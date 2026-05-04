@@ -1,0 +1,34 @@
+# Large binary copied from aihpc_val/tools/nvlmapper/dist_amd64 (NVLMAPPER / run_nvlmapper.sh)
+bin/scripts/nvlmapper
+
+# ---- Python / tooling ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# ---- App runtime (regenerated; cluster-specific) ----
+var/cache/
+
+# Default rack / multirack comment store (override with RACK_COMMENTS_FILE)
+rack_comments.json
+
+# ---- Local export bundles (see README / handoff zips) ----
+nvis-rack-status-cluster-export-*.zip
+rack-web-cluster-export-*.zip
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*.swo
+*~

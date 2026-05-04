@@ -1,0 +1,1 @@
+pdsh -w $1 "systemctl stop cmd; systemctl stop slurmd; systemctl stop nvidia-imex; systemctl stop cuda-dcgm; sleep 10; nvidia-smi -r; sleep 10; systemctl start cmd; systemctl start slurmd; systemctl start nvidia-imex; systemctl start cuda-dcgm"

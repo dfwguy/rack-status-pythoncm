@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NVIS Rack Status — overview</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css"
+    />
+    <style>
+      .reveal h1,
+      .reveal h2,
+      .reveal h3 {
+        text-transform: none;
+        font-weight: 600;
+      }
+      .reveal .subtitle {
+        color: #555;
+        font-size: 0.55em;
+        margin-top: 0.5em;
+      }
+      .reveal ul.compact li {
+        margin-bottom: 0.35em;
+      }
+      .reveal code {
+        background: #f0f4f8;
+        padding: 0.08em 0.25em;
+        border-radius: 4px;
+      }
+      .reveal .muted {
+        color: #666;
+        font-size: 0.85em;
+      }
+      .reveal section[data-background-color="#1a1a2e"] h1,
+      .reveal section[data-background-color="#1a1a2e"] h2,
+      .reveal section[data-background-color="#1a1a2e"] p,
+      .reveal section[data-background-color="#1a1a2e"] li {
+        color: #eee;
+      }
+      .reveal section[data-background-color="#1a1a2e"] .subtitle {
+        color: #aaa;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="reveal">
+      <div class="slides">
+        <section data-background-color="#1a1a2e">
+          <h1>NVIS Rack Status</h1>
+          <p class="subtitle">
+            Flask dashboard for rack validation, Slurm, logs, and operations
+          </p>
+          <p class="muted" style="margin-top: 2em">NVIDIA rack status / NEMO visibility</p>
+        </section>
+
+        <section>
+          <h2>What is NVIS Rack Status?</h2>
+          <ul class="compact">
+            <li>Single-page <strong>operations + visibility</strong> UI for data-center racks</li>
+            <li>Built with <strong>Python / Flask</strong> + <code>templates/index.html</code></li>
+            <li>Talks to <strong>cmsh</strong>, <strong>Slurm</strong>, and bundled <strong>shell tools</strong> under <code>bin/scripts/</code></li>
+            <li>Optional <strong>PAM</strong> login (same password as OS login for a chosen user)</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Who is it for?</h2>
+          <ul class="compact">
+            <li>Field / platform engineers running <strong>NEMO singlerack</strong> validation</li>
+            <li>Anyone who needs <strong>one place</strong> to see rack state, logs, parser charts, and actions</li>
+            <li>Teams that already use <code>rack_status.sh</code>, <code>parser.sh</code>, and Slurm on the dashboard host</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>High-level architecture</h2>
+          <ul class="compact">
+            <li><strong>app.py</strong> — routes, JSON APIs, background threads for long jobs</li>
+            <li><strong>native_status.py</strong> — builds the default status table (cmsh + ds + Slurm + log probes)</li>
+            <li><strong>bin/scripts/</strong> — <code>rack_status.sh</code>, <code>parser.sh</code>, power/GPU/NVSwitch helpers, etc.</li>
+            <li><strong>var/cache/</strong> — cached probe JSON, rack list, log analysis (tunable via env)</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Main screen</h2>
+          <ul class="compact">
+            <li><strong>Rack table</strong> — one row per rack: validation state, last job, sinfo, device status</li>
+            <li><strong>Log directory</strong> — working tree for logs and many subprocess <code>cwd</code>s</li>
+            <li><strong>Refresh</strong> — polls <code>/api/status</code> (background refresh optional)</li>
+            <li><strong>Theme</strong> — dark / blue / light</li>
+            <li>Per-rack <strong>comments</strong> stored server-side</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Where the data comes from</h2>
+          <ul class="compact">
+            <li><code>cmsh</code> — rack list; <code>ds</code> device / tray tokens for the device column</li>
+            <li><strong>Slurm</strong> — <code>sinfo</code>-style summary, job id, optional cancel / drain / undrain</li>
+            <li><strong>Log probes</strong> — <code>rack_status.sh --probe-json</code> (cached) for NCCL / LLM heuristics</li>
+            <li>Optional <strong>physical_rf0</strong> map from cmsh foreach</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Parser &amp; charts</h2>
+          <ul class="compact">
+            <li><code>[results]</code> → <code>parser.sh --json</code> on the best NEMO log for that rack</li>
+            <li>NCCL summaries, <strong>bus_bw vs message size</strong>, Nemotron step time vs iteration</li>
+            <li>Optional <strong>Grafana</strong> embeds (GPU thermal / power) via <code>RACK_WEB_GRAFANA_*</code></li>
+            <li>Export: <strong>Excel / CSV</strong>, log zip — gated on log heuristics and NEMO “done” where configured</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Validation &amp; workloads</h2>
+          <ul class="compact">
+            <li><strong>Run validation</strong> — bundled singlerack script, sync or async + status polling</li>
+            <li><strong>Nemo xrack</strong>, <strong>Llama</strong>, <strong>mnubergemm stress</strong> — async APIs + status endpoints</li>
+            <li><strong>Precheck / sysinfo</strong> — async or streaming where implemented</li>
+            <li>Shared pattern: <code>job_id</code> → poll status → toast / spinner on the rack row</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Slurm from the UI</h2>
+          <ul class="compact">
+            <li>Modals: <strong>squeue</strong>, <strong>sinfo -R --long</strong> (table layout when parseable)</li>
+            <li><strong>Drain / undrain</strong> for rack CT bracket via <code>scontrol</code></li>
+            <li><strong>scancel</strong> on last job when rules allow</li>
+            <li>Env: <code>RACK_SLURM_MODULE</code>, skip module load, binary overrides, feature toggles</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Power &amp; device operations</h2>
+          <ul class="compact">
+            <li><strong>Power on</strong>, <strong>GPU reset</strong>, <strong>services restart</strong> — sync + async</li>
+            <li><strong>HW check</strong> — presets / checker args</li>
+            <li>Row <strong>spinner</strong> + highlight while async work runs; hover for live stdout/stderr panel</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>NVLink / NVSwitch</h2>
+          <ul class="compact">
+            <li><strong>NMXC cycle</strong> — <code>nvswitches_rack_audit.sh --fix</code> (whole rack)</li>
+            <li><strong>NVSwitch check</strong> (streaming), SDN reset, system reset, IMEX check/reset</li>
+            <li><strong>NVLMAPPER</strong> — stage under reports, <code>run_nvlmapper.sh</code> (embedded YAML + RC merge), zip download</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Reports &amp; downloads</h2>
+          <ul class="compact">
+            <li><strong>Bug reports / reports</strong> — async generation, inventory under configurable dir (e.g. <code>/home/cmsupport/reports</code>)</li>
+            <li>Download <code>nvidia-bug-report*.log.gz</code> and <code>nvlmapper.*.zip</code> from inventory</li>
+            <li>Rack log <strong>open / tail</strong> and Slurm job stdout fetch/download</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Streaming APIs</h2>
+          <ul class="compact">
+            <li>Live <strong>tail</strong> of job stdout or log files (SSE-style streaming endpoints)</li>
+            <li><strong>sysinfo</strong> and <strong>nvswitch audit</strong> stream variants for long output</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>Security &amp; configuration</h2>
+          <ul class="compact">
+            <li><code>RACK_WEB_AUTH_*</code> — PAM, session secret, cookie flags for HTTPS</li>
+            <li><code>RACK_STATUS_LOG_DIR</code>, <code>RACK_STATUS_*</code> — logs, cache, background interval</li>
+            <li>Many endpoints can be <strong>disabled</strong> per env (Slurm, features, etc.)</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>API surface (grouped)</h2>
+          <p class="muted" style="text-align: left">
+            Status: <code>/api/status</code>, <code>/api/multirack-status</code>, <code>/api/app-stats</code><br />
+            Jobs: validation, power, GPU, services, HW, NVSwitch/NMXC, IMEX, NVLMAPPER, precheck — mostly
+            <code>POST …-async</code> + <code>GET /api/reset-job-status</code><br />
+            Slurm: squeue, sinfo, drain, undrain, scancel, job stdout<br />
+            Parser: results, export excel/csv, Grafana live charts<br />
+            Reports: bug-report async, inventory, file download
+          </p>
+        </section>
+
+        <section>
+          <h2>How to run it</h2>
+          <pre><code data-trim>cd nvis-rack-status
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+export PORT=5000   # optional
+python3 app.py</code></pre>
+          <p class="muted">See README.md and <code>app.py</code> module docstring for full env reference.</p>
+        </section>
+
+        <section>
+          <h2>Summary</h2>
+          <ul class="compact">
+            <li>One dashboard for <strong>validation state</strong>, <strong>Slurm</strong>, and <strong>rack ops</strong></li>
+            <li>Deep integration with <strong>your cluster scripts</strong>, not a separate SaaS</li>
+            <li>Extensive <strong>REST + streaming</strong> API for automation or custom UI</li>
+          </ul>
+        </section>
+
+        <section data-background-color="#1a1a2e">
+          <h2>Thank you</h2>
+          <p class="subtitle">NVIS Rack Status — <code>nvis-rack-status/README.md</code> · <code>bin/scripts/README.txt</code></p>
+        </section>
+      </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+    <script>
+      Reveal.initialize({
+        hash: true,
+        slideNumber: "c/t",
+        transition: "slide",
+        width: 1280,
+        height: 720,
+      });
+    </script>
+  </body>
+</html>

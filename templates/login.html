@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NVIS Rack Status{% if project_name %} - {{ project_name }}{% endif %} — sign in</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("rackWebTheme");
+        document.documentElement.setAttribute(
+          "data-theme",
+          t === "light" || t === "blue" || t === "dark" ? t : "dark"
+        );
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+  <style>
+    :root,
+    html[data-theme="dark"] {
+      /* Pantone Black C — screen / sRGB */
+      --nv-black: #000000;
+      --nv-black-surface: #0a0a0a;
+      --nv-black-raised: #121212;
+      --nv-black-muted: #181818;
+      --nv-black-input: #050505;
+
+      --bg: var(--nv-black);
+      --fg: #e6edf3;
+      --border: #2a2a2a;
+      --h1: #58d6ff;
+      --nv-green: #76b900;
+      --sep: #3dd8e0;
+      --dim: #8b9cb3;
+      --err-bg: #160808;
+      --err-fg: #fca5a5;
+      --title-rest: #eceff3;
+    }
+
+    html[data-theme="blue"] {
+      --nv-black: #0f1419;
+      --nv-black-surface: #151c27;
+      --nv-black-raised: #1a2332;
+      --nv-black-muted: #1a2230;
+      --nv-black-input: #0c1016;
+      --bg: var(--nv-black);
+      --fg: #e6edf3;
+      --border: #263445;
+      --h1: #58d6ff;
+      --sep: #3dd8e0;
+      --dim: #8b9cb3;
+      --err-bg: #3f1d23;
+      --err-fg: #fca5a5;
+      --title-rest: #eceff3;
+    }
+
+    html[data-theme="light"] {
+      --nv-black: #eef1f5;
+      --nv-black-surface: #ffffff;
+      --nv-black-raised: #e4e9f0;
+      --nv-black-muted: #e8ecf0;
+      --nv-black-input: #ffffff;
+      --bg: #f4f6f8;
+      --fg: #14181c;
+      --border: #c5ccd6;
+      --h1: #087ea8;
+      --sep: #0d7fa7;
+      --dim: #5a6570;
+      --err-bg: #fee2e2;
+      --err-fg: #991b1b;
+      --title-rest: #1a1d21;
+    }
+
+    html[data-theme="light"] .login-brand img {
+      filter: brightness(0);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      padding: 1.5rem;
+    }
+    .card {
+      width: 100%;
+      max-width: 22rem;
+      padding: 1.5rem 1.35rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--nv-black-surface);
+    }
+    .nvidia-type {
+      font-family: "Helvetica Neue", Helvetica, "Arial Narrow", "Franklin Gothic Medium", Arial, ui-sans-serif, system-ui, sans-serif;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      line-height: 1.2;
+    }
+    .login-title .brand-nvidia {
+      color: var(--nv-green);
+      letter-spacing: 0.07em;
+    }
+    .login-title .title-rest {
+      color: var(--title-rest);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .login-title .title-project {
+      color: var(--title-rest);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .login-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin: 0 0 0.5rem;
+    }
+    .login-brand img {
+      display: block;
+      height: 1.75rem;
+      width: auto;
+      max-width: min(18rem, 85%);
+      flex-shrink: 0;
+      object-fit: contain;
+    }
+    h1.login-title {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+    p.sub {
+      margin: 0 0 1.25rem;
+      font-size: 0.85rem;
+      color: var(--dim);
+      line-height: 1.4;
+    }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--dim);
+      margin-bottom: 0.35rem;
+    }
+    input[type="password"] {
+      width: 100%;
+      padding: 0.45rem 0.55rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--nv-black-input);
+      color: var(--fg);
+      font-size: 1rem;
+    }
+    button {
+      margin-top: 1rem;
+      width: 100%;
+      padding: 0.5rem 0.85rem;
+      border-radius: 4px;
+      border: 1px solid var(--sep);
+      background: var(--nv-black-raised);
+      color: var(--h1);
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.08); }
+    .err {
+      margin-bottom: 1rem;
+      padding: 0.5rem 0.65rem;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      background: var(--err-bg);
+      color: var(--err-fg);
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="login-brand" role="img" aria-label="NVIDIA">
+      <img src="{{ url_for('static', filename='nvidia-brand.svg') }}" alt="" />
+      <h1 class="nvidia-type login-title"><span class="brand-nvidia">NVIS</span><span class="title-rest"> Rack Status</span>{% if project_name %}<span class="title-project"> - {{ project_name }}</span>{% endif %}</h1>
+    </div>
+    <p class="sub">Sign in with the system password for account <strong>{{ auth_user }}</strong> (PAM service <code>{{ pam_service }}</code>).</p>
+    {% if fatal %}
+    <div class="err">{{ fatal }}</div>
+    {% endif %}
+    {% if error %}
+    <div class="err">Incorrect password or authentication failed.</div>
+    {% endif %}
+    <form method="post" action="{{ url_for('login') }}" autocomplete="current-password">
+      <input type="hidden" name="next" value="{{ next or '' }}" />
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required autofocus />
+      <button type="submit">Continue</button>
+    </form>
+  </div>
+</body>
+</html>
