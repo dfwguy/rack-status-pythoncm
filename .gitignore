@@ -18,12 +18,20 @@ build/
 # ---- App runtime (regenerated; cluster-specific) ----
 var/cache/
 
+# ---- Demo report logs (extracted from reports.tar.gz) ----
+demo-reports/
+
 # Default rack / multirack comment store (override with RACK_COMMENTS_FILE)
 rack_comments.json
 
 # ---- Local export bundles (see README / handoff zips) ----
 nvis-rack-status-cluster-export-*.zip
 rack-web-cluster-export-*.zip
+
+# ---- Frontend (React SPA) ----
+frontend/node_modules/
+frontend/dist/
+static/spa/
 
 # ---- OS / editor ----
 .DS_Store

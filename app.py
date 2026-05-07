@@ -92,6 +92,8 @@ if _app_dir_s not in sys.path:
     sys.path.insert(0, _app_dir_s)
 
 import native_status  # noqa: E402 — after sys.path so ``import native_status`` works when cwd != APP_DIR
+import host_exec  # noqa: E402
+from platforms import get_platform as _get_platform  # noqa: E402
 
 DEFAULT_SCRIPT = SCRIPTS_DIR / "rack_status.sh"
 DEFAULT_LOG_DIR = APP_DIR / "var" / "logs"
@@ -183,20 +185,14 @@ def get_physical_rf0_map() -> dict[str, str]:
         if _physical_rf0_loaded:
             return dict(_physical_rf0_map)
         _physical_rf0_map = {}
-        cmsh_bin = shutil.which("cmsh")
-        if not cmsh_bin:
+        plat = _get_platform()
+        cmd = plat.physical_rf0_cmd()
+        if not host_exec.is_remote() and not shutil.which(cmd[0]):
             _physical_rf0_loaded = True
             return {}
-        cmd = [
-            cmsh_bin,
-            "-c",
-            "device; foreach -t physicalnode (get hostname; interfaces; use rf0; get ip)",
-        ]
         try:
-            proc = subprocess.run(
+            proc = host_exec.run_on_host(
                 cmd,
-                capture_output=True,
-                text=True,
                 timeout=max(20, _env_int("RACK_PHYSICAL_RF0_TIMEOUT", 180)),
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -233,20 +229,13 @@ def _validation_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, disp
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            env=os.environ.copy(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=os.environ.copy())
         try:
-            out, err = proc.communicate(timeout=timeout)
+            out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            hp.kill()
             try:
-                proc.communicate(timeout=15)
+                hp.communicate(timeout=15)
             except (subprocess.TimeoutExpired, OSError):
                 pass
             _patch(
@@ -261,7 +250,7 @@ def _validation_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, disp
             )
             _validation_job_purge_later(job_id)
             return
-        rc = proc.returncode if proc.returncode is not None else -1
+        rc = hp.returncode if hp.returncode is not None else -1
         ok = rc == 0
         _patch(
             phase="done" if ok else "error",
@@ -310,20 +299,13 @@ def _stress_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            env=os.environ.copy(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=os.environ.copy())
         try:
-            out, err = proc.communicate(timeout=timeout)
+            out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            hp.kill()
             try:
-                proc.communicate(timeout=15)
+                hp.communicate(timeout=15)
             except (subprocess.TimeoutExpired, OSError):
                 pass
             _patch(
@@ -338,7 +320,7 @@ def _stress_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_
             )
             _stress_job_purge_later(job_id)
             return
-        rc = proc.returncode if proc.returncode is not None else -1
+        rc = hp.returncode if hp.returncode is not None else -1
         ok = rc == 0
         _patch(
             phase="done" if ok else "error",
@@ -387,20 +369,13 @@ def _xrack_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            env=os.environ.copy(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=os.environ.copy())
         try:
-            out, err = proc.communicate(timeout=timeout)
+            out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            hp.kill()
             try:
-                proc.communicate(timeout=15)
+                hp.communicate(timeout=15)
             except (subprocess.TimeoutExpired, OSError):
                 pass
             _patch(
@@ -415,7 +390,7 @@ def _xrack_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
             )
             _xrack_job_purge_later(job_id)
             return
-        rc = proc.returncode if proc.returncode is not None else -1
+        rc = hp.returncode if hp.returncode is not None else -1
         ok = rc == 0
         _patch(
             phase="done" if ok else "error",
@@ -464,20 +439,13 @@ def _llama_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            env=os.environ.copy(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=os.environ.copy())
         try:
-            out, err = proc.communicate(timeout=timeout)
+            out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            hp.kill()
             try:
-                proc.communicate(timeout=15)
+                hp.communicate(timeout=15)
             except (subprocess.TimeoutExpired, OSError):
                 pass
             _patch(
@@ -492,7 +460,7 @@ def _llama_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
             )
             _llama_job_purge_later(job_id)
             return
-        rc = proc.returncode if proc.returncode is not None else -1
+        rc = hp.returncode if hp.returncode is not None else -1
         ok = rc == 0
         _patch(
             phase="done" if ok else "error",
@@ -569,24 +537,15 @@ def _power_reset_worker(job_id: str, specs: list[str]) -> None:
     _reset_job_purge_later(job_id)
 
 
-# Remote command for pdsh (single argv): mount + service restarts; DCGM unit fallback.
-_SERVICES_RESTART_PDSH_REMOTE = (
-    "mount -a; "
-    "systemctl restart munge; "
-    "systemctl restart slurmd; "
-    "systemctl restart nvidia-imex; "
-    "systemctl restart nvidia-dcgm 2>/dev/null || systemctl restart cuda-dcgm"
-)
-
-
 def run_services_restart(pdsh_w: str) -> dict:
     """Run pdsh across hosts: mount -a, restart munge/slurmd/nvidia-imex, then nvidia-dcgm or cuda-dcgm."""
     w = (pdsh_w or "").strip()
     if not w:
         raise ValueError("empty pdsh -w pattern")
+    plat = _get_platform()
     timeout = max(30, _env_int("RACK_SERVICES_RESTART_TIMEOUT", 1800))
     dry = os.environ.get("RACK_SERVICES_RESTART_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
-    cmd = ["pdsh", "-w", w, _SERVICES_RESTART_PDSH_REMOTE]
+    cmd = plat.pdsh_cmd(w, plat.services_restart_remote_cmd())
     cmd_display = " ".join(shlex.quote(c) for c in cmd)
     if dry:
         return {
@@ -597,10 +556,8 @@ def run_services_restart(pdsh_w: str) -> dict:
             "pdsh_w": w,
         }
     try:
-        proc = subprocess.run(
+        proc = host_exec.run_on_host(
             cmd,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
     except FileNotFoundError:
@@ -647,7 +604,8 @@ def run_rack_uptime_pdsh(rack: str) -> dict:
     w = f"{rk}-ct[{_validation_ct_inner()}]"
     timeout = max(15, _env_int("RACK_UPTIME_PDSH_TIMEOUT", 120))
     dry = os.environ.get("RACK_UPTIME_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
-    cmd = ["pdsh", "-w", w, "uptime"]
+    plat = _get_platform()
+    cmd = plat.pdsh_cmd(w, "uptime")
     cmd_display = " ".join(shlex.quote(c) for c in cmd)
     if dry:
         sample = f"{rk}-ct01:  12:00:00 up 1 day,  1 user,  load average: 0.00, 0.00, 0.00"
@@ -662,10 +620,8 @@ def run_rack_uptime_pdsh(rack: str) -> dict:
             "rows": _parse_pdsh_prefixed_lines(sample),
         }
     try:
-        proc = subprocess.run(
+        proc = host_exec.run_on_host(
             cmd,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
     except FileNotFoundError:
@@ -846,8 +802,22 @@ def _count_running_async_commands() -> int:
 
 
 def _auth_enabled() -> bool:
-    """Dashboard login via PAM unless RACK_WEB_AUTH_DISABLED is set."""
+    """Dashboard login via PAM or token unless RACK_WEB_AUTH_DISABLED is set."""
     return not _truthy_env("RACK_WEB_AUTH_DISABLED")
+
+
+def _auth_mode() -> str:
+    """Return ``pam`` or ``token``.  Defaults to ``token`` when inside a container (SSH mode)."""
+    explicit = (os.environ.get("RACK_WEB_AUTH_MODE") or "").strip().lower()
+    if explicit in ("pam", "token"):
+        return explicit
+    return "token" if host_exec.is_remote() else "pam"
+
+
+def _auth_token() -> str | None:
+    """Token string when RACK_WEB_AUTH_MODE=token."""
+    t = (os.environ.get("RACK_WEB_AUTH_TOKEN") or "").strip()
+    return t or None
 
 
 def _auth_user() -> str:
@@ -949,9 +919,19 @@ def _pam_verify_subprocess(username: str, password: str, service: str) -> bool:
     return bool(data.get("ok"))
 
 
+def _token_verify(password: str) -> bool:
+    """Verify password against RACK_WEB_AUTH_TOKEN (simple shared-secret)."""
+    token = _auth_token()
+    if not token:
+        return False
+    return secrets.compare_digest(password, token)
+
+
 def _pam_verify(username: str, password: str, service: str) -> bool:
     if password is None:
         return False
+    if _auth_mode() == "token":
+        return _token_verify(password)
     try:
         from rack_web.pam_ctypes import authenticate as pam_authenticate
     except (ImportError, OSError):
@@ -1285,16 +1265,9 @@ def _slurm_job_base_id(job_raw: str | None) -> str | None:
 
 def _run_bash_slurm_prefix(cmd: str, *, timeout: int = 120) -> subprocess.CompletedProcess[str]:
     """Run ``cmd`` under ``bash -lc`` after optional ``module load`` (same semantics as Slurm drain helpers)."""
-    skip_mod = os.environ.get("RACK_SLURM_SKIP_MODULE_LOAD", "").strip().lower() in ("1", "true", "yes")
-    mod = (os.environ.get("RACK_SLURM_MODULE") or "slurm").strip() or "slurm"
-    if skip_mod:
-        inner = cmd
-    else:
-        inner = f"module load {shlex.quote(mod)} && {cmd}"
-    return subprocess.run(
-        ["bash", "-lc", inner],
-        capture_output=True,
-        text=True,
+    plat = _get_platform()
+    return host_exec.run_on_host(
+        plat.slurm_prefix(cmd),
         timeout=timeout,
     )
 
@@ -1933,16 +1906,16 @@ def _run_cmsh_device_power(
     spec: str,
     phase: str,
 ) -> dict:
-    cmd_display = f"{shlex.quote(cmsh)} -c {shlex.quote(inner)}"
+    plat = _get_platform()
+    cmd = plat.device_power_cmd(inner)
+    cmd_display = " ".join(shlex.quote(c) for c in cmd)
     try:
-        proc = subprocess.run(
-            [cmsh, "-c", inner],
-            capture_output=True,
-            text=True,
+        proc = host_exec.run_on_host(
+            cmd,
             timeout=timeout,
         )
     except FileNotFoundError:
-        raise OSError(f"cmsh executable not found: {cmsh}") from None
+        raise OSError(f"cluster manager executable not found: {cmsh}") from None
     except subprocess.TimeoutExpired:
         return {
             "spec": spec,
@@ -2395,14 +2368,14 @@ def _try_populate_cmsh_rack_list_file() -> None:
     with _CMSH_RACK_LIST_LOCK:
         if _CMSH_RACK_LIST_STATE != "pending":
             return
-        if not shutil.which("cmsh"):
+        plat = _get_platform()
+        cmd = plat.list_racks_cmd()
+        if not host_exec.is_remote() and not shutil.which(cmd[0]):
             _CMSH_RACK_LIST_STATE = "failed"
             return
         try:
-            proc = subprocess.run(
-                ["cmsh", "-c", "rack; list"],
-                capture_output=True,
-                text=True,
+            proc = host_exec.run_on_host(
+                cmd,
                 timeout=max(30, _env_int("RACK_CMSH_RACK_LIST_TIMEOUT_SEC", 120)),
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -2454,6 +2427,10 @@ def _start_cmsh_rack_list_warm_thread() -> None:
 
 
 def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
+    if _truthy_env("RACK_STATUS_DEMO"):
+        import demo_data
+        return demo_data.generate_demo_status(log_dir, include_raw)
+
     if _truthy_env("RACK_STATUS_USE_SHELL_TABLE"):
         script = _script_path()
         if not script.is_file():
@@ -2471,12 +2448,10 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
                 cmd = [str(script), *_extra_script_args(), "--tmp-status", str(tmp_pre)]
             else:
                 cmd = [str(script), *_extra_script_args()]
-            proc = subprocess.run(
+            proc = host_exec.run_on_host(
                 cmd,
                 cwd=str(log_dir),
                 env=env,
-                capture_output=True,
-                text=True,
                 timeout=max(1, _env_int("RACK_STATUS_TIMEOUT", 300)),
             )
         finally:
@@ -2838,10 +2813,8 @@ def run_gpu_reset(pdsh_w: str) -> dict:
             "pdsh_w": w,
         }
     try:
-        proc = subprocess.run(
+        proc = host_exec.run_on_host(
             cmd,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
     except FileNotFoundError:
@@ -2953,8 +2926,9 @@ def run_bug_report_pdsh(pdsh_w: str) -> dict:
     inner = f"mkdir -p {rq}/$HOSTNAME && cd {rq}/$HOSTNAME && nvidia-bug-report.sh"
     timeout = max(120, _env_int("RACK_BUG_REPORT_TIMEOUT", 10800))
     dry = os.environ.get("RACK_BUG_REPORT_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
+    plat = _get_platform()
     fan = max(1, _env_int("RACK_BUG_REPORT_PDSH_FANOUT", 32))
-    cmd = ["pdsh", "-f", str(fan), "-w", w, inner]
+    cmd = plat.pdsh_cmd(w, inner, fanout=fan)
     cmd_display = " ".join(shlex.quote(c) for c in cmd)
     if dry:
         return {
@@ -2965,10 +2939,8 @@ def run_bug_report_pdsh(pdsh_w: str) -> dict:
             "pdsh_w": w,
         }
     try:
-        proc = subprocess.run(
+        proc = host_exec.run_on_host(
             cmd,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
     except FileNotFoundError:
@@ -3026,8 +2998,9 @@ def run_bug_report_list_pdsh(pdsh_w: str) -> dict:
     rq = shlex.quote(remote)
     inner = f"ls -t {rq}/$HOSTNAME/nvidia-bug-report*.log.gz 2>/dev/null | head -1"
     timeout = max(30, _env_int("RACK_BUG_REPORT_LIST_TIMEOUT", 600))
+    plat = _get_platform()
     fan = max(1, _env_int("RACK_BUG_REPORT_PDSH_FANOUT", 32))
-    cmd = ["pdsh", "-f", str(fan), "-w", w, inner]
+    cmd = plat.pdsh_cmd(w, inner, fanout=fan)
     cmd_display = " ".join(shlex.quote(c) for c in cmd)
     dry = os.environ.get("RACK_BUG_REPORT_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
     if dry:
@@ -3039,10 +3012,8 @@ def run_bug_report_list_pdsh(pdsh_w: str) -> dict:
             "pdsh_w": w,
         }
     try:
-        proc = subprocess.run(
+        proc = host_exec.run_on_host(
             cmd,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
     except FileNotFoundError:
@@ -4812,22 +4783,11 @@ def _run_scontrol_node_update(target: str, state_kv: list[str]) -> dict:
     matching cluster login environments where *scontrol* is not on PATH until modules load.
     Set RACK_SLURM_SKIP_MODULE_LOAD=1 to invoke *scontrol* directly (e.g. full path already on PATH).
     """
-    scontrol = (os.environ.get("RACK_SLURM_SCONTROL") or "scontrol").strip() or "scontrol"
-    skip_mod = os.environ.get("RACK_SLURM_SKIP_MODULE_LOAD", "").strip().lower() in ("1", "true", "yes")
-    mod = (os.environ.get("RACK_SLURM_MODULE") or "slurm").strip() or "slurm"
+    plat = _get_platform()
     nodename_arg = f"nodename={target}"
-    scontrol_argv_tail = ["update", nodename_arg, *state_kv]
-
-    if skip_mod:
-        cmd: list[str] = [scontrol, *scontrol_argv_tail]
-        cmd_display = " ".join(shlex.quote(c) for c in cmd)
-    else:
-        inner = (
-            f"module load {shlex.quote(mod)} && {shlex.quote(scontrol)} "
-            + " ".join(shlex.quote(a) for a in scontrol_argv_tail)
-        )
-        cmd = ["bash", "-lc", inner]
-        cmd_display = "bash -lc " + shlex.quote(inner)
+    tail = " ".join(shlex.quote(a) for a in ["update", nodename_arg, *state_kv])
+    shell_cmd = plat.scontrol_cmd(tail)
+    cmd_display = shell_cmd
 
     dry = os.environ.get("RACK_SLURM_NODES_STATE_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
     if dry:
@@ -4840,20 +4800,14 @@ def _run_scontrol_node_update(target: str, state_kv: list[str]) -> dict:
         }
     timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
+        proc = host_exec.run_on_host(
+            shell_cmd,
             timeout=timeout,
         )
     except FileNotFoundError:
-        if skip_mod:
-            raise OSError(
-                f"scontrol executable not found ({scontrol!r}); set RACK_SLURM_SCONTROL to the full path"
-            ) from None
         raise OSError(
-            "bash not found on PATH (needed to run `module load` before scontrol); "
-            "install bash or set RACK_SLURM_SKIP_MODULE_LOAD=1 with RACK_SLURM_SCONTROL set to the real binary"
+            "scontrol executable not found; set RACK_SLURM_SCONTROL to the full path "
+            "or ensure module load is available"
         ) from None
     except subprocess.TimeoutExpired:
         return {
@@ -4931,32 +4885,16 @@ def _run_scancel(job_id: str) -> dict:
     jid = (job_id or "").strip()
     if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
         raise ValueError("job_id must be a Slurm job id (digits, optional _TASK for arrays)")
-    scancel = (os.environ.get("RACK_SLURM_SCANCEL") or "scancel").strip() or "scancel"
-    skip_mod = os.environ.get("RACK_SLURM_SKIP_MODULE_LOAD", "").strip().lower() in ("1", "true", "yes")
-    mod = (os.environ.get("RACK_SLURM_MODULE") or "slurm").strip() or "slurm"
-    if skip_mod:
-        cmd: list[str] = [scancel, jid]
-        cmd_display = " ".join(shlex.quote(c) for c in cmd)
-    else:
-        inner = f"module load {shlex.quote(mod)} && {shlex.quote(scancel)} {shlex.quote(jid)}"
-        cmd = ["bash", "-lc", inner]
-        cmd_display = "bash -lc " + shlex.quote(inner)
+    plat = _get_platform()
+    shell_cmd = plat.scancel_cmd(shlex.quote(jid))
+    cmd_display = shell_cmd
     timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        proc = host_exec.run_on_host(shell_cmd, timeout=timeout)
     except FileNotFoundError:
-        if skip_mod:
-            raise OSError(
-                f"scancel executable not found ({scancel!r}); set RACK_SLURM_SCANCEL to the full path"
-            ) from None
         raise OSError(
-            "bash not found on PATH (needed to run `module load` before scancel); "
-            "install bash or set RACK_SLURM_SKIP_MODULE_LOAD=1 with RACK_SLURM_SCANCEL set to the real binary"
+            "scancel executable not found; set RACK_SLURM_SCANCEL to the full path "
+            "or ensure module load is available"
         ) from None
     except subprocess.TimeoutExpired:
         return {
@@ -4978,32 +4916,16 @@ def _run_scancel(job_id: str) -> dict:
 
 def _run_squeue() -> dict:
     """Run ``squeue`` after optional ``module load`` (same env semantics as *scancel* / *scontrol*)."""
-    squeue = (os.environ.get("RACK_SLURM_SQUEUE") or "squeue").strip() or "squeue"
-    skip_mod = os.environ.get("RACK_SLURM_SKIP_MODULE_LOAD", "").strip().lower() in ("1", "true", "yes")
-    mod = (os.environ.get("RACK_SLURM_MODULE") or "slurm").strip() or "slurm"
-    if skip_mod:
-        cmd: list[str] = [squeue]
-        cmd_display = " ".join(shlex.quote(c) for c in cmd)
-    else:
-        inner = f"module load {shlex.quote(mod)} && {shlex.quote(squeue)}"
-        cmd = ["bash", "-lc", inner]
-        cmd_display = "bash -lc " + shlex.quote(inner)
+    plat = _get_platform()
+    shell_cmd = plat.squeue_cmd()
+    cmd_display = shell_cmd
     timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        proc = host_exec.run_on_host(shell_cmd, timeout=timeout)
     except FileNotFoundError:
-        if skip_mod:
-            raise OSError(
-                f"squeue executable not found ({squeue!r}); set RACK_SLURM_SQUEUE to the full path"
-            ) from None
         raise OSError(
-            "bash not found on PATH (needed to run `module load` before squeue); "
-            "install bash or set RACK_SLURM_SKIP_MODULE_LOAD=1 with RACK_SLURM_SQUEUE set to the real binary"
+            "squeue executable not found; set RACK_SLURM_SQUEUE to the full path "
+            "or ensure module load is available"
         ) from None
     except subprocess.TimeoutExpired:
         return {
@@ -5037,32 +4959,16 @@ def api_slurm_squeue():
 
 def _run_sinfo_r() -> dict:
     """Run ``sinfo -R --long`` after optional ``module load`` (same env semantics as *squeue* / *scontrol*)."""
-    sinfo = (os.environ.get("RACK_SLURM_SINFO") or "sinfo").strip() or "sinfo"
-    skip_mod = os.environ.get("RACK_SLURM_SKIP_MODULE_LOAD", "").strip().lower() in ("1", "true", "yes")
-    mod = (os.environ.get("RACK_SLURM_MODULE") or "slurm").strip() or "slurm"
-    if skip_mod:
-        cmd: list[str] = [sinfo, "-R", "--long"]
-        cmd_display = " ".join(shlex.quote(c) for c in cmd)
-    else:
-        inner = f"module load {shlex.quote(mod)} && {shlex.quote(sinfo)} -R --long"
-        cmd = ["bash", "-lc", inner]
-        cmd_display = "bash -lc " + shlex.quote(inner)
+    plat = _get_platform()
+    shell_cmd = plat.sinfo_cmd("-R --long")
+    cmd_display = shell_cmd
     timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        proc = host_exec.run_on_host(shell_cmd, timeout=timeout)
     except FileNotFoundError:
-        if skip_mod:
-            raise OSError(
-                f"sinfo executable not found ({sinfo!r}); set RACK_SLURM_SINFO to the full path"
-            ) from None
         raise OSError(
-            "bash not found on PATH (needed to run `module load` before sinfo); "
-            "install bash or set RACK_SLURM_SKIP_MODULE_LOAD=1 with RACK_SLURM_SINFO set to the real binary"
+            "sinfo executable not found; set RACK_SLURM_SINFO to the full path "
+            "or ensure module load is available"
         ) from None
     except subprocess.TimeoutExpired:
         return {
@@ -5143,36 +5049,17 @@ def _run_scontrol_show_job(job_id: str) -> dict:
     jid = (job_id or "").strip()
     if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
         raise ValueError("job_id must be a Slurm job id (digits, optional _TASK for arrays)")
-    scontrol = (os.environ.get("RACK_SLURM_SCONTROL") or "scontrol").strip() or "scontrol"
-    skip_mod = os.environ.get("RACK_SLURM_SKIP_MODULE_LOAD", "").strip().lower() in ("1", "true", "yes")
-    mod = (os.environ.get("RACK_SLURM_MODULE") or "slurm").strip() or "slurm"
-    tail = ["show", "job", jid]
-    if skip_mod:
-        cmd: list[str] = [scontrol, *tail]
-        cmd_display = " ".join(shlex.quote(c) for c in cmd)
-    else:
-        inner = (
-            f"module load {shlex.quote(mod)} && {shlex.quote(scontrol)} "
-            + " ".join(shlex.quote(a) for a in tail)
-        )
-        cmd = ["bash", "-lc", inner]
-        cmd_display = "bash -lc " + shlex.quote(inner)
+    plat = _get_platform()
+    tail = " ".join(shlex.quote(a) for a in ["show", "job", jid])
+    shell_cmd = plat.scontrol_cmd(tail)
+    cmd_display = shell_cmd
     timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        proc = host_exec.run_on_host(shell_cmd, timeout=timeout)
     except FileNotFoundError:
-        if skip_mod:
-            raise OSError(
-                f"scontrol executable not found ({scontrol!r}); set RACK_SLURM_SCONTROL to the full path"
-            ) from None
         raise OSError(
-            "bash not found on PATH (needed to run `module load` before scontrol); "
-            "install bash or set RACK_SLURM_SKIP_MODULE_LOAD=1 with RACK_SLURM_SCONTROL set to the real binary"
+            "scontrol executable not found; set RACK_SLURM_SCONTROL to the full path "
+            "or ensure module load is available"
         ) from None
     except subprocess.TimeoutExpired:
         return {
@@ -5440,6 +5327,57 @@ def api_rack_log_content():
     )
 
 
+def _demo_parser_results():
+    """Return synthetic parser results for demo mode (no parser.sh needed)."""
+    import math
+    import hashlib as _hl
+    rack = (request.args.get("rack") or "demo-rack").strip()
+    job_id = (request.args.get("job_id") or "0").strip()
+    seed = int(_hl.md5(f"{rack}:{job_id}".encode()).hexdigest()[:8], 16)
+    rng = __import__("random").Random(seed)
+
+    sizes = [2**i for i in range(10, 31)]
+    nccl_series = [
+        {"size_bytes": s, "bus_bw_gbps": round(min(180, 10 + 170 * math.log2(s) / 30) * rng.uniform(0.85, 1.05), 2)}
+        for s in sizes
+    ]
+    nccl_rows = [{
+        "job_id": job_id,
+        "rack": rack,
+        "nccl_test": "all_reduce_perf_mpi",
+        "dtype": "float32",
+        "peak_busbw_gbps": round(max(p["bus_bw_gbps"] for p in nccl_series), 2),
+        "all_reduce_busbw_series": nccl_series,
+    }]
+
+    n_iters = rng.randint(80, 200)
+    base_step = rng.uniform(1.2, 2.5)
+    step_series = [
+        {"iteration": i + 1, "step_time": round(base_step * rng.uniform(0.9, 1.15) + (5.0 if i < 3 else 0), 3)}
+        for i in range(n_iters)
+    ]
+    nemotron_rows = [{
+        "job_id": job_id,
+        "rack": rack,
+        "model": "Nemotron-5H-56B",
+        "median_step_time": round(base_step, 3),
+        "step_time_series": step_series,
+    }]
+
+    return jsonify({
+        "ok": True,
+        "returncode": 0,
+        "rack": rack,
+        "log_file": f"root-NEMO-1Rack-{rack}-18N-{job_id}.txt",
+        "data": {
+            "nccl_peak_out_of_place_busbw_gbps": nccl_rows,
+            "nemotron_5h_56b_train_window": nemotron_rows,
+            "parser_flags": [{"flag": "demo_mode", "value": "true"}],
+        },
+        "grafana_embed": None,
+    })
+
+
 @app.route("/api/parser-results")
 def api_parser_results():
     """Run parser.sh --json on the log for rack (same cwd convention as rack_status log_dir).
@@ -5450,6 +5388,8 @@ def api_parser_results():
     Optional ``display_timezone`` query (IANA, e.g. ``Europe/Berlin``): zone for naive wall-clock
     timestamps in the NEMO log when deriving the LLM/Grafana time window (same as Charts TZ in the UI).
     """
+    if _truthy_env("RACK_STATUS_DEMO"):
+        return _demo_parser_results()
     try:
         log_dir = _resolve_log_dir(request.args.get("log_dir"))
     except ValueError as e:
@@ -5568,12 +5508,10 @@ def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
             mvt = (env.get("RACK_MULTIRACK_VALIDATION_TEST") or "nccl_all_reduce").strip()
             env["VALIDATION_TEST"] = mvt or "nccl_all_reduce"
     try:
-        proc = subprocess.run(
+        proc = host_exec.run_on_host(
             [str(script), "--probe-json", str(ap)],
             cwd=str(ap.parent),
             env=env,
-            capture_output=True,
-            text=True,
             timeout=max(60, _env_int("RACK_MULTIRACK_PROBE_TIMEOUT", 180)),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -5691,11 +5629,10 @@ def _save_log_analysis_cache_entries(entries: dict[str, dict[str, object]]) -> N
 def _slurm_running_job_ids_for_rack_status() -> set[str]:
     """Slurm job ids for SQUEUE_USER or USER (same idea as rack_status load_squeue_jobs)."""
     user = (os.environ.get("SQUEUE_USER") or os.environ.get("USER") or "root").strip()
+    plat = _get_platform()
     try:
-        proc = subprocess.run(
-            ["squeue", "-u", user, "-h", "-o", "%i"],
-            capture_output=True,
-            text=True,
+        proc = host_exec.run_on_host(
+            plat.squeue_cmd(f"-u {shlex.quote(user)} -h -o %i"),
             timeout=max(5, _env_int("RACK_LOG_ANALYSIS_SQUEUE_TIMEOUT_SEC", 60)),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -7382,6 +7319,57 @@ def api_status():
     _merge_fresh_comments_into_status_payload(data)
     _merge_live_native_workers_into_status(data, log_dir)
     return jsonify(data)
+
+
+_SPA_DIR = APP_DIR / "static" / "spa"
+
+
+@app.route("/api/auth-check")
+def api_auth_check():
+    """Check if the current session is authenticated. Returns 401 if not."""
+    if not _auth_enabled():
+        return jsonify({"authenticated": True, "user": _auth_user(), "auth_disabled": True})
+    if _session_ok():
+        return jsonify({"authenticated": True, "user": _auth_user()})
+    return jsonify({"authenticated": False}), 401
+
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    """JSON login endpoint for the React SPA. Accepts {"password": "..."}."""
+    if not _auth_enabled():
+        return jsonify({"ok": True, "user": _auth_user(), "auth_disabled": True})
+    data = request.get_json(silent=True) or {}
+    pw = str(data.get("password") or "")
+    au = _auth_user()
+    psvc = _pam_service()
+    try:
+        ok = _pam_verify(au, pw, psvc)
+    except RuntimeError as e:
+        return jsonify({"ok": False, "error": f"PAM error: {e}"}), 500
+    if ok:
+        session.clear()
+        session.permanent = True
+        session["rack_web_auth"] = "1"
+        return jsonify({"ok": True, "user": au})
+    return jsonify({"ok": False, "error": "Invalid password"}), 401
+
+
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    """JSON logout endpoint for the React SPA."""
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.route("/spa/")
+@app.route("/spa/<path:path>")
+def serve_spa(path: str = "index.html"):
+    """Serve the React SPA from static/spa/ (built by Vite)."""
+    spa_file = _SPA_DIR / path
+    if spa_file.is_file():
+        return send_file(spa_file)
+    return send_file(_SPA_DIR / "index.html")
 
 
 if __name__ == "__main__":

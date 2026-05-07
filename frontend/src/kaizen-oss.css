@@ -1,0 +1,418 @@
+/*
+ * Kaizen UI OSS Component Styles
+ * These provide the visual definitions for class names output by @nvidia/foundations-react-core.
+ * Based on the Kaizen UI Foundations design system CSS variables and typography scale.
+ */
+
+/* ============================================================================
+   TEXT COMPONENT
+   ============================================================================ */
+
+.nv-text {
+  margin: 0;
+  padding: 0;
+}
+
+/* Title variants */
+.nv-text--title-2xl { font-size: 36px; font-weight: 700; line-height: 1.25; }
+.nv-text--title-xl { font-size: 32px; font-weight: 700; line-height: 1.25; }
+.nv-text--title-lg { font-size: 28px; font-weight: 700; line-height: 1.25; }
+.nv-text--title-md { font-size: 24px; font-weight: 700; line-height: 1.25; }
+.nv-text--title-sm { font-size: 20px; font-weight: 700; line-height: 1.25; }
+.nv-text--title-xs { font-size: 18px; font-weight: 700; line-height: 1.25; }
+
+/* Display variants */
+.nv-text--display-2xl { font-size: 64px; font-weight: 700; line-height: 1.25; }
+.nv-text--display-xl { font-size: 56px; font-weight: 700; line-height: 1.25; }
+.nv-text--display-lg { font-size: 50px; font-weight: 700; line-height: 1.25; }
+.nv-text--display-md { font-size: 44px; font-weight: 700; line-height: 1.25; }
+.nv-text--display-sm { font-size: 40px; font-weight: 700; line-height: 1.25; }
+.nv-text--display-xs { font-size: 36px; font-weight: 700; line-height: 1.25; }
+
+/* Body regular */
+.nv-text--body-regular-3xl { font-size: 32px; font-weight: 400; line-height: 1.5; }
+.nv-text--body-regular-2xl { font-size: 24px; font-weight: 400; line-height: 1.5; }
+.nv-text--body-regular-xl { font-size: 18px; font-weight: 400; line-height: 1.5; }
+.nv-text--body-regular-lg { font-size: 16px; font-weight: 400; line-height: 1.5; }
+.nv-text--body-regular-md { font-size: 14px; font-weight: 400; line-height: 1.5; }
+.nv-text--body-regular-sm { font-size: 12px; font-weight: 400; line-height: 1.5; }
+.nv-text--body-regular-xs { font-size: 10px; font-weight: 400; line-height: 1.5; }
+
+/* Body bold */
+.nv-text--body-bold-3xl { font-size: 32px; font-weight: 700; line-height: 1.5; }
+.nv-text--body-bold-2xl { font-size: 24px; font-weight: 700; line-height: 1.5; }
+.nv-text--body-bold-xl { font-size: 18px; font-weight: 700; line-height: 1.5; }
+.nv-text--body-bold-lg { font-size: 16px; font-weight: 700; line-height: 1.5; }
+.nv-text--body-bold-md { font-size: 14px; font-weight: 700; line-height: 1.5; }
+.nv-text--body-bold-sm { font-size: 12px; font-weight: 700; line-height: 1.5; }
+.nv-text--body-bold-xs { font-size: 10px; font-weight: 700; line-height: 1.5; }
+
+/* Body semibold */
+.nv-text--body-semibold-3xl { font-size: 32px; font-weight: 500; line-height: 1.5; }
+.nv-text--body-semibold-2xl { font-size: 24px; font-weight: 500; line-height: 1.5; }
+.nv-text--body-semibold-xl { font-size: 18px; font-weight: 500; line-height: 1.5; }
+.nv-text--body-semibold-lg { font-size: 16px; font-weight: 500; line-height: 1.5; }
+.nv-text--body-semibold-md { font-size: 14px; font-weight: 500; line-height: 1.5; }
+.nv-text--body-semibold-sm { font-size: 12px; font-weight: 500; line-height: 1.5; }
+.nv-text--body-semibold-xs { font-size: 10px; font-weight: 500; line-height: 1.5; }
+
+/* Label bold */
+.nv-text--label-bold-3xl { font-size: 32px; font-weight: 700; line-height: 1; }
+.nv-text--label-bold-2xl { font-size: 24px; font-weight: 700; line-height: 1; }
+.nv-text--label-bold-xl { font-size: 18px; font-weight: 700; line-height: 1; }
+.nv-text--label-bold-lg { font-size: 16px; font-weight: 700; line-height: 1; }
+.nv-text--label-bold-md { font-size: 14px; font-weight: 700; line-height: 1; }
+.nv-text--label-bold-sm { font-size: 12px; font-weight: 700; line-height: 1; }
+.nv-text--label-bold-xs { font-size: 10px; font-weight: 700; line-height: 1; }
+
+/* Label regular */
+.nv-text--label-regular-3xl { font-size: 32px; font-weight: 400; line-height: 1; }
+.nv-text--label-regular-2xl { font-size: 24px; font-weight: 400; line-height: 1; }
+.nv-text--label-regular-xl { font-size: 18px; font-weight: 400; line-height: 1; }
+.nv-text--label-regular-lg { font-size: 16px; font-weight: 400; line-height: 1; }
+.nv-text--label-regular-md { font-size: 14px; font-weight: 400; line-height: 1; }
+.nv-text--label-regular-sm { font-size: 12px; font-weight: 400; line-height: 1; }
+.nv-text--label-regular-xs { font-size: 10px; font-weight: 400; line-height: 1; }
+
+/* Label semibold */
+.nv-text--label-semibold-3xl { font-size: 32px; font-weight: 500; line-height: 1; }
+.nv-text--label-semibold-2xl { font-size: 24px; font-weight: 500; line-height: 1; }
+.nv-text--label-semibold-xl { font-size: 18px; font-weight: 500; line-height: 1; }
+.nv-text--label-semibold-lg { font-size: 16px; font-weight: 500; line-height: 1; }
+.nv-text--label-semibold-md { font-size: 14px; font-weight: 500; line-height: 1; }
+.nv-text--label-semibold-sm { font-size: 12px; font-weight: 500; line-height: 1; }
+.nv-text--label-semibold-xs { font-size: 10px; font-weight: 500; line-height: 1; }
+
+/* Label light */
+.nv-text--label-light-3xl { font-size: 32px; font-weight: 300; line-height: 1; }
+.nv-text--label-light-2xl { font-size: 24px; font-weight: 300; line-height: 1; }
+.nv-text--label-light-xl { font-size: 18px; font-weight: 300; line-height: 1; }
+.nv-text--label-light-lg { font-size: 16px; font-weight: 300; line-height: 1; }
+.nv-text--label-light-md { font-size: 14px; font-weight: 300; line-height: 1; }
+.nv-text--label-light-sm { font-size: 12px; font-weight: 300; line-height: 1; }
+.nv-text--label-light-xs { font-size: 10px; font-weight: 300; line-height: 1; }
+
+/* Mono */
+.nv-text--mono-2xl { font-size: 24px; font-family: var(--font-mono); line-height: 1.5; }
+.nv-text--mono-xl { font-size: 20px; font-family: var(--font-mono); line-height: 1.5; }
+.nv-text--mono-lg { font-size: 16px; font-family: var(--font-mono); line-height: 1.5; }
+.nv-text--mono-md { font-size: 14px; font-family: var(--font-mono); line-height: 1.5; }
+.nv-text--mono-sm { font-size: 12px; font-family: var(--font-mono); line-height: 1.5; }
+
+/* Font family overrides */
+.nv-text--font-sans { font-family: var(--font-sans); }
+.nv-text--font-mono { font-family: var(--font-mono); }
+
+/* Weight overrides */
+.nv-text--weight-light { font-weight: 300; }
+.nv-text--weight-regular { font-weight: 400; }
+.nv-text--weight-semibold { font-weight: 500; }
+.nv-text--weight-bold { font-weight: 700; }
+
+/* Style */
+.nv-text--style-normal { font-style: normal; }
+.nv-text--style-italic { font-style: italic; }
+
+/* Underline */
+.nv-text--underline { text-decoration: underline; }
+
+/* ============================================================================
+   BUTTON COMPONENT
+   ============================================================================ */
+
+.nv-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background-color 150ms, border-color 150ms, color 150ms;
+  white-space: nowrap;
+}
+
+.nv-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.nv-button--size-tiny { padding: 4px 8px; font-size: 11px; }
+.nv-button--size-small { padding: 6px 12px; font-size: 12px; }
+.nv-button--size-medium { padding: 8px 16px; font-size: 14px; }
+.nv-button--size-large { padding: 12px 24px; font-size: 16px; }
+
+.nv-button--kind-primary {
+  background: var(--color-brand);
+  color: #000;
+  border-color: var(--color-brand);
+}
+.nv-button--kind-primary:hover:not(:disabled) {
+  background: var(--color-brand-hover);
+  border-color: var(--color-brand-hover);
+}
+
+.nv-button--kind-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border-color: var(--border-base);
+}
+.nv-button--kind-secondary:hover:not(:disabled) {
+  background: var(--bg-muted);
+}
+
+.nv-button--kind-tertiary {
+  background: transparent;
+  color: var(--accent-blue);
+  border-color: transparent;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.nv-button--kind-tertiary:hover:not(:disabled) {
+  background: var(--bg-muted);
+}
+
+.nv-button--color-brand {
+  background: var(--color-brand);
+  color: #000;
+  border-color: var(--color-brand);
+}
+.nv-button--color-brand:hover:not(:disabled) {
+  background: var(--color-brand-hover);
+}
+
+.nv-button--color-danger {
+  background: #e52020;
+  color: #fff;
+  border-color: #e52020;
+}
+.nv-button--color-danger:hover:not(:disabled) {
+  background: #c21e1e;
+}
+
+.nv-button--color-neutral {
+  /* default button styling applies */
+}
+
+/* ============================================================================
+   BADGE COMPONENT
+   ============================================================================ */
+
+.nv-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+/* Outline (default) */
+.nv-badge--kind-outline { background: transparent; }
+.nv-badge--kind-outline.nv-badge--color-green { color: #86efac; border-color: #22c55e40; }
+.nv-badge--kind-outline.nv-badge--color-red { color: #fca5a5; border-color: #ef444440; }
+.nv-badge--kind-outline.nv-badge--color-yellow { color: #fde047; border-color: #eab30840; }
+.nv-badge--kind-outline.nv-badge--color-blue { color: #7dd3fc; border-color: #38bdf840; }
+.nv-badge--kind-outline.nv-badge--color-purple { color: #d8b4fe; border-color: #a855f740; }
+.nv-badge--kind-outline.nv-badge--color-teal { color: #5eead4; border-color: #14b8a640; }
+
+/* Solid */
+.nv-badge--kind-solid.nv-badge--color-green { background: #14532d; color: #86efac; }
+.nv-badge--kind-solid.nv-badge--color-red { background: #450a0a; color: #fca5a5; }
+.nv-badge--kind-solid.nv-badge--color-yellow { background: #422006; color: #fde047; }
+.nv-badge--kind-solid.nv-badge--color-blue { background: #0c4a6e; color: #7dd3fc; }
+.nv-badge--kind-solid.nv-badge--color-purple { background: #3b0764; color: #d8b4fe; }
+.nv-badge--kind-solid.nv-badge--color-teal { background: #042f2e; color: #5eead4; }
+
+/* Light theme overrides */
+[data-theme="light"] .nv-badge--kind-solid.nv-badge--color-green { background: #dcfce7; color: #14532d; }
+[data-theme="light"] .nv-badge--kind-solid.nv-badge--color-red { background: #fee2e2; color: #991b1b; }
+[data-theme="light"] .nv-badge--kind-solid.nv-badge--color-yellow { background: #fef9c3; color: #854d0e; }
+[data-theme="light"] .nv-badge--kind-solid.nv-badge--color-blue { background: #e0f2fe; color: #0c4a6e; }
+[data-theme="light"] .nv-badge--kind-outline.nv-badge--color-green { color: #15803d; border-color: #22c55e60; }
+[data-theme="light"] .nv-badge--kind-outline.nv-badge--color-red { color: #dc2626; border-color: #ef444460; }
+[data-theme="light"] .nv-badge--kind-outline.nv-badge--color-yellow { color: #a16207; border-color: #eab30860; }
+[data-theme="light"] .nv-badge--kind-outline.nv-badge--color-blue { color: #0369a1; border-color: #38bdf860; }
+
+/* ============================================================================
+   STATUS INDICATOR
+   ============================================================================ */
+
+.nv-status-indicator {
+  display: inline-block;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.nv-status-indicator--size-small { width: 8px; height: 8px; }
+.nv-status-indicator--size-medium { width: 10px; height: 10px; }
+.nv-status-indicator--size-large { width: 14px; height: 14px; }
+
+.nv-status-indicator--color-red { background: #ef4444; }
+.nv-status-indicator--color-green { background: #22c55e; }
+.nv-status-indicator--color-yellow { background: #eab308; }
+.nv-status-indicator--color-blue { background: #3b82f6; }
+.nv-status-indicator--color-purple { background: #a855f7; }
+.nv-status-indicator--color-teal { background: #14b8a6; }
+
+/* ============================================================================
+   TEXT INPUT
+   ============================================================================ */
+
+.nv-text-input {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border-base);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  transition: border-color 150ms;
+}
+
+.nv-text-input:focus-within {
+  border-color: var(--accent-blue);
+}
+
+.nv-text-input input,
+.nv-text-input-element {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+.nv-text-input input::placeholder {
+  color: var(--text-muted);
+}
+
+/* ============================================================================
+   BANNER
+   ============================================================================ */
+
+.nv-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  border: 1px solid;
+}
+
+.nv-banner--status-error {
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+  border-color: #7f1d1d;
+}
+
+.nv-banner--status-warning {
+  background: var(--status-warning-bg);
+  color: var(--status-warning-fg);
+  border-color: #854d0e40;
+}
+
+.nv-banner--status-info {
+  background: var(--status-info-bg);
+  color: var(--status-info-fg);
+  border-color: #0c4a6e40;
+}
+
+.nv-banner--status-success {
+  background: var(--status-success-bg);
+  color: var(--status-success-fg);
+  border-color: #14532d;
+}
+
+/* ============================================================================
+   SKELETON
+   ============================================================================ */
+
+.nv-skeleton {
+  background: var(--bg-raised);
+  border-radius: 4px;
+  animation: nv-skeleton-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes nv-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ============================================================================
+   DIVIDER
+   ============================================================================ */
+
+.nv-divider {
+  border: none;
+  border-top: 1px solid var(--border-base);
+  margin: 0;
+}
+
+/* ============================================================================
+   TABS
+   ============================================================================ */
+
+.nv-tabs-list {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-base);
+}
+
+.nv-tabs-trigger {
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 150ms, border-color 150ms;
+}
+
+.nv-tabs-trigger:hover {
+  color: var(--text-primary);
+}
+
+.nv-tabs-trigger[data-state="active"] {
+  color: var(--text-primary);
+  border-bottom-color: var(--color-brand);
+  font-weight: 600;
+}
+
+/* ============================================================================
+   TOOLTIP
+   ============================================================================ */
+
+.nv-tooltip-content {
+  background: #222;
+  color: #e6edf3;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 9999;
+}
+
+/* ============================================================================
+   THEME PROVIDER
+   ============================================================================ */
+
+.nv-theme--dark {
+  color-scheme: dark;
+}
+
+.nv-theme--light {
+  color-scheme: light;
+}

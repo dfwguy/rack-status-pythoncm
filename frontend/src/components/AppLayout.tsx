@@ -1,0 +1,46 @@
+import type { ReactNode } from "react";
+import Box from "@mui/material/Box";
+import { Divider, Text } from "@nvidia/foundations-react-core";
+
+interface AppLayoutProps {
+  sidebar: ReactNode;
+  toolbar: ReactNode;
+  children: ReactNode;
+  backendMode?: string;
+}
+
+export function AppLayout({ sidebar, toolbar, children, backendMode }: AppLayoutProps) {
+  return (
+    <Box sx={{ display: "flex", minHeight: "100vh", overflow: "hidden" }}>
+      {sidebar}
+
+      <Box sx={{ flexGrow: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        {toolbar}
+
+        <Box component="main" sx={{ flexGrow: 1, bgcolor: "background.default", overflow: "auto" }}>
+          {children}
+        </Box>
+
+        <Divider />
+        <Box
+          component="footer"
+          sx={{
+            py: 1.5,
+            px: 3,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            bgcolor: "background.paper",
+          }}
+        >
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+            NVIS Rack Status
+          </Text>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+            {backendMode ? `backend: ${backendMode}` : ""}
+          </Text>
+        </Box>
+      </Box>
+    </Box>
+  );
+}

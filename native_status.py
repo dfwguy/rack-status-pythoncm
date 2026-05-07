@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import threading
@@ -25,6 +26,9 @@ from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import host_exec
+from platforms import get_platform as _get_platform
 
 _PKG_DIR = Path(__file__).resolve().parent
 _NATIVE_LOG_JSON = _PKG_DIR / "var" / "cache" / "native_log_analysis.json"
@@ -191,13 +195,13 @@ def extract_rack_ids_from_cmsh_text(text: str) -> list[str]:
 
 
 def _cmsh_rack_list() -> list[str]:
-    if not shutil.which("cmsh"):
+    plat = _get_platform()
+    cmd = plat.list_racks_cmd()
+    if not host_exec.is_remote() and not shutil.which(cmd[0]):
         return []
     try:
-        proc = subprocess.run(
-            ["cmsh", "-c", "rack; list"],
-            capture_output=True,
-            text=True,
+        proc = host_exec.run_on_host(
+            cmd,
             timeout=max(30, _env_int("RACK_NATIVE_CMSH_TIMEOUT_SEC", 120)),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -206,13 +210,13 @@ def _cmsh_rack_list() -> list[str]:
 
 
 def _cmsh_ds_text() -> str:
-    if not shutil.which("cmsh"):
+    plat = _get_platform()
+    cmd = plat.device_status_cmd()
+    if not host_exec.is_remote() and not shutil.which(cmd[0]):
         return ""
     try:
-        proc = subprocess.run(
-            ["cmsh", "-c", "ds"],
-            capture_output=True,
-            text=True,
+        proc = host_exec.run_on_host(
+            cmd,
             timeout=max(30, _env_int("RACK_NATIVE_DS_TIMEOUT_SEC", 300)),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -315,17 +319,16 @@ def sinfo_state_trim(s: str) -> str:
 
 def collect_sinfo_counts() -> dict[tuple[str, str], int]:
     """Map (rack_id, trimmed_state) -> count of nodes (after hostname expansion)."""
-    if not shutil.which("sinfo"):
+    plat = _get_platform()
+    if not host_exec.is_remote() and not shutil.which("sinfo"):
         return {}
     opts = (os.environ.get("SINFO_OPTS") or "").strip()
-    cmd = ["sinfo", "-N", "-h", "-o", "%N %t"]
+    extra = f"-N -h -o '%N %t'"
     if opts:
-        cmd.extend(shlex_split_safe(opts))
+        extra += f" {opts}"
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
+        proc = host_exec.run_on_host(
+            plat.sinfo_cmd(extra),
             timeout=max(30, _env_int("RACK_NATIVE_SINFO_TIMEOUT_SEC", 120)),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -343,12 +346,10 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
         if not st:
             continue
         hosts: list[str] = []
-        if "[" in node and "]" in node and shutil.which("scontrol"):
+        if "[" in node and "]" in node:
             try:
-                hp = subprocess.run(
-                    ["scontrol", "show", "hostnames", node],
-                    capture_output=True,
-                    text=True,
+                hp = host_exec.run_on_host(
+                    plat.scontrol_hostnames_cmd(node),
                     timeout=max(5, _env_int("RACK_NATIVE_SCONTROL_TIMEOUT_SEC", 60)),
                 )
                 hosts = [h.strip() for h in (hp.stdout or "").splitlines() if h.strip()]
@@ -404,11 +405,10 @@ def load_squeue_jobs_map() -> tuple[set[str], dict[str, str]]:
     match ``last_job`` parsed from log filenames.
     """
     user = (os.environ.get("SQUEUE_USER") or os.environ.get("USER") or "root").strip()
+    plat = _get_platform()
     try:
-        proc = subprocess.run(
-            ["squeue", "-u", user, "-h", "-o", "%i|%M"],
-            capture_output=True,
-            text=True,
+        proc = host_exec.run_on_host(
+            plat.squeue_cmd(f"-u {shlex.quote(user)} -h -o '%i|%M'"),
             timeout=max(5, _env_int("RACK_NATIVE_SQUEUE_TIMEOUT_SEC", 60)),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -457,15 +457,14 @@ def augment_running_set_for_job_ids(
         need.append(sj)
     if not need:
         return
+    plat = _get_platform()
     chunk = 48
     timeout = max(5, _env_int("RACK_NATIVE_SQUEUE_JOB_LOOKUP_TIMEOUT_SEC", 45))
     for i in range(0, len(need), chunk):
         batch = need[i : i + chunk]
         try:
-            proc = subprocess.run(
-                ["squeue", "-j", ",".join(batch), "-h", "-o", "%i|%M"],
-                capture_output=True,
-                text=True,
+            proc = host_exec.run_on_host(
+                plat.squeue_cmd(f"-j {','.join(batch)} -h -o '%i|%M'"),
                 timeout=timeout,
             )
         except (OSError, subprocess.TimeoutExpired):

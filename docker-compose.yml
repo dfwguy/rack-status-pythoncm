@@ -1,0 +1,25 @@
+services:
+  rack-status:
+    build: .
+    ports:
+      - "${RACK_WEB_PORT:-5000}:5000"
+    environment:
+      - RACK_EXEC_MODE=${RACK_EXEC_MODE:-ssh}
+      - RACK_PLATFORM=${RACK_PLATFORM:-bcm}
+      - RACK_SSH_HOST=${RACK_SSH_HOST}
+      - RACK_SSH_USER=${RACK_SSH_USER:-root}
+      - RACK_SSH_KEY=/run/secrets/ssh_key
+      - RACK_SSH_PORT=${RACK_SSH_PORT:-22}
+      - RACK_STATUS_DEMO=${RACK_STATUS_DEMO:-0}
+      - RACK_WEB_AUTH_MODE=${RACK_WEB_AUTH_MODE:-token}
+      - RACK_WEB_AUTH_TOKEN=${RACK_WEB_AUTH_TOKEN:-}
+      - RACK_WEB_AUTH_DISABLED=${RACK_WEB_AUTH_DISABLED:-0}
+      - PORT=5000
+    volumes:
+      - ${RACK_SSH_KEY_PATH:-~/.ssh/id_rsa}:/run/secrets/ssh_key:ro
+      - ${RACK_LOG_DIR:-./var/logs}:/app/var/logs
+      - rack-cache:/app/var/cache
+    restart: unless-stopped
+
+volumes:
+  rack-cache:
