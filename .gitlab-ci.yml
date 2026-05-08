@@ -1,0 +1,106 @@
+stages:
+  - lint
+  - test
+  - build
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+  NPM_CONFIG_CACHE: "$CI_PROJECT_DIR/.npm-cache"
+
+# ─── Lint ────────────────────────────────────────────────────────────────────
+
+python-lint:
+  stage: lint
+  image: python:3.12-slim
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .pip-cache/
+  script:
+    - pip install -q ruff
+    - ruff check app.py native_status.py demo_data.py host_exec.py platforms/
+  allow_failure: true
+
+typescript-check:
+  stage: lint
+  image: node:22-slim
+  cache:
+    key: npm-${CI_COMMIT_REF_SLUG}
+    paths:
+      - frontend/node_modules/
+      - .npm-cache/
+  script:
+    - cd frontend
+    - npm ci --ignore-scripts
+    - npx tsc -b --noEmit
+
+# ─── Test ────────────────────────────────────────────────────────────────────
+
+python-test:
+  stage: test
+  image: python:3.12-slim
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .pip-cache/
+  script:
+    - pip install -q flask openpyxl pytest
+    - python -m pytest tests/ -v --tb=short --junitxml=report-python.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report-python.xml
+
+frontend-test:
+  stage: test
+  image: node:22-slim
+  cache:
+    key: npm-${CI_COMMIT_REF_SLUG}
+    paths:
+      - frontend/node_modules/
+      - .npm-cache/
+  script:
+    - cd frontend
+    - npm ci --ignore-scripts
+    - npx vitest run --reporter=junit --outputFile=../report-frontend.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report-frontend.xml
+
+# ─── Build ───────────────────────────────────────────────────────────────────
+
+docker-build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  script:
+    - docker build -t nvis-rack-status:${CI_COMMIT_SHORT_SHA} .
+    - docker tag nvis-rack-status:${CI_COMMIT_SHORT_SHA} nvis-rack-status:latest
+    - echo "Image built successfully"
+    - docker images nvis-rack-status
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# Push to NVCR (uncomment when registry is configured)
+# docker-push:
+#   stage: build
+#   image: docker:latest
+#   services:
+#     - docker:dind
+#   variables:
+#     DOCKER_TLS_CERTDIR: "/certs"
+#     NVCR_REGISTRY: "nvcr.io/your-org"
+#   needs: [docker-build]
+#   script:
+#     - echo "$NVCR_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
+#     - docker build -t ${NVCR_REGISTRY}/nvis-rack-status:${CI_COMMIT_SHORT_SHA} .
+#     - docker push ${NVCR_REGISTRY}/nvis-rack-status:${CI_COMMIT_SHORT_SHA}
+#     - docker tag ${NVCR_REGISTRY}/nvis-rack-status:${CI_COMMIT_SHORT_SHA} ${NVCR_REGISTRY}/nvis-rack-status:latest
+#     - docker push ${NVCR_REGISTRY}/nvis-rack-status:latest
+#   rules:
+#     - if: $CI_COMMIT_BRANCH == "main"
