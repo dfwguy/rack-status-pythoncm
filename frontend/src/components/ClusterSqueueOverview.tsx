@@ -1,7 +1,7 @@
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
-import Typography from "@mui/material/Typography";
 import Table from "@mui/material/Table";
+import { Text } from "@nvidia/foundations-react-core";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
@@ -27,18 +27,18 @@ export function ClusterSqueueOverview({ squeue }: { squeue: ClusterSqueueBlock |
       }}
     >
       <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover" }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NVIDIA_GREEN }}>
+        <Text kind="body/bold/md" style={{ fontWeight: 700, color: NVIDIA_GREEN, display: "block" }}>
           Slurm queue (squeue)
-        </Typography>
+        </Text>
         {squeue.command_display && (
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontFamily: "monospace", mt: 0.5, wordBreak: "break-all" }}>
+          <Text kind="body/regular/sm" style={{ display: "block", fontFamily: "monospace", marginTop: 4, wordBreak: "break-all", color: "var(--text-color-secondary)" }}>
             {squeue.command_display}
-          </Typography>
+          </Text>
         )}
         {!squeue.ok && squeue.error && (
-          <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+          <Text kind="body/regular/md" style={{ display: "block", marginTop: 8, color: "var(--text-color-error, #f44336)" }}>
             {squeue.error}
-          </Typography>
+          </Text>
         )}
       </Box>
       <Box sx={{ p: 0 }}>

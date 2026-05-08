@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
 import Paper from "@mui/material/Paper";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
@@ -9,8 +8,8 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
-import Typography from "@mui/material/Typography";
 import LinearProgress from "@mui/material/LinearProgress";
+import { Text, Button } from "@nvidia/foundations-react-core";
 import { fetchSlurmJson } from "../lib/slurmHelpers";
 import { parseSinfoRStdout } from "../lib/parseSinfoRStdout";
 
@@ -105,10 +104,10 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
   return (
     <Paper variant="outlined" sx={{ borderLeft: `4px solid ${NVIDIA_GREEN}`, overflow: "hidden" }}>
       <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover", display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NVIDIA_GREEN }}>
+        <Text kind="body/bold/md" style={{ fontWeight: 700, color: NVIDIA_GREEN }}>
           sinfo -R --long
-        </Typography>
-        <Button size="small" variant="outlined" onClick={() => void load()} disabled={loading || !active}>
+        </Text>
+        <Button size="small" kind="secondary" onClick={() => void load()} disabled={loading || !active}>
           Refresh
         </Button>
         {!showRaw && headers.length > 0 && (
@@ -128,20 +127,20 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
       </Box>
 
       {cmd && (
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block", px: 2, pt: 1, fontFamily: "monospace", wordBreak: "break-all" }}>
+        <Text kind="body/regular/sm" style={{ display: "block", paddingLeft: 16, paddingRight: 16, paddingTop: 8, fontFamily: "monospace", wordBreak: "break-all", color: "var(--text-color-secondary)" }}>
           {cmd}
-        </Typography>
+        </Text>
       )}
 
       {bannerErr && (
-        <Typography variant="body2" color="error" sx={{ px: 2, pt: 1, whiteSpace: "pre-wrap" }}>
+        <Text kind="body/regular/md" style={{ display: "block", paddingLeft: 16, paddingRight: 16, paddingTop: 8, whiteSpace: "pre-wrap", color: "var(--text-color-error, #f44336)" }}>
           {bannerErr}
-        </Typography>
+        </Text>
       )}
       {stderrNote && (
-        <Typography variant="body2" color="warning.main" sx={{ px: 2, pt: 1, whiteSpace: "pre-wrap" }}>
+        <Text kind="body/regular/md" style={{ display: "block", paddingLeft: 16, paddingRight: 16, paddingTop: 8, whiteSpace: "pre-wrap", color: "#ed6c02" }}>
           {stderrNote}
-        </Typography>
+        </Text>
       )}
 
       {!showRaw && headers.length > 0 && (

@@ -4,9 +4,9 @@ import MuiToolbar from "@mui/material/Toolbar";
 import IconButton from "@mui/material/IconButton";
 import Box from "@mui/material/Box";
 import Tooltip from "@mui/material/Tooltip";
-import Divider from "@mui/material/Divider";
 import CircularProgress from "@mui/material/CircularProgress";
 import LinearProgress from "@mui/material/LinearProgress";
+import Divider from "@mui/material/Divider";
 import { Text, Tag } from "@nvidia/foundations-react-core";
 import {
   Sun,

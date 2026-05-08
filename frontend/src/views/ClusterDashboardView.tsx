@@ -1,14 +1,13 @@
 import { useCallback, useState } from "react";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
-import Typography from "@mui/material/Typography";
-import Button from "@mui/material/Button";
+import MuiButton from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
 import DialogTitle from "@mui/material/DialogTitle";
 import DialogContent from "@mui/material/DialogContent";
 import DialogActions from "@mui/material/DialogActions";
 import TextField from "@mui/material/TextField";
-import { Text } from "@nvidia/foundations-react-core";
+import { Text, Button } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 import { LoadingSkeleton } from "../components/LoadingSkeleton";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -50,16 +49,16 @@ function MetricCard({
         bgcolor: NVIDIA_GREEN_DIM,
       }}
     >
-      <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 0.06 }}>
+      <Text kind="body/regular/sm" style={{ display: "block", textTransform: "uppercase", letterSpacing: 0.06, color: "var(--text-color-secondary)" }}>
         {label}
-      </Typography>
-      <Typography variant="h6" sx={{ mt: 0.5, fontWeight: 600, wordBreak: "break-word", color: "text.primary" }}>
+      </Text>
+      <Text kind="title/sm" style={{ display: "block", marginTop: 4, fontWeight: 600, wordBreak: "break-word" }}>
         {value}
-      </Typography>
+      </Text>
       {hint && (
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+        <Text kind="body/regular/sm" style={{ display: "block", marginTop: 4, color: "var(--text-color-secondary)" }}>
           {hint}
-        </Typography>
+        </Text>
       )}
     </Paper>
   );
@@ -136,14 +135,14 @@ export function ClusterDashboardView({
         <DialogTitle>Cluster labels (dashboard)</DialogTitle>
         <DialogContent>
           {labelsError && (
-            <Typography color="error" variant="body2" sx={{ mb: 2 }}>
+            <Text kind="body/regular/md" style={{ display: "block", marginBottom: 16, color: "var(--text-color-error, #f44336)" }}>
               {labelsError}
-            </Typography>
+            </Text>
           )}
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Text kind="body/regular/md" style={{ display: "block", marginBottom: 16, color: "var(--text-color-secondary)" }}>
             These values apply only when the corresponding env-derived field is unset or shown as an em dash (—).
             Leave a field empty and save to clear its saved override.
-          </Typography>
+          </Text>
           <TextField
             label="Product line"
             value={productLine}
@@ -170,12 +169,12 @@ export function ClusterDashboardView({
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setLabelsOpen(false)} disabled={labelsSaving}>
+          <MuiButton onClick={() => setLabelsOpen(false)} disabled={labelsSaving}>
             Cancel
-          </Button>
-          <Button onClick={() => void saveLabels()} variant="contained" disabled={labelsSaving}>
+          </MuiButton>
+          <MuiButton onClick={() => void saveLabels()} variant="contained" disabled={labelsSaving}>
             {labelsSaving ? "Saving…" : "Save"}
-          </Button>
+          </MuiButton>
         </DialogActions>
       </Dialog>
 
@@ -183,9 +182,9 @@ export function ClusterDashboardView({
         <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
           {s && (
             <Paper variant="outlined" sx={{ p: 2, borderLeft: `4px solid ${NVIDIA_GREEN}` }}>
-              <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
+              <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 8, color: "var(--text-color-secondary)" }}>
                 Rack validation states (summary)
-              </Typography>
+              </Text>
               <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
                 <Text kind="body/regular/sm">Done: <strong style={{ color: NVIDIA_GREEN }}>{s.done}</strong></Text>
                 <Text kind="body/regular/sm">Fail: <strong>{s.fail}</strong></Text>
@@ -203,34 +202,34 @@ export function ClusterDashboardView({
               background: `linear-gradient(135deg, ${NVIDIA_GREEN_DIM} 0%, transparent 55%)`,
             }}
           >
-            <Typography variant="subtitle2" sx={{ color: NVIDIA_GREEN, fontWeight: 700 }}>
+            <Text kind="body/bold/sm" style={{ display: "block", color: NVIDIA_GREEN, fontWeight: 700 }}>
               Identity
-            </Typography>
-            <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5, color: "text.primary" }}>
+            </Text>
+            <Text kind="title/lg" style={{ display: "block", fontWeight: 700, marginTop: 4 }}>
               {data.cluster_name}
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            </Text>
+            <Text kind="body/regular/md" style={{ display: "block", marginTop: 4, color: "var(--text-color-secondary)" }}>
               Project / customer:{" "}
               <strong style={{ color: NVIDIA_GREEN }}>{data.customer_name}</strong>
-            </Typography>
+            </Text>
             <Box sx={{ mt: 1.5 }}>
-              <Button size="small" variant="outlined" onClick={openLabelsDialog} sx={{ borderColor: NVIDIA_GREEN, color: NVIDIA_GREEN }}>
+              <Button size="small" kind="secondary" onClick={openLabelsDialog} style={{ borderColor: NVIDIA_GREEN, color: NVIDIA_GREEN }}>
                 Edit cluster labels…
               </Button>
             </Box>
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2, mt: 2 }}>
               <Paper variant="outlined" sx={{ px: 2, py: 1, borderColor: "rgba(118, 185, 0, 0.5)" }}>
-                <Typography variant="caption" color="text.secondary">
+                <Text kind="body/regular/sm" style={{ display: "block", color: "var(--text-color-secondary)" }}>
                   Dashboard users (approx.)
-                </Typography>
-                <Typography variant="h4" sx={{ fontWeight: 800, color: NVIDIA_GREEN, lineHeight: 1.1 }}>
+                </Text>
+                <Text kind="display/sm" style={{ display: "block", fontWeight: 800, color: NVIDIA_GREEN, lineHeight: 1.1 }}>
                   {connected}
-                </Typography>
+                </Text>
               </Paper>
               {data.status_updated_at && (
-                <Typography variant="caption" color="text.secondary" sx={{ alignSelf: "flex-end" }}>
+                <Text kind="body/regular/sm" style={{ alignSelf: "flex-end", color: "var(--text-color-secondary)" }}>
                   Rack status cache: {data.status_updated_at}
-                </Typography>
+                </Text>
               )}
             </Box>
           </Paper>

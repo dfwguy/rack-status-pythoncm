@@ -5,8 +5,8 @@ import ListItem from "@mui/material/ListItem";
 import ListItemButton from "@mui/material/ListItemButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
-import Divider from "@mui/material/Divider";
 import Tooltip from "@mui/material/Tooltip";
+import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import { Text } from "@nvidia/foundations-react-core";
 import {

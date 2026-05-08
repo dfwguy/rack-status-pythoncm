@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
 import Paper from "@mui/material/Paper";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
@@ -8,10 +7,8 @@ import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
-import Typography from "@mui/material/Typography";
 import LinearProgress from "@mui/material/LinearProgress";
-import Alert from "@mui/material/Alert";
-import { Text } from "@nvidia/foundations-react-core";
+import { Text, Button, Banner } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 
 type BugReportItem = { host: string; name: string };
@@ -147,7 +144,7 @@ export function ReportsView() {
       />
 
       <Paper variant="outlined" sx={{ p: 3, mb: 2 }}>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5, lineHeight: 1.6 }}>
+        <Text kind="body/regular/md" style={{ display: "block", marginBottom: 12, lineHeight: 1.6, color: "var(--text-color-secondary)" }}>
           Reads the reports directory on <strong>this dashboard host</strong> (same base as{" "}
           <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>RACK_BUG_REPORT_REMOTE_DIR</Box>, default{" "}
           <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>/home/cmsupport/reports</Box>
@@ -157,15 +154,15 @@ export function ReportsView() {
           <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>*.xlsx</Box> (e.g. parser exports under{" "}
           <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>parser-excel/</Box>). No pdsh — sync or copy here if
           needed. Use <strong>Download</strong> on a row to save a file.
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+        </Text>
+        <Text kind="body/regular/md" style={{ display: "block", lineHeight: 1.6, color: "var(--text-color-secondary)" }}>
           To <strong>generate</strong> new reports on compute nodes, use <strong>Generate bug report</strong> from the rack table (pdsh); when that job
           finishes, use the rack download control for a zip. This page only lists files already present under the server reports directory.
-        </Typography>
+        </Text>
       </Paper>
 
       <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2, flexWrap: "wrap" }}>
-        <Button variant="contained" onClick={() => void loadInventory()} disabled={loading}>
+        <Button kind="primary" onClick={() => void loadInventory()} disabled={loading}>
           Refresh list
         </Button>
         {loading && (
@@ -176,19 +173,18 @@ export function ReportsView() {
       </Box>
 
       {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Banner status="error" kind="inline" style={{ marginBottom: 16 }}>
           {error}
-        </Alert>
+        </Banner>
       )}
 
       {metaLines.length > 0 && (
-        <Typography
-          variant="body2"
-          component="div"
-          sx={{ mb: 2, whiteSpace: "pre-wrap", fontFamily: metaLines.some((l) => l.includes("/")) ? "ui-monospace, monospace" : "inherit", fontSize: 13 }}
+        <Text
+          kind="body/regular/md"
+          style={{ display: "block", marginBottom: 16, whiteSpace: "pre-wrap", fontFamily: metaLines.some((l) => l.includes("/")) ? "ui-monospace, monospace" : "inherit" }}
         >
           {metaLines.join("\n")}
-        </Typography>
+        </Text>
       )}
 
       <TableContainer component={Paper} variant="outlined">
@@ -204,9 +200,9 @@ export function ReportsView() {
             {loading && items.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={3}>
-                  <Typography variant="body2" color="text.secondary">
+                  <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
                     Scanning local reports directory…
-                  </Typography>
+                  </Text>
                 </TableCell>
               </TableRow>
             ) : !loading && items.length === 0 && !error ? (
@@ -238,7 +234,7 @@ export function ReportsView() {
                       {it.name}
                     </TableCell>
                     <TableCell>
-                      <Button size="small" variant="text" disabled={busy || loading} onClick={() => void downloadFile(it.host, it.name)}>
+                      <Button size="small" kind="tertiary" disabled={busy || loading} onClick={() => void downloadFile(it.host, it.name)}>
                         {busy ? "…" : "Download"}
                       </Button>
                     </TableCell>
