@@ -46,97 +46,90 @@ Open **http://localhost:5000/spa/** for the React UI, or **http://localhost:5000
 RACK_STATUS_DEMO=1 RACK_WEB_AUTH_DISABLED=1 python3 app.py
 ```
 
-### Production with Grafana and custom validation path
-
-```bash
-export VALIDATION_TEST=nccl_allreduce,llm
-export RACK_WEB_PROJECT_NAME="Project NAME"
-export NEMO_SQSH_SRC=/home/cmsupport/nemo-25.11.01.sqsh
-export RACK_STATUS_LOG_DIR=/home/cmsupport/aihpc_val-main/validation/nemo/
-export PORT=5000
-python3 app.py
-```
-
 ---
 
 ## Docker
 
-### Build and run (one command)
+### Using the config file (recommended)
 
-```bash
-./build-docker.sh          # dev: demo data, no auth, port 5050
-./build-docker.sh prod     # prod: SSH to head node, token auth
-./build-docker.sh build    # build only
-./build-docker.sh stop     # stop container
-./build-docker.sh logs     # tail logs
-./build-docker.sh help     # show all options
-```
-
-### Manual Docker commands
-
-**Demo mode:**
+Edit `rack-config.env` with your site settings, then:
 
 ```bash
 docker build -t nvis-rack-status:local .
-docker run -d --name rack-status -p 5050:5000 \
-  -e RACK_STATUS_DEMO=1 \
-  -e RACK_WEB_AUTH_DISABLED=1 \
+docker run -d --name rack-status -p 5000:5000 \
+  --env-file rack-config.env \
+  -e RACK_SSH_HOST=<head-node-ip> \
+  -e RACK_WEB_AUTH_TOKEN=<password> \
+  -v ~/.ssh/id_rsa:/run/secrets/ssh_key:ro \
   nvis-rack-status:local
 ```
 
-**Production (SSH to BCM head node):**
+### Build and run helper script
 
 ```bash
-docker run -d --name rack-status -p 5000:5000 \
-  -e RACK_EXEC_MODE=ssh \
-  -e RACK_PLATFORM=bcm \
-  -e RACK_SSH_HOST=10.0.0.1 \
-  -e RACK_SSH_USER=root \
-  -e RACK_WEB_AUTH_MODE=token \
-  -e RACK_WEB_AUTH_TOKEN=<password> \
-  -v ~/.ssh/id_rsa:/run/secrets/ssh_key:ro \
-  -v /path/to/logs:/app/var/logs \
-  --restart unless-stopped \
-  nvis-rack-status:local
-```
-
-**Production (MAAS head node):**
-
-```bash
-docker run -d --name rack-status -p 5000:5000 \
-  -e RACK_EXEC_MODE=ssh \
-  -e RACK_PLATFORM=maas \
-  -e RACK_SSH_HOST=10.0.0.1 \
-  -e RACK_SSH_USER=root \
-  -e RACK_WEB_AUTH_MODE=token \
-  -e RACK_WEB_AUTH_TOKEN=<password> \
-  -v ~/.ssh/id_rsa:/run/secrets/ssh_key:ro \
-  --restart unless-stopped \
-  nvis-rack-status:local
+./build-docker.sh          # dev: demo data, no auth, port 5050
+./build-docker.sh prod     # prod: SSH to head node, uses rack-config.env
+./build-docker.sh build    # build only
+./build-docker.sh stop     # stop container
+./build-docker.sh logs     # tail logs
 ```
 
 ### Docker Compose
 
 ```bash
-cp .env.example .env
-# Edit .env with your site values
+cp rack-config.env rack-config.env.local   # edit with your settings
 docker compose up -d
 ```
 
 ### Architecture
 
-The Docker image runs the Flask app inside the container and executes cluster commands (Slurm, cmsh, pdsh) on the head node via SSH. This is controlled by the `RACK_EXEC_MODE` and `RACK_PLATFORM` environment variables.
-
 ```
 Container (Flask + React SPA)
+  │
+  │  RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status
+  │  (resolves all script paths and log dir to the head node)
+  │
   └── SSH ──► Head Node (BCM or MAAS)
                 ├── sinfo / squeue / sacct / scontrol
                 ├── cmsh (BCM) or maas-cli (MAAS)
                 ├── pdsh
-                └── rack_status.sh, sysinfo.sh, etc.
+                └── bin/scripts/ (rack_status.sh, run-llama.sh, etc.)
 ```
 
-See **[INSTALL.md](INSTALL.md)** for full Docker deployment instructions, SSH key setup, configuration reference, and troubleshooting.
+Environment variables prefixed with `RACK_*`, `NEMO_*`, `VALIDATION_*`, and `SQUEUE_*` are automatically forwarded to the remote SSH session.
+
+See **[INSTALL.md](INSTALL.md)** for full deployment instructions, SSH key setup, and troubleshooting.
+
+---
+
+## Testing
+
+### Backend (pytest)
+
+```bash
+source .venv/bin/activate
+pip install pytest pytest-cov
+python -m pytest tests/ -v                     # run tests
+python -m pytest tests/ --cov=. --cov-report=term  # with coverage
+```
+
+### Frontend (vitest)
+
+```bash
+cd frontend
+npm test                    # run tests
+npx vitest run --coverage   # with coverage
+```
+
+### CI/CD
+
+The `.gitlab-ci.yml` pipeline runs on every push:
+
+| Stage | Jobs |
+|-------|------|
+| **lint** | Python (ruff), TypeScript (tsc) |
+| **test** | pytest (46 tests), vitest (13 tests) with JUnit reports |
+| **build** | Docker image build (main branch + merge requests) |
 
 ---
 
@@ -150,6 +143,9 @@ See **[INSTALL.md](INSTALL.md)** for full Docker deployment instructions, SSH ke
 | Charts | Chart.js + react-chartjs-2 |
 | Icons | Lucide React |
 | Theming | KUI ThemeProvider (dark/light) synced to MUI ThemeProvider |
+| Backend Tests | pytest + pytest-cov |
+| Frontend Tests | Vitest + Testing Library |
+| CI/CD | GitLab CI (lint, test, build, push to NVCR) |
 
 ---
 
@@ -167,28 +163,65 @@ nvis-rack-status/
 │   └── maas.py             # Canonical MAAS (maas-cli)
 ├── rack_web/               # PAM auth helpers
 ├── bin/scripts/            # Operational shell scripts
+├── tests/                  # Python unit tests (pytest)
 ├── frontend/               # React SPA (Vite + TypeScript)
-│   ├── src/components/     # Reusable components (RackTable, ParserResultsDialog, etc.)
-│   ├── src/views/          # Page views (Dashboard, Multirack, Slurm, etc.)
-│   └── src/context/        # Theme and auth context
+│   ├── src/components/     # Reusable components
+│   ├── src/views/          # Page views (Dashboard, Multirack, Slurm, Analytics, etc.)
+│   ├── src/context/        # Theme, auth, and command tracking contexts
+│   ├── src/hooks/          # Custom React hooks
+│   └── src/lib/            # Utility libraries (parsers, helpers)
 ├── templates/              # Legacy HTML dashboard
 ├── static/                 # Static assets (built SPA goes to static/spa/)
 ├── var/                    # Runtime logs and caches
+├── rack-config.env         # Docker deployment config (edit per site)
 ├── Dockerfile              # Multi-stage build (Node + Ubuntu)
-├── docker-compose.yml      # Compose with SSH key mount
+├── docker-compose.yml      # Compose with env_file support
 ├── build-docker.sh         # Build and run helper script
+├── .gitlab-ci.yml          # CI/CD pipeline (lint, test, build)
 ├── INSTALL.md              # Docker deployment guide
 └── requirements.txt        # Python dependencies
 ```
 
 ---
 
-## Status Backends: Native Python vs Shell
+## Configuration
 
-| Mode | Variable | What runs |
-|------|-----------|-----------|
-| **Native (default)** | `RACK_STATUS_USE_SHELL_TABLE` unset or false | `native_status.py` — cmsh rack list, async cmsh ds, sinfo, and log probes merge into in-memory state |
-| **Shell (legacy)** | `RACK_STATUS_USE_SHELL_TABLE=1` | `rack_status.sh` — full shell pipeline each refresh |
+### Remote path (Docker SSH mode)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RACK_REMOTE_BASE_PATH` | — | Base directory on the head node. When set, all script paths and default log dir resolve from this path instead of the container's `/app/`. |
+| `RACK_EXEC_MODE` | `local` | `local` or `ssh` |
+| `RACK_PLATFORM` | `bcm` | `bcm` or `maas` |
+
+### SSH connection
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RACK_SSH_HOST` | — | Head-node hostname/IP (required in ssh mode) |
+| `RACK_SSH_USER` | `root` | SSH user |
+| `RACK_SSH_KEY` | `/run/secrets/ssh_key` | Path to SSH private key |
+| `RACK_SSH_PORT` | `22` | SSH port |
+
+### Authentication
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RACK_WEB_AUTH_MODE` | auto | `token` or `pam` (auto-selects token in SSH mode) |
+| `RACK_WEB_AUTH_TOKEN` | — | Login password for token mode |
+| `RACK_WEB_AUTH_DISABLED` | `0` | `1` to disable login entirely |
+
+### Other
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `5000` | Flask listen port |
+| `RACK_STATUS_DEMO` | `0` | `1` for synthetic demo data |
+| `NEMO_SQSH_SRC` | — | Path to NeMo container image on head node |
+| `RACK_SLURM_SKIP_MODULE_LOAD` | `0` | `1` if sinfo/squeue are already on PATH |
+| `RACK_VALIDATION_CT_RANGE` | `01-18` | Tray range per rack (e.g. `01-02` for 2-node racks) |
+
+Full variable reference: **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)**
 
 ---
 
@@ -206,50 +239,12 @@ nvis-rack-status/
 | `/api/slurm-undrain` | POST | Undrain rack nodes |
 | `/api/slurm-scancel` | POST | Cancel Slurm job |
 | `/api/run-validation-async` | POST | Launch single-rack validation |
+| `/api/run-llama-async` | POST | Launch Llama benchmark |
 | `/api/run-nemo-xrack-async` | POST | Launch multirack validation |
+| `/api/run-mnubergemm-stress-async` | POST | Launch stress test |
 | `/api/power-reset` | POST | Power-cycle nodes |
-| `/api/auth-check` | GET | Check authentication status |
 | `/api/login` | POST | Token/PAM login |
-
----
-
-## Configuration
-
-### Core settings
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `5000` | Flask listen port |
-| `RACK_STATUS_DEMO` | `0` | `1` for synthetic demo data |
-| `RACK_STATUS_LOG_DIR` | `var/logs/` | Root for NEMO validation logs |
-| `RACK_EXEC_MODE` | `local` | `local` or `ssh` (Docker) |
-| `RACK_PLATFORM` | `bcm` | `bcm` or `maas` |
-
-### Docker SSH settings
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RACK_SSH_HOST` | — | Head-node hostname/IP (required in ssh mode) |
-| `RACK_SSH_USER` | `root` | SSH user |
-| `RACK_SSH_KEY` | `/run/secrets/ssh_key` | Path to SSH private key |
-| `RACK_SSH_PORT` | `22` | SSH port |
-
-### Authentication
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RACK_WEB_AUTH_MODE` | auto | `token` or `pam` (auto-selects token in SSH mode) |
-| `RACK_WEB_AUTH_TOKEN` | — | Login password for token mode |
-| `RACK_WEB_AUTH_DISABLED` | `0` | `1` to disable login entirely |
-| `RACK_WEB_SECRET_KEY` | random | Stable session key across restarts |
-
-Full variable reference: **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)**
-
----
-
-## Bundled Scripts
-
-Operational scripts live under `bin/scripts/` (paths overridable with `RACK_*_SCRIPT` env vars). Prerequisites (Slurm, pdsh, cmsh, etc.) are summarized in `bin/scripts/README.txt`.
+| `/api/tail-log-stream` | POST | Stream log file (tail -f) |
 
 ---
 
@@ -259,8 +254,8 @@ Operational scripts live under `bin/scripts/` (paths overridable with `RACK_*_SC
 |-----|---------|
 | **[INSTALL.md](INSTALL.md)** | Docker deployment, SSH setup, troubleshooting |
 | **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)** | All environment variables, timeouts, disable flags |
+| **`.cursor/rules/`** | Design rules for KUI/MUI components, host_exec patterns, backend conventions |
 | **`app.py` module docstring** | PAM, Grafana alignment, cache files |
-| **`docs/nvis-rack-status-slides.html`** | Reveal.js overview (open in browser) |
 
 ---
 
