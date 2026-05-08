@@ -67,42 +67,34 @@ run_dev() {
 run_prod() {
   local port="${RACK_WEB_PORT:-5000}"
   local ssh_host="${RACK_SSH_HOST:-}"
-  local ssh_user="${RACK_SSH_USER:-root}"
-  local ssh_port="${RACK_SSH_PORT:-22}"
   local ssh_key="${RACK_SSH_KEY_PATH:-$HOME/.ssh/id_rsa}"
-  local platform="${RACK_PLATFORM:-bcm}"
-  local auth_mode="${RACK_WEB_AUTH_MODE:-token}"
   local auth_token="${RACK_WEB_AUTH_TOKEN:-}"
-  local log_dir="${RACK_LOG_DIR:-./var/logs}"
+  local config="${RACK_CONFIG_FILE:-rack-config.env}"
 
   if [[ -z "$ssh_host" ]]; then
     echo "Error: RACK_SSH_HOST is required for prod mode."
-    echo "  RACK_SSH_HOST=10.0.0.1 ./dev-docker.sh prod"
+    echo "  RACK_SSH_HOST=10.0.0.1 ./build-docker.sh prod"
     exit 1
   fi
-  if [[ "$auth_mode" == "token" && -z "$auth_token" ]]; then
+  if [[ -z "$auth_token" ]]; then
     echo "Error: RACK_WEB_AUTH_TOKEN is required for prod token auth."
-    echo "  RACK_WEB_AUTH_TOKEN=secret ./dev-docker.sh prod"
+    echo "  RACK_WEB_AUTH_TOKEN=secret ./build-docker.sh prod"
     exit 1
   fi
   if [[ ! -f "$ssh_key" ]]; then
     echo "Warning: SSH key not found at ${ssh_key}"
   fi
+  if [[ ! -f "$config" ]]; then
+    echo "Warning: Config file not found at ${config}, using image defaults"
+  fi
 
   stop_container
-  echo "==> Starting in PROD mode (${platform}, ${ssh_host}, port ${port}) …"
+  echo "==> Starting in PROD mode (port ${port}, config: ${config}) …"
   docker run -d --name "$CONTAINER" -p "${port}:5000" \
-    -e RACK_EXEC_MODE=ssh \
-    -e RACK_PLATFORM="$platform" \
+    --env-file "$config" \
     -e RACK_SSH_HOST="$ssh_host" \
-    -e RACK_SSH_USER="$ssh_user" \
-    -e RACK_SSH_PORT="$ssh_port" \
-    -e RACK_SSH_KEY=/run/secrets/ssh_key \
-    -e RACK_WEB_AUTH_MODE="$auth_mode" \
     -e RACK_WEB_AUTH_TOKEN="$auth_token" \
-    -e RACK_STATUS_DEMO=0 \
     -v "${ssh_key}:/run/secrets/ssh_key:ro" \
-    -v "${log_dir}:/app/var/logs" \
     --restart unless-stopped \
     "$IMAGE"
   wait_ready "$port"

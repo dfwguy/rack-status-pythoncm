@@ -38,6 +38,7 @@ COPY rack_web/ ./rack_web/
 COPY bin/ ./bin/
 COPY templates/ ./templates/
 COPY static/ ./static/
+COPY rack-config.env ./
 
 RUN mkdir -p var/logs var/cache
 
