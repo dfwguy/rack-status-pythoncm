@@ -44,3 +44,43 @@ export interface WorkerStatus {
   thread_alive: boolean;
   finished_once: boolean;
 }
+
+/** Slurm squeue snapshot embedded in cluster overview (head / controller only). */
+export interface ClusterSqueueBlock {
+  ok: boolean;
+  stdout: string;
+  stderr?: string;
+  command_display?: string;
+  returncode?: number;
+  error?: string;
+}
+
+/** Values persisted via PUT /api/cluster-dashboard-metadata (fill gaps when env is unset). */
+export interface ClusterDashboardMetadata {
+  product_line: string;
+  hw_vendor: string;
+  customer_name: string;
+}
+
+/** GET /api/cluster-overview — cluster-wide facts (env + head-only Slurm; no compute-node SSH/pdsh). */
+export interface ClusterOverviewResponse {
+  ok: true;
+  cluster_name: string;
+  customer_name: string;
+  product_line: string;
+  hw_vendor: string;
+  bcm_version: string;
+  slurm_version: string;
+  nemo_container: string;
+  rack_count: number;
+  tray_hosts: number;
+  estimated_gpu_count: number;
+  validation_summary: RackSummary;
+  validation_cells_total: number;
+  status_updated_at: string | null;
+  probes: Record<string, unknown>;
+  app_version: string;
+  connected_users: number;
+  squeue: ClusterSqueueBlock;
+  cluster_dashboard_metadata: ClusterDashboardMetadata;
+}

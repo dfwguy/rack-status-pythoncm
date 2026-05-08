@@ -17,8 +17,18 @@ import Snackbar from "@mui/material/Snackbar";
 import Alert from "@mui/material/Alert";
 import CircularProgress from "@mui/material/CircularProgress";
 import { Card, Text, Tag, Button, Banner, Flex } from "@nvidia/foundations-react-core";
-import { Layers } from "lucide-react";
+import { Layers, LineChart } from "lucide-react";
+import Tooltip from "@mui/material/Tooltip";
+import IconButton from "@mui/material/IconButton";
 import { PageHeader } from "../components/layout/PageHeader";
+import { ParserResultsDialog } from "../components/ParserResultsDialog";
+import { TailLogDialog } from "../components/TailLogDialog";
+import {
+  buildMultirackTailBody,
+  openRackLogInNewTab,
+  validationOngoing,
+  type TailLogStreamBody,
+} from "../lib/rackLog";
 import type { RackRow, RackStatusResponse } from "../types/api";
 
 interface MultirackViewProps {
@@ -53,6 +63,14 @@ interface MultirackStatusRow {
   sinfo: string;
 }
 
+/** log_file from API is usually a basename; strip any path for parser ?log_file= */
+function logBasenameForParser(logFile: string): string {
+  const s = logFile.replace(/\\/g, "/").trim();
+  if (!s) return "";
+  const i = s.lastIndexOf("/");
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
 export function MultirackView({ data, logDir }: MultirackViewProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -68,7 +86,55 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   const [mrLoading, setMrLoading] = useState(false);
   const [mrError, setMrError] = useState("");
 
+  const [parserOpen, setParserOpen] = useState(false);
+  const [parserRack, setParserRack] = useState("");
+  const [parserLogBasename, setParserLogBasename] = useState<string | undefined>();
+  const [parserJobId, setParserJobId] = useState<string | undefined>();
+  const [parserInitialTab, setParserInitialTab] = useState(1);
+
+  const [tailStream, setTailStream] = useState<{ title: string; body: TailLogStreamBody } | null>(null);
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const openMultirackParser = useCallback((row: MultirackStatusRow, initialTab: number) => {
+    const bn = logBasenameForParser(row.log_file);
+    if (!bn) return;
+    setParserRack(row.display_rack || "");
+    setParserLogBasename(bn);
+    setParserJobId(row.last_job && row.last_job !== "-" ? row.last_job : undefined);
+    setParserInitialTab(initialTab);
+    setParserOpen(true);
+  }, []);
+
+  const openMultirackLog = useCallback(
+    async (row: MultirackStatusRow) => {
+      const bn = logBasenameForParser(row.log_file);
+      if (!bn) {
+        setSnackbar({ open: true, message: "No log file for this row.", severity: "error" });
+        return;
+      }
+      const r = await openRackLogInNewTab(logDir, { log_file: bn });
+      if (!r.ok) {
+        setSnackbar({ open: true, message: r.error, severity: "error" });
+      }
+    },
+    [logDir]
+  );
+
+  const startMultirackTail = useCallback(
+    (row: MultirackStatusRow) => {
+      const bn = logBasenameForParser(row.log_file);
+      if (!bn) {
+        setSnackbar({ open: true, message: "No log file for this row.", severity: "error" });
+        return;
+      }
+      setTailStream({
+        title: `Tail log — ${row.display_rack || bn}`,
+        body: buildMultirackTailBody(logDir, bn),
+      });
+    },
+    [logDir]
+  );
 
   const rows = data?.rows || [];
 
@@ -245,28 +311,68 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
                 <TableCell>Last Job</TableCell>
                 <TableCell>Sinfo</TableCell>
                 <TableCell>Log File</TableCell>
+                <TableCell align="right">Results</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {mrRows.map((row, i) => (
-                <TableRow key={i} hover>
-                  <TableCell sx={{ fontWeight: 600 }}>{row.display_rack}</TableCell>
-                  <TableCell>
-                    <Tag color={nemoColor(row.nemo)} kind="solid" readOnly density="compact">{row.nemo}</Tag>
-                  </TableCell>
-                  <TableCell>
-                    <Text kind="body/regular/md" style={{ fontFamily: "monospace" }}>{row.last_job}</Text>
-                  </TableCell>
-                  <TableCell>
-                    <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>{row.sinfo}</Text>
-                  </TableCell>
-                  <TableCell>
-                    <Text kind="mono/sm" style={{ color: "var(--text-color-secondary)" }}>
-                      {row.log_file.length > 50 ? "..." + row.log_file.slice(-47) : row.log_file}
-                    </Text>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {mrRows.map((row, i) => {
+                const hasLog = Boolean(logBasenameForParser(row.log_file));
+                const live = validationOngoing(row.nemo);
+                return (
+                  <TableRow key={i} hover>
+                    <TableCell sx={{ fontWeight: 600 }}>{row.display_rack}</TableCell>
+                    <TableCell>
+                      <Tag color={nemoColor(row.nemo)} kind="solid" readOnly density="compact">{row.nemo}</Tag>
+                    </TableCell>
+                    <TableCell>
+                      <Text kind="body/regular/md" style={{ fontFamily: "monospace" }}>{row.last_job}</Text>
+                    </TableCell>
+                    <TableCell>
+                      <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>{row.sinfo}</Text>
+                    </TableCell>
+                    <TableCell>
+                      <Text kind="mono/sm" style={{ color: "var(--text-color-secondary)" }}>
+                        {row.log_file.length > 50 ? "..." + row.log_file.slice(-47) : row.log_file}
+                      </Text>
+                    </TableCell>
+                    <TableCell align="right">
+                      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 0.5, flexWrap: "wrap" }}>
+                        {live ? (
+                          <MuiButton
+                            size="small"
+                            variant="outlined"
+                            disabled={!hasLog}
+                            onClick={() => startMultirackTail(row)}
+                          >
+                            Tail Log
+                          </MuiButton>
+                        ) : (
+                          <MuiButton
+                            size="small"
+                            variant="outlined"
+                            disabled={!hasLog}
+                            onClick={() => void openMultirackLog(row)}
+                          >
+                            Open Log
+                          </MuiButton>
+                        )}
+                        <Tooltip title={hasLog ? "NCCL / NEMO charts and Grafana (parser.sh --json)" : "No log file"}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              disabled={!hasLog}
+                              onClick={() => openMultirackParser(row, 1)}
+                              aria-label="Open parser results"
+                            >
+                              <LineChart size={18} />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </TableContainer>
@@ -386,6 +492,28 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           {snackbar.message}
         </Alert>
       </Snackbar>
+
+      <TailLogDialog
+        open={tailStream !== null}
+        onClose={() => setTailStream(null)}
+        title={tailStream?.title ?? "Tail log"}
+        payload={tailStream?.body ?? null}
+      />
+
+      <ParserResultsDialog
+        open={parserOpen}
+        onClose={() => {
+          setParserOpen(false);
+          setParserLogBasename(undefined);
+          setParserJobId(undefined);
+          setParserInitialTab(1);
+        }}
+        rack={parserRack}
+        jobId={parserJobId}
+        logDir={logDir}
+        logFileBasename={parserLogBasename}
+        initialTabIndex={parserInitialTab}
+      />
     </Box>
   );
 }

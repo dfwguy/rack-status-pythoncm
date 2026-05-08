@@ -7,7 +7,18 @@ import TableRow from "@mui/material/TableRow";
 import Paper from "@mui/material/Paper";
 import Checkbox from "@mui/material/Checkbox";
 import Box from "@mui/material/Box";
+import Link from "@mui/material/Link";
 import { Tag, Text, Button } from "@nvidia/foundations-react-core";
+
+/** Build https URL for BMC / RedFish UI; bracket bare IPv6 literals only. */
+function redfishHttpsHref(host: string): string | null {
+  const h = host.trim();
+  if (!h || /[\s/@#?\\]/.test(h)) return null;
+  if (h.startsWith("[")) return `https://${h}`;
+  const colons = (h.match(/:/g) || []).length;
+  if (colons >= 2 || h.includes("::")) return `https://[${h}]`;
+  return `https://${h}`;
+}
 
 export interface NodeInfo {
   id: string;
@@ -28,6 +39,36 @@ function statusLabel(status: NodeInfo["status"]) {
     case "inst": return "INST";
     default: return "?";
   }
+}
+
+function RedfishIpCell({ ip }: { ip?: string }) {
+  const trimmed = ip?.trim();
+  if (!trimmed) {
+    return <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>—</Text>;
+  }
+  const href = redfishHttpsHref(trimmed);
+  if (!href) {
+    return <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>{trimmed}</Text>;
+  }
+  return (
+    <Link
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      underline="always"
+      title={`RedFish BMC — ${href}`}
+      onClick={(e) => e.stopPropagation()}
+      sx={{
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        fontSize: 13,
+        fontWeight: 500,
+        color: "primary.main",
+        cursor: "pointer",
+      }}
+    >
+      {trimmed}
+    </Link>
+  );
 }
 
 export function NodeSelector({ nodes, selected, onSelectionChange }: NodeSelectorProps) {
@@ -90,7 +131,7 @@ export function NodeSelector({ nodes, selected, onSelectionChange }: NodeSelecto
               </TableCell>
               <TableCell>Node</TableCell>
               <TableCell>Status</TableCell>
-              <TableCell>IP</TableCell>
+              <TableCell>RedFish IP</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -119,10 +160,8 @@ export function NodeSelector({ nodes, selected, onSelectionChange }: NodeSelecto
                     {statusLabel(node.status)}
                   </Tag>
                 </TableCell>
-                <TableCell>
-                  <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-                    {node.ip || "—"}
-                  </Text>
+                <TableCell onClick={(e) => e.stopPropagation()}>
+                  <RedfishIpCell ip={node.ip} />
                 </TableCell>
               </TableRow>
             ))}

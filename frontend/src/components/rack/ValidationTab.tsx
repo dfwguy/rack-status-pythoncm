@@ -2,17 +2,23 @@ import Box from "@mui/material/Box";
 import { Text, Divider } from "@nvidia/foundations-react-core";
 import { ActionCard } from "./ActionCard";
 import { Play, Flame, Zap, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import { useRackCommands } from "../../context/RackCommandContext";
+import { llamaNodesBody, slurmTargetBody, validationFamilyBody } from "../../lib/rackCommandBodies";
 
 interface ValidationTabProps {
   rack: string;
+  logDir?: string;
   selectedNodes: Set<string>;
   disabled: boolean;
   jobId?: string;
   onViewResults?: () => void;
 }
 
-export function ValidationTab({ rack, selectedNodes, disabled, onViewResults }: ValidationTabProps) {
+export function ValidationTab({ rack, logDir, selectedNodes, disabled, jobId, onViewResults }: ValidationTabProps) {
+  const { runAsyncValidationFamily, runSyncJson, openText } = useRackCommands();
   const nodeCount = selectedNodes.size;
+
+  const validationBody = () => validationFamilyBody(rack, logDir, selectedNodes);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -27,6 +33,15 @@ export function ValidationTab({ rack, selectedNodes, disabled, onViewResults }: 
         buttonLabel="Run NEMO"
         disabled={disabled}
         selectedNodes={selectedNodes}
+        onRun={() =>
+          runAsyncValidationFamily(
+            "NEMO validation",
+            "validation",
+            "/api/run-validation-async",
+            (jid) => `/api/run-validation-status?job_id=${encodeURIComponent(jid)}`,
+            validationBody(),
+          )
+        }
       />
       <ActionCard
         title="Run Llama"
@@ -35,6 +50,15 @@ export function ValidationTab({ rack, selectedNodes, disabled, onViewResults }: 
         buttonLabel="Run Llama"
         disabled={disabled}
         selectedNodes={selectedNodes}
+        onRun={() =>
+          runAsyncValidationFamily(
+            "Llama",
+            "validation",
+            "/api/run-llama-async",
+            (jid) => `/api/run-llama-status?job_id=${encodeURIComponent(jid)}`,
+            llamaNodesBody(rack, logDir, selectedNodes),
+          )
+        }
       />
       <ActionCard
         title="Run Stress"
@@ -43,9 +67,20 @@ export function ValidationTab({ rack, selectedNodes, disabled, onViewResults }: 
         buttonLabel="Run Stress"
         disabled={disabled}
         selectedNodes={selectedNodes}
+        onRun={() =>
+          runAsyncValidationFamily(
+            "MNUBERGEMM stress",
+            "stress",
+            "/api/run-mnubergemm-stress-async",
+            (jid) => `/api/run-mnubergemm-stress-status?job_id=${encodeURIComponent(jid)}`,
+            validationBody(),
+          )
+        }
       />
 
-      <div style={{ margin: "8px 0" }}><Divider /></div>
+      <div style={{ margin: "8px 0" }}>
+        <Divider />
+      </div>
       <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)" }}>
         Results &amp; Controls
       </Text>
@@ -64,6 +99,14 @@ export function ValidationTab({ rack, selectedNodes, disabled, onViewResults }: 
         buttonLabel="Cancel"
         destructive
         selectedNodes={selectedNodes}
+        onRun={async () => {
+          const jid = (jobId ?? "").trim();
+          if (!jid || jid === "-") {
+            openText("Slurm scancel", "No active job id for this rack (last_job missing or placeholder).", true);
+            return;
+          }
+          await runSyncJson("Slurm scancel", "/api/slurm-scancel", { rack, job_id: jid });
+        }}
       />
       <ActionCard
         title="Drain Nodes"
@@ -72,6 +115,7 @@ export function ValidationTab({ rack, selectedNodes, disabled, onViewResults }: 
         buttonLabel="Drain"
         disabled={disabled}
         selectedNodes={selectedNodes}
+        onRun={() => runSyncJson("Slurm drain", "/api/slurm-drain", slurmTargetBody(rack, selectedNodes))}
       />
       <ActionCard
         title="Undrain Nodes"
@@ -80,6 +124,7 @@ export function ValidationTab({ rack, selectedNodes, disabled, onViewResults }: 
         buttonLabel="Undrain"
         disabled={disabled}
         selectedNodes={selectedNodes}
+        onRun={() => runSyncJson("Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, selectedNodes))}
       />
     </Box>
   );

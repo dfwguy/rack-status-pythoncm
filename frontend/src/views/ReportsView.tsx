@@ -1,23 +1,254 @@
+import { useCallback, useEffect, useState } from "react";
 import Box from "@mui/material/Box";
-import { Card, Text } from "@nvidia/foundations-react-core";
+import Button from "@mui/material/Button";
+import Paper from "@mui/material/Paper";
+import Table from "@mui/material/Table";
+import TableBody from "@mui/material/TableBody";
+import TableCell from "@mui/material/TableCell";
+import TableContainer from "@mui/material/TableContainer";
+import TableHead from "@mui/material/TableHead";
+import TableRow from "@mui/material/TableRow";
+import Typography from "@mui/material/Typography";
+import LinearProgress from "@mui/material/LinearProgress";
+import Alert from "@mui/material/Alert";
+import { Text } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 
+type BugReportItem = { host: string; name: string };
+
+/** Matches server ``_BUG_REPORT_EXCEL_ROOT_HOST`` — ``*.xlsx`` files directly under the reports base dir. */
+const BUG_REPORT_EXCEL_ROOT_HOST = "excel-root";
+
+type BugReportInventoryJson = {
+  ok?: boolean;
+  error?: string;
+  base_dir?: string;
+  notice?: string;
+  items?: unknown[];
+};
+
+function parseContentDispositionFilename(disp: string | null): string | null {
+  if (!disp) return null;
+  const mStar = /filename\*\s*=\s*[^']*''([^;\s]+)/i.exec(disp);
+  if (mStar) {
+    try {
+      return decodeURIComponent(mStar[1].trim());
+    } catch {
+      return mStar[1].trim();
+    }
+  }
+  const m = /filename\s*=\s*("?)([^";\n]+)\1/i.exec(disp);
+  return m ? m[2].trim() : null;
+}
+
+function normalizeItems(raw: unknown[] | undefined): BugReportItem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: BugReportItem[] = [];
+  for (const it of raw) {
+    if (!it || typeof it !== "object") continue;
+    const o = it as Record<string, unknown>;
+    const host = typeof o.host === "string" ? o.host.trim() : "";
+    const name = typeof o.name === "string" ? o.name.trim() : "";
+    if (host && name) out.push({ host, name });
+  }
+  return out;
+}
+
 export function ReportsView() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [baseDir, setBaseDir] = useState("");
+  const [notice, setNotice] = useState("");
+  const [items, setItems] = useState<BugReportItem[]>([]);
+  const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
+
+  const loadInventory = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    setNotice("");
+    setItems([]);
+    setBaseDir("");
+    try {
+      const res = await fetch("/api/bug-report-inventory", { credentials: "same-origin" });
+      if (res.status === 401) {
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        return;
+      }
+      const raw = await res.text();
+      let data: BugReportInventoryJson = {};
+      try {
+        data = raw ? (JSON.parse(raw) as BugReportInventoryJson) : {};
+      } catch {
+        throw new Error(`Invalid JSON (HTTP ${res.status}): ${raw.slice(0, 240)}`);
+      }
+      if (!res.ok || !data.ok) {
+        throw new Error(typeof data.error === "string" ? data.error : `HTTP ${res.status}`);
+      }
+      setBaseDir(data.base_dir || "");
+      setNotice(typeof data.notice === "string" ? data.notice.trim() : "");
+      setItems(normalizeItems(data.items));
+    } catch (e) {
+      setItems([]);
+      setBaseDir("");
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadInventory();
+  }, [loadInventory]);
+
+  const downloadFile = useCallback(async (host: string, name: string) => {
+    const key = `${host}\0${name}`;
+    setDownloadingKey(key);
+    try {
+      const params = new URLSearchParams({ host, name });
+      const res = await fetch(`/api/bug-report-file?${params}`, { credentials: "same-origin" });
+      if (res.status === 401) {
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        return;
+      }
+      const ctype = (res.headers.get("Content-Type") || "").toLowerCase();
+      if (!res.ok) {
+        if (ctype.includes("application/json")) {
+          const j = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(typeof j.error === "string" ? j.error : `HTTP ${res.status}`);
+        }
+        const t = await res.text();
+        throw new Error(t.slice(0, 400) || `HTTP ${res.status}`);
+      }
+      const disp = res.headers.get("Content-Disposition");
+      let fname = parseContentDispositionFilename(disp) || `${host}_${name || "nvidia-bug-report.log.gz"}`;
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      const href = URL.createObjectURL(blob);
+      a.href = href;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 2500);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Download failed");
+    } finally {
+      setDownloadingKey(null);
+    }
+  }, []);
+
+  const metaLines = [baseDir ? `Directory: ${baseDir}` : "", notice || ""].filter(Boolean);
+
   return (
-    <Box sx={{ maxWidth: 1400, mx: "auto", p: 4 }}>
+    <Box sx={{ maxWidth: 1200, mx: "auto", p: 4 }}>
       <PageHeader
         title="Reports"
-        description="Download bug reports and log archives from cluster nodes."
+        description="Browse NVIDIA bug report archives and NVLMAPPER zips on this dashboard host (same as legacy Download Reports)."
       />
 
-      <Card style={{ padding: 48, textAlign: "center" }}>
-        <Text kind="body/bold/md" style={{ color: "var(--text-color-secondary)", marginBottom: 8, display: "block" }}>
-          Bug Report Downloads
-        </Text>
-        <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-          Connect to /api/bug-report-inventory to list available report archives.
-        </Text>
-      </Card>
+      <Paper variant="outlined" sx={{ p: 3, mb: 2 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5, lineHeight: 1.6 }}>
+          Reads the reports directory on <strong>this dashboard host</strong> (same base as{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>RACK_BUG_REPORT_REMOTE_DIR</Box>, default{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>/home/cmsupport/reports</Box>
+          ): one subdirectory per node or rack id, with{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>nvidia-bug-report*.log.gz</Box>, NVLMAPPER{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>nvlmapper.*.zip</Box>, and Excel{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>*.xlsx</Box> (e.g. parser exports under{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>parser-excel/</Box>). No pdsh — sync or copy here if
+          needed. Use <strong>Download</strong> on a row to save a file.
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+          To <strong>generate</strong> new reports on compute nodes, use <strong>Generate bug report</strong> from the rack table (pdsh); when that job
+          finishes, use the rack download control for a zip. This page only lists files already present under the server reports directory.
+        </Typography>
+      </Paper>
+
+      <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2, flexWrap: "wrap" }}>
+        <Button variant="contained" onClick={() => void loadInventory()} disabled={loading}>
+          Refresh list
+        </Button>
+        {loading && (
+          <Box sx={{ flex: 1, minWidth: 160 }}>
+            <LinearProgress />
+          </Box>
+        )}
+      </Box>
+
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+
+      {metaLines.length > 0 && (
+        <Typography
+          variant="body2"
+          component="div"
+          sx={{ mb: 2, whiteSpace: "pre-wrap", fontFamily: metaLines.some((l) => l.includes("/")) ? "ui-monospace, monospace" : "inherit", fontSize: 13 }}
+        >
+          {metaLines.join("\n")}
+        </Typography>
+      )}
+
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small" aria-label="Reports by node">
+          <TableHead>
+            <TableRow>
+              <TableCell sx={{ fontWeight: 700 }}>Node</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>File</TableCell>
+              <TableCell sx={{ fontWeight: 700, width: 140 }}>Download</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {loading && items.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={3}>
+                  <Typography variant="body2" color="text.secondary">
+                    Scanning local reports directory…
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            ) : !loading && items.length === 0 && !error ? (
+              <TableRow>
+                <TableCell colSpan={3}>
+                  <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                    No nvidia-bug-report*.log.gz, nvlmapper.*.zip, or *.xlsx files found under the reports directory above.
+                  </Text>
+                </TableCell>
+              </TableRow>
+            ) : (
+              items.map((it) => {
+                const key = `${it.host}\0${it.name}`;
+                const busy = downloadingKey === key;
+                const fullPath =
+                  baseDir && it.host === BUG_REPORT_EXCEL_ROOT_HOST
+                    ? `${baseDir}/${it.name}`
+                    : baseDir
+                      ? `${baseDir}/${it.host}/${it.name}`
+                      : "";
+                const nodeLabel =
+                  it.host === BUG_REPORT_EXCEL_ROOT_HOST ? "— (reports root)" : it.host;
+                return (
+                  <TableRow key={key} hover>
+                    <TableCell sx={{ fontFamily: "monospace", fontSize: 13 }} title={it.host}>
+                      {nodeLabel}
+                    </TableCell>
+                    <TableCell sx={{ fontFamily: "monospace", fontSize: 13 }} title={fullPath || undefined}>
+                      {it.name}
+                    </TableCell>
+                    <TableCell>
+                      <Button size="small" variant="text" disabled={busy || loading} onClick={() => void downloadFile(it.host, it.name)}>
+                        {busy ? "…" : "Download"}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
     </Box>
   );
 }

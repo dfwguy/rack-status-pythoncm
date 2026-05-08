@@ -52,13 +52,16 @@ from __future__ import annotations
 import fcntl
 import io
 import json
+import logging
 import math
+import statistics
 import zipfile
 import os
 import queue
 import re
 import secrets
 import shlex
+import socket
 import shutil
 import subprocess
 import sys
@@ -99,6 +102,7 @@ DEFAULT_SCRIPT = SCRIPTS_DIR / "rack_status.sh"
 DEFAULT_LOG_DIR = APP_DIR / "var" / "logs"
 
 app = Flask(__name__)
+_logger = logging.getLogger(__name__)
 
 _validation_jobs_lock = threading.Lock()
 _validation_jobs: dict[str, dict[str, object]] = {}
@@ -1176,15 +1180,36 @@ def _nemo_log_file_looks_successful(path: Path) -> bool:
         return False
 
 
-def list_log_txt_paths_for_export(log_dir: Path) -> list[Path]:
-    """Matching *.txt under log_dir root only (excludes failed/).
+def _multirack_txt_paths_under_failed(log_dir: Path, pat: str) -> list[Path]:
+    """Multirack NEMO/NCCL *.txt under log_dir/failed/ (same glob as root export).
+
+    Multirack jobs often write logs only under ``failed/``; include them in Excel/zip export so
+    parser results match the Multirack tab.
+    """
+    root = log_dir.resolve()
+    failed = root / "failed"
+    if not failed.is_dir():
+        return []
+    out: list[Path] = []
+    for p in failed.glob(pat):
+        if p.is_file() and _nemo_nccl_in_log_basename(p.name) and _is_multirack_log_basename(p.name):
+            out.append(p)
+    return out
+
+
+def list_log_txt_paths_for_export(
+    log_dir: Path, *, include_multirack_under_failed: bool = True
+) -> list[Path]:
+    """Matching *.txt under log_dir root, optionally plus multirack logs under ``failed/``.
 
     NEMO one-rack logs (*1Rack-pNN-rMM-*.txt): at most one file per rack — the newest by mtime
     among logs that look successful (same heuristics as parser.sh: no Slurm hard-fail grep, LLM
     markers present). Only racks whose **nemo** cell from ``rack_status.sh`` is ``done`` (not
     ongoing / fail / pending) are included unless ``RACK_LOG_EXPORT_SKIP_NEMO_DONE_FILTER`` is set.
     Racks with no successful log contribute no 1Rack file. Other matching files in the root are
-    included unchanged.
+    included unchanged (including multirack logs in the root). When ``include_multirack_under_failed``
+    is true, multirack logs under ``failed/`` are merged in (deduped by resolved path); Excel export
+    passes false so nothing under ``failed/`` is included.
     """
     pat = _parser_export_glob()
     root = log_dir.resolve()
@@ -1220,8 +1245,13 @@ def list_log_txt_paths_for_export(log_dir: Path) -> list[Path]:
             continue
         selected_rack.append(best)
 
-    out = others + selected_rack
-    out.sort(key=lambda p: p.name.lower())
+    tail_failed = (
+        _multirack_txt_paths_under_failed(log_dir, pat) if include_multirack_under_failed else []
+    )
+    merged: dict[str, Path] = {}
+    for p in others + selected_rack + tail_failed:
+        merged[str(p.resolve())] = p
+    out = sorted(merged.values(), key=lambda p: p.name.lower())
     return out
 
 
@@ -2970,6 +3000,10 @@ _BUG_REPORT_PDSH_PATH_RE = re.compile(
 _BUG_REPORT_BASENAME_RE = re.compile(r"^nvidia-bug-report.*\.log\.gz$", re.IGNORECASE)
 # NVLMAPPER output zips under reports/<rack>/ (staged + ./run_nvlmapper.sh from app.py).
 _NVLMAPPER_ZIP_BASENAME_RE = re.compile(r"^nvlmapper\.[A-Za-z0-9][A-Za-z0-9._-]*\.zip$", re.IGNORECASE)
+# Parser Excel copies (e.g. rack-parser-export-*.xlsx) and other workbooks under reports/.
+_REPORT_EXCEL_BASENAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]*\.xlsx$", re.IGNORECASE)
+# Reserved inventory ``host`` for ``*.xlsx`` files sitting directly under the reports base dir (not in a subfolder).
+_BUG_REPORT_EXCEL_ROOT_HOST = "excel-root"
 
 
 def _parse_bug_report_paths_from_pdsh(stdout: str) -> list[dict[str, str]]:
@@ -3043,7 +3077,7 @@ def _bug_report_local_base_path() -> Path:
 
 
 def _local_bug_report_inventory() -> tuple[list[dict[str, str]], str | None]:
-    """Scan ``<RACK_BUG_REPORT_REMOTE_DIR>/<subdir>/`` for ``nvidia-bug-report*.log.gz`` and ``nvlmapper.*.zip``."""
+    """Scan ``<RACK_BUG_REPORT_REMOTE_DIR>/<subdir>/`` for bug-report ``*.log.gz``, ``nvlmapper.*.zip``, and ``*.xlsx``."""
     base = _bug_report_local_base_path()
     items: list[dict[str, str]] = []
     if not base.exists():
@@ -3083,8 +3117,40 @@ def _local_bug_report_inventory() -> tuple[list[dict[str, str]], str | None]:
                     except ValueError:
                         continue
                     items.append({"host": sub.name, "name": f.name})
+                for f in sorted(
+                    sub.glob("*.xlsx"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                ):
+                    if not f.is_file():
+                        continue
+                    if not _REPORT_EXCEL_BASENAME_RE.fullmatch(f.name):
+                        continue
+                    try:
+                        f.resolve().relative_to(base)
+                    except ValueError:
+                        continue
+                    items.append({"host": sub.name, "name": f.name})
             except OSError:
                 continue
+        # Workbooks placed directly under the reports base (not under a hostname subdir).
+        try:
+            for f in sorted(
+                base.glob("*.xlsx"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            ):
+                if not f.is_file():
+                    continue
+                if not _REPORT_EXCEL_BASENAME_RE.fullmatch(f.name):
+                    continue
+                try:
+                    f.resolve().relative_to(base.resolve())
+                except ValueError:
+                    continue
+                items.append({"host": _BUG_REPORT_EXCEL_ROOT_HOST, "name": f.name})
+        except OSError:
+            pass
     except OSError as e:
         return [], str(e)
     items.sort(key=lambda x: (x["host"].lower(), x["name"].lower()))
@@ -3282,7 +3348,7 @@ def api_bug_report_bundle():
 
 @app.route("/api/bug-report-inventory", methods=["GET"])
 def api_bug_report_inventory():
-    """List ``nvidia-bug-report*.log.gz`` and ``nvlmapper.*.zip`` under ``RACK_BUG_REPORT_REMOTE_DIR/<subdir>/`` (no pdsh)."""
+    """List bug-report ``*.log.gz``, ``nvlmapper.*.zip``, and ``*.xlsx`` under ``RACK_BUG_REPORT_REMOTE_DIR`` (no pdsh)."""
     if os.environ.get("RACK_BUG_REPORT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "Bug report disabled (RACK_BUG_REPORT_DISABLED)"}), 403
     base = _bug_report_local_base_path()
@@ -3299,7 +3365,7 @@ def api_bug_report_inventory():
 
 @app.route("/api/bug-report-file", methods=["GET"])
 def api_bug_report_file():
-    """Download one local file from ``<RACK_BUG_REPORT_REMOTE_DIR>/<host>/<name>`` (bug-report ``*.log.gz`` or NVLMAPPER ``nvlmapper.*.zip``)."""
+    """Download one local file from reports dir (subdir layout or ``excel-root`` for base-level ``*.xlsx``)."""
     if os.environ.get("RACK_BUG_REPORT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "Bug report disabled (RACK_BUG_REPORT_DISABLED)"}), 403
     host = (request.args.get("host") or "").strip()
@@ -3309,11 +3375,16 @@ def api_bug_report_file():
     if not _BUG_REPORT_SUBDIR_RE.fullmatch(host):
         return jsonify({"ok": False, "error": "invalid host (subdir name)"}), 400
     if not (
-        _BUG_REPORT_BASENAME_RE.fullmatch(name) or _NVLMAPPER_ZIP_BASENAME_RE.fullmatch(name)
+        _BUG_REPORT_BASENAME_RE.fullmatch(name)
+        or _NVLMAPPER_ZIP_BASENAME_RE.fullmatch(name)
+        or _REPORT_EXCEL_BASENAME_RE.fullmatch(name)
     ):
         return jsonify({"ok": False, "error": "invalid file name"}), 400
     base = _bug_report_local_base_path()
-    path = (base / host / name).resolve()
+    if host == _BUG_REPORT_EXCEL_ROOT_HOST:
+        path = (base / name).resolve()
+    else:
+        path = (base / host / name).resolve()
     try:
         path.relative_to(base.resolve())
     except ValueError:
@@ -3321,11 +3392,20 @@ def api_bug_report_file():
     if not path.is_file():
         return jsonify({"ok": False, "error": "file not found"}), 404
     is_zip = bool(_NVLMAPPER_ZIP_BASENAME_RE.fullmatch(name))
+    is_xlsx = bool(_REPORT_EXCEL_BASENAME_RE.fullmatch(name))
+    mime = (
+        "application/zip"
+        if is_zip
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if is_xlsx
+        else "application/gzip"
+    )
+    dl_host = host if host != _BUG_REPORT_EXCEL_ROOT_HOST else "reports"
     return send_file(
         path,
-        mimetype="application/zip" if is_zip else "application/gzip",
+        mimetype=mime,
         as_attachment=True,
-        download_name=f"{host}_{name}",
+        download_name=f"{dl_host}_{name}",
     )
 
 
@@ -5372,6 +5452,7 @@ def _demo_parser_results():
         "data": {
             "nccl_peak_out_of_place_busbw_gbps": nccl_rows,
             "nemotron_5h_56b_train_window": nemotron_rows,
+            "sn_llama_nemotron": [],
             "parser_flags": [{"flag": "demo_mode", "value": "true"}],
         },
         "grafana_embed": None,
@@ -5387,6 +5468,10 @@ def api_parser_results():
 
     Optional ``display_timezone`` query (IANA, e.g. ``Europe/Berlin``): zone for naive wall-clock
     timestamps in the NEMO log when deriving the LLM/Grafana time window (same as Charts TZ in the UI).
+
+    Response ``data`` may include ``sn_llama_nemotron``: Nemotron-style rows from a second parser pass
+    over ``log_dir/sn-llama/*.txt`` matching the rack (when that directory has LLAMA logs). Empty list
+    when none; UI hides the LLAMA tab when empty.
     """
     if _truthy_env("RACK_STATUS_DEMO"):
         return _demo_parser_results()
@@ -5467,7 +5552,32 @@ def api_parser_results():
                 "log_file": str(log_path.resolve()),
             }
         ), 502
+    if not isinstance(parsed, dict):
+        return jsonify({"ok": False, "error": "parser JSON root must be an object"}), 502
     display_cmd = "./parser.sh --json " + shlex.quote(log_path.name)
+    sn_nemo: list[object] = []
+    sn_paths = _sn_llama_txt_paths_for_rack(log_dir, rk, exclude=log_path)
+    if sn_paths:
+        try:
+            rel_sn = [str(p.resolve().relative_to(log_dir.resolve())) for p in sn_paths]
+            cmd_sn = ["bash", str(parser), *_parser_extra_args(), "--json", *rel_sn]
+            proc_sn = subprocess.run(
+                cmd_sn,
+                cwd=str(log_dir),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=max(60, _env_int("RACK_PARSER_TIMEOUT", 300)),
+            )
+            if proc_sn.returncode == 0 and (proc_sn.stdout or "").strip():
+                sn_parsed = json.loads(proc_sn.stdout)
+                if isinstance(sn_parsed, dict):
+                    raw_sn = sn_parsed.get("nemotron_5h_56b_train_window")
+                    if isinstance(raw_sn, list):
+                        sn_nemo = list(raw_sn)
+        except (json.JSONDecodeError, OSError, subprocess.TimeoutExpired, ValueError) as e:
+            _logger.warning("parser sn-llama bundle failed: %s", e)
+    merged_data: dict[str, object] = {**parsed, "sn_llama_nemotron": sn_nemo}
     log_tz_q = _sanitize_display_timezone_query(request.args.get("display_timezone"))
     g_embed = _grafana_parser_embed_context(
         log_path, rk, job_raw, parsed, log_timestamp_tz=log_tz_q
@@ -5482,12 +5592,647 @@ def api_parser_results():
             "rack": rk,
             "log_file": str(log_path.resolve()),
             "command_display": display_cmd,
-            "data": parsed,
+            "data": merged_data,
             "stderr": err_tail,
             "grafana_uri": _rack_web_grafana_uri(),
             "grafana_port": _rack_web_grafana_port(),
             "grafana_embed": g_embed,
             "parser_display_timezone": pdisp,
+        }
+    )
+
+
+def _parser_json_for_log_path(log_dir: Path, log_path: Path) -> tuple[dict | None, str | None]:
+    """Run ``parser.sh --json`` on one log under ``log_dir`` (relative path). Returns ``(parsed, err)``."""
+    parser = _parser_path()
+    if not parser.is_file():
+        return None, "parser.sh not found"
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    try:
+        rel = str(log_path.resolve().relative_to(log_dir.resolve()))
+    except ValueError:
+        return None, "log path outside log_dir"
+    cmd = ["bash", str(parser), *_parser_extra_args(), "--json", rel]
+    timeout = max(30, _env_int("RACK_PARSER_TIMEOUT", 300))
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(log_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "parser.sh timed out"
+    except Exception as e:
+        return None, str(e)
+    if proc.returncode != 0:
+        tail = ((proc.stderr or "") + "\n" + (proc.stdout or ""))[:800]
+        return None, tail or "parser non-zero exit"
+    raw = (proc.stdout or "").strip()
+    if not raw:
+        return None, "empty parser stdout"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None, "parser stdout is not valid JSON"
+    return (parsed if isinstance(parsed, dict) else None), None
+
+
+def _parse_gbps_scalar(v: object) -> float | None:
+    if v is None:
+        return None
+    s = str(v).strip().replace(",", "")
+    if not s or s in ("-", "?"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _pick_nccl_row(parsed: dict, rack: str) -> dict | None:
+    rows = parsed.get("nccl_peak_out_of_place_busbw_gbps")
+    if not isinstance(rows, list) or not rows:
+        return None
+    rk = rack.strip().lower()
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("rack", "")).strip().lower() == rk:
+            return row
+    first = rows[0]
+    return first if isinstance(first, dict) else None
+
+
+def _pick_nemotron_row(parsed: dict, rack: str) -> dict | None:
+    rows = parsed.get("nemotron_5h_56b_train_window")
+    if not isinstance(rows, list) or not rows:
+        return None
+    rk = rack.strip().lower()
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("rack", "")).strip().lower() == rk:
+            return row
+    first = rows[0]
+    return first if isinstance(first, dict) else None
+
+
+def _step_series_cv_pct(row: dict) -> float | None:
+    raw = row.get("step_time_series") or row.get("step_series") or []
+    if not isinstance(raw, list) or len(raw) < 2:
+        return None
+    vals: list[float] = []
+    for p in raw:
+        if not isinstance(p, dict):
+            continue
+        try:
+            st = float(p.get("step_time", p.get("step", 0)) or 0)
+        except (TypeError, ValueError):
+            continue
+        if st > 0:
+            vals.append(st)
+    if len(vals) < 2:
+        return None
+    try:
+        mu = statistics.mean(vals)
+        if mu <= 0:
+            return None
+        return round(statistics.stdev(vals) / mu * 100.0, 3)
+    except statistics.StatisticsError:
+        return None
+
+
+def _multirack_rack_count_from_basename(name: str) -> int:
+    m = _MULTIRACK_N_RACK_RE.search(name)
+    if m:
+        tok = m.group(0).lower()
+        if tok.endswith("rack"):
+            try:
+                return max(1, int(tok[:-4], 10))
+            except ValueError:
+                pass
+    phy = _multirack_physical_rack_ids(name)
+    return len(phy) if phy else 0
+
+
+def _multirack_done_log_paths(log_dir: Path) -> list[Path]:
+    """Multirack NEMO/NCCL logs under log_dir root and ``failed/`` that pass the successful-log heuristic."""
+    pat = _parser_export_glob()
+    root = log_dir.resolve()
+    merged: dict[str, Path] = {}
+    if root.is_dir():
+        for p in root.glob(pat):
+            if not p.is_file() or not _nemo_nccl_in_log_basename(p.name):
+                continue
+            if not _is_multirack_log_basename(p.name):
+                continue
+            if not _nemo_log_file_looks_successful(p):
+                continue
+            merged[str(p.resolve())] = p
+    for p in _multirack_txt_paths_under_failed(log_dir, pat):
+        if _nemo_log_file_looks_successful(p):
+            merged[str(p.resolve())] = p
+    return sorted(merged.values(), key=lambda x: x.stat().st_mtime, reverse=True)
+
+
+def _read_log_text_chunk(path: Path, max_bytes: int = 14 * 1024 * 1024) -> str:
+    try:
+        with path.open("rb") as fh:
+            blob = fh.read(max_bytes)
+        return blob.decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+_RE_RUN_GB = re.compile(r"(?<![\w-])-gb\s+(\d+)\b", re.I)
+_RE_RUN_NUM_GPUS = re.compile(r"--num_gpus\s+(\d+)\b", re.I)
+_RE_RUN_GPUS_PER_NODE = re.compile(r"--gpus_per_node\s+(\d+)\b", re.I)
+_RE_RUN_SLURM_NNODES = re.compile(r"SLURM_NNODES=(\d+)\b")
+_RE_RUN_NODELIST = re.compile(r"NODELIST:\s*(\S+)")
+_RE_SEQ_LEN_CANDIDATES = (
+    re.compile(r"(?:^|[\s|])seq(?:uence)?[_-]?length[=:\s]+(\d+)\b", re.I),
+    re.compile(r"context[_-]?length[=:\s]+(\d+)\b", re.I),
+    re.compile(r"(?<![\w-])-sl\s+(\d+)\b"),
+)
+
+
+def _last_regex_int(pat: re.Pattern[str], text: str) -> int | None:
+    last: int | None = None
+    for m in pat.finditer(text):
+        try:
+            last = int(m.group(1))
+        except (ValueError, IndexError):
+            continue
+    return last
+
+
+def _infer_num_nodes_from_nodelist(hosts: str) -> int | None:
+    h = hosts.strip()
+    if not h or re.search(r"[\[\]]", h):
+        return None
+    if "," in h:
+        return h.count(",") + 1
+    return 1
+
+
+def _nemotron_log_run_hw_tokens(
+    log_text: str, step_s: float, *, default_seq_len: int = 8192
+) -> dict[str, int | float | None]:
+    """Parse Slurm / ``run_script.py`` fragments from a NEMO validation log.
+
+    Token throughput uses ``global_batch × sequence_length ÷ step_time (s)`` when ``-gb`` is present
+    (Megatron-Bridge ``run_script.py``). Sequence length is read from the log when possible; otherwise
+    ``default_seq_len`` (8192 — Nemotron-H 56B default).
+
+    Time to train 1T tokens (days) = 1e12 / (throughput_tokens_s × 86400).
+    """
+    num_gpus = _last_regex_int(_RE_RUN_NUM_GPUS, log_text)
+    gpn = _last_regex_int(_RE_RUN_GPUS_PER_NODE, log_text)
+    gbs = _last_regex_int(_RE_RUN_GB, log_text)
+    seq_len: int | None = None
+    for rx in _RE_SEQ_LEN_CANDIDATES:
+        m = rx.search(log_text)
+        if m:
+            try:
+                seq_len = int(m.group(1))
+                break
+            except (ValueError, IndexError):
+                continue
+    seq_eff = int(seq_len) if seq_len is not None else int(default_seq_len)
+
+    num_nodes: int | None = None
+    if gpn and num_gpus and gpn > 0 and num_gpus % gpn == 0:
+        num_nodes = num_gpus // gpn
+    m = _RE_RUN_SLURM_NNODES.search(log_text)
+    if num_nodes is None and m:
+        try:
+            num_nodes = int(m.group(1))
+        except ValueError:
+            pass
+    if num_nodes is None:
+        m2 = _RE_RUN_NODELIST.search(log_text)
+        if m2:
+            num_nodes = _infer_num_nodes_from_nodelist(m2.group(1))
+
+    tps: float | None = None
+    if gbs and step_s > 0:
+        tps = (float(gbs) * float(seq_eff)) / float(step_s)
+    tps_gpu: float | None = (tps / float(num_gpus)) if (tps is not None and num_gpus) else None
+    days_1t: float | None = None
+    if tps and tps > 0:
+        days_1t = 1_000_000_000_000.0 / (float(tps) * 86400.0)
+    return {
+        "num_nodes": num_nodes,
+        "num_gpus": num_gpus,
+        "global_batch": gbs,
+        "seq_len_used": seq_eff,
+        "throughput_tokens_s": tps,
+        "throughput_tokens_s_per_gpu": tps_gpu,
+        "time_to_train_1t_days": days_1t,
+    }
+
+
+def _mean_finite(vals: list[float | None]) -> float | None:
+    xs = [float(v) for v in vals if v is not None and isinstance(v, (int, float)) and math.isfinite(float(v))]
+    if not xs:
+        return None
+    return float(statistics.mean(xs))
+
+
+def _log_mtime_or_zero(path: Path) -> float:
+    try:
+        return float(path.stat().st_mtime)
+    except OSError:
+        return 0.0
+
+
+def _nemotron_scaling_append_entry(
+    bucket: dict[int, list[dict[str, object]]], n_r: int, lp: Path, tf_f: float, st_f: float
+) -> None:
+    """Append one log's Nemotron stats + parsed run geometry / throughput for analytics buckets."""
+    log_text = _read_log_text_chunk(lp)
+    mrun = _nemotron_log_run_hw_tokens(log_text, st_f)
+    bucket.setdefault(n_r, []).append(
+        {
+            "path": lp,
+            "tf": tf_f,
+            "st": st_f,
+            "throughput_tokens_s": mrun["throughput_tokens_s"],
+            "throughput_tokens_s_per_gpu": mrun["throughput_tokens_s_per_gpu"],
+            "num_nodes": mrun["num_nodes"],
+            "num_gpus": mrun["num_gpus"],
+        }
+    )
+
+
+def _demo_analytics_aggregate() -> dict[str, object]:
+    return {
+        "ok": True,
+        "single_rack": {
+            "nccl_collectives": [
+                {"rack": "p5-r01", "log_file": "demo.txt", "all_reduce_gbps": 90.0, "all_gather_gbps": 12.0, "alltoall_gbps": 8.0},
+                {"rack": "p5-r02", "log_file": "demo2.txt", "all_reduce_gbps": 92.0, "all_gather_gbps": 11.5, "alltoall_gbps": 8.2},
+            ],
+            "nccl_collectives_deviation_pct": [
+                {"metric": "all_reduce_gbps", "rack": "p5-r01", "value_gbps": 90.0, "fleet_median_gbps": 91.0, "pct_vs_median": -1.1},
+                {"metric": "all_reduce_gbps", "rack": "p5-r02", "value_gbps": 92.0, "fleet_median_gbps": 91.0, "pct_vs_median": 1.1},
+            ],
+            "nccl_ar_series": {
+                "sizes_bytes": [1048576, 16777216],
+                "median_bus_bw_gbps": [10.0, 95.0],
+                "per_rack": [
+                    {
+                        "rack": "p5-r01",
+                        "log_file": "demo.txt",
+                        "bus_bw_gbps": [10.1, 94.0],
+                        "pct_vs_median": [1.0, -1.05],
+                    },
+                    {
+                        "rack": "p5-r02",
+                        "log_file": "demo2.txt",
+                        "bus_bw_gbps": [9.9, 96.0],
+                        "pct_vs_median": [-1.0, 1.05],
+                    },
+                ],
+            },
+            "nemotron": [
+                {
+                    "rack": "p5-r01",
+                    "log_file": "demo.txt",
+                    "median_step_time": 1.5,
+                    "tflops_per_gpu": 400.0,
+                    "step_time_cv_pct": 2.1,
+                    "pct_vs_mean_tflops": -1.2,
+                    "pct_vs_mean_step_time": 0.5,
+                },
+                {
+                    "rack": "p5-r02",
+                    "log_file": "demo2.txt",
+                    "median_step_time": 1.48,
+                    "tflops_per_gpu": 410.0,
+                    "step_time_cv_pct": 1.8,
+                    "pct_vs_mean_tflops": 1.2,
+                    "pct_vs_mean_step_time": -0.5,
+                },
+            ],
+        },
+        "multirack": {
+            "nccl_series_by_log": [
+                {
+                    "label": "p5-r01+p5-r02",
+                    "basename": "root-NEMO-2rack-demo.txt",
+                    "series": [{"size_bytes": 1048576, "bus_bw_gbps": 88.0}, {"size_bytes": 16777216, "bus_bw_gbps": 170.0}],
+                }
+            ],
+            "nemotron_scaling": [
+                {"n_racks": 1, "n_logs": 12, "mean_tflops_per_gpu": 390.0, "mean_step_s": 1.95},
+                {"n_racks": 2, "n_logs": 1, "mean_tflops_per_gpu": 380.0, "mean_step_s": 1.9},
+                {"n_racks": 4, "n_logs": 1, "mean_tflops_per_gpu": 360.0, "mean_step_s": 2.1},
+            ],
+            "nemotron_throughput_scaling": [
+                {
+                    "n_racks": 1,
+                    "n_logs": 12,
+                    "num_nodes": 18,
+                    "num_gpus": 72,
+                    "mean_step_s": 1.95,
+                    "mean_tflops_per_gpu": 390.0,
+                    "mean_throughput_tokens_s": 40000.0,
+                    "mean_throughput_tokens_s_per_gpu": 5000.0,
+                    "time_to_train_1t_days": 289.35,
+                },
+                {
+                    "n_racks": 2,
+                    "n_logs": 1,
+                    "num_nodes": 1,
+                    "num_gpus": 8,
+                    "mean_step_s": 1.9,
+                    "mean_tflops_per_gpu": 380.0,
+                    "mean_throughput_tokens_s": 39261.76,
+                    "mean_throughput_tokens_s_per_gpu": 4907.72,
+                    "time_to_train_1t_days": 294.79,
+                },
+                {
+                    "n_racks": 4,
+                    "n_logs": 1,
+                    "num_nodes": 2,
+                    "num_gpus": 16,
+                    "mean_step_s": 2.1,
+                    "mean_tflops_per_gpu": 360.0,
+                    "mean_throughput_tokens_s": 35000.0,
+                    "mean_throughput_tokens_s_per_gpu": 4375.0,
+                    "time_to_train_1t_days": 330.69,
+                },
+            ],
+        },
+    }
+
+
+@app.route("/api/analytics/aggregate", methods=["POST"])
+def api_analytics_aggregate():
+    """POST JSON ``{log_dir, rows:[{rack,nemo},…]}`` — parser-based NCCL/Nemotron analytics (single-rack + multirack).
+
+    Single-rack: only rows with ``nemo == "done"``; newest *1Rack-*.txt per rack that passes the
+    successful-log heuristic. NCCL: fleet median baseline for all_reduce bus_bw series and peak
+    scalars. Nemotron: ``median_step_time``, ``tflops_per_gpu``, step-time CV%, deviation vs fleet mean.
+
+    Multirack: successful multirack logs only; NCCL one series per log. Nemotron scaling / throughput / efficiency
+    tables group logs by inferred rack count (``…2rack…`` / distinct ``pN-rMM`` tokens), **including bucket Rack=1**
+    from successful single-rack (1Rack) logs for done racks (same picks as single-rack Nemotron). Per-bucket means
+    for step and TFLOPs; nodes/# GPU shown from the **newest** log in each bucket.
+    """
+    if os.environ.get("RACK_ANALYTICS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "analytics disabled (RACK_ANALYTICS_DISABLED)"}), 403
+    if _truthy_env("RACK_STATUS_DEMO"):
+        return jsonify(_demo_analytics_aggregate())
+    body = request.get_json(silent=True) or {}
+    log_raw = body.get("log_dir")
+    try:
+        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    rows_in = body.get("rows")
+    if not isinstance(rows_in, list):
+        return jsonify({"ok": False, "error": 'send JSON {"log_dir": "…", "rows": [{"rack":"…","nemo":"…"}, …]}'}), 400
+
+    done_racks: list[str] = []
+    for ent in rows_in:
+        if not isinstance(ent, dict):
+            continue
+        rk = str(ent.get("rack", "")).strip()
+        nemo = str(ent.get("nemo", "")).strip().lower()
+        if not rk or nemo != "done":
+            continue
+        try:
+            done_racks.append(_normalize_rack_id(rk))
+        except ValueError:
+            continue
+    done_racks = sorted(set(done_racks))
+
+    series_by_rack: dict[str, list[dict[str, float]]] = {}
+    scalar_rows: list[dict[str, object]] = []
+    nemotron_rows: list[dict[str, object]] = []
+    scaling_entries: dict[int, list[dict[str, object]]] = {}
+
+    for rack in done_racks:
+        lp = pick_log_for_rack(log_dir, rack, None)
+        if lp is None or not lp.is_file():
+            continue
+        if not _nemo_log_file_looks_successful(lp):
+            continue
+        parsed, err = _parser_json_for_log_path(log_dir, lp)
+        if parsed is None:
+            continue
+        nc = _pick_nccl_row(parsed, rack)
+        nm = _pick_nemotron_row(parsed, rack)
+        lf = lp.name
+        ar_series: list[dict[str, float]] = []
+        if isinstance(nc, dict):
+            raw_ser = nc.get("all_reduce_busbw_series") or []
+            if isinstance(raw_ser, list):
+                for p in raw_ser:
+                    if not isinstance(p, dict):
+                        continue
+                    try:
+                        sz = int(p.get("size_bytes") or 0)
+                        bw = float(p.get("bus_bw_gbps") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if sz > 0 and bw >= 0:
+                        ar_series.append({"size_bytes": float(sz), "bus_bw_gbps": bw})
+            if ar_series:
+                series_by_rack[rack] = ar_series
+            scalar_rows.append(
+                {
+                    "rack": rack,
+                    "log_file": lf,
+                    "all_reduce_gbps": _parse_gbps_scalar(nc.get("all_reduce_gbps")),
+                    "all_gather_gbps": _parse_gbps_scalar(nc.get("all_gather_gbps")),
+                    "alltoall_gbps": _parse_gbps_scalar(nc.get("alltoall_gbps")),
+                }
+            )
+        if isinstance(nm, dict):
+            med = _parse_gbps_scalar(nm.get("median_step_time"))
+            if med is None:
+                med = _parse_gbps_scalar(nm.get("step_s"))
+            tf = _parse_gbps_scalar(nm.get("tflops_per_gpu"))
+            nemotron_rows.append(
+                {
+                    "rack": rack,
+                    "log_file": lf,
+                    "median_step_time": med,
+                    "tflops_per_gpu": tf,
+                    "step_time_cv_pct": _step_series_cv_pct(nm),
+                }
+            )
+            if med is not None and tf is not None:
+                _nemotron_scaling_append_entry(scaling_entries, 1, lp, float(tf), float(med))
+
+    size_to_vals: dict[int, list[float]] = {}
+    for _rk, ser in series_by_rack.items():
+        for p in ser:
+            sz = int(p["size_bytes"])
+            size_to_vals.setdefault(sz, []).append(float(p["bus_bw_gbps"]))
+    sizes_sorted = sorted(size_to_vals.keys())
+    median_bw = {sz: statistics.median(size_to_vals[sz]) for sz in sizes_sorted if size_to_vals[sz]}
+
+    per_rack_series: list[dict[str, object]] = []
+    for rack in sorted(series_by_rack.keys()):
+        ser = series_by_rack[rack]
+        bws: list[float | None] = []
+        pcts: list[float | None] = []
+        for sz in sizes_sorted:
+            med = median_bw.get(sz)
+            v = next((float(p["bus_bw_gbps"]) for p in ser if int(p["size_bytes"]) == sz), None)
+            if v is None or med is None or med <= 0:
+                bws.append(None)
+                pcts.append(None)
+            else:
+                bws.append(round(v, 4))
+                pcts.append(round((v - med) / med * 100.0, 2))
+        lf = next((r["log_file"] for r in scalar_rows if r["rack"] == rack), "")
+        per_rack_series.append({"rack": rack, "log_file": lf, "bus_bw_gbps": bws, "pct_vs_median": pcts})
+
+    coll_dev: list[dict[str, object]] = []
+    for metric, key in (
+        ("all_reduce_gbps", "all_reduce_gbps"),
+        ("all_gather_gbps", "all_gather_gbps"),
+        ("alltoall_gbps", "alltoall_gbps"),
+    ):
+        vals = [float(r[key]) for r in scalar_rows if r.get(key) is not None]
+        if not vals:
+            continue
+        med = statistics.median(vals)
+        for r in scalar_rows:
+            v = r.get(key)
+            if v is None or med <= 0:
+                continue
+            vf = float(v)
+            coll_dev.append(
+                {
+                    "metric": metric,
+                    "rack": r["rack"],
+                    "log_file": r["log_file"],
+                    "value_gbps": round(vf, 4),
+                    "fleet_median_gbps": round(med, 4),
+                    "pct_vs_median": round((vf - med) / med * 100.0, 2),
+                }
+            )
+
+    mean_tf = statistics.mean([float(r["tflops_per_gpu"]) for r in nemotron_rows if r.get("tflops_per_gpu") is not None]) if any(
+        r.get("tflops_per_gpu") is not None for r in nemotron_rows
+    ) else None
+    mean_step = statistics.mean([float(r["median_step_time"]) for r in nemotron_rows if r.get("median_step_time") is not None]) if any(
+        r.get("median_step_time") is not None for r in nemotron_rows
+    ) else None
+    for r in nemotron_rows:
+        tf = r.get("tflops_per_gpu")
+        st = r.get("median_step_time")
+        if mean_tf is not None and tf is not None and float(mean_tf) > 0:
+            r["pct_vs_mean_tflops"] = round((float(tf) - float(mean_tf)) / float(mean_tf) * 100.0, 2)
+        else:
+            r["pct_vs_mean_tflops"] = None
+        if mean_step is not None and st is not None and float(mean_step) > 0:
+            r["pct_vs_mean_step_time"] = round((float(st) - float(mean_step)) / float(mean_step) * 100.0, 2)
+        else:
+            r["pct_vs_mean_step_time"] = None
+
+    nccl_multirack: list[dict[str, object]] = []
+    for lp in _multirack_done_log_paths(log_dir):
+        parsed, _err = _parser_json_for_log_path(log_dir, lp)
+        if parsed is None:
+            continue
+        label = multirack_display_rack_from_basename(lp.name)
+        nc = _pick_nccl_row(parsed, "")
+        ser_out: list[dict[str, float]] = []
+        if isinstance(nc, dict):
+            raw_ser = nc.get("all_reduce_busbw_series") or []
+            if isinstance(raw_ser, list):
+                for p in raw_ser:
+                    if not isinstance(p, dict):
+                        continue
+                    try:
+                        sz = int(p.get("size_bytes") or 0)
+                        bw = float(p.get("bus_bw_gbps") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if sz > 0:
+                        ser_out.append({"size_bytes": float(sz), "bus_bw_gbps": bw})
+        if ser_out:
+            nccl_multirack.append({"label": label, "basename": lp.name, "series": ser_out})
+        nm = _pick_nemotron_row(parsed, "")
+        if isinstance(nm, dict):
+            n_r = _multirack_rack_count_from_basename(lp.name)
+            if n_r < 1:
+                n_r = 1
+            tf = _parse_gbps_scalar(nm.get("tflops_per_gpu"))
+            st = _parse_gbps_scalar(nm.get("median_step_time"))
+            if st is None:
+                st = _parse_gbps_scalar(nm.get("step_s"))
+            if tf is not None and st is not None:
+                tf_f = float(tf)
+                st_f = float(st)
+                _nemotron_scaling_append_entry(scaling_entries, n_r, lp, tf_f, st_f)
+
+    nemotron_scaling: list[dict[str, object]] = []
+    nemotron_throughput_scaling: list[dict[str, object]] = []
+    for n_r in sorted(scaling_entries.keys()):
+        ents = scaling_entries[n_r]
+        if not ents:
+            continue
+        mean_tf = round(statistics.mean(float(e["tf"]) for e in ents), 3)
+        mean_st = round(statistics.mean(float(e["st"]) for e in ents), 4)
+        n_logs = len(ents)
+        nemotron_scaling.append(
+            {
+                "n_racks": n_r,
+                "n_logs": n_logs,
+                "mean_tflops_per_gpu": mean_tf,
+                "mean_step_s": mean_st,
+            }
+        )
+        rep = max(ents, key=lambda e: _log_mtime_or_zero(e["path"]))  # type: ignore[arg-type]
+        nn = rep.get("num_nodes")
+        ng = rep.get("num_gpus")
+        num_nodes = int(nn) if nn is not None else None
+        num_gpus = int(ng) if ng is not None else None
+        mtps = _mean_finite([e.get("throughput_tokens_s") for e in ents])  # type: ignore[list-item]
+        mtpsg = _mean_finite([e.get("throughput_tokens_s_per_gpu") for e in ents])  # type: ignore[list-item]
+        days: float | None = None
+        if mtps is not None and mtps > 0:
+            days = 1_000_000_000_000.0 / (mtps * 86400.0)
+        nemotron_throughput_scaling.append(
+            {
+                "n_racks": n_r,
+                "n_logs": n_logs,
+                "num_nodes": num_nodes,
+                "num_gpus": num_gpus,
+                "mean_step_s": mean_st,
+                "mean_tflops_per_gpu": mean_tf,
+                "mean_throughput_tokens_s": None if mtps is None else round(mtps, 4),
+                "mean_throughput_tokens_s_per_gpu": None if mtpsg is None else round(mtpsg, 4),
+                "time_to_train_1t_days": None if days is None else round(days, 4),
+            }
+        )
+
+    return jsonify(
+        {
+            "ok": True,
+            "single_rack": {
+                "nccl_collectives": scalar_rows,
+                "nccl_collectives_deviation_pct": coll_dev,
+                "nccl_ar_series": {
+                    "sizes_bytes": sizes_sorted,
+                    "median_bus_bw_gbps": [round(median_bw[s], 4) for s in sizes_sorted],
+                    "per_rack": per_rack_series,
+                },
+                "nemotron": nemotron_rows,
+            },
+            "multirack": {
+                "nccl_series_by_log": nccl_multirack,
+                "nemotron_scaling": nemotron_scaling,
+                "nemotron_throughput_scaling": nemotron_throughput_scaling,
+            },
         }
     )
 
@@ -6018,24 +6763,37 @@ def _workbook_bytes_from_parser_export(parsed: dict) -> bytes:
     return bio.getvalue()
 
 
+def _parser_excel_report_copy_dir() -> Path:
+    """Directory for an on-disk copy of each successful parser Excel export.
+
+    Override with ``RACK_PARSER_EXCEL_REPORT_DIR`` (absolute or ``~`` path; directory is created).
+
+    Default: ``<RACK_BUG_REPORT_REMOTE_DIR>/parser-excel`` (typically ``/home/cmsupport/reports/parser-excel``).
+    """
+    raw = (os.environ.get("RACK_PARSER_EXCEL_REPORT_DIR") or "").strip()
+    if raw:
+        return Path(os.path.expanduser(raw)).resolve()
+    return (_bug_report_local_base_path() / "parser-excel").resolve()
+
+
 @app.route("/api/parser-export-excel")
 def api_parser_export_excel():
-    """Run parser.sh --json on export-selected logs (root only; one successful 1Rack log per rack with nemo=done), then .xlsx."""
+    """Run parser.sh --json on export-selected logs (log root only; no ``failed/``; one successful 1Rack log per rack with nemo=done), then .xlsx."""
     if os.environ.get("RACK_PARSER_EXPORT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "export disabled (RACK_PARSER_EXPORT_DISABLED)"}), 403
     try:
         log_dir = _resolve_log_dir(request.args.get("log_dir"))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    paths = list_log_txt_paths_for_export(log_dir)
+    paths = list_log_txt_paths_for_export(log_dir, include_multirack_under_failed=False)
     if not paths:
         return jsonify(
             {
                 "ok": False,
                 "error": (
                     f"no exportable .txt logs matching {_parser_export_glob()!r} under {log_dir} "
-                    "(root only; NEMO 1Rack: one successful log per rack with nemo=done in rack_status, "
-                    "unless RACK_LOG_EXPORT_SKIP_NEMO_DONE_FILTER is set)"
+                    "(Excel: log_dir root only, no failed/; NEMO 1Rack: one successful log per rack with "
+                    "nemo=done in rack_status, unless RACK_LOG_EXPORT_SKIP_NEMO_DONE_FILTER is set)"
                 ),
             }
         ), 404
@@ -6100,15 +6858,25 @@ def api_parser_export_excel():
         return jsonify({"ok": False, "error": str(e)}), 500
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     fname = f"rack-parser-export-{stamp}.xlsx"
+    hdrs: dict[str, str] = {
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "Cache-Control": "no-store, max-age=0",
+        "Pragma": "no-cache",
+        "X-Export-Log-Count": str(len(paths)),
+    }
+    try:
+        report_dir = _parser_excel_report_copy_dir()
+        report_dir.mkdir(parents=True, exist_ok=True)
+        dest = report_dir / fname
+        dest.write_bytes(body)
+        hdrs["X-Export-Report-Copy"] = str(dest)
+    except OSError as e:
+        _logger.warning("parser Excel: could not write report copy: %s", e)
+        hdrs["X-Export-Report-Copy-Error"] = str(e)[:500]
     return Response(
         body,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": f'attachment; filename="{fname}"',
-            "Cache-Control": "no-store, max-age=0",
-            "Pragma": "no-cache",
-            "X-Export-Log-Count": str(len(paths)),
-        },
+        headers=hdrs,
     )
 
 
@@ -6120,7 +6888,7 @@ def api_parser_export_csv_legacy():
 
 @app.route("/api/export-logs-zip")
 def api_export_logs_zip():
-    """Zip exportable matching .txt under log_dir root (same rules as parser Excel export)."""
+    """Zip exportable matching .txt (same rules as parser Excel export: root + multirack under failed/)."""
     if os.environ.get("RACK_LOG_EXPORT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "log zip export disabled (RACK_LOG_EXPORT_DISABLED)"}), 403
     try:
@@ -6134,8 +6902,8 @@ def api_export_logs_zip():
                 "ok": False,
                 "error": (
                     f"no exportable .txt logs matching {_parser_export_glob()!r} under {log_dir} "
-                    "(root only; NEMO 1Rack: one successful log per rack with nemo=done in rack_status, "
-                    "unless RACK_LOG_EXPORT_SKIP_NEMO_DONE_FILTER is set)"
+                    "(root + multirack under failed/; NEMO 1Rack: one successful log per rack with "
+                    "nemo=done in rack_status, unless RACK_LOG_EXPORT_SKIP_NEMO_DONE_FILTER is set)"
                 ),
             }
         ), 404
@@ -6497,6 +7265,45 @@ def api_run_llama_status():
         payload = dict(row)
     payload["ok"] = True
     return jsonify(payload)
+
+
+def _sn_llama_txt_paths_for_rack(log_dir: Path, rack: str, *, exclude: Path | None = None) -> list[Path]:
+    """``log_dir/sn-llama/*.txt`` whose names suggest LLAMA and match *rack* (``pN-rMM`` tokens or whole string)."""
+    root = log_dir.resolve()
+    d = root / "sn-llama"
+    if not d.is_dir():
+        return []
+    needles: list[str] = []
+    for m in re.finditer(r"\b(p\d+-r\d+)\b", rack or "", re.IGNORECASE):
+        needles.append(m.group(1).lower())
+    if not needles:
+        t = (rack or "").strip().lower()
+        if t:
+            needles = [t]
+    ex = exclude.resolve() if exclude is not None else None
+    out: list[Path] = []
+    try:
+        paths = sorted(d.glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return []
+    cap = max(1, _env_int("RACK_PARSER_SN_LLAMA_MAX_FILES", 25))
+    for p in paths:
+        if len(out) >= cap:
+            break
+        try:
+            if not p.is_file():
+                continue
+            if ex is not None and p.resolve() == ex:
+                continue
+        except OSError:
+            continue
+        low = p.name.lower()
+        if "llama" not in low:
+            continue
+        if needles and not any(n in low for n in needles):
+            continue
+        out.append(p)
+    return list(reversed(out))
 
 
 @app.route("/api/sn-llama-logs", methods=["GET"])
@@ -7211,6 +8018,8 @@ def logout():
 
 @app.route("/")
 def index():
+    if _spa_at_root_enabled():
+        return _serve_spa_asset("index.html")
     dr = _env_int("RACK_STATUS_DEFAULT_REFRESH", 30)
     if not (5 <= dr <= 86400):
         dr = 30
@@ -7243,6 +8052,396 @@ def index():
     resp.headers["Cache-Control"] = "no-store, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     return resp
+
+
+def _cluster_env_pick(*keys: str, default: str = "") -> str:
+    for k in keys:
+        v = (os.environ.get(k) or "").strip()
+        if v:
+            return v.replace("\n", " ").replace("\r", " ").strip()
+    return default
+
+
+# Strip ``module load <mod> &&`` from command strings for cluster-dashboard display only.
+_CLUSTER_SLURM_MODULE_PREFIX_RE = re.compile(
+    r"^\s*module\s+load\s+(?:'[^']+'|\"[^\"]+\"|\S+)\s+&&\s*",
+    re.IGNORECASE,
+)
+
+
+def _cluster_slurm_command_display_public(cmd: str) -> str:
+    """Hide ``module load slurm &&`` in UI; execution still uses the real shell command."""
+    s = (cmd or "").strip()
+    s = _CLUSTER_SLURM_MODULE_PREFIX_RE.sub("", s, count=1)
+    return s.strip() or (cmd or "").strip()
+
+
+_SLURM_VERSION_JUNK_RE = re.compile(
+    r"node\s+status|running\s+in\s+active\s+master",
+    re.IGNORECASE,
+)
+
+
+def _pick_slurm_version_line(stdout: str, stderr: str) -> str:
+    """``scontrol -V`` often prints the version on *stderr*; stdout may contain unrelated lines."""
+    lines: list[str] = []
+    for block in (stdout or "", stderr or ""):
+        for ln in block.splitlines():
+            t = ln.strip()
+            if t:
+                lines.append(t)
+    if not lines:
+        return ""
+    for ln in lines:
+        if _SLURM_VERSION_JUNK_RE.search(ln):
+            continue
+        if re.search(r"slurm\s*[\d.]|^slurm\b", ln, re.I):
+            return ln
+    for ln in lines:
+        if _SLURM_VERSION_JUNK_RE.search(ln):
+            continue
+        if re.search(r"\d+\.\d+", ln):
+            return ln
+    for ln in lines:
+        if not _SLURM_VERSION_JUNK_RE.search(ln):
+            return ln
+    return ""
+
+
+def _cluster_probe_slurm_version() -> tuple[str, str]:
+    plat = _get_platform()
+    # ``scontrol -V`` only (with platform Slurm module prefix), inside one login shell.
+    inner = plat.scontrol_cmd("-V")
+    shell_cmd = "bash -lc " + shlex.quote(inner)
+    timeout = max(5, _env_int("RACK_CLUSTER_SLURM_PROBE_TIMEOUT", 40))
+    try:
+        proc = host_exec.run_on_host(shell_cmd, timeout=timeout)
+    except FileNotFoundError:
+        return "", "scontrol not found"
+    except subprocess.TimeoutExpired:
+        return "", "slurm version probe timed out"
+    out = proc.stdout or ""
+    err = proc.stderr or ""
+    line = _pick_slurm_version_line(out, err)
+    if proc.returncode != 0:
+        return "", (err.strip() or out.strip() or f"exit {proc.returncode}")
+    if not line:
+        return "", err.strip() or out.strip() or "empty scontrol -V output"
+    return line, ""
+
+
+def _cluster_probe_bcm_cmsh_version() -> tuple[str, str]:
+    """BCM / Bright Cluster Manager build from ``cmsh -c 'main; versioninfo'`` (head / dashboard host only)."""
+    if _truthy_env("RACK_CLUSTER_BCM_CMSH_DISABLED"):
+        return "", "disabled (RACK_CLUSTER_BCM_CMSH_DISABLED)"
+    cmsh = (os.environ.get("RACK_CMSH") or "cmsh").strip() or "cmsh"
+    cmd = [cmsh, "-c", "main; versioninfo"]
+    timeout = max(10, _env_int("RACK_CLUSTER_BCM_CMSH_TIMEOUT", 60))
+    if not host_exec.is_remote() and not shutil.which(cmsh):
+        return "", "cmsh not in PATH"
+    try:
+        proc = host_exec.run_on_host(cmd, timeout=timeout)
+    except FileNotFoundError:
+        return "", "cmsh executable not found"
+    except subprocess.TimeoutExpired:
+        return "", "cmsh versioninfo timed out"
+    out = (proc.stdout or "").strip()
+    err_tail = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        return "", err_tail or f"exit {proc.returncode}"
+    if not out:
+        return "", err_tail or "empty stdout"
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    cap = max(80, _env_int("RACK_CLUSTER_BCM_CMSH_DISPLAY_MAX", 600))
+    snippet = " | ".join(lines[:4]) if lines else out
+    if len(snippet) > cap:
+        snippet = snippet[: cap - 3].rstrip() + "…"
+    return snippet, ""
+
+
+def _cluster_squeue_overview_block() -> dict[str, object]:
+    """Head-only ``squeue`` (same as ``/api/slurm-squeue``); never targets compute nodes."""
+    if os.environ.get("RACK_SLURM_SQUEUE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return {
+            "ok": False,
+            "stdout": "",
+            "stderr": "",
+            "command_display": "",
+            "returncode": -1,
+            "error": "squeue disabled (RACK_SLURM_SQUEUE_DISABLED)",
+        }
+    try:
+        result = _run_squeue()
+    except OSError as e:
+        return {
+            "ok": False,
+            "stdout": "",
+            "stderr": str(e),
+            "command_display": "",
+            "returncode": -1,
+            "error": str(e),
+        }
+    out = dict(result)
+    rc = int(out.get("returncode") if out.get("returncode") is not None else -1)
+    ok = bool(out.get("ok")) and rc == 0
+    stdout = str(out.get("stdout") or "")
+    cap = max(4096, _env_int("RACK_CLUSTER_SQUEUE_OVERVIEW_MAX_BYTES", 262144))
+    if len(stdout) > cap:
+        stdout = stdout[:cap] + "\n… (truncated; increase RACK_CLUSTER_SQUEUE_OVERVIEW_MAX_BYTES)\n"
+    raw_cmd = str(out.get("command_display") or "")
+    return {
+        "ok": ok,
+        "stdout": stdout,
+        "stderr": str(out.get("stderr") or ""),
+        "command_display": _cluster_slurm_command_display_public(raw_cmd),
+        "returncode": rc,
+        "error": None if ok else str(out.get("error") or "squeue exited non-zero (see stderr)"),
+    }
+
+
+_CLUSTER_DM_KEYS: tuple[str, ...] = ("product_line", "hw_vendor", "customer_name")
+
+
+def _cluster_dashboard_metadata_path() -> Path:
+    raw = (os.environ.get("RACK_CLUSTER_DASHBOARD_METADATA_FILE") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (APP_DIR / "var" / "cache" / "cluster_dashboard_metadata.json").resolve()
+
+
+def read_cluster_dashboard_metadata() -> dict[str, str]:
+    """Load dashboard-saved cluster labels (product line, HW vendor, project/customer).
+
+    Returns ``product_line``, ``hw_vendor``, ``customer_name`` (empty string when unset).
+    """
+    defaults = {k: "" for k in _CLUSTER_DM_KEYS}
+    p = _cluster_dashboard_metadata_path()
+    if not p.is_file():
+        return dict(defaults)
+    max_len = max(1, _env_int("RACK_CLUSTER_DASHBOARD_META_MAX_LEN", 512))
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            locked = False
+            try:
+                fcntl.flock(f, fcntl.LOCK_SH)
+                locked = True
+            except OSError:
+                pass
+            try:
+                try:
+                    raw = json.load(f)
+                except json.JSONDecodeError:
+                    raw = {}
+            finally:
+                if locked:
+                    try:
+                        fcntl.flock(f, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+    except (OSError, UnicodeDecodeError, TypeError):
+        return dict(defaults)
+    if not isinstance(raw, dict):
+        return dict(defaults)
+    out = dict(defaults)
+    for k in _CLUSTER_DM_KEYS:
+        v = raw.get(k)
+        if isinstance(v, str):
+            t = v.replace("\n", " ").replace("\r", " ").strip()
+            if t:
+                out[k] = t[:max_len]
+    return out
+
+
+def update_cluster_dashboard_metadata(updates: dict[str, object]) -> dict[str, str]:
+    """Merge *updates* into the on-disk metadata file (empty string or null clears a key)."""
+    max_len = max(1, _env_int("RACK_CLUSTER_DASHBOARD_META_MAX_LEN", 512))
+    p = _cluster_dashboard_metadata_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if not p.exists():
+        p.write_text("{}\n", encoding="utf-8")
+    with open(p, "r+", encoding="utf-8") as f:
+        locked = False
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            locked = True
+        except OSError:
+            pass
+        try:
+            f.seek(0)
+            blob = f.read()
+            try:
+                cur = json.loads(blob) if blob.strip() else {}
+            except json.JSONDecodeError:
+                cur = {}
+            if not isinstance(cur, dict):
+                cur = {}
+            for k in _CLUSTER_DM_KEYS:
+                if k not in updates:
+                    continue
+                v = updates[k]
+                if v is None:
+                    cur.pop(k, None)
+                    continue
+                if not isinstance(v, str):
+                    continue
+                t = v.replace("\n", " ").replace("\r", " ").strip()
+                if not t:
+                    cur.pop(k, None)
+                else:
+                    cur[k] = t[:max_len]
+            new_obj = {k: cur[k] for k in _CLUSTER_DM_KEYS if isinstance(cur.get(k), str) and str(cur[k]).strip()}
+            new_blob = json.dumps(new_obj, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            f.seek(0)
+            f.truncate()
+            f.write(new_blob)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        finally:
+            if locked:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+    return read_cluster_dashboard_metadata()
+
+
+def build_cluster_overview(log_dir: Path) -> dict[str, object]:
+    """Aggregate cluster facts for the React dashboard (env + head-only Slurm; no node SSH/pdsh)."""
+    cached = _cached_rack_status_copy(log_dir)
+    rows = list(cached.get("rows") or []) if isinstance(cached, dict) else []
+    rack_ids = sorted({str(r.get("rack") or "").strip() for r in rows if r.get("rack")})
+    rack_count = len(rack_ids)
+    summary = dict(cached.get("summary") or {}) if isinstance(cached, dict) else {}
+    for k in ("done", "fail", "ongoing", "pending"):
+        if k not in summary:
+            summary[k] = 0
+    phys = dict(cached.get("physical_rf0") or {}) if isinstance(cached, dict) else {}
+    tray_hosts = len(phys)
+    gpus_per_tray = max(1, _env_int("RACK_CLUSTER_GPU_PER_TRAY", 8))
+    estimated_gpus = tray_hosts * gpus_per_tray
+    validation_total = int(summary.get("done", 0) or 0) + int(summary.get("fail", 0) or 0)
+    validation_total += int(summary.get("ongoing", 0) or 0) + int(summary.get("pending", 0) or 0)
+
+    cluster_name = _cluster_env_pick("RACK_CLUSTER_NAME", "CLUSTER_NAME")
+    if not cluster_name:
+        try:
+            cluster_name = socket.gethostname()
+        except Exception:
+            cluster_name = "—"
+
+    customer = _cluster_env_pick("RACK_CLUSTER_CUSTOMER_NAME", "RACK_CLUSTER_PROJECT") or _project_name() or "—"
+    product_line = _cluster_env_pick("RACK_CLUSTER_PRODUCT_LINE", "RACK_PRODUCT_LINE") or "—"
+    hw_vendor = _cluster_env_pick("RACK_CLUSTER_HW_VENDOR", "RACK_HW_VENDOR")
+    dash_meta = read_cluster_dashboard_metadata()
+    # Dashboard file fills gaps only (does not override env / hostname-derived values).
+    if product_line == "—" and dash_meta.get("product_line"):
+        product_line = dash_meta["product_line"]
+    if (not hw_vendor or hw_vendor == "—") and dash_meta.get("hw_vendor"):
+        hw_vendor = dash_meta["hw_vendor"]
+    if customer == "—" and dash_meta.get("customer_name"):
+        customer = dash_meta["customer_name"]
+    bcm_version = _cluster_env_pick("RACK_CLUSTER_BCM_VERSION", "RACK_BCM_VERSION")
+    slurm_version = _cluster_env_pick("RACK_CLUSTER_SLURM_VERSION", "RACK_SLURM_VERSION")
+    if slurm_version and _SLURM_VERSION_JUNK_RE.search(slurm_version):
+        slurm_version = ""
+    nemo_container = _cluster_env_pick(
+        "RACK_CLUSTER_NEMO_CONTAINER",
+        "RACK_CLUSTER_NEMO_IMAGE",
+        "RACK_NEMO_CONTAINER_IMAGE",
+        "NEMO_SQSH_SRC",
+    )
+
+    probes: dict[str, object] = {}
+    skip_probes = _truthy_env("RACK_CLUSTER_OVERVIEW_DISABLE_PROBES")
+
+    if not skip_probes and not slurm_version:
+        v, err = _cluster_probe_slurm_version()
+        slurm_version = v or "—"
+        probes["slurm"] = {"ok": bool(v) and not err, "detail": err or v}
+
+    if not skip_probes and not (bcm_version or "").strip():
+        v_b, err_b = _cluster_probe_bcm_cmsh_version()
+        bcm_version = v_b or bcm_version
+        probes["bcm_cmsh"] = {"ok": bool(v_b) and not err_b, "detail": (err_b or v_b)[:4000]}
+
+    squeue_block = _cluster_squeue_overview_block()
+
+    if hw_vendor == "":
+        hw_vendor = "—"
+    if bcm_version == "":
+        bcm_version = "—"
+    if slurm_version == "":
+        slurm_version = "—"
+    if nemo_container == "":
+        nemo_container = "—"
+
+    return {
+        "ok": True,
+        "cluster_name": cluster_name,
+        "customer_name": customer,
+        "product_line": product_line,
+        "hw_vendor": hw_vendor,
+        "bcm_version": bcm_version,
+        "slurm_version": slurm_version,
+        "nemo_container": nemo_container,
+        "rack_count": rack_count,
+        "tray_hosts": tray_hosts,
+        "estimated_gpu_count": estimated_gpus,
+        "validation_summary": summary,
+        "validation_cells_total": validation_total,
+        "status_updated_at": (cached or {}).get("updated_at") if isinstance(cached, dict) else None,
+        "probes": probes,
+        "app_version": _app_version(),
+        "squeue": squeue_block,
+        "cluster_dashboard_metadata": dash_meta,
+    }
+
+
+@app.route("/api/cluster-dashboard-metadata", methods=["GET", "PUT"])
+def api_cluster_dashboard_metadata():
+    """GET/PUT JSON ``product_line``, ``hw_vendor``, ``customer_name`` (saved under APP_DIR when unset)."""
+    if request.method == "GET":
+        meta = read_cluster_dashboard_metadata()
+        return jsonify({"ok": True, **meta})
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "expected JSON object"}), 400
+    updates: dict[str, object] = {}
+    for k in _CLUSTER_DM_KEYS:
+        if k not in body:
+            continue
+        v = body[k]
+        if v is None:
+            updates[k] = None
+        elif isinstance(v, str):
+            updates[k] = v
+        else:
+            return jsonify({"ok": False, "error": f"{k} must be a string or null"}), 400
+    try:
+        meta = update_cluster_dashboard_metadata(updates)
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, **meta})
+
+
+@app.route("/api/cluster-overview", methods=["GET"])
+def api_cluster_overview():
+    """Cluster-wide facts for the dashboard tab (env + head Slurm; uses cached /api/status rows)."""
+    try:
+        log_dir = _resolve_log_dir(request.args.get("log_dir"))
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    client_id = (request.args.get("client_id") or "").strip()
+    connected_users = _touch_app_client(client_id)
+    try:
+        payload = build_cluster_overview(log_dir)
+        payload["connected_users"] = connected_users
+        return jsonify(payload)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/app-stats", methods=["GET"])
@@ -7324,6 +8523,26 @@ def api_status():
 _SPA_DIR = APP_DIR / "static" / "spa"
 
 
+def _frontend_mode() -> str:
+    """UI mode selector: 'legacy' or 'react' (aliases: 'spa')."""
+    raw = os.environ.get("RACK_WEB_FRONTEND", "").strip().lower()
+    if raw in {"react", "spa"}:
+        return "react"
+    return "legacy"
+
+
+def _spa_at_root_enabled() -> bool:
+    return _frontend_mode() == "react"
+
+
+def _serve_spa_asset(path: str = "index.html"):
+    """Serve a built SPA asset, fallback to index.html for client routes."""
+    spa_file = _SPA_DIR / path
+    if spa_file.is_file():
+        return send_file(spa_file)
+    return send_file(_SPA_DIR / "index.html")
+
+
 @app.route("/api/auth-check")
 def api_auth_check():
     """Check if the current session is authenticated. Returns 401 if not."""
@@ -7366,10 +8585,15 @@ def api_logout():
 @app.route("/spa/<path:path>")
 def serve_spa(path: str = "index.html"):
     """Serve the React SPA from static/spa/ (built by Vite)."""
-    spa_file = _SPA_DIR / path
-    if spa_file.is_file():
-        return send_file(spa_file)
-    return send_file(_SPA_DIR / "index.html")
+    return _serve_spa_asset(path)
+
+
+@app.route("/<path:path>")
+def serve_root_spa(path: str):
+    """Serve React SPA at root when RACK_WEB_FRONTEND=react."""
+    if _spa_at_root_enabled():
+        return _serve_spa_asset(path)
+    return jsonify({"ok": False, "error": "Not found"}), 404
 
 
 if __name__ == "__main__":

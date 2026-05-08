@@ -31,7 +31,7 @@ export function SettingsView({ logDir, onLogDirChange }: SettingsViewProps) {
               fullWidth
               value={logDir}
               onChange={(e) => onLogDirChange(e.target.value)}
-              placeholder="var/logs/"
+              placeholder="leave empty for server default (RACK_STATUS_LOG_DIR)"
             />
             <Button kind="secondary" size="small">
               Apply

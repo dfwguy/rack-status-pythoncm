@@ -12,15 +12,17 @@ import { Text } from "@nvidia/foundations-react-core";
 import {
   LayoutDashboard,
   Layers,
+  Server,
   Terminal,
   FileDown,
   Settings,
   BookOpen,
   HelpCircle,
   ChevronLeft,
+  LineChart,
 } from "lucide-react";
 
-export type ViewId = "dashboard" | "multirack" | "slurm" | "reports" | "settings";
+export type ViewId = "dashboard" | "singleRack" | "multirack" | "slurm" | "reports" | "analytics" | "settings";
 
 export const DRAWER_WIDTH_OPEN = 240;
 export const DRAWER_WIDTH_CLOSED = 64;
@@ -33,9 +35,11 @@ interface NavItem {
 
 const mainNavItems: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={22} /> },
+  { id: "singleRack", label: "Single Rack", icon: <Server size={22} /> },
   { id: "multirack", label: "Multirack", icon: <Layers size={22} /> },
   { id: "slurm", label: "Slurm", icon: <Terminal size={22} /> },
   { id: "reports", label: "Reports", icon: <FileDown size={22} /> },
+  { id: "analytics", label: "Analytics", icon: <LineChart size={22} /> },
 ];
 
 const bottomNavItems: NavItem[] = [

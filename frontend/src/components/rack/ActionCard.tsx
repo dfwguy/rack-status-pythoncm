@@ -18,10 +18,12 @@ interface ActionCardProps {
   icon?: ReactNode;
   buttonLabel?: string;
   status?: ActionStatus;
-  onRun?: () => void;
+  onRun?: () => void | Promise<void>;
   disabled?: boolean;
   destructive?: boolean;
   selectedNodes?: Set<string>;
+  /** Called immediately before the confirm dialog opens (when nodes are selected). */
+  onBeforeConfirmDialog?: () => void;
 }
 
 function StatusTag({ status }: { status: ActionStatus }) {
@@ -42,20 +44,32 @@ export function ActionCard({
   disabled,
   destructive,
   selectedNodes,
+  onBeforeConfirmDialog,
 }: ActionCardProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [localRunning, setLocalRunning] = useState(false);
+  const effectiveRunning = status === "running" || localRunning;
+
+  const invokeRun = () => {
+    const ret = onRun?.();
+    if (ret && typeof (ret as Promise<void>).then === "function") {
+      setLocalRunning(true);
+      (ret as Promise<void>).finally(() => setLocalRunning(false));
+    }
+  };
 
   const handleClick = () => {
     if (selectedNodes && selectedNodes.size > 0) {
+      onBeforeConfirmDialog?.();
       setConfirmOpen(true);
     } else {
-      onRun?.();
+      invokeRun();
     }
   };
 
   const handleConfirm = () => {
     setConfirmOpen(false);
-    onRun?.();
+    invokeRun();
   };
 
   const sortedNodes = selectedNodes
@@ -72,7 +86,7 @@ export function ActionCard({
           <div style={{ flex: 1, minWidth: 0 }}>
             <Flex gap="2" align="center" style={{ marginBottom: 4 }}>
               <Text kind="body/bold/md">{title}</Text>
-              <StatusTag status={status} />
+              <StatusTag status={effectiveRunning ? "running" : status} />
             </Flex>
             <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
               {description}
@@ -82,9 +96,9 @@ export function ActionCard({
             kind={destructive ? "primary" : "secondary"}
             size="small"
             onClick={handleClick}
-            disabled={disabled || status === "running"}
+            disabled={disabled || effectiveRunning}
           >
-            {status === "running" ? "Running..." : buttonLabel}
+            {effectiveRunning ? "Running..." : buttonLabel}
           </KuiButton>
         </Flex>
       </Card>

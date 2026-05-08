@@ -2571,7 +2571,7 @@
     <div class="dlg-sub bug-inv-dlg-sub">
       Reads the reports directory on <strong>this dashboard host</strong> (same base as <code>RACK_BUG_REPORT_REMOTE_DIR</code>,
       default <code>/home/cmsupport/reports</code>): one subdirectory per node or rack id, with
-      <code>nvidia-bug-report*.log.gz</code> and/or NVLMAPPER <code>nvlmapper.*.zip</code> files. No pdsh — sync or copy here if needed. Click <strong>Download</strong> on a row to save a file.
+      <code>nvidia-bug-report*.log.gz</code>, NVLMAPPER <code>nvlmapper.*.zip</code>, and Excel <code>*.xlsx</code> (e.g. parser exports under <code>parser-excel/</code>). No pdsh — sync or copy here if needed. Click <strong>Download</strong> on a row to save a file.
     </div>
     <div class="bug-inv-dlg-toolbar">
       <button type="button" id="bugInvRefreshBtn">Refresh list</button>
@@ -5511,10 +5511,13 @@
           if (!it || !it.host || !it.name) continue;
           const tr = document.createElement("tr");
           const tdH = document.createElement("td");
-          tdH.textContent = it.host;
+          tdH.textContent = it.host === "excel-root" ? "— (reports root)" : it.host;
+          tdH.title = it.host;
           const tdF = document.createElement("td");
           tdF.textContent = it.name;
-          tdF.title = (data.base_dir || "") + "/" + it.host + "/" + it.name;
+          tdF.title =
+            (data.base_dir || "") +
+            (it.host === "excel-root" ? "/" + it.name : "/" + it.host + "/" + it.name);
           const tdDl = document.createElement("td");
           const b = document.createElement("button");
           b.type = "button";
@@ -5542,7 +5545,7 @@
           td.colSpan = 3;
           td.className = "parser-empty";
           td.textContent =
-            "No nvidia-bug-report*.log.gz or nvlmapper.*.zip files found under subdirectories of the directory above.";
+            "No nvidia-bug-report*.log.gz, nvlmapper.*.zip, or *.xlsx files found under the reports directory above.";
           tr.appendChild(td);
           tbodyInv.appendChild(tr);
         }

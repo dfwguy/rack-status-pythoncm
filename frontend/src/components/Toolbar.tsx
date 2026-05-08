@@ -6,6 +6,7 @@ import Box from "@mui/material/Box";
 import Tooltip from "@mui/material/Tooltip";
 import Divider from "@mui/material/Divider";
 import CircularProgress from "@mui/material/CircularProgress";
+import LinearProgress from "@mui/material/LinearProgress";
 import { Text, Tag } from "@nvidia/foundations-react-core";
 import {
   Sun,
@@ -13,6 +14,7 @@ import {
   RefreshCw,
   Menu,
   Download,
+  FileSpreadsheet,
   ListOrdered,
   Server,
   LogOut,
@@ -48,6 +50,7 @@ export function Toolbar({
   const { user, logout } = useAuth();
   const [squeueOpen, setSqueueOpen] = useState(false);
   const [sinfoOpen, setSinfoOpen] = useState(false);
+  const [excelExporting, setExcelExporting] = useState(false);
 
   const handleExportLogs = () => {
     const params = new URLSearchParams();
@@ -55,8 +58,58 @@ export function Toolbar({
     window.open(`/api/export-logs-zip?${params}`, "_blank");
   };
 
+  const handleExportExcel = async () => {
+    const params = new URLSearchParams();
+    if (logDir) params.set("log_dir", logDir);
+    const url = `/api/parser-export-excel?${params}`;
+    setExcelExporting(true);
+    try {
+      const res = await fetch(url, { credentials: "same-origin" });
+      if (res.status === 401) {
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        return;
+      }
+      if (!res.ok) {
+        const ct = res.headers.get("content-type") || "";
+        if (ct.includes("application/json")) {
+          const j = (await res.json()) as { error?: string };
+          throw new Error(typeof j.error === "string" ? j.error : `HTTP ${res.status}`);
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get("content-disposition");
+      let name = "rack-parser-export.xlsx";
+      const m = cd && /filename="([^"]+)"/.exec(cd);
+      if (m) name = m[1];
+      const a = document.createElement("a");
+      const href = URL.createObjectURL(blob);
+      a.href = href;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(href);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Excel export failed");
+    } finally {
+      setExcelExporting(false);
+    }
+  };
+
   return (
     <>
+      {excelExporting && (
+        <LinearProgress
+          color="primary"
+          sx={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: (t) => t.zIndex.modal + 2,
+            height: 3,
+          }}
+        />
+      )}
       <AppBar
         position="sticky"
         elevation={0}
@@ -84,10 +137,31 @@ export function Toolbar({
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
             {loading && <CircularProgress size={18} color="primary" sx={{ mr: 1 }} />}
 
-            <Tooltip title="Export Logs (zip)">
+            <Tooltip title="Export logs (zip)">
               <IconButton color="inherit" onClick={handleExportLogs} size="small">
                 <Download size={18} />
               </IconButton>
+            </Tooltip>
+
+            <Tooltip
+              title={
+                excelExporting
+                  ? "Building Excel export (parser running)…"
+                  : "Export parser results (Excel) — log root only; logs under failed/ are excluded"
+              }
+            >
+              <span>
+                <IconButton
+                  color="inherit"
+                  onClick={() => void handleExportExcel()}
+                  size="small"
+                  disabled={excelExporting}
+                  aria-busy={excelExporting}
+                  aria-label={excelExporting ? "Exporting Excel" : "Export parser results to Excel"}
+                >
+                  {excelExporting ? <CircularProgress color="inherit" size={18} /> : <FileSpreadsheet size={18} />}
+                </IconButton>
+              </span>
             </Tooltip>
 
             <Tooltip title="squeue">
@@ -144,7 +218,7 @@ export function Toolbar({
         </MuiToolbar>
       </AppBar>
 
-      <SqueueDialog open={squeueOpen} onClose={() => setSqueueOpen(false)} />
+      <SqueueDialog open={squeueOpen} onClose={() => setSqueueOpen(false)} logDir={logDir} />
       <SinfoDialog open={sinfoOpen} onClose={() => setSinfoOpen(false)} />
     </>
   );

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import Box from "@mui/material/Box";
 import { Text } from "@nvidia/foundations-react-core";
 import { ThemeProvider, useThemeMode } from "./context/ThemeContext";
@@ -6,22 +6,28 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AppLayout } from "./components/AppLayout";
 import { Sidebar, type ViewId } from "./components/Sidebar";
 import { Toolbar } from "./components/Toolbar";
-import { DashboardView } from "./views/DashboardView";
+import { ClusterDashboardView } from "./views/ClusterDashboardView";
+import { SingleRackView } from "./views/SingleRackView";
+import { useClusterOverview } from "./hooks/useClusterOverview";
 import { RackDetailView } from "./views/RackDetailView";
 import { MultirackView } from "./views/MultirackView";
 import { SlurmView } from "./views/SlurmView";
 import { ReportsView } from "./views/ReportsView";
+import { AnalyticsView } from "./views/AnalyticsView";
 import { SettingsView } from "./views/SettingsView";
 import { LoginPage } from "./pages/LoginPage";
 import { useRackStatus } from "./hooks/useRackStatus";
+import { RackCommandsStoreProvider } from "./context/RackCommandsStoreContext";
 
 const SIDEBAR_STORAGE_KEY = "nvis-sidebar-open";
 
 const VIEW_TITLES: Record<ViewId, string> = {
   dashboard: "Dashboard",
+  singleRack: "Single Rack",
   multirack: "Multirack",
   slurm: "Slurm",
   reports: "Reports",
+  analytics: "Analytics",
   settings: "Settings",
 };
 
@@ -36,12 +42,34 @@ function getInitialSidebarState(): boolean {
 
 function AppContent() {
   const { mode, toggleTheme } = useThemeMode();
-  const [logDir, setLogDir] = useState("var/logs/");
+  /** Empty = omit log_dir on /api/status so the server uses RACK_STATUS_LOG_DIR (or app default). */
+  const [logDir, setLogDir] = useState("");
+  const logDirSeededRef = useRef(false);
   const [activeView, setActiveView] = useState<ViewId>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(getInitialSidebarState);
   const [selectedRack, setSelectedRack] = useState<string | null>(null);
 
   const { data, loading, error, refresh, activeUsers } = useRackStatus(logDir);
+  const {
+    data: clusterOverview,
+    loading: clusterLoading,
+    error: clusterError,
+    refresh: refreshCluster,
+  } = useClusterOverview(logDir);
+
+  const refreshAll = useCallback(() => {
+    void refresh();
+    void refreshCluster();
+  }, [refresh, refreshCluster]);
+
+  useEffect(() => {
+    if (!data?.log_dir || logDirSeededRef.current) return;
+    setLogDir((current) => {
+      if (current !== "") return current;
+      logDirSeededRef.current = true;
+      return data.log_dir;
+    });
+  }, [data?.log_dir]);
 
   const handleSidebarToggle = useCallback(() => {
     setSidebarOpen((prev) => {
@@ -93,8 +121,8 @@ function AppContent() {
           title={toolbarTitle}
           theme={mode}
           onToggleTheme={toggleTheme}
-          onRefresh={refresh}
-          loading={loading}
+          onRefresh={refreshAll}
+          loading={loading || clusterLoading}
           sidebarOpen={sidebarOpen}
           onMenuToggle={handleSidebarToggle}
           activeUsers={activeUsers}
@@ -103,31 +131,44 @@ function AppContent() {
       }
       backendMode={data?.native_workers?.mode}
     >
-      {activeView === "dashboard" && !selectedRack && (
-        <DashboardView
-          data={data}
-          loading={loading}
-          error={error}
-          onRackSelect={handleRackSelect}
-          onCommentChange={handleCommentChange}
-        />
-      )}
-      {activeView === "dashboard" && selectedRack && (
-        <RackDetailView
-          rack={selectedRack}
-          row={data?.rows.find((r) => r.rack === selectedRack)}
-          comment={data?.comments[selectedRack] || ""}
-          physicalRf0={data?.physical_rf0 || {}}
-          logDir={data?.log_dir}
-          onBack={handleBackToDashboard}
-        />
-      )}
-      {activeView === "multirack" && <MultirackView data={data} logDir={logDir} />}
-      {activeView === "slurm" && <SlurmView />}
-      {activeView === "reports" && <ReportsView />}
-      {activeView === "settings" && (
-        <SettingsView logDir={logDir} onLogDirChange={setLogDir} />
-      )}
+      <RackCommandsStoreProvider>
+        {activeView === "dashboard" && (
+          <ClusterDashboardView
+            data={clusterOverview}
+            loading={clusterLoading}
+            error={clusterError}
+            onClusterMetadataSaved={refreshCluster}
+          />
+        )}
+        {activeView === "singleRack" && !selectedRack && (
+          <SingleRackView
+            data={data}
+            loading={loading}
+            error={error}
+            onRackSelect={handleRackSelect}
+            onCommentChange={handleCommentChange}
+          />
+        )}
+        {activeView === "singleRack" && selectedRack && (
+          <RackDetailView
+            rack={selectedRack}
+            row={data?.rows.find((r) => r.rack === selectedRack)}
+            comment={data?.comments[selectedRack] || ""}
+            physicalRf0={data?.physical_rf0 || {}}
+            logDir={data?.log_dir}
+            onBack={handleBackToDashboard}
+          />
+        )}
+        {activeView === "multirack" && <MultirackView data={data} logDir={logDir} />}
+        {activeView === "slurm" && <SlurmView logDir={logDir} />}
+        {activeView === "reports" && <ReportsView />}
+        {activeView === "analytics" && (
+          <AnalyticsView logDir={logDir} rows={data?.rows ?? []} />
+        )}
+        {activeView === "settings" && (
+          <SettingsView logDir={logDir} onLogDirChange={setLogDir} />
+        )}
+      </RackCommandsStoreProvider>
     </AppLayout>
   );
 }

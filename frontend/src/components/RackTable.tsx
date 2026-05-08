@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
@@ -7,6 +7,7 @@ import TableHead from "@mui/material/TableHead";
 import TablePagination from "@mui/material/TablePagination";
 import TableRow from "@mui/material/TableRow";
 import TableSortLabel from "@mui/material/TableSortLabel";
+import Checkbox from "@mui/material/Checkbox";
 import Paper from "@mui/material/Paper";
 import Box from "@mui/material/Box";
 import TextField from "@mui/material/TextField";
@@ -46,9 +47,28 @@ import {
   MessageSquarePlus,
   Pencil,
   Trash2,
+  LineChart,
+  ChevronDown,
 } from "lucide-react";
+import { useRackCommandsStore } from "../context/RackCommandsStoreContext";
+import { RackTableCommandIndicator } from "./RackTableCommandIndicator";
 import { ParserResultsDialog } from "./ParserResultsDialog";
+import { TailLogDialog } from "./TailLogDialog";
+import {
+  buildSingleRackTailBody,
+  openRackLogInNewTab,
+  validationOngoing,
+  type TailLogStreamBody,
+} from "../lib/rackLog";
 import type { RackRow } from "../types/api";
+import {
+  attachLogDir,
+  fullRackCt01to18NodeSet,
+  llamaNodesBody,
+  slurmTargetBody,
+  specsCommandBody,
+  validationFamilyBody,
+} from "../lib/rackCommandBodies";
 
 const ICON_SIZE = 14;
 
@@ -58,6 +78,9 @@ interface RackTableProps {
   logDir?: string;
   onRackSelect?: (rack: string) => void;
   onCommentChange?: (rack: string, comment: string | null) => void;
+  /** When set with ``onValidationFiltersChange``, validation filter state is controlled by the parent (e.g. summary chips). */
+  validationFilters?: string[];
+  onValidationFiltersChange?: (filters: string[]) => void;
 }
 
 type SortCol = "rack" | "nemo" | "sinfo";
@@ -181,77 +204,205 @@ function SinfoTags({ sinfo }: { sinfo: string }) {
   );
 }
 
-function parseDeviceSegments(ct: string): { up: string[]; down: string[] } {
-  if (ct === "-" || ct === "?") return { up: [], down: [] };
-  const segments = ct.split(";").map((s) => s.trim()).filter(Boolean);
+/** Tray bodies after UP:/DN:/INST:/UNK: prefixes (legacy `ct_down_unk` segments). */
+function parseNodesStatusSegments(ct: string): {
+  up: string[];
+  dn: string[];
+  inst: string[];
+  unk: string[];
+  other: string[];
+} {
+  if (ct === "-" || ct === "?") return { up: [], dn: [], inst: [], unk: [], other: [] };
   const up: string[] = [];
-  const down: string[] = [];
-  for (const seg of segments) {
-    if (seg.startsWith("UP:")) {
-      up.push(seg.slice(3));
-    } else if (seg.startsWith("DN:")) {
-      down.push(seg.slice(3));
-    } else if (seg.startsWith("INST:")) {
-      down.push(`INST ${seg.slice(5)}`);
-    } else {
-      down.push(seg);
-    }
+  const dn: string[] = [];
+  const inst: string[] = [];
+  const unk: string[] = [];
+  const other: string[] = [];
+  for (const seg of ct.split(";").map((s) => s.trim()).filter(Boolean)) {
+    if (/^up:/i.test(seg)) up.push(seg.replace(/^up:/i, "").trim());
+    else if (/^dn:/i.test(seg)) dn.push(seg.replace(/^dn:/i, "").trim());
+    else if (/^inst:/i.test(seg)) inst.push(seg.replace(/^inst:/i, "").trim());
+    else if (/^unk:/i.test(seg)) unk.push(seg.replace(/^unk:/i, "").trim());
+    else other.push(seg);
   }
-  return { up, down };
+  return { up, dn, inst, unk, other };
 }
 
-function DeviceUpTags({ ct }: { ct: string }) {
-  const { up } = parseDeviceSegments(ct);
-  if (ct === "-" || ct === "?") {
-    return <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>{ct}</Text>;
-  }
-  if (up.length === 0) {
-    return <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>-</Text>;
-  }
+function StatusLine({
+  prefix,
+  bodies,
+  tagColor,
+}: {
+  prefix: string;
+  bodies: string[];
+  tagColor: TagColor;
+}) {
   return (
-    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-      {up.map((range, i) => (
-        <Tag key={i} color="green" kind="solid" readOnly density="compact">{range}</Tag>
-      ))}
+    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, alignItems: "center", minWidth: 0 }}>
+      <Box
+        component="span"
+        sx={{
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+          fontSize: 12,
+          fontWeight: 600,
+          color: "var(--text-color-secondary)",
+          flexShrink: 0,
+        }}
+      >
+        {prefix}
+      </Box>
+      {bodies.length === 0 ? (
+        <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>—</Text>
+      ) : (
+        bodies.map((body, i) => (
+          <Tag key={`${prefix}-${i}`} color={tagColor} kind="solid" readOnly density="compact">
+            {body}
+          </Tag>
+        ))
+      )}
     </Box>
   );
 }
 
-function DeviceDownTags({ ct }: { ct: string }) {
-  const { down } = parseDeviceSegments(ct);
+function nodeStatusHasTypedSegments(ct: string): boolean {
+  const s = ct.trim();
+  return /^(dn|inst|up|unk):/i.test(s) || /;\s*(dn|inst|up|unk):/i.test(s);
+}
+
+function NodeStatusTags({
+  ct,
+  rowHasDown,
+  onOpenDeviceMenu,
+  menuDisabled,
+}: {
+  ct: string;
+  rowHasDown: boolean;
+  onOpenDeviceMenu: (e: React.MouseEvent<HTMLElement>) => void;
+  menuDisabled?: boolean;
+}) {
   if (ct === "-" || ct === "?") {
     return <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>{ct}</Text>;
   }
-  if (down.length === 0) {
-    return <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>-</Text>;
+  if (!nodeStatusHasTypedSegments(ct)) {
+    return (
+      <Box sx={{ display: "flex", gap: 0.5, alignItems: "flex-start", width: "100%", minWidth: 0 }}>
+        <Text kind="body/regular/sm" style={{ fontFamily: "monospace", color: "var(--text-color-secondary)", flex: 1, minWidth: 0, wordBreak: "break-word" }}>
+          {ct}
+        </Text>
+        {rowHasDown && (
+          <IconButton size="small" disabled={menuDisabled} onClick={onOpenDeviceMenu} sx={{ flexShrink: 0 }}>
+            <Ellipsis size={16} />
+          </IconButton>
+        )}
+      </Box>
+    );
   }
+  const { up, dn, inst, unk, other } = parseNodesStatusSegments(ct);
   return (
-    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-      {down.map((seg, i) => {
-        const isInst = seg.startsWith("INST ");
-        return (
-          <Tag key={i} color={isInst ? "blue" : "red"} kind="solid" readOnly density="compact">{seg}</Tag>
-        );
-      })}
+    <Box sx={{ display: "flex", gap: 0.5, alignItems: "center", width: "100%", minWidth: 0 }}>
+      <Box
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "row",
+          flexWrap: "wrap",
+          gap: 0.5,
+          alignItems: "center",
+        }}
+      >
+        <StatusLine prefix="UP:" bodies={up} tagColor="green" />
+        <StatusLine prefix="DN:" bodies={dn} tagColor="red" />
+        <StatusLine prefix="INST:" bodies={inst} tagColor="blue" />
+        {unk.length > 0 && <StatusLine prefix="UNK:" bodies={unk} tagColor="yellow" />}
+        {other.length > 0 &&
+          other.map((o, i) => (
+            <Tag key={`o-${i}`} color="gray" kind="solid" readOnly density="compact">
+              {o}
+            </Tag>
+          ))}
+      </Box>
+      {rowHasDown && (
+        <IconButton size="small" disabled={menuDisabled} onClick={onOpenDeviceMenu} sx={{ flexShrink: 0 }}>
+          <Ellipsis size={16} />
+        </IconButton>
+      )}
     </Box>
   );
 }
 
-export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChange }: RackTableProps) {
+export function RackTable({
+  rows,
+  comments,
+  logDir,
+  onRackSelect,
+  onCommentChange,
+  validationFilters: validationFiltersProp,
+  onValidationFiltersChange,
+}: RackTableProps) {
   const [sortCol, setSortCol] = useState<SortCol>("rack");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
 
   const [search, setSearch] = useState("");
-  const [validationFilters, setValidationFilters] = useState<string[]>([]);
+  const [internalValidationFilters, setInternalValidationFilters] = useState<string[]>([]);
+  const validationFilters = validationFiltersProp ?? internalValidationFilters;
+  const setValidationFilters = useCallback(
+    (v: string[]) => {
+      if (onValidationFiltersChange) {
+        onValidationFiltersChange(v);
+      } else {
+        setInternalValidationFilters(v);
+      }
+    },
+    [onValidationFiltersChange]
+  );
+
+  const validationFilterKey = validationFilters.slice().sort().join(",");
+  useEffect(() => {
+    setPage(0);
+  }, [validationFilterKey]);
+
   const [sinfoFilters, setSinfoFilters] = useState<string[]>([]);
   const [deviceFilters, setDeviceFilters] = useState<string[]>([]);
 
-  // Parser results dialog
+  // Parser results dialog (initial tab: 0 Summary, 1 NCCL — legacy opens NCCL first for rack review)
   const [parserOpen, setParserOpen] = useState(false);
+  const [parserInitialTab, setParserInitialTab] = useState(0);
   const [parserRack, setParserRack] = useState("");
   const [parserJobId, setParserJobId] = useState<string | undefined>();
+
+  const openParserForRow = useCallback((row: RackRow, initialTab: number) => {
+    setParserRack(row.rack);
+    setParserJobId(row.last_job !== "-" ? row.last_job : undefined);
+    setParserInitialTab(initialTab);
+    setParserOpen(true);
+  }, []);
+
+  const [tailStream, setTailStream] = useState<{ title: string; body: TailLogStreamBody } | null>(null);
+
+  const openLogForRow = useCallback(
+    async (row: RackRow) => {
+      const job = row.last_job.trim() && row.last_job !== "-" ? row.last_job : undefined;
+      const r = await openRackLogInNewTab(logDir, { rack: row.rack, job_id: job });
+      if (!r.ok) {
+        setSnackbar({ open: true, message: r.error, severity: "error" });
+      }
+    },
+    [logDir]
+  );
+
+  const startTailForRow = useCallback(
+    (row: RackRow) => {
+      const job = row.last_job.trim() && row.last_job !== "-" ? row.last_job : undefined;
+      setTailStream({
+        title: `Tail log — ${row.rack}`,
+        body: buildSingleRackTailBody(logDir, row.rack, job),
+      });
+    },
+    [logDir]
+  );
 
   // Comment edit dialog
   const [commentDialogOpen, setCommentDialogOpen] = useState(false);
@@ -271,11 +422,213 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
     open: false, message: "", severity: "success",
   });
 
+  const store = useRackCommandsStore();
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedRacks, setSelectedRacks] = useState<Set<string>>(() => new Set());
+  const [runMenuAnchor, setRunMenuAnchor] = useState<HTMLElement | null>(null);
+
+  const nodesFullRack = useCallback((rack: string) => fullRackCt01to18NodeSet(rack), []);
+
+  const toggleSelectMode = useCallback(() => {
+    setSelectMode((m) => {
+      if (m) {
+        setSelectedRacks(new Set());
+        setRunMenuAnchor(null);
+      }
+      return !m;
+    });
+  }, []);
+
+  const toggleRackSelected = useCallback((rack: string) => {
+    setSelectedRacks((prev) => {
+      const n = new Set(prev);
+      if (n.has(rack)) n.delete(rack);
+      else n.add(rack);
+      return n;
+    });
+  }, []);
+
+  const selectedRackList = useMemo(
+    () => [...selectedRacks].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    [selectedRacks],
+  );
+
+  const fireBulkParallel = useCallback(
+    (label: string, perRack: (rack: string) => void) => {
+      setRunMenuAnchor(null);
+      for (const rack of selectedRackList) {
+        perRack(rack);
+      }
+      setSnackbar({
+        open: true,
+        message: `${label}: started on ${selectedRackList.length} rack(s) (ct[01–18] each, parallel)`,
+        severity: "success",
+      });
+    },
+    [selectedRackList],
+  );
+
+  const handleBulkRun = useCallback(
+    (key: string) => {
+      if (!selectedRackList.length) {
+        setSnackbar({ open: true, message: "Choose at least one rack", severity: "error" });
+        setRunMenuAnchor(null);
+        return;
+      }
+      if (["nemo", "llama", "stress"].includes(key) && !logDir?.trim()) {
+        setSnackbar({
+          open: true,
+          message: "Set log directory (toolbar / settings) before launching validation or Llama jobs.",
+          severity: "error",
+        });
+        setRunMenuAnchor(null);
+        return;
+      }
+      const ld = logDir?.trim() ?? "";
+      switch (key) {
+        case "nemo":
+          fireBulkParallel("NEMO validation", (rack) =>
+            void store.runAsyncValidationFamily(
+              rack,
+              "NEMO validation",
+              "validation",
+              "/api/run-validation-async",
+              (jid) => `/api/run-validation-status?job_id=${encodeURIComponent(jid)}`,
+              validationFamilyBody(rack, ld, nodesFullRack(rack)),
+            ),
+          );
+          break;
+        case "llama":
+          fireBulkParallel("Llama", (rack) =>
+            void store.runAsyncValidationFamily(
+              rack,
+              "Llama",
+              "validation",
+              "/api/run-llama-async",
+              (jid) => `/api/run-llama-status?job_id=${encodeURIComponent(jid)}`,
+              llamaNodesBody(rack, ld, nodesFullRack(rack)),
+            ),
+          );
+          break;
+        case "stress":
+          fireBulkParallel("MNUBERGEMM stress", (rack) =>
+            void store.runAsyncValidationFamily(
+              rack,
+              "MNUBERGEMM stress",
+              "stress",
+              "/api/run-mnubergemm-stress-async",
+              (jid) => `/api/run-mnubergemm-stress-status?job_id=${encodeURIComponent(jid)}`,
+              validationFamilyBody(rack, ld, nodesFullRack(rack)),
+            ),
+          );
+          break;
+        case "power_on":
+          fireBulkParallel("Power on", (rack) =>
+            void store.runAsyncReset(rack, "Power on", "power", "/api/power-on-async", specsCommandBody(rack, ld, nodesFullRack(rack))),
+          );
+          break;
+        case "gpu_reset":
+          fireBulkParallel("GPU reset", (rack) =>
+            void store.runAsyncReset(rack, "GPU reset", "gpu", "/api/gpu-reset-async", specsCommandBody(rack, ld, nodesFullRack(rack))),
+          );
+          break;
+        case "hw_check":
+          fireBulkParallel("Hardware check", (rack) =>
+            void store.runAsyncReset(rack, "Hardware check", "hw", "/api/hw-check-async", {
+              ...specsCommandBody(rack, ld, nodesFullRack(rack)),
+              preset: "default",
+            }),
+          );
+          break;
+        case "bug_report":
+          fireBulkParallel("Bug report", (rack) =>
+            void store.runAsyncReset(rack, "Bug report", "hw", "/api/bug-report-async", specsCommandBody(rack, ld, nodesFullRack(rack))),
+          );
+          break;
+        case "imex_reset":
+          fireBulkParallel("IMEX reset", (rack) =>
+            void store.runAsyncReset(rack, "IMEX reset", "nmxc", "/api/imex-reset-async", attachLogDir({ rack }, ld)),
+          );
+          break;
+        case "imex_check":
+          fireBulkParallel("IMEX check", (rack) =>
+            void store.runAsyncReset(rack, "IMEX check", "hw", "/api/imex-check-async", attachLogDir({ rack }, ld)),
+          );
+          break;
+        case "services_restart":
+          fireBulkParallel("Restart services", (rack) =>
+            void store.runAsyncReset(
+              rack,
+              "Restart services",
+              "services",
+              "/api/services-restart-async",
+              specsCommandBody(rack, ld, nodesFullRack(rack)),
+            ),
+          );
+          break;
+        case "nvswitch_fix":
+          fireBulkParallel("NVSwitch fix", (rack) =>
+            void store.runAsyncReset(rack, "NVSwitch fix", "nmxc", "/api/nvswitch-fix-async", attachLogDir({ rack }, ld)),
+          );
+          break;
+        case "nvswitch_sdn":
+          fireBulkParallel("NVSwitch SDN reset", (rack) =>
+            void store.runAsyncReset(rack, "NVSwitch SDN reset", "nmxc", "/api/nvswitch-sdn-reset-async", attachLogDir({ rack }, ld)),
+          );
+          break;
+        case "nvswitch_system":
+          fireBulkParallel("NVSwitch system reset", (rack) => {
+            void (async () => {
+              try {
+                const res = await fetch(`/api/nvswitch-hosts?rack=${encodeURIComponent(rack)}`, { credentials: "same-origin" });
+                const data = (await res.json()) as { ok?: boolean; hosts?: string[]; error?: string };
+                if (!res.ok || !data.ok || !data.hosts?.length) {
+                  store.openText(`NVSwitch system reset — ${rack}`, data.error || "No NVSwitch hosts", true);
+                  return;
+                }
+                await store.runAsyncReset(rack, "NVSwitch system reset", "nmxc", "/api/nvswitch-system-reset-async", {
+                  ...attachLogDir({ rack }, ld),
+                  nvswitch_host: data.hosts[0],
+                });
+              } catch (e) {
+                store.openText(`NVSwitch system reset — ${rack}`, e instanceof Error ? e.message : String(e), true);
+              }
+            })();
+          });
+          break;
+        case "nvswitch_check":
+          fireBulkParallel("NVSwitch check", (rack) =>
+            void store.runAsyncReset(rack, "NVSwitch check", "nmxc", "/api/nvswitch-check-async", attachLogDir({ rack }, ld)),
+          );
+          break;
+        case "nvlmapper":
+          fireBulkParallel("NVLMapper", (rack) =>
+            void store.runAsyncReset(rack, "NVLMapper", "nmxc", "/api/nvlmapper-async", { rack }),
+          );
+          break;
+        case "drain":
+          fireBulkParallel("Slurm drain", (rack) =>
+            void store.runSyncJson(rack, "Slurm drain", "/api/slurm-drain", slurmTargetBody(rack, nodesFullRack(rack)) as Record<string, unknown>),
+          );
+          break;
+        case "undrain":
+          fireBulkParallel("Slurm undrain", (rack) =>
+            void store.runSyncJson(rack, "Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, nodesFullRack(rack)) as Record<string, unknown>),
+          );
+          break;
+        default:
+          setRunMenuAnchor(null);
+      }
+    },
+    [selectedRackList, logDir, store, fireBulkParallel, nodesFullRack],
+  );
+
   const openMenu = useCallback((event: React.MouseEvent<HTMLElement>, kind: MenuKind, row: RackRow) => {
+    if (selectMode) return;
     setMenuAnchor(event.currentTarget);
     setMenuKind(kind);
     setMenuRow(row);
-  }, []);
+  }, [selectMode]);
 
   const closeMenu = useCallback(() => {
     setMenuAnchor(null);
@@ -294,21 +647,17 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
     window.open("/api/slurm-sinfo-r", "_blank");
   }, [closeMenu]);
 
-  const handleOpenLog = useCallback(() => {
+  const handleOpenLog = useCallback(async () => {
     if (!menuRow) return;
-    setParserRack(menuRow.rack);
-    setParserJobId(menuRow.last_job !== "-" ? menuRow.last_job : undefined);
-    setParserOpen(true);
     closeMenu();
-  }, [menuRow, closeMenu]);
+    await openLogForRow(menuRow);
+  }, [menuRow, closeMenu, openLogForRow]);
 
   const handleTailLog = useCallback(() => {
     if (!menuRow) return;
-    setParserRack(menuRow.rack);
-    setParserJobId(menuRow.last_job !== "-" ? menuRow.last_job : undefined);
-    setParserOpen(true);
     closeMenu();
-  }, [menuRow, closeMenu]);
+    startTailForRow(menuRow);
+  }, [menuRow, closeMenu, startTailForRow]);
 
   const handleAddEditComment = useCallback(() => {
     if (!menuRow) return;
@@ -465,6 +814,7 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
   }, [sortedRows, page, rowsPerPage]);
 
   const handleSort = (col: SortCol) => {
+    if (selectMode) return;
     if (sortCol === col) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     } else {
@@ -474,15 +824,14 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
     setPage(0);
   };
 
-  const isJobOngoing = menuRow ? nemoCategory(menuRow.nemo) === "ongoing" : false;
-  const isJobDone = menuRow ? nemoCategory(menuRow.nemo) === "done" : false;
+  const isJobOngoing = menuRow ? validationOngoing(menuRow.nemo) : false;
   const hasJob = menuRow ? menuRow.last_job !== "-" && menuRow.last_job !== "" : false;
   const hasDown = menuRow ? hasDownDevices(menuRow.ct_down_unk) : false;
 
   return (
     <Box>
       {/* Filter bar */}
-      <Paper variant="outlined" sx={{ p: 2, mb: 1.5 }}>
+      <Paper variant="outlined" sx={{ p: 2, mb: 1.5, opacity: selectMode ? 0.55 : 1, pointerEvents: selectMode ? "none" : "auto" }}>
         <Flex gap="3" align="end" wrap="wrap">
           <div style={{ minWidth: 200 }}>
             <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 4, display: "block" }}>
@@ -492,6 +841,7 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
               size="small"
               placeholder="Rack or job ID..."
               value={search}
+              disabled={selectMode}
               onChange={(e) => { setSearch(e.target.value); setPage(0); }}
               slotProps={{
                 input: {
@@ -516,6 +866,7 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
               selectedValue={validationFilters}
               onSelectedValueChange={(v) => { setValidationFilters(v as string[]); setPage(0); }}
               size="small"
+              disabled={selectMode}
               aria-label="Filter by validation status"
             />
           </div>
@@ -530,13 +881,14 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
               selectedValue={sinfoFilters}
               onSelectedValueChange={(v) => { setSinfoFilters(v as string[]); setPage(0); }}
               size="small"
+              disabled={selectMode}
               aria-label="Filter by sinfo state"
             />
           </div>
 
           <div style={{ minWidth: 160 }}>
             <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 4, display: "block" }}>
-              Devices
+              Nodes status
             </Text>
             <Combobox
               items={[
@@ -547,12 +899,13 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
               selectedValue={deviceFilters}
               onSelectedValueChange={(v) => { setDeviceFilters(v as string[]); setPage(0); }}
               size="small"
-              aria-label="Filter by device status"
+              disabled={selectMode}
+              aria-label="Filter by nodes status"
             />
           </div>
 
           {hasActiveFilters && (
-            <Button kind="tertiary" size="small" onClick={clearFilters}>
+            <Button kind="tertiary" size="small" onClick={clearFilters} disabled={selectMode}>
               Clear filters
             </Button>
           )}
@@ -567,14 +920,109 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
 
       {/* Table */}
       <TableContainer component={Paper} variant="outlined">
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            gap: 1,
+            flexWrap: "wrap",
+            px: 1.5,
+            py: 1,
+            borderBottom: 1,
+            borderColor: "divider",
+            bgcolor: selectMode ? "action.selected" : "transparent",
+          }}
+        >
+          {selectMode && selectedRacks.size > 0 && (
+            <>
+              <Menu anchorEl={runMenuAnchor} open={Boolean(runMenuAnchor)} onClose={() => setRunMenuAnchor(null)}>
+                <MenuItem onClick={() => handleBulkRun("nemo")}>
+                  <ListItemText primary="Run NEMO validation" secondary="Async, all trays ct[01–18]" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("llama")}>
+                  <ListItemText primary="Run Llama" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("stress")}>
+                  <ListItemText primary="Run MNUBERGEMM stress" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("power_on")}>
+                  <ListItemText primary="Power on" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("gpu_reset")}>
+                  <ListItemText primary="GPU reset" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("hw_check")}>
+                  <ListItemText primary="Hardware check" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("bug_report")}>
+                  <ListItemText primary="Bug report" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("imex_reset")}>
+                  <ListItemText primary="IMEX reset" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("imex_check")}>
+                  <ListItemText primary="IMEX check" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("services_restart")}>
+                  <ListItemText primary="Restart services" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("nvswitch_fix")}>
+                  <ListItemText primary="NVSwitch fix" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("nvswitch_sdn")}>
+                  <ListItemText primary="NVSwitch SDN reset" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("nvswitch_system")}>
+                  <ListItemText primary="NVSwitch system reset" secondary="Async (per-rack host)" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("nvswitch_check")}>
+                  <ListItemText primary="NVSwitch check" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("nvlmapper")}>
+                  <ListItemText primary="NVLMapper" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("drain")}>
+                  <ListItemText primary="Slurm drain" secondary="Sync" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("undrain")}>
+                  <ListItemText primary="Slurm undrain" secondary="Sync" />
+                </MenuItem>
+              </Menu>
+              <MuiButton
+                size="small"
+                variant="contained"
+                color="secondary"
+                endIcon={<ChevronDown size={16} />}
+                onClick={(e) => setRunMenuAnchor(e.currentTarget)}
+              >
+                Run
+              </MuiButton>
+            </>
+          )}
+          <MuiButton size="small" variant={selectMode ? "contained" : "outlined"} onClick={toggleSelectMode}>
+            {selectMode ? "Exit selection" : "Select"}
+          </MuiButton>
+        </Box>
+        {selectMode && (
+          <Box sx={{ px: 1.5, py: 0.75, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover" }}>
+            <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+              Rack selection mode: use checkboxes. Other row actions are disabled. Run uses target{" "}
+              <span style={{ fontFamily: "monospace" }}>ct[01–18]</span> per rack; jobs start in parallel.
+              {selectedRacks.size > 0 ? ` Selected: ${selectedRacks.size}.` : ""}
+            </Text>
+          </Box>
+        )}
         <Table size="small" stickyHeader>
           <TableHead>
             <TableRow>
+              {selectMode && <TableCell padding="checkbox" sx={{ width: 48 }} />}
               <TableCell>
                 <TableSortLabel
                   active={sortCol === "rack"}
                   direction={sortCol === "rack" ? sortDir : "asc"}
                   onClick={() => handleSort("rack")}
+                  disabled={selectMode}
                 >
                   Rack
                 </TableSortLabel>
@@ -585,6 +1033,7 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
                   active={sortCol === "nemo"}
                   direction={sortCol === "nemo" ? sortDir : "asc"}
                   onClick={() => handleSort("nemo")}
+                  disabled={selectMode}
                 >
                   Validation
                 </TableSortLabel>
@@ -595,29 +1044,51 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
                   active={sortCol === "sinfo"}
                   direction={sortCol === "sinfo" ? sortDir : "asc"}
                   onClick={() => handleSort("sinfo")}
+                  disabled={selectMode}
                 >
                   Sinfo
                 </TableSortLabel>
               </TableCell>
-              <TableCell>Devices Up</TableCell>
-              <TableCell>Devices Down</TableCell>
+              <TableCell>Nodes status</TableCell>
+              <TableCell align="right">Results</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {paginatedRows.map((row) => {
               const rowHasDown = hasDownDevices(row.ct_down_unk);
               return (
-                <TableRow key={row.rack} hover>
+                <TableRow key={row.rack} hover selected={selectMode && selectedRacks.has(row.rack)}>
+                  {selectMode && (
+                    <TableCell padding="checkbox">
+                      <Checkbox
+                        size="small"
+                        checked={selectedRacks.has(row.rack)}
+                        onChange={() => toggleRackSelected(row.rack)}
+                        slotProps={{ input: { "aria-label": `Select ${row.rack}` } }}
+                      />
+                    </TableCell>
+                  )}
                   <TableCell sx={{ fontWeight: 600 }}>
-                    <Link
-                      component="button"
-                      underline="hover"
-                      color="primary"
-                      sx={{ fontWeight: 600, fontSize: "inherit" }}
-                      onClick={() => onRackSelect?.(row.rack)}
-                    >
-                      {row.rack}
-                    </Link>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                      {selectMode ? (
+                        <Text kind="body/bold/md" style={{ fontFamily: "inherit" }}>
+                          {row.rack}
+                        </Text>
+                      ) : (
+                        <Link
+                          component="button"
+                          underline="hover"
+                          color="primary"
+                          sx={{ fontWeight: 600, fontSize: "inherit" }}
+                          onClick={() => onRackSelect?.(row.rack)}
+                        >
+                          {row.rack}
+                        </Link>
+                      )}
+                      <Box sx={{ opacity: selectMode ? 0.35 : 1, pointerEvents: selectMode ? "none" : "auto" }}>
+                        <RackTableCommandIndicator rack={row.rack} />
+                      </Box>
+                    </Box>
                   </TableCell>
                   <TableCell>
                     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
@@ -630,7 +1101,7 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
                       ) : (
                         <span style={{ color: "var(--text-color-subtle)", fontSize: 14 }}>—</span>
                       )}
-                      <IconButton size="small" onClick={(e) => openMenu(e, "comment", row)} sx={{ flexShrink: 0 }}>
+                      <IconButton size="small" disabled={selectMode} onClick={(e) => openMenu(e, "comment", row)} sx={{ flexShrink: 0 }}>
                         <Ellipsis size={16} />
                       </IconButton>
                     </Box>
@@ -644,7 +1115,7 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
                         {row.last_job}
                       </Text>
                       {row.last_job !== "-" && row.last_job !== "" && (
-                        <IconButton size="small" onClick={(e) => openMenu(e, "job", row)} sx={{ flexShrink: 0 }}>
+                        <IconButton size="small" disabled={selectMode} onClick={(e) => openMenu(e, "job", row)} sx={{ flexShrink: 0 }}>
                           <Ellipsis size={16} />
                         </IconButton>
                       )}
@@ -653,22 +1124,40 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
                   <TableCell>
                     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
                       <SinfoTags sinfo={row.sinfo} />
-                      <IconButton size="small" onClick={(e) => openMenu(e, "sinfo", row)} sx={{ ml: "auto", flexShrink: 0 }}>
+                      <IconButton size="small" disabled={selectMode} onClick={(e) => openMenu(e, "sinfo", row)} sx={{ ml: "auto", flexShrink: 0 }}>
                         <Ellipsis size={16} />
                       </IconButton>
                     </Box>
                   </TableCell>
-                  <TableCell>
-                    <DeviceUpTags ct={row.ct_down_unk} />
+                  <TableCell sx={{ verticalAlign: "top" }}>
+                    <NodeStatusTags
+                      ct={row.ct_down_unk}
+                      rowHasDown={rowHasDown}
+                      menuDisabled={selectMode}
+                      onOpenDeviceMenu={(e) => openMenu(e, "device", row)}
+                    />
                   </TableCell>
-                  <TableCell>
-                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                      <DeviceDownTags ct={row.ct_down_unk} />
-                      {rowHasDown && (
-                        <IconButton size="small" onClick={(e) => openMenu(e, "device", row)} sx={{ ml: "auto", flexShrink: 0 }}>
-                          <Ellipsis size={16} />
-                        </IconButton>
+                  <TableCell align="right">
+                    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 0.5, flexWrap: "wrap" }}>
+                      {validationOngoing(row.nemo) ? (
+                        <MuiButton size="small" variant="outlined" disabled={selectMode} onClick={() => startTailForRow(row)}>
+                          Tail Log
+                        </MuiButton>
+                      ) : (
+                        <MuiButton size="small" variant="outlined" disabled={selectMode} onClick={() => void openLogForRow(row)}>
+                          Open Log
+                        </MuiButton>
                       )}
+                      <Tooltip title="NCCL / NEMO charts and Grafana (parser.sh --json)">
+                        <IconButton
+                          size="small"
+                          disabled={selectMode}
+                          onClick={() => openParserForRow(row, 1)}
+                          aria-label="Open parser results"
+                        >
+                          <LineChart size={18} />
+                        </IconButton>
+                      </Tooltip>
                     </Box>
                   </TableCell>
                 </TableRow>
@@ -680,13 +1169,17 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
           component="div"
           count={sortedRows.length}
           page={page}
-          onPageChange={(_, newPage) => setPage(newPage)}
+          onPageChange={(_, newPage) => {
+            if (!selectMode) setPage(newPage);
+          }}
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => {
+            if (selectMode) return;
             setRowsPerPage(parseInt(e.target.value, 10));
             setPage(0);
           }}
           rowsPerPageOptions={[25, 50, 100]}
+          sx={selectMode ? { pointerEvents: "none", opacity: 0.5 } : undefined}
         />
       </TableContainer>
 
@@ -720,14 +1213,14 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
         transformOrigin={{ horizontal: "right", vertical: "top" }}
         anchorOrigin={{ horizontal: "right", vertical: "bottom" }}
       >
-        {hasJob && isJobOngoing && (
+        {isJobOngoing && (
           <MenuItem onClick={handleTailLog}>
             <ListItemIcon><ScrollText size={18} /></ListItemIcon>
             <ListItemText>Tail log</ListItemText>
           </MenuItem>
         )}
-        {hasJob && isJobDone && (
-          <MenuItem onClick={handleOpenLog}>
+        {!isJobOngoing && (
+          <MenuItem onClick={() => void handleOpenLog()}>
             <ListItemIcon><FileText size={18} /></ListItemIcon>
             <ListItemText>Open log</ListItemText>
           </MenuItem>
@@ -736,11 +1229,6 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
           <MenuItem onClick={() => requestConfirm("cancel")}>
             <ListItemIcon><XCircle size={18} /></ListItemIcon>
             <ListItemText>Cancel job {menuRow?.last_job}</ListItemText>
-          </MenuItem>
-        )}
-        {hasJob && !isJobOngoing && !isJobDone && (
-          <MenuItem disabled>
-            <ListItemText>No actions available</ListItemText>
           </MenuItem>
         )}
       </Menu>
@@ -863,13 +1351,24 @@ export function RackTable({ rows, comments, logDir, onRackSelect, onCommentChang
         </Alert>
       </Snackbar>
 
+      <TailLogDialog
+        open={tailStream !== null}
+        onClose={() => setTailStream(null)}
+        title={tailStream?.title ?? "Tail log"}
+        payload={tailStream?.body ?? null}
+      />
+
       {/* Parser results dialog */}
       <ParserResultsDialog
         open={parserOpen}
-        onClose={() => setParserOpen(false)}
+        onClose={() => {
+          setParserOpen(false);
+          setParserInitialTab(0);
+        }}
         rack={parserRack}
         jobId={parserJobId}
         logDir={logDir}
+        initialTabIndex={parserInitialTab}
       />
     </Box>
   );

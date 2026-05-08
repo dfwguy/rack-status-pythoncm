@@ -1,7 +1,7 @@
+import { useState, useCallback } from "react";
 import Box from "@mui/material/Box";
-import { Button } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
-import { StatusSummary } from "../components/StatusSummary";
+import { StatusSummary, type ValidationSummaryCategory } from "../components/StatusSummary";
 import { RackTable } from "../components/RackTable";
 import { WorkerStatusPanel } from "../components/WorkerStatus";
 import { FooterNotes } from "../components/FooterNotes";
@@ -9,7 +9,7 @@ import { LoadingSkeleton } from "../components/LoadingSkeleton";
 import { ErrorBanner } from "../components/ErrorBanner";
 import type { RackStatusResponse } from "../types/api";
 
-interface DashboardViewProps {
+interface SingleRackViewProps {
   data: RackStatusResponse | null;
   loading: boolean;
   error: string | null;
@@ -17,20 +17,21 @@ interface DashboardViewProps {
   onCommentChange?: (rack: string, comment: string | null) => void;
 }
 
-export function DashboardView({ data, loading, error, onRackSelect, onCommentChange }: DashboardViewProps) {
+/** Per-rack validation table, workers, and filters (formerly the main dashboard). */
+export function SingleRackView({ data, loading, error, onRackSelect, onCommentChange }: SingleRackViewProps) {
+  const [validationFilters, setValidationFilters] = useState<string[]>([]);
+
+  const toggleValidationCategory = useCallback((category: ValidationSummaryCategory) => {
+    setValidationFilters((prev) =>
+      prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category]
+    );
+  }, []);
+
   if (loading && !data) return <LoadingSkeleton />;
 
   return (
     <Box sx={{ maxWidth: 1400, mx: "auto", p: 4 }}>
-      <PageHeader
-        title="Rack Validation Status"
-        description="Overview of single-rack NEMO/NCCL validation progress."
-        actions={
-          <Button kind="secondary" size="small">
-            Export to Excel
-          </Button>
-        }
-      />
+      <PageHeader title="Rack Validation Status" description="Overview of single-rack NEMO/NCCL validation progress." />
 
       {error && <ErrorBanner message={error} />}
 
@@ -40,13 +41,23 @@ export function DashboardView({ data, loading, error, onRackSelect, onCommentCha
             summary={data.summary}
             updatedAt={data.updated_at}
             legend={data.legend}
+            validationFilters={validationFilters}
+            onToggleValidationCategory={toggleValidationCategory}
           />
 
           {data.native_workers && (
             <WorkerStatusPanel workers={data.native_workers} />
           )}
 
-          <RackTable rows={data.rows} comments={data.comments} logDir={data.log_dir} onRackSelect={onRackSelect} onCommentChange={onCommentChange} />
+          <RackTable
+            rows={data.rows}
+            comments={data.comments}
+            logDir={data.log_dir}
+            onRackSelect={onRackSelect}
+            onCommentChange={onCommentChange}
+            validationFilters={validationFilters}
+            onValidationFiltersChange={setValidationFilters}
+          />
 
           <FooterNotes footnotes={data.footnotes} />
         </Box>

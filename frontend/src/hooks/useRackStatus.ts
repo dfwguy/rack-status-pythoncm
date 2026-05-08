@@ -5,7 +5,8 @@ const DEFAULT_POLL_MS = 15_000;
 const CLIENT_ID_KEY = "nvis-rack-client-id";
 
 let _clientId: string | null = null;
-function getClientId(): string {
+/** Shared client id for /api/status and /api/cluster-overview active-user counting. */
+export function getClientId(): string {
   if (!_clientId) {
     _clientId = localStorage.getItem(CLIENT_ID_KEY);
     if (!_clientId) {
