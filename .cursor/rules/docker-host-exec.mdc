@@ -1,0 +1,47 @@
+---
+description: Docker deployment and host command execution patterns
+globs: host_exec.py,platforms/**/*.py,Dockerfile,docker-compose.yml,build-docker.sh
+alwaysApply: false
+---
+
+# Docker & Host Execution
+
+## Command Execution
+
+All host commands (Slurm, cmsh/maas, pdsh, shell scripts) MUST route through `host_exec.run_on_host()` or `host_exec.popen_on_host()`. Never call `subprocess.run()` or `subprocess.Popen()` directly for cluster commands.
+
+```python
+# GOOD
+import host_exec
+proc = host_exec.run_on_host(cmd, timeout=120)
+
+# BAD
+proc = subprocess.run(cmd, capture_output=True, text=True)
+```
+
+Local-only operations (PAM auth, grep on local files, file I/O) may use `subprocess` directly.
+
+## Platform Providers
+
+Use `from platforms import get_platform` to get the active provider. Call provider methods to build commands:
+
+```python
+plat = _get_platform()
+proc = host_exec.run_on_host(plat.sinfo_cmd("-N -h"), timeout=120)
+proc = host_exec.run_on_host(plat.list_racks_cmd(), timeout=120)
+cmd = plat.pdsh_cmd(hosts, remote_cmd, fanout=32)
+```
+
+When adding new cluster commands, add the method to `PlatformProvider` (base.py), implement in `BCMProvider` (bcm.py) and `MAASProvider` (maas.py).
+
+## Docker Build
+
+- Multi-stage: Node 22 for SPA build, Ubuntu 22.04 for runtime
+- `build-docker.sh` is the single entry point for dev/prod builds
+- Demo mode (`RACK_STATUS_DEMO=1`) works without SSH — no cluster access needed
+- Production mode (`RACK_EXEC_MODE=ssh`) requires `RACK_SSH_HOST` and an SSH key mounted at `/run/secrets/ssh_key`
+- The SPA base path is `/spa/` (set in `vite.config.ts` as `base: "/spa/"`)
+
+## Auth in Docker
+
+PAM does not work inside containers. Token auth (`RACK_WEB_AUTH_MODE=token`) is the default when `RACK_EXEC_MODE=ssh`. The `_auth_mode()` function auto-selects based on exec mode.

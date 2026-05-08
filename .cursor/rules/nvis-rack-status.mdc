@@ -1,0 +1,53 @@
+---
+description: NVIS Rack Status project architecture, UI framework, and key conventions
+alwaysApply: true
+---
+
+# NVIS Rack Status
+
+Flask backend + React 19 SPA (Vite + NVIDIA Kaizen UI + MUI), Dockerized with SSH-back host execution for BCM/MAAS clusters.
+
+## UI Framework
+
+- **Primary**: NVIDIA Kaizen UI (`@nvidia/foundations-react-core`) — Text, Card, Tag, Button, Banner, Skeleton, Flex, Divider, Combobox.
+- **Secondary**: MUI — Sidebar/Drawer, AppBar/Toolbar, Table (sortable/paginated), Dialog, Tabs, TextField, Checkbox, Tooltip, IconButton, CircularProgress, Snackbar/Alert, Menu/MenuItem.
+- **Icons**: Lucide React (`lucide-react`) exclusively. No `@mui/icons-material`.
+- **Theming**: KUI `ThemeProvider` is outer wrapper (`global`); MUI `ThemeProvider` synced via `ThemeBridge` in `src/context/ThemeContext.tsx`. Use `useThemeMode()` for dark/light toggle.
+- **KUI CSS**: `theme.css` + `components.css` from Kaizen CDN in `index.html`. Without these, KUI components have no styles.
+- **Charts**: Chart.js via `react-chartjs-2` (`Bar`, `Line` components).
+
+## KUI Component API
+
+- **Text**: Use `kind` prop (`body/regular/sm`, `body/bold/md`, `title/lg`, `display/sm`, `mono/sm`, etc.). Use `style` for color/spacing — **not** `sx`.
+- **Tag**: `color` (green/red/yellow/blue/teal/purple/gray), `kind` (solid/outline), `readOnly`, `density` (compact/standard/spacious). Children are the label.
+- **Button**: `kind` (primary/secondary/tertiary), `size` (small/tiny/medium/large), `color` (brand/neutral/danger). **No** `density` prop on Button.
+- **Banner**: `status` (error/warning/success/info), `kind` (inline/header/global). Children are the message. **Not** `kind="error"`.
+- **Combobox**: `items`, `multiple`, `selectedValue`, `onSelectedValueChange`, `size` (small/medium/large).
+- **Card, Flex, Divider, Skeleton**: Use `style` prop for inline styles, not MUI `sx`.
+
+## UI Patterns
+
+- **Kebab menu for row actions**: Lucide `Ellipsis` in MUI `IconButton`, opens MUI `Menu`. Place inline in the relevant column (e.g., sinfo column for drain/undrain, job column for cancel/open log). Destructive actions require confirmation `Dialog`. Results via `Snackbar`.
+- **Font sizes**: Minimum 14px. Never use `fontSize: 12`, `fontSize: 11`, or `variant="caption"`. Use `body/regular/sm` (KUI) or `body2` (MUI) as the smallest text.
+- **Status badges**: KUI `Tag` with `density="compact"`, `kind="solid"`, `readOnly`. Color mapping: done=green, fail=red, ongoing=yellow, pending=blue, idle=green, alloc=blue, drain=yellow, down=red.
+- **Comments**: Truncate to 20 chars with `...` in table; full text in Tooltip with `whiteSpace: "pre-line"` for multiline.
+- **Filters**: KUI `Combobox` with `multiple` for multi-select dropdowns, not clickable tags.
+
+## Architecture
+
+- **host_exec.py**: All host commands route through `run_on_host()` / `popen_on_host()`. `RACK_EXEC_MODE=local` (direct subprocess) or `ssh` (SSH tunnel to head node).
+- **platforms/**: `PlatformProvider` base class; `BCMProvider` (cmsh, module load slurm, pdsh) and `MAASProvider` (maas-cli). Selected by `RACK_PLATFORM=bcm|maas`.
+- **Auth**: Token mode (`RACK_WEB_AUTH_MODE=token` + `RACK_WEB_AUTH_TOKEN`) for Docker. PAM for local. Auto-selects token when `RACK_EXEC_MODE=ssh`.
+- **Demo mode**: `RACK_STATUS_DEMO=1` returns synthetic data from `demo_data.py`. The `/api/parser-results` endpoint also returns mock chart data in demo mode.
+- **Docker**: Multi-stage Dockerfile (Node 22 SPA build + Ubuntu 22.04 runtime). `build-docker.sh` for dev/prod/build/stop/logs.
+
+## Key Files
+
+- `app.py` — Flask backend, all `/api/*` routes
+- `native_status.py` — Native Python rack-status builder (cmsh + sinfo + log probes)
+- `host_exec.py` — SSH/local command execution abstraction
+- `platforms/` — BCM and MAAS platform providers
+- `frontend/src/components/RackTable.tsx` — Main dashboard table with filters, menus, charts
+- `frontend/src/components/ParserResultsDialog.tsx` — NCCL/NEMO chart dialog
+- `frontend/src/views/MultirackView.tsx` — Multirack validation launcher + status
+- `frontend/src/context/ThemeContext.tsx` — KUI + MUI theme bridge

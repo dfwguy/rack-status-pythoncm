@@ -1,0 +1,45 @@
+---
+description: Backend Flask API patterns and conventions
+globs: app.py,native_status.py
+alwaysApply: false
+---
+
+# Backend API Conventions
+
+## Demo Mode
+
+When `RACK_STATUS_DEMO=1`, endpoints should return synthetic data without calling cluster tools. Check with `_truthy_env("RACK_STATUS_DEMO")` and return early:
+
+```python
+if _truthy_env("RACK_STATUS_DEMO"):
+    return _demo_parser_results()  # return mock JSON
+```
+
+`demo_data.py` generates the main `/api/status` mock. Other endpoints (like `/api/parser-results`) have inline mock functions.
+
+## Async Job Pattern
+
+Long-running operations follow the async pattern:
+1. `POST /api/<action>-async` — starts background thread, returns `{ ok, job_id }`
+2. `GET /api/<action>-status?job_id=...` — poll for progress
+3. Background worker uses `host_exec.popen_on_host()` and updates an in-memory dict
+4. Jobs purge from memory after ~15 minutes via daemon purge threads
+
+## Slurm Commands
+
+All Slurm commands go through the platform provider's `slurm_prefix()` which handles `module load slurm && ...` wrapping:
+
+```python
+plat = _get_platform()
+proc = host_exec.run_on_host(plat.scontrol_cmd("update nodename=..."), timeout=120)
+```
+
+Environment variables `RACK_SLURM_MODULE`, `RACK_SLURM_SKIP_MODULE_LOAD`, `RACK_SLURM_SCONTROL`, etc. are read by the platform provider, not by individual handler functions.
+
+## Comments
+
+Stored in `rack_comments.json` (override with `RACK_COMMENTS_FILE`). File-level locking with `fcntl.flock`. Max 4000 chars per comment. Works in both demo and production mode.
+
+## Error Responses
+
+Return `{"ok": false, "error": "message"}` with appropriate HTTP status codes. Use 400 for bad input, 403 for disabled features, 404 for not found, 500 for server errors, 502 for subprocess failures, 504 for timeouts.

@@ -1,0 +1,92 @@
+---
+description: Frontend React component patterns — KUI-first UI framework with MUI as secondary
+globs: frontend/src/**/*.tsx,frontend/src/**/*.ts
+alwaysApply: false
+---
+
+# Frontend Conventions
+
+## KUI-First Design Philosophy
+
+NVIDIA Kaizen UI (`@nvidia/foundations-react-core`) is the **primary** UI framework. MUI is **secondary** — retained only for complex widgets with no KUI equivalent. When building new features, always reach for KUI first. This ensures visual consistency with the NVIDIA design system across all NVIDIA internal tools.
+
+## KUI vs MUI Decision Table
+
+| Need | Use KUI | Do NOT use MUI |
+|------|---------|----------------|
+| Any text (body, labels, headings, titles) | `<Text kind="body/regular/md">` | `<Typography>` |
+| Page titles | `<Text kind="display/sm">` or `<Text kind="title/lg">` | `<Typography variant="h5">` |
+| Cards / content containers | `<Card>` | `<Card>` from MUI |
+| Status badges / tags | `<Tag color="green" kind="solid" readOnly density="compact">` | `<Chip>` |
+| Action buttons | `<Button kind="primary" size="small">` | `<Button>` from MUI |
+| Error/info/warning messages | `<Banner status="error">` | `<Alert>` |
+| Skeleton loading states | `<Skeleton>` | `<Skeleton>` from MUI |
+| Flex layout wrappers | `<Flex gap="2" align="center" wrap="wrap">` | `<Box display="flex">` |
+| Horizontal/vertical separators | `<Divider>` | `<Divider>` from MUI |
+| Dropdown multi-select filters | `<Combobox items={[...]} multiple>` | Custom toggle buttons |
+| Form fields with labels | `<FormField>` wrapping `<TextInput>` or `<TextArea>` | Standalone `<TextField>` |
+
+### MUI is prescribed for (no KUI equivalent or better suited)
+
+Table (sortable/paginated), Dialog/DialogTitle/DialogContent/DialogActions, Tabs/Tab, Sidebar (Drawer + List/ListItem/ListItemButton), AppBar/Toolbar, TextField/Checkbox (form controls inside MUI Dialogs), Tooltip, IconButton, Menu/MenuItem/ListItemIcon/ListItemText, Snackbar + Alert (feedback toasts), CircularProgress, Paper/TableContainer.
+
+## Theming Architecture
+
+```
+KuiThemeProvider (outer, global)
+  └── ThemeBridge (syncs mode)
+        └── MuiThemeProvider (inner, receives getTheme(mode))
+              └── CssBaseline
+                    └── App
+```
+
+- KUI `ThemeProvider` is the **source of truth** for dark/light mode. It wraps the entire app with `global` prop.
+- MUI `ThemeProvider` is synced via `ThemeBridge` in `src/context/ThemeContext.tsx`.
+- Use `useThemeMode()` hook to read `mode` and `toggleTheme`.
+- KUI CSS (`theme.css` + `components.css`) loaded from NVIDIA CDN in `index.html` — **required** or KUI components render unstyled.
+
+## KUI Component API Quick Reference
+
+- **Text**: `kind` prop sets size+weight (`body/regular/sm`, `body/bold/md`, `title/lg`, `display/sm`, `mono/sm`). `fontFamily="mono"` for monospace. Use `style` for color/spacing.
+- **Tag**: `color` (green/red/yellow/blue/teal/purple/gray), `kind` (solid/outline), `readOnly` (renders as span), `density` (compact/standard/spacious). Children are the label text.
+- **Button**: `kind` (primary/secondary/tertiary), `size` (small/tiny/medium/large), `color` (brand/neutral/danger), `disabled`. **No `density` prop** — use `size` instead.
+- **Banner**: `status` (error/warning/success/info), `kind` (inline/header/global). **Not** `kind="error"` — use `status="error"`.
+- **Combobox**: `items` (string[] or object[]), `multiple`, `selectedValue`, `onSelectedValueChange`, `size` (small/medium/large), `dismissible`.
+- **Flex**: `gap`, `align`, `justify`, `direction` ("col"), `wrap` ("wrap").
+- **Card**: Simple wrapper. Style with `style` prop.
+
+Full docs: `https://webassets.nvidia.com/kaizen-ui-foundations/docs/components/<Component>.txt`
+
+## TypeScript Strict Mode
+
+The Dockerfile build runs `tsc -b && vite build`. All code must pass strict checking.
+
+- Move `fontWeight`, `fontFamily`, `fontSize`, `fontStyle`, `display` into `sx` when using MUI components — they are not valid direct props in MUI 9.
+- Use `slotProps={{ primary: { sx: { ... } } }}` on `ListItemText`, not `primaryTypographyProps` (MUI 9 slots API).
+- `noUnusedLocals` is enabled — remove all unused imports and variables.
+
+## Styling Rules
+
+- **KUI components**: Use React `style` prop. Example: `<Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>`.
+- **MUI components**: Use `sx` prop. Example: `<Box sx={{ display: "flex", gap: 2 }}>`.
+- **Colors**: Use NVIDIA design tokens (CSS variables) from `theme.css`: `--text-color-primary`, `--text-color-secondary`, `--text-color-subtle`, `--background-color-surface-base`, `--background-color-accent-green`, `--border-color-base`. No hardcoded hex for themed content.
+- **Font sizes**: Minimum 14px across the app. Never use `fontSize: 12` or `variant="caption"`.
+- **Icons**: `lucide-react` exclusively. Import from `lucide-react`, never from `@mui/icons-material`.
+
+## Import Patterns
+
+```tsx
+// KUI — single import for multiple components
+import { Text, Card, Tag, Button, Banner, Flex, Divider, Combobox } from "@nvidia/foundations-react-core";
+
+// MUI — deep imports (one per line)
+import Dialog from "@mui/material/Dialog";
+import Table from "@mui/material/Table";
+import IconButton from "@mui/material/IconButton";
+
+// Icons — named imports from lucide
+import { CircleCheck, Ellipsis, ArrowDownToLine } from "lucide-react";
+
+// Charts
+import { Bar, Line } from "react-chartjs-2";
+```
