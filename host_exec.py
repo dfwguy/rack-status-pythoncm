@@ -33,6 +33,17 @@ _SSH_PORT: str | None = None
 _SSH_EXTRA_OPTS: list[str] = []
 _init_lock = threading.Lock()
 
+_FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_")
+
+
+def _build_env_exports() -> str:
+    """Build shell export statements for env vars that should be forwarded to the remote host."""
+    exports: list[str] = []
+    for key, val in os.environ.items():
+        if any(key.startswith(p) for p in _FORWARD_ENV_PREFIXES):
+            exports.append(f"export {key}={shlex.quote(val)}")
+    return "; ".join(exports) + "; " if exports else ""
+
 
 def _ensure_init() -> None:
     global _EXEC_MODE, _SSH_HOST, _SSH_USER, _SSH_KEY, _SSH_PORT, _SSH_EXTRA_OPTS
@@ -108,9 +119,11 @@ def run_on_host(
     shell_str = cmd if isinstance(cmd, str) else shlex.join(cmd)
 
     if _EXEC_MODE == "ssh":
+        env_prefix = _build_env_exports()
         remote_cmd = shell_str
         if cwd:
             remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
+        remote_cmd = env_prefix + remote_cmd
         argv = _ssh_base_argv() + [remote_cmd]
         return subprocess.run(
             argv,
@@ -184,9 +197,11 @@ def popen_on_host(
     shell_str = cmd if isinstance(cmd, str) else shlex.join(cmd)
 
     if _EXEC_MODE == "ssh":
+        env_prefix = _build_env_exports()
         remote_cmd = shell_str
         if cwd:
             remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
+        remote_cmd = env_prefix + remote_cmd
         argv = _ssh_base_argv() + [remote_cmd]
         proc = subprocess.Popen(
             argv,

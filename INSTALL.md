@@ -5,6 +5,7 @@
 - Docker Engine 20.10+ (or Docker Desktop)
 - An SSH key pair that can reach your head node (BCM or MAAS)
 - The head node must be running `sshd` and have Slurm, cmsh/maas-cli, and pdsh available
+- The nvis-rack-status scripts must be deployed on the head node (see [Deploying Scripts](#deploying-scripts))
 
 ## Quick Start (Demo Mode)
 
@@ -21,75 +22,67 @@ Open **http://localhost:5000/spa/** in your browser.
 
 ## Production Deployment
 
-### Option A: `docker run`
+### Option A: Config file (recommended)
 
-**BCM head node:**
+1. Edit `rack-config.env` with your site settings:
+
+```bash
+# Key settings to change:
+RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status  # path on head node
+RACK_EXEC_MODE=ssh
+RACK_PLATFORM=bcm
+RACK_SSH_USER=root
+RACK_SLURM_SKIP_MODULE_LOAD=1      # if sinfo/squeue are on PATH
+NEMO_SQSH_SRC=/path/to/nemo.sqsh   # NeMo container image on head node
+```
+
+2. Launch:
 
 ```bash
 docker run -d --name rack-status -p 5000:5000 \
-  -e RACK_EXEC_MODE=ssh \
-  -e RACK_PLATFORM=bcm \
-  -e RACK_SSH_HOST=10.0.0.1 \
-  -e RACK_SSH_USER=root \
-  -e RACK_WEB_AUTH_MODE=token \
-  -e RACK_WEB_AUTH_TOKEN=<your-password> \
+  --env-file rack-config.env \
+  -e RACK_SSH_HOST=<head-node-ip> \
+  -e RACK_WEB_AUTH_TOKEN=<password> \
   -v ~/.ssh/id_rsa:/run/secrets/ssh_key:ro \
-  -v /path/to/logs:/app/var/logs \
   --restart unless-stopped \
-  nvcr.io/your-org/nvis-rack-status:latest
+  nvis-rack-status:local
 ```
 
-**MAAS head node:**
-
-```bash
-docker run -d --name rack-status -p 5000:5000 \
-  -e RACK_EXEC_MODE=ssh \
-  -e RACK_PLATFORM=maas \
-  -e RACK_SSH_HOST=10.0.0.1 \
-  -e RACK_SSH_USER=root \
-  -e RACK_WEB_AUTH_MODE=token \
-  -e RACK_WEB_AUTH_TOKEN=<your-password> \
-  -v ~/.ssh/id_rsa:/run/secrets/ssh_key:ro \
-  -v /path/to/logs:/app/var/logs \
-  --restart unless-stopped \
-  nvcr.io/your-org/nvis-rack-status:latest
-```
+The `RACK_REMOTE_BASE_PATH` variable is the key — it tells the container where
+the scripts and log directory live on the head node. All script paths resolve as
+`{RACK_REMOTE_BASE_PATH}/bin/scripts/<script>.sh` and the default log directory
+resolves as `{RACK_REMOTE_BASE_PATH}/var/logs/`.
 
 ### Option B: Docker Compose
 
-1. Download the compose file and environment template:
-
 ```bash
-curl -O https://raw.githubusercontent.com/your-org/nvis-rack-status/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/your-org/nvis-rack-status/main/.env.example
-```
-
-2. Create your local configuration:
-
-```bash
-cp .env.example .env
-```
-
-3. Edit `.env` with your site-specific values:
-
-```bash
-RACK_EXEC_MODE=ssh
-RACK_PLATFORM=bcm
-RACK_SSH_HOST=10.0.0.1
-RACK_SSH_USER=root
-RACK_SSH_KEY_PATH=~/.ssh/id_rsa
-RACK_WEB_AUTH_MODE=token
-RACK_WEB_AUTH_TOKEN=<your-password>
-RACK_LOG_DIR=/path/to/logs
-```
-
-4. Launch:
-
-```bash
+# Edit rack-config.env, then:
 docker compose up -d
 ```
 
-Open **http://localhost:5000/spa/** in your browser.
+### Option C: build-docker.sh helper
+
+```bash
+# Edit rack-config.env first
+RACK_SSH_HOST=10.0.0.1 RACK_WEB_AUTH_TOKEN=secret ./build-docker.sh prod
+```
+
+## Deploying Scripts to the Head Node
+
+The container executes scripts on the head node via SSH. Copy the project to
+a shared filesystem path accessible by compute nodes:
+
+```bash
+# On your workstation
+tar czf nvis-deploy.tar.gz app.py native_status.py demo_data.py host_exec.py \
+  platforms/ rack_web/ bin/ templates/ static/ requirements.txt var/
+
+# Copy to head node
+scp nvis-deploy.tar.gz root@<head-node>:/home/cmsupport/nvis-rack-status/
+ssh root@<head-node> "cd /home/cmsupport/nvis-rack-status && tar xzf nvis-deploy.tar.gz"
+```
+
+Then set `RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status` in `rack-config.env`.
 
 ## Accessing the Dashboard
 
@@ -103,6 +96,12 @@ Log in with the password set in `RACK_WEB_AUTH_TOKEN`. If authentication is
 disabled (`RACK_WEB_AUTH_DISABLED=1`), no login is required.
 
 ## Configuration Reference
+
+### Remote Path
+
+| Variable | Default | Description |
+|---|---|---|
+| `RACK_REMOTE_BASE_PATH` | — | Base directory on the head node where nvis-rack-status is deployed. All script paths and the default log directory derive from this single variable. |
 
 ### Connection
 
@@ -118,17 +117,26 @@ disabled (`RACK_WEB_AUTH_DISABLED=1`), no login is required.
 
 | Variable | Default | Description |
 |---|---|---|
-| `RACK_WEB_AUTH_MODE` | auto | `token` (shared password) or `pam` (system PAM). Auto-selects `token` in ssh mode, `pam` in local mode |
+| `RACK_WEB_AUTH_MODE` | auto | `token` (shared password) or `pam` (system PAM). Auto-selects `token` in ssh mode |
 | `RACK_WEB_AUTH_TOKEN` | — | Login password when using token mode |
 | `RACK_WEB_AUTH_DISABLED` | `0` | Set to `1` to disable login entirely |
 | `RACK_WEB_SECRET_KEY` | random | Set a fixed value for stable sessions across container restarts |
+
+### Cluster-Specific
+
+| Variable | Default | Description |
+|---|---|---|
+| `NEMO_SQSH_SRC` | — | Path to NeMo container image (`.sqsh`) on the head node |
+| `RACK_SLURM_SKIP_MODULE_LOAD` | `0` | Set to `1` if Slurm binaries are already on PATH |
+| `RACK_VALIDATION_CT_RANGE` | `01-18` | Tray range per rack (e.g. `01-08` for 8-node racks) |
+| `VALIDATION_TEST` | — | Tests that must pass (e.g. `nccl_allreduce,llm`) |
 
 ### Volumes
 
 | Container Path | Purpose |
 |---|---|
 | `/run/secrets/ssh_key` | SSH private key (mount read-only) |
-| `/app/var/logs` | Rack validation log directory |
+| `/app/var/logs` | Local rack validation log directory (only needed in local mode) |
 | `/app/var/cache` | Internal caches (use a named volume for persistence) |
 
 ### Other
@@ -137,16 +145,13 @@ disabled (`RACK_WEB_AUTH_DISABLED=1`), no login is required.
 |---|---|---|
 | `RACK_STATUS_DEMO` | `0` | `1` = synthetic demo data, no cluster access needed |
 | `PORT` | `5000` | Flask listen port inside the container |
-| `RACK_WEB_PORT` | `5000` | Host-side port (compose only) |
 
 ## SSH Key Setup
 
-The container connects to the head node over SSH to execute Slurm, cmsh/maas,
-and pdsh commands. You need a key pair where:
+The container connects to the head node over SSH. You need a key pair where:
 
 1. The **private key** is mounted into the container at `/run/secrets/ssh_key`
-2. The **public key** is in `~/.ssh/authorized_keys` on the head node for the
-   target user (default `root`)
+2. The **public key** is in `~/.ssh/authorized_keys` on the head node
 
 To generate a dedicated key pair:
 
@@ -155,29 +160,52 @@ ssh-keygen -t ed25519 -f ~/.ssh/rack_status_key -N "" -C "nvis-rack-status"
 ssh-copy-id -i ~/.ssh/rack_status_key.pub root@<head-node>
 ```
 
-Then set `RACK_SSH_KEY_PATH=~/.ssh/rack_status_key` in your `.env` or use
-`-v ~/.ssh/rack_status_key:/run/secrets/ssh_key:ro` in your `docker run`
-command.
+Then mount it: `-v ~/.ssh/rack_status_key:/run/secrets/ssh_key:ro`
+
+### SSH via Jump Host
+
+If the head node requires a jump host, set up an SSH tunnel first:
+
+```bash
+# Start tunnel (local port 2222 -> head node port 22 via jump host)
+ssh -f -N -L 2222:<head-node-internal-ip>:22 user@jump-host
+
+# Run container pointing to the tunnel
+docker run -d --name rack-status -p 5000:5000 \
+  --env-file rack-config.env \
+  -e RACK_SSH_HOST=host.docker.internal \
+  -e RACK_SSH_PORT=2222 \
+  -e RACK_WEB_AUTH_TOKEN=<password> \
+  -v ~/.ssh/key:/run/secrets/ssh_key:ro \
+  --add-host=host.docker.internal:host-gateway \
+  nvis-rack-status:local
+```
 
 ## Building the Image Locally
 
-If you have the source code and want to build instead of pulling a pre-built
-image:
-
 ```bash
-git clone https://github.com/your-org/nvis-rack-status.git
+git clone <repo-url>
 cd nvis-rack-status
 docker build -t nvis-rack-status:local .
 ```
 
-Then replace `nvcr.io/your-org/nvis-rack-status:latest` with
-`nvis-rack-status:local` in any of the commands above.
+Or use the helper: `./build-docker.sh build`
+
+## Running Tests
+
+```bash
+# Backend
+pip install pytest
+python -m pytest tests/ -v
+
+# Frontend
+cd frontend && npm test
+```
 
 ## Updating
 
 ```bash
-docker compose pull
-docker compose up -d
+docker compose pull && docker compose up -d
 ```
 
 Or with `docker run`:
@@ -185,26 +213,41 @@ Or with `docker run`:
 ```bash
 docker pull nvcr.io/your-org/nvis-rack-status:latest
 docker stop rack-status && docker rm rack-status
-# re-run the original docker run command
+# re-run the docker run command
 ```
 
 ## Troubleshooting
 
 **Container starts but dashboard shows no racks:**
-- Verify `RACK_SSH_HOST` is reachable from inside the container:
-  `docker exec rack-status ssh -i /run/secrets/ssh_key root@<host> hostname`
+- Verify `RACK_SSH_HOST` is reachable: `docker exec rack-status ssh -i /run/secrets/ssh_key root@<host> hostname`
+- Check `RACK_REMOTE_BASE_PATH` points to where scripts are deployed on the head node
 - Check that `cmsh` (BCM) or `maas` (MAAS) is available on the head node
 - Check container logs: `docker logs rack-status`
+
+**Scripts fail with "No such file or directory":**
+- Verify `RACK_REMOTE_BASE_PATH` is set correctly in `rack-config.env`
+- Verify scripts exist on the head node: `ssh root@<host> ls <RACK_REMOTE_BASE_PATH>/bin/scripts/`
 
 **SSH connection refused:**
 - Confirm `sshd` is running on the head node
 - Confirm the mounted SSH key matches an authorized key on the head node
-- Try a manual SSH: `docker exec -it rack-status ssh -i /run/secrets/ssh_key -o StrictHostKeyChecking=no root@<host> whoami`
+- For jump hosts, verify the SSH tunnel is active: `lsof -i :<tunnel-port>`
 
 **Login page appears but password is rejected:**
 - Ensure `RACK_WEB_AUTH_TOKEN` is set and matches what you type at login
 - Or set `RACK_WEB_AUTH_DISABLED=1` to bypass login
 
-**Demo mode shows data but production mode is empty:**
-- Confirm `RACK_STATUS_DEMO=0` (or unset) in production
-- Confirm the SSH tunnel works (see above)
+**NEMO container fails to start (pyxis/enroot errors):**
+- Ensure `enroot` and `pyxis` are installed on compute nodes
+- Ensure `libnvidia-container` (`nvidia-container-cli`) is installed
+- Check disk space on compute nodes: container extraction needs ~20GB
+- Verify `NEMO_SQSH_SRC` points to a valid `.sqsh` file accessible from compute nodes
+
+**Log directory returns 400 error:**
+- In SSH mode, `RACK_REMOTE_BASE_PATH` sets the default log dir automatically
+- You can also change the log directory in the Settings page (persisted in browser)
+- The path must exist on the head node, not inside the container
+
+**Environment variables not reaching scripts:**
+- Variables prefixed with `RACK_*`, `NEMO_*`, `VALIDATION_*`, and `SQUEUE_*` are automatically forwarded to the remote SSH session
+- Add custom prefixes by modifying `_FORWARD_ENV_PREFIXES` in `host_exec.py`

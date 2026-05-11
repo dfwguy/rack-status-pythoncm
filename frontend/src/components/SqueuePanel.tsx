@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
 import Link from "@mui/material/Link";
 import Paper from "@mui/material/Paper";
 import Table from "@mui/material/Table";
@@ -9,8 +8,8 @@ import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
-import Typography from "@mui/material/Typography";
 import LinearProgress from "@mui/material/LinearProgress";
+import { Text, Button } from "@nvidia/foundations-react-core";
 import {
   fetchSlurmJson,
   findSqueueJobColumnIndex,
@@ -201,10 +200,10 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
   return (
     <Paper variant="outlined" sx={{ borderLeft: `4px solid ${NVIDIA_GREEN}`, overflow: "hidden" }}>
       <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover", display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, color: NVIDIA_GREEN }}>
+        <Text kind="body/bold/md" style={{ fontWeight: 700, color: NVIDIA_GREEN }}>
           squeue
-        </Typography>
-        <Button size="small" variant="outlined" onClick={() => void load()} disabled={loading || !active}>
+        </Text>
+        <Button size="small" kind="secondary" onClick={() => void load()} disabled={loading || !active}>
           Refresh
         </Button>
         {loading && (
@@ -215,20 +214,20 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
       </Box>
 
       {cmd && (
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block", px: 2, pt: 1, fontFamily: "monospace", wordBreak: "break-all" }}>
+        <Text kind="body/regular/sm" style={{ display: "block", paddingLeft: 16, paddingRight: 16, paddingTop: 8, fontFamily: "monospace", wordBreak: "break-all", color: "var(--text-color-secondary)" }}>
           {cmd}
-        </Typography>
+        </Text>
       )}
 
       {bannerErr && (
-        <Typography variant="body2" color="error" sx={{ px: 2, pt: 1, whiteSpace: "pre-wrap" }}>
+        <Text kind="body/regular/md" style={{ display: "block", paddingLeft: 16, paddingRight: 16, paddingTop: 8, whiteSpace: "pre-wrap", color: "var(--text-color-error, #f44336)" }}>
           {bannerErr}
-        </Typography>
+        </Text>
       )}
       {stderrNote && (
-        <Typography variant="body2" color="warning.main" sx={{ px: 2, pt: 1, whiteSpace: "pre-wrap" }}>
+        <Text kind="body/regular/md" style={{ display: "block", paddingLeft: 16, paddingRight: 16, paddingTop: 8, whiteSpace: "pre-wrap", color: "#ed6c02" }}>
           {stderrNote}
-        </Typography>
+        </Text>
       )}
 
       {!showRaw && headers.length > 0 && (
@@ -273,6 +272,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
                       {jid ? (
                         <Button
                           size="small"
+                          kind="tertiary"
                           onClick={() => void openJobLogTail(jid)}
                           disabled={tailBusyJob === jid}
                           title="Live tail of job StdOut= path (same as legacy open log)"
@@ -283,7 +283,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
                     </TableCell>
                     <TableCell sx={{ whiteSpace: "nowrap" }}>
                       {jid ? (
-                        <Button size="small" color="warning" onClick={() => void runScancel(jid)} title={`scancel ${jid}`}>
+                        <Button size="small" kind="tertiary" color="danger" onClick={() => void runScancel(jid)} title={`scancel ${jid}`}>
                           scancel
                         </Button>
                       ) : null}
@@ -324,9 +324,9 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
             bgcolor: scontrolErr ? "error.dark" : "action.hover",
           }}
         >
-          <Typography variant="subtitle2" sx={{ mb: 0.5, fontWeight: 600 }}>
+          <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4, fontWeight: 600 }}>
             scontrol show job — {scontrolJobId}
-          </Typography>
+          </Text>
           {scontrolLoading && (
             <Box sx={{ mb: 1 }}>
               <LinearProgress />
@@ -346,7 +346,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
           >
             {scontrolBlock}
           </Box>
-          <Button size="small" onClick={() => setScontrolJobId(null)} sx={{ mt: 1 }}>
+          <Button size="small" kind="tertiary" onClick={() => setScontrolJobId(null)} style={{ marginTop: 8 }}>
             Hide scontrol
           </Button>
         </Box>

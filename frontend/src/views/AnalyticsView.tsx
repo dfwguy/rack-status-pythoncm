@@ -1,16 +1,14 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
 import Paper from "@mui/material/Paper";
-import Typography from "@mui/material/Typography";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
-import Alert from "@mui/material/Alert";
 import CircularProgress from "@mui/material/CircularProgress";
+import { Text, Button, Banner } from "@nvidia/foundations-react-core";
 import Slider from "@mui/material/Slider";
 import MuiTooltip from "@mui/material/Tooltip";
 import { alpha } from "@mui/material/styles";
@@ -426,9 +424,9 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
                 cursor: "default",
               }}
             >
-              <Typography variant="caption" sx={{ display: "block", fontWeight: 600, lineHeight: 1.2, mb: 0.25 }}>
+              <Text kind="body/regular/sm" style={{ display: "block", fontWeight: 600, lineHeight: 1.2, marginBottom: 2 }}>
                 Perf Δ% tolerance
-              </Typography>
+              </Text>
               <Slider
                 size="small"
                 value={perfVariationMaxAbsPct}
@@ -441,16 +439,16 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
                 aria-label="Maximum absolute performance deviation before row highlight"
                 sx={{ mt: 0.25, mb: 0.25 }}
               />
-              <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.2 }}>
+              <Text kind="body/regular/sm" style={{ display: "block", lineHeight: 1.2, color: "var(--text-color-secondary)" }}>
                 ≤{perfVariationMaxAbsPct.toFixed(1)}% · hover for help
-              </Typography>
+              </Text>
             </Paper>
           </MuiTooltip>
         }
       />
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        <Text kind="body/regular/md" style={{ display: "block", marginBottom: 12, color: "var(--text-color-secondary)" }}>
           Runs{" "}
           <Box component="span" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>
             parser.sh --json
@@ -462,27 +460,27 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
             var/cache/analytics_aggregate_cache.json
           </Box>{" "}
           per log directory; this page loads it automatically when you open Analytics.
-        </Typography>
-        <Button variant="contained" onClick={() => void runAnalysis()} disabled={loading || !bodyRows.length}>
+        </Text>
+        <Button kind="primary" onClick={() => void runAnalysis()} disabled={loading || !bodyRows.length}>
           {loading ? "Running…" : "Run analysis"}
         </Button>
         {!bodyRows.length && (
-          <Typography variant="body2" color="warning.main" sx={{ mt: 1, display: "block" }}>
+          <Text kind="body/regular/md" style={{ marginTop: 8, display: "block", color: "#ed6c02" }}>
             No rack rows loaded yet — open Single Rack so status loads, then return here.
-          </Typography>
+          </Text>
         )}
         {loading && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 2 }}>
             <CircularProgress size={22} />
-            <Typography variant="body2">Parsing logs…</Typography>
+            <Text kind="body/regular/md">Parsing logs…</Text>
           </Box>
         )}
       </Paper>
 
       {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Banner status="error" kind="inline" style={{ marginBottom: 16 }}>
           {error}
-        </Alert>
+        </Banner>
       )}
 
       {data?.cached && data.analyzed_at && (
@@ -500,13 +498,13 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
 
       {sr && (
         <>
-          <Typography variant="h6" sx={{ mt: 2, mb: 1, fontWeight: 600 }}>
+          <Text kind="title/sm" style={{ display: "block", marginTop: 16, marginBottom: 8, fontWeight: 600 }}>
             1 — Single rack
-          </Typography>
+          </Text>
 
-          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
+          <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4, color: "var(--text-color-secondary)" }}>
             NCCL — peak collectives deviation vs fleet median (same log as newest 1Rack file per done rack)
-          </Typography>
+          </Text>
           <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
             <Table size="small">
               <TableHead>
@@ -545,9 +543,9 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
                 {!(sr.nccl_collectives_deviation_pct ?? []).length && (
                   <TableRow>
                     <TableCell colSpan={6}>
-                      <Typography variant="body2" color="text.secondary">
+                      <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
                         No NCCL scalar rows (missing parser fields or no done racks with logs).
-                      </Typography>
+                      </Text>
                     </TableCell>
                   </TableRow>
                 )}
@@ -555,18 +553,18 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
             </Table>
           </TableContainer>
 
-          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
+          <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4, color: "var(--text-color-secondary)" }}>
             NCCL — all_reduce bus BW vs message size (fleet median + each rack)
-          </Typography>
+          </Text>
           <Paper variant="outlined" sx={{ p: 2, mb: 2, height: 380 }}>
             {ncclLineData ? <Line data={ncclLineData} options={chartOptionsLogX} /> : (
-              <Typography variant="body2" color="text.secondary">No all_reduce series data.</Typography>
+              <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>No all_reduce series data.</Text>
             )}
           </Paper>
 
-          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
+          <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4, color: "var(--text-color-secondary)" }}>
             Nemotron — step time &amp; TFLOPs/GPU vs fleet mean; step_time CV% within the training window
-          </Typography>
+          </Text>
           <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
             <Table size="small">
               <TableHead>
@@ -622,18 +620,18 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
               {nemotronBarTflopsData ? (
                 <Bar data={nemotronBarTflopsData} options={nemotronPctBarOptionsTflops} />
               ) : (
-                <Typography variant="body2" color="text.secondary">
+                <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
                   No Nemotron rows.
-                </Typography>
+                </Text>
               )}
             </Paper>
             <Paper variant="outlined" sx={{ p: 2, height: 320 }}>
               {nemotronBarStepTimeData ? (
                 <Bar data={nemotronBarStepTimeData} options={nemotronPctBarOptionsStepTime} />
               ) : (
-                <Typography variant="body2" color="text.secondary">
+                <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
                   No Nemotron rows.
-                </Typography>
+                </Text>
               )}
             </Paper>
           </Box>
@@ -642,20 +640,20 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
 
       {mr && (
         <>
-          <Typography variant="h6" sx={{ mt: 2, mb: 1, fontWeight: 600 }}>
+          <Text kind="title/sm" style={{ display: "block", marginTop: 16, marginBottom: 8, fontWeight: 600 }}>
             2 — Multirack
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          </Text>
+          <Text kind="body/regular/md" style={{ display: "block", marginBottom: 8, color: "var(--text-color-secondary)" }}>
             NCCL: one line series per completed multirack log (label = rack combination). Nemotron scaling tables: Rack
             1 = all successful single-rack (1Rack) logs for done racks; Rack 2+ = multirack logs grouped by inferred rack
             count (e.g.{" "}
             <Box component="span" sx={{ fontFamily: "monospace" }}>2rack</Box> in the filename or distinct{" "}
             <Box component="span" sx={{ fontFamily: "monospace" }}>pN-rMM</Box> tokens).
-          </Typography>
+          </Text>
 
           <Paper variant="outlined" sx={{ p: 2, mb: 2, height: 400 }}>
             {multirackNcclData ? <Line data={multirackNcclData} options={chartOptionsLogX} /> : (
-              <Typography variant="body2" color="text.secondary">No multirack NCCL series.</Typography>
+              <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>No multirack NCCL series.</Text>
             )}
           </Paper>
 
@@ -691,20 +689,20 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
               </Table>
             </TableContainer>
             {nemotronScalingTableRows.baselineNRacks != null && nemotronScalingTableRows.rows.length > 0 ? (
-              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1, px: 0.5 }}>
+              <Text kind="body/regular/sm" style={{ display: "block", marginTop: 8, paddingLeft: 4, paddingRight: 4, color: "var(--text-color-secondary)" }}>
                 Scaling efficiency vs the smallest Rack bucket (includes 1R single-rack logs and multirack logs): TFLOPs
                 eff. = 100 × (mean TFLOPs/GPU ÷ baseline); step eff. = 100 × (baseline mean step ÷ mean step). 100%
                 matches baseline; higher step eff. means relatively faster steps.
-              </Typography>
+              </Text>
             ) : null}
           </Box>
 
-          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
+          <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4, color: "var(--text-color-secondary)" }}>
             Nemotron — throughput &amp; time to train 1T tokens (Rack = inferred rack count: 1R done racks + multirack
             logs; # logs = count in bucket; nodes/# GPU from one newest log in the bucket; other numeric columns are
             means). Throughput = global_batch × seq_len ÷ mean step when{" "}
             <Box component="span" sx={{ fontFamily: "monospace" }}>-gb</Box> is found in each log.
-          </Typography>
+          </Text>
           <TableContainer component={Paper} variant="outlined" sx={{ mb: 1 }}>
             <Table size="small">
               <TableHead>
@@ -750,25 +748,25 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
                 ) : (
                   <TableRow>
                     <TableCell colSpan={9}>
-                      <Typography variant="body2" color="text.secondary">
+                      <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
                         No Nemotron throughput rows (needs multirack logs with Nemotron stats).
-                      </Typography>
+                      </Text>
                     </TableCell>
                   </TableRow>
                 )}
               </TableBody>
             </Table>
           </TableContainer>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 2, px: 0.5 }}>
+          <Text kind="body/regular/sm" style={{ display: "block", marginBottom: 16, paddingLeft: 4, paddingRight: 4, color: "var(--text-color-secondary)" }}>
             Same Rack buckets as the table above. Nodes and # GPU come from the newest log in each bucket (by file
             mtime). Time to train 1T tokens (days) = 10^12 ÷ (mean throughput tokens/s × 86,400). Throughput uses global
             batch from <Box component="span" sx={{ fontFamily: "monospace" }}>-gb</Box> × sequence length (parsed when
             possible, else 8192) ÷ per-log step time, then averaged within the bucket.
-          </Typography>
+          </Text>
 
           <Paper variant="outlined" sx={{ p: 2, mb: 2, height: 340 }}>
             {scalingLineData ? <Line data={scalingLineData} options={scalingOptions} /> : (
-              <Typography variant="body2" color="text.secondary">No multirack Nemotron scaling buckets.</Typography>
+              <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>No multirack Nemotron scaling buckets.</Text>
             )}
           </Paper>
         </>

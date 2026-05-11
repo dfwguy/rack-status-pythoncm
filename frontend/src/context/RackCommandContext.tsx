@@ -1,7 +1,7 @@
 import { createContext, useContext, useMemo, useCallback, type ReactNode } from "react";
 import Box from "@mui/material/Box";
-import Chip from "@mui/material/Chip";
 import Stack from "@mui/material/Stack";
+import { Tag } from "@nvidia/foundations-react-core";
 import { useRackCommandsStore, type RackCommandsStoreValue } from "./RackCommandsStoreContext";
 import type { NodeCmdKind, RackLastAsyncOutput } from "../lib/rackCommandTypes";
 
@@ -109,7 +109,7 @@ export function RackCommandProvider({
         <Box sx={{ mb: 1 }}>
           <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: "wrap" }}>
             {pendingForRack.map((p) => (
-              <Chip key={p.id} size="small" color="warning" variant="outlined" label={p.label} />
+              <Tag key={p.id} color="yellow" kind="outline" readOnly density="compact">{p.label}</Tag>
             ))}
           </Stack>
         </Box>

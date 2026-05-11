@@ -97,7 +97,6 @@ os.environ.setdefault(
     "NVIS_JOB_ENV_OVERRIDES_FILE",
     str((APP_DIR / "var" / "cache" / "job_env_overrides.json").resolve()),
 )
-SCRIPTS_DIR = APP_DIR / "bin" / "scripts"
 _app_dir_s = str(APP_DIR)
 if _app_dir_s not in sys.path:
     sys.path.insert(0, _app_dir_s)
@@ -106,10 +105,24 @@ import native_status  # noqa: E402 — after sys.path so ``import native_status`
 import host_exec  # noqa: E402
 from platforms import get_platform as _get_platform  # noqa: E402
 
+_REMOTE_BASE = os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
+if _REMOTE_BASE:
+    SCRIPTS_DIR = Path(_REMOTE_BASE) / "bin" / "scripts"
+    DEFAULT_LOG_DIR = Path(_REMOTE_BASE) / "var" / "logs"
+else:
+    SCRIPTS_DIR = APP_DIR / "bin" / "scripts"
+    DEFAULT_LOG_DIR = APP_DIR / "var" / "logs"
+
 DEFAULT_SCRIPT = SCRIPTS_DIR / "rack_status.sh"
-DEFAULT_LOG_DIR = APP_DIR / "var" / "logs"
 # Output basename for Tools → 05-download-containers.sh (must match script).
 _TOOLS_NEMO_CONTAINER_SQSH = "nemo-25.11.01.sqsh"
+
+
+def _script_exists(path: Path) -> bool:
+    """Check if a script file exists. In SSH mode, skip the check (file is on the remote host)."""
+    if host_exec.is_remote():
+        return True
+    return path.is_file()
 
 app = Flask(__name__)
 _logger = logging.getLogger(__name__)
@@ -1635,7 +1648,7 @@ def _require_dashboard_auth():
             _JOB_ENV_BOOTSTRAP_DONE = True
     if not _auth_enabled():
         return None
-    if request.endpoint in ("login", "static"):
+    if request.endpoint in ("login", "api_login", "static"):
         return None
     if _session_ok():
         return None
@@ -2626,7 +2639,7 @@ def _resolve_log_dir(raw: str | None) -> Path:
         ok = any(str(log_dir).startswith(str(r) + os.sep) or log_dir == r for r in roots)
         if not ok:
             raise ValueError(f"log_dir must be under one of: {[str(r) for r in roots]}")
-    if not log_dir.is_dir():
+    if not host_exec.is_remote() and not log_dir.is_dir():
         raise ValueError(f"not a directory: {log_dir}")
     return log_dir
 
@@ -3405,7 +3418,7 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
 
     if _truthy_env("RACK_STATUS_USE_SHELL_TABLE"):
         script = _script_path()
-        if not script.is_file():
+        if not _script_exists(script):
             raise FileNotFoundError(f"rack_status script not found: {script}")
 
         env = _subprocess_env({"NO_COLOR": "1"})
@@ -3772,7 +3785,7 @@ def _gpu_reset_script_path() -> Path:
 def run_gpu_reset(pdsh_w: str) -> dict:
     """Run gpu_reset.sh once; argument is the pdsh -w host pattern (may contain commas)."""
     script = _gpu_reset_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         raise OSError(f"gpu_reset script not found: {script}")
     w = (pdsh_w or "").strip()
     if not w:
@@ -4527,7 +4540,7 @@ def _hw_check_argv_for_preset(preset: str) -> list[str]:
 def run_hw_check(pdsh_w: str, checker_argv: list[str]) -> dict:
     """Run hw_check_pdsh.sh once; checker_argv is passed after -- to checker.sh on each node."""
     script = _hw_check_pdsh_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         raise OSError(f"hw_check_pdsh.sh not found: {script}")
     w = (pdsh_w or "").strip()
     if not w:
@@ -4733,7 +4746,7 @@ def api_hw_check_help():
     if os.environ.get("RACK_HW_CHECK_HELP_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_HW_CHECK_HELP_DISABLED)", "help": ""}), 403
     script = _checker_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return jsonify({"ok": False, "error": f"checker.sh not found: {script}", "help": ""}), 404
     env = _subprocess_env({"RACK_WEB_PRINT_HELP": "1"})
     timeout = max(5, _env_int("RACK_HW_CHECK_HELP_TIMEOUT", 20))
@@ -4774,7 +4787,7 @@ def _prepare_nvswitch_fix_async(body: dict) -> tuple[dict[str, object] | None, t
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _nvswitches_rack_audit_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"nvswitch audit script not found: {script}"}), 500)
     cmd: list[str] = ["bash", str(script), "--no-color", "--fix", rack]
     display_cmd = "./" + script.name + " --fix " + shlex.quote(rack)
@@ -4889,7 +4902,7 @@ def _prepare_nvswitch_sdn_reset_async(body: dict) -> tuple[dict[str, object] | N
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _nvswitch_sdn_reset_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"NVLink SDN reset script not found: {script}"}), 500)
     cmd: list[str] = ["bash", str(script), rack]
     display_cmd = "./" + script.name + " " + shlex.quote(rack)
@@ -5008,7 +5021,7 @@ def _prepare_nvswitch_system_reset_async(body: dict) -> tuple[dict[str, object] 
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _nvswitch_system_reset_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"NVLink system reset script not found: {script}"}), 500)
     cmd: list[str] = ["bash", str(script), rack, nvswitch_host]
     display_cmd = "./" + script.name + " " + shlex.quote(rack) + " " + shlex.quote(nvswitch_host)
@@ -5145,7 +5158,7 @@ def _prepare_imex_reset_async(body: dict) -> tuple[dict[str, object] | None, tup
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _imex_reset_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"IMEX reset script not found: {script}"}), 500)
     cmd: list[str] = ["bash", str(script), rack]
     display_cmd = "./" + script.name + " " + shlex.quote(rack)
@@ -5262,7 +5275,7 @@ def _prepare_nvlmapper_async(body: dict) -> tuple[dict[str, object] | None, tupl
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     nvlmapper_bin = SCRIPTS_DIR / "nvlmapper"
-    if not nvlmapper_bin.is_file():
+    if not _script_exists(nvlmapper_bin):
         return None, (
             jsonify(
                 {
@@ -5276,7 +5289,7 @@ def _prepare_nvlmapper_async(body: dict) -> tuple[dict[str, object] | None, tupl
             500,
         )
     runner = SCRIPTS_DIR / "run_nvlmapper.sh"
-    if not runner.is_file():
+    if not _script_exists(runner):
         return None, (jsonify({"ok": False, "error": f"run_nvlmapper.sh not found ({runner})"}), 500)
     return {"rack": rack}, None
 
@@ -5686,7 +5699,7 @@ def _prepare_imex_check_async(body: dict) -> tuple[dict[str, object] | None, tup
         return None, err
     assert prep is not None
     script = _imex_check_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"IMEX check script not found: {script}"}), 500)
     cmd: list[str] = ["bash", str(script), str(prep["target"])]
     display_cmd = "./" + script.name + " " + shlex.quote(str(prep["target"]))
@@ -6499,7 +6512,7 @@ def api_parser_results():
                 }
             ), 404
     parser = _parser_path()
-    if not parser.is_file():
+    if not _script_exists(parser):
         return jsonify({"ok": False, "error": f"parser.sh not found: {parser}"}), 500
     env = _subprocess_env({"NO_COLOR": "1"})
     cmd = [
@@ -6918,7 +6931,7 @@ def api_clusterkit_results():
 def _parser_json_for_log_path(log_dir: Path, log_path: Path) -> tuple[dict | None, str | None]:
     """Run ``parser.sh --json`` on one log under ``log_dir`` (relative path). Returns ``(parsed, err)``."""
     parser = _parser_path()
-    if not parser.is_file():
+    if not _script_exists(parser):
         return None, "parser.sh not found"
     env = _subprocess_env({"NO_COLOR": "1"})
     try:
@@ -7657,7 +7670,7 @@ def api_analytics_aggregate():
 def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
     """Run ``rack_status.sh --probe-json`` for one log file (same nemo/nccl/squeue heuristics as the table)."""
     script = _script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None
     ap = abs_path.resolve()
     env = _subprocess_env({"NO_COLOR": "1"})
@@ -8214,7 +8227,7 @@ def api_parser_export_excel():
             }
         ), 404
     parser = _parser_path()
-    if not parser.is_file():
+    if not _script_exists(parser):
         return jsonify({"ok": False, "error": f"parser.sh not found: {parser}"}), 500
     rel_args: list[str] = []
     for p in paths:
@@ -8369,7 +8382,7 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _validation_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"validation script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
@@ -8512,7 +8525,7 @@ def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int]
     if not specs:
         return None, (jsonify({"ok": False, "error": "no valid rack ids"}), 400)
     script = _nemo_xrack_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"run-nemo-xrack script not found: {script}"}), 500)
     arg = ",".join(specs)
     cmd = ["bash", str(script), arg]
@@ -8607,7 +8620,7 @@ def _prepare_run_llama(body: dict) -> tuple[dict | None, tuple[object, int] | No
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _run_llama_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"run-llama.sh not found: {script}"}), 500)
     inner = f"module load slurm && exec bash {shlex.quote(str(script))} {shlex.quote(nodes_spec)}"
     cmd = ["bash", "-lc", inner]
@@ -8776,7 +8789,7 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _mnubergemm_stress_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"stress script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
@@ -9177,7 +9190,7 @@ def _parse_sysinfo_request(body: dict) -> tuple[dict | None, tuple[object, int] 
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _sysinfo_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"sysinfo script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
@@ -9320,7 +9333,7 @@ def _parse_nvswitch_audit_request(body: dict) -> tuple[dict | None, tuple[object
         isinstance(fix_raw, str) and fix_raw.strip().lower() in ("1", "true", "yes")
     )
     script = _nvswitches_rack_audit_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (
             jsonify({"ok": False, "error": f"nvswitch audit script not found: {script}"}),
             500,
