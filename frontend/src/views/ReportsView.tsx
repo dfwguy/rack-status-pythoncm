@@ -143,7 +143,7 @@ export function ReportsView() {
     <Box sx={{ maxWidth: 1200, mx: "auto", p: 4 }}>
       <PageHeader
         title="Reports"
-        description="Browse NVIDIA bug report archives and NVLMAPPER zips on this dashboard host (same as legacy Download Reports)."
+        description="Browse NVIDIA bug report archives and NVLMapper outputs on this dashboard host (same as legacy Download Reports)."
       />
 
       <Paper variant="outlined" sx={{ p: 3, mb: 2 }}>
@@ -152,8 +152,10 @@ export function ReportsView() {
           <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>RACK_BUG_REPORT_REMOTE_DIR</Box>, default{" "}
           <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>/home/cmsupport/reports</Box>
           ): one subdirectory per node or rack id, with{" "}
-          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>nvidia-bug-report*.log.gz</Box>, NVLMAPPER{" "}
-          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>nvlmapper.*.zip</Box>, and Excel{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>nvidia-bug-report*.log.gz</Box>, NVLMapper{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>*.csv</Box> /{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>*.xls*</Box>{" "}
+          under each rack subdirectory, optional legacy <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>nvlmapper.*.zip</Box>, and Excel{" "}
           <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>*.xlsx</Box> (e.g. parser exports under{" "}
           <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>parser-excel/</Box>). No pdsh — sync or copy here if
           needed. Use <strong>Download</strong> on a row to save a file.
@@ -213,7 +215,7 @@ export function ReportsView() {
               <TableRow>
                 <TableCell colSpan={3}>
                   <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-                    No nvidia-bug-report*.log.gz, nvlmapper.*.zip, or *.xlsx files found under the reports directory above.
+                    No nvidia-bug-report*.log.gz, NVLMapper outputs, nvlmapper.*.zip, or *.xlsx files found under the reports directory above.
                   </Text>
                 </TableCell>
               </TableRow>

@@ -5291,7 +5291,9 @@
         if (term) {
           lines.push(truncateForTooltip(formatGpuResetResult(st), 32000));
           const z = (st.nvlmapper_zip && String(st.nvlmapper_zip).trim()) || "";
+          const wd = (st.nvlmapper_work_dir && String(st.nvlmapper_work_dir).trim()) || "";
           if (z) lines.push("zip: " + z);
+          else if (wd) lines.push("outputs dir: " + wd);
         } else {
           lines.push("(NVLMAPPER running — panel updates while open)");
         }
@@ -5987,13 +5989,16 @@
         const st = await pollResetJob(jobId, rack, "u", "NVLMAPPER");
         const detail = formatGpuResetResult(st);
         const zip = (st.nvlmapper_zip && String(st.nvlmapper_zip).trim()) || "";
+        const wd = (st.nvlmapper_work_dir && String(st.nvlmapper_work_dir).trim()) || "";
         const dl =
           zip && jobId
             ? "\n\nDownload zip (same session; link expires when job record is purged):\n" +
               window.location.origin +
               "/api/nvlmapper-zip?job_id=" +
               encodeURIComponent(jobId)
-            : "";
+            : wd
+              ? "\n\nCSV/XLS outputs are on the dashboard host under:\n" + wd
+              : "";
         if (!st.ok) {
           showPowerAsyncResultAndRemember(
             rack,

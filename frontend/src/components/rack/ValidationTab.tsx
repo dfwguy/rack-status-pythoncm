@@ -1,7 +1,7 @@
 import Box from "@mui/material/Box";
 import { Text, Divider } from "@nvidia/foundations-react-core";
 import { ActionCard } from "./ActionCard";
-import { Play, Flame, Zap, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import { Play, Flame, Zap, Boxes, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine, Network } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
 import { llamaNodesBody, slurmTargetBody, validationFamilyBody } from "../../lib/rackCommandBodies";
 
@@ -73,6 +73,40 @@ export function ValidationTab({ rack, logDir, selectedNodes, disabled, jobId, on
             "stress",
             "/api/run-mnubergemm-stress-async",
             (jid) => `/api/run-mnubergemm-stress-status?job_id=${encodeURIComponent(jid)}`,
+            validationBody(),
+          )
+        }
+      />
+      <ActionCard
+        title="Run nvloom"
+        description={`Launch nvloom (gpu-to-rack / fabric) on ${nodeCount} selected node(s) in ${rack} via Slurm. Slurm stdout: log_dir/nvloom/$USER-NVLOOM-${rack}-<jobid>.txt (NEMO-style naming).`}
+        icon={<Boxes size={20} />}
+        buttonLabel="Run nvloom"
+        disabled={disabled}
+        selectedNodes={selectedNodes}
+        onRun={() =>
+          runAsyncValidationFamily(
+            "nvloom",
+            "validation",
+            "/api/run-nvloom-async",
+            (jid) => `/api/run-nvloom-status?job_id=${encodeURIComponent(jid)}`,
+            validationBody(),
+          )
+        }
+      />
+      <ActionCard
+        title="Run ClusterKit"
+        description={`Launch HPC-X ClusterKit (IB bandwidth per HCA) on ${nodeCount} selected node(s) in ${rack}. Slurm stdout: log_dir/clusterkit/$USER-CK-${rack}-<jobid>.txt; artifacts under log_dir/clusterkit/${rack}/.`}
+        icon={<Network size={20} />}
+        buttonLabel="Run ClusterKit"
+        disabled={disabled}
+        selectedNodes={selectedNodes}
+        onRun={() =>
+          runAsyncValidationFamily(
+            "ClusterKit",
+            "validation",
+            "/api/run-clusterkit-async",
+            (jid) => `/api/run-clusterkit-status?job_id=${encodeURIComponent(jid)}`,
             validationBody(),
           )
         }

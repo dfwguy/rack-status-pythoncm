@@ -87,5 +87,6 @@ export function formatJobStatusText(st: Record<string, unknown>): string {
   if (st.stderr) lines.push(`stderr:\n${String(st.stderr)}`);
   if (st.reset_sleep_sec != null) lines.push(`reset_sleep_sec: ${String(st.reset_sleep_sec)}`);
   if (st.nvlmapper_zip) lines.push(`nvlmapper_zip: ${String(st.nvlmapper_zip)}`);
+  if (st.nvlmapper_work_dir) lines.push(`nvlmapper_work_dir (CSV/XLS on disk): ${String(st.nvlmapper_work_dir)}`);
   return lines.join("\n").trim();
 }

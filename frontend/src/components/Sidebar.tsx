@@ -20,9 +20,18 @@ import {
   HelpCircle,
   ChevronLeft,
   LineChart,
+  Wrench,
 } from "lucide-react";
 
-export type ViewId = "dashboard" | "singleRack" | "multirack" | "slurm" | "reports" | "analytics" | "settings";
+export type ViewId =
+  | "dashboard"
+  | "singleRack"
+  | "multirack"
+  | "slurm"
+  | "reports"
+  | "analytics"
+  | "tools"
+  | "settings";
 
 export const DRAWER_WIDTH_OPEN = 240;
 export const DRAWER_WIDTH_CLOSED = 64;
@@ -40,14 +49,24 @@ const mainNavItems: NavItem[] = [
   { id: "slurm", label: "Slurm", icon: <Terminal size={22} /> },
   { id: "reports", label: "Reports", icon: <FileDown size={22} /> },
   { id: "analytics", label: "Analytics", icon: <LineChart size={22} /> },
+  { id: "tools", label: "Utility", icon: <Wrench size={22} /> },
 ];
 
 const bottomNavItems: NavItem[] = [
   { id: "settings", label: "Settings", icon: <Settings size={22} /> },
 ];
 
-const externalItems = [
-  { label: "Documentation", icon: <BookOpen size={22} /> },
+/** Project docs and source on GitLab (opens in a new tab from the sidebar). */
+export const NVIS_RACK_STATUS_DOC_URL = "https://gitlab-master.nvidia.com/nvis/nvis-rack-status";
+
+interface ExternalNavItem {
+  label: string;
+  icon: React.ReactNode;
+  href?: string;
+}
+
+const externalItems: ExternalNavItem[] = [
+  { label: "Documentation", icon: <BookOpen size={22} />, href: NVIS_RACK_STATUS_DOC_URL },
   { label: "Help", icon: <HelpCircle size={22} /> },
 ];
 
@@ -56,6 +75,8 @@ interface SidebarProps {
   onToggle: () => void;
   activeView: ViewId;
   onNavigate: (view: ViewId) => void;
+  /** When set (from server env / overrides), shown top-left instead of “Rack Status”. */
+  projectName?: string;
 }
 
 function NavList({
@@ -121,8 +142,9 @@ function NavList({
   );
 }
 
-export function Sidebar({ open, onToggle, activeView, onNavigate }: SidebarProps) {
+export function Sidebar({ open, onToggle, activeView, onNavigate, projectName }: SidebarProps) {
   const width = open ? DRAWER_WIDTH_OPEN : DRAWER_WIDTH_CLOSED;
+  const brandLabel = projectName?.trim() ? projectName.trim() : "Rack Status";
 
   return (
     <Drawer
@@ -148,7 +170,7 @@ export function Sidebar({ open, onToggle, activeView, onNavigate }: SidebarProps
           ...theme.mixins.toolbar,
         })}
       >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0, flex: open ? 1 : undefined }}>
           <svg
             width="32"
             height="32"
@@ -162,8 +184,18 @@ export function Sidebar({ open, onToggle, activeView, onNavigate }: SidebarProps
             />
           </svg>
           {open && (
-            <Text kind="body/bold/md" style={{ whiteSpace: "nowrap" }}>
-              Rack Status
+            <Text
+              key={brandLabel}
+              kind="body/bold/md"
+              title={brandLabel}
+              style={{
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                minWidth: 0,
+              }}
+            >
+              {brandLabel}
             </Text>
           )}
         </Box>
@@ -186,10 +218,24 @@ export function Sidebar({ open, onToggle, activeView, onNavigate }: SidebarProps
       <Box sx={{ pb: 1 }}>
         <NavList items={bottomNavItems} collapsed={!open} activeView={activeView} onNavigate={onNavigate} />
         <List disablePadding>
-          {externalItems.map(({ label, icon }) => (
+          {externalItems.map(({ label, icon, href }) => (
             <ListItem key={label} disablePadding sx={{ display: "block" }}>
-              <Tooltip title={!open ? label : ""} placement="right" arrow>
+              <Tooltip
+                title={
+                  !open ? label : href ? `${label} (opens in new tab)` : label
+                }
+                placement="right"
+                arrow
+              >
                 <ListItemButton
+                  {...(href
+                    ? {
+                        component: "a" as const,
+                        href,
+                        target: "_blank",
+                        rel: "noopener noreferrer",
+                      }
+                    : {})}
                   sx={{
                     minHeight: 44,
                     px: 2,

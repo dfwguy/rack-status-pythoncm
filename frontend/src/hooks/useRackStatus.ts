@@ -29,7 +29,7 @@ export function useRackStatus(logDir: string, pollMs = DEFAULT_POLL_MS) {
       const params = new URLSearchParams();
       if (logDir) params.set("log_dir", logDir);
       params.set("client_id", getClientId());
-      const res = await fetch(`/api/status?${params}`);
+      const res = await fetch(`/api/status?${params}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json: RackStatusResponse & { active_clients?: number } = await res.json();
       setData(json);

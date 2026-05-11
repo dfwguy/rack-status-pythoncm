@@ -51,3 +51,57 @@ Cluster-specific before validation:
     script are site-specific — review the whole file on a new cluster.
 
 parser.sh invokes rack_status.sh from the same directory as parser.sh (both live here).
+
+Tools / container images (Dashboard “Tools”):
+  05-download-containers.sh — enroot import for NEMO 25.11.01 .sqsh (and commented stubs for HPC benchmarks).
+    Usage: NGC_API_KEY=nvapi-... 05-download-containers.sh <destination_dir> [enroot_arch]
+    destination_dir must exist or will be created (mkdir -p). Default arch: aarch64.
+    API: POST /api/tools/download-containers JSON { "destination": "/abs/path" } [, "arch": "aarch64" ]
+    Stream: POST /api/tools/download-containers-stream (same body) → text/plain merged stdout/stderr until ``--- exit N ---``.
+    If nemo-25.11.01.sqsh already exists in the destination and is non-empty, the API returns ok + skipped (no enroot, no NGC key).
+    Runs on the dashboard host with Flask’s environment — set NGC_API_KEY before starting the app (not sent from browser).
+    Env: RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED, RACK_TOOLS_DOWNLOAD_CONTAINERS_TIMEOUT (sec, default 14400),
+         RACK_TOOLS_ENFORCE_ALLOWED_PREFIXES=1 to restrict destinations to RACK_STATUS_ALLOWED_PREFIXES (same as log_dir).
+
+  launch-grafana-bright-prometheus.sh — Docker Grafana (--network=host) with provisioned Prometheus datasource
+    (Bright metrics) and GPU thermal/power dashboard. See script header for PROMETHEUS_RC / ~/.prometheusrc (USER, PASSWORD).
+    API: POST /api/tools/launch-grafana-bright-prometheus JSON {} (no body fields). Uses Docker on the dashboard host.
+    Stream: POST /api/tools/launch-grafana-bright-prometheus-stream → text/plain live output.
+    When Settings → External connections has both RACK_PROMETHEUS_BASIC_AUTH_USER and RACK_PROMETHEUS_BASIC_AUTH_PASSWORD,
+    the server writes a temporary PROMETHEUS_RC for the script; if either is empty, the script resolves default rc paths.
+    Env: RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED, RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_TIMEOUT (sec, default 7200).
+
+  workspace-cuda-major-common.sh — Source-only: TBZ/URL/UNPACK (HPC-X) and RUN_FILE/RUN_URL (CUDA .run) for CUDA_MAJ 12|13.
+    Included by install-hpcx-workspace.sh and install-cuda-nccl-workspace.sh (same directory).
+
+  install-hpcx-workspace.sh — Mellanox HPC-X only (aarch64, CUDA major 12|13): wget/curl tarball, extract, hpcx_load.
+    API: POST /api/tools/install-hpcx-workspace JSON { "cuda_major": "12"|"13", "arch": "aarch64", "workspace": "/abs/path" }
+    (workspace defaults to /home/cmsupport/workspace). Same path rules as download-containers when RACK_TOOLS_ENFORCE_ALLOWED_PREFIXES is set.
+    Env: RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED, RACK_TOOLS_INSTALL_HPCX_WORKSPACE_TIMEOUT (sec, default 28800).
+    Stream: POST /api/tools/install-hpcx-workspace-stream (same JSON) → text/plain live output.
+
+  01-download-cuda-nccl-workspace.sh — Phase 1 on the **dashboard host**: wget/curl NVIDIA CUDA .run into TOPDIR when
+    NVIS_INSTALL_CUDA_TOOLKIT=1. Called by install-cuda-nccl-workspace.sh before pdsh.
+
+  02-install-cuda-nccl-workspace.sh — Phase 2 on a **compute node** (shared TOPDIR): silent .run install + optional NCCL build
+    (same logic as before split). Requires pdsh from the dashboard; HPC-X unpack + nvcc for NCCL. ``module load gcc`` before make.
+
+  install-cuda-nccl-workspace.sh — Orchestrator: runs 01 locally, then ``pdsh -w <host> bash -lc '…02…'`` with NVIS_* exports.
+    Env: NVIS_INSTALL_CUDA_TOOLKIT, NVIS_BUILD_NCCL, NVIS_CUDA_NCCL_BUILD_HOST (single hostname; set by API from JSON build_host).
+    API: POST /api/tools/install-cuda-nccl-workspace JSON {
+      "cuda_major": "12"|"13", "arch": "aarch64", "workspace": "/abs/path",
+      "install_cuda_toolkit": true|false, "build_nccl": true|false,
+      "build_host": "pNN-rMM-ctXX"
+    } — at least one of install_cuda_toolkit / build_nccl must be true; build_host required (dashboard needs ``pdsh`` in PATH).
+    GET /api/cluster-overview includes ``cuda_nccl_build_host_candidates`` (keys from rack status physical_rf0) for UI suggestions.
+    Env: RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED, RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_TIMEOUT (sec, default 28800).
+    Stream: POST /api/tools/install-cuda-nccl-workspace-stream (same JSON) → text/plain live output.
+
+  nvloom (NVIDIA MNNVL tools): 00-download-cmake-nvloom-workspace.sh (Kitware CMake v3.28.1 linux-aarch64 tarball → TOPDIR; **dashboard localhost only**), 01-clone-nvloom-workspace.sh (git clone on localhost), 02-build-nvloom-workspace.sh (HPC-X + Boost hints; patches ``Boost_USE_STATIC_LIBS``; removes ``CMakeCache.txt`` / ``CMakeFiles/``; ``cmake -DBoost_NO_BOOST_CMAKE=ON`` + ``Boost_ROOT`` / ``Boost_LIBRARY_DIR``; ``cuda/env.sh``; ``CMAKE_CUDA_ARCHITECTURES=native``; aarch64 build host), install-nvloom-workspace.sh (00+01 localhost, then ``pdsh`` … 02).
+    Env: NVIS_NVLOOM_BUILD_HOST (single hostname; API JSON build_host).
+    API: POST /api/tools/install-nvloom-workspace JSON { "workspace": "/abs/path", "cuda_major": "12"|"13", "build_host": "host" }.
+    Stream: POST /api/tools/install-nvloom-workspace-stream (same JSON).
+    Env: RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED, RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_TIMEOUT (sec, default 28800).
+
+    Optional line-buffering for tool streams: RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER (default 1, like other stream scripts).
+    GET /api/tools/workspace-toolchain-status?workspace=/abs&cuda_major=12|13 — returns cuda_nvcc, hpcx_init, nccl_all_reduce_perf, all_ready (read-only; not blocked by install-disabled env).

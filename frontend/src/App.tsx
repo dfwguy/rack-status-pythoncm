@@ -14,6 +14,7 @@ import { MultirackView } from "./views/MultirackView";
 import { SlurmView } from "./views/SlurmView";
 import { ReportsView } from "./views/ReportsView";
 import { AnalyticsView } from "./views/AnalyticsView";
+import { ToolsView } from "./views/ToolsView";
 import { SettingsView } from "./views/SettingsView";
 import { LoginPage } from "./pages/LoginPage";
 import { useRackStatus } from "./hooks/useRackStatus";
@@ -28,6 +29,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   slurm: "Slurm",
   reports: "Reports",
   analytics: "Analytics",
+  tools: "Utility",
   settings: "Settings",
 };
 
@@ -57,9 +59,8 @@ function AppContent() {
     refresh: refreshCluster,
   } = useClusterOverview(logDir);
 
-  const refreshAll = useCallback(() => {
-    void refresh();
-    void refreshCluster();
+  const refreshAll = useCallback(async () => {
+    await Promise.all([refresh(), refreshCluster()]);
   }, [refresh, refreshCluster]);
 
   useEffect(() => {
@@ -114,6 +115,7 @@ function AppContent() {
           onToggle={handleSidebarToggle}
           activeView={activeView}
           onNavigate={handleNavigate}
+          projectName={data?.project_name}
         />
       }
       toolbar={
@@ -121,7 +123,9 @@ function AppContent() {
           title={toolbarTitle}
           theme={mode}
           onToggleTheme={toggleTheme}
-          onRefresh={refreshAll}
+          onRefresh={() => {
+            void refreshAll();
+          }}
           loading={loading || clusterLoading}
           sidebarOpen={sidebarOpen}
           onMenuToggle={handleSidebarToggle}
@@ -165,8 +169,13 @@ function AppContent() {
         {activeView === "analytics" && (
           <AnalyticsView logDir={logDir} rows={data?.rows ?? []} />
         )}
+        {activeView === "tools" && <ToolsView logDir={logDir} />}
         {activeView === "settings" && (
-          <SettingsView logDir={logDir} onLogDirChange={setLogDir} />
+          <SettingsView
+            logDir={logDir}
+            onLogDirChange={setLogDir}
+            onDashboardEnvSaved={refreshAll}
+          />
         )}
       </RackCommandsStoreProvider>
     </AppLayout>

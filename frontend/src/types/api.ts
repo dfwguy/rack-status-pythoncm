@@ -22,6 +22,8 @@ export interface RackStatusResponse {
   native_workers: NativeWorkers;
   served_from_cache?: boolean;
   rack_status_background_interval_sec?: number;
+  /** From ``RACK_WEB_PROJECT_NAME`` / ``PROJECT_NAME`` (sidebar brand when set). */
+  project_name?: string;
 }
 
 export interface RackSummary {
@@ -72,6 +74,10 @@ export interface ClusterOverviewResponse {
   bcm_version: string;
   slurm_version: string;
   nemo_container: string;
+  /** Parent dir of NEMO_SQSH_SRC when it ends with .sqsh; else expanded path. Empty if unset. */
+  tools_download_destination_default?: string;
+  /** Compute hostnames from rack status ``physical_rf0`` keys (suggestions for CUDA/NCCL pdsh build host). */
+  cuda_nccl_build_host_candidates?: string[];
   rack_count: number;
   tray_hosts: number;
   estimated_gpu_count: number;

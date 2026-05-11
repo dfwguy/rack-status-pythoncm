@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Paper from "@mui/material/Paper";
@@ -45,6 +45,12 @@ ChartJS.register(
 type AnalyticsPayload = {
   ok: boolean;
   error?: string;
+  /** ISO-8601 UTC from server when the aggregate was produced or cached. */
+  analyzed_at?: string;
+  /** SHA-256 of sorted (rack,nemo) rows used for this run (server-side). */
+  rows_fingerprint?: string;
+  /** True when body came from ``GET /api/analytics/last`` disk cache. */
+  cached?: boolean;
   single_rack?: {
     nccl_collectives: { rack: string; log_file: string; all_reduce_gbps: number | null; all_gather_gbps: number | null; alltoall_gbps: number | null }[];
     nccl_collectives_deviation_pct: {
@@ -156,6 +162,7 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
+        cache: "no-store",
         body: JSON.stringify({ log_dir: logDir || undefined, rows: bodyRows }),
       });
       if (res.status === 401) {
@@ -174,6 +181,42 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
       setLoading(false);
     }
   }, [logDir, bodyRows]);
+
+  const loadCachedAnalysis = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (logDir) params.set("log_dir", logDir);
+      const res = await fetch(`/api/analytics/last?${params}`, {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (res.status === 401) {
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        return;
+      }
+      if (res.status === 404) {
+        return;
+      }
+      const json = (await res.json()) as AnalyticsPayload;
+      if (!res.ok || !json.ok) {
+        return;
+      }
+      setData((prev) => {
+        if (prev != null && prev.cached === false) return prev;
+        return json;
+      });
+    } catch {
+      /* ignore cache load errors */
+    }
+  }, [logDir]);
+
+  useEffect(() => {
+    setData(null);
+  }, [logDir]);
+
+  useEffect(() => {
+    void loadCachedAnalysis();
+  }, [loadCachedAnalysis]);
 
   const sr = data?.single_rack;
   const mr = data?.multirack;
@@ -414,6 +457,11 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
           </Box>{" "}
           on many logs — can take several minutes on large fleets. Uses the current log directory
           {logDir ? ` (${logDir})` : " (server default)"} and the latest rack status rows you have loaded.
+          The server keeps the last successful aggregate under{" "}
+          <Box component="span" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>
+            var/cache/analytics_aggregate_cache.json
+          </Box>{" "}
+          per log directory; this page loads it automatically when you open Analytics.
         </Typography>
         <Button variant="contained" onClick={() => void runAnalysis()} disabled={loading || !bodyRows.length}>
           {loading ? "Running…" : "Run analysis"}
@@ -435,6 +483,19 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
         <Alert severity="error" sx={{ mb: 2 }}>
           {error}
         </Alert>
+      )}
+
+      {data?.cached && data.analyzed_at && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Showing last saved analysis ({new Date(data.analyzed_at).toLocaleString()}). Run analysis again to refresh
+          after new validation logs or rack status changes.
+        </Alert>
+      )}
+
+      {data && !data.cached && data.analyzed_at && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+          Last run: {new Date(data.analyzed_at).toLocaleString()}
+        </Typography>
       )}
 
       {sr && (

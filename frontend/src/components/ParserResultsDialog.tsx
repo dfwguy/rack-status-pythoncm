@@ -33,6 +33,8 @@ import {
 } from "chart.js";
 import { Line } from "react-chartjs-2";
 import { ParserGrafanaEmbeds, type GrafanaEmbedPayload } from "./ParserGrafanaEmbeds";
+import { NvloomHeatmapsSection } from "./NvloomHeatmapsSection";
+import { ClusterkitResultsSection, type ClusterkitRunRow } from "./ClusterkitResultsSection";
 
 ChartJS.register(
   CategoryScale,
@@ -76,7 +78,7 @@ export interface ParserResultsDialogProps {
    * When set, request uses log_file=… and optional rack= for Grafana context (job_id omitted unless also provided).
    */
   logFileBasename?: string;
-  /** 0 = Summary, 1 = NCCL, 2 = NEMO, 3 = LLAMA (sn-llama) when server returned rows. */
+  /** 0 = Summary, 1 = NCCL, 2 = NEMO, 3 = LLAMA when server returned rows, 4 = NVLOOM (or LLAMA then NVLOOM), 5 = ClusterKit when runs exist. */
   initialTabIndex?: number;
 }
 
@@ -764,11 +766,18 @@ export function ParserResultsDialog({
   const [result, setResult] = useState<ParserResponse | null>(null);
   const [tabIndex, setTabIndex] = useState(0);
   const [chartsTz, setChartsTz] = useState(initChartsTzFromStorage);
+  const [nvloomPath, setNvloomPath] = useState("");
+  const [nvloomContent, setNvloomContent] = useState("");
+  const [nvloomLoading, setNvloomLoading] = useState(false);
+  const [nvloomError, setNvloomError] = useState("");
+  const [clusterkitRuns, setClusterkitRuns] = useState<ClusterkitRunRow[]>([]);
+  const [clusterkitListLoading, setClusterkitListLoading] = useState(false);
+  const [clusterkitListError, setClusterkitListError] = useState("");
 
   useEffect(() => {
     if (!open) return;
     setChartsTz(initChartsTzFromStorage());
-    setTabIndex(Math.min(Math.max(0, initialTabIndex), 3));
+    setTabIndex(Math.min(Math.max(0, initialTabIndex), 10));
   }, [open, initialTabIndex]);
 
   const persistChartsTz = (value: string) => {
@@ -806,8 +815,8 @@ export function ParserResultsDialog({
         if (json.ok) {
           const data = normalizeParserPayload(json.data);
           setResult({ ...json, data });
-          const maxT = (data.sn_llama_nemotron?.length ?? 0) > 0 ? 3 : 2;
-          setTabIndex((t) => Math.min(t, maxT));
+          const nvloomIdx = (data.sn_llama_nemotron?.length ?? 0) > 0 ? 4 : 3;
+          setTabIndex((t) => Math.min(t, nvloomIdx));
         } else {
           setError(json.error || "Parser failed");
         }
@@ -816,12 +825,104 @@ export function ParserResultsDialog({
       .finally(() => setLoading(false));
   }, [open, rack, jobId, logDir, logFileBasename, chartsTz]);
 
+  useEffect(() => {
+    if (!open || !(logDir || "").trim() || !rack.trim() || !result) {
+      setNvloomPath("");
+      setNvloomContent("");
+      setNvloomLoading(false);
+      setNvloomError("");
+      return;
+    }
+    const ac = new AbortController();
+    setNvloomLoading(true);
+    setNvloomError("");
+    const params = new URLSearchParams();
+    params.set("log_dir", logDir!.trim());
+    params.set("rack", rack.trim());
+    fetch(`/api/nvloom-heatmaps-log?${params}`, { signal: ac.signal })
+      .then(async (res) => {
+        const j = (await res.json()) as { ok?: boolean; error?: string; path?: string; content?: string };
+        if (!res.ok) {
+          setNvloomPath("");
+          setNvloomContent("");
+          if (res.status === 404) {
+            setNvloomError("");
+            return;
+          }
+          setNvloomError(j.error || res.statusText || "NVLOOM log request failed");
+          return;
+        }
+        if (j.ok) {
+          setNvloomPath(String(j.path ?? ""));
+          setNvloomContent(typeof j.content === "string" ? j.content : "");
+          setNvloomError("");
+        } else {
+          setNvloomPath("");
+          setNvloomContent("");
+          setNvloomError(j.error || "NVLOOM log unavailable");
+        }
+      })
+      .catch((err: Error) => {
+        if (err.name === "AbortError") return;
+        setNvloomPath("");
+        setNvloomContent("");
+        setNvloomError(err.message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setNvloomLoading(false);
+      });
+    return () => ac.abort();
+  }, [open, logDir, rack, result]);
+
+  useEffect(() => {
+    if (!open || !(logDir || "").trim() || !rack.trim() || !result) {
+      setClusterkitRuns([]);
+      setClusterkitListLoading(false);
+      setClusterkitListError("");
+      return;
+    }
+    const ac = new AbortController();
+    setClusterkitRuns([]);
+    setClusterkitListLoading(true);
+    setClusterkitListError("");
+    const params = new URLSearchParams();
+    params.set("log_dir", logDir!.trim());
+    params.set("rack", rack.trim());
+    fetch(`/api/clusterkit-results?${params}`, { signal: ac.signal })
+      .then(async (res) => {
+        const j = (await res.json()) as { ok?: boolean; error?: string; runs?: ClusterkitRunRow[] };
+        if (!res.ok || !j.ok) {
+          setClusterkitRuns([]);
+          setClusterkitListError(j.error || res.statusText || "ClusterKit list failed");
+          return;
+        }
+        setClusterkitRuns(Array.isArray(j.runs) ? j.runs : []);
+        setClusterkitListError("");
+      })
+      .catch((err: Error) => {
+        if (err.name === "AbortError") return;
+        setClusterkitRuns([]);
+        setClusterkitListError(err.message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setClusterkitListLoading(false);
+      });
+    return () => ac.abort();
+  }, [open, logDir, rack, result]);
+
   const ncclRows = result?.data?.nccl_peak_out_of_place_busbw_gbps || [];
   const nemoRows = result?.data?.nemotron_5h_56b_train_window || [];
   const snLlamaRows = result?.data?.sn_llama_nemotron || [];
   const showLlamaTab = snLlamaRows.length > 0;
-  const maxTabIdx = showLlamaTab ? 3 : 2;
+  const nvloomTabIndex = showLlamaTab ? 4 : 3;
+  const showClusterkitTab = clusterkitRuns.length > 0;
+  const clusterkitTabIndex = showClusterkitTab ? nvloomTabIndex + 1 : -1;
+  const maxTabIdx = showClusterkitTab ? nvloomTabIndex + 1 : nvloomTabIndex;
   const effectiveTab = Math.min(tabIndex, maxTabIdx);
+
+  useEffect(() => {
+    setTabIndex((t) => Math.min(t, maxTabIdx));
+  }, [maxTabIdx]);
   const pdisp = String(result?.parser_display_timezone ?? "").trim() || "utc";
 
   return (
@@ -852,7 +953,7 @@ export function ParserResultsDialog({
           </FormControl>
         </Box>
       </DialogTitle>
-      <DialogContent dividers>
+      <DialogContent dividers sx={{ minWidth: 0, boxSizing: "border-box" }}>
         {loading && (
           <Box sx={{ display: "flex", justifyContent: "center", py: 6 }}>
             <CircularProgress />
@@ -874,6 +975,8 @@ export function ParserResultsDialog({
               <Tab label={`NCCL (${ncclRows.length})`} />
               <Tab label={`NEMO + GPU (${nemoRows.length})`} />
               {showLlamaTab && <Tab label={`LLAMA (${snLlamaRows.length})`} />}
+              <Tab label="NVLOOM" />
+              {showClusterkitTab && <Tab label={`ClusterKit (${clusterkitRuns.length})`} />}
             </Tabs>
             {effectiveTab === 0 && (
               <SummaryTab
@@ -896,6 +999,23 @@ export function ParserResultsDialog({
               />
             )}
             {showLlamaTab && effectiveTab === 3 && <LlamaReviewSection rows={snLlamaRows} />}
+            {effectiveTab === nvloomTabIndex && (
+              <NvloomHeatmapsSection
+                logPath={nvloomPath}
+                content={nvloomContent}
+                loading={nvloomLoading}
+                error={nvloomError}
+              />
+            )}
+            {showClusterkitTab && clusterkitTabIndex >= 0 && effectiveTab === clusterkitTabIndex && logDir && (
+              <ClusterkitResultsSection
+                logDir={logDir.trim()}
+                rack={rack.trim()}
+                runs={clusterkitRuns}
+                listLoading={clusterkitListLoading}
+                listError={clusterkitListError}
+              />
+            )}
           </>
         )}
       </DialogContent>

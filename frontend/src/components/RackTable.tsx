@@ -33,7 +33,6 @@ import {
   CircleCheck,
   Cpu,
   Shuffle,
-  AlertTriangle,
   XCircle,
   Monitor,
   Search,
@@ -169,7 +168,7 @@ function sinfoIcon(state: string) {
     case "idle": return <CircleCheck size={ICON_SIZE} />;
     case "alloc": return <Cpu size={ICON_SIZE} />;
     case "mix": return <Shuffle size={ICON_SIZE} />;
-    case "drain": return <AlertTriangle size={ICON_SIZE} />;
+    case "drain": return <CircleCheck size={ICON_SIZE} />;
     case "down": return <XCircle size={ICON_SIZE} />;
     case "comp": return <Monitor size={ICON_SIZE} />;
     default: return null;
@@ -475,7 +474,7 @@ export function RackTable({
         setRunMenuAnchor(null);
         return;
       }
-      if (["nemo", "llama", "stress"].includes(key) && !logDir?.trim()) {
+      if (["nemo", "llama", "stress", "nvloom", "clusterkit"].includes(key) && !logDir?.trim()) {
         setSnackbar({
           open: true,
           message: "Set log directory (toolbar / settings) before launching validation or Llama jobs.",
@@ -518,6 +517,30 @@ export function RackTable({
               "stress",
               "/api/run-mnubergemm-stress-async",
               (jid) => `/api/run-mnubergemm-stress-status?job_id=${encodeURIComponent(jid)}`,
+              validationFamilyBody(rack, ld, nodesFullRack(rack)),
+            ),
+          );
+          break;
+        case "nvloom":
+          fireBulkParallel("nvloom", (rack) =>
+            void store.runAsyncValidationFamily(
+              rack,
+              "nvloom",
+              "validation",
+              "/api/run-nvloom-async",
+              (jid) => `/api/run-nvloom-status?job_id=${encodeURIComponent(jid)}`,
+              validationFamilyBody(rack, ld, nodesFullRack(rack)),
+            ),
+          );
+          break;
+        case "clusterkit":
+          fireBulkParallel("ClusterKit", (rack) =>
+            void store.runAsyncValidationFamily(
+              rack,
+              "ClusterKit",
+              "validation",
+              "/api/run-clusterkit-async",
+              (jid) => `/api/run-clusterkit-status?job_id=${encodeURIComponent(jid)}`,
               validationFamilyBody(rack, ld, nodesFullRack(rack)),
             ),
           );
@@ -945,6 +968,12 @@ export function RackTable({
                 </MenuItem>
                 <MenuItem onClick={() => handleBulkRun("stress")}>
                   <ListItemText primary="Run MNUBERGEMM stress" secondary="Async" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("nvloom")}>
+                  <ListItemText primary="Run nvloom" secondary="Async · log_dir/nvloom/" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("clusterkit")}>
+                  <ListItemText primary="Run ClusterKit" secondary="Async · log_dir/clusterkit/" />
                 </MenuItem>
                 <MenuItem onClick={() => handleBulkRun("power_on")}>
                   <ListItemText primary="Power on" secondary="Async" />

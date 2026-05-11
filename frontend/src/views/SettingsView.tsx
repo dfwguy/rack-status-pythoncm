@@ -1,19 +1,252 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import TextField from "@mui/material/TextField";
-import { Card, Text, Button } from "@nvidia/foundations-react-core";
+import Button from "@mui/material/Button";
+import Paper from "@mui/material/Paper";
+import Typography from "@mui/material/Typography";
+import Alert from "@mui/material/Alert";
+import CircularProgress from "@mui/material/CircularProgress";
+import Chip from "@mui/material/Chip";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
+import { Card, Text } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
+
+/** Use monospace input for long regex / technical values. */
+const MONOSPACE_JOB_ENV_KEYS = new Set([
+  "RACK_CMSH_DS_NODE_PATTERN",
+  "RACK_CMSH_DS_NODE_TOKEN_PATTERN",
+  "RACK_CMSH_DS_NODE_FIND_PATTERN",
+  "RACK_CMSH_DS_NODE_PARSE_PATTERN",
+  "NVLMAPPER_RC",
+]);
+
+const PASSWORD_JOB_ENV_KEYS = new Set(["RACK_PROMETHEUS_BASIC_AUTH_PASSWORD", "NVLMAPPER_PASSWORD"]);
 
 interface SettingsViewProps {
   logDir: string;
   onLogDirChange: (val: string) => void;
+  /** After a successful save: refetch dashboard APIs (status, cluster overview) so UI matches overrides. */
+  onDashboardEnvSaved?: () => void | Promise<void>;
 }
 
-export function SettingsView({ logDir, onLogDirChange }: SettingsViewProps) {
+type JobEnvRow = {
+  key: string;
+  label: string;
+  description: string;
+  value: string;
+  has_override?: boolean;
+  section?: string;
+};
+
+type JobEnvSection = {
+  id: string;
+  title: string;
+  variables: JobEnvRow[];
+};
+
+export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: SettingsViewProps) {
+  const [jobEnvSections, setJobEnvSections] = useState<JobEnvSection[]>([]);
+  const [jobEnvPath, setJobEnvPath] = useState("");
+  const [jobEnvValues, setJobEnvValues] = useState<Record<string, string>>({});
+  const [jobEnvLoading, setJobEnvLoading] = useState(true);
+  const [jobEnvSaving, setJobEnvSaving] = useState(false);
+  const [jobEnvError, setJobEnvError] = useState("");
+  const [jobEnvOk, setJobEnvOk] = useState("");
+  /** Index into ``jobEnvSections`` for the tabbed environment editor. */
+  const [jobEnvSectionTab, setJobEnvSectionTab] = useState(0);
+  /** Last effective values from the server (GET / successful PUT). Save only sends keys that differ — empty strings here would otherwise clear unrelated overrides on the server. */
+  const jobEnvBaselineRef = useRef<Record<string, string>>({});
+
+  const loadJobEnv = useCallback(async () => {
+    setJobEnvError("");
+    setJobEnvLoading(true);
+    try {
+      const res = await fetch("/api/settings/job-environment", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (res.status === 401) {
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        return;
+      }
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        sections?: JobEnvSection[];
+        variables?: JobEnvRow[];
+        path?: string;
+      };
+      if (!res.ok || !json.ok) {
+        setJobEnvError(json.error || `HTTP ${res.status}`);
+        setJobEnvSections([]);
+        jobEnvBaselineRef.current = {};
+        return;
+      }
+      setJobEnvPath(json.path || "");
+      const m: Record<string, string> = {};
+      if (json.sections && json.sections.length > 0) {
+        setJobEnvSections(json.sections);
+        for (const sec of json.sections) {
+          for (const v of sec.variables) {
+            m[v.key] = v.value ?? "";
+          }
+        }
+      } else if (json.variables && json.variables.length > 0) {
+        setJobEnvSections([{ id: "all", title: "Environment variables", variables: json.variables }]);
+        for (const v of json.variables) {
+          m[v.key] = v.value ?? "";
+        }
+      } else {
+        setJobEnvError("No environment variables returned");
+        setJobEnvSections([]);
+        jobEnvBaselineRef.current = {};
+        return;
+      }
+      jobEnvBaselineRef.current = { ...m };
+      setJobEnvValues(m);
+    } catch (e) {
+      setJobEnvError(e instanceof Error ? e.message : String(e));
+      setJobEnvSections([]);
+      jobEnvBaselineRef.current = {};
+    } finally {
+      setJobEnvLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadJobEnv();
+  }, [loadJobEnv]);
+
+  useEffect(() => {
+    setJobEnvSectionTab((i) => {
+      if (jobEnvSections.length === 0) {
+        return 0;
+      }
+      return Math.min(i, jobEnvSections.length - 1);
+    });
+  }, [jobEnvSections]);
+
+  const reloadJobEnvAndDashboard = useCallback(async () => {
+    setJobEnvError("");
+    setJobEnvOk("");
+    await loadJobEnv();
+    if (onDashboardEnvSaved) {
+      await Promise.resolve(onDashboardEnvSaved());
+    }
+  }, [loadJobEnv, onDashboardEnvSaved]);
+
+  const saveJobEnv = useCallback(async () => {
+    setJobEnvError("");
+    setJobEnvOk("");
+    setJobEnvSaving(true);
+    try {
+      const baseline = jobEnvBaselineRef.current;
+      const overrides: Record<string, string> = {};
+      for (const sec of jobEnvSections) {
+        for (const row of sec.variables) {
+          const key = row.key;
+          const cur = jobEnvValues[key] ?? "";
+          const base = baseline[key] ?? "";
+          if (cur !== base) {
+            overrides[key] = cur;
+          }
+        }
+      }
+      const res = await fetch("/api/settings/job-environment", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
+        body: JSON.stringify({ overrides }),
+      });
+      if (res.status === 401) {
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        return;
+      }
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        sections?: JobEnvSection[];
+        variables?: JobEnvRow[];
+        path?: string;
+      };
+      if (!res.ok || !json.ok) {
+        setJobEnvError(json.error || `HTTP ${res.status}`);
+        return;
+      }
+      setJobEnvOk("Saved. Dashboard data was refreshed to match the new values.");
+      // Apply the PUT response (same shape as GET) so we do not rely on a follow-up GET that may
+      // hit another Gunicorn worker with stale in-memory cache.
+      if (json.sections && json.sections.length > 0) {
+        setJobEnvPath(json.path || "");
+        setJobEnvSections(json.sections);
+        const m: Record<string, string> = {};
+        for (const sec of json.sections) {
+          for (const v of sec.variables) {
+            m[v.key] = v.value ?? "";
+          }
+        }
+        jobEnvBaselineRef.current = { ...m };
+        setJobEnvValues(m);
+      } else {
+        await loadJobEnv();
+      }
+      if (onDashboardEnvSaved) {
+        await Promise.resolve(onDashboardEnvSaved());
+      }
+    } catch (e) {
+      setJobEnvError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJobEnvSaving(false);
+    }
+  }, [jobEnvSections, jobEnvValues, loadJobEnv, onDashboardEnvSaved]);
+
+  const hasJobEnvRows = jobEnvSections.some((s) => s.variables.length > 0);
+
+  const renderRow = (row: JobEnvRow, monospace: boolean) => {
+    const passwordField = PASSWORD_JOB_ENV_KEYS.has(row.key);
+    return (
+      <Box key={row.key} sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+            {row.key}
+          </Typography>
+          {row.has_override ? <Chip size="small" label="override" color="primary" variant="outlined" /> : null}
+        </Box>
+        <TextField
+          label={row.label}
+          size="small"
+          fullWidth
+          type={passwordField ? "password" : "text"}
+          autoComplete={passwordField ? "new-password" : undefined}
+          value={jobEnvValues[row.key] ?? ""}
+          onChange={(e) =>
+            setJobEnvValues((prev) => ({
+              ...prev,
+              [row.key]: e.target.value,
+            }))
+          }
+          helperText={row.description}
+          slotProps={
+            monospace
+              ? {
+                  input: {
+                    sx: { fontFamily: "ui-monospace, monospace", fontSize: "0.8125rem" },
+                  },
+                }
+              : undefined
+          }
+        />
+      </Box>
+    );
+  };
+
   return (
-    <Box sx={{ maxWidth: 800, mx: "auto", p: 4 }}>
+    <Box sx={{ maxWidth: 900, mx: "auto", p: 4 }}>
       <PageHeader
         title="Settings"
-        description="Configure dashboard behavior and connection parameters."
+        description="Configure log directory, dashboard refresh and title, external connections (Grafana, Prometheus, log timezones), native status and cmsh, and job / validation overrides stored on the server."
       />
 
       <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -22,42 +255,109 @@ export function SettingsView({ logDir, onLogDirChange }: SettingsViewProps) {
             Log Directory
           </Text>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 16, display: "block" }}>
-            Root directory for NEMO validation logs. This is used as the working directory
-            for rack_status.sh and log analysis.
+            Root directory for NEMO validation logs. This is used as the working directory for rack_status.sh and log
+            analysis (sent with API requests as <code>log_dir</code>).
           </Text>
-          <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
-            <TextField
-              size="small"
-              fullWidth
-              value={logDir}
-              onChange={(e) => onLogDirChange(e.target.value)}
-              placeholder="leave empty for server default (RACK_STATUS_LOG_DIR)"
-            />
-            <Button kind="secondary" size="small">
-              Apply
-            </Button>
-          </Box>
+          <TextField
+            size="small"
+            fullWidth
+            value={logDir}
+            onChange={(e) => onLogDirChange(e.target.value)}
+            placeholder="leave empty for server default (RACK_STATUS_LOG_DIR)"
+          />
         </Card>
 
-        <Card style={{ padding: 24 }}>
-          <Text kind="body/bold/md" style={{ marginBottom: 8, display: "block" }}>
-            Refresh Interval
-          </Text>
-          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 16, display: "block" }}>
-            How often the dashboard polls /api/status for updated rack data.
-            Default: 15 seconds.
-          </Text>
-          <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
-            <TextField
-              size="small"
-              defaultValue="15"
-              sx={{ width: 100 }}
-            />
-            <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-              seconds
-            </Text>
-          </Box>
-        </Card>
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
+            Job &amp; environment overrides
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Values are merged over the Flask process environment for the dashboard (status refresh, page title), external
+            services (Grafana embed URLs, Prometheus basic auth for bundled scripts, log/chart timezones), validation, parser,
+            native status (including <Box component="code" sx={{ fontSize: "0.85em" }}>cmsh -c ds</Box>
+            ), Slurm helpers, and bundled scripts. Saving writes to{" "}
+            <Box component="code" sx={{ fontSize: "0.85em" }}>
+              {jobEnvPath || "var/cache/job_env_overrides.json"}
+            </Box>
+            . Leave a field empty and save to clear an override (inherit from the shell again).
+          </Typography>
+
+          {jobEnvLoading ? (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, py: 2 }}>
+              <CircularProgress size={22} />
+              <Typography variant="body2" color="text.secondary">
+                Loading…
+              </Typography>
+            </Box>
+          ) : null}
+
+          {jobEnvError ? (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {jobEnvError}
+            </Alert>
+          ) : null}
+          {jobEnvOk ? (
+            <Alert severity="success" sx={{ mb: 2 }} onClose={() => setJobEnvOk("")}>
+              {jobEnvOk}
+            </Alert>
+          ) : null}
+
+          {!jobEnvLoading && hasJobEnvRows ? (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {jobEnvSections.length > 1 ? (
+                <Tabs
+                  value={jobEnvSectionTab}
+                  onChange={(_, next) => setJobEnvSectionTab(next)}
+                  variant="scrollable"
+                  scrollButtons="auto"
+                  sx={{ borderBottom: 1, borderColor: "divider", mb: 0 }}
+                >
+                  {jobEnvSections.map((sec) => (
+                    <Tab
+                      key={sec.id}
+                      label={sec.title}
+                      id={`settings-env-tab-${sec.id}`}
+                      aria-controls={`settings-env-panel-${sec.id}`}
+                    />
+                  ))}
+                </Tabs>
+              ) : (
+                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                  {jobEnvSections[0]?.title}
+                </Typography>
+              )}
+              {jobEnvSections.map((sec, idx) => (
+                <Box
+                  key={sec.id}
+                  role="tabpanel"
+                  hidden={jobEnvSections.length > 1 ? jobEnvSectionTab !== idx : false}
+                  id={`settings-env-panel-${sec.id}`}
+                  aria-labelledby={`settings-env-tab-${sec.id}`}
+                  sx={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 2,
+                    pt: jobEnvSections.length > 1 ? 1 : 0,
+                  }}
+                >
+                  {sec.variables.map((row) => renderRow(row, MONOSPACE_JOB_ENV_KEYS.has(row.key)))}
+                </Box>
+              ))}
+              <Box sx={{ display: "flex", gap: 2, alignItems: "center", pt: 1 }}>
+                <Button variant="contained" disabled={jobEnvSaving} onClick={() => void saveJobEnv()}>
+                  {jobEnvSaving ? "Saving…" : "Save"}
+                </Button>
+                <Button
+                  variant="outlined"
+                  disabled={jobEnvSaving || jobEnvLoading}
+                  onClick={() => void reloadJobEnvAndDashboard()}
+                >
+                  Reload
+                </Button>
+              </Box>
+            </Box>
+          ) : null}
+        </Paper>
       </Box>
     </Box>
   );

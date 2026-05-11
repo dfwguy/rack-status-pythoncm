@@ -50,6 +50,7 @@ when logs are wall-clock local but the server env was UTC).
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import io
 import json
 import logging
@@ -71,6 +72,7 @@ import uuid
 import time
 import warnings
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 
@@ -89,6 +91,12 @@ from flask import (
 )
 
 APP_DIR = Path(__file__).resolve().parent
+# Canonical overrides file for this install; native_status reads the same path via this env
+# (set before ``import native_status`` so the first mtime load targets the app tree).
+os.environ.setdefault(
+    "NVIS_JOB_ENV_OVERRIDES_FILE",
+    str((APP_DIR / "var" / "cache" / "job_env_overrides.json").resolve()),
+)
 SCRIPTS_DIR = APP_DIR / "bin" / "scripts"
 _app_dir_s = str(APP_DIR)
 if _app_dir_s not in sys.path:
@@ -100,6 +108,8 @@ from platforms import get_platform as _get_platform  # noqa: E402
 
 DEFAULT_SCRIPT = SCRIPTS_DIR / "rack_status.sh"
 DEFAULT_LOG_DIR = APP_DIR / "var" / "logs"
+# Output basename for Tools → 05-download-containers.sh (must match script).
+_TOOLS_NEMO_CONTAINER_SQSH = "nemo-25.11.01.sqsh"
 
 app = Flask(__name__)
 _logger = logging.getLogger(__name__)
@@ -128,6 +138,652 @@ _rack_status_cache: dict[str, dict] = {}
 _rack_status_registry: set[str] = set()
 _rack_status_bg_thread_lock = threading.Lock()
 _rack_status_bg_thread: threading.Thread | None = None
+
+# Dashboard Settings → job / validation env overrides (merged into subprocess env and ``_eget`` reads).
+# ``section`` groups rows in Settings (see ``JOB_ENV_SECTION_ORDER``).
+JOB_ENV_SECTION_ORDER: tuple[tuple[str, str], ...] = (
+    ("dashboard", "Dashboard & charts"),
+    ("external", "External connections"),
+    ("native_cmsh", "Native status, parser & cmsh"),
+    ("jobs_cluster", "Validation, jobs & cluster tools"),
+)
+JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
+    {
+        "section": "dashboard",
+        "key": "RACK_STATUS_BACKGROUND_INTERVAL_SEC",
+        "label": "Status background refresh (seconds)",
+        "description": "How often the server refreshes cached native rack status (min 5). The background loop re-reads this after each sleep, so saves apply within roughly one interval (restart for an immediate first tick).",
+    },
+    {
+        "section": "dashboard",
+        "key": "RACK_WEB_PROJECT_NAME",
+        "label": "Page title suffix",
+        "description": "Optional short label appended to HTML titles (shell PROJECT_NAME is still read if this is unset).",
+    },
+    {
+        "section": "external",
+        "key": "RACK_PROMETHEUS_LOG_TIMESTAMP_TZ",
+        "label": "Log timestamp timezone (IANA)",
+        "description": "Zone for naive timestamps in NEMO logs and Grafana axis defaults when RACK_WEB_GRAFANA_TIMEZONE is unset (e.g. UTC, America/Los_Angeles).",
+    },
+    {
+        "section": "external",
+        "key": "RACK_PROMETHEUS_BASIC_AUTH_USER",
+        "label": "Prometheus basic auth username",
+        "description": "Same variable as USER in ~/.prometheusrc (Bright Prometheus). Used by Utility → launch Grafana script when set together with the password; leave both empty to use PROMETHEUS_RC / default rc paths on the server.",
+    },
+    {
+        "section": "external",
+        "key": "RACK_PROMETHEUS_BASIC_AUTH_PASSWORD",
+        "label": "Prometheus basic auth password",
+        "description": "Same variable as PASSWORD in ~/.prometheusrc. Stored in server overrides like other settings; restrict file permissions on var/cache/job_env_overrides.json.",
+    },
+    {
+        "section": "external",
+        "key": "RACK_WEB_GRAFANA_URI",
+        "label": "Grafana base URL",
+        "description": "Full origin without trailing slash (e.g. https://grafana.example). Empty uses same host as the app.",
+    },
+    {
+        "section": "external",
+        "key": "RACK_WEB_GRAFANA_PORT",
+        "label": "Grafana port",
+        "description": "Port when Grafana is on the same host as the browser (default 3000).",
+    },
+    {
+        "section": "external",
+        "key": "RACK_WEB_GRAFANA_DASH_UID",
+        "label": "Grafana dashboard UID",
+        "description": "UID path segment for embedded GPU / thermal panels (default bright-gpu-per-host).",
+    },
+    {
+        "section": "external",
+        "key": "RACK_WEB_GRAFANA_DASH_SLUG",
+        "label": "Grafana dashboard slug",
+        "description": "Slug in Grafana URLs for the embedded dashboard (default bright-gpu-thermal-and-power).",
+    },
+    {
+        "section": "external",
+        "key": "RACK_WEB_GRAFANA_TIMEZONE",
+        "label": "Grafana timezone query",
+        "description": "browser, utc, or an IANA zone. When empty, the server uses the same zone as RACK_PROMETHEUS_LOG_TIMESTAMP_TZ.",
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_STATUS_SCRIPT",
+        "label": "rack_status.sh path",
+        "description": "Main rack status script (native table and probe-json).",
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_STATUS_EXTRA_ARGS",
+        "label": "rack_status.sh extra args",
+        "description": "Extra arguments appended to rack_status.sh (shell-split).",
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_PARSER_SCRIPT",
+        "label": "parser.sh path",
+        "description": "Log parser script for /api/parser-results.",
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_PARSER_EXTRA_ARGS",
+        "label": "parser.sh extra args",
+        "description": "Extra arguments before --json (shell-split).",
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_PARSER_EXPORT_GLOB",
+        "label": "Parser export glob",
+        "description": "Basename glob under log dir for exports (default *.txt).",
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_PARSER_TIMEOUT",
+        "label": "Parser timeout (seconds)",
+        "description": "Timeout for parser.sh --json in the parser API.",
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_PARSER_EXCEL_REPORT_DIR",
+        "label": "Excel report directory",
+        "description": "Output directory for Excel exports (optional).",
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_MULTIRACK_SITE_PREFIX",
+        "label": "Multirack site prefix",
+        "description": "Pod id for multirack log names without pN- (default p5).",
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_MULTIRACK_VALIDATION_TEST",
+        "label": "Multirack probe VALIDATION_TEST",
+        "description": "Default VALIDATION_TEST for multirack probe-json (e.g. nccl_all_reduce).",
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_CMSH",
+        "label": "cmsh executable",
+        "description": "Bright cmsh command (power reset, probes, cluster overview).",
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_CMSH_DS_NODE_PATTERN",
+        "label": "cmsh ds — tray node regex (default mode)",
+        "description": (
+            "Used when TOKEN and FIND/PARSE are empty. One regex, ``finditer`` per ds line: **three** captures — "
+            "(1) full hostname, (2) rack id ``pN-rMM`` (``p5-r1`` and ``p5-r01`` merge to the rack list form), "
+            "(3) tray token (digits get compact ranges; other labels stay comma-separated). Default "
+            "``(?i)((p\\\\d+-r\\\\d+)-ct(\\\\d+))``. Optional simpler modes below override this."
+        ),
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_CMSH_DS_NODE_TOKEN_PATTERN",
+        "label": "cmsh ds — hostname token regex (optional)",
+        "description": (
+            "If set (and FIND/PARSE below are both empty), one **capture** per hostname; rack/tray split at the "
+            "last ``-ct`` after lowercasing (Bright ``p5-r01-ct18``, or ``CBR01-DH01-SVR-ctCN010213``). "
+            "Example token regex: ``(?i)(\\\\b[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+-ct[A-Za-z0-9]+\\\\b)``."
+        ),
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_CMSH_DS_NODE_FIND_PATTERN",
+        "label": "cmsh ds — FIND pattern (legacy, optional)",
+        "description": (
+            "Must be used with PARSE. ``finditer`` on each ds line; first capture (or whole match) is each node "
+            "token, then PARSE extracts rack and tray. Same as older two-variable split."
+        ),
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_CMSH_DS_NODE_PARSE_PATTERN",
+        "label": "cmsh ds — PARSE pattern (legacy, optional)",
+        "description": (
+            "Used with FIND: ``match`` on each token; **two** captures — (1) rack id, (2) tray label. "
+            "Example PARSE: ``(?i)^(p\\\\d+-r\\\\d+)-ct(\\\\d+)$``."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_VALIDATION_CT_RANGE",
+        "label": "Validation CT range",
+        "description": "Tray indices inside pNN-rMM-ct[…] for singlerack validation (e.g. 01-18).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_VALIDATION_SCRIPT",
+        "label": "Singlerack validation script",
+        "description": "Path to run_singlerack.sh (or site equivalent).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_VALIDATION_TIMEOUT",
+        "label": "Validation timeout (seconds)",
+        "description": "Max wall time for synchronous / async singlerack validation.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "NEMO_SQSH_SRC",
+        "label": "NEMO container .sqsh path",
+        "description": "Enroot image path or URI fragment; used for Setup defaults and skip checks.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NEMO_XRACK_SCRIPT",
+        "label": "Multinode NEMO script",
+        "description": "Path to run-nemo-xrack.sh.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NEMO_XRACK_TIMEOUT",
+        "label": "NEMO xrack timeout (seconds)",
+        "description": "Background job timeout for multinode NEMO.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_LLAMA_SCRIPT",
+        "label": "Llama script",
+        "description": "Path to run-llama.sh.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_LLAMA_TIMEOUT",
+        "label": "Llama timeout (seconds)",
+        "description": "Background job timeout for Llama runs.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_MNUBERGEMM_STRESS_SCRIPT",
+        "label": "MNU Bergemm stress script",
+        "description": "Path to run_mnubergemm_stress.sh.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_MNUBERGEMM_CUDA_MAJOR",
+        "label": "MNUBERGEMM stress CUDA major",
+        "description": "12 or 13; selects HPC-X unpack under NVIS_WORKSPACE_DIR (default 13). Falls back to RACK_NVLOOM_CUDA_MAJOR.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_MNUBERGEMM_PARTITION",
+        "label": "MNUBERGEMM stress Slurm partition",
+        "description": "If set, run_mnubergemm_stress.sh passes sbatch -p … (omit for site default).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NVLOOM_SINGLERACK_SCRIPT",
+        "label": "nvloom singlerack driver script",
+        "description": "Path to run_nvloom_singlerack.sh (Slurm sbatch --wait; logs under log_dir/nvloom/).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NVLOOM_SINGLERACK_TIMEOUT",
+        "label": "nvloom singlerack timeout (seconds)",
+        "description": "Background job timeout for nvloom Slurm wrapper (sbatch --wait).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NVLOOM_RACK_SAMPLES",
+        "label": "nvloom gpuToRackSamples",
+        "description": "Integer 1–256 for --gpuToRackSamples (default 5). Passed as RACK_SAMPLES.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_SCRIPT",
+        "label": "ClusterKit singlerack driver script",
+        "description": "Path to run_clusterkit.sh (Slurm; logs under log_dir/clusterkit/).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_TIMEOUT",
+        "label": "ClusterKit singlerack timeout (seconds)",
+        "description": "Background job timeout for ClusterKit Slurm wrapper (default 14400).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_PARTITION",
+        "label": "ClusterKit Slurm partition",
+        "description": "If set, run_clusterkit.sh passes sbatch -p … (omit for site default).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_CUDA_MAJOR",
+        "label": "ClusterKit CUDA major (HPC-X bundle)",
+        "description": "12 or 13; passed as CUDA_MAJ (default 13). Falls back to RACK_NVLOOM_CUDA_MAJOR.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "NVIS_WORKSPACE_DIR",
+        "label": "Workspace root (HPC-X / CUDA / nvloom)",
+        "description": "Absolute path; default /home/cmsupport/workspace. Used by nvloom singlerack, MNUBERGEMM stress, and install scripts (TOPDIR).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_WORKSPACE_DIR",
+        "label": "Workspace root (alias)",
+        "description": "Optional; if NVIS_WORKSPACE_DIR is unset, this sets the same workspace path.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NVLOOM_CUDA_MAJOR",
+        "label": "nvloom CUDA major (HPC-X bundle)",
+        "description": '12 or 13; selects hpcx unpack name under the workspace (default 13). Passed as CUDA_MAJ.',
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_SYSINFO_SCRIPT",
+        "label": "sysinfo / Precheck script",
+        "description": "Path to sysinfo.sh.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_SYSINFO_TIMEOUT",
+        "label": "sysinfo timeout (seconds)",
+        "description": "Timeout for Precheck / sysinfo streams.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_HW_CHECK_SCRIPT",
+        "label": "Hardware check (pdsh) script",
+        "description": "Path to hw_check_pdsh.sh when set; default uses bundled script.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_GPU_RESET_SCRIPT",
+        "label": "GPU reset script",
+        "description": "Site GPU reset script path.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NVSWITCH_AUDIT_SCRIPT",
+        "label": "NVSwitch audit script",
+        "description": "Path to nvswitches_rack_audit.sh.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NVSWITCH_SDN_RESET_SCRIPT",
+        "label": "NVSwitch SDN reset script",
+        "description": "Path to nvswitch_sdn_reset.sh.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NVSWITCH_SYSTEM_RESET_SCRIPT",
+        "label": "NVSwitch system reset script",
+        "description": "Path to nvswitch_system_reset.sh.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_IMEX_RESET_SCRIPT",
+        "label": "IMEX reset script",
+        "description": "Path to imex_reset.sh.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_IMEX_CHECK_SCRIPT",
+        "label": "IMEX check script",
+        "description": "Path to imex_check.sh.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NVLMAPPER_REPORTS_BASE",
+        "label": "NVLMapper reports base",
+        "description": "Directory under which NVLMapper stages per-rack work.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "NVLMAPPER_RC",
+        "label": "NVLMapper credentials file",
+        "description": (
+            "Path to key=value file (username= / user=, password=) merged into generated YAML by run_nvlmapper.sh. "
+            "Default /root/.nvlmapperrc. Ignored when NVLMAPPER_USERNAME and NVLMAPPER_PASSWORD are both set."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "NVLMAPPER_USERNAME",
+        "label": "NVLMapper username",
+        "description": (
+            "BMC/switch user for nvlmapper when not using a credentials file alone. When set together with "
+            "NVLMAPPER_PASSWORD, overrides NVLMAPPER_RC file contents for the merge step."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "NVLMAPPER_PASSWORD",
+        "label": "NVLMapper password",
+        "description": "Password paired with NVLMAPPER_USERNAME. Stored in server overrides like Prometheus auth; restrict permissions on var/cache/job_env_overrides.json.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_SLURM_DRAIN_REASON",
+        "label": "Slurm drain reason",
+        "description": "Reason string passed to scontrol drain (default admin).",
+    },
+]
+_JOB_ENV_ALLOWED_KEYS: frozenset[str] = frozenset(d["key"] for d in JOB_ENV_UI_DEFINITIONS)
+# Snapshot of process env for allowed keys at import (used when an override is cleared in Settings).
+_JOB_ENV_SHELL_BASELINE: dict[str, str | None] = {k: os.environ.get(k) for k in _JOB_ENV_ALLOWED_KEYS}
+# Changes to these keys affect the cached native / shell ``/api/status`` payload; others skip a full bust.
+_STATUS_ROW_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "RACK_STATUS_SCRIPT",
+        "RACK_STATUS_EXTRA_ARGS",
+        "RACK_CMSH",
+        "RACK_CMSH_DS_NODE_PATTERN",
+        "RACK_CMSH_DS_NODE_TOKEN_PATTERN",
+        "RACK_CMSH_DS_NODE_FIND_PATTERN",
+        "RACK_CMSH_DS_NODE_PARSE_PATTERN",
+        "RACK_MULTIRACK_SITE_PREFIX",
+        "RACK_MULTIRACK_VALIDATION_TEST",
+        "RACK_PARSER_SCRIPT",
+        "RACK_PARSER_EXTRA_ARGS",
+        "RACK_PARSER_EXPORT_GLOB",
+        "RACK_PARSER_TIMEOUT",
+    }
+)
+_job_env_file_lock = threading.Lock()
+_JOB_ENV_OVERRIDES_CACHE: dict[str, str] | None = None
+_JOB_ENV_OVERRIDES_MTIME: float | None = None
+_JOB_ENV_BOOTSTRAP_DONE = False
+
+
+def _materialize_job_env_overrides_into_os_environ(ov: dict[str, str]) -> None:
+    """Copy dashboard JSON overrides into ``os.environ`` so ``native_status`` / ``host_exec`` inherit them."""
+    for k in _JOB_ENV_ALLOWED_KEYS:
+        if k in ov and ov[k].strip():
+            os.environ[k] = ov[k].strip()[:8192]
+        else:
+            base = _JOB_ENV_SHELL_BASELINE.get(k)
+            if base is not None:
+                os.environ[k] = base
+            else:
+                os.environ.pop(k, None)
+
+
+def _job_env_status_payload_needs_rebuild(before: dict[str, str], after: dict[str, str]) -> bool:
+    for k in _STATUS_ROW_ENV_KEYS:
+        if (before.get(k) or "").strip() != (after.get(k) or "").strip():
+            return True
+    return False
+
+
+def _job_env_overrides_path() -> Path:
+    return (APP_DIR / "var" / "cache" / "job_env_overrides.json").resolve()
+
+
+def _job_env_flock_path() -> Path:
+    """Cross-process lock so Gunicorn workers / NFS do not read partially updated overrides."""
+    return (_job_env_overrides_path().parent / "job_env_overrides.flock").resolve()
+
+
+@contextmanager
+def _job_env_flock(shared: bool = True):
+    """``shared=True`` (LOCK_SH) for readers, ``False`` (LOCK_EX) for writers."""
+    p = _job_env_flock_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    f = open(p, "a+", encoding="utf-8")
+    locked = False
+    try:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+            locked = True
+        except (OSError, AttributeError):
+            pass
+        yield
+    finally:
+        if locked:
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        try:
+            f.close()
+        except OSError:
+            pass
+
+
+_TOOL_EXCLUSIVE_LOCK_FILES: dict[str, str] = {
+    "download_containers": "tools_download_containers.flock",
+    "install_hpcx_workspace": "tools_install_hpcx_workspace.flock",
+    "install_cuda_nccl_workspace": "tools_install_cuda_nccl_workspace.flock",
+    "install_nvloom_workspace": "tools_install_nvloom_workspace.flock",
+    "launch_grafana_bright_prometheus": "tools_launch_grafana_bright_prometheus.flock",
+}
+
+_TOOL_EXCLUSIVE_LOCK_BUSY_MSG: dict[str, str] = {
+    "download_containers": (
+        "Another session is already running the NEMO container download. Wait for it to finish."
+    ),
+    "install_hpcx_workspace": (
+        "Another session is already running the Mellanox HPC-X workspace install. Wait for it to finish."
+    ),
+    "install_cuda_nccl_workspace": (
+        "Another session is already running the CUDA toolkit / NCCL workspace install. Wait for it to finish."
+    ),
+    "install_nvloom_workspace": (
+        "Another session is already running the nvloom workspace install. Wait for it to finish."
+    ),
+    "launch_grafana_bright_prometheus": (
+        "Another session is already running the Grafana + Prometheus launch script. Wait for it to finish."
+    ),
+}
+
+
+class _ToolsExclusiveLockBusyError(Exception):
+    """Non-blocking flock(2) LOCK_EX failed — another process/session holds this Utility lock."""
+
+
+def _tools_exclusive_lock_path(lock_name: str) -> Path:
+    fname = _TOOL_EXCLUSIVE_LOCK_FILES.get(lock_name)
+    if not fname:
+        raise ValueError(f"unknown tools lock: {lock_name!r}")
+    p = (APP_DIR / "var" / "cache" / fname).resolve()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+@contextmanager
+def _tools_exclusive_lock(lock_name: str):
+    """Hold an advisory exclusive flock for one Utility script (cross-process / multi-worker)."""
+    path = _tools_exclusive_lock_path(lock_name)
+    fh = open(path, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        raise _ToolsExclusiveLockBusyError(_TOOL_EXCLUSIVE_LOCK_BUSY_MSG.get(lock_name, "This tool is already running."))
+    try:
+        yield
+    finally:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            fh.close()
+        except OSError:
+            pass
+
+
+def _tools_try_acquire_exclusive_flock_for_stream(lock_name: str):
+    """Return ``(fh, None)`` on success, or ``(None, busy_message)`` if another holder has LOCK_EX."""
+    path = _tools_exclusive_lock_path(lock_name)
+    fh = open(path, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        try:
+            fh.close()
+        except OSError:
+            pass
+        return None, _TOOL_EXCLUSIVE_LOCK_BUSY_MSG.get(lock_name, "This tool is already running.")
+    return fh, None
+
+
+def _tools_release_exclusive_flock_fh(fh) -> None:
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        fh.close()
+    except OSError:
+        pass
+
+
+def _read_job_env_file_raw(p: Path) -> dict[str, str]:
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+    out: dict[str, str] = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, v in raw.items():
+        if k not in _JOB_ENV_ALLOWED_KEYS:
+            continue
+        if isinstance(v, str) and v.strip():
+            out[k] = v.strip()[:8192]
+        elif v is not None and str(v).strip():
+            out[k] = str(v).strip()[:8192]
+    return out
+
+
+def _job_env_overrides_load() -> dict[str, str]:
+    """Effective overrides saved from Settings (merged on top of process env for jobs)."""
+    global _JOB_ENV_OVERRIDES_CACHE, _JOB_ENV_OVERRIDES_MTIME
+    p = _job_env_overrides_path()
+    # Keep native_status on the same file as this process (covers forked workers / odd env).
+    os.environ["NVIS_JOB_ENV_OVERRIDES_FILE"] = str(p)
+    with _job_env_flock(shared=True):
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            with _job_env_file_lock:
+                _JOB_ENV_OVERRIDES_CACHE = {}
+                _JOB_ENV_OVERRIDES_MTIME = None
+            _materialize_job_env_overrides_into_os_environ({})
+            return {}
+        with _job_env_file_lock:
+            if _JOB_ENV_OVERRIDES_CACHE is not None and _JOB_ENV_OVERRIDES_MTIME == mtime:
+                return dict(_JOB_ENV_OVERRIDES_CACHE)
+        data = _read_job_env_file_raw(p)
+        with _job_env_file_lock:
+            _JOB_ENV_OVERRIDES_CACHE = data
+            _JOB_ENV_OVERRIDES_MTIME = mtime
+        _materialize_job_env_overrides_into_os_environ(data)
+        return dict(data)
+
+
+def _job_env_overrides_invalidate_cache() -> None:
+    global _JOB_ENV_OVERRIDES_CACHE, _JOB_ENV_OVERRIDES_MTIME
+    with _job_env_file_lock:
+        _JOB_ENV_OVERRIDES_CACHE = None
+        _JOB_ENV_OVERRIDES_MTIME = None
+
+
+def _job_env_overrides_write(data: dict[str, str], *, bust_status_cache: bool = False) -> dict[str, str]:
+    p = _job_env_overrides_path()
+    os.environ["NVIS_JOB_ENV_OVERRIDES_FILE"] = str(p)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    clean = {k: v[:8192] for k, v in data.items() if k in _JOB_ENV_ALLOWED_KEYS and v.strip()}
+    tmp = p.with_suffix(".tmp")
+    with _job_env_flock(shared=False):
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(clean, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, p)
+        _job_env_overrides_invalidate_cache()
+        _materialize_job_env_overrides_into_os_environ(clean)
+    try:
+        native_status.invalidate_job_env_file_cache()
+    except Exception:
+        pass
+    if bust_status_cache:
+        _rack_status_cache_clear_all()
+    return clean
+
+
+def _eget(name: str, default: str | None = None) -> str | None:
+    """Environment getter with dashboard Settings overrides (job, validation, and dashboard keys)."""
+    ov = _job_env_overrides_load()
+    if name in ov and ov[name].strip():
+        return ov[name].strip()
+    return os.environ.get(name, default)
+
+
+def _subprocess_env(updates: dict[str, str] | None = None) -> dict[str, str]:
+    out = os.environ.copy()
+    out.update(_job_env_overrides_load())
+    if updates:
+        out.update(updates)
+    return out
+
 
 _PHYSICAL_RF0_IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
 _PHYSICAL_RF0_TRAY_HOST_RE = re.compile(r"^p[0-9]+-r[0-9]+-ct[0-9]+$", re.IGNORECASE)
@@ -233,7 +889,7 @@ def _validation_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, disp
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=os.environ.copy())
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env())
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -289,8 +945,17 @@ def _stress_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
     threading.Thread(target=_purge, daemon=True).start()
 
 
-def _stress_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_cmd: str) -> None:
-    """Run mnubergemm stress bash in a background thread; update _stress_jobs[job_id]."""
+def _stress_worker(
+    job_id: str,
+    cmd: list[str],
+    cwd: str,
+    timeout: int,
+    display_cmd: str,
+    *,
+    error_label: str = "mnubergemm stress script",
+    env_updates: dict[str, str] | None = None,
+) -> None:
+    """Run a stress-style bash driver (mnubergemm, nvloom, …) in a background thread; update _stress_jobs[job_id]."""
 
     def _patch(**kwargs: object) -> None:
         with _stress_jobs_lock:
@@ -303,7 +968,7 @@ def _stress_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=os.environ.copy())
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates))
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -318,7 +983,7 @@ def _stress_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_
                 stdout="",
                 stderr=f"timeout after {timeout}s",
                 ok=False,
-                error="mnubergemm stress script timed out",
+                error=f"{error_label} timed out",
                 finished_at=datetime.now(timezone.utc).isoformat(),
                 command_display=display_cmd,
             )
@@ -332,7 +997,7 @@ def _stress_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_
             stdout=(out or "").strip(),
             stderr=(err or "").strip(),
             ok=ok,
-            error=None if ok else "mnubergemm stress script exited non-zero",
+            error=None if ok else f"{error_label} exited non-zero",
             finished_at=datetime.now(timezone.utc).isoformat(),
             command_display=display_cmd,
         )
@@ -373,7 +1038,7 @@ def _xrack_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=os.environ.copy())
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env())
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -443,7 +1108,7 @@ def _llama_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=os.environ.copy())
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env())
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -755,16 +1420,31 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _job_env_int(name: str, default: int) -> int:
+    """Like ``_env_int`` but prefers values saved under Settings → job environment."""
+    ov = _job_env_overrides_load()
+    if name in ov:
+        raw = ov[name]
+        if raw and str(raw).strip():
+            try:
+                return int(str(raw).strip(), 10)
+            except ValueError:
+                return default
+    return _env_int(name, default)
+
+
 def _truthy_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _project_name() -> str:
     """Optional label appended to page titles (``PROJECT_NAME`` or ``RACK_WEB_PROJECT_NAME``)."""
-    for key in ("PROJECT_NAME", "RACK_WEB_PROJECT_NAME"):
-        v = (os.environ.get(key) or "").strip()
-        if v:
-            return v.replace("\n", " ").replace("\r", " ").strip()
+    v = (_eget("RACK_WEB_PROJECT_NAME") or "").strip()
+    if v:
+        return v.replace("\n", " ").replace("\r", " ").strip()
+    v = (os.environ.get("PROJECT_NAME") or "").strip()
+    if v:
+        return v.replace("\n", " ").replace("\r", " ").strip()
     return ""
 
 
@@ -891,7 +1571,7 @@ def _pam_verify_subprocess(username: str, password: str, service: str) -> bool:
             input=payload.encode("utf-8"),
             capture_output=True,
             timeout=90,
-            env=os.environ.copy(),
+            env=_subprocess_env(),
         )
     except FileNotFoundError:
         raise RuntimeError(
@@ -945,6 +1625,14 @@ def _pam_verify(username: str, password: str, service: str) -> bool:
 
 @app.before_request
 def _require_dashboard_auth():
+    global _JOB_ENV_BOOTSTRAP_DONE
+    if not _JOB_ENV_BOOTSTRAP_DONE:
+        try:
+            _job_env_overrides_load()
+        except Exception:
+            _logger.exception("bootstrap job env overrides load failed")
+        else:
+            _JOB_ENV_BOOTSTRAP_DONE = True
     if not _auth_enabled():
         return None
     if request.endpoint in ("login", "static"):
@@ -962,21 +1650,27 @@ def _require_dashboard_auth():
     return redirect(url_for("login"))
 
 
+@app.after_request
+def _api_json_no_store(response):
+    """Avoid stale dashboard JSON behind browsers or reverse proxies."""
+    if request.path.startswith("/api/") and response.content_type and "application/json" in response.content_type:
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
 def _script_path() -> Path:
-    p = os.environ.get("RACK_STATUS_SCRIPT", str(DEFAULT_SCRIPT))
+    p = _eget("RACK_STATUS_SCRIPT", str(DEFAULT_SCRIPT)) or str(DEFAULT_SCRIPT)
     return Path(p).resolve()
 
 
 def _parser_path() -> Path:
-    p = os.environ.get(
-        "RACK_PARSER_SCRIPT",
-        str(SCRIPTS_DIR / "parser.sh"),
-    )
+    p = _eget("RACK_PARSER_SCRIPT", str(SCRIPTS_DIR / "parser.sh")) or str(SCRIPTS_DIR / "parser.sh")
     return Path(p).resolve()
 
 
 def _parser_extra_args() -> list[str]:
-    extra = os.environ.get("RACK_PARSER_EXTRA_ARGS", "")
+    extra = _eget("RACK_PARSER_EXTRA_ARGS", "") or ""
     if not extra.strip():
         return []
     return shlex.split(extra)
@@ -984,7 +1678,7 @@ def _parser_extra_args() -> list[str]:
 
 def _parser_export_glob() -> str:
     """Basename-only glob under log_dir root for exports (default *.txt)."""
-    raw = (os.environ.get("RACK_PARSER_EXPORT_GLOB") or "*.txt").strip()
+    raw = (_eget("RACK_PARSER_EXPORT_GLOB") or "*.txt").strip()
     if not raw or "/" in raw or "\\" in raw or ".." in raw:
         return "*.txt"
     return raw
@@ -1026,7 +1720,7 @@ def _is_multirack_log_basename(name: str) -> bool:
 
 def _multirack_site_prefix() -> str:
     """Pod id for ``r[01-04]``-style names without ``pN-`` (e.g. ``p5``). See RACK_MULTIRACK_SITE_PREFIX (defaults to p5)."""
-    raw = os.environ.get("RACK_MULTIRACK_SITE_PREFIX")
+    raw = _eget("RACK_MULTIRACK_SITE_PREFIX")
     if raw is None or not str(raw).strip():
         return "p5"
     return str(raw).strip().lower()
@@ -1271,6 +1965,24 @@ def find_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
     return out
 
 
+def find_nvloom_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
+    """Newest-first paths to ``*NVLOOM-<rack>-*.txt`` under ``log_dir/nvloom`` (and ``nvloom/failed``)."""
+    try:
+        rk = _normalize_rack_id(rack)
+    except ValueError:
+        return []
+    pat = f"*NVLOOM-{rk}-*.txt"
+    out: list[Path] = []
+    for base in (log_dir / "nvloom", log_dir / "nvloom" / "failed"):
+        if base.is_dir():
+            out.extend(p for p in base.glob(pat) if p.is_file())
+    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return out
+
+
+_NVLOOM_HEATMAPS_LOG_MAX_BYTES = 40 * 1024 * 1024
+
+
 def pick_log_for_rack(log_dir: Path, rack: str, job_id: str | None) -> Path | None:
     cands = find_log_paths_for_rack(log_dir, rack)
     if not cands:
@@ -1395,7 +2107,7 @@ def _zoneinfo_for_log_parsing(override_name: str | None) -> tzinfo:
             return ZoneInfo(on)
         except Exception:
             pass
-    raw = (os.environ.get("RACK_PROMETHEUS_LOG_TIMESTAMP_TZ") or "UTC").strip() or "UTC"
+    raw = (_eget("RACK_PROMETHEUS_LOG_TIMESTAMP_TZ") or "UTC").strip() or "UTC"
     if raw.upper() in ("UTC", "GMT", "Z", "UCT"):
         return ZoneInfo("UTC")
     try:
@@ -1534,21 +2246,21 @@ def _nemotron_row_for_rack(
 
 
 def _grafana_dash_uid() -> str:
-    return (os.environ.get("RACK_WEB_GRAFANA_DASH_UID") or "bright-gpu-per-host").strip() or "bright-gpu-per-host"
+    return (_eget("RACK_WEB_GRAFANA_DASH_UID") or "bright-gpu-per-host").strip() or "bright-gpu-per-host"
 
 
 def _grafana_dash_slug() -> str:
-    s = (os.environ.get("RACK_WEB_GRAFANA_DASH_SLUG") or "bright-gpu-thermal-and-power").strip()
+    s = (_eget("RACK_WEB_GRAFANA_DASH_SLUG") or "bright-gpu-thermal-and-power").strip()
     return s or "bright-gpu-thermal-and-power"
 
 
 def _rack_web_grafana_uri() -> str:
-    u = (os.environ.get("RACK_WEB_GRAFANA_URI") or "").strip()
+    u = (_eget("RACK_WEB_GRAFANA_URI") or "").strip()
     return u.rstrip("/") if u else ""
 
 
 def _rack_web_grafana_port() -> str:
-    p = (os.environ.get("RACK_WEB_GRAFANA_PORT") or "3000").strip() or "3000"
+    p = (_eget("RACK_WEB_GRAFANA_PORT") or "3000").strip() or "3000"
     return p
 
 
@@ -1568,13 +2280,13 @@ def _grafana_url_timezone_param() -> str:
     When unset, use the same zone as log timestamp parsing (``RACK_PROMETHEUS_LOG_TIMESTAMP_TZ``),
     normalised to ``utc`` for UTC-like names so panel axes match server-derived ``from``/``to``.
     """
-    g = (os.environ.get("RACK_WEB_GRAFANA_TIMEZONE") or "").strip()
+    g = (_eget("RACK_WEB_GRAFANA_TIMEZONE") or "").strip()
     if g:
         gl = g.lower()
         if gl in ("browser", "utc"):
             return gl
         return g
-    logtz = (os.environ.get("RACK_PROMETHEUS_LOG_TIMESTAMP_TZ") or "UTC").strip() or "UTC"
+    logtz = (_eget("RACK_PROMETHEUS_LOG_TIMESTAMP_TZ") or "UTC").strip() or "UTC"
     if logtz.upper() in ("UTC", "GMT", "Z", "UCT"):
         return "utc"
     return logtz
@@ -1696,84 +2408,175 @@ _CT_RANGE_INNER_RE = re.compile(r"^[0-9,\-]+$")
 
 
 def _validation_ct_inner() -> str:
-    s = (os.environ.get("RACK_VALIDATION_CT_RANGE", "01-18") or "").strip()
+    s = (_eget("RACK_VALIDATION_CT_RANGE", "01-18") or "").strip()
     if not s or not _CT_RANGE_INNER_RE.match(s):
         return "01-18"
     return s
 
 
 def _validation_script_path() -> Path:
-    p = os.environ.get(
-        "RACK_VALIDATION_SCRIPT",
-        str(SCRIPTS_DIR / "run_singlerack.sh"),
+    p = _eget("RACK_VALIDATION_SCRIPT", str(SCRIPTS_DIR / "run_singlerack.sh")) or str(
+        SCRIPTS_DIR / "run_singlerack.sh"
     )
     return Path(p).resolve()
 
 
 def _mnubergemm_stress_script_path() -> Path:
-    p = os.environ.get(
-        "RACK_MNUBERGEMM_STRESS_SCRIPT",
-        str(SCRIPTS_DIR / "run_mnubergemm_stress.sh"),
+    p = _eget("RACK_MNUBERGEMM_STRESS_SCRIPT", str(SCRIPTS_DIR / "run_mnubergemm_stress.sh")) or str(
+        SCRIPTS_DIR / "run_mnubergemm_stress.sh"
     )
     return Path(p).resolve()
 
 
-def _sysinfo_script_path() -> Path:
-    p = os.environ.get(
-        "RACK_SYSINFO_SCRIPT",
-        str(SCRIPTS_DIR / "sysinfo.sh"),
+def _nvloom_singlerack_script_path() -> Path:
+    p = _eget("RACK_NVLOOM_SINGLERACK_SCRIPT", str(SCRIPTS_DIR / "run_nvloom_singlerack.sh")) or str(
+        SCRIPTS_DIR / "run_nvloom_singlerack.sh"
     )
+    return Path(p).resolve()
+
+
+def _clusterkit_script_path() -> Path:
+    p = _eget("RACK_CLUSTERKIT_SCRIPT", str(SCRIPTS_DIR / "run_clusterkit.sh")) or str(SCRIPTS_DIR / "run_clusterkit.sh")
+    return Path(p).resolve()
+
+
+def _clusterkit_product_line_for_job(body: dict) -> str:
+    """Prefer POST product_line, then saved cluster dashboard metadata, then process env."""
+    v = body.get("product_line")
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    try:
+        meta = read_cluster_dashboard_metadata()
+        pl = (meta.get("product_line") or "").strip()
+        if pl:
+            return pl
+    except Exception:
+        pass
+    return (_eget("RACK_CLUSTER_PRODUCT_LINE") or _eget("RACK_PRODUCT_LINE") or "").strip()
+
+
+def _nvis_workspace_dir_effective() -> str:
+    """Default workspace root for HPC-X / CUDA / nvloom install layout (same as bin/scripts/workspace-dir-common.sh)."""
+    return (_eget("NVIS_WORKSPACE_DIR") or _eget("RACK_WORKSPACE_DIR") or "").strip() or "/home/cmsupport/workspace"
+
+
+def _sysinfo_script_path() -> Path:
+    p = _eget("RACK_SYSINFO_SCRIPT", str(SCRIPTS_DIR / "sysinfo.sh")) or str(SCRIPTS_DIR / "sysinfo.sh")
     return Path(p).resolve()
 
 
 def _nvswitches_rack_audit_script_path() -> Path:
-    p = os.environ.get(
-        "RACK_NVSWITCH_AUDIT_SCRIPT",
-        str(SCRIPTS_DIR / "nvswitches_rack_audit.sh"),
+    p = _eget("RACK_NVSWITCH_AUDIT_SCRIPT", str(SCRIPTS_DIR / "nvswitches_rack_audit.sh")) or str(
+        SCRIPTS_DIR / "nvswitches_rack_audit.sh"
     )
     return Path(p).resolve()
 
 
 def _nvswitch_sdn_reset_script_path() -> Path:
-    p = os.environ.get(
-        "RACK_NVSWITCH_SDN_RESET_SCRIPT",
-        str(SCRIPTS_DIR / "nvswitch_sdn_reset.sh"),
+    p = _eget("RACK_NVSWITCH_SDN_RESET_SCRIPT", str(SCRIPTS_DIR / "nvswitch_sdn_reset.sh")) or str(
+        SCRIPTS_DIR / "nvswitch_sdn_reset.sh"
     )
     return Path(p).resolve()
 
 
 def _nvswitch_system_reset_script_path() -> Path:
-    p = os.environ.get(
-        "RACK_NVSWITCH_SYSTEM_RESET_SCRIPT",
-        str(SCRIPTS_DIR / "nvswitch_system_reset.sh"),
+    p = _eget("RACK_NVSWITCH_SYSTEM_RESET_SCRIPT", str(SCRIPTS_DIR / "nvswitch_system_reset.sh")) or str(
+        SCRIPTS_DIR / "nvswitch_system_reset.sh"
     )
     return Path(p).resolve()
 
 
 def _imex_reset_script_path() -> Path:
-    p = os.environ.get(
-        "RACK_IMEX_RESET_SCRIPT",
-        str(SCRIPTS_DIR / "imex_reset.sh"),
+    p = _eget("RACK_IMEX_RESET_SCRIPT", str(SCRIPTS_DIR / "imex_reset.sh")) or str(
+        SCRIPTS_DIR / "imex_reset.sh"
     )
     return Path(p).resolve()
 
 
 def _imex_check_script_path() -> Path:
-    p = os.environ.get(
-        "RACK_IMEX_CHECK_SCRIPT",
-        str(SCRIPTS_DIR / "imex_check.sh"),
+    p = _eget("RACK_IMEX_CHECK_SCRIPT", str(SCRIPTS_DIR / "imex_check.sh")) or str(
+        SCRIPTS_DIR / "imex_check.sh"
     )
     return Path(p).resolve()
 
 
 def _nemo_xrack_script_path() -> Path:
-    p = os.environ.get("RACK_NEMO_XRACK_SCRIPT", str(SCRIPTS_DIR / "run-nemo-xrack.sh"))
+    p = _eget("RACK_NEMO_XRACK_SCRIPT", str(SCRIPTS_DIR / "run-nemo-xrack.sh")) or str(
+        SCRIPTS_DIR / "run-nemo-xrack.sh"
+    )
     return Path(p).resolve()
 
 
 def _run_llama_script_path() -> Path:
-    p = os.environ.get("RACK_LLAMA_SCRIPT", str(SCRIPTS_DIR / "run-llama.sh"))
+    p = _eget("RACK_LLAMA_SCRIPT", str(SCRIPTS_DIR / "run-llama.sh")) or str(SCRIPTS_DIR / "run-llama.sh")
     return Path(p).resolve()
+
+
+def _job_env_effective_values() -> dict[str, str]:
+    """Resolved values for Settings → job environment (same as runtime after overrides)."""
+    ex = _extra_script_args()
+    px = _parser_extra_args()
+    return {
+        "RACK_STATUS_BACKGROUND_INTERVAL_SEC": str(_rack_status_background_interval_sec()),
+        "RACK_PROMETHEUS_LOG_TIMESTAMP_TZ": (_eget("RACK_PROMETHEUS_LOG_TIMESTAMP_TZ") or "UTC").strip() or "UTC",
+        "RACK_WEB_GRAFANA_URI": _rack_web_grafana_uri(),
+        "RACK_WEB_GRAFANA_PORT": _rack_web_grafana_port(),
+        "RACK_WEB_GRAFANA_DASH_UID": _grafana_dash_uid(),
+        "RACK_WEB_GRAFANA_DASH_SLUG": _grafana_dash_slug(),
+        "RACK_WEB_GRAFANA_TIMEZONE": (_eget("RACK_WEB_GRAFANA_TIMEZONE") or "").strip(),
+        "RACK_PROMETHEUS_BASIC_AUTH_USER": (_eget("RACK_PROMETHEUS_BASIC_AUTH_USER") or "").strip(),
+        "RACK_PROMETHEUS_BASIC_AUTH_PASSWORD": (_eget("RACK_PROMETHEUS_BASIC_AUTH_PASSWORD") or "").strip(),
+        "RACK_WEB_PROJECT_NAME": (_eget("RACK_WEB_PROJECT_NAME") or "").strip(),
+        "RACK_VALIDATION_CT_RANGE": _validation_ct_inner(),
+        "RACK_VALIDATION_SCRIPT": str(_validation_script_path()),
+        "RACK_VALIDATION_TIMEOUT": str(max(30, _job_env_int("RACK_VALIDATION_TIMEOUT", 600))),
+        "RACK_STATUS_SCRIPT": str(_script_path()),
+        "RACK_STATUS_EXTRA_ARGS": shlex.join(ex) if ex else "",
+        "RACK_PARSER_SCRIPT": str(_parser_path()),
+        "RACK_PARSER_EXTRA_ARGS": shlex.join(px) if px else "",
+        "RACK_PARSER_EXPORT_GLOB": _parser_export_glob(),
+        "RACK_PARSER_TIMEOUT": str(max(30, _job_env_int("RACK_PARSER_TIMEOUT", 300))),
+        "RACK_PARSER_EXCEL_REPORT_DIR": (_eget("RACK_PARSER_EXCEL_REPORT_DIR") or "").strip(),
+        "RACK_MULTIRACK_SITE_PREFIX": _multirack_site_prefix(),
+        "RACK_MULTIRACK_VALIDATION_TEST": (_eget("RACK_MULTIRACK_VALIDATION_TEST") or "nccl_all_reduce").strip(),
+        "RACK_CMSH": (_eget("RACK_CMSH", "cmsh") or "cmsh").strip(),
+        "RACK_CMSH_DS_NODE_PATTERN": native_status.cmsh_ds_node_pattern_effective(),
+        "RACK_CMSH_DS_NODE_TOKEN_PATTERN": (_eget("RACK_CMSH_DS_NODE_TOKEN_PATTERN") or "").strip(),
+        "RACK_CMSH_DS_NODE_FIND_PATTERN": (_eget("RACK_CMSH_DS_NODE_FIND_PATTERN") or "").strip(),
+        "RACK_CMSH_DS_NODE_PARSE_PATTERN": (_eget("RACK_CMSH_DS_NODE_PARSE_PATTERN") or "").strip(),
+        "NEMO_SQSH_SRC": (_eget("NEMO_SQSH_SRC") or "").strip(),
+        "RACK_NEMO_XRACK_SCRIPT": str(_nemo_xrack_script_path()),
+        "RACK_NEMO_XRACK_TIMEOUT": str(max(300, _job_env_int("RACK_NEMO_XRACK_TIMEOUT", 7200))),
+        "RACK_LLAMA_SCRIPT": str(_run_llama_script_path()),
+        "RACK_LLAMA_TIMEOUT": str(max(120, _job_env_int("RACK_LLAMA_TIMEOUT", 7200))),
+        "RACK_MNUBERGEMM_STRESS_SCRIPT": str(_mnubergemm_stress_script_path()),
+        "RACK_MNUBERGEMM_CUDA_MAJOR": (_eget("RACK_MNUBERGEMM_CUDA_MAJOR") or _eget("RACK_NVLOOM_CUDA_MAJOR") or "13").strip(),
+        "RACK_NVLOOM_SINGLERACK_SCRIPT": str(_nvloom_singlerack_script_path()),
+        "RACK_NVLOOM_SINGLERACK_TIMEOUT": str(max(120, _job_env_int("RACK_NVLOOM_SINGLERACK_TIMEOUT", 10800))),
+        "RACK_NVLOOM_RACK_SAMPLES": str(max(1, min(256, _job_env_int("RACK_NVLOOM_RACK_SAMPLES", 5)))),
+        "RACK_CLUSTERKIT_SCRIPT": str(_clusterkit_script_path()),
+        "RACK_CLUSTERKIT_TIMEOUT": str(max(120, _job_env_int("RACK_CLUSTERKIT_TIMEOUT", 14400))),
+        "RACK_CLUSTERKIT_CUDA_MAJOR": (
+            _eget("RACK_CLUSTERKIT_CUDA_MAJOR") or _eget("RACK_NVLOOM_CUDA_MAJOR") or "13"
+        ).strip(),
+        "NVIS_WORKSPACE_DIR": _nvis_workspace_dir_effective(),
+        "RACK_WORKSPACE_DIR": (_eget("RACK_WORKSPACE_DIR") or "").strip(),
+        "RACK_NVLOOM_CUDA_MAJOR": (_eget("RACK_NVLOOM_CUDA_MAJOR") or "13").strip(),
+        "RACK_SYSINFO_SCRIPT": str(_sysinfo_script_path()),
+        "RACK_SYSINFO_TIMEOUT": str(max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800))),
+        "RACK_HW_CHECK_SCRIPT": str(_hw_check_pdsh_script_path()),
+        "RACK_GPU_RESET_SCRIPT": (_eget("RACK_GPU_RESET_SCRIPT") or "").strip(),
+        "RACK_NVSWITCH_AUDIT_SCRIPT": str(_nvswitches_rack_audit_script_path()),
+        "RACK_NVSWITCH_SDN_RESET_SCRIPT": str(_nvswitch_sdn_reset_script_path()),
+        "RACK_NVSWITCH_SYSTEM_RESET_SCRIPT": str(_nvswitch_system_reset_script_path()),
+        "RACK_IMEX_RESET_SCRIPT": str(_imex_reset_script_path()),
+        "RACK_IMEX_CHECK_SCRIPT": str(_imex_check_script_path()),
+        "RACK_NVLMAPPER_REPORTS_BASE": str(_nvlmapper_reports_base()),
+        "NVLMAPPER_RC": (_eget("NVLMAPPER_RC") or "").strip(),
+        "NVLMAPPER_USERNAME": (_eget("NVLMAPPER_USERNAME") or "").strip(),
+        "NVLMAPPER_PASSWORD": (_eget("NVLMAPPER_PASSWORD") or "").strip(),
+        "RACK_SLURM_DRAIN_REASON": (_eget("RACK_SLURM_DRAIN_REASON") or "admin").strip() or "admin",
+    }
 
 
 def _normalize_llama_nodes_spec(raw: object) -> str:
@@ -1828,8 +2631,132 @@ def _resolve_log_dir(raw: str | None) -> Path:
     return log_dir
 
 
+def _tools_check_destination_allowed(p: Path) -> None:
+    """Raise ``ValueError`` if *p* is outside allowed prefixes when enforcement is on."""
+    if _truthy_env("RACK_TOOLS_ENFORCE_ALLOWED_PREFIXES"):
+        roots = _allowed_roots()
+        if roots:
+            ok = any(str(p).startswith(str(r) + os.sep) or p == r for r in roots)
+            if not ok:
+                raise ValueError(
+                    "destination must be under one of RACK_STATUS_ALLOWED_PREFIXES "
+                    f"(enforce: RACK_TOOLS_ENFORCE_ALLOWED_PREFIXES): {[str(r) for r in roots]}"
+                )
+
+
+def _resolve_tools_destination(raw: str) -> Path:
+    """Validate an absolute destination **directory** for Tools (e.g. enroot import output).
+
+    May be an existing directory or a non-existent path that ``mkdir -p`` will create. Must not
+    be a file path or a path whose last component looks like a ``.sqsh`` file.
+    """
+    s = (raw or "").strip()
+    if not s:
+        raise ValueError("destination is required")
+    p = Path(s).expanduser()
+    if not p.is_absolute():
+        raise ValueError("destination must be an absolute path")
+    try:
+        p = p.resolve()
+    except (OSError, RuntimeError):
+        p = Path(os.path.abspath(str(p)))
+    try:
+        if p.is_file():
+            raise ValueError("destination must be a directory, not a file")
+        if not p.is_dir() and p.suffix.lower() == ".sqsh":
+            raise ValueError("destination must be a directory path, not a .sqsh file path")
+    except OSError as e:
+        raise ValueError(f"destination is not usable: {e}") from e
+    _tools_check_destination_allowed(p)
+    return p
+
+
+def _tools_destination_dir_for_status_probe(raw: str) -> Path:
+    """Directory to check for an existing NEMO ``.sqsh`` (UI may paste a file path; POST remains directory-only)."""
+    s = (raw or "").strip()
+    if not s:
+        raise ValueError("destination is required")
+    p = Path(s).expanduser()
+    if not p.is_absolute():
+        raise ValueError("destination must be an absolute path")
+    try:
+        p = p.resolve()
+    except (OSError, RuntimeError):
+        p = Path(os.path.abspath(str(p)))
+    try:
+        is_dir = p.is_dir()
+        is_file = p.is_file()
+    except OSError as e:
+        raise ValueError(f"destination is not usable: {e}") from e
+    if is_file and p.suffix.lower() != ".sqsh":
+        raise ValueError("destination must be a directory or a NEMO .sqsh file path")
+    if (is_file and p.suffix.lower() == ".sqsh") or (not is_dir and p.suffix.lower() == ".sqsh"):
+        dest_dir = p.parent
+    else:
+        dest_dir = p
+    _tools_check_destination_allowed(dest_dir)
+    return dest_dir
+
+
+def _tools_sqsh_nonempty(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _tools_find_existing_sqsh_for_skip(dest_dir: Path) -> tuple[Path | None, list[str]]:
+    """Return (path, checked_str_paths) if a non-empty .sqsh is already present under *dest_dir*."""
+    checked: list[str] = []
+
+    def try_path(p: Path) -> Path | None:
+        checked.append(str(p))
+        return p if _tools_sqsh_nonempty(p) else None
+
+    hit = try_path(dest_dir / _TOOLS_NEMO_CONTAINER_SQSH)
+    if hit:
+        return hit, checked
+
+    raw = (_eget("NEMO_SQSH_SRC") or "").strip()
+    if raw:
+        bn = Path(raw).expanduser().name
+        if bn.lower().endswith(".sqsh"):
+            hit = try_path(dest_dir / bn)
+            if hit:
+                return hit, checked
+        try:
+            nemo = Path(raw).expanduser().resolve()
+        except (OSError, ValueError, RuntimeError):
+            nemo = None
+        if nemo is not None and nemo.suffix.lower() == ".sqsh":
+            try:
+                if nemo.parent.resolve() == dest_dir.resolve():
+                    hit = try_path(nemo)
+                    if hit:
+                        return hit, checked
+            except OSError:
+                pass
+
+    return None, checked
+
+
+def _tools_download_destination_default() -> str:
+    """Directory default for Tools → download containers: parent of ``NEMO_SQSH_SRC`` when it is a .sqsh path."""
+    raw = (_eget("NEMO_SQSH_SRC") or "").strip()
+    if not raw:
+        return ""
+    p = Path(raw).expanduser()
+    try:
+        p = p.resolve()
+    except OSError:
+        p = Path(raw).expanduser()
+    if p.suffix.lower() == ".sqsh":
+        return str(p.parent) if str(p.parent) not in ("", ".") else ""
+    return str(p)
+
+
 def _extra_script_args() -> list[str]:
-    extra = os.environ.get("RACK_STATUS_EXTRA_ARGS", "")
+    extra = _eget("RACK_STATUS_EXTRA_ARGS", "") or ""
     if not extra.strip():
         return []
     return shlex.split(extra)
@@ -1967,7 +2894,7 @@ def _run_cmsh_device_power(
 
 def run_cmsh_power_reset(specs: list[str]) -> list[dict]:
     """For each tray spec: cmsh device; power … off, sleep, then device; power … on."""
-    cmsh = os.environ.get("RACK_CMSH", "cmsh")
+    cmsh = _eget("RACK_CMSH", "cmsh") or "cmsh"
     timeout = max(5, _env_int("RACK_POWER_TIMEOUT", 120))
     sleep_sec = max(0, _env_int("RACK_POWER_RESET_SLEEP_SEC", 10))
     dry = os.environ.get("RACK_POWER_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
@@ -2277,12 +3204,27 @@ def _merge_fresh_comments_into_status_payload(out: dict) -> None:
 
 
 def _merge_live_native_workers_into_status(out: dict, log_dir: Path) -> None:
-    """Refresh ``native_workers`` from in-memory state so cached /api/status shows live thread activity."""
+    """Refresh native table rows and ``native_workers`` from in-memory async workers.
+
+    Cached ``/api/status`` JSON can otherwise keep ``sinfo`` / ``ct_down_unk`` as ``?`` forever
+    (first snapshot was taken before ds/sinfo threads finished) while only worker metadata was merged.
+    """
     if _truthy_env("RACK_STATUS_USE_SHELL_TABLE"):
         return
-    snap = native_status.worker_snapshot_for_log_dir(log_dir.resolve())
+    ld = log_dir.resolve()
+    snap = native_status.worker_snapshot_for_log_dir(ld)
     if snap is not None:
         out["native_workers"] = snap
+    live = native_status.live_table_snapshot_for_log_dir(ld)
+    if live is not None:
+        out["rows"] = live["rows"]
+        out["summary"] = live["summary"]
+        fn = live.get("footnotes") or []
+        out["footnotes"] = fn
+        out["stderr"] = "\n".join(fn) if fn else ""
+        if live.get("legend"):
+            out["legend"] = live["legend"]
+        out["updated_at"] = datetime.now(timezone.utc).isoformat()
 
 
 _FOOTNOTE_MARKERS = (
@@ -2466,8 +3408,7 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
         if not script.is_file():
             raise FileNotFoundError(f"rack_status script not found: {script}")
 
-        env = os.environ.copy()
-        env["NO_COLOR"] = "1"
+        env = _subprocess_env({"NO_COLOR": "1"})
         _ensure_cmsh_rack_list_env_for_subprocess(env)
 
         tmp_pre: Path | None = None
@@ -2535,7 +3476,13 @@ def _rack_status_background_enabled() -> bool:
 
 
 def _rack_status_background_interval_sec() -> int:
-    return max(5, _env_int("RACK_STATUS_BACKGROUND_INTERVAL_SEC", 30))
+    return max(5, _job_env_int("RACK_STATUS_BACKGROUND_INTERVAL_SEC", 30))
+
+
+def _rack_status_cache_clear_all() -> None:
+    """Invalidate cached native payloads so the next ``/api/status`` uses current job-env overrides."""
+    with _rack_status_cache_lock:
+        _rack_status_cache.clear()
 
 
 def _rack_status_cache_key(log_dir: Path) -> str:
@@ -2585,10 +3532,10 @@ def _ensure_rack_status_background_thread() -> None:
 
 def _rack_status_background_loop() -> None:
     """Refresh cached rack_status for every registered ``log_dir``; one subprocess at a time."""
-    interval = _rack_status_background_interval_sec()
     first = True
     while True:
         if not first:
+            interval = max(5, _rack_status_background_interval_sec())
             time.sleep(float(interval))
         first = False
         try:
@@ -2816,7 +3763,7 @@ def api_power_on_async():
 
 
 def _gpu_reset_script_path() -> Path:
-    raw = (os.environ.get("RACK_GPU_RESET_SCRIPT") or "").strip()
+    raw = (_eget("RACK_GPU_RESET_SCRIPT") or "").strip()
     if raw:
         return Path(raw).expanduser().resolve()
     return (SCRIPTS_DIR / "gpu_reset.sh").resolve()
@@ -3000,6 +3947,9 @@ _BUG_REPORT_PDSH_PATH_RE = re.compile(
 _BUG_REPORT_BASENAME_RE = re.compile(r"^nvidia-bug-report.*\.log\.gz$", re.IGNORECASE)
 # NVLMAPPER output zips under reports/<rack>/ (staged + ./run_nvlmapper.sh from app.py).
 _NVLMAPPER_ZIP_BASENAME_RE = re.compile(r"^nvlmapper\.[A-Za-z0-9][A-Za-z0-9._-]*\.zip$", re.IGNORECASE)
+_NVLMAPPER_TABLE_BASENAME_RE = re.compile(
+    r"^[a-zA-Z0-9][a-zA-Z0-9._\-]*\.(csv|xls)$", re.IGNORECASE
+)
 # Parser Excel copies (e.g. rack-parser-export-*.xlsx) and other workbooks under reports/.
 _REPORT_EXCEL_BASENAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]*\.xlsx$", re.IGNORECASE)
 # Reserved inventory ``host`` for ``*.xlsx`` files sitting directly under the reports base dir (not in a subfolder).
@@ -3077,7 +4027,7 @@ def _bug_report_local_base_path() -> Path:
 
 
 def _local_bug_report_inventory() -> tuple[list[dict[str, str]], str | None]:
-    """Scan ``<RACK_BUG_REPORT_REMOTE_DIR>/<subdir>/`` for bug-report ``*.log.gz``, ``nvlmapper.*.zip``, and ``*.xlsx``."""
+    """Scan ``<RACK_BUG_REPORT_REMOTE_DIR>/<subdir>/`` for bug-report ``*.log.gz``, NVLMapper ``*.csv`` / ``*.xls``, ``nvlmapper.*.zip``, and ``*.xlsx``."""
     base = _bug_report_local_base_path()
     items: list[dict[str, str]] = []
     if not base.exists():
@@ -3111,6 +4061,34 @@ def _local_bug_report_inventory() -> tuple[list[dict[str, str]], str | None]:
                     if not f.is_file():
                         continue
                     if not _NVLMAPPER_ZIP_BASENAME_RE.fullmatch(f.name):
+                        continue
+                    try:
+                        f.resolve().relative_to(base)
+                    except ValueError:
+                        continue
+                    items.append({"host": sub.name, "name": f.name})
+                for f in sorted(
+                    sub.glob("*.csv"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                ):
+                    if not f.is_file():
+                        continue
+                    if not _NVLMAPPER_TABLE_BASENAME_RE.fullmatch(f.name):
+                        continue
+                    try:
+                        f.resolve().relative_to(base)
+                    except ValueError:
+                        continue
+                    items.append({"host": sub.name, "name": f.name})
+                for f in sorted(
+                    sub.glob("*.xls"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                ):
+                    if not f.is_file():
+                        continue
+                    if not _NVLMAPPER_TABLE_BASENAME_RE.fullmatch(f.name):
                         continue
                     try:
                         f.resolve().relative_to(base)
@@ -3348,7 +4326,7 @@ def api_bug_report_bundle():
 
 @app.route("/api/bug-report-inventory", methods=["GET"])
 def api_bug_report_inventory():
-    """List bug-report ``*.log.gz``, ``nvlmapper.*.zip``, and ``*.xlsx`` under ``RACK_BUG_REPORT_REMOTE_DIR`` (no pdsh)."""
+    """List bug-report ``*.log.gz``, NVLMapper ``*.csv`` / ``*.xls``, ``nvlmapper.*.zip``, and ``*.xlsx`` under ``RACK_BUG_REPORT_REMOTE_DIR`` (no pdsh)."""
     if os.environ.get("RACK_BUG_REPORT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "Bug report disabled (RACK_BUG_REPORT_DISABLED)"}), 403
     base = _bug_report_local_base_path()
@@ -3377,6 +4355,7 @@ def api_bug_report_file():
     if not (
         _BUG_REPORT_BASENAME_RE.fullmatch(name)
         or _NVLMAPPER_ZIP_BASENAME_RE.fullmatch(name)
+        or _NVLMAPPER_TABLE_BASENAME_RE.fullmatch(name)
         or _REPORT_EXCEL_BASENAME_RE.fullmatch(name)
     ):
         return jsonify({"ok": False, "error": "invalid file name"}), 400
@@ -3393,11 +4372,17 @@ def api_bug_report_file():
         return jsonify({"ok": False, "error": "file not found"}), 404
     is_zip = bool(_NVLMAPPER_ZIP_BASENAME_RE.fullmatch(name))
     is_xlsx = bool(_REPORT_EXCEL_BASENAME_RE.fullmatch(name))
+    is_csv = name.lower().endswith(".csv") and bool(_NVLMAPPER_TABLE_BASENAME_RE.fullmatch(name))
+    is_xls = name.lower().endswith(".xls") and bool(_NVLMAPPER_TABLE_BASENAME_RE.fullmatch(name))
     mime = (
         "application/zip"
         if is_zip
         else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         if is_xlsx
+        else "text/csv; charset=utf-8"
+        if is_csv
+        else "application/vnd.ms-excel"
+        if is_xls
         else "application/gzip"
     )
     dl_host = host if host != _BUG_REPORT_EXCEL_ROOT_HOST else "reports"
@@ -3525,7 +4510,7 @@ def _hw_check_argv_from_custom_string(raw: str) -> list[str]:
 
 
 def _hw_check_pdsh_script_path() -> Path:
-    raw = (os.environ.get("RACK_HW_CHECK_SCRIPT") or "").strip()
+    raw = (_eget("RACK_HW_CHECK_SCRIPT") or "").strip()
     if raw:
         return Path(raw).expanduser().resolve()
     return (SCRIPTS_DIR / "hw_check_pdsh.sh").resolve()
@@ -3750,8 +4735,7 @@ def api_hw_check_help():
     script = _checker_script_path()
     if not script.is_file():
         return jsonify({"ok": False, "error": f"checker.sh not found: {script}", "help": ""}), 404
-    env = os.environ.copy()
-    env["RACK_WEB_PRINT_HELP"] = "1"
+    env = _subprocess_env({"RACK_WEB_PRINT_HELP": "1"})
     timeout = max(5, _env_int("RACK_HW_CHECK_HELP_TIMEOUT", 20))
     try:
         proc = subprocess.run(
@@ -3820,7 +4804,7 @@ def _nvswitch_fix_async_worker(job_id: str, log_dir: Path, cmd: list[str], displ
         proc = subprocess.run(
             cmd,
             cwd=str(log_dir),
-            env=os.environ.copy(),
+            env=_subprocess_env(),
             capture_output=True,
             text=True,
             timeout=timeout_sec,
@@ -3935,7 +4919,7 @@ def _nvswitch_sdn_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str],
         proc = subprocess.run(
             cmd,
             cwd=str(log_dir),
-            env=os.environ.copy(),
+            env=_subprocess_env(),
             capture_output=True,
             text=True,
             timeout=timeout_sec,
@@ -4055,7 +5039,7 @@ def _nvswitch_system_reset_async_worker(job_id: str, log_dir: Path, cmd: list[st
         proc = subprocess.run(
             cmd,
             cwd=str(log_dir),
-            env=os.environ.copy(),
+            env=_subprocess_env(),
             capture_output=True,
             text=True,
             timeout=timeout_sec,
@@ -4191,7 +5175,7 @@ def _imex_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str], display
         proc = subprocess.run(
             cmd,
             cwd=str(log_dir),
-            env=os.environ.copy(),
+            env=_subprocess_env(),
             capture_output=True,
             text=True,
             timeout=timeout_sec,
@@ -4265,7 +5249,7 @@ def api_imex_reset_async():
 
 
 def _nvlmapper_reports_base() -> Path:
-    raw = (os.environ.get("RACK_NVLMAPPER_REPORTS_BASE") or "/home/cmsupport/reports").strip()
+    raw = (_eget("RACK_NVLMAPPER_REPORTS_BASE") or "/home/cmsupport/reports").strip()
     return Path(os.path.expanduser(raw or "/home/cmsupport/reports")).resolve()
 
 
@@ -4298,6 +5282,7 @@ def _prepare_nvlmapper_async(body: dict) -> tuple[dict[str, object] | None, tupl
 
 
 def _nvlmapper_zip_path_allowed(path: Path, rack: str) -> bool:
+    """Legacy: allow only a finished-job zip under ``reports/<rack>/`` (new runs no longer create zips)."""
     base = (_nvlmapper_reports_base() / rack).resolve()
     try:
         path.resolve().relative_to(base)
@@ -4309,8 +5294,29 @@ def _nvlmapper_zip_path_allowed(path: Path, rack: str) -> bool:
     return path.is_file()
 
 
+def _nvlmapper_stage_cleanup_keep_outputs(work: Path, rack: str) -> None:
+    """Remove staged ``nvlmapper`` binary and ``run_nvlmapper.sh``; drop generated YAML with credentials.
+
+    CSV / XLS / XLSX (and other outputs) remain under *work* for operators to copy from ``reports/<rack>/``.
+    """
+    for name in ("nvlmapper", "run_nvlmapper.sh"):
+        p = work / name
+        try:
+            if p.is_file():
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass
+    for yaml_name in (f"config-{rack}.yaml", f"config_{rack}.yaml"):
+        p = work / yaml_name
+        try:
+            if p.is_file():
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
-    """Stage ``nvlmapper`` + ``run_nvlmapper.sh`` (embedded YAML template inside the script), run ``./run_nvlmapper.sh``, zip, prune."""
+    """Stage ``nvlmapper`` + ``run_nvlmapper.sh``, run ``./run_nvlmapper.sh``, then clean staging only (keep outputs)."""
 
     def _patch(**kwargs: object) -> None:
         with _reset_jobs_lock:
@@ -4321,43 +5327,15 @@ def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
     timeout_sec = max(120, _env_int("RACK_NVLMAPPER_TIMEOUT", 14400))
     work = (_nvlmapper_reports_base() / rack).resolve()
     display_cmd = f"(cd {shlex.quote(str(work))} && ./run_nvlmapper.sh {shlex.quote(rack)})"
-    env = os.environ.copy()
-
-    def _zip_and_prune() -> str:
-        """Write ``nvlmapper.<rack>.<ts>.zip`` under *work*, delete everything else there; return path or ""."""
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        zip_name = f"nvlmapper.{rack}.{ts}.zip"
-        zip_path = work / zip_name
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for p in sorted(work.iterdir(), key=lambda x: x.name):
-                if not p.is_file():
-                    if p.is_dir():
-                        for sub in sorted(p.rglob("*")):
-                            if sub.is_file():
-                                zf.write(sub, arcname=sub.relative_to(work).as_posix())
-                    continue
-                if p.name in ("nvlmapper", "run_nvlmapper.sh", zip_name):
-                    continue
-                if p.suffix.lower() == ".zip":
-                    continue
-                zf.write(p, arcname=p.name)
-        for p in list(work.iterdir()):
-            if p.name == zip_name:
-                continue
-            try:
-                if p.is_dir():
-                    shutil.rmtree(p, ignore_errors=True)
-                else:
-                    p.unlink(missing_ok=True)
-            except OSError:
-                pass
-        return str(zip_path) if zip_path.is_file() else ""
+    env = _subprocess_env()
+    work_dir_s = str(work)
 
     try:
         _patch(
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
             command_display=display_cmd,
+            nvlmapper_work_dir=work_dir_s,
         )
         work.mkdir(parents=True, exist_ok=True)
         shutil.copy2(SCRIPTS_DIR / "nvlmapper", work / "nvlmapper")
@@ -4374,9 +5352,8 @@ def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
         )
         out = (proc.stdout or "").strip()
         err = (proc.stderr or "").strip()
-        zip_path_str = _zip_and_prune()
         ok = proc.returncode == 0
-        zp = zip_path_str if zip_path_str and _nvlmapper_zip_path_allowed(Path(zip_path_str), rack) else ""
+        _nvlmapper_stage_cleanup_keep_outputs(work, rack)
         _patch(
             phase="done" if ok else "error",
             ok=ok,
@@ -4385,10 +5362,11 @@ def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
             stdout=out,
             stderr=err,
             command_display=display_cmd,
-            nvlmapper_zip=zp,
+            nvlmapper_zip="",
+            nvlmapper_work_dir=work_dir_s,
             error=None
             if ok
-            else "NVLMAPPER run exited non-zero (see stdout/stderr); zip was still written if staging produced files",
+            else "NVLMAPPER run exited non-zero (see stdout/stderr); CSV/XLS outputs may still be present under the work directory",
         )
     except subprocess.TimeoutExpired:
         _patch(
@@ -4400,6 +5378,7 @@ def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
             stderr=f"timeout after {timeout_sec}s",
             command_display=display_cmd,
             nvlmapper_zip="",
+            nvlmapper_work_dir=work_dir_s,
             error=f"NVLMAPPER timed out after {timeout_sec}s",
         )
     except Exception as e:
@@ -4412,6 +5391,7 @@ def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
             stderr="",
             command_display=display_cmd,
             nvlmapper_zip="",
+            nvlmapper_work_dir=work_dir_s,
             error=str(e),
         )
     _reset_job_purge_later(job_id)
@@ -4419,7 +5399,7 @@ def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
 
 @app.route("/api/nvlmapper-async", methods=["POST"])
 def api_nvlmapper_async():
-    """POST JSON ``{"rack": "pNN-rMM"}`` — stage, ``./run_nvlmapper.sh`` (embedded template + RC merge), zip; poll ``/api/reset-job-status``."""
+    """POST JSON ``{"rack": "pNN-rMM"}`` — stage, ``./run_nvlmapper.sh``; outputs stay under ``reports/<rack>/`` (no zip). Poll ``/api/reset-job-status``."""
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_nvlmapper_async(body)
     if err is not None:
@@ -4436,6 +5416,7 @@ def api_nvlmapper_async():
             "phase": "starting",
             "created_at": created,
             "nvlmapper_zip": "",
+            "nvlmapper_work_dir": str((_nvlmapper_reports_base() / rack).resolve()),
         }
     threading.Thread(
         target=_nvlmapper_async_worker,
@@ -4447,7 +5428,7 @@ def api_nvlmapper_async():
 
 @app.route("/api/nvlmapper-zip", methods=["GET"])
 def api_nvlmapper_zip():
-    """GET ``?job_id=…`` — download ``nvlmapper.<rack>.<ts>.zip`` from a finished NVLMAPPER job (same host)."""
+    """GET ``?job_id=…`` — legacy zip download (NVLMAPPER no longer builds zips; outputs live under ``nvlmapper_work_dir``)."""
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
@@ -4463,7 +5444,12 @@ def api_nvlmapper_zip():
         return jsonify({"ok": False, "error": "job not finished yet"}), 400
     z = str(payload.get("nvlmapper_zip") or "").strip()
     if not z:
-        return jsonify({"ok": False, "error": "no zip path recorded for this job"}), 400
+        wd = str(payload.get("nvlmapper_work_dir") or "").strip()
+        msg = (
+            "NVLMAPPER no longer produces a zip; copy CSV/XLS from the rack directory under the reports base."
+            + (f" Work dir: {wd}" if wd else "")
+        )
+        return jsonify({"ok": False, "error": msg}), 400
     path = Path(z).resolve()
     rack = str(payload.get("rack") or "").strip().lower()
     if not rack or not _nvlmapper_zip_path_allowed(path, rack):
@@ -4500,7 +5486,7 @@ def _precheck_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_c
             if row is not None:
                 row.update(kwargs)
 
-    timeout_sec = max(30, _env_int("RACK_SYSINFO_TIMEOUT", 1800))
+    timeout_sec = max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800))
     try:
         _patch(
             phase="running",
@@ -4509,7 +5495,7 @@ def _precheck_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_c
         proc = subprocess.run(
             cmd,
             cwd=str(log_dir),
-            env=os.environ.copy(),
+            env=_subprocess_env(),
             capture_output=True,
             text=True,
             timeout=timeout_sec,
@@ -4620,7 +5606,7 @@ def _nvswitch_check_async_worker(
         proc = subprocess.run(
             cmd,
             cwd=str(log_dir),
-            env=os.environ.copy(),
+            env=_subprocess_env(),
             capture_output=True,
             text=True,
             timeout=timeout_sec,
@@ -4721,7 +5707,7 @@ def _imex_check_async_worker(job_id: str, log_dir: Path, cmd: list[str], display
             if row is not None:
                 row.update(kwargs)
 
-    timeout_sec = max(30, _env_int("RACK_SYSINFO_TIMEOUT", 1800))
+    timeout_sec = max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800))
     try:
         _patch(
             phase="running",
@@ -4730,7 +5716,7 @@ def _imex_check_async_worker(job_id: str, log_dir: Path, cmd: list[str], display
         proc = subprocess.run(
             cmd,
             cwd=str(log_dir),
-            env=os.environ.copy(),
+            env=_subprocess_env(),
             capture_output=True,
             text=True,
             timeout=timeout_sec,
@@ -4921,7 +5907,7 @@ def api_slurm_drain():
         return jsonify({"ok": False, "error": "reason must be a string"}), 400
     r = (raw_reason if isinstance(raw_reason, str) else "").strip()
     if not r:
-        r = (os.environ.get("RACK_SLURM_DRAIN_REASON") or "admin").strip() or "admin"
+        r = (_eget("RACK_SLURM_DRAIN_REASON") or "admin").strip() or "admin"
     if not _SLURM_DRAIN_REASON_RE.fullmatch(r):
         return jsonify(
             {
@@ -5515,8 +6501,7 @@ def api_parser_results():
     parser = _parser_path()
     if not parser.is_file():
         return jsonify({"ok": False, "error": f"parser.sh not found: {parser}"}), 500
-    env = os.environ.copy()
-    env["NO_COLOR"] = "1"
+    env = _subprocess_env({"NO_COLOR": "1"})
     cmd = [
         "bash",
         str(parser),
@@ -5531,7 +6516,7 @@ def api_parser_results():
             env=env,
             capture_output=True,
             text=True,
-            timeout=max(30, _env_int("RACK_PARSER_TIMEOUT", 300)),
+            timeout=max(30, _job_env_int("RACK_PARSER_TIMEOUT", 300)),
         )
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": "parser.sh timed out"}), 504
@@ -5567,7 +6552,7 @@ def api_parser_results():
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=max(60, _env_int("RACK_PARSER_TIMEOUT", 300)),
+                timeout=max(60, _job_env_int("RACK_PARSER_TIMEOUT", 300)),
             )
             if proc_sn.returncode == 0 and (proc_sn.stdout or "").strip():
                 sn_parsed = json.loads(proc_sn.stdout)
@@ -5602,19 +6587,346 @@ def api_parser_results():
     )
 
 
+@app.route("/api/nvloom-heatmaps-log")
+def api_nvloom_heatmaps_log():
+    """Return the newest Slurm stdout for nvloom singlerack (``nvloom/*NVLOOM-<rack>-*.txt``) for heatmap UI.
+
+    Query: ``log_dir``, ``rack`` (same normalization as the rest of rack web).
+    Response JSON: ``ok``, ``path`` (resolved file or empty), ``content`` (UTF-8 text, size-capped).
+    """
+    if _truthy_env("RACK_STATUS_DEMO"):
+        demo_txt = (
+            "Process  0 (p1-r01-ct01): device 0: NVIDIA GB300 (00000008:06:00); rackGuid: 111\n"
+            "Process  1 (p1-r01-ct01): device 1: NVIDIA GB300 (00000009:06:00); rackGuid: 222\n"
+            "Running demo_pair\n"
+            "A | B\n"
+            "0 100 200\n"
+            "1 150 220\n"
+            "Min demo_pair 90 GB/s\n"
+        )
+        return jsonify({"ok": True, "path": "(demo)", "content": demo_txt})
+    try:
+        log_dir = _resolve_log_dir(request.args.get("log_dir"))
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    rack_raw = (request.args.get("rack") or "").strip()
+    try:
+        rk = _normalize_rack_id(rack_raw)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    cands = find_nvloom_log_paths_for_rack(log_dir, rk)
+    if not cands:
+        return jsonify(
+            {
+                "ok": False,
+                "error": f"no nvloom log *NVLOOM-{rk}-*.txt under {log_dir / 'nvloom'}",
+            }
+        ), 404
+    log_path = cands[0]
+    try:
+        sz = log_path.stat().st_size
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    if sz > _NVLOOM_HEATMAPS_LOG_MAX_BYTES:
+        return jsonify(
+            {
+                "ok": False,
+                "error": f"NVLOOM log too large ({sz} bytes; max {_NVLOOM_HEATMAPS_LOG_MAX_BYTES})",
+            }
+        ), 413
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "path": str(log_path.resolve()), "content": text})
+
+
+_CLUSTERKIT_JSON_MAX_BYTES = 80 * 1024 * 1024
+
+
+def _clusterkit_rack_dir(log_dir: Path, rk: str) -> Path:
+    return log_dir / "clusterkit" / rk
+
+
+def _clusterkit_get_cell(links: list[object], i: int, j: int) -> float | None:
+    """Upper-triangular storage: same convention as clusterkit ``bwResultAnalyzer.getCell``."""
+    if i == j:
+        return 0.0
+    try:
+        if i < j:
+            row = links[i]
+            if not isinstance(row, list) or j - i >= len(row):
+                return None
+            return float(row[j - i])
+        row = links[j]
+        if not isinstance(row, list) or i - j >= len(row):
+            return None
+        return float(row[i - j])
+    except (IndexError, TypeError, ValueError):
+        return None
+
+
+def _clusterkit_parse_bandwidth_payload(
+    data: dict[str, object],
+) -> tuple[list[str], list[list[float | None]], dict[str, object]] | None:
+    """Return ``(labels, matrix, meta)`` from ClusterKit ``bandwidth.json``."""
+    nodes = data.get("Nodes")
+    links = data.get("Links")
+    if not isinstance(nodes, dict) or not isinstance(links, list):
+        return None
+    try:
+        pairs = sorted(((int(v), str(k)) for k, v in nodes.items()), key=lambda x: x[0])
+    except (TypeError, ValueError):
+        return None
+    labels = [p[1] for p in pairs]
+    n = len(labels)
+    if n < 2 or len(links) < n - 1:
+        return None
+    for i in range(n - 1):
+        row = links[i]
+        if not isinstance(row, list) or len(row) != n - i:
+            return None
+    matrix: list[list[float | None]] = []
+    for i in range(n):
+        row_out: list[float | None] = []
+        for j in range(n):
+            if i == j:
+                row_out.append(0.0)
+            else:
+                row_out.append(_clusterkit_get_cell(links, i, j))
+        matrix.append(row_out)
+    meta: dict[str, object] = {
+        "cluster": data.get("Cluster"),
+        "user": data.get("User"),
+        "testname": data.get("Testname"),
+        "date_and_time": data.get("Date_and_Time"),
+        "jobid": data.get("JOBID"),
+        "ppn": data.get("PPN"),
+        "bidirectional": data.get("Bidirectional"),
+        "hca_tag": data.get("HCA_Tag"),
+        "technology": data.get("Technology"),
+        "units": data.get("Units"),
+    }
+    return labels, matrix, meta
+
+
+def _clusterkit_pairwise_positive_summary(data: dict[str, object]) -> dict[str, object] | None:
+    """Min / max / avg over off-diagonal positive finite cells (bandwidth or latency JSON)."""
+    parsed = _clusterkit_parse_bandwidth_payload(data)
+    if parsed is None:
+        return None
+    _labels, matrix, _meta = parsed
+    vals: list[float] = []
+    for i, row in enumerate(matrix):
+        for j, v in enumerate(row):
+            if i == j:
+                continue
+            if isinstance(v, (int, float)) and math.isfinite(float(v)) and float(v) > 0:
+                vals.append(float(v))
+    n = len(matrix)
+    if not vals:
+        return {"node_count": n, "link_count": 0}
+    return {
+        "node_count": n,
+        "link_count": len(vals),
+        "min": min(vals),
+        "max": max(vals),
+        "avg": sum(vals) / len(vals),
+    }
+
+
+def _clusterkit_bandwidth_summary_from_data(data: dict[str, object]) -> dict[str, object] | None:
+    return _clusterkit_pairwise_positive_summary(data)
+
+
+@app.route("/api/clusterkit-results")
+def api_clusterkit_results():
+    """List ClusterKit ``bandwidth.json`` runs under ``log_dir/clusterkit/<rack>/``; optional full matrix for one run.
+
+    Query: ``log_dir``, ``rack``; optional ``run`` = subdirectory name (basename only) with ``bandwidth.json``.
+    ``runs`` are sorted newest first by ``bandwidth.json`` mtime. When ``run`` matches, ``detail`` includes
+    ``labels``, ``matrix``, ``meta`` (bandwidth). If ``latency.json`` exists beside it, ``detail["latency"]`` has
+    the same shape for pairwise latency (see ``bwResultAnalyzer``).
+    """
+    if _truthy_env("RACK_STATUS_DEMO"):
+        run_q = (request.args.get("run") or "").strip()
+        demo_runs: list[dict[str, object]] = [
+            {
+                "dir": "demo_mlx5_0",
+                "rel_path": "clusterkit/p1-r01/demo_mlx5_0",
+                "mtime": 0,
+                "meta": {"hca_tag": "mlx5_0", "units": "MB/s", "date_and_time": "demo"},
+                "summary": {"node_count": 3, "link_count": 6, "min": 100.0, "max": 200.0, "avg": 150.0},
+                "has_latency": True,
+            }
+        ]
+        out_demo: dict[str, object] = {"ok": True, "rack": "p1-r01", "runs": demo_runs}
+        if run_q == "demo_mlx5_0":
+            out_demo["detail"] = {
+                "dir": "demo_mlx5_0",
+                "labels": ["node-a", "node-b", "node-c"],
+                "matrix": [[0.0, 100.0, 150.0], [100.0, 0.0, 200.0], [150.0, 200.0, 0.0]],
+                "meta": {
+                    "cluster": "demo-cluster",
+                    "user": "demo",
+                    "testname": "ib_write_bw",
+                    "date_and_time": "demo",
+                    "jobid": "999",
+                    "ppn": 1,
+                    "bidirectional": "True",
+                    "hca_tag": "mlx5_0",
+                    "technology": "IB",
+                    "units": "MB/s",
+                },
+                "summary": {"node_count": 3, "link_count": 6, "min": 100.0, "max": 200.0, "avg": 150.0},
+                "latency": {
+                    "labels": ["node-a", "node-b", "node-c"],
+                    "matrix": [[0.0, 1.25, 1.48], [1.25, 0.0, 2.05], [1.48, 2.05, 0.0]],
+                    "meta": {
+                        "cluster": "demo-cluster",
+                        "testname": "ib_write_lat",
+                        "date_and_time": "demo",
+                        "jobid": "999",
+                        "hca_tag": "mlx5_0",
+                        "technology": "IB",
+                        "units": "usec",
+                    },
+                    "summary": {"node_count": 3, "link_count": 6, "min": 1.25, "max": 2.05, "avg": 1.593},
+                },
+            }
+        return jsonify(out_demo)
+    try:
+        log_dir = _resolve_log_dir(request.args.get("log_dir"))
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    rack_raw = (request.args.get("rack") or "").strip()
+    try:
+        rk = _normalize_rack_id(rack_raw)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    base = _clusterkit_rack_dir(log_dir, rk)
+    if not base.is_dir():
+        return jsonify({"ok": True, "rack": rk, "runs": []})
+    runs_out: list[dict[str, object]] = []
+    try:
+        subdirs = [p for p in base.iterdir() if p.is_dir()]
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    for sub in subdirs:
+        bw = sub / "bandwidth.json"
+        if not bw.is_file():
+            continue
+        try:
+            st = bw.stat()
+        except OSError:
+            continue
+        if st.st_size > _CLUSTERKIT_JSON_MAX_BYTES:
+            runs_out.append(
+                {
+                    "dir": sub.name,
+                    "rel_path": str(bw.resolve().relative_to(log_dir.resolve())),
+                    "mtime": int(st.st_mtime),
+                    "error": f"bandwidth.json too large ({st.st_size} bytes)",
+                }
+            )
+            continue
+        try:
+            raw = bw.read_text(encoding="utf-8", errors="replace")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as e:
+            runs_out.append(
+                {
+                    "dir": sub.name,
+                    "rel_path": str(bw.resolve().relative_to(log_dir.resolve())),
+                    "mtime": int(st.st_mtime),
+                    "error": str(e),
+                }
+            )
+            continue
+        if not isinstance(data, dict):
+            continue
+        summ = _clusterkit_bandwidth_summary_from_data(data)
+        meta_only = {
+            "hca_tag": data.get("HCA_Tag"),
+            "units": data.get("Units"),
+            "date_and_time": data.get("Date_and_Time"),
+            "jobid": data.get("JOBID"),
+            "bidirectional": data.get("Bidirectional"),
+            "cluster": data.get("Cluster"),
+        }
+        has_lat = (sub / "latency.json").is_file()
+        runs_out.append(
+            {
+                "dir": sub.name,
+                "rel_path": str(bw.resolve().relative_to(log_dir.resolve())),
+                "mtime": int(st.st_mtime),
+                "meta": meta_only,
+                "summary": summ or {},
+                "has_latency": has_lat,
+            }
+        )
+    runs_out.sort(key=lambda r: int(r.get("mtime") or 0), reverse=True)
+    out: dict[str, object] = {"ok": True, "rack": rk, "runs": runs_out}
+    run_q = (request.args.get("run") or "").strip()
+    if run_q and run_q == Path(run_q).name and re.fullmatch(r"[A-Za-z0-9_.\-]+", run_q):
+        target = base / run_q / "bandwidth.json"
+        try:
+            sub_resolved = (base / run_q).resolve()
+            if target.is_file() and sub_resolved.parent == base.resolve():
+                sz = target.stat().st_size
+                if sz <= _CLUSTERKIT_JSON_MAX_BYTES:
+                    data = json.loads(target.read_text(encoding="utf-8", errors="replace"))
+                    if isinstance(data, dict):
+                        parsed = _clusterkit_parse_bandwidth_payload(data)
+                        if parsed:
+                            labels, matrix, meta = parsed
+                            summ = _clusterkit_bandwidth_summary_from_data(data)
+                            detail: dict[str, object] = {
+                                "dir": run_q,
+                                "labels": labels,
+                                "matrix": matrix,
+                                "meta": meta,
+                                "summary": summ or {},
+                            }
+                            lat_path = sub_resolved / "latency.json"
+                            try:
+                                if lat_path.is_file():
+                                    lst = lat_path.stat().st_size
+                                    if lst <= _CLUSTERKIT_JSON_MAX_BYTES:
+                                        lat_data = json.loads(
+                                            lat_path.read_text(encoding="utf-8", errors="replace")
+                                        )
+                                        if isinstance(lat_data, dict):
+                                            lat_parsed = _clusterkit_parse_bandwidth_payload(lat_data)
+                                            if lat_parsed:
+                                                ll, lm, lmeta = lat_parsed
+                                                lsumm = _clusterkit_pairwise_positive_summary(lat_data)
+                                                detail["latency"] = {
+                                                    "labels": ll,
+                                                    "matrix": lm,
+                                                    "meta": lmeta,
+                                                    "summary": lsumm or {},
+                                                }
+                            except (OSError, json.JSONDecodeError, ValueError, TypeError):
+                                pass
+                            out["detail"] = detail
+        except (OSError, json.JSONDecodeError, ValueError):
+            pass
+    return jsonify(out)
+
+
 def _parser_json_for_log_path(log_dir: Path, log_path: Path) -> tuple[dict | None, str | None]:
     """Run ``parser.sh --json`` on one log under ``log_dir`` (relative path). Returns ``(parsed, err)``."""
     parser = _parser_path()
     if not parser.is_file():
         return None, "parser.sh not found"
-    env = os.environ.copy()
-    env["NO_COLOR"] = "1"
+    env = _subprocess_env({"NO_COLOR": "1"})
     try:
         rel = str(log_path.resolve().relative_to(log_dir.resolve()))
     except ValueError:
         return None, "log path outside log_dir"
     cmd = ["bash", str(parser), *_parser_extra_args(), "--json", rel]
-    timeout = max(30, _env_int("RACK_PARSER_TIMEOUT", 300))
+    timeout = max(30, _job_env_int("RACK_PARSER_TIMEOUT", 300))
     try:
         proc = subprocess.run(
             cmd,
@@ -5865,6 +7177,75 @@ def _nemotron_scaling_append_entry(
     )
 
 
+_analytics_aggregate_cache_lock = threading.Lock()
+_ANALYTICS_AGG_CACHE_PATH = (APP_DIR / "var" / "cache" / "analytics_aggregate_cache.json").resolve()
+
+
+def _analytics_rows_fingerprint(rows_in: object) -> str:
+    """Stable hash of rack status rows sent with analytics (same inputs → same key)."""
+    if not isinstance(rows_in, list):
+        return hashlib.sha256(b"[]").hexdigest()
+    pairs: list[tuple[str, str]] = []
+    for ent in rows_in:
+        if not isinstance(ent, dict):
+            continue
+        rk = str(ent.get("rack", "")).strip().lower()
+        nm = str(ent.get("nemo", "")).strip().lower()
+        if rk:
+            pairs.append((rk, nm))
+    pairs.sort()
+    raw = json.dumps(pairs, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _analytics_aggregate_cache_get(log_dir_key: str) -> dict[str, object] | None:
+    """Return last stored payload for *log_dir_key* (resolved absolute path string), or ``None``."""
+    with _analytics_aggregate_cache_lock:
+        try:
+            with open(_ANALYTICS_AGG_CACHE_PATH, "r", encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError, UnicodeDecodeError):
+            return None
+    if not isinstance(doc, dict) or int(doc.get("version") or 0) != 1:
+        return None
+    entries = doc.get("entries")
+    if not isinstance(entries, dict):
+        return None
+    hit = entries.get(log_dir_key)
+    return hit if isinstance(hit, dict) else None
+
+
+def _analytics_aggregate_cache_put(log_dir_key: str, payload: dict[str, object]) -> None:
+    """Persist ``analyzed_at``, ``rows_fingerprint``, ``single_rack``, ``multirack`` for a log directory."""
+    _ANALYTICS_AGG_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    store = {
+        k: payload[k]
+        for k in ("analyzed_at", "rows_fingerprint", "single_rack", "multirack")
+        if k in payload
+    }
+    with _analytics_aggregate_cache_lock:
+        doc: dict[str, object] = {"version": 1, "entries": {}}
+        try:
+            if _ANALYTICS_AGG_CACHE_PATH.is_file():
+                with open(_ANALYTICS_AGG_CACHE_PATH, "r", encoding="utf-8") as f:
+                    prev = json.load(f)
+                if isinstance(prev, dict) and int(prev.get("version") or 0) == 1 and isinstance(prev.get("entries"), dict):
+                    doc["entries"] = dict(prev["entries"])
+        except (OSError, json.JSONDecodeError, TypeError, UnicodeDecodeError):
+            pass
+        ent: dict[str, object] = {}
+        prev_entries = doc.get("entries")
+        if isinstance(prev_entries, dict):
+            ent = dict(prev_entries)
+        doc["entries"] = ent
+        ent[log_dir_key] = store
+        tmp = _ANALYTICS_AGG_CACHE_PATH.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, _ANALYTICS_AGG_CACHE_PATH)
+
+
 def _demo_analytics_aggregate() -> dict[str, object]:
     return {
         "ok": True,
@@ -5968,6 +7349,30 @@ def _demo_analytics_aggregate() -> dict[str, object]:
     }
 
 
+@app.route("/api/analytics/last", methods=["GET"])
+def api_analytics_last():
+    """Return the last saved analytics aggregate for ``log_dir`` (written after a successful POST)."""
+    if os.environ.get("RACK_ANALYTICS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "analytics disabled (RACK_ANALYTICS_DISABLED)"}), 403
+    if _truthy_env("RACK_STATUS_DEMO"):
+        d = dict(_demo_analytics_aggregate())
+        d["cached"] = True
+        d["analyzed_at"] = "1970-01-01T00:00:00+00:00"
+        d["rows_fingerprint"] = "demo"
+        return jsonify(d)
+    try:
+        log_dir = _resolve_log_dir(request.args.get("log_dir"))
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    hit = _analytics_aggregate_cache_get(str(log_dir.resolve()))
+    if not hit:
+        return jsonify({"ok": False, "error": "no cached analysis for this log directory"}), 404
+    out: dict[str, object] = dict(hit)
+    out["ok"] = True
+    out["cached"] = True
+    return jsonify(out)
+
+
 @app.route("/api/analytics/aggregate", methods=["POST"])
 def api_analytics_aggregate():
     """POST JSON ``{log_dir, rows:[{rack,nemo},…]}`` — parser-based NCCL/Nemotron analytics (single-rack + multirack).
@@ -5984,7 +7389,11 @@ def api_analytics_aggregate():
     if os.environ.get("RACK_ANALYTICS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "analytics disabled (RACK_ANALYTICS_DISABLED)"}), 403
     if _truthy_env("RACK_STATUS_DEMO"):
-        return jsonify(_demo_analytics_aggregate())
+        demo = dict(_demo_analytics_aggregate())
+        demo["analyzed_at"] = datetime.now(timezone.utc).isoformat()
+        demo["rows_fingerprint"] = "demo"
+        demo["cached"] = False
+        return jsonify(demo)
     body = request.get_json(silent=True) or {}
     log_raw = body.get("log_dir")
     try:
@@ -6215,26 +7624,34 @@ def api_analytics_aggregate():
             }
         )
 
-    return jsonify(
-        {
-            "ok": True,
-            "single_rack": {
-                "nccl_collectives": scalar_rows,
-                "nccl_collectives_deviation_pct": coll_dev,
-                "nccl_ar_series": {
-                    "sizes_bytes": sizes_sorted,
-                    "median_bus_bw_gbps": [round(median_bw[s], 4) for s in sizes_sorted],
-                    "per_rack": per_rack_series,
-                },
-                "nemotron": nemotron_rows,
+    analyzed_at = datetime.now(timezone.utc).isoformat()
+    rows_fp = _analytics_rows_fingerprint(rows_in)
+    payload: dict[str, object] = {
+        "ok": True,
+        "analyzed_at": analyzed_at,
+        "rows_fingerprint": rows_fp,
+        "cached": False,
+        "single_rack": {
+            "nccl_collectives": scalar_rows,
+            "nccl_collectives_deviation_pct": coll_dev,
+            "nccl_ar_series": {
+                "sizes_bytes": sizes_sorted,
+                "median_bus_bw_gbps": [round(median_bw[s], 4) for s in sizes_sorted],
+                "per_rack": per_rack_series,
             },
-            "multirack": {
-                "nccl_series_by_log": nccl_multirack,
-                "nemotron_scaling": nemotron_scaling,
-                "nemotron_throughput_scaling": nemotron_throughput_scaling,
-            },
-        }
-    )
+            "nemotron": nemotron_rows,
+        },
+        "multirack": {
+            "nccl_series_by_log": nccl_multirack,
+            "nemotron_scaling": nemotron_scaling,
+            "nemotron_throughput_scaling": nemotron_throughput_scaling,
+        },
+    }
+    try:
+        _analytics_aggregate_cache_put(str(log_dir.resolve()), payload)
+    except OSError:
+        _logger.exception("analytics aggregate cache write failed")
+    return jsonify(payload)
 
 
 def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
@@ -6243,14 +7660,13 @@ def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
     if not script.is_file():
         return None
     ap = abs_path.resolve()
-    env = os.environ.copy()
-    env["NO_COLOR"] = "1"
+    env = _subprocess_env({"NO_COLOR": "1"})
     _ensure_cmsh_rack_list_env_for_subprocess(env)
     # Multirack aggregate logs often lack per-collective / LLM signals that 1-rack runs have; use a
     # looser default unless VALIDATION_TEST is set. Override default via RACK_MULTIRACK_VALIDATION_TEST.
     if _is_multirack_log_basename(ap.name):
         if not str(env.get("VALIDATION_TEST", "")).strip():
-            mvt = (env.get("RACK_MULTIRACK_VALIDATION_TEST") or "nccl_all_reduce").strip()
+            mvt = (_eget("RACK_MULTIRACK_VALIDATION_TEST") or "nccl_all_reduce").strip()
             env["VALIDATION_TEST"] = mvt or "nccl_all_reduce"
     try:
         proc = host_exec.run_on_host(
@@ -6770,7 +8186,7 @@ def _parser_excel_report_copy_dir() -> Path:
 
     Default: ``<RACK_BUG_REPORT_REMOTE_DIR>/parser-excel`` (typically ``/home/cmsupport/reports/parser-excel``).
     """
-    raw = (os.environ.get("RACK_PARSER_EXCEL_REPORT_DIR") or "").strip()
+    raw = (_eget("RACK_PARSER_EXCEL_REPORT_DIR") or "").strip()
     if raw:
         return Path(os.path.expanduser(raw)).resolve()
     return (_bug_report_local_base_path() / "parser-excel").resolve()
@@ -6803,8 +8219,7 @@ def api_parser_export_excel():
     rel_args: list[str] = []
     for p in paths:
         rel_args.append(str(p.resolve().relative_to(log_dir.resolve())))
-    env = os.environ.copy()
-    env["NO_COLOR"] = "1"
+    env = _subprocess_env({"NO_COLOR": "1"})
     cmd = ["bash", str(parser), *_parser_extra_args(), "--json", *rel_args]
     timeout = max(60, _env_int("RACK_PARSER_EXPORT_TIMEOUT", 900))
     try:
@@ -6958,7 +8373,7 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
         return None, (jsonify({"ok": False, "error": f"validation script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
-    timeout = max(30, _env_int("RACK_VALIDATION_TIMEOUT", 600))
+    timeout = max(30, _job_env_int("RACK_VALIDATION_TIMEOUT", 600))
     return (
         {
             "log_dir": log_dir,
@@ -6990,7 +8405,7 @@ def api_run_validation():
         proc = subprocess.run(
             cmd,
             cwd=str(log_dir),
-            env=os.environ.copy(),
+            env=_subprocess_env(),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -7102,7 +8517,7 @@ def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int]
     arg = ",".join(specs)
     cmd = ["bash", str(script), arg]
     display_cmd = "./" + script.name + " " + shlex.quote(arg)
-    timeout = max(300, _env_int("RACK_NEMO_XRACK_TIMEOUT", 7200))
+    timeout = max(300, _job_env_int("RACK_NEMO_XRACK_TIMEOUT", 7200))
     return (
         {
             "log_dir": log_dir,
@@ -7197,7 +8612,7 @@ def _prepare_run_llama(body: dict) -> tuple[dict | None, tuple[object, int] | No
     inner = f"module load slurm && exec bash {shlex.quote(str(script))} {shlex.quote(nodes_spec)}"
     cmd = ["bash", "-lc", inner]
     display_cmd = f"module load slurm && ./{script.name} {shlex.quote(nodes_spec)}"
-    timeout = max(120, _env_int("RACK_LLAMA_TIMEOUT", 7200))
+    timeout = max(120, _job_env_int("RACK_LLAMA_TIMEOUT", 7200))
     return (
         {
             "log_dir": log_dir,
@@ -7366,6 +8781,23 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
     timeout = max(120, _env_int("RACK_MNUBERGEMM_STRESS_TIMEOUT", 86400))
+    ws = _nvis_workspace_dir_effective()
+    cuda_m = (_eget("RACK_MNUBERGEMM_CUDA_MAJOR") or _eget("RACK_NVLOOM_CUDA_MAJOR") or _eget("CUDA_MAJ") or "13").strip()
+    if cuda_m not in ("12", "13"):
+        cuda_m = "13"
+    env_updates: dict[str, str] = {
+        "WORKSPACE_DIR": ws,
+        "NVIS_WORKSPACE_DIR": ws,
+        "TOPDIR": ws,
+        "NVIS_BIN_SCRIPTS": str(SCRIPTS_DIR.resolve()),
+        "CUDA_MAJ": cuda_m,
+        "NVIS_SYSINFO_SH": str(_sysinfo_script_path()),
+        "NVIS_CHECKER_SH": str((SCRIPTS_DIR / "checker.sh").resolve()),
+    }
+    for k in ("NVIS_HPCX_ROOT", "NVIS_NCCL_PATH", "RACK_MNUBERGEMM_PARTITION"):
+        v = (_eget(k) or "").strip()
+        if v:
+            env_updates[k] = v
     return (
         {
             "log_dir": log_dir,
@@ -7374,6 +8806,130 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
             "cmd": cmd,
             "display_cmd": display_cmd,
             "timeout": timeout,
+            "env_updates": env_updates,
+        },
+        None,
+    )
+
+
+def _prepare_run_nvloom_singlerack(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
+    """Shared parse for async nvloom singlerack Slurm job. Returns (prep, None) or (None, (jsonify(...), code))."""
+    if os.environ.get("RACK_NVLOOM_SINGLERACK_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return None, (
+            jsonify({"ok": False, "error": "nvloom singlerack disabled (RACK_NVLOOM_SINGLERACK_DISABLED)"}),
+            403,
+        )
+    log_raw = body.get("log_dir")
+    try:
+        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    rack = (body.get("rack") or "").strip()
+    try:
+        rk = _normalize_rack_id(rack)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    tgt_ov = body.get("target")
+    if tgt_ov is not None and not isinstance(tgt_ov, str):
+        return None, (jsonify({"ok": False, "error": "target must be a string"}), 400)
+    try:
+        target = validation_target_for_rack(rack, tgt_ov if isinstance(tgt_ov, str) else None)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    script = _nvloom_singlerack_script_path()
+    if not script.is_file():
+        return None, (jsonify({"ok": False, "error": f"nvloom script not found: {script}"}), 500)
+    cmd = ["bash", str(script), target]
+    display_cmd = "./" + script.name + " " + shlex.quote(target)
+    timeout = max(120, _env_int("RACK_NVLOOM_SINGLERACK_TIMEOUT", 10800))
+    ws = _nvis_workspace_dir_effective()
+    cuda_m = (_eget("RACK_NVLOOM_CUDA_MAJOR") or _eget("CUDA_MAJ") or "13").strip()
+    if cuda_m not in ("12", "13"):
+        cuda_m = "13"
+    env_updates: dict[str, str] = {
+        "NVIS_SYSINFO_SH": str(_sysinfo_script_path()),
+        "RACK_SAMPLES": str(max(1, min(256, _env_int("RACK_NVLOOM_RACK_SAMPLES", 5)))),
+        "WORKSPACE_DIR": ws,
+        "NVIS_WORKSPACE_DIR": ws,
+        "TOPDIR": ws,
+        "NVIS_BIN_SCRIPTS": str(SCRIPTS_DIR.resolve()),
+        "CUDA_MAJ": cuda_m,
+    }
+    for k in ("NVIS_NVLOOM_HPCX_INIT", "NVIS_NVLOOM_CLI", "RACK_NVLOOM_PARTITION"):
+        v = (_eget(k) or "").strip()
+        if v:
+            env_updates[k] = v
+    return (
+        {
+            "log_dir": log_dir,
+            "rk": rk,
+            "target": target,
+            "cmd": cmd,
+            "display_cmd": display_cmd,
+            "timeout": timeout,
+            "env_updates": env_updates,
+        },
+        None,
+    )
+
+
+def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
+    """Shared parse for async ClusterKit singlerack Slurm job."""
+    if os.environ.get("RACK_CLUSTERKIT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return None, (
+            jsonify({"ok": False, "error": "clusterkit disabled (RACK_CLUSTERKIT_DISABLED)"}),
+            403,
+        )
+    log_raw = body.get("log_dir")
+    try:
+        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    rack = (body.get("rack") or "").strip()
+    try:
+        rk = _normalize_rack_id(rack)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    tgt_ov = body.get("target")
+    if tgt_ov is not None and not isinstance(tgt_ov, str):
+        return None, (jsonify({"ok": False, "error": "target must be a string"}), 400)
+    try:
+        target = validation_target_for_rack(rack, tgt_ov if isinstance(tgt_ov, str) else None)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    script = _clusterkit_script_path()
+    if not script.is_file():
+        return None, (jsonify({"ok": False, "error": f"clusterkit script not found: {script}"}), 500)
+    cmd = ["bash", str(script), target]
+    display_cmd = "./" + script.name + " " + shlex.quote(target)
+    timeout = max(120, _job_env_int("RACK_CLUSTERKIT_TIMEOUT", 14400))
+    ws = _nvis_workspace_dir_effective()
+    cuda_m = (_eget("RACK_CLUSTERKIT_CUDA_MAJOR") or _eget("RACK_NVLOOM_CUDA_MAJOR") or _eget("CUDA_MAJ") or "13").strip()
+    if cuda_m not in ("12", "13"):
+        cuda_m = "13"
+    env_updates: dict[str, str] = {
+        "WORKSPACE_DIR": ws,
+        "NVIS_WORKSPACE_DIR": ws,
+        "TOPDIR": ws,
+        "NVIS_BIN_SCRIPTS": str(SCRIPTS_DIR.resolve()),
+        "CUDA_MAJ": cuda_m,
+    }
+    pl = _clusterkit_product_line_for_job(body)
+    if pl:
+        env_updates["RACK_CLUSTER_PRODUCT_LINE"] = pl
+    for k in ("NVIS_HPCX_ROOT", "NVIS_CLUSTERKIT_HPCX_INIT", "RACK_CLUSTERKIT_PARTITION", "RACK_CLUSTERKIT_EXTRA_OPTS"):
+        v = (_eget(k) or "").strip()
+        if v:
+            env_updates[k] = v
+    return (
+        {
+            "log_dir": log_dir,
+            "rk": rk,
+            "target": target,
+            "cmd": cmd,
+            "display_cmd": display_cmd,
+            "timeout": timeout,
+            "env_updates": env_updates,
         },
         None,
     )
@@ -7393,6 +8949,8 @@ def api_run_mnubergemm_stress_async():
     cmd = prep["cmd"]
     display_cmd = str(prep["display_cmd"])
     timeout = int(prep["timeout"])
+    _eu = prep.get("env_updates")
+    env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) else None
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     with _stress_jobs_lock:
@@ -7408,6 +8966,7 @@ def api_run_mnubergemm_stress_async():
     threading.Thread(
         target=_stress_worker,
         args=(job_id, cmd, str(log_dir), timeout, display_cmd),
+        kwargs={"env_updates": env_merged},
         daemon=True,
     ).start()
     client_poll_deadline_ms = min(int(timeout) * 1000 + 600000, 48 * 3600 * 1000)
@@ -7427,6 +8986,134 @@ def api_run_mnubergemm_stress_async():
 @app.route("/api/run-mnubergemm-stress-status", methods=["GET"])
 def api_run_mnubergemm_stress_status():
     """Return state for a job started via /api/run-mnubergemm-stress-async."""
+    job_id = (request.args.get("job_id") or "").strip()
+    if not job_id:
+        return jsonify({"ok": False, "error": "job_id is required"}), 400
+    with _stress_jobs_lock:
+        row = _stress_jobs.get(job_id)
+        if row is None:
+            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
+        payload = dict(row)
+    payload["ok"] = True
+    return jsonify(payload)
+
+
+@app.route("/api/run-nvloom-async", methods=["POST"])
+def api_run_nvloom_async():
+    """Start nvloom singlerack Slurm driver (sbatch --wait); poll GET /api/run-nvloom-status?job_id=…"""
+    body = request.get_json(silent=True) or {}
+    prep, err = _prepare_run_nvloom_singlerack(body)
+    if err is not None:
+        return err[0], err[1]
+    assert prep is not None
+    log_dir = prep["log_dir"]
+    rk = str(prep["rk"])
+    target = str(prep["target"])
+    cmd = prep["cmd"]
+    display_cmd = str(prep["display_cmd"])
+    timeout = int(prep["timeout"])
+    _eu = prep.get("env_updates")
+    env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) else None
+    job_id = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat()
+    with _stress_jobs_lock:
+        _stress_jobs[job_id] = {
+            "job_id": job_id,
+            "rack": rk,
+            "target": target,
+            "log_dir": str(log_dir),
+            "phase": "starting",
+            "command_display": display_cmd,
+            "created_at": created,
+            "kind": "nvloom",
+        }
+    threading.Thread(
+        target=_stress_worker,
+        args=(job_id, cmd, str(log_dir), timeout, display_cmd),
+        kwargs={"error_label": "nvloom singlerack script", "env_updates": env_merged},
+        daemon=True,
+    ).start()
+    client_poll_deadline_ms = min(int(timeout) * 1000 + 600000, 48 * 3600 * 1000)
+    return jsonify(
+        {
+            "ok": True,
+            "job_id": job_id,
+            "rack": rk,
+            "target": target,
+            "command_display": display_cmd,
+            "timeout_sec": timeout,
+            "client_poll_deadline_ms": client_poll_deadline_ms,
+        }
+    )
+
+
+@app.route("/api/run-nvloom-status", methods=["GET"])
+def api_run_nvloom_status():
+    """Return state for a job started via /api/run-nvloom-async (same store as mnubergemm stress)."""
+    job_id = (request.args.get("job_id") or "").strip()
+    if not job_id:
+        return jsonify({"ok": False, "error": "job_id is required"}), 400
+    with _stress_jobs_lock:
+        row = _stress_jobs.get(job_id)
+        if row is None:
+            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
+        payload = dict(row)
+    payload["ok"] = True
+    return jsonify(payload)
+
+
+@app.route("/api/run-clusterkit-async", methods=["POST"])
+def api_run_clusterkit_async():
+    """Start ClusterKit singlerack Slurm driver; poll GET /api/run-clusterkit-status?job_id=…"""
+    body = request.get_json(silent=True) or {}
+    prep, err = _prepare_run_clusterkit_singlerack(body)
+    if err is not None:
+        return err[0], err[1]
+    assert prep is not None
+    log_dir = prep["log_dir"]
+    rk = str(prep["rk"])
+    target = str(prep["target"])
+    cmd = prep["cmd"]
+    display_cmd = str(prep["display_cmd"])
+    timeout = int(prep["timeout"])
+    _eu = prep.get("env_updates")
+    env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) else None
+    job_id = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat()
+    with _stress_jobs_lock:
+        _stress_jobs[job_id] = {
+            "job_id": job_id,
+            "rack": rk,
+            "target": target,
+            "log_dir": str(log_dir),
+            "phase": "starting",
+            "command_display": display_cmd,
+            "created_at": created,
+            "kind": "clusterkit",
+        }
+    threading.Thread(
+        target=_stress_worker,
+        args=(job_id, cmd, str(log_dir), timeout, display_cmd),
+        kwargs={"error_label": "clusterkit script", "env_updates": env_merged},
+        daemon=True,
+    ).start()
+    client_poll_deadline_ms = min(int(timeout) * 1000 + 600000, 48 * 3600 * 1000)
+    return jsonify(
+        {
+            "ok": True,
+            "job_id": job_id,
+            "rack": rk,
+            "target": target,
+            "command_display": display_cmd,
+            "timeout_sec": timeout,
+            "client_poll_deadline_ms": client_poll_deadline_ms,
+        }
+    )
+
+
+@app.route("/api/run-clusterkit-status", methods=["GET"])
+def api_run_clusterkit_status():
+    """Return state for a job started via /api/run-clusterkit-async."""
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
@@ -7514,10 +9201,11 @@ def _merged_stdout_stream_generator(
     *,
     linebuffer_env_var: str,
     linebuffer_default: str = "1",
+    env_extra: dict[str, str] | None = None,
 ) -> Iterator[bytes]:
     """Yield merged stdout/stderr from a subprocess until exit (or timeout)."""
     cmd_run = list(cmd)
-    if os.environ.get(linebuffer_env_var, linebuffer_default).strip().lower() in (
+    if (_eget(linebuffer_env_var, linebuffer_default) or "").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -7526,7 +9214,7 @@ def _merged_stdout_stream_generator(
         stdbuf = shutil.which("stdbuf")
         if stdbuf:
             cmd_run = [stdbuf, "-oL", "-eL", *cmd_run]
-    env = os.environ.copy()
+    env = _subprocess_env(env_extra)
     proc = subprocess.Popen(
         cmd_run,
         cwd=cwd,
@@ -7599,7 +9287,7 @@ def _merged_stdout_stream_generator(
 
 def _sysinfo_stream_generator(prep: dict):
     """Yield stdout+stderr bytes from sysinfo.sh until process exit (or timeout)."""
-    timeout_sec = max(30, _env_int("RACK_SYSINFO_TIMEOUT", 1800))
+    timeout_sec = max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800))
     yield from _merged_stdout_stream_generator(
         list(prep["cmd"]),
         str(prep["log_dir"]),
@@ -7682,10 +9370,10 @@ def api_run_sysinfo():
         proc = subprocess.run(
             prep["cmd"],
             cwd=str(prep["log_dir"]),
-            env=os.environ.copy(),
+            env=_subprocess_env(),
             capture_output=True,
             text=True,
-            timeout=max(30, _env_int("RACK_SYSINFO_TIMEOUT", 1800)),
+            timeout=max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800)),
         )
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": "sysinfo.sh timed out", "target": prep["target"]}), 504
@@ -7703,6 +9391,879 @@ def api_run_sysinfo():
             "stderr": (proc.stderr or "").strip(),
         }
     ), (200 if ok else 502)
+
+
+@app.route("/api/tools/download-containers", methods=["POST"])
+def api_tools_download_containers():
+    """Run bin/scripts/05-download-containers.sh with a chosen destination (and optional arch).
+
+    Requires ``NGC_API_KEY`` in the **server** environment (nvapi-…), not in the HTTP body.
+    If the expected ``.sqsh`` already exists and is non-empty, returns success with ``skipped`` (no import, no key needed).
+    """
+    if os.environ.get("RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED)"}), 403
+    body = request.get_json(silent=True) or {}
+    dest_raw = body.get("destination")
+    arch_raw = body.get("arch")
+    try:
+        dest_dir = _resolve_tools_destination(str(dest_raw).strip() if dest_raw else "")
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    found, checked_paths = _tools_find_existing_sqsh_for_skip(dest_dir)
+    if found is not None:
+        msg = f"File already exists, skipping download: {found}"
+        return jsonify(
+            {
+                "ok": True,
+                "skipped": True,
+                "destination": str(dest_dir),
+                "existing_file": str(found),
+                "checked_paths": checked_paths,
+                "message": msg,
+                "stdout": msg,
+                "stderr": "",
+                "command_display": "(no command — output file already present)",
+            }
+        )
+    if not (os.environ.get("NGC_API_KEY") or "").strip():
+        return jsonify(
+            {
+                "ok": False,
+                "error": "NGC_API_KEY is not set on the dashboard host (export before starting the app)",
+            }
+        ), 400
+    arch = str(arch_raw).strip() if arch_raw else ""
+    if arch and arch not in ("aarch64", "x86_64", "arm64"):
+        return jsonify({"ok": False, "error": "arch must be aarch64, x86_64, or arm64"}), 400
+    if arch == "arm64":
+        arch = "aarch64"
+    script = SCRIPTS_DIR / "05-download-containers.sh"
+    if not script.is_file():
+        return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
+    timeout = max(60, _env_int("RACK_TOOLS_DOWNLOAD_CONTAINERS_TIMEOUT", 14400))
+    cmd: list[str] = [str(script), str(dest_dir)]
+    if arch:
+        cmd.append(arch)
+    display_cmd = f"{script.name} {shlex.quote(str(dest_dir))}" + (f" {shlex.quote(arch)}" if arch else "")
+    try:
+        with _tools_exclusive_lock("download_containers"):
+            proc = subprocess.run(
+                cmd,
+                cwd=str(APP_DIR),
+                env=_subprocess_env(),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+    except _ToolsExclusiveLockBusyError as e:
+        return jsonify({"ok": False, "error": str(e), "destination": str(dest_dir)}), 409
+    except subprocess.TimeoutExpired:
+        return jsonify(
+            {"ok": False, "error": f"download script timed out after {timeout}s", "destination": str(dest_dir)}
+        ), 504
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "destination": str(dest_dir)}), 500
+    ok = proc.returncode == 0
+    return jsonify(
+        {
+            "ok": ok,
+            "returncode": proc.returncode,
+            "destination": str(dest_dir),
+            "command_display": display_cmd,
+            "stdout": (proc.stdout or "").strip(),
+            "stderr": (proc.stderr or "").strip(),
+        }
+    ), (200 if ok else 502)
+
+
+_STREAM_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store",
+    "Pragma": "no-cache",
+    "X-Accel-Buffering": "no",
+}
+
+
+@app.route("/api/tools/download-containers-stream", methods=["POST"])
+def api_tools_download_containers_stream():
+    """Stream ``05-download-containers.sh`` merged stdout/stderr (same POST JSON as ``/api/tools/download-containers``)."""
+    if os.environ.get("RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED)"}), 403
+    body = request.get_json(silent=True) or {}
+    dest_raw = body.get("destination")
+    arch_raw = body.get("arch")
+    try:
+        dest_dir = _resolve_tools_destination(str(dest_raw).strip() if dest_raw else "")
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    found, _checked = _tools_find_existing_sqsh_for_skip(dest_dir)
+    if found is not None:
+        msg = f"File already exists, skipping download: {found}"
+
+        def _skip_gen() -> Iterator[bytes]:
+            yield f"{msg}\n\n--- exit 0 ---\n".encode("utf-8")
+
+        return Response(
+            stream_with_context(_skip_gen()),
+            mimetype="text/plain; charset=utf-8",
+            headers=dict(_STREAM_NO_CACHE_HEADERS),
+        )
+    if not (os.environ.get("NGC_API_KEY") or "").strip():
+
+        def _ngc_gen() -> Iterator[bytes]:
+            yield (
+                "ERROR: NGC_API_KEY is not set on the dashboard host (export before starting the app)\n"
+            ).encode("utf-8")
+
+        return Response(
+            stream_with_context(_ngc_gen()),
+            status=400,
+            mimetype="text/plain; charset=utf-8",
+            headers=dict(_STREAM_NO_CACHE_HEADERS),
+        )
+    arch = str(arch_raw).strip() if arch_raw else ""
+    if arch and arch not in ("aarch64", "x86_64", "arm64"):
+        return jsonify({"ok": False, "error": "arch must be aarch64, x86_64, or arm64"}), 400
+    if arch == "arm64":
+        arch = "aarch64"
+    script = SCRIPTS_DIR / "05-download-containers.sh"
+    if not script.is_file():
+        return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
+    timeout = max(60, _env_int("RACK_TOOLS_DOWNLOAD_CONTAINERS_TIMEOUT", 14400))
+    cmd: list[str] = [str(script), str(dest_dir)]
+    if arch:
+        cmd.append(arch)
+    display_cmd = f"{script.name} {shlex.quote(str(dest_dir))}" + (f" {shlex.quote(arch)}" if arch else "")
+    lock_fh, lock_busy = _tools_try_acquire_exclusive_flock_for_stream("download_containers")
+    if lock_busy is not None:
+
+        def _lock_busy_gen() -> Iterator[bytes]:
+            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+
+        return Response(
+            stream_with_context(_lock_busy_gen()),
+            status=409,
+            mimetype="text/plain; charset=utf-8",
+            headers=dict(_STREAM_NO_CACHE_HEADERS),
+        )
+
+    def _download_stream_gen() -> Iterator[bytes]:
+        try:
+            yield from _merged_stdout_stream_generator(
+                cmd,
+                str(APP_DIR),
+                display_cmd,
+                timeout,
+                linebuffer_env_var="RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER",
+            )
+        finally:
+            _tools_release_exclusive_flock_fh(lock_fh)
+
+    return Response(
+        stream_with_context(_download_stream_gen()),
+        mimetype="text/plain; charset=utf-8",
+        headers=dict(_STREAM_NO_CACHE_HEADERS),
+    )
+
+
+@app.route("/api/tools/download-containers-status", methods=["GET"])
+def api_tools_download_containers_status():
+    """Return whether a non-empty NEMO ``.sqsh`` is already present for *destination* (same rules as download skip)."""
+    if os.environ.get("RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED)"}), 403
+    dest_q = (request.args.get("destination") or "").strip()
+    if not dest_q:
+        return jsonify({"ok": True, "exists": False})
+    try:
+        dest_dir = _tools_destination_dir_for_status_probe(dest_q)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    found, _checked = _tools_find_existing_sqsh_for_skip(dest_dir)
+    if found is not None:
+        return jsonify({"ok": True, "exists": True, "existing_file": str(found), "destination_dir": str(dest_dir)})
+    return jsonify({"ok": True, "exists": False, "destination_dir": str(dest_dir)})
+
+
+def _workspace_toolchain_status_payload(ws: Path, cuda_major: str) -> dict[str, object]:
+    """Probe CUDA toolkit, HPC-X unpack, NCCL binaries, and nvloom in-tree build under *ws*."""
+    maj = cuda_major.strip() if cuda_major else "13"
+    cuda_nvcc = (ws / "cuda" / "bin" / "nvcc").is_file() or (ws / f"cuda{maj}" / "bin" / "nvcc").is_file()
+    if maj == "12":
+        hpcx_unpack = "hpcx-v2.22.1-gcc-doca_ofed-ubuntu24.04-cuda12-aarch64"
+    else:
+        hpcx_unpack = "hpcx-v2.25.1-gcc-doca_ofed-ubuntu24.04-cuda13-aarch64"
+    _hpx = ws / hpcx_unpack
+    hpcx_init = (_hpx / "hpcx-init.sh").is_file() or (_hpx / "hpcx-mt-init-ompi.sh").is_file()
+    nccl_perf = (ws / "nccl" / "bins" / "all_reduce_perf").is_file()
+    all_ready = bool(cuda_nvcc and hpcx_init and nccl_perf)
+    _nvloom_dir = ws / "nvloom"
+    nvloom_cli = (_nvloom_dir / "nvloom_cli").is_file()
+    cmake_nvloom_bundle = (ws / "cmake-3.28.1-linux-aarch64" / "bin" / "cmake").is_file()
+    return {
+        "cuda_nvcc": cuda_nvcc,
+        "hpcx_init": hpcx_init,
+        "nccl_all_reduce_perf": nccl_perf,
+        "all_ready": all_ready,
+        "hpcx_unpack": hpcx_unpack,
+        "workspace_dir": str(ws),
+        "nvloom_cli": nvloom_cli,
+        "cmake_nvloom_bundle": cmake_nvloom_bundle,
+    }
+
+
+@app.route("/api/tools/workspace-toolchain-status", methods=["GET"])
+def api_tools_workspace_toolchain_status():
+    """Return whether CUDA toolkit, HPC-X, NCCL test binary, and nvloom_cli are present under *workspace*."""
+    ws_q = (request.args.get("workspace") or "").strip()
+    cuda_m = str(request.args.get("cuda_major") or "13").strip()
+    if cuda_m not in ("12", "13"):
+        return jsonify({"ok": False, "error": 'cuda_major must be "12" or "13"'}), 400
+    if not ws_q:
+        return jsonify(
+            {
+                "ok": True,
+                "cuda_nvcc": False,
+                "hpcx_init": False,
+                "nccl_all_reduce_perf": False,
+                "all_ready": False,
+                "workspace_dir": "",
+                "nvloom_cli": False,
+                "cmake_nvloom_bundle": False,
+            }
+        )
+    try:
+        ws = _resolve_tools_destination(ws_q)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    payload = _workspace_toolchain_status_payload(ws, cuda_m)
+    return jsonify({"ok": True, **payload})
+
+
+def _write_prometheus_rc_for_launch(user: str, password: str) -> Path:
+    """Create a mode-0600 file with ``USER`` / ``PASSWORD`` assignments like ``~/.prometheusrc`` for ``source``."""
+    fd, path_s = tempfile.mkstemp(prefix="nvis-prometheusrc-", suffix=".env", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(f"USER={shlex.quote(user)}\n")
+            f.write(f"PASSWORD={shlex.quote(password)}\n")
+        p = Path(path_s)
+        p.chmod(0o600)
+        return p
+    except Exception:
+        try:
+            os.unlink(path_s)
+        except OSError:
+            pass
+        raise
+
+
+@app.route("/api/tools/launch-grafana-bright-prometheus", methods=["POST"])
+def api_tools_launch_grafana_bright_prometheus():
+    """Run ``bin/scripts/launch-grafana-bright-prometheus.sh`` on the dashboard host (Docker Grafana + Prometheus DS).
+
+    When **both** ``RACK_PROMETHEUS_BASIC_AUTH_USER`` and ``RACK_PROMETHEUS_BASIC_AUTH_PASSWORD`` are set
+    (Settings → External connections), the server writes a temporary ``PROMETHEUS_RC`` file in the same shape
+    as ``~/.prometheusrc`` and passes it to the script. If either is empty, ``PROMETHEUS_RC`` is unset so the
+    script resolves ``/cm/cmsupport/.prometheusrc`` or ``~/.prometheusrc`` as documented in the script.
+    """
+    if os.environ.get("RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED)"}), 403
+    script = SCRIPTS_DIR / "launch-grafana-bright-prometheus.sh"
+    if not script.is_file():
+        return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
+    user = (_eget("RACK_PROMETHEUS_BASIC_AUTH_USER") or "").strip()
+    password = (_eget("RACK_PROMETHEUS_BASIC_AUTH_PASSWORD") or "").strip()
+    tmp_rc: Path | None = None
+    extra: dict[str, str] = {}
+    if user or password:
+        if not user or not password:
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        "Set both Prometheus username and password in Settings → External connections, "
+                        "or clear both to use ~/.prometheusrc (or other default paths) on the server."
+                    ),
+                }
+            ), 400
+        tmp_rc = _write_prometheus_rc_for_launch(user, password)
+        extra["PROMETHEUS_RC"] = str(tmp_rc)
+    timeout = max(120, _env_int("RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_TIMEOUT", 7200))
+    cmd = ["bash", str(script)]
+    display_cmd = "bash bin/scripts/launch-grafana-bright-prometheus.sh"
+    if extra.get("PROMETHEUS_RC"):
+        display_cmd += "  (PROMETHEUS_RC from Settings credentials)"
+    proc: subprocess.CompletedProcess[str] | None = None
+    err_resp: tuple[object, int] | None = None
+    try:
+        with _tools_exclusive_lock("launch_grafana_bright_prometheus"):
+            proc = subprocess.run(
+                cmd,
+                cwd=str(APP_DIR),
+                env=_subprocess_env(extra),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+    except _ToolsExclusiveLockBusyError as e:
+        err_resp = (jsonify({"ok": False, "error": str(e)}), 409)
+    except subprocess.TimeoutExpired:
+        err_resp = (jsonify({"ok": False, "error": f"script timed out after {timeout}s"}), 504)
+    except Exception as e:
+        err_resp = (jsonify({"ok": False, "error": str(e)}), 500)
+    finally:
+        if tmp_rc is not None:
+            try:
+                tmp_rc.unlink(missing_ok=True)
+            except OSError:
+                pass
+    if err_resp is not None:
+        return err_resp
+    assert proc is not None
+    ok = proc.returncode == 0
+    return jsonify(
+        {
+            "ok": ok,
+            "returncode": proc.returncode,
+            "command_display": display_cmd,
+            "stdout": (proc.stdout or "").strip(),
+            "stderr": (proc.stderr or "").strip(),
+        }
+    ), (200 if ok else 502)
+
+
+@app.route("/api/tools/launch-grafana-bright-prometheus-stream", methods=["POST"])
+def api_tools_launch_grafana_bright_prometheus_stream():
+    """Stream ``launch-grafana-bright-prometheus.sh`` (same credentials rules as the JSON POST)."""
+    if os.environ.get("RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED)"}), 403
+    script = SCRIPTS_DIR / "launch-grafana-bright-prometheus.sh"
+    if not script.is_file():
+        return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
+    user = (_eget("RACK_PROMETHEUS_BASIC_AUTH_USER") or "").strip()
+    password = (_eget("RACK_PROMETHEUS_BASIC_AUTH_PASSWORD") or "").strip()
+    tmp_rc: Path | None = None
+    extra: dict[str, str] = {}
+    if user or password:
+        if not user or not password:
+
+            def _cred_err() -> Iterator[bytes]:
+                yield (
+                    "ERROR: Set both Prometheus username and password in Settings → External connections, "
+                    "or clear both to use ~/.prometheusrc on the server.\n"
+                ).encode("utf-8")
+
+            return Response(
+                stream_with_context(_cred_err()),
+                status=400,
+                mimetype="text/plain; charset=utf-8",
+                headers=dict(_STREAM_NO_CACHE_HEADERS),
+            )
+        tmp_rc = _write_prometheus_rc_for_launch(user, password)
+        extra["PROMETHEUS_RC"] = str(tmp_rc)
+    timeout = max(120, _env_int("RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_TIMEOUT", 7200))
+    cmd = ["bash", str(script)]
+    display_cmd = "bash bin/scripts/launch-grafana-bright-prometheus.sh"
+    if extra.get("PROMETHEUS_RC"):
+        display_cmd += "  (PROMETHEUS_RC from Settings credentials)"
+
+    lock_fh, lock_busy = _tools_try_acquire_exclusive_flock_for_stream("launch_grafana_bright_prometheus")
+    if lock_busy is not None:
+        if tmp_rc is not None:
+            try:
+                tmp_rc.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        def _lock_busy_gen() -> Iterator[bytes]:
+            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+
+        return Response(
+            stream_with_context(_lock_busy_gen()),
+            status=409,
+            mimetype="text/plain; charset=utf-8",
+            headers=dict(_STREAM_NO_CACHE_HEADERS),
+        )
+
+    def _grafana_stream_gen() -> Iterator[bytes]:
+        try:
+            yield from _merged_stdout_stream_generator(
+                cmd,
+                str(APP_DIR),
+                display_cmd,
+                timeout,
+                linebuffer_env_var="RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER",
+                env_extra=extra if extra else None,
+            )
+        finally:
+            if tmp_rc is not None:
+                try:
+                    tmp_rc.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            _tools_release_exclusive_flock_fh(lock_fh)
+
+    return Response(
+        stream_with_context(_grafana_stream_gen()),
+        mimetype="text/plain; charset=utf-8",
+        headers=dict(_STREAM_NO_CACHE_HEADERS),
+    )
+
+
+def _json_body_bool(body: dict, key: str, *, default: bool) -> bool:
+    """Parse a boolean from a JSON object (dashboard Tools POST bodies)."""
+    if key not in body:
+        return default
+    v = body[key]
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    if isinstance(v, str):
+        t = v.strip().lower()
+        if t in ("1", "true", "yes", "on"):
+            return True
+        if t in ("0", "false", "no", "off", ""):
+            return False
+    return default
+
+
+@app.route("/api/tools/install-hpcx-workspace", methods=["POST"])
+def api_tools_install_hpcx_workspace():
+    """Run ``install-hpcx-workspace.sh``: Mellanox HPC-X tarball only (CUDA/NCCL: ``install-cuda-nccl-workspace.sh``)."""
+    if os.environ.get("RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED)"}), 403
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    cuda_major = str(body.get("cuda_major") or "13").strip()
+    if cuda_major not in ("12", "13"):
+        return jsonify({"ok": False, "error": 'cuda_major must be "12" or "13"'}), 400
+    arch = str(body.get("arch") or "aarch64").strip()
+    if arch != "aarch64":
+        return jsonify(
+            {
+                "ok": False,
+                "error": 'arch must be "aarch64" (matches aihpc_val installation/03-build-nccl.sh).',
+            }
+        ), 400
+    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    try:
+        ws = _resolve_tools_destination(ws_raw)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    script = SCRIPTS_DIR / "install-hpcx-workspace.sh"
+    if not script.is_file():
+        return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
+    timeout = max(300, _env_int("RACK_TOOLS_INSTALL_HPCX_WORKSPACE_TIMEOUT", 28800))
+    cmd = ["bash", str(script), str(ws), cuda_major, arch]
+    display_cmd = (
+        "bash bin/scripts/install-hpcx-workspace.sh "
+        f"{shlex.quote(str(ws))} {shlex.quote(cuda_major)} {shlex.quote(arch)}"
+    )
+    try:
+        with _tools_exclusive_lock("install_hpcx_workspace"):
+            proc = subprocess.run(
+                cmd,
+                cwd=str(APP_DIR),
+                env=_subprocess_env(),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+    except _ToolsExclusiveLockBusyError as e:
+        return jsonify({"ok": False, "error": str(e)}), 409
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": f"install-hpcx-workspace timed out after {timeout}s"}), 504
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    ok = proc.returncode == 0
+    return jsonify(
+        {
+            "ok": ok,
+            "returncode": proc.returncode,
+            "command_display": display_cmd,
+            "stdout": (proc.stdout or "").strip(),
+            "stderr": (proc.stderr or "").strip(),
+        }
+    ), (200 if ok else 502)
+
+
+@app.route("/api/tools/install-hpcx-workspace-stream", methods=["POST"])
+def api_tools_install_hpcx_workspace_stream():
+    """Stream ``install-hpcx-workspace.sh`` (POST JSON: ``workspace``, ``cuda_major``, ``arch``)."""
+    if os.environ.get("RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED)"}), 403
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    cuda_major = str(body.get("cuda_major") or "13").strip()
+    if cuda_major not in ("12", "13"):
+        return jsonify({"ok": False, "error": 'cuda_major must be "12" or "13"'}), 400
+    arch = str(body.get("arch") or "aarch64").strip()
+    if arch != "aarch64":
+        return jsonify(
+            {
+                "ok": False,
+                "error": 'arch must be "aarch64" (matches aihpc_val installation/03-build-nccl.sh).',
+            }
+        ), 400
+    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    try:
+        ws = _resolve_tools_destination(ws_raw)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    script = SCRIPTS_DIR / "install-hpcx-workspace.sh"
+    if not script.is_file():
+        return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
+    timeout = max(300, _env_int("RACK_TOOLS_INSTALL_HPCX_WORKSPACE_TIMEOUT", 28800))
+    cmd = ["bash", str(script), str(ws), cuda_major, arch]
+    display_cmd = (
+        "bash bin/scripts/install-hpcx-workspace.sh "
+        f"{shlex.quote(str(ws))} {shlex.quote(cuda_major)} {shlex.quote(arch)}"
+    )
+    lock_fh, lock_busy = _tools_try_acquire_exclusive_flock_for_stream("install_hpcx_workspace")
+    if lock_busy is not None:
+
+        def _lock_busy_gen() -> Iterator[bytes]:
+            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+
+        return Response(
+            stream_with_context(_lock_busy_gen()),
+            status=409,
+            mimetype="text/plain; charset=utf-8",
+            headers=dict(_STREAM_NO_CACHE_HEADERS),
+        )
+
+    def _hpcx_stream_gen() -> Iterator[bytes]:
+        try:
+            yield from _merged_stdout_stream_generator(
+                cmd,
+                str(APP_DIR),
+                display_cmd,
+                timeout,
+                linebuffer_env_var="RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER",
+            )
+        finally:
+            _tools_release_exclusive_flock_fh(lock_fh)
+
+    return Response(
+        stream_with_context(_hpcx_stream_gen()),
+        mimetype="text/plain; charset=utf-8",
+        headers=dict(_STREAM_NO_CACHE_HEADERS),
+    )
+
+
+_CUDA_NCCL_BUILD_HOST_RE = re.compile(r"^[a-zA-Z0-9](?:[-a-zA-Z0-9.]{0,251})$")
+
+
+def _validate_cuda_nccl_build_host(raw: object) -> tuple[str | None, str | None]:
+    """Return ``(hostname, None)`` or ``(None, error_message)`` for ``build_host`` JSON field."""
+    t = str(raw or "").strip()
+    if not t:
+        return None, "build_host is required (one Slurm compute node; workspace path must exist there on shared home)."
+    if len(t) > 253:
+        return None, "build_host is too long."
+    if not _CUDA_NCCL_BUILD_HOST_RE.match(t):
+        return None, "build_host must be a single hostname (letters, digits, dots, hyphens)."
+    return t, None
+
+
+@app.route("/api/tools/install-cuda-nccl-workspace", methods=["POST"])
+def api_tools_install_cuda_nccl_workspace():
+    """Run ``install-cuda-nccl-workspace.sh``: download on localhost, install on ``build_host`` via pdsh."""
+    if os.environ.get("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED)"}), 403
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    cuda_major = str(body.get("cuda_major") or "13").strip()
+    if cuda_major not in ("12", "13"):
+        return jsonify({"ok": False, "error": 'cuda_major must be "12" or "13"'}), 400
+    arch = str(body.get("arch") or "aarch64").strip()
+    if arch != "aarch64":
+        return jsonify(
+            {
+                "ok": False,
+                "error": 'arch must be "aarch64" (matches aihpc_val installation/03-build-nccl.sh).',
+            }
+        ), 400
+    install_cuda = _json_body_bool(body, "install_cuda_toolkit", default=False)
+    build_nccl = _json_body_bool(body, "build_nccl", default=False)
+    if not install_cuda and not build_nccl:
+        return jsonify(
+            {"ok": False, "error": "Enable install_cuda_toolkit and/or build_nccl (at least one step)."},
+        ), 400
+    build_host, bh_err = _validate_cuda_nccl_build_host(body.get("build_host"))
+    if bh_err is not None:
+        return jsonify({"ok": False, "error": bh_err}), 400
+    assert build_host is not None
+    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    try:
+        ws = _resolve_tools_destination(ws_raw)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    script = SCRIPTS_DIR / "install-cuda-nccl-workspace.sh"
+    if not script.is_file():
+        return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
+    timeout = max(300, _env_int("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_TIMEOUT", 28800))
+    extra_env = {
+        "NVIS_INSTALL_CUDA_TOOLKIT": "1" if install_cuda else "0",
+        "NVIS_BUILD_NCCL": "1" if build_nccl else "0",
+        "NVIS_CUDA_NCCL_BUILD_HOST": build_host,
+    }
+    cmd = ["bash", str(script), str(ws), cuda_major, arch]
+    display_cmd = (
+        f"NVIS_INSTALL_CUDA_TOOLKIT={extra_env['NVIS_INSTALL_CUDA_TOOLKIT']} "
+        f"NVIS_BUILD_NCCL={extra_env['NVIS_BUILD_NCCL']} "
+        f"NVIS_CUDA_NCCL_BUILD_HOST={shlex.quote(build_host)} "
+        "bash bin/scripts/install-cuda-nccl-workspace.sh "
+        f"{shlex.quote(str(ws))} {shlex.quote(cuda_major)} {shlex.quote(arch)}"
+    )
+    try:
+        with _tools_exclusive_lock("install_cuda_nccl_workspace"):
+            proc = subprocess.run(
+                cmd,
+                cwd=str(APP_DIR),
+                env=_subprocess_env(extra_env),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+    except _ToolsExclusiveLockBusyError as e:
+        return jsonify({"ok": False, "error": str(e)}), 409
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": f"install-cuda-nccl-workspace timed out after {timeout}s"}), 504
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    ok = proc.returncode == 0
+    return jsonify(
+        {
+            "ok": ok,
+            "returncode": proc.returncode,
+            "command_display": display_cmd,
+            "stdout": (proc.stdout or "").strip(),
+            "stderr": (proc.stderr or "").strip(),
+            "install_cuda_toolkit": install_cuda,
+            "build_nccl": build_nccl,
+            "build_host": build_host,
+        }
+    ), (200 if ok else 502)
+
+
+@app.route("/api/tools/install-cuda-nccl-workspace-stream", methods=["POST"])
+def api_tools_install_cuda_nccl_workspace_stream():
+    """Stream ``install-cuda-nccl-workspace.sh`` (same POST JSON as ``/api/tools/install-cuda-nccl-workspace``)."""
+    if os.environ.get("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED)"}), 403
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    cuda_major = str(body.get("cuda_major") or "13").strip()
+    if cuda_major not in ("12", "13"):
+        return jsonify({"ok": False, "error": 'cuda_major must be "12" or "13"'}), 400
+    arch = str(body.get("arch") or "aarch64").strip()
+    if arch != "aarch64":
+        return jsonify(
+            {
+                "ok": False,
+                "error": 'arch must be "aarch64" (matches aihpc_val installation/03-build-nccl.sh).',
+            }
+        ), 400
+    install_cuda = _json_body_bool(body, "install_cuda_toolkit", default=False)
+    build_nccl = _json_body_bool(body, "build_nccl", default=False)
+    if not install_cuda and not build_nccl:
+        return jsonify(
+            {"ok": False, "error": "Enable install_cuda_toolkit and/or build_nccl (at least one step)."},
+        ), 400
+    build_host, bh_err = _validate_cuda_nccl_build_host(body.get("build_host"))
+    if bh_err is not None:
+        return jsonify({"ok": False, "error": bh_err}), 400
+    assert build_host is not None
+    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    try:
+        ws = _resolve_tools_destination(ws_raw)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    script = SCRIPTS_DIR / "install-cuda-nccl-workspace.sh"
+    if not script.is_file():
+        return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
+    timeout = max(300, _env_int("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_TIMEOUT", 28800))
+    extra_env = {
+        "NVIS_INSTALL_CUDA_TOOLKIT": "1" if install_cuda else "0",
+        "NVIS_BUILD_NCCL": "1" if build_nccl else "0",
+        "NVIS_CUDA_NCCL_BUILD_HOST": build_host,
+    }
+    cmd = ["bash", str(script), str(ws), cuda_major, arch]
+    display_cmd = (
+        f"NVIS_INSTALL_CUDA_TOOLKIT={extra_env['NVIS_INSTALL_CUDA_TOOLKIT']} "
+        f"NVIS_BUILD_NCCL={extra_env['NVIS_BUILD_NCCL']} "
+        f"NVIS_CUDA_NCCL_BUILD_HOST={shlex.quote(build_host)} "
+        "bash bin/scripts/install-cuda-nccl-workspace.sh "
+        f"{shlex.quote(str(ws))} {shlex.quote(cuda_major)} {shlex.quote(arch)}"
+    )
+    lock_fh, lock_busy = _tools_try_acquire_exclusive_flock_for_stream("install_cuda_nccl_workspace")
+    if lock_busy is not None:
+
+        def _lock_busy_gen() -> Iterator[bytes]:
+            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+
+        return Response(
+            stream_with_context(_lock_busy_gen()),
+            status=409,
+            mimetype="text/plain; charset=utf-8",
+            headers=dict(_STREAM_NO_CACHE_HEADERS),
+        )
+
+    def _cuda_nccl_stream_gen() -> Iterator[bytes]:
+        try:
+            yield from _merged_stdout_stream_generator(
+                cmd,
+                str(APP_DIR),
+                display_cmd,
+                timeout,
+                linebuffer_env_var="RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER",
+                env_extra=extra_env,
+            )
+        finally:
+            _tools_release_exclusive_flock_fh(lock_fh)
+
+    return Response(
+        stream_with_context(_cuda_nccl_stream_gen()),
+        mimetype="text/plain; charset=utf-8",
+        headers=dict(_STREAM_NO_CACHE_HEADERS),
+    )
+
+
+@app.route("/api/tools/install-nvloom-workspace", methods=["POST"])
+def api_tools_install_nvloom_workspace():
+    """Run ``install-nvloom-workspace.sh``: git clone on localhost, build on ``build_host`` via pdsh."""
+    if os.environ.get("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED)"}), 403
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    cuda_major = str(body.get("cuda_major") or "13").strip()
+    if cuda_major not in ("12", "13"):
+        return jsonify({"ok": False, "error": 'cuda_major must be "12" or "13"'}), 400
+    build_host, bh_err = _validate_cuda_nccl_build_host(body.get("build_host"))
+    if bh_err is not None:
+        return jsonify({"ok": False, "error": bh_err}), 400
+    assert build_host is not None
+    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    try:
+        ws = _resolve_tools_destination(ws_raw)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    script = SCRIPTS_DIR / "install-nvloom-workspace.sh"
+    if not script.is_file():
+        return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
+    timeout = max(300, _env_int("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_TIMEOUT", 28800))
+    extra_env = {"NVIS_NVLOOM_BUILD_HOST": build_host}
+    cmd = ["bash", str(script), str(ws), cuda_major]
+    display_cmd = (
+        f"NVIS_NVLOOM_BUILD_HOST={shlex.quote(build_host)} "
+        "bash bin/scripts/install-nvloom-workspace.sh "
+        f"{shlex.quote(str(ws))} {shlex.quote(cuda_major)}"
+    )
+    try:
+        with _tools_exclusive_lock("install_nvloom_workspace"):
+            proc = subprocess.run(
+                cmd,
+                cwd=str(APP_DIR),
+                env=_subprocess_env(extra_env),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+    except _ToolsExclusiveLockBusyError as e:
+        return jsonify({"ok": False, "error": str(e)}), 409
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": f"install-nvloom-workspace timed out after {timeout}s"}), 504
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    ok = proc.returncode == 0
+    return jsonify(
+        {
+            "ok": ok,
+            "returncode": proc.returncode,
+            "command_display": display_cmd,
+            "stdout": (proc.stdout or "").strip(),
+            "stderr": (proc.stderr or "").strip(),
+            "build_host": build_host,
+        }
+    ), (200 if ok else 502)
+
+
+@app.route("/api/tools/install-nvloom-workspace-stream", methods=["POST"])
+def api_tools_install_nvloom_workspace_stream():
+    """Stream ``install-nvloom-workspace.sh`` (POST JSON: ``workspace``, ``cuda_major``, ``build_host``)."""
+    if os.environ.get("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED)"}), 403
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    cuda_major = str(body.get("cuda_major") or "13").strip()
+    if cuda_major not in ("12", "13"):
+        return jsonify({"ok": False, "error": 'cuda_major must be "12" or "13"'}), 400
+    build_host, bh_err = _validate_cuda_nccl_build_host(body.get("build_host"))
+    if bh_err is not None:
+        return jsonify({"ok": False, "error": bh_err}), 400
+    assert build_host is not None
+    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    try:
+        ws = _resolve_tools_destination(ws_raw)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    script = SCRIPTS_DIR / "install-nvloom-workspace.sh"
+    if not script.is_file():
+        return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
+    timeout = max(300, _env_int("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_TIMEOUT", 28800))
+    extra_env = {"NVIS_NVLOOM_BUILD_HOST": build_host}
+    cmd = ["bash", str(script), str(ws), cuda_major]
+    display_cmd = (
+        f"NVIS_NVLOOM_BUILD_HOST={shlex.quote(build_host)} "
+        "bash bin/scripts/install-nvloom-workspace.sh "
+        f"{shlex.quote(str(ws))} {shlex.quote(cuda_major)}"
+    )
+    lock_fh, lock_busy = _tools_try_acquire_exclusive_flock_for_stream("install_nvloom_workspace")
+    if lock_busy is not None:
+
+        def _lock_busy_gen() -> Iterator[bytes]:
+            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+
+        return Response(
+            stream_with_context(_lock_busy_gen()),
+            status=409,
+            mimetype="text/plain; charset=utf-8",
+            headers=dict(_STREAM_NO_CACHE_HEADERS),
+        )
+
+    def _nvloom_stream_gen() -> Iterator[bytes]:
+        try:
+            yield from _merged_stdout_stream_generator(
+                cmd,
+                str(APP_DIR),
+                display_cmd,
+                timeout,
+                linebuffer_env_var="RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER",
+                env_extra=extra_env,
+            )
+        finally:
+            _tools_release_exclusive_flock_fh(lock_fh)
+
+    return Response(
+        stream_with_context(_nvloom_stream_gen()),
+        mimetype="text/plain; charset=utf-8",
+        headers=dict(_STREAM_NO_CACHE_HEADERS),
+    )
 
 
 @app.route("/api/run-sysinfo-stream", methods=["POST"])
@@ -7817,11 +10378,11 @@ def _tail_log_stream_generator(prep: dict) -> object:
     lp = prep["log_path"]
     n_init = max(0, _env_int("RACK_TAIL_INITIAL_LINES", 400))
     cmd = ["tail", "-n", str(n_init), "-f", str(lp)]
-    if os.environ.get("RACK_TAIL_LINEBUFFER", "1").strip().lower() in ("1", "true", "yes", "on"):
+    if (_eget("RACK_TAIL_LINEBUFFER", "1") or "").strip().lower() in ("1", "true", "yes", "on"):
         stdbuf = shutil.which("stdbuf")
         if stdbuf:
             cmd = [stdbuf, "-oL", "-eL", *cmd]
-    env = os.environ.copy()
+    env = _subprocess_env()
     proc = subprocess.Popen(
         cmd,
         cwd=str(prep["log_dir"]),
@@ -8134,7 +10695,7 @@ def _cluster_probe_bcm_cmsh_version() -> tuple[str, str]:
     """BCM / Bright Cluster Manager build from ``cmsh -c 'main; versioninfo'`` (head / dashboard host only)."""
     if _truthy_env("RACK_CLUSTER_BCM_CMSH_DISABLED"):
         return "", "disabled (RACK_CLUSTER_BCM_CMSH_DISABLED)"
-    cmsh = (os.environ.get("RACK_CMSH") or "cmsh").strip() or "cmsh"
+    cmsh = (_eget("RACK_CMSH") or "cmsh").strip() or "cmsh"
     cmd = [cmsh, "-c", "main; versioninfo"]
     timeout = max(10, _env_int("RACK_CLUSTER_BCM_CMSH_TIMEOUT", 60))
     if not host_exec.is_remote() and not shutil.which(cmsh):
@@ -8310,7 +10871,12 @@ def update_cluster_dashboard_metadata(updates: dict[str, object]) -> dict[str, s
 
 def build_cluster_overview(log_dir: Path) -> dict[str, object]:
     """Aggregate cluster facts for the React dashboard (env + head-only Slurm; no node SSH/pdsh)."""
-    cached = _cached_rack_status_copy(log_dir)
+    base = _cached_rack_status_copy(log_dir)
+    cached: dict | None = dict(base) if isinstance(base, dict) else None
+    if cached is not None:
+        _merge_fresh_comments_into_status_payload(cached)
+        if not _truthy_env("RACK_STATUS_USE_SHELL_TABLE"):
+            _merge_live_native_workers_into_status(cached, log_dir)
     rows = list(cached.get("rows") or []) if isinstance(cached, dict) else []
     rack_ids = sorted({str(r.get("rack") or "").strip() for r in rows if r.get("rack")})
     rack_count = len(rack_ids)
@@ -8378,6 +10944,8 @@ def build_cluster_overview(log_dir: Path) -> dict[str, object]:
     if nemo_container == "":
         nemo_container = "—"
 
+    cuda_nccl_build_host_candidates = sorted(phys.keys(), key=str.casefold)
+
     return {
         "ok": True,
         "cluster_name": cluster_name,
@@ -8387,6 +10955,8 @@ def build_cluster_overview(log_dir: Path) -> dict[str, object]:
         "bcm_version": bcm_version,
         "slurm_version": slurm_version,
         "nemo_container": nemo_container,
+        "cuda_nccl_build_host_candidates": cuda_nccl_build_host_candidates,
+        "tools_download_destination_default": _tools_download_destination_default(),
         "rack_count": rack_count,
         "tray_hosts": tray_hosts,
         "estimated_gpu_count": estimated_gpus,
@@ -8427,6 +10997,128 @@ def api_cluster_dashboard_metadata():
     return jsonify({"ok": True, **meta})
 
 
+def _job_environment_settings_payload() -> dict[str, object]:
+    """Same JSON shape for GET /api/settings/job-environment and successful PUT (avoids multi-worker GET races)."""
+    ovr = _job_env_overrides_load()
+    eff = _job_env_effective_values()
+    variables: list[dict[str, object]] = []
+    for d in JOB_ENV_UI_DEFINITIONS:
+        k = d["key"]
+        variables.append(
+            {
+                **d,
+                "value": eff.get(k, ""),
+                "has_override": k in ovr,
+            }
+        )
+    sections: list[dict[str, object]] = []
+    for sec_id, title in JOB_ENV_SECTION_ORDER:
+        sec_vars: list[dict[str, object]] = []
+        for d in JOB_ENV_UI_DEFINITIONS:
+            if d.get("section") != sec_id:
+                continue
+            k = d["key"]
+            sec_vars.append(
+                {
+                    **d,
+                    "value": eff.get(k, ""),
+                    "has_override": k in ovr,
+                }
+            )
+        sections.append({"id": sec_id, "title": title, "variables": sec_vars})
+    return {
+        "ok": True,
+        "sections": sections,
+        "variables": variables,
+        "path": str(_job_env_overrides_path()),
+    }
+
+
+@app.route("/api/settings/job-environment", methods=["GET", "PUT"])
+def api_settings_job_environment():
+    """GET effective job/validation env (with dashboard overrides); PUT merges ``overrides`` (empty value clears)."""
+    if request.method == "GET":
+        return jsonify(_job_environment_settings_payload())
+
+    body = request.get_json(silent=True) or {}
+    raw_updates = body.get("overrides")
+    if raw_updates is None:
+        return jsonify({"ok": False, "error": 'expected JSON body with "overrides" object'}), 400
+    if not isinstance(raw_updates, dict):
+        return jsonify({"ok": False, "error": '"overrides" must be an object'}), 400
+
+    before_snapshot = dict(_job_env_overrides_load())
+    cur = dict(before_snapshot)
+    for k, v in raw_updates.items():
+        if not isinstance(k, str) or k not in _JOB_ENV_ALLOWED_KEYS:
+            return jsonify({"ok": False, "error": f"unknown or disallowed key: {k!r}"}), 400
+        if v is None or (isinstance(v, str) and not v.strip()):
+            cur.pop(k, None)
+            continue
+        if not isinstance(v, str):
+            return jsonify({"ok": False, "error": f"{k}: value must be a string"}), 400
+        t = v.strip()
+        if len(t) > 8192:
+            return jsonify({"ok": False, "error": f"{k}: value too long (max 8192)"}), 400
+        if k == "RACK_CMSH_DS_NODE_PATTERN":
+            err = native_status.validate_cmsh_ds_node_pattern(t)
+            if err:
+                return jsonify({"ok": False, "error": f"RACK_CMSH_DS_NODE_PATTERN: {err}"}), 400
+        if k == "RACK_CMSH_DS_NODE_TOKEN_PATTERN":
+            err = native_status.validate_cmsh_ds_node_token_pattern(t)
+            if err:
+                return jsonify({"ok": False, "error": f"RACK_CMSH_DS_NODE_TOKEN_PATTERN: {err}"}), 400
+        if k == "RACK_VALIDATION_CT_RANGE" and not _CT_RANGE_INNER_RE.match(t):
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "RACK_VALIDATION_CT_RANGE must contain only digits, commas, and hyphens (e.g. 01-18)",
+                }
+            ), 400
+        if k == "RACK_STATUS_BACKGROUND_INTERVAL_SEC":
+            try:
+                iv = int(t, 10)
+            except ValueError:
+                return jsonify(
+                    {"ok": False, "error": "RACK_STATUS_BACKGROUND_INTERVAL_SEC must be an integer"}
+                ), 400
+            if iv < 5 or iv > 86400:
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "RACK_STATUS_BACKGROUND_INTERVAL_SEC must be between 5 and 86400",
+                    }
+                ), 400
+        if k == "RACK_WEB_GRAFANA_PORT":
+            try:
+                pv = int(t, 10)
+            except ValueError:
+                return jsonify({"ok": False, "error": "RACK_WEB_GRAFANA_PORT must be an integer"}), 400
+            if pv < 1 or pv > 65535:
+                return jsonify(
+                    {"ok": False, "error": "RACK_WEB_GRAFANA_PORT must be between 1 and 65535"}
+                ), 400
+        cur[k] = t
+
+    find_v = (cur.get("RACK_CMSH_DS_NODE_FIND_PATTERN") or os.environ.get("RACK_CMSH_DS_NODE_FIND_PATTERN") or "").strip()
+    parse_v = (cur.get("RACK_CMSH_DS_NODE_PARSE_PATTERN") or os.environ.get("RACK_CMSH_DS_NODE_PARSE_PATTERN") or "").strip()
+    tok_v = (cur.get("RACK_CMSH_DS_NODE_TOKEN_PATTERN") or os.environ.get("RACK_CMSH_DS_NODE_TOKEN_PATTERN") or "").strip()
+    if find_v and parse_v:
+        err_fp = native_status.validate_cmsh_ds_find_parse_patterns(find_v, parse_v)
+        if err_fp:
+            return jsonify({"ok": False, "error": err_fp}), 400
+    elif tok_v:
+        err_tok = native_status.validate_cmsh_ds_node_token_pattern(tok_v)
+        if err_tok:
+            return jsonify({"ok": False, "error": f"RACK_CMSH_DS_NODE_TOKEN_PATTERN: {err_tok}"}), 400
+
+    bust = _job_env_status_payload_needs_rebuild(before_snapshot, cur)
+    on_disk = _job_env_overrides_write(cur, bust_status_cache=bust)
+    payload = dict(_job_environment_settings_payload())
+    payload["saved"] = on_disk
+    return jsonify(payload)
+
+
 @app.route("/api/cluster-overview", methods=["GET"])
 def api_cluster_overview():
     """Cluster-wide facts for the dashboard tab (env + head Slurm; uses cached /api/status rows)."""
@@ -8460,6 +11152,11 @@ def api_app_stats():
     )
 
 
+def _merge_project_name_into_status_payload(payload: dict) -> None:
+    """SPA sidebar / titles: ``RACK_WEB_PROJECT_NAME`` (and shell ``PROJECT_NAME``) via ``_project_name()``."""
+    payload["project_name"] = _project_name()
+
+
 @app.route("/api/status")
 def api_status():
     _start_cmsh_rack_list_warm_thread()
@@ -8480,6 +11177,7 @@ def api_status():
             out["rack_status_background_interval_sec"] = interval
             _merge_fresh_comments_into_status_payload(out)
             _merge_live_native_workers_into_status(out, log_dir)
+            _merge_project_name_into_status_payload(out)
             return jsonify(out)
         try:
             with _rack_status_exec_lock:
@@ -8491,6 +11189,7 @@ def api_status():
                     out["rack_status_background_interval_sec"] = interval
                     _merge_fresh_comments_into_status_payload(out)
                     _merge_live_native_workers_into_status(out, log_dir)
+                    _merge_project_name_into_status_payload(out)
                     return jsonify(out)
                 data = run_rack_status(log_dir, include_raw=False)
         except subprocess.TimeoutExpired:
@@ -8504,6 +11203,7 @@ def api_status():
         out["rack_status_background_interval_sec"] = interval
         _merge_fresh_comments_into_status_payload(out)
         _merge_live_native_workers_into_status(out, log_dir)
+        _merge_project_name_into_status_payload(out)
         return jsonify(out)
     try:
         if _rack_status_background_enabled():
@@ -8517,6 +11217,7 @@ def api_status():
         return jsonify({"ok": False, "error": str(e)}), 500
     _merge_fresh_comments_into_status_payload(data)
     _merge_live_native_workers_into_status(data, log_dir)
+    _merge_project_name_into_status_payload(data)
     return jsonify(data)
 
 
