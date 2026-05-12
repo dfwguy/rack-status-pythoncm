@@ -484,16 +484,18 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
       )}
 
       {data?.cached && data.analyzed_at && (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          Showing last saved analysis ({new Date(data.analyzed_at).toLocaleString()}). Run analysis again to refresh
-          after new validation logs or rack status changes.
-        </Alert>
+        <div style={{ marginBottom: 16 }}>
+          <Banner status="info">
+            Showing last saved analysis ({new Date(data.analyzed_at).toLocaleString()}). Run analysis again to refresh
+            after new validation logs or rack status changes.
+          </Banner>
+        </div>
       )}
 
       {data && !data.cached && data.analyzed_at && (
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+        <Text kind="body/regular/sm" style={{ display: "block", marginBottom: 8, color: "var(--text-color-secondary)" }}>
           Last run: {new Date(data.analyzed_at).toLocaleString()}
-        </Typography>
+        </Text>
       )}
 
       {sr && (
