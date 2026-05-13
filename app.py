@@ -11339,7 +11339,8 @@ def api_ai_chat():
 
     def generate():
         try:
-            if _truthy_env("RACK_STATUS_DEMO"):
+            use_demo = _truthy_env("RACK_STATUS_DEMO") and not ai_chat.is_ai_enabled()
+            if use_demo:
                 stream = ai_chat.demo_stream_response(full_messages)
             else:
                 stream = ai_chat.chat_completion_stream(full_messages)

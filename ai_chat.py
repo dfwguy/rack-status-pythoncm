@@ -120,11 +120,15 @@ def _get_effective_config() -> dict:
 
 
 def is_ai_enabled() -> bool:
+    """AI is enabled if an API key is configured (settings or env), regardless of the toggle."""
     with _settings_lock:
         settings = _load_settings()
-    if settings.get("enabled") is False:
+    has_key = bool(settings.get("api_key") or os.environ.get("RACK_AI_API_KEY", "").strip())
+    if not has_key:
         return False
-    return bool(settings.get("api_key") or os.environ.get("RACK_AI_API_KEY", "").strip())
+    if settings.get("enabled") is False and not has_key:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
