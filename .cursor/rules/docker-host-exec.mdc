@@ -1,6 +1,6 @@
 ---
-description: Docker deployment and host command execution patterns
-globs: host_exec.py,platforms/**/*.py,Dockerfile,docker-compose.yml,build-docker.sh
+description: Docker deployment, remote path config, and host command execution patterns
+globs: host_exec.py,platforms/**/*.py,Dockerfile,docker-compose.yml,build-docker.sh,rack-config.env
 alwaysApply: false
 ---
 
@@ -8,40 +8,55 @@ alwaysApply: false
 
 ## Command Execution
 
-All host commands (Slurm, cmsh/maas, pdsh, shell scripts) MUST route through `host_exec.run_on_host()` or `host_exec.popen_on_host()`. Never call `subprocess.run()` or `subprocess.Popen()` directly for cluster commands.
+All host commands (Slurm, cmsh/maas, pdsh, shell scripts) MUST route through `host_exec.run_on_host()` or `host_exec.popen_on_host()`. Never call `subprocess.run()` directly for cluster commands.
 
 ```python
 # GOOD
-import host_exec
 proc = host_exec.run_on_host(cmd, timeout=120)
 
 # BAD
 proc = subprocess.run(cmd, capture_output=True, text=True)
 ```
 
-Local-only operations (PAM auth, grep on local files, file I/O) may use `subprocess` directly.
+## Environment Forwarding
+
+In SSH mode, env vars prefixed `RACK_*`, `NEMO_*`, `VALIDATION_*`, `SQUEUE_*` are automatically exported before the remote command. To forward additional prefixes, edit `_FORWARD_ENV_PREFIXES` in `host_exec.py`.
+
+## RACK_REMOTE_BASE_PATH
+
+Single env var that resolves all script paths and the default log directory to the head node filesystem:
+- `SCRIPTS_DIR` = `{RACK_REMOTE_BASE_PATH}/bin/scripts/`
+- `DEFAULT_LOG_DIR` = `{RACK_REMOTE_BASE_PATH}/var/logs/`
+- Individual `RACK_*_SCRIPT` env vars still override if set.
+
+## Script Existence Checks
+
+Use `_script_exists(path)` instead of `path.is_file()` for scripts. In SSH mode it returns `True` (scripts are on the remote host). In local mode it checks the filesystem.
 
 ## Platform Providers
-
-Use `from platforms import get_platform` to get the active provider. Call provider methods to build commands:
 
 ```python
 plat = _get_platform()
 proc = host_exec.run_on_host(plat.sinfo_cmd("-N -h"), timeout=120)
-proc = host_exec.run_on_host(plat.list_racks_cmd(), timeout=120)
 cmd = plat.pdsh_cmd(hosts, remote_cmd, fanout=32)
 ```
 
-When adding new cluster commands, add the method to `PlatformProvider` (base.py), implement in `BCMProvider` (bcm.py) and `MAASProvider` (maas.py).
+When adding new cluster commands: add method to `PlatformProvider` (base.py), implement in `BCMProvider` (bcm.py) and `MAASProvider` (maas.py).
 
-## Docker Build
+## Docker Config
 
-- Multi-stage: Node 22 for SPA build, Ubuntu 22.04 for runtime
-- `build-docker.sh` is the single entry point for dev/prod builds
-- Demo mode (`RACK_STATUS_DEMO=1`) works without SSH — no cluster access needed
-- Production mode (`RACK_EXEC_MODE=ssh`) requires `RACK_SSH_HOST` and an SSH key mounted at `/run/secrets/ssh_key`
-- The SPA base path is `/spa/` (set in `vite.config.ts` as `base: "/spa/"`)
+- `rack-config.env` — centralized config file, loaded via `--env-file` or `docker compose env_file`
+- `build-docker.sh` — dev (demo), prod (env-file), build, stop, logs
+- Multi-stage Dockerfile: Node 22 SPA build + Ubuntu 22.04 runtime
+- SPA base path is `/spa/` (set in `vite.config.ts`)
+- `api_login` must be in the auth bypass list in `_require_dashboard_auth()`
 
 ## Auth in Docker
 
-PAM does not work inside containers. Token auth (`RACK_WEB_AUTH_MODE=token`) is the default when `RACK_EXEC_MODE=ssh`. The `_auth_mode()` function auto-selects based on exec mode.
+PAM does not work in containers. Token auth (`RACK_WEB_AUTH_MODE=token`) auto-selects when `RACK_EXEC_MODE=ssh`.
+
+## Path Resolution in SSH Mode
+
+- `_resolve_log_dir()` skips `is_dir()` check when `host_exec.is_remote()`
+- All `_*_script_path()` functions resolve from `SCRIPTS_DIR` which derives from `RACK_REMOTE_BASE_PATH`
+- The frontend Settings page persists `log_dir` to localStorage; in SSH mode this must be an absolute path on the head node

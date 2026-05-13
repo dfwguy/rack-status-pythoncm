@@ -1,6 +1,6 @@
 ---
-description: Backend Flask API patterns and conventions
-globs: app.py,native_status.py
+description: Backend Flask API patterns, async jobs, and testing conventions
+globs: app.py,native_status.py,tests/**/*.py
 alwaysApply: false
 ---
 
@@ -8,38 +8,52 @@ alwaysApply: false
 
 ## Demo Mode
 
-When `RACK_STATUS_DEMO=1`, endpoints should return synthetic data without calling cluster tools. Check with `_truthy_env("RACK_STATUS_DEMO")` and return early:
+When `RACK_STATUS_DEMO=1`, endpoints should return synthetic data without calling cluster tools:
 
 ```python
 if _truthy_env("RACK_STATUS_DEMO"):
-    return _demo_parser_results()  # return mock JSON
+    return _demo_parser_results()
 ```
 
-`demo_data.py` generates the main `/api/status` mock. Other endpoints (like `/api/parser-results`) have inline mock functions.
+`demo_data.py` generates `/api/status` mock. `/api/parser-results` has an inline `_demo_parser_results()` function.
 
 ## Async Job Pattern
 
-Long-running operations follow the async pattern:
+Long-running operations (validation, llama, stress, xrack, power, GPU reset, etc.):
 1. `POST /api/<action>-async` — starts background thread, returns `{ ok, job_id }`
-2. `GET /api/<action>-status?job_id=...` — poll for progress
-3. Background worker uses `host_exec.popen_on_host()` and updates an in-memory dict
-4. Jobs purge from memory after ~15 minutes via daemon purge threads
+2. `GET /api/<action>-status?job_id=...` — poll for progress, returns `{ ok, phase, stdout, stderr, ... }`
+3. Worker uses `host_exec.popen_on_host()` and updates an in-memory dict
+4. Phases: `starting` -> `running` -> `done` | `error` | `timeout`
+5. Jobs purge from memory after ~15 minutes
 
 ## Slurm Commands
 
-All Slurm commands go through the platform provider's `slurm_prefix()` which handles `module load slurm && ...` wrapping:
+All Slurm commands go through the platform provider:
 
 ```python
 plat = _get_platform()
 proc = host_exec.run_on_host(plat.scontrol_cmd("update nodename=..."), timeout=120)
 ```
 
-Environment variables `RACK_SLURM_MODULE`, `RACK_SLURM_SKIP_MODULE_LOAD`, `RACK_SLURM_SCONTROL`, etc. are read by the platform provider, not by individual handler functions.
+`RACK_SLURM_MODULE`, `RACK_SLURM_SKIP_MODULE_LOAD`, `RACK_SLURM_SCONTROL`, etc. are read by the provider.
 
-## Comments
+## Script Path Resolution
 
-Stored in `rack_comments.json` (override with `RACK_COMMENTS_FILE`). File-level locking with `fcntl.flock`. Max 4000 chars per comment. Works in both demo and production mode.
+Scripts resolve from `SCRIPTS_DIR` (set by `RACK_REMOTE_BASE_PATH` or defaults to `APP_DIR/bin/scripts/`). Use `_script_exists(path)` not `path.is_file()` — the latter fails in SSH mode.
+
+## Auth Bypass
+
+The `_require_dashboard_auth()` before_request hook must allow these endpoints without auth: `login`, `api_login`, `static`.
 
 ## Error Responses
 
-Return `{"ok": false, "error": "message"}` with appropriate HTTP status codes. Use 400 for bad input, 403 for disabled features, 404 for not found, 500 for server errors, 502 for subprocess failures, 504 for timeouts.
+Return `{"ok": false, "error": "message"}` with HTTP status: 400 (bad input), 403 (disabled), 404 (not found), 500 (server), 502 (subprocess), 504 (timeout).
+
+## Testing
+
+- Tests in `tests/` directory, pytest framework
+- Set env vars before importing app: `RACK_STATUS_DEMO=1`, `RACK_WEB_AUTH_DISABLED=1`, `RACK_EXEC_MODE=local`
+- Use Flask test client via `app.test_client()`
+- SPA serving test must check `static/spa/index.html` exists before requesting (file not present in CI)
+- CI runs: `pip install flask openpyxl pytest && python -m pytest tests/ -v`
+- Ruff lint must pass: `ruff check app.py native_status.py demo_data.py host_exec.py platforms/`

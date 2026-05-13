@@ -9,8 +9,8 @@ Flask backend + React 19 SPA (Vite + NVIDIA Kaizen UI + MUI), Dockerized with SS
 
 ## UI Framework
 
-- **Primary**: NVIDIA Kaizen UI (`@nvidia/foundations-react-core`) — Text, Card, Tag, Button, Banner, Skeleton, Flex, Divider, Combobox.
-- **Secondary**: MUI — Sidebar/Drawer, AppBar/Toolbar, Table (sortable/paginated), Dialog, Tabs, TextField, Checkbox, Tooltip, IconButton, CircularProgress, Snackbar/Alert, Menu/MenuItem.
+- **Primary**: NVIDIA Kaizen UI (`@nvidia/foundations-react-core`) — Text, Card, Tag, Button, Banner, Skeleton, Flex, Combobox.
+- **Secondary**: MUI — Sidebar/Drawer, AppBar/Toolbar, Table (sortable/paginated), Dialog, Tabs, TextField, Checkbox, Tooltip, IconButton, CircularProgress, Snackbar/Alert, Menu/MenuItem, Divider (inside MUI shell only).
 - **Icons**: Lucide React (`lucide-react`) exclusively. No `@mui/icons-material`.
 - **Theming**: KUI `ThemeProvider` is outer wrapper (`global`); MUI `ThemeProvider` synced via `ThemeBridge` in `src/context/ThemeContext.tsx`. Use `useThemeMode()` for dark/light toggle.
 - **KUI CSS**: `theme.css` + `components.css` from Kaizen CDN in `index.html`. Without these, KUI components have no styles.
@@ -20,34 +20,41 @@ Flask backend + React 19 SPA (Vite + NVIDIA Kaizen UI + MUI), Dockerized with SS
 
 - **Text**: Use `kind` prop (`body/regular/sm`, `body/bold/md`, `title/lg`, `display/sm`, `mono/sm`, etc.). Use `style` for color/spacing — **not** `sx`.
 - **Tag**: `color` (green/red/yellow/blue/teal/purple/gray), `kind` (solid/outline), `readOnly`, `density` (compact/standard/spacious). Children are the label.
-- **Button**: `kind` (primary/secondary/tertiary), `size` (small/tiny/medium/large), `color` (brand/neutral/danger). **No** `density` prop on Button.
-- **Banner**: `status` (error/warning/success/info), `kind` (inline/header/global). Children are the message. **Not** `kind="error"`.
+- **Button**: `kind` (primary/secondary/tertiary), `size` (small/tiny/medium/large), `color` (brand/neutral/danger). **No** `density` prop on Button — use `size`.
+- **Banner**: `status` (error/warning/success/info), `kind` (inline/header/global). Children are the message. **Not** `kind="error"` — use `status="error"`.
 - **Combobox**: `items`, `multiple`, `selectedValue`, `onSelectedValueChange`, `size` (small/medium/large).
-- **Card, Flex, Divider, Skeleton**: Use `style` prop for inline styles, not MUI `sx`.
-
-## UI Patterns
-
-- **Kebab menu for row actions**: Lucide `Ellipsis` in MUI `IconButton`, opens MUI `Menu`. Place inline in the relevant column (e.g., sinfo column for drain/undrain, job column for cancel/open log). Destructive actions require confirmation `Dialog`. Results via `Snackbar`.
-- **Font sizes**: Minimum 14px. Never use `fontSize: 12`, `fontSize: 11`, or `variant="caption"`. Use `body/regular/sm` (KUI) or `body2` (MUI) as the smallest text.
-- **Status badges**: KUI `Tag` with `density="compact"`, `kind="solid"`, `readOnly`. Color mapping: done=green, fail=red, ongoing=yellow, pending=blue, idle=green, alloc=blue, drain=yellow, down=red.
-- **Comments**: Truncate to 20 chars with `...` in table; full text in Tooltip with `whiteSpace: "pre-line"` for multiline.
-- **Filters**: KUI `Combobox` with `multiple` for multi-select dropdowns, not clickable tags.
+- **Card, Flex, Skeleton**: Use `style` prop for inline styles, not MUI `sx`.
+- **Divider**: Use KUI Divider in content areas. Keep MUI Divider inside MUI shell components (Sidebar/Drawer, AppBar/Toolbar) — KUI Divider renders differently in MUI layout contexts.
+- Full docs: `https://webassets.nvidia.com/kaizen-ui-foundations/docs/components/<Component>.txt`
 
 ## Architecture
 
-- **host_exec.py**: All host commands route through `run_on_host()` / `popen_on_host()`. `RACK_EXEC_MODE=local` (direct subprocess) or `ssh` (SSH tunnel to head node).
+- **host_exec.py**: All host commands route through `run_on_host()` / `popen_on_host()`. `RACK_EXEC_MODE=local` (direct subprocess) or `ssh` (SSH tunnel to head node). Env vars prefixed `RACK_*`, `NEMO_*`, `VALIDATION_*`, `SQUEUE_*` are auto-forwarded to remote SSH sessions.
 - **platforms/**: `PlatformProvider` base class; `BCMProvider` (cmsh, module load slurm, pdsh) and `MAASProvider` (maas-cli). Selected by `RACK_PLATFORM=bcm|maas`.
-- **Auth**: Token mode (`RACK_WEB_AUTH_MODE=token` + `RACK_WEB_AUTH_TOKEN`) for Docker. PAM for local. Auto-selects token when `RACK_EXEC_MODE=ssh`.
-- **Demo mode**: `RACK_STATUS_DEMO=1` returns synthetic data from `demo_data.py`. The `/api/parser-results` endpoint also returns mock chart data in demo mode.
-- **Docker**: Multi-stage Dockerfile (Node 22 SPA build + Ubuntu 22.04 runtime). `build-docker.sh` for dev/prod/build/stop/logs.
+- **RACK_REMOTE_BASE_PATH**: Single env var resolves all script paths and default log dir to head node filesystem. `SCRIPTS_DIR` and `DEFAULT_LOG_DIR` derive from it.
+- **_script_exists()**: All script `is_file()` checks skip in SSH mode (scripts live on remote host).
+- **Auth**: Token mode for Docker (`RACK_WEB_AUTH_MODE=token`), PAM for local. `api_login` endpoint must be in the auth bypass list.
+- **Demo mode**: `RACK_STATUS_DEMO=1` returns synthetic data. `/api/parser-results` also returns mock chart data.
+- **Docker**: Multi-stage Dockerfile. `rack-config.env` centralizes deployment settings. `build-docker.sh` for dev/prod/build/stop/logs.
+- **Command contexts**: `RackCommandContext` and `RackCommandsStoreContext` track async job state across views.
+
+## Testing
+
+- **Backend**: pytest (`tests/`). Run: `python -m pytest tests/ -v`
+- **Frontend**: Vitest + Testing Library (`src/**/*.test.{ts,tsx}`). Run: `cd frontend && npm test`
+- **CI/CD**: `.gitlab-ci.yml` — lint (ruff + tsc), test (pytest + vitest), build (Docker)
+- **Lint**: `ruff check` for Python, `tsc -b --noEmit` for TypeScript. Both must pass.
 
 ## Key Files
 
-- `app.py` — Flask backend, all `/api/*` routes
+- `app.py` — Flask backend, all `/api/*` routes (~11k lines)
 - `native_status.py` — Native Python rack-status builder (cmsh + sinfo + log probes)
-- `host_exec.py` — SSH/local command execution abstraction
+- `host_exec.py` — SSH/local command execution with env forwarding
 - `platforms/` — BCM and MAAS platform providers
+- `rack-config.env` — Docker deployment configuration
 - `frontend/src/components/RackTable.tsx` — Main dashboard table with filters, menus, charts
-- `frontend/src/components/ParserResultsDialog.tsx` — NCCL/NEMO chart dialog
-- `frontend/src/views/MultirackView.tsx` — Multirack validation launcher + status
+- `frontend/src/components/ParserResultsDialog.tsx` — NCCL/NEMO chart dialog + Grafana embeds
+- `frontend/src/views/ToolsView.tsx` — NVLoom, Clusterkit, workspace tools
+- `frontend/src/views/AnalyticsView.tsx` — Rack analytics and aggregate analysis
+- `frontend/src/context/RackCommandsStoreContext.tsx` — Centralized async command tracking
 - `frontend/src/context/ThemeContext.tsx` — KUI + MUI theme bridge
