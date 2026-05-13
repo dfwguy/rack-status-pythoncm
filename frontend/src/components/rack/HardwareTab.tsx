@@ -1,8 +1,10 @@
+import { useState, useMemo } from "react";
 import Box from "@mui/material/Box";
 import { ActionCard } from "./ActionCard";
-import { Power, Cpu, ScanSearch, Bug, RotateCcw, CircleCheck } from "lucide-react";
+import { MacChangeDialog } from "./MacChangeDialog";
+import { Power, Cpu, ScanSearch, Bug, RotateCcw, CircleCheck, Zap, Network } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
-import { attachLogDir, specsCommandBody } from "../../lib/rackCommandBodies";
+import { attachLogDir, bmcRecoveryBody, specsCommandBody } from "../../lib/rackCommandBodies";
 interface HardwareTabProps {
   rack: string;
   logDir?: string;
@@ -15,9 +17,23 @@ interface HardwareTabProps {
 export function HardwareTab({ rack, logDir, selectedNodes, disabled, onSelectPowerResetTargets }: HardwareTabProps) {
   const { runAsyncReset } = useRackCommands();
   const nodeCount = selectedNodes.size;
+  const [macDialogOpen, setMacDialogOpen] = useState(false);
 
   const specsBody = () => specsCommandBody(rack, logDir, selectedNodes);
   const imexBody = () => attachLogDir({ rack }, logDir);
+
+  const singleNode = useMemo(() => {
+    if (selectedNodes.size !== 1) return null;
+    const [only] = [...selectedNodes];
+    return only ?? null;
+  }, [selectedNodes]);
+
+  const macChangeDescription =
+    singleNode
+      ? `Change MAC(s) on ${singleNode}. Auto-swaps if the new MAC is owned by exactly one other node.`
+      : selectedNodes.size === 0
+        ? "Select exactly 1 node to enable."
+        : `Select exactly 1 node (currently ${selectedNodes.size}).`;
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -78,6 +94,34 @@ export function HardwareTab({ rack, logDir, selectedNodes, disabled, onSelectPow
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("IMEX check", "hw", "/api/imex-check-async", imexBody())}
       />
+      <ActionCard
+        title="BMC Recovery"
+        description={`Cold-reset the BMC (rf0) on ${nodeCount} selected node(s) via ipmitool.`}
+        icon={<Zap size={20} />}
+        buttonLabel="Reset BMC"
+        disabled={disabled}
+        destructive
+        selectedNodes={selectedNodes}
+        onRun={() =>
+          runAsyncReset("BMC recovery", "bmc", "/api/bmc-recovery-async", bmcRecoveryBody(rack, logDir, selectedNodes))
+        }
+      />
+      <ActionCard
+        title="MAC Change"
+        description={macChangeDescription}
+        icon={<Network size={20} />}
+        buttonLabel="Change MAC"
+        disabled={disabled || !singleNode}
+        onRun={() => setMacDialogOpen(true)}
+      />
+      {singleNode && (
+        <MacChangeDialog
+          open={macDialogOpen}
+          rack={rack}
+          node={singleNode}
+          onClose={() => setMacDialogOpen(false)}
+        />
+      )}
     </Box>
   );
 }

@@ -71,3 +71,48 @@ export function llamaNodesBody(rack: string, logDir: string | undefined, selecte
   body.nodes_spec = t ?? tokens.join(",");
   return body;
 }
+
+/** A single {name, mac} row used by macChangeBody / MacChangeDialog. */
+export interface MacInterfaceRow {
+  name: string;
+  mac: string;
+}
+
+/**
+ * Body for /api/bmc-recovery-async — same shape as specsCommandBody plus an
+ * optional `iface` (server defaults to "rf0" when omitted).
+ */
+export function bmcRecoveryBody(
+  rack: string,
+  logDir: string | undefined,
+  selected: Set<string>,
+  iface?: string,
+): Record<string, unknown> {
+  const body = specsCommandBody(rack, logDir, selected);
+  const trimmed = (iface ?? "").trim();
+  if (trimmed) body.iface = trimmed;
+  return body;
+}
+
+/**
+ * Body for /api/mac-change-async — single-node form with optional node MAC,
+ * a list of interface rows (empty rows are dropped), and the dry-run flag.
+ */
+export function macChangeBody(
+  rack: string,
+  logDir: string | undefined,
+  node: string,
+  nodeMac: string,
+  interfaces: MacInterfaceRow[],
+  dryRun: boolean,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { rack, node };
+  const trimmedMac = (nodeMac ?? "").trim();
+  if (trimmedMac) body.node_mac = trimmedMac;
+  const rows = (interfaces || [])
+    .map((r) => ({ name: (r.name ?? "").trim(), mac: (r.mac ?? "").trim() }))
+    .filter((r) => r.name && r.mac);
+  if (rows.length > 0) body.interfaces = rows;
+  body.dry_run = !!dryRun;
+  return attachLogDir(body, logDir);
+}

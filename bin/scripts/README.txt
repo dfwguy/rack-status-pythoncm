@@ -105,3 +105,47 @@ Tools / container images (Dashboard “Tools”):
 
     Optional line-buffering for tool streams: RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER (default 1, like other stream scripts).
     GET /api/tools/workspace-toolchain-status?workspace=/abs&cuda_major=12|13 — returns cuda_nvcc, hpcx_init, nccl_all_reduce_perf, all_ready (read-only; not blocked by install-disabled env).
+
+MAC management (macswap/):
+  Unified CLI for BCM cluster MAC address operations. Vendored from
+  https://gitlab-master.nvidia.com/womari/macswap — re-sync by copying
+  macswap, _macswap_common.py, swap_node_macs.py, change_node_macs.py
+  from the upstream repo root.
+  Modes:
+    macswap NODE_A NODE_B [--dry-run]               # swap MACs between two nodes
+    macswap NODE [--node-mac MAC] \                 # change one node's MACs;
+            [--interface NAME=MAC ...] [--dry-run]  # auto-promotes to swap on
+                                                    # single-node conflict.
+  Runtime: requires BCM's bundled python3 (has pythoncm). Invoke through a
+  login shell with `module load python3` so pythoncm is on sys.path.
+  Dashboard: POST /api/mac-change-async JSON
+    { "rack": "pNN-rMM", "node": "pNN-rMM-ctXX",
+      "node_mac": "aa:bb:..."?, "interfaces": [{"name": "...", "mac": "..."}, ...],
+      "dry_run": false }
+  At least one of node_mac or a non-empty interfaces[] must be present.
+  Reuses the _reset_jobs job table (poll /api/reset-job-status?job_id=...).
+  Env: RACK_MACSWAP_SCRIPT (default SCRIPTS_DIR/macswap/macswap),
+       RACK_MACSWAP_PYTHON_MODULE (default 'python3' -- the modulefile
+       name to `module load`; switch to 'python312' etc. on clusters that
+       expose pythoncm under a differently-named module),
+       RACK_MAC_CHANGE_DISABLED, RACK_MAC_CHANGE_TIMEOUT (sec, default 600).
+
+BMC recovery (bmc-recovery.sh):
+  Cold-reset a node's BMC via ipmitool. Vendored from the operations
+  toolbox -- re-sync from
+  https://gitlab-master.nvidia.com/womari/scripts/tree/main/tools/bmc-recovery.
+  Looks up the BMC MAC + credentials via cmsh, finds the latest DHCPOFFER
+  for that MAC in syslog, then issues `ipmitool mc reset cold` against
+  the IP.
+  Usage: bmc-recovery.sh <node> [interface]   # interface defaults to rf0
+  Requires: cmsh (always present on BCM head), ipmitool (must be installed
+  separately on the head node: `apt-get install -y ipmitool`), read access
+  to /var/log/syslog (override via SYSLOG_PRIMARY / SYSLOG_FALLBACK env).
+  Dashboard: POST /api/bmc-recovery-async JSON
+    { "rack": "pNN-rMM", "specs": ["pNN-rMM-ct[XX]", ...],
+      "iface": "rf0"? }                       # default rf0
+  Fans out across the selected node specs serially (one node per
+  ipmitool call). Reuses the _reset_jobs job table.
+  Env: RACK_BMC_RECOVERY_SCRIPT (default SCRIPTS_DIR/bmc-recovery.sh),
+       RACK_BMC_RECOVERY_DISABLED, RACK_BMC_RECOVERY_TIMEOUT (sec, per-node
+       default 120).
