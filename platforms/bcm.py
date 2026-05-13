@@ -7,7 +7,6 @@ a BCM head node: ``cmsh``, ``pdsh``, ``sinfo``/``squeue``/``sacct``/``scontrol``
 from __future__ import annotations
 
 import os
-import shlex
 
 from platforms.base import PlatformProvider
 

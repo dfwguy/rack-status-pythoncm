@@ -12,7 +12,6 @@ Environment variables
 from __future__ import annotations
 
 import os
-import shlex
 
 from platforms.base import PlatformProvider
 

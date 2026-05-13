@@ -592,7 +592,7 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
     if not host_exec.is_remote() and not shutil.which("sinfo"):
         return {}
     opts = (os.environ.get("SINFO_OPTS") or "").strip()
-    extra = f"-N -h -o '%N %t'"
+    extra = "-N -h -o '%N %t'"
     if opts:
         extra += f" {opts}"
     try:
