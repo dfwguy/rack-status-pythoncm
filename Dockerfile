@@ -32,7 +32,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-COPY app.py native_status.py demo_data.py host_exec.py ./
+COPY app.py native_status.py demo_data.py host_exec.py ai_chat.py workflow_engine.py ./
 COPY platforms/ ./platforms/
 COPY rack_web/ ./rack_web/
 COPY bin/ ./bin/
@@ -40,7 +40,8 @@ COPY templates/ ./templates/
 COPY static/ ./static/
 COPY rack-config.env ./
 
-RUN mkdir -p var/logs var/cache
+RUN mkdir -p var/logs var/cache var/workflows/runs
+COPY var/workflows/*.yaml ./var/workflows/
 
 COPY --from=frontend-build /build/static/spa/ ./static/spa/
 

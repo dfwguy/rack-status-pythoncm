@@ -1,0 +1,98 @@
+id: gpu-health-check
+name: GPU Health Check
+description: Standard procedure for diagnosing GPU failures on a rack
+version: 1
+mermaid: |
+  graph TD
+    start(["Start Health Check"]) -->|"begin"| check_status["Check Rack Status"]
+    check_status -->|"all healthy"| run_nccl["Run NCCL Test"]
+    check_status -->|"nodes down"| check_slurm["Check Slurm State"]
+    run_nccl -->|"pass"| done(["Done - Healthy"])
+    run_nccl -->|"fail"| diagnose{"Hardware or Software?"}
+    check_slurm --> undrain(["Undrain Nodes"])
+    undrain --> run_nccl
+    diagnose -->|"Hardware"| gpu_reset["Reset GPU"]
+    diagnose -->|"Software"| restart_service(["Restart Services"])
+    gpu_reset -->|"recovered"| verify["Verify Fix"]
+    gpu_reset -->|"still failing"| escalate(["Open HW Ticket"])
+    restart_service --> verify
+    verify -->|"pass"| done
+    verify -->|"fail"| escalate
+steps:
+  - id: start
+    type: manual
+    name: Start Health Check
+    instructions: "Initiate the GPU health check workflow for the target rack."
+    on_complete: check_status
+  - id: check_status
+    type: automated
+    name: Check Rack Status
+    command: "/api/status"
+    method: GET
+    on_success: run_nccl
+    on_failure: check_slurm
+  - id: check_slurm
+    type: automated
+    name: Check Slurm State
+    command: "host:sinfo -N -h --partition=${partition}"
+    method: GET
+    on_success: undrain
+    on_failure: undrain
+  - id: undrain
+    type: manual
+    name: Undrain Nodes
+    instructions: "Review drained nodes and undrain healthy ones using scontrol."
+    on_complete: run_nccl
+  - id: run_nccl
+    type: automated
+    name: Run NCCL Test
+    command: "/api/run-validation-async"
+    method: POST
+    body:
+      rack: "${rack}"
+      test: "nccl"
+    timeout: 300
+    on_success: done
+    on_failure: diagnose
+  - id: diagnose
+    type: decision
+    name: Hardware or Software?
+    question: "Based on the NCCL test results, is this likely a hardware or software issue?"
+    options:
+      - label: Hardware
+        next: gpu_reset
+      - label: Software
+        next: restart_service
+  - id: gpu_reset
+    type: automated
+    name: Reset GPU
+    command: "/api/gpu-reset-async"
+    method: POST
+    body:
+      rack: "${rack}"
+    on_success: verify
+    on_failure: escalate
+  - id: restart_service
+    type: manual
+    name: Restart Services
+    instructions: "Restart NCCL daemon, check NVLink status, and verify driver is loaded correctly."
+    on_complete: verify
+  - id: verify
+    type: automated
+    name: Verify Fix
+    command: "/api/run-validation-async"
+    method: POST
+    body:
+      rack: "${rack}"
+      test: "nccl"
+    on_success: done
+    on_failure: escalate
+  - id: escalate
+    type: manual
+    name: Open HW Ticket
+    instructions: "GPU hardware failure confirmed. Open a hardware ticket with the datacenter team."
+    on_complete: done
+  - id: done
+    type: manual
+    name: Done
+    instructions: "Health check complete."

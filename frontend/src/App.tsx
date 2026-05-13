@@ -3,9 +3,11 @@ import Box from "@mui/material/Box";
 import { Text } from "@nvidia/foundations-react-core";
 import { ThemeProvider, useThemeMode } from "./context/ThemeContext";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { AIChatProvider, useAIChat } from "./context/AIChatContext";
 import { AppLayout } from "./components/AppLayout";
 import { Sidebar, type ViewId } from "./components/Sidebar";
 import { Toolbar } from "./components/Toolbar";
+import AIChatWidget from "./components/ai/AIChatWidget";
 import { ClusterDashboardView } from "./views/ClusterDashboardView";
 import { SingleRackView } from "./views/SingleRackView";
 import { useClusterOverview } from "./hooks/useClusterOverview";
@@ -15,6 +17,7 @@ import { SlurmView } from "./views/SlurmView";
 import { ReportsView } from "./views/ReportsView";
 import { AnalyticsView } from "./views/AnalyticsView";
 import { ToolsView } from "./views/ToolsView";
+import { WorkflowsView } from "./views/WorkflowsView";
 import { SettingsView } from "./views/SettingsView";
 import { LoginPage } from "./pages/LoginPage";
 import { useRackStatus } from "./hooks/useRackStatus";
@@ -30,6 +33,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   reports: "Reports",
   analytics: "Analytics",
   tools: "Utility",
+  workflows: "Workflows",
   settings: "Settings",
 };
 
@@ -80,10 +84,16 @@ function AppContent() {
     });
   }, []);
 
+  const { setPageContext } = useAIChat();
+
   const handleNavigate = useCallback((view: ViewId) => {
     setActiveView(view);
     setSelectedRack(null);
   }, []);
+
+  useEffect(() => {
+    setPageContext({ page: activeView, rack: selectedRack || undefined });
+  }, [activeView, selectedRack, setPageContext]);
 
   const handleRackSelect = useCallback((rack: string) => {
     setSelectedRack(rack);
@@ -170,6 +180,7 @@ function AppContent() {
           <AnalyticsView logDir={logDir} rows={data?.rows ?? []} />
         )}
         {activeView === "tools" && <ToolsView logDir={logDir} />}
+        {activeView === "workflows" && <WorkflowsView />}
         {activeView === "settings" && (
           <SettingsView
             logDir={logDir}
@@ -178,6 +189,7 @@ function AppContent() {
           />
         )}
       </RackCommandsStoreProvider>
+      <AIChatWidget />
     </AppLayout>
   );
 }
@@ -197,7 +209,11 @@ function AuthGate() {
     return <LoginPage />;
   }
 
-  return <AppContent />;
+  return (
+    <AIChatProvider>
+      <AppContent />
+    </AIChatProvider>
+  );
 }
 
 export default function App() {

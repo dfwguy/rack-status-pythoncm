@@ -21,6 +21,7 @@ import {
   ChevronLeft,
   LineChart,
   Wrench,
+  Workflow,
 } from "lucide-react";
 
 export type ViewId =
@@ -31,6 +32,7 @@ export type ViewId =
   | "reports"
   | "analytics"
   | "tools"
+  | "workflows"
   | "settings";
 
 export const DRAWER_WIDTH_OPEN = 240;
@@ -50,6 +52,7 @@ const mainNavItems: NavItem[] = [
   { id: "reports", label: "Reports", icon: <FileDown size={22} /> },
   { id: "analytics", label: "Analytics", icon: <LineChart size={22} /> },
   { id: "tools", label: "Utility", icon: <Wrench size={22} /> },
+  { id: "workflows", label: "Workflows", icon: <Workflow size={22} /> },
 ];
 
 const bottomNavItems: NavItem[] = [

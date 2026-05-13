@@ -9,8 +9,11 @@ import CircularProgress from "@mui/material/CircularProgress";
 import Chip from "@mui/material/Chip";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
+import Switch from "@mui/material/Switch";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import { Card, Text } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
+import { getAISettings, updateAISettings, testAIConnection, type AISettings } from "../services/aiService";
 
 /** Use monospace input for long regex / technical values. */
 const MONOSPACE_JOB_ENV_KEYS = new Set([
@@ -242,13 +245,27 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
     );
   };
 
+  const [topTab, setTopTab] = useState(0);
+
   return (
     <Box sx={{ maxWidth: 900, mx: "auto", p: 4 }}>
       <PageHeader
         title="Settings"
-        description="Configure log directory, dashboard refresh and title, external connections (Grafana, Prometheus, log timezones), native status and cmsh, and job / validation overrides stored on the server."
+        description="Configure log directory, environment overrides, and AI assistant endpoint."
       />
 
+      <Tabs
+        value={topTab}
+        onChange={(_, v) => setTopTab(v)}
+        sx={{ borderBottom: 1, borderColor: "divider", mb: 3 }}
+      >
+        <Tab label="General" />
+        <Tab label="AI Configuration" />
+      </Tabs>
+
+      {topTab === 1 && <AIConfigurationPanel />}
+
+      {topTab === 0 && (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
         <Card style={{ padding: 24 }}>
           <Text kind="body/bold/md" style={{ marginBottom: 8, display: "block" }}>
@@ -359,6 +376,160 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
           ) : null}
         </Paper>
       </Box>
+      )}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AI Configuration Panel
+// ---------------------------------------------------------------------------
+
+function AIConfigurationPanel() {
+  const [settings, setSettings] = useState<AISettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [model, setModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [enabled, setEnabled] = useState(true);
+  const [systemRules, setSystemRules] = useState("");
+
+  useEffect(() => {
+    getAISettings()
+      .then((s) => {
+        setSettings(s);
+        setEndpoint(s.endpoint || "");
+        setModel(s.model || "");
+        setEnabled(s.enabled);
+        setSystemRules(s.system_rules || "");
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async () => {
+    setError("");
+    setSuccess("");
+    setSaving(true);
+    try {
+      const payload: Record<string, unknown> = { enabled, endpoint, model, system_rules: systemRules };
+      if (apiKey.trim()) payload.api_key = apiKey.trim();
+      const updated = await updateAISettings(payload as Parameters<typeof updateAISettings>[0]);
+      setSettings(updated);
+      setApiKey("");
+      setSuccess("AI settings saved.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    setError("");
+    setSuccess("");
+    setTesting(true);
+    try {
+      const result = await testAIConnection();
+      if (result.ok) {
+        setSuccess(`Connection successful. Model: ${result.model}`);
+      } else {
+        setError(`Connection failed: ${result.error}`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, py: 2 }}>
+        <CircularProgress size={22} />
+        <Typography variant="body2" color="text.secondary">Loading AI settings…</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {error && <Alert severity="error" onClose={() => setError("")}>{error}</Alert>}
+      {success && <Alert severity="success" onClose={() => setSuccess("")}>{success}</Alert>}
+
+      <Card style={{ padding: 24 }}>
+        <Text kind="body/bold/md" style={{ marginBottom: 16, display: "block" }}>
+          AI Assistant Configuration
+        </Text>
+        <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 24, display: "block" }}>
+          Configure the LLM endpoint for the AI assistant. Supports NVIDIA NIM, OpenAI-compatible APIs (vLLM, Ollama), or a local Llama instance.
+        </Text>
+
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
+          <FormControlLabel
+            control={<Switch checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />}
+            label="Enable AI Assistant"
+          />
+
+          <TextField
+            label="Endpoint URL"
+            size="small"
+            fullWidth
+            value={endpoint}
+            onChange={(e) => setEndpoint(e.target.value)}
+            placeholder="https://integrate.api.nvidia.com/v1/chat/completions"
+            helperText="OpenAI-compatible chat completions endpoint"
+          />
+
+          <TextField
+            label="Model"
+            size="small"
+            fullWidth
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="nvidia/llama-3.1-nemotron-ultra-253b-v1"
+            helperText="Model identifier sent in the API request"
+          />
+
+          <TextField
+            label="API Key"
+            size="small"
+            fullWidth
+            type="password"
+            autoComplete="new-password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={settings?.api_key_configured ? "••• key configured (enter new to replace)" : "Enter API key"}
+            helperText={settings?.api_key_masked ? `Current: ${settings.api_key_masked}` : "Required for NVIDIA NIM and cloud endpoints"}
+          />
+
+          <TextField
+            label="Custom System Rules"
+            size="small"
+            fullWidth
+            multiline
+            minRows={3}
+            maxRows={8}
+            value={systemRules}
+            onChange={(e) => setSystemRules(e.target.value)}
+            placeholder="Additional instructions for the AI assistant (optional)"
+            helperText="Appended to the system prompt for all conversations"
+          />
+
+          <Box sx={{ display: "flex", gap: 2, pt: 1 }}>
+            <Button variant="contained" disabled={saving} onClick={() => void handleSave()}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+            <Button variant="outlined" disabled={testing || !settings?.api_key_configured} onClick={() => void handleTest()}>
+              {testing ? "Testing…" : "Test Connection"}
+            </Button>
+          </Box>
+        </Box>
+      </Card>
     </Box>
   );
 }
