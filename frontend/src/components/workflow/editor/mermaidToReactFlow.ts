@@ -157,30 +157,38 @@ export function mermaidToReactFlow(
 
   const nodeArray = Array.from(nodesMap.values());
 
-  // Use dagre for top-down (vertical) auto-layout with generous spacing
+  // Dynamic node sizing based on label length (like the reference mermaid-reactflow-editor)
+  function calculateNodeSize(label: string, shape: string): { w: number; h: number } {
+    const lines = label.replace(/^"|"$/g, "").split("\n");
+    const maxLineLen = Math.max(...lines.map((l) => l.length));
+    const baseW = Math.max(120, maxLineLen * 9 + 50);
+    const baseH = Math.max(44, lines.length * 20 + 24);
+    if (shape === "diamond") {
+      const w = Math.max(140, baseW * 1.2);
+      const h = Math.max(80, w * 0.6);
+      return { w: Math.ceil(w), h: Math.ceil(h) };
+    }
+    return { w: Math.ceil(baseW), h: Math.ceil(baseH) };
+  }
+
+  // Use dagre for top-down (vertical) auto-layout
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({
     rankdir: "TB",
-    align: "UL",
     nodesep: 80,
     ranksep: 100,
     marginx: 60,
     marginy: 60,
+    ranker: "tight-tree",
   });
 
-  const NODE_WIDTH = 180;
-  const NODE_HEIGHT = 54;
-  const DIAMOND_SIZE = 150;
-  const GRID = 20;
-
   const nodeSizes = new Map<string, { w: number; h: number }>();
+
   for (const n of nodeArray) {
-    const isDiamond = n.shape === "diamond";
-    const w = isDiamond ? DIAMOND_SIZE : NODE_WIDTH;
-    const h = isDiamond ? DIAMOND_SIZE : NODE_HEIGHT;
-    nodeSizes.set(n.id, { w, h });
-    g.setNode(n.id, { width: w, height: h });
+    const size = calculateNodeSize(n.label, n.shape);
+    nodeSizes.set(n.id, size);
+    g.setNode(n.id, { width: size.w, height: size.h });
   }
   for (const e of edges) {
     g.setEdge(e.source, e.target);
@@ -188,25 +196,25 @@ export function mermaidToReactFlow(
 
   dagre.layout(g);
 
-  // Snap positions to grid for cleaner alignment
-  const snap = (v: number) => Math.round(v / GRID) * GRID;
-
   const rfNodes: Node[] = nodeArray.map((n) => {
     const pos = g.node(n.id);
-    const size = nodeSizes.get(n.id) || { w: NODE_WIDTH, h: NODE_HEIGHT };
+    const size = nodeSizes.get(n.id) || { w: 150, h: 50 };
+    const isDiamond = n.shape === "diamond";
+    const stepType = stepTypes?.[n.id] || (isDiamond ? "decision" : n.shape === "rounded" || n.shape === "stadium" ? "manual" : "automated");
     return {
       id: n.id,
-      type: "custom",
+      type: isDiamond ? "diamond" : "custom",
       position: {
-        x: snap((pos?.x ?? 0) - size.w / 2),
-        y: snap((pos?.y ?? 0) - size.h / 2),
+        x: Math.round((pos?.x ?? 0) - size.w / 2),
+        y: Math.round((pos?.y ?? 0) - size.h / 2),
       },
       data: {
         label: n.label,
         shape: n.shape,
-        stepType: stepTypes?.[n.id] || (n.shape === "diamond" ? "decision" : n.shape === "rounded" || n.shape === "stadium" ? "manual" : "automated"),
+        stepType,
         style: getNodeStyle(n.shape, stepTypes?.[n.id]),
       },
+      style: { width: size.w, height: size.h },
       ...(n.parentGroup ? { parentNode: n.parentGroup, extent: "parent" as const } : {}),
     };
   });
@@ -219,8 +227,10 @@ export function mermaidToReactFlow(
     type: "smoothstep",
     animated: true,
     style: { stroke: "#76B900", strokeWidth: 2 },
-    labelStyle: { fontSize: 12, fill: "#999", fontWeight: 500 },
-    labelBgStyle: { fill: "transparent" },
+    labelStyle: { fontSize: 12, fill: "#ccc", fontWeight: 600 },
+    labelBgStyle: { fill: "#1e1e1e", fillOpacity: 0.9 },
+    labelBgPadding: [6, 4] as [number, number],
+    labelBgBorderRadius: 4,
   }));
 
   return { nodes: rfNodes, edges: rfEdges };

@@ -18,20 +18,21 @@ interface WorkflowAIGeneratorProps {
   onGenerated: (mermaid: string) => void;
 }
 
-const GENERATE_PROMPT = `You are a workflow designer. Generate a Mermaid flowchart diagram based on the user's description.
+const SYSTEM_INSTRUCTION = `You are a Mermaid flowchart code generator. You ONLY output valid Mermaid flowchart code. You NEVER output explanations, comments, or any text outside the mermaid code block.
 
-Rules:
-- Use "graph TD" (top-down) format
-- Use descriptive node IDs (snake_case)
-- Use square brackets for automated steps: step_id["Step Name"]
-- Use curly braces for decision points: decision_id{"Question?"}
-- Use rounded brackets for manual steps: step_id(["Manual Step Name"])
-- Use stadium shape for start/end: start(["Start"]) and done(["Done"])
-- Label edges with conditions: -->|"condition"|
-- Keep it concise but complete
-- Only output the mermaid code, no explanations
+STRICT RULES:
+1. Start with "graph TD" on the first line
+2. Use descriptive snake_case node IDs
+3. Automated steps use square brackets: step_id["Step Name"]
+4. Decision/conditional points use curly braces: decision_id{"Question?"}
+5. Manual steps use stadium shape: step_id(["Manual Step Name"])
+6. Start and end use stadium shape: start(["Start"]) and done(["Done"])
+7. Label edges with conditions in quotes: -->|"condition"|
+8. Output ONLY the raw mermaid code — no markdown fences, no prose, no explanation
+9. Every workflow must have a start node and at least one end/done node
+10. Decision nodes must have at least two outgoing edges with labels
 
-Example format:
+EXAMPLE OUTPUT:
 graph TD
     start(["Start"]) -->|"begin"| check_status["Check Status"]
     check_status -->|"healthy"| done(["Done"])
@@ -42,6 +43,24 @@ graph TD
     sw_fix --> verify
     verify -->|"pass"| done
     verify -->|"fail"| escalate(["Escalate to Engineering"])`;
+
+function extractMermaid(text: string): string {
+  // Try to extract from markdown code fence first
+  const fenced = text.match(/```(?:mermaid)?\s*\n([\s\S]*?)```/);
+  if (fenced) return fenced[1].trim();
+
+  // Try to find raw mermaid starting with graph/flowchart directive
+  const raw = text.match(/((?:graph|flowchart)\s+(?:TD|LR|TB|BT|RL)[\s\S]*)/);
+  if (raw) return raw[1].trim();
+
+  // Strip any leading prose before "graph" if present
+  const idx = text.indexOf("graph ");
+  if (idx > 0) return text.slice(idx).trim();
+  const idx2 = text.indexOf("flowchart ");
+  if (idx2 > 0) return text.slice(idx2).trim();
+
+  return text.trim();
+}
 
 export default function WorkflowAIGenerator({ open, onClose, onGenerated }: WorkflowAIGeneratorProps) {
   const [description, setDescription] = useState("");
@@ -60,25 +79,17 @@ export default function WorkflowAIGenerator({ open, onClose, onGenerated }: Work
     try {
       const controller = await streamChat(
         [
-          { role: "user", content: `Create a workflow for: ${description.trim()}` },
+          { role: "assistant", content: SYSTEM_INSTRUCTION },
+          { role: "user", content: `Generate a Mermaid flowchart for the following workflow. Output ONLY the mermaid code starting with "graph TD", nothing else:\n\n${description.trim()}` },
         ],
-        { page: "workflows", additional_context: GENERATE_PROMPT },
+        { page: "workflows" },
         (chunk) => {
           accumulated += chunk;
-          const mermaidMatch = accumulated.match(/```mermaid\n([\s\S]*?)```/) ||
-            accumulated.match(/(graph\s+(?:TD|LR|TB|BT|RL)[\s\S]*)/);
-          if (mermaidMatch) {
-            setPreview(mermaidMatch[1].trim());
-          } else {
-            setPreview(accumulated);
-          }
+          setPreview(extractMermaid(accumulated));
         },
         () => {
           setGenerating(false);
-          const mermaidMatch = accumulated.match(/```mermaid\n([\s\S]*?)```/) ||
-            accumulated.match(/(graph\s+(?:TD|LR|TB|BT|RL)[\s\S]*)/);
-          const finalMermaid = mermaidMatch ? mermaidMatch[1].trim() : accumulated.trim();
-          setPreview(finalMermaid);
+          setPreview(extractMermaid(accumulated));
         },
         (err) => {
           setError(err);

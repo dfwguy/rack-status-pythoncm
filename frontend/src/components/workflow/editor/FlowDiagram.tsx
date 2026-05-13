@@ -4,14 +4,16 @@
  * Adapted from mermaid-reactflow-editor (MIT License).
  */
 
-import { useCallback, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import ReactFlow, {
   Background,
   Controls,
   MiniMap,
   Panel,
+  ReactFlowProvider,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   addEdge,
   type Node,
   type Edge,
@@ -41,9 +43,9 @@ import {
   Lock,
   Unlock,
 } from "lucide-react";
-import CustomNode from "./CustomNode";
+import { CustomNodeMemo, DiamondNodeMemo } from "./CustomNode";
 
-const nodeTypes = { custom: CustomNode };
+const nodeTypes = { custom: CustomNodeMemo, diamond: DiamondNodeMemo };
 
 interface FlowDiagramProps {
   nodes: Node[];
@@ -63,7 +65,7 @@ function nextNodeId(): string {
   return `node_${Date.now()}_${++nodeIdCounter}`;
 }
 
-export default function FlowDiagram({
+function FlowDiagramInternal({
   nodes: initialNodes,
   edges: initialEdges,
   onNodeDoubleClick,
@@ -75,6 +77,7 @@ export default function FlowDiagram({
 }: FlowDiagramProps) {
   const [locked, setLocked] = useState(false);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+  const reactFlowInstance = useReactFlow();
 
   const decoratedNodes = useMemo(() => {
     return initialNodes.map((node) => ({
@@ -102,6 +105,20 @@ export default function FlowDiagram({
 
   const [nodes, setNodes, onNodesChangeInternal] = useNodesState(decoratedNodes);
   const [edges, setEdges, onEdgesChangeInternal] = useEdgesState(decoratedEdges);
+
+  // Sync local state when parent props change (e.g. mermaid code edited)
+  // After updating, fit the viewport so the diagram is fully visible.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setNodes(decoratedNodes);
+    setEdges(decoratedEdges);
+    // Double-RAF: first frame React Flow updates DOM, second frame we fit
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        reactFlowInstance.fitView({ padding: 0.12, duration: 250 });
+      });
+    });
+  }, [initialNodes, initialEdges]);
 
   // Notify parent of graph changes when needed
   const handleGraphChanged = useCallback(() => {
@@ -436,5 +453,13 @@ export default function FlowDiagram({
         )}
       </ReactFlow>
     </Box>
+  );
+}
+
+export default function FlowDiagram(props: FlowDiagramProps) {
+  return (
+    <ReactFlowProvider>
+      <FlowDiagramInternal {...props} />
+    </ReactFlowProvider>
   );
 }
