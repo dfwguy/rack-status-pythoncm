@@ -1,6 +1,6 @@
 export interface WorkflowStep {
   id: string;
-  type: "automated" | "manual" | "decision" | "ai_query";
+  type: "automated" | "manual" | "decision" | "ai_query" | "delay";
   name: string;
   command?: string;
   method?: string;

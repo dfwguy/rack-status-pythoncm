@@ -7,10 +7,12 @@ import Tooltip from "@mui/material/Tooltip";
 import Divider from "@mui/material/Divider";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
-import { Text, Card } from "@nvidia/foundations-react-core";
+import { Text, Card, Banner } from "@nvidia/foundations-react-core";
 import { Save, Play, Sparkles, Code2, LayoutGrid, Eye } from "lucide-react";
 import { mermaidToReactFlow } from "./editor/mermaidToReactFlow";
+import { parseFrontmatter, serializeFrontmatter, getNodeMetadata, setNodeMetadata, type NodeMetadata } from "./editor/frontmatter";
 import FlowDiagram from "./editor/FlowDiagram";
+import NodePropertiesDialog from "./NodePropertiesDialog";
 import WorkflowAIGenerator from "./WorkflowAIGenerator";
 import type { Workflow } from "../../services/workflowService";
 import type { Node } from "reactflow";
@@ -70,34 +72,195 @@ export default function WorkflowDesigner({ workflow, onSave, onRun }: WorkflowDe
     return map;
   }, [workflow?.steps]);
 
-  const { nodes, edges } = useMemo(() => {
+  const { nodes, edges, syntaxError } = useMemo(() => {
     try {
-      return mermaidToReactFlow(mermaidCode, stepTypes);
-    } catch {
-      return { nodes: [], edges: [] };
+      const result = mermaidToReactFlow(mermaidCode, stepTypes);
+      return { ...result, syntaxError: "" };
+    } catch (e) {
+      return { nodes: [], edges: [], syntaxError: e instanceof Error ? e.message : "Invalid mermaid syntax" };
     }
   }, [mermaidCode, stepTypes]);
 
   const handleSave = useCallback(() => {
+    // Derive steps from frontmatter metadata + parsed nodes
+    const { metadata: currentMeta } = parseFrontmatter(mermaidCode);
+    const nodeIds = nodes.map((n) => n.id);
+
+    const steps = nodeIds.map((id) => {
+      const meta = currentMeta[id];
+      return {
+        id,
+        name: meta?.name || id,
+        type: meta?.type || "automated",
+        ...(meta?.description ? { description: meta.description } : {}),
+        ...(meta?.command ? { command: meta.command } : {}),
+        ...(meta?.parameters ? { parameters: meta.parameters } : {}),
+        ...(meta?.output ? { output: meta.output } : {}),
+        ...(meta?.timeout ? { timeout: meta.timeout } : {}),
+        ...(meta?.retries ? { retries: meta.retries } : {}),
+        ...(meta?.on_success ? { on_success: meta.on_success } : {}),
+        ...(meta?.on_failure ? { on_failure: meta.on_failure } : {}),
+      };
+    });
+
     onSave({
       id: workflow?.id,
       name,
       description,
       mermaid: mermaidCode,
-      steps: workflow?.steps || [],
+      steps,
     });
-  }, [workflow, name, description, mermaidCode, onSave]);
+  }, [workflow, name, description, mermaidCode, nodes, onSave]);
 
+  // Node properties dialog state
+  const [propsDialogOpen, setPropsDialogOpen] = useState(false);
+  const [propsDialogNodeId, setPropsDialogNodeId] = useState("");
+  const [propsDialogNodeLabel, setPropsDialogNodeLabel] = useState("");
+
+  // Parse metadata from the full code (frontmatter + mermaid)
+  const { metadata } = useMemo(() => parseFrontmatter(mermaidCode), [mermaidCode]);
+
+  // All node IDs for the combobox options
+  const allNodeIds = useMemo(() => nodes.map((n) => n.id), [nodes]);
+
+  // Double-click opens properties dialog
   const handleNodeDoubleClick = useCallback((_event: React.MouseEvent, node: Node) => {
-    const line = `    ${node.id}["${node.data.label}"]`;
-    const textarea = textareaRef.current;
-    if (textarea) {
-      const start = textarea.selectionStart;
-      const val = textarea.value;
-      const newVal = val.slice(0, start) + "\n" + line + val.slice(start);
-      setMermaidCode(newVal);
-    }
+    setPropsDialogNodeId(node.id);
+    setPropsDialogNodeLabel(node.data?.label || node.id);
+    setPropsDialogOpen(true);
   }, []);
+
+  // Save node properties back to frontmatter
+  const handleNodePropsSave = useCallback((nodeId: string, props: NodeMetadata, newLabel?: string) => {
+    setMermaidCode((code) => {
+      const { metadata: currentMeta, mermaidCode: bodyCode } = parseFrontmatter(code);
+      const updatedMeta = setNodeMetadata(currentMeta, nodeId, props);
+
+      let updatedBody = bodyCode;
+      if (newLabel) {
+        const escaped = nodeId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        updatedBody = updatedBody.replace(
+          new RegExp(`(${escaped})\\[["']?[^"'\\]]*["']?\\]`),
+          `$1["${newLabel}"]`,
+        );
+        updatedBody = updatedBody.replace(
+          new RegExp(`(${escaped})\\(\\[["']?[^"'\\]]*["']?\\]\\)`),
+          `$1(["${newLabel}"])`,
+        );
+        updatedBody = updatedBody.replace(
+          new RegExp(`(${escaped})\\{["']?[^"'\\}]*["']?\\}`),
+          `$1{"${newLabel}"}`,
+        );
+      }
+
+      return serializeFrontmatter(updatedMeta, updatedBody);
+    });
+  }, []);
+
+  const nodeCounter = useRef(0);
+
+  // Derive next unique node ID by scanning existing code for step_N patterns
+  const getNextNodeId = useCallback((code: string): string => {
+    const matches = code.matchAll(/step_(\d+)/g);
+    let max = nodeCounter.current;
+    for (const m of matches) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+    nodeCounter.current = max + 1;
+    return `step_${nodeCounter.current}`;
+  }, []);
+
+  // Check if a line references a given node ID (as definition, edge source, or edge target)
+  const lineReferencesNode = useCallback((line: string, nodeId: string): boolean => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("graph ") || trimmed.startsWith("flowchart ")) return false;
+    const escaped = nodeId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`(^|\\s|-->|\\|)${escaped}(\\s|\\[|\\(|\\{|"|$|\\s*-->)`);
+    return pattern.test(trimmed);
+  }, []);
+
+  // Find the last content line index (ignoring trailing empty lines)
+  const findLastContentLine = useCallback((lines: string[]): number => {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].trim()) return i;
+    }
+    return lines.length - 1;
+  }, []);
+
+  // Find the last line that references a specific node
+  const findLastLineForNode = useCallback((lines: string[], nodeId: string): number => {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lineReferencesNode(lines[i], nodeId)) return i;
+    }
+    return -1;
+  }, [lineReferencesNode]);
+
+  const handleCodeAction = useCallback((action: { type: string; [key: string]: unknown }) => {
+    setMermaidCode((code) => {
+      const lines = code.split("\n");
+
+      if (action.type === "addNode") {
+        const stepType = action.stepType as string;
+        const id = getNextNodeId(code);
+        let nodeDef: string;
+        if (stepType === "decision") {
+          nodeDef = `    ${id}{"New Decision?"}`;
+        } else if (stepType === "manual") {
+          nodeDef = `    ${id}(["Manual Step"])`;
+        } else {
+          nodeDef = `    ${id}["New Step"]`;
+        }
+        // Insert after the last content line
+        const insertIdx = findLastContentLine(lines);
+        lines.splice(insertIdx + 1, 0, nodeDef);
+        return lines.join("\n");
+      }
+
+      if (action.type === "addEdge") {
+        const { source, target, label } = action as { type: string; source: string; target: string; label?: string };
+        const edgeLine = label
+          ? `    ${source} -->|"${label}"| ${target}`
+          : `    ${source} --> ${target}`;
+        // Insert after the last line that references the source node
+        const sourceLineIdx = findLastLineForNode(lines, source);
+        const insertIdx = sourceLineIdx >= 0 ? sourceLineIdx : findLastContentLine(lines);
+        lines.splice(insertIdx + 1, 0, edgeLine);
+        return lines.join("\n");
+      }
+
+      if (action.type === "deleteNodes") {
+        const ids = action.ids as string[];
+        const filtered = lines.filter((line) => {
+          for (const id of ids) {
+            if (lineReferencesNode(line, id)) return false;
+          }
+          return true;
+        });
+        return filtered.join("\n");
+      }
+
+      if (action.type === "duplicateNode") {
+        const { id: origId, label, stepType } = action as { type: string; id: string; label: string; stepType: string };
+        const newId = getNextNodeId(code);
+        let nodeDef: string;
+        if (stepType === "decision") {
+          nodeDef = `    ${newId}{"${label}"}`;
+        } else if (stepType === "manual") {
+          nodeDef = `    ${newId}(["${label}"])`;
+        } else {
+          nodeDef = `    ${newId}["${label}"]`;
+        }
+        // Insert after the original node's last reference
+        const origLineIdx = findLastLineForNode(lines, origId);
+        const insertIdx = origLineIdx >= 0 ? origLineIdx : findLastContentLine(lines);
+        lines.splice(insertIdx + 1, 0, nodeDef);
+        return lines.join("\n");
+      }
+
+      return code;
+    });
+  }, [getNextNodeId, lineReferencesNode, findLastContentLine, findLastLineForNode]);
 
   const handlePanelToggle = useCallback((_: React.MouseEvent<HTMLElement>, newPanels: string[]) => {
     if (newPanels.length > 0) setPanels(newPanels);
@@ -216,7 +379,7 @@ export default function WorkflowDesigner({ workflow, onSave, onRun }: WorkflowDe
               }}
             >
               <Box sx={{ px: 2, py: 0.75, bgcolor: "action.hover", borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
-                <Text kind="body/bold/sm">Mermaid Source</Text>
+                <Text kind="body/bold/sm">Template Source</Text>
               </Box>
               <Box
                 component="textarea"
@@ -238,6 +401,13 @@ export default function WorkflowDesigner({ workflow, onSave, onRun }: WorkflowDe
                   overflow: "auto",
                 }}
               />
+              {syntaxError && (
+                <Box sx={{ px: 2, py: 1, flexShrink: 0, borderTop: "1px solid", borderColor: "divider" }}>
+                  <Banner status="error" kind="inline">
+                    {syntaxError}
+                  </Banner>
+                </Box>
+              )}
             </Box>
 
             {/* Resize handle */}
@@ -267,6 +437,7 @@ export default function WorkflowDesigner({ workflow, onSave, onRun }: WorkflowDe
                   nodes={nodes}
                   edges={edges}
                   onNodeDoubleClick={handleNodeDoubleClick}
+                  onCodeAction={handleCodeAction}
                 />
               ) : (
                 <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
@@ -327,6 +498,16 @@ export default function WorkflowDesigner({ workflow, onSave, onRun }: WorkflowDe
         open={showAIGenerator}
         onClose={() => setShowAIGenerator(false)}
         onGenerated={(mermaid) => setMermaidCode(mermaid)}
+      />
+
+      <NodePropertiesDialog
+        open={propsDialogOpen}
+        onOpenChange={setPropsDialogOpen}
+        nodeId={propsDialogNodeId}
+        nodeLabel={propsDialogNodeLabel}
+        metadata={getNodeMetadata(metadata, propsDialogNodeId)}
+        allNodeIds={allNodeIds}
+        onSave={handleNodePropsSave}
       />
     </Box>
   );

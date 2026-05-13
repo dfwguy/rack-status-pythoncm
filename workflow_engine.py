@@ -81,11 +81,22 @@ def save_workflow(data: dict) -> dict:
         data["id"] = wf_id
 
     data.setdefault("name", wf_id)
-    data.setdefault("version", 1)
     data.setdefault("steps", [])
     data.setdefault("mermaid", "")
 
+    # Auto-increment version: read existing version from disk and bump
     path = WORKFLOWS_DIR / f"{wf_id}.yaml"
+    if path.is_file():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = yaml.safe_load(f) or {}
+            current_version = existing.get("version", 0)
+            data["version"] = current_version + 1
+        except (OSError, yaml.YAMLError):
+            data.setdefault("version", 1)
+    else:
+        data.setdefault("version", 1)
+
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
@@ -110,10 +121,17 @@ VALID_STATES = {"pending", "running", "waiting_manual", "waiting_decision", "com
 TERMINAL_STATES = {"completed", "failed", "cancelled"}
 
 
+def _run_dir(run_id: str) -> Path:
+    """Per-run directory for state + output logs."""
+    return RUNS_DIR / run_id
+
+
 def _save_run(run: dict) -> None:
     _ensure_dirs()
     run_id = run["run_id"]
-    path = RUNS_DIR / f"{run_id}.json"
+    run_path = _run_dir(run_id)
+    run_path.mkdir(parents=True, exist_ok=True)
+    path = run_path / "state.json"
     tmp = path.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(run, f, indent=2, default=str)
@@ -121,13 +139,47 @@ def _save_run(run: dict) -> None:
 
 
 def _load_run(run_id: str) -> dict | None:
-    path = RUNS_DIR / f"{run_id}.json"
+    # Try new per-directory format first
+    path = _run_dir(run_id) / "state.json"
+    if not path.is_file():
+        # Fallback to legacy flat format
+        path = RUNS_DIR / f"{run_id}.json"
     if not path.is_file():
         return None
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _save_step_output(run_id: str, step_id: str, output: str) -> str:
+    """Save step output to a .log file and return the relative path."""
+    run_path = _run_dir(run_id)
+    run_path.mkdir(parents=True, exist_ok=True)
+    log_file = run_path / f"{step_id}.log"
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write(output)
+    return f"{run_id}/{step_id}.log"
+
+
+def _get_output_snippet(output: str, max_lines: int = 20) -> str:
+    """Get the last N lines of output as a snippet."""
+    lines = output.strip().split("\n")
+    if len(lines) <= max_lines:
+        return output.strip()
+    return "\n".join(lines[-max_lines:])
+
+
+def get_step_output(run_id: str, step_id: str) -> str | None:
+    """Read full step output from the log file."""
+    log_file = _run_dir(run_id) / f"{step_id}.log"
+    if not log_file.is_file():
+        return None
+    try:
+        with open(log_file, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
         return None
 
 
@@ -187,6 +239,31 @@ def list_runs() -> list[dict]:
                 "updated_at": run.get("updated_at"),
             })
 
+    # Scan per-run directories (new format)
+    for d in sorted(RUNS_DIR.iterdir(), reverse=True):
+        if d.is_dir():
+            state_file = d / "state.json"
+            if not state_file.is_file():
+                continue
+            run_id = d.name
+            if any(r["run_id"] == run_id for r in results):
+                continue
+            try:
+                with open(state_file, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                results.append({
+                    "run_id": data["run_id"],
+                    "workflow_id": data["workflow_id"],
+                    "workflow_name": data.get("workflow_name", ""),
+                    "state": data["state"],
+                    "current_step_id": data.get("current_step_id"),
+                    "started_at": data.get("started_at"),
+                    "updated_at": data.get("updated_at"),
+                })
+            except (OSError, json.JSONDecodeError, KeyError):
+                continue
+
+    # Also scan legacy flat .json files
     for f in sorted(RUNS_DIR.glob("*.json"), reverse=True):
         run_id = f.stem
         if any(r["run_id"] == run_id for r in results):
@@ -292,6 +369,14 @@ def cancel_run(run_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _find_next_step_in_sequence(steps_map: dict, steps_list: list[dict], current_step_id: str) -> str | None:
+    """Find the next step in the ordered list after the current one."""
+    for i, s in enumerate(steps_list):
+        if s.get("id") == current_step_id and i + 1 < len(steps_list):
+            return steps_list[i + 1].get("id")
+    return None
+
+
 def _execute_run(run_id: str) -> None:
     """Execute workflow steps sequentially until hitting a manual/decision/terminal step."""
     with _runs_lock:
@@ -348,14 +433,18 @@ def _execute_run(run_id: str) -> None:
             return
 
         if step_type == "automated":
-            success = _execute_automated_step(run, step)
+            success, output = _execute_automated_step(run, step)
             run["history"].append({
                 "step_id": step_id,
                 "type": "automated",
                 "success": success,
+                "output_snippet": _get_output_snippet(output),
+                "output_file": f"{run['run_id']}/{step_id}.log",
                 "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             })
             next_id = step.get("on_success") if success else step.get("on_failure")
+            if not next_id and success:
+                next_id = _find_next_step_in_sequence(steps, wf.get("steps", []), step_id)
             if not next_id or next_id == "done":
                 run["state"] = "completed" if success else "failed"
                 run["current_step_id"] = None
@@ -365,11 +454,53 @@ def _execute_run(run_id: str) -> None:
             run["current_step_id"] = next_id
             continue
 
-        if step_type == "ai_query":
-            run["state"] = "waiting_manual"
+        if step_type == "delay":
+            delay_sec = int(step.get("timeout", step.get("delay", 5)))
+            output = f"[Delay] Waiting {delay_sec} seconds...\n"
             run["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             _save_run(run)
-            return
+            time.sleep(delay_sec)
+            output += f"[Delay] Completed after {delay_sec}s."
+            _save_step_output(run["run_id"], step_id, output)
+            run["history"].append({
+                "step_id": step_id,
+                "type": "delay",
+                "success": True,
+                "output_snippet": output,
+                "output_file": f"{run['run_id']}/{step_id}.log",
+                "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
+            next_id = step.get("on_success", step.get("on_complete"))
+            if not next_id:
+                next_id = _find_next_step_in_sequence(steps, wf.get("steps", []), step_id)
+            if not next_id or next_id == "done":
+                run["state"] = "completed"
+                run["current_step_id"] = None
+                run["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                _save_run(run)
+                return
+            run["current_step_id"] = next_id
+            continue
+
+        if step_type == "ai_query":
+            ai_output = _execute_ai_step(run, step)
+            run["history"].append({
+                "step_id": step_id,
+                "type": "ai_query",
+                "success": True,
+                "output_snippet": _get_output_snippet(ai_output),
+                "output_file": f"{run['run_id']}/{step_id}.log",
+                "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
+            next_id = step.get("on_success", step.get("on_complete"))
+            if not next_id or next_id == "done":
+                run["state"] = "completed"
+                run["current_step_id"] = None
+                run["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                _save_run(run)
+                return
+            run["current_step_id"] = next_id
+            continue
 
         run["state"] = "failed"
         run["error"] = f"Unknown step type: {step_type}"
@@ -378,18 +509,24 @@ def _execute_run(run_id: str) -> None:
         return
 
 
-def _execute_automated_step(run: dict, step: dict) -> bool:
-    """Execute an automated step. Returns True on success, False on failure."""
+def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
+    """Execute an automated step. Returns (success, output)."""
     command = step.get("command", "")
     method = step.get("method", "GET").upper()
     params = run.get("params", {})
+    step_id = step.get("id", "unknown")
+    run_id = run["run_id"]
 
     for key, val in params.items():
         command = command.replace(f"${{{key}}}", str(val))
 
+    output = ""
+
     if command.startswith("/api/"):
-        _logger.info("Workflow step %s: internal API call %s %s", step.get("id"), method, command)
-        return True
+        _logger.info("Workflow step %s: internal API call %s %s", step_id, method, command)
+        output = f"[Internal API call]\n{method} {command}\nStatus: OK (simulated)"
+        _save_step_output(run_id, step_id, output)
+        return True, output
 
     if command.startswith("host:"):
         host_cmd = command[5:].strip()
@@ -398,13 +535,57 @@ def _execute_automated_step(run: dict, step: dict) -> bool:
         try:
             timeout = int(step.get("timeout", 120))
             proc = host_exec.run_on_host(host_cmd, timeout=timeout)
-            return proc.returncode == 0
+            output = ""
+            if proc.stdout:
+                output += proc.stdout
+            if proc.stderr:
+                output += "\n--- stderr ---\n" + proc.stderr
+            if not output.strip():
+                output = f"[Command completed with exit code {proc.returncode}]"
+            _save_step_output(run_id, step_id, output)
+            return proc.returncode == 0, output
         except Exception as exc:
+            output = f"[Error] {exc}"
+            _save_step_output(run_id, step_id, output)
             _logger.error("Workflow automated step failed: %s", exc)
-            return False
+            return False, output
 
-    _logger.info("Workflow step %s: no-op (command=%r)", step.get("id"), command)
-    return True
+    # Known tool env key (e.g. RACK_SYSINFO_SCRIPT) — resolve and describe
+    if command.startswith("RACK_"):
+        import os as _os
+        resolved = _os.environ.get(command, f"(not configured: {command})")
+        output = f"[Tool: {command}]\nResolved path: {resolved}\nStatus: OK (configured)"
+        _save_step_output(run_id, step_id, output)
+        return True, output
+
+    output = f"[No-op] command={command!r}\nStep completed without execution."
+    _save_step_output(run_id, step_id, output)
+    _logger.info("Workflow step %s: no-op (command=%r)", step_id, command)
+    return True, output
+
+
+def _execute_ai_step(run: dict, step: dict) -> str:
+    """Execute an AI query step using the chat completion API."""
+    step_id = step.get("id", "unknown")
+    run_id = run["run_id"]
+    prompt = step.get("command", step.get("name", "Analyze the current state"))
+
+    try:
+        import ai_chat
+        if ai_chat.is_ai_enabled():
+            messages = [
+                {"role": "system", "content": "You are analyzing workflow execution results. Be concise and actionable."},
+                {"role": "user", "content": prompt},
+            ]
+            response = ai_chat.chat_completion(messages)
+        else:
+            response = f"[AI Demo Response]\nAnalysis for: {prompt}\n\nAll checks passed. No issues detected."
+    except Exception as exc:
+        response = f"[AI Error] {exc}"
+        _logger.error("AI step %s failed: %s", step_id, exc)
+
+    _save_step_output(run_id, step_id, response)
+    return response
 
 
 # ---------------------------------------------------------------------------

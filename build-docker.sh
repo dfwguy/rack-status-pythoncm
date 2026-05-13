@@ -60,6 +60,7 @@ run_dev() {
     -e RACK_STATUS_DEMO=1 \
     -e RACK_WEB_AUTH_DISABLED=1 \
     -e RACK_EXEC_MODE=local \
+    -v rack-data:/app/var \
     "$IMAGE"
   wait_ready "$port"
 }

@@ -7,7 +7,7 @@ import { memo, useState } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
 import Box from "@mui/material/Box";
 import { Text } from "@nvidia/foundations-react-core";
-import { Play, Hand, GitBranch, Bot, CircleDot } from "lucide-react";
+import { Play, Hand, GitBranch, Bot, CircleDot, Timer } from "lucide-react";
 
 interface CustomNodeData {
   label: string;
@@ -24,6 +24,7 @@ const STEP_ICONS: Record<string, React.ReactNode> = {
   manual: <Hand size={14} />,
   decision: <GitBranch size={14} />,
   ai_query: <Bot size={14} />,
+  delay: <Timer size={14} />,
 };
 
 const STEP_LABELS: Record<string, string> = {
@@ -31,6 +32,7 @@ const STEP_LABELS: Record<string, string> = {
   manual: "Manual",
   decision: "Condition",
   ai_query: "AI",
+  delay: "Delay",
 };
 
 function getColors(stepType: string, isActive?: boolean, isCompleted?: boolean, isFailed?: boolean) {
@@ -174,21 +176,29 @@ function DiamondNode({ data, selected }: NodeProps<CustomNodeData>) {
         />
       </svg>
 
-      {/* Content centered over the diamond */}
+      {/* Text centered at the exact middle of the diamond */}
       <div style={{
-        position: "absolute", inset: 0, display: "flex", flexDirection: "column",
-        alignItems: "center", justifyContent: "center", padding: 6, textAlign: "center",
-        pointerEvents: "none",
+        position: "absolute", inset: 0, display: "flex",
+        alignItems: "center", justifyContent: "center",
+        textAlign: "center", pointerEvents: "none",
+        padding: "0 15%",
       }}>
-        <div style={{ color: accentColor, display: "flex", alignItems: "center", marginBottom: 2 }}>
-          <GitBranch size={14} />
-        </div>
         <div style={{
           fontSize: 12, fontWeight: 600, lineHeight: 1.2,
-          maxWidth: "70%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}>
           {label.replace(/^"|"$/g, "")}
         </div>
+      </div>
+
+      {/* Icon sits just above the text, anchored to the text's top edge */}
+      <div style={{
+        position: "absolute", left: "50%", top: "50%",
+        transform: "translate(-50%, calc(-100% - 10px))",
+        color: accentColor, display: "flex", alignItems: "center",
+        pointerEvents: "none", opacity: 0.7,
+      }}>
+        <GitBranch size={11} />
       </div>
 
       {/* Badge */}

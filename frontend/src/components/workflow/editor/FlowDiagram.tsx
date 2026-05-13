@@ -54,6 +54,7 @@ interface FlowDiagramProps {
   onEdgesChange?: OnEdgesChange;
   onNodeDoubleClick?: (event: React.MouseEvent, node: Node) => void;
   onGraphChange?: (nodes: Node[], edges: Edge[]) => void;
+  onCodeAction?: (action: { type: "addNode"; stepType: string } | { type: "addEdge"; source: string; target: string; label?: string } | { type: "deleteNodes"; ids: string[] } | { type: "duplicateNode"; id: string; label: string; stepType: string }) => void;
   activeStepId?: string | null;
   completedStepIds?: string[];
   failedStepIds?: string[];
@@ -70,6 +71,7 @@ function FlowDiagramInternal({
   edges: initialEdges,
   onNodeDoubleClick,
   onGraphChange,
+  onCodeAction,
   activeStepId,
   completedStepIds = [],
   failedStepIds = [],
@@ -145,6 +147,10 @@ function FlowDiagramInternal({
   const onConnect = useCallback(
     (connection: Connection) => {
       if (readOnly || locked) return;
+      if (onCodeAction && connection.source && connection.target) {
+        onCodeAction({ type: "addEdge", source: connection.source, target: connection.target });
+        return;
+      }
       const newEdge: Edge = {
         id: `e-${connection.source}-${connection.target}-${Date.now()}`,
         source: connection.source!,
@@ -158,7 +164,7 @@ function FlowDiagramInternal({
       };
       setEdges((eds) => addEdge(newEdge, eds));
     },
-    [readOnly, locked, setEdges],
+    [readOnly, locked, setEdges, onCodeAction],
   );
 
   // --- Editing actions ---
@@ -169,41 +175,67 @@ function FlowDiagramInternal({
 
   const addNode = useCallback(
     (stepType: string) => {
+      if (onCodeAction) {
+        onCodeAction({ type: "addNode", stepType });
+        return;
+      }
+      // Fallback: direct canvas manipulation if no code callback
       const id = nextNodeId();
-      const label = stepType === "decision" ? "Decision?" : stepType === "manual" ? "Manual Step" : "New Step";
-      const shape = stepType === "decision" ? "diamond" : stepType === "manual" ? "rounded" : "rect";
-      const centerX = reactFlowWrapper.current ? reactFlowWrapper.current.clientWidth / 2 - 80 : 200;
+      const isDiamond = stepType === "decision";
+      const label = isDiamond ? "Decision?" : stepType === "manual" ? "Manual Step" : "New Step";
+      const shape = isDiamond ? "diamond" : stepType === "manual" ? "rounded" : "rect";
+      const w = 160;
+      const h = isDiamond ? 48 : 44;
+      const vp = reactFlowInstance.getViewport();
+      const wrapper = reactFlowWrapper.current;
+      const cx = wrapper ? (-vp.x + wrapper.clientWidth / 2) / vp.zoom : 300;
+      const cy = wrapper ? (-vp.y + wrapper.clientHeight / 2) / vp.zoom : 200;
       const newNode: Node = {
         id,
-        type: "custom",
-        position: { x: centerX, y: nodes.length * 100 + 50 },
+        type: isDiamond ? "diamond" : "custom",
+        position: { x: Math.round(cx - w / 2), y: Math.round(cy - h / 2) },
         data: { label, shape, stepType },
+        style: { width: w, height: h },
         selected: true,
       };
       setNodes((nds) => [...nds.map((n) => ({ ...n, selected: false })), newNode]);
     },
-    [nodes.length, setNodes],
+    [setNodes, reactFlowInstance, onCodeAction],
   );
 
   const duplicateSelected = useCallback(() => {
     const selected = getSelectedNodes();
     if (selected.length === 0) return;
+    if (onCodeAction) {
+      for (const n of selected) {
+        onCodeAction({ type: "duplicateNode", id: n.id, label: n.data?.label || n.id, stepType: n.data?.stepType || "automated" });
+      }
+      return;
+    }
     const newNodes: Node[] = selected.map((n) => ({
       ...n,
       id: nextNodeId(),
-      position: { x: n.position.x + 30, y: n.position.y + 60 },
+      position: { x: n.position.x + 40, y: n.position.y + 60 },
       selected: true,
       data: { ...n.data },
+      style: n.style ? { ...n.style } : undefined,
     }));
     setNodes((nds) => [...nds.map((n) => ({ ...n, selected: false })), ...newNodes]);
-  }, [getSelectedNodes, setNodes]);
+  }, [getSelectedNodes, setNodes, onCodeAction]);
 
   const deleteSelected = useCallback(() => {
-    const selectedIds = new Set(nodes.filter((n) => n.selected).map((n) => n.id));
-    if (selectedIds.size === 0) return;
-    setNodes((nds) => nds.filter((n) => !selectedIds.has(n.id)));
-    setEdges((eds) => eds.filter((e) => !selectedIds.has(e.source) && !selectedIds.has(e.target)));
-  }, [nodes, setNodes, setEdges]);
+    const selectedNodeIds = nodes.filter((n) => n.selected).map((n) => n.id);
+    const selectedEdgeIds = edges.filter((e) => e.selected).map((e) => e.id);
+    if (selectedNodeIds.length === 0 && selectedEdgeIds.length === 0) return;
+    if (onCodeAction && selectedNodeIds.length > 0) {
+      onCodeAction({ type: "deleteNodes", ids: selectedNodeIds });
+      return;
+    }
+    const nodeIdSet = new Set(selectedNodeIds);
+    const edgeIdSet = new Set(selectedEdgeIds);
+    setNodes((nds) => nds.filter((n) => !nodeIdSet.has(n.id)));
+    setEdges((eds) => eds.filter((e) => !edgeIdSet.has(e.id) && !nodeIdSet.has(e.source) && !nodeIdSet.has(e.target)));
+  }, [nodes, edges, setNodes, setEdges, onCodeAction]);
 
   const GRID = 20;
   const snap = (v: number) => Math.round(v / GRID) * GRID;

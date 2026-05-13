@@ -95,9 +95,30 @@ export function mermaidToReactFlow(
   mermaidCode: string,
   stepTypes?: Record<string, string>,
 ): ParseResult {
-  const lines = mermaidCode.split("\n").map((l) => l.trim()).filter(Boolean);
+  // Strip YAML frontmatter if present (between --- delimiters)
+  let code = mermaidCode;
+  const trimmedStart = code.trimStart();
+  if (trimmedStart.startsWith("---")) {
+    const endIdx = trimmedStart.indexOf("\n---", 3);
+    if (endIdx !== -1) {
+      code = trimmedStart.slice(endIdx + 4);
+    }
+  }
+
+  const lines = code.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  if (lines.length === 0) {
+    return { nodes: [], edges: [] };
+  }
+
+  const hasDirective = lines.some((l) => l.startsWith("graph ") || l.startsWith("flowchart "));
+  if (!hasDirective) {
+    throw new Error("Missing diagram directive. Start with 'graph TD' or 'flowchart TD'.");
+  }
+
   const nodesMap = new Map<string, ParsedNode>();
   const edges: ParsedEdge[] = [];
+  const warnings: string[] = [];
   let inSubgraph = false;
   let currentGroup = "";
 
@@ -151,8 +172,14 @@ export function mermaidToReactFlow(
         if (!nodesMap.has(node.id)) {
           nodesMap.set(node.id, node);
         }
+      } else {
+        warnings.push(`Unrecognized syntax: "${line}"`);
       }
     }
+  }
+
+  if (warnings.length > 0) {
+    throw new Error(warnings.join("\n"));
   }
 
   const nodeArray = Array.from(nodesMap.values());
@@ -164,8 +191,8 @@ export function mermaidToReactFlow(
     const baseW = Math.max(120, maxLineLen * 9 + 50);
     const baseH = Math.max(44, lines.length * 20 + 24);
     if (shape === "diamond") {
-      const w = Math.max(140, baseW * 1.2);
-      const h = Math.max(80, w * 0.6);
+      const w = Math.max(120, baseW * 1.0);
+      const h = Math.max(50, w * 0.30);
       return { w: Math.ceil(w), h: Math.ceil(h) };
     }
     return { w: Math.ceil(baseW), h: Math.ceil(baseH) };

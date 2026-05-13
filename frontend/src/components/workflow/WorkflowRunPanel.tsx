@@ -11,6 +11,8 @@ import { Text, Tag, Card } from "@nvidia/foundations-react-core";
 import { Play, XCircle, CheckCircle, Clock, AlertTriangle } from "lucide-react";
 import FlowDiagram from "./editor/FlowDiagram";
 import { mermaidToReactFlow } from "./editor/mermaidToReactFlow";
+import StepOutputDialog from "./StepOutputDialog";
+import type { Node } from "reactflow";
 import {
   getRunState,
   advanceRun,
@@ -84,12 +86,41 @@ export default function WorkflowRunPanel({ runId, onClose }: WorkflowRunPanelPro
   }, [workflow]);
 
   const completedStepIds = useMemo(() => {
-    return (run?.history || []).map((h) => h.step_id);
-  }, [run?.history]);
+    if (!run) return [];
+    if (run.state === "completed") {
+      return nodes.map((n) => n.id);
+    }
+    return (run.history || []).map((h) => h.step_id);
+  }, [run, nodes]);
+
+  const failedStepIds = useMemo(() => {
+    if (!run) return [];
+    if (run.state === "failed" && run.current_step_id) {
+      return [run.current_step_id];
+    }
+    return [];
+  }, [run]);
 
   const currentStep = useMemo(() => {
     if (!run?.current_step_id || !workflow?.steps) return null;
     return workflow.steps.find((s) => s.id === run.current_step_id) || null;
+  }, [run, workflow]);
+
+  // Step output viewer state
+  const [outputDialogOpen, setOutputDialogOpen] = useState(false);
+  const [outputStepId, setOutputStepId] = useState("");
+  const [outputStepName, setOutputStepName] = useState("");
+  const [outputHistoryEntry, setOutputHistoryEntry] = useState<any>(null);
+
+  const handleNodeDoubleClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    if (!run?.history) return;
+    const entry = run.history.find((h: any) => h.step_id === node.id);
+    if (!entry) return;
+    const step = workflow?.steps?.find((s) => s.id === node.id);
+    setOutputStepId(node.id);
+    setOutputStepName(step?.name || node.data?.label || node.id);
+    setOutputHistoryEntry(entry);
+    setOutputDialogOpen(true);
   }, [run, workflow]);
 
   const handleAdvance = async (action: Record<string, unknown>) => {
@@ -129,6 +160,8 @@ export default function WorkflowRunPanel({ runId, onClose }: WorkflowRunPanelPro
               edges={edges}
               activeStepId={run.current_step_id}
               completedStepIds={completedStepIds}
+              failedStepIds={failedStepIds}
+              onNodeDoubleClick={handleNodeDoubleClick}
               readOnly
             />
           )}
@@ -195,6 +228,15 @@ export default function WorkflowRunPanel({ runId, onClose }: WorkflowRunPanelPro
         )}
         <MuiButton onClick={onClose}>Close</MuiButton>
       </DialogActions>
+
+      <StepOutputDialog
+        open={outputDialogOpen}
+        onOpenChange={setOutputDialogOpen}
+        stepId={outputStepId}
+        stepName={outputStepName}
+        runId={runId}
+        historyEntry={outputHistoryEntry}
+      />
     </Dialog>
   );
 }

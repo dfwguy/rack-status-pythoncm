@@ -9,8 +9,8 @@ services:
       - RACK_WEB_AUTH_TOKEN=${RACK_WEB_AUTH_TOKEN:-}
     volumes:
       - ${RACK_SSH_KEY_PATH:-~/.ssh/id_rsa}:/run/secrets/ssh_key:ro
-      - rack-cache:/app/var/cache
+      - rack-data:/app/var
     restart: unless-stopped
 
 volumes:
-  rack-cache:
+  rack-data:

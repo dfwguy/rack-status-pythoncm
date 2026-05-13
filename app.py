@@ -11709,6 +11709,50 @@ def serve_root_spa(path: str):
 
 
 # ---------------------------------------------------------------------------
+# Available tools/scripts for workflow automation
+# ---------------------------------------------------------------------------
+
+_WORKFLOW_TOOL_KEYS = {
+    "RACK_STATUS_SCRIPT": ("rack_status.sh", "Native Status"),
+    "RACK_PARSER_SCRIPT": ("parser.sh", "Native Status"),
+    "RACK_VALIDATION_SCRIPT": ("Singlerack validation", "Validation"),
+    "RACK_NEMO_XRACK_SCRIPT": ("Multinode NEMO", "Validation"),
+    "RACK_LLAMA_SCRIPT": ("Llama run", "Validation"),
+    "RACK_MNUBERGEMM_STRESS_SCRIPT": ("MNU Bergemm stress", "Validation"),
+    "RACK_NVLOOM_SINGLERACK_SCRIPT": ("NVLoom singlerack", "Validation"),
+    "RACK_CLUSTERKIT_SCRIPT": ("ClusterKit singlerack", "Validation"),
+    "RACK_SYSINFO_SCRIPT": ("sysinfo / Precheck", "Cluster Tools"),
+    "RACK_HW_CHECK_SCRIPT": ("Hardware check (pdsh)", "Cluster Tools"),
+    "RACK_GPU_RESET_SCRIPT": ("GPU reset", "Cluster Tools"),
+    "RACK_NVSWITCH_AUDIT_SCRIPT": ("NVSwitch audit", "Cluster Tools"),
+    "RACK_NVSWITCH_SDN_RESET_SCRIPT": ("NVSwitch SDN reset", "Cluster Tools"),
+    "RACK_NVSWITCH_SYSTEM_RESET_SCRIPT": ("NVSwitch system reset", "Cluster Tools"),
+    "RACK_IMEX_RESET_SCRIPT": ("IMEX reset", "Cluster Tools"),
+    "RACK_IMEX_CHECK_SCRIPT": ("IMEX check", "Cluster Tools"),
+}
+
+
+@app.route("/api/tools/available", methods=["GET"])
+def api_tools_available():
+    """Return predefined scripts/tools available for workflow automation steps."""
+    tools = []
+    for env_key, (label, category) in _WORKFLOW_TOOL_KEYS.items():
+        desc = ""
+        for defn in JOB_ENV_UI_DEFINITIONS:
+            if defn.get("key") == env_key:
+                desc = defn.get("description", "")
+                break
+        tools.append({
+            "id": env_key,
+            "label": label,
+            "description": desc,
+            "category": category,
+            "path": os.environ.get(env_key, ""),
+        })
+    return jsonify({"ok": True, "tools": tools})
+
+
+# ---------------------------------------------------------------------------
 # AI Chat routes
 # ---------------------------------------------------------------------------
 
@@ -11864,6 +11908,15 @@ def api_workflow_run_cancel(run_id: str):
         return jsonify({"ok": True, **result})
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.route("/api/workflow-runs/<run_id>/output/<step_id>", methods=["GET"])
+def api_workflow_run_output(run_id: str, step_id: str):
+    """Get the full output log for a specific step in a workflow run."""
+    output = workflow_engine.get_step_output(run_id, step_id)
+    if output is None:
+        return jsonify({"ok": False, "error": "Output not found"}), 404
+    return jsonify({"ok": True, "output": output, "step_id": step_id, "run_id": run_id})
 
 
 @app.route("/api/workflows/generate-mermaid", methods=["POST"])

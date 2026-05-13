@@ -12,7 +12,7 @@ import TableRow from "@mui/material/TableRow";
 import Paper from "@mui/material/Paper";
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
-import { Text, Tag } from "@nvidia/foundations-react-core";
+import { Text, Tag, Modal, ModalCloseButton, Button as KuiButton } from "@nvidia/foundations-react-core";
 import { Plus, Play, Trash2, Edit } from "lucide-react";
 import {
   listWorkflows,
@@ -62,9 +62,12 @@ export default function WorkflowList({ onSelect, onNew, onViewRun }: WorkflowLis
     refresh();
   }, [refresh]);
 
-  const handleDelete = async (id: string) => {
-    if (!confirm(`Delete workflow "${id}"?`)) return;
-    await deleteWorkflow(id);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    await deleteWorkflow(deleteTarget);
+    setDeleteTarget(null);
     refresh();
   };
 
@@ -132,7 +135,7 @@ export default function WorkflowList({ onSelect, onNew, onViewRun }: WorkflowLis
                       </IconButton>
                     </Tooltip>
                     <Tooltip title="Delete">
-                      <IconButton size="small" onClick={() => handleDelete(wf.id)}>
+                      <IconButton size="small" onClick={() => setDeleteTarget(wf.id)}>
                         <Trash2 size={16} />
                       </IconButton>
                     </Tooltip>
@@ -202,6 +205,31 @@ export default function WorkflowList({ onSelect, onNew, onViewRun }: WorkflowLis
           </Table>
         </TableContainer>
       )}
+
+      <Modal
+        open={!!deleteTarget}
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
+        modal={true}
+        slotHeading="Delete Workflow"
+        slotFooter={
+          <>
+            <ModalCloseButton kind="tertiary">Cancel</ModalCloseButton>
+            <KuiButton kind="primary" color="danger" onClick={handleDeleteConfirm}>
+              Delete
+            </KuiButton>
+          </>
+        }
+      >
+        <Text kind="label/regular/xl">
+          Are you sure you want to delete this workflow? This action cannot be undone.
+        </Text>
+        <Text kind="label/regular/xl" style={{ marginTop: 16, display: "block" }}>
+          ID: {deleteTarget}
+        </Text>
+        <Text kind="label/regular/xl" style={{ color: "var(--text-color-secondary)" }}>
+          Name: {workflows.find((w) => w.id === deleteTarget)?.name || deleteTarget}
+        </Text>
+      </Modal>
     </Box>
   );
 }

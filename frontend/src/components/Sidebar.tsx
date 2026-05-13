@@ -48,11 +48,11 @@ const mainNavItems: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={22} /> },
   { id: "singleRack", label: "Single Rack", icon: <Server size={22} /> },
   { id: "multirack", label: "Multirack", icon: <Layers size={22} /> },
+  { id: "workflows", label: "Workflows", icon: <Workflow size={22} /> },
   { id: "slurm", label: "Slurm", icon: <Terminal size={22} /> },
   { id: "reports", label: "Reports", icon: <FileDown size={22} /> },
   { id: "analytics", label: "Analytics", icon: <LineChart size={22} /> },
   { id: "tools", label: "Utility", icon: <Wrench size={22} /> },
-  { id: "workflows", label: "Workflows", icon: <Workflow size={22} /> },
 ];
 
 const bottomNavItems: NavItem[] = [
