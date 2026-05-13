@@ -3896,6 +3896,402 @@ def api_gpu_reset_async():
     return jsonify({"ok": True, "job_id": job_id, "kind": "gpu", "rack": rk})
 
 
+# ---------------------------------------------------------------------------
+# BMC recovery and MAC change
+#
+# Both target a single head node where BCM (cmsh / pythoncm) + ipmitool live.
+# Invocation always routes through host_exec so the same code path serves
+# local-on-head and dashboard-in-container deployments. Each call writes its
+# stdout/stderr/returncode into the shared _reset_jobs table; the frontend
+# polls /api/reset-job-status?job_id=… (no new polling endpoint needed).
+# ---------------------------------------------------------------------------
+
+_MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
+_IFACE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+_SINGLE_NODE_SPEC_RE = re.compile(r"^([a-z0-9-]+-ct)\[(\d+)\]$", re.IGNORECASE)
+_HOSTNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$", re.IGNORECASE)
+
+
+def _bmc_recovery_script_path() -> Path:
+    raw = (_eget("RACK_BMC_RECOVERY_SCRIPT") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (SCRIPTS_DIR / "bmc-recovery.sh").resolve()
+
+
+def _macswap_script_path() -> Path:
+    raw = (_eget("RACK_MACSWAP_SCRIPT") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (SCRIPTS_DIR / "macswap" / "macswap").resolve()
+
+
+def _macswap_python_module() -> str:
+    """Environment Modules name to load before invoking macswap (default ``python3``)."""
+    raw = (_eget("RACK_MACSWAP_PYTHON_MODULE") or "").strip()
+    return raw or "python3"
+
+
+def _spec_to_hostname(spec: str) -> str | None:
+    """Parse a single-node spec like ``pNN-rMM-ct[01]`` → ``pNN-rMM-ct01``.
+
+    Returns ``None`` for range forms (e.g. ``pNN-rMM-ct[01-04]``) so the
+    caller can fan-out only across explicit single-node selections.
+    """
+    m = _SINGLE_NODE_SPEC_RE.match(spec.strip())
+    if not m:
+        return None
+    return f"{m.group(1)}{m.group(2)}".lower()
+
+
+def run_bmc_recovery_one(node: str, iface: str) -> dict:
+    """Run ``bmc-recovery.sh <node> <iface>`` on the head node and capture output."""
+    script = _bmc_recovery_script_path()
+    if not _script_exists(script):
+        raise OSError(f"bmc-recovery script not found: {script}")
+    if not _HOSTNAME_RE.match(node):
+        raise ValueError(f"invalid node hostname: {node!r}")
+    if not _IFACE_NAME_RE.match(iface):
+        raise ValueError(f"invalid interface name: {iface!r}")
+    timeout = max(30, _env_int("RACK_BMC_RECOVERY_TIMEOUT", 120))
+    dry = os.environ.get("RACK_BMC_RECOVERY_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
+    cmd = ["bash", str(script), node, iface]
+    cmd_display = " ".join(shlex.quote(c) for c in cmd)
+    if dry:
+        return {
+            "returncode": 0,
+            "stdout": f"dry-run (RACK_BMC_RECOVERY_DRY_RUN)\n{cmd_display}",
+            "stderr": "",
+            "command_display": cmd_display,
+            "node": node,
+            "iface": iface,
+        }
+    try:
+        proc = host_exec.run_on_host(cmd, timeout=timeout)
+    except FileNotFoundError:
+        raise OSError("bash executable not found") from None
+    except subprocess.TimeoutExpired:
+        return {
+            "returncode": -1,
+            "stdout": "",
+            "stderr": f"timeout after {timeout}s",
+            "command_display": cmd_display,
+            "node": node,
+            "iface": iface,
+        }
+    return {
+        "returncode": proc.returncode,
+        "stdout": (proc.stdout or "").strip(),
+        "stderr": (proc.stderr or "").strip(),
+        "command_display": cmd_display,
+        "node": node,
+        "iface": iface,
+    }
+
+
+def _prepare_bmc_recovery(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
+    """Validate the request body; return ({nodes, iface}, None) or (None, (response, code))."""
+    if os.environ.get("RACK_BMC_RECOVERY_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return None, (jsonify({"ok": False, "error": "bmc recovery disabled (RACK_BMC_RECOVERY_DISABLED)"}), 403)
+    specs_raw = body.get("specs")
+    if not isinstance(specs_raw, list) or not specs_raw:
+        return None, (jsonify({"ok": False, "error": 'send JSON {"specs": ["pNN-rMM-ct[id]", ...]}'}), 400)
+    nodes: list[str] = []
+    for raw in specs_raw:
+        host = _spec_to_hostname(str(raw))
+        if host is None:
+            return None, (
+                jsonify({"ok": False, "error": f"spec {raw!r} is not a single-node form pNN-rMM-ct[NN]"}),
+                400,
+            )
+        if host not in nodes:
+            nodes.append(host)
+    iface_raw = body.get("iface")
+    iface = "rf0" if iface_raw is None else str(iface_raw).strip()
+    if not _IFACE_NAME_RE.match(iface):
+        return None, (jsonify({"ok": False, "error": f"invalid interface name: {iface!r}"}), 400)
+    return {"nodes": nodes, "iface": iface}, None
+
+
+def _bmc_recovery_worker(job_id: str, nodes: list[str], iface: str) -> None:
+    """Run bmc-recovery.sh against each selected node serially; aggregate into _reset_jobs."""
+
+    def _patch(**kwargs: object) -> None:
+        with _reset_jobs_lock:
+            row = _reset_jobs.get(job_id)
+            if row is not None:
+                row.update(kwargs)
+
+    results: list[dict] = []
+    try:
+        _patch(
+            phase="running",
+            started_running_at=datetime.now(timezone.utc).isoformat(),
+        )
+        for node in nodes:
+            try:
+                res = run_bmc_recovery_one(node, iface)
+            except (OSError, ValueError) as e:
+                res = {
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(e),
+                    "command_display": "",
+                    "node": node,
+                    "iface": iface,
+                }
+            results.append(res)
+            _patch(results=list(results))
+        ok_all = all(r.get("returncode") == 0 for r in results)
+        _patch(
+            phase="done" if ok_all else "error",
+            ok=ok_all,
+            results=results,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            error=None if ok_all else "bmc-recovery.sh failed on one or more nodes (see results)",
+        )
+    except Exception as e:
+        _patch(
+            phase="error",
+            ok=False,
+            results=results,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            error=str(e),
+        )
+    _reset_job_purge_later(job_id)
+
+
+@app.route("/api/bmc-recovery-async", methods=["POST"])
+def api_bmc_recovery_async():
+    """Start BMC recovery in a background thread; poll GET /api/reset-job-status?job_id=…"""
+    body = request.get_json(silent=True) or {}
+    prep, err = _prepare_bmc_recovery(body)
+    if err is not None:
+        return err[0], err[1]
+    assert prep is not None
+    nodes = prep["nodes"]
+    iface = prep["iface"]
+    assert isinstance(nodes, list) and isinstance(iface, str)
+    try:
+        rk = _normalize_rack_id((body.get("rack") or "").strip())
+    except ValueError:
+        rk = ""
+    job_id = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat()
+    with _reset_jobs_lock:
+        _reset_jobs[job_id] = {
+            "job_id": job_id,
+            "kind": "bmc",
+            "rack": rk,
+            "nodes": list(nodes),
+            "iface": iface,
+            "phase": "starting",
+            "created_at": created,
+        }
+    threading.Thread(
+        target=_bmc_recovery_worker,
+        args=(job_id, list(nodes), iface),
+        daemon=True,
+    ).start()
+    return jsonify({"ok": True, "job_id": job_id, "kind": "bmc", "rack": rk})
+
+
+def run_mac_change(
+    node: str,
+    node_mac: str | None,
+    ifspecs: list[tuple[str, str]],
+    dry_run: bool,
+) -> dict:
+    """Invoke macswap in change mode through ``bash -lc 'module load python3 && macswap …'``."""
+    script = _macswap_script_path()
+    if not _script_exists(script):
+        raise OSError(f"macswap script not found: {script}")
+    if not _HOSTNAME_RE.match(node):
+        raise ValueError(f"invalid node hostname: {node!r}")
+    if node_mac is not None and not _MAC_RE.match(node_mac):
+        raise ValueError(f"invalid node MAC: {node_mac!r}")
+    for name, mac in ifspecs:
+        if not _IFACE_NAME_RE.match(name):
+            raise ValueError(f"invalid interface name: {name!r}")
+        if not _MAC_RE.match(mac):
+            raise ValueError(f"invalid MAC for interface {name!r}: {mac!r}")
+    timeout = max(30, _env_int("RACK_MAC_CHANGE_TIMEOUT", 600))
+    dry_env = os.environ.get("RACK_MAC_CHANGE_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
+    inner_argv: list[str] = ["python3", str(script), node]
+    if node_mac:
+        inner_argv += ["--node-mac", node_mac]
+    for name, mac in ifspecs:
+        inner_argv += ["--interface", f"{name}={mac}"]
+    if dry_run or dry_env:
+        inner_argv.append("--dry-run")
+    module_name = _macswap_python_module()
+    inner_cmd = f"module load {shlex.quote(module_name)} && {shlex.join(inner_argv)}"
+    cmd = ["bash", "-lc", inner_cmd]
+    cmd_display = " ".join(shlex.quote(c) for c in cmd)
+    try:
+        proc = host_exec.run_on_host(cmd, timeout=timeout)
+    except FileNotFoundError:
+        raise OSError("bash executable not found") from None
+    except subprocess.TimeoutExpired:
+        return {
+            "returncode": -1,
+            "stdout": "",
+            "stderr": f"timeout after {timeout}s",
+            "command_display": cmd_display,
+            "node": node,
+            "dry_run": bool(dry_run or dry_env),
+        }
+    return {
+        "returncode": proc.returncode,
+        "stdout": (proc.stdout or "").strip(),
+        "stderr": (proc.stderr or "").strip(),
+        "command_display": cmd_display,
+        "node": node,
+        "dry_run": bool(dry_run or dry_env),
+    }
+
+
+def _prepare_mac_change(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
+    """Validate the request body; return ({node, node_mac, ifspecs, dry_run}, None) or (None, err)."""
+    if os.environ.get("RACK_MAC_CHANGE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return None, (jsonify({"ok": False, "error": "mac change disabled (RACK_MAC_CHANGE_DISABLED)"}), 403)
+    node_raw = body.get("node")
+    if not isinstance(node_raw, str) or not node_raw.strip():
+        return None, (jsonify({"ok": False, "error": '"node" is required (single hostname)'}), 400)
+    node = node_raw.strip().lower()
+    if not _HOSTNAME_RE.match(node):
+        return None, (jsonify({"ok": False, "error": f"invalid node hostname: {node!r}"}), 400)
+
+    node_mac_raw = body.get("node_mac")
+    node_mac: str | None
+    if node_mac_raw is None or (isinstance(node_mac_raw, str) and not node_mac_raw.strip()):
+        node_mac = None
+    elif not isinstance(node_mac_raw, str):
+        return None, (jsonify({"ok": False, "error": '"node_mac" must be a string'}), 400)
+    elif not _MAC_RE.match(node_mac_raw.strip()):
+        return None, (jsonify({"ok": False, "error": f"invalid node MAC: {node_mac_raw!r}"}), 400)
+    else:
+        node_mac = node_mac_raw.strip().lower()
+
+    ifaces_raw = body.get("interfaces") or []
+    if not isinstance(ifaces_raw, list):
+        return None, (jsonify({"ok": False, "error": '"interfaces" must be an array of {name, mac} objects'}), 400)
+    ifspecs: list[tuple[str, str]] = []
+    for idx, row in enumerate(ifaces_raw):
+        if not isinstance(row, dict):
+            return None, (jsonify({"ok": False, "error": f"interfaces[{idx}] must be an object"}), 400)
+        name_raw = row.get("name")
+        mac_raw = row.get("mac")
+        if (name_raw is None or not str(name_raw).strip()) and (mac_raw is None or not str(mac_raw).strip()):
+            continue
+        if not isinstance(name_raw, str) or not _IFACE_NAME_RE.match(name_raw.strip()):
+            return None, (jsonify({"ok": False, "error": f'interfaces[{idx}].name is missing or invalid'}), 400)
+        if not isinstance(mac_raw, str) or not _MAC_RE.match(mac_raw.strip()):
+            return None, (jsonify({"ok": False, "error": f'interfaces[{idx}].mac is missing or invalid'}), 400)
+        ifspecs.append((name_raw.strip(), mac_raw.strip().lower()))
+
+    if node_mac is None and not ifspecs:
+        return None, (
+            jsonify({"ok": False, "error": "provide --node-mac or at least one interface"}),
+            400,
+        )
+
+    dry_raw = body.get("dry_run")
+    dry_run = bool(dry_raw) if dry_raw is not None else False
+
+    return {"node": node, "node_mac": node_mac, "ifspecs": ifspecs, "dry_run": dry_run}, None
+
+
+def _mac_change_worker(
+    job_id: str,
+    node: str,
+    node_mac: str | None,
+    ifspecs: list[tuple[str, str]],
+    dry_run: bool,
+) -> None:
+    """Run macswap once (single node) and aggregate into _reset_jobs."""
+
+    def _patch(**kwargs: object) -> None:
+        with _reset_jobs_lock:
+            row = _reset_jobs.get(job_id)
+            if row is not None:
+                row.update(kwargs)
+
+    try:
+        _patch(
+            phase="running",
+            started_running_at=datetime.now(timezone.utc).isoformat(),
+        )
+        try:
+            result = run_mac_change(node, node_mac, ifspecs, dry_run)
+        except (OSError, ValueError) as e:
+            result = {
+                "returncode": -1,
+                "stdout": "",
+                "stderr": str(e),
+                "command_display": "",
+                "node": node,
+                "dry_run": dry_run,
+            }
+        ok = result.get("returncode") == 0
+        _patch(
+            phase="done" if ok else "error",
+            ok=ok,
+            results=[result],
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            error=None if ok else "macswap exited non-zero (see stdout/stderr)",
+        )
+    except Exception as e:
+        _patch(
+            phase="error",
+            ok=False,
+            results=[],
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            error=str(e),
+        )
+    _reset_job_purge_later(job_id)
+
+
+@app.route("/api/mac-change-async", methods=["POST"])
+def api_mac_change_async():
+    """Start a MAC change in a background thread; poll GET /api/reset-job-status?job_id=…"""
+    body = request.get_json(silent=True) or {}
+    prep, err = _prepare_mac_change(body)
+    if err is not None:
+        return err[0], err[1]
+    assert prep is not None
+    node = str(prep["node"])
+    node_mac = prep["node_mac"]
+    assert node_mac is None or isinstance(node_mac, str)
+    ifspecs = prep["ifspecs"]
+    assert isinstance(ifspecs, list)
+    dry_run = bool(prep["dry_run"])
+    try:
+        rk = _normalize_rack_id((body.get("rack") or "").strip())
+    except ValueError:
+        rk = ""
+    job_id = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat()
+    with _reset_jobs_lock:
+        _reset_jobs[job_id] = {
+            "job_id": job_id,
+            "kind": "mac",
+            "rack": rk,
+            "node": node,
+            "node_mac": node_mac,
+            "interfaces": [{"name": n, "mac": m} for n, m in ifspecs],
+            "dry_run": dry_run,
+            "phase": "starting",
+            "created_at": created,
+        }
+    threading.Thread(
+        target=_mac_change_worker,
+        args=(job_id, node, node_mac, list(ifspecs), dry_run),
+        daemon=True,
+    ).start()
+    return jsonify({"ok": True, "job_id": job_id, "kind": "mac", "rack": rk})
+
+
 _DEFAULT_BUG_REPORT_REMOTE_DIR = "/home/cmsupport/reports"
 
 

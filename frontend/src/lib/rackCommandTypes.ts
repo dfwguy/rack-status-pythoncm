@@ -6,7 +6,9 @@ export type NodeCmdKind =
   | "gpu"
   | "services"
   | "hw"
-  | "nmxc";
+  | "nmxc"
+  | "bmc"
+  | "mac";
 
 /** Client-only replay buffer per rack (legacy `rackLastAsyncOutput`). */
 export interface RackLastAsyncOutput {

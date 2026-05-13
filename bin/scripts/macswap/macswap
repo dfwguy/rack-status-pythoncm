@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""
+Unified entry point for BCM cluster MAC address management.
+
+Dispatches automatically based on the arguments supplied:
+
+  Swap MACs between two nodes:
+    macswap NODE_A NODE_B
+    macswap --dry-run NODE_A NODE_B
+
+  Change a node's MAC(s) -- automatically swaps when the requested MAC
+  is already owned by exactly one other node on the same cluster
+  connection:
+    macswap NODE --node-mac aa:bb:cc:dd:ee:01
+    macswap NODE --interface eth0=aa:bb:cc:dd:ee:10
+    macswap NODE --node-mac aa:bb:cc:dd:ee:01 \\
+                 --interface eth0=aa:bb:cc:dd:ee:10 \\
+                 --interface ipmi0=aa:bb:cc:dd:ee:11
+
+Prerequisite (on a head node):
+
+    module load python3
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+
+from _macswap_common import (
+    add_verbosity_args,
+    configure_logging,
+    get_device,
+    import_cluster_or_die,
+    interface_spec,
+    normalize_mac,
+)
+import change_node_macs
+import swap_node_macs
+
+Cluster = import_cluster_or_die()
+
+LOGGER = logging.getLogger("macswap")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="macswap",
+        description=(
+            "Manage BCM cluster MAC addresses.\n\n"
+            "  Swap mode  (two nodes):  macswap NODE_A NODE_B\n"
+            "  Change mode (one node):  macswap NODE --node-mac MAC\n"
+            "                           macswap NODE --interface NAME=MAC ..."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "node_a", metavar="NODE",
+        help="Device hostname.",
+    )
+    parser.add_argument(
+        "node_b", metavar="NODE_B", nargs="?", default=None,
+        help="Second device hostname. When given, swap mode is used.",
+    )
+
+    change = parser.add_argument_group("change-mode options")
+    change.add_argument(
+        "--node-mac", type=normalize_mac, default=None, metavar="MAC",
+        help="New device-level (boot/provisioning) MAC.",
+    )
+    change.add_argument(
+        "--interface", action="append", type=interface_spec,
+        default=[], metavar="NAME=MAC",
+        help="New MAC for a named interface. May be repeated.",
+    )
+
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Print what would change without committing.",
+    )
+    add_verbosity_args(parser)
+
+    args = parser.parse_args()
+    swap_mode = args.node_b is not None
+    change_mode = args.node_mac is not None or bool(args.interface)
+    if swap_mode and change_mode:
+        parser.error(
+            "swap mode (two node names) and change mode "
+            "(--node-mac / --interface) are mutually exclusive"
+        )
+    if not swap_mode and not change_mode:
+        parser.error(
+            "provide a second node name for swap mode, "
+            "or at least one of --node-mac / --interface for change mode"
+        )
+    return args
+
+
+def main() -> int:
+    args = parse_args()
+    configure_logging(LOGGER, args.verbose, args.quiet)
+
+    if args.node_b is not None and args.node_a == args.node_b:
+        LOGGER.error("Both node names are the same: %r", args.node_a)
+        return 2
+
+    cluster = Cluster(load_entities="basic")
+    try:
+        if args.node_b is not None:
+            node_a = get_device(cluster, args.node_a, LOGGER)
+            node_b = get_device(cluster, args.node_b, LOGGER)
+            return swap_node_macs.run_swap(cluster, node_a, node_b, args.dry_run)
+
+        node = get_device(cluster, args.node_a, LOGGER)
+        return change_node_macs.run_change(
+            cluster, node, args.node_mac, args.interface, args.dry_run,
+        )
+    finally:
+        try:
+            cluster.disconnect()
+        except Exception as exc:
+            LOGGER.debug("Ignored error while disconnecting cluster: %s", exc)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
