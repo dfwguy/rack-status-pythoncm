@@ -188,6 +188,9 @@ export default function FlowDiagram({
     setEdges((eds) => eds.filter((e) => !selectedIds.has(e.source) && !selectedIds.has(e.target)));
   }, [nodes, setNodes, setEdges]);
 
+  const GRID = 20;
+  const snap = (v: number) => Math.round(v / GRID) * GRID;
+
   const alignNodes = useCallback(
     (axis: "left" | "centerX" | "right" | "top" | "centerY" | "bottom") => {
       const selected = getSelectedNodes();
@@ -215,6 +218,7 @@ export default function FlowDiagram({
           break;
       }
 
+      target = snap(target);
       const ids = new Set(selected.map((n) => n.id));
       setNodes((nds) =>
         nds.map((n) => {
@@ -246,8 +250,8 @@ export default function FlowDiagram({
       const posMap = new Map<string, { x: number; y: number }>();
       sorted.forEach((n, i) => {
         const pos = { ...n.position };
-        if (direction === "horizontal") pos.x = first.x + step * i;
-        else pos.y = first.y + step * i;
+        if (direction === "horizontal") pos.x = snap(first.x + step * i);
+        else pos.y = snap(first.y + step * i);
         posMap.set(n.id, pos);
       });
 
@@ -276,6 +280,8 @@ export default function FlowDiagram({
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.2 }}
+        snapToGrid
+        snapGrid={[20, 20]}
         nodesDraggable={!readOnly && !locked}
         nodesConnectable={!readOnly && !locked}
         elementsSelectable={!readOnly}
@@ -292,7 +298,7 @@ export default function FlowDiagram({
         }}
         style={{ width: "100%", height: "100%" }}
       >
-        <Background gap={20} size={1} color="rgba(118,185,0,0.08)" />
+        <Background gap={20} size={1} color="rgba(118,185,0,0.12)" />
         <Controls showInteractive={!readOnly} />
         <MiniMap
           nodeColor={(n) => {

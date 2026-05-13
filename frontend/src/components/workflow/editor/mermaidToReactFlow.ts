@@ -157,16 +157,30 @@ export function mermaidToReactFlow(
 
   const nodeArray = Array.from(nodesMap.values());
 
-  // Use dagre for top-down (vertical) auto-layout
+  // Use dagre for top-down (vertical) auto-layout with generous spacing
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: "TB", nodesep: 60, ranksep: 80, marginx: 40, marginy: 40 });
+  g.setGraph({
+    rankdir: "TB",
+    align: "UL",
+    nodesep: 80,
+    ranksep: 100,
+    marginx: 60,
+    marginy: 60,
+  });
 
   const NODE_WIDTH = 180;
-  const NODE_HEIGHT = 50;
+  const NODE_HEIGHT = 54;
+  const DIAMOND_SIZE = 150;
+  const GRID = 20;
 
+  const nodeSizes = new Map<string, { w: number; h: number }>();
   for (const n of nodeArray) {
-    g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+    const isDiamond = n.shape === "diamond";
+    const w = isDiamond ? DIAMOND_SIZE : NODE_WIDTH;
+    const h = isDiamond ? DIAMOND_SIZE : NODE_HEIGHT;
+    nodeSizes.set(n.id, { w, h });
+    g.setNode(n.id, { width: w, height: h });
   }
   for (const e of edges) {
     g.setEdge(e.source, e.target);
@@ -174,14 +188,18 @@ export function mermaidToReactFlow(
 
   dagre.layout(g);
 
+  // Snap positions to grid for cleaner alignment
+  const snap = (v: number) => Math.round(v / GRID) * GRID;
+
   const rfNodes: Node[] = nodeArray.map((n) => {
     const pos = g.node(n.id);
+    const size = nodeSizes.get(n.id) || { w: NODE_WIDTH, h: NODE_HEIGHT };
     return {
       id: n.id,
       type: "custom",
       position: {
-        x: (pos?.x ?? 0) - NODE_WIDTH / 2,
-        y: (pos?.y ?? 0) - NODE_HEIGHT / 2,
+        x: snap((pos?.x ?? 0) - size.w / 2),
+        y: snap((pos?.y ?? 0) - size.h / 2),
       },
       data: {
         label: n.label,

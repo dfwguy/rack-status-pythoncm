@@ -1,6 +1,6 @@
 /**
  * Custom node renderer for workflow steps.
- * Supports: automated (rectangle), manual (rounded), decision (diamond), ai_query (rounded purple).
+ * Supports: automated (rectangle), manual (rounded), decision (rotated diamond), ai_query (rounded purple).
  * Adapted from mermaid-reactflow-editor (MIT License).
  */
 
@@ -80,19 +80,118 @@ function CustomNode({ data, selected }: NodeProps<CustomNodeData>) {
 
   const isDiamond = stepType === "decision";
 
+  if (isDiamond) {
+    return (
+      <Box
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        sx={{ position: "relative", padding: "20px" }}
+      >
+        {/* Handles outside the rotated shape so they stay axis-aligned */}
+        <Handle type="target" position={Position.Top} style={{ ...handleStyle, top: 0 }} />
+
+        {/* Rotated diamond shape */}
+        <Box
+          sx={{
+            width: 110,
+            height: 110,
+            transform: "rotate(45deg)",
+            border: `2px solid ${borderColor}`,
+            bgcolor: bgColor,
+            borderRadius: "6px",
+            boxShadow: selected
+              ? `0 0 0 3px ${accentColor}40`
+              : isActive
+                ? `0 0 12px ${accentColor}60`
+                : hovered
+                  ? `0 2px 8px rgba(0,0,0,0.15)`
+                  : "0 1px 3px rgba(0,0,0,0.08)",
+            transition: "all 0.2s ease",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "grab",
+            "&:active": { cursor: "grabbing" },
+          }}
+        >
+          {/* Counter-rotate the content so text is readable */}
+          <Box
+            sx={{
+              transform: "rotate(-45deg)",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 0.25,
+              px: 1,
+              textAlign: "center",
+              maxWidth: 100,
+            }}
+          >
+            <Box sx={{ color: accentColor, display: "flex", alignItems: "center" }}>
+              <GitBranch size={14} />
+            </Box>
+            <Text kind="body/regular/sm" style={{ lineHeight: 1.2, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", maxWidth: 90 }}>
+              {label.replace(/^"|"$/g, "")}
+            </Text>
+          </Box>
+        </Box>
+
+        {/* Type badge — positioned above the diamond tip */}
+        <Box
+          sx={{
+            position: "absolute",
+            top: 0,
+            left: "50%",
+            transform: "translateX(-50%)",
+            bgcolor: accentColor,
+            color: "#fff",
+            px: 0.75,
+            py: 0.1,
+            borderRadius: "4px",
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: "0.02em",
+            lineHeight: 1.4,
+            opacity: hovered || selected ? 1 : 0,
+            transition: "opacity 0.15s ease",
+            whiteSpace: "nowrap",
+            zIndex: 1,
+          }}
+        >
+          Condition
+        </Box>
+
+        <Handle type="source" position={Position.Bottom} style={{ ...handleStyle, bottom: 0 }} />
+        <Handle
+          type="source"
+          position={Position.Left}
+          id="left"
+          style={{ ...handleStyle, left: 0, top: "50%" }}
+        />
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="right"
+          style={{ ...handleStyle, right: 0, top: "50%" }}
+        />
+      </Box>
+    );
+  }
+
+  // Non-diamond nodes (automated, manual, ai_query)
   return (
     <Box
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       sx={{ position: "relative" }}
     >
-      <Handle type="target" position={Position.Top} style={{ ...handleStyle, top: isDiamond ? -4 : -5 }} />
+      <Handle type="target" position={Position.Top} style={{ ...handleStyle, top: -5 }} />
 
       <Box
         sx={{
           px: 2.5,
           py: 1.5,
-          borderRadius: isDiamond ? "4px" : stepType === "manual" || stepType === "ai_query" ? "16px" : "8px",
+          borderRadius: stepType === "manual" || stepType === "ai_query" ? "16px" : "8px",
           border: `2px solid ${borderColor}`,
           bgcolor: bgColor,
           minWidth: 150,
@@ -104,7 +203,6 @@ function CustomNode({ data, selected }: NodeProps<CustomNodeData>) {
               : hovered
                 ? `0 2px 8px rgba(0,0,0,0.15)`
                 : "0 1px 3px rgba(0,0,0,0.08)",
-          transform: isDiamond ? "rotate(0deg)" : undefined,
           transition: "all 0.2s ease",
           cursor: "grab",
           "&:active": { cursor: "grabbing" },
@@ -144,25 +242,7 @@ function CustomNode({ data, selected }: NodeProps<CustomNodeData>) {
         </Box>
       </Box>
 
-      <Handle type="source" position={Position.Bottom} style={{ ...handleStyle, bottom: isDiamond ? -4 : -5 }} />
-
-      {/* Extra handles on sides for decision nodes (Yes/No branches) */}
-      {isDiamond && (
-        <>
-          <Handle
-            type="source"
-            position={Position.Left}
-            id="left"
-            style={{ ...handleStyle, left: -5, top: "50%" }}
-          />
-          <Handle
-            type="source"
-            position={Position.Right}
-            id="right"
-            style={{ ...handleStyle, right: -5, top: "50%" }}
-          />
-        </>
-      )}
+      <Handle type="source" position={Position.Bottom} style={{ ...handleStyle, bottom: -5 }} />
     </Box>
   );
 }
