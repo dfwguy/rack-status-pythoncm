@@ -2,17 +2,33 @@
 set -euo pipefail
 
 # =============================================================================
-# Local dashboard defaults — edit here. Override from the shell when needed,
-# e.g.  PORT=8080 RACK_STATUS_DEMO=0 ./start.sh
+# NVIS Rack Status — start script
+#
+# Modes:
+#   ./start.sh                              # auto-detect: demo on macOS, cluster on Linux
+#   RACK_STATUS_DEMO=1 ./start.sh           # force demo mode
+#   RACK_STATUS_DEMO=0 ./start.sh           # force cluster mode
 # =============================================================================
+
 export PORT="${PORT:-5050}"
-#export RACK_STATUS_DEMO="${RACK_STATUS_DEMO:-1}"
-#export RACK_WEB_AUTH_DISABLED="${RACK_WEB_AUTH_DISABLED:-1}"
-export VALIDATION_TEST="${VALIDATION_TEST:-nccl_allreduce,llm}"
-export RACK_WEB_PROJECT_NAME="${RACK_WEB_PROJECT_NAME:-Mistral Phase 2}"
-export NEMO_SQSH_SRC="${NEMO_SQSH_SRC:-/home/cmsupport/nemo-25.11.01.sqsh}"
-# Used by Flask when /api/status has no log_dir query (React SPA omits it until Settings overrides).
-export RACK_STATUS_LOG_DIR="${RACK_STATUS_LOG_DIR:-/home/cmsupport/aihpc_val-main/validation/nemo/}"
+
+# ---- Auto-detect mode based on OS ----
+# macOS = local development (demo mode by default)
+# Linux = HPC cluster (real mode by default)
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  export RACK_STATUS_DEMO="${RACK_STATUS_DEMO:-1}"
+  export RACK_WEB_AUTH_DISABLED="${RACK_WEB_AUTH_DISABLED:-1}"
+else
+  export RACK_STATUS_DEMO="${RACK_STATUS_DEMO:-0}"
+fi
+
+# ---- Cluster defaults (only applied when NOT in demo mode) ----
+if [[ "${RACK_STATUS_DEMO}" != "1" ]]; then
+  export VALIDATION_TEST="${VALIDATION_TEST:-nccl_allreduce,llm}"
+  export RACK_WEB_PROJECT_NAME="${RACK_WEB_PROJECT_NAME:-Mistral Phase 2}"
+  export NEMO_SQSH_SRC="${NEMO_SQSH_SRC:-/home/cmsupport/nemo-25.11.01.sqsh}"
+  export RACK_STATUS_LOG_DIR="${RACK_STATUS_LOG_DIR:-/home/cmsupport/aihpc_val-main/validation/nemo/}"
+fi
 # =============================================================================
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
