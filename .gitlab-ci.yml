@@ -44,7 +44,7 @@ python-test:
     paths:
       - .pip-cache/
   script:
-    - pip install -q flask openpyxl pytest
+    - pip install -q flask openpyxl pytest requests pyyaml
     - python -m pytest tests/ -v --tb=short --junitxml=report-python.xml
   artifacts:
     when: always
