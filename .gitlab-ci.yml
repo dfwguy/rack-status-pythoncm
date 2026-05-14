@@ -64,8 +64,7 @@ frontend-test:
     - cd frontend
     - npm ci --ignore-scripts
     - npx vitest run --reporter=junit --outputFile=../report-frontend.xml --coverage
-    - echo "TOTAL $(cat coverage/coverage-summary.json | grep -o '"pct":[0-9.]*' | head -1 | grep -o '[0-9.]*')%"
-  coverage: '/TOTAL (\d+\.?\d*%)/'
+  coverage: '/Statements\s*:\s*(\d+\.?\d*%)/'
   artifacts:
     when: always
     reports:
