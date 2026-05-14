@@ -1,5 +1,9 @@
 # NVIS Rack Status (`nvis-rack-status`)
 
+[![Pipeline](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/badges/feature/react-frontend-nvis-ux/pipeline.svg)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/pipelines)
+[![Backend Coverage](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/badges/feature/react-frontend-nvis-ux/coverage.svg?job=python-test&key_text=Backend+Coverage&key_width=130)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/jobs)
+[![Frontend Coverage](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/badges/feature/react-frontend-nvis-ux/coverage.svg?job=frontend-test&key_text=Frontend+Coverage&key_width=130)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/jobs)
+
 Flask + React dashboard for **rack-level operations and NEMO validation visibility**: a sortable rack table with filters, parser charts (NCCL bandwidth, step-time), log export, Slurm controls, power and GPU flows, NVSwitch / NVLink tooling, optional Grafana embeds, and token or PAM login.
 
 **Configuration:** every environment variable is documented in **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)**.
