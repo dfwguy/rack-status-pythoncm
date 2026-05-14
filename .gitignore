@@ -17,6 +17,7 @@ build/
 
 # ---- App runtime (regenerated; cluster-specific) ----
 var/cache/
+var/workflows/runs/
 
 # ---- Demo report logs (extracted from reports.tar.gz) ----
 demo-reports/
