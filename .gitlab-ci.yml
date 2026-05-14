@@ -63,7 +63,7 @@ frontend-test:
   script:
     - cd frontend
     - npm ci --ignore-scripts
-    - npx vitest run --reporter=junit --outputFile=../report-frontend.xml --coverage
+    - npx vitest run --reporter=default --reporter=junit --outputFile=../report-frontend.xml --coverage
   coverage: '/Statements\s*:\s*(\d+\.?\d*%)/'
   artifacts:
     when: always
