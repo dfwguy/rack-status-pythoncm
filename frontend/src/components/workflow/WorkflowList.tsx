@@ -13,7 +13,7 @@ import Paper from "@mui/material/Paper";
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import { Text, Tag, Modal, ModalCloseButton, Button as KuiButton } from "@nvidia/foundations-react-core";
-import { Plus, Play, Trash2, Edit } from "lucide-react";
+import { Plus, Play, Trash2, Edit, RefreshCw } from "lucide-react";
 import {
   listWorkflows,
   listRuns,
@@ -84,9 +84,14 @@ export default function WorkflowList({ onSelect, onNew, onViewRun }: WorkflowLis
           <Tab label="Templates" />
           <Tab label="Run History" />
         </Tabs>
-        <Button variant="contained" size="small" startIcon={<Plus size={16} />} onClick={onNew}>
-          New Workflow
-        </Button>
+        <Box sx={{ display: "flex", gap: 1 }}>
+          <Button variant="outlined" size="small" startIcon={<RefreshCw size={14} />} onClick={() => refresh()} disabled={loading}>
+            Refresh
+          </Button>
+          <Button variant="contained" size="small" startIcon={<Plus size={16} />} onClick={onNew}>
+            New Workflow
+          </Button>
+        </Box>
       </Box>
 
       {tab === 0 && (
@@ -153,6 +158,7 @@ export default function WorkflowList({ onSelect, onNew, onViewRun }: WorkflowLis
             <TableHead>
               <TableRow>
                 <TableCell>Workflow</TableCell>
+                <TableCell>Run ID</TableCell>
                 <TableCell>State</TableCell>
                 <TableCell>Current Step</TableCell>
                 <TableCell>Started</TableCell>
@@ -162,7 +168,7 @@ export default function WorkflowList({ onSelect, onNew, onViewRun }: WorkflowLis
             <TableBody>
               {runs.length === 0 && !loading && (
                 <TableRow>
-                  <TableCell colSpan={5} align="center">
+                  <TableCell colSpan={6} align="center">
                     <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", padding: "24px 0" }}>
                       No workflow runs yet.
                     </Text>
@@ -178,6 +184,11 @@ export default function WorkflowList({ onSelect, onNew, onViewRun }: WorkflowLis
                 >
                   <TableCell>
                     <Text kind="body/regular/sm">{run.workflow_name}</Text>
+                  </TableCell>
+                  <TableCell>
+                    <Text kind="mono/sm" style={{ color: "var(--text-color-secondary)" }}>
+                      {run.run_id.slice(0, 8)}
+                    </Text>
                   </TableCell>
                   <TableCell>
                     <Tag color={STATE_COLORS[run.state] || "gray"} kind="solid" readOnly density="compact">

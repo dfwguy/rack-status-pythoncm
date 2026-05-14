@@ -7,7 +7,7 @@ import { PageHeader } from "../components/layout/PageHeader";
 import WorkflowList from "../components/workflow/WorkflowList";
 import WorkflowDesigner from "../components/workflow/WorkflowDesigner";
 import WorkflowRunPanel from "../components/workflow/WorkflowRunPanel";
-import { getWorkflow, saveWorkflow, type Workflow } from "../services/workflowService";
+import { getWorkflow, saveWorkflow, startWorkflowRun, type Workflow } from "../services/workflowService";
 
 type ViewMode = "list" | "designer";
 
@@ -37,8 +37,9 @@ export function WorkflowsView() {
     setSelectedWorkflow(saved);
   }, []);
 
-  const handleRun = useCallback((_workflowId: string) => {
-    // startWorkflowRun is handled in WorkflowList, which calls onViewRun
+  const handleRun = useCallback(async (workflowId: string) => {
+    const result = await startWorkflowRun(workflowId);
+    setActiveRunId(result.run_id);
   }, []);
 
   const handleViewRun = useCallback((runId: string) => {
