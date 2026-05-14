@@ -36,7 +36,6 @@ COPY app.py native_status.py demo_data.py host_exec.py ai_chat.py workflow_engin
 COPY platforms/ ./platforms/
 COPY rack_web/ ./rack_web/
 COPY bin/ ./bin/
-COPY templates/ ./templates/
 COPY static/ ./static/
 COPY rack-config.env ./
 

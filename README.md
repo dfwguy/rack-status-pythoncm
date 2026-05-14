@@ -75,7 +75,7 @@ export PORT=5000
 python3 app.py
 ```
 
-Open **http://localhost:5000/spa/** for the React UI, or **http://localhost:5000/** for the legacy HTML dashboard.
+Open **http://localhost:5050/** in your browser.
 
 ### Demo mode (no cluster needed)
 

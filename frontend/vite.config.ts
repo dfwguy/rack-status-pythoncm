@@ -13,7 +13,7 @@ export default defineConfig({
       },
     },
   },
-  base: "/spa/",
+  base: "/",
   build: {
     outDir: "../static/spa",
     emptyOutDir: true,

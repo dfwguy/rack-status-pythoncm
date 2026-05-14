@@ -80,9 +80,7 @@ from flask import (
     Flask,
     Response,
     jsonify,
-    make_response,
     redirect,
-    render_template,
     request,
     send_file,
     session,
@@ -10922,108 +10920,24 @@ def api_tail_log_stream():
     )
 
 
-@app.route("/login", methods=["GET", "POST"])
+@app.route("/login", methods=["GET"])
 def login():
-    if not _auth_enabled():
-        return redirect(url_for("index"))
-    au = _auth_user()
-    psvc = _pam_service()
-    default_next = url_for("index")
-    if _session_ok():
-        dest = _safe_next(request.args.get("next")) or default_next
-        return redirect(dest or default_next)
-    if request.method == "POST":
-        pw_raw = request.form.get("password")
-        if pw_raw is None:
-            pw = ""
-        elif isinstance(pw_raw, str):
-            pw = pw_raw
-        else:
-            pw = str(pw_raw)
-        next_url = _safe_next(request.form.get("next")) or default_next
-        if not next_url:
-            next_url = default_next
-        try:
-            ok = _pam_verify(au, pw, psvc)
-        except RuntimeError as e:
-            return (
-                render_template(
-                    "login.html",
-                    error=False,
-                    next="",
-                    auth_user=au,
-                    pam_service=psvc,
-                    fatal=str(e),
-                    project_name=_project_name(),
-                ),
-                500,
-            )
-        if ok:
-            session.clear()
-            session.permanent = True
-            session["rack_web_auth"] = "1"
-            return redirect(next_url)
-        return render_template(
-            "login.html",
-            error=True,
-            next=_safe_next(request.form.get("next")) or "",
-            auth_user=au,
-            pam_service=psvc,
-            project_name=_project_name(),
-        )
-    next_q = _safe_next(request.args.get("next"))
-    return render_template(
-        "login.html",
-        error=False,
-        next=next_q or "",
-        auth_user=au,
-        pam_service=psvc,
-        project_name=_project_name(),
-    )
+    """Redirect to SPA — the React LoginPage handles authentication."""
+    if not _auth_enabled() or _session_ok():
+        return redirect("/")
+    return _serve_spa_asset("index.html")
 
 
 @app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
-    return redirect(url_for("login"))
+    return redirect("/")
 
 
 @app.route("/")
 def index():
-    if _spa_at_root_enabled():
-        return _serve_spa_asset("index.html")
-    dr = _env_int("RACK_STATUS_DEFAULT_REFRESH", 30)
-    if not (5 <= dr <= 86400):
-        dr = 30
-    pwr_sleep = max(0, _env_int("RACK_POWER_RESET_SLEEP_SEC", 10))
-    html = render_template(
-        "index.html",
-        default_log_dir=str(_default_log_dir()),
-        default_refresh=dr,
-        power_reset_sleep_sec=pwr_sleep,
-        validation_ct_inner=_validation_ct_inner(),
-        validation_script_name=_validation_script_path().name,
-        mnubergemm_stress_script_name=_mnubergemm_stress_script_path().name,
-        sysinfo_script_name=_sysinfo_script_path().name,
-        nvswitch_audit_script_name=_nvswitches_rack_audit_script_path().name,
-        nvswitch_sdn_reset_script_name=_nvswitch_sdn_reset_script_path().name,
-        nvswitch_system_reset_script_name=_nvswitch_system_reset_script_path().name,
-        imex_reset_script_name=_imex_reset_script_path().name,
-        imex_check_script_name=_imex_check_script_path().name,
-        nemo_xrack_script_name=_nemo_xrack_script_path().name,
-        run_llama_script_name=_run_llama_script_path().name,
-        gpu_reset_script_name=_gpu_reset_script_path().name,
-        hw_check_script_name=_hw_check_pdsh_script_path().name,
-        auth_required=_auth_enabled(),
-        grafana_uri=_rack_web_grafana_uri(),
-        grafana_port=_rack_web_grafana_port(),
-        grafana_embed_disabled=_truthy_env("RACK_WEB_GRAFANA_EMBED_DISABLED"),
-        project_name=_project_name(),
-    )
-    resp = make_response(html)
-    resp.headers["Cache-Control"] = "no-store, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    return resp
+    """Serve the React SPA."""
+    return _serve_spa_asset("index.html")
 
 
 def _cluster_env_pick(*keys: str, default: str = "") -> str:
@@ -11635,16 +11549,6 @@ def api_status():
 _SPA_DIR = APP_DIR / "static" / "spa"
 
 
-def _frontend_mode() -> str:
-    """UI mode selector: 'legacy' or 'react' (aliases: 'spa')."""
-    raw = os.environ.get("RACK_WEB_FRONTEND", "").strip().lower()
-    if raw in {"react", "spa"}:
-        return "react"
-    return "legacy"
-
-
-def _spa_at_root_enabled() -> bool:
-    return _frontend_mode() == "react"
 
 
 def _serve_spa_asset(path: str = "index.html"):
@@ -11702,10 +11606,8 @@ def serve_spa(path: str = "index.html"):
 
 @app.route("/<path:path>")
 def serve_root_spa(path: str):
-    """Serve React SPA at root when RACK_WEB_FRONTEND=react."""
-    if _spa_at_root_enabled():
-        return _serve_spa_asset(path)
-    return jsonify({"ok": False, "error": "Not found"}), 404
+    """Serve React SPA for all non-API routes (client-side routing)."""
+    return _serve_spa_asset(path)
 
 
 # ---------------------------------------------------------------------------
