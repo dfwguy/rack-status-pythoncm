@@ -64,7 +64,12 @@ frontend-test:
     - cd frontend
     - npm ci --ignore-scripts
     - npx vitest run --reporter=default --reporter=junit --outputFile=../report-frontend.xml --coverage
-  coverage: '/Statements\s*:\s*(\d+\.?\d*%)/'
+    - |
+      if [ -f coverage/coverage-summary.json ]; then
+        COVERAGE=$(node -e "const c=require('./coverage/coverage-summary.json');console.log(c.total.statements.pct)")
+        echo "TOTAL_COVERAGE: ${COVERAGE}%"
+      fi
+  coverage: '/TOTAL_COVERAGE: (\d+\.?\d*%)/'
   artifacts:
     when: always
     reports:
