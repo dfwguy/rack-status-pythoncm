@@ -1,0 +1,16 @@
+services:
+  rack-status:
+    build: .
+    ports:
+      - "${RACK_WEB_PORT:-5000}:5000"
+    env_file: rack-config.env
+    environment:
+      - RACK_SSH_HOST=${RACK_SSH_HOST}
+      - RACK_WEB_AUTH_TOKEN=${RACK_WEB_AUTH_TOKEN:-}
+    volumes:
+      - ${RACK_SSH_KEY_PATH:-~/.ssh/id_rsa}:/run/secrets/ssh_key:ro
+      - rack-data:/app/var
+    restart: unless-stopped
+
+volumes:
+  rack-data:

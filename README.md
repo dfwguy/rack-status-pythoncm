@@ -1,226 +1,365 @@
 # NVIS Rack Status (`nvis-rack-status`)
 
-Flask dashboard for **rack-level operations and NEMO validation visibility**: a sortable rack table, parser charts, log export, Slurm controls, power and GPU flows, NVSwitch / NVLink tooling, optional Grafana embeds, and optional PAM login.
+[![Pipeline](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/badges/feature/react-frontend-nvis-ux/pipeline.svg)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/pipelines)
+[![Backend Coverage](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/badges/feature/react-frontend-nvis-ux/coverage.svg?job=python-test&key_text=Backend+Coverage&key_width=130)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/jobs)
+[![Frontend Coverage](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/badges/feature/react-frontend-nvis-ux/coverage.svg?job=frontend-test&key_text=Frontend+Coverage&key_width=130)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/jobs)
 
-**Configuration:** every environment variable and credential file pattern is documented in **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)** (including **`.nvlmapperrc`**, **`.prometheusrc`**, and Grafana helper env).
+A full-stack **rack validation and operations platform** for NVIDIA GPU clusters. Combines a Flask backend with a React 19 SPA featuring NVIDIA Kaizen UI, providing real-time rack status monitoring, an AI-powered assistant, and a visual workflow engine for automated troubleshooting procedures.
+
+**Configuration:** every environment variable is documented in **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)**.
 
 ---
 
-## Quick start
+## Features
+
+### Rack Operations Dashboard
+- Sortable rack status table with validation state, NCCL bandwidth, node health
+- Parser charts (NCCL all-reduce bandwidth, step-time analysis)
+- Slurm controls (drain/undrain, squeue, sinfo, job management)
+- Power cycling, GPU reset, NVSwitch/NVLink diagnostics
+- Multirack validation view with aggregate analysis
+- Log export to Excel, real-time log streaming (tail -f)
+- Optional embedded Grafana panels (GPU thermal, power)
+- Token or PAM authentication
+
+### AI Assistant
+- Floating chat widget with streaming responses (SSE)
+- Context-aware: understands which view/rack the user is looking at
+- Supports NVIDIA NIM, OpenAI-compatible endpoints, vLLM, Ollama, local Llama
+- Configurable endpoint, model, and API key via Settings
+- Demo mode with topic-matched responses for testing without LLM
+
+### Workflow Engine
+- Visual workflow designer with Mermaid code editor and React Flow canvas
+- Interactive node editing: add, delete, duplicate, connect, align, distribute
+- Node types: Automated, Manual, Decision (diamond), AI Query, Delay
+- YAML frontmatter metadata for per-node configuration (command, parameters, timeout, retries)
+- Predefined scripts dropdown from cluster tool inventory
+- AI-powered workflow generation from natural language descriptions
+- State machine execution engine (pending, running, waiting, completed, failed)
+- Step output capture to per-run log files with snippet preview
+- Execution log timeline with timestamps and status indicators
+- Version auto-increment and persistent storage via Docker volumes
+
+---
+
+## Quick Start (Standalone)
+
+### Prerequisites
+
+- Python 3.10+
+- Node.js 22+ and npm (for the React SPA)
+- Access to a BCM or MAAS head node (for Slurm/cmsh commands), or use demo mode
+
+### 1. Backend
+
 ```bash
 cd nvis-rack-status
-module load python3
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-export PORT=5000   # optional
-python3 app.py
 ```
 
-## Launch with Grafana and custom validation path
-
-### 1. Grafana credentials (`~/.prometheusrc`)
-
-Create **`~/.prometheusrc`** with base-view credentials for the Grafana helper:
+### 2. Frontend (React SPA)
 
 ```bash
-USER=<BASE-VIEW-USER>
-PASSWORD=<BASE-VIEW-PASSWORD>
+cd frontend
+npm install
+npm run build     # builds to ../static/spa/
+cd ..
 ```
 
-### 2. Start Grafana
+### 3. Run
 
 ```bash
-cd nvis-rack-status
-./bin/scripts/launch-grafana-bright-prometheus.sh
-```
-
-### 3. Start the dashboard
-
-Example environment for a named project, custom NEMO image, and validation log root (adjust paths to your site):
-
-```bash
-cd nvis-rack-status
-# Tests that must pass for “cluster ready” (default: all_reduce,all_to_all,all_gather,nemotron)
-export VALIDATION_TEST=nccl_allreduce,llm
-export RACK_WEB_PROJECT_NAME="Project NAME"
-export NEMO_SQSH_SRC=/home/cmsupport/nemo-25.11.01.sqsh
-export RACK_STATUS_LOG_DIR=/home/cmsupport/aihpc_val-main/validation/nemo/
 export PORT=5000
-module load python3
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
 python3 app.py
 ```
 
-**After launch:** open **`http://0.0.0.0:${PORT:-5000}/`**. Use **`RACK_WEB_SECRET_KEY`** for stable sessions; **`RACK_WEB_AUTH_DISABLED=1`** only on trusted networks.
+Open **http://localhost:5050/** in your browser.
 
----
+### Demo mode (no cluster needed)
 
-## Status backends: native Python vs shell
-
-The rack table is built in one of two ways (toggle with an environment variable):
-
-| Mode | Variable | What runs |
-|------|-----------|-----------|
-| **Native (default)** | `RACK_STATUS_USE_SHELL_TABLE` **unset or false** | **`native_status.py`** — `cmsh` rack list, async **`cmsh ds`**, **`sinfo`**, and log probes (typically **`rack_status.sh --probe-json`**) merge into in-memory state; `/api/status` returns JSON without parsing the full shell table. |
-| **Shell (legacy)** | **`RACK_STATUS_USE_SHELL_TABLE=1`** | **`rack_status.sh`** — full shell pipeline each refresh; output is parsed into the same JSON shape the UI expects. Heavier, but matches older deployments exactly. |
-
-The UI footer includes a **`backend:`** hint (`native_status.py` vs shell table) so operators can confirm which path is live.
-
----
-
-## Internal daemons and background work
-
-### Overview (`app.py` + `/api/status`)
-
-```mermaid
-flowchart TB
-  subgraph clients [Clients]
-    UI[Browser / API]
-  end
-  subgraph flask [Flask app.py]
-    API["/api/status\nand other routes"]
-    WARM["Thread: cmsh rack-list warm\nonce per process"]
-    BG["Thread: rack-status-bg\ninterval RACK_STATUS_BACKGROUND_INTERVAL_SEC"]
-    ASYNC["Threads: per async job\nvalidation power GPU bug-report NVLMAPPER …"]
-    PURGE["Threads: job purge\n~900s after terminal state"]
-  end
-  subgraph disk [On-disk cache]
-    RL["var/cache/cmsh_rack_list.txt"]
-    MEM["In-memory rack_status cache\nper registered log_dir"]
-  end
-  subgraph work [Status build]
-    RSR["run_rack_status(log_dir)"]
-    MODE{"RACK_STATUS_USE_SHELL_TABLE?"}
-    SH["rack_status.sh\nfull shell table"]
-    NS["native_status.py\nbuild_native_rack_status"]
-  end
-  UI --> API
-  API --> MEM
-  API --> RSR
-  WARM --> RL
-  BG --> RSR
-  RSR --> MODE
-  MODE -->|yes| SH
-  MODE -->|no default| NS
-  RSR --> MEM
-  ASYNC -.->|does not feed table cache| UI
-  PURGE -.->|removes job rows| ASYNC
+```bash
+RACK_STATUS_DEMO=1 RACK_WEB_AUTH_DISABLED=1 python3 app.py
 ```
 
-- **`rack-status-bg`** runs **`run_rack_status`** for each registered **`log_dir`** in series (lock: one heavy status run at a time when combined with foreground refresh).
-- **`RACK_STATUS_BACKGROUND_DISABLED=1`** — no background loop; **`/api/status`** runs **`run_rack_status`** when a fresh payload is needed (unless serving only from cache where applicable).
-- **`RACK_CMSH_RACK_LIST_CACHE_DISABLED=1`** — skip warming **`cmsh -c "rack; list"`**; subprocesses do not receive **`RACK_CMSH_RACK_LIST_FILE`**.
+---
 
-### Native mode: `native_status.py` worker threads
+## Docker
 
-Each **single-rack** `log_dir` key keeps a **`NativeRackTableState`**: three daemons refresh slices of the table; results merge on the next **`build_native_rack_status`**. The **multirack** tab uses **`MultirackTableState`** (no `cmsh ds` thread — only sinfo + log probes).
+### Using the config file (recommended)
 
-```mermaid
-flowchart LR
-  subgraph single [Single-rack — per log_dir key]
-    DS["Thread native-ds-*\ncmsh ds → tray / DN / UP"]
-    SI["Thread native-sinfo-*\nsinfo counts"]
-    LG["Thread native-logs-*\nscan *1Rack* logs"]
-    LG --> PROBE["rack_status.sh\n--probe-json"]
-    C1[("native_log_analysis.json")]
-    LG --> C1
-  end
-  subgraph multi [Multirack tab — per log_dir key]
-    MSI["Thread multirack-sinfo-*"]
-    MLG["Thread multirack-logs-*"]
-    MLG --> PROBE2["rack_status.sh\n--probe-json"]
-    C2[("native_multirack_log_analysis.json")]
-    MLG --> C2
-  end
-  MERGE["Merged in-memory rows\n+ /api/status JSON"]
-  DS --> MERGE
-  SI --> MERGE
-  LG --> MERGE
-  MSI --> MERGE
-  MLG --> MERGE
+Edit `rack-config.env` with your site settings, then:
+
+```bash
+docker build -t nvis-rack-status:local .
+docker run -d --name rack-status -p 5000:5000 \
+  --env-file rack-config.env \
+  -e RACK_SSH_HOST=<head-node-ip> \
+  -e RACK_WEB_AUTH_TOKEN=<password> \
+  -v ~/.ssh/id_rsa:/run/secrets/ssh_key:ro \
+  -v rack-data:/app/var \
+  nvis-rack-status:local
 ```
 
-| Thread name (pattern) | Where | Role |
-|------------------------|-------|------|
-| **`native-ds-*`** | Single-rack only | **`cmsh -c "ds"`** → device / tray column. |
-| **`native-sinfo-*`** | Single-rack | Slurm **`sinfo`** aggregation for rack cells. |
-| **`native-logs-*`** | Single-rack | Log scan + **`probe_fn`** (default **`rack_status.sh --probe-json`**); persists **`var/cache/native_log_analysis.json`**. |
-| **`multirack-sinfo-*`** | Multirack | Same sinfo aggregation for multirack rows. |
-| **`multirack-logs-*`** | Multirack | Multirack log paths + probes; persists **`var/cache/native_multirack_log_analysis.json`**. |
+### Build and run helper script
 
-In **shell table** mode (**`RACK_STATUS_USE_SHELL_TABLE=1`**), the **`native-*`** / **`multirack-*`** threads above are **not** started; **`run_rack_status`** only runs **`rack_status.sh`** (still fed by **`rack-status-bg`** when background refresh is enabled).
+```bash
+./build-docker.sh          # dev: demo data, no auth, port 5050, persistent volume
+./build-docker.sh prod     # prod: SSH to head node, uses rack-config.env
+./build-docker.sh build    # build only
+./build-docker.sh stop     # stop container
+./build-docker.sh logs     # tail logs
+```
 
----
+### Docker Compose
 
-## Main screen (overview)
+```bash
+cp rack-config.env rack-config.env.local   # edit with your settings
+docker compose up -d
+```
 
-- **Log directory** — Root for NEMO logs and **`cwd`** for many scripts (`RACK_STATUS_LOG_DIR`, default `var/logs/` under the app).
-- **Refresh / Refresh now** — Polls **`GET /api/status`**; optional background refresh keeps the cache warm (see above).
-- **squeue / sinfo** — Toolbar modals; same **`RACK_SLURM_*`** module and binary overrides as drain/undrain.
-- **Theme** — Dark, blue, or light.
-- **Export to Excel / Export Logs** — Same file-selection rules as before: log root only, `*1Rack*` filtering vs NEMO **`done`** unless **`RACK_LOG_EXPORT_SKIP_NEMO_DONE_FILTER=1`** (see ENVIRONMENT.md).
+### Architecture
 
-### Rack table (short)
+```
+Container (Flask + React SPA)
+  │
+  │  RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status
+  │  (resolves all script paths and log dir to the head node)
+  │
+  ├── SSH ──► Head Node (BCM or MAAS)
+  │             ├── sinfo / squeue / sacct / scontrol
+  │             ├── cmsh (BCM) or maas-cli (MAAS)
+  │             ├── pdsh
+  │             └── bin/scripts/ (rack_status.sh, run-llama.sh, etc.)
+  │
+  ├── AI ──► LLM Endpoint (NVIDIA NIM / OpenAI-compatible / Local Llama)
+  │
+  └── var/ ──► Persistent Volume (rack-data)
+                ├── cache/ai_settings.json
+                ├── cache/job_env_overrides.json
+                ├── workflows/*.yaml
+                └── workflows/runs/<run_id>/state.json + *.log
+```
 
-| Column | Role |
-|--------|------|
-| **rack** | Id + actions: **`[results]`** (parser modal), **`[run validation]`**, **`[sysinfo]`**, tail/open log links, multirack helpers as configured. Spinner + row highlight for in-flight async work; hover spinner for live output panel. |
-| **comment** | Server-side note (`RACK_COMMENTS_FILE`). |
-| **validation state** | `done` / `fail` / `ongoing` / `pending` from logs + Slurm heuristics. |
-| **last_job** | Slurm job id; **`[cancel_job]`** when allowed → **`POST /api/slurm-scancel`**. |
-| **sinfo** | Compact states; **`[drain]`** / **`[undrain]`**. |
-| **Device status** | Tray / DN / UP tokens; buttons for power, GPU reset, services, HW check, NMXC / NVLink menu (site-dependent). |
+Environment variables prefixed with `RACK_*`, `NEMO_*`, `VALIDATION_*`, and `SQUEUE_*` are automatically forwarded to the remote SSH session.
 
-### Parser results dialog
-
-Runs **`./parser.sh --json`** on the best log for the rack: command line, NCCL summary tables, Chart.js series, optional Grafana solo panels (**`RACK_WEB_GRAFANA_*`**). If Grafana iframes are blank in the browser, check mixed-content rules and set a **browser-reachable** Grafana base URL (**`RACK_WEB_GRAFANA_URI`** or host + **`RACK_WEB_GRAFANA_PORT`**).
-
----
-
-## Bundled scripts
-
-Operational scripts live under **`bin/scripts/`** (paths overridable with **`RACK_*_SCRIPT`** env vars). Prerequisites (Slurm, `pdsh`, `cmsh`, Docker for optional Grafana launcher, etc.) are summarized in **`bin/scripts/README.txt`**.
-
-Large optional binaries (e.g. **`bin/scripts/nvlmapper`**) may be gitignored — copy from your build tree when using NVLMAPPER.
-
----
-
-## Slurm APIs (dashboard host)
-
-| Endpoint | Purpose |
-|----------|---------|
-| **`GET /api/slurm-squeue`** | `squeue` → JSON + optional table parse. |
-| **`GET /api/slurm-sinfo-r`** | `sinfo -R --long` → JSON + column slicing on `REASON … NODELIST`. |
-| **`POST /api/slurm-scancel`** | Cancel a job id (`RACK_SLURM_SCANCEL_DISABLED` to disable). |
-| **Drain / undrain** | From UI → `scontrol` on rack CT bracket (`RACK_VALIDATION_CT_RANGE`, **`RACK_SLURM_*`**). |
-
-Full variable list: **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)** (Slurm / `native_status.py`: see section 7 there).
+See **[INSTALL.md](INSTALL.md)** for full deployment instructions, SSH key setup, and troubleshooting.
 
 ---
 
-## Background job APIs
+## Testing
 
-Pattern: **`POST …-async`** returns **`job_id`** → poll **`GET /api/reset-job-status?job_id=…`** (or validation/xrack/llama/stress-specific status URLs where applicable). Completed rows are purged from memory after about **15 minutes** (daemon purge threads).
+### Backend (pytest)
 
-Examples: **`/api/run-validation-async`**, **`/api/power-on-async`**, **`/api/gpu-reset-async`**, **`/api/services-restart-async`**, **`/api/hw-check-async`**, **`/api/nvswitch-fix-async`**, **`/api/bug-report-async`**, **`/api/nvlmapper-async`**, streaming sysinfo / NVSwitch audit, tail-log streams — see **`app.py`** `@app.route` list or the slide deck **`docs/nvis-rack-status-slides.html`**.
+```bash
+source .venv/bin/activate
+pip install pytest pytest-cov
+python -m pytest tests/ -v                     # run all 94 tests
+python -m pytest tests/ --cov=ai_chat --cov=workflow_engine --cov-report=term  # with coverage
+```
+
+### Frontend (vitest)
+
+```bash
+cd frontend
+npm test                    # run all 34 tests
+npx vitest run --coverage   # with coverage
+```
+
+### CI/CD
+
+The `.gitlab-ci.yml` pipeline runs on every push:
+
+| Stage | Jobs |
+|-------|------|
+| **lint** | Python (ruff), TypeScript (tsc) |
+| **test** | pytest (94 tests), vitest (34 tests) with JUnit reports + coverage badges |
+| **build** | Docker image build (main branch + merge requests) |
 
 ---
 
-## Dependencies
+## Technology Stack
 
-- **Python:** Flask and packages in **`requirements.txt`**.
-- **Host:** Scripts’ expectations in **`bin/scripts/README.txt`**; **`scontrol`** / **`module load`** for Slurm UI; **`tail`** / optional **`stdbuf`** for streams.
+| Layer | Technology |
+|-------|-----------|
+| Backend | Python / Flask |
+| AI Chat | OpenAI-compatible streaming (NVIDIA NIM, vLLM, Ollama) |
+| Workflow Engine | YAML templates, dagre layout, state machine execution |
+| Frontend (React SPA) | React 19, Vite 8, TypeScript 6 |
+| UI Components | NVIDIA Kaizen UI (`@nvidia/foundations-react-core`) primary, MUI secondary |
+| Workflow Canvas | React Flow + dagre auto-layout |
+| Charts | Chart.js + react-chartjs-2 |
+| Icons | Lucide React |
+| Theming | KUI ThemeProvider (dark/light) synced to MUI ThemeProvider |
+| Backend Tests | pytest + pytest-cov (94 tests) |
+| Frontend Tests | Vitest + Testing Library (34 tests) |
+| CI/CD | GitLab CI (lint, test, build, coverage badges) |
+| Containerization | Docker multi-stage build, named volumes for persistence |
 
 ---
 
-## Further reading
+## Project Structure
+
+```
+nvis-rack-status/
+├── app.py                  # Flask backend (all API routes, ~11k lines)
+├── ai_chat.py              # AI chat LLM client + settings + demo responses
+├── workflow_engine.py       # Workflow state machine, CRUD, execution engine
+├── native_status.py        # Native Python rack-status builder (cmsh + sinfo)
+├── demo_data.py            # Synthetic demo data generator
+├── host_exec.py            # SSH/local command execution layer
+├── platforms/              # BCM and MAAS platform providers
+│   ├── base.py             # Abstract PlatformProvider
+│   ├── bcm.py              # BCM (cmsh, pdsh, module load slurm)
+│   └── maas.py             # Canonical MAAS (maas-cli)
+├── rack_web/               # PAM auth helpers
+├── bin/scripts/            # Operational shell scripts
+├── tests/                  # Python unit tests (pytest)
+│   ├── test_app_api.py     # Flask API endpoint tests
+│   ├── test_ai_chat.py     # AI chat module tests
+│   ├── test_workflow_engine.py  # Workflow engine tests
+│   ├── test_api_ai_workflow.py  # AI + workflow API endpoint tests
+│   ├── test_demo_data.py   # Demo data generator tests
+│   ├── test_host_exec.py   # Command execution tests
+│   └── test_platforms.py   # Platform provider tests
+├── frontend/               # React SPA (Vite + TypeScript)
+│   ├── src/components/     # Reusable components
+│   │   ├── ai/             # AI chat widget (AIChatWidget, ChatWindow, ChatMessage)
+│   │   ├── workflow/       # Workflow designer + runner
+│   │   │   ├── editor/     # React Flow canvas, mermaid parser, frontmatter utils
+│   │   │   ├── WorkflowDesigner.tsx
+│   │   │   ├── WorkflowList.tsx
+│   │   │   ├── WorkflowRunPanel.tsx
+│   │   │   ├── NodePropertiesDialog.tsx
+│   │   │   ├── StepOutputDialog.tsx
+│   │   │   └── WorkflowAIGenerator.tsx
+│   │   ├── rack/           # Rack detail tabs (validation, hardware, networking)
+│   │   └── layout/         # Page headers, app layout
+│   ├── src/views/          # Page views
+│   │   ├── ClusterDashboardView.tsx
+│   │   ├── SingleRackView.tsx
+│   │   ├── MultirackView.tsx
+│   │   ├── WorkflowsView.tsx
+│   │   ├── SlurmView.tsx
+│   │   ├── AnalyticsView.tsx
+│   │   ├── ToolsView.tsx
+│   │   ├── ReportsView.tsx
+│   │   └── SettingsView.tsx
+│   ├── src/context/        # Theme, auth, AI chat, command tracking contexts
+│   ├── src/hooks/          # Custom React hooks
+│   ├── src/services/       # API service layers (aiService, workflowService)
+│   └── src/lib/            # Utility libraries (parsers, helpers)
+├── var/                    # Runtime state (Docker volume mount point)
+│   ├── cache/              # AI settings, job env overrides
+│   └── workflows/          # YAML templates + execution runs
+├── rack-config.env         # Docker deployment config (edit per site)
+├── Dockerfile              # Multi-stage build (Node 22 + Ubuntu 22.04)
+├── docker-compose.yml      # Compose with named volume for persistence
+├── build-docker.sh         # Build and run helper script
+├── .gitlab-ci.yml          # CI/CD pipeline (lint, test, build, coverage)
+├── INSTALL.md              # Docker deployment guide
+└── requirements.txt        # Python dependencies (flask, requests, pyyaml)
+```
+
+---
+
+## Configuration
+
+### Remote path (Docker SSH mode)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RACK_REMOTE_BASE_PATH` | — | Base directory on the head node. All script paths and default log dir resolve from this. |
+| `RACK_EXEC_MODE` | `local` | `local` or `ssh` |
+| `RACK_PLATFORM` | `bcm` | `bcm` or `maas` |
+
+### SSH connection
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RACK_SSH_HOST` | — | Head-node hostname/IP (required in ssh mode) |
+| `RACK_SSH_USER` | `root` | SSH user |
+| `RACK_SSH_KEY` | `/run/secrets/ssh_key` | Path to SSH private key |
+| `RACK_SSH_PORT` | `22` | SSH port |
+
+### Authentication
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RACK_WEB_AUTH_MODE` | auto | `token` or `pam` (auto-selects token in SSH mode) |
+| `RACK_WEB_AUTH_TOKEN` | — | Login password for token mode |
+| `RACK_WEB_AUTH_DISABLED` | `0` | `1` to disable login entirely |
+
+### AI Assistant
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RACK_AI_API_KEY` | — | API key for LLM endpoint |
+| `RACK_AI_ENDPOINT` | `https://integrate.api.nvidia.com/v1/chat/completions` | OpenAI-compatible endpoint |
+| `RACK_AI_MODEL` | `nvidia/llama-3.1-nemotron-ultra-253b-v1` | Model identifier |
+
+### Other
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `5000` | Flask listen port |
+| `RACK_STATUS_DEMO` | `0` | `1` for synthetic demo data |
+| `NEMO_SQSH_SRC` | — | Path to NeMo container image on head node |
+| `RACK_SLURM_SKIP_MODULE_LOAD` | `0` | `1` if sinfo/squeue are already on PATH |
+| `RACK_VALIDATION_CT_RANGE` | `01-18` | Tray range per rack |
+
+Full variable reference: **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)**
+
+---
+
+## Key API Endpoints
+
+### Rack Operations
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/status` | GET | Main rack status table |
+| `/api/cluster-overview` | GET | Cluster-wide dashboard data |
+| `/api/parser-results` | GET | Parse log and return chart data |
+| `/api/slurm-drain` | POST | Drain rack nodes |
+| `/api/slurm-undrain` | POST | Undrain rack nodes |
+| `/api/run-validation-async` | POST | Launch single-rack validation |
+| `/api/power-reset` | POST | Power-cycle nodes |
+| `/api/tail-log-stream` | POST | Stream log file (tail -f) |
+
+### AI Assistant
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/ai/chat` | POST | SSE streaming chat completion |
+| `/api/ai/settings` | GET/PUT | AI configuration (endpoint, model, key) |
+| `/api/ai/test` | POST | Test AI endpoint connectivity |
+
+### Workflow Engine
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/workflows` | GET/POST | List or create workflow templates |
+| `/api/workflows/<id>` | GET/DELETE | Get or delete a template |
+| `/api/workflows/<id>/run` | POST | Start a workflow execution |
+| `/api/workflow-runs` | GET | List active and recent runs |
+| `/api/workflow-runs/<id>` | GET | Get run state and history |
+| `/api/workflow-runs/<id>/advance` | POST | Advance manual/decision steps |
+| `/api/workflow-runs/<id>/cancel` | POST | Cancel a running workflow |
+| `/api/workflow-runs/<id>/output/<step>` | GET | Get step output log |
+| `/api/tools/available` | GET | Predefined scripts for automation |
+
+---
+
+## Further Reading
 
 | Doc | Content |
 |-----|---------|
-| **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)** | All **`RACK_*`**, **`RACK_WEB_*`**, **`PORT`**, **`FLASK_DEBUG`**, **`NVLMAPPER_RC`**, **`.prometheusrc`**, parser/Grafana time zones, disable flags, timeouts. |
-| **`app.py` module docstring** | Long-form notes on PAM, Grafana time alignment, and cache files. |
-| **`docs/nvis-rack-status-slides.html`** | Reveal.js overview (open in a browser). |
+| **[INSTALL.md](INSTALL.md)** | Docker deployment, SSH setup, troubleshooting |
+| **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)** | All environment variables, timeouts, disable flags |
+| **`.cursor/rules/`** | Design rules for KUI/MUI components, host_exec patterns, backend conventions |
+| **`app.py` module docstring** | PAM, Grafana alignment, cache files |
 
 ---
 
@@ -230,10 +369,10 @@ Parser results with InfiniBand table and embedded Grafana (GPU thermal / power):
 
 ![Parser results — IB table and Grafana](docs/screenshots/ui-parser-results-ib-grafana.png)
 
-Main table with NEMO log modal; footer shows **`backend: native_status.py`** when the Python table is active:
+Main table with NEMO log modal; footer shows `backend: native_status.py` when the Python table is active:
 
 ![Rack table and NEMO log modal](docs/screenshots/ui-nemo-log-table.png)
 
-Parser results — NCCL summary and **all_reduce** bandwidth chart:
+Parser results — NCCL summary and all_reduce bandwidth chart:
 
 ![Parser results — NCCL charts](docs/screenshots/ui-parser-results-nccl.png)

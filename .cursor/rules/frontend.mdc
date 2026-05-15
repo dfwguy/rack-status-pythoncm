@@ -1,0 +1,81 @@
+---
+description: Frontend React component patterns — KUI-first UI framework with MUI as secondary
+globs: frontend/src/**/*.tsx,frontend/src/**/*.ts
+alwaysApply: false
+---
+
+# Frontend Conventions
+
+## KUI-First Design Philosophy
+
+NVIDIA Kaizen UI (`@nvidia/foundations-react-core`) is the **primary** UI framework. MUI is **secondary** — retained only for complex widgets with no KUI equivalent. When building new features, always reach for KUI first.
+
+## KUI vs MUI Decision Table
+
+| Need | Use KUI | Do NOT use MUI |
+|------|---------|----------------|
+| Any text (body, labels, headings, titles) | `<Text kind="body/regular/md">` | `<Typography>` |
+| Page titles | `<Text kind="display/sm">` or `<Text kind="title/lg">` | `<Typography variant="h5">` |
+| Cards / content containers | `<Card>` | `<Card>` from MUI |
+| Status badges / tags | `<Tag color="green" kind="solid" readOnly density="compact">` | `<Chip>` |
+| Action buttons | `<Button kind="primary" size="small">` | `<Button>` from MUI |
+| Error/info/warning messages | `<Banner status="error">` | `<Alert>` (except inside Snackbar) |
+| Skeleton loading states | `<Skeleton>` | `<Skeleton>` from MUI |
+| Flex layout wrappers | `<Flex gap="2" align="center" wrap="wrap">` | `<Box display="flex">` |
+| Dropdown multi-select filters | `<Combobox items={[...]} multiple>` | Custom toggle buttons |
+| Dividers in content areas | `<Divider>` from KUI | `<Divider>` from MUI |
+
+### MUI stays for (no KUI equivalent or renders better in MUI context)
+
+Table, Dialog, Tabs, Sidebar (Drawer + List), AppBar/Toolbar, TextField/Checkbox, Tooltip, IconButton, Menu/MenuItem, Snackbar + Alert (toasts), CircularProgress/LinearProgress, Paper/TableContainer. **Divider inside Drawer/AppBar** — KUI Divider renders differently in MUI shell components.
+
+### MUI Button alias pattern
+
+When a file needs both KUI Button (primary actions) and MUI Button (inside DialogActions):
+```tsx
+import MuiButton from "@mui/material/Button";
+import { Button } from "@nvidia/foundations-react-core";
+```
+
+## TypeScript & Lint
+
+- Build: `tsc -b && vite build`. All code must pass strict TypeScript.
+- MUI 9: Move `fontWeight`/`fontFamily`/`fontSize` into `sx`. Use `slotProps` not `primaryTypographyProps`.
+- `noUnusedLocals` enabled. Remove all unused imports.
+- Python lint: `ruff check`. Remove unused imports, no extraneous f-string prefixes.
+
+## Styling Rules
+
+- **KUI components**: `style` prop. Example: `style={{ color: "var(--text-color-secondary)" }}`
+- **MUI components**: `sx` prop. Example: `sx={{ display: "flex", gap: 2 }}`
+- **Colors**: NVIDIA design tokens: `--text-color-primary`, `--text-color-secondary`, `--text-color-subtle`, `--background-color-surface-base`. No hardcoded hex.
+- **Font sizes**: Minimum 14px. Never `fontSize: 12` or `variant="caption"`.
+- **Icons**: `lucide-react` exclusively.
+
+## Frontend Architecture
+
+- **Views**: SingleRackView, ClusterDashboardView, MultirackView, SlurmView, ReportsView, AnalyticsView, ToolsView, SettingsView
+- **Command tracking**: `RackCommandsStoreContext` manages async job state (launch, poll, results) across all views. `RackCommandContext` per-rack.
+- **Hooks**: `useRackStatus` (polling /api/status), `useClusterOverview` (cluster-wide data)
+- **Lib**: `rackCommandTypes.ts`, `rackLog.ts`, `slurmHelpers.ts`, `parseSqueueStdout.ts`, `parseSinfoRStdout.ts`, `nvloomHeatmapParse.ts`
+- **Tests**: Vitest + Testing Library. Co-located `*.test.tsx` files. Run: `npm test`
+
+## Import Patterns
+
+```tsx
+// KUI — single import for multiple components
+import { Text, Card, Tag, Button, Banner, Flex, Combobox } from "@nvidia/foundations-react-core";
+
+// MUI — deep imports (one per line), aliased when needed alongside KUI
+import Dialog from "@mui/material/Dialog";
+import MuiButton from "@mui/material/Button";
+import Divider from "@mui/material/Divider";  // only inside Sidebar/Toolbar
+
+// Icons — named imports from lucide
+import { CircleCheck, Ellipsis, ArrowDownToLine } from "lucide-react";
+
+// Charts
+import { Bar, Line } from "react-chartjs-2";
+```
+
+Full KUI docs: `https://webassets.nvidia.com/kaizen-ui-foundations/docs/components/<Component>.txt`

@@ -6,6 +6,14 @@ Background threads: ``cmsh -c ds`` (device status), ``sinfo`` (+ ``scontrol`` ho
 parsing via ``probe_fn`` (typically ``rack_status.sh --probe-json``). Results merge into in-memory
 state and the next ``/api/status`` read shows updated cells.
 
+Tray hosts on each ``cmsh -c ds`` line are matched by ``RACK_CMSH_DS_NODE_PATTERN`` (default: one regex
+with three capture groups: full hostname, rack id ``pN-rMM``, tray). Rack ids are canonicalized to
+``pN-rMM`` two-digit rack suffix so ``p5-r1`` merges with ``p5-r01`` from ``rack; list``.
+
+Optional: ``RACK_CMSH_DS_NODE_TOKEN_PATTERN`` (one capture: hostname token) with automatic ``…-ct…``
+split; or legacy ``RACK_CMSH_DS_NODE_FIND_PATTERN`` + ``RACK_CMSH_DS_NODE_PARSE_PATTERN``. Override
+via process env or the dashboard job-environment JSON.
+
 Set ``RACK_STATUS_USE_SHELL_TABLE=1`` to use the legacy shell table instead.
 
 Rack ids from ``rack; list`` are canonicalized (``p5-r1`` → ``p5-r01``). By default ``pN-r00`` is
@@ -17,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import threading
@@ -26,8 +35,220 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import host_exec
+from platforms import get_platform as _get_platform
+
 _PKG_DIR = Path(__file__).resolve().parent
 _NATIVE_LOG_JSON = _PKG_DIR / "var" / "cache" / "native_log_analysis.json"
+
+
+def _job_env_overrides_file() -> Path:
+    """Path to dashboard job-env JSON; prefer ``NVIS_JOB_ENV_OVERRIDES_FILE`` (set by ``app.py``)."""
+    raw = (os.environ.get("NVIS_JOB_ENV_OVERRIDES_FILE") or "").strip()
+    if raw:
+        return Path(raw).resolve()
+    return _PKG_DIR / "var" / "cache" / "job_env_overrides.json"
+
+# cmsh ``ds`` output: default one regex per line via ``finditer``; three capture groups (hostname, rack, tray).
+_DEFAULT_CMSH_DS_NODE_PATTERN = r"(?i)((p\d+-r\d+)-ct(\d+))"
+_CMSH_DS_ENV_KEYS = frozenset(
+    {
+        "RACK_CMSH_DS_NODE_PATTERN",
+        "RACK_CMSH_DS_NODE_TOKEN_PATTERN",
+        "RACK_CMSH_DS_NODE_FIND_PATTERN",
+        "RACK_CMSH_DS_NODE_PARSE_PATTERN",
+    }
+)
+_je_file_mtime: float | None = None
+_je_subset: dict[str, str] = {}
+_ds_line_pat_effective: str | None = None
+_ds_line_re_compiled: re.Pattern[str] | None = None
+
+
+def invalidate_job_env_file_cache() -> None:
+    """Call after dashboard writes ``job_env_overrides.json`` so ds regex / env merge reloads."""
+    global _je_file_mtime, _je_subset, _ds_line_pat_effective, _ds_line_re_compiled
+    _je_file_mtime = None
+    _je_subset = {}
+    _ds_line_pat_effective = None
+    _ds_line_re_compiled = None
+
+
+def _reload_cmsh_ds_job_env_subset() -> None:
+    """Load only ds-related keys from ``var/cache/job_env_overrides.json`` (mtime-based cache)."""
+    global _je_file_mtime, _je_subset, _ds_line_pat_effective, _ds_line_re_compiled
+    try:
+        m = _job_env_overrides_file().stat().st_mtime
+    except OSError:
+        if _je_file_mtime is not None or _je_subset:
+            _je_file_mtime = None
+            _je_subset = {}
+            _ds_line_pat_effective = None
+            _ds_line_re_compiled = None
+        return
+    if _je_file_mtime == m:
+        return
+    subset: dict[str, str] = {}
+    try:
+        with open(_job_env_overrides_file(), "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                if k not in _CMSH_DS_ENV_KEYS:
+                    continue
+                if isinstance(v, str) and v.strip():
+                    subset[k] = v.strip()[:8192]
+                elif v is not None and str(v).strip():
+                    subset[k] = str(v).strip()[:8192]
+    except (OSError, json.JSONDecodeError, TypeError, UnicodeDecodeError):
+        subset = {}
+    _je_subset = subset
+    _je_file_mtime = m
+    _ds_line_pat_effective = None
+    _ds_line_re_compiled = None
+
+
+def _native_env_ds(key: str, default: str) -> str:
+    _reload_cmsh_ds_job_env_subset()
+    if key in _je_subset and _je_subset[key].strip():
+        return _je_subset[key].strip()
+    v = (os.environ.get(key) or "").strip()
+    return v if v else default
+
+
+def cmsh_ds_node_pattern_effective() -> str:
+    p = _native_env_ds("RACK_CMSH_DS_NODE_PATTERN", _DEFAULT_CMSH_DS_NODE_PATTERN)
+    return p.strip() or _DEFAULT_CMSH_DS_NODE_PATTERN
+
+
+def _ds_node_line_re() -> re.Pattern[str]:
+    global _ds_line_pat_effective, _ds_line_re_compiled
+    pat = cmsh_ds_node_pattern_effective()
+    if _ds_line_re_compiled is not None and _ds_line_pat_effective == pat:
+        return _ds_line_re_compiled
+    try:
+        _ds_line_re_compiled = re.compile(pat)
+        _ds_line_pat_effective = pat
+    except re.error:
+        _ds_line_re_compiled = re.compile(_DEFAULT_CMSH_DS_NODE_PATTERN)
+        _ds_line_pat_effective = _DEFAULT_CMSH_DS_NODE_PATTERN
+    return _ds_line_re_compiled
+
+
+def validate_cmsh_ds_node_pattern(t: str) -> str | None:
+    """Return error message or ``None`` if *t* matches ``[UP] p5-r01-ct03`` with groups 1–3 populated."""
+    t = t.strip()
+    if not t:
+        return None
+    try:
+        r = re.compile(t)
+    except re.error as e:
+        return f"invalid regex: {e}"
+    line = "[UP] p5-r01-ct03"
+    ms = list(r.finditer(line))
+    if not ms:
+        return "must match at least one occurrence on a sample line like '[UP] p5-r01-ct03'"
+    m0 = ms[0]
+    if len(m0.groups()) < 3:
+        return "need three capture groups: (1) full hostname, (2) rack pN-rMM, (3) tray — e.g. (?i)((p\\\\d+-r\\\\d+)-ct(\\\\d+))"
+    g1, g2, g3 = m0.group(1), m0.group(2), m0.group(3)
+    if not g1 or not g2 or not g3:
+        return "groups 1–3 must be non-empty for sample p5-r01-ct03"
+    return None
+
+
+def validate_cmsh_ds_node_token_pattern(t: str) -> str | None:
+    """Return error or ``None`` if *t* is a valid token regex with exactly one capture group."""
+    t = t.strip()
+    if not t:
+        return None
+    try:
+        r = re.compile(t)
+    except re.error as e:
+        return f"invalid regex: {e}"
+    line = "[UP] p5-r01-ct03"
+    ms = list(r.finditer(line))
+    if not ms:
+        return "must match on a sample line like '[UP] p5-r01-ct03'"
+    m0 = ms[0]
+    if len(m0.groups()) < 1 or m0.group(1) is None:
+        return "use exactly one capture group for the full hostname token (e.g. (?i)(p\\\\d+-r\\\\d+-ct\\\\d+))"
+    tok = (m0.group(1) or "").strip()
+    if _rack_tray_from_hostname_token(tok) is None:
+        return "captured token must split into rack and tray at a ``-ct`` boundary (e.g. p5-r01-ct18)"
+    return None
+
+
+def validate_cmsh_ds_find_parse_patterns(find_pat: str, parse_pat: str) -> str | None:
+    """Validate legacy two-pattern mode: FIND on a line, PARSE on each token (two capture groups: rack, tray)."""
+    fp = find_pat.strip()
+    pp = parse_pat.strip()
+    if not fp and not pp:
+        return None
+    if bool(fp) ^ bool(pp):
+        return "set both RACK_CMSH_DS_NODE_FIND_PATTERN and RACK_CMSH_DS_NODE_PARSE_PATTERN, or neither"
+    try:
+        fre = re.compile(fp)
+    except re.error as e:
+        return f"FIND invalid regex: {e}"
+    try:
+        pre = re.compile(pp)
+    except re.error as e:
+        return f"PARSE invalid regex: {e}"
+    line = "[UP] x p5-r01-ct03 y"
+    toks: list[str] = []
+    for fm in fre.finditer(line):
+        if fm.lastindex:
+            toks.append(fm.group(1))
+        else:
+            toks.append(fm.group(0))
+    if not toks:
+        return "FIND must match at least one token on a sample line with p5-r01-ct03"
+    pm = pre.match(toks[0].strip())
+    if not pm or len(pm.groups()) < 2:
+        return "PARSE must match each FIND token with two capture groups: (1) rack pN-rMM, (2) tray"
+    return None
+
+
+def _normalize_rack_key_for_ds(rack_raw: str) -> str:
+    """Align ds-derived rack ids with ``rack; list`` (``p5-r1`` → ``p5-r01``)."""
+    rr = rack_raw.strip().lower()
+    c = canonical_rack_id(rr)
+    return c if c else rr
+
+
+def _rack_tray_from_hostname_token(tok: str) -> tuple[str, str] | None:
+    """Split ``…-ct<tray>`` from a token; Bright first, then generic last ``-ct`` split."""
+    t = tok.strip().lower()
+    m = re.match(r"^(?P<rack>p\d+-r\d+)-ct(?P<tray>.+)$", t)
+    if m:
+        rack = _normalize_rack_key_for_ds(m.group("rack"))
+        tray = m.group("tray").strip()
+        if tray:
+            return rack, tray
+    m2 = re.match(r"^(?P<rack>.+)-ct(?P<tray>.+)$", t)
+    if not m2:
+        return None
+    rack_raw = m2.group("rack").strip().lower()
+    tray = m2.group("tray").strip()
+    if not tray:
+        return None
+    rack = _normalize_rack_key_for_ds(rack_raw)
+    return rack, tray
+
+
+def _condense_tray_tokens(nums_s: str) -> str:
+    """Build inner of ``-ct[…]``: numeric ranges when all tokens are digits, else sorted unique list."""
+    parts = [p for p in nums_s.split() if p.strip()]
+    if not parts:
+        return ""
+    if all(p.isdigit() for p in parts):
+        nums = [int(p) for p in parts]
+        return condense_ct_nums(nums)
+    uniq = sorted(set(parts), key=lambda x: (len(x), x.lower()))
+    return ",".join(uniq)
+
+
 _MULTIRACK_LOG_JSON = _PKG_DIR / "var" / "cache" / "native_multirack_log_analysis.json"
 
 _MULTIRACK_N_RACK_RE = re.compile(r"(?:[2-9]|[1-9]\d{1,3})rack", re.IGNORECASE)
@@ -191,13 +412,13 @@ def extract_rack_ids_from_cmsh_text(text: str) -> list[str]:
 
 
 def _cmsh_rack_list() -> list[str]:
-    if not shutil.which("cmsh"):
+    plat = _get_platform()
+    cmd = plat.list_racks_cmd()
+    if not host_exec.is_remote() and not shutil.which(cmd[0]):
         return []
     try:
-        proc = subprocess.run(
-            ["cmsh", "-c", "rack; list"],
-            capture_output=True,
-            text=True,
+        proc = host_exec.run_on_host(
+            cmd,
             timeout=max(30, _env_int("RACK_NATIVE_CMSH_TIMEOUT_SEC", 120)),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -206,13 +427,13 @@ def _cmsh_rack_list() -> list[str]:
 
 
 def _cmsh_ds_text() -> str:
-    if not shutil.which("cmsh"):
+    plat = _get_platform()
+    cmd = plat.device_status_cmd()
+    if not host_exec.is_remote() and not shutil.which(cmd[0]):
         return ""
     try:
-        proc = subprocess.run(
-            ["cmsh", "-c", "ds"],
-            capture_output=True,
-            text=True,
+        proc = host_exec.run_on_host(
+            cmd,
             timeout=max(30, _env_int("RACK_NATIVE_DS_TIMEOUT_SEC", 300)),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -246,8 +467,44 @@ def condense_ct_nums(nums: list[int]) -> str:
 
 def parse_cmsh_ds_to_ct_column_by_rack(ds_text: str) -> dict[str, str]:
     """Replicate rack_status.sh ct_dn / INST / UP blob merge into one column string per rack."""
-    ct_acc: dict[str, str] = defaultdict(str)  # "rack|ST" -> space-separated tray nums
+    find_s = _native_env_ds("RACK_CMSH_DS_NODE_FIND_PATTERN", "").strip()
+    parse_s = _native_env_ds("RACK_CMSH_DS_NODE_PARSE_PATTERN", "").strip()
+    token_s = _native_env_ds("RACK_CMSH_DS_NODE_TOKEN_PATTERN", "").strip()
+    mode = "single"
+    fre: re.Pattern[str] | None = None
+    pre: re.Pattern[str] | None = None
+    tre: re.Pattern[str] | None = None
+    if find_s and parse_s:
+        try:
+            fre = re.compile(find_s)
+            pre = re.compile(parse_s)
+            mode = "find_parse"
+        except re.error:
+            mode = "single"
+            fre = pre = None
+    elif token_s:
+        try:
+            tre = re.compile(token_s)
+            mode = "token"
+        except re.error:
+            tre = None
+            mode = "single"
+
+    ct_acc: dict[str, str] = defaultdict(str)  # "rack|ST" -> space-separated tray labels
     ct_seen: set[str] = set()
+
+    def ingest(_host: str, rack_raw: str, tray_tok: str, st: str) -> None:
+        rr = _normalize_rack_key_for_ds(rack_raw)
+        nn = tray_tok.strip()
+        if not nn:
+            return
+        key = f"{rr}|{st}|{nn}"
+        if key in ct_seen:
+            return
+        ct_seen.add(key)
+        acc_key = f"{rr}|{st}"
+        ct_acc[acc_key] = (ct_acc[acc_key] + " " + nn).strip()
+
     for line in ds_text.splitlines():
         if not line.strip():
             continue
@@ -261,25 +518,41 @@ def parse_cmsh_ds_to_ct_column_by_rack(ds_text: str) -> dict[str, str]:
             st = "DN"
         else:
             st = "INST"
-        for hm in re.finditer(r"(?i)(p\d+-r\d+-ct\d+)", line):
-            h = hm.group(1).lower()
-            rm = re.match(r"^(p\d+-r\d+)-ct(\d+)$", h)
-            if not rm:
-                continue
-            rr, nn = rm.group(1), rm.group(2)
-            key = f"{rr}|{st}|{nn}"
-            if key in ct_seen:
-                continue
-            ct_seen.add(key)
-            acc_key = f"{rr}|{st}"
-            ct_acc[acc_key] = (ct_acc[acc_key] + " " + nn).strip()
+
+        if mode == "find_parse" and fre is not None and pre is not None:
+            for fm in fre.finditer(line):
+                tok = (fm.group(1) if fm.lastindex else fm.group(0)).strip()
+                if not tok:
+                    continue
+                pm = pre.match(tok)
+                if not pm or len(pm.groups()) < 2:
+                    continue
+                ingest(tok.lower(), pm.group(1), pm.group(2), st)
+        elif mode == "token" and tre is not None:
+            for tm in tre.finditer(line):
+                if len(tm.groups()) < 1 or tm.group(1) is None:
+                    continue
+                tok = (tm.group(1) or "").strip()
+                spl = _rack_tray_from_hostname_token(tok)
+                if not spl:
+                    continue
+                rr_t, nn_t = spl
+                ingest(tok.lower(), rr_t, nn_t, st)
+        else:
+            for hm in _ds_node_line_re().finditer(line):
+                # Do not use ``Match.lastindex`` for nested groups: it is the index of the last
+                # opened group (often 1) even when ``groups()`` has three entries.
+                if len(hm.groups()) < 3:
+                    continue
+                h = hm.group(1).lower()
+                ingest(h, hm.group(2), hm.group(3), st)
+
     ct_dn: dict[str, str] = {}
     ct_inst: dict[str, str] = {}
     ct_up: dict[str, str] = {}
     for acc_k, nums_s in ct_acc.items():
         rr, stb = acc_k.split("|", 1)
-        nums = [int(x) for x in nums_s.split() if x.isdigit()]
-        ranges = condense_ct_nums(nums)
+        ranges = _condense_tray_tokens(nums_s)
         if not ranges:
             continue
         blob = f"{rr}-ct[{ranges}]"
@@ -315,17 +588,16 @@ def sinfo_state_trim(s: str) -> str:
 
 def collect_sinfo_counts() -> dict[tuple[str, str], int]:
     """Map (rack_id, trimmed_state) -> count of nodes (after hostname expansion)."""
-    if not shutil.which("sinfo"):
+    plat = _get_platform()
+    if not host_exec.is_remote() and not shutil.which("sinfo"):
         return {}
     opts = (os.environ.get("SINFO_OPTS") or "").strip()
-    cmd = ["sinfo", "-N", "-h", "-o", "%N %t"]
+    extra = "-N -h -o '%N %t'"
     if opts:
-        cmd.extend(shlex_split_safe(opts))
+        extra += f" {opts}"
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
+        proc = host_exec.run_on_host(
+            plat.sinfo_cmd(extra),
             timeout=max(30, _env_int("RACK_NATIVE_SINFO_TIMEOUT_SEC", 120)),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -343,12 +615,10 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
         if not st:
             continue
         hosts: list[str] = []
-        if "[" in node and "]" in node and shutil.which("scontrol"):
+        if "[" in node and "]" in node:
             try:
-                hp = subprocess.run(
-                    ["scontrol", "show", "hostnames", node],
-                    capture_output=True,
-                    text=True,
+                hp = host_exec.run_on_host(
+                    plat.scontrol_hostnames_cmd(node),
                     timeout=max(5, _env_int("RACK_NATIVE_SCONTROL_TIMEOUT_SEC", 60)),
                 )
                 hosts = [h.strip() for h in (hp.stdout or "").splitlines() if h.strip()]
@@ -404,11 +674,10 @@ def load_squeue_jobs_map() -> tuple[set[str], dict[str, str]]:
     match ``last_job`` parsed from log filenames.
     """
     user = (os.environ.get("SQUEUE_USER") or os.environ.get("USER") or "root").strip()
+    plat = _get_platform()
     try:
-        proc = subprocess.run(
-            ["squeue", "-u", user, "-h", "-o", "%i|%M"],
-            capture_output=True,
-            text=True,
+        proc = host_exec.run_on_host(
+            plat.squeue_cmd(f"-u {shlex.quote(user)} -h -o '%i|%M'"),
             timeout=max(5, _env_int("RACK_NATIVE_SQUEUE_TIMEOUT_SEC", 60)),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -457,15 +726,14 @@ def augment_running_set_for_job_ids(
         need.append(sj)
     if not need:
         return
+    plat = _get_platform()
     chunk = 48
     timeout = max(5, _env_int("RACK_NATIVE_SQUEUE_JOB_LOOKUP_TIMEOUT_SEC", 45))
     for i in range(0, len(need), chunk):
         batch = need[i : i + chunk]
         try:
-            proc = subprocess.run(
-                ["squeue", "-j", ",".join(batch), "-h", "-o", "%i|%M"],
-                capture_output=True,
-                text=True,
+            proc = host_exec.run_on_host(
+                plat.squeue_cmd(f"-j {','.join(batch)} -h -o '%i|%M'"),
                 timeout=timeout,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -905,6 +1173,26 @@ def worker_snapshot_for_log_dir(log_dir: Path) -> dict[str, Any] | None:
     if st is None:
         return None
     return _worker_snapshot(st)
+
+
+def live_table_snapshot_for_log_dir(log_dir: Path) -> dict[str, Any] | None:
+    """Rebuild rack rows/summary from in-memory async workers (sinfo, ds, log probes).
+
+    Cached ``/api/status`` payloads can otherwise keep placeholder ``?`` cells from the first
+    snapshot taken before ``ds_done`` / ``sinfo_done`` flipped true.
+    """
+    key = str(log_dir.resolve())
+    with _states_lock:
+        st = _states.get(key)
+    if st is None:
+        return None
+    rows, summary, footnotes, legend = st.build_table_rows()
+    return {
+        "rows": rows,
+        "summary": summary,
+        "footnotes": footnotes,
+        "legend": legend,
+    }
 
 
 def _get_state(key: str, log_dir: Path) -> NativeRackTableState:
