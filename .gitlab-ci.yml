@@ -84,7 +84,8 @@ docker-build:
   services:
     - docker:dind
   variables:
-    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_HOST: "tcp://docker:2375"
   script:
     - docker build -t nvis-rack-status:${CI_COMMIT_SHORT_SHA} .
     - docker tag nvis-rack-status:${CI_COMMIT_SHORT_SHA} nvis-rack-status:latest
