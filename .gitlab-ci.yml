@@ -80,17 +80,14 @@ frontend-test:
 
 docker-build:
   stage: build
-  image: docker:latest
-  services:
-    - docker:dind
-  variables:
-    DOCKER_TLS_CERTDIR: ""
-    DOCKER_HOST: "tcp://docker:2375"
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
   script:
-    - docker build -t nvis-rack-status:${CI_COMMIT_SHORT_SHA} .
-    - docker tag nvis-rack-status:${CI_COMMIT_SHORT_SHA} nvis-rack-status:latest
-    - echo "Image built successfully"
-    - docker images nvis-rack-status
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+      --no-push
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -99,18 +96,19 @@ docker-build:
 # Push to NVCR (uncomment when registry is configured)
 # docker-push:
 #   stage: build
-#   image: docker:latest
-#   services:
-#     - docker:dind
+#   image:
+#     name: gcr.io/kaniko-project/executor:debug
+#     entrypoint: [""]
 #   variables:
-#     DOCKER_TLS_CERTDIR: "/certs"
 #     NVCR_REGISTRY: "nvcr.io/your-org"
 #   needs: [docker-build]
 #   script:
-#     - echo "$NVCR_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-#     - docker build -t ${NVCR_REGISTRY}/nvis-rack-status:${CI_COMMIT_SHORT_SHA} .
-#     - docker push ${NVCR_REGISTRY}/nvis-rack-status:${CI_COMMIT_SHORT_SHA}
-#     - docker tag ${NVCR_REGISTRY}/nvis-rack-status:${CI_COMMIT_SHORT_SHA} ${NVCR_REGISTRY}/nvis-rack-status:latest
-#     - docker push ${NVCR_REGISTRY}/nvis-rack-status:latest
+#     - mkdir -p /kaniko/.docker
+#     - echo "{\"auths\":{\"nvcr.io\":{\"auth\":\"$(echo -n \$oauthtoken:${NVCR_API_KEY} | base64)\"}}}" > /kaniko/.docker/config.json
+#     - /kaniko/executor
+#       --context "${CI_PROJECT_DIR}"
+#       --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+#       --destination "${NVCR_REGISTRY}/nvis-rack-status:${CI_COMMIT_SHORT_SHA}"
+#       --destination "${NVCR_REGISTRY}/nvis-rack-status:latest"
 #   rules:
 #     - if: $CI_COMMIT_BRANCH == "main"
