@@ -14,6 +14,12 @@ import FormControlLabel from "@mui/material/FormControlLabel";
 import { Card, Text } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 import { getAISettings, updateAISettings, testAIConnection, type AISettings } from "../services/aiService";
+import {
+  getOperatorName,
+  setOperatorName,
+  isAutoClaimEnabled,
+  setAutoClaimEnabled,
+} from "../lib/getOperatorName";
 
 /** Use monospace input for long regex / technical values. */
 const MONOSPACE_JOB_ENV_KEYS = new Set([
@@ -267,6 +273,7 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
 
       {topTab === 0 && (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        <OperatorPanel />
         <Card style={{ padding: 24 }}>
           <Text kind="body/bold/md" style={{ marginBottom: 8, display: "block" }}>
             Log Directory
@@ -378,6 +385,70 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
       </Box>
       )}
     </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Operator Panel — display name + auto-claim preference for rack-locks
+// ---------------------------------------------------------------------------
+
+function OperatorPanel() {
+  const [name, setName] = useState(() => getOperatorName());
+  const [autoClaim, setAutoClaim] = useState(() => isAutoClaimEnabled());
+  const [saved, setSaved] = useState(false);
+
+  const handleNameChange = (val: string) => {
+    setName(val);
+    setOperatorName(val);
+    setSaved(true);
+  };
+
+  const handleAutoClaimChange = (val: boolean) => {
+    setAutoClaim(val);
+    setAutoClaimEnabled(val);
+    setSaved(true);
+  };
+
+  return (
+    <Card style={{ padding: 24 }}>
+      <Text kind="body/bold/md" style={{ marginBottom: 8, display: "block" }}>
+        Operator
+      </Text>
+      <Text
+        kind="body/regular/sm"
+        style={{ color: "var(--text-color-secondary)", marginBottom: 16, display: "block" }}
+      >
+        Optional display name shown next to operations you trigger. All sessions share the
+        same system user, so this is purely a coordination hint — the server stamps it on jobs
+        and rack-lock entries so other operators can tell who is doing what.
+      </Text>
+      <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <TextField
+          label="Operator display name"
+          size="small"
+          fullWidth
+          value={name}
+          onChange={(e) => handleNameChange(e.target.value)}
+          placeholder="e.g. alice"
+          helperText="Stored locally in your browser. Leave empty to remain anonymous."
+        />
+        <FormControlLabel
+          control={
+            <Switch
+              checked={autoClaim}
+              onChange={(e) => handleAutoClaimChange(e.target.checked)}
+              disabled={!name.trim()}
+            />
+          }
+          label="Auto-claim rack when I open its detail view"
+        />
+        {saved && (
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+            Saved locally.
+          </Text>
+        )}
+      </Box>
+    </Card>
   );
 }
 

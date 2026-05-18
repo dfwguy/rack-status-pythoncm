@@ -1,3 +1,5 @@
+import { apiFetch } from "../lib/apiFetch";
+
 export interface ChatMessagePayload {
   role: "user" | "assistant";
   content: string;
@@ -27,10 +29,9 @@ export async function streamChat(
 ): Promise<AbortController> {
   const controller = new AbortController();
 
-  fetch("/api/ai/chat", {
+  apiFetch("/api/ai/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
     body: JSON.stringify({ messages, context }),
     signal: controller.signal,
   })
@@ -100,7 +101,7 @@ export async function streamChat(
 }
 
 export async function getAISettings(): Promise<AISettings> {
-  const res = await fetch("/api/ai/settings", { credentials: "same-origin" });
+  const res = await apiFetch("/api/ai/settings");
   const json = await res.json();
   return json as AISettings;
 }
@@ -108,10 +109,9 @@ export async function getAISettings(): Promise<AISettings> {
 export async function updateAISettings(
   settings: Partial<AISettings> & { api_key?: string },
 ): Promise<AISettings> {
-  const res = await fetch("/api/ai/settings", {
+  const res = await apiFetch("/api/ai/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
     body: JSON.stringify(settings),
   });
   const json = await res.json();
@@ -119,9 +119,6 @@ export async function updateAISettings(
 }
 
 export async function testAIConnection(): Promise<{ ok: boolean; error?: string; model?: string }> {
-  const res = await fetch("/api/ai/test", {
-    method: "POST",
-    credentials: "same-origin",
-  });
+  const res = await apiFetch("/api/ai/test", { method: "POST" });
   return res.json();
 }

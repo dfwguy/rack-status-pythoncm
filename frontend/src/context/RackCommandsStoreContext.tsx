@@ -3,6 +3,7 @@ import {
   useContext,
   useCallback,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -10,10 +11,14 @@ import Snackbar from "@mui/material/Snackbar";
 import Alert from "@mui/material/Alert";
 import { CommandStreamDialog } from "../components/rack/CommandStreamDialog";
 import { CommandTextDialog } from "../components/rack/CommandTextDialog";
+import { LockConflictDialog } from "../components/rack/LockConflictDialog";
 import { buildSingleRackTailBody } from "../lib/rackLog";
 import { formatJobStatusText, formatSyncJsonResult } from "../lib/formatJobOutput";
 import type { NodeCmdKind, RackLastAsyncOutput } from "../lib/rackCommandTypes";
 import { validationRackKey } from "../lib/rackCommandTypes";
+import { apiFetch } from "../lib/apiFetch";
+import { useRackLocksContext } from "./RackLocksContext";
+import type { RackLockEntry } from "../hooks/useRackLocks";
 
 interface StreamState {
   title: string;
@@ -28,7 +33,7 @@ export interface RackCommandsStoreValue {
   getPendingForRack: (rack: string) => Array<{ id: string; label: string }>;
   replayLastOutput: (rack: string) => void;
   openText: (title: string, text: string, isErr?: boolean) => void;
-  openStream: (title: string, endpoint: string, body: Record<string, unknown>) => void;
+  openStream: (title: string, endpoint: string, body: Record<string, unknown>) => Promise<void>;
   runSyncJson: (rack: string, title: string, url: string, body: Record<string, unknown>) => Promise<void>;
   runAsyncReset: (rack: string, label: string, cmdKind: NodeCmdKind, url: string, body: Record<string, unknown>) => Promise<void>;
   runAsyncValidationFamily: (
@@ -57,7 +62,7 @@ async function pollJobUntilTerminal(statusUrl: string): Promise<Record<string, u
   const deadline = Date.now() + POLL_MAX_MS;
   let last: Record<string, unknown> = {};
   while (Date.now() < deadline) {
-    const res = await fetch(statusUrl, { credentials: "same-origin" });
+    const res = await apiFetch(statusUrl);
     const raw = await res.text();
     let data: Record<string, unknown> = {};
     try {
@@ -97,6 +102,56 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
   const [stream, setStream] = useState<StreamState | null>(null);
   const [textDlg, setTextDlg] = useState<{ title: string; text: string; isErr?: boolean } | null>(null);
   const [snack, setSnack] = useState<{ open: boolean; msg: string }>({ open: false, msg: "" });
+
+  const { isLockedByOther, refresh: refreshLocks } = useRackLocksContext();
+
+  /** When non-null, the LockConflictDialog is open with these conflicts.
+   *  ``resolve`` is settled with ``true`` (run anyway) or ``false`` (cancel). */
+  const [conflictPrompt, setConflictPrompt] = useState<
+    | {
+        conflicts: Array<{ rack: string; lock: RackLockEntry }>;
+        resolve: (proceed: boolean) => void;
+      }
+    | null
+  >(null);
+  /** Avoid stacking prompts when the user fires multiple commands in quick succession. */
+  const conflictResolverRef = useRef<((proceed: boolean) => void) | null>(null);
+
+  const promptIfLocked = useCallback(
+    async (racks: string[]): Promise<boolean> => {
+      const seen = new Set<string>();
+      const conflicts: Array<{ rack: string; lock: RackLockEntry }> = [];
+      for (const raw of racks) {
+        const r = (raw || "").trim();
+        if (!r || seen.has(r)) continue;
+        seen.add(r);
+        const lock = isLockedByOther(r);
+        if (lock) conflicts.push({ rack: r, lock });
+      }
+      if (conflicts.length === 0) return true;
+      return new Promise<boolean>((resolve) => {
+        conflictResolverRef.current = resolve;
+        setConflictPrompt({ conflicts, resolve });
+      });
+    },
+    [isLockedByOther],
+  );
+
+  const handleConflictCancel = useCallback(() => {
+    const r = conflictResolverRef.current;
+    conflictResolverRef.current = null;
+    setConflictPrompt(null);
+    r?.(false);
+  }, []);
+
+  const handleConflictProceed = useCallback(() => {
+    const r = conflictResolverRef.current;
+    conflictResolverRef.current = null;
+    setConflictPrompt(null);
+    r?.(true);
+    // Re-poll so the optimistic UI catches up quickly with whatever the operator did.
+    void refreshLocks();
+  }, [refreshLocks]);
 
   const setRackOutput = useCallback((rack: string, kind: NodeCmdKind, full: string, isErr: boolean, noticeTitle?: string) => {
     const rk = validationRackKey(rack);
@@ -148,9 +203,18 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
     setTextDlg({ title, text, isErr });
   }, []);
 
-  const openStream = useCallback((title: string, endpoint: string, body: Record<string, unknown>) => {
-    setStream({ title, endpoint, body });
-  }, []);
+  const openStream = useCallback(
+    async (title: string, endpoint: string, body: Record<string, unknown>) => {
+      const rack = typeof body?.rack === "string" ? (body.rack as string) : "";
+      // Only gate write-y streams that target a specific rack (skip read-only tail streams).
+      if (rack && /sysinfo|nvswitch-audit/.test(endpoint)) {
+        const proceed = await promptIfLocked([rack]);
+        if (!proceed) return;
+      }
+      setStream({ title, endpoint, body });
+    },
+    [promptIfLocked],
+  );
 
   const pushPending = useCallback((rack: string, label: string) => {
     const rk = validationRackKey(rack);
@@ -166,11 +230,12 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
 
   const runSyncJson = useCallback(
     async (rack: string, title: string, url: string, body: Record<string, unknown>) => {
-      const res = await fetch(url, {
+      const proceed = await promptIfLocked([rack]);
+      if (!proceed) return;
+      const res = await apiFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        credentials: "same-origin",
       });
       const raw = await res.text();
       let data: Record<string, unknown> = {};
@@ -187,18 +252,19 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
       openText(title, full, !ok);
       setRackOutput(rack, syncCmdKindFromTitle(title), full, !ok, title);
     },
-    [openText, setRackOutput]
+    [openText, setRackOutput, promptIfLocked]
   );
 
   const runAsyncReset = useCallback(
     async (rack: string, label: string, cmdKind: NodeCmdKind, url: string, body: Record<string, unknown>) => {
+      const proceed = await promptIfLocked([rack]);
+      if (!proceed) return;
       const pid = pushPending(rack, label);
       try {
-        const res = await fetch(url, {
+        const res = await apiFetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
-          credentials: "same-origin",
         });
         const data = (await res.json()) as { ok?: boolean; job_id?: string; error?: string };
         if (!res.ok || !data.ok || !data.job_id) {
@@ -217,7 +283,7 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
         popPending(pid);
       }
     },
-    [pushPending, popPending, openText, setRackOutput]
+    [pushPending, popPending, openText, setRackOutput, promptIfLocked]
   );
 
   const runAsyncValidationFamily = useCallback(
@@ -229,13 +295,14 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
       statusUrl: (jobId: string) => string,
       body: Record<string, unknown>,
     ) => {
+      const proceed = await promptIfLocked([rack]);
+      if (!proceed) return;
       const pid = pushPending(rack, label);
       try {
-        const res = await fetch(postUrl, {
+        const res = await apiFetch(postUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
-          credentials: "same-origin",
         });
         const data = (await res.json()) as { ok?: boolean; job_id?: string; error?: string };
         if (!res.ok || !data.ok || !data.job_id) {
@@ -254,7 +321,7 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
         popPending(pid);
       }
     },
-    [pushPending, popPending, openText, setRackOutput]
+    [pushPending, popPending, openText, setRackOutput, promptIfLocked]
   );
 
   const openTailLogNemo = useCallback((rack: string, logDir: string, jobId?: string) => {
@@ -309,6 +376,12 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
         title={textDlg?.title ?? ""}
         text={textDlg?.text ?? ""}
         isError={textDlg?.isErr}
+      />
+      <LockConflictDialog
+        open={conflictPrompt !== null}
+        conflicts={conflictPrompt?.conflicts ?? []}
+        onCancel={handleConflictCancel}
+        onProceed={handleConflictProceed}
       />
       <Snackbar
         open={snack.open}

@@ -1,6 +1,7 @@
 """Tests for workflow_engine.py module."""
 import os
 import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -9,6 +10,7 @@ os.environ["RACK_WEB_AUTH_DISABLED"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
 import workflow_engine
+import rack_locks
 
 
 @pytest.fixture(autouse=True)
@@ -129,6 +131,69 @@ class TestStepOutput:
         lines = "\n".join(f"line {i}" for i in range(50))
         snippet = workflow_engine._get_output_snippet(lines, max_lines=5)
         assert snippet.count("\n") == 4
+
+
+class TestAutomatedHostStepLocks:
+    """Verify the host: branch of _execute_automated_step acquires + releases an explicit claim."""
+
+    @pytest.fixture(autouse=True)
+    def isolated_claims(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(rack_locks, "CLAIMS_FILE", tmp_path / "rack_locks.json")
+
+    def _fake_run_on_host_ok(self, *args, **kwargs):
+        m = MagicMock()
+        m.returncode = 0
+        m.stdout = "ok\n"
+        m.stderr = ""
+        return m
+
+    def test_host_step_with_explicit_rack_claims_and_releases(self):
+        run = {"run_id": "abcdef0123456789", "params": {}, "history": []}
+        step = {"id": "s1", "type": "automated", "command": "host:uptime", "rack": "p5-r01", "timeout": 5}
+        with patch("workflow_engine.host_exec.run_on_host", side_effect=self._fake_run_on_host_ok):
+            success, _ = workflow_engine._execute_automated_step(run, step)
+        assert success is True
+        # claim acquired and released
+        assert rack_locks.list_claims() == {}
+
+    def test_host_step_extracts_rack_from_command(self):
+        run = {"run_id": "abcdef0123456789", "params": {}, "history": []}
+        step = {"id": "s1", "type": "automated", "command": "host:pdsh -w p7-r02-ct[01-18] uptime", "timeout": 5}
+        captured = {}
+
+        def _spy(*args, **kwargs):
+            # at the moment run_on_host runs, the rack should be claimed by workflow:<run_id[:8]>
+            claims = rack_locks.list_claims()
+            captured["claims"] = dict(claims)
+            return self._fake_run_on_host_ok()
+
+        with patch("workflow_engine.host_exec.run_on_host", side_effect=_spy):
+            workflow_engine._execute_automated_step(run, step)
+
+        assert "p7-r02" in captured["claims"]
+        assert captured["claims"]["p7-r02"]["operator"].startswith("workflow:")
+        # released after run_on_host returns
+        assert rack_locks.list_claims() == {}
+
+    def test_host_step_releases_claim_on_exception(self):
+        run = {"run_id": "abcdef0123456789", "params": {}, "history": []}
+        step = {"id": "s1", "type": "automated", "command": "host:false", "rack": "p5-r01", "timeout": 5}
+        with patch("workflow_engine.host_exec.run_on_host", side_effect=OSError("boom")):
+            success, _ = workflow_engine._execute_automated_step(run, step)
+        assert success is False
+        assert rack_locks.list_claims() == {}
+
+    def test_host_step_continues_when_lock_held_by_other(self):
+        # Pre-claim by a different operator; workflow should NOT block (advisory only).
+        rack_locks.upsert_claim("p5-r01", "alice", ttl_sec=300)
+        run = {"run_id": "abcdef0123456789", "params": {}, "history": []}
+        step = {"id": "s1", "type": "automated", "command": "host:uptime", "rack": "p5-r01", "timeout": 5}
+        with patch("workflow_engine.host_exec.run_on_host", side_effect=self._fake_run_on_host_ok):
+            success, _ = workflow_engine._execute_automated_step(run, step)
+        assert success is True
+        # alice's claim is preserved
+        claims = rack_locks.list_claims()
+        assert claims["p5-r01"]["operator"] == "alice"
 
 
 class TestMermaidGeneration:

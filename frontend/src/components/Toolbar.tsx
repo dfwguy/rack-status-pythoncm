@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import AppBar from "@mui/material/AppBar";
 import MuiToolbar from "@mui/material/Toolbar";
 import IconButton from "@mui/material/IconButton";
@@ -7,7 +7,8 @@ import Tooltip from "@mui/material/Tooltip";
 import CircularProgress from "@mui/material/CircularProgress";
 import LinearProgress from "@mui/material/LinearProgress";
 import Divider from "@mui/material/Divider";
-import { Text, Tag } from "@nvidia/foundations-react-core";
+import Popover from "@mui/material/Popover";
+import { Text, Tag, Flex } from "@nvidia/foundations-react-core";
 import {
   Sun,
   Moon,
@@ -23,6 +24,7 @@ import {
 import { SqueueDialog } from "./SqueueDialog";
 import { SinfoDialog } from "./SinfoDialog";
 import { useAuth } from "../context/AuthContext";
+import { useRackLocksContext } from "../context/RackLocksContext";
 
 interface ToolbarProps {
   title: string;
@@ -51,6 +53,25 @@ export function Toolbar({
   const [squeueOpen, setSqueueOpen] = useState(false);
   const [sinfoOpen, setSinfoOpen] = useState(false);
   const [excelExporting, setExcelExporting] = useState(false);
+  const [usersAnchor, setUsersAnchor] = useState<HTMLElement | null>(null);
+
+  const { locks, me } = useRackLocksContext();
+  /** Group lock entries by operator so we can show "alice — 2 racks (1 active, 1 claim)". */
+  const operatorActivity = useMemo(() => {
+    const byOp = new Map<
+      string,
+      { operator: string; racks: string[]; activeCount: number; claimCount: number }
+    >();
+    for (const [rack, lock] of Object.entries(locks)) {
+      const op = (lock.operator || "").trim() || "(unknown)";
+      const cur = byOp.get(op) || { operator: op, racks: [], activeCount: 0, claimCount: 0 };
+      cur.racks.push(rack);
+      if (lock.kind === "claim") cur.claimCount += 1;
+      else cur.activeCount += 1;
+      byOp.set(op, cur);
+    }
+    return Array.from(byOp.values()).sort((a, b) => a.operator.localeCompare(b.operator));
+  }, [locks]);
 
   const handleExportLogs = () => {
     const params = new URLSearchParams();
@@ -193,15 +214,58 @@ export function Toolbar({
             <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
             {activeUsers != null && activeUsers > 0 && (
-              <Tooltip title={`${activeUsers} active user(s)`}>
-                <span style={{ marginRight: 4 }}>
+              <Tooltip title="Who is doing what">
+                <Box
+                  component="span"
+                  sx={{ marginRight: "4px", cursor: "pointer" }}
+                  onClick={(e) => setUsersAnchor(e.currentTarget)}
+                  aria-haspopup="true"
+                  aria-expanded={Boolean(usersAnchor)}
+                  role="button"
+                >
                   <Tag color="gray" kind="solid" readOnly density="compact">
                     <Users size={14} style={{ marginRight: 4, verticalAlign: "middle" }} />
                     {activeUsers}
                   </Tag>
-                </span>
+                </Box>
               </Tooltip>
             )}
+            <Popover
+              open={Boolean(usersAnchor)}
+              anchorEl={usersAnchor}
+              onClose={() => setUsersAnchor(null)}
+              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+              transformOrigin={{ vertical: "top", horizontal: "right" }}
+              slotProps={{ paper: { sx: { p: 2, minWidth: 260, maxWidth: 360 } } }}
+            >
+              <Flex direction="col" gap="3">
+                <Text kind="body/bold/sm">Active operators</Text>
+                {operatorActivity.length === 0 ? (
+                  <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                    No racks currently held.
+                  </Text>
+                ) : (
+                  operatorActivity.map((entry) => (
+                    <Box key={entry.operator}>
+                      <Flex direction="row" gap="2" align="center">
+                        <Text kind="body/bold/sm">
+                          {entry.operator}
+                          {entry.operator === me ? " (you)" : ""}
+                        </Text>
+                        <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                          {entry.activeCount > 0 ? `${entry.activeCount} active` : ""}
+                          {entry.activeCount > 0 && entry.claimCount > 0 ? " · " : ""}
+                          {entry.claimCount > 0 ? `${entry.claimCount} claim${entry.claimCount > 1 ? "s" : ""}` : ""}
+                        </Text>
+                      </Flex>
+                      <Text kind="body/regular/sm" style={{ color: "var(--text-color-subtle)" }}>
+                        {entry.racks.join(", ")}
+                      </Text>
+                    </Box>
+                  ))
+                )}
+              </Flex>
+            </Popover>
 
             {user && (
               <span style={{ marginRight: 4 }}>
