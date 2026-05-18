@@ -82,7 +82,10 @@ def test_map_cmsh_rack_list_token_rk_to_svr_cn():
     assert n.map_cmsh_rack_list_token("CBR01-DH01-SVR-CN0102") == "CBR01-DH01-SVR-CN0102"
 
 
-def test_extract_rack_ids_from_cmsh_text_cbr_rk_lines():
+def test_extract_rack_ids_from_cmsh_text_cbr_rk_lines(monkeypatch):
+    monkeypatch.setenv("NVIS_RACK_ID", nid.CBR_NVIS_RACK_ID)
+    monkeypatch.setenv("NVIS_CT_ID", nid.CBR_NVIS_CT_ID)
+    nid.clear_nvis_naming_cache()
     import native_status
 
     text = (
