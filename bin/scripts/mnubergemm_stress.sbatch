@@ -42,6 +42,9 @@ fi
 source "${_hpcx_init}"
 hpcx_load
 
+# shellcheck disable=SC1091
+. "${NVIS_BIN_SCRIPTS}/nvis-ucx-job-env.inc.sh"
+
 # CUDA toolkit from workspace install (same layout as install-cuda-nccl-workspace.sh).
 if [[ -e "${WORKSPACE_DIR}/cuda${CUDA_MAJ}/bin/nvcc" ]]; then
   export CUDA_HOME="${WORKSPACE_DIR}/cuda${CUDA_MAJ}"

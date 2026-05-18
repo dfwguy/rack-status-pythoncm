@@ -2,6 +2,7 @@
 # Single-rack / multi-node nvloom (Slurm): fabric / gpu-to-rack tests via nvloom_cli.
 # Uses HPC-X and nvloom_cli under WORKSPACE_DIR (same layout as install-nvloom-workspace.sh / workspace-cuda-major-common).
 # Node count and stdout path come from run_nvloom_singlerack.sh (sbatch CLI overrides).
+# UCX: sources nvis-ucx-job-env.inc.sh after hpcx_load; optional NVIS_NVLOOM_UCX_TLS overrides UCX_TLS for nvloom.
 
 #SBATCH --job-name=nvloom-rack-scale
 #SBATCH --exclusive
@@ -49,6 +50,15 @@ export HPCX_ENABLE_NCCL_SPCX_PLUGIN="${HPCX_ENABLE_NCCL_SPCX_PLUGIN:-0}"
 # shellcheck disable=SC1090
 source "${INIT}"
 hpcx_load
+
+# shellcheck disable=SC1091
+. "${NVIS_BIN_SCRIPTS}/nvis-ucx-job-env.inc.sh"
+# nvloom gpu-to-rack / fabric-stress: avoid a wide default UCX_TLS stack on RoCE (rdmacm CM pressure).
+if [[ -n "${NVIS_NVLOOM_UCX_TLS:-}" ]]; then
+  export UCX_TLS="${NVIS_NVLOOM_UCX_TLS}"
+elif [[ -z ${UCX_TLS+x} ]]; then
+  export UCX_TLS="rc,cuda_copy,cuda_ipc,cuda,self"
+fi
 
 if [[ -z "${NVIS_SYSINFO_SH:-}" ]] || [[ ! -f "${NVIS_SYSINFO_SH}" ]]; then
   echo "ERROR: NVIS_SYSINFO_SH must point to an existing sysinfo.sh (set by the dashboard or export before sbatch)." >&2

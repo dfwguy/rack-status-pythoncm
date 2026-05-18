@@ -1,0 +1,127 @@
+# shellcheck shell=bash
+# Shared RDMA / interconnect helpers for NVIS scripts (source, do not execute).
+#
+# NVIS_RDMA_LINK_TECH — auto (default) | mlx | ib | roce | spectrumx | spx
+#   auto: use classic IB mlx5 sysfs CPU affinity when readable; otherwise treat as RoCE / Spectrum-X style.
+#
+# Typical usage from another script:
+#   _NVIS_SCR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#   # shellcheck disable=SC1091
+#   . "${_NVIS_SCR}/nvis-rdma-common.inc.sh"
+#   export UCX_NET_DEVICES
+#   UCX_NET_DEVICES="$(nvis_rdma_default_ucx_net_devices)" || exit 1
+
+# True when at least one mlx5_* device exposes a non-empty local_cpulist (DGX IB-style).
+nvis_rdma_mlx_infiniband_usable() {
+  local d f
+  shopt -s nullglob
+  for d in /sys/class/infiniband/mlx5_*; do
+    [[ -d "$d" ]] || continue
+    f="${d}/device/local_cpulist"
+    if [[ -r "$f" ]] && grep -q '[^[:space:]]' "$f" 2>/dev/null; then
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+  return 1
+}
+
+# Print mlx or roce (stdout). On invalid input, print to stderr and return 1.
+# Argument: raw token (e.g. value of NVIS_RDMA_LINK_TECH).
+nvis_rdma_normalize_link_tech_raw() {
+  local raw up
+  raw="${1:-auto}"
+  raw="${raw//[[:space:]]/}"
+  [[ -z "$raw" ]] && raw=auto
+  up=$(printf '%s' "$raw" | tr '[:lower:]' '[:upper:]')
+  case "$up" in
+    AUTO)
+      if nvis_rdma_mlx_infiniband_usable; then
+        printf mlx
+      else
+        printf roce
+      fi
+      ;;
+    MLX | IB)
+      printf mlx
+      ;;
+    ROCE | SPECTRUMX | SPX)
+      printf roce
+      ;;
+    *)
+      echo "ERROR: invalid RDMA link technology '${1}' (use auto, mlx, ib, roce, spectrumx, spx)." >&2
+      return 1
+      ;;
+  esac
+}
+
+# Space-separated ibdev names (no :port) for UCX_NET_DEVICES construction.
+nvis_rdma_list_ibdevs_for_mode() {
+  local tech
+  tech=$(nvis_rdma_normalize_link_tech_raw "${NVIS_RDMA_LINK_TECH:-auto}") || return 1
+  if [[ "$tech" == "mlx" ]]; then
+    nvis_rdma_list_mlx_ibdevs || return 1
+  else
+    nvis_rdma_list_roce_ibdevs || return 1
+  fi
+}
+
+nvis_rdma_list_mlx_ibdevs() {
+  local d out=()
+  shopt -s nullglob
+  for d in /sys/class/infiniband/mlx5_*; do
+    [[ -d "$d" ]] || continue
+    out+=("$(basename "$d")")
+  done
+  shopt -u nullglob
+  if [[ "${#out[@]}" -eq 0 ]]; then
+    echo "ERROR: no mlx5_* devices under /sys/class/infiniband." >&2
+    return 1
+  fi
+  printf '%s' "${out[*]}"
+}
+
+nvis_rdma_list_roce_ibdevs() {
+  local d out=()
+  shopt -s nullglob
+  for d in /sys/class/infiniband/roce_*; do
+    [[ -e "$d" ]] || continue
+    out+=("$(basename "$d")")
+  done
+  shopt -u nullglob
+  if [[ "${#out[@]}" -gt 0 ]]; then
+    printf '%s' "${out[*]}"
+    return 0
+  fi
+  # Fallback: Mellanox HCAs that are not mlx5_* naming (rare); exclude obvious bonds.
+  for d in /sys/class/infiniband/*; do
+    [[ -e "$d" ]] || continue
+    [[ -d "$d" ]] || continue
+    local b
+    b=$(basename "$d")
+    [[ "$b" == mlx5_* ]] && continue
+    [[ "$b" == bond_* ]] && continue
+    out+=("$b")
+  done
+  if [[ "${#out[@]}" -eq 0 ]]; then
+    echo "ERROR: no RoCE-style ibdevs found under /sys/class/infiniband (expected roce_* or other HCAs)." >&2
+    return 1
+  fi
+  printf '%s' "${out[*]}"
+}
+
+# Comma-separated dev:1 list suitable for UCX_NET_DEVICES (best-effort for multirail).
+nvis_rdma_default_ucx_net_devices() {
+  local tech
+  tech=$(nvis_rdma_normalize_link_tech_raw "${NVIS_RDMA_LINK_TECH:-auto}") || return 1
+  local -a devs=()
+  read -r -a devs <<<"$(nvis_rdma_list_ibdevs_for_mode)" || return 1
+  local out="" d
+  for d in "${devs[@]}"; do
+    [[ -z "$d" ]] && continue
+    [[ -n "$out" ]] && out+=","
+    out+="${d}:1"
+  done
+  printf '%s' "$out"
+}

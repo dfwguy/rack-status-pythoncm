@@ -137,18 +137,25 @@ render_tsv_box() {
 }
 
 rack_from_fname() {
-  # root-NEMO-1Rack-p17-r01-18N-212.txt -> p17-r01
-  # user-NEMO-LLAMA3_8B-1N-p17-r01-ct05-212.txt -> p17-r01
-  local b
+  # NEMO 1Rack: rack id from basename. Llama Slurm stdout: …-NEMO-LLAMA3_8B-1N-<ct-hostname>-<jid>.txt → use CT host (not rack).
+  local b _save
   b=$(basename "$1")
-  if [[ "$b" =~ 1Rack-(p[0-9]+-r[0-9]+)- ]]; then
+  if [[ "$b" =~ 1Rack-(p[0-9]+-r[0-9]+)(\[|-) ]]; then
     echo "${BASH_REMATCH[1]}"
     return
   fi
-  if [[ "$b" =~ NEMO-LLAMA3_8B-1N-(p[0-9]+-r[0-9]+)-ct ]]; then
+  if [[ "$b" =~ 1Rack-(CBR[0-9]{2}-DH[0-9]{2}-SVR-CN[0-9]{4})(\[|-) ]]; then
     echo "${BASH_REMATCH[1]}"
     return
   fi
+  _save=$(shopt -p nocasematch 2>/dev/null || printf 'shopt -u nocasematch\n')
+  shopt -s nocasematch 2>/dev/null || true
+  if [[ "$b" =~ NEMO-LLAMA3_8B-1N-(.+)-([0-9]+)\.txt$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+    eval "$_save"
+    return
+  fi
+  eval "$_save"
   echo "?"
 }
 
