@@ -5,8 +5,10 @@
 # Usage:
 #   ./export-dashboard-bundle.sh              -> /home/cmsupport/nvis-rack-status-cluster-export-<UTC>.zip
 #   ./export-dashboard-bundle.sh /other/dir   -> /other/dir/nvis-rack-status-cluster-export-<UTC>.zip
+#   ./export-dashboard-bundle.sh --dev        -> same, but include .git/ in the zip (dev handoff)
+#   ./export-dashboard-bundle.sh --dev /path  -> --dev with custom output directory
 #
-# Excludes: .git, .local/ (often a vendored Node tarball under the repo — hundreds of MB), Python/Node
+# Excludes (default): .git, .local/ (often a vendored Node tarball under the repo — hundreds of MB), Python/Node
 # caches, venvs, built SPA, var/cache, prior export zips. Optional: set INCLUDE_NVLMAPPER_BINARY=1 to
 # bundle bin/scripts/nvlmapper (~14M) when that file exists.
 # On the target host: unpack, pip install -r requirements.txt, (cd frontend && npm ci && npm run build),
@@ -19,7 +21,33 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TOP_NAME="$(basename "$ROOT")"
 
-OUT_DIR="${1:-/home/cmsupport}"
+INCLUDE_GIT=0
+OUT_DIR=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dev)
+      INCLUDE_GIT=1
+      shift
+      ;;
+    -h|--help)
+      sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    -*)
+      echo "Unknown option: $1 (try --help)" >&2
+      exit 1
+      ;;
+    *)
+      if [[ -n "$OUT_DIR" ]]; then
+        echo "Unexpected extra argument: $1 (only one output directory allowed)" >&2
+        exit 1
+      fi
+      OUT_DIR="$1"
+      shift
+      ;;
+  esac
+done
+OUT_DIR="${OUT_DIR:-/home/cmsupport}"
 if [[ ! -d "$OUT_DIR" ]]; then
   echo "Output directory does not exist or is not a directory: $OUT_DIR" >&2
   exit 1
@@ -42,16 +70,25 @@ trap cleanup EXIT
 
 echo "Staging from: $ROOT"
 echo "Archive:      $ZIP_PATH"
+if [[ "$INCLUDE_GIT" == "1" ]]; then
+  echo "Mode:         --dev (including .git/)"
+fi
 
 EXCLUDE_NVL=()
 if [[ "${INCLUDE_NVLMAPPER_BINARY:-}" != "1" ]]; then
   EXCLUDE_NVL=(--exclude='bin/scripts/nvlmapper')
 fi
 
+EXCLUDE_GIT=()
+if [[ "$INCLUDE_GIT" != "1" ]]; then
+  EXCLUDE_GIT=(--exclude='.git/')
+fi
+
 # Single top-level folder in the zip = repo basename (easy unpack on the other cluster).
+# bash 3.2 + set -u: do not expand empty arrays with "${arr[@]}" — use ${arr[@]+"${arr[@]}"}.
 rsync -a \
-  "${EXCLUDE_NVL[@]}" \
-  --exclude='.git/' \
+  ${EXCLUDE_NVL[@]+"${EXCLUDE_NVL[@]}"} \
+  ${EXCLUDE_GIT[@]+"${EXCLUDE_GIT[@]}"} \
   --exclude='.local/' \
   --exclude='.venv/' \
   --exclude='venv/' \

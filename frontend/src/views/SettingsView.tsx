@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import TextField from "@mui/material/TextField";
+import InputAdornment from "@mui/material/InputAdornment";
+import IconButton from "@mui/material/IconButton";
 import Button from "@mui/material/Button";
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
@@ -11,22 +13,18 @@ import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import Switch from "@mui/material/Switch";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import { Search, X } from "lucide-react";
 import { Card, Text } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 import { getAISettings, updateAISettings, testAIConnection, type AISettings } from "../services/aiService";
-import {
-  getOperatorName,
-  setOperatorName,
-  isAutoClaimEnabled,
-  setAutoClaimEnabled,
-} from "../lib/getOperatorName";
 
 /** Use monospace input for long regex / technical values. */
 const MONOSPACE_JOB_ENV_KEYS = new Set([
-  "RACK_CMSH_DS_NODE_PATTERN",
-  "RACK_CMSH_DS_NODE_TOKEN_PATTERN",
-  "RACK_CMSH_DS_NODE_FIND_PATTERN",
-  "RACK_CMSH_DS_NODE_PARSE_PATTERN",
+  "NVIS_RACK_ID",
+  "NVIS_CT_ID",
+  "NVIS_NVSW_ID",
+  "NVIS_SLURM_HOSTLIST",
+  "VALIDATION_TEST",
   "NVLMAPPER_RC",
 ]);
 
@@ -64,6 +62,7 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
   const [jobEnvOk, setJobEnvOk] = useState("");
   /** Index into ``jobEnvSections`` for the tabbed environment editor. */
   const [jobEnvSectionTab, setJobEnvSectionTab] = useState(0);
+  const [envSearch, setEnvSearch] = useState("");
   /** Last effective values from the server (GET / successful PUT). Save only sends keys that differ — empty strings here would otherwise clear unrelated overrides on the server. */
   const jobEnvBaselineRef = useRef<Record<string, string>>({});
 
@@ -213,6 +212,34 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
 
   const hasJobEnvRows = jobEnvSections.some((s) => s.variables.length > 0);
 
+  const envSearchNorm = envSearch.trim().toLowerCase();
+  const envSearching = envSearchNorm.length > 0;
+
+  const filteredJobEnvSections = useMemo(() => {
+    if (!envSearching) {
+      return jobEnvSections;
+    }
+    return jobEnvSections
+      .map((sec) => ({
+        ...sec,
+        variables: sec.variables.filter((row) => {
+          const val = (jobEnvValues[row.key] ?? "").toLowerCase();
+          return (
+            row.key.toLowerCase().includes(envSearchNorm) ||
+            row.label.toLowerCase().includes(envSearchNorm) ||
+            row.description.toLowerCase().includes(envSearchNorm) ||
+            val.includes(envSearchNorm)
+          );
+        }),
+      }))
+      .filter((sec) => sec.variables.length > 0);
+  }, [jobEnvSections, jobEnvValues, envSearchNorm, envSearching]);
+
+  const envSearchMatchCount = useMemo(
+    () => filteredJobEnvSections.reduce((n, sec) => n + sec.variables.length, 0),
+    [filteredJobEnvSections],
+  );
+
   const renderRow = (row: JobEnvRow, monospace: boolean) => {
     const passwordField = PASSWORD_JOB_ENV_KEYS.has(row.key);
     return (
@@ -273,7 +300,6 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
 
       {topTab === 0 && (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-        <OperatorPanel />
         <Card style={{ padding: 24 }}>
           <Text kind="body/bold/md" style={{ marginBottom: 8, display: "block" }}>
             Log Directory
@@ -328,7 +354,43 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
 
           {!jobEnvLoading && hasJobEnvRows ? (
             <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              {jobEnvSections.length > 1 ? (
+              <TextField
+                size="small"
+                fullWidth
+                placeholder="Search variables by key, label, description, or value…"
+                value={envSearch}
+                onChange={(e) => setEnvSearch(e.target.value)}
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Search size={18} aria-hidden />
+                      </InputAdornment>
+                    ),
+                    endAdornment: envSearch ? (
+                      <InputAdornment position="end">
+                        <IconButton
+                          size="small"
+                          aria-label="Clear search"
+                          onClick={() => setEnvSearch("")}
+                          edge="end"
+                        >
+                          <X size={18} />
+                        </IconButton>
+                      </InputAdornment>
+                    ) : null,
+                  },
+                }}
+              />
+              {envSearching ? (
+                <Typography variant="body2" color="text.secondary">
+                  {envSearchMatchCount === 0
+                    ? "No variables match your search."
+                    : `${envSearchMatchCount} variable${envSearchMatchCount === 1 ? "" : "s"} in ${filteredJobEnvSections.length} section${filteredJobEnvSections.length === 1 ? "" : "s"}`}
+                </Typography>
+              ) : null}
+
+              {!envSearching && jobEnvSections.length > 1 ? (
                 <Tabs
                   value={jobEnvSectionTab}
                   onChange={(_, next) => setJobEnvSectionTab(next)}
@@ -345,28 +407,47 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
                     />
                   ))}
                 </Tabs>
-              ) : (
+              ) : !envSearching ? (
                 <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                   {jobEnvSections[0]?.title}
                 </Typography>
+              ) : null}
+
+              {envSearching ? (
+                filteredJobEnvSections.length === 0 ? null : (
+                  filteredJobEnvSections.map((sec) => (
+                    <Box
+                      key={sec.id}
+                      sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 0.5 }}
+                    >
+                      {filteredJobEnvSections.length > 1 ? (
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                          {sec.title}
+                        </Typography>
+                      ) : null}
+                      {sec.variables.map((row) => renderRow(row, MONOSPACE_JOB_ENV_KEYS.has(row.key)))}
+                    </Box>
+                  ))
+                )
+              ) : (
+                jobEnvSections.map((sec, idx) => (
+                  <Box
+                    key={sec.id}
+                    role="tabpanel"
+                    hidden={jobEnvSections.length > 1 ? jobEnvSectionTab !== idx : false}
+                    id={`settings-env-panel-${sec.id}`}
+                    aria-labelledby={`settings-env-tab-${sec.id}`}
+                    sx={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 2,
+                      pt: jobEnvSections.length > 1 ? 1 : 0,
+                    }}
+                  >
+                    {sec.variables.map((row) => renderRow(row, MONOSPACE_JOB_ENV_KEYS.has(row.key)))}
+                  </Box>
+                ))
               )}
-              {jobEnvSections.map((sec, idx) => (
-                <Box
-                  key={sec.id}
-                  role="tabpanel"
-                  hidden={jobEnvSections.length > 1 ? jobEnvSectionTab !== idx : false}
-                  id={`settings-env-panel-${sec.id}`}
-                  aria-labelledby={`settings-env-tab-${sec.id}`}
-                  sx={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 2,
-                    pt: jobEnvSections.length > 1 ? 1 : 0,
-                  }}
-                >
-                  {sec.variables.map((row) => renderRow(row, MONOSPACE_JOB_ENV_KEYS.has(row.key)))}
-                </Box>
-              ))}
               <Box sx={{ display: "flex", gap: 2, alignItems: "center", pt: 1 }}>
                 <Button variant="contained" disabled={jobEnvSaving} onClick={() => void saveJobEnv()}>
                   {jobEnvSaving ? "Saving…" : "Save"}
@@ -385,70 +466,6 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
       </Box>
       )}
     </Box>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Operator Panel — display name + auto-claim preference for rack-locks
-// ---------------------------------------------------------------------------
-
-function OperatorPanel() {
-  const [name, setName] = useState(() => getOperatorName());
-  const [autoClaim, setAutoClaim] = useState(() => isAutoClaimEnabled());
-  const [saved, setSaved] = useState(false);
-
-  const handleNameChange = (val: string) => {
-    setName(val);
-    setOperatorName(val);
-    setSaved(true);
-  };
-
-  const handleAutoClaimChange = (val: boolean) => {
-    setAutoClaim(val);
-    setAutoClaimEnabled(val);
-    setSaved(true);
-  };
-
-  return (
-    <Card style={{ padding: 24 }}>
-      <Text kind="body/bold/md" style={{ marginBottom: 8, display: "block" }}>
-        Operator
-      </Text>
-      <Text
-        kind="body/regular/sm"
-        style={{ color: "var(--text-color-secondary)", marginBottom: 16, display: "block" }}
-      >
-        Optional display name shown next to operations you trigger. All sessions share the
-        same system user, so this is purely a coordination hint — the server stamps it on jobs
-        and rack-lock entries so other operators can tell who is doing what.
-      </Text>
-      <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <TextField
-          label="Operator display name"
-          size="small"
-          fullWidth
-          value={name}
-          onChange={(e) => handleNameChange(e.target.value)}
-          placeholder="e.g. alice"
-          helperText="Stored locally in your browser. Leave empty to remain anonymous."
-        />
-        <FormControlLabel
-          control={
-            <Switch
-              checked={autoClaim}
-              onChange={(e) => handleAutoClaimChange(e.target.checked)}
-              disabled={!name.trim()}
-            />
-          }
-          label="Auto-claim rack when I open its detail view"
-        />
-        {saved && (
-          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-            Saved locally.
-          </Text>
-        )}
-      </Box>
-    </Card>
   );
 }
 

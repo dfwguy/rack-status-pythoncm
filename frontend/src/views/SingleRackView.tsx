@@ -53,6 +53,7 @@ export function SingleRackView({ data, loading, error, onRackSelect, onCommentCh
             rows={data.rows}
             comments={data.comments}
             logDir={data.log_dir}
+            naming={data.naming}
             onRackSelect={onRackSelect}
             onCommentChange={onCommentChange}
             validationFilters={validationFilters}

@@ -1,17 +1,29 @@
+import Tooltip from "@mui/material/Tooltip";
 import { Card, Flex, Tag, Text, Divider } from "@nvidia/foundations-react-core";
 import type { RackRow } from "../../types/api";
+import { validationStatusTooltip } from "../../lib/validationStatusTooltip";
 
 interface RackOverviewProps {
   row: RackRow;
   comment: string;
 }
 
-function ValidationTag({ nemo }: { nemo: string }) {
-  if (nemo === "done") return <Tag color="green" kind="solid" readOnly density="compact">done</Tag>;
-  if (nemo === "fail") return <Tag color="red" kind="solid" readOnly density="compact">fail</Tag>;
-  if (nemo.startsWith("ongoing")) return <Tag color="yellow" kind="solid" readOnly density="compact">{nemo}</Tag>;
-  if (nemo === "pending") return <Tag color="blue" kind="solid" readOnly density="compact">pending</Tag>;
-  return <Tag color="gray" kind="solid" readOnly density="compact">{nemo}</Tag>;
+function ValidationTag({ row }: { row: RackRow }) {
+  const tip = validationStatusTooltip(row);
+  const inner = (() => {
+    if (row.nemo === "done") return <Tag color="green" kind="solid" readOnly density="compact">done</Tag>;
+    if (row.nemo === "fail") return <Tag color="red" kind="solid" readOnly density="compact">fail</Tag>;
+    if (row.nemo.startsWith("ongoing"))
+      return <Tag color="yellow" kind="solid" readOnly density="compact">{row.nemo}</Tag>;
+    if (row.nemo === "pending") return <Tag color="blue" kind="solid" readOnly density="compact">pending</Tag>;
+    return <Tag color="gray" kind="solid" readOnly density="compact">{row.nemo}</Tag>;
+  })();
+  if (!tip) return inner;
+  return (
+    <Tooltip title={<span style={{ display: "block", maxWidth: 420, whiteSpace: "pre-wrap" }}>{tip}</span>} enterDelay={350} arrow>
+      <span style={{ display: "inline-flex", cursor: "default" }}>{inner}</span>
+    </Tooltip>
+  );
 }
 
 function InfoItem({ label, children }: { label: string; children: React.ReactNode }) {
@@ -30,7 +42,7 @@ export function RackOverview({ row, comment }: RackOverviewProps) {
     <Card style={{ padding: 24 }}>
       <Flex gap="4" align="center" wrap="wrap">
         <InfoItem label="Validation State">
-          <ValidationTag nemo={row.nemo} />
+          <ValidationTag row={row} />
         </InfoItem>
 
         <Divider orientation="vertical" />

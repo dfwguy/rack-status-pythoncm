@@ -100,6 +100,11 @@ if _app_dir_s not in sys.path:
     sys.path.insert(0, _app_dir_s)
 
 import native_status  # noqa: E402 — after sys.path so ``import native_status`` works when cwd != APP_DIR
+import nvis_id_templates  # noqa: E402
+
+
+def _nvis_naming() -> nvis_id_templates.NvisNaming:
+    return nvis_id_templates.get_nvis_naming()
 import host_exec  # noqa: E402
 import ai_chat  # noqa: E402
 import workflow_engine  # noqa: E402
@@ -278,47 +283,66 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "native_cmsh",
+        "key": "RACK_SLURM_SKIP_MODULE_LOAD",
+        "label": "Skip module load for Slurm",
+        "description": (
+            "Set to 1 if squeue/sinfo/scontrol are already on PATH (avoids ``module load slurm`` and "
+            "bash-completion errors on the head node)."
+        ),
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_MODULES_INIT",
+        "label": "Environment modules init script",
+        "description": (
+            "Optional path to source before ``module load`` (e.g. "
+            "/cm/local/apps/environment-modules/current/init/bash). Leave empty for auto-detect."
+        ),
+    },
+    {
+        "section": "native_cmsh",
         "key": "RACK_CMSH",
         "label": "cmsh executable",
         "description": "Bright cmsh command (power reset, probes, cluster overview).",
     },
     {
         "section": "native_cmsh",
-        "key": "RACK_CMSH_DS_NODE_PATTERN",
-        "label": "cmsh ds — tray node regex (default mode)",
+        "key": "NVIS_RACK_ID",
+        "label": "Rack id pattern",
         "description": (
-            "Used when TOKEN and FIND/PARSE are empty. One regex, ``finditer`` per ds line: **three** captures — "
-            "(1) full hostname, (2) rack id ``pN-rMM`` (``p5-r1`` and ``p5-r01`` merge to the rack list form), "
-            "(3) tray token (digits get compact ranges; other labels stay comma-separated). Default "
-            "``(?i)((p\\\\d+-r\\\\d+)-ct(\\\\d+))``. Optional simpler modes below override this."
+            "How a rack row is named in the dashboard. Use literal text and [01-99] for each two-digit field. "
+            "Bright example: p[01-99]-r[01-99] matches p05-r01. "
+            "CBR example: CBR[01-99]-DH[01-99]-SVR-CN[01-99][01-99] matches CBR01-DH01-SVR-CN0102."
         ),
     },
     {
         "section": "native_cmsh",
-        "key": "RACK_CMSH_DS_NODE_TOKEN_PATTERN",
-        "label": "cmsh ds — hostname token regex (optional)",
+        "key": "NVIS_CT_ID",
+        "label": "Compute tray hostname pattern",
         "description": (
-            "If set (and FIND/PARSE below are both empty), one **capture** per hostname; rack/tray split at the "
-            "last ``-ct`` after lowercasing (Bright ``p5-r01-ct18``, or ``CBR01-DH01-SVR-ctCN010213``). "
-            "Example token regex: ``(?i)(\\\\b[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+-ct[A-Za-z0-9]+\\\\b)``."
+            "Full compute node name from cmsh ds (must start with the rack pattern and add tray slot(s) at the end). "
+            "Bright: p[01-99]-r[01-99]-ct[01-99] (e.g. p05-r01-ct01). "
+            "CBR: CBR[01-99]-DH[01-99]-SVR-CN[01-99][01-99][01-99] (e.g. CBR01-DH01-SVR-CN010213)."
         ),
     },
     {
         "section": "native_cmsh",
-        "key": "RACK_CMSH_DS_NODE_FIND_PATTERN",
-        "label": "cmsh ds — FIND pattern (legacy, optional)",
+        "key": "NVIS_NVSW_ID",
+        "label": "NVSwitch hostname pattern (optional)",
         "description": (
-            "Must be used with PARSE. ``finditer`` on each ds line; first capture (or whole match) is each node "
-            "token, then PARSE extracts rack and tray. Same as older two-variable split."
+            "Naming pattern for NVSwitch devices (reserved for future UI). "
+            "Bright: p[01-99]-r[01-99]-nvsw-[01-99]. CBR: CBR[01-99]-DH[01-99]-NSW-NV[01-99][01-99][01-99]."
         ),
     },
     {
-        "section": "native_cmsh",
-        "key": "RACK_CMSH_DS_NODE_PARSE_PATTERN",
-        "label": "cmsh ds — PARSE pattern (legacy, optional)",
+        "section": "jobs_cluster",
+        "key": "VALIDATION_TEST",
+        "label": "Validation test suite (parser + rack status)",
         "description": (
-            "Used with FIND: ``match`` on each token; **two** captures — (1) rack id, (2) tray label. "
-            "Example PARSE: ``(?i)^(p\\\\d+-r\\\\d+)-ct(\\\\d+)$``."
+            "Comma-separated tokens for NCCL/LLM pass (see bin/scripts/validation_test_env.sh). "
+            "Typical single-rack NEMO logs: nccl_all_reduce,llm. Full NCCL sweep: "
+            "nccl_all_reduce,nccl_alltoall,nccl_allgather,llm. When unset, the server defaults to "
+            "nccl_all_reduce,llm for singlerack runs (multirack probe-json uses RACK_MULTIRACK_VALIDATION_TEST only)."
         ),
     },
     {
@@ -407,6 +431,15 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
+        "key": "NVIS_NVLOOM_UCX_TLS",
+        "label": "nvloom UCX_TLS override",
+        "description": (
+            "Optional UCX_TLS string for the nvloom srun step (Spectrum-X / RoCE). "
+            "When unset, nvloom_singlerack.sbatch uses rc,cuda_copy,cuda_ipc,cuda,self only if UCX_TLS is not already set."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
         "key": "RACK_CLUSTERKIT_SCRIPT",
         "label": "ClusterKit singlerack driver script",
         "description": "Path to run_clusterkit.sh (Slurm; logs under log_dir/clusterkit/).",
@@ -428,6 +461,45 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "key": "RACK_CLUSTERKIT_CUDA_MAJOR",
         "label": "ClusterKit CUDA major (HPC-X bundle)",
         "description": "12 or 13; passed as CUDA_MAJ (default 13). Falls back to RACK_NVLOOM_CUDA_MAJOR.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "NVIS_RDMA_LINK_TECH",
+        "label": "RDMA link technology (global)",
+        "description": (
+            "auto | mlx | ib | roce | spectrumx | spx. Default auto: InfiniBand-style mlx5 sysfs when usable, else RoCE/Spectrum-X. "
+            "Other validation scripts may source nvis-rdma-common.inc.sh; ClusterKit uses this when RACK_CLUSTERKIT_LINK_TECH is unset."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_LINK_TECH",
+        "label": "ClusterKit interconnect mode",
+        "description": (
+            "Same values as NVIS_RDMA_LINK_TECH; overrides the global default for singlerack ClusterKit only. "
+            "Use roce or spx on Spectrum-X; use mlx or ib for classic IB mlx5 local_cpulist mapping."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_HCA_PROFILE",
+        "label": "ClusterKit HCA preset profile",
+        "description": (
+            "Preset rail table: mlx — gb300_mlx4 (default), b300_mlx8; roce — gb300_roce_spx_quad (default), "
+            "gb300_roce_spx_rail, b300_roce_dual_8. Must match RACK_CLUSTERKIT_LINK_TECH / NVIS_RDMA_LINK_TECH family."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_UCX_TLS",
+        "label": "ClusterKit UCX_TLS (RoCE branch)",
+        "description": "Optional. When interconnect is RoCE/Spectrum-X, clusterkit.sbatch sets UCX_TLS to this value (default rc,cuda).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "NVIS_SLURM_HOSTLIST",
+        "label": "Slurm sbatch -w override (comma-separated)",
+        "description": "Optional. If set, run_clusterkit.sh / run_nvloom_singlerack.sh / run_mnubergemm_stress.sh use this exact NodeName list for sbatch -w instead of expanding the validation target. Use when Slurm NodeNames differ from NVIS hostnames (FQDN, prefix, or casing). Leave empty to auto-expand via scontrol.",
     },
     {
         "section": "jobs_cluster",
@@ -547,12 +619,14 @@ _STATUS_ROW_ENV_KEYS: frozenset[str] = frozenset(
         "RACK_STATUS_SCRIPT",
         "RACK_STATUS_EXTRA_ARGS",
         "RACK_CMSH",
-        "RACK_CMSH_DS_NODE_PATTERN",
-        "RACK_CMSH_DS_NODE_TOKEN_PATTERN",
-        "RACK_CMSH_DS_NODE_FIND_PATTERN",
-        "RACK_CMSH_DS_NODE_PARSE_PATTERN",
+        "NVIS_RACK_ID",
+        "NVIS_CT_ID",
+        "NVIS_NVSW_ID",
+        "RACK_SLURM_SKIP_MODULE_LOAD",
+        "RACK_MODULES_INIT",
         "RACK_MULTIRACK_SITE_PREFIX",
         "RACK_MULTIRACK_VALIDATION_TEST",
+        "VALIDATION_TEST",
         "RACK_PARSER_SCRIPT",
         "RACK_PARSER_EXTRA_ARGS",
         "RACK_PARSER_EXPORT_GLOB",
@@ -791,16 +865,25 @@ def _eget(name: str, default: str | None = None) -> str | None:
     return os.environ.get(name, default)
 
 
-def _subprocess_env(updates: dict[str, str] | None = None) -> dict[str, str]:
+def _subprocess_env(
+    updates: dict[str, str] | None = None,
+    *,
+    validation_test_if_unset: str = "nccl_all_reduce,llm",
+) -> dict[str, str]:
     out = os.environ.copy()
     out.update(_job_env_overrides_load())
     if updates:
         out.update(updates)
+    # validation_test_env.sh treats unset as a very strict suite (all NCCL collectives + LLM), which
+    # often marks racks pending when logs only have all-reduce + Nemotron. Callers may pass a
+    # different *validation_test_if_unset* (e.g. multirack probe uses RACK_MULTIRACK_VALIDATION_TEST).
+    if not (out.get("VALIDATION_TEST") or "").strip():
+        d = (validation_test_if_unset or "nccl_all_reduce,llm").strip() or "nccl_all_reduce,llm"
+        out["VALIDATION_TEST"] = d
     return out
 
 
 _PHYSICAL_RF0_IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
-_PHYSICAL_RF0_TRAY_HOST_RE = re.compile(r"^p[0-9]+-r[0-9]+-ct[0-9]+$", re.IGNORECASE)
 _APP_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{8,80}$")
 
 
@@ -821,8 +904,10 @@ def _parse_physical_rf0_stdout(text: str) -> dict[str, str]:
         "yes",
     )
 
+    naming = _nvis_naming()
+
     def host_ok(h: str) -> bool:
-        if _PHYSICAL_RF0_TRAY_HOST_RE.match(h):
+        if naming.is_tray_hostname(h):
             return True
         if not loose:
             return False
@@ -1222,7 +1307,7 @@ def _power_reset_worker(job_id: str, specs: list[str]) -> None:
 
 def run_services_restart(pdsh_w: str) -> dict:
     """Run pdsh across hosts: mount -a, restart munge/slurmd/nvidia-imex, then nvidia-dcgm or cuda-dcgm."""
-    w = (pdsh_w or "").strip()
+    w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
     plat = _get_platform()
@@ -1282,9 +1367,11 @@ def _parse_pdsh_prefixed_lines(stdout: str) -> list[dict[str, str]]:
 
 
 def run_rack_uptime_pdsh(rack: str) -> dict:
-    """Run ``pdsh -w <rack>-ct[RANGE] uptime`` (RANGE from RACK_VALIDATION_CT_RANGE)."""
+    """Run ``pdsh -w <rack><ct_joiner>[RANGE] uptime`` (RANGE from RACK_VALIDATION_CT_RANGE)."""
     rk = _normalize_rack_id(rack)
-    w = f"{rk}-ct[{_validation_ct_inner()}]"
+    w = _expand_pdsh_w_slurm_nodenames(
+        _nvis_naming().uptime_pdsh_wildcard(rack, _validation_ct_inner())
+    )
     timeout = max(15, _env_int("RACK_UPTIME_PDSH_TIMEOUT", 120))
     dry = os.environ.get("RACK_UPTIME_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
     plat = _get_platform()
@@ -1755,6 +1842,20 @@ def _pam_verify(username: str, password: str, service: str) -> bool:
     return bool(pam_authenticate(username, password, service=service))
 
 
+def _is_public_spa_static_path() -> bool:
+    """Vite build assets and icons must be served without a session.
+
+    The login screen is part of the React SPA; if ``/assets/*.js`` is redirected to
+  ``/login``, the browser receives HTML instead of JavaScript and the page stays blank.
+    """
+    p = request.path
+    if p in ("/login", "/favicon.svg", "/icons.svg"):
+        return True
+    if p.startswith("/assets/") or p.startswith("/spa/"):
+        return True
+    return False
+
+
 @app.before_request
 def _require_dashboard_auth():
     global _JOB_ENV_BOOTSTRAP_DONE
@@ -1767,7 +1868,9 @@ def _require_dashboard_auth():
             _JOB_ENV_BOOTSTRAP_DONE = True
     if not _auth_enabled():
         return None
-    if request.endpoint in ("login", "api_login", "static"):
+    if request.endpoint in ("login", "api_login", "api_auth_check", "static"):
+        return None
+    if _is_public_spa_static_path():
         return None
     if _session_ok():
         return None
@@ -1817,9 +1920,19 @@ def _parser_export_glob() -> str:
 
 
 def _nemo_nccl_in_log_basename(name: str) -> bool:
-    """Dashboard and rack_status consider only logs whose basename contains NEMO or NCCL (case-insensitive)."""
+    """Logs with NEMO or NCCL in the basename (multirack tab, exports, legacy shell table)."""
     low = name.lower()
-    return "nemo" in low or "nccl" in low
+    if "nemo" in low or "nccl" in low:
+        return True
+    return _nvis_naming().auxiliary_single_rack_log_basename(name)
+
+
+def _nemo_single_rack_log_basename(name: str) -> bool:
+    """Single-rack NEMO validation logs for the dashboard table / Open Log (not NCCL-only sweeps)."""
+    low = name.lower()
+    if "nemo" in low:
+        return True
+    return _nvis_naming().auxiliary_single_rack_log_basename(name)
 
 
 _MULTIRACK_N_RACK_RE = re.compile(r"(?:[2-9]|[1-9]\d{1,3})rack", re.IGNORECASE)
@@ -1842,12 +1955,11 @@ def _is_multirack_log_basename(name: str) -> bool:
         return True
     low = name.lower()
     # run-nemo-xrack.sh: root-NEMO-p5-r[…]-ct[…],p5-r[…]-ct[…]-<n>N-<jid>.txt
-    if (low.startswith("root-nemo-") or low.startswith("root-nccl-")) and re.search(
-        r",\s*p\d+-r", low
+    if (low.startswith("root-nemo-") or low.startswith("root-nccl-")) and _nvis_naming().multirack_comma_after_rack_re().search(
+        low
     ):
         return True
-    racks = {m.group(1).lower() for m in re.finditer(r"\b(p\d+-r\d+)\b", name, re.IGNORECASE)}
-    return len(racks) >= 2
+    return len(_nvis_naming().find_rack_ids_in_string(name)) >= 2
 
 
 def _multirack_site_prefix() -> str:
@@ -1895,48 +2007,48 @@ def _multirack_node_count_suffix(name: str) -> str:
 def multirack_display_rack_from_basename(name: str) -> str:
     """Human label like ``p5-r01+p5-r02 (36N)`` for multirack log filenames."""
     suffix = _multirack_node_count_suffix(name)
-    racks = sorted({m.group(1).lower() for m in re.finditer(r"\b(p\d+-r\d+)\b", name, re.IGNORECASE)})
+    naming = _nvis_naming()
+    racks = sorted(naming.find_rack_ids_in_string(name))
     if len(racks) >= 2:
         return "+".join(racks) + suffix
-    m = re.search(r"(p\d+)-r\[([\d,\-]+)\]", name, re.IGNORECASE)
-    if m:
-        pod = m.group(1).lower()
-        nums = _expand_r_inner_to_rack_nums(m.group(2))
-        if nums:
-            return "+".join(f"{pod}-r{n:02d}" for n in nums) + suffix
-    m2 = re.search(r"(?:^|[\-_])r\[([\d,\-]+)\]", name, re.IGNORECASE)
-    if m2:
-        pod = _multirack_site_prefix()
-        nums = _expand_r_inner_to_rack_nums(m2.group(1))
-        if nums and pod:
-            pl = pod.lower().strip()
-            if not re.match(r"^p\d+$", pl):
-                pl = "p" + pl.lstrip("p")
-            return "+".join(f"{pl}-r{n:02d}" for n in nums) + suffix
+    pod_re = naming.multirack_pod_r_bracket_re()
+    if pod_re:
+        m = pod_re.search(name)
+        if m:
+            expanded = naming.expand_pod_r_inner(m.group(1), m.group(2))
+            if expanded:
+                return "+".join(expanded) + suffix
+    bare_re = naming.multirack_bare_r_bracket_re()
+    if bare_re:
+        m2 = bare_re.search(name)
+        if m2:
+            expanded = naming.expand_site_r_inner(_multirack_site_prefix(), m2.group(1))
+            if expanded:
+                return "+".join(expanded) + suffix
     stem = Path(name).stem
     return (stem[:120] if stem else name) + suffix
 
 
 def _multirack_physical_rack_ids(name: str) -> list[str]:
-    """Rack ids (``pN-rMM``) for Slurm sinfo aggregation; mirrors ``multirack_display_rack_from_basename`` cases."""
-    racks = sorted({m.group(1).lower() for m in re.finditer(r"\b(p\d+-r\d+)\b", name, re.IGNORECASE)})
+    """Rack ids for Slurm sinfo aggregation; mirrors ``multirack_display_rack_from_basename`` cases."""
+    naming = _nvis_naming()
+    racks = sorted(naming.find_rack_ids_in_string(name))
     if len(racks) >= 2:
         return list(racks)
-    m = re.search(r"(p\d+)-r\[([\d,\-]+)\]", name, re.IGNORECASE)
-    if m:
-        pod = m.group(1).lower()
-        nums = _expand_r_inner_to_rack_nums(m.group(2))
-        if nums:
-            return [f"{pod}-r{n:02d}" for n in nums]
-    m2 = re.search(r"(?:^|[\-_])r\[([\d,\-]+)\]", name, re.IGNORECASE)
-    if m2:
-        pod = _multirack_site_prefix()
-        nums = _expand_r_inner_to_rack_nums(m2.group(1))
-        if nums and pod:
-            pl = pod.lower().strip()
-            if not re.match(r"^p\d+$", pl):
-                pl = "p" + pl.lstrip("p")
-            return [f"{pl}-r{n:02d}" for n in nums]
+    pod_re = naming.multirack_pod_r_bracket_re()
+    if pod_re:
+        m = pod_re.search(name)
+        if m:
+            expanded = naming.expand_pod_r_inner(m.group(1), m.group(2))
+            if expanded:
+                return expanded
+    bare_re = naming.multirack_bare_r_bracket_re()
+    if bare_re:
+        m2 = bare_re.search(name)
+        if m2:
+            expanded = naming.expand_site_r_inner(_multirack_site_prefix(), m2.group(1))
+            if expanded:
+                return expanded
     return []
 
 
@@ -1961,18 +2073,14 @@ def _resolve_nemo_log_basename_in_dir(log_dir: Path, basename: str) -> Path | No
     return None
 
 
-_NEMO_1RACK_FN_RE = re.compile(r"1Rack-(p[0-9]+-r[0-9]+)-", re.IGNORECASE)
-
-
 def _rack_id_from_nemo_1rack_filename(name: str) -> str | None:
-    """Return normalized rack id pNN-rMM if basename looks like a NEMO 1Rack log, else None."""
-    m = _NEMO_1RACK_FN_RE.search(name)
-    if not m:
-        return None
-    r = m.group(1).strip().lower()
-    if not _RACK_ID_RE.match(r):
-        return None
-    return r
+    """Return normalized rack id if basename looks like a NEMO 1Rack log, else None."""
+    return _nvis_naming().rack_id_from_nemo_1rack_filename(name)
+
+
+def _rack_id_from_log_basename(name: str) -> str | None:
+    """Rack id from single-rack NEMO validation basename (1Rack-, root-CK-, …); not Llama Slurm stdout."""
+    return _nvis_naming().rack_id_from_log_basename(name)
 
 
 def _nemo_log_file_looks_successful(path: Path) -> bool:
@@ -2082,17 +2190,32 @@ def list_log_txt_paths_for_export(
 
 
 def find_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
-    """Paths to root-NEMO-1Rack-<rack>-*.txt in log_dir and log_dir/failed (newest first)."""
+    """Paths to single-rack validation logs for *rack* under ``log_dir`` and ``failed/`` (newest first).
+
+    Scans ``*.txt`` and keeps files whose basename maps to exactly this rack via
+    ``rack_id_from_log_basename`` (agnostic to pod/rack zero-padding in filenames, e.g. ``p5-r01``
+    vs dashboard ``p05-r01``). Excludes multirack and Llama Slurm stdout basenames.
+    """
     rk = _normalize_rack_id(rack)
-    pat = f"*1Rack-{rk}-*.txt"
+    naming = _nvis_naming()
     out: list[Path] = []
+    seen: set[str] = set()
     for base in (log_dir, log_dir / "failed"):
-        if base.is_dir():
-            out.extend(
-                p
-                for p in base.glob(pat)
-                if p.is_file() and _nemo_nccl_in_log_basename(p.name)
-            )
+        if not base.is_dir():
+            continue
+        for p in sorted(base.glob("*.txt"), key=lambda x: x.name.lower()):
+            if not p.is_file() or not _nemo_single_rack_log_basename(p.name):
+                continue
+            if naming.is_llama_slurm_stdout_basename(p.name):
+                continue
+            if _is_multirack_log_basename(p.name):
+                continue
+            if naming.rack_id_from_log_basename(p.name) != rk:
+                continue
+            key = str(p.resolve())
+            if key not in seen:
+                seen.add(key)
+                out.append(p)
     out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return out
 
@@ -2138,15 +2261,16 @@ def _slurm_job_base_id(job_raw: str | None) -> str | None:
 
 
 def _run_bash_slurm_prefix(cmd: str, *, timeout: int = 120) -> subprocess.CompletedProcess[str]:
-    """Run ``cmd`` under ``bash -lc`` after optional ``module load`` (same semantics as Slurm drain helpers)."""
+    """Run Slurm CLI after optional ``module load`` (non-login shell; see ``host_exec.run_slurm_on_host``)."""
     plat = _get_platform()
-    return host_exec.run_on_host(
+    return host_exec.run_slurm_on_host(
         plat.slurm_prefix(cmd),
         timeout=timeout,
     )
 
 
-def _scontrol_hostnames(nodespec: str) -> list[str]:
+def _scontrol_hostnames_preserving_case(nodespec: str) -> list[str]:
+    """Hostnames from ``scontrol show hostnames``, one per line, preserving Slurm ``NodeName`` spelling."""
     nodespec = nodespec.strip()
     if not nodespec or nodespec.lower() in ("none", "null"):
         return []
@@ -2156,7 +2280,70 @@ def _scontrol_hostnames(nodespec: str) -> list[str]:
     )
     if proc.returncode != 0:
         return []
-    return [ln.strip().lower() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    return [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+
+
+def _dedupe_hostnames_preserve_spelling(hosts: list[str]) -> list[str]:
+    """Drop duplicate hosts case-insensitively; keep the first spelling seen (prefer Slurm output order)."""
+    out_map: dict[str, str] = {}
+    for h in hosts:
+        t = (h or "").strip()
+        if not t:
+            continue
+        k = t.casefold()
+        if k not in out_map:
+            out_map[k] = t
+    return sorted(out_map.values(), key=str.casefold)
+
+
+def _split_pdsh_w_top_level_commas(w: str) -> list[str]:
+    """Split a pdsh ``-w`` comma list without splitting commas inside ``[…]`` host ranges."""
+    w = (w or "").strip()
+    if not w:
+        return []
+    out: list[str] = []
+    depth = 0
+    cur: list[str] = []
+    for ch in w:
+        if ch == "[":
+            depth += 1
+            cur.append(ch)
+        elif ch == "]":
+            depth = max(0, depth - 1)
+            cur.append(ch)
+        elif ch == "," and depth == 0:
+            s = "".join(cur).strip()
+            if s:
+                out.append(s)
+            cur = []
+        else:
+            cur.append(ch)
+    tail = "".join(cur).strip()
+    if tail:
+        out.append(tail)
+    return out
+
+
+def _expand_pdsh_w_slurm_nodenames(w: str) -> str:
+    """Expand each Slurm nodeset fragment via ``scontrol show hostnames`` so pdsh uses NodeName casing.
+
+    pdsh bracket expansion can lower-case host tokens, which breaks ssh/DNS on some sites. When Slurm
+    expansion fails for a fragment, the original fragment is kept. Set ``RACK_PDSH_W_SKIP_SLURM_EXPAND``
+    to skip this step entirely.
+    """
+    w = (w or "").strip()
+    if not w:
+        return w
+    if os.environ.get("RACK_PDSH_W_SKIP_SLURM_EXPAND", "").strip().lower() in ("1", "true", "yes"):
+        return w
+    parts_out: list[str] = []
+    for seg in _split_pdsh_w_top_level_commas(w):
+        hosts = _scontrol_hostnames_preserving_case(seg)
+        if hosts:
+            parts_out.extend(hosts)
+        else:
+            parts_out.append(seg)
+    return ",".join(parts_out)
 
 
 def _hostnames_for_slurm_job(job_raw: str | None) -> tuple[list[str], str]:
@@ -2169,7 +2356,7 @@ def _hostnames_for_slurm_job(job_raw: str | None) -> tuple[list[str], str]:
     )
     if proc.returncode != 0 or not (proc.stdout or "").strip():
         return [], "sacct_failed"
-    hosts_set: dict[str, None] = {}
+    hosts_flat: list[str] = []
     for line in (proc.stdout or "").splitlines():
         seg = line.strip()
         if not seg:
@@ -2178,9 +2365,8 @@ def _hostnames_for_slurm_job(job_raw: str | None) -> tuple[list[str], str]:
             part = part.strip()
             if not part:
                 continue
-            for h in _scontrol_hostnames(part):
-                hosts_set.setdefault(h, None)
-    hosts = sorted(hosts_set)
+            hosts_flat.extend(_scontrol_hostnames_preserving_case(part))
+    hosts = _dedupe_hostnames_preserve_spelling(hosts_flat)
     return hosts, ("sacct" if hosts else "sacct_empty")
 
 
@@ -2189,7 +2375,7 @@ def _hostnames_for_rack_validation_expand(rack: str) -> tuple[list[str], str]:
         tgt = validation_target_for_rack(rack, None)
     except ValueError:
         return [], "target_error"
-    hs = _scontrol_hostnames(tgt)
+    hs = _dedupe_hostnames_preserve_spelling(_scontrol_hostnames_preserving_case(tgt))
     return hs, ("rack_ct_expand" if hs else "rack_ct_expand_failed")
 
 
@@ -2201,6 +2387,150 @@ def _job_hosts_for_grafana(rack: str, job_raw: str | None) -> tuple[list[str], s
     if hosts2:
         return hosts2, src2
     return [], "none"
+
+
+def _grafana_bright_hostname_promql_regex(hosts: list[str]) -> str:
+    """Build ``hostname=~`` RHS for Bright ``gpu_*`` metrics (Prometheus matches the **whole** label).
+
+    Slurm ``NodeName`` casing may differ from Prometheus (Bright often lowercases ``uname -n``;
+    DCGM may keep Slurm-style ``CBR01-...``). We emit **lowercase and verbatim** alternates when
+    they differ so PromQL stays portable (no ``(?i)`` — VictoriaMetrics / some stacks reject it
+    in label matchers, which would blank **every** branch including ``.*``).
+
+    Per Slurm host we add: full name (with any domain), name before the first ``.``, a long final
+    hyphen segment (≥6 chars, e.g. ``cn010211``), and the last two hyphen segments when distinct
+    (e.g. ``svr-cn010211``). Each literal is escaped and followed by an optional FQDN suffix
+    (parenthesized dot + any chars, quantified with ``?``); we avoid ``(?:`` because Grafana
+    treats ``{`` in panel queries as template syntax and can break variables.
+
+    ``RACK_WEB_GRAFANA_HOST_REGEX_STRICT=1``: ``|``-joined ``re.escape`` of each Slurm name
+    (lowercase and verbatim when different; no short forms, no domain tail).
+    """
+    if not hosts:
+        return ".*"
+    if _truthy_env("RACK_WEB_GRAFANA_HOST_REGEX_STRICT"):
+        parts_s: list[str] = []
+        seen_s: set[str] = set()
+        for h in hosts:
+            raw = (h or "").strip()
+            if not raw:
+                continue
+            variants = (raw.lower(), raw) if raw != raw.lower() else (raw,)
+            for v in variants:
+                pat = re.escape(v)
+                if pat in seen_s:
+                    continue
+                seen_s.add(pat)
+                parts_s.append(pat)
+        return "|".join(parts_s) if parts_s else ".*"
+
+    parts: list[str] = []
+    seen_pat: set[str] = set()
+
+    def add_pat_for_string(lit: str) -> None:
+        raw = lit.strip()
+        if not raw:
+            return
+        variants = (raw.lower(), raw) if raw != raw.lower() else (raw.lower(),)
+        for v in variants:
+            pat = re.escape(v) + r"(\..*)?"
+            if pat in seen_pat:
+                continue
+            seen_pat.add(pat)
+            parts.append(pat)
+
+    for h in hosts:
+        t = (h or "").strip()
+        if not t:
+            continue
+        nodots = t.split(".", 1)[0].strip()
+        add_pat_for_string(t)
+        add_pat_for_string(nodots)
+        if "-" in nodots:
+            segs = nodots.split("-")
+            last = segs[-1]
+            if len(last) >= 6:
+                add_pat_for_string(last)
+            if len(segs) >= 2:
+                two = f"{segs[-2]}-{segs[-1]}"
+                if len(two) >= 6 and two.lower() != nodots.lower():
+                    add_pat_for_string(two)
+    if not parts:
+        return ".*"
+    return "|".join(parts)
+
+
+def _grafana_embed_rack_canonical_id(rack: str, hosts: list[str]) -> str | None:
+    """Resolve NVIS canonical rack id for Grafana ``<rack-id>.*`` embed filter."""
+    n = _nvis_naming()
+    rid = (rack or "").strip()
+    rid_main = rid.split("(", 1)[0].strip()
+    c = n.canonical_rack_id(rid_main)
+    if c:
+        return c
+    for seg in rid_main.split("+"):
+        seg = seg.strip()
+        if not seg:
+            continue
+        cc = n.canonical_rack_id(seg)
+        if cc:
+            return cc
+    for r2 in n.find_rack_ids_in_string(rid):
+        cc = n.canonical_rack_id(r2)
+        if cc:
+            return cc
+    fk = n.rack_id_from_nemo_1rack_filename(rid)
+    if fk:
+        return fk
+    for h in hosts or ():
+        hit = n.sinfo_rack_from_host(h)
+        if hit:
+            rr, _ = hit
+            return n.canonical_rack_id(rr) or rr
+    for h in hosts or ():
+        for r2 in n.find_rack_ids_in_string(h):
+            cc = n.canonical_rack_id(r2)
+            if cc:
+                return cc
+    return None
+
+
+def _grafana_rack_prefix_promql_regex(rack: str, hosts: list[str]) -> str | None:
+    """PromQL label regex for Grafana embed: ``<canonical-rack-id>.*`` only.
+
+    Matches full hostnames such as ``CBR01-DH01-SVR-CN010211``. This must match the form users
+    verify in Grafana (e.g. ``CBR01-DH01-SVR-CN0102.*``): **no** ``re.escape`` on ordinary rack
+    tokens (avoids ``\\-`` in URLs) and **no** ``|`` alternates — ``/d-solo/`` + text variables can
+    fail when the regex contains a pipe. Do not emit ``{`` anywhere (Grafana template parsing).
+
+    Set ``RACK_WEB_GRAFANA_EMBED_RACK_REGEX_LOWER=1`` to use lowercase ``<rack>.*`` when Prometheus
+    labels are only lowercased.
+    """
+    rk = _grafana_embed_rack_canonical_id(rack, hosts)
+    if not rk:
+        return None
+    if _truthy_env("RACK_WEB_GRAFANA_EMBED_RACK_REGEX_LOWER"):
+        body = rk.lower()
+    else:
+        body = rk
+    # Safe unescaped body: Prometheus RE2 treats ``-`` literally outside ``[]``.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,191}", body):
+        return re.escape(body) + r".*"
+    return body + r".*"
+
+
+def _grafana_embed_host_regex_and_mode(rack: str, hosts: list[str]) -> tuple[str, str]:
+    """``(regex, mode)`` for Grafana ``var-job_host_regex``. See ``RACK_WEB_GRAFANA_HOST_REGEX_PER_HOST``."""
+    if _truthy_env("RACK_WEB_GRAFANA_HOST_REGEX_PER_HOST"):
+        if hosts:
+            return _grafana_bright_hostname_promql_regex(hosts), "hosts"
+        return ".*", "open"
+    pref = _grafana_rack_prefix_promql_regex(rack, hosts)
+    if pref:
+        return pref, "rack_prefix"
+    if hosts:
+        return _grafana_bright_hostname_promql_regex(hosts), "hosts"
+    return ".*", "open"
 
 
 _LLM_LINE_MARK_RE = re.compile(
@@ -2468,10 +2798,7 @@ def _grafana_parser_embed_context(
             "display_timezone": dtz,
         }
     hosts, hsrc = _job_hosts_for_grafana(rack, job_raw)
-    if hosts:
-        host_regex = "|".join(re.escape(h) for h in hosts)
-    else:
-        host_regex = ".*"
+    host_regex, host_regex_mode = _grafana_embed_host_regex_and_mode(rack, hosts)
     return {
         "ok": True,
         "iframe_ready": True,
@@ -2480,6 +2807,7 @@ def _grafana_parser_embed_context(
         "from_iso_utc": _iso_utc_z(lo),
         "to_iso_utc": _iso_utc_z(hi),
         "host_regex": host_regex,
+        "host_regex_mode": host_regex_mode,
         "hosts": hosts,
         "hosts_source": hsrc,
         "time_source": tsrc,
@@ -2514,10 +2842,7 @@ def _grafana_live_5m_embed_context(
             "display_timezone": dtz,
         }
     hosts, hsrc = _hostnames_for_rack_validation_expand(rack)
-    if hosts:
-        host_regex = "|".join(re.escape(h) for h in hosts)
-    else:
-        host_regex = ".*"
+    host_regex, host_regex_mode = _grafana_embed_host_regex_and_mode(rack, hosts)
     return {
         "ok": True,
         "iframe_ready": True,
@@ -2526,6 +2851,7 @@ def _grafana_live_5m_embed_context(
         "from_iso_utc": _iso_utc_z(lo),
         "to_iso_utc": _iso_utc_z(hi),
         "host_regex": host_regex,
+        "host_regex_mode": host_regex_mode,
         "hosts": hosts,
         "hosts_source": hsrc,
         "time_source": "live_last_5m",
@@ -2648,7 +2974,7 @@ def _job_env_effective_values() -> dict[str, str]:
     """Resolved values for Settings → job environment (same as runtime after overrides)."""
     ex = _extra_script_args()
     px = _parser_extra_args()
-    return {
+    out: dict[str, str] = {
         "RACK_STATUS_BACKGROUND_INTERVAL_SEC": str(_rack_status_background_interval_sec()),
         "RACK_PROMETHEUS_LOG_TIMESTAMP_TZ": (_eget("RACK_PROMETHEUS_LOG_TIMESTAMP_TZ") or "UTC").strip() or "UTC",
         "RACK_WEB_GRAFANA_URI": _rack_web_grafana_uri(),
@@ -2660,6 +2986,7 @@ def _job_env_effective_values() -> dict[str, str]:
         "RACK_PROMETHEUS_BASIC_AUTH_PASSWORD": (_eget("RACK_PROMETHEUS_BASIC_AUTH_PASSWORD") or "").strip(),
         "RACK_WEB_PROJECT_NAME": (_eget("RACK_WEB_PROJECT_NAME") or "").strip(),
         "RACK_VALIDATION_CT_RANGE": _validation_ct_inner(),
+        "VALIDATION_TEST": (_eget("VALIDATION_TEST") or "nccl_all_reduce,llm").strip(),
         "RACK_VALIDATION_SCRIPT": str(_validation_script_path()),
         "RACK_VALIDATION_TIMEOUT": str(max(30, _job_env_int("RACK_VALIDATION_TIMEOUT", 600))),
         "RACK_STATUS_SCRIPT": str(_script_path()),
@@ -2672,10 +2999,9 @@ def _job_env_effective_values() -> dict[str, str]:
         "RACK_MULTIRACK_SITE_PREFIX": _multirack_site_prefix(),
         "RACK_MULTIRACK_VALIDATION_TEST": (_eget("RACK_MULTIRACK_VALIDATION_TEST") or "nccl_all_reduce").strip(),
         "RACK_CMSH": (_eget("RACK_CMSH", "cmsh") or "cmsh").strip(),
-        "RACK_CMSH_DS_NODE_PATTERN": native_status.cmsh_ds_node_pattern_effective(),
-        "RACK_CMSH_DS_NODE_TOKEN_PATTERN": (_eget("RACK_CMSH_DS_NODE_TOKEN_PATTERN") or "").strip(),
-        "RACK_CMSH_DS_NODE_FIND_PATTERN": (_eget("RACK_CMSH_DS_NODE_FIND_PATTERN") or "").strip(),
-        "RACK_CMSH_DS_NODE_PARSE_PATTERN": (_eget("RACK_CMSH_DS_NODE_PARSE_PATTERN") or "").strip(),
+        "NVIS_RACK_ID": native_status._nvis_rack_id_template(),
+        "NVIS_CT_ID": native_status._nvis_ct_id_template(),
+        "NVIS_NVSW_ID": native_status._nvis_nvsw_id_template(),
         "NEMO_SQSH_SRC": (_eget("NEMO_SQSH_SRC") or "").strip(),
         "RACK_NEMO_XRACK_SCRIPT": str(_nemo_xrack_script_path()),
         "RACK_NEMO_XRACK_TIMEOUT": str(max(300, _job_env_int("RACK_NEMO_XRACK_TIMEOUT", 7200))),
@@ -2709,6 +3035,13 @@ def _job_env_effective_values() -> dict[str, str]:
         "NVLMAPPER_PASSWORD": (_eget("NVLMAPPER_PASSWORD") or "").strip(),
         "RACK_SLURM_DRAIN_REASON": (_eget("RACK_SLURM_DRAIN_REASON") or "admin").strip() or "admin",
     }
+    # Keys listed in ``JOB_ENV_UI_DEFINITIONS`` must appear above with computed defaults, **or** be filled
+    # from ``_eget`` here. Otherwise Settings GET/PUT shows empty inputs even though overrides JSON saved
+    # correctly (regression when new env rows are added without updating this dict).
+    for k in _JOB_ENV_ALLOWED_KEYS:
+        if k not in out:
+            out[k] = (_eget(k) or "").strip()
+    return out
 
 
 def _normalize_llama_nodes_spec(raw: object) -> str:
@@ -2724,18 +3057,11 @@ def _normalize_llama_nodes_spec(raw: object) -> str:
     return t
 
 
-_VALIDATION_TARGET_RE = re.compile(r"^p[0-9]+-r[0-9]+-ct\[[0-9,\-]+\]$", re.IGNORECASE)
-
-
 def validation_target_for_rack(rack: str, override: str | None) -> str:
-    """Build e.g. p26-r05-ct[01-18] for run_singlerack.sh (override must match same pattern)."""
-    rk = _normalize_rack_id(rack)
-    o = (override or "").strip()
-    if o:
-        if not _VALIDATION_TARGET_RE.fullmatch(o):
-            raise ValueError("invalid target (expected pNN-rMM-ct[digits/ranges])")
-        return o.lower()
-    return f"{rk}-ct[{_validation_ct_inner()}]"
+    """Build validation target for run_singlerack.sh / sysinfo (pattern from NVIS_* templates)."""
+    return _nvis_naming().build_validation_target(
+        rack, _validation_ct_inner(), override
+    )
 
 
 def _default_log_dir() -> Path:
@@ -2894,11 +3220,12 @@ def _extra_script_args() -> list[str]:
     return shlex.split(extra)
 
 
-# Tray tokens from rack_status "ct_down_unk": DN:…; INST:…; UP:… (legacy DN/UNK or unprefixed).
-_CT_POWER_TOKEN_RE = re.compile(
-    r"(p[0-9]+-r[0-9]+-ct\[[0-9,\-]+\])",
-    re.IGNORECASE,
-)
+def _ct_power_token_re() -> re.Pattern[str]:
+    """Tray blob tokens from ``ct_down_unk`` (pattern follows ``NVIS_*`` templates)."""
+    naming = _nvis_naming()
+    rack_part = nvis_id_templates._template_to_regex(naming.rack_template).replace("(?i)", "")
+    join = re.escape(naming.ct_joiner)
+    return re.compile(rf"({rack_part}{join}\[[^\]]+\])", re.IGNORECASE)
 
 
 def power_specs_from_ct_down_unk(raw: str | None) -> list[str]:
@@ -2913,7 +3240,7 @@ def power_specs_from_ct_down_unk(raw: str | None) -> list[str]:
     out: list[str] = []
 
     def add_from_fragment(fragment: str) -> None:
-        for m in _CT_POWER_TOKEN_RE.finditer(fragment):
+        for m in _ct_power_token_re().finditer(fragment):
             tok = m.group(1).lower()
             if tok in seen:
                 continue
@@ -2932,8 +3259,15 @@ def power_specs_from_ct_down_unk(raw: str | None) -> list[str]:
     return out
 
 
-_CT_POWER_TRAY_FULL_RE = re.compile(r"^p[0-9]+-r[0-9]+-ct\[[0-9,\-]+\]$", re.IGNORECASE)
-_CT_POWER_SINGLE_CT_RE = re.compile(r"^(p[0-9]+-r[0-9]+)-ct\[(\d+)\]$", re.IGNORECASE)
+def _ct_power_tray_full_re() -> re.Pattern[str]:
+    return _nvis_naming().validation_target_re()
+
+
+def _ct_power_single_ct_re() -> re.Pattern[str]:
+    naming = _nvis_naming()
+    rack_part = nvis_id_templates._template_to_regex(naming.rack_template).replace("(?i)", "")
+    join = re.escape(naming.ct_joiner)
+    return re.compile(rf"^({rack_part}){join}\[(\d+)\]$", re.IGNORECASE)
 
 
 def _condense_ct_numbers(nums: list[int]) -> str:
@@ -2961,28 +3295,36 @@ def _condense_ct_numbers(nums: list[int]) -> str:
 
 def merge_ct_individuals_for_power(nodes: list[str]) -> list[str]:
     """
-    Merge per-node tokens (pNN-rMM-ct[dd] with one decimal id) into tray specs
-    pNN-rMM-ct[ranges] for cmsh device; power -n …
+    Merge per-node tokens (``<rack><ct_joiner>[dd]`` with one tray id) into tray specs for cmsh power.
     """
+    naming = _nvis_naming()
+    single_re = _ct_power_single_ct_re()
+    full_re = _ct_power_tray_full_re()
     by_rack: dict[str, list[int]] = {}
     for raw in nodes:
         if not isinstance(raw, str):
             raise ValueError("each entry in specs must be a string")
-        s = raw.strip().lower()
-        m = _CT_POWER_SINGLE_CT_RE.match(s)
+        token = raw.strip()
+        m = single_re.match(token)
         if not m:
             raise ValueError(
-                f"invalid node token {raw!r} — expected pNN-rMM-ct[number] with a single tray id"
+                f"invalid node token {raw!r} — expected rack{ naming.ct_joiner }[number] with a single tray id"
             )
-        rr = m.group(1).lower()
-        n = int(m.group(2), 10)
+        rack_tok = m.group(1).strip()
+        rr = naming.canonical_rack_id(rack_tok) or rack_tok
+        li = m.lastindex or 0
+        if li < 2:
+            raise ValueError(
+                f"invalid node token {raw!r} — expected rack{ naming.ct_joiner }[number] with a single tray id"
+            )
+        n = int(m.group(li), 10)
         by_rack.setdefault(rr, []).append(n)
     out: list[str] = []
     for rr in sorted(by_rack.keys(), key=str.lower):
         inner = _condense_ct_numbers(by_rack[rr])
         if inner:
-            tok = f"{rr}-ct[{inner}]"
-            if not _CT_POWER_TRAY_FULL_RE.match(tok):
+            tok = naming.ct_blob(rr, inner)
+            if not full_re.match(tok):
                 raise ValueError(f"invalid merged tray spec {tok!r}")
             out.append(tok)
     return out
@@ -3067,28 +3409,16 @@ def _comments_file() -> Path:
     return Path(os.environ.get("RACK_COMMENTS_FILE", str(APP_DIR / "rack_comments.json"))).resolve()
 
 
-_RACK_ID_RE = re.compile(r"^p[0-9]+-r[0-9]+$", re.IGNORECASE)
-_NVSWITCH_HOSTNAME_RE = re.compile(r"^p[0-9]+-r[0-9]+-nvsw-\d+$", re.IGNORECASE)
-
-
 def _normalize_rack_id(rack: str) -> str:
-    r = (rack or "").strip().lower()
-    if not _RACK_ID_RE.match(r):
-        raise ValueError("invalid rack id (expected e.g. p17-r01)")
-    return r
+    return _nvis_naming().normalize_rack_id(rack)
 
 
 def _normalize_nvswitch_host_for_rack(rack: str, raw: object) -> str:
-    """Require a full hostname ``pNN-rMM-nvsw-<index>`` belonging to *rack*."""
+    """Require a full NVSwitch hostname belonging to *rack* (``NVIS_NVSW_ID`` template)."""
     rk = _normalize_rack_id(rack)
     if not isinstance(raw, str) or not raw.strip():
-        raise ValueError("nvswitch_host is required (e.g. p01-r01-nvsw-01)")
-    h = raw.strip().lower()
-    if not _NVSWITCH_HOSTNAME_RE.fullmatch(h):
-        raise ValueError("invalid nvswitch_host (expected pNN-rMM-nvsw-<index>)")
-    if not h.startswith(rk + "-nvsw-"):
-        raise ValueError("nvswitch_host does not match rack")
-    return h
+        raise ValueError("nvswitch_host is required")
+    return _nvis_naming().normalize_nvsw_host(rk, raw)
 
 
 def _nvswitch_host_sort_key(hostname: str) -> tuple[int, str]:
@@ -3099,11 +3429,12 @@ def _nvswitch_host_sort_key(hostname: str) -> tuple[int, str]:
 
 
 def nvswitch_hosts_for_rack_list(rack: str) -> list[str]:
-    """Expand NV switch hostnames for *rack* via ``nodeset`` when available; else ``rack-nvsw-01`` … ``-09``."""
+    """Expand NV switch hostnames for *rack* via ``nodeset`` when available; else template fallbacks."""
+    naming = _nvis_naming()
     rk = _normalize_rack_id(rack)
     out: list[str] = []
     timeout = max(5, _env_int("RACK_NVSWITCH_NODESET_TIMEOUT", 30))
-    for spec in (f"@{rk}-nvsw", f"{rk}-nvsw-[01-09]"):
+    for spec in naming.nvsw_nodeset_specs(rk):
         try:
             proc = subprocess.run(
                 ["nodeset", "-e", spec],
@@ -3129,7 +3460,7 @@ def nvswitch_hosts_for_rack_list(rack: str) -> list[str]:
         if out:
             break
     if not out:
-        out = [f"{rk}-nvsw-{i:02d}" for i in range(1, 10)]
+        out = naming.nvsw_fallback_hosts(rk)
     return sorted(set(out), key=_nvswitch_host_sort_key)
 
 
@@ -3399,7 +3730,7 @@ def parse_rack_output(text: str) -> dict:
                 continue
             if parts[0].lower() == "rack" and any(p.lower() == "nemo" for p in parts):
                 continue
-            # New: rack, nemo, last_job, sinfo, ct_down_unk (5 cols). Legacy: rack, cm, nemo, last_job, sinfo, ct_down_unk.
+            # New: rack, nemo, last_job, sinfo, ct_down_unk [, nemo_hint]. Legacy: rack, cm, nemo, last_job, sinfo, ct_down_unk.
             legacy_cm = len(parts) >= 6 and parts[1].lower() in ("yes", "no", "?", "n/a")
             if legacy_cm:
                 rows.append(
@@ -3412,6 +3743,7 @@ def parse_rack_output(text: str) -> dict:
                     }
                 )
             else:
+                hint = parts[5] if len(parts) > 5 else ""
                 rows.append(
                     {
                         "rack": parts[0],
@@ -3419,6 +3751,7 @@ def parse_rack_output(text: str) -> dict:
                         "last_job": parts[2],
                         "sinfo": parts[3],
                         "ct_down_unk": parts[4],
+                        "nemo_hint": hint,
                     }
                 )
             continue
@@ -3909,7 +4242,7 @@ def run_gpu_reset(pdsh_w: str) -> dict:
     script = _gpu_reset_script_path()
     if not _script_exists(script):
         raise OSError(f"gpu_reset script not found: {script}")
-    w = (pdsh_w or "").strip()
+    w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
     timeout = max(30, _env_int("RACK_GPU_RESET_TIMEOUT", 3600))
@@ -4431,7 +4764,7 @@ def _bug_report_remote_dir() -> str:
 
 def run_bug_report_pdsh(pdsh_w: str) -> dict:
     """Run nvidia-bug-report.sh on each host via pdsh (same -w pattern as GPU reset)."""
-    w = (pdsh_w or "").strip()
+    w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
     remote = _bug_report_remote_dir()
@@ -4499,9 +4832,9 @@ def _parse_bug_report_paths_from_pdsh(stdout: str) -> list[dict[str, str]]:
         m = _BUG_REPORT_PDSH_PATH_RE.match(line.strip())
         if not m:
             continue
-        host = m.group(1).strip().lower()
+        host = m.group(1).strip()
         path = m.group(2).strip()
-        key = (host, path)
+        key = (host.casefold(), path)
         if key in seen:
             continue
         seen.add(key)
@@ -4511,7 +4844,7 @@ def _parse_bug_report_paths_from_pdsh(stdout: str) -> list[dict[str, str]]:
 
 def run_bug_report_list_pdsh(pdsh_w: str) -> dict:
     """List newest nvidia-bug-report *.log.gz per host under ``<remote>/$HOSTNAME/``."""
-    w = (pdsh_w or "").strip()
+    w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
     remote = _bug_report_remote_dir()
@@ -4562,14 +4895,30 @@ def _bug_report_local_base_path() -> Path:
     return Path(_bug_report_remote_dir()).expanduser().resolve()
 
 
+def _ensure_bug_report_local_base_dir() -> tuple[Path, str | None]:
+    """Create ``RACK_BUG_REPORT_REMOTE_DIR`` when missing (local dashboard host only)."""
+    base = _bug_report_local_base_path()
+    if host_exec.is_remote():
+        return base, None
+    if base.exists():
+        if not base.is_dir():
+            return base, f"not a directory: {base}"
+        return base, None
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return base, f"could not create reports directory {base}: {e}"
+    return base, f"created reports directory: {base}"
+
+
 def _local_bug_report_inventory() -> tuple[list[dict[str, str]], str | None]:
     """Scan ``<RACK_BUG_REPORT_REMOTE_DIR>/<subdir>/`` for bug-report ``*.log.gz``, NVLMapper ``*.csv`` / ``*.xls``, ``nvlmapper.*.zip``, and ``*.xlsx``."""
-    base = _bug_report_local_base_path()
+    base, ensure_notice = _ensure_bug_report_local_base_dir()
+    if ensure_notice and ensure_notice.startswith("not a directory"):
+        return [], ensure_notice
+    if ensure_notice and ensure_notice.startswith("could not create"):
+        return [], ensure_notice
     items: list[dict[str, str]] = []
-    if not base.exists():
-        return [], f"directory does not exist: {base}"
-    if not base.is_dir():
-        return [], f"not a directory: {base}"
     try:
         for sub in sorted(base.iterdir(), key=lambda p: p.name.lower()):
             if not sub.is_dir():
@@ -4668,7 +5017,8 @@ def _local_bug_report_inventory() -> tuple[list[dict[str, str]], str | None]:
     except OSError as e:
         return [], str(e)
     items.sort(key=lambda x: (x["host"].lower(), x["name"].lower()))
-    return items, None
+    notice = ensure_notice if ensure_notice and ensure_notice.startswith("created ") else None
+    return items, notice
 
 
 def _bug_report_ssh_user() -> str:
@@ -4838,7 +5188,7 @@ def api_bug_report_bundle():
             for ent in snap:
                 if not isinstance(ent, dict):
                     continue
-                host = str(ent.get("host") or "").strip().lower()
+                host = str(ent.get("host") or "").strip()
                 path = str(ent.get("path") or "").strip()
                 if not host or not path:
                     continue
@@ -5069,7 +5419,7 @@ def run_hw_check(pdsh_w: str, checker_argv: list[str]) -> dict:
     script = _hw_check_pdsh_script_path()
     if not _script_exists(script):
         raise OSError(f"hw_check_pdsh.sh not found: {script}")
-    w = (pdsh_w or "").strip()
+    w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
     timeout = max(60, _env_int("RACK_HW_CHECK_TIMEOUT", 3600))
@@ -5266,6 +5616,15 @@ def api_hw_check_async():
 def _checker_script_path() -> Path:
     """Bundled checker.sh (same directory as hw_check_pdsh.sh)."""
     return (SCRIPTS_DIR / "checker.sh").resolve()
+
+
+@app.route("/api/hw-check-presets", methods=["GET"])
+def api_hw_check_presets():
+    """Named checker argument bundles for ``/api/hw-check-async`` (``preset`` vs custom ``checker_args``)."""
+    if os.environ.get("RACK_HW_CHECK_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "HW check disabled (RACK_HW_CHECK_DISABLED)"}), 403
+    presets = {k: list(v) for k, v in sorted(_HW_CHECK_PRESETS.items())}
+    return jsonify({"ok": True, "presets": presets})
 
 
 @app.route("/api/hw-check-help", methods=["GET"])
@@ -6416,7 +6775,7 @@ def _run_scontrol_node_update(target: str, state_kv: list[str]) -> dict:
         }
     timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
     try:
-        proc = host_exec.run_on_host(
+        proc = host_exec.run_slurm_on_host(
             shell_cmd,
             timeout=timeout,
         )
@@ -6510,7 +6869,7 @@ def _run_scancel(job_id: str) -> dict:
     cmd_display = shell_cmd
     timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
     try:
-        proc = host_exec.run_on_host(shell_cmd, timeout=timeout)
+        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
     except FileNotFoundError:
         raise OSError(
             "scancel executable not found; set RACK_SLURM_SCANCEL to the full path "
@@ -6541,7 +6900,7 @@ def _run_squeue() -> dict:
     cmd_display = shell_cmd
     timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
     try:
-        proc = host_exec.run_on_host(shell_cmd, timeout=timeout)
+        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
     except FileNotFoundError:
         raise OSError(
             "squeue executable not found; set RACK_SLURM_SQUEUE to the full path "
@@ -6584,7 +6943,7 @@ def _run_sinfo_r() -> dict:
     cmd_display = shell_cmd
     timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
     try:
-        proc = host_exec.run_on_host(shell_cmd, timeout=timeout)
+        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
     except FileNotFoundError:
         raise OSError(
             "sinfo executable not found; set RACK_SLURM_SINFO to the full path "
@@ -6676,7 +7035,7 @@ def _run_scontrol_show_job(job_id: str) -> dict:
     cmd_display = shell_cmd
     timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
     try:
-        proc = host_exec.run_on_host(shell_cmd, timeout=timeout)
+        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
     except FileNotFoundError:
         raise OSError(
             "scontrol executable not found; set RACK_SLURM_SCONTROL to the full path "
@@ -6867,7 +7226,8 @@ def _rack_log_resolve(
                 {
                     "ok": False,
                     "error": (
-                        f"no log *1Rack-{rk}-*.txt under {log_dir} or {log_dir / 'failed'}"
+                        f"no matching *.txt for rack {rk!r} under {log_dir} or {log_dir / 'failed'} "
+                        f"(NEMO/NCCL basename, or ClusterKit root-CK-/clusterkit with one rack id)"
                     ),
                 }
             ),
@@ -7049,7 +7409,8 @@ def api_parser_results():
                 {
                     "ok": False,
                     "error": (
-                        f"no log *1Rack-{rk}-*.txt under {log_dir} or {log_dir / 'failed'}"
+                        f"no matching *.txt for rack {rk!r} under {log_dir} or {log_dir / 'failed'} "
+                        f"(NEMO/NCCL basename, or ClusterKit root-CK-/clusterkit with one rack id)"
                     ),
                 }
             ), 404
@@ -8215,14 +8576,10 @@ def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
     if not _script_exists(script):
         return None
     ap = abs_path.resolve()
-    env = _subprocess_env({"NO_COLOR": "1"})
+    mvt = (_eget("RACK_MULTIRACK_VALIDATION_TEST") or "nccl_all_reduce").strip() or "nccl_all_reduce"
+    vt_if_unset = mvt if _is_multirack_log_basename(ap.name) else "nccl_all_reduce,llm"
+    env = _subprocess_env({"NO_COLOR": "1"}, validation_test_if_unset=vt_if_unset)
     _ensure_cmsh_rack_list_env_for_subprocess(env)
-    # Multirack aggregate logs often lack per-collective / LLM signals that 1-rack runs have; use a
-    # looser default unless VALIDATION_TEST is set. Override default via RACK_MULTIRACK_VALIDATION_TEST.
-    if _is_multirack_log_basename(ap.name):
-        if not str(env.get("VALIDATION_TEST", "")).strip():
-            mvt = (_eget("RACK_MULTIRACK_VALIDATION_TEST") or "nccl_all_reduce").strip()
-            env["VALIDATION_TEST"] = mvt or "nccl_all_reduce"
     try:
         proc = host_exec.run_on_host(
             [str(script), "--probe-json", str(ap)],
@@ -8247,13 +8604,16 @@ _LOG_ANALYSIS_CACHE_PATH = APP_DIR / "var" / "cache" / "log_analysis_cache.json"
 
 
 def _glob_one_rack_nemo_logs_for_rack_status(log_dir: Path) -> list[Path]:
-    """Same basename rules as rack_status.sh in log_dir (root only, not failed/)."""
+    """NEMO single-rack validation logs in log_dir root (not failed/, not NCCL-only, no Llama stdout)."""
     root = log_dir.resolve()
+    naming = _nvis_naming()
     out: list[Path] = []
     for p in sorted(root.glob("*.txt"), key=lambda x: x.name.lower()):
         if not p.is_file():
             continue
-        if not _nemo_nccl_in_log_basename(p.name):
+        if not _nemo_single_rack_log_basename(p.name):
+            continue
+        if naming.is_llama_slurm_stdout_basename(p.name):
             continue
         if _is_multirack_log_basename(p.name):
             continue
@@ -8347,7 +8707,7 @@ def _slurm_running_job_ids_for_rack_status() -> set[str]:
     user = (os.environ.get("SQUEUE_USER") or os.environ.get("USER") or "root").strip()
     plat = _get_platform()
     try:
-        proc = host_exec.run_on_host(
+        proc = host_exec.run_slurm_on_host(
             plat.squeue_cmd(f"-u {shlex.quote(user)} -h -o %i"),
             timeout=max(5, _env_int("RACK_LOG_ANALYSIS_SQUEUE_TIMEOUT_SEC", 60)),
         )
@@ -8415,7 +8775,7 @@ def _maybe_build_tmp_status_from_log_cache(log_dir: Path) -> Path | None:
             entries[key] = {"mtime_ns": mtime_ns, "size": size, "nccl_ok": nc, "llm_ok": ll}
             dirty = True
         jid = _jobid_from_nemo_log_basename(p.name) or "?"
-        rack = _rack_id_from_nemo_1rack_filename(p.name) or "?"
+        rack = _rack_id_from_log_basename(p.name) or "?"
         ongoing = 1 if jid in running else 0
         rows.append((rack, jid, ongoing, nc, ll))
 
@@ -9245,14 +9605,14 @@ def api_run_llama_status():
 
 
 def _sn_llama_txt_paths_for_rack(log_dir: Path, rack: str, *, exclude: Path | None = None) -> list[Path]:
-    """``log_dir/sn-llama/*.txt`` whose names suggest LLAMA and match *rack* (``pN-rMM`` tokens or whole string)."""
+    """``log_dir/sn-llama/*.txt`` whose names suggest LLAMA and match *rack* (case-insensitive substring on rack id tokens)."""
     root = log_dir.resolve()
     d = root / "sn-llama"
     if not d.is_dir():
         return []
     needles: list[str] = []
-    for m in re.finditer(r"\b(p\d+-r\d+)\b", rack or "", re.IGNORECASE):
-        needles.append(m.group(1).lower())
+    for rid in _nvis_naming().find_rack_ids_in_string(rack or ""):
+        needles.append(rid)
     if not needles:
         t = (rack or "").strip().lower()
         if t:
@@ -9274,10 +9634,11 @@ def _sn_llama_txt_paths_for_rack(log_dir: Path, rack: str, *, exclude: Path | No
                 continue
         except OSError:
             continue
-        low = p.name.lower()
-        if "llama" not in low:
+        nl = p.name.casefold()
+        if "llama" not in nl:
             continue
-        if needles and not any(n in low for n in needles):
+        # Needles from ``find_rack_ids_in_string`` keep canonical casing (e.g. CBR…); basename is matched case-insensitively.
+        if needles and not any(n.casefold() in nl for n in needles):
             continue
         out.append(p)
     return list(reversed(out))
@@ -9411,13 +9772,14 @@ def _prepare_run_nvloom_singlerack(body: dict) -> tuple[dict | None, tuple[objec
     env_updates: dict[str, str] = {
         "NVIS_SYSINFO_SH": str(_sysinfo_script_path()),
         "RACK_SAMPLES": str(max(1, min(256, _env_int("RACK_NVLOOM_RACK_SAMPLES", 5)))),
+        "RACK_NVLOOM_SINGLERACK_RACK": rk,
         "WORKSPACE_DIR": ws,
         "NVIS_WORKSPACE_DIR": ws,
         "TOPDIR": ws,
         "NVIS_BIN_SCRIPTS": str(SCRIPTS_DIR.resolve()),
         "CUDA_MAJ": cuda_m,
     }
-    for k in ("NVIS_NVLOOM_HPCX_INIT", "NVIS_NVLOOM_CLI", "RACK_NVLOOM_PARTITION"):
+    for k in ("NVIS_NVLOOM_HPCX_INIT", "NVIS_NVLOOM_CLI", "NVIS_NVLOOM_UCX_TLS", "RACK_NVLOOM_PARTITION"):
         v = (_eget(k) or "").strip()
         if v:
             env_updates[k] = v
@@ -9475,11 +9837,21 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
         "TOPDIR": ws,
         "NVIS_BIN_SCRIPTS": str(SCRIPTS_DIR.resolve()),
         "CUDA_MAJ": cuda_m,
+        "RACK_CLUSTERKIT_RACK": rk,
     }
     pl = _clusterkit_product_line_for_job(body)
     if pl:
         env_updates["RACK_CLUSTER_PRODUCT_LINE"] = pl
-    for k in ("NVIS_HPCX_ROOT", "NVIS_CLUSTERKIT_HPCX_INIT", "RACK_CLUSTERKIT_PARTITION", "RACK_CLUSTERKIT_EXTRA_OPTS"):
+    for k in (
+        "NVIS_HPCX_ROOT",
+        "NVIS_CLUSTERKIT_HPCX_INIT",
+        "RACK_CLUSTERKIT_PARTITION",
+        "RACK_CLUSTERKIT_EXTRA_OPTS",
+        "NVIS_RDMA_LINK_TECH",
+        "RACK_CLUSTERKIT_LINK_TECH",
+        "RACK_CLUSTERKIT_HCA_PROFILE",
+        "RACK_CLUSTERKIT_UCX_TLS",
+    ):
         v = (_eget(k) or "").strip()
         if v:
             env_updates[k] = v
@@ -10928,7 +11300,8 @@ def _parse_tail_log_request(body: dict) -> tuple[dict | None, tuple[object, int]
                     {
                         "ok": False,
                         "error": (
-                            f"no log *1Rack-{rk}-*.txt under {log_dir} or {log_dir / 'failed'}"
+                            f"no matching *.txt for rack {rk!r} under {log_dir} or {log_dir / 'failed'} "
+                        f"(NEMO/NCCL basename, or ClusterKit root-CK-/clusterkit with one rack id)"
                         ),
                     }
                 ),
@@ -11170,11 +11543,10 @@ def _pick_slurm_version_line(stdout: str, stderr: str) -> str:
 def _cluster_probe_slurm_version() -> tuple[str, str]:
     plat = _get_platform()
     # ``scontrol -V`` only (with platform Slurm module prefix), inside one login shell.
-    inner = plat.scontrol_cmd("-V")
-    shell_cmd = "bash -lc " + shlex.quote(inner)
+    shell_cmd = plat.scontrol_cmd("-V")
     timeout = max(5, _env_int("RACK_CLUSTER_SLURM_PROBE_TIMEOUT", 40))
     try:
-        proc = host_exec.run_on_host(shell_cmd, timeout=timeout)
+        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
     except FileNotFoundError:
         return "", "scontrol not found"
     except subprocess.TimeoutExpired:
@@ -11558,14 +11930,10 @@ def api_settings_job_environment():
         t = v.strip()
         if len(t) > 8192:
             return jsonify({"ok": False, "error": f"{k}: value too long (max 8192)"}), 400
-        if k == "RACK_CMSH_DS_NODE_PATTERN":
-            err = native_status.validate_cmsh_ds_node_pattern(t)
+        if k in ("NVIS_RACK_ID", "NVIS_CT_ID", "NVIS_NVSW_ID") and t:
+            err = nvis_id_templates.validate_nvis_template(t, label=k)
             if err:
-                return jsonify({"ok": False, "error": f"RACK_CMSH_DS_NODE_PATTERN: {err}"}), 400
-        if k == "RACK_CMSH_DS_NODE_TOKEN_PATTERN":
-            err = native_status.validate_cmsh_ds_node_token_pattern(t)
-            if err:
-                return jsonify({"ok": False, "error": f"RACK_CMSH_DS_NODE_TOKEN_PATTERN: {err}"}), 400
+                return jsonify({"ok": False, "error": err}), 400
         if k == "RACK_VALIDATION_CT_RANGE" and not _CT_RANGE_INNER_RE.match(t):
             return jsonify(
                 {
@@ -11598,17 +11966,20 @@ def api_settings_job_environment():
                 ), 400
         cur[k] = t
 
-    find_v = (cur.get("RACK_CMSH_DS_NODE_FIND_PATTERN") or os.environ.get("RACK_CMSH_DS_NODE_FIND_PATTERN") or "").strip()
-    parse_v = (cur.get("RACK_CMSH_DS_NODE_PARSE_PATTERN") or os.environ.get("RACK_CMSH_DS_NODE_PARSE_PATTERN") or "").strip()
-    tok_v = (cur.get("RACK_CMSH_DS_NODE_TOKEN_PATTERN") or os.environ.get("RACK_CMSH_DS_NODE_TOKEN_PATTERN") or "").strip()
-    if find_v and parse_v:
-        err_fp = native_status.validate_cmsh_ds_find_parse_patterns(find_v, parse_v)
-        if err_fp:
-            return jsonify({"ok": False, "error": err_fp}), 400
-    elif tok_v:
-        err_tok = native_status.validate_cmsh_ds_node_token_pattern(tok_v)
-        if err_tok:
-            return jsonify({"ok": False, "error": f"RACK_CMSH_DS_NODE_TOKEN_PATTERN: {err_tok}"}), 400
+    rack_n = (cur.get("NVIS_RACK_ID") or os.environ.get("NVIS_RACK_ID") or "").strip()
+    ct_n = (cur.get("NVIS_CT_ID") or os.environ.get("NVIS_CT_ID") or "").strip()
+    nvsw_n = (cur.get("NVIS_NVSW_ID") or os.environ.get("NVIS_NVSW_ID") or "").strip()
+    if rack_n or ct_n or nvsw_n:
+        err_nvis = native_status.validate_nvis_naming_settings(rack_n, ct_n, nvsw_n)
+        if err_nvis:
+            return jsonify({"ok": False, "error": err_nvis}), 400
+        for legacy_k in (
+            "RACK_CMSH_DS_NODE_PATTERN",
+            "RACK_CMSH_DS_NODE_TOKEN_PATTERN",
+            "RACK_CMSH_DS_NODE_FIND_PATTERN",
+            "RACK_CMSH_DS_NODE_PARSE_PATTERN",
+        ):
+            cur.pop(legacy_k, None)
 
     bust = _job_env_status_payload_needs_rebuild(before_snapshot, cur)
     on_disk = _job_env_overrides_write(cur, bust_status_cache=bust)
@@ -11655,6 +12026,11 @@ def _merge_project_name_into_status_payload(payload: dict) -> None:
     payload["project_name"] = _project_name()
 
 
+def _merge_naming_into_status_payload(payload: dict) -> None:
+    """Expose ``NVIS_*`` naming hints for the SPA (validation targets, node id parsing)."""
+    payload["naming"] = _nvis_naming().schema_dict()
+
+
 @app.route("/api/status")
 def api_status():
     _start_cmsh_rack_list_warm_thread()
@@ -11676,6 +12052,7 @@ def api_status():
             _merge_fresh_comments_into_status_payload(out)
             _merge_live_native_workers_into_status(out, log_dir)
             _merge_project_name_into_status_payload(out)
+            _merge_naming_into_status_payload(out)
             return jsonify(out)
         try:
             with _rack_status_exec_lock:
@@ -11688,6 +12065,7 @@ def api_status():
                     _merge_fresh_comments_into_status_payload(out)
                     _merge_live_native_workers_into_status(out, log_dir)
                     _merge_project_name_into_status_payload(out)
+                    _merge_naming_into_status_payload(out)
                     return jsonify(out)
                 data = run_rack_status(log_dir, include_raw=False)
         except subprocess.TimeoutExpired:
@@ -11702,6 +12080,7 @@ def api_status():
         _merge_fresh_comments_into_status_payload(out)
         _merge_live_native_workers_into_status(out, log_dir)
         _merge_project_name_into_status_payload(out)
+        _merge_naming_into_status_payload(out)
         return jsonify(out)
     try:
         if _rack_status_background_enabled():
@@ -11716,6 +12095,7 @@ def api_status():
     _merge_fresh_comments_into_status_payload(data)
     _merge_live_native_workers_into_status(data, log_dir)
     _merge_project_name_into_status_payload(data)
+    _merge_naming_into_status_payload(data)
     return jsonify(data)
 
 
@@ -11835,6 +12215,7 @@ def api_rack_locks_release(rack: str):
     except PermissionError as e:
         return jsonify({"ok": False, "error": str(e)}), 403
     return jsonify({"ok": True, "removed": bool(removed)})
+
 
 
 @app.route("/spa/")

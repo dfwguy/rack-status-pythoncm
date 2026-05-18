@@ -4,21 +4,23 @@ import { ActionCard } from "./ActionCard";
 import { Play, Flame, Zap, Boxes, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine, Network } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
 import { llamaNodesBody, slurmTargetBody, validationFamilyBody } from "../../lib/rackCommandBodies";
+import type { NvisNamingSchema } from "../../types/naming";
 
 interface ValidationTabProps {
   rack: string;
   logDir?: string;
+  naming?: NvisNamingSchema;
   selectedNodes: Set<string>;
   disabled: boolean;
   jobId?: string;
   onViewResults?: () => void;
 }
 
-export function ValidationTab({ rack, logDir, selectedNodes, disabled, jobId, onViewResults }: ValidationTabProps) {
+export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, jobId, onViewResults }: ValidationTabProps) {
   const { runAsyncValidationFamily, runSyncJson, openText } = useRackCommands();
   const nodeCount = selectedNodes.size;
 
-  const validationBody = () => validationFamilyBody(rack, logDir, selectedNodes);
+  const validationBody = () => validationFamilyBody(rack, logDir, selectedNodes, naming);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -56,7 +58,7 @@ export function ValidationTab({ rack, logDir, selectedNodes, disabled, jobId, on
             "validation",
             "/api/run-llama-async",
             (jid) => `/api/run-llama-status?job_id=${encodeURIComponent(jid)}`,
-            llamaNodesBody(rack, logDir, selectedNodes),
+            llamaNodesBody(rack, logDir, selectedNodes, naming),
           )
         }
       />
@@ -149,7 +151,7 @@ export function ValidationTab({ rack, logDir, selectedNodes, disabled, jobId, on
         buttonLabel="Drain"
         disabled={disabled}
         selectedNodes={selectedNodes}
-        onRun={() => runSyncJson("Slurm drain", "/api/slurm-drain", slurmTargetBody(rack, selectedNodes))}
+        onRun={() => runSyncJson("Slurm drain", "/api/slurm-drain", slurmTargetBody(rack, selectedNodes, naming))}
       />
       <ActionCard
         title="Undrain Nodes"
@@ -158,7 +160,7 @@ export function ValidationTab({ rack, logDir, selectedNodes, disabled, jobId, on
         buttonLabel="Undrain"
         disabled={disabled}
         selectedNodes={selectedNodes}
-        onRun={() => runSyncJson("Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, selectedNodes))}
+        onRun={() => runSyncJson("Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, selectedNodes, naming))}
       />
     </Box>
   );

@@ -9,6 +9,18 @@
 # for mlx in `ls /sys/class/infiniband/mlx5_*/device/local_cpulist`; do echo -n "$mlx:  "; cat $mlx; done
 #
 
+_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${_script_dir}/nvis-rdma-common.inc.sh" ]]; then
+  # shellcheck disable=SC1091
+  . "${_script_dir}/nvis-rdma-common.inc.sh"
+  _rdma_tech=$(nvis_rdma_normalize_link_tech_raw "${RACK_CLUSTERKIT_LINK_TECH:-${NVIS_RDMA_LINK_TECH:-auto}}") || exit 1
+  if [[ "${_rdma_tech}" == "roce" ]]; then
+    echo "ERROR: core_to_hca_dgxgb200.sh expects InfiniBand mlx5 HCAs with sysfs local_cpulist, but link technology resolved to RoCE/Spectrum-X." >&2
+    echo "       Use ClusterKit with RACK_CLUSTERKIT_LINK_TECH=roce (or NVIS_RDMA_LINK_TECH) and a RoCE HCA profile, or set NVIS_CLUSTERKIT_MAPPER to core_to_hca_clusterkit_roce_numactl.sh." >&2
+    exit 1
+  fi
+fi
+
 if [ "${OMPI_COMM_WORLD_LOCAL_SIZE}" -eq 1 ]; then
   export UCX_NET_DEVICES=${HCA_TAG}:1
   taskset -c "$(cat "/sys/class/infiniband/${HCA_TAG}/device/local_cpulist")" "$@"

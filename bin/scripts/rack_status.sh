@@ -45,7 +45,17 @@ probe_json_mode=0
 # Must be defined before default log glob / explicit argv filtering (bash does not pre-scan function defs).
 is_nemo_nccl_fname() {
   local b=${1,,}
-  [[ "$b" == *nemo* || "$b" == *nccl* ]]
+  [[ "$b" == *nemo* || "$b" == *nccl* ]] && return 0
+  [[ "$b" == *root-ck-* || "$b" == root-ck-* ]] && return 0
+  [[ "$b" == *clusterkit* ]] && return 0
+  return 1
+}
+
+# run-llama.sh Slurm stdout: excluded from single-rack NEMO table (see parser results / sn-llama/).
+is_llama_slurm_fname() {
+  local b=${1,,}
+  [[ "$b" == *nemo-llama3_8b-1n-* ]] && return 0
+  return 1
 }
 
 # Multirack NEMO/NCCL log names (excluded from single-rack table; shown in nvis-rack-status multirack tab).
@@ -114,6 +124,7 @@ else
     for f in *.txt; do
       [[ -f "$f" ]] || continue
       is_nemo_nccl_fname "$f" || continue
+      is_llama_slurm_fname "$f" && continue
       is_multirack_fname "$f" && continue
       log_files+=("$f")
     done
@@ -133,6 +144,10 @@ else
       bn=$(basename "$f")
       is_nemo_nccl_fname "$bn" || {
         echo "${C_WARN}skip (basename must contain nemo or nccl):${C_RESET} $f" >&2
+        continue
+      }
+      is_llama_slurm_fname "$bn" && {
+        echo "${C_WARN}skip (LLAMA log; use results view / sn-llama):${C_RESET} $f" >&2
         continue
       }
       is_multirack_fname "$bn" && {
@@ -204,13 +219,39 @@ render_tsv_box() {
 rack_from_fname() {
   local b
   b=$(basename "$1")
-  if [[ "$b" =~ 1Rack-(p[0-9]+-r[0-9]+)- ]]; then
+  if [[ "$b" =~ 1Rack-(p[0-9]+-r[0-9]+)(\[|-) ]]; then
     echo "${BASH_REMATCH[1]}"
     return
   fi
-  if [[ "$b" =~ NEMO-LLAMA3_8B-1N-(p[0-9]+-r[0-9]+)-ct ]]; then
+  # CBR-style 1Rack logs: …1Rack-CBR01-DH01-SVR-CN0102[11-18]-… (``[`` or ``-`` after rack id)
+  if [[ "$b" =~ 1Rack-(CBR[0-9]{2}-DH[0-9]{2}-SVR-CN[0-9]{4})(\[|-) ]]; then
     echo "${BASH_REMATCH[1]}"
     return
+  fi
+  # ClusterKit single-rack logs: root-CK-<rack>-… (rack token must match CBR…CNdddd)
+  if [[ "${b,,}" == *root-ck* ]] && [[ "$b" =~ (CBR[0-9]{2}-DH[0-9]{2}-SVR-CN[0-9]{4}) ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return
+  fi
+  if [[ "${b,,}" == *nemo-llama3_8b-1n-* ]]; then
+    # Slurm stdout: …-NEMO-LLAMA3_8B-1N-<full-hostname>-<jid>.txt (hostname parsed by Python elsewhere; CBR needs full host)
+    if [[ "$b" =~ NEMO-LLAMA3_8B-1N-(p[0-9]+-r[0-9]+)-ct[0-9]+- ]]; then
+      echo "${BASH_REMATCH[1]}"
+      return
+    fi
+    if [[ "$b" =~ NEMO-LLAMA3_8B-1N-(CBR[0-9]{2}-DH[0-9]{2}-SVR-CN[0-9]{6,})-([0-9]+)\.txt$ ]]; then
+      # Hostname CBR01-DH01-SVR-CN010211 → rack CBR01-DH01-SVR-CN0102 (strip last 2 tray digits from CN segment)
+      local host rack_prefix cn_tail
+      host="${BASH_REMATCH[1]}"
+      if [[ "$host" =~ ^(CBR[0-9]{2}-DH[0-9]{2}-SVR-CN)([0-9]+)$ ]]; then
+        rack_prefix="${BASH_REMATCH[1]}"
+        cn_tail="${BASH_REMATCH[2]}"
+        if ((${#cn_tail} >= 3)); then
+          echo "${rack_prefix}${cn_tail:0:${#cn_tail}-2}"
+          return
+        fi
+      fi
+    fi
   fi
   echo "?"
 }
@@ -523,7 +564,7 @@ if [[ "$USE_SINFO" -eq 0 ]]; then
   echo "${C_NOTE}(sinfo disabled: no Slurm node-state column on rack table.)${C_RESET}"
 fi
 
-declare -A rack_state rack_job
+declare -A rack_state rack_job rack_nccl_ok rack_llm_ok
 while IFS=$'\t' read -r rack jid is_run nccl_ok llm_ok; do
   [[ -z "${rack:-}" ]] && continue
   if [[ "$is_run" -eq 1 ]]; then
@@ -534,7 +575,43 @@ while IFS=$'\t' read -r rack jid is_run nccl_ok llm_ok; do
     rack_state[$rack]=fail
   fi
   rack_job[$rack]=$jid
+  rack_nccl_ok[$rack]=$nccl_ok
+  rack_llm_ok[$rack]=$llm_ok
 done <"$tmp_status"
+
+# One-line hover text for the dashboard (tab/pipe-free; column nemo_hint in TSV).
+nemo_hint_for_row() {
+  local nem=$1 st=$2 jid=$3 nc=$4 ll=$5
+  local vt parts=() oifs
+  case "$nem" in
+    done) printf '' ;;
+    pending)
+      printf '%s' "No NEMO or NCCL validation log in the log directory matches this rack yet (rack is listed but no matching log basename)."
+      ;;
+    ongoing*)
+      if [[ -n "${jid:-}" && "$jid" != "-" ]]; then
+        printf '%s' "Slurm job ${jid} is running; the validation log is still being written."
+      else
+        printf '%s' "Slurm reports a running validation job; elapsed time is in the status label."
+      fi
+      ;;
+    fail)
+      vt="$(validation_test_raw)"
+      parts=()
+      (( nc == 0 )) && parts+=("NCCL suite not satisfied for VALIDATION_TEST=${vt} (missing busbw line(s) or below threshold).")
+      (( ll == 0 )) && parts+=("LLM/Nemotron not OK, training not finished to target steps, or log incomplete.")
+      if ((${#parts[@]})); then
+        oifs=$IFS
+        IFS=' '
+        printf '%s' "${parts[*]}"
+        IFS=$oifs
+      else
+        printf '%s' "Validation did not reach done; inspect the log or adjust VALIDATION_TEST in Settings."
+      fi
+      ;;
+    *) printf '%s' "See validation log and Slurm state for this rack." ;;
+  esac
+}
 
 # --tmp-status path never ran load_squeue_jobs above; still need JOB_TIME for ongoing [TIME].
 if [[ -n "${tmp_status_arg:-}" ]]; then
@@ -666,9 +743,11 @@ for r in "${rack_keys[@]}"; do
     ((++n_cm_no)) || true
   fi
 
+  hint=
   if [[ -z "$st" ]]; then
     nem=pending
     job=-
+    hint=$(nemo_hint_for_row "$nem" "$st" "$job" 0 0)
     ((++n_pending)) || true
   else
     nem=$st
@@ -689,6 +768,9 @@ for r in "${rack_keys[@]}"; do
         fi
         ;;
     esac
+    nc=${rack_nccl_ok[$r]:-0}
+    ll=${rack_llm_ok[$r]:-0}
+    hint=$(nemo_hint_for_row "$nem" "$st" "$job" "$nc" "$ll")
   fi
   if [[ "$USE_CMSH" -eq 0 ]]; then
     ctv=n/a
@@ -720,11 +802,11 @@ for r in "${rack_keys[@]}"; do
   else
     siv=$(format_sinfo_cell "$r")
   fi
-  printf '%s\t%s\t%s\t%s\t%s\n' "$r" "$nem" "$job" "$siv" "$ctv" >>"$tmp_rack"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$nem" "$job" "$siv" "$ctv" "$hint" >>"$tmp_rack"
 done
 
-_hdr_rs=$'rack\tnemo\tlast_job\tsinfo\tct_down_unk'
-echo "${C_DIM}  rack; list (cmsh). nemo: done|fail|ongoing [TIME]|pending — ongoing [TIME] uses squeue %M (elapsed) for last_job when USE_SQUEUE=1, else [n/a] or [?]. last_job: Slurm id. sinfo: Slurm compact states (%t) per rack (pNN-rMM-ct… nodes). ct_down_unk: cmsh ds — DN:… (DOWN/UNREACHABLE, red); INST:… (other non-UP states, blue); UP:… (green); \"-\" if none.${C_RESET}"
+_hdr_rs=$'rack\tnemo\tlast_job\tsinfo\tct_down_unk\tnemo_hint'
+echo "${C_DIM}  rack; list (cmsh). nemo: done|fail|ongoing [TIME]|pending — ongoing [TIME] uses squeue %M (elapsed) for last_job when USE_SQUEUE=1, else [n/a] or [?]. last_job: Slurm id. nemo_hint: dashboard hover (why pending/fail/ongoing). sinfo: Slurm compact states (%t) per rack (pNN-rMM-ct… nodes). ct_down_unk: cmsh ds — DN:… (DOWN/UNREACHABLE, red); INST:… (other non-UP states, blue); UP:… (green); \"-\" if none.${C_RESET}"
 render_tsv_box "$_hdr_rs" "$tmp_rack" | sed -E \
   -e '/[|]/s/[|] done([[:space:]]+)[|]/| '"${C_OK}"'done'"${C_RESET}"'\1|/g' \
   -e '/[|]/s/[|] fail([[:space:]]+)[|]/| '"${C_FAIL}"'fail'"${C_RESET}"'\1|/g' \

@@ -1,8 +1,10 @@
 #!/bin/bash
 # Start Grafana in Docker (--network=host) with a provisioned Prometheus datasource
 # (https://localhost:8081/prometheus, GET, basic auth from PROMETHEUS_RC) and a small
-# dashboard: GPU thermal + GPU power (Bright-style metrics: gpu_temperature,
-# gpu_power_usage_instant; labels hostname, parameter).
+# dashboard: GPU thermal + GPU power. Each panel runs several Prometheus targets (Bright-style
+# gpu_* plus DCGM_FI_DEV_* on hostname / Hostname / instance / nodename / node) so one bad matcher
+# does not blank the whole chart. Avoid (?i) in label regex — some backends reject it and break
+# even ``.*``.
 #
 # Usage:
 #   PROMETHEUS_RC=/cm/cmsupport/.prometheusrc ./launch-grafana-bright-prometheus.sh
@@ -134,7 +136,26 @@ import sys
 
 out_path, ds_uid = sys.argv[1], sys.argv[2]
 
-def panel(pid, y, title, expr, unit, leg):
+# Several queries instead of one big ``or``: if the backend rejects one form (e.g. unknown
+# label), other targets can still return data. Do **not** use ``(?i)`` in label matchers — some
+# Prometheus-compatible engines (notably VictoriaMetrics) reject it and the whole panel goes empty
+# even when ``job_host_regex`` is ``.*``.
+_RX = '"$job_host_regex"'
+_INST = '".*($job_host_regex).*"'
+
+
+def target(ref: str, expr: str, legend: str) -> dict:
+    return {
+        "datasource": {"type": "prometheus", "uid": ds_uid},
+        "editorMode": "code",
+        "expr": expr,
+        "legendFormat": legend,
+        "range": True,
+        "refId": ref,
+    }
+
+
+def panel(pid, y, title, unit, targets: list[dict]):
     return {
         "id": pid,
         "type": "timeseries",
@@ -160,17 +181,37 @@ def panel(pid, y, title, expr, unit, leg):
             "legend": {"displayMode": "table", "placement": "right", "showLegend": True},
             "tooltip": {"mode": "single", "sort": "none"},
         },
-        "targets": [
-            {
-                "datasource": {"type": "prometheus", "uid": ds_uid},
-                "editorMode": "code",
-                "expr": expr,
-                "legendFormat": leg,
-                "range": True,
-                "refId": "A",
-            }
-        ],
+        "targets": targets,
     }
+
+
+THERMAL_TARGETS = [
+    target(
+        "A",
+        f"gpu_temperature{{parameter=~\"^gpu[0-9]+$\", hostname=~{_RX}}}",
+        "{{hostname}} / {{parameter}}",
+    ),
+    target("B", f"gpu_temperature{{hostname=~{_RX}}}", "{{hostname}} / {{parameter}}"),
+    target("C", f"DCGM_FI_DEV_GPU_TEMP{{hostname=~{_RX}}}", "{{hostname}} / gpu{{gpu}}"),
+    target("D", f"DCGM_FI_DEV_GPU_TEMP{{Hostname=~{_RX}}}", "{{Hostname}} / gpu{{gpu}}"),
+    target("E", f"DCGM_FI_DEV_GPU_TEMP{{instance=~{_INST}}}", "{{instance}} / gpu{{gpu}}"),
+    target("F", f"DCGM_FI_DEV_GPU_TEMP{{nodename=~{_RX}}}", "{{nodename}} / gpu{{gpu}}"),
+    target("G", f"DCGM_FI_DEV_GPU_TEMP{{node=~{_RX}}}", "{{node}} / gpu{{gpu}}"),
+]
+
+POWER_TARGETS = [
+    target(
+        "A",
+        f"gpu_power_usage_instant{{parameter=~\"^gpu[0-9]+$\", hostname=~{_RX}}}",
+        "{{hostname}} / {{parameter}}",
+    ),
+    target("B", f"gpu_power_usage_instant{{hostname=~{_RX}}}", "{{hostname}} / {{parameter}}"),
+    target("C", f"DCGM_FI_DEV_POWER_USAGE{{hostname=~{_RX}}}", "{{hostname}} / gpu{{gpu}}"),
+    target("D", f"DCGM_FI_DEV_POWER_USAGE{{Hostname=~{_RX}}}", "{{Hostname}} / gpu{{gpu}}"),
+    target("E", f"DCGM_FI_DEV_POWER_USAGE{{instance=~{_INST}}}", "{{instance}} / gpu{{gpu}}"),
+    target("F", f"DCGM_FI_DEV_POWER_USAGE{{nodename=~{_RX}}}", "{{nodename}} / gpu{{gpu}}"),
+    target("G", f"DCGM_FI_DEV_POWER_USAGE{{node=~{_RX}}}", "{{node}} / gpu{{gpu}}"),
+]
 
 dash = {
     "annotations": {"list": []},
@@ -180,22 +221,8 @@ dash = {
     "links": [],
     "liveNow": False,
     "panels": [
-        panel(
-            1,
-            0,
-            "GPU thermal (per host / GPU)",
-            'gpu_temperature{parameter=~"^gpu[0-9]+$", hostname=~"$job_host_regex"}',
-            "celsius",
-            "{{hostname}} / {{parameter}}",
-        ),
-        panel(
-            2,
-            10,
-            "GPU power usage (per host / GPU)",
-            'gpu_power_usage_instant{parameter=~"^gpu[0-9]+$", hostname=~"$job_host_regex"}',
-            "watt",
-            "{{hostname}} / {{parameter}}",
-        ),
+        panel(1, 0, "GPU thermal (per host / GPU)", "celsius", THERMAL_TARGETS),
+        panel(2, 10, "GPU power usage (per host / GPU)", "watt", POWER_TARGETS),
     ],
     "refresh": "10s",
     "schemaVersion": 39,

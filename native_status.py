@@ -6,13 +6,9 @@ Background threads: ``cmsh -c ds`` (device status), ``sinfo`` (+ ``scontrol`` ho
 parsing via ``probe_fn`` (typically ``rack_status.sh --probe-json``). Results merge into in-memory
 state and the next ``/api/status`` read shows updated cells.
 
-Tray hosts on each ``cmsh -c ds`` line are matched by ``RACK_CMSH_DS_NODE_PATTERN`` (default: one regex
-with three capture groups: full hostname, rack id ``pN-rMM``, tray). Rack ids are canonicalized to
-``pN-rMM`` two-digit rack suffix so ``p5-r1`` merges with ``p5-r01`` from ``rack; list``.
-
-Optional: ``RACK_CMSH_DS_NODE_TOKEN_PATTERN`` (one capture: hostname token) with automatic ``…-ct…``
-split; or legacy ``RACK_CMSH_DS_NODE_FIND_PATTERN`` + ``RACK_CMSH_DS_NODE_PARSE_PATTERN``. Override
-via process env or the dashboard job-environment JSON.
+Tray hosts on each ``cmsh -c ds`` line are matched using **Settings → naming templates**
+(``NVIS_CT_ID``, ``NVIS_RACK_ID``): literals plus ``[01-99]`` digit slots (e.g. ``p[01-99]-r[01-99]-ct[01-99]``
+or ``CBR[01-99]-DH[01-99]-SVR-CN[01-99][01-99][01-99]``). Legacy raw-regex keys are still honored when set.
 
 Set ``RACK_STATUS_USE_SHELL_TABLE=1`` to use the legacy shell table instead.
 
@@ -36,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import host_exec
+import nvis_id_templates as _nvis_ids
 from platforms import get_platform as _get_platform
 
 _PKG_DIR = Path(__file__).resolve().parent
@@ -51,7 +48,14 @@ def _job_env_overrides_file() -> Path:
 
 # cmsh ``ds`` output: default one regex per line via ``finditer``; three capture groups (hostname, rack, tray).
 _DEFAULT_CMSH_DS_NODE_PATTERN = r"(?i)((p\d+-r\d+)-ct(\d+))"
-_CMSH_DS_ENV_KEYS = frozenset(
+_NVIS_NAMING_ENV_KEYS = frozenset(
+    {
+        "NVIS_RACK_ID",
+        "NVIS_CT_ID",
+        "NVIS_NVSW_ID",
+    }
+)
+_LEGACY_CMSH_DS_ENV_KEYS = frozenset(
     {
         "RACK_CMSH_DS_NODE_PATTERN",
         "RACK_CMSH_DS_NODE_TOKEN_PATTERN",
@@ -59,6 +63,7 @@ _CMSH_DS_ENV_KEYS = frozenset(
         "RACK_CMSH_DS_NODE_PARSE_PATTERN",
     }
 )
+_CMSH_DS_ENV_KEYS = _NVIS_NAMING_ENV_KEYS | _LEGACY_CMSH_DS_ENV_KEYS
 _je_file_mtime: float | None = None
 _je_subset: dict[str, str] = {}
 _ds_line_pat_effective: str | None = None
@@ -72,6 +77,15 @@ def invalidate_job_env_file_cache() -> None:
     _je_subset = {}
     _ds_line_pat_effective = None
     _ds_line_re_compiled = None
+    _nvis_ids.clear_nvis_naming_cache()
+
+
+def _nvis_naming() -> _nvis_ids.NvisNaming:
+    return _nvis_ids.get_nvis_naming(
+        _nvis_rack_id_template(),
+        _nvis_ct_id_template(),
+        _nvis_nvsw_id_template(),
+    )
 
 
 def _reload_cmsh_ds_job_env_subset() -> None:
@@ -135,78 +149,71 @@ def _ds_node_line_re() -> re.Pattern[str]:
     return _ds_line_re_compiled
 
 
+def _nvis_rack_id_template() -> str:
+    return _native_env_ds("NVIS_RACK_ID", _nvis_ids.DEFAULT_NVIS_RACK_ID)
+
+
+def _nvis_ct_id_template() -> str:
+    return _native_env_ds("NVIS_CT_ID", _nvis_ids.DEFAULT_NVIS_CT_ID)
+
+
+def _nvis_nvsw_id_template() -> str:
+    return _native_env_ds("NVIS_NVSW_ID", _nvis_ids.DEFAULT_NVIS_NVSW_ID)
+
+
+def _legacy_ds_configured() -> bool:
+    for k in _LEGACY_CMSH_DS_ENV_KEYS:
+        if k == "RACK_CMSH_DS_NODE_PATTERN":
+            v = _native_env_ds(k, _DEFAULT_CMSH_DS_NODE_PATTERN).strip()
+            if v and v != _DEFAULT_CMSH_DS_NODE_PATTERN:
+                return True
+        elif _native_env_ds(k, "").strip():
+            return True
+    return False
+
+
+def validate_nvis_naming_settings(
+    rack_t: str, ct_t: str, nvsw_t: str = ""
+) -> str | None:
+    """Syntax validation for NVIS_* templates (no hardcoded sample hostnames)."""
+    return _nvis_ids.validate_nvis_naming_triplet(rack_t, ct_t, nvsw_t)
+
+
 def validate_cmsh_ds_node_pattern(t: str) -> str | None:
-    """Return error message or ``None`` if *t* matches ``[UP] p5-r01-ct03`` with groups 1–3 populated."""
+    """Legacy regex mode (deprecated in Settings UI)."""
     t = t.strip()
     if not t:
         return None
     try:
-        r = re.compile(t)
+        re.compile(t)
     except re.error as e:
         return f"invalid regex: {e}"
-    line = "[UP] p5-r01-ct03"
-    ms = list(r.finditer(line))
-    if not ms:
-        return "must match at least one occurrence on a sample line like '[UP] p5-r01-ct03'"
-    m0 = ms[0]
-    if len(m0.groups()) < 3:
-        return "need three capture groups: (1) full hostname, (2) rack pN-rMM, (3) tray — e.g. (?i)((p\\\\d+-r\\\\d+)-ct(\\\\d+))"
-    g1, g2, g3 = m0.group(1), m0.group(2), m0.group(3)
-    if not g1 or not g2 or not g3:
-        return "groups 1–3 must be non-empty for sample p5-r01-ct03"
     return None
 
 
 def validate_cmsh_ds_node_token_pattern(t: str) -> str | None:
-    """Return error or ``None`` if *t* is a valid token regex with exactly one capture group."""
     t = t.strip()
     if not t:
         return None
     try:
-        r = re.compile(t)
+        re.compile(t)
     except re.error as e:
         return f"invalid regex: {e}"
-    line = "[UP] p5-r01-ct03"
-    ms = list(r.finditer(line))
-    if not ms:
-        return "must match on a sample line like '[UP] p5-r01-ct03'"
-    m0 = ms[0]
-    if len(m0.groups()) < 1 or m0.group(1) is None:
-        return "use exactly one capture group for the full hostname token (e.g. (?i)(p\\\\d+-r\\\\d+-ct\\\\d+))"
-    tok = (m0.group(1) or "").strip()
-    if _rack_tray_from_hostname_token(tok) is None:
-        return "captured token must split into rack and tray at a ``-ct`` boundary (e.g. p5-r01-ct18)"
     return None
 
 
 def validate_cmsh_ds_find_parse_patterns(find_pat: str, parse_pat: str) -> str | None:
-    """Validate legacy two-pattern mode: FIND on a line, PARSE on each token (two capture groups: rack, tray)."""
     fp = find_pat.strip()
     pp = parse_pat.strip()
     if not fp and not pp:
         return None
     if bool(fp) ^ bool(pp):
-        return "set both RACK_CMSH_DS_NODE_FIND_PATTERN and RACK_CMSH_DS_NODE_PARSE_PATTERN, or neither"
+        return "set both FIND and PARSE, or neither"
     try:
-        fre = re.compile(fp)
+        re.compile(fp)
+        re.compile(pp)
     except re.error as e:
-        return f"FIND invalid regex: {e}"
-    try:
-        pre = re.compile(pp)
-    except re.error as e:
-        return f"PARSE invalid regex: {e}"
-    line = "[UP] x p5-r01-ct03 y"
-    toks: list[str] = []
-    for fm in fre.finditer(line):
-        if fm.lastindex:
-            toks.append(fm.group(1))
-        else:
-            toks.append(fm.group(0))
-    if not toks:
-        return "FIND must match at least one token on a sample line with p5-r01-ct03"
-    pm = pre.match(toks[0].strip())
-    if not pm or len(pm.groups()) < 2:
-        return "PARSE must match each FIND token with two capture groups: (1) rack pN-rMM, (2) tray"
+        return f"invalid regex: {e}"
     return None
 
 
@@ -218,22 +225,19 @@ def _normalize_rack_key_for_ds(rack_raw: str) -> str:
 
 
 def _rack_tray_from_hostname_token(tok: str) -> tuple[str, str] | None:
-    """Split ``…-ct<tray>`` from a token; Bright first, then generic last ``-ct`` split."""
+    """Split rack + tray from a hostname token (NVIS templates or legacy ``-ct`` suffix)."""
     t = tok.strip().lower()
-    m = re.match(r"^(?P<rack>p\d+-r\d+)-ct(?P<tray>.+)$", t)
-    if m:
-        rack = _normalize_rack_key_for_ds(m.group("rack"))
-        tray = m.group("tray").strip()
-        if tray:
-            return rack, tray
+    if not _legacy_ds_configured():
+        hm = _nvis_naming().matcher().match_hostname(t)
+        if hm:
+            return _normalize_rack_key_for_ds(hm.rack_id), hm.tray
     m2 = re.match(r"^(?P<rack>.+)-ct(?P<tray>.+)$", t)
     if not m2:
         return None
-    rack_raw = m2.group("rack").strip().lower()
     tray = m2.group("tray").strip()
     if not tray:
         return None
-    rack = _normalize_rack_key_for_ds(rack_raw)
+    rack = _normalize_rack_key_for_ds(m2.group("rack").strip().lower())
     return rack, tray
 
 
@@ -252,9 +256,6 @@ def _condense_tray_tokens(nums_s: str) -> str:
 _MULTIRACK_LOG_JSON = _PKG_DIR / "var" / "cache" / "native_multirack_log_analysis.json"
 
 _MULTIRACK_N_RACK_RE = re.compile(r"(?:[2-9]|[1-9]\d{1,3})rack", re.IGNORECASE)
-# Word boundaries: avoid matching ``p5-r1`` / ``p5-r0`` inside ``p5-r10`` / ``p5-r01`` when scraping text.
-_CMSH_RACK_ID_RE = re.compile(r"\bp\d+-r\d+\b", re.IGNORECASE)
-_NEMO_1RACK_RE = re.compile(r"1Rack-(\bp\d+-r\d+\b)-", re.IGNORECASE)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -267,7 +268,17 @@ def _env_int(name: str, default: int) -> int:
 
 def _nemo_nccl_bn(name: str) -> bool:
     low = name.lower()
-    return "nemo" in low or "nccl" in low
+    if "nemo" in low or "nccl" in low:
+        return True
+    return _nvis_naming().auxiliary_single_rack_log_basename(name)
+
+
+def _nemo_single_rack_bn(name: str) -> bool:
+    """NEMO validation logs for the single-rack table (excludes NCCL-only basename sweeps)."""
+    low = name.lower()
+    if "nemo" in low:
+        return True
+    return _nvis_naming().auxiliary_single_rack_log_basename(name)
 
 
 def _is_multirack_bn(name: str) -> bool:
@@ -276,12 +287,12 @@ def _is_multirack_bn(name: str) -> bool:
     if _MULTIRACK_N_RACK_RE.search(name):
         return True
     low = name.lower()
-    if (low.startswith("root-nemo-") or low.startswith("root-nccl-")) and re.search(
-        r",\s*p\d+-r", low
+    naming = _nvis_naming()
+    if (low.startswith("root-nemo-") or low.startswith("root-nccl-")) and naming.multirack_comma_after_rack_re().search(
+        low
     ):
         return True
-    racks = {m.group(1).lower() for m in re.finditer(r"\b(p\d+-r\d+)\b", name, re.IGNORECASE)}
-    return len(racks) >= 2
+    return len(naming.find_rack_ids_in_string(name)) >= 2
 
 
 _NODELIST_LINE_RE = re.compile(r"^\s*NODELIST:\s*(.+)\s*$", re.IGNORECASE | re.MULTILINE)
@@ -301,6 +312,7 @@ def extract_physical_rack_ids_from_multirack_log(path: Path) -> list[str]:
     except OSError:
         return []
     text = chunk.decode("utf-8", errors="replace")
+    naming = _nvis_naming()
     racks: set[str] = set()
     nodem = _NODELIST_LINE_RE.search(text)
     if nodem:
@@ -309,18 +321,12 @@ def extract_physical_rack_ids_from_multirack_log(path: Path) -> list[str]:
             piece = piece.strip()
             if not piece:
                 continue
-            for m in _CMSH_RACK_ID_RE.finditer(piece):
-                c = canonical_rack_id(m.group(0).lower())
-                if c:
-                    racks.add(c)
+            racks.update(naming.find_rack_ids_in_string(piece))
     else:
-        for m in _CMSH_RACK_ID_RE.finditer(text):
-            c = canonical_rack_id(m.group(0).lower())
-            if c:
-                racks.add(c)
-    out = sorted(racks, key=_rack_sort_key)
+        racks.update(naming.find_rack_ids_in_string(text))
+    out = sorted(racks, key=naming.rack_sort_key)
     if not _include_cmsh_rack_r00():
-        out = [rid for rid in out if not re.fullmatch(r"p\d+-r00$", rid, flags=re.IGNORECASE)]
+        out = [rid for rid in out if not naming.is_r00_rack(rid)]
     return out
 
 
@@ -343,22 +349,28 @@ def _glob_multirack_logs(log_dir: Path) -> list[Path]:
 
 
 def _rack_from_1rack_log(name: str) -> str | None:
-    m = _NEMO_1RACK_RE.search(name)
-    return m.group(1).strip().lower() if m else None
+    return _nvis_naming().rack_id_from_log_basename(name)
 
 
 def _jobid_from_log_name(name: str) -> str | None:
     m = re.search(r"N-(\d+)\.txt$", name, re.IGNORECASE)
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
+    m2 = re.search(r"NEMO-LLAMA3_8B-1N-.+-(\d+)\.txt$", name, re.IGNORECASE)
+    return m2.group(1) if m2 else None
 
 
 def _glob_one_rack_logs(log_dir: Path) -> list[Path]:
+    """``*.txt`` in *log_dir* root only (NEMO single-rack validation); excludes multirack and Llama stdout."""
     root = log_dir.resolve()
     out: list[Path] = []
+    naming = _nvis_naming()
     for p in sorted(root.glob("*.txt"), key=lambda x: x.name.lower()):
         if not p.is_file():
             continue
-        if not _nemo_nccl_bn(p.name):
+        if not _nemo_single_rack_bn(p.name):
+            continue
+        if naming.is_llama_slurm_stdout_basename(p.name):
             continue
         if _is_multirack_bn(p.name):
             continue
@@ -366,11 +378,8 @@ def _glob_one_rack_logs(log_dir: Path) -> list[Path]:
     return out
 
 
-def _rack_sort_key(rid: str) -> tuple[int, int, str]:
-    m = re.match(r"^p(\d+)-r(\d+)$", rid.strip().lower())
-    if not m:
-        return (10**9, 10**9, rid)
-    return (int(m.group(1)), int(m.group(2)), rid)
+def _rack_sort_key(rid: str) -> tuple[int, ...]:
+    return _nvis_naming().rack_sort_key(rid)
 
 
 def _include_cmsh_rack_r00() -> bool:
@@ -380,34 +389,34 @@ def _include_cmsh_rack_r00() -> bool:
 
 
 def canonical_rack_id(rid: str) -> str | None:
-    """Normalize ``p5-r1`` / ``p05-r01`` / ``p5-r0`` → ``p5-r01`` / ``p5-r00`` (two-digit rack suffix).
-
-    cmsh output and hostnames often mix ``p5-r1`` with real names ``p5-r01``; deduping by canonical
-    form removes phantom single-digit rows when the padded rack is already listed.
-    """
-    m = re.fullmatch(r"p(\d+)-r(\d+)$", rid.strip().lower())
-    if not m:
-        return None
-    pod = int(m.group(1), 10)
-    rack = int(m.group(2), 10)
-    return f"p{pod}-r{rack:02d}"
+    """Normalize rack ids per ``NVIS_RACK_ID`` (e.g. ``p5-r1`` → ``p5-r01`` for Bright templates)."""
+    return _nvis_naming().canonical_rack_id(rid)
 
 
 def extract_rack_ids_from_cmsh_text(text: str) -> list[str]:
-    """Parse ``pNN-rMM`` rack ids from ``cmsh -c 'rack; list'`` output (or similar).
-
-    Uses word boundaries so hostnames like ``p5-r10-ct2`` yield ``p5-r10`` only, never ``p5-r1``.
-    Canonicalizes rack numbers to two digits so ``p5-r1`` merges with ``p5-r01``.
-    """
-    raw = {m.group(0).lower() for m in _CMSH_RACK_ID_RE.finditer(text or "")}
+    """Parse rack ids from ``cmsh -c 'rack; list'`` using ``NVIS_RACK_ID`` (legacy regex when configured)."""
+    text = text or ""
+    naming = _nvis_naming()
     canon: set[str] = set()
-    for piece in raw:
-        c = canonical_rack_id(piece)
-        if c:
-            canon.add(c)
-    out = sorted(canon, key=_rack_sort_key)
+    if not _legacy_ds_configured():
+        for rid in naming.extract_rack_ids_from_text(text):
+            canon.add(rid)
+    else:
+        legacy = re.compile(r"\bp\d+-r\d+\b", re.IGNORECASE)
+        for m in legacy.finditer(text):
+            c = naming.canonical_rack_id(m.group(0))
+            if c:
+                canon.add(c)
+    for line in text.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        mapped = naming.map_cmsh_rack_list_token(parts[0])
+        if mapped:
+            canon.add(mapped)
+    out = sorted(canon, key=naming.rack_sort_key)
     if not _include_cmsh_rack_r00():
-        out = [rid for rid in out if not re.fullmatch(r"p\d+-r00$", rid, flags=re.IGNORECASE)]
+        out = [rid for rid in out if not naming.is_r00_rack(rid)]
     return out
 
 
@@ -467,6 +476,8 @@ def condense_ct_nums(nums: list[int]) -> str:
 
 def parse_cmsh_ds_to_ct_column_by_rack(ds_text: str) -> dict[str, str]:
     """Replicate rack_status.sh ct_dn / INST / UP blob merge into one column string per rack."""
+    if not _legacy_ds_configured():
+        return _parse_cmsh_ds_nvis_templates(ds_text)
     find_s = _native_env_ds("RACK_CMSH_DS_NODE_FIND_PATTERN", "").strip()
     parse_s = _native_env_ds("RACK_CMSH_DS_NODE_PARSE_PATTERN", "").strip()
     token_s = _native_env_ds("RACK_CMSH_DS_NODE_TOKEN_PATTERN", "").strip()
@@ -555,7 +566,73 @@ def parse_cmsh_ds_to_ct_column_by_rack(ds_text: str) -> dict[str, str]:
         ranges = _condense_tray_tokens(nums_s)
         if not ranges:
             continue
-        blob = f"{rr}-ct[{ranges}]"
+        blob = _nvis_naming().ct_blob(rr, ranges)
+        if stb == "DN":
+            ct_dn[rr] = blob
+        elif stb == "INST":
+            ct_inst[rr] = blob
+        else:
+            ct_up[rr] = blob
+    out: dict[str, str] = {}
+    racks = set(ct_dn) | set(ct_inst) | set(ct_up)
+    for rr in racks:
+        parts: list[str] = []
+        if rr in ct_dn:
+            parts.append(f"DN:{ct_dn[rr]}")
+        if rr in ct_inst:
+            parts.append(f"INST:{ct_inst[rr]}")
+        if rr in ct_up:
+            parts.append(f"UP:{ct_up[rr]}")
+        out[rr] = ";".join(parts) if parts else "-"
+    return out
+
+
+def _parse_cmsh_ds_nvis_templates(ds_text: str) -> dict[str, str]:
+    """Parse ``cmsh ds`` using ``NVIS_CT_ID`` / ``NVIS_RACK_ID`` templates from Settings."""
+    try:
+        matcher = _nvis_ids.naming_matcher_from_env(_nvis_rack_id_template(), _nvis_ct_id_template())
+    except ValueError:
+        return {}
+    ct_acc: dict[str, str] = defaultdict(str)
+    ct_seen: set[str] = set()
+
+    def ingest(_host: str, rack_raw: str, tray_tok: str, st: str) -> None:
+        rr = _normalize_rack_key_for_ds(rack_raw)
+        nn = tray_tok.strip()
+        if not nn:
+            return
+        key = f"{rr}|{st}|{nn}"
+        if key in ct_seen:
+            return
+        ct_seen.add(key)
+        acc_key = f"{rr}|{st}"
+        ct_acc[acc_key] = (ct_acc[acc_key] + " " + nn).strip()
+
+    for line in ds_text.splitlines():
+        if not line.strip():
+            continue
+        m = re.search(r"\[([^\]]+)\]", line)
+        if not m:
+            continue
+        bracket = re.sub(r"\s+", "", m.group(1)).lower()
+        if bracket == "up":
+            st = "UP"
+        elif bracket in ("down", "unreachable"):
+            st = "DN"
+        else:
+            st = "INST"
+        for hm in matcher.find_in_line(line):
+            ingest(hm.hostname, hm.rack_id, hm.tray, st)
+
+    ct_dn: dict[str, str] = {}
+    ct_inst: dict[str, str] = {}
+    ct_up: dict[str, str] = {}
+    for acc_k, nums_s in ct_acc.items():
+        rr, stb = acc_k.split("|", 1)
+        ranges = _condense_tray_tokens(nums_s)
+        if not ranges:
+            continue
+        blob = _nvis_naming().ct_blob(rr, ranges)
         if stb == "DN":
             ct_dn[rr] = blob
         elif stb == "INST":
@@ -596,7 +673,7 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
     if opts:
         extra += f" {opts}"
     try:
-        proc = host_exec.run_on_host(
+        proc = host_exec.run_slurm_on_host(
             plat.sinfo_cmd(extra),
             timeout=max(30, _env_int("RACK_NATIVE_SINFO_TIMEOUT_SEC", 120)),
         )
@@ -617,7 +694,7 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
         hosts: list[str] = []
         if "[" in node and "]" in node:
             try:
-                hp = host_exec.run_on_host(
+                hp = host_exec.run_slurm_on_host(
                     plat.scontrol_hostnames_cmd(node),
                     timeout=max(5, _env_int("RACK_NATIVE_SCONTROL_TIMEOUT_SEC", 60)),
                 )
@@ -626,12 +703,13 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
                 hosts = []
         else:
             hosts = [node]
+        naming = _nvis_naming()
         for h in hosts:
             hh = h.lower().split(".")[0]
-            m = re.match(r"^(p\d+-r\d+)(-ct\d+)?$", hh, re.IGNORECASE)
-            if not m:
+            parsed = naming.sinfo_rack_from_host(hh)
+            if not parsed:
                 continue
-            rr = m.group(1).lower()
+            rr, _host = parsed
             key = (rr, st)
             counts[key] = counts.get(key, 0) + 1
     return counts
@@ -667,6 +745,46 @@ def _slurm_base_job_id(jid_raw: str) -> str | None:
     return base if base.isdigit() else None
 
 
+def validation_status_hint(
+    nemo: str,
+    last_job: str,
+    *,
+    nccl_ok: bool | None = None,
+    llm_ok: bool | None = None,
+    validation_test: str | None = None,
+) -> str:
+    """Short explanation for dashboard hover (pending / ongoing / fail); empty for done."""
+    n = (nemo or "").strip()
+    lj = (last_job or "").strip()
+    if n == "done" or n.lower() == "done":
+        return ""
+    vt = (validation_test or "").strip() or "VALIDATION_TEST"
+    if n == "pending" or n.lower() == "pending":
+        return (
+            "No NEMO or NCCL validation log in the log directory matches this rack yet "
+            "(rack appears in the rack list from CM, but no matching log basename)."
+        )
+    if n.startswith("ongoing"):
+        if lj and lj != "-":
+            return f"Slurm job {lj} is running; the validation log is still being written."
+        return "Slurm reports a running validation job; elapsed time is shown in the status label."
+    if n == "fail":
+        parts: list[str] = []
+        if nccl_ok is False:
+            parts.append(
+                f"NCCL suite not satisfied for {vt} (missing busbw line(s) or below threshold)."
+            )
+        if llm_ok is False:
+            parts.append(
+                "LLM / Nemotron segment is not OK, training has not reached the target step count, "
+                "or the log still looks incomplete."
+            )
+        if parts:
+            return " ".join(parts)
+        return "Validation did not reach done; inspect the log or adjust VALIDATION_TEST in Settings."
+    return ""
+
+
 def load_squeue_jobs_map() -> tuple[set[str], dict[str, str]]:
     """Return (job_ids, job_id -> %M elapsed string).
 
@@ -676,7 +794,7 @@ def load_squeue_jobs_map() -> tuple[set[str], dict[str, str]]:
     user = (os.environ.get("SQUEUE_USER") or os.environ.get("USER") or "root").strip()
     plat = _get_platform()
     try:
-        proc = host_exec.run_on_host(
+        proc = host_exec.run_slurm_on_host(
             plat.squeue_cmd(f"-u {shlex.quote(user)} -h -o '%i|%M'"),
             timeout=max(5, _env_int("RACK_NATIVE_SQUEUE_TIMEOUT_SEC", 60)),
         )
@@ -732,7 +850,7 @@ def augment_running_set_for_job_ids(
     for i in range(0, len(need), chunk):
         batch = need[i : i + chunk]
         try:
-            proc = host_exec.run_on_host(
+            proc = host_exec.run_slurm_on_host(
                 plat.squeue_cmd(f"-j {','.join(batch)} -h -o '%i|%M'"),
                 timeout=timeout,
             )
@@ -1066,6 +1184,7 @@ class NativeRackTableState:
                         "last_job": "-",
                         "sinfo": "?" if not sinfo_done else format_sinfo_cell(rack, sct),
                         "ct_down_unk": "?" if not ds_done else ct.get(rack, "-"),
+                        "nemo_hint": validation_status_hint("pending", "-"),
                     }
                 )
                 continue
@@ -1111,6 +1230,19 @@ class NativeRackTableState:
             else:
                 ctv = ct.get(rack, "-")
 
+            vt = str(pr.get("validation_test") or "").strip()
+            nco = pr.get("nccl_ok")
+            llo = pr.get("llm_ok")
+            nc_b = bool(nco) if isinstance(nco, (bool, int)) else None
+            ll_b = bool(llo) if isinstance(llo, (bool, int)) else None
+            nh = validation_status_hint(
+                nemo,
+                jid_s,
+                nccl_ok=nc_b,
+                llm_ok=ll_b,
+                validation_test=vt or None,
+            )
+
             rows.append(
                 {
                     "rack": rack,
@@ -1118,6 +1250,7 @@ class NativeRackTableState:
                     "last_job": jid_s,
                     "sinfo": siv,
                     "ct_down_unk": ctv,
+                    "nemo_hint": nh,
                 }
             )
         summary = {
@@ -1404,6 +1537,18 @@ class MultirackTableState:
             rack_ids_sinfo = racks_from_log if racks_from_log else list(rack_ids_fn(bn))
             rack_disp = _multirack_rack_display_label(bn, racks_from_log, rack_label_fn)
             siv = format_multirack_sinfo_cell(rack_ids_sinfo, sct, sinfo_done)
+            vt = str(probe.get("validation_test") or "").strip() if probe else ""
+            nco = probe.get("nccl_ok") if probe else None
+            llo = probe.get("llm_ok") if probe else None
+            nc_b = bool(nco) if isinstance(nco, (bool, int)) else None
+            ll_b = bool(llo) if isinstance(llo, (bool, int)) else None
+            nh = validation_status_hint(
+                nemo,
+                last_job,
+                nccl_ok=nc_b,
+                llm_ok=ll_b,
+                validation_test=vt or None,
+            )
             rows.append(
                 {
                     "rack_display": rack_disp,
@@ -1411,6 +1556,7 @@ class MultirackTableState:
                     "nemo": nemo,
                     "last_job": last_job,
                     "sinfo": siv,
+                    "nemo_hint": nh,
                 }
             )
         return rows

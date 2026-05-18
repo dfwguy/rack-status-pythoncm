@@ -48,26 +48,28 @@ import {
   Trash2,
   LineChart,
   ChevronDown,
-  Lock,
 } from "lucide-react";
 import { useRackCommandsStore } from "../context/RackCommandsStoreContext";
-import { useRackLocksContext } from "../context/RackLocksContext";
 import { RackTableCommandIndicator } from "./RackTableCommandIndicator";
 import { ParserResultsDialog } from "./ParserResultsDialog";
 import { TailLogDialog } from "./TailLogDialog";
+import { HwCheckRunDialog } from "./rack/HwCheckRunDialog";
 import {
   buildSingleRackTailBody,
   openRackLogInNewTab,
   validationOngoing,
   type TailLogStreamBody,
 } from "../lib/rackLog";
+import { validationStatusTooltip } from "../lib/validationStatusTooltip";
 import type { RackRow } from "../types/api";
+import type { NvisNamingSchema } from "../types/naming";
 import {
   attachLogDir,
   fullRackCt01to18NodeSet,
   llamaNodesBody,
   slurmTargetBody,
   specsCommandBody,
+  hwCheckOptionsBody,
   validationFamilyBody,
 } from "../lib/rackCommandBodies";
 
@@ -77,6 +79,7 @@ interface RackTableProps {
   rows: RackRow[];
   comments: Record<string, string>;
   logDir?: string;
+  naming?: NvisNamingSchema;
   onRackSelect?: (rack: string) => void;
   onCommentChange?: (rack: string, comment: string | null) => void;
   /** When set with ``onValidationFiltersChange``, validation filter state is controlled by the parent (e.g. summary chips). */
@@ -177,9 +180,27 @@ function sinfoIcon(state: string) {
   }
 }
 
-function ValidationTag({ nemo }: { nemo: string }) {
+function ValidationTag({ row }: { row: RackRow }) {
+  const nemo = row.nemo;
   const color = validationTagColor(nemoCategory(nemo));
-  return <Tag color={color} kind="solid" readOnly density="compact">{nemo}</Tag>;
+  const tip = validationStatusTooltip(row);
+  const tag = (
+    <Tag color={color} kind="solid" readOnly density="compact">
+      {nemo}
+    </Tag>
+  );
+  if (!tip) {
+    return tag;
+  }
+  return (
+    <Tooltip
+      title={<span style={{ display: "block", maxWidth: 420, whiteSpace: "pre-wrap" }}>{tip}</span>}
+      enterDelay={350}
+      arrow
+    >
+      <span style={{ display: "inline-flex", cursor: "default" }}>{tag}</span>
+    </Tooltip>
+  );
 }
 
 function SinfoTags({ sinfo }: { sinfo: string }) {
@@ -336,6 +357,7 @@ export function RackTable({
   rows,
   comments,
   logDir,
+  naming,
   onRackSelect,
   onCommentChange,
   validationFilters: validationFiltersProp,
@@ -345,8 +367,6 @@ export function RackTable({
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
-
-  const { isLockedByOther: rackLockedByOther } = useRackLocksContext();
 
   const [search, setSearch] = useState("");
   const [internalValidationFilters, setInternalValidationFilters] = useState<string[]>([]);
@@ -429,6 +449,7 @@ export function RackTable({
   const [selectMode, setSelectMode] = useState(false);
   const [selectedRacks, setSelectedRacks] = useState<Set<string>>(() => new Set());
   const [runMenuAnchor, setRunMenuAnchor] = useState<HTMLElement | null>(null);
+  const [hwBulkDialogOpen, setHwBulkDialogOpen] = useState(false);
 
   const nodesFullRack = useCallback((rack: string) => fullRackCt01to18NodeSet(rack), []);
 
@@ -471,6 +492,29 @@ export function RackTable({
     [selectedRackList],
   );
 
+  const runHwCheckBulk = useCallback(
+    (opts: { preset?: string; checker_args?: string }) => {
+      setHwBulkDialogOpen(false);
+      const ld = logDir?.trim() ?? "";
+      if (!selectedRackList.length) {
+        setSnackbar({ open: true, message: "Choose at least one rack", severity: "error" });
+        return;
+      }
+      for (const rack of selectedRackList) {
+        void store.runAsyncReset(rack, "Hardware check", "hw", "/api/hw-check-async", {
+          ...specsCommandBody(rack, ld, nodesFullRack(rack), naming),
+          ...hwCheckOptionsBody(opts),
+        });
+      }
+      setSnackbar({
+        open: true,
+        message: `Hardware check: started on ${selectedRackList.length} rack(s) (ct[01–18] each, parallel)`,
+        severity: "success",
+      });
+    },
+    [logDir, naming, nodesFullRack, selectedRackList, store],
+  );
+
   const handleBulkRun = useCallback(
     (key: string) => {
       if (!selectedRackList.length) {
@@ -497,7 +541,7 @@ export function RackTable({
               "validation",
               "/api/run-validation-async",
               (jid) => `/api/run-validation-status?job_id=${encodeURIComponent(jid)}`,
-              validationFamilyBody(rack, ld, nodesFullRack(rack)),
+              validationFamilyBody(rack, ld, nodesFullRack(rack), naming),
             ),
           );
           break;
@@ -509,7 +553,7 @@ export function RackTable({
               "validation",
               "/api/run-llama-async",
               (jid) => `/api/run-llama-status?job_id=${encodeURIComponent(jid)}`,
-              llamaNodesBody(rack, ld, nodesFullRack(rack)),
+              llamaNodesBody(rack, ld, nodesFullRack(rack), naming),
             ),
           );
           break;
@@ -521,7 +565,7 @@ export function RackTable({
               "stress",
               "/api/run-mnubergemm-stress-async",
               (jid) => `/api/run-mnubergemm-stress-status?job_id=${encodeURIComponent(jid)}`,
-              validationFamilyBody(rack, ld, nodesFullRack(rack)),
+              validationFamilyBody(rack, ld, nodesFullRack(rack), naming),
             ),
           );
           break;
@@ -533,7 +577,7 @@ export function RackTable({
               "validation",
               "/api/run-nvloom-async",
               (jid) => `/api/run-nvloom-status?job_id=${encodeURIComponent(jid)}`,
-              validationFamilyBody(rack, ld, nodesFullRack(rack)),
+              validationFamilyBody(rack, ld, nodesFullRack(rack), naming),
             ),
           );
           break;
@@ -545,31 +589,23 @@ export function RackTable({
               "validation",
               "/api/run-clusterkit-async",
               (jid) => `/api/run-clusterkit-status?job_id=${encodeURIComponent(jid)}`,
-              validationFamilyBody(rack, ld, nodesFullRack(rack)),
+              validationFamilyBody(rack, ld, nodesFullRack(rack), naming),
             ),
           );
           break;
         case "power_on":
           fireBulkParallel("Power on", (rack) =>
-            void store.runAsyncReset(rack, "Power on", "power", "/api/power-on-async", specsCommandBody(rack, ld, nodesFullRack(rack))),
+            void store.runAsyncReset(rack, "Power on", "power", "/api/power-on-async", specsCommandBody(rack, ld, nodesFullRack(rack), naming)),
           );
           break;
         case "gpu_reset":
           fireBulkParallel("GPU reset", (rack) =>
-            void store.runAsyncReset(rack, "GPU reset", "gpu", "/api/gpu-reset-async", specsCommandBody(rack, ld, nodesFullRack(rack))),
-          );
-          break;
-        case "hw_check":
-          fireBulkParallel("Hardware check", (rack) =>
-            void store.runAsyncReset(rack, "Hardware check", "hw", "/api/hw-check-async", {
-              ...specsCommandBody(rack, ld, nodesFullRack(rack)),
-              preset: "default",
-            }),
+            void store.runAsyncReset(rack, "GPU reset", "gpu", "/api/gpu-reset-async", specsCommandBody(rack, ld, nodesFullRack(rack), naming)),
           );
           break;
         case "bug_report":
           fireBulkParallel("Bug report", (rack) =>
-            void store.runAsyncReset(rack, "Bug report", "hw", "/api/bug-report-async", specsCommandBody(rack, ld, nodesFullRack(rack))),
+            void store.runAsyncReset(rack, "Bug report", "hw", "/api/bug-report-async", specsCommandBody(rack, ld, nodesFullRack(rack), naming)),
           );
           break;
         case "imex_reset":
@@ -589,7 +625,7 @@ export function RackTable({
               "Restart services",
               "services",
               "/api/services-restart-async",
-              specsCommandBody(rack, ld, nodesFullRack(rack)),
+              specsCommandBody(rack, ld, nodesFullRack(rack), naming),
             ),
           );
           break;
@@ -635,19 +671,19 @@ export function RackTable({
           break;
         case "drain":
           fireBulkParallel("Slurm drain", (rack) =>
-            void store.runSyncJson(rack, "Slurm drain", "/api/slurm-drain", slurmTargetBody(rack, nodesFullRack(rack)) as Record<string, unknown>),
+            void store.runSyncJson(rack, "Slurm drain", "/api/slurm-drain", slurmTargetBody(rack, nodesFullRack(rack), naming) as Record<string, unknown>),
           );
           break;
         case "undrain":
           fireBulkParallel("Slurm undrain", (rack) =>
-            void store.runSyncJson(rack, "Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, nodesFullRack(rack)) as Record<string, unknown>),
+            void store.runSyncJson(rack, "Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, nodesFullRack(rack), naming) as Record<string, unknown>),
           );
           break;
         default:
           setRunMenuAnchor(null);
       }
     },
-    [selectedRackList, logDir, store, fireBulkParallel, nodesFullRack],
+    [selectedRackList, logDir, naming, store, fireBulkParallel, nodesFullRack],
   );
 
   const openMenu = useCallback((event: React.MouseEvent<HTMLElement>, kind: MenuKind, row: RackRow) => {
@@ -985,8 +1021,13 @@ export function RackTable({
                 <MenuItem onClick={() => handleBulkRun("gpu_reset")}>
                   <ListItemText primary="GPU reset" secondary="Async" />
                 </MenuItem>
-                <MenuItem onClick={() => handleBulkRun("hw_check")}>
-                  <ListItemText primary="Hardware check" secondary="Async" />
+                <MenuItem
+                  onClick={() => {
+                    setRunMenuAnchor(null);
+                    setHwBulkDialogOpen(true);
+                  }}
+                >
+                  <ListItemText primary="Hardware check" secondary="Async · choose preset or args" />
                 </MenuItem>
                 <MenuItem onClick={() => handleBulkRun("bug_report")}>
                   <ListItemText primary="Bug report" secondary="Async" />
@@ -1121,36 +1162,6 @@ export function RackTable({
                       <Box sx={{ opacity: selectMode ? 0.35 : 1, pointerEvents: selectMode ? "none" : "auto" }}>
                         <RackTableCommandIndicator rack={row.rack} />
                       </Box>
-                      {(() => {
-                        const lock = rackLockedByOther(row.rack);
-                        if (!lock) return null;
-                        const detail =
-                          lock.kind === "claim"
-                            ? `Manually claimed by ${lock.operator || "unknown"}`
-                            : `${lock.detail || "operation"} running for ${lock.operator || "unknown"}`;
-                        return (
-                          <Tooltip
-                            arrow
-                            placement="top"
-                            title={
-                              <Text kind="body/regular/sm" style={{ color: "inherit" }}>
-                                {detail}
-                              </Text>
-                            }
-                          >
-                            <Box
-                              sx={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                color: "warning.main",
-                              }}
-                              aria-label={`Locked: ${detail}`}
-                            >
-                              <Lock size={14} />
-                            </Box>
-                          </Tooltip>
-                        );
-                      })()}
                     </Box>
                   </TableCell>
                   <TableCell>
@@ -1170,7 +1181,7 @@ export function RackTable({
                     </Box>
                   </TableCell>
                   <TableCell>
-                    <ValidationTag nemo={row.nemo} />
+                    <ValidationTag row={row} />
                   </TableCell>
                   <TableCell>
                     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
@@ -1432,6 +1443,18 @@ export function RackTable({
         jobId={parserJobId}
         logDir={logDir}
         initialTabIndex={parserInitialTab}
+      />
+
+      <HwCheckRunDialog
+        open={hwBulkDialogOpen}
+        onClose={() => setHwBulkDialogOpen(false)}
+        title="Hardware check (bulk)"
+        subtitle={
+          selectedRackList.length
+            ? `${selectedRackList.length} rack(s): ${selectedRackList.join(", ")} · ct[01–18] per rack`
+            : undefined
+        }
+        onConfirm={(opts) => runHwCheckBulk(opts)}
       />
     </Box>
   );

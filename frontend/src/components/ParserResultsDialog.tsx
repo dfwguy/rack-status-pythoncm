@@ -105,6 +105,7 @@ interface StepPoint {
 
 interface NemotronRow {
   job_id: string;
+  /** Rack id for NEMO 1Rack logs; for sn-llama LLAMA rows this is the CT hostname parsed from the Slurm log basename. */
   rack: string;
   model: string;
   median_step_time: number;
@@ -258,7 +259,7 @@ function LlamaReportTable({ rows }: { rows: NemotronRow[] }) {
       <Table size="small" stickyHeader>
         <TableHead>
           <TableRow>
-            <TableCell>Rack</TableCell>
+            <TableCell>CT</TableCell>
             <TableCell>Job</TableCell>
             <TableCell>Status</TableCell>
             <TableCell>Step (s)</TableCell>
@@ -296,8 +297,9 @@ function LlamaSnStepTimeMultiChart({ rows }: { rows: NemotronRow[] }) {
         .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
       if (!pts.length) return null;
       const col = LLAMA_SN_CHART_COLORS[idx % LLAMA_SN_CHART_COLORS.length];
+      const ctLabel = (row.rack || "").trim() || "?";
       return {
-        label: `${row.rack} · job ${row.job_id}`,
+        label: `${ctLabel} · job ${row.job_id}`,
         data: pts,
         borderColor: col,
         backgroundColor: "transparent",
@@ -322,7 +324,7 @@ function LlamaSnStepTimeMultiChart({ rows }: { rows: NemotronRow[] }) {
         LLAMA step time (all matching logs under sn-llama/)
       </Text>
       <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 12, display: "block" }}>
-        {datasets.length} series — one per Slurm job / log file. Iterations may differ between runs.
+        {datasets.length} series — one per Slurm job / log file (CT hostname from the log name). Iterations may differ between runs.
       </Text>
       <div style={{ height: 360 }}>
         <Line

@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RackStatusResponse } from "../types/api";
-import { apiFetch, getClientId } from "../lib/apiFetch";
 
 const DEFAULT_POLL_MS = 15_000;
+const CLIENT_ID_KEY = "nvis-rack-client-id";
 
-/** Re-exported for legacy call sites; prefer importing from ../lib/apiFetch. */
-export { getClientId };
+let _clientId: string | null = null;
+/** Shared client id for /api/status and /api/cluster-overview active-user counting. */
+export function getClientId(): string {
+  if (!_clientId) {
+    _clientId = localStorage.getItem(CLIENT_ID_KEY);
+    if (!_clientId) {
+      _clientId = `spa-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem(CLIENT_ID_KEY, _clientId);
+    }
+  }
+  return _clientId;
+}
 
 export function useRackStatus(logDir: string, pollMs = DEFAULT_POLL_MS) {
   const [data, setData] = useState<RackStatusResponse | null>(null);
@@ -19,9 +29,11 @@ export function useRackStatus(logDir: string, pollMs = DEFAULT_POLL_MS) {
       const params = new URLSearchParams();
       if (logDir) params.set("log_dir", logDir);
       params.set("client_id", getClientId());
-      const res = await apiFetch(`/api/status?${params}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json: RackStatusResponse & { active_clients?: number } = await res.json();
+      const res = await fetch(`/api/status?${params}`, { cache: "no-store" });
+      const json: RackStatusResponse & { active_clients?: number; error?: string } = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error || `HTTP ${res.status}`);
+      }
       setData(json);
       setError(null);
       if (json.active_clients != null) {

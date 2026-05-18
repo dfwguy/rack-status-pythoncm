@@ -167,9 +167,13 @@ function AppContent() {
         {activeView === "singleRack" && selectedRack && (
           <RackDetailView
             rack={selectedRack}
-            row={data?.rows.find((r) => r.rack === selectedRack)}
+            row={
+              data?.rows.find((r) => r.rack === selectedRack) ??
+              data?.rows.find((r) => r.rack.toLowerCase() === selectedRack.toLowerCase())
+            }
             comment={data?.comments[selectedRack] || ""}
             physicalRf0={data?.physical_rf0 || {}}
+            naming={data?.naming}
             logDir={data?.log_dir}
             onBack={handleBackToDashboard}
           />
@@ -211,11 +215,11 @@ function AuthGate() {
   }
 
   return (
-    <RackLocksProvider>
-      <AIChatProvider>
+    <AIChatProvider>
+      <RackLocksProvider>
         <AppContent />
-      </AIChatProvider>
-    </RackLocksProvider>
+      </RackLocksProvider>
+    </AIChatProvider>
   );
 }
 

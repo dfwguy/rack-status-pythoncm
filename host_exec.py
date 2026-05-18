@@ -93,12 +93,64 @@ def _ssh_base_argv() -> list[str]:
 # run_on_host  –  blocking command execution (replaces subprocess.run)
 # ---------------------------------------------------------------------------
 
+def _slurm_module_init_snippet() -> str:
+    """Minimal Environment Modules init (no login profile / bash-completion)."""
+    custom = (os.environ.get("RACK_MODULES_INIT") or "").strip()
+    if custom:
+        return f"source {shlex.quote(custom)} 2>/dev/null; "
+    return (
+        "source /etc/profile.d/lmod.sh 2>/dev/null || "
+        "source /usr/share/Modules/init/bash 2>/dev/null || "
+        "source /cm/local/apps/environment-modules/current/init/bash 2>/dev/null; "
+        "true; "
+    )
+
+
+def run_slurm_on_host(
+    shell_cmd: str,
+    *,
+    timeout: int = 120,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run Slurm CLI (*shell_cmd* often ``module load slurm && squeue``).
+
+    Uses ``bash -c`` with a minimal modules init instead of ``bash -lc``, so BCM
+    ``module load slurm`` does not pull in ``slurm_completion.sh`` / bash-completion
+    (the common ``FATAL: Missing required source file`` on head nodes).
+    """
+    _ensure_init()
+    inner = _slurm_module_init_snippet() + shell_cmd
+    if _EXEC_MODE == "ssh":
+        env_prefix = _build_env_exports()
+        remote_cmd = f"bash -c {shlex.quote(inner)}"
+        remote_cmd = env_prefix + remote_cmd
+        if cwd:
+            remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
+        argv = _ssh_base_argv() + [remote_cmd]
+        return subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    return subprocess.run(
+        ["bash", "-c", inner],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=cwd,
+        env=env,
+    )
+
+
 def run_on_host(
     cmd: str | list[str],
     *,
     timeout: int = 120,
     cwd: str | None = None,
     env: dict[str, str] | None = None,
+    login_shell: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     """Execute *cmd* on the host, locally or via SSH.
 
@@ -142,8 +194,9 @@ def run_on_host(
             cwd=cwd,
             env=env,
         )
+    bash_flag = "-lc" if login_shell else "-c"
     return subprocess.run(
-        ["bash", "-lc", shell_str],
+        ["bash", bash_flag, shell_str],
         capture_output=True,
         text=True,
         timeout=timeout,

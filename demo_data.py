@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from native_status import validation_status_hint
 
 _DEMO_POD = 5
 _DEMO_RACK_COUNT = 18
@@ -68,12 +69,28 @@ def _generate_rows(now_ts: float) -> list[dict[str, str]]:
         ct_parts.append(f"UP:{rack_id}-ct[{_condense(up_ct)}]")
         ct_cell = ";".join(ct_parts)
 
+        nc_b: bool | None = None
+        ll_b: bool | None = None
+        if state == "fail":
+            nc_b = rng.random() < 0.55
+            ll_b = rng.random() < 0.55
+            if nc_b and ll_b:
+                ll_b = False
+        nemo_hint = validation_status_hint(
+            nemo,
+            job_id,
+            nccl_ok=nc_b,
+            llm_ok=ll_b,
+            validation_test="nccl_all_reduce,llm",
+        )
+
         rows.append({
             "rack": rack_id,
             "nemo": nemo,
             "last_job": job_id,
             "sinfo": sinfo_cell,
             "ct_down_unk": ct_cell,
+            "nemo_hint": nemo_hint,
         })
 
     return rows

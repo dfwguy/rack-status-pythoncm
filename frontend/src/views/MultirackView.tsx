@@ -29,6 +29,7 @@ import {
   validationOngoing,
   type TailLogStreamBody,
 } from "../lib/rackLog";
+import { validationStatusTooltip } from "../lib/validationStatusTooltip";
 import type { RackRow, RackStatusResponse } from "../types/api";
 
 interface MultirackViewProps {
@@ -55,12 +56,32 @@ function nemoColor(nemo: string): TagColor {
   return "gray";
 }
 
+function MultirackValidationTag({ row }: { row: MultirackStatusRow }) {
+  const tip = validationStatusTooltip({
+    nemo: row.nemo,
+    last_job: row.last_job,
+    nemo_hint: row.nemo_hint,
+  });
+  const tag = (
+    <Tag color={nemoColor(row.nemo)} kind="solid" readOnly density="compact">
+      {row.nemo}
+    </Tag>
+  );
+  if (!tip) return tag;
+  return (
+    <Tooltip title={<span style={{ display: "block", maxWidth: 420, whiteSpace: "pre-wrap" }}>{tip}</span>} enterDelay={350} arrow>
+      <span style={{ display: "inline-flex", cursor: "default" }}>{tag}</span>
+    </Tooltip>
+  );
+}
+
 interface MultirackStatusRow {
   log_file: string;
   display_rack: string;
   nemo: string;
   last_job: string;
   sinfo: string;
+  nemo_hint?: string;
 }
 
 /** log_file from API is usually a basename; strip any path for parser ?log_file= */
@@ -244,6 +265,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           nemo: r.nemo || "-",
           last_job: r.last_job || "-",
           sinfo: r.sinfo || "-",
+          nemo_hint: r.nemo_hint || "",
         })));
       } else {
         setMrRows([]);
@@ -322,7 +344,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
                   <TableRow key={i} hover>
                     <TableCell sx={{ fontWeight: 600 }}>{row.display_rack}</TableCell>
                     <TableCell>
-                      <Tag color={nemoColor(row.nemo)} kind="solid" readOnly density="compact">{row.nemo}</Tag>
+                      <MultirackValidationTag row={row} />
                     </TableCell>
                     <TableCell>
                       <Text kind="body/regular/md" style={{ fontFamily: "monospace" }}>{row.last_job}</Text>
@@ -434,7 +456,16 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
                       </TableCell>
                       <TableCell sx={{ fontWeight: 600 }}>{row.rack}</TableCell>
                       <TableCell>
-                        <Tag color={nemoColor(row.nemo)} kind="solid" readOnly density="compact">{row.nemo}</Tag>
+                        <MultirackValidationTag
+                          row={{
+                            log_file: "",
+                            display_rack: row.rack,
+                            nemo: row.nemo,
+                            last_job: row.last_job,
+                            sinfo: row.sinfo,
+                            nemo_hint: row.nemo_hint,
+                          }}
+                        />
                       </TableCell>
                       <TableCell>
                         <Text kind="body/regular/sm">{row.sinfo}</Text>

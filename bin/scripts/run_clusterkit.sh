@@ -3,34 +3,50 @@
 # Slurm stdout: log_dir/clusterkit/${USER}-CK-<rack>-%j.txt ; per-job artifacts under log_dir/clusterkit/<rack>/.
 # Cwd must be the rack log directory (Flask sets cwd=log_dir when used from the dashboard).
 #
-# Usage: ./bin/scripts/run_clusterkit.sh <pNN-rMM-ct[range]>
+# Usage: ./bin/scripts/run_clusterkit.sh <Slurm hostlist; e.g. pNN-rMM-ct[range] or CBR… prefix[trays]>
 #
 # Workspace: NVIS_WORKSPACE_DIR / RACK_WORKSPACE_DIR / TOPDIR (workspace-dir-common.sh).
 # CUDA tarball major: CUDA_MAJ or RACK_NVLOOM_CUDA_MAJOR (default 13).
 #
 # Optional env:
+#   RACK_CLUSTERKIT_RACK — canonical rack id for logs/paths (dashboard sets this for NVIS/CBR names).
+#     If unset: Bright pNN-rMM-ct[…] → pNN-rMM; else trailing […] tray range is stripped from target.
+#   NVIS_SLURM_HOSTLIST — comma-separated Slurm NodeNames for ``sbatch -w`` (bypasses scontrol expansion; last resort).
 #   RACK_CLUSTER_PRODUCT_LINE / RACK_PRODUCT_LINE — selects core_to_hca_dgxgb200 vs dgxgb300 (see clusterkit.sbatch).
 #   NVIS_CLUSTERKIT_MAPPER — full path to mapper script (overrides product line).
+#   NVIS_RDMA_LINK_TECH — auto|mlx|ib|roce|spectrumx|spx; used when RACK_CLUSTERKIT_LINK_TECH is unset (see clusterkit.sbatch).
+#   RACK_CLUSTERKIT_LINK_TECH — per-ClusterKit override of interconnect mode (see clusterkit.sbatch).
+#   RACK_CLUSTERKIT_HCA_PROFILE — preset HCA table (gb300_mlx4, gb300_roce_spx_quad, …; see clusterkit.sbatch).
+#   RACK_CLUSTERKIT_UCX_TLS — optional UCX_TLS for RoCE branch (default rc,cuda).
 #   RACK_CLUSTERKIT_PARTITION — if set, passed as sbatch -p …
 #   RACK_CLUSTERKIT_EXTRA_OPTS — optional extra flags for clusterkit.sh (word-split; see clusterkit.sbatch)
 #   NVIS_CLUSTERKIT_HPCX_INIT — override path to hpcx-init.sh
+# UCX defaults for Slurm jobs: nvis-ucx-job-env.inc.sh (sourced from clusterkit.sbatch); override UCX_* in the job env.
 
 module load slurm
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 . "${_SCRIPT_DIR}/workspace-dir-common.sh"
+# shellcheck disable=SC1091
+. "${_SCRIPT_DIR}/slurm-expand-hosts.inc.sh"
 
 export WORKSPACE_DIR
 export NVIS_BIN_SCRIPTS="${_SCRIPT_DIR}"
 export CUDA_MAJ="${CUDA_MAJ:-${RACK_CLUSTERKIT_CUDA_MAJOR:-${RACK_NVLOOM_CUDA_MAJOR:-13}}}"
 
 target="${1:?usage: $0 <pNN-rMM-ct[range]>}"
-rack=$(echo "${target}" | sed -E 's/(p[0-9]+-r[0-9]+)-ct.*/\1/' | tr '[:upper:]' '[:lower:]')
+if [[ -n "${RACK_CLUSTERKIT_RACK:-}" ]]; then
+  rack="${RACK_CLUSTERKIT_RACK}"
+else
+  rack=$(echo "${target}" | sed -E 's/(p[0-9]+-r[0-9]+)-ct.*/\1/' | tr '[:upper:]' '[:lower:]')
+  if [[ "$rack" == "$target" ]]; then
+    rack=$(echo "${target}" | sed -E 's/\[[^][]*\]$//' | tr '[:upper:]' '[:lower:]')
+  fi
+fi
+export RACK_CLUSTERKIT_RACK="${rack}"
 
-hosts=($(scontrol show hostname "${target}"))
-if [[ ${#hosts[@]} -eq 0 ]]; then
-  echo "error: scontrol expanded zero hosts for ${target}" >&2
+if ! _slurm_expand_to_wlist "${target}"; then
   exit 1
 fi
 
@@ -41,21 +57,25 @@ if [[ ${#_cancel_ids[@]} -gt 0 ]]; then
   scancel "${_cancel_ids[@]}" 2>/dev/null || true
 fi
 
-_nnodes=${#hosts[@]}
-_wlist=$(IFS=,; echo "${hosts[*]}")
+_nnodes=${_slurm_nnodes}
+
+if [[ "${_nnodes}" -lt 2 ]]; then
+  echo "ERROR: ClusterKit needs at least two Slurm nodes for pairwise NIC latency/bandwidth (expanded count=${_nnodes})." >&2
+  echo "       Widen the validation target / tray range, or set NVIS_SLURM_HOSTLIST to two or more NodeNames (comma-separated)." >&2
+  echo "       See validation/clusterkit/clusterkit.sh (hostfile must have ≥2 lines)." >&2
+  exit 1
+fi
 
 _sbatch_extra=()
 if [[ -n "${RACK_CLUSTERKIT_PARTITION:-}" ]]; then
   _sbatch_extra+=(-p "${RACK_CLUSTERKIT_PARTITION}")
 fi
 
-export RACK_CLUSTERKIT_RACK="${rack}"
-
 sbatch \
   --export=ALL \
   "${_sbatch_extra[@]}" \
   -N "${_nnodes}" \
-  -w "${_wlist}" \
+  -w "${_slurm_wlist}" \
   --requeue \
   --dependency=singleton \
   --job-name="CLUSTERKIT-${rack}" \
