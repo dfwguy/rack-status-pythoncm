@@ -399,6 +399,13 @@ def extract_rack_ids_from_cmsh_text(text: str) -> list[str]:
             c = naming.canonical_rack_id(m.group(0))
             if c:
                 canon.add(c)
+    for line in text.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        mapped = naming.map_cmsh_rack_list_token(parts[0])
+        if mapped:
+            canon.add(mapped)
     out = sorted(canon, key=naming.rack_sort_key)
     if not _include_cmsh_rack_r00():
         out = [rid for rid in out if not naming.is_r00_rack(rid)]

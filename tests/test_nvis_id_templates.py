@@ -75,6 +75,24 @@ def test_canonical_rack_id_cbr_preserves_template_literals():
     )
 
 
+def test_map_cmsh_rack_list_token_rk_to_svr_cn():
+    n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
+    assert n.map_cmsh_rack_list_token("CBR01-DH01-RK0102") == "CBR01-DH01-SVR-CN0102"
+    assert n.map_cmsh_rack_list_token("CBR01-DH01-RK0104") == "CBR01-DH01-SVR-CN0104"
+    assert n.map_cmsh_rack_list_token("CBR01-DH01-SVR-CN0102") == "CBR01-DH01-SVR-CN0102"
+
+
+def test_extract_rack_ids_from_cmsh_text_cbr_rk_lines():
+    import native_status
+
+    text = (
+        "CBR01-DH01-RK0102    DataHall     1              1              42\n"
+        "CBR01-DH01-RK0104    DataHall     2              1              42\n"
+    )
+    ids = native_status.extract_rack_ids_from_cmsh_text(text)
+    assert ids == ["CBR01-DH01-SVR-CN0102", "CBR01-DH01-SVR-CN0104"]
+
+
 def test_rack_id_from_log_basename_clusterkit_root_ck():
     n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
     assert n.rack_id_from_log_basename("root-CK-CBR01-DH01-SVR-CN0102-829.txt") == "CBR01-DH01-SVR-CN0102"

@@ -271,6 +271,27 @@ class NvisNaming:
         groups = [g.zfill(2) for g in m.groups()]
         return _build_from_template(self.rack_template, groups)
 
+    def map_cmsh_rack_list_token(self, token: str) -> str | None:
+        """Map a ``cmsh -c 'rack; list'`` rack object id to the dashboard row id (``NVIS_RACK_ID``).
+
+        On some BCM sites the rack object is named ``…-RK0102`` while validation logs and
+        ``NVIS_RACK_ID`` use ``…-SVR-CN0102`` (same four-digit suffix). Bright sites usually
+        already use the row id in ``rack; list``.
+        """
+        t = (token or "").strip()
+        if not t or t.isdigit():
+            return None
+        c = self.canonical_rack_id(t)
+        if c:
+            return c
+        rack_lit = "".join(seg[1] for seg in self.rack_template.segments if seg[0] == "lit")
+        if "SVR-CN" not in rack_lit.upper():
+            return None
+        m = re.fullmatch(r"(?P<prefix>.+)-RK(?P<suf>\d{4})$", t, re.IGNORECASE)
+        if not m:
+            return None
+        return self.canonical_rack_id(f"{m.group('prefix')}-SVR-CN{m.group('suf')}")
+
     def normalize_rack_id(self, rack: str) -> str:
         c = self.canonical_rack_id(rack)
         if not c:

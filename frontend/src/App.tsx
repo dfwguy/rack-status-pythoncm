@@ -22,6 +22,7 @@ import { SettingsView } from "./views/SettingsView";
 import { LoginPage } from "./pages/LoginPage";
 import { useRackStatus } from "./hooks/useRackStatus";
 import { RackCommandsStoreProvider } from "./context/RackCommandsStoreContext";
+import { RackLocksProvider } from "./context/RackLocksContext";
 
 const SIDEBAR_STORAGE_KEY = "nvis-sidebar-open";
 
@@ -215,7 +216,9 @@ function AuthGate() {
 
   return (
     <AIChatProvider>
-      <AppContent />
+      <RackLocksProvider>
+        <AppContent />
+      </RackLocksProvider>
     </AIChatProvider>
   );
 }
