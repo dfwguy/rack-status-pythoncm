@@ -1920,9 +1920,17 @@ def _parser_export_glob() -> str:
 
 
 def _nemo_nccl_in_log_basename(name: str) -> bool:
-    """Logs considered for single-rack validation: NEMO/NCCL plus ClusterKit-style aux names."""
+    """Logs with NEMO or NCCL in the basename (multirack tab, exports, legacy shell table)."""
     low = name.lower()
     if "nemo" in low or "nccl" in low:
+        return True
+    return _nvis_naming().auxiliary_single_rack_log_basename(name)
+
+
+def _nemo_single_rack_log_basename(name: str) -> bool:
+    """Single-rack NEMO validation logs for the dashboard table / Open Log (not NCCL-only sweeps)."""
+    low = name.lower()
+    if "nemo" in low:
         return True
     return _nvis_naming().auxiliary_single_rack_log_basename(name)
 
@@ -2182,11 +2190,11 @@ def list_log_txt_paths_for_export(
 
 
 def find_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
-    """Paths to single-rack *NEMO* validation logs for *rack* under ``log_dir`` and ``failed/`` (newest first).
+    """Paths to single-rack validation logs for *rack* under ``log_dir`` and ``failed/`` (newest first).
 
-    Matches ``*<rack>*.txt`` when the basename maps to exactly this rack via
-    ``rack_id_from_log_basename`` (covers ``1Rack-…``, ``root-CK-…`` / ClusterKit, etc.) and is not
-    classified as multirack. Excludes Llama Slurm stdout (see parser results / ``sn-llama/``).
+    Scans ``*.txt`` and keeps files whose basename maps to exactly this rack via
+    ``rack_id_from_log_basename`` (agnostic to pod/rack zero-padding in filenames, e.g. ``p5-r01``
+    vs dashboard ``p05-r01``). Excludes multirack and Llama Slurm stdout basenames.
     """
     rk = _normalize_rack_id(rack)
     naming = _nvis_naming()
@@ -2195,8 +2203,8 @@ def find_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
     for base in (log_dir, log_dir / "failed"):
         if not base.is_dir():
             continue
-        for p in base.glob(f"*{rk}*.txt"):
-            if not p.is_file() or not _nemo_nccl_in_log_basename(p.name):
+        for p in sorted(base.glob("*.txt"), key=lambda x: x.name.lower()):
+            if not p.is_file() or not _nemo_single_rack_log_basename(p.name):
                 continue
             if naming.is_llama_slurm_stdout_basename(p.name):
                 continue
@@ -8596,14 +8604,14 @@ _LOG_ANALYSIS_CACHE_PATH = APP_DIR / "var" / "cache" / "log_analysis_cache.json"
 
 
 def _glob_one_rack_nemo_logs_for_rack_status(log_dir: Path) -> list[Path]:
-    """Same basename rules as rack_status.sh in log_dir (root only, not failed/); NEMO validation only, no Llama stdout."""
+    """NEMO single-rack validation logs in log_dir root (not failed/, not NCCL-only, no Llama stdout)."""
     root = log_dir.resolve()
     naming = _nvis_naming()
     out: list[Path] = []
     for p in sorted(root.glob("*.txt"), key=lambda x: x.name.lower()):
         if not p.is_file():
             continue
-        if not _nemo_nccl_in_log_basename(p.name):
+        if not _nemo_single_rack_log_basename(p.name):
             continue
         if naming.is_llama_slurm_stdout_basename(p.name):
             continue

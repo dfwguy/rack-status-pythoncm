@@ -121,6 +121,24 @@ def test_rack_id_from_nemo_1rack_bright_ct_after_hyphen():
     assert n.rack_id_from_nemo_1rack_filename(bn) == "p05-r01"
 
 
+def test_sinfo_and_ds_match_unpadded_bright_hostname():
+    """Slurm ``sinfo`` and cmsh ``ds`` often spell ``p5-r01-ct01`` (dashboard row ``p05-r01``)."""
+    n = nid.NvisNaming.from_templates(nid.DEFAULT_NVIS_RACK_ID, nid.DEFAULT_NVIS_CT_ID)
+    assert n.sinfo_rack_from_host("p5-r01-ct01") == ("p05-r01", "p5-r01-ct01")
+    m = n.matcher()
+    found = m.find_in_line("p5-r01-ct01 .............. [ CLOSED ] (DOWN)")
+    assert len(found) == 1
+    assert found[0].rack_id == "p05-r01"
+    assert found[0].tray == "01"
+
+
+def test_rack_id_from_log_basename_unpadded_bright_pod():
+    """Slurm logs often use ``p5-r01`` while cmsh rows are canonical ``p05-r01``."""
+    n = nid.NvisNaming.from_templates(nid.DEFAULT_NVIS_RACK_ID, nid.DEFAULT_NVIS_CT_ID)
+    assert n.rack_id_from_log_basename("root-NEMO-1Rack-p5-r01-14N-23806.txt") == "p05-r01"
+    assert n.rack_id_from_log_basename("root-NCCL-p5-r01-ct01-N-22417.txt") is None
+
+
 def test_rack_id_from_llama_slurm_basename_bright():
     n = nid.NvisNaming.from_templates(nid.DEFAULT_NVIS_RACK_ID, nid.DEFAULT_NVIS_CT_ID)
     bn = "cmsupport-NEMO-LLAMA3_8B-1N-p05-r01-ct07-99.txt"

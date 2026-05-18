@@ -273,6 +273,14 @@ def _nemo_nccl_bn(name: str) -> bool:
     return _nvis_naming().auxiliary_single_rack_log_basename(name)
 
 
+def _nemo_single_rack_bn(name: str) -> bool:
+    """NEMO validation logs for the single-rack table (excludes NCCL-only basename sweeps)."""
+    low = name.lower()
+    if "nemo" in low:
+        return True
+    return _nvis_naming().auxiliary_single_rack_log_basename(name)
+
+
 def _is_multirack_bn(name: str) -> bool:
     if not _nemo_nccl_bn(name):
         return False
@@ -353,14 +361,14 @@ def _jobid_from_log_name(name: str) -> str | None:
 
 
 def _glob_one_rack_logs(log_dir: Path) -> list[Path]:
-    """``*.txt`` in *log_dir* root only (NEMO/NCCL single-rack validation); excludes multirack and Llama stdout."""
+    """``*.txt`` in *log_dir* root only (NEMO single-rack validation); excludes multirack and Llama stdout."""
     root = log_dir.resolve()
     out: list[Path] = []
     naming = _nvis_naming()
     for p in sorted(root.glob("*.txt"), key=lambda x: x.name.lower()):
         if not p.is_file():
             continue
-        if not _nemo_nccl_bn(p.name):
+        if not _nemo_single_rack_bn(p.name):
             continue
         if naming.is_llama_slurm_stdout_basename(p.name):
             continue

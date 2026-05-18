@@ -183,7 +183,7 @@ class NamingMatcher:
         m = self.ct_re.fullmatch(token.strip())
         if not m:
             return None
-        groups = list(m.groups())
+        groups = [g.zfill(2) for g in m.groups()]
         rack_id = _build_from_template(
             self.rack_template, groups[: self.rack_template.slot_count]
         )
@@ -219,6 +219,7 @@ class NvisNaming:
     rack_re: re.Pattern[str]
     rack_scan_re: re.Pattern[str]
     ct_re: re.Pattern[str]
+    ct_scan_re: re.Pattern[str]
     nvsw_re: re.Pattern[str] | None
     ct_joiner: str
     tray_slot_index: int
@@ -243,16 +244,18 @@ class NvisNaming:
             rack_re=re.compile(_template_to_regex(rack_p)),
             rack_scan_re=re.compile(_template_to_regex(rack_p, loose=True)),
             ct_re=re.compile(_template_to_regex(ct_p)),
+            ct_scan_re=re.compile(_template_to_regex(ct_p, loose=True)),
             nvsw_re=re.compile(_template_to_regex(nvsw_p)) if nvsw_p else None,
             ct_joiner=_ct_validation_joiner(ct_p, rack_p),
             tray_slot_index=_tray_slot_index(ct_p),
         )
 
     def matcher(self) -> NamingMatcher:
+        """Hostname matcher for cmsh ``ds`` lines (loose digit slots for Slurm/cmsh spelling)."""
         return NamingMatcher(
             rack_template=self.rack_template,
             ct_template=self.ct_template,
-            ct_re=self.ct_re,
+            ct_re=self.ct_scan_re,
         )
 
     def schema_dict(self) -> dict[str, str]:
@@ -427,14 +430,14 @@ class NvisNaming:
 
     def sinfo_rack_from_host(self, host: str) -> tuple[str, str | None] | None:
         hh = host.strip().split(".")[0]
-        m_ct = self.ct_re.fullmatch(hh)
+        m_ct = self.ct_scan_re.fullmatch(hh)
         if m_ct:
-            groups = list(m_ct.groups())
+            groups = [g.zfill(2) for g in m_ct.groups()]
             rack = _build_from_template(
                 self.rack_template, groups[: self.rack_template.slot_count]
             )
             return rack, hh
-        m_r = self.rack_re.fullmatch(hh)
+        m_r = self.rack_scan_re.fullmatch(hh)
         if m_r:
             groups = [g.zfill(2) for g in m_r.groups()]
             rack = _build_from_template(self.rack_template, groups)
@@ -442,7 +445,8 @@ class NvisNaming:
         return None
 
     def nemo_1rack_filename_re(self) -> re.Pattern[str]:
-        inner = _template_to_regex(self.rack_template).replace("(?i)", "")
+        # Loose digit slots: logs often use ``p5-r01`` while the dashboard row id is ``p05-r01``.
+        inner = _template_to_regex(self.rack_template, loose=True).replace("(?i)", "")
         # Bright: …1Rack-p05-r01-ct[…]-…  CBR: …1Rack-CBR01-…-CN0102[11-18]-… (``[`` right after rack id)
         return re.compile(rf"1Rack-({inner})(?:-|\[)", re.IGNORECASE)
 
@@ -487,13 +491,20 @@ class NvisNaming:
         return None
 
     def rack_id_from_log_basename(self, name: str) -> str | None:
-        """Rack id from a single-rack *NEMO* validation log basename (1Rack-…, auxiliary e.g. root-CK-…).
+        """Rack id from a single-rack NEMO validation log basename (1Rack-, auxiliary e.g. root-CK-…).
 
-        Excludes Llama Slurm stdout (``…NEMO-LLAMA3_8B-1N-…``); use ``rack_id_from_llama_slurm_basename`` for that.
+        Excludes NCCL-only sweeps and Llama Slurm stdout (``…NEMO-LLAMA3_8B-1N-…``).
         """
+        if self.is_llama_slurm_stdout_basename(name):
+            return None
         rid = self.rack_id_from_nemo_1rack_filename(name)
         if rid:
             return rid
+        low = (name or "").lower()
+        if "nemo" in low:
+            racks = self.find_rack_ids_in_string(name)
+            if len(racks) == 1:
+                return next(iter(racks))
         if not self.auxiliary_single_rack_log_basename(name):
             return None
         racks = self.find_rack_ids_in_string(name)
