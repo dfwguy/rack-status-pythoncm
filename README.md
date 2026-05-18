@@ -393,14 +393,32 @@ Full variable reference: **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)**
 
 ## Screenshots
 
-Parser results with InfiniBand table and embedded Grafana (GPU thermal / power):
+Single-rack validation table (Firmus/CBR naming):
 
-![Parser results — IB table and Grafana](docs/screenshots/ui-parser-results-ib-grafana.png)
+<p align="center">
+  <img src="docs/screenshots/ui-screenshot-01.png" alt="Single rack validation status" width="900" />
+</p>
 
-Main table with NEMO log modal; footer shows `backend: native_status.py` when the Python table is active:
+Rack detail — nodes, Validation tab, Run NEMO:
 
-![Rack table and NEMO log modal](docs/screenshots/ui-nemo-log-table.png)
+<p align="center">
+  <img src="docs/screenshots/ui-screenshot-02.png" alt="Rack detail validation tab" width="900" />
+</p>
 
-Parser results — NCCL summary and all_reduce bandwidth chart:
+Workflow editor — GPU Health Check (canvas + template source):
 
-![Parser results — NCCL charts](docs/screenshots/ui-parser-results-nccl.png)
+<p align="center">
+  <img src="docs/screenshots/ui-screenshot-03.png" alt="Workflow editor" width="900" />
+</p>
+
+Analytics — NCCL deviation vs fleet median and bus BW chart:
+
+<p align="center">
+  <img src="docs/screenshots/ui-screenshot-04.png" alt="Analytics NCCL charts" width="900" />
+</p>
+
+Cluster overview dashboard — identity, Slurm, validation summary:
+
+<p align="center">
+  <img src="docs/screenshots/ui-screenshot-05.png" alt="Cluster overview dashboard" width="900" />
+</p>
