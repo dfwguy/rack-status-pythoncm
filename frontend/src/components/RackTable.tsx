@@ -48,8 +48,10 @@ import {
   Trash2,
   LineChart,
   ChevronDown,
+  Lock,
 } from "lucide-react";
 import { useRackCommandsStore } from "../context/RackCommandsStoreContext";
+import { useRackLocksContext } from "../context/RackLocksContext";
 import { RackTableCommandIndicator } from "./RackTableCommandIndicator";
 import { ParserResultsDialog } from "./ParserResultsDialog";
 import { TailLogDialog } from "./TailLogDialog";
@@ -343,6 +345,8 @@ export function RackTable({
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
+
+  const { isLockedByOther: rackLockedByOther } = useRackLocksContext();
 
   const [search, setSearch] = useState("");
   const [internalValidationFilters, setInternalValidationFilters] = useState<string[]>([]);
@@ -1117,6 +1121,36 @@ export function RackTable({
                       <Box sx={{ opacity: selectMode ? 0.35 : 1, pointerEvents: selectMode ? "none" : "auto" }}>
                         <RackTableCommandIndicator rack={row.rack} />
                       </Box>
+                      {(() => {
+                        const lock = rackLockedByOther(row.rack);
+                        if (!lock) return null;
+                        const detail =
+                          lock.kind === "claim"
+                            ? `Manually claimed by ${lock.operator || "unknown"}`
+                            : `${lock.detail || "operation"} running for ${lock.operator || "unknown"}`;
+                        return (
+                          <Tooltip
+                            arrow
+                            placement="top"
+                            title={
+                              <Text kind="body/regular/sm" style={{ color: "inherit" }}>
+                                {detail}
+                              </Text>
+                            }
+                          >
+                            <Box
+                              sx={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                color: "warning.main",
+                              }}
+                              aria-label={`Locked: ${detail}`}
+                            >
+                              <Lock size={14} />
+                            </Box>
+                          </Tooltip>
+                        );
+                      })()}
                     </Box>
                   </TableCell>
                   <TableCell>

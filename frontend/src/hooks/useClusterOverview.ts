@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClusterOverviewResponse } from "../types/api";
+import { apiFetch, getClientId } from "../lib/apiFetch";
 
 const emptyClusterDashboardMetadata = (): ClusterOverviewResponse["cluster_dashboard_metadata"] => ({
   product_line: "",
   hw_vendor: "",
   customer_name: "",
 });
-import { getClientId } from "./useRackStatus";
 
 const POLL_MS = 30_000;
 
@@ -21,7 +21,7 @@ export function useClusterOverview(logDir: string) {
       const params = new URLSearchParams();
       if (logDir) params.set("log_dir", logDir);
       params.set("client_id", getClientId());
-      const res = await fetch(`/api/cluster-overview?${params}`, { cache: "no-store" });
+      const res = await apiFetch(`/api/cluster-overview?${params}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as ClusterOverviewResponse | { ok: false; error?: string };
       if (!json.ok) throw new Error("error" in json ? String(json.error || "cluster overview failed") : "cluster overview failed");

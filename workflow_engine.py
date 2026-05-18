@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -18,8 +19,12 @@ from typing import Any
 import yaml
 
 import host_exec
+import rack_locks
 
 _logger = logging.getLogger(__name__)
+
+# Pattern used to discover a rack id inside a substituted ``host:`` command.
+_WORKFLOW_RACK_RE = re.compile(r"\bp[0-9]+-r[0-9]+\b", re.IGNORECASE)
 
 APP_DIR = Path(__file__).resolve().parent
 WORKFLOWS_DIR = Path(
@@ -532,8 +537,39 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
         host_cmd = command[5:].strip()
         for key, val in params.items():
             host_cmd = host_cmd.replace(f"${{{key}}}", str(val))
+        timeout = int(step.get("timeout", 120))
+
+        # Identify rack: explicit step field wins; otherwise first match in the substituted command.
+        rack_raw = step.get("rack") or params.get("rack") or ""
+        if not rack_raw:
+            m = _WORKFLOW_RACK_RE.search(host_cmd)
+            if m:
+                rack_raw = m.group(0)
+        rack_norm: str | None = None
+        if isinstance(rack_raw, str) and rack_raw.strip():
+            try:
+                rack_norm = rack_locks.normalize_rack_id(rack_raw)
+            except ValueError:
+                rack_norm = None
+
+        operator_label = f"workflow:{run_id[:8]}"
+        claimed = False
+        if rack_norm:
+            try:
+                rack_locks.upsert_claim(
+                    rack_norm,
+                    operator_label,
+                    note=f"workflow step {step_id}",
+                    ttl_sec=max(60, timeout + 60),
+                )
+                claimed = True
+            except PermissionError as exc:
+                _logger.info(
+                    "Workflow %s step %s skipped rack-lock acquire (held by other): %s",
+                    run_id, step_id, exc,
+                )
+
         try:
-            timeout = int(step.get("timeout", 120))
             proc = host_exec.run_on_host(host_cmd, timeout=timeout)
             output = ""
             if proc.stdout:
@@ -549,6 +585,15 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
             _save_step_output(run_id, step_id, output)
             _logger.error("Workflow automated step failed: %s", exc)
             return False, output
+        finally:
+            if claimed and rack_norm:
+                try:
+                    rack_locks.release_claim(rack_norm, operator_label)
+                except (PermissionError, ValueError) as exc:
+                    _logger.debug(
+                        "Workflow %s step %s rack-lock release: %s",
+                        run_id, step_id, exc,
+                    )
 
     # Known tool env key (e.g. RACK_SYSINFO_SCRIPT) — resolve and describe
     if command.startswith("RACK_"):

@@ -103,6 +103,7 @@ import native_status  # noqa: E402 — after sys.path so ``import native_status`
 import host_exec  # noqa: E402
 import ai_chat  # noqa: E402
 import workflow_engine  # noqa: E402
+import rack_locks  # noqa: E402
 from platforms import get_platform as _get_platform  # noqa: E402
 
 _REMOTE_BASE = os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
@@ -1496,6 +1497,124 @@ def _count_running_async_commands() -> int:
     with _reset_jobs_lock:
         n_reset = sum(1 for row in _reset_jobs.values() if str(row.get("phase") or "").lower() in active_phases)
     return n_validation + n_stress + n_reset
+
+
+# ---------------------------------------------------------------------------
+# Rack-locks helpers: operator label from request, active-job iterator for
+# ``rack_locks.build_lock_snapshot``, and a context manager that registers
+# long-running sync / stream handlers in ``_reset_jobs`` so they show up in
+# the same advisory snapshot the SPA polls.
+# ---------------------------------------------------------------------------
+
+
+def _operator_from_request() -> str:
+    """Operator label from the ``X-Rack-Operator`` header. Advisory metadata only -- never
+    trusted for authorization. Empty when the SPA hasn't set a display name."""
+    try:
+        raw = request.headers.get("X-Rack-Operator", "")
+    except RuntimeError:
+        # Outside a request context (worker thread): fall back to empty label.
+        raw = ""
+    return rack_locks.sanitize_operator(raw)
+
+
+def _client_id_from_request() -> str:
+    """Stable browser id from the ``X-Rack-Client-Id`` header (also accepted as
+    ``?client_id=`` for backward compatibility with the existing useRackStatus poll)."""
+    try:
+        raw = request.headers.get("X-Rack-Client-Id", "") or request.args.get("client_id", "")
+    except RuntimeError:
+        return ""
+    if not isinstance(raw, str):
+        return ""
+    cid = raw.strip()[:80]
+    return cid if _APP_CLIENT_ID_RE.fullmatch(cid) else ""
+
+
+def _iter_active_jobs_for_locks() -> list[dict]:
+    """Flatten the five in-memory job dicts into the shape ``rack_locks`` expects:
+    ``{job_id, rack | racks, kind, operator, phase, started_at, sync}``.
+
+    Called by ``GET /api/rack-locks`` only; cheap (≤ tens of entries in practice)."""
+    rows: list[dict] = []
+    for src_lock, src_dict, default_kind in (
+        (_reset_jobs_lock, _reset_jobs, "reset"),
+        (_validation_jobs_lock, _validation_jobs, "validation"),
+        (_stress_jobs_lock, _stress_jobs, "stress"),
+        (_xrack_jobs_lock, _xrack_jobs, "xrack"),
+        (_llama_jobs_lock, _llama_jobs, "llama"),
+    ):
+        with src_lock:
+            snapshot = list(src_dict.items())
+        for jid, row in snapshot:
+            if not isinstance(row, dict):
+                continue
+            rows.append(
+                {
+                    "job_id": str(jid),
+                    "rack": row.get("rack"),
+                    "racks": row.get("racks"),
+                    "kind": str(row.get("kind") or default_kind),
+                    "operator": str(row.get("operator") or ""),
+                    "phase": str(row.get("phase") or ""),
+                    "started_at": str(row.get("started_at") or row.get("created_at") or ""),
+                    "sync": bool(row.get("sync")),
+                }
+            )
+    return rows
+
+
+def _active_clients_snapshot() -> dict[str, float]:
+    """Copy of the heartbeat map for ``rack_locks`` (offline-claim detection)."""
+    with _app_clients_lock:
+        return dict(_app_clients_last_seen)
+
+
+@contextmanager
+def _track_sync_op(rack: str | object, kind: str, operator: str = ""):
+    """Register a synthetic entry in ``_reset_jobs`` so long-running sync handlers and
+    write-y SSE streams show up in ``GET /api/rack-locks`` for their duration.
+
+    Accepts a single rack id or a list/tuple. ``ValueError`` from a bad rack id is logged
+    and swallowed -- the wrapped handler runs untracked rather than breaking the route."""
+    racks: list[str] = []
+    if isinstance(rack, (list, tuple)):
+        candidates = rack
+    else:
+        candidates = [rack] if rack else []
+    for raw_rack in candidates:
+        if not isinstance(raw_rack, str) or not raw_rack:
+            continue
+        try:
+            racks.append(rack_locks.normalize_rack_id(raw_rack))
+        except ValueError:
+            continue
+    if not racks:
+        # Nothing to lock against; still yield so the route runs.
+        yield None
+        return
+    job_id = "sync-" + uuid.uuid4().hex[:12]
+    entry = {
+        "job_id": job_id,
+        "rack": racks[0] if len(racks) == 1 else None,
+        "racks": racks,
+        "kind": str(kind or "operation"),
+        "operator": rack_locks.sanitize_operator(operator),
+        "phase": "running",
+        "sync": True,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with _reset_jobs_lock:
+        _reset_jobs[job_id] = entry
+    try:
+        yield job_id
+    finally:
+        with _reset_jobs_lock:
+            row = _reset_jobs.get(job_id)
+            if row is not None:
+                row["phase"] = "done"
+                row["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _reset_job_purge_later(job_id, delay_sec=15)
 
 
 def _auth_enabled() -> bool:
@@ -3728,8 +3847,10 @@ def api_power_on():
     specs = prep["specs"]
     assert isinstance(specs, list)
     sleep_sec = max(0, _env_int("RACK_POWER_RESET_SLEEP_SEC", 10))
+    rk_for_lock = (body.get("rack") or "").strip()
     try:
-        results = run_cmsh_power_reset(specs)
+        with _track_sync_op(rk_for_lock, "power", _operator_from_request()):
+            results = run_cmsh_power_reset(specs)
     except OSError as e:
         return jsonify({"ok": False, "error": str(e), "results": []}), 500
     ok_all = all(r.get("returncode") == 0 for r in results)
@@ -3763,6 +3884,7 @@ def api_power_on_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "power",
+            "operator": _operator_from_request(),
             "rack": rk,
             "phase": "starting",
             "created_at": created,
@@ -3852,8 +3974,10 @@ def api_gpu_reset():
         return err[0], err[1]
     assert prep is not None
     pdsh_w = str(prep["pdsh_w"])
+    rk_for_lock = (body.get("rack") or "").strip()
     try:
-        result = run_gpu_reset(pdsh_w)
+        with _track_sync_op(rk_for_lock, "gpu", _operator_from_request()):
+            result = run_gpu_reset(pdsh_w)
     except OSError as e:
         return jsonify({"ok": False, "error": str(e)}), 500
     ok = result.get("returncode") == 0
@@ -3882,6 +4006,7 @@ def api_gpu_reset_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "gpu",
+            "operator": _operator_from_request(),
             "rack": rk,
             "phase": "starting",
             "created_at": created,
@@ -4080,6 +4205,7 @@ def api_bmc_recovery_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "bmc",
+            "operator": _operator_from_request(),
             "rack": rk,
             "nodes": list(nodes),
             "iface": iface,
@@ -4274,6 +4400,7 @@ def api_mac_change_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "mac",
+            "operator": _operator_from_request(),
             "rack": rk,
             "node": node,
             "node_mac": node_mac,
@@ -4671,6 +4798,7 @@ def api_bug_report_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "bug_report",
+            "operator": _operator_from_request(),
             "rack": rk,
             "phase": "starting",
             "created_at": created,
@@ -4832,8 +4960,10 @@ def api_services_restart():
         return err[0], err[1]
     assert prep is not None
     pdsh_w = str(prep["pdsh_w"])
+    rk_for_lock = (body.get("rack") or "").strip()
     try:
-        result = run_services_restart(pdsh_w)
+        with _track_sync_op(rk_for_lock, "services", _operator_from_request()):
+            result = run_services_restart(pdsh_w)
     except OSError as e:
         return jsonify({"ok": False, "error": str(e)}), 500
     ok = result.get("returncode") == 0
@@ -4862,6 +4992,7 @@ def api_services_restart_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "services",
+            "operator": _operator_from_request(),
             "rack": rk,
             "phase": "starting",
             "created_at": created,
@@ -5117,6 +5248,7 @@ def api_hw_check_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "hw_check",
+            "operator": _operator_from_request(),
             "rack": rk,
             "preset": preset,
             "checker_args": prep.get("checker_args_display"),
@@ -5274,6 +5406,7 @@ def api_nvswitch_fix_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "nmxc_cycle",
+            "operator": _operator_from_request(),
             "rack": rack,
             "phase": "starting",
             "created_at": created,
@@ -5389,6 +5522,7 @@ def api_nvswitch_sdn_reset_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "nvswitch_sdn_reset",
+            "operator": _operator_from_request(),
             "rack": rack,
             "phase": "starting",
             "created_at": created,
@@ -5521,6 +5655,7 @@ def api_nvswitch_system_reset_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "nvswitch_system_reset",
+            "operator": _operator_from_request(),
             "rack": rack,
             "nvswitch_host": nvswitch_host,
             "phase": "starting",
@@ -5645,6 +5780,7 @@ def api_imex_reset_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "imex_reset",
+            "operator": _operator_from_request(),
             "rack": rack,
             "phase": "starting",
             "created_at": created,
@@ -5821,6 +5957,7 @@ def api_nvlmapper_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "nvlmapper",
+            "operator": _operator_from_request(),
             "rack": rack,
             "phase": "starting",
             "created_at": created,
@@ -5965,6 +6102,7 @@ def api_precheck_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "precheck",
+            "operator": _operator_from_request(),
             "rack": rack,
             "phase": "starting",
             "created_at": created,
@@ -6076,6 +6214,7 @@ def api_nvswitch_check_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "nvswitch_check",
+            "operator": _operator_from_request(),
             "rack": rack,
             "phase": "starting",
             "created_at": created,
@@ -6186,6 +6325,7 @@ def api_imex_check_async():
         _reset_jobs[job_id] = {
             "job_id": job_id,
             "kind": "imex_check",
+            "operator": _operator_from_request(),
             "rack": rack,
             "phase": "starting",
             "created_at": created,
@@ -6208,7 +6348,8 @@ def api_rack_uptime():
     if not isinstance(rack_raw, str) or not rack_raw.strip():
         return jsonify({"ok": False, "error": "rack is required"}), 400
     try:
-        result = run_rack_uptime_pdsh(rack_raw)
+        with _track_sync_op(rack_raw, "uptime", _operator_from_request()):
+            result = run_rack_uptime_pdsh(rack_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     except OSError as e:
@@ -6324,8 +6465,10 @@ def api_slurm_drain():
                 "error": "invalid reason (1–256 chars: letters, digits, space, _.,:/()- only)",
             }
         ), 400
+    rk_for_lock = (body.get("rack") or "").strip()
     try:
-        result = _run_scontrol_node_update(target, ["state=drain", f"reason={r}"])
+        with _track_sync_op(rk_for_lock, "slurm_drain", _operator_from_request()):
+            result = _run_scontrol_node_update(target, ["state=drain", f"reason={r}"])
     except OSError as e:
         return jsonify({"ok": False, "error": str(e)}), 500
     ok = bool(result.get("ok"))
@@ -6344,8 +6487,10 @@ def api_slurm_undrain():
     target, err = _slurm_nodename_target_from_body(body)
     if err:
         return jsonify({"ok": False, "error": err}), 400
+    rk_for_lock = (body.get("rack") or "").strip()
     try:
-        result = _run_scontrol_node_update(target, ["state=idle"])
+        with _track_sync_op(rk_for_lock, "slurm_undrain", _operator_from_request()):
+            result = _run_scontrol_node_update(target, ["state=idle"])
     except OSError as e:
         return jsonify({"ok": False, "error": str(e)}), 500
     ok = bool(result.get("ok"))
@@ -6505,7 +6650,8 @@ def api_slurm_scancel():
         except ValueError:
             rack_norm = rack_raw
     try:
-        result = _run_scancel(jid)
+        with _track_sync_op(rack_raw, "slurm_scancel", _operator_from_request()):
+            result = _run_scancel(jid)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     except OSError as e:
@@ -8811,14 +8957,15 @@ def api_run_validation():
     display_cmd = str(prep["display_cmd"])
     timeout = int(prep["timeout"])
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(log_dir),
-            env=_subprocess_env(),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        with _track_sync_op(rk, "validation", _operator_from_request()):
+            proc = subprocess.run(
+                cmd,
+                cwd=str(log_dir),
+                env=_subprocess_env(),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": "validation script timed out", "target": target}), 504
     except Exception as e:
@@ -8856,6 +9003,8 @@ def api_run_validation_async():
     with _validation_jobs_lock:
         _validation_jobs[job_id] = {
             "job_id": job_id,
+            "kind": "validation",
+            "operator": _operator_from_request(),
             "rack": rk,
             "target": target,
             "log_dir": str(log_dir),
@@ -8962,6 +9111,8 @@ def api_run_nemo_xrack_async():
     with _xrack_jobs_lock:
         _xrack_jobs[job_id] = {
             "job_id": job_id,
+            "kind": "xrack",
+            "operator": _operator_from_request(),
             "rack": "multinode",
             "log_dir": str(log_dir),
             "phase": "starting",
@@ -9055,6 +9206,8 @@ def api_run_llama_async():
     with _llama_jobs_lock:
         _llama_jobs[job_id] = {
             "job_id": job_id,
+            "kind": "llama",
+            "operator": _operator_from_request(),
             "rack": rk,
             "log_dir": cwd,
             "nodes_spec": nodes_spec,
@@ -9365,6 +9518,8 @@ def api_run_mnubergemm_stress_async():
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
             "job_id": job_id,
+            "kind": "mnubergemm",
+            "operator": _operator_from_request(),
             "rack": rk,
             "target": target,
             "log_dir": str(log_dir),
@@ -9428,13 +9583,14 @@ def api_run_nvloom_async():
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
             "job_id": job_id,
+            "kind": "nvloom",
+            "operator": _operator_from_request(),
             "rack": rk,
             "target": target,
             "log_dir": str(log_dir),
             "phase": "starting",
             "command_display": display_cmd,
             "created_at": created,
-            "kind": "nvloom",
         }
     threading.Thread(
         target=_stress_worker,
@@ -9492,13 +9648,14 @@ def api_run_clusterkit_async():
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
             "job_id": job_id,
+            "kind": "clusterkit",
+            "operator": _operator_from_request(),
             "rack": rk,
             "target": target,
             "log_dir": str(log_dir),
             "phase": "starting",
             "command_display": display_cmd,
             "created_at": created,
-            "kind": "clusterkit",
         }
     threading.Thread(
         target=_stress_worker,
@@ -9776,14 +9933,15 @@ def api_run_sysinfo():
         return err[0], err[1]
     assert prep is not None
     try:
-        proc = subprocess.run(
-            prep["cmd"],
-            cwd=str(prep["log_dir"]),
-            env=_subprocess_env(),
-            capture_output=True,
-            text=True,
-            timeout=max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800)),
-        )
+        with _track_sync_op(prep.get("rack") or "", "sysinfo", _operator_from_request()):
+            proc = subprocess.run(
+                prep["cmd"],
+                cwd=str(prep["log_dir"]),
+                env=_subprocess_env(),
+                capture_output=True,
+                text=True,
+                timeout=max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800)),
+            )
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": "sysinfo.sh timed out", "target": prep["target"]}), 504
     except Exception as e:
@@ -10684,8 +10842,15 @@ def api_run_sysinfo_stream():
         return err[0], err[1]
     assert prep is not None
 
+    rk_for_lock = str(prep.get("rack") or "")
+    operator = _operator_from_request()
+
+    def _tracked_sysinfo_stream() -> Iterator[bytes]:
+        with _track_sync_op(rk_for_lock, "sysinfo", operator):
+            yield from _sysinfo_stream_generator(prep)
+
     return Response(
-        stream_with_context(_sysinfo_stream_generator(prep)),
+        stream_with_context(_tracked_sysinfo_stream()),
         mimetype="text/plain; charset=utf-8",
         headers={
             "Cache-Control": "no-store",
@@ -10703,8 +10868,16 @@ def api_run_nvswitch_audit_stream():
     if err is not None:
         return err[0], err[1]
     assert prep is not None
+
+    rk_for_lock = str(prep.get("rack") or "")
+    operator = _operator_from_request()
+
+    def _tracked_nvswitch_audit_stream() -> Iterator[bytes]:
+        with _track_sync_op(rk_for_lock, "nvswitch_audit", operator):
+            yield from _nvswitch_audit_stream_generator(prep)
+
     return Response(
-        stream_with_context(_nvswitch_audit_stream_generator(prep)),
+        stream_with_context(_tracked_nvswitch_audit_stream()),
         mimetype="text/plain; charset=utf-8",
         headers={
             "Cache-Control": "no-store",
@@ -11595,6 +11768,73 @@ def api_logout():
     """JSON logout endpoint for the React SPA."""
     session.clear()
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Rack locks (advisory multi-operator coordination). The SPA polls this snapshot
+# every 5 s via ``useRackLocks`` and shows a confirmation dialog before POSTing
+# operations against a rack held by another operator. Server is never blocking.
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/rack-locks", methods=["GET"])
+def api_rack_locks_get():
+    """Snapshot of in-flight operations + explicit claims, grouped by rack."""
+    snapshot = rack_locks.build_lock_snapshot(
+        _operator_from_request(),
+        _iter_active_jobs_for_locks(),
+        _active_clients_snapshot(),
+    )
+    return jsonify(snapshot)
+
+
+@app.route("/api/rack-locks/<rack>", methods=["POST"])
+def api_rack_locks_claim(rack: str):
+    """Create or refresh a manual claim. Requires ``X-Rack-Operator`` header (advisory)."""
+    operator = _operator_from_request()
+    if not operator:
+        return jsonify(
+            {"ok": False, "error": "X-Rack-Operator header is required to claim a rack"}
+        ), 400
+    body = request.get_json(silent=True) or {}
+    note = str(body.get("note") or "") if isinstance(body.get("note"), str) else ""
+    ttl_raw = body.get("ttl_sec")
+    ttl_sec = None
+    if isinstance(ttl_raw, (int, float)) and not isinstance(ttl_raw, bool):
+        try:
+            ttl_sec = int(ttl_raw)
+        except (TypeError, ValueError):
+            ttl_sec = None
+    client_id = _client_id_from_request()
+    force = bool(body.get("force")) if isinstance(body, dict) else False
+    try:
+        claim = rack_locks.upsert_claim(
+            rack,
+            operator,
+            client_id=client_id or None,
+            note=note,
+            ttl_sec=ttl_sec,
+            force=force,
+        )
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except PermissionError as e:
+        return jsonify({"ok": False, "error": str(e)}), 409
+    return jsonify({"ok": True, "claim": claim})
+
+
+@app.route("/api/rack-locks/<rack>", methods=["DELETE"])
+def api_rack_locks_release(rack: str):
+    """Release a manual claim. Only the recorded owner may release a live claim; expired
+    entries can be cleared by anyone."""
+    operator = _operator_from_request()
+    try:
+        removed = rack_locks.release_claim(rack, operator)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except PermissionError as e:
+        return jsonify({"ok": False, "error": str(e)}), 403
+    return jsonify({"ok": True, "removed": bool(removed)})
 
 
 @app.route("/spa/")

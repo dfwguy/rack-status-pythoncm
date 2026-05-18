@@ -32,7 +32,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-COPY app.py native_status.py demo_data.py host_exec.py ai_chat.py workflow_engine.py ./
+COPY app.py native_status.py demo_data.py host_exec.py ai_chat.py workflow_engine.py rack_locks.py ./
 COPY platforms/ ./platforms/
 COPY rack_web/ ./rack_web/
 COPY bin/ ./bin/

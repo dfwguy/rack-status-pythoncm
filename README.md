@@ -41,6 +41,34 @@ A full-stack **rack validation and operations platform** for NVIDIA GPU clusters
 - Execution log timeline with timestamps and status indicators
 - Version auto-increment and persistent storage via Docker volumes
 
+### Rack Locks (multi-operator coordination)
+All sessions authenticate as the same system user, so a lightweight advisory locking
+layer prevents operators from accidentally stepping on each other.
+
+- **Two lock sources are merged into a single snapshot exposed at `GET /api/rack-locks`:**
+  - **Implicit (active operations):** every async handler (reset / validation / stress / xrack /
+    llama) and long-running sync handler (power-on, gpu-reset, services-restart,
+    run-validation, run-sysinfo, rack-uptime, slurm-drain/undrain/scancel) plus the
+    write-y SSE streams (sysinfo, nvswitch-audit) register their target rack while the
+    operation is in flight. Workflow `host:` steps register one for the step's duration.
+  - **Explicit claims:** an operator can claim a rack from the rack detail view for the
+    next 30 minutes (refreshable, capped at 6 h). Claims are persisted under
+    `var/cache/rack_locks.json` with `fcntl.flock`. A claim is dropped early when the
+    owning browser has been offline for more than 5 minutes.
+- **Identity is advisory.** The SPA stores a per-browser display name in localStorage
+  (`Settings → General → Operator`) and sends it to the backend as `X-Rack-Operator`.
+  No server-side enforcement; locks exist purely for coordination.
+- **The UI gates write-y operations.** Before POSTing, `RackCommandsStoreContext`
+  consults the snapshot. If another operator holds the rack the *Rack busy* dialog
+  appears with **Cancel** / **Run anyway** — the operator can still proceed if they
+  coordinated out-of-band.
+- **Visibility everywhere:** lock icon next to the rack name in the table, banner +
+  Claim/Release controls in the rack detail view, and a Toolbar popover listing each
+  active operator with the racks they currently hold.
+- **Stale-job defence:** the `RACK_LOCK_MAX_AGE_SEC` env var (default 6 h) filters out
+  active-job lock entries that have been "running" for longer than that, in case a
+  process leaks. See [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md#rack-locks).
+
 ---
 
 ## Quick Start (Standalone)

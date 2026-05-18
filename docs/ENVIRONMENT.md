@@ -115,6 +115,29 @@ Used by **`bin/scripts/launch-grafana-bright-prometheus.sh`** (not by Flask). Af
 | **`RACK_WEB_COOKIE_SECURE`** | *(unset)* | Truthy → `Secure` cookies. |
 | **`RACK_WEB_ACTIVE_CLIENT_TTL_SEC`** | `120` | Client heartbeat TTL in `/api/app-stats`. |
 
+### Rack locks
+
+The rack-locks layer (`rack_locks.py`, `GET/POST/DELETE /api/rack-locks[/<rack>]`) is
+described in detail in the project README under **Rack Locks (multi-operator
+coordination)**. The relevant env knobs:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| **`RACK_LOCK_MAX_AGE_SEC`** | `21600` (6 h, min 60 s) | Implicit locks derived from in-flight jobs older than this are filtered out of `GET /api/rack-locks` (defends against leaked jobs that never reach a terminal phase). |
+| **`RACK_LOCKS_FILE`** | `var/cache/rack_locks.json` | Where explicit claims are persisted (atomically, via `fcntl.flock`). |
+
+Non-env defaults baked into `rack_locks.py`:
+
+- Default claim TTL: `CLAIM_DEFAULT_TTL_SEC = 1800` (30 min). The HTTP caller can
+  request any TTL, capped server-side at `CLAIM_MAX_TTL_SEC = 21600` (6 h).
+- Heartbeat-based early release: claims are dropped when the owning browser
+  `client_id` has been absent from `_app_clients_last_seen` for more than
+  `OPERATOR_OFFLINE_SEC = 300` (5 min).
+
+Operator identity is supplied by the SPA via the `X-Rack-Operator` HTTP header
+(`Settings → General → Operator`). The matching `X-Rack-Client-Id` (or `client_id`
+query param) is used for the heartbeat check above.
+
 ---
 
 ## 5. Log directory, status scripts, and caching
@@ -348,6 +371,8 @@ RACK_IMEX_RESET_TIMEOUT
 RACK_LLAMA_DISABLED
 RACK_LLAMA_SCRIPT
 RACK_LLAMA_TIMEOUT
+RACK_LOCKS_FILE
+RACK_LOCK_MAX_AGE_SEC
 RACK_LOG_ANALYSIS_CACHE_DISABLED
 RACK_LOG_ANALYSIS_CACHE_MAX_FILES
 RACK_LOG_ANALYSIS_SQUEUE_TIMEOUT_SEC

@@ -1,3 +1,5 @@
+import { apiFetch } from "../lib/apiFetch";
+
 export interface WorkflowStep {
   id: string;
   type: "automated" | "manual" | "decision" | "ai_query" | "delay";
@@ -55,7 +57,7 @@ export interface WorkflowRunSummary {
 }
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, { credentials: "same-origin", ...init });
+  const res = await apiFetch(url, init);
   const data = await res.json();
   if (!res.ok || data.ok === false) {
     throw new Error(data.error || `HTTP ${res.status}`);
