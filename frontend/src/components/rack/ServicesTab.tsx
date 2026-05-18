@@ -3,15 +3,17 @@ import { ActionCard } from "./ActionCard";
 import { RefreshCw, Info, FileText } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
 import { specsCommandBody, validationFamilyBody } from "../../lib/rackCommandBodies";
+import type { NvisNamingSchema } from "../../types/naming";
 
 interface ServicesTabProps {
   rack: string;
   logDir?: string;
+  naming?: NvisNamingSchema;
   selectedNodes: Set<string>;
   disabled: boolean;
 }
 
-export function ServicesTab({ rack, logDir, selectedNodes, disabled }: ServicesTabProps) {
+export function ServicesTab({ rack, logDir, naming, selectedNodes, disabled }: ServicesTabProps) {
   const { runAsyncReset, openStream, openTailLogNemo } = useRackCommands();
   const nodeCount = selectedNodes.size;
 
@@ -25,7 +27,7 @@ export function ServicesTab({ rack, logDir, selectedNodes, disabled }: ServicesT
         disabled={disabled}
         selectedNodes={selectedNodes}
         onRun={() =>
-          runAsyncReset("Restart services", "services", "/api/services-restart-async", specsCommandBody(rack, logDir, selectedNodes))
+          runAsyncReset("Restart services", "services", "/api/services-restart-async", specsCommandBody(rack, logDir, selectedNodes, naming))
         }
       />
       <ActionCard
@@ -39,7 +41,7 @@ export function ServicesTab({ rack, logDir, selectedNodes, disabled }: ServicesT
           openStream(
             "System info (stream)",
             "/api/run-sysinfo-stream",
-            validationFamilyBody(rack, logDir, selectedNodes) as Record<string, unknown>,
+            validationFamilyBody(rack, logDir, selectedNodes, naming) as Record<string, unknown>,
           )
         }
       />

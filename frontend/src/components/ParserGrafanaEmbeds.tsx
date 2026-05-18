@@ -16,6 +16,8 @@ export interface GrafanaEmbedPayload {
   from_iso_utc?: string;
   to_iso_utc?: string;
   host_regex?: string;
+  /** ``rack_prefix`` (default): short regex from NVIS canonical rack id; ``hosts``: per-node alternates (``RACK_WEB_GRAFANA_HOST_REGEX_PER_HOST=1``); ``open``: ``.*`` */
+  host_regex_mode?: string;
   hosts?: string[];
   hosts_source?: string;
   time_source?: string;
@@ -28,31 +30,20 @@ function trimSlash(s: string): string {
   return s.replace(/\/+$/, "");
 }
 
-function soloUrl(
-  ge: GrafanaEmbedPayload,
-  base: string,
-  panelId: number,
-  tzParam: string,
-  forNewTab: boolean,
-): string {
+function soloUrl(ge: GrafanaEmbedPayload, base: string, panelId: number): string {
   const uid = ge.dashboard_uid || "bright-gpu-per-host";
   const slug = ge.dash_slug || "bright-gpu-thermal-and-power";
   const regexQ = encodeURIComponent(ge.host_regex || ".*");
-  const wantLiveNewTab = !!forNewTab && String(ge.time_source || "") === "live_last_5m";
-  let rangeQs: string;
-  if (wantLiveNewTab) {
-    rangeQs =
-      `from=${encodeURIComponent("now-5m")}&to=${encodeURIComponent("now")}&refresh=${encodeURIComponent("5s")}`;
-  } else {
-    const useIso = ge.from_iso_utc && ge.to_iso_utc;
-    rangeQs = useIso
-      ? `from=${encodeURIComponent(String(ge.from_iso_utc))}&to=${encodeURIComponent(String(ge.to_iso_utc))}`
-      : `from=${encodeURIComponent(String(ge.from_ms))}&to=${encodeURIComponent(String(ge.to_ms))}`;
-  }
+  // Match a known-good Grafana solo URL shape (query order matters for some releases):
+  // ?orgId=1&panelId=1&var-job_host_regex=...%2A&from=now-6h&to=now&timezone=utc&refresh=10s
+  const from = encodeURIComponent("now-6h");
+  const to = encodeURIComponent("now");
+  const tz = encodeURIComponent("utc");
+  const refresh = encodeURIComponent("10s");
   return (
     `${trimSlash(base)}/d-solo/${encodeURIComponent(String(uid))}/${encodeURIComponent(String(slug))}` +
-    `?orgId=1&${rangeQs}&timezone=${encodeURIComponent(tzParam)}` +
-    `&panelId=${encodeURIComponent(String(panelId))}&var-job_host_regex=${regexQ}&kiosk&theme=dark`
+    `?orgId=1&panelId=${encodeURIComponent(String(panelId))}&var-job_host_regex=${regexQ}` +
+    `&from=${from}&to=${to}&timezone=${tz}&refresh=${refresh}`
   );
 }
 
@@ -109,14 +100,21 @@ export function ParserGrafanaEmbeds({
   const hnSrc = ge.hosts_source ? String(ge.hosts_source) : "?";
   const nhosts = ge.hosts && ge.hosts.length ? String(ge.hosts.length) : "0";
 
+  const filterNote =
+    ge.host_regex_mode === "rack_prefix"
+      ? " Prometheus filter: canonical rack id + .* (all trays on this rack)."
+      : ge.host_regex_mode === "hosts"
+        ? " Prometheus filter: per-node hostname alternates."
+        : "";
+
   const meta =
-    thSrc === "live_last_5m"
+    (thSrc === "live_last_5m"
       ? `Rolling window: last 5 minutes (server clock). Grafana timezone: ${tzParam}. Nodes: ${hnSrc}${
           ge.hosts && ge.hosts.length ? ` (${nhosts} hostnames).` : " (no host list — Prometheus regex .*)."
         }`
       : `Time range from NEMO log (${thSrc}). Grafana timezone: ${tzParam}. Nodes: ${hnSrc}${
           ge.hosts && ge.hosts.length ? ` (${nhosts} hostnames).` : " (no host list — Prometheus regex .*)."
-        }`;
+        }`) + filterNote;
 
   const panels: { id: number; label: string }[] = [
     { id: 1, label: "GPU thermal" },
@@ -129,7 +127,9 @@ export function ParserGrafanaEmbeds({
         Grafana — GPU thermal and power
       </Text>
       <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 12, display: "block" }}>
-        {meta}
+        {meta} Embedded panels use the Grafana solo URL shape{" "}
+        <code>from=now-6h&amp;to=now&amp;timezone=utc&amp;refresh=10s</code> (log-derived times above are for parser
+        charts only).
       </Text>
       <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 16, display: "block" }}>
         Requires Grafana with GF_SECURITY_ALLOW_EMBEDDING=true. If panels stay blank, check mixed content (HTTPS vs
@@ -143,8 +143,8 @@ export function ParserGrafanaEmbeds({
         }}
       >
         {panels.map(({ id, label }) => {
-          const embedUrl = soloUrl(ge, base, id, tzParam, false);
-          const newTabUrl = soloUrl(ge, base, id, tzParam, true);
+          const embedUrl = soloUrl(ge, base, id);
+          const newTabUrl = soloUrl(ge, base, id);
           return (
             <Card key={id} style={{ padding: 12, overflow: "hidden" }}>
               <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap", mb: 1 }}>

@@ -1,4 +1,7 @@
 import { validationTargetFromNodes } from "./validationTargetFromNodes";
+import type { NvisNamingSchema } from "../types/naming";
+
+export type { NvisNamingSchema };
 
 export function sortedSpecs(selected: Set<string>): string[] {
   return [...selected].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
@@ -6,7 +9,7 @@ export function sortedSpecs(selected: Set<string>): string[] {
 
 /** All trays ct01–ct18 for a rack (`pNN-rMM-ct01` … `ct18`) — used for bulk rack-table runs. */
 export function fullRackCt01to18NodeSet(rack: string): Set<string> {
-  const rk = rack.trim().toLowerCase();
+  const rk = rack.trim();
   const out = new Set<string>();
   if (!rk) return out;
   for (let i = 1; i <= 18; i++) {
@@ -20,21 +23,32 @@ export function fullRackCt01to18NodeSet(rack: string): Set<string> {
  * `pNN-rMM-ct[01]` so `merge_ct_individuals_for_power` can merge to `pNN-rMM-ct[01-18]`
  * (same as legacy checkboxes).
  */
-export function powerSpecTokensFromNodeIds(rack: string, selected: Set<string>): string[] {
-  const rackLower = rack.trim().toLowerCase();
-  const esc = rackLower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`^${esc}-ct(\\d+)$`, "i");
+export function powerSpecTokensFromNodeIds(
+  rack: string,
+  selected: Set<string>,
+  naming?: NvisNamingSchema,
+): string[] {
+  const rackCanon = rack.trim();
+  const rackKey = rackCanon.toLowerCase();
+  const joiner = naming?.ct_joiner ?? "-ct";
   const nums: number[] = [];
   for (const id of sortedSpecs(selected)) {
+    const esc = rackKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escJoin = joiner.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`^${esc}${escJoin}(\\d+)$`, "i");
     const m = id.trim().match(re);
-    if (!m) continue;
-    nums.push(parseInt(m[1], 10));
+    if (m) nums.push(parseInt(m[1], 10));
+    else if (naming?.node_id_mode === "full_hostname" && id.toLowerCase().startsWith(rackKey)) {
+      const tail = id.slice(rackCanon.length);
+      const tm = tail.toLowerCase().match(/^(\d{2,})$/);
+      if (tm) nums.push(parseInt(tm[1], 10));
+    }
   }
   const uniq = [...new Set(nums)].sort((a, b) => a - b);
   if (uniq.length === 0) return [];
   const mx = uniq[uniq.length - 1]!;
   const w = mx < 100 ? 2 : String(mx).length;
-  return uniq.map((n) => `${rackLower}-ct[${String(n).padStart(w, "0")}]`);
+  return uniq.map((n) => `${rackCanon}${joiner}[${String(n).padStart(w, "0")}]`);
 }
 
 export function attachLogDir(body: Record<string, unknown>, logDir?: string): Record<string, unknown> {
@@ -43,31 +57,63 @@ export function attachLogDir(body: Record<string, unknown>, logDir?: string): Re
   return body;
 }
 
-/** POST bodies that use `specs: string[]` (power, GPU reset, services, bug report, hw check). */
-export function specsCommandBody(rack: string, logDir: string | undefined, selected: Set<string>): Record<string, unknown> {
-  return attachLogDir({ rack, specs: powerSpecTokensFromNodeIds(rack, selected) }, logDir);
+/**
+ * Options fragment for ``POST /api/hw-check-async`` — merge with ``specsCommandBody(...)``.
+ * Non-empty ``checker_args`` overrides ``preset`` (server parses with shlex).
+ */
+export function hwCheckOptionsBody(opts: { preset?: string; checker_args?: string }): Record<string, unknown> {
+  const raw = (opts.checker_args ?? "").trim();
+  if (raw.length > 0) {
+    return { checker_args: raw };
+  }
+  const p = (opts.preset ?? "default").trim().toLowerCase() || "default";
+  return { preset: p };
 }
 
-/** Bodies with optional Slurm / validation `target` (pNN-rMM-ct[…]) from selected trays. */
-export function slurmTargetBody(rack: string, selected: Set<string>): Record<string, unknown> {
+/** POST bodies that use `specs: string[]` (power, GPU reset, services, bug report, hw check). */
+export function specsCommandBody(
+  rack: string,
+  logDir: string | undefined,
+  selected: Set<string>,
+  naming?: NvisNamingSchema,
+): Record<string, unknown> {
+  return attachLogDir({ rack, specs: powerSpecTokensFromNodeIds(rack, selected, naming) }, logDir);
+}
+
+/** Bodies with optional Slurm / validation `target` from selected trays. */
+export function slurmTargetBody(
+  rack: string,
+  selected: Set<string>,
+  naming?: NvisNamingSchema,
+): Record<string, unknown> {
   const body: Record<string, unknown> = { rack };
-  const t = validationTargetFromNodes(rack, selected);
+  const t = validationTargetFromNodes(rack, selected, naming);
   if (t) body.target = t;
   return body;
 }
 
-export function validationFamilyBody(rack: string, logDir: string | undefined, selected: Set<string>): Record<string, unknown> {
+export function validationFamilyBody(
+  rack: string,
+  logDir: string | undefined,
+  selected: Set<string>,
+  naming?: NvisNamingSchema,
+): Record<string, unknown> {
   const body = attachLogDir({ rack }, logDir);
-  const t = validationTargetFromNodes(rack, selected);
+  const t = validationTargetFromNodes(rack, selected, naming);
   if (t) body.target = t;
   return body;
 }
 
 /** Llama API expects `nodes_spec` (Slurm fragment); use bracket target when possible. */
-export function llamaNodesBody(rack: string, logDir: string | undefined, selected: Set<string>): Record<string, unknown> {
+export function llamaNodesBody(
+  rack: string,
+  logDir: string | undefined,
+  selected: Set<string>,
+  naming?: NvisNamingSchema,
+): Record<string, unknown> {
   const body = attachLogDir({ rack }, logDir);
-  const t = validationTargetFromNodes(rack, selected);
-  const tokens = powerSpecTokensFromNodeIds(rack, selected);
+  const t = validationTargetFromNodes(rack, selected, naming);
+  const tokens = powerSpecTokensFromNodeIds(rack, selected, naming);
   body.nodes_spec = t ?? tokens.join(",");
   return body;
 }

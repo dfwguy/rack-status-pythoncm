@@ -47,7 +47,11 @@ class PlatformProvider(ABC):
         if self._skip_module_load():
             return cmd
         mod = self._slurm_module()
-        return f"module load {shlex.quote(mod)} && {cmd}"
+        # Prefer silent module load; stderr from Slurm bash-completion is harmless but noisy.
+        return (
+            f"module load -s {shlex.quote(mod)} 2>/dev/null || "
+            f"module load {shlex.quote(mod)} 2>/dev/null; {cmd}"
+        )
 
     def sinfo_cmd(self, extra_args: str = "") -> str:
         """``sinfo`` invocation (with optional extra arguments)."""

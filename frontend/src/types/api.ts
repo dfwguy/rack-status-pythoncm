@@ -4,7 +4,11 @@ export interface RackRow {
   last_job: string;
   sinfo: string;
   ct_down_unk: string;
+  /** Why pending / fail / ongoing (from rack_status.sh or native); omit when done or unknown. */
+  nemo_hint?: string;
 }
+
+import type { NvisNamingSchema } from "./naming";
 
 export interface RackStatusResponse {
   ok: boolean;
@@ -19,6 +23,8 @@ export interface RackStatusResponse {
   footnotes: string[];
   comments: Record<string, string>;
   physical_rf0: Record<string, string>;
+  /** Tray / validation naming from ``NVIS_RACK_ID`` / ``NVIS_CT_ID`` (see Settings). */
+  naming?: NvisNamingSchema;
   native_workers: NativeWorkers;
   served_from_cache?: boolean;
   rack_status_background_interval_sec?: number;

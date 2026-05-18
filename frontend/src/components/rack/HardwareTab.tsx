@@ -1,25 +1,31 @@
 import { useState, useMemo } from "react";
 import Box from "@mui/material/Box";
+import { Card, Flex, Text, Button as KuiButton } from "@nvidia/foundations-react-core";
 import { ActionCard } from "./ActionCard";
 import { MacChangeDialog } from "./MacChangeDialog";
+import { HwCheckRunDialog } from "./HwCheckRunDialog";
 import { Power, Cpu, ScanSearch, Bug, RotateCcw, CircleCheck, Zap, Network } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
-import { attachLogDir, bmcRecoveryBody, specsCommandBody } from "../../lib/rackCommandBodies";
+import { attachLogDir, bmcRecoveryBody, specsCommandBody, hwCheckOptionsBody } from "../../lib/rackCommandBodies";
+import type { NvisNamingSchema } from "../../types/naming";
+
 interface HardwareTabProps {
   rack: string;
   logDir?: string;
+  naming?: NvisNamingSchema;
   selectedNodes: Set<string>;
   disabled: boolean;
   /** Pre-select down trays before Power On confirm (legacy power dialog defaults). */
   onSelectPowerResetTargets: () => void;
 }
 
-export function HardwareTab({ rack, logDir, selectedNodes, disabled, onSelectPowerResetTargets }: HardwareTabProps) {
+export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, onSelectPowerResetTargets }: HardwareTabProps) {
   const { runAsyncReset } = useRackCommands();
   const nodeCount = selectedNodes.size;
   const [macDialogOpen, setMacDialogOpen] = useState(false);
+  const [hwCheckDialogOpen, setHwCheckDialogOpen] = useState(false);
 
-  const specsBody = () => specsCommandBody(rack, logDir, selectedNodes);
+  const specsBody = () => specsCommandBody(rack, logDir, selectedNodes, naming);
   const imexBody = () => attachLogDir({ rack }, logDir);
 
   const singleNode = useMemo(() => {
@@ -56,16 +62,40 @@ export function HardwareTab({ rack, logDir, selectedNodes, disabled, onSelectPow
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("GPU reset", "gpu", "/api/gpu-reset-async", specsBody())}
       />
-      <ActionCard
-        title="Hardware Check"
-        description={`Run hardware diagnostic (checker.sh) on ${nodeCount} selected node(s) via pdsh.`}
-        icon={<ScanSearch size={20} />}
-        buttonLabel="Run Check"
-        disabled={disabled}
-        selectedNodes={selectedNodes}
-        onRun={() =>
-          runAsyncReset("Hardware check", "hw", "/api/hw-check-async", { ...specsBody(), preset: "default" })
-        }
+      <Card style={{ padding: 20 }}>
+        <Flex gap="3" align="start">
+          <div style={{ color: "var(--text-color-secondary)", marginTop: 2 }}>
+            <ScanSearch size={20} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Flex gap="2" align="center" style={{ marginBottom: 4 }}>
+              <Text kind="body/bold/md">Hardware Check</Text>
+            </Flex>
+            <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+              {`Run hardware diagnostic (checker.sh) on ${nodeCount} selected node(s) via pdsh. Choose preset or custom arguments before running.`}
+            </Text>
+          </div>
+          <KuiButton
+            kind="secondary"
+            size="small"
+            onClick={() => setHwCheckDialogOpen(true)}
+            disabled={disabled || nodeCount === 0}
+          >
+            Run Check
+          </KuiButton>
+        </Flex>
+      </Card>
+      <HwCheckRunDialog
+        open={hwCheckDialogOpen}
+        onClose={() => setHwCheckDialogOpen(false)}
+        subtitle={`${nodeCount} selected node(s) in ${rack}`}
+        onConfirm={(opts) => {
+          setHwCheckDialogOpen(false);
+          void runAsyncReset("Hardware check", "hw", "/api/hw-check-async", {
+            ...specsBody(),
+            ...hwCheckOptionsBody(opts),
+          });
+        }}
       />
       <ActionCard
         title="Bug Report"
