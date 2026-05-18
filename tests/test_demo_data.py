@@ -26,6 +26,13 @@ class TestGenerateDemoStatus:
             assert "last_job" in row
             assert "sinfo" in row
             assert "ct_down_unk" in row
+            assert "nemo_hint" in row
+
+    def test_done_rows_have_empty_hint(self, tmp_path):
+        result = demo_data.generate_demo_status(tmp_path)
+        for row in result["rows"]:
+            if row["nemo"] == "done":
+                assert row.get("nemo_hint", "") == ""
 
     def test_rack_ids_follow_pattern(self, tmp_path):
         result = demo_data.generate_demo_status(tmp_path)
