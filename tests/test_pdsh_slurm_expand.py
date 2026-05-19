@@ -131,9 +131,9 @@ def test_grafana_embed_rack_prefix_bright():
 
     n = nid.NvisNaming.from_templates(nid.DEFAULT_NVIS_RACK_ID, nid.DEFAULT_NVIS_CT_ID)
     with mock.patch("app._nvis_naming", return_value=n):
-        r, mode = _grafana_embed_host_regex_and_mode("p5-r1", ["p05-r01-ct07"])
+        r, mode = _grafana_embed_host_regex_and_mode("p5-r03", ["p5-r03-ct07"])
     assert mode == "rack_prefix"
-    assert r == "p05-r01.*"
+    assert r == "p5-r03.*"
 
 
 def test_grafana_embed_host_regex_per_host_env():
@@ -164,5 +164,5 @@ def test_merge_ct_individuals_bright_tray_is_last_capture_group():
 
     n = nid.NvisNaming.from_templates(nid.DEFAULT_NVIS_RACK_ID, nid.DEFAULT_NVIS_CT_ID)
     with mock.patch("app._nvis_naming", return_value=n):
-        out = merge_ct_individuals_for_power(["p05-r01-ct[01]", "p05-r01-ct[18]"])
-        assert out == ["p05-r01-ct[01,18]"]
+        out = merge_ct_individuals_for_power(["p5-r03-ct[1]", "p5-r03-ct[18]"])
+        assert out == ["p5-r03-ct[1,18]"]

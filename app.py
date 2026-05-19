@@ -310,9 +310,9 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "key": "NVIS_RACK_ID",
         "label": "Rack id pattern",
         "description": (
-            "How a rack row is named in the dashboard. Use literal text and [01-99] for each two-digit field. "
-            "Bright example: p[01-99]-r[01-99] matches p05-r01. "
-            "CBR example: CBR[01-99]-DH[01-99]-SVR-CN[01-99][01-99] matches CBR01-DH01-SVR-CN0102."
+            "How a rack row is named in the dashboard. Default: [\\d+] (digits as in cmsh). "
+            "Bright default: p[\\d+]-r[\\d+] (e.g. p5-r03). Optional [01-99] for zero-padded two-digit fields. "
+            "CBR default: CBR[\\d+]-DH[\\d+]-SVR-CN[01-99][01-99]."
         ),
     },
     {
@@ -321,8 +321,8 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "label": "Compute tray hostname pattern",
         "description": (
             "Full compute node name from cmsh ds (must start with the rack pattern and add tray slot(s) at the end). "
-            "Bright: p[01-99]-r[01-99]-ct[01-99] (e.g. p05-r01-ct01). "
-            "CBR: CBR[01-99]-DH[01-99]-SVR-CN[01-99][01-99][01-99] (e.g. CBR01-DH01-SVR-CN010213)."
+            "Bright default: p[\\d+]-r[\\d+]-ct[\\d+] (e.g. p5-r03-ct12). "
+            "CBR default: CBR[\\d+]-DH[\\d+]-SVR-CN[01-99][01-99][01-99]."
         ),
     },
     {
@@ -331,7 +331,8 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "label": "NVSwitch hostname pattern (optional)",
         "description": (
             "Naming pattern for NVSwitch devices (reserved for future UI). "
-            "Bright: p[01-99]-r[01-99]-nvsw-[01-99]. CBR: CBR[01-99]-DH[01-99]-NSW-NV[01-99][01-99][01-99]."
+            "Bright default: p[\\d+]-r[\\d+]-nvsw-[\\d+] (e.g. p03-r13-nvsw-9). "
+            "CBR default: CBR[\\d+]-DH[\\d+]-NSW-NV[01-99][01-99][01-99]."
         ),
     },
     {

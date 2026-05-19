@@ -515,11 +515,11 @@ query param) is used for the heartbeat check above.
 
 | Variable | Default (Bright) | Purpose |
 |----------|------------------|---------|
-| **`NVIS_RACK_ID`** | `p[01-99]-r[01-99]` | Rack row id pattern (`p05-r01`, `CBR01-DH01-SVR-CN0102`, …) |
-| **`NVIS_CT_ID`** | `p[01-99]-r[01-99]-ct[01-99]` | Full compute-tray hostname pattern |
+| **`NVIS_RACK_ID`** | `p[\d+]-r[\d+]` | Rack row id pattern (`p5-r03`, `CBR01-DH01-SVR-CN0102`, …) |
+| **`NVIS_CT_ID`** | `p[\d+]-r[\d+]-ct[\d+]` | Full compute-tray hostname pattern |
 | **`NVIS_NVSW_ID`** | *(optional)* | NVSwitch hostname pattern (reserved) |
 
-Templates use literal text plus `[01-99]` two-digit slots. Configure in the SPA **Settings → Job environment** or via `NVIS_JOB_ENV_OVERRIDES_FILE`. Legacy `RACK_CMSH_DS_NODE_*` regex vars are superseded when NVIS templates are set.
+Templates use literal text plus `[\d+]` (default, cmsh spelling) or `[01-99]` (fixed two-digit) slots. Configure in the SPA **Settings → Job environment** or via `NVIS_JOB_ENV_OVERRIDES_FILE`. Legacy `RACK_CMSH_DS_NODE_*` regex vars are superseded when NVIS templates are set.
 
 See `nvis_id_templates.py` and `tests/test_nvis_id_templates.py`.
 

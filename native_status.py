@@ -7,8 +7,9 @@ parsing via ``probe_fn`` (typically ``rack_status.sh --probe-json``). Results me
 state and the next ``/api/status`` read shows updated cells.
 
 Tray hosts on each ``cmsh -c ds`` line are matched using **Settings → naming templates**
-(``NVIS_CT_ID``, ``NVIS_RACK_ID``): literals plus ``[01-99]`` digit slots (e.g. ``p[01-99]-r[01-99]-ct[01-99]``
-or ``CBR[01-99]-DH[01-99]-SVR-CN[01-99][01-99][01-99]``). Legacy raw-regex keys are still honored when set.
+(``NVIS_CT_ID``, ``NVIS_RACK_ID``): literals plus ``[\\d+]`` (default) or ``[01-99]`` digit slots.
+Bright default: ``p[\\d+]-r[\\d+]-ct[\\d+]``. CBR default:
+``CBR[\\d+]-DH[\\d+]-SVR-CN[01-99][01-99][01-99]``. Legacy raw-regex keys are still honored when set.
 
 Set ``RACK_STATUS_USE_SHELL_TABLE=1`` to use the legacy shell table instead.
 
@@ -248,6 +249,8 @@ def _condense_tray_tokens(nums_s: str) -> str:
         return ""
     if all(p.isdigit() for p in parts):
         nums = [int(p) for p in parts]
+        if not _legacy_ds_configured():
+            return _nvis_naming().condense_tray_range_inner(nums)
         return condense_ct_nums(nums)
     uniq = sorted(set(parts), key=lambda x: (len(x), x.lower()))
     return ",".join(uniq)
