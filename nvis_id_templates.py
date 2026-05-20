@@ -1,37 +1,61 @@
 #!/usr/bin/env python3
 """Simple hostname / rack id templates for NVIS Rack Status (Settings → Job environment).
 
-Templates use literal text plus ``[NN-NN]`` placeholders (two-digit slots, matched as ``\\d{2}``).
-Example Bright compute tray::
+Templates use literal text plus digit placeholders:
+
+- ``[NN-NN]`` — two-digit field (matched as ``\\d{1,2}`` in scan mode, canonicalized with zero-padding).
+- ``[\\d+]`` — one or more digits (matched as ``\\d+``; canonical form preserves cmsh spelling).
+
+Default Bright templates (variable width, as spelled in cmsh)::
+
+    NVIS_RACK_ID=p[\\d+]-r[\\d+]
+    NVIS_CT_ID=p[\\d+]-r[\\d+]-ct[\\d+]
+    NVIS_NVSW_ID=p[\\d+]-r[\\d+]-nvsw-[\\d+]
+
+Optional fixed two-digit fields (legacy / zero-padded dashboard rows)::
 
     NVIS_RACK_ID=p[01-99]-r[01-99]
     NVIS_CT_ID=p[01-99]-r[01-99]-ct[01-99]
 
-Example CBR-style::
+Default CBR-style (``[\\d+]`` pod/hall + ``[01-99]`` for fixed-width ``SVR-CN`` suffix)::
 
-    NVIS_RACK_ID=CBR[01-99]-DH[01-99]-SVR-CN[01-99][01-99]
-    NVIS_CT_ID=CBR[01-99]-DH[01-99]-SVR-CN[01-99][01-99][01-99]
+    NVIS_RACK_ID=CBR[\\d+]-DH[\\d+]-SVR-CN[01-99][01-99]
+    NVIS_CT_ID=CBR[\\d+]-DH[\\d+]-SVR-CN[01-99][01-99][01-99]
+
+Consecutive ``[\\d+]`` slots without separators are ambiguous (regex greed); prefer
+``[01-99]`` for fixed two-digit fields (e.g. the ``SVR-CN`` suffix on CBR racks).
 """
 
 from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 
-_SLOT_RE = re.compile(r"\[(\d{2})-(\d{2})\]")
+_TEMPLATE_TOKEN_RE = re.compile(
+    r"\[\\d\+\]|\[(\d{2})-(\d{2})\]",
+)
 
-# Defaults when Settings leaves naming fields empty (legacy Bright / BCM layout).
-DEFAULT_NVIS_RACK_ID = "p[01-99]-r[01-99]"
-DEFAULT_NVIS_CT_ID = "p[01-99]-r[01-99]-ct[01-99]"
-DEFAULT_NVIS_NVSW_ID = "p[01-99]-r[01-99]-nvsw-[01-99]"
+# Defaults when Settings leaves naming fields empty (cmsh spelling: p5-r03-ct12, …).
+DEFAULT_NVIS_RACK_ID = r"p[\d+]-r[\d+]"
+DEFAULT_NVIS_CT_ID = r"p[\d+]-r[\d+]-ct[\d+]"
+DEFAULT_NVIS_NVSW_ID = r"p[\d+]-r[\d+]-nvsw-[\d+]"
 
-CBR_NVIS_RACK_ID = "CBR[01-99]-DH[01-99]-SVR-CN[01-99][01-99]"
-CBR_NVIS_CT_ID = "CBR[01-99]-DH[01-99]-SVR-CN[01-99][01-99][01-99]"
-CBR_NVIS_NVSW_ID = "CBR[01-99]-DH[01-99]-NSW-NV[01-99][01-99][01-99]"
+# CBR / Firmus: variable pod/hall + fixed two-digit ``SVR-CN`` / ``NSW-NV`` suffix pairs.
+CBR_NVIS_RACK_ID = r"CBR[\d+]-DH[\d+]-SVR-CN[01-99][01-99]"
+CBR_NVIS_CT_ID = r"CBR[\d+]-DH[\d+]-SVR-CN[01-99][01-99][01-99]"
+CBR_NVIS_NVSW_ID = r"CBR[\d+]-DH[\d+]-NSW-NV[01-99][01-99][01-99]"
+
+# Legacy Bright: zero-padded two-digit slots (``p5-r1`` → ``p05-r01``).
+PADDED_NVIS_RACK_ID = "p[01-99]-r[01-99]"
+PADDED_NVIS_CT_ID = "p[01-99]-r[01-99]-ct[01-99]"
+PADDED_NVIS_NVSW_ID = "p[01-99]-r[01-99]-nvsw-[01-99]"
 
 _CT_BRACKET_INNER_RE = re.compile(r"^[\d,\-\s]+$")
+
+SlotKind = str  # "range2" | "digits"
 
 
 @dataclass(frozen=True)
@@ -39,36 +63,48 @@ class ParsedTemplate:
     """Decomposed template: literals and numbered digit slots."""
 
     raw: str
-    segments: tuple[tuple[str, ...], ...]  # ('lit', text) | ('slot', index str)
+    segments: tuple[tuple[str, ...], ...]  # ('lit', text) | ('slot', index, kind)
 
     @property
     def slot_count(self) -> int:
         return sum(1 for s in self.segments if s[0] == "slot")
 
+    def slot_kind(self, index: int) -> SlotKind:
+        for seg in self.segments:
+            if seg[0] == "slot" and int(seg[1]) == index:
+                return seg[2]
+        return "range2"
+
+    def uses_digits_slots(self) -> bool:
+        return any(s[0] == "slot" and s[2] == "digits" for s in self.segments)
+
 
 def parse_template(template: str) -> ParsedTemplate:
-    """Split *template* into literal and ``[01-99]`` slot segments."""
+    """Split *template* into literal and ``[NN-NN]`` / ``[\\d+]`` slot segments."""
     t = (template or "").strip()
     if not t:
         raise ValueError("template is empty")
     segments: list[tuple[str, ...]] = []
     pos = 0
     slot_i = 0
-    for m in _SLOT_RE.finditer(t):
+    for m in _TEMPLATE_TOKEN_RE.finditer(t):
         if m.start() > pos:
             lit = t[pos : m.start()]
             if lit:
                 segments.append(("lit", lit))
-        lo, hi = m.group(1), m.group(2)
-        if int(lo) > int(hi):
-            raise ValueError(f"invalid range [{lo}-{hi}] (low > high)")
-        segments.append(("slot", str(slot_i)))
+        if m.group(0) == r"[\d+]":
+            segments.append(("slot", str(slot_i), "digits"))
+        else:
+            lo, hi = m.group(1), m.group(2)
+            if int(lo) > int(hi):
+                raise ValueError(f"invalid range [{lo}-{hi}] (low > high)")
+            segments.append(("slot", str(slot_i), "range2"))
         slot_i += 1
         pos = m.end()
     if pos < len(t):
         segments.append(("lit", t[pos:]))
     if slot_i == 0:
-        raise ValueError("template must include at least one [NN-NN] slot")
+        raise ValueError("template must include at least one [NN-NN] or [\\d+] slot")
     return ParsedTemplate(raw=t, segments=tuple(segments))
 
 
@@ -103,7 +139,7 @@ def validate_nvis_naming_triplet(
     except ValueError as e:
         return str(e)
     if ct_p.slot_count < rack_p.slot_count:
-        return "NVIS_CT_ID must have at least as many [NN-NN] slots as NVIS_RACK_ID"
+        return "NVIS_CT_ID must have at least as many digit slots as NVIS_RACK_ID"
     if not _rack_is_prefix_of_ct(rack_p, ct_p):
         return (
             "NVIS_RACK_ID must match the start of NVIS_CT_ID "
@@ -134,15 +170,48 @@ def _build_from_template(parsed: ParsedTemplate, slot_values: list[str]) -> str:
     return "".join(out)
 
 
+def _format_slot_groups(parsed: ParsedTemplate, groups: Iterable[str]) -> list[str]:
+    """Map regex capture groups to canonical slot strings (zero-pad only for ``range2`` slots)."""
+    out: list[str] = []
+    slot_i = 0
+    for g in groups:
+        kind = parsed.slot_kind(slot_i)
+        if kind == "digits":
+            out.append(g)
+        else:
+            out.append(g.zfill(2))
+        slot_i += 1
+    return out
+
+
+def _slot_regex_pat(kind: SlotKind, *, loose: bool) -> str:
+    if kind == "digits":
+        return r"(\d+)"
+    return r"(\d{1,2})" if loose else r"(\d{2})"
+
+
 def _template_to_regex(parsed: ParsedTemplate, *, loose: bool = False) -> str:
     parts: list[str] = []
-    slot_pat = r"(\d{1,2})" if loose else r"(\d{2})"
     for seg in parsed.segments:
         if seg[0] == "lit":
             parts.append(re.escape(seg[1]))
         else:
-            parts.append(slot_pat)
+            parts.append(_slot_regex_pat(seg[2], loose=loose))
     return "(?i)" + "".join(parts)
+
+
+def _bright_pod_style_rack(parsed: ParsedTemplate) -> bool:
+    """True when rack template is Bright ``p…-r…`` (pod + rack digit slots)."""
+    if len(parsed.segments) < 2:
+        return False
+    return parsed.segments[0] == ("lit", "p") and parsed.segments[1][0] == "slot"
+
+
+def _rack_r_slot_pad_width(parsed: ParsedTemplate) -> int:
+    """Zero-pad width for the rack-index slot (index 1 in ``p*-r*`` templates); 0 = no padding."""
+    if parsed.slot_count < 2:
+        return 2
+    return 2 if parsed.slot_kind(1) == "range2" else 0
 
 
 def _ct_validation_joiner(ct_p: ParsedTemplate, rack_p: ParsedTemplate) -> str:
@@ -183,7 +252,7 @@ class NamingMatcher:
         m = self.ct_re.fullmatch(token.strip())
         if not m:
             return None
-        groups = [g.zfill(2) for g in m.groups()]
+        groups = _format_slot_groups(self.ct_template, m.groups())
         rack_id = _build_from_template(
             self.rack_template, groups[: self.rack_template.slot_count]
         )
@@ -271,7 +340,7 @@ class NvisNaming:
         m = self.rack_scan_re.fullmatch(rid.strip())
         if not m:
             return None
-        groups = [g.zfill(2) for g in m.groups()]
+        groups = _format_slot_groups(self.rack_template, m.groups())
         return _build_from_template(self.rack_template, groups)
 
     def map_cmsh_rack_list_token(self, token: str) -> str | None:
@@ -337,18 +406,44 @@ class NvisNaming:
 
     def build_tray_hostname(self, rack_id: str, tray: str) -> str:
         """Full CT hostname from canonical rack id and tray token."""
-        m = self.rack_re.fullmatch(rack_id.strip())
+        m = self.rack_scan_re.fullmatch(rack_id.strip())
         if not m:
             return f"{rack_id}{self.ct_joiner}{tray}"
-        groups = list(m.groups())
+        groups = _format_slot_groups(self.rack_template, m.groups())
         tray_s = tray.strip()
-        if tray_s.isdigit():
+        tray_kind = self.ct_template.slot_kind(self.tray_slot_index)
+        if tray_s.isdigit() and tray_kind == "range2":
             groups.append(tray_s.zfill(2))
         else:
             groups.append(tray_s)
         while len(groups) < self.ct_template.slot_count:
-            groups.append("00")
+            groups.append("00" if self.ct_template.slot_kind(len(groups)) == "range2" else "0")
         return _build_from_template(self.ct_template, groups)
+
+    def tray_range_pad_width(self) -> int:
+        """Digit width for tray tokens inside validation ``[…]`` brackets (0 = unpadded)."""
+        return 2 if self.ct_template.slot_kind(self.tray_slot_index) == "range2" else 0
+
+    def condense_tray_range_inner(self, nums: list[int]) -> str:
+        """Compress tray numbers for ``{rack}{joiner}[inner]`` (respects ``[\\d+]`` vs ``[01-99]``)."""
+        if not nums:
+            return ""
+        sorted_u = sorted(set(nums))
+        pad = self.tray_range_pad_width()
+
+        def _fmt(n: int) -> str:
+            return f"{n:02d}" if pad else str(n)
+
+        out: list[str] = []
+        s = e = sorted_u[0]
+        for n in sorted_u[1:]:
+            if n == e + 1:
+                e = n
+            else:
+                out.append(_fmt(s) if s == e else f"{_fmt(s)}-{_fmt(e)}")
+                s = e = n
+        out.append(_fmt(s) if s == e else f"{_fmt(s)}-{_fmt(e)}")
+        return ",".join(out)
 
     def ct_blob(self, rack_id: str, ranges: str) -> str:
         rk = self.canonical_rack_id(rack_id) or rack_id.strip()
@@ -419,12 +514,16 @@ class NvisNaming:
         rk = self.normalize_rack_id(rack)
         if self.nvsw_template:
             lit_tail = ""
+            nvsw_slot_kind: SlotKind = "range2"
             for seg in reversed(self.nvsw_template.segments):
                 if seg[0] == "lit":
                     lit_tail = seg[1] + lit_tail
                 elif seg[0] == "slot":
+                    nvsw_slot_kind = seg[2]
                     break
             if lit_tail:
+                if nvsw_slot_kind == "digits":
+                    return [f"{rk}{lit_tail}{i}" for i in range(1, 10)]
                 return [f"{rk}{lit_tail}{i:02d}" for i in range(1, 10)]
         return [f"{rk}-nvsw-{i:02d}" for i in range(1, 10)]
 
@@ -432,14 +531,14 @@ class NvisNaming:
         hh = host.strip().split(".")[0]
         m_ct = self.ct_scan_re.fullmatch(hh)
         if m_ct:
-            groups = [g.zfill(2) for g in m_ct.groups()]
+            groups = _format_slot_groups(self.ct_template, m_ct.groups())
             rack = _build_from_template(
                 self.rack_template, groups[: self.rack_template.slot_count]
             )
             return rack, hh
         m_r = self.rack_scan_re.fullmatch(hh)
         if m_r:
-            groups = [g.zfill(2) for g in m_r.groups()]
+            groups = _format_slot_groups(self.rack_template, m_r.groups())
             rack = _build_from_template(self.rack_template, groups)
             return rack, None
         return None
@@ -529,23 +628,29 @@ class NvisNaming:
         return re.compile(r",\s*\w", re.IGNORECASE)
 
     def multirack_pod_r_bracket_re(self) -> re.Pattern[str] | None:
-        if not self.rack_template.raw.lower().startswith("p[01-99]"):
+        if not _bright_pod_style_rack(self.rack_template):
             return None
         return re.compile(r"(p\d+)-r\[([\d,\-]+)\]", re.IGNORECASE)
 
     def multirack_bare_r_bracket_re(self) -> re.Pattern[str] | None:
-        if not self.rack_template.raw.lower().startswith("p[01-99]"):
+        if not _bright_pod_style_rack(self.rack_template):
             return None
         return re.compile(r"(?:^|[\-_])r\[([\d,\-]+)\]", re.IGNORECASE)
 
     def expand_pod_r_inner(self, pod: str, inner: str) -> list[str]:
         nums = _expand_bracket_inner(inner)
-        return [f"{pod.lower()}-r{n:02d}" for n in nums]
+        w = _rack_r_slot_pad_width(self.rack_template)
+        if w:
+            return [f"{pod.lower()}-r{n:0{w}d}" for n in nums]
+        return [f"{pod.lower()}-r{n}" for n in nums]
 
     def expand_site_r_inner(self, site_prefix: str, inner: str) -> list[str]:
         nums = _expand_bracket_inner(inner)
         pod = site_prefix.strip().lower() or "p5"
-        return [f"{pod}-r{n:02d}" for n in nums]
+        w = _rack_r_slot_pad_width(self.rack_template)
+        if w:
+            return [f"{pod}-r{n:0{w}d}" for n in nums]
+        return [f"{pod}-r{n}" for n in nums]
 
 
 def _expand_bracket_inner(inner: str) -> list[int]:
