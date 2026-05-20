@@ -3271,29 +3271,6 @@ def _ct_power_single_ct_re() -> re.Pattern[str]:
     return re.compile(rf"^({rack_part}){join}\[(\d+)\]$", re.IGNORECASE)
 
 
-def _condense_ct_numbers(nums: list[int]) -> str:
-    """Turn sorted unique tray indices into inner bracket text like 01,03-05,18."""
-    u = sorted(set(nums))
-    if not u:
-        return ""
-    mx = u[-1]
-    w = 2 if mx < 100 else len(str(mx))
-
-    def fmt(n: int) -> str:
-        return f"{n:0{w}d}"
-
-    parts: list[str] = []
-    s = e = u[0]
-    for n in u[1:]:
-        if n == e + 1:
-            e = n
-        else:
-            parts.append(fmt(s) if s == e else f"{fmt(s)}-{fmt(e)}")
-            s = e = n
-    parts.append(fmt(s) if s == e else f"{fmt(s)}-{fmt(e)}")
-    return ",".join(parts)
-
-
 def merge_ct_individuals_for_power(nodes: list[str]) -> list[str]:
     """
     Merge per-node tokens (``<rack><ct_joiner>[dd]`` with one tray id) into tray specs for cmsh power.
@@ -3322,7 +3299,7 @@ def merge_ct_individuals_for_power(nodes: list[str]) -> list[str]:
         by_rack.setdefault(rr, []).append(n)
     out: list[str] = []
     for rr in sorted(by_rack.keys(), key=str.lower):
-        inner = _condense_ct_numbers(by_rack[rr])
+        inner = naming.condense_tray_range_inner(by_rack[rr])
         if inner:
             tok = naming.ct_blob(rr, inner)
             if not full_re.match(tok):
