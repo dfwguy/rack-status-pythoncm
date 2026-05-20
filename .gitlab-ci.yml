@@ -7,7 +7,6 @@ include:
       - .reusable_jobs/docker/multi/buildkit/docker_build_and_push_rc.yml
       - .reusable_jobs/docker/multi/buildkit/docker_build_and_push.yml
 
-
 default:
   retry:
     max: 2
@@ -20,13 +19,17 @@ default:
       - data_integrity_failure
       - unknown_failure
 
-
+# App CI (lint / test / image verify) runs first; ci-toolkit release + JFrog push last.
 stages:
+  - lint
+  - test
+  - build
   - ci_toolkit_release
 
 variables:
   LOG_LEVEL: "INFO"
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+  NPM_CONFIG_CACHE: "$CI_PROJECT_DIR/.npm-cache"
   GITLAB_RUNNER_DOCKER_TAG: "fusion-instance-k8s"
 
   ############# AUTOMATED BADGES ###########################################
@@ -40,3 +43,109 @@ variables:
   JFROG_IMAGE_PREFIX: "artifactory.nvidia.com/it-astra-docker-local"
   JFROG_DOCKER_REGISTRY_HOSTNAME: "artifactory.nvidia.com"
   ##########################################################################
+
+# Run lint/test/build on branch pushes and merge requests
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+
+# ─── Lint ────────────────────────────────────────────────────────────────────
+
+python-lint:
+  stage: lint
+  image: python:3.12-slim
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .pip-cache/
+  script:
+    - pip install -q ruff
+    - ruff check app.py native_status.py demo_data.py host_exec.py platforms/ rack_locks.py
+  allow_failure: true
+
+typescript-check:
+  stage: lint
+  image: node:22-slim
+  cache:
+    key: npm-${CI_COMMIT_REF_SLUG}
+    paths:
+      - frontend/node_modules/
+      - .npm-cache/
+  script:
+    - cd frontend
+    - npm ci --ignore-scripts
+    - npx tsc -b --noEmit
+
+# ─── Test ────────────────────────────────────────────────────────────────────
+
+python-test:
+  stage: test
+  image: python:3.12-slim
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .pip-cache/
+  script:
+    - pip install -q flask openpyxl pytest requests pyyaml pytest-cov
+    - python -m pytest tests/ -v --tb=short --junitxml=report-python.xml --cov=ai_chat --cov=workflow_engine --cov-report=term-missing
+  coverage: '/TOTAL.+\s(\d+%)/'
+  artifacts:
+    when: always
+    reports:
+      junit: report-python.xml
+
+frontend-test:
+  stage: test
+  image: node:22-slim
+  cache:
+    key: npm-${CI_COMMIT_REF_SLUG}
+    paths:
+      - frontend/node_modules/
+      - .npm-cache/
+  script:
+    - cd frontend
+    - npm ci --ignore-scripts
+    - npx vitest run --reporter=default --reporter=junit --outputFile=../report-frontend.xml --coverage --coverage.reporter=text-summary
+  coverage: '/Statements\s*:\s*(\d+\.?\d*%)/'
+  artifacts:
+    when: always
+    reports:
+      junit: report-frontend.xml
+
+# ─── Build (Kaniko verify; JFrog push is in ci_toolkit_release) ──────────────
+
+docker-build:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+      --no-push
+  rules:
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  allow_failure: true
+
+# Push to NVCR (uncomment when registry is configured)
+# docker-push:
+#   stage: build
+#   image:
+#     name: gcr.io/kaniko-project/executor:debug
+#     entrypoint: [""]
+#   variables:
+#     NVCR_REGISTRY: "nvcr.io/your-org"
+#   needs: [docker-build]
+#   script:
+#     - mkdir -p /kaniko/.docker
+#     - echo "{\"auths\":{\"nvcr.io\":{\"auth\":\"$(echo -n \$oauthtoken:${NVCR_API_KEY} | base64)\"}}}" > /kaniko/.docker/config.json
+#     - /kaniko/executor
+#       --context "${CI_PROJECT_DIR}"
+#       --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+#       --destination "${NVCR_REGISTRY}/nvis-rack-status:${CI_COMMIT_SHORT_SHA}"
+#       --destination "${NVCR_REGISTRY}/nvis-rack-status:latest"
+#   rules:
+#     - if: $CI_COMMIT_BRANCH == "main"
