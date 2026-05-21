@@ -6,7 +6,8 @@ include:
       - .reusable_jobs/auto_merge/auto_merge_automated_release.yml
       - .reusable_jobs/docker/multi/buildkit/docker_build_and_push_rc.yml
       - .reusable_jobs/docker/multi/buildkit/docker_build_and_push.yml
-      - .reusable_jobs/docker/astra_deploy_repo_updater.yml
+  # Must be last: overrides ci-toolkit .pipeline_post_job_hooks (drops Slack failure notifications).
+  - local: .gitlab-ci/ci-toolkit-no-slack.yml
 
 default:
   retry:
@@ -28,9 +29,8 @@ stages:
   - ci_toolkit_release
 
 variables:
-  DEPLOY_REPO_URL: "https://gitlab-master.nvidia.com/ape-repo/astra-projects/nvis-rack-status-owners/nvis-rack-status-demo-deploy.git"
-  # No Slack pipeline-failure notifications (ci-toolkit after_script skips when false + no token).
-  CI_TOOLKIT_SLACK_VIA_API: "false"
+  # No Slack (MR notifier + pipeline-failure hooks). Re-enable: CI_TOOLKIT_ENABLE_SLACK: "true"
+  CI_TOOLKIT_ENABLE_SLACK: "false"
   LOG_LEVEL: "INFO"
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
   NPM_CONFIG_CACHE: "$CI_PROJECT_DIR/.npm-cache"

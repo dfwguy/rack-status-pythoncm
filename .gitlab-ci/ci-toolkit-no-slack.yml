@@ -1,0 +1,46 @@
+# Override ci-toolkit's .pipeline_post_job_hooks: keep OTEL/API telemetry only.
+# Included last from .gitlab-ci.yml so !reference targets this definition.
+.pipeline_post_job_hooks:
+  after_script:
+    - |
+      CI_TOOLKIT_TAG=$(cat /tmp/ci_toolkit_tag.txt 2>/dev/null || echo "")
+      if [ -z "$CI_TOOLKIT_TAG" ]; then
+        if [ "${CI_PROJECT_ID:-}" = "${CI_TOOLKIT_PROJECT_ID}" ]; then
+          CI_TOOLKIT_TAG="$CI_COMMIT_REF_NAME"
+        elif [ -f ".gitlab-ci.yml" ]; then
+          CI_TOOLKIT_TAG=$(grep -A1 "project: 'ci-toolkit/ci-toolkit'" .gitlab-ci.yml 2>/dev/null | grep 'ref:' | sed -E "s/.*ref:\s*['\"]?([^'\"]+)['\"]?.*/\1/" || echo "")
+        fi
+      fi
+      JOB_DURATION=$(python3 -c "from datetime import datetime,timezone; start=datetime.fromisoformat('${CI_JOB_STARTED_AT:-}'.replace('Z','+00:00')); print(round((datetime.now(timezone.utc)-start).total_seconds(),1))" 2>/dev/null || echo "null")
+      API_URLS="${CI_TOOLKIT_API_URLS:-$CI_TOOLKIT_API_URL}"
+      for api_url in $(echo "$API_URLS" | tr ',' ' '); do
+        [ -z "$api_url" ] && continue
+        curl -sk -o /dev/null --connect-timeout 5 --max-time 10 -X POST \
+             -H "Content-Type: application/json" \
+             -H "X-Gitlab-Token: ${CI_JOB_TOKEN:-}" \
+             -d "{\"project_id\": \"$CI_PROJECT_ID\", \"project_namespace\": \"$CI_PROJECT_NAMESPACE\", \"project_name\": \"$CI_PROJECT_NAME\", \"job_name\": \"$CI_JOB_NAME\", \"job_status\": \"$CI_JOB_STATUS\", \"pipeline_id\": \"$CI_PIPELINE_ID\", \"job_duration_seconds\": $JOB_DURATION, \"runner_description\": \"${CI_RUNNER_DESCRIPTION:-}\", \"ci_toolkit_ref\": \"${CI_TOOLKIT_TAG:-}\", \"user_login\": \"${GITLAB_USER_LOGIN:-}\", \"user_email\": \"${GITLAB_USER_EMAIL:-}\"}" \
+             "${api_url%/}/telemetry" 2>/dev/null || true
+      done
+
+      JOB_FAMILY=$(echo "$CI_JOB_NAME" | sed 's/[[:space:]]*\[.*//;s/:[[:space:]]*$//')
+      case "$JOB_FAMILY" in
+        docker_build_and_push_rc)       JOB_FAMILY="docker:build:push:rc" ;;
+        docker_build_and_push)          JOB_FAMILY="docker:build:push" ;;
+        docker_dind_build_and_push_rc)  JOB_FAMILY="docker:dind:build:push:rc" ;;
+        docker_dind_build_and_push)     JOB_FAMILY="docker:dind:build:push" ;;
+      esac
+
+      OTEL_ENDPOINT="${CI_TOOLKIT_OTEL_ENDPOINT:-https://observability-fusion-prd.nvidia.com}"
+      OTEL_TS=$(python3 -c "import time; print(int(time.time()*1e9))" 2>/dev/null || echo "$(date +%s)000000000")
+      echo "📡 Sending OTEL telemetry to ${OTEL_ENDPOINT}/v1/logs ..."
+      OTEL_HTTP_CODE=$(curl -sS -o /tmp/otel_response.txt -w "%{http_code}" \
+           --connect-timeout 3 --max-time 5 -X POST \
+           -H "Content-Type: application/json" \
+           -d "{\"resourceLogs\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"ci-toolkit-pipelines\"}},{\"key\":\"deployment.environment.name\",\"value\":{\"stringValue\":\"pipeline\"}}]},\"scopeLogs\":[{\"scope\":{\"name\":\"ci-toolkit-pipelines\"},\"logRecords\":[{\"timeUnixNano\":\"${OTEL_TS}\",\"severityNumber\":9,\"severityText\":\"INFO\",\"body\":{\"stringValue\":\"pipeline.job_event\"},\"attributes\":[{\"key\":\"event\",\"value\":{\"stringValue\":\"pipeline.telemetry\"}},{\"key\":\"project_id\",\"value\":{\"stringValue\":\"$CI_PROJECT_ID\"}},{\"key\":\"project_namespace\",\"value\":{\"stringValue\":\"$CI_PROJECT_NAMESPACE\"}},{\"key\":\"project_name\",\"value\":{\"stringValue\":\"$CI_PROJECT_NAME\"}},{\"key\":\"job_name\",\"value\":{\"stringValue\":\"$CI_JOB_NAME\"}},{\"key\":\"job_family\",\"value\":{\"stringValue\":\"$JOB_FAMILY\"}},{\"key\":\"job_status\",\"value\":{\"stringValue\":\"$CI_JOB_STATUS\"}},{\"key\":\"pipeline_id\",\"value\":{\"stringValue\":\"$CI_PIPELINE_ID\"}},{\"key\":\"job_duration_seconds\",\"value\":{\"stringValue\":\"$JOB_DURATION\"}},{\"key\":\"runner_description\",\"value\":{\"stringValue\":\"${CI_RUNNER_DESCRIPTION:-}\"}},{\"key\":\"ci_toolkit_ref\",\"value\":{\"stringValue\":\"${CI_TOOLKIT_TAG:-}\"}}]}]}]}]}" \
+           "${OTEL_ENDPOINT}/v1/logs" 2>&1) || true
+      if [ "${OTEL_HTTP_CODE:-0}" -ge 200 ] && [ "${OTEL_HTTP_CODE:-0}" -lt 300 ]; then
+        echo "✅ OTEL telemetry sent successfully (HTTP ${OTEL_HTTP_CODE})"
+      else
+        echo "⚠️ OTEL telemetry failed (HTTP ${OTEL_HTTP_CODE}): $(cat /tmp/otel_response.txt 2>/dev/null)"
+      fi
+      rm -f /tmp/otel_response.txt
