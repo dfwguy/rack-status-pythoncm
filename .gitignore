@@ -45,6 +45,7 @@ static/spa/
 
 # ---- OS / editor ----
 .DS_Store
+*.zip
 Thumbs.db
 .idea/
 *.swp
