@@ -12728,7 +12728,7 @@ class _WebSocketTerminalMiddleware:
                             sess.resize(int(ctrl.get("cols", 80)), int(ctrl.get("rows", 24)))
                             if pending_redraw:
                                 pending_redraw = False
-                                    time.sleep(0.1)
+                                time.sleep(0.1)
                                 sess.force_redraw()
                             continue
                     except (json.JSONDecodeError, ValueError):
