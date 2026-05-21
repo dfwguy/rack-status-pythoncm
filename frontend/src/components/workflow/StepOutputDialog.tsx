@@ -1,5 +1,10 @@
 import { useState, useEffect } from "react";
-import { Modal, ModalCloseButton, Text, Flex, Tag } from "@nvidia/foundations-react-core";
+import { Text, Tag } from "@nvidia/foundations-react-core";
+import Dialog from "@mui/material/Dialog";
+import DialogTitle from "@mui/material/DialogTitle";
+import DialogContent from "@mui/material/DialogContent";
+import DialogActions from "@mui/material/DialogActions";
+import MuiButton from "@mui/material/Button";
 import Box from "@mui/material/Box";
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
@@ -39,6 +44,7 @@ export default function StepOutputDialog({
     if (!open) return;
     setTab(0);
     setFullOutput("");
+    fetchFullOutput();
   }, [open, stepId]);
 
   const fetchFullOutput = async () => {
@@ -69,24 +75,20 @@ export default function StepOutputDialog({
   const success = historyEntry?.success !== false;
 
   return (
-    <Modal
+    <Dialog
       open={open}
-      onOpenChange={onOpenChange}
-      modal={true}
-      style={{ width: "700px", maxWidth: "90vw" }}
-      slotHeading={
-        <>
-          <Terminal size={18} />
-          Step Output — {stepName}
-        </>
-      }
-      slotFooter={
-        <ModalCloseButton kind="tertiary">Close</ModalCloseButton>
-      }
+      onClose={() => onOpenChange(false)}
+      maxWidth="md"
+      fullWidth
+      sx={{ zIndex: 1500 }}
     >
-      <Flex direction="col" gap="3">
+      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Terminal size={18} />
+        Step Output — {stepName}
+      </DialogTitle>
+      <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {/* Status summary */}
-        <Flex gap="2" align="center">
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
           {success ? (
             <Tag color="green" kind="solid" readOnly density="compact">
               <CheckCircle size={12} style={{ marginRight: 4 }} /> Passed
@@ -99,7 +101,7 @@ export default function StepOutputDialog({
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
             {historyEntry?.type || "step"} | Completed: {historyEntry?.completed_at ? new Date(historyEntry.completed_at).toLocaleString() : "—"}
           </Text>
-        </Flex>
+        </Box>
 
         {/* Tabs */}
         <Tabs value={tab} onChange={handleTabChange} sx={{ borderBottom: 1, borderColor: "divider" }}>
@@ -109,27 +111,24 @@ export default function StepOutputDialog({
 
         {/* Summary tab */}
         {tab === 0 && (
-          <Box>
-            <Text kind="body/bold/sm" style={{ marginBottom: 8, display: "block" }}>Output Snippet (last 20 lines)</Text>
-            <Box
-              sx={{
-                bgcolor: "#0d1117",
-                border: "1px solid",
-                borderColor: "divider",
-                borderRadius: 1,
-                p: 2,
-                fontFamily: "ui-monospace, monospace",
-                fontSize: 13,
-                lineHeight: 1.5,
-                color: "#e6edf3",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                maxHeight: 300,
-                overflow: "auto",
-              }}
-            >
-              {historyEntry?.output_snippet || "[No output captured]"}
-            </Box>
+          <Box
+            sx={{
+              bgcolor: "#0d1117",
+              border: "1px solid",
+              borderColor: "divider",
+              borderRadius: 1,
+              p: 2,
+              fontFamily: "ui-monospace, monospace",
+              fontSize: 13,
+              lineHeight: 1.5,
+              color: "#e6edf3",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              maxHeight: 500,
+              overflow: "auto",
+            }}
+          >
+            {historyEntry?.output_snippet || "[No output captured]"}
           </Box>
         )}
 
@@ -152,7 +151,7 @@ export default function StepOutputDialog({
                   color: "#e6edf3",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
-                  maxHeight: 400,
+                  maxHeight: 500,
                   overflow: "auto",
                 }}
               >
@@ -161,7 +160,10 @@ export default function StepOutputDialog({
             )}
           </Box>
         )}
-      </Flex>
-    </Modal>
+      </DialogContent>
+      <DialogActions>
+        <MuiButton variant="outlined" onClick={() => onOpenChange(false)}>Close</MuiButton>
+      </DialogActions>
+    </Dialog>
   );
 }

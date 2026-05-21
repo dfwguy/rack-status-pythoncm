@@ -172,7 +172,7 @@ export default function WorkflowAIGenerator({ open, onClose, onGenerated }: Work
         )}
       </DialogContent>
       <DialogActions>
-        <MuiButton onClick={onClose}>Cancel</MuiButton>
+        <MuiButton variant="outlined" onClick={onClose}>Cancel</MuiButton>
         <MuiButton variant="contained" onClick={handleApply} disabled={!preview || generating}>
           Apply to Editor
         </MuiButton>

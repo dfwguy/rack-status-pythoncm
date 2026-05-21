@@ -18,7 +18,6 @@ import {
   listWorkflows,
   listRuns,
   deleteWorkflow,
-  startWorkflowRun,
   type WorkflowSummary,
   type WorkflowRunSummary,
 } from "../../services/workflowService";
@@ -27,6 +26,7 @@ interface WorkflowListProps {
   onSelect: (workflowId: string) => void;
   onNew: () => void;
   onViewRun: (runId: string) => void;
+  onRun: (workflowId: string) => void;
 }
 
 const STATE_COLORS: Record<string, "green" | "red" | "yellow" | "blue" | "gray"> = {
@@ -39,7 +39,7 @@ const STATE_COLORS: Record<string, "green" | "red" | "yellow" | "blue" | "gray">
   cancelled: "gray",
 };
 
-export default function WorkflowList({ onSelect, onNew, onViewRun }: WorkflowListProps) {
+export default function WorkflowList({ onSelect, onNew, onViewRun, onRun }: WorkflowListProps) {
   const [tab, setTab] = useState(0);
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [runs, setRuns] = useState<WorkflowRunSummary[]>([]);
@@ -71,10 +71,8 @@ export default function WorkflowList({ onSelect, onNew, onViewRun }: WorkflowLis
     refresh();
   };
 
-  const handleRun = async (id: string) => {
-    const result = await startWorkflowRun(id);
-    onViewRun(result.run_id);
-    refresh();
+  const handleRun = (id: string) => {
+    onRun(id);
   };
 
   return (

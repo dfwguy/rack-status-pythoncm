@@ -1897,12 +1897,12 @@ def _api_json_no_store(response):
 
 def _script_path() -> Path:
     p = _eget("RACK_STATUS_SCRIPT", str(DEFAULT_SCRIPT)) or str(DEFAULT_SCRIPT)
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _parser_path() -> Path:
     p = _eget("RACK_PARSER_SCRIPT", str(SCRIPTS_DIR / "parser.sh")) or str(SCRIPTS_DIR / "parser.sh")
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _parser_extra_args() -> list[str]:
@@ -2873,30 +2873,38 @@ def _validation_ct_inner() -> str:
     return s
 
 
+def _resolve_path(p: Path) -> Path:
+    """Resolve a filesystem path; skip .resolve() in SSH mode (paths refer to the remote host)."""
+    p = p.expanduser()
+    if host_exec.is_remote():
+        return p
+    return p.resolve()
+
+
 def _validation_script_path() -> Path:
     p = _eget("RACK_VALIDATION_SCRIPT", str(SCRIPTS_DIR / "run_singlerack.sh")) or str(
         SCRIPTS_DIR / "run_singlerack.sh"
     )
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _mnubergemm_stress_script_path() -> Path:
     p = _eget("RACK_MNUBERGEMM_STRESS_SCRIPT", str(SCRIPTS_DIR / "run_mnubergemm_stress.sh")) or str(
         SCRIPTS_DIR / "run_mnubergemm_stress.sh"
     )
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _nvloom_singlerack_script_path() -> Path:
     p = _eget("RACK_NVLOOM_SINGLERACK_SCRIPT", str(SCRIPTS_DIR / "run_nvloom_singlerack.sh")) or str(
         SCRIPTS_DIR / "run_nvloom_singlerack.sh"
     )
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _clusterkit_script_path() -> Path:
     p = _eget("RACK_CLUSTERKIT_SCRIPT", str(SCRIPTS_DIR / "run_clusterkit.sh")) or str(SCRIPTS_DIR / "run_clusterkit.sh")
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _clusterkit_product_line_for_job(body: dict) -> str:
@@ -2921,54 +2929,54 @@ def _nvis_workspace_dir_effective() -> str:
 
 def _sysinfo_script_path() -> Path:
     p = _eget("RACK_SYSINFO_SCRIPT", str(SCRIPTS_DIR / "sysinfo.sh")) or str(SCRIPTS_DIR / "sysinfo.sh")
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _nvswitches_rack_audit_script_path() -> Path:
     p = _eget("RACK_NVSWITCH_AUDIT_SCRIPT", str(SCRIPTS_DIR / "nvswitches_rack_audit.sh")) or str(
         SCRIPTS_DIR / "nvswitches_rack_audit.sh"
     )
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _nvswitch_sdn_reset_script_path() -> Path:
     p = _eget("RACK_NVSWITCH_SDN_RESET_SCRIPT", str(SCRIPTS_DIR / "nvswitch_sdn_reset.sh")) or str(
         SCRIPTS_DIR / "nvswitch_sdn_reset.sh"
     )
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _nvswitch_system_reset_script_path() -> Path:
     p = _eget("RACK_NVSWITCH_SYSTEM_RESET_SCRIPT", str(SCRIPTS_DIR / "nvswitch_system_reset.sh")) or str(
         SCRIPTS_DIR / "nvswitch_system_reset.sh"
     )
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _imex_reset_script_path() -> Path:
     p = _eget("RACK_IMEX_RESET_SCRIPT", str(SCRIPTS_DIR / "imex_reset.sh")) or str(
         SCRIPTS_DIR / "imex_reset.sh"
     )
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _imex_check_script_path() -> Path:
     p = _eget("RACK_IMEX_CHECK_SCRIPT", str(SCRIPTS_DIR / "imex_check.sh")) or str(
         SCRIPTS_DIR / "imex_check.sh"
     )
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _nemo_xrack_script_path() -> Path:
     p = _eget("RACK_NEMO_XRACK_SCRIPT", str(SCRIPTS_DIR / "run-nemo-xrack.sh")) or str(
         SCRIPTS_DIR / "run-nemo-xrack.sh"
     )
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _run_llama_script_path() -> Path:
     p = _eget("RACK_LLAMA_SCRIPT", str(SCRIPTS_DIR / "run-llama.sh")) or str(SCRIPTS_DIR / "run-llama.sh")
-    return Path(p).resolve()
+    return _resolve_path(Path(p))
 
 
 def _job_env_effective_values() -> dict[str, str]:
@@ -3067,19 +3075,30 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
 
 def _default_log_dir() -> Path:
     p = os.environ.get("RACK_STATUS_LOG_DIR", str(DEFAULT_LOG_DIR))
-    return Path(p).resolve()
+    path = Path(p)
+    if host_exec.is_remote():
+        return path
+    return path.resolve()
 
 
 def _allowed_roots() -> list[Path]:
     raw = os.environ.get("RACK_STATUS_ALLOWED_PREFIXES", "")
     if not raw.strip():
         return []
-    return [Path(x.strip()).resolve() for x in raw.split(",") if x.strip()]
+    remote = host_exec.is_remote()
+    return [Path(x.strip()) if remote else Path(x.strip()).resolve() for x in raw.split(",") if x.strip()]
 
 
 def _resolve_log_dir(raw: str | None) -> Path:
     base = Path(raw or _default_log_dir()).expanduser()
-    log_dir = base.resolve()
+    if host_exec.is_remote():
+        s = str(base)
+        _MACOS_FIRMLINK = "/System/Volumes/Data"
+        if s.startswith(_MACOS_FIRMLINK + "/"):
+            s = s[len(_MACOS_FIRMLINK):]
+        log_dir = Path(s)
+    else:
+        log_dir = base.resolve()
     roots = _allowed_roots()
     if roots:
         ok = any(str(log_dir).startswith(str(r) + os.sep) or log_dir == r for r in roots)
@@ -3184,7 +3203,7 @@ def _tools_find_existing_sqsh_for_skip(dest_dir: Path) -> tuple[Path | None, lis
             if hit:
                 return hit, checked
         try:
-            nemo = Path(raw).expanduser().resolve()
+            nemo = _resolve_path(Path(raw))
         except (OSError, ValueError, RuntimeError):
             nemo = None
         if nemo is not None and nemo.suffix.lower() == ".sqsh":
@@ -4211,8 +4230,8 @@ def api_power_on_async():
 def _gpu_reset_script_path() -> Path:
     raw = (_eget("RACK_GPU_RESET_SCRIPT") or "").strip()
     if raw:
-        return Path(raw).expanduser().resolve()
-    return (SCRIPTS_DIR / "gpu_reset.sh").resolve()
+        return _resolve_path(Path(raw))
+    return _resolve_path(SCRIPTS_DIR / "gpu_reset.sh")
 
 
 def run_gpu_reset(pdsh_w: str) -> dict:
@@ -4349,15 +4368,15 @@ _HOSTNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$", re.IGNORECASE)
 def _bmc_recovery_script_path() -> Path:
     raw = (_eget("RACK_BMC_RECOVERY_SCRIPT") or "").strip()
     if raw:
-        return Path(raw).expanduser().resolve()
-    return (SCRIPTS_DIR / "bmc-recovery.sh").resolve()
+        return _resolve_path(Path(raw))
+    return _resolve_path(SCRIPTS_DIR / "bmc-recovery.sh")
 
 
 def _macswap_script_path() -> Path:
     raw = (_eget("RACK_MACSWAP_SCRIPT") or "").strip()
     if raw:
-        return Path(raw).expanduser().resolve()
-    return (SCRIPTS_DIR / "macswap" / "macswap").resolve()
+        return _resolve_path(Path(raw))
+    return _resolve_path(SCRIPTS_DIR / "macswap" / "macswap")
 
 
 def _macswap_python_module() -> str:
@@ -4870,7 +4889,7 @@ _BUG_REPORT_SUBDIR_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 
 
 def _bug_report_local_base_path() -> Path:
-    return Path(_bug_report_remote_dir()).expanduser().resolve()
+    return _resolve_path(Path(_bug_report_remote_dir()))
 
 
 def _ensure_bug_report_local_base_dir() -> tuple[Path, str | None]:
@@ -5380,8 +5399,8 @@ def _hw_check_argv_from_custom_string(raw: str) -> list[str]:
 def _hw_check_pdsh_script_path() -> Path:
     raw = (_eget("RACK_HW_CHECK_SCRIPT") or "").strip()
     if raw:
-        return Path(raw).expanduser().resolve()
-    return (SCRIPTS_DIR / "hw_check_pdsh.sh").resolve()
+        return _resolve_path(Path(raw))
+    return _resolve_path(SCRIPTS_DIR / "hw_check_pdsh.sh")
 
 
 def _hw_check_argv_for_preset(preset: str) -> list[str]:
@@ -5593,7 +5612,7 @@ def api_hw_check_async():
 
 def _checker_script_path() -> Path:
     """Bundled checker.sh (same directory as hw_check_pdsh.sh)."""
-    return (SCRIPTS_DIR / "checker.sh").resolve()
+    return _resolve_path(SCRIPTS_DIR / "checker.sh")
 
 
 @app.route("/api/hw-check-presets", methods=["GET"])
@@ -7042,7 +7061,7 @@ def _resolve_slurm_job_stdout_path(path_raw: str, log_dir_raw: str | None) -> Pa
     raw = (path_raw or "").strip()
     if not raw or ".." in raw or "://" in raw:
         raise ValueError("invalid path")
-    p = Path(raw).expanduser().resolve()
+    p = _resolve_path(Path(raw))
     if not p.exists():
         raise ValueError("path does not exist")
     if not p.is_file():
@@ -9690,10 +9709,10 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
         "WORKSPACE_DIR": ws,
         "NVIS_WORKSPACE_DIR": ws,
         "TOPDIR": ws,
-        "NVIS_BIN_SCRIPTS": str(SCRIPTS_DIR.resolve()),
+        "NVIS_BIN_SCRIPTS": str(_resolve_path(SCRIPTS_DIR)),
         "CUDA_MAJ": cuda_m,
         "NVIS_SYSINFO_SH": str(_sysinfo_script_path()),
-        "NVIS_CHECKER_SH": str((SCRIPTS_DIR / "checker.sh").resolve()),
+        "NVIS_CHECKER_SH": str(_resolve_path(SCRIPTS_DIR / "checker.sh")),
     }
     for k in ("NVIS_HPCX_ROOT", "NVIS_NCCL_PATH", "RACK_MNUBERGEMM_PARTITION"):
         v = (_eget(k) or "").strip()
@@ -9754,7 +9773,7 @@ def _prepare_run_nvloom_singlerack(body: dict) -> tuple[dict | None, tuple[objec
         "WORKSPACE_DIR": ws,
         "NVIS_WORKSPACE_DIR": ws,
         "TOPDIR": ws,
-        "NVIS_BIN_SCRIPTS": str(SCRIPTS_DIR.resolve()),
+        "NVIS_BIN_SCRIPTS": str(_resolve_path(SCRIPTS_DIR)),
         "CUDA_MAJ": cuda_m,
     }
     for k in ("NVIS_NVLOOM_HPCX_INIT", "NVIS_NVLOOM_CLI", "NVIS_NVLOOM_UCX_TLS", "RACK_NVLOOM_PARTITION"):
@@ -9813,7 +9832,7 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
         "WORKSPACE_DIR": ws,
         "NVIS_WORKSPACE_DIR": ws,
         "TOPDIR": ws,
-        "NVIS_BIN_SCRIPTS": str(SCRIPTS_DIR.resolve()),
+        "NVIS_BIN_SCRIPTS": str(_resolve_path(SCRIPTS_DIR)),
         "CUDA_MAJ": cuda_m,
         "RACK_CLUSTERKIT_RACK": rk,
     }
@@ -10121,7 +10140,8 @@ def _merged_stdout_stream_generator(
 ) -> Iterator[bytes]:
     """Yield merged stdout/stderr from a subprocess until exit (or timeout)."""
     cmd_run = list(cmd)
-    if (_eget(linebuffer_env_var, linebuffer_default) or "").strip().lower() in (
+    remote = host_exec.is_remote()
+    if not remote and (_eget(linebuffer_env_var, linebuffer_default) or "").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -10130,10 +10150,11 @@ def _merged_stdout_stream_generator(
         stdbuf = shutil.which("stdbuf")
         if stdbuf:
             cmd_run = [stdbuf, "-oL", "-eL", *cmd_run]
-    env = _subprocess_env(env_extra)
+    cmd_run = host_exec.wrap_for_host(cmd_run, cwd=cwd if remote else None)
+    env = None if remote else _subprocess_env(env_extra)
     proc = subprocess.Popen(
         cmd_run,
-        cwd=cwd,
+        cwd=None if remote else cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         env=env,
@@ -10204,9 +10225,10 @@ def _merged_stdout_stream_generator(
 def _sysinfo_stream_generator(prep: dict):
     """Yield stdout+stderr bytes from sysinfo.sh until process exit (or timeout)."""
     timeout_sec = max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800))
+    cwd = _REMOTE_BASE if host_exec.is_remote() and _REMOTE_BASE else str(prep["log_dir"])
     yield from _merged_stdout_stream_generator(
         list(prep["cmd"]),
-        str(prep["log_dir"]),
+        cwd,
         prep["display_cmd"],
         timeout_sec,
         linebuffer_env_var="RACK_SYSINFO_LINEBUFFER",
@@ -10264,9 +10286,10 @@ def _parse_nvswitch_audit_request(body: dict) -> tuple[dict | None, tuple[object
 def _nvswitch_audit_stream_generator(prep: dict):
     """Stream nvswitches_rack_audit.sh (check-only or --fix)."""
     timeout_sec = max(60, _env_int("RACK_NVSWITCH_AUDIT_TIMEOUT", 7200))
+    cwd = _REMOTE_BASE if host_exec.is_remote() and _REMOTE_BASE else str(prep["log_dir"])
     yield from _merged_stdout_stream_generator(
         list(prep["cmd"]),
-        str(prep["log_dir"]),
+        cwd,
         prep["display_cmd"],
         timeout_sec,
         linebuffer_env_var="RACK_NVSWITCH_AUDIT_LINEBUFFER",
@@ -11614,7 +11637,7 @@ _CLUSTER_DM_KEYS: tuple[str, ...] = ("product_line", "hw_vendor", "customer_name
 def _cluster_dashboard_metadata_path() -> Path:
     raw = (os.environ.get("RACK_CLUSTER_DASHBOARD_METADATA_FILE") or "").strip()
     if raw:
-        return Path(raw).expanduser().resolve()
+        return _resolve_path(Path(raw))
     return (APP_DIR / "var" / "cache" / "cluster_dashboard_metadata.json").resolve()
 
 

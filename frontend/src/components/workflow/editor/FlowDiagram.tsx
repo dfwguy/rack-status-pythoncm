@@ -27,9 +27,15 @@ import Box from "@mui/material/Box";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import Divider from "@mui/material/Divider";
+import Menu from "@mui/material/Menu";
+import MenuItem from "@mui/material/MenuItem";
+import ListItemIcon from "@mui/material/ListItemIcon";
+import ListItemText from "@mui/material/ListItemText";
 import {
   Plus,
+  Play,
   GitBranch,
+  Circle,
   Copy,
   Trash2,
   AlignStartVertical,
@@ -44,8 +50,10 @@ import {
   Unlock,
 } from "lucide-react";
 import { CustomNodeMemo, DiamondNodeMemo } from "./CustomNode";
+import CustomEdge from "./CustomEdge";
 
 const nodeTypes = { custom: CustomNodeMemo, diamond: DiamondNodeMemo };
+const edgeTypes = { deletable: CustomEdge };
 
 interface FlowDiagramProps {
   nodes: Node[];
@@ -54,7 +62,7 @@ interface FlowDiagramProps {
   onEdgesChange?: OnEdgesChange;
   onNodeDoubleClick?: (event: React.MouseEvent, node: Node) => void;
   onGraphChange?: (nodes: Node[], edges: Edge[]) => void;
-  onCodeAction?: (action: { type: "addNode"; stepType: string } | { type: "addEdge"; source: string; target: string; label?: string } | { type: "deleteNodes"; ids: string[] } | { type: "duplicateNode"; id: string; label: string; stepType: string }) => void;
+  onCodeAction?: (action: { type: "addNode"; stepType: string } | { type: "addEdge"; source: string; target: string; label?: string } | { type: "deleteEdge"; source: string; target: string } | { type: "deleteNodes"; ids: string[] } | { type: "duplicateNode"; id: string; label: string; stepType: string }) => void;
   activeStepId?: string | null;
   completedStepIds?: string[];
   failedStepIds?: string[];
@@ -78,32 +86,64 @@ function FlowDiagramInternal({
   readOnly = false,
 }: FlowDiagramProps) {
   const [locked, setLocked] = useState(false);
+  const [addMenuAnchor, setAddMenuAnchor] = useState<null | HTMLElement>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const reactFlowInstance = useReactFlow();
 
+  const handleDeleteEdge = useCallback(
+    (edgeId: string) => {
+      if (readOnly || locked || !onCodeAction) return;
+      const edge = initialEdges.find((e) => e.id === edgeId);
+      if (edge) {
+        onCodeAction({ type: "deleteEdge", source: edge.source, target: edge.target });
+      }
+    },
+    [readOnly, locked, onCodeAction, initialEdges],
+  );
+
+  const canDeleteEdges = !readOnly && !locked && !!onCodeAction;
+
   const decoratedNodes = useMemo(() => {
-    return initialNodes.map((node) => ({
-      ...node,
-      data: {
-        ...node.data,
-        isActive: node.id === activeStepId,
-        isCompleted: completedStepIds.includes(node.id),
-        isFailed: failedStepIds.includes(node.id),
-      },
-    }));
-  }, [initialNodes, activeStepId, completedStepIds, failedStepIds]);
+    return initialNodes.map((node) => {
+      const connectedEdges = canDeleteEdges
+        ? initialEdges
+            .filter((e) => e.source === node.id || e.target === node.id)
+            .map((e) => ({
+              edgeId: e.id,
+              source: e.source,
+              target: e.target,
+              position: e.source === node.id ? "bottom" as const : "top" as const,
+            }))
+        : [];
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          isActive: node.id === activeStepId,
+          isCompleted: completedStepIds.includes(node.id),
+          isFailed: failedStepIds.includes(node.id),
+          connectedEdges,
+          onDeleteEdge: canDeleteEdges ? handleDeleteEdge : undefined,
+        },
+      };
+    });
+  }, [initialNodes, initialEdges, activeStepId, completedStepIds, failedStepIds, canDeleteEdges, handleDeleteEdge]);
 
   const decoratedEdges = useMemo(() => {
     return initialEdges.map((edge) => {
+      const base = {
+        ...edge,
+        type: canDeleteEdges ? "deletable" : edge.type,
+      };
       if (activeStepId && edge.target === activeStepId) {
-        return { ...edge, animated: true, style: { ...edge.style, stroke: "#22c55e", strokeWidth: 3 } };
+        return { ...base, animated: true, style: { ...edge.style, stroke: "#22c55e", strokeWidth: 3 } };
       }
       if (completedStepIds.includes(edge.source) && completedStepIds.includes(edge.target)) {
-        return { ...edge, animated: false, style: { ...edge.style, stroke: "#6b7280", strokeWidth: 1.5, opacity: 0.6 } };
+        return { ...base, animated: false, style: { ...edge.style, stroke: "#6b7280", strokeWidth: 1.5, opacity: 0.6 } };
       }
-      return edge;
+      return base;
     });
-  }, [initialEdges, activeStepId, completedStepIds]);
+  }, [initialEdges, activeStepId, completedStepIds, canDeleteEdges]);
 
   const [nodes, setNodes, onNodesChangeInternal] = useNodesState(decoratedNodes);
   const [edges, setEdges, onEdgesChangeInternal] = useEdgesState(decoratedEdges);
@@ -142,6 +182,14 @@ function FlowDiagramInternal({
       onEdgesChangeInternal(changes);
     },
     [readOnly, locked, onEdgesChangeInternal],
+  );
+
+  const isValidConnection = useCallback(
+    (connection: Connection) => {
+      if (connection.source === connection.target) return false;
+      return true;
+    },
+    [],
   );
 
   const onConnect = useCallback(
@@ -325,8 +373,10 @@ function FlowDiagramInternal({
         onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
         onConnect={onConnect}
+        isValidConnection={isValidConnection}
         onNodeDoubleClick={onNodeDoubleClick}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         snapToGrid
@@ -338,6 +388,7 @@ function FlowDiagramInternal({
         multiSelectionKeyCode="Shift"
         selectionOnDrag={!readOnly && !locked}
         panOnDrag={readOnly || locked ? true : [1, 2]}
+        connectionRadius={40}
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{
           type: "smoothstep",
@@ -380,15 +431,29 @@ function FlowDiagramInternal({
             >
               {/* Add nodes */}
               <Tooltip title="Add Node">
-                <IconButton size="small" onClick={() => addNode("automated")}>
+                <IconButton size="small" onClick={(e) => setAddMenuAnchor(e.currentTarget)}>
                   <Plus size={16} />
                 </IconButton>
               </Tooltip>
-              <Tooltip title="Add Conditional">
-                <IconButton size="small" onClick={() => addNode("decision")}>
-                  <GitBranch size={16} />
-                </IconButton>
-              </Tooltip>
+              <Menu
+                anchorEl={addMenuAnchor}
+                open={Boolean(addMenuAnchor)}
+                onClose={() => setAddMenuAnchor(null)}
+                anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+              >
+                <MenuItem onClick={() => { addNode("automated"); setAddMenuAnchor(null); }}>
+                  <ListItemIcon><Play size={16} /></ListItemIcon>
+                  <ListItemText>Step</ListItemText>
+                </MenuItem>
+                <MenuItem onClick={() => { addNode("decision"); setAddMenuAnchor(null); }}>
+                  <ListItemIcon><GitBranch size={16} /></ListItemIcon>
+                  <ListItemText>Conditional</ListItemText>
+                </MenuItem>
+                <MenuItem onClick={() => { addNode("manual"); setAddMenuAnchor(null); }}>
+                  <ListItemIcon><Circle size={16} /></ListItemIcon>
+                  <ListItemText>Start/End Event</ListItemText>
+                </MenuItem>
+              </Menu>
 
               <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import Box from "@mui/material/Box";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
@@ -7,14 +7,37 @@ import { PageHeader } from "../components/layout/PageHeader";
 import WorkflowList from "../components/workflow/WorkflowList";
 import WorkflowDesigner from "../components/workflow/WorkflowDesigner";
 import WorkflowRunPanel from "../components/workflow/WorkflowRunPanel";
-import { getWorkflow, saveWorkflow, startWorkflowRun, type Workflow } from "../services/workflowService";
+import WorkflowRunDialog from "../components/workflow/WorkflowRunDialog";
+import {
+  getWorkflow,
+  saveWorkflow,
+  startWorkflowRun,
+  type Workflow,
+  type WorkflowTarget,
+} from "../services/workflowService";
+import type { RackStatusResponse } from "../types/api";
 
 type ViewMode = "list" | "designer";
 
-export function WorkflowsView() {
+interface WorkflowsViewProps {
+  rackData?: RackStatusResponse | null;
+}
+
+export function WorkflowsView({ rackData = null }: WorkflowsViewProps) {
   const [mode, setMode] = useState<ViewMode>("list");
   const [selectedWorkflow, setSelectedWorkflow] = useState<Workflow | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+
+  const [runDialogOpen, setRunDialogOpen] = useState(false);
+  const [runDialogWorkflowId, setRunDialogWorkflowId] = useState("");
+  const [runDialogWorkflowName, setRunDialogWorkflowName] = useState("");
+  const [runDialogWorkflowDesc, setRunDialogWorkflowDesc] = useState("");
+  const [runDialogTarget, setRunDialogTarget] = useState<WorkflowTarget | undefined>();
+
+  const availableRacks = useMemo(
+    () => (rackData?.rows || []).map((r) => r.rack).sort(),
+    [rackData],
+  );
 
   const handleSelect = useCallback(async (workflowId: string) => {
     const wf = await getWorkflow(workflowId);
@@ -37,10 +60,24 @@ export function WorkflowsView() {
     setSelectedWorkflow(saved);
   }, []);
 
-  const handleRun = useCallback(async (workflowId: string) => {
-    const result = await startWorkflowRun(workflowId);
-    setActiveRunId(result.run_id);
+  const openRunDialog = useCallback(async (workflowId: string) => {
+    try {
+      const wf = await getWorkflow(workflowId);
+      setRunDialogWorkflowId(workflowId);
+      setRunDialogWorkflowName(wf.name);
+      setRunDialogWorkflowDesc(wf.description || "");
+      setRunDialogTarget(wf.target);
+      setRunDialogOpen(true);
+    } catch {
+      const result = await startWorkflowRun(workflowId);
+      setActiveRunId(result.run_id);
+    }
   }, []);
+
+  const handleRunConfirm = useCallback(async (params: Record<string, string>) => {
+    const result = await startWorkflowRun(runDialogWorkflowId, params);
+    setActiveRunId(result.run_id);
+  }, [runDialogWorkflowId]);
 
   const handleViewRun = useCallback((runId: string) => {
     setActiveRunId(runId);
@@ -54,7 +91,7 @@ export function WorkflowsView() {
             title="Workflows"
             description="Create and manage rack troubleshooting and validation workflows. Define automated steps, manual checkpoints, and decision points."
           />
-          <WorkflowList onSelect={handleSelect} onNew={handleNew} onViewRun={handleViewRun} />
+          <WorkflowList onSelect={handleSelect} onNew={handleNew} onViewRun={handleViewRun} onRun={openRunDialog} />
         </Box>
       )}
 
@@ -75,7 +112,8 @@ export function WorkflowsView() {
             <WorkflowDesigner
               workflow={selectedWorkflow}
               onSave={handleSave}
-              onRun={handleRun}
+              onRun={openRunDialog}
+              availableRacks={availableRacks}
             />
           </Box>
         </Box>
@@ -84,6 +122,16 @@ export function WorkflowsView() {
       {activeRunId && (
         <WorkflowRunPanel runId={activeRunId} onClose={() => setActiveRunId(null)} />
       )}
+
+      <WorkflowRunDialog
+        open={runDialogOpen}
+        onClose={() => setRunDialogOpen(false)}
+        onRun={handleRunConfirm}
+        workflowName={runDialogWorkflowName}
+        workflowDescription={runDialogWorkflowDesc}
+        defaultTarget={runDialogTarget}
+        rackData={rackData}
+      />
     </Box>
   );
 }

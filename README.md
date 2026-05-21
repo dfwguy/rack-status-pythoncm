@@ -30,10 +30,14 @@ A full-stack **rack validation and operations platform** for NVIDIA GPU clusters
 - Demo mode with topic-matched responses for testing without LLM
 
 ### Workflow Engine
-- Visual workflow designer with Mermaid code editor and React Flow canvas
+- Visual workflow designer with Mermaid code editor and React Flow canvas (bi-directional sync)
+- Add node dropdown menu: Step (automated), Conditional (decision), Start/End Event (stadium)
 - Interactive node editing: add, delete, duplicate, connect, align, distribute
-- Node types: Automated, Manual, Decision (diamond), AI Query, Delay
+- Edge deletion via hover: hover a node to reveal delete buttons on connected handles
+- Node types: Automated (green rect), Manual/Event (blue stadium), Decision (yellow diamond), AI Query, Delay
+- Mermaid parser handles forward-referenced nodes (label defined after first edge use)
 - YAML frontmatter metadata for per-node configuration (command, parameters, timeout, retries)
+- Node types preserved across save/reload (inferred from mermaid shape, not hardcoded)
 - Predefined scripts dropdown from cluster tool inventory
 - AI-powered workflow generation from natural language descriptions
 - State machine execution engine (pending, running, waiting, completed, failed)
@@ -79,37 +83,45 @@ layer prevents operators from accidentally stepping on each other.
 - Node.js 22+ and npm (for the React SPA)
 - Access to a BCM or MAAS head node (for Slurm/cmsh commands), or use demo mode
 
-### 1. Backend
+### Using `start.sh` (recommended)
+
+```bash
+./start.sh                              # auto-detect mode (macOS = demo, Linux = cluster)
+RACK_STATUS_DEMO=1 ./start.sh           # force demo mode
+BUILD_FRONTEND=0 ./start.sh             # skip frontend rebuild
+```
+
+The script handles Python venv, deps, Node.js detection, frontend build, and Flask startup on port 5050.
+
+### SSH mode (local Mac → remote cluster)
+
+Upload scripts to the head node and run locally with SSH env vars:
+
+```bash
+scp -i ~/.ssh/<key> -r bin/scripts root@<head-node>:/home/cmsupport/nvis-rack-status/bin/
+
+RACK_EXEC_MODE=ssh \
+RACK_SSH_HOST=<head-node-ip> \
+RACK_SSH_USER=root \
+RACK_SSH_KEY=~/.ssh/<key> \
+RACK_PLATFORM=bcm \
+RACK_STATUS_DEMO=0 \
+RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status \
+BUILD_FRONTEND=0 \
+./start.sh
+```
+
+### Manual setup (alternative)
 
 ```bash
 cd nvis-rack-status
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 2. Frontend (React SPA)
-
-```bash
-cd frontend
-npm install
-npm run build     # builds to ../static/spa/
-cd ..
-```
-
-### 3. Run
-
-```bash
-export PORT=5000
+cd frontend && npm install && npm run build && cd ..
 python3 app.py
 ```
 
 Open **http://localhost:5050/** in your browser.
-
-### Demo mode (no cluster needed)
-
-```bash
-RACK_STATUS_DEMO=1 RACK_WEB_AUTH_DISABLED=1 python3 app.py
-```
 
 ---
 
@@ -203,7 +215,7 @@ The `.gitlab-ci.yml` pipeline runs on every push:
 |-------|------|
 | **lint** | Python (ruff), TypeScript (tsc) |
 | **test** | pytest (94 tests), vitest (34 tests) with JUnit reports + coverage badges |
-| **build** | Docker image build (main branch + merge requests) |
+| **build** | Docker image build via Kaniko (all branches + merge requests) |
 
 ---
 
@@ -237,6 +249,8 @@ nvis-rack-status/
 ├── native_status.py        # Native Python rack-status builder (cmsh + sinfo)
 ├── demo_data.py            # Synthetic demo data generator
 ├── host_exec.py            # SSH/local command execution layer
+├── rack_locks.py           # Advisory rack locks (claims + active-op tracking)
+├── nvis_id_templates.py    # NVIS naming conventions (Firmus/CBR/Bright)
 ├── platforms/              # BCM and MAAS platform providers
 │   ├── base.py             # Abstract PlatformProvider
 │   ├── bcm.py              # BCM (cmsh, pdsh, module load slurm)
@@ -255,8 +269,13 @@ nvis-rack-status/
 │   ├── src/components/     # Reusable components
 │   │   ├── ai/             # AI chat widget (AIChatWidget, ChatWindow, ChatMessage)
 │   │   ├── workflow/       # Workflow designer + runner
-│   │   │   ├── editor/     # React Flow canvas, mermaid parser, frontmatter utils
-│   │   │   ├── WorkflowDesigner.tsx
+│   │   │   ├── editor/     # React Flow canvas + mermaid parser
+│   │   │   │   ├── FlowDiagram.tsx      # Canvas wrapper (toolbar, node/edge types, connections)
+│   │   │   │   ├── mermaidToReactFlow.ts # Mermaid → React Flow nodes/edges (dagre layout)
+│   │   │   │   ├── CustomNode.tsx        # Standard + Diamond node renderers (edge delete on hover)
+│   │   │   │   ├── CustomEdge.tsx        # Styled smoothstep edge with labels
+│   │   │   │   └── frontmatter.ts        # YAML frontmatter parse/serialize
+│   │   │   ├── WorkflowDesigner.tsx      # Main editor: code panel + canvas + save
 │   │   │   ├── WorkflowList.tsx
 │   │   │   ├── WorkflowRunPanel.tsx
 │   │   │   ├── NodePropertiesDialog.tsx
@@ -284,6 +303,7 @@ nvis-rack-status/
 ├── rack-config.env         # Docker deployment config (edit per site)
 ├── Dockerfile              # Multi-stage build (Node 22 + Ubuntu 22.04)
 ├── docker-compose.yml      # Compose with named volume for persistence
+├── start.sh                # Local dev launcher (venv, npm, Flask)
 ├── build-docker.sh         # Build and run helper script
 ├── .gitlab-ci.yml          # CI/CD pipeline (lint, test, build, coverage)
 ├── INSTALL.md              # Docker deployment guide

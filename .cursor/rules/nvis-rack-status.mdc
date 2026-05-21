@@ -37,6 +37,8 @@ Flask backend + React 19 SPA (Vite + NVIDIA Kaizen UI + MUI), Dockerized with SS
 - **Demo mode**: `RACK_STATUS_DEMO=1` returns synthetic data. `/api/parser-results` also returns mock chart data.
 - **Docker**: Multi-stage Dockerfile. `rack-config.env` centralizes deployment settings. `build-docker.sh` for dev/prod/build/stop/logs.
 - **Command contexts**: `RackCommandContext` and `RackCommandsStoreContext` track async job state across views.
+- **Workflow editor**: Mermaid source text is the single source of truth. React Flow canvas reads from and writes back to mermaid via `mermaidToReactFlow.ts` parser and `handleCodeAction` in `WorkflowDesigner.tsx`. Node types: automated (green rect), manual/event (blue stadium), decision (yellow diamond). The parser infers `stepType` from mermaid shape — this must be preserved during save (`handleSave`) so nodes retain their visual style on reload. Edge deletion must preserve inline node definitions (e.g., `step1 --> done(["Done"])` — removing the edge must re-insert `done(["Done"])` as a standalone line). Connections use React Flow handles: Top=target, Bottom=source, Left=target, Right=source. Edge delete buttons appear on node hover (not on the edge line).
+- **Remote cluster deployment**: Upload `bin/scripts/` to the head node at `RACK_REMOTE_BASE_PATH/bin/scripts/` via `scp`. Run locally with `RACK_EXEC_MODE=ssh` and the SSH env vars pointing to the head node.
 
 ## Testing
 
@@ -50,10 +52,18 @@ Flask backend + React 19 SPA (Vite + NVIDIA Kaizen UI + MUI), Dockerized with SS
 - `app.py` — Flask backend, all `/api/*` routes (~11k lines)
 - `native_status.py` — Native Python rack-status builder (cmsh + sinfo + log probes)
 - `host_exec.py` — SSH/local command execution with env forwarding
+- `nvis_id_templates.py` — NVIS naming conventions (Firmus/CBR/Bright templates, uses `lru_cache`)
+- `workflow_engine.py` — Workflow state machine, CRUD, execution engine
+- `rack_locks.py` — Advisory rack lock claims, persistence, TTL, heartbeat-based release
 - `platforms/` — BCM and MAAS platform providers
 - `rack-config.env` — Docker deployment configuration
 - `frontend/src/components/RackTable.tsx` — Main dashboard table with filters, menus, charts
 - `frontend/src/components/ParserResultsDialog.tsx` — NCCL/NEMO chart dialog + Grafana embeds
+- `frontend/src/components/workflow/WorkflowDesigner.tsx` — Workflow editor: code panel + canvas + save
+- `frontend/src/components/workflow/editor/FlowDiagram.tsx` — React Flow canvas wrapper (node/edge types, connection handling, toolbar)
+- `frontend/src/components/workflow/editor/mermaidToReactFlow.ts` — Mermaid parser → React Flow nodes/edges (dagre layout)
+- `frontend/src/components/workflow/editor/CustomNode.tsx` — Node renderers (Standard + Diamond) with edge delete buttons
+- `frontend/src/components/workflow/editor/CustomEdge.tsx` — Custom edge renderer (smoothstep + label)
 - `frontend/src/views/ToolsView.tsx` — NVLoom, Clusterkit, workspace tools
 - `frontend/src/views/AnalyticsView.tsx` — Rack analytics and aggregate analysis
 - `frontend/src/context/RackCommandsStoreContext.tsx` — Centralized async command tracking

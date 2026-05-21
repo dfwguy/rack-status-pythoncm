@@ -1368,7 +1368,7 @@ export function RackTable({
           />
         </DialogContent>
         <DialogActions>
-          <MuiButton onClick={() => setCommentDialogOpen(false)} disabled={commentSaving}>
+          <MuiButton variant="outlined" onClick={() => setCommentDialogOpen(false)} disabled={commentSaving}>
             Cancel
           </MuiButton>
           <MuiButton
@@ -1393,7 +1393,7 @@ export function RackTable({
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <MuiButton onClick={() => setConfirmAction(null)} disabled={actionLoading}>
+          <MuiButton variant="outlined" onClick={() => setConfirmAction(null)} disabled={actionLoading}>
             Cancel
           </MuiButton>
           <MuiButton

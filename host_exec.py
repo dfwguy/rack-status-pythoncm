@@ -33,7 +33,7 @@ _SSH_PORT: str | None = None
 _SSH_EXTRA_OPTS: list[str] = []
 _init_lock = threading.Lock()
 
-_FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_")
+_FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_", "NVIS_", "PDSH_")
 
 
 def _build_env_exports() -> str:
@@ -65,6 +65,23 @@ def is_remote() -> bool:
     """Return True when commands are routed over SSH."""
     _ensure_init()
     return _EXEC_MODE == "ssh"
+
+
+def wrap_for_host(cmd: list[str], *, cwd: str | None = None) -> list[str]:
+    """Return *cmd* as-is locally, or wrapped in an SSH argv when remote.
+
+    The returned list is suitable for ``subprocess.Popen(…)``.  Environment
+    variables matching the forwarding prefixes are exported on the remote side.
+    """
+    _ensure_init()
+    if _EXEC_MODE != "ssh":
+        return list(cmd)
+    env_prefix = _build_env_exports()
+    shell_str = shlex.join(cmd)
+    if cwd:
+        shell_str = f"cd {shlex.quote(cwd)} && {shell_str}"
+    shell_str = env_prefix + shell_str
+    return _ssh_base_argv() + [shell_str]
 
 
 def _ssh_base_argv() -> list[str]:

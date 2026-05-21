@@ -169,7 +169,7 @@ export function ClusterDashboardView({
           />
         </DialogContent>
         <DialogActions>
-          <MuiButton onClick={() => setLabelsOpen(false)} disabled={labelsSaving}>
+          <MuiButton variant="outlined" onClick={() => setLabelsOpen(false)} disabled={labelsSaving}>
             Cancel
           </MuiButton>
           <MuiButton onClick={() => void saveLabels()} variant="contained" disabled={labelsSaving}>
