@@ -90,7 +90,7 @@ python-test:
     paths:
       - .pip-cache/
   script:
-    - pip install -q flask openpyxl pytest requests pyyaml pytest-cov
+    - pip install -q -r requirements.txt pytest pytest-cov
     - python -m pytest tests/ -v --tb=short --junitxml=report-python.xml --cov=ai_chat --cov=workflow_engine --cov-report=term-missing
   coverage: '/TOTAL.+\s(\d+%)/'
   artifacts:
