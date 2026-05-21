@@ -110,7 +110,26 @@ Used by **`bin/scripts/launch-grafana-bright-prometheus.sh`** (not by Flask). Af
 | **`RACK_WEB_AUTH_USER`** | `root` | PAM user. |
 | **`RACK_WEB_PAM_SERVICE`** | `login` | PAM stack. |
 | **`RACK_WEB_PAM_HELPER_PYTHON`** | `/usr/bin/python3` | Interpreter for `rack_web/pam_helper.py`. |
-| **`RACK_WEB_SECRET_KEY`** | *(ephemeral)* | Flask session signing. |
+| **`RACK_WEB_SECRET_KEY`** | *(auto on first start)* | Flask session signing and NVFTP vault encryption. If unset, the app creates `var/secrets/.rack_web_secret_key` on first launch (gitignored, persisted on the `var/` volume in Docker). Set this env var explicitly to use your own key. |
+| **`NVIS_VAULT_MASTER_KEY`** | *(empty)* | Optional override for vault encryption instead of `RACK_WEB_SECRET_KEY`. |
+| **`NVIS_TOKEN_VAULT_DIR`** | `var/secrets/` | Directory for encrypted token vault files (**never commit** — see `.gitignore` and `scripts/check_no_vault_in_git.sh`). |
+
+### NVFTP cache sync (`var/cache` → SFTP)
+
+Requires `RACK_WEB_SECRET_KEY`, **Settings → `RACK_PROJECT_TOKEN`**, vault NVFTP token, and **`RACK_NVFTP_SFTP_USER`**. Uploads run every **`RACK_NVFTP_SYNC_INTERVAL_SEC`** (default **7200** = 2 hours) to:
+
+`/nvis-project-view/{RACK_PROJECT_TOKEN}/cache/…` mirrors every file under `var/cache/` plus `rack_comments.json` (optional `{RACK_NVFTP_REMOTE_BASE}/` prefix). `POST /api/nvftp-sync/run` with `{"force": true}` re-uploads all files.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| **`RACK_PROJECT_TOKEN`** | *(empty)* | Remote folder name; empty disables sync |
+| **`RACK_NVFTP_SFTP_USER`** | *(empty)* | SFTP username (token from vault is the password) |
+| **`RACK_NVFTP_REMOTE_BASE`** | *(empty)* | Optional prefix before `/nvis-project-view/{RACK_PROJECT_TOKEN}/…` |
+| **`RACK_NVFTP_SYNC_INTERVAL_SEC`** | `7200` | Sync interval in seconds (min 300) |
+| **`RACK_NVFTP_SFTP_HOST`** | `transfer.nvftp.nvidia.com` | SFTP host |
+| **`RACK_NVFTP_SFTP_PORT`** | `22` | SFTP port (set in shell env if needed) |
+| **`RACK_NVFTP_SYNC_DISABLED`** | `0` | `1` to disable background sync |
+| **`RACK_NVFTP_SYNC_FORCE`** | `0` | `1` to upload every cache file on each sync (not only changed files) |
 | **`RACK_WEB_SESSION_HOURS`** | `8` | Session lifetime. |
 | **`RACK_WEB_COOKIE_SECURE`** | *(unset)* | Truthy → `Secure` cookies. |
 | **`RACK_WEB_ACTIVE_CLIENT_TTL_SEC`** | `120` | Client heartbeat TTL in `/api/app-stats`. |

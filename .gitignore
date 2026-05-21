@@ -21,6 +21,13 @@ build/
 var/cache/
 var/workflows/runs/
 
+# ---- Token vault (NEVER commit — encrypted NVFTP tokens + master key material) ----
+var/secrets/
+**/*.vault.json
+**/*.vault.flock
+**/.vault_master_key
+**/.rack_web_secret_key
+
 # ---- Demo report logs (extracted from reports.tar.gz) ----
 demo-reports/
 

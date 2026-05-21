@@ -109,7 +109,13 @@ import host_exec  # noqa: E402
 import ai_chat  # noqa: E402
 import workflow_engine  # noqa: E402
 import rack_locks  # noqa: E402
+import token_vault  # noqa: E402
+import nvftp_cache_sync  # noqa: E402
 from platforms import get_platform as _get_platform  # noqa: E402
+
+NVFTP_TOKENS_URL = (
+    "https://nvftp.nvidia.com/workspace/1099ff0b-621c-490f-a662-c69583ccabad/tokens"
+)
 
 _REMOTE_BASE = os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
 if _REMOTE_BASE:
@@ -163,6 +169,7 @@ _rack_status_bg_thread: threading.Thread | None = None
 JOB_ENV_SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("dashboard", "Dashboard & charts"),
     ("external", "External connections"),
+    ("nvftp", "NVFTP cache sync"),
     ("native_cmsh", "Native status, parser & cmsh"),
     ("jobs_cluster", "Validation, jobs & cluster tools"),
 )
@@ -178,6 +185,46 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "key": "RACK_WEB_PROJECT_NAME",
         "label": "Page title suffix",
         "description": "Optional short label appended to HTML titles (shell PROJECT_NAME is still read if this is unset).",
+    },
+    {
+        "section": "nvftp",
+        "key": "RACK_PROJECT_TOKEN",
+        "label": "NVFTP project folder name",
+        "description": (
+            "Top-level folder on the NVFTP remote path for this site (e.g. mistral-p2). "
+            "var/cache and rack_comments.json mirror to /nvis-project-view/<token>/cache/ every RACK_NVFTP_SYNC_INTERVAL_SEC. "
+            "Leave empty to disable uploads."
+        ),
+    },
+    {
+        "section": "nvftp",
+        "key": "RACK_NVFTP_SFTP_USER",
+        "label": "NVFTP SFTP username",
+        "description": (
+            "SFTP user from your NVFTP workspace. "
+            "Password is the token saved via Overview → Set Project View."
+        ),
+    },
+    {
+        "section": "nvftp",
+        "key": "RACK_NVFTP_REMOTE_BASE",
+        "label": "NVFTP remote base path",
+        "description": (
+            "Optional POSIX prefix before /nvis-project-view/{RACK_PROJECT_TOKEN}/ on transfer.nvftp.nvidia.com. "
+            "Leave empty for the default /nvis-project-view/… layout."
+        ),
+    },
+    {
+        "section": "nvftp",
+        "key": "RACK_NVFTP_SYNC_INTERVAL_SEC",
+        "label": "NVFTP cache sync interval (seconds)",
+        "description": "How often var/cache is uploaded when sync is enabled (default 7200 = 2 hours, min 300).",
+    },
+    {
+        "section": "nvftp",
+        "key": "RACK_NVFTP_SFTP_HOST",
+        "label": "NVFTP SFTP host",
+        "description": "SFTP hostname (default transfer.nvftp.nvidia.com).",
     },
     {
         "section": "external",
@@ -1741,19 +1788,45 @@ def _session_lifetime() -> timedelta:
     return timedelta(hours=h)
 
 
-def _configure_session(app: Flask) -> None:
-    key = (os.environ.get("RACK_WEB_SECRET_KEY") or "").strip()
-    if key:
-        app.secret_key = key
-    elif _auth_enabled():
-        app.secret_key = secrets.token_hex(32)
+_RACK_WEB_SECRET_FILE = (APP_DIR / "var" / "secrets" / ".rack_web_secret_key").resolve()
+
+
+def _bootstrap_rack_web_secret_key() -> None:
+    """Ensure ``RACK_WEB_SECRET_KEY`` exists: env override, else load/create ``var/secrets/.rack_web_secret_key``."""
+    if (os.environ.get("RACK_WEB_SECRET_KEY") or "").strip():
+        return
+    _RACK_WEB_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if _RACK_WEB_SECRET_FILE.is_file():
+        try:
+            existing = _RACK_WEB_SECRET_FILE.read_text(encoding="utf-8").strip()
+            if existing:
+                os.environ["RACK_WEB_SECRET_KEY"] = existing
+                return
+        except OSError:
+            pass
+    key = secrets.token_hex(32)
+    try:
+        tmp = _RACK_WEB_SECRET_FILE.with_suffix(".tmp")
+        tmp.write_text(key + "\n", encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, _RACK_WEB_SECRET_FILE)
+        os.chmod(_RACK_WEB_SECRET_FILE, 0o600)
+    except OSError as exc:
         warnings.warn(
-            "RACK_WEB_SECRET_KEY is not set; using an ephemeral secret. "
-            "Sessions reset on restart. Set RACK_WEB_SECRET_KEY for stable logins.",
+            f"RACK_WEB_SECRET_KEY not persisted ({exc}); using an ephemeral key for this process only.",
             stacklevel=2,
         )
-    else:
-        app.secret_key = secrets.token_hex(16)
+    os.environ["RACK_WEB_SECRET_KEY"] = key
+    logging.getLogger(__name__).info(
+        "Created persistent RACK_WEB_SECRET_KEY at %s (first dashboard start)",
+        _RACK_WEB_SECRET_FILE,
+    )
+
+
+def _configure_session(app: Flask) -> None:
+    _bootstrap_rack_web_secret_key()
+    key = (os.environ.get("RACK_WEB_SECRET_KEY") or "").strip()
+    app.secret_key = key or secrets.token_hex(32)
     app.permanent_session_lifetime = _session_lifetime()
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -1761,6 +1834,18 @@ def _configure_session(app: Flask) -> None:
 
 
 _configure_session(app)
+
+
+def _bootstrap_nvftp_sync_at_startup() -> None:
+    """Load job-env overrides and start NVFTP background sync (retries when config becomes ready)."""
+    try:
+        _job_env_overrides_load()
+    except Exception:
+        _logger.exception("NVFTP sync startup: job env load failed")
+    nvftp_cache_sync.ensure_background_thread()
+
+
+_bootstrap_nvftp_sync_at_startup()
 
 
 def _session_ok() -> bool:
@@ -2986,6 +3071,11 @@ def _job_env_effective_values() -> dict[str, str]:
         "RACK_PROMETHEUS_BASIC_AUTH_USER": (_eget("RACK_PROMETHEUS_BASIC_AUTH_USER") or "").strip(),
         "RACK_PROMETHEUS_BASIC_AUTH_PASSWORD": (_eget("RACK_PROMETHEUS_BASIC_AUTH_PASSWORD") or "").strip(),
         "RACK_WEB_PROJECT_NAME": (_eget("RACK_WEB_PROJECT_NAME") or "").strip(),
+        "RACK_PROJECT_TOKEN": (_eget("RACK_PROJECT_TOKEN") or "").strip(),
+        "RACK_NVFTP_SFTP_USER": (_eget("RACK_NVFTP_SFTP_USER") or "").strip(),
+        "RACK_NVFTP_REMOTE_BASE": (_eget("RACK_NVFTP_REMOTE_BASE", "") or "").strip(),
+        "RACK_NVFTP_SYNC_INTERVAL_SEC": str(max(300, _job_env_int("RACK_NVFTP_SYNC_INTERVAL_SEC", 7200))),
+        "RACK_NVFTP_SFTP_HOST": (_eget("RACK_NVFTP_SFTP_HOST", "transfer.nvftp.nvidia.com") or "transfer.nvftp.nvidia.com").strip(),
         "RACK_VALIDATION_CT_RANGE": _validation_ct_inner(),
         "VALIDATION_TEST": (_eget("VALIDATION_TEST") or "nccl_all_reduce,llm").strip(),
         "RACK_VALIDATION_SCRIPT": str(_validation_script_path()),
@@ -11818,6 +11908,72 @@ def build_cluster_overview(log_dir: Path) -> dict[str, object]:
     }
 
 
+@app.route("/api/nvftp-sync/status", methods=["GET"])
+def api_nvftp_sync_status():
+    """NVFTP var/cache sync status (no secrets)."""
+    nvftp_cache_sync.ensure_background_thread()
+    return jsonify({"ok": True, **nvftp_cache_sync.sync_status()})
+
+
+@app.route("/api/nvftp-sync/run", methods=["POST"])
+def api_nvftp_sync_run():
+    """Trigger an immediate var/cache upload. JSON body ``{\"force\": true}`` re-uploads every file."""
+    body = request.get_json(silent=True) or {}
+    force = body.get("force") in (True, 1, "1", "true", "yes")
+    out = nvftp_cache_sync.run_sync(force=force)
+    code = 200 if out.get("ok") else 502
+    return jsonify(out), code
+
+
+@app.route("/api/nvftp-sync/test", methods=["POST"])
+def api_nvftp_sync_test():
+    """POST ``{project_token, sftp_user?, token?}`` — SFTP probe file under ``{remote_base}/{project_token}/``."""
+    body = request.get_json(silent=True) or {}
+    project = (body.get("project_token") or body.get("RACK_PROJECT_TOKEN") or "").strip()
+    if not project:
+        return jsonify({"ok": False, "error": "project_token (RACK_PROJECT_TOKEN) is required"}), 400
+    sftp_user = (body.get("sftp_user") or body.get("RACK_NVFTP_SFTP_USER") or "").strip() or None
+    token = (body.get("token") or "").strip() or None
+    out = nvftp_cache_sync.test_project_directory(
+        project_token=project,
+        sftp_user=sftp_user,
+        token=token,
+    )
+    code = 200 if out.get("ok") else 502
+    return jsonify(out), code
+
+
+@app.route("/api/vault/nvftp-token", methods=["GET", "PUT", "DELETE"])
+def api_vault_nvftp_token():
+    """GET status (masked); PUT ``{token}`` to store encrypted; DELETE to clear."""
+    if request.method == "GET":
+        try:
+            st = token_vault.nvftp_token_status()
+        except RuntimeError as e:
+            return jsonify({"ok": False, "error": str(e)}), 503
+        return jsonify({"ok": True, "tokens_url": NVFTP_TOKENS_URL, **st})
+    if request.method == "DELETE":
+        try:
+            token_vault.clear_nvftp_token()
+        except OSError as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": True, "configured": False})
+    body = request.get_json(silent=True) or {}
+    raw = body.get("token")
+    if not isinstance(raw, str):
+        return jsonify({"ok": False, "error": 'expected JSON {"token": "…"}'}), 400
+    try:
+        st = token_vault.store_nvftp_token(raw)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({"ok": False, "error": str(e)}), 503
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    nvftp_cache_sync.ensure_background_thread()
+    return jsonify({"ok": True, "tokens_url": NVFTP_TOKENS_URL, **st})
+
+
 @app.route("/api/cluster-dashboard-metadata", methods=["GET", "PUT"])
 def api_cluster_dashboard_metadata():
     """GET/PUT JSON ``product_line``, ``hw_vendor``, ``customer_name`` (saved under APP_DIR when unset)."""
@@ -11961,6 +12117,7 @@ def api_settings_job_environment():
 
     bust = _job_env_status_payload_needs_rebuild(before_snapshot, cur)
     on_disk = _job_env_overrides_write(cur, bust_status_cache=bust)
+    nvftp_cache_sync.ensure_background_thread()
     payload = dict(_job_environment_settings_payload())
     payload["saved"] = on_disk
     return jsonify(payload)
@@ -11969,6 +12126,7 @@ def api_settings_job_environment():
 @app.route("/api/cluster-overview", methods=["GET"])
 def api_cluster_overview():
     """Cluster-wide facts for the dashboard tab (env + head Slurm; uses cached /api/status rows)."""
+    nvftp_cache_sync.ensure_background_thread()
     try:
         log_dir = _resolve_log_dir(request.args.get("log_dir"))
     except ValueError as e:
@@ -12013,6 +12171,7 @@ def _merge_naming_into_status_payload(payload: dict) -> None:
 def api_status():
     _start_cmsh_rack_list_warm_thread()
     _ensure_rack_status_background_thread()
+    nvftp_cache_sync.ensure_background_thread()
     try:
         log_dir = _resolve_log_dir(request.args.get("log_dir"))
     except ValueError as e:

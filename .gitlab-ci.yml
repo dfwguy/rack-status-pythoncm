@@ -61,7 +61,8 @@ python-lint:
       - .pip-cache/
   script:
     - pip install -q ruff
-    - ruff check app.py native_status.py demo_data.py host_exec.py platforms/ rack_locks.py
+    - ruff check app.py native_status.py demo_data.py host_exec.py platforms/ rack_locks.py token_vault.py nvftp_cache_sync.py
+    - bash scripts/check_no_vault_in_git.sh
   allow_failure: true
 
 typescript-check:

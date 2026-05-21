@@ -7,6 +7,10 @@ frontend/.vite
 static/spa
 var/logs/*
 var/cache/*
+var/secrets/
+**/*.vault.json
+**/.vault_master_key
+**/.rack_web_secret_key
 demo-reports
 docs
 *.md
