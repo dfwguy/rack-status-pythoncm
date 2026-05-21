@@ -731,6 +731,9 @@ def _job_env_flock_path() -> Path:
 @contextmanager
 def _job_env_flock(shared: bool = True):
     """``shared=True`` (LOCK_SH) for readers, ``False`` (LOCK_EX) for writers."""
+    if _truthy_env("RACK_STATUS_DEMO"):
+        yield
+        return
     p = _job_env_flock_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     f = open(p, "a+", encoding="utf-8")
