@@ -55,22 +55,27 @@ import io
 import json
 import logging
 import math
-import statistics
-import zipfile
 import os
+import pty
 import queue
 import re
 import secrets
+import select
+import signal
 import shlex
-import socket
 import shutil
+import socket
+import statistics
+import struct
 import subprocess
 import sys
 import tempfile
+import termios
 import threading
 import uuid
 import time
 import warnings
+import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone, tzinfo
@@ -138,6 +143,13 @@ def _script_exists(path: Path) -> bool:
 
 app = Flask(__name__)
 _logger = logging.getLogger(__name__)
+
+try:
+    from flask_sock import Sock
+    _sock = Sock(app)
+except ImportError:
+    _sock = None
+    _logger.warning("flask-sock not installed; /ws/terminal will be unavailable")
 
 _validation_jobs_lock = threading.Lock()
 _validation_jobs: dict[str, dict[str, object]] = {}
@@ -1960,7 +1972,7 @@ def _require_dashboard_auth():
         return None
     if _session_ok():
         return None
-    if request.path.startswith("/api/"):
+    if request.path.startswith("/api/") or request.path.startswith("/ws/"):
         return (
             jsonify({"ok": False, "error": "authentication required", "login": "/login"}),
             401,
@@ -12613,6 +12625,300 @@ def api_workflow_generate_mermaid():
     return jsonify({"ok": True, "mermaid": mermaid})
 
 
+# ---------------------------------------------------------------------------
+# WebSocket terminal — interactive SSH to compute nodes
+# ---------------------------------------------------------------------------
+
+_TERMINAL_ENABLED = os.environ.get("RACK_ENABLE_WEB_TERMINAL", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+
+class _TerminalSession:
+    """Holds state for a single PTY session that can outlive a WebSocket."""
+
+    def __init__(self, session_id: str, master_fd: int, proc: subprocess.Popen,
+                 target: str, mode: str):
+        self.session_id = session_id
+        self.master_fd = master_fd
+        self.proc = proc
+        self.target = target
+        self.mode = mode
+        self.alive = True
+        self.ws_count = 0
+        self.lock = threading.Lock()
+        self.subscribers: list[queue.Queue[bytes | None]] = []
+        self._start_reader()
+
+    def _start_reader(self) -> None:
+        def _pty_reader():
+            try:
+                while self.alive:
+                    rlist, _, _ = select.select([self.master_fd], [], [], 0.5)
+                    if rlist:
+                        try:
+                            data = os.read(self.master_fd, 4096)
+                        except OSError:
+                            break
+                        if not data:
+                            break
+                        with self.lock:
+                            for q in self.subscribers:
+                                q.put(data)
+                    if self.proc.poll() is not None:
+                        time.sleep(0.2)
+                        try:
+                            remaining = os.read(self.master_fd, 4096)
+                            if remaining:
+                                with self.lock:
+                                    for q in self.subscribers:
+                                        q.put(remaining)
+                        except OSError:
+                            pass
+                        msg = f"\r\n\x1b[31m[Process exited with code {self.proc.returncode}]\x1b[0m\r\n".encode()
+                        with self.lock:
+                            for q in self.subscribers:
+                                q.put(msg)
+                        break
+            except Exception as exc:
+                msg = f"\r\n\x1b[31m[PTY error: {exc}]\x1b[0m\r\n".encode()
+                with self.lock:
+                    for q in self.subscribers:
+                        q.put(msg)
+            finally:
+                self.alive = False
+                with self.lock:
+                    for q in self.subscribers:
+                        q.put(None)
+
+        threading.Thread(target=_pty_reader, daemon=True).start()
+
+    def subscribe(self) -> "queue.Queue[bytes | None]":
+        q: queue.Queue[bytes | None] = queue.Queue()
+        with self.lock:
+            self.subscribers.append(q)
+            self.ws_count += 1
+        return q
+
+    def unsubscribe(self, q: "queue.Queue[bytes | None]") -> None:
+        with self.lock:
+            if q in self.subscribers:
+                self.subscribers.remove(q)
+            self.ws_count -= 1
+
+    def write(self, data: bytes) -> None:
+        if self.alive:
+            os.write(self.master_fd, data)
+
+    def resize(self, cols: int, rows: int) -> None:
+        if self.alive:
+            winsize = struct.pack("HHHH", rows, cols, 0, 0)
+            fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, winsize)
+            os.kill(self.proc.pid, signal.SIGWINCH)
+
+    def force_redraw(self) -> None:
+        """Send SIGWINCH to the process group to trigger a full screen redraw."""
+        if self.alive:
+            try:
+                os.kill(self.proc.pid, signal.SIGWINCH)
+            except (ProcessLookupError, OSError):
+                pass
+
+    def destroy(self) -> None:
+        if not self.alive:
+            return
+        self.alive = False
+        try:
+            self.proc.terminate()
+            self.proc.wait(timeout=3)
+        except Exception:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+        try:
+            os.close(self.master_fd)
+        except OSError:
+            pass
+        _logger.info("WebSocket terminal: session %s (%s) destroyed", self.session_id, self.target)
+
+
+_TERMINAL_GRACE_PERIOD = 30  # seconds to keep PTY alive with no WebSocket
+
+
+class _WebSocketTerminalMiddleware:
+    """WSGI middleware that handles /ws/terminal at the WSGI layer.
+
+    This bypasses Flask's response handling entirely, which prevents
+    Werkzeug from writing HTTP headers into the WebSocket stream.
+
+    Sessions are tracked by UUID so a WebSocket can disconnect and a new
+    one (e.g. from a pop-out tab) can reattach to the same PTY.
+    """
+
+    def __init__(self, wsgi_app):  # type: ignore[no-untyped-def]
+        self.wsgi_app = wsgi_app
+        self._sessions: dict[str, _TerminalSession] = {}
+        self._sessions_lock = threading.Lock()
+
+    def __call__(self, environ, start_response):  # type: ignore[no-untyped-def]
+        path = environ.get("PATH_INFO", "")
+        if path == "/ws/terminal" and "werkzeug.socket" in environ and _TERMINAL_ENABLED:
+            self._handle_terminal(environ)
+            return []
+        return self.wsgi_app(environ, start_response)
+
+    def _cleanup_session(self, session_id: str) -> None:
+        """Destroy a session after the grace period if no clients reconnected."""
+        import time
+        time.sleep(_TERMINAL_GRACE_PERIOD)
+        with self._sessions_lock:
+            sess = self._sessions.get(session_id)
+            if sess and sess.ws_count <= 0:
+                sess.destroy()
+                del self._sessions[session_id]
+                _logger.info("WebSocket terminal: session %s expired after grace period", session_id)
+
+    def _get_or_create_session(self, qs: dict) -> "_TerminalSession | None":
+        """Return an existing session for reconnect, or create a new one."""
+        session_id = (qs.get("session") or [""])[0].strip()
+        if session_id:
+            with self._sessions_lock:
+                sess = self._sessions.get(session_id)
+            if sess and sess.alive:
+                return sess
+            return None
+
+        # New session
+        target = (qs.get("target") or qs.get("node") or [""])[0].strip()
+        mode = (qs.get("mode") or ["node"])[0].strip()
+        if not target and mode != "headnode":
+            return None
+
+        if mode == "headnode":
+            argv = host_exec.ssh_to_headnode_argv()
+            target = target or "headnode"
+        else:
+            argv = host_exec.ssh_to_node_argv(target)
+
+        _logger.info("WebSocket terminal: new session for %s via %s", target, " ".join(argv))
+
+        master_fd, slave_fd = pty.openpty()
+        winsize = struct.pack("HHHH", 24, 80, 0, 0)
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        proc = subprocess.Popen(
+            argv,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            preexec_fn=os.setsid,
+            env=env,
+        )
+        os.close(slave_fd)
+
+        new_id = str(uuid.uuid4())
+        sess = _TerminalSession(new_id, master_fd, proc, target, mode)
+        with self._sessions_lock:
+            self._sessions[new_id] = sess
+        return sess
+
+    def _handle_terminal(self, environ):  # type: ignore[no-untyped-def]
+        from simple_websocket import Server as _WSServer, ConnectionClosed as _WSClosed
+        from urllib.parse import parse_qs
+
+        ws = _WSServer(environ)
+        outq = None
+        sess = None
+        try:
+            qs = parse_qs(environ.get("QUERY_STRING", ""))
+            sess = self._get_or_create_session(qs)
+
+            if sess is None:
+                ws.send(json.dumps({"type": "error", "error": "invalid session or missing target"}))
+                return
+
+            # Send session ID so the frontend can use it for pop-out
+            is_reconnect = bool((qs.get("session") or [""])[0].strip())
+            ws.send(json.dumps({
+                "type": "session",
+                "id": sess.session_id,
+                "target": sess.target,
+                "mode": sess.mode,
+                "reconnect": is_reconnect,
+            }))
+
+            outq = sess.subscribe()
+            pending_redraw = is_reconnect
+
+            while True:
+                # Drain PTY output -> WS
+                while True:
+                    try:
+                        chunk = outq.get_nowait()
+                    except queue.Empty:
+                        break
+                    if chunk is None:
+                        _logger.info("WebSocket terminal: PTY EOF for %s", sess.target)
+                        return
+                    ws.send(chunk)
+
+                # Read WS input -> PTY (with short timeout)
+                try:
+                    msg = ws.receive(timeout=0.05)
+                except _WSClosed:
+                    _logger.info("WebSocket terminal: client disconnected from %s (session %s)",
+                                 sess.target, sess.session_id)
+                    return
+                except OSError:
+                    return
+                except Exception as exc:
+                    _logger.warning("WebSocket terminal: receive error: %s", exc)
+                    continue
+
+                if msg is None:
+                    continue
+
+                if isinstance(msg, str):
+                    try:
+                        ctrl = json.loads(msg)
+                        if isinstance(ctrl, dict) and ctrl.get("type") == "resize":
+                            sess.resize(int(ctrl.get("cols", 80)), int(ctrl.get("rows", 24)))
+                            if pending_redraw:
+                                pending_redraw = False
+                                time.sleep(0.1)
+                                sess.force_redraw()
+                            continue
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                    sess.write(msg.encode("utf-8"))
+                elif isinstance(msg, bytes):
+                    sess.write(msg)
+
+        except _WSClosed:
+            pass
+        except Exception:
+            _logger.exception("ws_terminal: unhandled error")
+        finally:
+            if sess and outq:
+                sess.unsubscribe(outq)
+                if sess.ws_count <= 0 and sess.alive:
+                    threading.Thread(
+                        target=self._cleanup_session,
+                        args=(sess.session_id,),
+                        daemon=True,
+                    ).start()
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+
+if _TERMINAL_ENABLED:
+    app.wsgi_app = _WebSocketTerminalMiddleware(app.wsgi_app)  # type: ignore[assignment]
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG") == "1")
+    app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG") == "1", threaded=True)

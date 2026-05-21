@@ -20,6 +20,7 @@ import { ToolsView } from "./views/ToolsView";
 import { WorkflowsView } from "./views/WorkflowsView";
 import { SettingsView } from "./views/SettingsView";
 import { LoginPage } from "./pages/LoginPage";
+import TerminalView from "./views/TerminalView";
 import { useRackStatus } from "./hooks/useRackStatus";
 import { RackCommandsStoreProvider } from "./context/RackCommandsStoreContext";
 import { RackLocksProvider } from "./context/RackLocksContext";
@@ -224,6 +225,14 @@ function AuthGate() {
 }
 
 export default function App() {
+  if (window.location.pathname === "/terminal") {
+    return (
+      <ThemeProvider>
+        <TerminalView />
+      </ThemeProvider>
+    );
+  }
+
   return (
     <ThemeProvider>
       <AuthProvider>

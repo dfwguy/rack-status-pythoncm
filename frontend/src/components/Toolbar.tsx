@@ -20,9 +20,11 @@ import {
   Server,
   LogOut,
   Users,
+  Terminal,
 } from "lucide-react";
 import { SqueueDialog } from "./SqueueDialog";
 import { SinfoDialog } from "./SinfoDialog";
+import WebTerminalDialog from "./rack/WebTerminalDialog";
 import { useAuth } from "../context/AuthContext";
 import { useRackLocksContext } from "../context/RackLocksContext";
 
@@ -52,6 +54,7 @@ export function Toolbar({
   const { user, logout } = useAuth();
   const [squeueOpen, setSqueueOpen] = useState(false);
   const [sinfoOpen, setSinfoOpen] = useState(false);
+  const [headTerminalOpen, setHeadTerminalOpen] = useState(false);
   const [excelExporting, setExcelExporting] = useState(false);
   const [usersAnchor, setUsersAnchor] = useState<HTMLElement | null>(null);
 
@@ -197,6 +200,12 @@ export function Toolbar({
               </IconButton>
             </Tooltip>
 
+            <Tooltip title="Head node terminal">
+              <IconButton color="inherit" onClick={() => setHeadTerminalOpen(true)} size="small">
+                <Terminal size={18} />
+              </IconButton>
+            </Tooltip>
+
             <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
             <Tooltip title="Refresh data">
@@ -284,6 +293,13 @@ export function Toolbar({
 
       <SqueueDialog open={squeueOpen} onClose={() => setSqueueOpen(false)} logDir={logDir} />
       <SinfoDialog open={sinfoOpen} onClose={() => setSinfoOpen(false)} />
+      <WebTerminalDialog
+        open={headTerminalOpen}
+        onClose={() => setHeadTerminalOpen(false)}
+        target="headnode"
+        label="Head Node"
+        mode="headnode"
+      />
     </>
   );
 }
