@@ -49,7 +49,6 @@ when logs are wall-clock local but the server env was UTC).
 """
 from __future__ import annotations
 
-import array
 import fcntl
 import hashlib
 import io
@@ -12507,7 +12506,7 @@ class _TerminalSession:
                             for q in self.subscribers:
                                 q.put(data)
                     if self.proc.poll() is not None:
-                        import time; time.sleep(0.2)
+                        time.sleep(0.2)
                         try:
                             remaining = os.read(self.master_fd, 4096)
                             if remaining:
@@ -12729,7 +12728,7 @@ class _WebSocketTerminalMiddleware:
                             sess.resize(int(ctrl.get("cols", 80)), int(ctrl.get("rows", 24)))
                             if pending_redraw:
                                 pending_redraw = False
-                                import time; time.sleep(0.1)
+                                    time.sleep(0.1)
                                 sess.force_redraw()
                             continue
                     except (json.JSONDecodeError, ValueError):
