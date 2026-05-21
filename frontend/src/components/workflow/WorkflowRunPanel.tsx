@@ -10,7 +10,7 @@ import LinearProgress from "@mui/material/LinearProgress";
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import { Text, Tag, Card } from "@nvidia/foundations-react-core";
-import { Play, XCircle, CheckCircle, Clock, AlertTriangle, ScrollText, GitGraph } from "lucide-react";
+import { Play, XCircle, CheckCircle, Clock, AlertTriangle, ScrollText, GitGraph, Download } from "lucide-react";
 import FlowDiagram from "./editor/FlowDiagram";
 import { mermaidToReactFlow } from "./editor/mermaidToReactFlow";
 import StepOutputDialog from "./StepOutputDialog";
@@ -133,6 +133,37 @@ export default function WorkflowRunPanel({ runId, onClose }: WorkflowRunPanelPro
   const handleCancel = async () => {
     await cancelRun(runId);
     await loadState();
+  };
+
+  const handleExport = async () => {
+    if (!run?.history || !workflow) return;
+    const steps = await Promise.all(
+      run.history.map(async (entry: any) => {
+        const step = workflow.steps?.find((s) => s.id === entry.step_id);
+        let output = entry.output_snippet || "";
+        try {
+          const res = await fetch(`/api/workflow-runs/${runId}/output/${entry.step_id}`, { credentials: "same-origin" });
+          const data = await res.json();
+          if (data.ok && data.output) output = data.output;
+        } catch { /* use snippet as fallback */ }
+        return { id: entry.step_id, name: step?.name || entry.step_id, output };
+      }),
+    );
+    const payload = {
+      workflow: workflow.name,
+      run_id: runId,
+      state: run.state,
+      started_at: run.started_at,
+      updated_at: run.updated_at,
+      steps,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${workflow.name.replace(/\s+/g, "_")}_${runId.slice(0, 8)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const [viewTab, setViewTab] = useState(0);
@@ -302,6 +333,13 @@ export default function WorkflowRunPanel({ runId, onClose }: WorkflowRunPanelPro
                     {/* Output snippet */}
                     {entry.output_snippet && (
                       <Box
+                        onClick={() => {
+                          const step = workflow?.steps?.find((s) => s.id === entry.step_id);
+                          setOutputStepId(entry.step_id);
+                          setOutputStepName(step?.name || entry.step_id);
+                          setOutputHistoryEntry(entry);
+                          setOutputDialogOpen(true);
+                        }}
                         sx={{
                           mt: 0.5,
                           p: 1,
@@ -313,12 +351,29 @@ export default function WorkflowRunPanel({ runId, onClose }: WorkflowRunPanelPro
                           color: "#8b949e",
                           whiteSpace: "pre-wrap",
                           wordBreak: "break-word",
-                          maxHeight: 80,
-                          overflow: "hidden",
+                          maxHeight: 400,
+                          overflow: "auto",
+                          cursor: "pointer",
+                          "&:hover": { borderColor: "primary.main", border: "1px solid" },
                         }}
                       >
                         {entry.output_snippet}
                       </Box>
+                    )}
+                    {entry.output_file && (
+                      <Text
+                        kind="body/regular/sm"
+                        style={{ color: "var(--nv-color-brand-500, #76b900)", cursor: "pointer", marginTop: 4, display: "inline-block" }}
+                        onClick={() => {
+                          const step = workflow?.steps?.find((s) => s.id === entry.step_id);
+                          setOutputStepId(entry.step_id);
+                          setOutputStepName(step?.name || entry.step_id);
+                          setOutputHistoryEntry(entry);
+                          setOutputDialogOpen(true);
+                        }}
+                      >
+                        View full output →
+                      </Text>
                     )}
                   </Box>
                 </Box>
@@ -390,11 +445,14 @@ export default function WorkflowRunPanel({ runId, onClose }: WorkflowRunPanelPro
       </DialogContent>
       <DialogActions>
         {!isTerminal && (
-          <MuiButton color="error" onClick={handleCancel} startIcon={<XCircle size={16} />}>
+          <MuiButton variant="outlined" color="error" onClick={handleCancel} startIcon={<XCircle size={16} />}>
             Cancel Run
           </MuiButton>
         )}
-        <MuiButton onClick={onClose}>Close</MuiButton>
+        <MuiButton variant="outlined" onClick={handleExport} startIcon={<Download size={16} />}>
+          Export
+        </MuiButton>
+        <MuiButton variant="outlined" onClick={onClose}>Close</MuiButton>
       </DialogActions>
 
       <StepOutputDialog

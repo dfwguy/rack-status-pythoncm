@@ -7,27 +7,30 @@ import Tooltip from "@mui/material/Tooltip";
 import Divider from "@mui/material/Divider";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Autocomplete from "@mui/material/Autocomplete";
 import { Text, Card, Banner } from "@nvidia/foundations-react-core";
 import { Save, Play, Sparkles, Code2, LayoutGrid, Eye } from "lucide-react";
-import { mermaidToReactFlow } from "./editor/mermaidToReactFlow";
+import { mermaidToReactFlow, EDGE_PATTERNS, parseNodeDef } from "./editor/mermaidToReactFlow";
 import { parseFrontmatter, serializeFrontmatter, getNodeMetadata, setNodeMetadata, type NodeMetadata } from "./editor/frontmatter";
 import FlowDiagram from "./editor/FlowDiagram";
 import NodePropertiesDialog from "./NodePropertiesDialog";
 import WorkflowAIGenerator from "./WorkflowAIGenerator";
-import type { Workflow } from "../../services/workflowService";
+import type { Workflow, WorkflowTarget } from "../../services/workflowService";
 import type { Node } from "reactflow";
 
 interface WorkflowDesignerProps {
   workflow: Workflow | null;
   onSave: (workflow: Partial<Workflow>) => void;
   onRun?: (workflowId: string) => void;
+  availableRacks?: string[];
 }
 
 const MIN_PANEL_WIDTH = 200;
 
-export default function WorkflowDesigner({ workflow, onSave, onRun }: WorkflowDesignerProps) {
+export default function WorkflowDesigner({ workflow, onSave, onRun, availableRacks = [] }: WorkflowDesignerProps) {
   const [name, setName] = useState(workflow?.name || "");
   const [description, setDescription] = useState(workflow?.description || "");
+  const [targetRacks, setTargetRacks] = useState<string[]>(workflow?.target?.racks || []);
   const [mermaidCode, setMermaidCode] = useState(workflow?.mermaid || "graph TD\n    start[\"Start\"] --> step1[\"Step 1\"]\n    step1 --> done([\"Done\"])");
   const [panels, setPanels] = useState<string[]>(["code", "canvas"]);
   const [showAIGenerator, setShowAIGenerator] = useState(false);
@@ -41,6 +44,7 @@ export default function WorkflowDesigner({ workflow, onSave, onRun }: WorkflowDe
       setName(workflow.name || "");
       setDescription(workflow.description || "");
       setMermaidCode(workflow.mermaid || "");
+      setTargetRacks(workflow.target?.racks || []);
     }
   }, [workflow]);
 
@@ -88,10 +92,12 @@ export default function WorkflowDesigner({ workflow, onSave, onRun }: WorkflowDe
 
     const steps = nodeIds.map((id) => {
       const meta = currentMeta[id];
+      const node = nodes.find((n) => n.id === id);
+      const inferredType = node?.data?.stepType || "automated";
       return {
         id,
-        name: meta?.name || id,
-        type: meta?.type || "automated",
+        name: meta?.name || node?.data?.label || id,
+        type: meta?.type || inferredType,
         ...(meta?.description ? { description: meta.description } : {}),
         ...(meta?.command ? { command: meta.command } : {}),
         ...(meta?.parameters ? { parameters: meta.parameters } : {}),
@@ -103,14 +109,19 @@ export default function WorkflowDesigner({ workflow, onSave, onRun }: WorkflowDe
       };
     });
 
+    const target: WorkflowTarget | undefined = targetRacks.length > 0
+      ? { mode: "rack", racks: targetRacks, nodes: [] }
+      : undefined;
+
     onSave({
       id: workflow?.id,
       name,
       description,
       mermaid: mermaidCode,
       steps,
+      ...(target ? { target } : {}),
     });
-  }, [workflow, name, description, mermaidCode, nodes, onSave]);
+  }, [workflow, name, description, mermaidCode, nodes, targetRacks, onSave]);
 
   // Node properties dialog state
   const [propsDialogOpen, setPropsDialogOpen] = useState(false);
@@ -229,6 +240,41 @@ export default function WorkflowDesigner({ workflow, onSave, onRun }: WorkflowDe
         return lines.join("\n");
       }
 
+      if (action.type === "deleteEdge") {
+        const { source, target } = action as { type: string; source: string; target: string };
+        const removedNodes: { id: string; label: string; shape: string }[] = [];
+        const filtered = lines.filter((line) => {
+          const trimmed = line.trim();
+          for (const { regex } of EDGE_PATTERNS) {
+            const parts = trimmed.split(regex);
+            if (parts.length >= 2) {
+              const src = parseNodeDef(parts[0].trim());
+              const tgt = parseNodeDef(parts[parts.length - 1].trim());
+              if (src?.id === source && tgt?.id === target) {
+                if (src.label !== src.id) removedNodes.push(src);
+                if (tgt.label !== tgt.id) removedNodes.push(tgt);
+                return false;
+              }
+            }
+          }
+          return true;
+        });
+        const orphaned = removedNodes.filter((node) => {
+          const escapedId = node.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const pattern = new RegExp(`(^|\\s|-->|\\|)${escapedId}(\\s|\\[|\\(|\\{|"|$|\\s*-->)`);
+          return !filtered.some((line) => pattern.test(line.trim()));
+        });
+        for (const node of orphaned) {
+          let def: string;
+          if (node.shape === "stadium") def = `    ${node.id}(["${node.label}"])`;
+          else if (node.shape === "diamond") def = `    ${node.id}{"${node.label}"}`;
+          else if (node.shape === "rounded") def = `    ${node.id}("${node.label}")`;
+          else def = `    ${node.id}["${node.label}"]`;
+          filtered.push(def);
+        }
+        return filtered.join("\n");
+      }
+
       if (action.type === "deleteNodes") {
         const ids = action.ids as string[];
         const filtered = lines.filter((line) => {
@@ -312,6 +358,18 @@ export default function WorkflowDesigner({ workflow, onSave, onRun }: WorkflowDe
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           sx={{ flex: 1 }}
+        />
+
+        <Autocomplete<string, true>
+          multiple
+          size="small"
+          options={availableRacks}
+          value={targetRacks}
+          onChange={(_, value) => setTargetRacks(value)}
+          renderInput={(params) => (
+            <TextField {...params} placeholder={targetRacks.length === 0 ? "Target racks" : ""} />
+          )}
+          sx={{ minWidth: 180 }}
         />
 
         <Divider orientation="vertical" flexItem />

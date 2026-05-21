@@ -32,7 +32,7 @@ export function CommandTextDialog({ open, onClose, title, text, isError }: Comma
         </pre>
       </DialogContent>
       <DialogActions>
-        <MuiButton onClick={onClose}>Close</MuiButton>
+        <MuiButton variant="outlined" onClick={onClose}>Close</MuiButton>
       </DialogActions>
     </Dialog>
   );

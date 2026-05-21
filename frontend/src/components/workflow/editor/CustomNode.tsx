@@ -1,6 +1,7 @@
 /**
  * Custom node renderers for workflow steps.
  * Uses SVG polygon for diamond shape (matching mermaid-reactflow-editor).
+ * Shows edge delete buttons on node hover near the connected handles.
  */
 
 import { memo, useState } from "react";
@@ -8,6 +9,13 @@ import { Handle, Position, type NodeProps } from "reactflow";
 import Box from "@mui/material/Box";
 import { Text } from "@nvidia/foundations-react-core";
 import { Play, Hand, GitBranch, Bot, CircleDot, Timer } from "lucide-react";
+
+interface ConnectedEdge {
+  edgeId: string;
+  source: string;
+  target: string;
+  position: "top" | "bottom";
+}
 
 interface CustomNodeData {
   label: string;
@@ -17,6 +25,8 @@ interface CustomNodeData {
   isCompleted?: boolean;
   isFailed?: boolean;
   style?: Record<string, unknown>;
+  connectedEdges?: ConnectedEdge[];
+  onDeleteEdge?: (edgeId: string) => void;
 }
 
 const STEP_ICONS: Record<string, React.ReactNode> = {
@@ -73,16 +83,85 @@ function getColors(stepType: string, isActive?: boolean, isCompleted?: boolean, 
 
 const handleStyle = (color: string, hovered: boolean, selected: boolean) => ({
   background: hovered || selected ? color : "transparent",
-  border: `2px solid ${color}`,
-  width: 10,
-  height: 10,
+  border: `2px solid ${hovered || selected ? color : "transparent"}`,
+  width: 12,
+  height: 12,
   transition: "all 0.15s ease",
 });
 
+const deleteButtonStyle: React.CSSProperties = {
+  width: 18,
+  height: 18,
+  borderRadius: "50%",
+  background: "#ef4444",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  cursor: "pointer",
+  color: "#fff",
+  fontSize: 11,
+  fontWeight: 700,
+  lineHeight: 1,
+  boxShadow: "0 1px 4px rgba(0,0,0,0.4)",
+  userSelect: "none",
+  zIndex: 10,
+  position: "absolute",
+};
+
+function EdgeDeleteButtons({
+  connectedEdges,
+  onDeleteEdge,
+  nodeId,
+}: {
+  connectedEdges: ConnectedEdge[];
+  onDeleteEdge: (edgeId: string) => void;
+  nodeId: string;
+}) {
+  const outgoing = connectedEdges.filter((e) => e.source === nodeId);
+  const incoming = connectedEdges.filter((e) => e.target === nodeId);
+
+  return (
+    <>
+      {/* Outgoing edges: delete buttons below the node (near bottom-source handle) */}
+      {outgoing.map((edge, i) => (
+        <div
+          key={edge.edgeId}
+          onClick={(e) => { e.stopPropagation(); onDeleteEdge(edge.edgeId); }}
+          style={{
+            ...deleteButtonStyle,
+            left: `calc(50% + ${(i - (outgoing.length - 1) / 2) * 22}px)`,
+            bottom: -24,
+            transform: "translateX(-50%)",
+          }}
+          title={`Remove connection to ${edge.target}`}
+        >
+          ✕
+        </div>
+      ))}
+      {/* Incoming edges: delete buttons above the node (near top-target handle) */}
+      {incoming.map((edge, i) => (
+        <div
+          key={edge.edgeId}
+          onClick={(e) => { e.stopPropagation(); onDeleteEdge(edge.edgeId); }}
+          style={{
+            ...deleteButtonStyle,
+            left: `calc(50% + ${(i - (incoming.length - 1) / 2) * 22}px)`,
+            top: -24,
+            transform: "translateX(-50%)",
+          }}
+          title={`Remove connection from ${edge.source}`}
+        >
+          ✕
+        </div>
+      ))}
+    </>
+  );
+}
+
 // ---- Standard rectangular/rounded node ----
 
-function StandardNode({ data, selected }: NodeProps<CustomNodeData>) {
-  const { label, stepType = "automated", isActive, isCompleted, isFailed } = data;
+function StandardNode({ id, data, selected }: NodeProps<CustomNodeData>) {
+  const { label, stepType = "automated", isActive, isCompleted, isFailed, connectedEdges, onDeleteEdge } = data;
   const [hovered, setHovered] = useState(false);
   const { borderColor, bgColor, accentColor } = getColors(stepType, isActive, isCompleted, isFailed);
   const hs = handleStyle(accentColor, hovered, !!selected);
@@ -138,6 +217,11 @@ function StandardNode({ data, selected }: NodeProps<CustomNodeData>) {
         </div>
       )}
 
+      {/* Edge delete buttons */}
+      {hovered && connectedEdges && connectedEdges.length > 0 && onDeleteEdge && (
+        <EdgeDeleteButtons connectedEdges={connectedEdges} onDeleteEdge={onDeleteEdge} nodeId={id} />
+      )}
+
       <Handle type="source" position={Position.Bottom} id="bottom-source" style={{ ...hs, left: "50%", bottom: 0, transform: "translate(-50%,50%)" }} />
       <Handle type="target" position={Position.Left} id="left-target" style={{ ...hs, left: 0, top: "50%", transform: "translate(-50%,-50%)" }} />
       <Handle type="source" position={Position.Right} id="right-source" style={{ ...hs, right: 0, top: "50%", transform: "translate(50%,-50%)" }} />
@@ -147,8 +231,8 @@ function StandardNode({ data, selected }: NodeProps<CustomNodeData>) {
 
 // ---- Diamond/conditional node using SVG polygon ----
 
-function DiamondNode({ data, selected }: NodeProps<CustomNodeData>) {
-  const { label, stepType = "decision", isActive, isCompleted, isFailed } = data;
+function DiamondNode({ id, data, selected }: NodeProps<CustomNodeData>) {
+  const { label, stepType = "decision", isActive, isCompleted, isFailed, connectedEdges, onDeleteEdge } = data;
   const [hovered, setHovered] = useState(false);
   const { borderColor, bgColor, accentColor } = getColors(stepType, isActive, isCompleted, isFailed);
   const hs = handleStyle(accentColor, hovered, !!selected);
@@ -210,6 +294,11 @@ function DiamondNode({ data, selected }: NodeProps<CustomNodeData>) {
         }}>
           Condition
         </div>
+      )}
+
+      {/* Edge delete buttons */}
+      {hovered && connectedEdges && connectedEdges.length > 0 && onDeleteEdge && (
+        <EdgeDeleteButtons connectedEdges={connectedEdges} onDeleteEdge={onDeleteEdge} nodeId={id} />
       )}
 
       {/* Connection handles at midpoints of each side */}

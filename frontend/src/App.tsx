@@ -185,7 +185,7 @@ function AppContent() {
           <AnalyticsView logDir={logDir} rows={data?.rows ?? []} />
         )}
         {activeView === "tools" && <ToolsView logDir={logDir} />}
-        {activeView === "workflows" && <WorkflowsView />}
+        {activeView === "workflows" && <WorkflowsView rackData={data} />}
         {activeView === "settings" && (
           <SettingsView
             logDir={logDir}

@@ -1,0 +1,61 @@
+---
+description: Local development startup and Docker build scripts
+alwaysApply: true
+---
+
+# Local Development & Deployment
+
+## Local Dev
+
+Use `./start.sh` to build and run locally. It handles:
+- Python venv creation and deps install
+- Node.js detection/download, frontend `npm install` + `npm run build`
+- Auto-detects OS: macOS = demo mode, Linux = cluster mode
+- Defaults to port 5050
+
+```bash
+./start.sh                              # auto-detect mode
+RACK_STATUS_DEMO=1 ./start.sh           # force demo
+BUILD_FRONTEND=0 ./start.sh             # skip frontend rebuild
+```
+
+Do NOT manually run `python3 app.py` or `npm run build` separately — always use `start.sh`.
+
+## SSH Mode (local Mac → remote cluster)
+
+To run locally against a real cluster via SSH:
+
+1. Upload scripts to the head node:
+```bash
+scp -i <key> -r bin/scripts root@<head-node>:/home/cmsupport/nvis-rack-status/bin/
+ssh -i <key> root@<head-node> "chmod +x /home/cmsupport/nvis-rack-status/bin/scripts/*.sh"
+```
+
+2. Start the app with SSH env vars:
+```bash
+RACK_EXEC_MODE=ssh \
+RACK_SSH_HOST=<head-node-ip> \
+RACK_SSH_USER=root \
+RACK_SSH_KEY=~/.ssh/<key> \
+RACK_PLATFORM=bcm \
+RACK_STATUS_DEMO=0 \
+RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status \
+BUILD_FRONTEND=0 \
+./start.sh
+```
+
+`BUILD_FRONTEND=0` skips the frontend rebuild when only testing backend/cluster changes.
+
+## Docker Build & Run
+
+Use `./build-docker.sh` for Docker workflows:
+
+```bash
+./build-docker.sh              # dev mode (demo, no auth, port 5050)
+./build-docker.sh prod         # prod mode (SSH to head node, token auth)
+./build-docker.sh build        # build image only
+./build-docker.sh stop         # stop container
+./build-docker.sh logs         # tail logs
+```
+
+Prod requires `RACK_SSH_HOST` and `RACK_WEB_AUTH_TOKEN` env vars.

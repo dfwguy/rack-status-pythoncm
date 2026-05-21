@@ -8,7 +8,7 @@
 import type { Node, Edge } from "reactflow";
 import dagre from "dagre";
 
-interface ParsedNode {
+export interface ParsedNode {
   id: string;
   label: string;
   shape: string;
@@ -41,7 +41,7 @@ const NODE_PATTERNS = [
   { regex: /^(\w+)\[(.+?)\]/, shape: "rect" },
 ];
 
-const EDGE_PATTERNS = [
+export const EDGE_PATTERNS = [
   { regex: /-->\|"(.+?)"\|/, label: "$1", type: "arrow" },
   { regex: /-->\|(.+?)\|/, label: "$1", type: "arrow" },
   { regex: /-- "(.+?)" -->/, label: "$1", type: "arrow" },
@@ -56,7 +56,7 @@ const EDGE_PATTERNS = [
   { regex: /-\.->/, label: "", type: "dotted" },
 ];
 
-function parseNodeDef(text: string): ParsedNode | null {
+export function parseNodeDef(text: string): ParsedNode | null {
   const trimmed = text.trim();
   for (const { regex, shape } of NODE_PATTERNS) {
     const match = trimmed.match(regex);
@@ -150,13 +150,12 @@ export function mermaidToReactFlow(
         const targetNode = parseNodeDef(targetText);
 
         if (sourceNode && targetNode) {
-          if (!nodesMap.has(sourceNode.id)) {
-            if (inSubgraph) sourceNode.parentGroup = currentGroup;
-            nodesMap.set(sourceNode.id, sourceNode);
-          }
-          if (!nodesMap.has(targetNode.id)) {
-            if (inSubgraph) targetNode.parentGroup = currentGroup;
-            nodesMap.set(targetNode.id, targetNode);
+          for (const parsed of [sourceNode, targetNode]) {
+            if (inSubgraph) parsed.parentGroup ??= currentGroup;
+            const existing = nodesMap.get(parsed.id);
+            if (!existing || (existing.label === existing.id && parsed.label !== parsed.id)) {
+              nodesMap.set(parsed.id, parsed);
+            }
           }
           edges.push({ source: sourceNode.id, target: targetNode.id, label: edgeLabel });
           edgeFound = true;
@@ -169,7 +168,8 @@ export function mermaidToReactFlow(
       const node = parseNodeDef(line);
       if (node) {
         if (inSubgraph) node.parentGroup = currentGroup;
-        if (!nodesMap.has(node.id)) {
+        const existing = nodesMap.get(node.id);
+        if (!existing || (existing.label === existing.id && node.label !== node.id)) {
           nodesMap.set(node.id, node);
         }
       } else {

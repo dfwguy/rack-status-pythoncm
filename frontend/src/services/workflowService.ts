@@ -16,6 +16,12 @@ export interface WorkflowStep {
   timeout?: number;
 }
 
+export interface WorkflowTarget {
+  mode: "rack" | "nodes";
+  racks: string[];
+  nodes: string[];
+}
+
 export interface Workflow {
   id: string;
   name: string;
@@ -23,6 +29,7 @@ export interface Workflow {
   version?: number;
   mermaid?: string;
   steps: WorkflowStep[];
+  target?: WorkflowTarget;
 }
 
 export interface WorkflowSummary {

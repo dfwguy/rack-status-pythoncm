@@ -418,7 +418,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           </Text>
 
           <Box sx={{ mb: 2 }}>
-            <MuiButton size="small" onClick={handleSelectAllEligible}>
+            <MuiButton size="small" variant="outlined" onClick={handleSelectAllEligible}>
               {selected.size === eligibleCount ? "Clear all" : `Select all eligible (${eligibleCount})`}
             </MuiButton>
           </Box>
@@ -493,7 +493,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           )}
         </DialogContent>
         <DialogActions sx={{ px: 3, py: 2 }}>
-          <MuiButton onClick={() => setDialogOpen(false)} disabled={launching}>
+          <MuiButton variant="outlined" onClick={() => setDialogOpen(false)} disabled={launching}>
             Cancel
           </MuiButton>
           <MuiButton

@@ -92,4 +92,36 @@ graph TD
     const { nodes } = mermaidToReactFlow(code, { myStep: "delay" });
     expect(nodes[0].data.stepType).toBe("delay");
   });
+
+  it("parses new step connected to done after user adds node and edges", () => {
+    const code = `graph TD
+    start["Start"] --> step1["Step 1"]
+    step1 --> done(["Done"])
+    step1 --> step_1
+    step_1["New Step"]
+    step_1 --> done`;
+
+    const { nodes, edges } = mermaidToReactFlow(code);
+    const nodeIds = nodes.map((n) => n.id);
+    expect(nodeIds).toContain("step_1");
+    expect(nodeIds).toContain("done");
+    const edgeTargets = edges.filter((e) => e.target === "done");
+    expect(edgeTargets.length).toBeGreaterThanOrEqual(2);
+    const step1ToDone = edges.find((e) => e.source === "step_1" && e.target === "done");
+    expect(step1ToDone).toBeDefined();
+  });
+
+  it("uses full label even when node definition appears after edge reference", () => {
+    const code = `graph TD
+    start["Start"] --> step1["Step 1"]
+    step1 --> done(["Done"])
+    step1 --> step_1
+    step_1["New Step"]`;
+
+    const { nodes } = mermaidToReactFlow(code);
+    const step1Node = nodes.find((n) => n.id === "step_1");
+    expect(step1Node).toBeDefined();
+    expect(step1Node!.data.label).toBe("New Step");
+    expect(step1Node!.data.shape).toBe("rect");
+  });
 });

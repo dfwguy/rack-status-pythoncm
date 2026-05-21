@@ -88,6 +88,10 @@ def save_workflow(data: dict) -> dict:
     data.setdefault("name", wf_id)
     data.setdefault("steps", [])
     data.setdefault("mermaid", "")
+    if "target" in data and isinstance(data["target"], dict):
+        data["target"].setdefault("mode", "rack")
+        data["target"].setdefault("racks", [])
+        data["target"].setdefault("nodes", [])
 
     # Auto-increment version: read existing version from disk and bump
     path = WORKFLOWS_DIR / f"{wf_id}.yaml"
@@ -168,12 +172,12 @@ def _save_step_output(run_id: str, step_id: str, output: str) -> str:
     return f"{run_id}/{step_id}.log"
 
 
-def _get_output_snippet(output: str, max_lines: int = 20) -> str:
-    """Get the last N lines of output as a snippet."""
+def _get_output_snippet(output: str, max_lines: int = 500) -> str:
+    """Return the tail of the output so the inline view shows the final result."""
     lines = output.strip().split("\n")
     if len(lines) <= max_lines:
         return output.strip()
-    return "\n".join(lines[-max_lines:])
+    return f"... ({len(lines) - max_lines} lines above) ...\n\n" + "\n".join(lines[-max_lines:])
 
 
 def get_step_output(run_id: str, step_id: str) -> str | None:
@@ -199,13 +203,22 @@ def start_workflow_run(workflow_id: str, params: dict | None = None) -> dict:
         raise ValueError(f"Workflow '{workflow_id}' has no steps")
 
     run_id = str(uuid.uuid4())
+    merged_params = dict(params or {})
+    tgt = wf.get("target") or {}
+    if isinstance(tgt, dict) and not merged_params.get("rack"):
+        racks = tgt.get("racks") or []
+        if racks:
+            merged_params.setdefault("rack", racks[0] if len(racks) == 1 else ",".join(racks))
+        nodes = tgt.get("nodes") or []
+        if nodes:
+            merged_params.setdefault("target", ",".join(nodes))
     run: dict[str, Any] = {
         "run_id": run_id,
         "workflow_id": workflow_id,
         "workflow_name": wf.get("name", workflow_id),
         "state": "pending",
         "current_step_id": steps[0]["id"],
-        "params": params or {},
+        "params": merged_params,
         "history": [],
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -595,13 +608,76 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
                         run_id, step_id, exc,
                     )
 
-    # Known tool env key (e.g. RACK_SYSINFO_SCRIPT) — resolve and describe
-    if command.startswith("RACK_"):
+    # Known tool env key (e.g. RACK_SYSINFO_SCRIPT) — resolve path and execute
+    if command.startswith("RACK_") and command.endswith("_SCRIPT"):
         import os as _os
-        resolved = _os.environ.get(command, f"(not configured: {command})")
-        output = f"[Tool: {command}]\nResolved path: {resolved}\nStatus: OK (configured)"
-        _save_step_output(run_id, step_id, output)
-        return True, output
+        from pathlib import Path as _Path
+        script_dir = _os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
+        default_scripts = (_Path(script_dir) / "bin" / "scripts") if script_dir else None
+        _SCRIPT_DEFAULTS = {
+            "RACK_SYSINFO_SCRIPT": "sysinfo.sh",
+            "RACK_VALIDATION_SCRIPT": "run_singlerack.sh",
+            "RACK_HW_CHECK_SCRIPT": "hw_check_pdsh.sh",
+            "RACK_NVSWITCH_AUDIT_SCRIPT": "nvswitches_rack_audit.sh",
+            "RACK_NEMO_XRACK_SCRIPT": "run-nemo-xrack.sh",
+            "RACK_LLAMA_SCRIPT": "run-llama.sh",
+            "RACK_IMEX_CHECK_SCRIPT": "imex_check.sh",
+        }
+        resolved = _os.environ.get(command, "").strip()
+        if not resolved and default_scripts and command in _SCRIPT_DEFAULTS:
+            resolved = str(default_scripts / _SCRIPT_DEFAULTS[command])
+        if not resolved:
+            output = f"[Tool: {command}]\nResolved path: (not configured: {command})\nStatus: SKIPPED"
+            _save_step_output(run_id, step_id, output)
+            return False, output
+        host_cmd = f"bash {resolved}"
+        target = params.get("target", "")
+        if not target and params.get("rack"):
+            ct_range = _os.environ.get("RACK_VALIDATION_CT_RANGE", "01-18").strip() or "01-18"
+            target = f"{params['rack']}-ct[{ct_range}]"
+        if target:
+            host_cmd += f" {target}"
+        timeout = int(step.get("timeout", 300))
+
+        rack_raw = params.get("rack", "")
+        rack_norm_t: str | None = None
+        if rack_raw:
+            try:
+                rack_norm_t = rack_locks.normalize_rack_id(rack_raw)
+            except ValueError:
+                pass
+        operator_label_t = f"workflow:{run_id[:8]}"
+        claimed_t = False
+        if rack_norm_t:
+            try:
+                rack_locks.upsert_claim(rack_norm_t, operator_label_t, note=f"workflow step {step_id}", ttl_sec=max(60, timeout + 60))
+                claimed_t = True
+            except PermissionError:
+                pass
+
+        try:
+            proc = host_exec.run_on_host(host_cmd, timeout=timeout)
+            output = ""
+            if proc.stdout:
+                output += proc.stdout
+            if proc.stderr:
+                output += "\n--- stderr ---\n" + proc.stderr
+            output += f"\n--- exit {proc.returncode} ---\n"
+            if not output.strip():
+                output = f"[Command completed with exit code {proc.returncode}]"
+            _save_step_output(run_id, step_id, output)
+            return proc.returncode == 0, output
+        except Exception as exc:
+            output = f"[Error] {exc}"
+            _save_step_output(run_id, step_id, output)
+            _logger.error("Workflow tool step failed: %s", exc)
+            return False, output
+        finally:
+            if claimed_t and rack_norm_t:
+                try:
+                    rack_locks.release_claim(rack_norm_t, operator_label_t)
+                except (PermissionError, ValueError):
+                    pass
 
     output = f"[No-op] command={command!r}\nStep completed without execution."
     _save_step_output(run_id, step_id, output)

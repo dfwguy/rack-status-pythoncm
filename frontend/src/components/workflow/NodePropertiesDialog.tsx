@@ -53,8 +53,8 @@ export default function NodePropertiesDialog({
   const [description, setDescription] = useState(metadata.description || "");
   const [type, setType] = useState(metadata.type || "automated");
   const [command, setCommand] = useState(metadata.command || "");
-  const [params, setParams] = useState<Array<{ key: string; value: string }>>(
-    Object.entries(metadata.parameters || {}).map(([key, value]) => ({ key, value })),
+  const [params, setParams] = useState<string[]>(
+    Object.entries(metadata.parameters || {}).map(([key, value]) => (value ? `${key}=${value}` : key)),
   );
   const [output, setOutput] = useState(metadata.output || "");
   const [timeout, setTimeout_] = useState(metadata.timeout?.toString() || "");
@@ -81,7 +81,7 @@ export default function NodePropertiesDialog({
     setDescription(metadata.description || "");
     setType(metadata.type || "automated");
     setCommand(metadata.command || "");
-    setParams(Object.entries(metadata.parameters || {}).map(([key, value]) => ({ key, value })));
+    setParams(Object.entries(metadata.parameters || {}).map(([key, value]) => (value ? `${key}=${value}` : key)));
     setOutput(metadata.output || "");
     setTimeout_(metadata.timeout?.toString() || "");
     setRetries(metadata.retries?.toString() || "");
@@ -94,21 +94,28 @@ export default function NodePropertiesDialog({
   }, [open, nodeId]);
 
   const handleAddParam = useCallback(() => {
-    setParams((p) => [...p, { key: "", value: "" }]);
+    setParams((p) => [...p, ""]);
   }, []);
 
   const handleRemoveParam = useCallback((idx: number) => {
     setParams((p) => p.filter((_, i) => i !== idx));
   }, []);
 
-  const handleParamChange = useCallback((idx: number, field: "key" | "value", val: string) => {
-    setParams((p) => p.map((item, i) => (i === idx ? { ...item, [field]: val } : item)));
+  const handleParamChange = useCallback((idx: number, val: string) => {
+    setParams((p) => p.map((item, i) => (i === idx ? val : item)));
   }, []);
 
   const handleSave = useCallback(() => {
     const parameters: Record<string, string> = {};
     for (const p of params) {
-      if (p.key.trim()) parameters[p.key.trim()] = p.value;
+      const trimmed = p.trim();
+      if (!trimmed) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx > 0) {
+        parameters[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1).trim();
+      } else {
+        parameters[trimmed] = "";
+      }
     }
 
     const updated: NodeMetadata = {
@@ -235,10 +242,7 @@ export default function NodePropertiesDialog({
           {params.map((p, idx) => (
             <Flex key={idx} gap="2" align="center" style={{ marginBottom: 6 }}>
               <Box sx={{ flex: 1 }}>
-                <TextInput value={p.key} onValueChange={(v) => handleParamChange(idx, "key", v)} placeholder="Key" size="small" />
-              </Box>
-              <Box sx={{ flex: 1 }}>
-                <TextInput value={p.value} onValueChange={(v) => handleParamChange(idx, "value", v)} placeholder="Value" size="small" />
+                <TextInput value={p} onValueChange={(v) => handleParamChange(idx, v)} placeholder="-p or --key=value" size="small" />
               </Box>
               <IconButton size="small" onClick={() => handleRemoveParam(idx)} title="Remove">
                 <Trash2 size={14} />

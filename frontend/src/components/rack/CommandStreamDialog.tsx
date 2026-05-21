@@ -139,7 +139,7 @@ export function CommandStreamDialog({ open, onClose, title, endpoint, body }: Co
         />
       </DialogContent>
       <DialogActions>
-        <MuiButton onClick={onClose}>Close</MuiButton>
+        <MuiButton variant="outlined" onClick={onClose}>Close</MuiButton>
       </DialogActions>
     </Dialog>
   );
