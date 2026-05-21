@@ -130,7 +130,9 @@ class TestStepOutput:
     def test_output_snippet_truncates(self):
         lines = "\n".join(f"line {i}" for i in range(50))
         snippet = workflow_engine._get_output_snippet(lines, max_lines=5)
-        assert snippet.count("\n") == 4
+        assert "lines above" in snippet
+        tail_lines = [l for l in snippet.split("\n") if l.startswith("line ")]
+        assert len(tail_lines) == 5
 
 
 class TestAutomatedHostStepLocks:
