@@ -12,6 +12,7 @@ import { HardwareTab } from "../components/rack/HardwareTab";
 import { NetworkingTab } from "../components/rack/NetworkingTab";
 import { ServicesTab } from "../components/rack/ServicesTab";
 import { ParserResultsDialog } from "../components/ParserResultsDialog";
+import WebTerminalDialog from "../components/rack/WebTerminalDialog";
 import { RackCommandProvider } from "../context/RackCommandContext";
 import type { RackRow } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
@@ -30,6 +31,7 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
   const [tabIndex, setTabIndex] = useState(0);
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
   const [parserOpen, setParserOpen] = useState(false);
+  const [terminalNode, setTerminalNode] = useState("");
 
   const nodes = useMemo(() => {
     if (!row) return [];
@@ -82,6 +84,7 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
             nodes={nodes}
             selected={selectedNodes}
             onSelectionChange={setSelectedNodes}
+            onOpenTerminal={(nodeId) => setTerminalNode(nodeId)}
           />
         </Box>
 
@@ -152,6 +155,13 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
         rack={rack}
         jobId={row?.last_job !== "-" ? row?.last_job : undefined}
         logDir={logDir}
+      />
+
+      <WebTerminalDialog
+        open={!!terminalNode}
+        onClose={() => setTerminalNode("")}
+        target={terminalNode}
+        mode="node"
       />
     </RackCommandProvider>
   );

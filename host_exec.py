@@ -301,3 +301,70 @@ def popen_on_host(
             text=True,
         )
     return HostProcess(_proc=proc)
+
+
+# ---------------------------------------------------------------------------
+# ssh_to_node_argv  –  build argv for an interactive SSH session to a node
+# ---------------------------------------------------------------------------
+
+def ssh_to_headnode_argv() -> list[str]:
+    """Return an argv list to open an interactive SSH session to the head node.
+
+    In SSH (remote) mode this connects to the configured head node.
+    In local mode this opens a local shell (the app is already on the head node).
+    """
+    _ensure_init()
+    if _EXEC_MODE == "ssh":
+        argv = [
+            "ssh", "-tt",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+            "-o", "SetEnv=TERM=xterm-256color",
+            "-p", _SSH_PORT or "22",
+        ]
+        if _SSH_KEY and os.path.isfile(_SSH_KEY):
+            argv.extend(["-i", _SSH_KEY])
+        argv.append(f"{_SSH_USER}@{_SSH_HOST}")
+        return argv
+    return [os.environ.get("SHELL", "/bin/bash"), "-l"]
+
+
+def ssh_to_node_argv(node: str) -> list[str]:
+    """Return an argv list to open an interactive SSH session to *node*.
+
+    In SSH (remote) mode the connection jumps through the head node:
+        ssh -J headnode user@node
+    In local mode the connection is direct:
+        ssh user@node
+    """
+    _ensure_init()
+    ssh_user = _SSH_USER or "root"
+    if _EXEC_MODE == "ssh":
+        # SSH to head node, then from there SSH to the compute node
+        # (compute nodes use munge-based auth from the head node).
+        argv = [
+            "ssh", "-tt",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+            "-p", _SSH_PORT or "22",
+        ]
+        if _SSH_KEY and os.path.isfile(_SSH_KEY):
+            argv.extend(["-i", _SSH_KEY])
+        argv.extend([
+            f"{_SSH_USER}@{_SSH_HOST}",
+            "TERM=xterm-256color",
+            "ssh", "-tt",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            node,
+        ])
+        return argv
+    return [
+        "ssh", "-tt",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "LogLevel=ERROR",
+        f"{ssh_user}@{node}",
+    ]

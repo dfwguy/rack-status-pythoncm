@@ -8,7 +8,10 @@ import Paper from "@mui/material/Paper";
 import Checkbox from "@mui/material/Checkbox";
 import Box from "@mui/material/Box";
 import Link from "@mui/material/Link";
+import IconButton from "@mui/material/IconButton";
+import Tooltip from "@mui/material/Tooltip";
 import { Tag, Text, Button } from "@nvidia/foundations-react-core";
+import { Terminal } from "lucide-react";
 import type { NvisNamingSchema } from "../../types/naming";
 
 /** Build https URL for BMC / RedFish UI; bracket bare IPv6 literals only. */
@@ -31,6 +34,7 @@ interface NodeSelectorProps {
   nodes: NodeInfo[];
   selected: Set<string>;
   onSelectionChange: (selected: Set<string>) => void;
+  onOpenTerminal?: (nodeId: string) => void;
 }
 
 function statusLabel(status: NodeInfo["status"]) {
@@ -72,7 +76,7 @@ function RedfishIpCell({ ip }: { ip?: string }) {
   );
 }
 
-export function NodeSelector({ nodes, selected, onSelectionChange }: NodeSelectorProps) {
+export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTerminal }: NodeSelectorProps) {
   const allSelected = nodes.length > 0 && selected.size === nodes.length;
   const someSelected = selected.size > 0 && selected.size < nodes.length;
 
@@ -133,6 +137,7 @@ export function NodeSelector({ nodes, selected, onSelectionChange }: NodeSelecto
               <TableCell>Node</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>RedFish IP</TableCell>
+              {onOpenTerminal && <TableCell align="center">Actions</TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -164,6 +169,17 @@ export function NodeSelector({ nodes, selected, onSelectionChange }: NodeSelecto
                 <TableCell onClick={(e) => e.stopPropagation()}>
                   <RedfishIpCell ip={node.ip} />
                 </TableCell>
+                {onOpenTerminal && (
+                  <TableCell align="center" onClick={(e) => e.stopPropagation()}>
+                    {node.status === "up" && (
+                      <Tooltip title={`Open terminal to ${node.id}`}>
+                        <IconButton size="small" onClick={() => onOpenTerminal(node.id)}>
+                          <Terminal size={16} />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>
