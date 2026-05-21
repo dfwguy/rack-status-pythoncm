@@ -1857,9 +1857,6 @@ def _bootstrap_nvftp_sync_at_startup() -> None:
     nvftp_cache_sync.ensure_background_thread()
 
 
-_bootstrap_nvftp_sync_at_startup()
-
-
 def _session_ok() -> bool:
     return session.get("rack_web_auth") == "1"
 
@@ -12917,6 +12914,9 @@ class _WebSocketTerminalMiddleware:
 
 if _TERMINAL_ENABLED:
     app.wsgi_app = _WebSocketTerminalMiddleware(app.wsgi_app)  # type: ignore[assignment]
+
+# After all routes and middleware are registered (avoid circular import via nvftp_cache_sync._eget → app).
+_bootstrap_nvftp_sync_at_startup()
 
 
 if __name__ == "__main__":

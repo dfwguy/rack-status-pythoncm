@@ -51,15 +51,40 @@ _bg_thread: threading.Thread | None = None
 _bg_thread_lock = threading.Lock()
 
 
+def _job_env_override_from_file(name: str) -> str:
+    """Read a single key from ``var/cache/job_env_overrides.json`` without importing ``app``."""
+    path = CACHE_DIR / "job_env_overrides.json"
+    try:
+        if path.is_file():
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+            if isinstance(doc, dict):
+                raw = doc.get(name)
+                if isinstance(raw, str) and raw.strip():
+                    return raw.strip()
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+    return ""
+
+
 def _eget(name: str, default: str = "") -> str:
-    """Read env (process env first, then dashboard job-env overrides)."""
+    """Read env (process env, job-env JSON, then ``app._eget`` when the app module is fully loaded)."""
     raw = (os.environ.get(name) or "").strip()
     if raw:
         return raw
+    raw = _job_env_override_from_file(name)
+    if raw:
+        return raw
     try:
-        import app as app_mod
+        import sys
 
-        v = app_mod._eget(name, default)  # type: ignore[attr-defined]
+        app_mod = sys.modules.get("app")
+        if app_mod is None:
+            return (default or "").strip()
+        eget = getattr(app_mod, "_eget", None)
+        if eget is None:
+            return (default or "").strip()
+        v = eget(name, default)  # type: ignore[misc]
         return (v or default).strip() if v is not None else (default or "").strip()
     except Exception:
         return (default or "").strip()
