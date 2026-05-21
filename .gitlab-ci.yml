@@ -29,6 +29,8 @@ stages:
 
 variables:
   DEPLOY_REPO_URL: "https://gitlab-master.nvidia.com/ape-repo/astra-projects/nvis-rack-status-owners/nvis-rack-status-demo-deploy.git"
+  # No Slack pipeline-failure notifications (ci-toolkit after_script skips when false + no token).
+  CI_TOOLKIT_SLACK_VIA_API: "false"
   LOG_LEVEL: "INFO"
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
   NPM_CONFIG_CACHE: "$CI_PROJECT_DIR/.npm-cache"
