@@ -12794,6 +12794,10 @@ class _WebSocketTerminalMiddleware:
         if not target and mode != "headnode":
             return None
 
+        if _truthy_env("RACK_STATUS_DEMO"):
+            _logger.info("WebSocket terminal: blocked in demo mode (target=%s)", target or "headnode")
+            return None
+
         if mode == "headnode":
             argv = host_exec.ssh_to_headnode_argv()
             target = target or "headnode"
@@ -12836,7 +12840,8 @@ class _WebSocketTerminalMiddleware:
             sess = self._get_or_create_session(qs)
 
             if sess is None:
-                ws.send(json.dumps({"type": "error", "error": "invalid session or missing target"}))
+                reason = "Demo mode — terminal connections are disabled" if _truthy_env("RACK_STATUS_DEMO") else "Missing target node"
+                ws.send(json.dumps({"type": "error", "error": reason}))
                 return
 
             # Send session ID so the frontend can use it for pop-out
