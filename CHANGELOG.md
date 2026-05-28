@@ -1,3 +1,7 @@
+### [0.1.2 (Thursday, May 28, 2026)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/merge_requests/16)
+### Features/Bug Fixes
+* fix: bump dependencies to resolve nSpect vulnerabilities ([ccfeeb74](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/commit/ccfeeb74515c780e54e29de4beadbdfb75b70d9a))
+---
 ### [0.1.1 (Tuesday, May 26, 2026)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/merge_requests/15)
 ### Features/Bug Fixes
 * fix: disable terminal SSH connections in demo mode ([615160db](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/commit/615160dbfbb9e908fce4cda22ea9ed111863485c))
