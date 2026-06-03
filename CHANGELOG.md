@@ -1,3 +1,7 @@
+### [0.1.3 (Wednesday, June 03, 2026)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/merge_requests/17)
+### Features/Bug Fixes
+* docs: add UX & information architecture framework (v1.0) ([2caaaeee](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/commit/2caaaeee5e8c0177605f8db84cd0a93e93ef42c9))
+---
 ### [0.1.2 (Thursday, May 28, 2026)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/merge_requests/16)
 ### Features/Bug Fixes
 * fix: bump dependencies to resolve nSpect vulnerabilities ([ccfeeb74](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/commit/ccfeeb74515c780e54e29de4beadbdfb75b70d9a))
