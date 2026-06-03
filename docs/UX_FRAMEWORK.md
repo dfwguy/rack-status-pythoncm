@@ -6,8 +6,8 @@
 | **Team** | NVIS CBU & OVA (Observability, Validation, Automation) |
 | **Author** | Rafael Marcelino Koike |
 | **Year** | 2026 |
-| **Revision** | v1.0 |
-| **Status** | Approved baseline; implementation follows in phases (see Section 12) |
+| **Revision** | v1.1 |
+| **Status** | Approved baseline; implementation follows in phases (see Section 12). v1.1: Multirack moved into Compute as multi-rack operations (was under Analytics & Benchmarks). |
 | **Audience** | Developers, designers, project managers, and AI agents working on the NVIS Rack Status tool |
 
 > Copyright (c) 2026 NVIDIA Corporation. All rights reserved.
@@ -118,6 +118,7 @@ flowchart TB
   subgraph compute [Compute hierarchy - macro to micro]
     Cluster[Cluster] --> Rack[Rack]
     Rack --> Node[Node]
+    Cluster --> Multi[Multirack operations]
   end
 
   subgraph infra [Infrastructure]
@@ -157,7 +158,7 @@ flowchart TB
 
 | Domain | What it contains | The question it answers |
 |---|---|---|
-| **Compute** | `cluster -> rack -> node` (macro to micro). The unit of work we build, validate, and operate. | "Is the cluster (and each rack/node) healthy and validated?" |
+| **Compute** | `cluster -> rack -> node` (macro to micro), plus **multirack operations** — running scripts, tests, or commands against a selected group of racks at once. The unit of work we build, validate, and operate. | "Is the cluster (and each rack/node) healthy and validated, and how do I operate several racks at once?" |
 | **Infrastructure** | Ethernet, InfiniBand, NVLink, and Storage, and how each connects to the compute fabric. | "Is the fabric and storage that connects compute healthy and correctly wired?" |
 | **Observability** | The observability tripod — **Logs** (validation/parser output, job logs), **Metrics** (Grafana/Prometheus time-series, GPU thermal/power, DCGM), and **Events** (state changes, drains, job start/stop, alerts) — with **Traces** as a future fourth pillar. | "What is happening right now, what happened during the last run, and what changed?" |
 | **Tools** | The scripts and programs we run today — installers (HPC-X, CUDA/NCCL, NEMO sqsh, nvloom, Grafana), workflows, the head-node/compute terminal. | "How do I run the operations and automation that act on the cluster?" |
@@ -169,6 +170,12 @@ The earlier draft listed "Benchmarks & Tests" as a separate domain. On reflectio
 
 - **Analytics** already *is* the benchmark surface — it runs `parser.sh --json`, computes baselines/medians, and shows deviation tables (`AnalyticsView.tsx`). Benchmarks and tests produce exactly the data Analytics consumes, so merging them removes an artificial seam: you run a benchmark and analyze it in one domain.
 - **Reports** is a different intent — it is the *export/delivery* of status and results (Excel/CSV/bug-report artifacts), primarily for PMs and customers. That is an output surface of Analytics & Benchmarks (and of cluster status), not a peer technical domain. We therefore place Reports *inside* Analytics & Benchmarks as the "share it" step rather than giving it its own domain.
+
+### Note on Multirack
+
+Multirack lives in **Compute**, not Analytics. It is an *operations* surface — a way to run scripts, tests, or commands against a selected group of racks at once (a cluster-level operation), rather than a benchmark report. It sits one level up the hierarchy from the single-rack view: cluster overview → multirack operations → a single rack → a node.
+
+> **Future consideration.** Multirack's job may eventually be absorbed into the **Racks** table via multi-select — selecting several racks and running an action against that selection (the same way bulk actions already work per-row). If that interaction proves sufficient, the standalone Multirack view can be retired. Until then it remains a dedicated Compute destination.
 
 This framework is the **shared vocabulary** for the rest of the document and for navigation labels.
 
@@ -223,7 +230,7 @@ flowchart LR
 |---|---|---|
 | Dashboard | `ClusterDashboardView.tsx` | Compute (cluster summary) |
 | Single Rack | `SingleRackView.tsx` + `RackTable.tsx` | Compute (rack list -> rack/node detail) |
-| Multirack | `MultirackView.tsx` | Analytics & Benchmarks (multirack performance) |
+| Multirack | `MultirackView.tsx` | Compute (multirack operations — run actions across a group of racks) |
 | Slurm | `SlurmView.tsx` | Compute (scheduler) — also duplicated in toolbar dialogs |
 | Reports | `ReportsView.tsx` | Analytics & Benchmarks (export/share) |
 | Workflows | `WorkflowsView.tsx` | Tools |
@@ -241,7 +248,7 @@ flowchart LR
 5. **No infrastructure domain.** Ethernet/IB/NVLink/Storage health is implicit (inside rack-detail Networking tab) rather than a navigable concern.
 6. **Not deep-linkable.** No router means PM/partner-friendly shareable URLs don't exist.
 7. **Flat list doesn't scale.** Ten ungrouped items with more coming (Observability, Infrastructure) will become a long, unscannable list.
-8. **Analytics and Reports are split** even though they are one user story (measure → analyze → share). Today Analytics, Multirack, and Reports are three separate items.
+8. **Analytics and Reports are split** even though they are one user story (measure → analyze → share). Today Analytics and Reports are separate items. (Multirack was historically grouped here too, but it is an *operations* surface and now belongs in Compute — see the Note on Multirack in Section 5.)
 
 ### 7.4 Click-depth audit (representative actions, from app open)
 
@@ -271,12 +278,12 @@ flowchart TB
     direction TB
     H1[COMPUTE] --> a1[Cluster overview]
     H1 --> a2[Racks]
-    H1 --> a3[Scheduler - Slurm]
+    H1 --> a3[Multirack operations]
+    H1 --> a4[Scheduler - Slurm]
     H2[OBSERVABILITY] --> b1[Metrics and Dashboards]
     H3[TOOLS] --> c1[Operations and Scripts]
     H3 --> c2[Workflows]
     H4[ANALYTICS and BENCHMARKS] --> d1[Analytics]
-    H4 --> d2[Multirack performance]
     H4 --> d3[Reports]
     H5[PLATFORM] --> e1[Settings]
     H5 --> e2[Documentation]
@@ -287,7 +294,7 @@ Changes:
 - Merge the two dashboards' intent: "Cluster overview" = the PM/partner cluster summary; "Racks" = the operator table (which drills macro→micro into rack and node detail). Make Cluster overview the default landing.
 - Rename "Utility" -> "Operations and Scripts" under a **Tools** group; place Workflows with it.
 - Remove the standalone Slurm view *or* the toolbar dialogs (keep one); label the survivor "Scheduler".
-- Group **Analytics, Multirack performance, and Reports** under one "Analytics & Benchmarks" heading (measure → analyze → share).
+- Group **Analytics and Reports** under one "Analytics & Benchmarks" heading (measure → analyze → share). Place **Multirack operations** under Compute, since it operates a group of racks rather than reporting on them.
 - Add a single **Observability** item (new view, Section 9) — this is the one net-new entry.
 - Group with KUI labels/dividers; no router required.
 
@@ -306,7 +313,8 @@ flowchart TB
       c1[Cluster overview]
       c2[Racks]
       c3[Rack detail - node trays]
-      c4[Scheduler]
+      c4[Multirack operations]
+      c5[Scheduler]
     end
     subgraph i [Infrastructure]
       i1[Ethernet]
@@ -326,7 +334,6 @@ flowchart TB
     end
     subgraph ab [Analytics and Benchmarks]
       ab1[Analytics and baselines]
-      ab2[Multirack performance]
       ab3[Reports and exports]
     end
     Home --> c
@@ -476,7 +483,7 @@ flowchart LR
   P3 --- p3d["Full domain nav (Option B) + routing + RackTable decomposition"]
 ```
 
-- **Phase 1 — IA regroup + RackTable quick wins.** Group the sidebar into the five domains with KUI labels/dividers (Option A), rename Utility, merge the dashboard intent, consolidate Analytics/Multirack/Reports, remove Slurm duplication, and land RackTable quick wins (10.1 items 1-6). Low risk, no routing.
+- **Phase 1 — IA regroup + RackTable quick wins.** Group the sidebar into the five domains with KUI labels/dividers (Option A), rename Utility, merge the dashboard intent, place Multirack operations under Compute, consolidate Analytics/Reports, remove Slurm duplication, and land RackTable quick wins (10.1 items 1-6). Low risk, no routing.
 - **Phase 2 — Observability view.** Build the dedicated Observability view (Section 9): wire `/api/rack-grafana-live-charts`, fix `soloUrl()` time windows, centralize Grafana URL building, KUI `Tabs`/`Card`/`Grid` layout with scope selector.
 - **Phase 3 — Full domain nav + decomposition.** Migrate to Option B (`VerticalNav`/`TreeNav`, breadcrumbs, hash routing, first-class Infrastructure), and complete the RackTable decomposition + MUI `Table` -> KUI `Table`.
 

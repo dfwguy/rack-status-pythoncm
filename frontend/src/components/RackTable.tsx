@@ -926,8 +926,8 @@ export function RackTable({
             <Combobox
               items={VALIDATION_OPTIONS}
               multiple
-              selectedValue={validationFilters}
-              onSelectedValueChange={(v) => { setValidationFilters(v as string[]); setPage(0); }}
+              value={validationFilters}
+              onValueChange={(v: string[]) => { setValidationFilters(v); setPage(0); }}
               size="small"
               disabled={selectMode}
               aria-label="Filter by validation status"
@@ -941,8 +941,8 @@ export function RackTable({
             <Combobox
               items={SINFO_OPTIONS}
               multiple
-              selectedValue={sinfoFilters}
-              onSelectedValueChange={(v) => { setSinfoFilters(v as string[]); setPage(0); }}
+              value={sinfoFilters}
+              onValueChange={(v: string[]) => { setSinfoFilters(v); setPage(0); }}
               size="small"
               disabled={selectMode}
               aria-label="Filter by sinfo state"
@@ -959,8 +959,8 @@ export function RackTable({
                 { value: "all_up", children: "All nodes up" },
               ]}
               multiple
-              selectedValue={deviceFilters}
-              onSelectedValueChange={(v) => { setDeviceFilters(v as string[]); setPage(0); }}
+              value={deviceFilters}
+              onValueChange={(v: string[]) => { setDeviceFilters(v); setPage(0); }}
               size="small"
               disabled={selectMode}
               aria-label="Filter by nodes status"

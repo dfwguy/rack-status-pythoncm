@@ -9,11 +9,12 @@ Flask backend + React 19 SPA (Vite + NVIDIA Kaizen UI + MUI), Dockerized with SS
 
 ## UI Framework
 
-- **Primary**: NVIDIA Kaizen UI (`@nvidia/foundations-react-core`) — Text, Card, Tag, Button, Banner, Skeleton, Flex, Combobox.
-- **Secondary**: MUI — Sidebar/Drawer, AppBar/Toolbar, Table (sortable/paginated), Dialog, Tabs, TextField, Checkbox, Tooltip, IconButton, CircularProgress, Snackbar/Alert, Menu/MenuItem, Divider (inside MUI shell only).
+- **Primary**: NVIDIA Kaizen UI (`@nvidia/foundations-react-core`) — **always prefer KUI over MUI** for new code. See `kui-components.mdc` for the full component catalog and migration table.
+- **KUI Reference**: https://webassets.nvidia.com/kaizen-ui-foundations/docs/llms.txt — full component list, guidelines, CSS variables. Per-component docs: `https://webassets.nvidia.com/kaizen-ui-foundations/docs/components/<Component>.txt`
+- **Secondary**: MUI — retained only for complex existing widgets with no easy KUI migration (RackTable, sidebar Drawer, AppBar/Toolbar shell). New features should use KUI equivalents.
 - **Icons**: Lucide React (`lucide-react`) exclusively. No `@mui/icons-material`.
 - **Theming**: KUI `ThemeProvider` is outer wrapper (`global`); MUI `ThemeProvider` synced via `ThemeBridge` in `src/context/ThemeContext.tsx`. Use `useThemeMode()` for dark/light toggle.
-- **KUI CSS**: `theme.css` + `components.css` from Kaizen CDN in `index.html`. Without these, KUI components have no styles.
+- **KUI CSS**: `base.css` + `components.css` from Kaizen CDN (`1.0.0`) in `index.html`. Without these, KUI components have no styles.
 - **Charts**: Chart.js via `react-chartjs-2` (`Bar`, `Line` components).
 
 ## KUI Component API
@@ -22,7 +23,7 @@ Flask backend + React 19 SPA (Vite + NVIDIA Kaizen UI + MUI), Dockerized with SS
 - **Tag**: `color` (green/red/yellow/blue/teal/purple/gray), `kind` (solid/outline), `readOnly`, `density` (compact/standard/spacious). Children are the label.
 - **Button**: `kind` (primary/secondary/tertiary), `size` (small/tiny/medium/large), `color` (brand/neutral/danger). **No** `density` prop on Button — use `size`.
 - **Banner**: `status` (error/warning/success/info), `kind` (inline/header/global). Children are the message. **Not** `kind="error"` — use `status="error"`.
-- **Combobox**: `items`, `multiple`, `selectedValue`, `onSelectedValueChange`, `size` (small/medium/large).
+- **Combobox**: `items`, `multiple`, `value`, `onValueChange`, `size` (small/medium/large).
 - **Card, Flex, Skeleton**: Use `style` prop for inline styles, not MUI `sx`.
 - **Divider**: Use KUI Divider in content areas. Keep MUI Divider inside MUI shell components (Sidebar/Drawer, AppBar/Toolbar) — KUI Divider renders differently in MUI layout contexts.
 - Full docs: `https://webassets.nvidia.com/kaizen-ui-foundations/docs/components/<Component>.txt`

@@ -1,14 +1,15 @@
+import type { ReactNode } from "react";
 import Drawer from "@mui/material/Drawer";
 import Box from "@mui/material/Box";
 import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
 import ListItemButton from "@mui/material/ListItemButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
-import ListItemText from "@mui/material/ListItemText";
 import Tooltip from "@mui/material/Tooltip";
 import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
-import { Text } from "@nvidia/foundations-react-core";
+import { Text, VerticalNav, type VerticalNavBaseItem } from "@nvidia/foundations-react-core";
+import { viewIdToPath } from "../routes";
 import {
   LayoutDashboard,
   Layers,
@@ -22,126 +23,358 @@ import {
   LineChart,
   Wrench,
   Workflow,
+  Cpu,
+  BarChart3,
+  Network,
+  Cable,
+  Share2,
+  HardDrive,
+  Activity,
+  CalendarClock,
+  Gauge,
+  ScrollText,
+  Bell,
 } from "lucide-react";
 
 export type ViewId =
   | "dashboard"
   | "singleRack"
-  | "multirack"
   | "slurm"
+  | "infraEthernet"
+  | "infraIbNvlink"
+  | "infraStorage"
+  | "obsMetrics"
+  | "obsLogs"
+  | "obsEvents"
+  | "multirack"
   | "reports"
   | "analytics"
   | "tools"
   | "workflows"
+  | "terminal"
   | "settings";
 
-export const DRAWER_WIDTH_OPEN = 240;
+export const DRAWER_WIDTH_OPEN = 248;
 export const DRAWER_WIDTH_CLOSED = 64;
 
-interface NavItem {
+/** A navigable destination that maps to a `ViewId` switched in App.tsx. */
+interface NavLeaf {
   id: ViewId;
   label: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
 }
 
-const mainNavItems: NavItem[] = [
-  { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={22} /> },
-  { id: "singleRack", label: "Single Rack", icon: <Server size={22} /> },
-  { id: "multirack", label: "Multirack", icon: <Layers size={22} /> },
-  { id: "workflows", label: "Workflows", icon: <Workflow size={22} /> },
-  { id: "slurm", label: "Slurm", icon: <Terminal size={22} /> },
-  { id: "reports", label: "Reports", icon: <FileDown size={22} /> },
-  { id: "analytics", label: "Analytics", icon: <LineChart size={22} /> },
-  { id: "tools", label: "Utility", icon: <Wrench size={22} /> },
+/** A domain grouping in the framework (Compute, Infrastructure, Tools, ...). */
+interface NavGroup {
+  kind: "group";
+  /** Group id, namespaced to avoid colliding with leaf ViewIds. */
+  id: string;
+  label: string;
+  icon: ReactNode;
+  leaves: NavLeaf[];
+}
+
+/** A top-level destination with no sub-items (e.g. Observability). */
+interface NavStandalone {
+  kind: "leaf";
+  leaf: NavLeaf;
+}
+
+type NavEntry = NavGroup | NavStandalone;
+
+const ICON_SIZE = 20;
+
+/**
+ * Domain navigation per the UX framework (docs/UX_FRAMEWORK.md, Sections 5 & 8.2).
+ * Compute → Infrastructure → Observability → Tools → Analytics, macro to micro.
+ * Several leaves are design previews (mock data) pending backend wiring.
+ */
+const navEntries: NavEntry[] = [
+  {
+    kind: "group",
+    id: "grp-compute",
+    label: "Compute",
+    icon: <Cpu size={ICON_SIZE} />,
+    leaves: [
+      { id: "dashboard", label: "Cluster overview", icon: <LayoutDashboard size={ICON_SIZE} /> },
+      { id: "singleRack", label: "Racks", icon: <Server size={ICON_SIZE} /> },
+      { id: "multirack", label: "Multirack operations", icon: <Layers size={ICON_SIZE} /> },
+      { id: "slurm", label: "Scheduler", icon: <CalendarClock size={ICON_SIZE} /> },
+    ],
+  },
+  {
+    kind: "group",
+    id: "grp-infra",
+    label: "Infrastructure",
+    icon: <Network size={ICON_SIZE} />,
+    leaves: [
+      { id: "infraEthernet", label: "Ethernet", icon: <Cable size={ICON_SIZE} /> },
+      { id: "infraIbNvlink", label: "IB / NVLink", icon: <Share2 size={ICON_SIZE} /> },
+      { id: "infraStorage", label: "Storage", icon: <HardDrive size={ICON_SIZE} /> },
+    ],
+  },
+  {
+    kind: "group",
+    id: "grp-observability",
+    label: "Observability",
+    icon: <Activity size={ICON_SIZE} />,
+    leaves: [
+      { id: "obsMetrics", label: "Metrics", icon: <Gauge size={ICON_SIZE} /> },
+      { id: "obsLogs", label: "Logs", icon: <ScrollText size={ICON_SIZE} /> },
+      { id: "obsEvents", label: "Events", icon: <Bell size={ICON_SIZE} /> },
+    ],
+  },
+  {
+    kind: "group",
+    id: "grp-tools",
+    label: "Tools",
+    icon: <Wrench size={ICON_SIZE} />,
+    leaves: [
+      { id: "tools", label: "Operations & Scripts", icon: <Wrench size={ICON_SIZE} /> },
+      { id: "workflows", label: "Workflows", icon: <Workflow size={ICON_SIZE} /> },
+      { id: "terminal", label: "Terminal", icon: <Terminal size={ICON_SIZE} /> },
+    ],
+  },
+  {
+    kind: "group",
+    id: "grp-analytics",
+    label: "Analytics & Benchmarks",
+    icon: <BarChart3 size={ICON_SIZE} />,
+    leaves: [
+      { id: "analytics", label: "Analytics", icon: <LineChart size={ICON_SIZE} /> },
+      { id: "reports", label: "Reports", icon: <FileDown size={ICON_SIZE} /> },
+    ],
+  },
 ];
 
-const bottomNavItems: NavItem[] = [
-  { id: "settings", label: "Settings", icon: <Settings size={22} /> },
-];
+/** All navigable leaves, flattened (used by the collapsed icon rail). */
+const allLeaves: NavLeaf[] = navEntries.flatMap((entry) =>
+  entry.kind === "group" ? entry.leaves : [entry.leaf]
+);
+
+/** Bottom-pinned platform leaf (a view). */
+const settingsLeaf: NavLeaf = { id: "settings", label: "Settings", icon: <Settings size={ICON_SIZE} /> };
 
 /** Project docs and source on GitLab (opens in a new tab from the sidebar). */
 export const NVIS_RACK_STATUS_DOC_URL = "https://gitlab-master.nvidia.com/nvis/nvis-rack-status";
-
-interface ExternalNavItem {
-  label: string;
-  icon: React.ReactNode;
-  href?: string;
-}
-
-const externalItems: ExternalNavItem[] = [
-  { label: "Documentation", icon: <BookOpen size={22} />, href: NVIS_RACK_STATUS_DOC_URL },
-  { label: "Help", icon: <HelpCircle size={22} /> },
-];
 
 interface SidebarProps {
   open: boolean;
   onToggle: () => void;
   activeView: ViewId;
   onNavigate: (view: ViewId) => void;
-  /** When set (from server env / overrides), shown top-left instead of “Rack Status”. */
+  /** When set (from server env / overrides), shown top-left instead of "Rack Status". */
   projectName?: string;
 }
 
-function NavList({
-  items,
-  collapsed,
+/**
+ * A leaf rendered as an anchor so KUI's `VerticalNavItem` (an `<a>`) styles it
+ * natively via `asChild`. Navigation is state-based (no router), so we prevent
+ * the default and call `onNavigate`.
+ */
+function navLeafItem(leaf: NavLeaf, activeView: ViewId, onNavigate: (view: ViewId) => void): VerticalNavBaseItem {
+  return {
+    id: leaf.id,
+    active: activeView === leaf.id,
+    asChild: true,
+    children: (
+      <a
+        href={`#${viewIdToPath(leaf.id)}`}
+        onClick={(e) => {
+          e.preventDefault();
+          onNavigate(leaf.id);
+        }}
+      >
+        {leaf.label}
+      </a>
+    ),
+  };
+}
+
+/** Expanded navigation: collapsible KUI domain groups + bottom platform items. */
+function ExpandedNav({
   activeView,
   onNavigate,
 }: {
-  items: NavItem[];
-  collapsed: boolean;
   activeView: ViewId;
   onNavigate: (view: ViewId) => void;
 }) {
+  const groupItems: VerticalNavBaseItem[] = navEntries.map((entry) => {
+    if (entry.kind === "leaf") {
+      const { leaf } = entry;
+      return {
+        id: leaf.id,
+        active: activeView === leaf.id,
+        slotIcon: leaf.icon,
+        asChild: true,
+        children: (
+          <a
+            href={`#${viewIdToPath(leaf.id)}`}
+            onClick={(e) => {
+              e.preventDefault();
+              onNavigate(leaf.id);
+            }}
+          >
+            {leaf.label}
+          </a>
+        ),
+      };
+    }
+    return {
+      id: entry.id,
+      children: entry.label,
+      slotIcon: entry.icon,
+      defaultOpen: true,
+      subItems: entry.leaves.map((leaf) => navLeafItem(leaf, activeView, onNavigate)),
+    };
+  });
+
+  const bottomItems: VerticalNavBaseItem[] = [
+    {
+      id: settingsLeaf.id,
+      active: activeView === settingsLeaf.id,
+      slotIcon: settingsLeaf.icon,
+      asChild: true,
+      children: (
+        <a
+          href={`#${viewIdToPath(settingsLeaf.id)}`}
+          onClick={(e) => {
+            e.preventDefault();
+            onNavigate(settingsLeaf.id);
+          }}
+        >
+          {settingsLeaf.label}
+        </a>
+      ),
+    },
+    {
+      id: "documentation",
+      slotIcon: <BookOpen size={ICON_SIZE} />,
+      asChild: true,
+      children: (
+        <a href={NVIS_RACK_STATUS_DOC_URL} target="_blank" rel="noopener noreferrer">
+          Documentation
+        </a>
+      ),
+    },
+    {
+      id: "help",
+      slotIcon: <HelpCircle size={ICON_SIZE} />,
+      asChild: true,
+      children: (
+        <a href="#" onClick={(e) => e.preventDefault()}>
+          Help
+        </a>
+      ),
+    },
+  ];
+
   return (
-    <List disablePadding>
-      {items.map(({ id, label, icon }) => {
-        const active = activeView === id;
-        return (
-          <ListItem key={id} disablePadding sx={{ display: "block" }}>
-            <Tooltip title={collapsed ? label : ""} placement="right" arrow>
-              <ListItemButton
-                onClick={() => onNavigate(id)}
-                sx={{
-                  minHeight: 44,
-                  px: 2,
-                  justifyContent: collapsed ? "center" : "initial",
-                  bgcolor: active ? "action.selected" : "transparent",
-                  borderRight: active ? 3 : 0,
-                  borderColor: "primary.main",
-                  "&:hover": { bgcolor: "action.hover" },
-                }}
-              >
-                <ListItemIcon
+    <>
+      <Box sx={{ flexGrow: 1, overflowY: "auto", pt: 1 }}>
+        <VerticalNav items={groupItems} />
+      </Box>
+      <Divider />
+      <Box sx={{ py: 1 }}>
+        <VerticalNav items={bottomItems} />
+      </Box>
+    </>
+  );
+}
+
+/**
+ * Collapsed rail: icon-only destinations with tooltips. KUI's grouped VerticalNav
+ * does not render as a 64px icon rail, so the rail uses a flat MUI icon list
+ * (the Drawer shell is MUI as well). Clicking still navigates immediately.
+ */
+function CollapsedRail({
+  activeView,
+  onNavigate,
+}: {
+  activeView: ViewId;
+  onNavigate: (view: ViewId) => void;
+}) {
+  const leaves = allLeaves;
+
+  return (
+    <Box sx={{ flexGrow: 1, pt: 1 }}>
+      <List disablePadding>
+        {leaves.map((leaf) => {
+          const active = activeView === leaf.id;
+          return (
+            <ListItem key={leaf.id} disablePadding sx={{ display: "block" }}>
+              <Tooltip title={leaf.label} placement="right" arrow>
+                <ListItemButton
+                  onClick={() => onNavigate(leaf.id)}
                   sx={{
-                    minWidth: 0,
-                    mr: collapsed ? 0 : 2,
+                    minHeight: 44,
+                    px: 0,
                     justifyContent: "center",
-                    color: active ? "primary.main" : "text.secondary",
+                    bgcolor: active ? "action.selected" : "transparent",
+                    borderRight: active ? 3 : 0,
+                    borderColor: "primary.main",
+                    "&:hover": { bgcolor: "action.hover" },
                   }}
                 >
-                  {icon}
-                </ListItemIcon>
-                {!collapsed && (
-                  <ListItemText
-                    primary={label}
-                    slotProps={{
-                      primary: {
-                        sx: {
-                          fontSize: 14,
-                          fontWeight: active ? 600 : 400,
-                          color: active ? "text.primary" : "text.secondary",
-                        },
-                      },
+                  <ListItemIcon
+                    sx={{
+                      minWidth: 0,
+                      justifyContent: "center",
+                      color: active ? "primary.main" : "text.secondary",
                     }}
-                  />
-                )}
-              </ListItemButton>
-            </Tooltip>
-          </ListItem>
-        );
-      })}
-    </List>
+                  >
+                    {leaf.icon}
+                  </ListItemIcon>
+                </ListItemButton>
+              </Tooltip>
+            </ListItem>
+          );
+        })}
+      </List>
+      <Divider sx={{ my: 1 }} />
+      <List disablePadding>
+        {[settingsLeaf].map((leaf) => {
+          const active = activeView === leaf.id;
+          return (
+            <ListItem key={leaf.id} disablePadding sx={{ display: "block" }}>
+              <Tooltip title={leaf.label} placement="right" arrow>
+                <ListItemButton
+                  onClick={() => onNavigate(leaf.id)}
+                  sx={{
+                    minHeight: 44,
+                    px: 0,
+                    justifyContent: "center",
+                    bgcolor: active ? "action.selected" : "transparent",
+                    "&:hover": { bgcolor: "action.hover" },
+                  }}
+                >
+                  <ListItemIcon
+                    sx={{ minWidth: 0, justifyContent: "center", color: active ? "primary.main" : "text.secondary" }}
+                  >
+                    {leaf.icon}
+                  </ListItemIcon>
+                </ListItemButton>
+              </Tooltip>
+            </ListItem>
+          );
+        })}
+        <ListItem disablePadding sx={{ display: "block" }}>
+          <Tooltip title="Documentation (opens in new tab)" placement="right" arrow>
+            <ListItemButton
+              component="a"
+              href={NVIS_RACK_STATUS_DOC_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={{ minHeight: 44, px: 0, justifyContent: "center", "&:hover": { bgcolor: "action.hover" } }}
+            >
+              <ListItemIcon sx={{ minWidth: 0, justifyContent: "center", color: "text.secondary" }}>
+                <BookOpen size={ICON_SIZE} />
+              </ListItemIcon>
+            </ListItemButton>
+          </Tooltip>
+        </ListItem>
+      </List>
+    </Box>
   );
 }
 
@@ -211,67 +444,11 @@ export function Sidebar({ open, onToggle, activeView, onNavigate, projectName }:
 
       <Divider />
 
-      {/* Main navigation */}
-      <Box sx={{ flexGrow: 1, pt: 1 }}>
-        <NavList items={mainNavItems} collapsed={!open} activeView={activeView} onNavigate={onNavigate} />
-      </Box>
-
-      {/* Bottom navigation */}
-      <Divider />
-      <Box sx={{ pb: 1 }}>
-        <NavList items={bottomNavItems} collapsed={!open} activeView={activeView} onNavigate={onNavigate} />
-        <List disablePadding>
-          {externalItems.map(({ label, icon, href }) => (
-            <ListItem key={label} disablePadding sx={{ display: "block" }}>
-              <Tooltip
-                title={
-                  !open ? label : href ? `${label} (opens in new tab)` : label
-                }
-                placement="right"
-                arrow
-              >
-                <ListItemButton
-                  {...(href
-                    ? {
-                        component: "a" as const,
-                        href,
-                        target: "_blank",
-                        rel: "noopener noreferrer",
-                      }
-                    : {})}
-                  sx={{
-                    minHeight: 44,
-                    px: 2,
-                    justifyContent: !open ? "center" : "initial",
-                    "&:hover": { bgcolor: "action.hover" },
-                  }}
-                >
-                  <ListItemIcon
-                    sx={{
-                      minWidth: 0,
-                      mr: !open ? 0 : 2,
-                      justifyContent: "center",
-                      color: "text.secondary",
-                    }}
-                  >
-                    {icon}
-                  </ListItemIcon>
-                  {open && (
-                    <ListItemText
-                      primary={label}
-                      slotProps={{
-                        primary: {
-                          sx: { fontSize: 14, color: "text.secondary" },
-                        },
-                      }}
-                    />
-                  )}
-                </ListItemButton>
-              </Tooltip>
-            </ListItem>
-          ))}
-        </List>
-      </Box>
+      {open ? (
+        <ExpandedNav activeView={activeView} onNavigate={onNavigate} />
+      ) : (
+        <CollapsedRail activeView={activeView} onNavigate={onNavigate} />
+      )}
     </Drawer>
   );
 }

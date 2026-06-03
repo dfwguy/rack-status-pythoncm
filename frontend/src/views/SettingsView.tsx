@@ -16,6 +16,7 @@ import FormControlLabel from "@mui/material/FormControlLabel";
 import { Search, X } from "lucide-react";
 import { Card, Text } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
+import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { getAISettings, updateAISettings, testAIConnection, type AISettings } from "../services/aiService";
 
 /** Use monospace input for long regex / technical values. */
@@ -284,7 +285,7 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
   const [topTab, setTopTab] = useState(0);
 
   return (
-    <Box sx={{ maxWidth: 900, mx: "auto", p: 4 }}>
+    <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.comfortable, mx: "auto", p: 4 }}>
       <PageHeader
         title="Settings"
         description="Configure log directory, environment overrides, and AI assistant endpoint."

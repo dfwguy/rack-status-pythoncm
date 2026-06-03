@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import { Text } from "@nvidia/foundations-react-core";
 import { ThemeProvider, useThemeMode } from "./context/ThemeContext";
@@ -7,6 +8,7 @@ import { AIChatProvider, useAIChat } from "./context/AIChatContext";
 import { AppLayout } from "./components/AppLayout";
 import { Sidebar, type ViewId } from "./components/Sidebar";
 import { Toolbar } from "./components/Toolbar";
+import { AppBreadcrumbs } from "./components/AppBreadcrumbs";
 import AIChatWidget from "./components/ai/AIChatWidget";
 import { ClusterDashboardView } from "./views/ClusterDashboardView";
 import { SingleRackView } from "./views/SingleRackView";
@@ -18,24 +20,38 @@ import { ReportsView } from "./views/ReportsView";
 import { AnalyticsView } from "./views/AnalyticsView";
 import { ToolsView } from "./views/ToolsView";
 import { WorkflowsView } from "./views/WorkflowsView";
+import { MetricsView } from "./views/MetricsView";
+import { LogsView } from "./views/LogsView";
+import { EventsView } from "./views/EventsView";
+import { InfrastructureView } from "./views/InfrastructureView";
+import { TerminalPlaceholderView } from "./views/TerminalPlaceholderView";
 import { SettingsView } from "./views/SettingsView";
 import { LoginPage } from "./pages/LoginPage";
 import TerminalView from "./views/TerminalView";
 import { useRackStatus } from "./hooks/useRackStatus";
+import type { RackStatusResponse } from "./types/api";
 import { RackCommandsStoreProvider } from "./context/RackCommandsStoreContext";
 import { RackLocksProvider } from "./context/RackLocksContext";
+import { DEFAULT_PATH, RACKS_PATH, rackDetailPath, pathToRoute, rackIdFromPath, viewIdToPath } from "./routes";
 
 const SIDEBAR_STORAGE_KEY = "nvis-sidebar-open";
 
 const VIEW_TITLES: Record<ViewId, string> = {
-  dashboard: "Dashboard",
-  singleRack: "Single Rack",
-  multirack: "Multirack",
-  slurm: "Slurm",
+  dashboard: "Cluster overview",
+  singleRack: "Racks",
+  slurm: "Scheduler",
+  infraEthernet: "Ethernet",
+  infraIbNvlink: "IB / NVLink",
+  infraStorage: "Storage",
+  obsMetrics: "Metrics",
+  obsLogs: "Logs",
+  obsEvents: "Events",
+  multirack: "Multirack operations",
   reports: "Reports",
   analytics: "Analytics",
-  tools: "Utility",
+  tools: "Operations & Scripts",
   workflows: "Workflows",
+  terminal: "Terminal",
   settings: "Settings",
 };
 
@@ -48,14 +64,49 @@ function getInitialSidebarState(): boolean {
   }
 }
 
+/**
+ * Rack detail route element. Reads `:rackId` from the URL and resolves the row
+ * from the shared rack-status data (kept in `AppContent` so it persists across
+ * navigation). Keeps `RackDetailView`'s existing prop contract.
+ */
+function RackDetailRoute({
+  data,
+  onBack,
+}: {
+  data: RackStatusResponse | null;
+  onBack: () => void;
+}) {
+  const { rackId } = useParams<{ rackId: string }>();
+  const rack = rackId ? decodeURIComponent(rackId) : "";
+  const row =
+    data?.rows.find((r) => r.rack === rack) ??
+    data?.rows.find((r) => r.rack.toLowerCase() === rack.toLowerCase());
+
+  return (
+    <RackDetailView
+      rack={rack}
+      row={row}
+      comment={data?.comments[rack] || ""}
+      physicalRf0={data?.physical_rf0 || {}}
+      naming={data?.naming}
+      logDir={data?.log_dir}
+      onBack={onBack}
+    />
+  );
+}
+
 function AppContent() {
   const { mode, toggleTheme } = useThemeMode();
+  const location = useLocation();
+  const navigate = useNavigate();
   /** Empty = omit log_dir on /api/status so the server uses RACK_STATUS_LOG_DIR (or app default). */
   const [logDir, setLogDir] = useState("");
   const logDirSeededRef = useRef(false);
-  const [activeView, setActiveView] = useState<ViewId>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(getInitialSidebarState);
-  const [selectedRack, setSelectedRack] = useState<string | null>(null);
+
+  /** Active view + selected rack are derived from the URL (refresh-safe). */
+  const activeView: ViewId = pathToRoute(location.pathname)?.viewId ?? "dashboard";
+  const selectedRack = rackIdFromPath(location.pathname);
 
   const { data, loading, error, refresh, activeUsers } = useRackStatus(logDir);
   const {
@@ -88,22 +139,27 @@ function AppContent() {
 
   const { setPageContext } = useAIChat();
 
-  const handleNavigate = useCallback((view: ViewId) => {
-    setActiveView(view);
-    setSelectedRack(null);
-  }, []);
+  const handleNavigate = useCallback(
+    (view: ViewId) => {
+      navigate(viewIdToPath(view));
+    },
+    [navigate]
+  );
 
   useEffect(() => {
     setPageContext({ page: activeView, rack: selectedRack || undefined });
   }, [activeView, selectedRack, setPageContext]);
 
-  const handleRackSelect = useCallback((rack: string) => {
-    setSelectedRack(rack);
-  }, []);
+  const handleRackSelect = useCallback(
+    (rack: string) => {
+      navigate(rackDetailPath(rack));
+    },
+    [navigate]
+  );
 
   const handleBackToDashboard = useCallback(() => {
-    setSelectedRack(null);
-  }, []);
+    navigate(RACKS_PATH);
+  }, [navigate]);
 
   const handleCommentChange = useCallback((rack: string, comment: string | null) => {
     if (!data) return;
@@ -115,9 +171,7 @@ function AppContent() {
     refresh();
   }, [data, refresh]);
 
-  const toolbarTitle = selectedRack
-    ? selectedRack
-    : VIEW_TITLES[activeView];
+  const toolbarTitle = selectedRack ? selectedRack : VIEW_TITLES[activeView];
 
   return (
     <AppLayout
@@ -145,55 +199,64 @@ function AppContent() {
           logDir={logDir}
         />
       }
+      breadcrumbs={<AppBreadcrumbs />}
       backendMode={data?.native_workers?.mode}
     >
       <RackCommandsStoreProvider>
-        {activeView === "dashboard" && (
-          <ClusterDashboardView
-            data={clusterOverview}
-            loading={clusterLoading}
-            error={clusterError}
-            onClusterMetadataSaved={refreshCluster}
-          />
-        )}
-        {activeView === "singleRack" && !selectedRack && (
-          <SingleRackView
-            data={data}
-            loading={loading}
-            error={error}
-            onRackSelect={handleRackSelect}
-            onCommentChange={handleCommentChange}
-          />
-        )}
-        {activeView === "singleRack" && selectedRack && (
-          <RackDetailView
-            rack={selectedRack}
-            row={
-              data?.rows.find((r) => r.rack === selectedRack) ??
-              data?.rows.find((r) => r.rack.toLowerCase() === selectedRack.toLowerCase())
+        <Routes>
+          <Route path="/" element={<Navigate to={DEFAULT_PATH} replace />} />
+          <Route
+            path="/compute/overview"
+            element={
+              <ClusterDashboardView
+                data={clusterOverview}
+                loading={clusterLoading}
+                error={clusterError}
+                onClusterMetadataSaved={refreshCluster}
+              />
             }
-            comment={data?.comments[selectedRack] || ""}
-            physicalRf0={data?.physical_rf0 || {}}
-            naming={data?.naming}
-            logDir={data?.log_dir}
-            onBack={handleBackToDashboard}
           />
-        )}
-        {activeView === "multirack" && <MultirackView data={data} logDir={logDir} />}
-        {activeView === "slurm" && <SlurmView logDir={logDir} />}
-        {activeView === "reports" && <ReportsView />}
-        {activeView === "analytics" && (
-          <AnalyticsView logDir={logDir} rows={data?.rows ?? []} />
-        )}
-        {activeView === "tools" && <ToolsView logDir={logDir} />}
-        {activeView === "workflows" && <WorkflowsView rackData={data} />}
-        {activeView === "settings" && (
-          <SettingsView
-            logDir={logDir}
-            onLogDirChange={setLogDir}
-            onDashboardEnvSaved={refreshAll}
+          <Route
+            path="/compute/racks"
+            element={
+              <SingleRackView
+                data={data}
+                loading={loading}
+                error={error}
+                onRackSelect={handleRackSelect}
+                onCommentChange={handleCommentChange}
+              />
+            }
           />
-        )}
+          <Route
+            path="/compute/racks/:rackId"
+            element={<RackDetailRoute data={data} onBack={handleBackToDashboard} />}
+          />
+          <Route path="/compute/multirack" element={<MultirackView data={data} logDir={logDir} />} />
+          <Route path="/compute/scheduler" element={<SlurmView logDir={logDir} />} />
+          <Route path="/infrastructure/ethernet" element={<InfrastructureView segment="ethernet" />} />
+          <Route path="/infrastructure/ib-nvlink" element={<InfrastructureView segment="ib-nvlink" />} />
+          <Route path="/infrastructure/storage" element={<InfrastructureView segment="storage" />} />
+          <Route path="/observability/metrics" element={<MetricsView />} />
+          <Route path="/observability/logs" element={<LogsView />} />
+          <Route path="/observability/events" element={<EventsView />} />
+          <Route path="/tools/operations" element={<ToolsView logDir={logDir} />} />
+          <Route path="/tools/workflows" element={<WorkflowsView rackData={data} />} />
+          <Route path="/tools/terminal" element={<TerminalPlaceholderView />} />
+          <Route path="/analytics/overview" element={<AnalyticsView logDir={logDir} rows={data?.rows ?? []} />} />
+          <Route path="/analytics/reports" element={<ReportsView />} />
+          <Route
+            path="/settings"
+            element={
+              <SettingsView
+                logDir={logDir}
+                onLogDirChange={setLogDir}
+                onDashboardEnvSaved={refreshAll}
+              />
+            }
+          />
+          <Route path="*" element={<Navigate to={DEFAULT_PATH} replace />} />
+        </Routes>
       </RackCommandsStoreProvider>
       <AIChatWidget />
     </AppLayout>
@@ -235,9 +298,11 @@ export default function App() {
 
   return (
     <ThemeProvider>
-      <AuthProvider>
-        <AuthGate />
-      </AuthProvider>
+      <HashRouter>
+        <AuthProvider>
+          <AuthGate />
+        </AuthProvider>
+      </HashRouter>
     </ThemeProvider>
   );
 }

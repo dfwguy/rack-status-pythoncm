@@ -21,6 +21,7 @@ import { Layers, LineChart } from "lucide-react";
 import Tooltip from "@mui/material/Tooltip";
 import IconButton from "@mui/material/IconButton";
 import { PageHeader } from "../components/layout/PageHeader";
+import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { ParserResultsDialog } from "../components/ParserResultsDialog";
 import { TailLogDialog } from "../components/TailLogDialog";
 import {
@@ -284,7 +285,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   }, [fetchMultirackStatus]);
 
   return (
-    <Box sx={{ maxWidth: 1400, mx: "auto", p: 4 }}>
+    <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader
         title="Multirack Validation"
         description="Cross-rack NEMO validation runs spanning multiple racks."
