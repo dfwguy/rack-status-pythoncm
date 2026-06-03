@@ -10,6 +10,9 @@ alwaysApply: false
 
 NVIDIA Kaizen UI (`@nvidia/foundations-react-core`) is the **primary** UI framework. MUI is **secondary** — retained only for complex widgets with no KUI equivalent. When building new features, always reach for KUI first.
 
+Full KUI reference (components, guidelines, CSS variables): https://webassets.nvidia.com/kaizen-ui-foundations/docs/llms.txt
+See `kui-components.mdc` for the complete component catalog with KUI-to-MUI migration mappings.
+
 ## KUI vs MUI Decision Table
 
 | Need | Use KUI | Do NOT use MUI |
@@ -78,4 +81,5 @@ import { CircleCheck, Ellipsis, ArrowDownToLine } from "lucide-react";
 import { Bar, Line } from "react-chartjs-2";
 ```
 
-Full KUI docs: `https://webassets.nvidia.com/kaizen-ui-foundations/docs/components/<Component>.txt`
+Full KUI docs: https://webassets.nvidia.com/kaizen-ui-foundations/docs/llms.txt
+Per-component docs: `https://webassets.nvidia.com/kaizen-ui-foundations/docs/components/<Component>.txt`

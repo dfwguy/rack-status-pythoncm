@@ -26,6 +26,7 @@ import {
 } from "chart.js";
 import { Line, Bar } from "react-chartjs-2";
 import { PageHeader } from "../components/layout/PageHeader";
+import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import type { RackRow } from "../types/api";
 
 ChartJS.register(
@@ -407,7 +408,7 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
     "Rows highlight red when outside tolerance: |% vs median| (NCCL deviation) or |% vs fleet mean| (Nemotron) exceeds this value. Band is |Δ%| ≤ value (strictly greater fails). Nemotron scaling efficiency table is not checked.";
 
   return (
-    <Box sx={{ maxWidth: 1400, mx: "auto", p: 4 }}>
+    <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader
         title="Analytics"
         description="Compare NCCL and Nemotron metrics from parser output: single-rack uses the newest successful 1Rack log per rack with validation done; multirack uses successful multirack logs only."

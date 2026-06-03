@@ -6,16 +6,19 @@ interface AppLayoutProps {
   sidebar: ReactNode;
   toolbar: ReactNode;
   children: ReactNode;
+  /** Optional breadcrumb bar rendered between the toolbar and main content. */
+  breadcrumbs?: ReactNode;
   backendMode?: string;
 }
 
-export function AppLayout({ sidebar, toolbar, children, backendMode }: AppLayoutProps) {
+export function AppLayout({ sidebar, toolbar, children, breadcrumbs, backendMode }: AppLayoutProps) {
   return (
     <Box sx={{ display: "flex", minHeight: "100vh", overflow: "hidden" }}>
       {sidebar}
 
       <Box sx={{ flexGrow: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         {toolbar}
+        {breadcrumbs}
 
         <Box component="main" sx={{ flexGrow: 1, bgcolor: "background.default", overflow: "auto" }}>
           {children}

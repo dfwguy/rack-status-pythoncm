@@ -1,6 +1,7 @@
 import Box from "@mui/material/Box";
 import { Text } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
+import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { SqueuePanel } from "../components/SqueuePanel";
 import { SinfoPanel } from "../components/SinfoPanel";
 
@@ -10,7 +11,7 @@ interface SlurmViewProps {
 
 export function SlurmView({ logDir }: SlurmViewProps) {
   return (
-    <Box sx={{ maxWidth: 1600, mx: "auto", p: 4 }}>
+    <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader title="Slurm" description="Live squeue and sinfo -R --long from the dashboard host (same APIs as the legacy toolbar)." />
 
       <Text kind="body/regular/sm" style={{ marginBottom: 16, display: "block", color: "var(--text-color-secondary)" }}>

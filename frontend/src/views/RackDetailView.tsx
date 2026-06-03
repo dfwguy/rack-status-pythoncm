@@ -14,6 +14,7 @@ import { ServicesTab } from "../components/rack/ServicesTab";
 import { ParserResultsDialog } from "../components/ParserResultsDialog";
 import WebTerminalDialog from "../components/rack/WebTerminalDialog";
 import { RackCommandProvider } from "../context/RackCommandContext";
+import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import type { RackRow } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 
@@ -62,7 +63,7 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
 
   return (
     <RackCommandProvider rack={rack} logDir={logDir} jobId={row?.last_job}>
-      <Box sx={{ maxWidth: 1200, mx: "auto", p: 4 }}>
+      <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 3, flexWrap: "wrap" }}>
           <Button kind="tertiary" size="small" onClick={onBack}>
             <ArrowLeft size={18} style={{ marginRight: 4 }} />

@@ -9,6 +9,8 @@ import DialogActions from "@mui/material/DialogActions";
 import TextField from "@mui/material/TextField";
 import { Text, Button } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
+import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
+import { StatTile, InfoTile } from "../components/dashboard/StatTiles";
 import { LoadingSkeleton } from "../components/LoadingSkeleton";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { ClusterSqueueOverview } from "../components/ClusterSqueueOverview";
@@ -20,6 +22,8 @@ const NVFTP_TOKENS_URL =
 
 const NVIDIA_GREEN = "#76B900";
 const NVIDIA_GREEN_DIM = "rgba(118, 185, 0, 0.14)";
+const STATUS_RED = "var(--text-color-error, #f44336)";
+const STATUS_YELLOW = "#f2c94c";
 
 interface ClusterDashboardViewProps {
   data: ClusterOverviewResponse | null;
@@ -33,40 +37,6 @@ const emptyMeta = (): ClusterDashboardMetadata => ({
   hw_vendor: "",
   customer_name: "",
 });
-
-function MetricCard({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string | number;
-  hint?: string;
-}) {
-  return (
-    <Paper
-      variant="outlined"
-      sx={{
-        p: 2,
-        height: "100%",
-        borderTop: `3px solid ${NVIDIA_GREEN}`,
-        bgcolor: NVIDIA_GREEN_DIM,
-      }}
-    >
-      <Text kind="body/regular/sm" style={{ display: "block", textTransform: "uppercase", letterSpacing: 0.06, color: "var(--text-color-secondary)" }}>
-        {label}
-      </Text>
-      <Text kind="title/sm" style={{ display: "block", marginTop: 4, fontWeight: 600, wordBreak: "break-word" }}>
-        {value}
-      </Text>
-      {hint && (
-        <Text kind="body/regular/sm" style={{ display: "block", marginTop: 4, color: "var(--text-color-secondary)" }}>
-          {hint}
-        </Text>
-      )}
-    </Paper>
-  );
-}
 
 export function ClusterDashboardView({
   data,
@@ -339,7 +309,7 @@ export function ClusterDashboardView({
   return (
     <Box
       sx={{
-        maxWidth: 1200,
+        maxWidth: CONTENT_MAX_WIDTH.comfortable,
         mx: "auto",
         p: 4,
         borderTop: `4px solid ${NVIDIA_GREEN}`,
@@ -495,19 +465,29 @@ export function ClusterDashboardView({
 
       {data && (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          {s && (
-            <Paper variant="outlined" sx={{ p: 2, borderLeft: `4px solid ${NVIDIA_GREEN}` }}>
-              <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 8, color: "var(--text-color-secondary)" }}>
-                Rack validation states (summary)
-              </Text>
-              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-                <Text kind="body/regular/sm">Done: <strong style={{ color: NVIDIA_GREEN }}>{s.done}</strong></Text>
-                <Text kind="body/regular/sm">Fail: <strong>{s.fail}</strong></Text>
-                <Text kind="body/regular/sm">Ongoing: <strong>{s.ongoing}</strong></Text>
-                <Text kind="body/regular/sm">Pending: <strong>{s.pending}</strong></Text>
-              </Box>
-            </Paper>
-          )}
+          <Box>
+            <Text
+              kind="body/bold/sm"
+              style={{ display: "block", marginBottom: 12, color: "var(--text-color-secondary)", textTransform: "uppercase", letterSpacing: 0.06 }}
+            >
+              Cluster statistics
+            </Text>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                gap: 2,
+              }}
+            >
+              <StatTile label="Racks" value={data.rack_count} unit="total" />
+              <StatTile label="Nodes" value={data.tray_hosts} unit="trays" />
+              {s && <StatTile label="Done" value={s.done} accentColor={NVIDIA_GREEN} unit="racks" />}
+              {s && <StatTile label="Failed" value={s.fail} accentColor={s.fail > 0 ? STATUS_RED : undefined} unit="racks" />}
+              {s && <StatTile label="Ongoing" value={s.ongoing} accentColor={s.ongoing > 0 ? STATUS_YELLOW : undefined} unit="racks" />}
+              {s && <StatTile label="Pending" value={s.pending} unit="racks" />}
+              <StatTile label="Dashboard users" value={connected} unit="online" />
+            </Box>
+          </Box>
 
           <Paper
             elevation={0}
@@ -598,40 +578,36 @@ export function ClusterDashboardView({
               </Box>
             </Box>
 
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2, mt: 2 }}>
-              <Paper variant="outlined" sx={{ px: 2, py: 1, borderColor: "rgba(118, 185, 0, 0.5)" }}>
-                <Text kind="body/regular/sm" style={{ display: "block", color: "var(--text-color-secondary)" }}>
-                  Dashboard users (approx.)
-                </Text>
-                <Text kind="display/sm" style={{ display: "block", fontWeight: 800, color: NVIDIA_GREEN, lineHeight: 1.1 }}>
-                  {connected}
-                </Text>
-              </Paper>
-              {data.status_updated_at && (
-                <Text kind="body/regular/sm" style={{ alignSelf: "flex-end", color: "var(--text-color-secondary)" }}>
+            {data.status_updated_at && (
+              <Box sx={{ mt: 2 }}>
+                <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
                   Rack status cache: {data.status_updated_at}
                 </Text>
-              )}
-            </Box>
+              </Box>
+            )}
           </Paper>
 
-          <Box
-            sx={{
-              display: "grid",
-              gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)", md: "repeat(3, 1fr)" },
-              gap: 2,
-            }}
-          >
-            <MetricCard label="Product line" value={data.product_line} hint="RACK_CLUSTER_PRODUCT_LINE" />
-            <MetricCard label="HW vendor" value={data.hw_vendor} hint="RACK_CLUSTER_HW_VENDOR" />
-            <MetricCard
-              label="BCM version"
-              value={data.bcm_version}
-              hint='RACK_CLUSTER_BCM_VERSION, else cmsh -c "main; versioninfo"'
-            />
-            <MetricCard label="Slurm version" value={data.slurm_version} hint="RACK_CLUSTER_SLURM_VERSION, else Slurm on head" />
-            <MetricCard label="NEMO container" value={data.nemo_container} hint="RACK_CLUSTER_NEMO_* or NEMO_SQSH_SRC" />
-            <MetricCard label="Dashboard build" value={data.app_version} hint="RACK_WEB_VERSION" />
+          <Box>
+            <Text
+              kind="body/bold/sm"
+              style={{ display: "block", marginBottom: 12, color: "var(--text-color-secondary)", textTransform: "uppercase", letterSpacing: 0.06 }}
+            >
+              Environment & versions
+            </Text>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)", md: "repeat(3, 1fr)" },
+                gap: 2,
+              }}
+            >
+              <InfoTile label="Product line" value={data.product_line} hint="RACK_CLUSTER_PRODUCT_LINE" />
+              <InfoTile label="HW vendor" value={data.hw_vendor} hint="RACK_CLUSTER_HW_VENDOR" />
+              <InfoTile label="BCM version" value={data.bcm_version} mono hint='RACK_CLUSTER_BCM_VERSION, else cmsh versioninfo' />
+              <InfoTile label="Slurm version" value={data.slurm_version} mono hint="RACK_CLUSTER_SLURM_VERSION, else Slurm on head" />
+              <InfoTile label="NEMO container" value={data.nemo_container} mono hint="RACK_CLUSTER_NEMO_* or NEMO_SQSH_SRC" />
+              <InfoTile label="Dashboard build" value={data.app_version} mono hint="RACK_WEB_VERSION" />
+            </Box>
           </Box>
 
           <ClusterSqueueOverview squeue={data.squeue} />

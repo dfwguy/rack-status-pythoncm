@@ -10,6 +10,7 @@ import TableRow from "@mui/material/TableRow";
 import LinearProgress from "@mui/material/LinearProgress";
 import { Text, Button, Banner } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
+import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 
 type BugReportItem = { host: string; name: string };
 
@@ -137,7 +138,7 @@ export function ReportsView() {
   const metaLines = [baseDir ? `Directory: ${baseDir}` : "", notice || ""].filter(Boolean);
 
   return (
-    <Box sx={{ maxWidth: 1200, mx: "auto", p: 4 }}>
+    <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader
         title="Reports"
         description="Browse NVIDIA bug report archives and NVLMapper outputs on this dashboard host (same as legacy Download Reports)."
