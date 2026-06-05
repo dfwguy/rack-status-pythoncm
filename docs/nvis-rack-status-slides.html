@@ -80,10 +80,11 @@
         <section>
           <h2>High-level architecture</h2>
           <ul class="compact">
-            <li><strong>app.py</strong> — routes, JSON APIs, background threads for long jobs</li>
-            <li><strong>native_status.py</strong> — builds the default status table (cmsh + ds + Slurm + log probes)</li>
-            <li><strong>bin/scripts/</strong> — <code>rack_status.sh</code>, <code>parser.sh</code>, power/GPU/NVSwitch helpers, etc.</li>
-            <li><strong>var/cache/</strong> — cached probe JSON, rack list, log analysis (tunable via env)</li>
+            <li><strong>backend/</strong> — Python backend package (run with cwd at the repo root)</li>
+            <li><strong>backend/app.py</strong> — routes, JSON APIs, background threads for long jobs</li>
+            <li><strong>backend/native_status.py</strong> — builds the default status table (cmsh + ds + Slurm + log probes)</li>
+            <li><strong>bin/scripts/</strong> — <code>rack_status.sh</code>, <code>parser.sh</code>, power/GPU/NVSwitch helpers, etc. (repo root)</li>
+            <li><strong>var/cache/</strong> — cached probe JSON, rack list, log analysis (repo root; tunable via env)</li>
           </ul>
         </section>
 
@@ -198,10 +199,10 @@
           <h2>How to run it</h2>
           <pre><code data-trim>cd nvis-rack-status
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 export PORT=5000   # optional
-python3 app.py</code></pre>
-          <p class="muted">See README.md and <code>app.py</code> module docstring for full env reference.</p>
+python3 backend/app.py</code></pre>
+          <p class="muted">See README.md and the <code>backend/app.py</code> module docstring for full env reference.</p>
         </section>
 
         <section>

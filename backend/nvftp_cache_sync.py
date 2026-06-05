@@ -34,7 +34,9 @@ import token_vault
 _logger = logging.getLogger(__name__)
 
 APP_DIR = Path(__file__).resolve().parent
-CACHE_DIR = (APP_DIR / "var" / "cache").resolve()
+# Cache lives under repo-root var/ (parent of backend/).
+REPO_ROOT = APP_DIR.parent
+CACHE_DIR = (REPO_ROOT / "var" / "cache").resolve()
 SYNC_STATE_FILE = CACHE_DIR / "nvftp_sync_state.json"
 
 _DEFAULT_HOST = "transfer.nvftp.nvidia.com"
@@ -160,11 +162,11 @@ def _sync_remote_root(project: str) -> str:
 
 
 def _comments_file() -> Path:
-    """Path to rack comments JSON (``RACK_COMMENTS_FILE`` or ``APP_DIR/rack_comments.json``)."""
+    """Path to rack comments JSON (``RACK_COMMENTS_FILE`` or ``REPO_ROOT/rack_comments.json``)."""
     raw = _eget("RACK_COMMENTS_FILE", "")
     if raw:
         return Path(os.path.expanduser(raw)).resolve()
-    return (APP_DIR / "rack_comments.json").resolve()
+    return (REPO_ROOT / "rack_comments.json").resolve()
 
 
 def _is_syncable_cache_file(name: str) -> bool:

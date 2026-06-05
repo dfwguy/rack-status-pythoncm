@@ -34,9 +34,11 @@ from typing import Iterable
 _logger = logging.getLogger(__name__)
 
 APP_DIR = Path(__file__).resolve().parent
+# Lock claims persist under repo-root var/ (parent of backend/).
+REPO_ROOT = APP_DIR.parent
 CLAIMS_FILE = Path(
     os.environ.get("RACK_LOCKS_FILE", "")
-    or str(APP_DIR / "var" / "cache" / "rack_locks.json")
+    or str(REPO_ROOT / "var" / "cache" / "rack_locks.json")
 )
 
 CLAIM_DEFAULT_TTL_SEC = 1800       # 30 min

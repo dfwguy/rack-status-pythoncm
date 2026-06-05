@@ -372,7 +372,7 @@ Pros: scales with new domains, deep-linkable, matches the mental model, cleanest
 
 ## 9. Observability component design
 
-Today, observability is **validation-log-centric** (Chart.js in `[frontend/src/components/ParserResultsDialog.tsx](frontend/src/components/ParserResultsDialog.tsx)` and `[frontend/src/views/AnalyticsView.tsx](frontend/src/views/AnalyticsView.tsx)`), and **Grafana is hidden** — two `/d-solo/` iframes on the parser "NEMO + GPU" tab (`[frontend/src/components/ParserGrafanaEmbeds.tsx](frontend/src/components/ParserGrafanaEmbeds.tsx)`). A backend route `GET /api/rack-grafana-live-charts` exists in `[app.py](app.py)` but **has no frontend caller**, and `soloUrl()` ignores the log-aligned `from/to` window the backend computes.
+Today, observability is **validation-log-centric** (Chart.js in `[frontend/src/components/ParserResultsDialog.tsx](frontend/src/components/ParserResultsDialog.tsx)` and `[frontend/src/views/AnalyticsView.tsx](frontend/src/views/AnalyticsView.tsx)`), and **Grafana is hidden** — two `/d-solo/` iframes on the parser "NEMO + GPU" tab (`[frontend/src/components/ParserGrafanaEmbeds.tsx](frontend/src/components/ParserGrafanaEmbeds.tsx)`). A backend route `GET /api/rack-grafana-live-charts` exists in `[backend/app.py](backend/app.py)` but **has no frontend caller**, and `soloUrl()` ignores the log-aligned `from/to` window the backend computes.
 
 ### 9.1 The observability tripod
 
@@ -405,7 +405,7 @@ flowchart TB
   Scope --> Grid["KUI Grid of Cards, one per Grafana panel/dashboard"]
 ```
 
-- **Scope selector** (cluster / rack / node) using KUI `Combobox` or `SegmentedControl`, driving the Grafana `var-job_host_regex` (reuse backend regex builders in `app.py`) and filtering logs/events. This mirrors the macro→micro compute hierarchy and is shared across all tripod tabs.
+- **Scope selector** (cluster / rack / node) using KUI `Combobox` or `SegmentedControl`, driving the Grafana `var-job_host_regex` (reuse backend regex builders in `backend/app.py`) and filtering logs/events. This mirrors the macro→micro compute hierarchy and is shared across all tripod tabs.
 - **Metrics tab** — Grafana embeds laid out as KUI `Card`s in a `Grid` (GPU thermal, GPU power, and additional panels), not buried in a dialog. Each card is a `/d-solo/` iframe.
 - **Logs tab** — surfaces parser/job/tail output for the selected scope (reuse `TailLogDialog`/parser data inline rather than only in a modal).
 - **Events tab** — a chronological timeline of state changes (drains, job lifecycle, power ops, lock claims, alerts) rendered with KUI `List`/`Tag`/`StatusIndicator`; sourced from existing status/command/lock data.

@@ -27,8 +27,10 @@ _logger = logging.getLogger(__name__)
 _WORKFLOW_RACK_RE = re.compile(r"\bp[0-9]+-r[0-9]+\b", re.IGNORECASE)
 
 APP_DIR = Path(__file__).resolve().parent
+# Workflow definitions/runs live under repo-root var/ (parent of backend/).
+REPO_ROOT = APP_DIR.parent
 WORKFLOWS_DIR = Path(
-    os.environ.get("RACK_WORKFLOWS_DIR", "") or str(APP_DIR / "var" / "workflows")
+    os.environ.get("RACK_WORKFLOWS_DIR", "") or str(REPO_ROOT / "var" / "workflows")
 )
 RUNS_DIR = WORKFLOWS_DIR / "runs"
 

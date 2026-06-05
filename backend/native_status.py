@@ -37,7 +37,9 @@ import nvis_id_templates as _nvis_ids
 from platforms import get_platform as _get_platform
 
 _PKG_DIR = Path(__file__).resolve().parent
-_NATIVE_LOG_JSON = _PKG_DIR / "var" / "cache" / "native_log_analysis.json"
+# Runtime cache lives under repo-root var/ (parent of backend/).
+_REPO_ROOT = _PKG_DIR.parent
+_NATIVE_LOG_JSON = _REPO_ROOT / "var" / "cache" / "native_log_analysis.json"
 
 
 def _job_env_overrides_file() -> Path:
@@ -45,7 +47,7 @@ def _job_env_overrides_file() -> Path:
     raw = (os.environ.get("NVIS_JOB_ENV_OVERRIDES_FILE") or "").strip()
     if raw:
         return Path(raw).resolve()
-    return _PKG_DIR / "var" / "cache" / "job_env_overrides.json"
+    return _REPO_ROOT / "var" / "cache" / "job_env_overrides.json"
 
 # cmsh ``ds`` output: default one regex per line via ``finditer``; three capture groups (hostname, rack, tray).
 _DEFAULT_CMSH_DS_NODE_PATTERN = r"(?i)((p\d+-r\d+)-ct(\d+))"
@@ -256,7 +258,7 @@ def _condense_tray_tokens(nums_s: str) -> str:
     return ",".join(uniq)
 
 
-_MULTIRACK_LOG_JSON = _PKG_DIR / "var" / "cache" / "native_multirack_log_analysis.json"
+_MULTIRACK_LOG_JSON = _REPO_ROOT / "var" / "cache" / "native_multirack_log_analysis.json"
 
 _MULTIRACK_N_RACK_RE = re.compile(r"(?:[2-9]|[1-9]\d{1,3})rack", re.IGNORECASE)
 

@@ -65,7 +65,7 @@ python-lint:
       - .pip-cache/
   script:
     - pip install -q ruff
-    - ruff check app.py native_status.py demo_data.py host_exec.py platforms/ rack_locks.py token_vault.py nvftp_cache_sync.py
+    - ruff check backend/ --exclude tests
     - bash scripts/check_no_vault_in_git.sh
   allow_failure: true
 
@@ -92,8 +92,10 @@ python-test:
     paths:
       - .pip-cache/
   script:
-    - pip install -q -r requirements.txt pytest pytest-cov
-    - python -m pytest tests/ -v --tb=short --junitxml=report-python.xml --cov=ai_chat --cov=workflow_engine --cov-report=term-missing
+    - pip install -q -r backend/requirements.txt pytest pytest-cov
+    # Run from the repo root so backend modules resolve repo-root assets (var/, etc.);
+    # pytest adds backend/ to sys.path via the backend/tests package.
+    - python -m pytest backend/tests/ -v --tb=short --junitxml=report-python.xml --cov=ai_chat --cov=workflow_engine --cov-report=term-missing
   coverage: '/TOTAL.+\s(\d+%)/'
   artifacts:
     when: always

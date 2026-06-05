@@ -92,7 +92,7 @@ source ".venv/bin/activate"
 
 echo "[start.sh] installing python deps"
 python -m pip install --upgrade pip -q
-pip install -r requirements.txt -q
+pip install -r backend/requirements.txt -q
 
 # ---- Frontend build (React SPA) ----
 # ---- Frontend build (React SPA) ----
@@ -135,4 +135,6 @@ else
 fi
 
 echo "[start.sh] starting Flask on port ${PORT}"
-exec python app.py
+# Run from the repo root (cwd) so backend modules resolve repo-root assets
+# (bin/, static/spa, var/, help_content.json); app.py adds backend/ to sys.path itself.
+exec python backend/app.py

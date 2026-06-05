@@ -27,7 +27,9 @@ from cryptography.fernet import Fernet, InvalidToken
 _logger = logging.getLogger(__name__)
 
 APP_DIR = Path(__file__).resolve().parent
-VAULT_DIR = Path(os.environ.get("NVIS_TOKEN_VAULT_DIR", "") or str(APP_DIR / "var" / "secrets"))
+# Secrets vault lives under repo-root var/ (parent of backend/).
+REPO_ROOT = APP_DIR.parent
+VAULT_DIR = Path(os.environ.get("NVIS_TOKEN_VAULT_DIR", "") or str(REPO_ROOT / "var" / "secrets"))
 NVFTP_VAULT_FILE = VAULT_DIR / "nvftp_token.vault.json"
 FLOCK_FILE = VAULT_DIR / "nvftp_token.vault.flock"
 

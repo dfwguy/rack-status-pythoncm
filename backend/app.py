@@ -94,11 +94,14 @@ from flask import (
 )
 
 APP_DIR = Path(__file__).resolve().parent
+# Repo root (parent of backend/) holds runtime assets that live outside the Python
+# tree: bin/scripts, static/spa, var/, help_content.json, rack_comments.json.
+REPO_ROOT = APP_DIR.parent
 # Canonical overrides file for this install; native_status reads the same path via this env
 # (set before ``import native_status`` so the first mtime load targets the app tree).
 os.environ.setdefault(
     "NVIS_JOB_ENV_OVERRIDES_FILE",
-    str((APP_DIR / "var" / "cache" / "job_env_overrides.json").resolve()),
+    str((REPO_ROOT / "var" / "cache" / "job_env_overrides.json").resolve()),
 )
 _app_dir_s = str(APP_DIR)
 if _app_dir_s not in sys.path:
@@ -128,8 +131,8 @@ if _REMOTE_BASE:
     SCRIPTS_DIR = Path(_REMOTE_BASE) / "bin" / "scripts"
     DEFAULT_LOG_DIR = Path(_REMOTE_BASE) / "var" / "logs"
 else:
-    SCRIPTS_DIR = APP_DIR / "bin" / "scripts"
-    DEFAULT_LOG_DIR = APP_DIR / "var" / "logs"
+    SCRIPTS_DIR = REPO_ROOT / "bin" / "scripts"
+    DEFAULT_LOG_DIR = REPO_ROOT / "var" / "logs"
 
 DEFAULT_SCRIPT = SCRIPTS_DIR / "rack_status.sh"
 # Output basename for Tools → 05-download-containers.sh (must match script).
@@ -142,7 +145,7 @@ def _script_exists(path: Path) -> bool:
         return True
     return path.is_file()
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=str(REPO_ROOT / "static"), static_url_path="/static")
 _logger = logging.getLogger(__name__)
 
 try:
@@ -721,7 +724,7 @@ def _job_env_status_payload_needs_rebuild(before: dict[str, str], after: dict[st
 
 
 def _job_env_overrides_path() -> Path:
-    return (APP_DIR / "var" / "cache" / "job_env_overrides.json").resolve()
+    return (REPO_ROOT / "var" / "cache" / "job_env_overrides.json").resolve()
 
 
 def _job_env_flock_path() -> Path:
@@ -793,7 +796,7 @@ def _tools_exclusive_lock_path(lock_name: str) -> Path:
     fname = _TOOL_EXCLUSIVE_LOCK_FILES.get(lock_name)
     if not fname:
         raise ValueError(f"unknown tools lock: {lock_name!r}")
-    p = (APP_DIR / "var" / "cache" / fname).resolve()
+    p = (REPO_ROOT / "var" / "cache" / fname).resolve()
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -1804,7 +1807,7 @@ def _session_lifetime() -> timedelta:
     return timedelta(hours=h)
 
 
-_RACK_WEB_SECRET_FILE = (APP_DIR / "var" / "secrets" / ".rack_web_secret_key").resolve()
+_RACK_WEB_SECRET_FILE = (REPO_ROOT / "var" / "secrets" / ".rack_web_secret_key").resolve()
 
 
 def _bootstrap_rack_web_secret_key() -> None:
@@ -3506,7 +3509,7 @@ def run_cmsh_power_reset(specs: list[str]) -> list[dict]:
 
 
 def _comments_file() -> Path:
-    return Path(os.environ.get("RACK_COMMENTS_FILE", str(APP_DIR / "rack_comments.json"))).resolve()
+    return Path(os.environ.get("RACK_COMMENTS_FILE", str(REPO_ROOT / "rack_comments.json"))).resolve()
 
 
 def _normalize_rack_id(rack: str) -> str:
@@ -3881,7 +3884,7 @@ def parse_rack_output(text: str) -> dict:
 
 _CMSH_RACK_LIST_LOCK = threading.Lock()
 _CMSH_RACK_LIST_STATE: str = "pending"  # pending | ok | failed
-_CMSH_RACK_LIST_PATH = APP_DIR / "var" / "cache" / "cmsh_rack_list.txt"
+_CMSH_RACK_LIST_PATH = REPO_ROOT / "var" / "cache" / "cmsh_rack_list.txt"
 _CMSH_RACK_LIST_WARM_THREAD_STARTED = False
 _CMSH_RACK_WARM_START_LOCK = threading.Lock()
 
@@ -8194,7 +8197,7 @@ def _nemotron_scaling_append_entry(
 
 
 _analytics_aggregate_cache_lock = threading.Lock()
-_ANALYTICS_AGG_CACHE_PATH = (APP_DIR / "var" / "cache" / "analytics_aggregate_cache.json").resolve()
+_ANALYTICS_AGG_CACHE_PATH = (REPO_ROOT / "var" / "cache" / "analytics_aggregate_cache.json").resolve()
 
 
 def _analytics_rows_fingerprint(rows_in: object) -> str:
@@ -8700,7 +8703,7 @@ def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
 
 
 _LOG_ANALYSIS_CACHE_VERSION = 1
-_LOG_ANALYSIS_CACHE_PATH = APP_DIR / "var" / "cache" / "log_analysis_cache.json"
+_LOG_ANALYSIS_CACHE_PATH = REPO_ROOT / "var" / "cache" / "log_analysis_cache.json"
 
 
 def _glob_one_rack_nemo_logs_for_rack_status(log_dir: Path) -> list[Path]:
@@ -10492,7 +10495,7 @@ def api_tools_download_containers():
         with _tools_exclusive_lock("download_containers"):
             proc = subprocess.run(
                 cmd,
-                cwd=str(APP_DIR),
+                cwd=str(REPO_ROOT),
                 env=_subprocess_env(),
                 capture_output=True,
                 text=True,
@@ -10593,7 +10596,7 @@ def api_tools_download_containers_stream():
         try:
             yield from _merged_stdout_stream_generator(
                 cmd,
-                str(APP_DIR),
+                str(REPO_ROOT),
                 display_cmd,
                 timeout,
                 linebuffer_env_var="RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER",
@@ -10745,7 +10748,7 @@ def api_tools_launch_grafana_bright_prometheus():
         with _tools_exclusive_lock("launch_grafana_bright_prometheus"):
             proc = subprocess.run(
                 cmd,
-                cwd=str(APP_DIR),
+                cwd=str(REPO_ROOT),
                 env=_subprocess_env(extra),
                 capture_output=True,
                 text=True,
@@ -10839,7 +10842,7 @@ def api_tools_launch_grafana_bright_prometheus_stream():
         try:
             yield from _merged_stdout_stream_generator(
                 cmd,
-                str(APP_DIR),
+                str(REPO_ROOT),
                 display_cmd,
                 timeout,
                 linebuffer_env_var="RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER",
@@ -10915,7 +10918,7 @@ def api_tools_install_hpcx_workspace():
         with _tools_exclusive_lock("install_hpcx_workspace"):
             proc = subprocess.run(
                 cmd,
-                cwd=str(APP_DIR),
+                cwd=str(REPO_ROOT),
                 env=_subprocess_env(),
                 capture_output=True,
                 text=True,
@@ -10989,7 +10992,7 @@ def api_tools_install_hpcx_workspace_stream():
         try:
             yield from _merged_stdout_stream_generator(
                 cmd,
-                str(APP_DIR),
+                str(REPO_ROOT),
                 display_cmd,
                 timeout,
                 linebuffer_env_var="RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER",
@@ -11074,7 +11077,7 @@ def api_tools_install_cuda_nccl_workspace():
         with _tools_exclusive_lock("install_cuda_nccl_workspace"):
             proc = subprocess.run(
                 cmd,
-                cwd=str(APP_DIR),
+                cwd=str(REPO_ROOT),
                 env=_subprocess_env(extra_env),
                 capture_output=True,
                 text=True,
@@ -11169,7 +11172,7 @@ def api_tools_install_cuda_nccl_workspace_stream():
         try:
             yield from _merged_stdout_stream_generator(
                 cmd,
-                str(APP_DIR),
+                str(REPO_ROOT),
                 display_cmd,
                 timeout,
                 linebuffer_env_var="RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER",
@@ -11220,7 +11223,7 @@ def api_tools_install_nvloom_workspace():
         with _tools_exclusive_lock("install_nvloom_workspace"):
             proc = subprocess.run(
                 cmd,
-                cwd=str(APP_DIR),
+                cwd=str(REPO_ROOT),
                 env=_subprocess_env(extra_env),
                 capture_output=True,
                 text=True,
@@ -11293,7 +11296,7 @@ def api_tools_install_nvloom_workspace_stream():
         try:
             yield from _merged_stdout_stream_generator(
                 cmd,
-                str(APP_DIR),
+                str(REPO_ROOT),
                 display_cmd,
                 timeout,
                 linebuffer_env_var="RACK_TOOLS_SCRIPT_STREAM_LINEBUFFER",
@@ -11741,7 +11744,7 @@ def _cluster_dashboard_metadata_path() -> Path:
     raw = (os.environ.get("RACK_CLUSTER_DASHBOARD_METADATA_FILE") or "").strip()
     if raw:
         return _resolve_path(Path(raw))
-    return (APP_DIR / "var" / "cache" / "cluster_dashboard_metadata.json").resolve()
+    return (REPO_ROOT / "var" / "cache" / "cluster_dashboard_metadata.json").resolve()
 
 
 def read_cluster_dashboard_metadata() -> dict[str, str]:
@@ -12012,7 +12015,7 @@ def api_vault_nvftp_token():
 
 @app.route("/api/cluster-dashboard-metadata", methods=["GET", "PUT"])
 def api_cluster_dashboard_metadata():
-    """GET/PUT JSON ``product_line``, ``hw_vendor``, ``customer_name`` (saved under APP_DIR when unset)."""
+    """GET/PUT JSON ``product_line``, ``hw_vendor``, ``customer_name`` (saved under REPO_ROOT/var when unset)."""
     if request.method == "GET":
         meta = read_cluster_dashboard_metadata()
         return jsonify({"ok": True, **meta})
@@ -12272,7 +12275,7 @@ def api_status():
     return jsonify(data)
 
 
-_SPA_DIR = APP_DIR / "static" / "spa"
+_SPA_DIR = REPO_ROOT / "static" / "spa"
 
 
 
