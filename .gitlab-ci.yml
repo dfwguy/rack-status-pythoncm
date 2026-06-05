@@ -213,13 +213,16 @@ release:publish-bundle:
   rules:
     - !reference [.rules:on_main_finalize_commit, rules]
   script:
-    - test -n "${BUNDLE_TAG:-}" && test -f "${BUNDLE_FILE:-}"
-    - PKG_BASE="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/nvis-rack-status-image/${BUNDLE_TAG}"
-    - echo "Uploading ${BUNDLE_FILE} → ${PKG_BASE}/"
-    - curl --fail-with-body --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "${BUNDLE_FILE}" "${PKG_BASE}/${BUNDLE_FILE}"
-    - curl --fail-with-body --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "${BUNDLE_FILE}.sha256" "${PKG_BASE}/${BUNDLE_FILE}.sha256"
-    - echo "Attaching release asset link to release ${BUNDLE_TAG} (best-effort)"
+    # Single literal block: keeps the `JOB-TOKEN: ...` header colon out of YAML's
+    # block-sequence parser (a bare `- curl ... "X: y"` item is read as a mapping).
     - |
+      set -e
+      test -n "${BUNDLE_TAG:-}" && test -f "${BUNDLE_FILE:-}"
+      PKG_BASE="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/nvis-rack-status-image/${BUNDLE_TAG}"
+      echo "Uploading ${BUNDLE_FILE} -> ${PKG_BASE}/"
+      curl --fail-with-body --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "${BUNDLE_FILE}" "${PKG_BASE}/${BUNDLE_FILE}"
+      curl --fail-with-body --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "${BUNDLE_FILE}.sha256" "${PKG_BASE}/${BUNDLE_FILE}.sha256"
+      echo "Attaching release asset link to release ${BUNDLE_TAG} (best-effort)"
       curl --fail-with-body --silent --show-error --request POST \
         --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
         --data-urlencode "name=${BUNDLE_FILE} (air-gapped Docker image)" \
