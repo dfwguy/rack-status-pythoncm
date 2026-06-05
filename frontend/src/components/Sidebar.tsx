@@ -10,6 +10,7 @@ import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import { Text, VerticalNav, type VerticalNavBaseItem } from "@nvidia/foundations-react-core";
 import { viewIdToPath } from "../routes";
+import { useOptionalHelpPanel } from "../context/HelpPanelContext";
 import {
   LayoutDashboard,
   Layers,
@@ -195,9 +196,11 @@ function navLeafItem(leaf: NavLeaf, activeView: ViewId, onNavigate: (view: ViewI
 function ExpandedNav({
   activeView,
   onNavigate,
+  onOpenHelp,
 }: {
   activeView: ViewId;
   onNavigate: (view: ViewId) => void;
+  onOpenHelp: () => void;
 }) {
   const groupItems: VerticalNavBaseItem[] = navEntries.map((entry) => {
     if (entry.kind === "leaf") {
@@ -262,7 +265,13 @@ function ExpandedNav({
       slotIcon: <HelpCircle size={ICON_SIZE} />,
       asChild: true,
       children: (
-        <a href="#" onClick={(e) => e.preventDefault()}>
+        <a
+          href="#help"
+          onClick={(e) => {
+            e.preventDefault();
+            onOpenHelp();
+          }}
+        >
           Help
         </a>
       ),
@@ -271,11 +280,11 @@ function ExpandedNav({
 
   return (
     <>
-      <Box sx={{ flexGrow: 1, overflowY: "auto", pt: 1 }}>
+      <Box component="nav" aria-label="Primary navigation" sx={{ flexGrow: 1, overflowY: "auto", pt: 1 }}>
         <VerticalNav items={groupItems} />
       </Box>
       <Divider />
-      <Box sx={{ py: 1 }}>
+      <Box component="nav" aria-label="Settings, documentation, and help" sx={{ py: 1 }}>
         <VerticalNav items={bottomItems} />
       </Box>
     </>
@@ -290,9 +299,11 @@ function ExpandedNav({
 function CollapsedRail({
   activeView,
   onNavigate,
+  onOpenHelp,
 }: {
   activeView: ViewId;
   onNavigate: (view: ViewId) => void;
+  onOpenHelp: () => void;
 }) {
   const leaves = allLeaves;
 
@@ -359,6 +370,19 @@ function CollapsedRail({
           );
         })}
         <ListItem disablePadding sx={{ display: "block" }}>
+          <Tooltip title="Help" placement="right" arrow>
+            <ListItemButton
+              onClick={onOpenHelp}
+              aria-label="Open help"
+              sx={{ minHeight: 44, px: 0, justifyContent: "center", "&:hover": { bgcolor: "action.hover" } }}
+            >
+              <ListItemIcon sx={{ minWidth: 0, justifyContent: "center", color: "text.secondary" }}>
+                <HelpCircle size={ICON_SIZE} />
+              </ListItemIcon>
+            </ListItemButton>
+          </Tooltip>
+        </ListItem>
+        <ListItem disablePadding sx={{ display: "block" }}>
           <Tooltip title="Documentation (opens in new tab)" placement="right" arrow>
             <ListItemButton
               component="a"
@@ -381,6 +405,8 @@ function CollapsedRail({
 export function Sidebar({ open, onToggle, activeView, onNavigate, projectName }: SidebarProps) {
   const width = open ? DRAWER_WIDTH_OPEN : DRAWER_WIDTH_CLOSED;
   const brandLabel = projectName?.trim() ? projectName.trim() : "Rack Status";
+  const helpPanel = useOptionalHelpPanel();
+  const openHelp = () => helpPanel?.openHelp();
 
   return (
     <Drawer
@@ -445,9 +471,9 @@ export function Sidebar({ open, onToggle, activeView, onNavigate, projectName }:
       <Divider />
 
       {open ? (
-        <ExpandedNav activeView={activeView} onNavigate={onNavigate} />
+        <ExpandedNav activeView={activeView} onNavigate={onNavigate} onOpenHelp={openHelp} />
       ) : (
-        <CollapsedRail activeView={activeView} onNavigate={onNavigate} />
+        <CollapsedRail activeView={activeView} onNavigate={onNavigate} onOpenHelp={openHelp} />
       )}
     </Drawer>
   );

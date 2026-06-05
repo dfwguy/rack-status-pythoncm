@@ -316,7 +316,7 @@ export function ClusterDashboardView({
         minHeight: "60vh",
       }}
     >
-      <PageHeader title="Overview" />
+      <PageHeader contentId="dashboard" title="Overview" />
 
       {error && <ErrorBanner message={error} />}
 

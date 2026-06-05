@@ -892,7 +892,7 @@ export function RackTable({
   const hasDown = menuRow ? hasDownDevices(menuRow.ct_down_unk) : false;
 
   return (
-    <Box>
+    <Box component="section" aria-label="Rack table: sortable, filterable list of racks and validation status">
       {/* Filter bar */}
       <Paper variant="outlined" sx={{ p: 2, mb: 1.5, opacity: selectMode ? 0.55 : 1, pointerEvents: selectMode ? "none" : "auto" }}>
         <Flex gap="3" align="end" wrap="wrap">

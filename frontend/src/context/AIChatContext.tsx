@@ -43,6 +43,15 @@ export function useAIChat(): AIChatContextType {
   return ctx;
 }
 
+/**
+ * Like `useAIChat`, but returns null instead of throwing when no provider is
+ * present. Used by always-on chrome (e.g. PageHeader) that may render in
+ * isolation (tests) or outside the authenticated app shell.
+ */
+export function useOptionalAIChat(): AIChatContextType | null {
+  return useContext(AIChatCtx);
+}
+
 let msgCounter = 0;
 function nextMsgId(): string {
   return `msg-${Date.now()}-${++msgCounter}`;

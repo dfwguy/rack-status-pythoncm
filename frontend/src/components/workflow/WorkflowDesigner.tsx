@@ -342,7 +342,7 @@ export default function WorkflowDesigner({ workflow, onSave, onRun, availableRac
   const visiblePanelCount = [showCode, showCanvas, showPreview].filter(Boolean).length;
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, overflow: "hidden" }}>
+    <Box component="section" aria-label="Workflow designer: mermaid editor and flow canvas" sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, overflow: "hidden" }}>
       {/* Toolbar */}
       <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, px: 2, py: 1, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
         <TextField

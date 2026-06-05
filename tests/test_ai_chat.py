@@ -75,8 +75,10 @@ class TestBuildSystemPrompt:
         assert "NVIS Rack Status AI Assistant" in prompt
 
     def test_dashboard_context(self):
+        # Page context is now sourced from the help-content registry.
         prompt = ai_chat.build_system_prompt({"page": "dashboard"})
-        assert "cluster dashboard" in prompt
+        assert "dashboard" in prompt.lower()
+        assert "Cluster overview" in prompt
 
     def test_rack_context(self):
         prompt = ai_chat.build_system_prompt({"page": "singleRack", "rack": "p34-r07"})

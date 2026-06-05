@@ -1,0 +1,95 @@
+"""App knowledge / help content — backend loader.
+
+Reads `help_content.json` (generated from the canonical TypeScript registry in
+`frontend/src/content` via `frontend/scripts/gen-help-content.mjs`) so the Flask
+backend can serve the same content the frontend uses and enrich the AI system
+prompt with per-page context.
+
+The JSON is the "hybrid" mirror: the frontend pushes page context directly to
+the AI, and this module is the server-side fallback plus the source for the
+`/api/help/content` endpoints.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+from pathlib import Path
+
+_logger = logging.getLogger(__name__)
+
+APP_DIR = Path(__file__).resolve().parent
+HELP_CONTENT_FILE = APP_DIR / "help_content.json"
+
+_lock = threading.Lock()
+_cache: dict | None = None
+
+
+def _load() -> dict:
+    """Loads and caches the help content JSON. Returns {} if missing/invalid."""
+    global _cache
+    with _lock:
+        if _cache is not None:
+            return _cache
+        try:
+            with open(HELP_CONTENT_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            _logger.warning("help_content.json could not be loaded: %s", exc)
+            _cache = {"count": 0, "entries": [], "by_id": {}}
+            return _cache
+
+        entries = data.get("entries", []) if isinstance(data, dict) else []
+        by_id = {e["id"]: e for e in entries if isinstance(e, dict) and e.get("id")}
+        _cache = {"count": len(entries), "entries": entries, "by_id": by_id}
+        return _cache
+
+
+def reload() -> None:
+    """Clears the in-memory cache so the next access re-reads the file."""
+    global _cache
+    with _lock:
+        _cache = None
+
+
+def get_help_content() -> list[dict]:
+    """Returns all help entries (authoring order)."""
+    return list(_load()["entries"])
+
+
+def get_entry(content_id: str) -> dict | None:
+    """Returns a single help entry by id, or None."""
+    return _load()["by_id"].get(content_id)
+
+
+def get_ai_context(page: str, rack: str | None = None) -> str:
+    """Builds concise, page-aware context for the AI system prompt.
+
+    Mirrors the frontend `buildAIContext`. The frontend normally pushes this via
+    `additional_context`; this is the server-side fallback for non-browser
+    callers (e.g. workflow `ai_query` steps) or when context is absent.
+    """
+    by_id = _load()["by_id"]
+
+    # Rack detail is reached through the singleRack view; prefer the richer entry.
+    entry = None
+    if page == "singleRack" and rack:
+        entry = by_id.get("rackDetail")
+    if entry is None:
+        entry = by_id.get(page)
+
+    parts: list[str] = []
+    if entry:
+        parts.append(f"Current page: {entry.get('title', page)}. {entry.get('aiContext', '')}".strip())
+        features = entry.get("features") or []
+        if features:
+            parts.append("Key capabilities here: " + "; ".join(features) + ".")
+    if rack:
+        parts.append(f"The user is focused on rack: {rack}.")
+    if parts:
+        parts.append(
+            "When the user asks how to use this page or feature, answer using the "
+            "capabilities above and give concrete, step-by-step guidance."
+        )
+    return "\n".join(parts)

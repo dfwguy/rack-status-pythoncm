@@ -33,6 +33,7 @@ export function LogsView() {
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader
+        contentId="obsLogs"
         title="Logs"
         description="Validation, job, and tail output — discrete timestamped records for the selected cluster scope."
       />

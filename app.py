@@ -112,6 +112,7 @@ def _nvis_naming() -> nvis_id_templates.NvisNaming:
     return nvis_id_templates.get_nvis_naming()
 import host_exec  # noqa: E402
 import ai_chat  # noqa: E402
+import help_content  # noqa: E402
 import workflow_engine  # noqa: E402
 import rack_locks  # noqa: E402
 import token_vault  # noqa: E402
@@ -12476,7 +12477,7 @@ def api_ai_chat():
         try:
             use_demo = _truthy_env("RACK_STATUS_DEMO") and not ai_chat.is_ai_enabled()
             if use_demo:
-                stream = ai_chat.demo_stream_response(full_messages)
+                stream = ai_chat.demo_stream_response(full_messages, context)
             else:
                 stream = ai_chat.chat_completion_stream(full_messages)
             for chunk in stream:
@@ -12513,6 +12514,27 @@ def api_ai_test():
     result = ai_chat.test_connection()
     status = 200 if result.get("ok") else 502
     return jsonify(result), status
+
+
+# ---------------------------------------------------------------------------
+# Help / knowledge content routes
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/help/content", methods=["GET"])
+def api_help_content():
+    """Return the full app knowledge registry (mirror of the frontend content)."""
+    entries = help_content.get_help_content()
+    return jsonify({"ok": True, "count": len(entries), "entries": entries})
+
+
+@app.route("/api/help/content/<content_id>", methods=["GET"])
+def api_help_content_entry(content_id: str):
+    """Return a single help entry by id."""
+    entry = help_content.get_entry(content_id)
+    if not entry:
+        return jsonify({"ok": False, "error": "Help content not found"}), 404
+    return jsonify({"ok": True, "entry": entry})
 
 
 # ---------------------------------------------------------------------------

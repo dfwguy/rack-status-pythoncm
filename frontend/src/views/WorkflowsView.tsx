@@ -88,6 +88,7 @@ export function WorkflowsView({ rackData = null }: WorkflowsViewProps) {
       {mode === "list" && (
         <Box sx={{ p: 3, flex: 1, overflow: "auto" }}>
           <PageHeader
+            contentId="workflows"
             title="Workflows"
             description="Create and manage rack troubleshooting and validation workflows. Define automated steps, manual checkpoints, and decision points."
           />
@@ -104,6 +105,7 @@ export function WorkflowsView({ rackData = null }: WorkflowsViewProps) {
               </IconButton>
             </Tooltip>
             <PageHeader
+              contentId="workflowDesigner"
               title={selectedWorkflow ? `Edit: ${selectedWorkflow.name}` : "New Workflow"}
               description=""
             />

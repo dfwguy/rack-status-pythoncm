@@ -27,6 +27,7 @@ export function MetricsView() {
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader
+        contentId="obsMetrics"
         title="Metrics"
         description="Live numeric time-series — GPU, NVLink, and fabric telemetry for the selected cluster scope."
       />

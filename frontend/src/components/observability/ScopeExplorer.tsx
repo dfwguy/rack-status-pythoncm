@@ -13,6 +13,12 @@ import {
 /** Width of the scope SidePanel; content reserves this much room when open. */
 const SCOPE_PANEL_WIDTH = 340;
 
+/**
+ * Top offset so the docked panel sits below the app chrome instead of behind it:
+ * the sticky MUI AppBar/Toolbar (~64px) + the breadcrumb bar (~41px).
+ */
+const APP_HEADER_OFFSET = 105;
+
 interface ScopeExplorerProps {
   /** Topology to explore; defaults to the mock cluster. Supply real data later. */
   topology?: ScopeCluster;
@@ -39,7 +45,14 @@ export function ScopeExplorer({ topology = CLUSTER_TOPOLOGY, statusNote, childre
   const selectedHosts = useMemo(() => Array.from(selected), [selected]);
   const summary = selectionSummary(topology, selected);
 
-  const panelStyle = { "--side-panel-width": `${SCOPE_PANEL_WIDTH}px` } as CSSProperties;
+  // Forwarded to the SidePanelContent element (.nv-side-panel-content): sets the
+  // panel width and offsets it below the app header so its heading/close button
+  // are not hidden behind the sticky navbar.
+  const panelStyle = {
+    "--side-panel-width": `${SCOPE_PANEL_WIDTH}px`,
+    top: APP_HEADER_OFFSET,
+    height: `calc(100vh - ${APP_HEADER_OFFSET}px)`,
+  } as CSSProperties;
 
   return (
     <Box>

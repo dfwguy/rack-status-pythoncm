@@ -15,8 +15,12 @@ import { ParserResultsDialog } from "../components/ParserResultsDialog";
 import WebTerminalDialog from "../components/rack/WebTerminalDialog";
 import { RackCommandProvider } from "../context/RackCommandContext";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
+import { VisuallyHidden } from "../components/a11y/VisuallyHidden";
+import { getContent } from "../content";
 import type { RackRow } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
+
+const RACK_DETAIL_HELP = getContent("rackDetail");
 
 interface RackDetailViewProps {
   rack: string;
@@ -63,7 +67,15 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
 
   return (
     <RackCommandProvider rack={rack} logDir={logDir} jobId={row?.last_job}>
-      <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
+      <Box
+        component="section"
+        sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}
+        aria-label={RACK_DETAIL_HELP ? `${RACK_DETAIL_HELP.aria.label}: ${rack}` : `Rack detail: ${rack}`}
+        aria-describedby={RACK_DETAIL_HELP ? "help-desc-rackDetail" : undefined}
+      >
+        {RACK_DETAIL_HELP && (
+          <VisuallyHidden id="help-desc-rackDetail">{RACK_DETAIL_HELP.aria.description}</VisuallyHidden>
+        )}
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 3, flexWrap: "wrap" }}>
           <Button kind="tertiary" size="small" onClick={onBack}>
             <ArrowLeft size={18} style={{ marginRight: 4 }} />

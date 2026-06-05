@@ -287,6 +287,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader
+        contentId="multirack"
         title="Multirack Validation"
         description="Cross-rack NEMO validation runs spanning multiple racks."
         actions={

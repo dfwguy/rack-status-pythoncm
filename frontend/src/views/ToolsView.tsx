@@ -770,6 +770,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.comfortable, mx: "auto", p: 4 }}>
       <PageHeader
+        contentId="tools"
         title="Utility"
         description="Operational helpers under bin/scripts: NEMO download (NGC_API_KEY), workspace Mellanox HPC-X (install-hpcx-workspace.sh), workspace CUDA toolkit + NCCL (install-cuda-nccl-workspace.sh; aihpc_val 02 + 03), NVIDIA nvloom clone + build (install-nvloom-workspace.sh), Grafana + Docker. Green dot opens live streamed output for that card."
       />

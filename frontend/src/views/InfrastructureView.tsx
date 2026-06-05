@@ -104,12 +104,18 @@ interface InfrastructureViewProps {
   segment: InfraSegment;
 }
 
+const SEGMENT_CONTENT_ID: Record<InfraSegment, string> = {
+  ethernet: "infraEthernet",
+  "ib-nvlink": "infraIbNvlink",
+  storage: "infraStorage",
+};
+
 export function InfrastructureView({ segment }: InfrastructureViewProps) {
   const cfg = SEGMENTS[segment];
 
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
-      <PageHeader title={cfg.title} description={cfg.description} />
+      <PageHeader contentId={SEGMENT_CONTENT_ID[segment]} title={cfg.title} description={cfg.description} />
       <PreviewBanner note="Topology, counters, and health will be sourced from the platform fabric probes and Grafana." />
 
       <Box
