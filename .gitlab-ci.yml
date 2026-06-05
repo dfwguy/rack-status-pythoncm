@@ -133,9 +133,50 @@ docker-build:
       --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
       --no-push
   rules:
+    # On main the docker-save job already does a full build + tarball, so skip the
+    # redundant verify build there.
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: never
     - if: $CI_COMMIT_BRANCH
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   allow_failure: true
+
+# ─── Air-gapped image bundle (docker save → downloadable .tar artifact) ─────────
+# Produces a self-contained image tarball that can be downloaded from the pipeline,
+# copied to an offline/air-gapped host, then `docker load`ed and `docker run`. The
+# k8s runners have no Docker daemon, so we use Kaniko's --tarPath (the daemonless
+# equivalent of `docker save`) instead of build-docker.sh's local `docker save`.
+docker-save:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  needs: []
+  variables:
+    IMAGE_NAME: "nvis-rack-status"
+    IMAGE_TAR: "nvis-rack-status-${CI_COMMIT_SHORT_SHA}.tar"
+  script:
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+      --no-push
+      --destination "${IMAGE_NAME}:${CI_COMMIT_SHORT_SHA}"
+      --destination "${IMAGE_NAME}:latest"
+      --tarPath "${CI_PROJECT_DIR}/${IMAGE_TAR}"
+    - sha256sum "${IMAGE_TAR}" > "${IMAGE_TAR}.sha256"
+    - ls -lh "${IMAGE_TAR}"
+  artifacts:
+    name: "nvis-rack-status-image-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - "${IMAGE_TAR}"
+      - "${IMAGE_TAR}.sha256"
+    expire_in: 2 weeks
+  rules:
+    # Auto-build the bundle on release tags and on main; available on-demand elsewhere.
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == "main"
+    - when: manual
+      allow_failure: true
 
 # Push to NVCR (uncomment when registry is configured)
 # docker-push:

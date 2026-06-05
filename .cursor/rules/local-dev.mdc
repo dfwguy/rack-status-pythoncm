@@ -54,8 +54,14 @@ Use `./build-docker.sh` for Docker workflows:
 ./build-docker.sh              # dev mode (demo, no auth, port 5050)
 ./build-docker.sh prod         # prod mode (SSH to head node, token auth)
 ./build-docker.sh build        # build image only
+./build-docker.sh save         # build + docker save → dist/*.tar.gz (air-gapped bundle)
+./build-docker.sh load <tar>   # docker load a saved image on an offline host
 ./build-docker.sh stop         # stop container
 ./build-docker.sh logs         # tail logs
 ```
 
 Prod requires `RACK_SSH_HOST` and `RACK_WEB_AUTH_TOKEN` env vars.
+
+## Air-Gapped Image Bundle
+
+`./build-docker.sh save` builds the image and `docker save`s it to `dist/nvis-rack-status-<version>.tar.gz` (+ `.sha256`) for offline hosts. Tag/output overrides: `RACK_IMAGE_TAG`, `RACK_IMAGE_OUT_DIR`, `RACK_IMAGE_COMPRESS`. The CI `docker-save` job produces the same tarball as a downloadable artifact via Kaniko `--tarPath` (CI runners are daemonless). On the target: `docker load -i <tar>` then `docker run`. See INSTALL.md "Air-Gapped Deployment".
