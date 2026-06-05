@@ -7,6 +7,7 @@ import Divider from "@mui/material/Divider";
 import { Text } from "@nvidia/foundations-react-core";
 import { Send, Square, Trash2 } from "lucide-react";
 import { useAIChat } from "../../context/AIChatContext";
+import { getContent } from "../../content";
 import ChatMessage from "./ChatMessage";
 
 const PAGE_LABELS: Record<string, string> = {
@@ -53,10 +54,15 @@ export default function ChatWindow() {
     }
   };
 
-  const contextLabel = PAGE_LABELS[pageContext.page] || pageContext.page;
+  const contextLabel =
+    getContent(pageContext.page)?.title || PAGE_LABELS[pageContext.page] || pageContext.page;
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+    <Box
+      role="region"
+      aria-label="AI assistant chat"
+      sx={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}
+    >
       <Box
         sx={{
           px: 2,

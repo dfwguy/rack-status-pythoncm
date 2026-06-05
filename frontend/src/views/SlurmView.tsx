@@ -12,7 +12,7 @@ interface SlurmViewProps {
 export function SlurmView({ logDir }: SlurmViewProps) {
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
-      <PageHeader title="Slurm" description="Live squeue and sinfo -R --long from the dashboard host (same APIs as the legacy toolbar)." />
+      <PageHeader contentId="slurm" title="Slurm" description="Live squeue and sinfo -R --long from the dashboard host (same APIs as the legacy toolbar)." />
 
       <Text kind="body/regular/sm" style={{ marginBottom: 16, display: "block", color: "var(--text-color-secondary)" }}>
         Job log tail uses the log directory from settings (or server default) for path validation, same as the legacy squeue dialog.

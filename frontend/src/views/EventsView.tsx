@@ -24,6 +24,7 @@ export function EventsView() {
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader
+        contentId="obsEvents"
         title="Events"
         description="Notable state changes — drains, job lifecycle, power ops, locks, and alerts for the selected scope."
       />

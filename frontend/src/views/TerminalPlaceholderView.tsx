@@ -26,6 +26,7 @@ export function TerminalPlaceholderView() {
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.comfortable, mx: "auto", p: 4 }}>
       <PageHeader
+        contentId="terminal"
         title="Terminal"
         description="Interactive head-node and compute shell, embedded in the tool's chrome."
         actions={

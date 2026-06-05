@@ -121,6 +121,8 @@ export default function AIChatWidget() {
   if (isExpanded) {
     return (
       <Box
+        role="dialog"
+        aria-label="AI assistant"
         sx={{
           position: "fixed",
           inset: 0,
@@ -143,6 +145,8 @@ export default function AIChatWidget() {
 
   return (
     <Box
+      role="dialog"
+      aria-label="AI assistant"
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}

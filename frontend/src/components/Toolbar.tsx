@@ -137,6 +137,7 @@ export function Toolbar({
       <AppBar
         position="sticky"
         elevation={0}
+        aria-label="Application toolbar"
         sx={{ borderBottom: 1, borderColor: "divider", zIndex: (t) => t.zIndex.drawer + 1 }}
       >
         <MuiToolbar>

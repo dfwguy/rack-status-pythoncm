@@ -32,7 +32,7 @@ export function SingleRackView({ data, loading, error, onRackSelect, onCommentCh
 
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
-      <PageHeader title="Rack Validation Status" description="Overview of single-rack NEMO/NCCL validation progress." />
+      <PageHeader contentId="singleRack" title="Rack Validation Status" description="Overview of single-rack NEMO/NCCL validation progress." />
 
       {error && <ErrorBanner message={error} />}
 

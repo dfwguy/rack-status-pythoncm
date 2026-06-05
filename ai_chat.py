@@ -160,21 +160,26 @@ def build_system_prompt(context: dict, custom_rules: str = "") -> str:
 
     page = context.get("page", "unknown")
     rack = context.get("rack")
-    if page == "singleRack" and rack:
-        parts.append(f"\nThe user is currently viewing rack: {rack}")
-    elif page == "dashboard":
-        parts.append("\nThe user is on the cluster dashboard overview.")
-    elif page == "slurm":
-        parts.append("\nThe user is viewing Slurm job/node status.")
-    elif page == "analytics":
-        parts.append("\nThe user is on the analytics/aggregate view.")
-    elif page == "tools":
-        parts.append("\nThe user is in the utility/tools section.")
-    elif page == "workflows":
-        parts.append("\nThe user is in the workflow designer.")
 
-    if context.get("additional_context"):
-        parts.append(f"\nAdditional context: {context['additional_context']}")
+    # Page-aware context. The frontend normally pushes a rich, registry-derived
+    # `additional_context`; when present it takes precedence. Otherwise fall back
+    # to the same content server-side via the help-content registry, and finally
+    # to a minimal rack hint.
+    additional = (context.get("additional_context") or "").strip()
+    if additional:
+        parts.append(f"\nPage context:\n{additional}")
+    else:
+        registry_context = ""
+        try:
+            import help_content
+
+            registry_context = help_content.get_ai_context(page, rack)
+        except Exception:  # pragma: no cover - registry is optional
+            registry_context = ""
+        if registry_context:
+            parts.append(f"\nPage context:\n{registry_context}")
+        elif page == "singleRack" and rack:
+            parts.append(f"\nThe user is currently viewing rack: {rack}")
 
     if custom_rules:
         parts.append(f"\nAdditional rules:\n{custom_rules}")
@@ -570,7 +575,78 @@ _DEMO_FALLBACK = (
 )
 
 
-def _match_demo_response(messages: list[dict]) -> str:
+# Phrases that signal the user is asking about the current page/feature itself
+# ("what can I do here", "what info is on this dashboard", "how do I use this").
+_HELP_INTENT_PATTERNS = [
+    r"this (page|dashboard|view|screen|section|tab|tool)",
+    r"\bhere\b",
+    r"what (information|info|data|can|could|else|features|options|actions)",
+    r"how (do i|to|can i) use",
+    r"available (in|on|here|to)",
+    r"what('| i)s (here|on this|available|shown)",
+    r"what does this",
+    r"explain (this|the page|the dashboard)",
+    r"tell me about this",
+    r"what should i",
+]
+
+
+def _help_answer_for_page(context: dict | None) -> str | None:
+    """Build a page-aware help answer from the knowledge registry, or None."""
+    if not context:
+        return None
+    page = context.get("page")
+    rack = context.get("rack")
+
+    entry = None
+    try:
+        import help_content
+
+        if page == "singleRack" and rack:
+            entry = help_content.get_entry("rackDetail")
+        if entry is None and page:
+            entry = help_content.get_entry(page)
+    except Exception:  # pragma: no cover - registry is optional
+        entry = None
+
+    if not entry:
+        return None
+
+    lines: list[str] = [f"## {entry.get('title', 'This page')}", "", entry.get("description", "")]
+
+    features = entry.get("features") or []
+    if features:
+        lines.append("")
+        lines.append("**What you can do here:**")
+        lines.extend(f"- {f}" for f in features)
+
+    howto = entry.get("howTo") or []
+    if howto:
+        lines.append("")
+        lines.append("**Common tasks:**")
+        for h in howto[:4]:
+            steps = " → ".join(h.get("steps", []))
+            lines.append(f"- *{h.get('task')}*: {steps}")
+
+    faqs = entry.get("faqs") or []
+    if faqs:
+        lines.append("")
+        lines.append("**FAQ:**")
+        for f in faqs[:3]:
+            lines.append(f"- **{f.get('q')}** {f.get('a')}")
+
+    if rack:
+        lines.append("")
+        lines.append(f"You're currently focused on rack **{rack}**.")
+
+    lines.append("")
+    lines.append(
+        "Open the **Help** page from the sidebar for the full guide, or ask me about a specific feature."
+    )
+    return "\n".join(lines)
+
+
+def _match_demo_response(messages: list[dict], context: dict | None = None) -> str:
     """Find the best matching demo response based on the user's last message."""
     user_text = ""
     for m in reversed(messages):
@@ -578,19 +654,29 @@ def _match_demo_response(messages: list[dict]) -> str:
             user_text = (m.get("content") or "").lower()
             break
     if not user_text:
-        return _DEMO_FALLBACK
+        return _help_answer_for_page(context) or _DEMO_FALLBACK
+
+    # Page-aware help takes priority when the user is asking about the current
+    # page/feature itself, so demo mode showcases the knowledge layer.
+    if any(re.search(p, user_text) for p in _HELP_INTENT_PATTERNS):
+        page_answer = _help_answer_for_page(context)
+        if page_answer:
+            return page_answer
 
     for keywords, response in _DEMO_TOPIC_RESPONSES:
         for kw in keywords:
             if re.search(kw, user_text):
                 return response
 
-    return _DEMO_FALLBACK
+    # No specific topic matched — prefer page context over the generic fallback.
+    return _help_answer_for_page(context) or _DEMO_FALLBACK
 
 
-def demo_stream_response(messages: list[dict]) -> Generator[str, None, None]:
+def demo_stream_response(
+    messages: list[dict], context: dict | None = None
+) -> Generator[str, None, None]:
     """Return a realistic context-aware response for demo mode, streamed word-by-word."""
-    response = _match_demo_response(messages)
+    response = _match_demo_response(messages, context)
 
     words = response.split(" ")
     for i, word in enumerate(words):

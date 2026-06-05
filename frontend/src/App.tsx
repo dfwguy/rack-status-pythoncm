@@ -32,7 +32,10 @@ import { useRackStatus } from "./hooks/useRackStatus";
 import type { RackStatusResponse } from "./types/api";
 import { RackCommandsStoreProvider } from "./context/RackCommandsStoreContext";
 import { RackLocksProvider } from "./context/RackLocksContext";
+import { HelpPanelProvider } from "./context/HelpPanelProvider";
+import HelpPanel from "./components/help/HelpPanel";
 import { DEFAULT_PATH, RACKS_PATH, rackDetailPath, pathToRoute, rackIdFromPath, viewIdToPath } from "./routes";
+import { buildAIContext } from "./content";
 
 const SIDEBAR_STORAGE_KEY = "nvis-sidebar-open";
 
@@ -147,7 +150,12 @@ function AppContent() {
   );
 
   useEffect(() => {
-    setPageContext({ page: activeView, rack: selectedRack || undefined });
+    const rack = selectedRack || undefined;
+    setPageContext({
+      page: activeView,
+      rack,
+      additional_context: buildAIContext(activeView, rack),
+    });
   }, [activeView, selectedRack, setPageContext]);
 
   const handleRackSelect = useCallback(
@@ -259,6 +267,7 @@ function AppContent() {
         </Routes>
       </RackCommandsStoreProvider>
       <AIChatWidget />
+      <HelpPanel />
     </AppLayout>
   );
 }
@@ -280,9 +289,11 @@ function AuthGate() {
 
   return (
     <AIChatProvider>
-      <RackLocksProvider>
-        <AppContent />
-      </RackLocksProvider>
+      <HelpPanelProvider>
+        <RackLocksProvider>
+          <AppContent />
+        </RackLocksProvider>
+      </HelpPanelProvider>
     </AIChatProvider>
   );
 }

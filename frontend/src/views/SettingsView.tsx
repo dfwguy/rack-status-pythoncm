@@ -287,6 +287,7 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.comfortable, mx: "auto", p: 4 }}>
       <PageHeader
+        contentId="settings"
         title="Settings"
         description="Configure log directory, environment overrides, and AI assistant endpoint."
       />

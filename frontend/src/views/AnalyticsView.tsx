@@ -410,6 +410,7 @@ export function AnalyticsView({ logDir, rows }: AnalyticsViewProps) {
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader
+        contentId="analytics"
         title="Analytics"
         description="Compare NCCL and Nemotron metrics from parser output: single-rack uses the newest successful 1Rack log per rack with validation done; multirack uses successful multirack logs only."
         actions={

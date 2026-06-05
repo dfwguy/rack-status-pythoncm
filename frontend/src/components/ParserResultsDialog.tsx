@@ -928,7 +928,7 @@ export function ParserResultsDialog({
   const pdisp = String(result?.parser_display_timezone ?? "").trim() || "utc";
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
+    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth aria-label="Parser results: NCCL and NEMO benchmark charts">
       <DialogTitle sx={{ fontWeight: 600 }}>
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
           <span>
