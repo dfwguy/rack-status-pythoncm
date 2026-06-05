@@ -29,17 +29,18 @@ Override any setting with env vars:
 
 Image-bundle (save) env vars:
   RACK_IMAGE_OUT_DIR=dist          # output directory for the .tar(.gz) + .sha256
-  RACK_IMAGE_TAG=0.1.2             # image tag (defaults to backend/version.py VERSION)
+  RACK_IMAGE_TAG=0.1.2             # image tag (defaults to version.py VERSION)
   RACK_IMAGE_COMPRESS=1            # 1 = gzip the tar (default), 0 = leave uncompressed
   RACK_SAVE_IMAGE=nvis-rack-status:0.1.2   # full image ref to build/save (overrides tag)
 EOF
   exit 0
 }
 
-# Read VERSION from backend/version.py (e.g. VERSION = "0.1.2").
+# Read VERSION from version.py at the repo root (the canonical release-metadata
+# file consumed by the ci-toolkit release jobs). e.g. VERSION = "0.1.2".
 get_version() {
   local v
-  v="$(grep -Eo '"[0-9]+\.[0-9]+\.[0-9]+[^"]*"' backend/version.py 2>/dev/null | head -1 | tr -d '"')"
+  v="$(grep -Eo '"[0-9]+\.[0-9]+\.[0-9]+[^"]*"' version.py 2>/dev/null | head -1 | tr -d '"')"
   echo "${v:-0.0.0}"
 }
 

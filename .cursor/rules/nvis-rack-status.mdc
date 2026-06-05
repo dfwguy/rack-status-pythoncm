@@ -50,7 +50,7 @@ Flask backend + React 19 SPA (Vite + NVIDIA Kaizen UI + MUI), Dockerized with SS
 
 ## Key Files
 
-The Python backend lives under `backend/`; runtime assets (`bin/`, `static/`, `var/`, `help_content.json`) stay at the repo root. Backend modules resolve those via `REPO_ROOT = APP_DIR.parent` (parent of `backend/`); keep `APP_DIR` only for `sys.path` and the `rack_web/` helper.
+The Python backend lives under `backend/`; runtime assets (`bin/`, `static/`, `var/`, `help_content.json`) stay at the repo root. Backend modules resolve those via `REPO_ROOT = APP_DIR.parent` (parent of `backend/`); keep `APP_DIR` only for `sys.path` and the `rack_web/` helper. **`version.py` must stay at the repo root** — it is release metadata read by the ci-toolkit release jobs (`grep VERSION = version.py`) and the JFrog image build, not imported by the app (which uses `RACK_WEB_VERSION`).
 
 - `backend/app.py` — Flask backend, all `/api/*` routes (~11k lines)
 - `backend/native_status.py` — Native Python rack-status builder (cmsh + sinfo + log probes)

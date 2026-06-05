@@ -209,12 +209,17 @@ needed on the target.
 Useful overrides: `RACK_IMAGE_TAG=1.2.3`, `RACK_IMAGE_OUT_DIR=/tmp/out`,
 `RACK_IMAGE_COMPRESS=0` (skip gzip).
 
-**From CI/CD**: the `docker-save` job (stage `build`) produces the same tarball as a
-downloadable pipeline **artifact** (`nvis-rack-status-<short-sha>.tar` + `.sha256`). It
-runs automatically on `main` and release tags, and can be triggered manually on any
-pipeline. It uses Kaniko's `--tarPath` (the daemonless equivalent of `docker save`,
-since the CI runners have no Docker daemon). Download it from the pipeline's
-**Artifacts** menu.
+**From CI/CD (published with each release)**: on the release commit, the `docker-save`
+job builds the bundle tagged with the release **VERSION** (from `version.py`), and the
+`release:publish-bundle` job uploads it to the project's **Package Registry** and links
+it on the **GitLab Release** page. Download it by version from either:
+
+- the Release page → **Assets** (`nvis-rack-status-<version>.tar.gz` + `.sha256`), or
+- the Package Registry: `…/packages/generic/nvis-rack-status-image/<version>/nvis-rack-status-<version>.tar.gz`
+
+Both CI jobs use Kaniko's `--tarPath` (the daemonless equivalent of `docker save`, since
+the CI runners have no Docker daemon). `docker-save` can also be triggered **manually** on
+any other pipeline to produce an ad-hoc bundle as a downloadable job artifact.
 
 ### 2. Transfer and run on the air-gapped host
 
