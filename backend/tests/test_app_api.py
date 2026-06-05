@@ -94,7 +94,7 @@ class TestCommentsAPI:
 class TestSPAServing:
     def test_spa_index(self, client):
         from pathlib import Path
-        spa_index = Path(__file__).resolve().parent.parent / "static" / "spa" / "index.html"
+        spa_index = Path(__file__).resolve().parent.parent.parent / "static" / "spa" / "index.html"
         if not spa_index.is_file():
             pytest.skip("SPA not built (static/spa/ missing in CI)")
         resp = client.get("/spa/")

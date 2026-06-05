@@ -19,7 +19,7 @@ RACK_STATUS_DEMO=1 ./start.sh           # force demo
 BUILD_FRONTEND=0 ./start.sh             # skip frontend rebuild
 ```
 
-Do NOT manually run `python3 app.py` or `npm run build` separately — always use `start.sh`.
+Do NOT manually run `python3 backend/app.py` or `npm run build` separately — always use `start.sh`.
 
 ## SSH Mode (local Mac → remote cluster)
 

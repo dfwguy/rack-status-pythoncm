@@ -74,8 +74,7 @@ a shared filesystem path accessible by compute nodes:
 
 ```bash
 # On your workstation
-tar czf nvis-deploy.tar.gz app.py native_status.py demo_data.py host_exec.py \
-  platforms/ rack_web/ bin/ templates/ static/ requirements.txt var/
+tar czf nvis-deploy.tar.gz backend/ bin/ static/ help_content.json var/
 
 # Copy to head node
 scp nvis-deploy.tar.gz root@<head-node>:/home/cmsupport/nvis-rack-status/
@@ -194,9 +193,9 @@ Or use the helper: `./build-docker.sh build`
 ## Running Tests
 
 ```bash
-# Backend
+# Backend (run from repo root)
 pip install pytest
-python -m pytest tests/ -v
+python -m pytest backend/tests/ -v
 
 # Frontend
 cd frontend && npm test
@@ -250,4 +249,4 @@ docker stop rack-status && docker rm rack-status
 
 **Environment variables not reaching scripts:**
 - Variables prefixed with `RACK_*`, `NEMO_*`, `VALIDATION_*`, and `SQUEUE_*` are automatically forwarded to the remote SSH session
-- Add custom prefixes by modifying `_FORWARD_ENV_PREFIXES` in `host_exec.py`
+- Add custom prefixes by modifying `_FORWARD_ENV_PREFIXES` in `backend/host_exec.py`

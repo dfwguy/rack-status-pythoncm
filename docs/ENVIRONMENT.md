@@ -1,6 +1,6 @@
 # NVIS Rack Status configuration reference
 
-This document lists **environment variables**, **credential files**, and related knobs under **`/home/cmsupport/nvis-rack-status`** only (Python: `app.py`, `native_status.py`, `rack_web/`; shell: `bin/scripts/`). Third-party code under **`.venv/`** is not catalogued here.
+This document lists **environment variables**, **credential files**, and related knobs under **`/home/cmsupport/nvis-rack-status`** only (Python: `backend/app.py`, `backend/native_status.py`, `backend/rack_web/`; shell: `bin/scripts/`). Third-party code under **`.venv/`** is not catalogued here.
 
 **Truthy** (unless noted): `1`, `true`, `yes`, or `on` (case-insensitive).
 
@@ -102,14 +102,14 @@ Used by **`bin/scripts/launch-grafana-bright-prometheus.sh`** (not by Flask). Af
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| **`PORT`** | `5000` | Listen port (`python3 app.py`). |
+| **`PORT`** | `5000` | Listen port (`python3 backend/app.py`). |
 | **`FLASK_DEBUG`** | *(unset)* | `1` → Flask debug (**not** for production). |
 | **`PROJECT_NAME`**, **`RACK_WEB_PROJECT_NAME`** | *(unset)* | Optional page title suffix. |
 | **`RACK_WEB_VERSION`** | `dev` | `/api/app-stats`. |
 | **`RACK_WEB_AUTH_DISABLED`** | *(unset)* | Truthy → no HTTP login. |
 | **`RACK_WEB_AUTH_USER`** | `root` | PAM user. |
 | **`RACK_WEB_PAM_SERVICE`** | `login` | PAM stack. |
-| **`RACK_WEB_PAM_HELPER_PYTHON`** | `/usr/bin/python3` | Interpreter for `rack_web/pam_helper.py`. |
+| **`RACK_WEB_PAM_HELPER_PYTHON`** | `/usr/bin/python3` | Interpreter for `backend/rack_web/pam_helper.py`. |
 | **`RACK_WEB_SECRET_KEY`** | *(auto on first start)* | Flask session signing and NVFTP vault encryption. If unset, the app creates `var/secrets/.rack_web_secret_key` on first launch (gitignored, persisted on the `var/` volume in Docker). Set this env var explicitly to use your own key. |
 | **`NVIS_VAULT_MASTER_KEY`** | *(empty)* | Optional override for vault encryption instead of `RACK_WEB_SECRET_KEY`. |
 | **`NVIS_TOKEN_VAULT_DIR`** | `var/secrets/` | Directory for encrypted token vault files (**never commit** — see `.gitignore` and `scripts/check_no_vault_in_git.sh`). |
@@ -500,7 +500,7 @@ RACK_WEB_VERSION
 
 ---
 
-*Generated from repository sources; if a variable is missing, search **`/home/cmsupport/nvis-rack-status/app.py`** and **`native_status.py`** for the exact spelling.*
+*Generated from repository sources; if a variable is missing, search **`/home/cmsupport/nvis-rack-status/backend/app.py`** and **`backend/native_status.py`** for the exact spelling.*
 
 ---
 
@@ -540,5 +540,5 @@ query param) is used for the heartbeat check above.
 
 Templates use literal text plus `[\d+]` (default, cmsh spelling) or `[01-99]` (fixed two-digit) slots. Configure in the SPA **Settings → Job environment** or via `NVIS_JOB_ENV_OVERRIDES_FILE`. Legacy `RACK_CMSH_DS_NODE_*` regex vars are superseded when NVIS templates are set.
 
-See `nvis_id_templates.py` and `tests/test_nvis_id_templates.py`.
+See `backend/nvis_id_templates.py` and `backend/tests/test_nvis_id_templates.py`.
 

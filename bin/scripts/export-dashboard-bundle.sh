@@ -11,7 +11,7 @@
 # Excludes (default): .git, .local/ (often a vendored Node tarball under the repo — hundreds of MB), Python/Node
 # caches, venvs, built SPA, var/cache, prior export zips. Optional: set INCLUDE_NVLMAPPER_BINARY=1 to
 # bundle bin/scripts/nvlmapper (~14M) when that file exists.
-# On the target host: unpack, pip install -r requirements.txt, (cd frontend && npm ci && npm run build),
+# On the target host: unpack, pip install -r backend/requirements.txt, (cd frontend && npm ci && npm run build),
 # use system Node or install Node on the target (do not rely on .local/), copy nvlmapper if needed,
 # configure env — see README.md and docs/ENVIRONMENT.md.
 #

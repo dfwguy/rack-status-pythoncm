@@ -43,20 +43,23 @@ Flask backend + React 19 SPA (Vite + NVIDIA Kaizen UI + MUI), Dockerized with SS
 
 ## Testing
 
-- **Backend**: pytest (`tests/`). Run: `python -m pytest tests/ -v`
+- **Backend**: pytest (`backend/tests/`). Run from repo root: `python -m pytest backend/tests/ -v`
 - **Frontend**: Vitest + Testing Library (`src/**/*.test.{ts,tsx}`). Run: `cd frontend && npm test`
 - **CI/CD**: `.gitlab-ci.yml` — lint (ruff + tsc), test (pytest + vitest), build (Docker)
 - **Lint**: `ruff check` for Python, `tsc -b --noEmit` for TypeScript. Both must pass.
 
 ## Key Files
 
-- `app.py` — Flask backend, all `/api/*` routes (~11k lines)
-- `native_status.py` — Native Python rack-status builder (cmsh + sinfo + log probes)
-- `host_exec.py` — SSH/local command execution with env forwarding
-- `nvis_id_templates.py` — NVIS naming conventions (Firmus/CBR/Bright templates, uses `lru_cache`)
-- `workflow_engine.py` — Workflow state machine, CRUD, execution engine
-- `rack_locks.py` — Advisory rack lock claims, persistence, TTL, heartbeat-based release
-- `platforms/` — BCM and MAAS platform providers
+The Python backend lives under `backend/`; runtime assets (`bin/`, `static/`, `var/`, `help_content.json`) stay at the repo root. Backend modules resolve those via `REPO_ROOT = APP_DIR.parent` (parent of `backend/`); keep `APP_DIR` only for `sys.path` and the `rack_web/` helper.
+
+- `backend/app.py` — Flask backend, all `/api/*` routes (~11k lines)
+- `backend/native_status.py` — Native Python rack-status builder (cmsh + sinfo + log probes)
+- `backend/host_exec.py` — SSH/local command execution with env forwarding
+- `backend/nvis_id_templates.py` — NVIS naming conventions (Firmus/CBR/Bright templates, uses `lru_cache`)
+- `backend/workflow_engine.py` — Workflow state machine, CRUD, execution engine
+- `backend/rack_locks.py` — Advisory rack lock claims, persistence, TTL, heartbeat-based release
+- `backend/platforms/` — BCM and MAAS platform providers
+- `backend/requirements.txt` — Python dependencies
 - `rack-config.env` — Docker deployment configuration
 - `frontend/src/components/RackTable.tsx` — Main dashboard table with filters, menus, charts
 - `frontend/src/components/ParserResultsDialog.tsx` — NCCL/NEMO chart dialog + Grafana embeds

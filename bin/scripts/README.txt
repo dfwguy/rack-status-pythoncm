@@ -25,7 +25,7 @@ Hardware checker (checker.sh + hw_check_pdsh.sh):
   - Dashboard: POST /api/hw-check-async JSON { "specs": [...], "rack": "pNN-rMM", "preset": "…" } or include
     "checker_args": "-d -e 0" (string, shell-style quoting allowed) or "checker_args": ["-d","-e","0"] (JSON list).
     Non-empty checker_args overrides preset; tokens are validated (no shell metacharacters).
-  - Presets map to checker.sh flags (see app.py _HW_CHECK_PRESETS). UI runs with RACK_WEB_HW_CHECK=1 on nodes so
+  - Presets map to checker.sh flags (see backend/app.py _HW_CHECK_PRESETS). UI runs with RACK_WEB_HW_CHECK=1 on nodes so
     checker.sh never performs Slurm drain/undrain (even without -d).
   - Requires pdcp (copy checker.sh to targets) and pdsh as for gpu_reset.sh; nodes must run the script as root.
   - checker.sh expects: cpupower, dmidecode, lspci, nvidia-smi, nvidia-imex-ctl, getopt (util-linux), enroot paths,

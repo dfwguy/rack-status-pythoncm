@@ -20,9 +20,11 @@ import requests
 _logger = logging.getLogger(__name__)
 
 APP_DIR = Path(__file__).resolve().parent
+# Runtime state lives under repo-root var/ (parent of backend/).
+REPO_ROOT = APP_DIR.parent
 AI_SETTINGS_FILE = Path(
     os.environ.get("RACK_AI_SETTINGS_FILE", "")
-    or str(APP_DIR / "var" / "cache" / "ai_settings.json")
+    or str(REPO_ROOT / "var" / "cache" / "ai_settings.json")
 )
 
 _LLM_TIMEOUT_S = 180
