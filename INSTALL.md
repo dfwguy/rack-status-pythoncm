@@ -190,6 +190,53 @@ docker build -t nvis-rack-status:local .
 
 Or use the helper: `./build-docker.sh build`
 
+## Air-Gapped Deployment (offline image bundle)
+
+For hosts with **no internet/registry access**, package the fully-built image into a
+single tarball, copy it over, then `docker load` + `docker run` it — no build or pull
+needed on the target.
+
+### 1. Produce the image bundle
+
+**Locally** (uses `docker build` + `docker save`):
+
+```bash
+./build-docker.sh save
+# → dist/nvis-rack-status-<version>.tar.gz
+#   dist/nvis-rack-status-<version>.tar.gz.sha256
+```
+
+Useful overrides: `RACK_IMAGE_TAG=1.2.3`, `RACK_IMAGE_OUT_DIR=/tmp/out`,
+`RACK_IMAGE_COMPRESS=0` (skip gzip).
+
+**From CI/CD**: the `docker-save` job (stage `build`) produces the same tarball as a
+downloadable pipeline **artifact** (`nvis-rack-status-<short-sha>.tar` + `.sha256`). It
+runs automatically on `main` and release tags, and can be triggered manually on any
+pipeline. It uses Kaniko's `--tarPath` (the daemonless equivalent of `docker save`,
+since the CI runners have no Docker daemon). Download it from the pipeline's
+**Artifacts** menu.
+
+### 2. Transfer and run on the air-gapped host
+
+```bash
+# Copy the tarball (and checksum) to the offline host by your approved method
+sha256sum -c nvis-rack-status-<version>.tar.gz.sha256   # verify integrity
+
+docker load -i nvis-rack-status-<version>.tar.gz        # import (gz auto-detected)
+
+# Demo (no cluster, no auth):
+docker run -d --name rack-status -p 5000:5000 \
+  -e RACK_STATUS_DEMO=1 -e RACK_WEB_AUTH_DISABLED=1 \
+  -v rack-data:/app/var nvis-rack-status:<version>
+
+# Or load with the helper (verifies the checksum if present):
+./build-docker.sh load nvis-rack-status-<version>.tar.gz
+```
+
+For a real cluster, swap the demo flags for the SSH/auth env described in
+[Configuration Reference](#configuration-reference) (e.g. `--env-file rack-config.env`,
+`RACK_SSH_HOST`, `RACK_WEB_AUTH_TOKEN`, and the SSH key mount).
+
 ## Running Tests
 
 ```bash

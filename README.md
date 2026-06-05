@@ -148,6 +148,8 @@ docker run -d --name rack-status -p 5000:5000 \
 ./build-docker.sh          # dev: demo data, no auth, port 5050, persistent volume
 ./build-docker.sh prod     # prod: SSH to head node, uses rack-config.env
 ./build-docker.sh build    # build only
+./build-docker.sh save     # build + docker save → dist/*.tar.gz (air-gapped bundle)
+./build-docker.sh load <tar>  # docker load a saved image on an offline host
 ./build-docker.sh stop     # stop container
 ./build-docker.sh logs     # tail logs
 ```
