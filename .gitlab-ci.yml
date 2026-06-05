@@ -133,8 +133,8 @@ docker-build:
       --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
       --no-push
   rules:
-    # On main the docker-save job already does a full build + tarball, so skip the
-    # redundant verify build there.
+    # The release image build (docker-save) + JFrog push cover the release commit
+    # on main, so skip the redundant verify-only build there.
     - if: $CI_COMMIT_BRANCH == "main"
       when: never
     - if: $CI_COMMIT_BRANCH
@@ -146,37 +146,89 @@ docker-build:
 # copied to an offline/air-gapped host, then `docker load`ed and `docker run`. The
 # k8s runners have no Docker daemon, so we use Kaniko's --tarPath (the daemonless
 # equivalent of `docker save`) instead of build-docker.sh's local `docker save`.
+#
+# Builds automatically on the release (finalize) commit — tagged with the release
+# VERSION from version.py — so the bundle ships with every release. Also available
+# on-demand (manual) on any other pipeline for ad-hoc offline images.
 docker-save:
   stage: build
   image:
     name: gcr.io/kaniko-project/executor:debug
     entrypoint: [""]
-  needs: []
   variables:
     IMAGE_NAME: "nvis-rack-status"
-    IMAGE_TAR: "nvis-rack-status-${CI_COMMIT_SHORT_SHA}.tar"
   script:
+    # On the release commit version.py holds the new release version; elsewhere
+    # (manual runs) fall back to the short SHA so the artifact is still unique.
+    - export VERSION=$(grep -Eo '"[0-9]+\.[0-9]+\.[0-9]+[^"]*"' version.py 2>/dev/null | head -1 | tr -d '"')
+    - export BUNDLE_TAG="${VERSION:-$CI_COMMIT_SHORT_SHA}"
+    - export IMAGE_TAR="${IMAGE_NAME}-${BUNDLE_TAG}.tar"
+    - echo "Building air-gapped bundle ${IMAGE_TAR} (tag ${BUNDLE_TAG})"
     - /kaniko/executor
       --context "${CI_PROJECT_DIR}"
       --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
       --no-push
-      --destination "${IMAGE_NAME}:${CI_COMMIT_SHORT_SHA}"
+      --destination "${IMAGE_NAME}:${BUNDLE_TAG}"
       --destination "${IMAGE_NAME}:latest"
       --tarPath "${CI_PROJECT_DIR}/${IMAGE_TAR}"
-    - sha256sum "${IMAGE_TAR}" > "${IMAGE_TAR}.sha256"
-    - ls -lh "${IMAGE_TAR}"
+    - gzip -f "${IMAGE_TAR}"
+    - sha256sum "${IMAGE_TAR}.gz" > "${IMAGE_TAR}.gz.sha256"
+    - ls -lh "${IMAGE_TAR}.gz"
+    # Pass the resolved tag + filename to the publish job via dotenv.
+    - printf 'BUNDLE_TAG=%s\nBUNDLE_FILE=%s\n' "${BUNDLE_TAG}" "${IMAGE_TAR}.gz" > bundle.env
+    - cat bundle.env
   artifacts:
     name: "nvis-rack-status-image-${CI_COMMIT_SHORT_SHA}"
     paths:
-      - "${IMAGE_TAR}"
-      - "${IMAGE_TAR}.sha256"
+      - "nvis-rack-status-*.tar.gz"
+      - "nvis-rack-status-*.tar.gz.sha256"
+    reports:
+      dotenv: bundle.env
     expire_in: 2 weeks
   rules:
-    # Auto-build the bundle on release tags and on main; available on-demand elsewhere.
-    - if: $CI_COMMIT_TAG
-    - if: $CI_COMMIT_BRANCH == "main"
+    - !reference [.rules:on_main_finalize_commit, rules]
     - when: manual
       allow_failure: true
+
+# ─── Publish the bundle to the Package Registry + attach to the GitLab Release ──
+# Runs on the release (finalize) commit, alongside the ci-toolkit release jobs.
+# Uploads the versioned tarball to the project's generic Package Registry (a stable,
+# permanent, version-addressed URL) and links it as an asset on the GitLab Release
+# so the air-gapped image is downloadable straight from the release page.
+release:publish-bundle:
+  stage: ci_toolkit_release
+  image:
+    name: dockerhub.nvidia.com/python:3.12
+    pull_policy: ["if-not-present", "always"]
+  tags:
+    - $GITLAB_RUNNER_DOCKER_TAG
+  variables:
+    GIT_STRATEGY: none
+  needs:
+    - job: docker-save
+      artifacts: true
+    - job: "release:finalize"
+      artifacts: false
+      optional: true
+  rules:
+    - !reference [.rules:on_main_finalize_commit, rules]
+  script:
+    - test -n "${BUNDLE_TAG:-}" && test -f "${BUNDLE_FILE:-}"
+    - PKG_BASE="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/nvis-rack-status-image/${BUNDLE_TAG}"
+    - echo "Uploading ${BUNDLE_FILE} → ${PKG_BASE}/"
+    - curl --fail-with-body --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "${BUNDLE_FILE}" "${PKG_BASE}/${BUNDLE_FILE}"
+    - curl --fail-with-body --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "${BUNDLE_FILE}.sha256" "${PKG_BASE}/${BUNDLE_FILE}.sha256"
+    - echo "Attaching release asset link to release ${BUNDLE_TAG} (best-effort)"
+    - |
+      curl --fail-with-body --silent --show-error --request POST \
+        --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        --data-urlencode "name=${BUNDLE_FILE} (air-gapped Docker image)" \
+        --data-urlencode "url=${PKG_BASE}/${BUNDLE_FILE}" \
+        --data "link_type=package" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases/${BUNDLE_TAG}/assets/links" \
+        || echo "WARN: could not attach release link (release ${BUNDLE_TAG} may not exist yet or token scope); bundle is in the Package Registry regardless."
+  after_script:
+    - !reference [.pipeline_post_job_hooks, after_script]
 
 # Push to NVCR (uncomment when registry is configured)
 # docker-push:
