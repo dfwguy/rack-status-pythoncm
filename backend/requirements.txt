@@ -5,3 +5,4 @@ pyyaml>=6.0,<7
 cryptography>=48.0,<49
 paramiko>=5.0,<6
 flask-sock>=0.7,<1
+tinydb>=4.8,<5

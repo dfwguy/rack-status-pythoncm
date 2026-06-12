@@ -6,6 +6,76 @@ import type { HelpContent } from "../types";
 
 export const platformContent: HelpContent[] = [
   {
+    id: "projects",
+    kind: "view",
+    title: "Projects & Clusters",
+    domain: "Platform",
+    routePath: "/platform/projects",
+    summary: "Customer projects and clusters; set the active cluster to re-scope the app.",
+    description:
+      "Projects & Clusters defines each customer engagement and the clusters within it: naming convention (rack/node/NVSwitch templates), site geometry, the hardware platform, the cluster manager (BCM/MAAS), and the connection (local or SSH). The active cluster is server-authoritative: switching it re-scopes status, validation geometry, tool execution, and the AI context across the whole app.",
+    features: [
+      "Create projects with a customer name and description.",
+      "Add clusters with platform, manager, naming convention, geometry, and connection.",
+      "Set the active cluster (also available from the top-bar switcher).",
+    ],
+    howTo: [
+      { task: "Switch the active cluster", steps: ["Open Projects & Clusters.", "Find the cluster card.", "Click 'Set active' (or use the top-bar switcher)."] },
+      { task: "Add a cluster", steps: ["Open the project.", "Click 'Cluster'.", "Pick a platform, set naming + connection, and save."] },
+    ],
+    related: ["platformCatalog", "toolRegistry", "settings"],
+    keywords: ["project", "cluster", "customer", "naming", "active", "switch", "tenant", "bcm", "maas", "ssh"],
+    aria: { label: "Projects and clusters page", description: "Manage customer projects and clusters and set the active cluster." },
+    aiContext:
+      "Projects & Clusters manages customer projects and their clusters (platform, manager, naming, geometry, connection). The active cluster is server-authoritative and re-scopes status, geometry, tools, and AI context.",
+  },
+  {
+    id: "platformCatalog",
+    kind: "view",
+    title: "Platform Catalog",
+    domain: "Platform",
+    routePath: "/platform/catalog",
+    summary: "Hardware/system SKUs (GPU, CPU, vendor, topology, geometry, capabilities).",
+    description:
+      "The Platform Catalog defines hardware/system SKUs across NVIDIA generations (GB200/GB300/B200/B300, future VR200/R200), with CPU vendor (Grace/Intel/AMD), system vendor (NVIDIA/DGX/Dell/SMC), form factor, per-rack geometry, interconnect, capabilities (nvlink, nvswitch, imex, mnnvl, roce), and tool parameter defaults. A cluster's platform drives dashboard geometry and which tools are compatible.",
+    features: [
+      "Define GPU/CPU/vendor/form-factor and per-rack geometry.",
+      "Declare capabilities used for tool compatibility.",
+      "Set tool parameter defaults (e.g. GPU model flag, MNNVL topology, CUDA major).",
+    ],
+    howTo: [
+      { task: "Add a platform", steps: ["Open Platform Catalog.", "Click 'New platform'.", "Fill GPU/CPU/vendor, geometry, capabilities, and save."] },
+    ],
+    related: ["projects", "toolRegistry"],
+    keywords: ["platform", "gpu", "gb200", "gb300", "b200", "b300", "vr200", "r200", "geometry", "capability", "nvlink", "nvswitch", "mnnvl", "vendor"],
+    aria: { label: "Platform catalog page", description: "Define hardware/system platforms and their geometry and capabilities." },
+    aiContext:
+      "The Platform Catalog defines hardware SKUs (GPU/CPU/vendor/form-factor), per-rack geometry, capabilities, and tool param defaults. The active cluster's platform drives geometry and tool compatibility.",
+  },
+  {
+    id: "toolRegistry",
+    kind: "view",
+    title: "Tool Registry",
+    domain: "Platform",
+    routePath: "/platform/tools",
+    summary: "Each script as a document: platform compatibility, surfaces, and execution.",
+    description:
+      "The Tool Registry describes each validation/performance/maintenance script as a document: the script basename, optional env-key override, platform compatibility (all platforms, required capabilities, or specific platform ids), where it surfaces in the UI, and how it executes (async/sync/stream; rack/multirack/cluster/node). Tools are filtered to the active cluster's platform so only compatible tools are offered.",
+    features: [
+      "Register a tool with its script and execution mode/target.",
+      "Set platform compatibility by capability or platform id.",
+      "Declare UI surfaces (e.g. rackDetail.hardware).",
+    ],
+    howTo: [
+      { task: "Register a tool", steps: ["Open Tool Registry.", "Click 'New tool'.", "Set script, compatibility, surfaces, execution, and save."] },
+    ],
+    related: ["projects", "platformCatalog", "tools"],
+    keywords: ["tool", "registry", "script", "sysinfo", "clusterkit", "nvloom", "compatibility", "surface", "execution", "platform"],
+    aria: { label: "Tool registry page", description: "Define tools, their platform compatibility, surfaces, and execution." },
+    aiContext:
+      "The Tool Registry describes scripts as documents (script, compatibility by capability/platform, surfaces, execution mode/target). Tools are filtered to the active platform.",
+  },
+  {
     id: "settings",
     kind: "view",
     title: "Settings",

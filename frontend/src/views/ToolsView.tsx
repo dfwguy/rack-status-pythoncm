@@ -17,6 +17,7 @@ import IconButton from "@mui/material/IconButton";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { ToolsLiveOutputDialog } from "../components/ToolsLiveOutputDialog";
+import { CompatibleToolsPanel } from "../components/CompatibleToolsPanel";
 
 type LiveKind = "nemo" | "hpcx" | "cudaNccl" | "nvloom" | "grafana";
 
@@ -774,6 +775,8 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         title="Utility"
         description="Operational helpers under bin/scripts: NEMO download (NGC_API_KEY), workspace Mellanox HPC-X (install-hpcx-workspace.sh), workspace CUDA toolkit + NCCL (install-cuda-nccl-workspace.sh; aihpc_val 02 + 03), NVIDIA nvloom clone + build (install-nvloom-workspace.sh), Grafana + Docker. Green dot opens live streamed output for that card."
       />
+
+      <CompatibleToolsPanel />
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
         <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1, mb: 1 }}>

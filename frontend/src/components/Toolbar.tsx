@@ -27,6 +27,7 @@ import { SinfoDialog } from "./SinfoDialog";
 import WebTerminalDialog from "./rack/WebTerminalDialog";
 import { useAuth } from "../context/AuthContext";
 import { useRackLocksContext } from "../context/RackLocksContext";
+import { ProjectSwitcher } from "./ProjectSwitcher";
 
 interface ToolbarProps {
   title: string;
@@ -38,6 +39,8 @@ interface ToolbarProps {
   onMenuToggle: () => void;
   activeUsers?: number;
   logDir?: string;
+  /** Called after the active project/cluster is switched (refresh dashboards). */
+  onClusterSwitched?: () => void;
 }
 
 export function Toolbar({
@@ -50,6 +53,7 @@ export function Toolbar({
   onMenuToggle,
   activeUsers,
   logDir,
+  onClusterSwitched,
 }: ToolbarProps) {
   const { user, logout } = useAuth();
   const [squeueOpen, setSqueueOpen] = useState(false);
@@ -155,9 +159,11 @@ export function Toolbar({
             </Tooltip>
           )}
 
-          <Text kind="body/bold/md" style={{ flexGrow: 1 }}>
-            {title}
-          </Text>
+          <Text kind="body/bold/md">{title}</Text>
+
+          <Box sx={{ flexGrow: 1, display: "flex", alignItems: "center", ml: 2 }}>
+            <ProjectSwitcher onSwitched={onClusterSwitched} />
+          </Box>
 
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
             {loading && <CircularProgress size={18} color="primary" sx={{ mr: 1 }} />}

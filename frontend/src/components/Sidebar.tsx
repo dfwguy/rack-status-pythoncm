@@ -35,6 +35,9 @@ import {
   Gauge,
   ScrollText,
   Bell,
+  Boxes,
+  FolderKanban,
+  CircuitBoard,
 } from "lucide-react";
 
 export type ViewId =
@@ -53,6 +56,9 @@ export type ViewId =
   | "tools"
   | "workflows"
   | "terminal"
+  | "projects"
+  | "platformCatalog"
+  | "toolRegistry"
   | "settings";
 
 export const DRAWER_WIDTH_OPEN = 248;
@@ -146,6 +152,17 @@ const navEntries: NavEntry[] = [
       { id: "reports", label: "Reports", icon: <FileDown size={ICON_SIZE} /> },
     ],
   },
+  {
+    kind: "group",
+    id: "grp-platform",
+    label: "Platform",
+    icon: <Boxes size={ICON_SIZE} />,
+    leaves: [
+      { id: "projects", label: "Projects & Clusters", icon: <FolderKanban size={ICON_SIZE} /> },
+      { id: "platformCatalog", label: "Platform Catalog", icon: <CircuitBoard size={ICON_SIZE} /> },
+      { id: "toolRegistry", label: "Tool Registry", icon: <Wrench size={ICON_SIZE} /> },
+    ],
+  },
 ];
 
 /** All navigable leaves, flattened (used by the collapsed icon rail). */
@@ -227,7 +244,7 @@ function ExpandedNav({
       id: entry.id,
       children: entry.label,
       slotIcon: entry.icon,
-      defaultOpen: true,
+      defaultOpen: false,
       subItems: entry.leaves.map((leaf) => navLeafItem(leaf, activeView, onNavigate)),
     };
   });

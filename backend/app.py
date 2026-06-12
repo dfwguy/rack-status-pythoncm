@@ -122,6 +122,23 @@ import token_vault  # noqa: E402
 import nvftp_cache_sync  # noqa: E402
 from platforms import get_platform as _get_platform  # noqa: E402
 
+# Catalog (platforms/tools/projects). Optional at import time so the app still boots if
+# the store is unavailable; all call sites degrade to the legacy env behavior.
+try:
+    from catalog import context as catalog_context  # noqa: E402
+    from catalog import seed as catalog_seed  # noqa: E402
+    from catalog import store as catalog_store  # noqa: E402
+    from catalog.api import catalog_bp  # noqa: E402
+
+    _CATALOG_AVAILABLE = True
+except Exception as _catalog_exc:  # pragma: no cover - defensive
+    logging.getLogger(__name__).warning("catalog unavailable: %s", _catalog_exc)
+    catalog_context = None  # type: ignore[assignment]
+    catalog_seed = None  # type: ignore[assignment]
+    catalog_store = None  # type: ignore[assignment]
+    catalog_bp = None  # type: ignore[assignment]
+    _CATALOG_AVAILABLE = False
+
 NVFTP_TOKENS_URL = (
     "https://nvftp.nvidia.com/workspace/1099ff0b-621c-490f-a662-c69583ccabad/tokens"
 )
@@ -154,6 +171,9 @@ try:
 except ImportError:
     _sock = None
     _logger.warning("flask-sock not installed; /ws/terminal will be unavailable")
+
+if _CATALOG_AVAILABLE and catalog_bp is not None:
+    app.register_blueprint(catalog_bp)
 
 _validation_jobs_lock = threading.Lock()
 _validation_jobs: dict[str, dict[str, object]] = {}
@@ -714,6 +734,15 @@ def _materialize_job_env_overrides_into_os_environ(ov: dict[str, str]) -> None:
                 os.environ[k] = base
             else:
                 os.environ.pop(k, None)
+    # This strips Settings-managed keys not present in the overrides; re-apply the active
+    # catalog overlay so platform/cluster-derived values (e.g. RACK_VALIDATION_CT_RANGE)
+    # survive. Only runs on cache-miss materialization, so this is infrequent.
+    _apply = globals().get("_apply_catalog_active_to_environ")
+    if callable(_apply):
+        try:
+            _apply()
+        except Exception:
+            pass
 
 
 def _job_env_status_payload_needs_rebuild(before: dict[str, str], after: dict[str, str]) -> bool:
@@ -925,11 +954,45 @@ def _job_env_overrides_write(data: dict[str, str], *, bust_status_cache: bool = 
 
 
 def _eget(name: str, default: str | None = None) -> str | None:
-    """Environment getter with dashboard Settings overrides (job, validation, and dashboard keys)."""
+    """Environment getter with catalog + dashboard Settings overrides.
+
+    Precedence (highest first): active cluster identity/naming/connection (catalog
+    ``high`` overlay) > dashboard Settings overrides (``job_env_overrides.json``) >
+    process env > platform geometry/tool defaults (catalog ``low`` overlay) > *default*.
+    """
+    high: dict[str, str] = {}
+    low: dict[str, str] = {}
+    if _CATALOG_AVAILABLE and catalog_context is not None:
+        try:
+            high, low = catalog_context.overlays_for_active()
+        except Exception:
+            high, low = {}, {}
+    if name in high and high[name].strip():
+        return high[name].strip()
     ov = _job_env_overrides_load()
     if name in ov and ov[name].strip():
         return ov[name].strip()
-    return os.environ.get(name, default)
+    v = os.environ.get(name)
+    if v is not None:
+        return v
+    if name in low and low[name].strip():
+        return low[name].strip()
+    return default
+
+
+def _eget_int(name: str, default: int) -> int:
+    """Like ``_env_int`` but honors catalog overlays + Settings overrides via ``_eget``.
+
+    Used for platform-geometry-derived knobs (CT range count, GPUs/tray, nodes/rack)
+    so the active platform's geometry applies unless explicitly overridden.
+    """
+    raw = _eget(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return int(str(raw).strip(), 10)
+    except ValueError:
+        return default
 
 
 def _subprocess_env(
@@ -937,8 +1000,20 @@ def _subprocess_env(
     *,
     validation_test_if_unset: str = "nccl_all_reduce,llm",
 ) -> dict[str, str]:
-    out = os.environ.copy()
+    high: dict[str, str] = {}
+    low: dict[str, str] = {}
+    if _CATALOG_AVAILABLE and catalog_context is not None:
+        try:
+            high, low = catalog_context.overlays_for_active()
+        except Exception:
+            high, low = {}, {}
+    # Precedence (later wins): low platform defaults < process env < Settings overrides
+    # < active cluster identity < per-call updates.
+    out: dict[str, str] = {}
+    out.update(low)
+    out.update(os.environ)
     out.update(_job_env_overrides_load())
+    out.update(high)
     if updates:
         out.update(updates)
     # validation_test_env.sh treats unset as a very strict suite (all NCCL collectives + LLM), which
@@ -1853,6 +1928,88 @@ def _configure_session(app: Flask) -> None:
 
 
 _configure_session(app)
+
+
+# Keys we materialized into os.environ from the catalog, with their pre-existing value
+# (or None if absent) so a project switch can restore the baseline before re-applying.
+_catalog_env_saved: dict[str, str | None] = {}
+
+
+def _catalog_restore_environ_baseline() -> None:
+    for key, orig in list(_catalog_env_saved.items()):
+        if orig is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = orig
+    _catalog_env_saved.clear()
+
+
+def _catalog_set_environ(key: str, val: str) -> None:
+    if key not in _catalog_env_saved:
+        _catalog_env_saved[key] = os.environ.get(key)
+    os.environ[key] = val
+
+
+def _apply_catalog_active_to_environ() -> None:
+    """Materialize the active cluster's overlay into ``os.environ``.
+
+    ``_eget``/``_subprocess_env`` already consult the catalog overlays, but several
+    modules read ``os.environ`` directly (``nvis_id_templates``, ``host_exec`` SSH
+    forwarding, ``native_status``, workflow steps). Pushing the overlay into
+    ``os.environ`` keeps them consistent. The previous materialization is restored
+    first so switching projects never leaves stale values behind.
+
+    Precedence preserved: the *high* overlay (cluster identity/naming/connection) wins
+    and is always written; the *low* overlay (platform geometry/tool defaults) only
+    fills keys that have no explicit env/Settings value.
+    """
+    if not (_CATALOG_AVAILABLE and catalog_context is not None):
+        return
+    try:
+        _catalog_restore_environ_baseline()
+        high, low = catalog_context.overlays_for_active()
+        for key, val in high.items():
+            if val and val.strip():
+                _catalog_set_environ(key, val.strip())
+        ov = _job_env_overrides_load()
+        for key, val in low.items():
+            if not val or not val.strip():
+                continue
+            if (os.environ.get(key) or "").strip():
+                continue
+            if (ov.get(key) or "").strip():
+                continue
+            _catalog_set_environ(key, val.strip())
+        # Reset naming/status caches so the new cluster's templates are picked up.
+        try:
+            nvis_id_templates.clear_nvis_naming_cache()
+        except Exception:
+            pass
+        try:
+            native_status.invalidate_job_env_file_cache()
+        except Exception:
+            pass
+        _rack_status_cache_clear_all()
+    except Exception:
+        _logger.exception("catalog: applying active context to environ failed")
+
+
+def _bootstrap_catalog_at_startup() -> None:
+    """Seed/migrate the catalog and apply the active project/cluster to the environment."""
+    if not (_CATALOG_AVAILABLE and catalog_seed is not None and catalog_store is not None):
+        return
+    try:
+        repo = catalog_store.get_repo()
+        summary = catalog_seed.migrate(repo)
+        if summary.get("platforms_added") or summary.get("tools_added") or summary.get(
+            "default_project_created"
+        ):
+            _logger.info("catalog seeded: %s", summary)
+        # Re-materialize on any later catalog change (active switch or doc edits).
+        catalog_context.add_change_hook(_apply_catalog_active_to_environ)
+        _apply_catalog_active_to_environ()
+    except Exception:
+        _logger.exception("catalog bootstrap failed; continuing with legacy env behavior")
 
 
 def _bootstrap_nvftp_sync_at_startup() -> None:
@@ -8950,7 +9107,7 @@ def _export_float_cell(v: object) -> float | None:
 
 
 def _export_nodes_per_rack() -> int:
-    n = _env_int("RACK_EXPORT_NODES_PER_RACK", 18)
+    n = _eget_int("RACK_EXPORT_NODES_PER_RACK", 18)
     return max(1, min(n, 65535))
 
 
@@ -11863,7 +12020,7 @@ def build_cluster_overview(log_dir: Path) -> dict[str, object]:
             summary[k] = 0
     phys = dict(cached.get("physical_rf0") or {}) if isinstance(cached, dict) else {}
     tray_hosts = len(phys)
-    gpus_per_tray = max(1, _env_int("RACK_CLUSTER_GPU_PER_TRAY", 8))
+    gpus_per_tray = max(1, _eget_int("RACK_CLUSTER_GPU_PER_TRAY", 8))
     estimated_gpus = tray_hosts * gpus_per_tray
     validation_total = int(summary.get("done", 0) or 0) + int(summary.get("fail", 0) or 0)
     validation_total += int(summary.get("ongoing", 0) or 0) + int(summary.get("pending", 0) or 0)
@@ -12949,6 +13106,7 @@ if _TERMINAL_ENABLED:
     app.wsgi_app = _WebSocketTerminalMiddleware(app.wsgi_app)  # type: ignore[assignment]
 
 # After all routes and middleware are registered (avoid circular import via nvftp_cache_sync._eget → app).
+_bootstrap_catalog_at_startup()
 _bootstrap_nvftp_sync_at_startup()
 
 

@@ -625,6 +625,18 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
             "RACK_LLAMA_SCRIPT": "run-llama.sh",
             "RACK_IMEX_CHECK_SCRIPT": "imex_check.sh",
         }
+        # Broaden defaults from the catalog Tool registry (env_key -> script basename),
+        # so any registered tool is runnable from a workflow, not just the seven above.
+        try:
+            from catalog.store import TABLE_TOOLS, get_repo as _get_repo
+
+            for _t in _get_repo().list(TABLE_TOOLS):
+                ek = (_t.get("env_key") or "").strip()
+                sc = (_t.get("script") or "").strip()
+                if ek and sc:
+                    _SCRIPT_DEFAULTS.setdefault(ek, sc)
+        except Exception:
+            pass
         resolved = _os.environ.get(command, "").strip()
         if not resolved and default_scripts and command in _SCRIPT_DEFAULTS:
             resolved = str(default_scripts / _SCRIPT_DEFAULTS[command])

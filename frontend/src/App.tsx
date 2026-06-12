@@ -26,6 +26,10 @@ import { EventsView } from "./views/EventsView";
 import { InfrastructureView } from "./views/InfrastructureView";
 import { TerminalPlaceholderView } from "./views/TerminalPlaceholderView";
 import { SettingsView } from "./views/SettingsView";
+import { ProjectsView } from "./views/ProjectsView";
+import { PlatformCatalogView } from "./views/PlatformCatalogView";
+import { ToolRegistryView } from "./views/ToolRegistryView";
+import { ActiveClusterProvider } from "./context/ActiveClusterContext";
 import { LoginPage } from "./pages/LoginPage";
 import TerminalView from "./views/TerminalView";
 import { useRackStatus } from "./hooks/useRackStatus";
@@ -55,6 +59,9 @@ const VIEW_TITLES: Record<ViewId, string> = {
   tools: "Operations & Scripts",
   workflows: "Workflows",
   terminal: "Terminal",
+  projects: "Projects & Clusters",
+  platformCatalog: "Platform Catalog",
+  toolRegistry: "Tool Registry",
   settings: "Settings",
 };
 
@@ -205,6 +212,9 @@ function AppContent() {
           onMenuToggle={handleSidebarToggle}
           activeUsers={activeUsers}
           logDir={logDir}
+          onClusterSwitched={() => {
+            void refreshAll();
+          }}
         />
       }
       breadcrumbs={<AppBreadcrumbs />}
@@ -253,6 +263,9 @@ function AppContent() {
           <Route path="/tools/terminal" element={<TerminalPlaceholderView />} />
           <Route path="/analytics/overview" element={<AnalyticsView logDir={logDir} rows={data?.rows ?? []} />} />
           <Route path="/analytics/reports" element={<ReportsView />} />
+          <Route path="/platform/projects" element={<ProjectsView />} />
+          <Route path="/platform/catalog" element={<PlatformCatalogView />} />
+          <Route path="/platform/tools" element={<ToolRegistryView />} />
           <Route
             path="/settings"
             element={
@@ -288,13 +301,15 @@ function AuthGate() {
   }
 
   return (
-    <AIChatProvider>
-      <HelpPanelProvider>
-        <RackLocksProvider>
-          <AppContent />
-        </RackLocksProvider>
-      </HelpPanelProvider>
-    </AIChatProvider>
+    <ActiveClusterProvider>
+      <AIChatProvider>
+        <HelpPanelProvider>
+          <RackLocksProvider>
+            <AppContent />
+          </RackLocksProvider>
+        </HelpPanelProvider>
+      </AIChatProvider>
+    </ActiveClusterProvider>
   );
 }
 

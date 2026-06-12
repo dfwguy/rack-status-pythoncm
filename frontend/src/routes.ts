@@ -41,6 +41,9 @@ export const ROUTES: RouteDef[] = [
   { viewId: "terminal", path: "/tools/terminal", domain: "Tools", label: "Terminal" },
   { viewId: "analytics", path: "/analytics/overview", domain: "Analytics & Benchmarks", label: "Analytics" },
   { viewId: "reports", path: "/analytics/reports", domain: "Analytics & Benchmarks", label: "Reports" },
+  { viewId: "projects", path: "/platform/projects", domain: "Platform", label: "Projects & Clusters" },
+  { viewId: "platformCatalog", path: "/platform/catalog", domain: "Platform", label: "Platform Catalog" },
+  { viewId: "toolRegistry", path: "/platform/tools", domain: "Platform", label: "Tool Registry" },
   { viewId: "settings", path: "/settings", domain: "Platform", label: "Settings" },
 ];
 

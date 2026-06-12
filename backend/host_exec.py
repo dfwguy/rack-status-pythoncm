@@ -35,12 +35,17 @@ _init_lock = threading.Lock()
 
 _FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_", "NVIS_", "PDSH_")
 
+# Platform-default knobs (from the catalog's tool_param_defaults) that scripts/sbatch
+# consume but which don't carry a forwarded prefix. Forwarded by exact name so the
+# active platform's generation reaches remote jobs over SSH.
+_FORWARD_ENV_NAMES = ("CUDA_MAJ", "GPU_MODEL_FLAG", "MNNVL_TOPOLOGY", "CORE_TO_HCA_SCRIPT")
+
 
 def _build_env_exports() -> str:
     """Build shell export statements for env vars that should be forwarded to the remote host."""
     exports: list[str] = []
     for key, val in os.environ.items():
-        if any(key.startswith(p) for p in _FORWARD_ENV_PREFIXES):
+        if any(key.startswith(p) for p in _FORWARD_ENV_PREFIXES) or key in _FORWARD_ENV_NAMES:
             exports.append(f"export {key}={shlex.quote(val)}")
     return "; ".join(exports) + "; " if exports else ""
 
