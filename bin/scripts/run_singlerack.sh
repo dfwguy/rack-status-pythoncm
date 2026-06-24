@@ -1,5 +1,8 @@
 #!/bin/bash
 module load slurm
+# Force ssh transport: this cluster's pdsh defaults to rsh (refused on compute nodes).
+export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -o CheckHostIP=no"
+export PDSH_RCMD_TYPE=ssh
 #### ROW J
 # done:
 # p17-r01-ct[01-18] - completed
@@ -78,7 +81,7 @@ do
  hosts=($(scontrol show hostname $r))
  : "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the head-node path of the nemo .sqsh image to copy under /raid/data/ on compute nodes}"
  _sqsh_b=$(basename "$NEMO_SQSH_SRC")
- pdsh -w $(echo "${hosts[*]}"|tr ' ' ',') "mkdir -p /raid/data; rsync -ah --progress $NEMO_SQSH_SRC /raid/data/$_sqsh_b"
+ pdsh -R ssh -w $(echo "${hosts[*]}"|tr ' ' ',') "mkdir -p /raid/data; rsync -ah --progress $NEMO_SQSH_SRC /raid/data/$_sqsh_b"
 
  n=$[${#hosts[*]}/2*2]
 

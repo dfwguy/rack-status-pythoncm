@@ -3,6 +3,11 @@
 # Remote runs with RACK_WEB_HW_CHECK=1 so checker.sh never calls scontrol drain/undrain.
 set -uo pipefail
 
+# Force ssh transport for pdsh/pdcp: this cluster's pdsh defaults to rsh, which is
+# refused on compute nodes ("connect: Connection refused"). Matches sysinfo.sh.
+export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -o CheckHostIP=no"
+export PDSH_RCMD_TYPE=ssh
+
 PDSH_W="${1:-}"
 shift || true
 if [[ "${1:-}" == "--" ]]; then shift; fi
@@ -28,15 +33,15 @@ fi
 
 TMP="/tmp/rack_web_checker.$$.$RANDOM.sh"
 cleanup() {
-  pdsh -w "${PDSH_W}" -f 64 "rm -f ${TMP}" >/dev/null 2>&1 || true
+  pdsh -R ssh -w "${PDSH_W}" -f 64 "rm -f ${TMP}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
-pdcp -w "${PDSH_W}" -f 64 "${LOCAL}" "${TMP}" || exit 5
+pdcp -R ssh -w "${PDSH_W}" -f 64 "${LOCAL}" "${TMP}" || exit 5
 
 args_q=()
 for a in "$@"; do args_q+=("$(printf '%q' "$a")"); done
 qargs="${args_q[*]}"
 
-pdsh -w "${PDSH_W}" -f 64 "RACK_WEB_HW_CHECK=1 bash ${TMP} ${qargs}"
+pdsh -R ssh -w "${PDSH_W}" -f 64 "RACK_WEB_HW_CHECK=1 bash ${TMP} ${qargs}"
 exit $?

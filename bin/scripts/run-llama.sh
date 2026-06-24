@@ -8,6 +8,10 @@
 
 set -uo pipefail
 
+# Force ssh transport: this cluster's pdsh defaults to rsh (refused on compute nodes).
+export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -o CheckHostIP=no"
+export PDSH_RCMD_TYPE=ssh
+
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 if [[ $# -lt 1 ]]; then
@@ -30,7 +34,7 @@ mkdir -p sn-llama
 
 : "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the head-node path of the nemo .sqsh image (same as validation)}"
 _sqsh_b=$(basename "$NEMO_SQSH_SRC")
-pdsh -w "$(echo "${hosts[@]}" | tr ' ' ',')" "mkdir -p /raid/data; rsync -ah --progress $NEMO_SQSH_SRC /raid/data/$_sqsh_b"
+pdsh -R ssh -w "$(echo "${hosts[@]}" | tr ' ' ',')" "mkdir -p /raid/data; rsync -ah --progress $NEMO_SQSH_SRC /raid/data/$_sqsh_b"
 
 for i in "${hosts[@]}"; do
   [[ -z "$i" ]] && continue
