@@ -35,6 +35,15 @@ _SSH_EXTRA_OPTS: list[str] = []
 _SSH_CONNECT_TIMEOUT: str = "10"
 _SSH_ALIVE_INTERVAL: str = "5"
 _SSH_ALIVE_COUNT: str = "2"
+# Secondary "script" SSH profile for privileged, node-operational tools (sysinfo,
+# pdsh hardware checks, switch/IMEX/BMC actions). On split clusters the control
+# plane (cmsh / slurm queries) runs on the head as an unprivileged user, while
+# these run on a node that grants root (e.g. an slogin node reachable on the
+# container's host network). Unset => privileged calls fall back to the control
+# target, so single-target clusters are unaffected.
+_SCRIPT_SSH_HOST: str | None = None
+_SCRIPT_SSH_USER: str | None = None
+_SCRIPT_SSH_KEY: str | None = None
 _init_lock = threading.Lock()
 
 _FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_", "NVIS_", "PDSH_")
@@ -57,6 +66,7 @@ def _build_env_exports() -> str:
 def _ensure_init() -> None:
     global _EXEC_MODE, _SSH_HOST, _SSH_USER, _SSH_KEY, _SSH_PORT, _SSH_EXTRA_OPTS
     global _SSH_CONNECT_TIMEOUT, _SSH_ALIVE_INTERVAL, _SSH_ALIVE_COUNT
+    global _SCRIPT_SSH_HOST, _SCRIPT_SSH_USER, _SCRIPT_SSH_KEY
     if _EXEC_MODE is not None:
         return
     with _init_lock:
@@ -67,6 +77,11 @@ def _ensure_init() -> None:
         _SSH_USER = (os.environ.get("RACK_SSH_USER") or "root").strip() or "root"
         _SSH_KEY = (os.environ.get("RACK_SSH_KEY") or "/run/secrets/ssh_key").strip()
         _SSH_PORT = (os.environ.get("RACK_SSH_PORT") or "22").strip() or "22"
+        # Privileged "script" profile (optional). User defaults to root; key
+        # falls back to the control key so a single mounted key serves both.
+        _SCRIPT_SSH_HOST = (os.environ.get("RACK_SCRIPT_SSH_HOST") or "").strip()
+        _SCRIPT_SSH_USER = (os.environ.get("RACK_SCRIPT_SSH_USER") or "root").strip() or "root"
+        _SCRIPT_SSH_KEY = (os.environ.get("RACK_SCRIPT_SSH_KEY") or _SSH_KEY or "").strip()
         raw_opts = (os.environ.get("RACK_SSH_OPTS") or "").strip()
         _SSH_EXTRA_OPTS = shlex.split(raw_opts) if raw_opts else []
         # Bounded connect + keepalive so a dropped VPN / dead tunnel fails fast
@@ -83,11 +98,12 @@ def is_remote() -> bool:
     return _EXEC_MODE == "ssh"
 
 
-def wrap_for_host(cmd: list[str], *, cwd: str | None = None) -> list[str]:
+def wrap_for_host(cmd: list[str], *, cwd: str | None = None, profile: str = "control") -> list[str]:
     """Return *cmd* as-is locally, or wrapped in an SSH argv when remote.
 
     The returned list is suitable for ``subprocess.Popen(…)``.  Environment
     variables matching the forwarding prefixes are exported on the remote side.
+    ``profile="script"`` routes to the privileged target when configured.
     """
     _ensure_init()
     if _EXEC_MODE != "ssh":
@@ -97,18 +113,33 @@ def wrap_for_host(cmd: list[str], *, cwd: str | None = None) -> list[str]:
     if cwd:
         shell_str = f"cd {shlex.quote(cwd)} && {shell_str}"
     shell_str = env_prefix + shell_str
-    return _ssh_base_argv() + [shell_str]
+    return _ssh_base_argv(profile=profile) + [shell_str]
 
 
-def _ssh_base_argv(connect_timeout: str | None = None) -> list[str]:
+def script_target_configured() -> bool:
+    """True when a dedicated privileged ``script`` SSH target is configured."""
+    _ensure_init()
+    return bool(_SCRIPT_SSH_HOST)
+
+
+def _ssh_base_argv(connect_timeout: str | None = None, *, profile: str = "control") -> list[str]:
     """Build the ``ssh …`` prefix used for both run and popen.
+
+    ``profile`` selects the target: ``"control"`` (default) uses ``RACK_SSH_*``
+    (head node / cmsh / slurm); ``"script"`` uses ``RACK_SCRIPT_SSH_*`` for
+    privileged node-operational tools, falling back to the control target when no
+    script target is configured.
 
     Includes a bounded ``ConnectTimeout`` and ``ServerAlive*`` keepalive so that a
     dropped VPN / dead network path is detected in seconds rather than blocking the
     calling worker on a half-open TCP connection.
     """
     _ensure_init()
-    if not _SSH_HOST:
+    if profile == "script" and _SCRIPT_SSH_HOST:
+        host, user, key = _SCRIPT_SSH_HOST, _SCRIPT_SSH_USER, _SCRIPT_SSH_KEY
+    else:
+        host, user, key = _SSH_HOST, _SSH_USER, _SSH_KEY
+    if not host:
         raise RuntimeError(
             "RACK_EXEC_MODE=ssh but RACK_SSH_HOST is not set. "
             "Point it to the head-node hostname or IP."
@@ -122,10 +153,10 @@ def _ssh_base_argv(connect_timeout: str | None = None) -> list[str]:
         "-o", f"ServerAliveCountMax={_SSH_ALIVE_COUNT or '2'}",
         "-p", _SSH_PORT or "22",
     ]
-    if _SSH_KEY and os.path.isfile(_SSH_KEY):
-        argv.extend(["-i", _SSH_KEY])
+    if key and os.path.isfile(key):
+        argv.extend(["-i", key])
     argv.extend(_SSH_EXTRA_OPTS)
-    argv.append(f"{_SSH_USER}@{_SSH_HOST}")
+    argv.append(f"{user}@{host}")
     return argv
 
 
@@ -288,6 +319,7 @@ def run_on_host(
     cwd: str | None = None,
     env: dict[str, str] | None = None,
     login_shell: bool = True,
+    profile: str = "control",
 ) -> subprocess.CompletedProcess[str]:
     """Execute *cmd* on the host, locally or via SSH.
 
@@ -313,7 +345,7 @@ def run_on_host(
         if cwd:
             remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
         remote_cmd = env_prefix + remote_cmd
-        argv = _ssh_base_argv() + [remote_cmd]
+        argv = _ssh_base_argv(profile=profile) + [remote_cmd]
         return subprocess.run(
             argv,
             capture_output=True,
@@ -377,6 +409,7 @@ def popen_on_host(
     *,
     cwd: str | None = None,
     env: dict[str, str] | None = None,
+    profile: str = "control",
 ) -> HostProcess:
     """Start a long-running command, returning a :class:`HostProcess`.
 
@@ -392,7 +425,7 @@ def popen_on_host(
         if cwd:
             remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
         remote_cmd = env_prefix + remote_cmd
-        argv = _ssh_base_argv() + [remote_cmd]
+        argv = _ssh_base_argv(profile=profile) + [remote_cmd]
         proc = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,

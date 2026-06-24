@@ -101,3 +101,47 @@ class TestSshArgvBuilding:
         argv = host_exec._ssh_base_argv()
         assert "ssh" in argv
         assert "root@10.0.0.1" in argv
+
+
+class TestScriptProfileRouting:
+    """Privileged 'script' profile routes to RACK_SCRIPT_SSH_* when configured."""
+
+    def _set_targets(self, *, script_host: str) -> None:
+        host_exec._EXEC_MODE = "ssh"
+        host_exec._SSH_HOST = "head.cluster"
+        host_exec._SSH_USER = "cmods"
+        host_exec._SSH_PORT = "22"
+        host_exec._SSH_KEY = "/nonexistent"
+        host_exec._SSH_EXTRA_OPTS = []
+        host_exec._SCRIPT_SSH_HOST = script_host
+        host_exec._SCRIPT_SSH_USER = "root"
+        host_exec._SCRIPT_SSH_KEY = "/nonexistent"
+
+    def test_control_profile_uses_head(self):
+        self._set_targets(script_host="127.0.0.1")
+        argv = host_exec._ssh_base_argv(profile="control")
+        assert "cmods@head.cluster" in argv
+        assert "root@127.0.0.1" not in argv
+
+    def test_script_profile_uses_privileged_target(self):
+        self._set_targets(script_host="127.0.0.1")
+        argv = host_exec._ssh_base_argv(profile="script")
+        assert "root@127.0.0.1" in argv
+        assert "cmods@head.cluster" not in argv
+
+    def test_script_profile_falls_back_to_control_when_unset(self):
+        self._set_targets(script_host="")
+        argv = host_exec._ssh_base_argv(profile="script")
+        assert "cmods@head.cluster" in argv
+
+    def test_script_target_configured_flag(self):
+        self._set_targets(script_host="127.0.0.1")
+        assert host_exec.script_target_configured() is True
+        self._set_targets(script_host="")
+        assert host_exec.script_target_configured() is False
+
+    def test_wrap_for_host_script_profile(self):
+        self._set_targets(script_host="127.0.0.1")
+        argv = host_exec.wrap_for_host(["bash", "sysinfo.sh", "rack01"], profile="script")
+        assert "root@127.0.0.1" in argv
+        assert argv[-1].endswith("bash sysinfo.sh rack01")

@@ -2583,6 +2583,73 @@ def _dedupe_hostnames_preserve_spelling(hosts: list[str]) -> list[str]:
     return sorted(out_map.values(), key=str.casefold)
 
 
+# --- Live inventory (Slurm NodeNames) -------------------------------------------------
+# The authoritative list of *real* node hostnames for node-targeting tools (sysinfo,
+# pdsh, validation). Using inventory instead of a generated ``<rack>-<ctNN>`` template
+# makes targets correct on any site naming scheme (e.g. Boston's
+# ``bos01-a07-13-s1-dgx-03-c03`` under rack ``bos01-a07``). Short TTL cache so repeated
+# target builds in one request don't re-run ``sinfo``.
+_slurm_nodenames_cache: tuple[float, list[str]] = (0.0, [])
+_slurm_nodenames_lock = threading.Lock()
+
+
+def _all_slurm_nodenames() -> list[str]:
+    """All real Slurm ``NodeName`` values (``sinfo -N``), deduped; short TTL cache.
+
+    Returns the last cached value (possibly empty) when Slurm is unavailable.
+    """
+    global _slurm_nodenames_cache
+    ttl = max(0, _env_int("RACK_INVENTORY_NODENAMES_TTL_SEC", 60))
+    ts, cached = _slurm_nodenames_cache
+    if cached and (time.monotonic() - ts) < ttl:
+        return cached
+    with _slurm_nodenames_lock:
+        ts, cached = _slurm_nodenames_cache
+        if cached and (time.monotonic() - ts) < ttl:
+            return cached
+        try:
+            proc = _run_bash_slurm_prefix(
+                'sinfo -N -h -o "%N"',
+                timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return cached
+        if proc.returncode != 0:
+            return cached
+        hosts = _dedupe_hostnames_preserve_spelling(
+            [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+        )
+        if hosts:
+            _slurm_nodenames_cache = (time.monotonic(), hosts)
+            return hosts
+        return cached
+
+
+def _rack_node_hostnames_from_inventory(rack: str) -> list[str]:
+    """Real node hostnames belonging to *rack*, derived from live Slurm inventory.
+
+    Nodes are matched to the rack id by prefix (rack id followed by a separator), so
+    this is **template-free** and works where the hostname is not ``<rack>-<ctNN>``.
+    Returns ``[]`` when inventory is unavailable or nothing matches.
+    """
+    rid = (rack or "").strip()
+    if not rid:
+        return []
+    hosts = _all_slurm_nodenames()
+    if not hosts:
+        return []
+    rid_cf = rid.casefold()
+    seps = ("-", "_", ".", ":", "/")
+    matched: list[str] = []
+    for h in hosts:
+        hcf = h.casefold()
+        if hcf == rid_cf:
+            matched.append(h)
+        elif hcf.startswith(rid_cf) and len(h) > len(rid) and h[len(rid)] in seps:
+            matched.append(h)
+    return matched
+
+
 def _split_pdsh_w_top_level_commas(w: str) -> list[str]:
     """Split a pdsh ``-w`` comma list without splitting commas inside ``[…]`` host ranges."""
     w = (w or "").strip()
@@ -3358,7 +3425,23 @@ def _normalize_llama_nodes_spec(raw: object) -> str:
 
 
 def validation_target_for_rack(rack: str, override: str | None) -> str:
-    """Build validation target for run_singlerack.sh / sysinfo (pattern from NVIS_* templates)."""
+    """Build the node target for run_singlerack.sh / sysinfo / pdsh.
+
+    Primary source is **live Slurm inventory** (real ``NodeName`` values matched to the
+    rack id), so the target uses the cluster's actual node hostnames regardless of the
+    site naming scheme. Falls back to the ``NVIS_*`` template when an explicit override
+    is given, inventory is unavailable, or nothing matches. Set
+    ``RACK_TARGET_FROM_INVENTORY=0`` to force the template path.
+    """
+    ov = (override or "").strip()
+    inventory_on = (
+        os.environ.get("RACK_TARGET_FROM_INVENTORY", "1").strip().lower()
+        not in ("0", "false", "no", "off")
+    )
+    if not ov and inventory_on:
+        hosts = _rack_node_hostnames_from_inventory(rack)
+        if hosts:
+            return ",".join(hosts)
     return _nvis_naming().build_validation_target(
         rack, _validation_ct_inner(), override
     )
@@ -5728,11 +5811,14 @@ def run_hw_check(pdsh_w: str, checker_argv: list[str]) -> dict:
             "pdsh_w": w,
         }
     try:
-        proc = subprocess.run(
+        # Route through the privileged script profile (root@slogin) like sysinfo:
+        # hw_check_pdsh.sh pdsh's to compute nodes and needs root on each node, and
+        # the script lives on the cluster filesystem (not the dashboard host).
+        proc = host_exec.run_on_host(
             cmd,
-            capture_output=True,
-            text=True,
             timeout=timeout,
+            env=_subprocess_env(),
+            profile="script",
         )
     except FileNotFoundError:
         raise OSError("bash executable not found") from None
@@ -5757,24 +5843,36 @@ def _prepare_hw_check(body: dict) -> tuple[dict[str, object] | None, tuple[objec
     if os.environ.get("RACK_HW_CHECK_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (jsonify({"ok": False, "error": "HW check disabled (RACK_HW_CHECK_DISABLED)"}), 403)
     specs_raw = body.get("specs")
-    if not isinstance(specs_raw, list) or not specs_raw:
-        return None, (
-            jsonify(
-                {
-                    "ok": False,
-                    "error": (
-                        'send JSON {"specs": [...], "preset": "…"} and/or optional "checker_args": "-d …" or ["-d","…"]'
-                    ),
-                }
-            ),
-            400,
-        )
-    try:
-        specs = merge_ct_individuals_for_power([str(x) for x in specs_raw])
-    except ValueError as e:
-        return None, (jsonify({"ok": False, "error": str(e)}), 400)
-    if not specs:
-        return None, (jsonify({"ok": False, "error": "no valid tray specs after merge"}), 400)
+    pdsh_w = ""
+    if isinstance(specs_raw, list) and specs_raw:
+        try:
+            specs = merge_ct_individuals_for_power([str(x) for x in specs_raw])
+        except ValueError as e:
+            return None, (jsonify({"ok": False, "error": str(e)}), 400)
+        if not specs:
+            return None, (jsonify({"ok": False, "error": "no valid tray specs after merge"}), 400)
+        pdsh_w = ",".join(specs)
+    else:
+        # Fallback: derive the whole-rack node list from live inventory (real Slurm
+        # NodeNames) when the client sent no tray specs. Keeps hw-check working on
+        # sites where the dashboard tray parse is naming-template dependent (e.g.
+        # Boston's bos01-aRR-NN-s1-dgx-GG-cNN hostnames).
+        rack = (body.get("rack") or "").strip()
+        hosts = _rack_node_hostnames_from_inventory(rack) if rack else []
+        if hosts:
+            pdsh_w = ",".join(hosts)
+        else:
+            return None, (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": (
+                            'send JSON {"specs": [...], "preset": "…"} and/or optional "checker_args": "-d …" or ["-d","…"]'
+                        ),
+                    }
+                ),
+                400,
+            )
 
     checker_args_display: str | None = None
     argv: list[str]
@@ -5816,7 +5914,6 @@ def _prepare_hw_check(body: dict) -> tuple[dict[str, object] | None, tuple[objec
         except ValueError as e:
             return None, (jsonify({"ok": False, "error": str(e)}), 400)
 
-    pdsh_w = ",".join(specs)
     return {
         "pdsh_w": pdsh_w,
         "preset": preset,
@@ -10433,8 +10530,15 @@ def _merged_stdout_stream_generator(
     linebuffer_env_var: str,
     linebuffer_default: str = "1",
     env_extra: dict[str, str] | None = None,
+    privileged: bool = False,
 ) -> Iterator[bytes]:
-    """Yield merged stdout/stderr from a subprocess until exit (or timeout)."""
+    """Yield merged stdout/stderr from a subprocess until exit (or timeout).
+
+    ``privileged=True`` routes the command to the dedicated root "script" SSH
+    target (``RACK_SCRIPT_SSH_*``) when configured, for node-operational tools
+    (sysinfo, switch audits) that require root + ``pdsh`` and therefore cannot run
+    as the unprivileged control-plane user on the head node.
+    """
     cmd_run = list(cmd)
     remote = host_exec.is_remote()
     if not remote and (_eget(linebuffer_env_var, linebuffer_default) or "").strip().lower() in (
@@ -10446,7 +10550,9 @@ def _merged_stdout_stream_generator(
         stdbuf = shutil.which("stdbuf")
         if stdbuf:
             cmd_run = [stdbuf, "-oL", "-eL", *cmd_run]
-    cmd_run = host_exec.wrap_for_host(cmd_run, cwd=cwd if remote else None)
+    cmd_run = host_exec.wrap_for_host(
+        cmd_run, cwd=cwd if remote else None, profile="script" if privileged else "control"
+    )
     env = None if remote else _subprocess_env(env_extra)
     proc = subprocess.Popen(
         cmd_run,
@@ -10529,6 +10635,7 @@ def _sysinfo_stream_generator(prep: dict):
         timeout_sec,
         linebuffer_env_var="RACK_SYSINFO_LINEBUFFER",
         linebuffer_default="1",
+        privileged=True,
     )
 
 
@@ -10590,6 +10697,7 @@ def _nvswitch_audit_stream_generator(prep: dict):
         timeout_sec,
         linebuffer_env_var="RACK_NVSWITCH_AUDIT_LINEBUFFER",
         linebuffer_default="1",
+        privileged=True,
     )
 
 
