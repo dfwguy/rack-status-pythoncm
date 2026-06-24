@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 _TEMPLATE_TOKEN_RE = re.compile(
-    r"\[\\d\+\]|\[(\d{2})-(\d{2})\]",
+    r"\[\\d\+\]|\[(\d{2})-(\d{2})\]|\[(?:A-Z|a-z)\]",
 )
 
 # Defaults when Settings leaves naming fields empty (cmsh spelling: p5-r03-ct12, …).
@@ -94,6 +94,10 @@ def parse_template(template: str) -> ParsedTemplate:
                 segments.append(("lit", lit))
         if m.group(0) == r"[\d+]":
             segments.append(("slot", str(slot_i), "digits"))
+        elif m.group(1) is None:
+            # Single-letter slot (``[A-Z]`` / ``[a-z]``) for sites with row-letter
+            # racks (e.g. ``bos01-a05`` vs ``bos01-b05``). Matched case-insensitively.
+            segments.append(("slot", str(slot_i), "alpha"))
         else:
             lo, hi = m.group(1), m.group(2)
             if int(lo) > int(hi):
@@ -170,13 +174,38 @@ def _build_from_template(parsed: ParsedTemplate, slot_values: list[str]) -> str:
     return "".join(out)
 
 
+def _rebuild_through_slot(parsed: ParsedTemplate, values: list[str], up_to: int) -> str:
+    """Rebuild the template literal/slot string up to and including slot ``up_to``.
+
+    Trailing separators (``-_/:.``) are stripped so the resulting grouping key is
+    stable (e.g. ``bos01-a`` rather than ``bos01-a-``). Returns ``""`` when
+    ``up_to`` is negative (i.e. the requested level does not exist).
+    """
+    if up_to < 0:
+        return ""
+    out: list[str] = []
+    slot_i = 0
+    for seg in parsed.segments:
+        if seg[0] == "lit":
+            out.append(seg[1])
+        else:
+            if slot_i > up_to:
+                break
+            idx = int(seg[1])
+            out.append(values[idx] if idx < len(values) else "")
+            slot_i += 1
+            if slot_i > up_to:
+                break
+    return re.sub(r"[-_/:.]+$", "", "".join(out))
+
+
 def _format_slot_groups(parsed: ParsedTemplate, groups: Iterable[str]) -> list[str]:
     """Map regex capture groups to canonical slot strings (zero-pad only for ``range2`` slots)."""
     out: list[str] = []
     slot_i = 0
     for g in groups:
         kind = parsed.slot_kind(slot_i)
-        if kind == "digits":
+        if kind in ("digits", "alpha"):
             out.append(g)
         else:
             out.append(g.zfill(2))
@@ -187,6 +216,8 @@ def _format_slot_groups(parsed: ParsedTemplate, groups: Iterable[str]) -> list[s
 def _slot_regex_pat(kind: SlotKind, *, loose: bool) -> str:
     if kind == "digits":
         return r"(\d+)"
+    if kind == "alpha":
+        return r"([A-Za-z])"
     return r"(\d{1,2})" if loose else r"(\d{2})"
 
 
@@ -240,6 +271,25 @@ class HostnameMatch:
     hostname: str
     rack_id: str
     tray: str
+
+
+@dataclass(frozen=True)
+class RackParts:
+    """A rack id decomposed into its datacenter hierarchy (section -> row -> rack).
+
+    Levels are derived from the trailing slots of ``NVIS_RACK_ID``: the last slot
+    is the rack, the second-to-last the row, the third-to-last the section. Sites
+    with fewer slots simply collapse the higher levels (Boston ``bos01-[A-Z][01-99]``
+    -> row letter + rack; Bright ``p[\\d+]-r[\\d+]`` -> pod-as-row + rack).
+    """
+
+    rack_id: str
+    section_key: str
+    section_label: str
+    row_key: str
+    row_label: str
+    rack_label: str
+    sort_key: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -393,7 +443,8 @@ class NvisNaming:
         m = self.rack_scan_re.fullmatch(rid.strip())
         if not m:
             return (10**9,) * (self.rack_template.slot_count + 1) + (hash(rid) % 10**6,)
-        return tuple(int(g, 10) for g in m.groups()) + (0,)
+        # Letter slots (``[A-Z]``) sort by their character ordinal so row ``a`` precedes ``b``.
+        return tuple(int(g, 10) if g.isdigit() else ord(g.lower()) for g in m.groups()) + (0,)
 
     def is_r00_rack(self, rid: str) -> bool:
         c = self.canonical_rack_id(rid)
@@ -402,7 +453,93 @@ class NvisNaming:
         m = self.rack_re.fullmatch(c)
         if not m or not m.groups():
             return False
-        return int(m.groups()[-1], 10) == 0
+        last = m.groups()[-1]
+        return last.isdigit() and int(last, 10) == 0
+
+    def rack_parts(self, rid: str) -> RackParts | None:
+        """Decompose a rack id into section/row/rack parts using the rack template.
+
+        This is the single authoritative decomposition consumed by the dashboard
+        hierarchy (floor view, etc.) so the SPA never re-implements template
+        parsing. Returns ``None`` when *rid* does not match ``NVIS_RACK_ID``.
+        """
+        canon = self.canonical_rack_id(rid)
+        if not canon:
+            return None
+        m = self.rack_scan_re.fullmatch(canon)
+        if not m:
+            return None
+        values = _format_slot_groups(self.rack_template, list(m.groups()))
+        n = len(values)
+        rack_label = values[-1] if n >= 1 else canon
+        row_label = values[-2] if n >= 2 else ""
+        row_key = _rebuild_through_slot(self.rack_template, values, n - 2) if n >= 2 else canon
+        section_key = _rebuild_through_slot(self.rack_template, values, n - 3) if n >= 3 else ""
+        section_label = section_key or ("Cluster" if n >= 2 else canon)
+        return RackParts(
+            rack_id=canon,
+            section_key=section_key,
+            section_label=section_label,
+            row_key=row_key,
+            row_label=row_label,
+            rack_label=rack_label,
+            sort_key=self.rack_sort_key(canon),
+        )
+
+    def build_hierarchy(self, rack_ids: Iterable[str]) -> dict:
+        """Group rack ids into a ``section -> row -> rack`` tree (JSON-serializable).
+
+        The single source of truth for datacenter layout: any surface that needs
+        rows/sections consumes this instead of parsing rack ids itself. Racks that
+        don't match ``NVIS_RACK_ID`` are returned under ``unmatched`` (never
+        silently dropped). ``levels`` lists which grouping levels are meaningful
+        for the active naming (``section`` is omitted for 2-slot templates such as
+        Boston's ``bos01-[A-Z][01-99]``).
+        """
+        sections: dict[str, dict] = {}
+        rows: dict[tuple[str, str], dict] = {}
+        unmatched: list[str] = []
+        has_section = False
+        has_row = False
+        for rid in rack_ids:
+            parts = self.rack_parts(rid)
+            if parts is None:
+                unmatched.append(rid)
+                continue
+            if parts.section_key:
+                has_section = True
+            if parts.row_key != parts.rack_id:
+                has_row = True
+            sec = sections.get(parts.section_key)
+            if sec is None:
+                sec = {"key": parts.section_key, "label": parts.section_label, "rows": []}
+                sections[parts.section_key] = sec
+            rkey = (parts.section_key, parts.row_key)
+            row = rows.get(rkey)
+            if row is None:
+                row = {"key": parts.row_key, "label": parts.row_label, "racks": []}
+                rows[rkey] = row
+                sec["rows"].append(row)
+            row["racks"].append({"rack": parts.rack_id, "label": parts.rack_label})
+
+        def _row_key(row: dict) -> tuple[int, ...]:
+            return self.rack_sort_key(row["racks"][0]["rack"]) if row["racks"] else (10**9,)
+
+        for row in rows.values():
+            row["racks"].sort(key=lambda r: self.rack_sort_key(r["rack"]))
+        for sec in sections.values():
+            sec["rows"].sort(key=_row_key)
+        ordered = sorted(
+            sections.values(),
+            key=lambda s: _row_key(s["rows"][0]) if s["rows"] else (10**9,),
+        )
+        levels: list[str] = []
+        if has_section:
+            levels.append("section")
+        if has_row:
+            levels.append("row")
+        levels.append("rack")
+        return {"levels": levels, "sections": ordered, "unmatched": unmatched}
 
     def build_tray_hostname(self, rack_id: str, tray: str) -> str:
         """Full CT hostname from canonical rack id and tray token."""

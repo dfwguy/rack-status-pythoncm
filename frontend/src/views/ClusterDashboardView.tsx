@@ -7,6 +7,7 @@ import DialogTitle from "@mui/material/DialogTitle";
 import DialogContent from "@mui/material/DialogContent";
 import DialogActions from "@mui/material/DialogActions";
 import TextField from "@mui/material/TextField";
+import { RefreshCw } from "lucide-react";
 import { Text, Button } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
@@ -28,8 +29,20 @@ const STATUS_YELLOW = "#f2c94c";
 interface ClusterDashboardViewProps {
   data: ClusterOverviewResponse | null;
   loading: boolean;
+  refreshing?: boolean;
+  lastUpdated?: number | null;
   error: string | null;
   onClusterMetadataSaved?: () => void;
+}
+
+function formatAgo(ts: number): string {
+  const sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (sec < 5) return "just now";
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  return `${hr}h ago`;
 }
 
 const emptyMeta = (): ClusterDashboardMetadata => ({
@@ -41,6 +54,8 @@ const emptyMeta = (): ClusterDashboardMetadata => ({
 export function ClusterDashboardView({
   data,
   loading,
+  refreshing = false,
+  lastUpdated = null,
   error,
   onClusterMetadataSaved,
 }: ClusterDashboardViewProps) {
@@ -318,7 +333,50 @@ export function ClusterDashboardView({
     >
       <PageHeader contentId="dashboard" title="Overview" />
 
-      {error && <ErrorBanner message={error} />}
+      {data && (refreshing || lastUpdated) && (
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            mb: 1.5,
+            color: "var(--text-color-secondary)",
+          }}
+        >
+          {refreshing && (
+            <Box
+              component="span"
+              sx={{
+                display: "inline-flex",
+                animation: "nvis-overview-spin 0.9s linear infinite",
+                "@keyframes nvis-overview-spin": {
+                  from: { transform: "rotate(0deg)" },
+                  to: { transform: "rotate(360deg)" },
+                },
+              }}
+            >
+              <RefreshCw size={14} />
+            </Box>
+          )}
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+            {refreshing
+              ? "Refreshing… showing last known status"
+              : lastUpdated
+                ? `Updated ${formatAgo(lastUpdated)}`
+                : ""}
+          </Text>
+        </Box>
+      )}
+
+      {error && data && (
+        <Box sx={{ mb: 1.5 }}>
+          <Text kind="body/regular/sm" style={{ color: STATUS_YELLOW }}>
+            Last refresh failed ({error}). Showing last known status.
+          </Text>
+        </Box>
+      )}
+
+      {error && !data && <ErrorBanner message={error} />}
 
       <Dialog
         open={nvftpDialogOpen}

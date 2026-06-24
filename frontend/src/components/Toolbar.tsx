@@ -22,6 +22,7 @@ import {
   Users,
   Terminal,
 } from "lucide-react";
+import { ConnectionStatusIndicator } from "./ConnectionStatusIndicator";
 import { SqueueDialog } from "./SqueueDialog";
 import { SinfoDialog } from "./SinfoDialog";
 import WebTerminalDialog from "./rack/WebTerminalDialog";
@@ -41,6 +42,13 @@ interface ToolbarProps {
   logDir?: string;
   /** Called after the active project/cluster is switched (refresh dashboards). */
   onClusterSwitched?: () => void;
+  /** UI ↔ backend link state for the connection indicator. */
+  backendConnected?: boolean;
+  /** Backend ↔ cluster (SSH) link state for the connection indicator. */
+  clusterReachable?: boolean;
+  execMode?: "ssh" | "local";
+  lastUpdated?: number | null;
+  onReconnect?: () => void;
 }
 
 export function Toolbar({
@@ -54,6 +62,11 @@ export function Toolbar({
   activeUsers,
   logDir,
   onClusterSwitched,
+  backendConnected = true,
+  clusterReachable = true,
+  execMode = "ssh",
+  lastUpdated = null,
+  onReconnect,
 }: ToolbarProps) {
   const { user, logout } = useAuth();
   const [squeueOpen, setSqueueOpen] = useState(false);
@@ -228,6 +241,14 @@ export function Toolbar({
             </Tooltip>
 
             <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
+
+            <ConnectionStatusIndicator
+              backendConnected={backendConnected}
+              clusterReachable={clusterReachable}
+              execMode={execMode}
+              lastUpdated={lastUpdated}
+              onReconnect={onReconnect}
+            />
 
             {activeUsers != null && activeUsers > 0 && (
               <Tooltip title="Who is doing what">

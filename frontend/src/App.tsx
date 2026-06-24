@@ -9,6 +9,7 @@ import { AppLayout } from "./components/AppLayout";
 import { Sidebar, type ViewId } from "./components/Sidebar";
 import { Toolbar } from "./components/Toolbar";
 import { AppBreadcrumbs } from "./components/AppBreadcrumbs";
+import { ConnectionBanner } from "./components/ConnectionBanner";
 import AIChatWidget from "./components/ai/AIChatWidget";
 import { ClusterDashboardView } from "./views/ClusterDashboardView";
 import { SingleRackView } from "./views/SingleRackView";
@@ -118,17 +119,49 @@ function AppContent() {
   const activeView: ViewId = pathToRoute(location.pathname)?.viewId ?? "dashboard";
   const selectedRack = rackIdFromPath(location.pathname);
 
-  const { data, loading, error, refresh, activeUsers } = useRackStatus(logDir);
+  const {
+    data,
+    loading,
+    error,
+    reachable: statusReachable,
+    unreachableDetail: statusUnreachableDetail,
+    backendConnected,
+    lastUpdated: statusLastUpdated,
+    refresh,
+    activeUsers,
+  } = useRackStatus(logDir);
   const {
     data: clusterOverview,
     loading: clusterLoading,
+    refreshing: clusterRefreshing,
     error: clusterError,
+    lastUpdated: clusterLastUpdated,
     refresh: refreshCluster,
   } = useClusterOverview(logDir);
 
   const refreshAll = useCallback(async () => {
     await Promise.all([refresh(), refreshCluster()]);
   }, [refresh, refreshCluster]);
+
+  const [reconnecting, setReconnecting] = useState(false);
+  const clusterUnreachable =
+    statusReachable === false || clusterOverview?.cluster_reachable === false;
+  const unreachableDetail =
+    statusUnreachableDetail || clusterOverview?.cluster_unreachable_detail || null;
+
+  const handleReconnect = useCallback(async () => {
+    setReconnecting(true);
+    try {
+      await fetch("/api/cluster-health/reconnect", { method: "POST" });
+    } catch {
+      /* ignore; refreshAll below will reflect the new state */
+    }
+    try {
+      await refreshAll();
+    } finally {
+      setReconnecting(false);
+    }
+  }, [refreshAll]);
 
   useEffect(() => {
     if (!data?.log_dir || logDirSeededRef.current) return;
@@ -207,7 +240,7 @@ function AppContent() {
           onRefresh={() => {
             void refreshAll();
           }}
-          loading={loading || clusterLoading}
+          loading={loading || clusterLoading || clusterRefreshing}
           sidebarOpen={sidebarOpen}
           onMenuToggle={handleSidebarToggle}
           activeUsers={activeUsers}
@@ -215,12 +248,23 @@ function AppContent() {
           onClusterSwitched={() => {
             void refreshAll();
           }}
+          backendConnected={backendConnected}
+          clusterReachable={!clusterUnreachable}
+          execMode={data?.exec_mode ?? clusterOverview?.exec_mode ?? "ssh"}
+          lastUpdated={statusLastUpdated ?? clusterLastUpdated}
+          onReconnect={() => void handleReconnect()}
         />
       }
       breadcrumbs={<AppBreadcrumbs />}
       backendMode={data?.native_workers?.mode}
     >
       <RackCommandsStoreProvider>
+        <ConnectionBanner
+          unreachable={Boolean(clusterUnreachable)}
+          detail={unreachableDetail}
+          reconnecting={reconnecting}
+          onReconnect={() => void handleReconnect()}
+        />
         <Routes>
           <Route path="/" element={<Navigate to={DEFAULT_PATH} replace />} />
           <Route
@@ -229,6 +273,8 @@ function AppContent() {
               <ClusterDashboardView
                 data={clusterOverview}
                 loading={clusterLoading}
+                refreshing={clusterRefreshing}
+                lastUpdated={clusterLastUpdated}
                 error={clusterError}
                 onClusterMetadataSaved={refreshCluster}
               />

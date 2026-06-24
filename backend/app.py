@@ -165,6 +165,34 @@ def _script_exists(path: Path) -> bool:
 app = Flask(__name__, static_folder=str(REPO_ROOT / "static"), static_url_path="/static")
 _logger = logging.getLogger(__name__)
 
+# Gzip/brotli compression for static assets (the ~2.2 MB SPA bundle) and JSON API
+# payloads. The Vite bundle is served as ``text/javascript``, which is not in
+# Flask-Compress's default mimetype list, so set the list explicitly.
+try:
+    from flask_compress import Compress
+
+    app.config["COMPRESS_MIMETYPES"] = [
+        "text/html",
+        "text/css",
+        "text/xml",
+        "text/plain",
+        "text/javascript",
+        "application/json",
+        "application/javascript",
+        "application/x-javascript",
+        "application/manifest+json",
+        "image/svg+xml",
+    ]
+    app.config["COMPRESS_LEVEL"] = 6
+    app.config["COMPRESS_BR_LEVEL"] = 5
+    app.config["COMPRESS_MIN_SIZE"] = 1024
+    Compress(app)
+except Exception as _compress_exc:  # pragma: no cover - defensive
+    _logger.warning(
+        "flask-compress unavailable; responses will be uncompressed: %s",
+        _compress_exc,
+    )
+
 try:
     from flask_sock import Sock
     _sock = Sock(app)
@@ -4264,6 +4292,11 @@ def _rack_status_background_loop() -> None:
             time.sleep(float(interval))
         first = False
         try:
+            # Skip the heavy SSH refresh while the cluster link is down so the loop
+            # doesn't spend each cycle stacking up connect timeouts. A cheap cached
+            # reachability probe lets it resume automatically once the VPN returns.
+            if host_exec.is_remote() and not host_exec.cluster_reachable():
+                continue
             with _rack_status_cache_lock:
                 dirs = sorted(_rack_status_registry)
             if not dirs:
@@ -12055,7 +12088,10 @@ def build_cluster_overview(log_dir: Path) -> dict[str, object]:
     )
 
     probes: dict[str, object] = {}
-    skip_probes = _truthy_env("RACK_CLUSTER_OVERVIEW_DISABLE_PROBES")
+    # Skip live head-node probes when the cluster link is down (VPN drop / dead tunnel)
+    # so the overview returns last-known facts immediately instead of blocking on SSH.
+    reachable, reach_detail = host_exec.reachability_state()
+    skip_probes = _truthy_env("RACK_CLUSTER_OVERVIEW_DISABLE_PROBES") or not reachable
 
     if not skip_probes and not slurm_version:
         v, err = _cluster_probe_slurm_version()
@@ -12067,7 +12103,17 @@ def build_cluster_overview(log_dir: Path) -> dict[str, object]:
         bcm_version = v_b or bcm_version
         probes["bcm_cmsh"] = {"ok": bool(v_b) and not err_b, "detail": (err_b or v_b)[:4000]}
 
-    squeue_block = _cluster_squeue_overview_block()
+    if reachable:
+        squeue_block = _cluster_squeue_overview_block()
+    else:
+        squeue_block = {
+            "ok": False,
+            "stdout": "",
+            "stderr": "",
+            "command_display": "",
+            "returncode": -1,
+            "error": "cluster unreachable (head node not reachable over SSH)",
+        }
 
     if hw_vendor == "":
         hw_vendor = "—"
@@ -12101,6 +12147,9 @@ def build_cluster_overview(log_dir: Path) -> dict[str, object]:
         "app_version": _app_version(),
         "squeue": squeue_block,
         "cluster_dashboard_metadata": dash_meta,
+        "cluster_reachable": reachable,
+        "cluster_unreachable_detail": ("" if reachable else (reach_detail or "head node not reachable over SSH")),
+        "exec_mode": "ssh" if host_exec.is_remote() else "local",
     }
 
 
@@ -12337,6 +12386,31 @@ def api_cluster_overview():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/cluster-health", methods=["GET"])
+def api_cluster_health():
+    """Cheap, cached cluster-link reachability for the SPA connection banner.
+
+    ``?force=1`` re-probes immediately (used by the "Reconnect now" action).
+    """
+    force = (request.args.get("force") or "").strip().lower() in ("1", "true", "yes")
+    try:
+        info = host_exec.reachability_info(force=force)
+        return jsonify({"ok": True, **info})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/cluster-health/reconnect", methods=["POST"])
+def api_cluster_health_reconnect():
+    """Force an immediate reachability re-probe (drops the cached result first)."""
+    try:
+        host_exec.invalidate_reachability()
+        info = host_exec.reachability_info(force=True)
+        return jsonify({"ok": True, **info})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/app-stats", methods=["GET"])
 def api_app_stats():
     """Lightweight app metrics: active users, version, and running async commands."""
@@ -12359,8 +12433,57 @@ def _merge_project_name_into_status_payload(payload: dict) -> None:
 
 
 def _merge_naming_into_status_payload(payload: dict) -> None:
-    """Expose ``NVIS_*`` naming hints for the SPA (validation targets, node id parsing)."""
-    payload["naming"] = _nvis_naming().schema_dict()
+    """Expose ``NVIS_*`` naming hints for the SPA (validation targets, node id parsing).
+
+    Also emits a backend-authoritative ``hierarchy`` (section -> row -> rack) built
+    from the same naming module that parses/sorts rack ids, so the SPA floor view
+    and any other hierarchy-aware surface consume one source of truth instead of
+    re-parsing rack ids client-side.
+    """
+    naming = _nvis_naming()
+    payload["naming"] = naming.schema_dict()
+    try:
+        rows = payload.get("rows") or []
+        rack_ids = [r.get("rack", "") for r in rows if isinstance(r, dict) and r.get("rack")]
+        payload["hierarchy"] = naming.build_hierarchy(rack_ids)
+    except Exception:  # pragma: no cover - hierarchy is additive, never break status
+        _logger.exception("failed to build rack hierarchy for status payload")
+
+
+def _merge_cluster_reachable_into_status_payload(out: dict, reachable: bool, detail: str = "") -> None:
+    """Tag a /api/status payload with cluster link state for the SPA connection banner."""
+    out["cluster_reachable"] = reachable
+    out["cluster_unreachable_detail"] = "" if reachable else (detail or "head node not reachable over SSH")
+    out["exec_mode"] = "ssh" if host_exec.is_remote() else "local"
+
+
+def _degraded_status_payload(log_dir: Path, detail: str) -> dict:
+    """Minimal payload returned when the cluster link is down and no cache exists yet.
+
+    Keeps the request fast (no blocking SSH) and lets the SPA show its last-known UI
+    plus a reconnecting banner instead of spinning on a dead connection.
+    """
+    out: dict = {
+        "ok": True,
+        "degraded": True,
+        "served_from_cache": False,
+        "rows": [],
+        "summary": {"done": 0, "fail": 0, "ongoing": 0, "pending": 0},
+        "footnotes": [],
+        "legend": "",
+        "stderr": "",
+        "updated_at": None,
+        "log_dir": str(log_dir),
+        "rack_status_background_interval_sec": _rack_status_background_interval_sec(),
+    }
+    try:
+        out["comments"] = read_comments()
+    except Exception:
+        out["comments"] = {}
+    _merge_project_name_into_status_payload(out)
+    _merge_naming_into_status_payload(out)
+    _merge_cluster_reachable_into_status_payload(out, False, detail)
+    return out
 
 
 @app.route("/api/status")
@@ -12374,6 +12497,7 @@ def api_status():
         return jsonify({"ok": False, "error": str(e)}), 400
     want_raw = request.args.get("raw") == "1"
     interval = _rack_status_background_interval_sec()
+    reachable, reach_detail = host_exec.reachability_state()
     if _rack_status_background_enabled() and not want_raw:
         cache_key = _register_rack_status_log_dir(log_dir)
         with _rack_status_cache_lock:
@@ -12386,7 +12510,11 @@ def api_status():
             _merge_live_native_workers_into_status(out, log_dir)
             _merge_project_name_into_status_payload(out)
             _merge_naming_into_status_payload(out)
+            _merge_cluster_reachable_into_status_payload(out, reachable, reach_detail)
             return jsonify(out)
+        # Cold cache + unreachable link: return fast instead of blocking on SSH.
+        if not reachable:
+            return jsonify(_degraded_status_payload(log_dir, reach_detail))
         try:
             with _rack_status_exec_lock:
                 with _rack_status_cache_lock:
@@ -12399,6 +12527,7 @@ def api_status():
                     _merge_live_native_workers_into_status(out, log_dir)
                     _merge_project_name_into_status_payload(out)
                     _merge_naming_into_status_payload(out)
+                    _merge_cluster_reachable_into_status_payload(out, reachable, reach_detail)
                     return jsonify(out)
                 data = run_rack_status(log_dir, include_raw=False)
         except subprocess.TimeoutExpired:
@@ -12414,7 +12543,10 @@ def api_status():
         _merge_live_native_workers_into_status(out, log_dir)
         _merge_project_name_into_status_payload(out)
         _merge_naming_into_status_payload(out)
+        _merge_cluster_reachable_into_status_payload(out, reachable, reach_detail)
         return jsonify(out)
+    if not reachable and not want_raw:
+        return jsonify(_degraded_status_payload(log_dir, reach_detail))
     try:
         if _rack_status_background_enabled():
             with _rack_status_exec_lock:
@@ -12429,6 +12561,7 @@ def api_status():
     _merge_live_native_workers_into_status(data, log_dir)
     _merge_project_name_into_status_payload(data)
     _merge_naming_into_status_payload(data)
+    _merge_cluster_reachable_into_status_payload(data, reachable, reach_detail)
     return jsonify(data)
 
 

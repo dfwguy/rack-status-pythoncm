@@ -51,6 +51,14 @@ EXPOSE 5000
 
 ENV RACK_EXEC_MODE=local \
     RACK_PLATFORM=bcm \
-    PORT=5000
+    PORT=5000 \
+    GUNICORN_THREADS=24 \
+    GUNICORN_TIMEOUT=600
 
-ENTRYPOINT ["python3", "backend/app.py"]
+# Production WSGI server. ONE worker on purpose: the app keeps significant
+# in-process state (rack-status cache, SSH reachability cache, async command
+# contexts, active-user counts, terminal sessions). Multiple workers would each
+# duplicate that state and the SSH work. Concurrency comes from gthread threads,
+# which preserves the single-process model the app assumes while still serving
+# the parallel UI polls + WebSocket terminals far better than the dev server.
+ENTRYPOINT ["sh", "-c", "exec gunicorn --workers 1 --threads ${GUNICORN_THREADS} --worker-class gthread --timeout ${GUNICORN_TIMEOUT} --graceful-timeout 30 --keep-alive 5 --access-logfile - --pythonpath /app/backend --bind 0.0.0.0:${PORT} app:app"]

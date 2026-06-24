@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 import nvis_id_templates as nid
 
 
@@ -206,3 +204,92 @@ def test_sn_llama_log_basename_matches_cbr_rack_casefold():
     nl = fname.casefold()
     assert any(needle.casefold() in nl for needle in needles)
     assert not any(needle in fname.lower() for needle in needles)
+
+
+# --- Row-letter racks (Boston Markley GB200): ``[A-Z]`` single-letter slot ----
+
+_BOS_RACK = r"bos01-[A-Z][01-99]"
+_BOS_CT = r"bos01-[A-Z][01-99]-[01-99]-s1-dgx-[01-99]-c[01-99]"
+_BOS_NVSW = r"bos01-[A-Z][01-99]-[01-99]-s1-nvsw-[01-99]"
+
+
+def test_alpha_slot_triplet_validates():
+    assert nid.validate_nvis_naming_triplet(_BOS_RACK, _BOS_CT, _BOS_NVSW) is None
+
+
+def test_alpha_slot_matches_compute_hostname_both_rows():
+    m = nid.NvisNaming.from_templates(_BOS_RACK, _BOS_CT, _BOS_NVSW).matcher()
+    a = m.match_hostname("bos01-a05-11-s1-dgx-01-c01")
+    assert a is not None and a.rack_id == "bos01-a05" and a.tray == "01"
+    b = m.match_hostname("bos01-b10-37-s1-dgx-12-c18")
+    assert b is not None and b.rack_id == "bos01-b10" and b.tray == "18"
+
+
+def test_alpha_slot_canonical_and_nvsw_and_sort():
+    n = nid.NvisNaming.from_templates(_BOS_RACK, _BOS_CT, _BOS_NVSW)
+    assert n.canonical_rack_id("bos01-a05") == "bos01-a05"
+    assert n.is_nvsw_hostname("bos01-b07-25-s1-nvsw-09")
+    assert not n.is_nvsw_hostname("bos01-b07-25-s1-dgx-01-c01")
+    racks = ["bos01-b05", "bos01-a10", "bos01-a05", "bos01-b10"]
+    assert sorted(racks, key=n.rack_sort_key) == [
+        "bos01-a05",
+        "bos01-a10",
+        "bos01-b05",
+        "bos01-b10",
+    ]
+
+
+def test_alpha_slot_extracts_from_rack_list_text():
+    n = nid.NvisNaming.from_templates(_BOS_RACK, _BOS_CT, _BOS_NVSW)
+    text = "bos01-a05  4  0  48\nbos01-b10  20 0 48\nbos01-a06 5 0 48\n"
+    assert n.extract_rack_ids_from_text(text) == ["bos01-a05", "bos01-a06", "bos01-b10"]
+
+
+# --- Hierarchy (section -> row -> rack): single source of truth for layouts -----
+
+
+def test_hierarchy_boston_groups_rows_a_and_b():
+    """Boston ``bos01-[A-Z][01-99]`` collapses into two row-letter rows, no section."""
+    n = nid.NvisNaming.from_templates(_BOS_RACK, _BOS_CT, _BOS_NVSW)
+    ids = [f"bos01-{r}{i:02d}" for r in ("b", "a") for i in (11, 1, 5)]
+    h = n.build_hierarchy(ids)
+    assert h["levels"] == ["row", "rack"]
+    assert len(h["sections"]) == 1
+    rows = h["sections"][0]["rows"]
+    assert [r["label"] for r in rows] == ["a", "b"]  # rows ordered by letter ordinal
+    # racks within a row sorted numerically (1, 5, 11 -> bos01-a01, a05, a11)
+    assert [r["rack"] for r in rows[0]["racks"]] == ["bos01-a01", "bos01-a05", "bos01-a11"]
+    assert h["unmatched"] == []
+
+
+def test_hierarchy_bright_pod_rows():
+    n = nid.NvisNaming.from_templates(r"p[\d+]-r[\d+]")
+    h = n.build_hierarchy(["p6-r1", "p5-r10", "p5-r2", "p5-r1"])
+    assert h["levels"] == ["row", "rack"]
+    rows = h["sections"][0]["rows"]
+    assert [r["label"] for r in rows] == ["5", "6"]
+    assert [r["rack"] for r in rows[0]["racks"]] == ["p5-r1", "p5-r2", "p5-r10"]
+
+
+def test_hierarchy_cbr_section_row_rack():
+    n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
+    h = n.build_hierarchy(
+        ["CBR1-DH22-SVR-CN0201", "CBR1-DH22-SVR-CN0101", "CBR1-DH22-SVR-CN0102"]
+    )
+    assert h["levels"] == ["section", "row", "rack"]
+    sec = h["sections"][0]
+    assert sec["key"] == "CBR1-DH22"
+    assert [row["label"] for row in sec["rows"]] == ["01", "02"]
+    assert [r["rack"] for r in sec["rows"][0]["racks"]] == [
+        "CBR1-DH22-SVR-CN0101",
+        "CBR1-DH22-SVR-CN0102",
+    ]
+
+
+def test_hierarchy_unmatched_racks_are_preserved():
+    n = nid.NvisNaming.from_templates(_BOS_RACK, _BOS_CT, _BOS_NVSW)
+    h = n.build_hierarchy(["bos01-a05", "not-a-rack", "1"])
+    assert "not-a-rack" in h["unmatched"]
+    assert any(
+        r["rack"] == "bos01-a05" for s in h["sections"] for row in s["rows"] for r in row["racks"]
+    )

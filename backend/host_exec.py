@@ -23,6 +23,7 @@ import os
 import shlex
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 
 _EXEC_MODE: str | None = None
@@ -31,6 +32,9 @@ _SSH_USER: str | None = None
 _SSH_KEY: str | None = None
 _SSH_PORT: str | None = None
 _SSH_EXTRA_OPTS: list[str] = []
+_SSH_CONNECT_TIMEOUT: str = "10"
+_SSH_ALIVE_INTERVAL: str = "5"
+_SSH_ALIVE_COUNT: str = "2"
 _init_lock = threading.Lock()
 
 _FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_", "NVIS_", "PDSH_")
@@ -52,6 +56,7 @@ def _build_env_exports() -> str:
 
 def _ensure_init() -> None:
     global _EXEC_MODE, _SSH_HOST, _SSH_USER, _SSH_KEY, _SSH_PORT, _SSH_EXTRA_OPTS
+    global _SSH_CONNECT_TIMEOUT, _SSH_ALIVE_INTERVAL, _SSH_ALIVE_COUNT
     if _EXEC_MODE is not None:
         return
     with _init_lock:
@@ -64,6 +69,12 @@ def _ensure_init() -> None:
         _SSH_PORT = (os.environ.get("RACK_SSH_PORT") or "22").strip() or "22"
         raw_opts = (os.environ.get("RACK_SSH_OPTS") or "").strip()
         _SSH_EXTRA_OPTS = shlex.split(raw_opts) if raw_opts else []
+        # Bounded connect + keepalive so a dropped VPN / dead tunnel fails fast
+        # (≈ ConnectTimeout for new sessions, ≈ interval*count for mid-session stalls)
+        # instead of hanging on a half-open TCP connection for minutes.
+        _SSH_CONNECT_TIMEOUT = (os.environ.get("RACK_SSH_CONNECT_TIMEOUT") or "10").strip() or "10"
+        _SSH_ALIVE_INTERVAL = (os.environ.get("RACK_SSH_ALIVE_INTERVAL") or "5").strip() or "5"
+        _SSH_ALIVE_COUNT = (os.environ.get("RACK_SSH_ALIVE_COUNT") or "2").strip() or "2"
 
 
 def is_remote() -> bool:
@@ -89,8 +100,13 @@ def wrap_for_host(cmd: list[str], *, cwd: str | None = None) -> list[str]:
     return _ssh_base_argv() + [shell_str]
 
 
-def _ssh_base_argv() -> list[str]:
-    """Build the ``ssh …`` prefix used for both run and popen."""
+def _ssh_base_argv(connect_timeout: str | None = None) -> list[str]:
+    """Build the ``ssh …`` prefix used for both run and popen.
+
+    Includes a bounded ``ConnectTimeout`` and ``ServerAlive*`` keepalive so that a
+    dropped VPN / dead network path is detected in seconds rather than blocking the
+    calling worker on a half-open TCP connection.
+    """
     _ensure_init()
     if not _SSH_HOST:
         raise RuntimeError(
@@ -101,7 +117,9 @@ def _ssh_base_argv() -> list[str]:
         "ssh",
         "-o", "StrictHostKeyChecking=no",
         "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=10",
+        "-o", f"ConnectTimeout={connect_timeout or _SSH_CONNECT_TIMEOUT or '10'}",
+        "-o", f"ServerAliveInterval={_SSH_ALIVE_INTERVAL or '5'}",
+        "-o", f"ServerAliveCountMax={_SSH_ALIVE_COUNT or '2'}",
         "-p", _SSH_PORT or "22",
     ]
     if _SSH_KEY and os.path.isfile(_SSH_KEY):
@@ -109,6 +127,103 @@ def _ssh_base_argv() -> list[str]:
     argv.extend(_SSH_EXTRA_OPTS)
     argv.append(f"{_SSH_USER}@{_SSH_HOST}")
     return argv
+
+
+# ---------------------------------------------------------------------------
+# Reachability  –  cheap, cached "is the cluster head node reachable?" probe
+# ---------------------------------------------------------------------------
+
+_reach_lock = threading.Lock()
+_reach_ok: bool | None = None
+_reach_checked_at: float = 0.0  # time.monotonic() of last probe
+_reach_wall_at: float = 0.0  # time.time() of last probe (for display)
+_reach_detail: str = ""
+
+
+def _reachability_ttl() -> int:
+    try:
+        return max(3, int(os.environ.get("RACK_SSH_REACHABILITY_TTL_SEC", "15")))
+    except (TypeError, ValueError):
+        return 15
+
+
+def _probe_reachable() -> tuple[bool, str]:
+    """Run a minimal ``ssh … true`` with a short connect timeout."""
+    ct = (os.environ.get("RACK_SSH_REACHABILITY_CONNECT_TIMEOUT") or "5").strip() or "5"
+    try:
+        argv = _ssh_base_argv(connect_timeout=ct) + ["true"]
+    except RuntimeError as e:
+        return False, str(e)
+    try:
+        budget = max(5, int(ct) + 3)
+    except (TypeError, ValueError):
+        budget = 8
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=budget)
+    except subprocess.TimeoutExpired:
+        return False, "ssh reachability probe timed out"
+    except OSError as e:
+        return False, str(e)
+    if proc.returncode == 0:
+        return True, ""
+    detail = (proc.stderr or "").strip().splitlines()
+    return False, (detail[-1][:300] if detail else f"ssh exit {proc.returncode}")
+
+
+def reachability_state(force: bool = False) -> tuple[bool, str]:
+    """Return ``(reachable, detail)``; cached for ``RACK_SSH_REACHABILITY_TTL_SEC``.
+
+    Always ``(True, "")`` in local mode. In SSH mode a fresh cached result is
+    returned without re-probing unless *force* is set.
+    """
+    global _reach_ok, _reach_checked_at, _reach_wall_at, _reach_detail
+    _ensure_init()
+    if _EXEC_MODE != "ssh":
+        return True, ""
+    now = time.monotonic()
+    with _reach_lock:
+        fresh = _reach_ok is not None and (now - _reach_checked_at) < _reachability_ttl()
+        if not force and fresh:
+            return bool(_reach_ok), _reach_detail
+    ok, detail = _probe_reachable()
+    with _reach_lock:
+        _reach_ok = ok
+        _reach_checked_at = time.monotonic()
+        _reach_wall_at = time.time()
+        _reach_detail = detail
+    return ok, detail
+
+
+def cluster_reachable(force: bool = False) -> bool:
+    """Convenience boolean wrapper around :func:`reachability_state`."""
+    ok, _ = reachability_state(force=force)
+    return ok
+
+
+def invalidate_reachability() -> None:
+    """Drop the cached reachability result so the next check re-probes immediately."""
+    global _reach_checked_at, _reach_ok
+    with _reach_lock:
+        _reach_checked_at = 0.0
+        _reach_ok = None
+
+
+def reachability_info(force: bool = False) -> dict[str, object]:
+    """Structured reachability snapshot for the ``/api/cluster-health`` endpoint."""
+    _ensure_init()
+    if _EXEC_MODE != "ssh":
+        return {"mode": "local", "reachable": True, "detail": "", "host": None, "checked_at": None}
+    ok, detail = reachability_state(force=force)
+    with _reach_lock:
+        wall = _reach_wall_at
+    return {
+        "mode": "ssh",
+        "reachable": ok,
+        "detail": detail,
+        "host": _SSH_HOST or None,
+        "checked_at": wall or None,
+        "ttl_sec": _reachability_ttl(),
+    }
 
 
 # ---------------------------------------------------------------------------

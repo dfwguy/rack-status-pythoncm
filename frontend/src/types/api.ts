@@ -10,6 +10,38 @@ export interface RackRow {
 
 import type { NvisNamingSchema } from "./naming";
 
+/** A rack within the backend-derived hierarchy (id + short display label). */
+export interface HierarchyRack {
+  rack: string;
+  label: string;
+}
+
+/** A datacenter row (or pod) within a section. */
+export interface HierarchyRow {
+  key: string;
+  label: string;
+  racks: HierarchyRack[];
+}
+
+/** A datacenter section (hall); ``key`` is "" for sites without a section level. */
+export interface HierarchySection {
+  key: string;
+  label: string;
+  rows: HierarchyRow[];
+}
+
+/**
+ * Backend-authoritative cluster topology (section -> row -> rack) built from the
+ * active ``NVIS_RACK_ID`` naming. Single source of truth for layout: the SPA
+ * consumes this instead of re-parsing rack ids. ``levels`` lists the meaningful
+ * grouping levels (``section`` omitted for 2-slot templates).
+ */
+export interface RackHierarchy {
+  levels: string[];
+  sections: HierarchySection[];
+  unmatched: string[];
+}
+
 export interface RackStatusResponse {
   ok: boolean;
   returncode: number;
@@ -25,11 +57,19 @@ export interface RackStatusResponse {
   physical_rf0: Record<string, string>;
   /** Tray / validation naming from ``NVIS_RACK_ID`` / ``NVIS_CT_ID`` (see Settings). */
   naming?: NvisNamingSchema;
+  /** Section -> row -> rack tree derived from the naming module (floor view, etc.). */
+  hierarchy?: RackHierarchy;
   native_workers: NativeWorkers;
   served_from_cache?: boolean;
   rack_status_background_interval_sec?: number;
   /** From ``RACK_WEB_PROJECT_NAME`` / ``PROJECT_NAME`` (sidebar brand when set). */
   project_name?: string;
+  /** False when the head node is not reachable over SSH (e.g. VPN drop). */
+  cluster_reachable?: boolean;
+  cluster_unreachable_detail?: string;
+  /** True when the backend returned a fast placeholder because the link is down. */
+  degraded?: boolean;
+  exec_mode?: "ssh" | "local";
 }
 
 export interface RackSummary {
@@ -95,4 +135,20 @@ export interface ClusterOverviewResponse {
   connected_users: number;
   squeue: ClusterSqueueBlock;
   cluster_dashboard_metadata: ClusterDashboardMetadata;
+  /** False when the head node is not reachable over SSH (e.g. VPN drop). */
+  cluster_reachable?: boolean;
+  cluster_unreachable_detail?: string;
+  exec_mode?: "ssh" | "local";
+}
+
+/** GET /api/cluster-health — cheap cached reachability for the connection banner. */
+export interface ClusterHealthResponse {
+  ok: boolean;
+  mode: "ssh" | "local";
+  reachable: boolean;
+  detail?: string;
+  host?: string | null;
+  checked_at?: number | null;
+  ttl_sec?: number;
+  error?: string;
 }
