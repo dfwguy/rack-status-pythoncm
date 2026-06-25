@@ -122,6 +122,8 @@ export interface ClusterOverviewResponse {
   nemo_container: string;
   /** Parent dir of NEMO_SQSH_SRC when it ends with .sqsh; else expanded path. Empty if unset. */
   tools_download_destination_default?: string;
+  /** Effective workspace root (NVIS_WORKSPACE_DIR) for HPC-X / CUDA / nvloom installs. */
+  tools_workspace_default?: string;
   /** Compute hostnames from rack status ``physical_rf0`` keys (suggestions for CUDA/NCCL pdsh build host). */
   cuda_nccl_build_host_candidates?: string[];
   rack_count: number;

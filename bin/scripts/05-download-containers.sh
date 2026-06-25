@@ -67,11 +67,59 @@ if [[ -z "${NGC_API_KEY:-}" ]]; then
   exit 1
 fi
 
+# Enroot's site defaults (e.g. /var/lib/enroot and /run/enroot from /etc/enroot/enroot.conf)
+# require root to create, so we relocate every enroot working path. Two storage classes:
+#
+#   * CACHE — pulled layer blobs (plain files). NFS is fine; keep it on the destination so
+#     it persists and a re-run skips the download. Override with NVIS_ENROOT_BASE.
+#   * DATA / TEMP / RUNTIME — layer extraction + AUFS->OverlayFS whiteout conversion, which
+#     creates device nodes via mknod. NFS rejects that ("enroot-aufs2ovlfs: failed to create
+#     ovlfs whiteout: Operation not permitted"), so these MUST live on a LOCAL filesystem.
+#
+# Pick a local, writable, non-NFS scratch dir (prefer real disk over tmpfs/RAM, falling back
+# to the one with the most free space). Override with NVIS_ENROOT_LOCAL.
+_enroot_base="${NVIS_ENROOT_BASE:-${DEST}/.enroot}"
+export ENROOT_CACHE_PATH="${ENROOT_CACHE_PATH:-${_enroot_base}/cache}"
+mkdir -p "$ENROOT_CACHE_PATH"
+
+_fstype() { stat -f -c %T "$1" 2>/dev/null; }
+_avail_gb() { df -Pk "$1" 2>/dev/null | awk 'NR==2{print int($4/1024/1024)}'; }
+_pick_local_scratch() {
+  local need_gb="${NVIS_ENROOT_MIN_TMP_GB:-40}"
+  local best="" best_avail=-1 d ft av
+  for d in "${NVIS_ENROOT_LOCAL:-}" /var/tmp /tmp /dev/shm; do
+    [ -n "$d" ] && [ -d "$d" ] && [ -w "$d" ] || continue
+    ft=$(_fstype "$d"); case "$ft" in nfs*|*nfs) continue ;; esac
+    av=$(_avail_gb "$d"); [ -n "$av" ] || continue
+    # Explicit override always wins.
+    if [ -n "${NVIS_ENROOT_LOCAL:-}" ] && [ "$d" = "${NVIS_ENROOT_LOCAL%/}" ]; then echo "$d"; return 0; fi
+    # First candidate (disk before tmpfs, per loop order) with enough room wins.
+    if [ "$av" -ge "$need_gb" ]; then echo "$d"; return 0; fi
+    if [ "$av" -gt "$best_avail" ]; then best="$d"; best_avail="$av"; fi
+  done
+  [ -n "$best" ] && { echo "$best"; return 0; }
+  return 1
+}
+_local_root="$(_pick_local_scratch || true)"
+if [ -z "$_local_root" ]; then
+  echo "${0##*/}: no local scratch found for enroot temp; NFS cannot create overlay whiteouts." >&2
+  echo "  Set NVIS_ENROOT_LOCAL to a local, writable path with free space (e.g. /raid/scratch)." >&2
+  exit 1
+fi
+_local_base="${_local_root%/}/nvis-enroot-$(id -u)"
+export ENROOT_DATA_PATH="${ENROOT_DATA_PATH:-${_local_base}/data}"
+export ENROOT_RUNTIME_PATH="${ENROOT_RUNTIME_PATH:-${_local_base}/runtime}"
+export ENROOT_TEMP_PATH="${ENROOT_TEMP_PATH:-${_local_base}/tmp}"
+mkdir -p "$ENROOT_DATA_PATH" "$ENROOT_RUNTIME_PATH" "$ENROOT_TEMP_PATH"
+echo "${0##*/}: enroot cache=${ENROOT_CACHE_PATH} (layers), local scratch=${_local_root} ($(_fstype "$_local_root"), $(_avail_gb "$_local_root")G free)"
+
 ENROOT_CONFIG_PATH=$(mktemp -d "${TMPDIR:-/tmp}/nvis-enroot-config.XXXXXX")
 chmod 0700 "$ENROOT_CONFIG_PATH"
 export ENROOT_CONFIG_PATH
 cleanup() {
-  rm -rf "$ENROOT_CONFIG_PATH"
+  # Config holds credentials (always remove). Runtime/temp are transient working dirs.
+  # Keep cache/data so a re-run can reuse pulled layers instead of re-downloading.
+  rm -rf "$ENROOT_CONFIG_PATH" "$ENROOT_RUNTIME_PATH" "$ENROOT_TEMP_PATH"
 }
 trap cleanup EXIT
 

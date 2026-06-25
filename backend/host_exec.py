@@ -46,7 +46,7 @@ _SCRIPT_SSH_USER: str | None = None
 _SCRIPT_SSH_KEY: str | None = None
 _init_lock = threading.Lock()
 
-_FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_", "NVIS_", "PDSH_")
+_FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_", "NVIS_", "PDSH_", "NGC_")
 
 # Platform-default knobs (from the catalog's tool_param_defaults) that scripts/sbatch
 # consume but which don't carry a forwarded prefix. Forwarded by exact name so the

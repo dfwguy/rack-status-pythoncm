@@ -102,7 +102,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     stderr?: string;
   } | null>(null);
 
-  const [hpcxWorkspace, setHpcxWorkspace] = useState("/home/cmsupport/workspace");
+  const [hpcxWorkspace, setHpcxWorkspace] = useState("");
   const [cudaMajor, setCudaMajor] = useState<CudaMajorChoice>("13");
   const [installCudaToolkit, setInstallCudaToolkit] = useState(true);
   const [buildNccl, setBuildNccl] = useState(true);
@@ -125,7 +125,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     stdout?: string;
     stderr?: string;
   } | null>(null);
-  const [nvloomWorkspace, setNvloomWorkspace] = useState("/home/cmsupport/workspace");
+  const [nvloomWorkspace, setNvloomWorkspace] = useState("");
   const [nvloomBuildHost, setNvloomBuildHost] = useState("");
   const [nvloomCudaMajor, setNvloomCudaMajor] = useState<CudaMajorChoice>("13");
   const [nvloomLoading, setNvloomLoading] = useState(false);
@@ -180,11 +180,16 @@ export function ToolsView({ logDir }: ToolsViewProps) {
   useEffect(() => {
     try {
       const w = localStorage.getItem(HPCX_WORKSPACE_STORAGE_KEY)?.trim();
-      if (w) setHpcxWorkspace(w);
+      if (w) {
+        setHpcxWorkspace(w);
+        return;
+      }
     } catch {
       /* ignore */
     }
-  }, []);
+    const def = clusterData?.tools_workspace_default?.trim();
+    if (def) setHpcxWorkspace(def);
+  }, [clusterData?.tools_workspace_default]);
 
   useEffect(() => {
     try {
@@ -202,7 +207,9 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         setNvloomWorkspace(w);
       } else {
         const fallback = localStorage.getItem(HPCX_WORKSPACE_STORAGE_KEY)?.trim();
+        const def = clusterData?.tools_workspace_default?.trim();
         if (fallback) setNvloomWorkspace(fallback);
+        else if (def) setNvloomWorkspace(def);
       }
       const bh = localStorage.getItem(NVLOOM_BUILD_HOST_STORAGE_KEY)?.trim();
       if (bh) {
@@ -216,7 +223,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     } catch {
       /* ignore */
     }
-  }, []);
+  }, [clusterData?.tools_workspace_default]);
 
   const persistNvloomWorkspace = useCallback((v: string) => {
     setNvloomWorkspace(v);
@@ -911,7 +918,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             fullWidth
             value={hpcxWorkspace}
             onChange={(e) => persistHpcxWorkspace(e.target.value)}
-            placeholder="/home/cmsupport/workspace"
+            placeholder={clusterData?.tools_workspace_default || "/home/<user>/workspace"}
             slotProps={{
               input: {
                 endAdornment: toolchainAllReady ? (
@@ -1004,7 +1011,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             fullWidth
             value={hpcxWorkspace}
             onChange={(e) => persistHpcxWorkspace(e.target.value)}
-            placeholder="/home/cmsupport/workspace"
+            placeholder={clusterData?.tools_workspace_default || "/home/<user>/workspace"}
           />
           <TextField
             label="Build host (compute node for pdsh)"
@@ -1115,7 +1122,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             fullWidth
             value={nvloomWorkspace}
             onChange={(e) => persistNvloomWorkspace(e.target.value)}
-            placeholder="/home/cmsupport/workspace"
+            placeholder={clusterData?.tools_workspace_default || "/home/<user>/workspace"}
           />
           <TextField
             label="Build host (compute node for pdsh)"

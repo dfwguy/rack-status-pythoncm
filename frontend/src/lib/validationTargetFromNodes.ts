@@ -39,8 +39,17 @@ function trayFromNodeId(
 }
 
 /**
- * Build validation target from selected tray hostnames (pattern follows ``NVIS_*`` templates).
- * Returns null if no parsable ct ids for this rack.
+ * Build a validation/sysinfo target from the selected tray hostnames.
+ *
+ * Two shapes are produced depending on the site naming scheme:
+ *  - Trays that fold into the ``NVIS_*`` ct template are compressed into the compact
+ *    ``<rack><joiner>[NN-MM]`` range form (e.g. ``mel01-r05-ct[01-04]``).
+ *  - Sites whose node hostnames don't fold into that template (e.g. Boston
+ *    ``bos01-b07-11-s1-dgx-07-c01``) fall back to passing the **real selected hostnames**
+ *    through as a comma list, so the backend targets exactly the chosen nodes instead of
+ *    falling back to the whole rack.
+ *
+ * Returns null when nothing belonging to this rack is selected.
  */
 export function validationTargetFromNodes(
   rack: string,
@@ -51,11 +60,22 @@ export function validationTargetFromNodes(
   const rackKey = rackCanon.toLowerCase();
   const joiner = naming?.ct_joiner ?? "-ct";
   const nums: number[] = [];
+  const hostnames: string[] = [];
   for (const id of selected) {
     const n = trayFromNodeId(rackKey, id, naming);
-    if (n !== null && !Number.isNaN(n)) nums.push(n);
+    if (n !== null && !Number.isNaN(n)) {
+      nums.push(n);
+    } else {
+      const t = id.trim();
+      if (t && t.toLowerCase().startsWith(rackKey)) hostnames.push(t);
+    }
   }
-  if (nums.length === 0) return null;
-  nums.sort((a, b) => a - b);
-  return `${rackCanon}${joiner}[${compressCtNums(nums)}]`;
+  if (nums.length > 0) {
+    nums.sort((a, b) => a - b);
+    return `${rackCanon}${joiner}[${compressCtNums(nums)}]`;
+  }
+  if (hostnames.length > 0) {
+    return Array.from(new Set(hostnames)).join(",");
+  }
+  return null;
 }

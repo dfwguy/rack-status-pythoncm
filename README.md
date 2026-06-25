@@ -412,6 +412,7 @@ Full variable reference: **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)**
 |-----|---------|
 | **[INSTALL.md](INSTALL.md)** | Docker deployment, SSH setup, troubleshooting |
 | **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)** | All environment variables, timeouts, disable flags |
+| **[docs/EXECUTION_ARCHITECTURE.md](docs/EXECUTION_ARCHITECTURE.md)** | Local vs SSH execution, hybrid SSH profiles, inventory targets, `pdsh` transport, path-resolution pitfalls |
 | **`.cursor/rules/`** | Design rules for KUI/MUI components, host_exec patterns, backend conventions |
 | **`backend/app.py` module docstring** | PAM, Grafana alignment, cache files |
 

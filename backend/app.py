@@ -79,7 +79,7 @@ import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone, tzinfo
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from flask import (
     Flask,
@@ -307,6 +307,12 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "key": "RACK_PROMETHEUS_BASIC_AUTH_PASSWORD",
         "label": "Prometheus basic auth password",
         "description": "Same variable as PASSWORD in ~/.prometheusrc. Stored in server overrides like other settings; restrict file permissions on var/cache/job_env_overrides.json.",
+    },
+    {
+        "section": "external",
+        "key": "NGC_API_KEY",
+        "label": "NGC API key",
+        "description": "NGC personal API key (nvapi-…) used by Tools → Download NEMO container (enroot import). Saved in server overrides like other settings; restrict file permissions on var/cache/job_env_overrides.json. Forwarded to the cluster when running in SSH mode.",
     },
     {
         "section": "external",
@@ -971,7 +977,12 @@ def _job_env_overrides_write(data: dict[str, str], *, bust_status_cache: bool = 
             f.write("\n")
         os.replace(tmp, p)
         _job_env_overrides_invalidate_cache()
-        _materialize_job_env_overrides_into_os_environ(clean)
+    # Materialize into os.environ *after* releasing the exclusive lock. Materialization
+    # calls _apply_catalog_active_to_environ() -> _job_env_overrides_load(), which acquires a
+    # *shared* lock on this same file via a new fd; doing that while still holding the
+    # exclusive lock above deadlocks (flock locks are per-open-file-description, so the
+    # shared request blocks against our own exclusive lock).
+    _materialize_job_env_overrides_into_os_environ(clean)
     try:
         native_status.invalidate_job_env_file_cache()
     except Exception:
@@ -3427,17 +3438,43 @@ def _normalize_llama_nodes_spec(raw: object) -> str:
 def validation_target_for_rack(rack: str, override: str | None) -> str:
     """Build the node target for run_singlerack.sh / sysinfo / pdsh.
 
-    Primary source is **live Slurm inventory** (real ``NodeName`` values matched to the
-    rack id), so the target uses the cluster's actual node hostnames regardless of the
-    site naming scheme. Falls back to the ``NVIS_*`` template when an explicit override
-    is given, inventory is unavailable, or nothing matches. Set
-    ``RACK_TARGET_FROM_INVENTORY=0`` to force the template path.
+    Override precedence:
+
+    1. An override that is a **plain comma-list of real node hostnames** (no ``[`` range
+       syntax) is honored as an explicit node selection — e.g. the UI sends the selected
+       trays directly when the site's hostnames don't fold into ``<rack><joiner>[NN]``
+       (Boston: ``bos01-b07-11-s1-dgx-07-c01``). The list is intersected with live Slurm
+       inventory for the rack when available (drops typos / foreign hosts); if inventory
+       is unavailable the tokens are trusted as-is.
+    2. An override in ``<rack><joiner>[ranges]`` template form is validated/normalized by
+       the naming schema.
+    3. With no override, the target is the **full rack** from live Slurm inventory (real
+       ``NodeName`` values), falling back to the ``NVIS_*`` template when inventory is
+       unavailable. Set ``RACK_TARGET_FROM_INVENTORY=0`` to force the template path.
     """
     ov = (override or "").strip()
     inventory_on = (
         os.environ.get("RACK_TARGET_FROM_INVENTORY", "1").strip().lower()
         not in ("0", "false", "no", "off")
     )
+    if ov and "[" not in ov:
+        # Plain (non-range) override → treat as an explicit hostname selection.
+        tokens = [t.strip() for t in ov.split(",") if t.strip()]
+        if tokens:
+            inv = _rack_node_hostnames_from_inventory(rack) if inventory_on else []
+            if inv:
+                inv_cf = {h.casefold(): h for h in inv}
+                chosen = [inv_cf[t.casefold()] for t in tokens if t.casefold() in inv_cf]
+                if chosen:
+                    # de-dup, preserve request order
+                    seen: set[str] = set()
+                    out = [h for h in chosen if not (h in seen or seen.add(h))]
+                    return ",".join(out)
+                # None matched inventory: fall through to template validation so a bad
+                # override surfaces as an error instead of silently targeting the rack.
+            else:
+                # Inventory unavailable — trust the explicit hostname tokens.
+                return ",".join(tokens)
     if not ov and inventory_on:
         hosts = _rack_node_hostnames_from_inventory(rack)
         if hosts:
@@ -3505,6 +3542,18 @@ def _resolve_tools_destination(raw: str) -> Path:
     s = (raw or "").strip()
     if not s:
         raise ValueError("destination is required")
+    if host_exec.is_remote():
+        # Remote path: the destination lives on the *cluster*, not the dashboard host.
+        # Treat it as an opaque POSIX path — never .resolve() (firmlink rewrite on macOS,
+        # e.g. /home/cmods -> /System/Volumes/Data/home/cmods) and never stat the local FS.
+        rp = PurePosixPath(s)
+        if not rp.is_absolute():
+            raise ValueError("destination must be an absolute path")
+        if rp.suffix.lower() == ".sqsh":
+            raise ValueError("destination must be a directory path, not a .sqsh file path")
+        dest = Path(str(rp))
+        _tools_check_destination_allowed(dest)
+        return dest
     p = Path(s).expanduser()
     if not p.is_absolute():
         raise ValueError("destination must be an absolute path")
@@ -3593,17 +3642,20 @@ def _tools_find_existing_sqsh_for_skip(dest_dir: Path) -> tuple[Path | None, lis
 
 
 def _tools_download_destination_default() -> str:
-    """Directory default for Tools → download containers: parent of ``NEMO_SQSH_SRC`` when it is a .sqsh path."""
+    """Directory default for Tools → download containers: parent of ``NEMO_SQSH_SRC`` when it is a .sqsh path.
+
+    Intentionally avoids ``Path.resolve()``: in SSH mode the path refers to the *remote*
+    cluster filesystem, so resolving it against the local dashboard host is wrong. On macOS
+    that rewrites ``/home/cmods`` to ``/System/Volumes/Data/home/cmods`` via firmlinks.
+    Use a pure-path parent so the remote path is preserved verbatim.
+    """
     raw = (_eget("NEMO_SQSH_SRC") or "").strip()
     if not raw:
         return ""
-    p = Path(raw).expanduser()
-    try:
-        p = p.resolve()
-    except OSError:
-        p = Path(raw).expanduser()
+    p = PurePosixPath(raw)
     if p.suffix.lower() == ".sqsh":
-        return str(p.parent) if str(p.parent) not in ("", ".") else ""
+        parent = str(p.parent)
+        return parent if parent not in ("", ".") else ""
     return str(p)
 
 
@@ -10150,7 +10202,7 @@ def _prepare_run_nvloom_singlerack(body: dict) -> tuple[dict | None, tuple[objec
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _nvloom_singlerack_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"nvloom script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
@@ -10212,7 +10264,7 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _clusterkit_script_path()
-    if not script.is_file():
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"clusterkit script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
@@ -10521,6 +10573,26 @@ def _parse_sysinfo_request(body: dict) -> tuple[dict | None, tuple[object, int] 
     )
 
 
+def _translate_cwd_for_remote(local_cwd: str) -> str | None:
+    """Map a dashboard-host cwd onto the cluster filesystem for SSH execution.
+
+    Streamed tool/validation commands pass a *local* path (usually ``REPO_ROOT``) as
+    their cwd so the script runs from the repo root locally. Over SSH that path does not
+    exist on the cluster, so map any path at/under ``REPO_ROOT`` onto
+    ``RACK_REMOTE_BASE_PATH``. Paths already on the remote filesystem (e.g. a remote log
+    dir, or callers that pre-translate to the remote base) are returned unchanged.
+    Returns ``None`` when no remote base is configured (run in the remote home).
+    """
+    if not _REMOTE_BASE:
+        return None if local_cwd == str(REPO_ROOT) else local_cwd
+    try:
+        rel = Path(local_cwd).resolve().relative_to(REPO_ROOT.resolve())
+    except (ValueError, OSError):
+        return local_cwd
+    rel_s = str(rel)
+    return _REMOTE_BASE if rel_s == "." else str(PurePosixPath(_REMOTE_BASE) / rel_s)
+
+
 def _merged_stdout_stream_generator(
     cmd: list[str],
     cwd: str,
@@ -10550,8 +10622,9 @@ def _merged_stdout_stream_generator(
         stdbuf = shutil.which("stdbuf")
         if stdbuf:
             cmd_run = [stdbuf, "-oL", "-eL", *cmd_run]
+    remote_cwd = _translate_cwd_for_remote(cwd) if remote else None
     cmd_run = host_exec.wrap_for_host(
-        cmd_run, cwd=cwd if remote else None, profile="script" if privileged else "control"
+        cmd_run, cwd=remote_cwd, profile="script" if privileged else "control"
     )
     env = None if remote else _subprocess_env(env_extra)
     proc = subprocess.Popen(
@@ -10583,7 +10656,7 @@ def _merged_stdout_stream_generator(
             outq.put(None)
 
     threading.Thread(target=feeder, daemon=True).start()
-    header = f"# {display_cmd}\n# cwd: {cwd}\n\n"
+    header = f"# {display_cmd}\n# cwd: {(remote_cwd if remote else cwd) or '(remote home)'}\n\n"
     yield header.encode("utf-8")
     deadline = time.monotonic() + timeout_sec
     rc: int | None = None
@@ -10741,7 +10814,8 @@ def api_run_sysinfo():
 def api_tools_download_containers():
     """Run bin/scripts/05-download-containers.sh with a chosen destination (and optional arch).
 
-    Requires ``NGC_API_KEY`` in the **server** environment (nvapi-…), not in the HTTP body.
+    Requires ``NGC_API_KEY`` (nvapi-…) saved in Settings → External connections or the
+    **server** environment — never in the HTTP body.
     If the expected ``.sqsh`` already exists and is non-empty, returns success with ``skipped`` (no import, no key needed).
     """
     if os.environ.get("RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -10769,11 +10843,11 @@ def api_tools_download_containers():
                 "command_display": "(no command — output file already present)",
             }
         )
-    if not (os.environ.get("NGC_API_KEY") or "").strip():
+    if not (_eget("NGC_API_KEY") or "").strip():
         return jsonify(
             {
                 "ok": False,
-                "error": "NGC_API_KEY is not set on the dashboard host (export before starting the app)",
+                "error": "NGC_API_KEY is not set — add it in Settings → External connections (or export before starting the app)",
             }
         ), 400
     arch = str(arch_raw).strip() if arch_raw else ""
@@ -10782,7 +10856,7 @@ def api_tools_download_containers():
     if arch == "arm64":
         arch = "aarch64"
     script = SCRIPTS_DIR / "05-download-containers.sh"
-    if not script.is_file():
+    if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(60, _env_int("RACK_TOOLS_DOWNLOAD_CONTAINERS_TIMEOUT", 14400))
     cmd: list[str] = [str(script), str(dest_dir)]
@@ -10851,11 +10925,12 @@ def api_tools_download_containers_stream():
             mimetype="text/plain; charset=utf-8",
             headers=dict(_STREAM_NO_CACHE_HEADERS),
         )
-    if not (os.environ.get("NGC_API_KEY") or "").strip():
+    if not (_eget("NGC_API_KEY") or "").strip():
 
         def _ngc_gen() -> Iterator[bytes]:
             yield (
-                "ERROR: NGC_API_KEY is not set on the dashboard host (export before starting the app)\n"
+                "ERROR: NGC_API_KEY is not set — add it in Settings \u2192 External connections "
+                "(or export before starting the app)\n"
             ).encode("utf-8")
 
         return Response(
@@ -10870,7 +10945,7 @@ def api_tools_download_containers_stream():
     if arch == "arm64":
         arch = "aarch64"
     script = SCRIPTS_DIR / "05-download-containers.sh"
-    if not script.is_file():
+    if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(60, _env_int("RACK_TOOLS_DOWNLOAD_CONTAINERS_TIMEOUT", 14400))
     cmd: list[str] = [str(script), str(dest_dir)]
@@ -11016,7 +11091,7 @@ def api_tools_launch_grafana_bright_prometheus():
     ):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED)"}), 403
     script = SCRIPTS_DIR / "launch-grafana-bright-prometheus.sh"
-    if not script.is_file():
+    if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     user = (_eget("RACK_PROMETHEUS_BASIC_AUTH_USER") or "").strip()
     password = (_eget("RACK_PROMETHEUS_BASIC_AUTH_PASSWORD") or "").strip()
@@ -11089,7 +11164,7 @@ def api_tools_launch_grafana_bright_prometheus_stream():
     ):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED)"}), 403
     script = SCRIPTS_DIR / "launch-grafana-bright-prometheus.sh"
-    if not script.is_file():
+    if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     user = (_eget("RACK_PROMETHEUS_BASIC_AUTH_USER") or "").strip()
     password = (_eget("RACK_PROMETHEUS_BASIC_AUTH_PASSWORD") or "").strip()
@@ -11198,13 +11273,13 @@ def api_tools_install_hpcx_workspace():
                 "error": 'arch must be "aarch64" (matches aihpc_val installation/03-build-nccl.sh).',
             }
         ), 400
-    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = SCRIPTS_DIR / "install-hpcx-workspace.sh"
-    if not script.is_file():
+    if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_HPCX_WORKSPACE_TIMEOUT", 28800))
     cmd = ["bash", str(script), str(ws), cuda_major, arch]
@@ -11259,13 +11334,13 @@ def api_tools_install_hpcx_workspace_stream():
                 "error": 'arch must be "aarch64" (matches aihpc_val installation/03-build-nccl.sh).',
             }
         ), 400
-    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = SCRIPTS_DIR / "install-hpcx-workspace.sh"
-    if not script.is_file():
+    if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_HPCX_WORKSPACE_TIMEOUT", 28800))
     cmd = ["bash", str(script), str(ws), cuda_major, arch]
@@ -11349,13 +11424,13 @@ def api_tools_install_cuda_nccl_workspace():
     if bh_err is not None:
         return jsonify({"ok": False, "error": bh_err}), 400
     assert build_host is not None
-    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = SCRIPTS_DIR / "install-cuda-nccl-workspace.sh"
-    if not script.is_file():
+    if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_TIMEOUT", 28800))
     extra_env = {
@@ -11431,13 +11506,13 @@ def api_tools_install_cuda_nccl_workspace_stream():
     if bh_err is not None:
         return jsonify({"ok": False, "error": bh_err}), 400
     assert build_host is not None
-    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = SCRIPTS_DIR / "install-cuda-nccl-workspace.sh"
-    if not script.is_file():
+    if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_TIMEOUT", 28800))
     extra_env = {
@@ -11501,13 +11576,13 @@ def api_tools_install_nvloom_workspace():
     if bh_err is not None:
         return jsonify({"ok": False, "error": bh_err}), 400
     assert build_host is not None
-    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = SCRIPTS_DIR / "install-nvloom-workspace.sh"
-    if not script.is_file():
+    if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_TIMEOUT", 28800))
     extra_env = {"NVIS_NVLOOM_BUILD_HOST": build_host}
@@ -11561,13 +11636,13 @@ def api_tools_install_nvloom_workspace_stream():
     if bh_err is not None:
         return jsonify({"ok": False, "error": bh_err}), 400
     assert build_host is not None
-    ws_raw = (body.get("workspace") or "").strip() or "/home/cmsupport/workspace"
+    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = SCRIPTS_DIR / "install-nvloom-workspace.sh"
-    if not script.is_file():
+    if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_TIMEOUT", 28800))
     extra_env = {"NVIS_NVLOOM_BUILD_HOST": build_host}
@@ -12245,6 +12320,7 @@ def build_cluster_overview(log_dir: Path) -> dict[str, object]:
         "nemo_container": nemo_container,
         "cuda_nccl_build_host_candidates": cuda_nccl_build_host_candidates,
         "tools_download_destination_default": _tools_download_destination_default(),
+        "tools_workspace_default": _nvis_workspace_dir_effective(),
         "rack_count": rack_count,
         "tray_hosts": tray_hosts,
         "estimated_gpu_count": estimated_gpus,
