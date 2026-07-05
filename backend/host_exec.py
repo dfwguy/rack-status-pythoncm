@@ -77,6 +77,21 @@ def _conn() -> RoutingConnection:
     return _CONN
 
 
+def invalidate_connection() -> None:
+    """Drop the cached connection so the next call rebuilds it from current env.
+
+    Call this after a runtime environment change (e.g. saving Settings that affect
+    transport/sudo, like ``RACK_SCRIPT_SUDO``) so the change takes effect without
+    an app restart.
+    """
+    global _CONN, _CONTROL_SSH, _CONFIG, _EXEC_MODE
+    with _init_lock:
+        _CONN = None
+        _CONTROL_SSH = None
+        _CONFIG = None
+        _EXEC_MODE = None
+
+
 def is_remote() -> bool:
     """Return True when commands are routed over SSH."""
     _ensure_init()

@@ -1055,6 +1055,12 @@ def _job_env_overrides_write(data: dict[str, str], *, bust_status_cache: bool = 
         native_status.invalidate_job_env_file_cache()
     except Exception:
         pass
+    # Rebuild the transport connection so transport-affecting settings (e.g.
+    # RACK_SCRIPT_SUDO / RACK_SUDO_PASSWORD) take effect without an app restart.
+    try:
+        host_exec.invalidate_connection()
+    except Exception:
+        pass
     if bust_status_cache:
         _rack_status_cache_clear_all()
     return clean
