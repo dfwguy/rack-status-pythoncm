@@ -7,6 +7,10 @@
 # Usage: install-cuda-nccl-workspace.sh [TOPDIR] [CUDA_MAJOR] [ARCH]
 set -euo pipefail
 
+# Force ssh transport: this cluster's pdsh defaults to rsh (refused on compute nodes).
+export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -o CheckHostIP=no"
+export PDSH_RCMD_TYPE=ssh
+
 TOPDIR="${1:-/home/cmsupport/workspace}"
 CUDA_MAJ="${2:-13}"
 ARCH="${3:-aarch64}"
@@ -65,4 +69,4 @@ _remote_quoted=$(printf '%q' "$_pds_inner")
 echo "==> Phase 2: pdsh -w ${HOST} (NVIS_INSTALL_CUDA_TOOLKIT=${_ic} NVIS_BUILD_NCCL=${_ib})"
 echo "==> remote: ${_pds_inner}"
 # shellcheck disable=SC2029
-pdsh -w "$HOST" bash -c "$_remote_quoted"
+pdsh -R ssh -w "$HOST" bash -c "$_remote_quoted"

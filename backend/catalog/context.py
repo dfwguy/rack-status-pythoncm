@@ -208,18 +208,41 @@ def geometry_defaults(platform: models.Platform, cluster: models.Cluster | None 
     return out
 
 
+def fabric_defaults(platform: models.Platform) -> dict[str, str]:
+    """Derive low-precedence fabric env from the platform's expected fabric shape.
+
+    Feeds ``bin/scripts/lib/fabric.inc.sh``:
+      * ``NVIS_RDMA_LINK_TECH`` selects IB vs RoCE rail classification.
+      * ``NVIS_FABRIC_EXPECT_RAILS`` / ``NVIS_FABRIC_EXPECT_RATE`` let the fabric
+        probe flag detected-vs-expected discrepancies (e.g. an 800G RA at 400G).
+    The per-node ``ns_ifname`` is intentionally NOT forced here so the on-node
+    auto-detect stays authoritative (the profile value is a documentation hint).
+    """
+    f = platform.fabric
+    out: dict[str, str] = {}
+    if f.scaleout in ("ib", "roce"):
+        _put(out, "NVIS_RDMA_LINK_TECH", f.scaleout)
+    gpn = platform.geometry.gpus_per_node
+    if f.rails_per_gpu > 0 and gpn > 0:
+        _put(out, "NVIS_FABRIC_EXPECT_RAILS", str(f.rails_per_gpu * gpn))
+    if f.rail_rate_gbps > 0:
+        _put(out, "NVIS_FABRIC_EXPECT_RATE", str(f.rail_rate_gbps))
+    return out
+
+
 def low_overlay(
     platform: models.Platform | None = None,
     cluster: models.Cluster | None = None,
     repo: Repo | None = None,
 ) -> dict[str, str]:
-    """Geometry defaults + platform ``tool_param_defaults`` (lowest precedence)."""
+    """Geometry + fabric defaults + platform ``tool_param_defaults`` (lowest precedence)."""
     if platform is None:
         _project, cluster, platform = resolve(repo=repo)
     if platform is None:
         return {}
     out: dict[str, str] = {}
     out.update(geometry_defaults(platform, cluster))
+    out.update(fabric_defaults(platform))
     # platform tool_param_defaults are defaults too (env/Settings/per-call win).
     for k, v in platform.tool_param_defaults.items():
         _put(out, k, v)

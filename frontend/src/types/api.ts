@@ -1,6 +1,13 @@
+/** Per-stage validation state. A rack is individually validated once stage 1 & 2 are both "done". */
+export type StageState = "done" | "fail" | "ongoing" | "pending";
+
 export interface RackRow {
   rack: string;
   nemo: string;
+  /** Stage 1 — NCCL benchmark. Optional (legacy shell/multirack rows omit it). */
+  stage1?: StageState;
+  /** Stage 2 — NeMo / LLM training. Optional (legacy shell/multirack rows omit it). */
+  stage2?: StageState;
   last_job: string;
   sinfo: string;
   ct_down_unk: string;
@@ -42,6 +49,33 @@ export interface RackHierarchy {
   unmatched: string[];
 }
 
+/** A launched multi-rack job from the durable state table (GET /api/multirack-jobs). */
+export interface MultirackJob {
+  job_id: string;
+  /** "nemo" (cross-rack NEMO validation) or "llmb" (NCCL microbenchmark). */
+  kind: "nemo" | "llmb";
+  racks: string[];
+  log_dir: string;
+  operator: string;
+  command_display: string;
+  dry_run: boolean;
+  /** starting | running | done | error | timeout. */
+  phase: string;
+  returncode: number | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  stdout_tail: string;
+  stderr_tail: string;
+}
+
+export interface MultirackJobsResponse {
+  ok: boolean;
+  jobs: MultirackJob[];
+  error?: string;
+}
+
 export interface RackStatusResponse {
   ok: boolean;
   returncode: number;
@@ -72,11 +106,22 @@ export interface RackStatusResponse {
   exec_mode?: "ssh" | "local";
 }
 
+/** Count of racks in each state for a single validation stage. */
+export interface StageSummary {
+  done: number;
+  fail: number;
+  ongoing: number;
+  pending: number;
+}
+
 export interface RackSummary {
   done: number;
   fail: number;
   ongoing: number;
   pending: number;
+  /** Per-stage rack counts (native / demo backends). Absent on legacy shell table. */
+  stage1?: StageSummary;
+  stage2?: StageSummary;
 }
 
 export interface NativeWorkers {

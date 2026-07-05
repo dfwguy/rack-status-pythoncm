@@ -16,7 +16,8 @@
 #   NVIS_NVLOOM_HPCX_INIT, NVIS_NVLOOM_CLI — optional overrides for non-workspace paths
 #   NVIS_NVLOOM_UCX_TLS — optional UCX_TLS for the nvloom srun step (see nvloom_singlerack.sbatch)
 
-module load slurm
+# Slurm CLI on PATH (non-login SSH shells don't init Modules — see slurm-init.inc.sh).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091

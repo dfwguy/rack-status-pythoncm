@@ -1,5 +1,6 @@
 #!/bin/bash
-module load slurm
+# Slurm CLI on PATH (non-login SSH shells don't init Modules — see slurm-init.inc.sh).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
 # Force ssh transport: this cluster's pdsh defaults to rsh (refused on compute nodes).
 export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -o CheckHostIP=no"
 export PDSH_RCMD_TYPE=ssh
@@ -76,12 +77,25 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ## Per rack test
 for r in ${a[*]}
 do
- rack=$(echo $r|cut -c1-6)
- rack=$(echo "$r" | sed -E 's/(p[0-9]+-r[0-9]+)-ct.*/\1/')
+ # Rack id for the log basename (…-NEMO-1Rack-<rack>-…): prefer the id the app passes as $2
+ # (works for any naming convention, e.g. Boston bos01-b05); fall back to the Bright p<N>-r<N> regex.
+ rack="${2:-}"
+ [[ -z "$rack" ]] && rack=$(echo "$r" | sed -E 's/(p[0-9]+-r[0-9]+)-ct.*/\1/')
  hosts=($(scontrol show hostname $r))
  : "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the head-node path of the nemo .sqsh image to copy under /raid/data/ on compute nodes}"
  _sqsh_b=$(basename "$NEMO_SQSH_SRC")
- pdsh -R ssh -w $(echo "${hosts[*]}"|tr ' ' ',') "mkdir -p /raid/data; rsync -ah --progress $NEMO_SQSH_SRC /raid/data/$_sqsh_b"
+ _wl=$(echo "${hosts[*]}" | tr ' ' ',')
+ # /raid is root-owned on the compute trays, so the staging runs as root ON EACH COMPUTE NODE.
+ # If RACK_SUDO_PASSWORD is set, elevate with sudo -S (cmods password, kept OUT of the repo — set via
+ # env or the server secret store). Otherwise use sudo -n (works when passwordless sudo is baked into
+ # the compute IMAGE by AIC, and also when the script already runs as root). NOTE: a passwordless
+ # visudo edit only on the slogin does NOT help here — this sudo runs on the compute trays.
+ if [[ -n "${RACK_SUDO_PASSWORD:-}" ]]; then
+   _sudo="printf '%s\n' $(printf %q "$RACK_SUDO_PASSWORD") | sudo -S -p '' "
+ else
+   _sudo="sudo -n "
+ fi
+ pdsh -R ssh -w "$_wl" "${_sudo}mkdir -p /raid/data && ${_sudo}rsync -ah $NEMO_SQSH_SRC /raid/data/$_sqsh_b"
 
  n=$[${#hosts[*]}/2*2]
 

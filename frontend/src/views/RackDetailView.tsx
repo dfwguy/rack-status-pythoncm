@@ -7,6 +7,7 @@ import { ArrowLeft } from "lucide-react";
 import { RackOverview } from "../components/rack/RackOverview";
 import { NodeSelector, parseNodesFromRack, type NodeInfo } from "../components/rack/NodeSelector";
 import { RackLastOutputDot } from "../components/rack/RackLastOutputDot";
+import { RackPendingTags } from "../components/rack/RackPendingTags";
 import { ValidationTab } from "../components/rack/ValidationTab";
 import { HardwareTab } from "../components/rack/HardwareTab";
 import { NetworkingTab } from "../components/rack/NetworkingTab";
@@ -86,6 +87,8 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
             <RackLastOutputDot />
           </Box>
         </Box>
+
+        <RackPendingTags rack={rack} />
 
         {row && <RackOverview row={row} comment={comment} />}
 

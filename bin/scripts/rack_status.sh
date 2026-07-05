@@ -10,7 +10,8 @@
 
 set -uo pipefail
 
-module load slurm
+# Slurm CLI on PATH (non-login SSH shells don't init Modules — see slurm-init.inc.sh).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
 
 use_color=0
 force_c="${FORCE_COLOR:-0}"
@@ -343,24 +344,8 @@ format_sinfo_cell() {
 }
 
 perf=5000
-nccl_busbw_csv() {
-  awk '
-    /^# Collective test starting: all_reduce_perf_mpi$/  { in_ar=1 }
-    /^# Collective test concluded: all_reduce_perf_mpi$/ { in_ar=0 }
-    in_ar && $1 ~ /^1717/ { ar=$8 }
-    /^# Collective test starting: alltoall_perf_mpi$/   { in_aa=1 }
-    /^# Collective test concluded: alltoall_perf_mpi$/  { in_aa=0 }
-    in_aa && $1 ~ /^1717/ { aa=$8 }
-    /^# Collective test starting: all_gather_perf_mpi$/ { in_ag=1 }
-    /^# Collective test concluded: all_gather_perf_mpi$/ { in_ag=0 }
-    in_ag && $1 ~ /^1717/ { ag=$8 }
-    END { print ar "," aa "," ag }
-  ' "$1"
-}
-
-nccl_oob_csv() {
-  grep 'Out of bounds values' "$1" 2>/dev/null | awk '{ print $NF }' | paste -sd, - || true
-}
+# nccl_busbw_csv / nccl_oob_csv are shared with parser.sh via nccl_parse.inc.sh (sourced below,
+# next to validation_test_env.sh) so the dashboard PASS/FAIL and the parser stay in lockstep.
 
 slurm_hard_fail() {
   grep -E -q 'srun:.*error:.*Exited|error:.*SIGNAL' "$1" 2>/dev/null
@@ -454,6 +439,8 @@ llm_label() {
 _RACK_SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=/dev/null
 source "${_RACK_SCRIPTS_DIR}/validation_test_env.sh"
+# shellcheck source=/dev/null
+source "${_RACK_SCRIPTS_DIR}/nccl_parse.inc.sh"
 
 # When USE_SQUEUE=1: RUNNING_SET[jobid]=1 and JOB_TIME[jobid]=elapsed wall time (squeue %M, e.g. 0:29 or 1-00:15:30).
 load_squeue_jobs() {

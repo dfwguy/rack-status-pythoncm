@@ -8,7 +8,8 @@
 # Optional: RACK_MNUBERGEMM_PARTITION → sbatch -p …
 # Optional: NVIS_SLURM_HOSTLIST — comma-separated NodeNames for ``sbatch -w`` (override expansion).
 
-module load slurm
+# Slurm CLI on PATH (non-login SSH shells don't init Modules — see slurm-init.inc.sh).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091

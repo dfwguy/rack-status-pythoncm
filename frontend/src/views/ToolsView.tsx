@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useClusterOverview } from "../hooks/useClusterOverview";
-import { CheckCircle, Cpu, LineChart } from "lucide-react";
+import { CheckCircle, Cpu, Gauge, LineChart } from "lucide-react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import TextField from "@mui/material/TextField";
@@ -17,9 +17,19 @@ import IconButton from "@mui/material/IconButton";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { ToolsLiveOutputDialog } from "../components/ToolsLiveOutputDialog";
-import { CompatibleToolsPanel } from "../components/CompatibleToolsPanel";
+import { CollapsibleLog } from "../components/CollapsibleLog";
+type LiveKind = "nemo" | "hpcx" | "cudaNccl" | "nvloom" | "dgxc" | "dcgm" | "grafana";
 
-type LiveKind = "nemo" | "hpcx" | "cudaNccl" | "nvloom" | "grafana";
+type ExemplarMode = "record" | "install";
+type GpuTypeChoice = "gb200" | "gb300" | "vr200" | "h100" | "b200" | "b300";
+const GPU_TYPE_CHOICES: GpuTypeChoice[] = ["gb200", "gb300", "vr200", "h100", "b200", "b300"];
+
+/** Best-effort map of the active platform product line (e.g. "GB300 NVL72") to an llmb gpu_type. */
+function deriveGpuType(productLine: string | undefined): GpuTypeChoice {
+  const pl = (productLine || "").toLowerCase();
+  const hit = GPU_TYPE_CHOICES.find((g) => pl.includes(g));
+  return hit ?? "gb200";
+}
 
 /** Shown next to Utility card titles when the server reports that artifact is already present. */
 function InstalledLabel() {
@@ -60,12 +70,65 @@ async function consumePlainTextStream(res: Response, onFullText: (full: string) 
   return acc;
 }
 
+/** Max characters kept for the *live* dialog view (full text is still returned for results). */
+const LIVE_LOG_DISPLAY_CAP = 100_000;
+
+/**
+ * Build a throttled, size-capped sink for live streaming logs.
+ *
+ * The network reader delivers many chunks per second; pushing the full (ever-growing) string
+ * into React state on every chunk re-renders this large view and reflows the entire <pre> each
+ * time — O(n) per chunk, O(n^2) overall — which visibly stalls once the log is long. This
+ * coalesces updates to at most one per animation frame and only keeps the tail for display.
+ */
+function createThrottledLogSink(
+  apply: (text: string) => void,
+): ((full: string) => void) & { flush: () => void } {
+  let latest: string | null = null;
+  let scheduled = false;
+  let handle = 0;
+  const raf: (cb: () => void) => number =
+    typeof requestAnimationFrame === "function"
+      ? (cb) => requestAnimationFrame(cb)
+      : (cb) => setTimeout(cb, 16) as unknown as number;
+  const cancel: (id: number) => void =
+    typeof cancelAnimationFrame === "function" ? (id) => cancelAnimationFrame(id) : (id) => clearTimeout(id);
+  const emit = () => {
+    scheduled = false;
+    handle = 0;
+    if (latest == null) return;
+    const full = latest;
+    latest = null;
+    const text =
+      full.length > LIVE_LOG_DISPLAY_CAP
+        ? `…(${full.length - LIVE_LOG_DISPLAY_CAP} earlier characters hidden — full log saved on completion)…\n` +
+          full.slice(full.length - LIVE_LOG_DISPLAY_CAP)
+        : full;
+    apply(text);
+  };
+  const sink = (full: string) => {
+    latest = full;
+    if (!scheduled) {
+      scheduled = true;
+      handle = raf(emit);
+    }
+  };
+  sink.flush = () => {
+    if (handle) cancel(handle);
+    scheduled = false;
+    emit();
+  };
+  return sink;
+}
+
 const DEST_STORAGE_KEY = "nvis-tools-download-dest";
 const HPCX_WORKSPACE_STORAGE_KEY = "nvis-tools-hpcx-workspace";
 const CUDA_NCCL_BUILD_HOST_STORAGE_KEY = "nvis-tools-cuda-nccl-build-host";
 const NVLOOM_WORKSPACE_STORAGE_KEY = "nvis-tools-nvloom-workspace";
 const NVLOOM_BUILD_HOST_STORAGE_KEY = "nvis-tools-nvloom-build-host";
 const NVLOOM_CUDA_MAJOR_STORAGE_KEY = "nvis-tools-nvloom-cuda-major";
+const DGXC_WORKSPACE_STORAGE_KEY = "nvis-tools-dgxc-workspace";
+const DGXC_GPU_TYPE_STORAGE_KEY = "nvis-tools-dgxc-gpu-type";
 
 type ArchChoice = "aarch64" | "x86_64" | "";
 type CudaMajorChoice = "12" | "13";
@@ -137,6 +200,19 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     stdout?: string;
     stderr?: string;
   } | null>(null);
+  const [dcgmArch, setDcgmArch] = useState<"aarch64" | "x86_64">("aarch64");
+  const [dcgmDistro, setDcgmDistro] = useState("dgx");
+  const [dcgmCudaMajor, setDcgmCudaMajor] = useState<CudaMajorChoice>("13");
+  const [dcgmVersion, setDcgmVersion] = useState("");
+  const [dcgmLoading, setDcgmLoading] = useState(false);
+  const [dcgmError, setDcgmError] = useState("");
+  const [dcgmResult, setDcgmResult] = useState<{
+    ok: boolean;
+    returncode?: number;
+    command_display?: string;
+    stdout?: string;
+    stderr?: string;
+  } | null>(null);
   const [toolchainAllReady, setToolchainAllReady] = useState(false);
   const [toolchainCudaNvcc, setToolchainCudaNvcc] = useState(false);
   const [toolchainHpcxInit, setToolchainHpcxInit] = useState(false);
@@ -146,14 +222,53 @@ export function ToolsView({ logDir }: ToolsViewProps) {
   const [toolchainProbeTick, setToolchainProbeTick] = useState(0);
   const [nemoStatusTick, setNemoStatusTick] = useState(0);
 
+  const [llmbRacks, setLlmbRacks] = useState("");
+  const [llmbDryRun, setLlmbDryRun] = useState(true);
+  const [llmbLoading, setLlmbLoading] = useState(false);
+  const [llmbError, setLlmbError] = useState("");
+  const [llmbPhase, setLlmbPhase] = useState("");
+  const [llmbResult, setLlmbResult] = useState<{
+    ok: boolean;
+    returncode?: number;
+    command_display?: string;
+    stdout?: string;
+    stderr?: string;
+  } | null>(null);
+
+  const [dgxcWorkspace, setDgxcWorkspace] = useState("");
+  const [dgxcMode, setDgxcMode] = useState<ExemplarMode>("record");
+  const [dgxcGpuType, setDgxcGpuType] = useState<GpuTypeChoice>("gb200");
+  const [dgxcUseUv, setDgxcUseUv] = useState(true);
+  const [dgxcTrustGit, setDgxcTrustGit] = useState(true);
+  const [dgxcImageFolder, setDgxcImageFolder] = useState("");
+  const [dgxcLoading, setDgxcLoading] = useState(false);
+  const [dgxcError, setDgxcError] = useState("");
+  const [dgxcResult, setDgxcResult] = useState<{
+    ok: boolean;
+    returncode?: number;
+    command_display?: string;
+    stdout?: string;
+    stderr?: string;
+  } | null>(null);
+
   const [liveDialogOpen, setLiveDialogOpen] = useState(false);
   const [liveDialogKind, setLiveDialogKind] = useState<LiveKind>("nemo");
-  const [liveLogs, setLiveLogs] = useState({ nemo: "", hpcx: "", cudaNccl: "", nvloom: "", grafana: "" });
+  const [liveLogs, setLiveLogs] = useState({
+    nemo: "",
+    hpcx: "",
+    cudaNccl: "",
+    nvloom: "",
+    dgxc: "",
+    dcgm: "",
+    grafana: "",
+  });
   const [liveRunning, setLiveRunning] = useState({
     nemo: false,
     hpcx: false,
     cudaNccl: false,
     nvloom: false,
+    dgxc: false,
+    dcgm: false,
     grafana: false,
   });
 
@@ -256,6 +371,48 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     setCudaNcclBuildHost(v);
     try {
       if (v.trim()) localStorage.setItem(CUDA_NCCL_BUILD_HOST_STORAGE_KEY, v.trim());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  // Exemplar (dgxc-benchmarking) workspace + gpu_type: restore from storage, else
+  // fall back to the cluster workspace default / active-platform-derived gpu_type.
+  useEffect(() => {
+    try {
+      const w = localStorage.getItem(DGXC_WORKSPACE_STORAGE_KEY)?.trim();
+      if (w) {
+        setDgxcWorkspace(w);
+      } else {
+        const fallback = localStorage.getItem(NVLOOM_WORKSPACE_STORAGE_KEY)?.trim();
+        const def = clusterData?.tools_workspace_default?.trim();
+        if (fallback) setDgxcWorkspace(fallback);
+        else if (def) setDgxcWorkspace(def);
+      }
+      const g = localStorage.getItem(DGXC_GPU_TYPE_STORAGE_KEY)?.trim();
+      if (g && (GPU_TYPE_CHOICES as string[]).includes(g)) {
+        setDgxcGpuType(g as GpuTypeChoice);
+      } else {
+        setDgxcGpuType(deriveGpuType(clusterData?.product_line));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [clusterData?.tools_workspace_default, clusterData?.product_line]);
+
+  const persistDgxcWorkspace = useCallback((v: string) => {
+    setDgxcWorkspace(v);
+    try {
+      if (v.trim()) localStorage.setItem(DGXC_WORKSPACE_STORAGE_KEY, v.trim());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const persistDgxcGpuType = useCallback((v: GpuTypeChoice) => {
+    setDgxcGpuType(v);
+    try {
+      localStorage.setItem(DGXC_GPU_TYPE_STORAGE_KEY, v);
     } catch {
       /* ignore */
     }
@@ -458,7 +615,9 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
         return;
       }
-      const text = await consumePlainTextStream(res, (full) => setLiveLogs((p) => ({ ...p, nemo: full })));
+      const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, nemo: t })));
+      const text = await consumePlainTextStream(res, sink);
+      sink.flush();
       const rc = parseToolsStreamExit(text);
       const exitOk = rc === null ? res.ok : rc === 0;
       const skipped = text.toLowerCase().includes("skipping download");
@@ -538,7 +697,9 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
         return;
       }
-      const text = await consumePlainTextStream(res, (full) => setLiveLogs((p) => ({ ...p, hpcx: full })));
+      const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, hpcx: t })));
+      const text = await consumePlainTextStream(res, sink);
+      sink.flush();
       const rc = parseToolsStreamExit(text);
       const exitOk = rc === null ? res.ok : rc === 0;
       const firstLine = text.split("\n")[0]?.replace(/^#\s*/, "").trim() || "";
@@ -614,7 +775,9 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
         return;
       }
-      const text = await consumePlainTextStream(res, (full) => setLiveLogs((p) => ({ ...p, cudaNccl: full })));
+      const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, cudaNccl: t })));
+      const text = await consumePlainTextStream(res, sink);
+      sink.flush();
       const rc = parseToolsStreamExit(text);
       const exitOk = rc === null ? res.ok : rc === 0;
       const firstLine = text.split("\n")[0]?.replace(/^#\s*/, "").trim() || "";
@@ -652,6 +815,144 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     }
   }, [hpcxWorkspace, cudaMajor, installCudaToolkit, buildNccl, cudaNcclBuildHost]);
 
+  const runDcgmInstall = useCallback(async () => {
+    setDcgmError("");
+    setDcgmResult(null);
+    const ws = hpcxWorkspace.trim();
+    if (!ws) {
+      setDcgmError("Enter an absolute workspace directory (shared /home path visible to compute nodes).");
+      return;
+    }
+    setDcgmLoading(true);
+    setLiveRunning((r) => ({ ...r, dcgm: true }));
+    setLiveLogs((p) => ({ ...p, dcgm: "" }));
+    try {
+      const res = await fetch("/api/tools/install-dcgm-workspace-stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          workspace: ws,
+          cuda_major: dcgmCudaMajor,
+          arch: dcgmArch,
+          distro: dcgmDistro,
+          version: dcgmVersion.trim(),
+        }),
+      });
+      if (res.status === 401) {
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        return;
+      }
+      const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, dcgm: t })));
+      const text = await consumePlainTextStream(res, sink);
+      sink.flush();
+      const rc = parseToolsStreamExit(text);
+      const exitOk = rc === null ? res.ok : rc === 0;
+      const firstLine = text.split("\n")[0]?.replace(/^#\s*/, "").trim() || "";
+      setDcgmResult({
+        ok: Boolean(res.ok && exitOk),
+        returncode: rc ?? undefined,
+        command_display: firstLine && !firstLine.startsWith("ERROR") ? firstLine : undefined,
+        stdout: text,
+        stderr: "",
+      });
+      if (!res.ok || !exitOk) {
+        let errMsg = `HTTP ${res.status}`;
+        if (res.headers.get("content-type")?.includes("application/json")) {
+          try {
+            const j = JSON.parse(text) as { error?: string };
+            if (j.error) errMsg = j.error;
+          } catch {
+            /* ignore */
+          }
+        } else if (text.trim().startsWith("ERROR:")) {
+          errMsg = text.trim().split("\n")[0] ?? errMsg;
+        } else if (rc != null && rc !== 0) {
+          errMsg = `Script exited with code ${rc}`;
+        }
+        setDcgmError(errMsg);
+      } else {
+        setDcgmError("");
+      }
+    } catch (e) {
+      setDcgmError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDcgmLoading(false);
+      setLiveRunning((r) => ({ ...r, dcgm: false }));
+    }
+  }, [hpcxWorkspace, dcgmCudaMajor, dcgmArch, dcgmDistro, dcgmVersion]);
+
+  const runLlmbNccl = useCallback(async () => {
+    setLlmbError("");
+    setLlmbResult(null);
+    setLlmbPhase("");
+    const racks = llmbRacks
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (racks.length === 0) {
+      setLlmbError("Enter one or more NVIS rack ids (e.g. MEL01-HC07-RK0105).");
+      return;
+    }
+    setLlmbLoading(true);
+    try {
+      const startRes = await fetch("/api/run-llmb-nccl-async", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ racks, dry_run: llmbDryRun, log_dir: logDir }),
+      });
+      if (startRes.status === 401) {
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        return;
+      }
+      const startJson = (await startRes.json()) as { ok?: boolean; job_id?: string; error?: string };
+      if (!startRes.ok || !startJson.ok || !startJson.job_id) {
+        setLlmbError(startJson.error || `HTTP ${startRes.status}`);
+        return;
+      }
+      const jobId = startJson.job_id;
+      setLlmbPhase("starting");
+      // Poll until terminal.
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 4000));
+        const sRes = await fetch(`/api/run-llmb-nccl-status?job_id=${encodeURIComponent(jobId)}`, {
+          credentials: "same-origin",
+        });
+        const sJson = (await sRes.json()) as {
+          ok?: boolean;
+          phase?: string;
+          returncode?: number;
+          command_display?: string;
+          stdout?: string;
+          stderr?: string;
+          error?: string;
+        };
+        const phase = sJson.phase || "unknown";
+        setLlmbPhase(phase);
+        if (phase === "done" || phase === "error" || phase === "timeout") {
+          setLlmbResult({
+            ok: phase === "done",
+            returncode: sJson.returncode,
+            command_display: sJson.command_display,
+            stdout: sJson.stdout,
+            stderr: sJson.stderr || (phase !== "done" ? sJson.error : ""),
+          });
+          if (phase !== "done") setLlmbError(sJson.error || `Job ${phase}`);
+          break;
+        }
+        if (sRes.status === 404) {
+          setLlmbError("Job expired before completion.");
+          break;
+        }
+      }
+    } catch (e) {
+      setLlmbError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLlmbLoading(false);
+    }
+  }, [llmbRacks, llmbDryRun, logDir]);
+
   const runNvloomInstall = useCallback(async () => {
     setNvloomError("");
     setNvloomResult(null);
@@ -683,7 +984,9 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
         return;
       }
-      const text = await consumePlainTextStream(res, (full) => setLiveLogs((p) => ({ ...p, nvloom: full })));
+      const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, nvloom: t })));
+      const text = await consumePlainTextStream(res, sink);
+      sink.flush();
       const rc = parseToolsStreamExit(text);
       const exitOk = rc === null ? res.ok : rc === 0;
       const firstLine = text.split("\n")[0]?.replace(/^#\s*/, "").trim() || "";
@@ -721,6 +1024,75 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     }
   }, [nvloomWorkspace, nvloomCudaMajor, nvloomBuildHost]);
 
+  const runDgxcSetup = useCallback(async () => {
+    setDgxcError("");
+    setDgxcResult(null);
+    const ws = dgxcWorkspace.trim();
+    if (!ws) {
+      setDgxcError("Enter an absolute workspace directory (shared filesystem).");
+      return;
+    }
+    setDgxcLoading(true);
+    setLiveRunning((r) => ({ ...r, dgxc: true }));
+    setLiveLogs((p) => ({ ...p, dgxc: "" }));
+    if (dgxcMode === "install") openLive("dgxc");
+    try {
+      const res = await fetch("/api/tools/install-dgxc-benchmarking-workspace-stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          workspace: ws,
+          mode: dgxcMode,
+          gpu_type: dgxcGpuType,
+          use_uv: dgxcUseUv,
+          trust_git: dgxcTrustGit,
+          image_folder: dgxcImageFolder.trim() || undefined,
+        }),
+      });
+      if (res.status === 401) {
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        return;
+      }
+      const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, dgxc: t })));
+      const text = await consumePlainTextStream(res, sink);
+      sink.flush();
+      const rc = parseToolsStreamExit(text);
+      const exitOk = rc === null ? res.ok : rc === 0;
+      const firstLine = text.split("\n")[0]?.replace(/^#\s*/, "").trim() || "";
+      setDgxcResult({
+        ok: Boolean(res.ok && exitOk),
+        returncode: rc ?? undefined,
+        command_display: firstLine && !firstLine.startsWith("ERROR") ? firstLine : undefined,
+        stdout: text,
+        stderr: "",
+      });
+      if (!res.ok || !exitOk) {
+        let errMsg = `HTTP ${res.status}`;
+        if (res.headers.get("content-type")?.includes("application/json")) {
+          try {
+            const j = JSON.parse(text) as { error?: string };
+            if (j.error) errMsg = j.error;
+          } catch {
+            /* ignore */
+          }
+        } else if (text.trim().startsWith("ERROR:")) {
+          errMsg = text.trim().split("\n")[0] ?? errMsg;
+        } else if (rc != null && rc !== 0) {
+          errMsg = `Script exited with code ${rc}`;
+        }
+        setDgxcError(errMsg);
+      } else {
+        setDgxcError("");
+      }
+    } catch (e) {
+      setDgxcError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDgxcLoading(false);
+      setLiveRunning((r) => ({ ...r, dgxc: false }));
+    }
+  }, [dgxcWorkspace, dgxcMode, dgxcGpuType, dgxcUseUv, dgxcTrustGit, dgxcImageFolder, openLive]);
+
   const runGrafanaLaunch = useCallback(async () => {
     setGrafanaError("");
     setGrafanaResult(null);
@@ -738,7 +1110,9 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
         return;
       }
-      const text = await consumePlainTextStream(res, (full) => setLiveLogs((p) => ({ ...p, grafana: full })));
+      const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, grafana: t })));
+      const text = await consumePlainTextStream(res, sink);
+      sink.flush();
       const rc = parseToolsStreamExit(text);
       const exitOk = rc === null ? res.ok : rc === 0;
       const firstLine = text.split("\n")[0]?.replace(/^#\s*/, "").trim() || "";
@@ -780,10 +1154,74 @@ export function ToolsView({ logDir }: ToolsViewProps) {
       <PageHeader
         contentId="tools"
         title="Utility"
-        description="Operational helpers under bin/scripts: NEMO download (NGC_API_KEY), workspace Mellanox HPC-X (install-hpcx-workspace.sh), workspace CUDA toolkit + NCCL (install-cuda-nccl-workspace.sh; aihpc_val 02 + 03), NVIDIA nvloom clone + build (install-nvloom-workspace.sh), Grafana + Docker. Green dot opens live streamed output for that card."
+        description="Operational helpers under bin/scripts: NEMO download (NGC_API_KEY), workspace Mellanox HPC-X (install-hpcx-workspace.sh), workspace CUDA toolkit + NCCL (install-cuda-nccl-workspace.sh; aihpc_val 02 + 03), NVIDIA nvloom clone + build (install-nvloom-workspace.sh), Exemplar / dgxc-benchmarking llmb-run setup (install-dgxc-benchmarking-workspace.sh), Grafana + Docker. Green dot opens live streamed output for that card."
       />
 
-      <CompatibleToolsPanel />
+      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+        <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1, mb: 1 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            NCCL Microbenchmark (LLMB)
+          </Typography>
+        </Box>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Runs <Box component="code" sx={{ fontSize: "0.85em" }}>run_llmb_nccl.sh</Box> (
+          <Box component="code" sx={{ fontSize: "0.85em" }}>llmb-run submit -w microbenchmark_nccl -d fp8</Box>, MOP §7.3). Enter
+          one or more NVIS rack ids (e.g. <Box component="code" sx={{ fontSize: "0.85em" }}>MEL01-HC07-RK0105</Box>);
+          multiple racks run the cross-rack form. The wrapper resolves real Slurm nodes via{" "}
+          <Box component="code" sx={{ fontSize: "0.85em" }}>sinfo</Box> and computes GPU scale (nodes×4; 72 per GB300 NVL72
+          rack). Use <strong>Dry run</strong> to print the resolved <Box component="code" sx={{ fontSize: "0.85em" }}>llmb-run</Box>{" "}
+          command without submitting.
+        </Typography>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 640 }}>
+          <TextField
+            label="Rack id(s) — comma or space separated"
+            size="small"
+            fullWidth
+            value={llmbRacks}
+            onChange={(e) => setLlmbRacks(e.target.value)}
+            placeholder="MEL01-HC07-RK0105"
+          />
+          <FormControlLabel
+            control={<Checkbox checked={llmbDryRun} onChange={(e) => setLlmbDryRun(e.target.checked)} size="small" />}
+            label="Dry run (resolve + print the llmb-run command, do not submit)"
+          />
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <Button
+              variant="contained"
+              onClick={() => void runLlmbNccl()}
+              disabled={llmbLoading || !llmbRacks.trim()}
+            >
+              {llmbLoading ? "Running…" : llmbDryRun ? "Run LLMB NCCL (dry run)" : "Run LLMB NCCL"}
+            </Button>
+            {llmbLoading && <CircularProgress size={22} />}
+            {llmbLoading && llmbPhase && (
+              <Typography variant="body2" color="text.secondary">
+                phase: {llmbPhase}
+              </Typography>
+            )}
+          </Box>
+          {llmbError ? (
+            <Alert severity="error" sx={{ whiteSpace: "pre-wrap" }}>
+              {llmbError}
+            </Alert>
+          ) : null}
+          {llmbResult ? (
+            <Alert severity={llmbResult.ok ? "success" : "error"} sx={{ whiteSpace: "pre-wrap" }}>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                LLMB NCCL — {llmbResult.ok ? "success" : "failed"}
+                {llmbResult.returncode != null ? ` — exit ${llmbResult.returncode}` : ""}
+              </Typography>
+              {llmbResult.command_display ? (
+                <Box component="pre" sx={{ m: 0, mt: 1, fontSize: "0.8em", whiteSpace: "pre-wrap" }}>
+                  {llmbResult.command_display}
+                </Box>
+              ) : null}
+              {llmbResult.stdout ? <CollapsibleLog text={llmbResult.stdout} label="output" /> : null}
+              {llmbResult.stderr ? <CollapsibleLog text={llmbResult.stderr} label="stderr" /> : null}
+            </Alert>
+          ) : null}
+        </Box>
+      </Paper>
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
         <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1, mb: 1 }}>
@@ -1075,6 +1513,109 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           <Tooltip title="Open live output (streams while the script runs)">
             <IconButton
               size="small"
+              onClick={() => openLive("dcgm")}
+              aria-label="Open DCGM / DCGMI workspace install live output"
+              sx={{ p: 0.75 }}
+            >
+              <Box
+                component="span"
+                sx={{
+                  width: 14,
+                  height: 14,
+                  borderRadius: "50%",
+                  bgcolor: "success.main",
+                  display: "block",
+                }}
+              />
+            </IconButton>
+          </Tooltip>
+          <Gauge size={20} aria-hidden />
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            DCGM / DCGMI (workspace)
+          </Typography>
+        </Box>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Downloads NVIDIA Data Center GPU Manager (DCGM 4.x) and extracts it into the shared workspace on this
+          dashboard host — no per-node root install. Because the workspace lives on shared{" "}
+          <Box component="code" sx={{ fontSize: "0.85em" }}>/home</Box>, every compute node sees the same binaries. The{" "}
+          <Box component="code" sx={{ fontSize: "0.85em" }}>mnubergemm</Box>/
+          <Box component="code" sx={{ fontSize: "0.85em" }}>ubergemm</Box> stress binary ships in the DCGM cuda-major
+          plugins (DCGM 4.3.0+); the installer prints{" "}
+          <Box component="code" sx={{ fontSize: "0.85em" }}>NVIS_MNUBERGEMM_BIN</Box> for{" "}
+          <Box component="code" sx={{ fontSize: "0.85em" }}>mnubergemm_stress.sbatch</Box>. Pick the{" "}
+          <strong>target compute-node</strong> architecture (GBx00 = ARM, Bx00 = x86), not this head node&apos;s arch.
+        </Typography>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 640 }}>
+          <TextField
+            label="Workspace directory (absolute path)"
+            size="small"
+            fullWidth
+            value={hpcxWorkspace}
+            onChange={(e) => persistHpcxWorkspace(e.target.value)}
+            placeholder={clusterData?.tools_workspace_default || "/home/<user>/workspace"}
+          />
+          <TextField
+            select
+            label="Target architecture (compute node)"
+            size="small"
+            sx={{ maxWidth: 360 }}
+            value={dcgmArch}
+            onChange={(e) => setDcgmArch(e.target.value as "aarch64" | "x86_64")}
+          >
+            <MenuItem value="aarch64">aarch64 — GBx00 / Grace-Blackwell (ARM)</MenuItem>
+            <MenuItem value="x86_64">x86_64 — Bx00 (x86)</MenuItem>
+          </TextField>
+          <TextField
+            select
+            label="Linux flavor (package repo)"
+            size="small"
+            sx={{ maxWidth: 360 }}
+            value={dcgmDistro}
+            onChange={(e) => setDcgmDistro(e.target.value)}
+          >
+            <MenuItem value="dgx">NVIDIA DGX OS (Ubuntu 24.04)</MenuItem>
+            <MenuItem value="ubuntu2404">Ubuntu 24.04</MenuItem>
+            <MenuItem value="ubuntu2204">Ubuntu 22.04</MenuItem>
+            <MenuItem value="ubuntu2004">Ubuntu 20.04</MenuItem>
+            <MenuItem value="debian12">Debian 12</MenuItem>
+            <MenuItem value="rhel9">RHEL 9</MenuItem>
+            <MenuItem value="rhel8">RHEL 8</MenuItem>
+            <MenuItem value="sles15">SLES 15</MenuItem>
+          </TextField>
+          <TextField
+            select
+            label="CUDA major (DCGM plugins)"
+            size="small"
+            sx={{ maxWidth: 280 }}
+            value={dcgmCudaMajor}
+            onChange={(e) => setDcgmCudaMajor(e.target.value as CudaMajorChoice)}
+          >
+            <MenuItem value="12">CUDA 12</MenuItem>
+            <MenuItem value="13">CUDA 13</MenuItem>
+          </TextField>
+          <TextField
+            label="Version pin (optional)"
+            size="small"
+            sx={{ maxWidth: 280 }}
+            value={dcgmVersion}
+            onChange={(e) => setDcgmVersion(e.target.value)}
+            placeholder="e.g. 4.5.3"
+            helperText="Leave blank for the newest available in the repo."
+          />
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <Button variant="contained" onClick={() => void runDcgmInstall()} disabled={dcgmLoading}>
+              {dcgmLoading ? "Running…" : "Install DCGM to workspace"}
+            </Button>
+            {dcgmLoading && <CircularProgress size={22} />}
+          </Box>
+        </Box>
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+        <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1, mb: 1 }}>
+          <Tooltip title="Open live output (streams while the script runs)">
+            <IconButton
+              size="small"
               onClick={() => openLive("nvloom")}
               aria-label="Open nvloom install live output"
               sx={{ p: 0.75 }}
@@ -1168,6 +1709,123 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           <Tooltip title="Open live output (streams while the script runs)">
             <IconButton
               size="small"
+              onClick={() => openLive("dgxc")}
+              aria-label="Open Exemplar (dgxc-benchmarking) setup live output"
+              sx={{ p: 0.75 }}
+            >
+              <Box
+                component="span"
+                sx={{ width: 14, height: 14, borderRadius: "50%", bgcolor: "success.main", display: "block" }}
+              />
+            </IconButton>
+          </Tooltip>
+          <LineChart size={20} aria-hidden />
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            Download/Setup Exemplar (dgxc-benchmarking)
+          </Typography>
+        </Box>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Runs <Box component="code" sx={{ fontSize: "0.85em" }}>install-dgxc-benchmarking-workspace.sh</Box>: clones{" "}
+          <Box component="code" sx={{ fontSize: "0.85em" }}>NVIDIA/dgxc-benchmarking</Box> (v25.10.01) into the workspace and
+          prepares <Box component="code" sx={{ fontSize: "0.85em" }}>llmb-run</Box> (the “Exemplar” suite) so the NCCL/NEMO
+          tools can use it (MOP §7.4.1). <strong>Record</strong> clones + writes a headless{" "}
+          <Box component="code" sx={{ fontSize: "0.85em" }}>--play</Box> config (fast, review-only).{" "}
+          <strong>Install</strong> additionally runs <Box component="code" sx={{ fontSize: "0.85em" }}>install.sh --play</Box>{" "}
+          (Python 3.12 venv + workloads + NeMo container download via SLURM — can take hours). Output streams live (green
+          dot). Timeout: <Box component="code" sx={{ fontSize: "0.85em" }}>RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_TIMEOUT</Box>.
+        </Typography>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 640 }}>
+          <TextField
+            label="Workspace directory (absolute path, shared filesystem)"
+            size="small"
+            fullWidth
+            value={dgxcWorkspace}
+            onChange={(e) => persistDgxcWorkspace(e.target.value)}
+            placeholder={clusterData?.tools_workspace_default || "/home/<user>/workspace"}
+            helperText="Repo clones to <workspace>/dgxc-benchmarking; workloads install to <workspace>/llmb (LLMB_INSTALL)."
+          />
+          <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+            <TextField
+              select
+              label="Action"
+              size="small"
+              sx={{ minWidth: 260 }}
+              value={dgxcMode}
+              onChange={(e) => setDgxcMode(e.target.value as ExemplarMode)}
+            >
+              <MenuItem value="record">Record (clone + write config, no install)</MenuItem>
+              <MenuItem value="install">Install (headless --play; long-running)</MenuItem>
+            </TextField>
+            <TextField
+              select
+              label="GPU type (llmb)"
+              size="small"
+              sx={{ minWidth: 160 }}
+              value={dgxcGpuType}
+              onChange={(e) => persistDgxcGpuType(e.target.value as GpuTypeChoice)}
+              helperText="Defaults from active platform"
+            >
+              {GPU_TYPE_CHOICES.map((g) => (
+                <MenuItem key={g} value={g}>
+                  {g}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
+          <TextField
+            label="Shared container image folder (optional, -i)"
+            size="small"
+            fullWidth
+            value={dgxcImageFolder}
+            onChange={(e) => setDgxcImageFolder(e.target.value)}
+            placeholder="e.g. /shared/llmb-images (recommended for multi-install reuse)"
+          />
+          <FormControlLabel
+            control={<Checkbox checked={dgxcUseUv} onChange={(e) => setDgxcUseUv(e.target.checked)} size="small" />}
+            label="Use uv (standalone Python 3.12 — required when the node lacks python3-venv/ensurepip; needs astral.sh)"
+          />
+          <FormControlLabel
+            control={<Checkbox checked={dgxcTrustGit} onChange={(e) => setDgxcTrustGit(e.target.checked)} size="small" />}
+            label="Trust workspace git repos (auto-fix 'dubious ownership' — chowns the workspace when sudo is available and registers git safe.directory for the installer's nested dependency clones)"
+          />
+          {dgxcMode === "install" ? (
+            <Alert severity="warning">
+              Install mode submits SLURM jobs to download the NeMo container and installs all selected workloads — this can
+              run for hours. Use Record first to review the generated config.
+            </Alert>
+          ) : null}
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <Button
+              variant="contained"
+              onClick={() => void runDgxcSetup()}
+              disabled={dgxcLoading || !dgxcWorkspace.trim()}
+            >
+              {dgxcLoading ? "Running…" : dgxcMode === "install" ? "Run Exemplar install" : "Record Exemplar config"}
+            </Button>
+            {dgxcLoading && <CircularProgress size={22} />}
+          </Box>
+          {dgxcError ? (
+            <Alert severity="error" sx={{ whiteSpace: "pre-wrap" }}>
+              {dgxcError}
+            </Alert>
+          ) : null}
+          {dgxcResult ? (
+            <Alert severity={dgxcResult.ok ? "success" : "error"} sx={{ whiteSpace: "pre-wrap" }}>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                Exemplar {dgxcMode} — {dgxcResult.ok ? "success" : "failed"}
+                {dgxcResult.returncode != null ? ` — exit ${dgxcResult.returncode}` : ""}
+              </Typography>
+              {dgxcResult.stdout ? <CollapsibleLog text={dgxcResult.stdout} label="output" /> : null}
+            </Alert>
+          ) : null}
+        </Box>
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+        <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1, mb: 1 }}>
+          <Tooltip title="Open live output (streams while the script runs)">
+            <IconButton
+              size="small"
               onClick={() => openLive("grafana")}
               aria-label="Open Grafana launch live output"
               sx={{ p: 0.75 }}
@@ -1245,6 +1903,12 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         </Alert>
       ) : null}
 
+      {dcgmError ? (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {dcgmError}
+        </Alert>
+      ) : null}
+
       {result ? (
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
@@ -1257,20 +1921,8 @@ export function ToolsView({ logDir }: ToolsViewProps) {
               {result.command_display}
             </Typography>
           ) : null}
-          {result.stdout ? (
-            <Typography variant="caption" component="pre" sx={{ display: "block", mb: 1, whiteSpace: "pre-wrap" }}>
-              {result.stdout}
-            </Typography>
-          ) : null}
-          {result.stderr ? (
-            <Typography
-              variant="caption"
-              component="pre"
-              sx={{ display: "block", color: "error.main", whiteSpace: "pre-wrap" }}
-            >
-              {result.stderr}
-            </Typography>
-          ) : null}
+          {result.stdout ? <CollapsibleLog text={result.stdout} label="output" /> : null}
+          {result.stderr ? <CollapsibleLog text={result.stderr} label="stderr" tone="error" /> : null}
         </Paper>
       ) : null}
 
@@ -1285,20 +1937,8 @@ export function ToolsView({ logDir }: ToolsViewProps) {
               {hpcxResult.command_display}
             </Typography>
           ) : null}
-          {hpcxResult.stdout ? (
-            <Typography variant="caption" component="pre" sx={{ display: "block", mb: 1, whiteSpace: "pre-wrap" }}>
-              {hpcxResult.stdout}
-            </Typography>
-          ) : null}
-          {hpcxResult.stderr ? (
-            <Typography
-              variant="caption"
-              component="pre"
-              sx={{ display: "block", color: "error.main", whiteSpace: "pre-wrap" }}
-            >
-              {hpcxResult.stderr}
-            </Typography>
-          ) : null}
+          {hpcxResult.stdout ? <CollapsibleLog text={hpcxResult.stdout} label="output" /> : null}
+          {hpcxResult.stderr ? <CollapsibleLog text={hpcxResult.stderr} label="stderr" tone="error" /> : null}
         </Paper>
       ) : null}
 
@@ -1313,20 +1953,8 @@ export function ToolsView({ logDir }: ToolsViewProps) {
               {cudaNcclResult.command_display}
             </Typography>
           ) : null}
-          {cudaNcclResult.stdout ? (
-            <Typography variant="caption" component="pre" sx={{ display: "block", mb: 1, whiteSpace: "pre-wrap" }}>
-              {cudaNcclResult.stdout}
-            </Typography>
-          ) : null}
-          {cudaNcclResult.stderr ? (
-            <Typography
-              variant="caption"
-              component="pre"
-              sx={{ display: "block", color: "error.main", whiteSpace: "pre-wrap" }}
-            >
-              {cudaNcclResult.stderr}
-            </Typography>
-          ) : null}
+          {cudaNcclResult.stdout ? <CollapsibleLog text={cudaNcclResult.stdout} label="output" /> : null}
+          {cudaNcclResult.stderr ? <CollapsibleLog text={cudaNcclResult.stderr} label="stderr" tone="error" /> : null}
         </Paper>
       ) : null}
 
@@ -1341,20 +1969,24 @@ export function ToolsView({ logDir }: ToolsViewProps) {
               {nvloomResult.command_display}
             </Typography>
           ) : null}
-          {nvloomResult.stdout ? (
+          {nvloomResult.stdout ? <CollapsibleLog text={nvloomResult.stdout} label="output" /> : null}
+          {nvloomResult.stderr ? <CollapsibleLog text={nvloomResult.stderr} label="stderr" tone="error" /> : null}
+        </Paper>
+      ) : null}
+
+      {dcgmResult ? (
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            DCGM / DCGMI — {dcgmResult.ok ? "success" : "failed"}
+            {dcgmResult.returncode != null ? ` — exit ${dcgmResult.returncode}` : ""}
+          </Typography>
+          {dcgmResult.command_display ? (
             <Typography variant="caption" component="pre" sx={{ display: "block", mb: 1, whiteSpace: "pre-wrap" }}>
-              {nvloomResult.stdout}
+              {dcgmResult.command_display}
             </Typography>
           ) : null}
-          {nvloomResult.stderr ? (
-            <Typography
-              variant="caption"
-              component="pre"
-              sx={{ display: "block", color: "error.main", whiteSpace: "pre-wrap" }}
-            >
-              {nvloomResult.stderr}
-            </Typography>
-          ) : null}
+          {dcgmResult.stdout ? <CollapsibleLog text={dcgmResult.stdout} label="output" /> : null}
+          {dcgmResult.stderr ? <CollapsibleLog text={dcgmResult.stderr} label="stderr" tone="error" /> : null}
         </Paper>
       ) : null}
 
@@ -1369,20 +2001,8 @@ export function ToolsView({ logDir }: ToolsViewProps) {
               {grafanaResult.command_display}
             </Typography>
           ) : null}
-          {grafanaResult.stdout ? (
-            <Typography variant="caption" component="pre" sx={{ display: "block", mb: 1, whiteSpace: "pre-wrap" }}>
-              {grafanaResult.stdout}
-            </Typography>
-          ) : null}
-          {grafanaResult.stderr ? (
-            <Typography
-              variant="caption"
-              component="pre"
-              sx={{ display: "block", color: "error.main", whiteSpace: "pre-wrap" }}
-            >
-              {grafanaResult.stderr}
-            </Typography>
-          ) : null}
+          {grafanaResult.stdout ? <CollapsibleLog text={grafanaResult.stdout} label="output" /> : null}
+          {grafanaResult.stderr ? <CollapsibleLog text={grafanaResult.stderr} label="stderr" tone="error" /> : null}
         </Paper>
       ) : null}
 
@@ -1398,7 +2018,11 @@ export function ToolsView({ logDir }: ToolsViewProps) {
                 ? "CUDA toolkit & NCCL install"
                 : liveDialogKind === "nvloom"
                   ? "nvloom install"
-                  : "Grafana + Bright Prometheus launch"
+                  : liveDialogKind === "dgxc"
+                    ? "Exemplar (dgxc-benchmarking) setup"
+                    : liveDialogKind === "dcgm"
+                      ? "DCGM / DCGMI workspace install"
+                      : "Grafana + Bright Prometheus launch"
         }
         logText={
           liveDialogKind === "nemo"
@@ -1409,7 +2033,11 @@ export function ToolsView({ logDir }: ToolsViewProps) {
                 ? liveLogs.cudaNccl
                 : liveDialogKind === "nvloom"
                   ? liveLogs.nvloom
-                  : liveLogs.grafana
+                  : liveDialogKind === "dgxc"
+                    ? liveLogs.dgxc
+                    : liveDialogKind === "dcgm"
+                      ? liveLogs.dcgm
+                      : liveLogs.grafana
         }
         running={
           liveDialogKind === "nemo"
@@ -1420,7 +2048,11 @@ export function ToolsView({ logDir }: ToolsViewProps) {
                 ? liveRunning.cudaNccl
                 : liveDialogKind === "nvloom"
                   ? liveRunning.nvloom
-                  : liveRunning.grafana
+                  : liveDialogKind === "dgxc"
+                    ? liveRunning.dgxc
+                    : liveDialogKind === "dcgm"
+                      ? liveRunning.dcgm
+                      : liveRunning.grafana
         }
       />
     </Box>

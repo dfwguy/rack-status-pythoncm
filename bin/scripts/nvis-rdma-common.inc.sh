@@ -10,6 +10,18 @@
 #   . "${_NVIS_SCR}/nvis-rdma-common.inc.sh"
 #   export UCX_NET_DEVICES
 #   UCX_NET_DEVICES="$(nvis_rdma_default_ucx_net_devices)" || exit 1
+#
+# This shim now delegates mlx5 rail selection to the shared classifier in
+# lib/fabric.inc.sh (ACTIVE + InfiniBand + top line rate, so slower BlueField-3
+# storage NICs are excluded). If that include is unavailable or finds nothing, it
+# falls back to the legacy "all mlx5_*" listing so existing callers never regress.
+
+# Best-effort: pull in the shared fabric classifier from lib/fabric.inc.sh.
+_NVIS_RDMA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _NVIS_RDMA_DIR=""
+if [[ -n "${_NVIS_RDMA_DIR}" && -f "${_NVIS_RDMA_DIR}/lib/fabric.inc.sh" ]]; then
+  # shellcheck disable=SC1091
+  . "${_NVIS_RDMA_DIR}/lib/fabric.inc.sh"
+fi
 
 # True when at least one mlx5_* device exposes a non-empty local_cpulist (DGX IB-style).
 nvis_rdma_mlx_infiniband_usable() {
@@ -68,6 +80,17 @@ nvis_rdma_list_ibdevs_for_mode() {
 }
 
 nvis_rdma_list_mlx_ibdevs() {
+  # Prefer the shared classifier: ACTIVE + InfiniBand + top rate (drops BF3 storage).
+  if declare -F nvis_fabric_scan >/dev/null 2>&1; then
+    local _scan _hca
+    _scan="$(NVIS_RDMA_LINK_TECH=ib nvis_fabric_scan 2>/dev/null)"
+    _hca="$(printf '%s\n' "${_scan}" | sed -n 's/^NVIS_FAB_IB_HCA=//p')"
+    if [[ -n "${_hca}" ]]; then
+      printf '%s' "${_hca//,/ }"
+      return 0
+    fi
+  fi
+  # Fallback (legacy): every mlx5_* device under sysfs.
   local d out=()
   shopt -s nullglob
   for d in /sys/class/infiniband/mlx5_*; do

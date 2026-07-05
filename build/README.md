@@ -124,7 +124,7 @@ flags, Slurm/Grafana knobs) see [`docs/ENVIRONMENT.md`](../docs/ENVIRONMENT.md).
 |---|---|---|
 | `RACK_AI_API_KEY` | — | API key (`nvapi-…`) to enable the chat widget. Unset = demo/canned answers. |
 | `RACK_AI_ENDPOINT` | NVIDIA NIM | Chat completions endpoint. |
-| `RACK_AI_MODEL` | — | Model id (e.g. `nvidia/llama-3.1-nemotron-ultra-253b-v1`). |
+| `RACK_AI_MODEL` | — | Model id (e.g. `nvidia/nvidia/nemotron-3-super-v3`). |
 
 ### Cluster-specific (optional)
 

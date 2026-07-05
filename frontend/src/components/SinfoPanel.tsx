@@ -12,6 +12,7 @@ import LinearProgress from "@mui/material/LinearProgress";
 import { Text, Button } from "@nvidia/foundations-react-core";
 import { fetchSlurmJson } from "../lib/slurmHelpers";
 import { parseSinfoRStdout } from "../lib/parseSinfoRStdout";
+import { slurmReasonTone, slurmToneColor } from "../lib/slurmReasonTone";
 
 const NVIDIA_GREEN = "#76B900";
 
@@ -91,6 +92,9 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
   const headers = parsed && !parsed.useRaw && parsed.headers.length ? parsed.headers : [];
   const rows = parsed && !parsed.useRaw && parsed.headers.length ? parsed.rows : [];
   const showRaw = !parsed || parsed.useRaw || !headers.length;
+  const toneCols = headers
+    .map((h, i) => (/^(STATE|REASON)$/i.test(h) ? i : -1))
+    .filter((i) => i >= 0);
 
   const visibleRows = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -159,11 +163,28 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
               {visibleRows.map(({ r, i, show }) =>
                 show ? (
                   <TableRow key={i} hover sx={{ "&:nth-of-type(even)": { bgcolor: "action.hover" } }}>
-                    {headers.map((_, ci) => (
-                      <TableCell key={ci} sx={{ fontFamily: "monospace", fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-word", maxWidth: 360 }}>
-                        {r[ci] ?? ""}
-                      </TableCell>
-                    ))}
+                    {headers.map((_, ci) => {
+                      const value = r[ci] ?? "";
+                      const tone = toneCols.includes(ci) ? slurmReasonTone(value) : "none";
+                      const toneColor = slurmToneColor(tone);
+                      return (
+                        <TableCell
+                          key={ci}
+                          title={value}
+                          sx={{
+                            fontFamily: "monospace",
+                            fontSize: 11,
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                            maxWidth: 360,
+                            color: toneColor,
+                            fontWeight: toneColor ? 600 : undefined,
+                          }}
+                        >
+                          {value}
+                        </TableCell>
+                      );
+                    })}
                   </TableRow>
                 ) : null
               )}

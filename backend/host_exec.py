@@ -1,12 +1,15 @@
-"""Platform-agnostic host command executor.
+"""Platform-agnostic host command executor (compatibility facade).
+
+This module is now a thin facade over the composable :mod:`transport` layer.
+It preserves the historical function surface (``run_on_host`` / ``popen_on_host``
+/ ``run_slurm_on_host`` / ``wrap_for_host`` / reachability / interactive SSH
+argv) so existing call sites keep working, while delegating actual execution to
+a :class:`transport.RoutingConnection` composed of Local/SSH leaves and an
+env-forwarding decorator.
 
 Routes subprocess calls either locally (``RACK_EXEC_MODE=local``, the default)
-or through SSH to a remote head node (``RACK_EXEC_MODE=ssh``).
-
-When running directly on the head node this module is a thin wrapper around
-``subprocess``.  Inside a Docker container the SSH path lets the app execute
-Slurm / cmsh / pdsh commands on the actual cluster head node without needing
-those tools installed in the image.
+or through SSH to a remote head node (``RACK_EXEC_MODE=ssh``). A privileged
+``profile="script"`` target (``RACK_SCRIPT_SSH_*``) is exposed as a second route.
 
 Environment variables
 ---------------------
@@ -24,72 +27,54 @@ import shlex
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
 
-_EXEC_MODE: str | None = None
-_SSH_HOST: str | None = None
-_SSH_USER: str | None = None
-_SSH_KEY: str | None = None
-_SSH_PORT: str | None = None
-_SSH_EXTRA_OPTS: list[str] = []
-_SSH_CONNECT_TIMEOUT: str = "10"
-_SSH_ALIVE_INTERVAL: str = "5"
-_SSH_ALIVE_COUNT: str = "2"
-# Secondary "script" SSH profile for privileged, node-operational tools (sysinfo,
-# pdsh hardware checks, switch/IMEX/BMC actions). On split clusters the control
-# plane (cmsh / slurm queries) runs on the head as an unprivileged user, while
-# these run on a node that grants root (e.g. an slogin node reachable on the
-# container's host network). Unset => privileged calls fall back to the control
-# target, so single-target clusters are unaffected.
-_SCRIPT_SSH_HOST: str | None = None
-_SCRIPT_SSH_USER: str | None = None
-_SCRIPT_SSH_KEY: str | None = None
+from transport import (  # noqa: F401  (Process re-exported as HostProcess)
+    FORWARD_ENV_NAMES,
+    FORWARD_ENV_PREFIXES,
+    Process,
+    RoutingConnection,
+    SSHConnection,
+    TransportConfig,
+    build_connection,
+)
+
+# HostProcess is retained as a public name for back-compat; it is the transport
+# Process wrapper (communicate/kill/poll/returncode).
+HostProcess = Process
+
 _init_lock = threading.Lock()
 
-_FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_", "NVIS_", "PDSH_", "NGC_")
-
-# Platform-default knobs (from the catalog's tool_param_defaults) that scripts/sbatch
-# consume but which don't carry a forwarded prefix. Forwarded by exact name so the
-# active platform's generation reaches remote jobs over SSH.
-_FORWARD_ENV_NAMES = ("CUDA_MAJ", "GPU_MODEL_FLAG", "MNNVL_TOPOLOGY", "CORE_TO_HCA_SCRIPT")
-
-
-def _build_env_exports() -> str:
-    """Build shell export statements for env vars that should be forwarded to the remote host."""
-    exports: list[str] = []
-    for key, val in os.environ.items():
-        if any(key.startswith(p) for p in _FORWARD_ENV_PREFIXES) or key in _FORWARD_ENV_NAMES:
-            exports.append(f"export {key}={shlex.quote(val)}")
-    return "; ".join(exports) + "; " if exports else ""
+# Cached, lazily-built state -------------------------------------------------
+_CONN: RoutingConnection | None = None
+_CONTROL_SSH: SSHConnection | None = None  # raw control SSH leaf (reachability/PTY argv)
+_CONFIG: TransportConfig | None = None
+_EXEC_MODE: str | None = None
 
 
 def _ensure_init() -> None:
-    global _EXEC_MODE, _SSH_HOST, _SSH_USER, _SSH_KEY, _SSH_PORT, _SSH_EXTRA_OPTS
-    global _SSH_CONNECT_TIMEOUT, _SSH_ALIVE_INTERVAL, _SSH_ALIVE_COUNT
-    global _SCRIPT_SSH_HOST, _SCRIPT_SSH_USER, _SCRIPT_SSH_KEY
-    if _EXEC_MODE is not None:
+    global _CONN, _CONTROL_SSH, _CONFIG, _EXEC_MODE
+    if _CONN is not None:
         return
     with _init_lock:
-        if _EXEC_MODE is not None:
+        if _CONN is not None:
             return
-        _EXEC_MODE = (os.environ.get("RACK_EXEC_MODE") or "local").strip().lower()
-        _SSH_HOST = (os.environ.get("RACK_SSH_HOST") or "").strip()
-        _SSH_USER = (os.environ.get("RACK_SSH_USER") or "root").strip() or "root"
-        _SSH_KEY = (os.environ.get("RACK_SSH_KEY") or "/run/secrets/ssh_key").strip()
-        _SSH_PORT = (os.environ.get("RACK_SSH_PORT") or "22").strip() or "22"
-        # Privileged "script" profile (optional). User defaults to root; key
-        # falls back to the control key so a single mounted key serves both.
-        _SCRIPT_SSH_HOST = (os.environ.get("RACK_SCRIPT_SSH_HOST") or "").strip()
-        _SCRIPT_SSH_USER = (os.environ.get("RACK_SCRIPT_SSH_USER") or "root").strip() or "root"
-        _SCRIPT_SSH_KEY = (os.environ.get("RACK_SCRIPT_SSH_KEY") or _SSH_KEY or "").strip()
-        raw_opts = (os.environ.get("RACK_SSH_OPTS") or "").strip()
-        _SSH_EXTRA_OPTS = shlex.split(raw_opts) if raw_opts else []
-        # Bounded connect + keepalive so a dropped VPN / dead tunnel fails fast
-        # (≈ ConnectTimeout for new sessions, ≈ interval*count for mid-session stalls)
-        # instead of hanging on a half-open TCP connection for minutes.
-        _SSH_CONNECT_TIMEOUT = (os.environ.get("RACK_SSH_CONNECT_TIMEOUT") or "10").strip() or "10"
-        _SSH_ALIVE_INTERVAL = (os.environ.get("RACK_SSH_ALIVE_INTERVAL") or "5").strip() or "5"
-        _SSH_ALIVE_COUNT = (os.environ.get("RACK_SSH_ALIVE_COUNT") or "2").strip() or "2"
+        cfg = TransportConfig.from_env()
+        conn = build_connection(cfg)
+        _CONFIG = cfg
+        _EXEC_MODE = cfg.exec_mode
+        _CONN = conn
+        # Keep a handle to the raw control SSH leaf for reachability probes and
+        # interactive PTY argv (which need ssh_argv/interactive_argv, not run()).
+        if cfg.exec_mode == "ssh":
+            _CONTROL_SSH = SSHConnection(cfg.control) if cfg.control else None
+        else:
+            _CONTROL_SSH = None
+
+
+def _conn() -> RoutingConnection:
+    _ensure_init()
+    assert _CONN is not None
+    return _CONN
 
 
 def is_remote() -> bool:
@@ -98,66 +83,26 @@ def is_remote() -> bool:
     return _EXEC_MODE == "ssh"
 
 
-def wrap_for_host(cmd: list[str], *, cwd: str | None = None, profile: str = "control") -> list[str]:
-    """Return *cmd* as-is locally, or wrapped in an SSH argv when remote.
-
-    The returned list is suitable for ``subprocess.Popen(…)``.  Environment
-    variables matching the forwarding prefixes are exported on the remote side.
-    ``profile="script"`` routes to the privileged target when configured.
-    """
-    _ensure_init()
-    if _EXEC_MODE != "ssh":
-        return list(cmd)
-    env_prefix = _build_env_exports()
-    shell_str = shlex.join(cmd)
-    if cwd:
-        shell_str = f"cd {shlex.quote(cwd)} && {shell_str}"
-    shell_str = env_prefix + shell_str
-    return _ssh_base_argv(profile=profile) + [shell_str]
-
-
 def script_target_configured() -> bool:
     """True when a dedicated privileged ``script`` SSH target is configured."""
     _ensure_init()
-    return bool(_SCRIPT_SSH_HOST)
+    return bool(_CONFIG and _CONFIG.script is not None)
 
 
-def _ssh_base_argv(connect_timeout: str | None = None, *, profile: str = "control") -> list[str]:
-    """Build the ``ssh …`` prefix used for both run and popen.
+def wrap_for_host(
+    cmd: list[str],
+    *,
+    cwd: str | None = None,
+    profile: str = "control",
+    env_extra: dict[str, str] | None = None,
+) -> list[str]:
+    """Return *cmd* as-is locally, or wrapped in an SSH argv when remote.
 
-    ``profile`` selects the target: ``"control"`` (default) uses ``RACK_SSH_*``
-    (head node / cmsh / slurm); ``"script"`` uses ``RACK_SCRIPT_SSH_*`` for
-    privileged node-operational tools, falling back to the control target when no
-    script target is configured.
-
-    Includes a bounded ``ConnectTimeout`` and ``ServerAlive*`` keepalive so that a
-    dropped VPN / dead network path is detected in seconds rather than blocking the
-    calling worker on a half-open TCP connection.
+    The returned list is suitable for ``subprocess.Popen(…)``. Forwarded env vars
+    (prefix/name allowlist) plus any request-scoped *env_extra* are exported on
+    the remote side. ``profile="script"`` routes to the privileged target.
     """
-    _ensure_init()
-    if profile == "script" and _SCRIPT_SSH_HOST:
-        host, user, key = _SCRIPT_SSH_HOST, _SCRIPT_SSH_USER, _SCRIPT_SSH_KEY
-    else:
-        host, user, key = _SSH_HOST, _SSH_USER, _SSH_KEY
-    if not host:
-        raise RuntimeError(
-            "RACK_EXEC_MODE=ssh but RACK_SSH_HOST is not set. "
-            "Point it to the head-node hostname or IP."
-        )
-    argv = [
-        "ssh",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "BatchMode=yes",
-        "-o", f"ConnectTimeout={connect_timeout or _SSH_CONNECT_TIMEOUT or '10'}",
-        "-o", f"ServerAliveInterval={_SSH_ALIVE_INTERVAL or '5'}",
-        "-o", f"ServerAliveCountMax={_SSH_ALIVE_COUNT or '2'}",
-        "-p", _SSH_PORT or "22",
-    ]
-    if key and os.path.isfile(key):
-        argv.extend(["-i", key])
-    argv.extend(_SSH_EXTRA_OPTS)
-    argv.append(f"{user}@{host}")
-    return argv
+    return _conn().wrap_argv(cmd, cwd=cwd, env_extra=env_extra, profile=profile)
 
 
 # ---------------------------------------------------------------------------
@@ -180,9 +125,12 @@ def _reachability_ttl() -> int:
 
 def _probe_reachable() -> tuple[bool, str]:
     """Run a minimal ``ssh … true`` with a short connect timeout."""
+    _ensure_init()
+    if _CONTROL_SSH is None:
+        return False, "RACK_EXEC_MODE=ssh but RACK_SSH_HOST is not set."
     ct = (os.environ.get("RACK_SSH_REACHABILITY_CONNECT_TIMEOUT") or "5").strip() or "5"
     try:
-        argv = _ssh_base_argv(connect_timeout=ct) + ["true"]
+        argv = _CONTROL_SSH.ssh_argv(connect_timeout=ct) + ["true"]
     except RuntimeError as e:
         return False, str(e)
     try:
@@ -247,11 +195,12 @@ def reachability_info(force: bool = False) -> dict[str, object]:
     ok, detail = reachability_state(force=force)
     with _reach_lock:
         wall = _reach_wall_at
+    host = _CONFIG.control.host if (_CONFIG and _CONFIG.control) else None
     return {
         "mode": "ssh",
         "reachable": ok,
         "detail": detail,
-        "host": _SSH_HOST or None,
+        "host": host or None,
         "checked_at": wall or None,
         "ttl_sec": _reachability_ttl(),
     }
@@ -284,32 +233,15 @@ def run_slurm_on_host(
     """Run Slurm CLI (*shell_cmd* often ``module load slurm && squeue``).
 
     Uses ``bash -c`` with a minimal modules init instead of ``bash -lc``, so BCM
-    ``module load slurm`` does not pull in ``slurm_completion.sh`` / bash-completion
-    (the common ``FATAL: Missing required source file`` on head nodes).
+    ``module load slurm`` does not pull in bash-completion (the common
+    ``FATAL: Missing required source file`` on head nodes).
     """
-    _ensure_init()
     inner = _slurm_module_init_snippet() + shell_cmd
+    conn = _conn()
     if _EXEC_MODE == "ssh":
-        env_prefix = _build_env_exports()
-        remote_cmd = f"bash -c {shlex.quote(inner)}"
-        remote_cmd = env_prefix + remote_cmd
-        if cwd:
-            remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
-        argv = _ssh_base_argv() + [remote_cmd]
-        return subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    return subprocess.run(
-        ["bash", "-c", inner],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=cwd,
-        env=env,
-    )
+        # Preserve the historical remote form: export…; cd <cwd> && bash -c '<inner>'.
+        return conn.run(f"bash -c {shlex.quote(inner)}", timeout=timeout, cwd=cwd)
+    return conn.run(inner, timeout=timeout, cwd=cwd, env=env, login_shell=False)
 
 
 def run_on_host(
@@ -326,82 +258,19 @@ def run_on_host(
     Parameters
     ----------
     cmd
-        A shell string **or** argv list.  In SSH mode only the string form
-        is sent; an argv list is joined with ``shlex.join``.
+        A shell string **or** argv list. In SSH mode an argv list is joined with
+        ``shlex.join``.
     timeout
         Seconds before the call times out.
     cwd
-        Working directory (local mode only; SSH mode prepends ``cd <cwd> &&``).
+        Working directory (local: passed to subprocess; SSH: prepends ``cd``).
     env
-        Environment dict (local mode only; ignored in SSH mode – the remote
-        login shell provides the cluster environment).
+        Environment dict (local only; ignored in SSH mode — the remote login
+        shell + forwarded env provide the cluster environment).
     """
-    _ensure_init()
-    shell_str = cmd if isinstance(cmd, str) else shlex.join(cmd)
-
-    if _EXEC_MODE == "ssh":
-        env_prefix = _build_env_exports()
-        remote_cmd = shell_str
-        if cwd:
-            remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
-        remote_cmd = env_prefix + remote_cmd
-        argv = _ssh_base_argv(profile=profile) + [remote_cmd]
-        return subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-
-    # Local execution
-    if isinstance(cmd, list):
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=cwd,
-            env=env,
-        )
-    bash_flag = "-lc" if login_shell else "-c"
-    return subprocess.run(
-        ["bash", bash_flag, shell_str],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=cwd,
-        env=env,
+    return _conn().run(
+        cmd, timeout=timeout, cwd=cwd, env=env, login_shell=login_shell, profile=profile
     )
-
-
-# ---------------------------------------------------------------------------
-# HostProcess  –  long-running command wrapper (replaces subprocess.Popen)
-# ---------------------------------------------------------------------------
-
-@dataclass
-class HostProcess:
-    """Wraps a ``Popen`` (local) or SSH-tunnelled process so callers get a
-    uniform ``communicate()`` / ``kill()`` / ``returncode`` interface."""
-
-    _proc: subprocess.Popen = field(repr=False)
-    returncode: int | None = None
-
-    def communicate(self, timeout: int | None = None) -> tuple[str, str]:
-        out, err = self._proc.communicate(timeout=timeout)
-        self.returncode = self._proc.returncode
-        return (out or ""), (err or "")
-
-    def kill(self) -> None:
-        try:
-            self._proc.kill()
-        except OSError:
-            pass
-
-    def poll(self) -> int | None:
-        rc = self._proc.poll()
-        if rc is not None:
-            self.returncode = rc
-        return rc
 
 
 def popen_on_host(
@@ -416,70 +285,22 @@ def popen_on_host(
     In SSH mode the command runs on the remote host via an SSH channel that
     stays open until ``communicate()`` / ``kill()`` is called.
     """
-    _ensure_init()
-    shell_str = cmd if isinstance(cmd, str) else shlex.join(cmd)
-
-    if _EXEC_MODE == "ssh":
-        env_prefix = _build_env_exports()
-        remote_cmd = shell_str
-        if cwd:
-            remote_cmd = f"cd {shlex.quote(cwd)} && {remote_cmd}"
-        remote_cmd = env_prefix + remote_cmd
-        argv = _ssh_base_argv(profile=profile) + [remote_cmd]
-        proc = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        return HostProcess(_proc=proc)
-
-    # Local execution
-    if isinstance(cmd, list):
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    else:
-        proc = subprocess.Popen(
-            ["bash", "-lc", shell_str],
-            cwd=cwd,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    return HostProcess(_proc=proc)
+    return _conn().popen(cmd, cwd=cwd, env=env, profile=profile)
 
 
 # ---------------------------------------------------------------------------
-# ssh_to_node_argv  –  build argv for an interactive SSH session to a node
+# Interactive SSH argv  –  build argv for a PTY session to head node / a node
 # ---------------------------------------------------------------------------
 
 def ssh_to_headnode_argv() -> list[str]:
     """Return an argv list to open an interactive SSH session to the head node.
 
-    In SSH (remote) mode this connects to the configured head node.
-    In local mode this opens a local shell (the app is already on the head node).
+    In SSH (remote) mode this connects to the configured head node. In local
+    mode this opens a local shell (the app is already on the head node).
     """
     _ensure_init()
-    if _EXEC_MODE == "ssh":
-        argv = [
-            "ssh", "-tt",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "LogLevel=ERROR",
-            "-o", "SetEnv=TERM=xterm-256color",
-            "-p", _SSH_PORT or "22",
-        ]
-        if _SSH_KEY and os.path.isfile(_SSH_KEY):
-            argv.extend(["-i", _SSH_KEY])
-        argv.append(f"{_SSH_USER}@{_SSH_HOST}")
-        return argv
+    if _EXEC_MODE == "ssh" and _CONTROL_SSH is not None:
+        return _CONTROL_SSH.interactive_argv()
     return [os.environ.get("SHELL", "/bin/bash"), "-l"]
 
 
@@ -492,21 +313,20 @@ def ssh_to_node_argv(node: str) -> list[str]:
         ssh user@node
     """
     _ensure_init()
-    ssh_user = _SSH_USER or "root"
-    if _EXEC_MODE == "ssh":
-        # SSH to head node, then from there SSH to the compute node
-        # (compute nodes use munge-based auth from the head node).
+    ctrl = _CONFIG.control if _CONFIG else None
+    ssh_user = (ctrl.user if ctrl else "root") or "root"
+    if _EXEC_MODE == "ssh" and ctrl:
         argv = [
             "ssh", "-tt",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "LogLevel=ERROR",
-            "-p", _SSH_PORT or "22",
+            "-p", ctrl.port or "22",
         ]
-        if _SSH_KEY and os.path.isfile(_SSH_KEY):
-            argv.extend(["-i", _SSH_KEY])
+        if ctrl.key and os.path.isfile(ctrl.key):
+            argv.extend(["-i", ctrl.key])
         argv.extend([
-            f"{_SSH_USER}@{_SSH_HOST}",
+            f"{ctrl.user}@{ctrl.host}",
             "TERM=xterm-256color",
             "ssh", "-tt",
             "-o", "StrictHostKeyChecking=no",

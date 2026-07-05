@@ -176,3 +176,56 @@ class TestRackLocksAPI:
         resp = client.delete("/api/rack-locks/p5-r01", headers={"X-Rack-Operator": "alice"})
         assert resp.status_code == 200
         assert resp.get_json()["removed"] is False
+
+
+class TestRunLlmbNccl:
+    """Async + status endpoints for the NCCL Microbenchmark (LLMB) tool."""
+
+    def test_single_rack_starts_job(self, client):
+        resp = client.post(
+            "/api/run-llmb-nccl-async",
+            json={"rack": "p5-r01", "log_dir": "var/logs/", "dry_run": True},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data.get("job_id")
+        assert data.get("racks") == ["p5-r01"]
+        assert "run_llmb_nccl.sh" in (data.get("command_display") or "")
+        assert "--dry-run" in (data.get("command_display") or "")
+
+    def test_multi_rack_starts_job(self, client):
+        resp = client.post(
+            "/api/run-llmb-nccl-async",
+            json={"racks": ["p5-r01", "p5-r02", "p5-r01"], "log_dir": "var/logs/"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        # Duplicates removed, order preserved.
+        assert data.get("racks") == ["p5-r01", "p5-r02"]
+
+    def test_missing_rack_returns_400(self, client):
+        resp = client.post("/api/run-llmb-nccl-async", json={"log_dir": "var/logs/"})
+        assert resp.status_code == 400
+        assert resp.get_json()["ok"] is False
+
+    def test_status_requires_job_id(self, client):
+        resp = client.get("/api/run-llmb-nccl-status")
+        assert resp.status_code == 400
+
+    def test_status_for_started_job(self, client):
+        start = client.post(
+            "/api/run-llmb-nccl-async",
+            json={"rack": "p5-r01", "log_dir": "var/logs/", "dry_run": True},
+        ).get_json()
+        job_id = start["job_id"]
+        resp = client.get(f"/api/run-llmb-nccl-status?job_id={job_id}")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data.get("phase") in {"starting", "running", "done", "error", "timeout"}
+
+    def test_status_unknown_job_404(self, client):
+        resp = client.get("/api/run-llmb-nccl-status?job_id=does-not-exist")
+        assert resp.status_code == 404

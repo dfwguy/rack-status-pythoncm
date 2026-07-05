@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import Box from "@mui/material/Box";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
@@ -6,10 +7,11 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Paper from "@mui/material/Paper";
-import { Card, Flex, Tag, Text } from "@nvidia/foundations-react-core";
+import { Banner, Button, Card, Flex, Tag, Text } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 import { PreviewBanner } from "../components/layout/PreviewBanner";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
+import { probeFabric, type FabricProbe } from "../services/fabricService";
 
 export type InfraSegment = "ethernet" | "ib-nvlink" | "storage";
 
@@ -100,6 +102,100 @@ const SEGMENTS: Record<InfraSegment, SegmentConfig> = {
   },
 };
 
+/**
+ * Live fabric probe: classifies a representative compute node's RDMA devices into
+ * the compute rails NCCL should use vs the storage/NS plane, and flags any
+ * detected-vs-expected discrepancy from the active platform's fabric profile
+ * (e.g. an 800G reference architecture that comes up at 400G).
+ */
+function FabricProbeCard() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [node, setNode] = useState<string | null>(null);
+  const [fabric, setFabric] = useState<FabricProbe | null>(null);
+
+  const runProbe = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const resp = await probeFabric();
+      if (!resp.ok || !resp.fabric) {
+        setError(resp.error || "Fabric probe failed");
+        setFabric(null);
+      } else {
+        setFabric(resp.fabric);
+        setNode(resp.node || resp.fabric.host || null);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setFabric(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const rows: [string, string][] = fabric
+    ? [
+        ["Scale-out fabric", fabric.link ? fabric.link.toUpperCase() : "—"],
+        ["Per-rail rate", fabric.rate_gbps ? `${fabric.rate_gbps} Gb/s` : "—"],
+        ["Compute rails", `${fabric.compute_rails}${fabric.gpus ? ` (for ${fabric.gpus} GPUs)` : ""}`],
+        ["NCCL_IB_HCA", fabric.nccl_ib_hca || "—"],
+        ["NCCL_SOCKET_IFNAME", fabric.ns_ifname || "—"],
+        ["UCX_NET_DEVICES", fabric.ucx_net_devices || "—"],
+      ]
+    : [];
+
+  return (
+    <Card style={{ padding: 16, marginBottom: 24 }}>
+      <Flex align="center" justify="between" style={{ marginBottom: 8 }}>
+        <Text kind="body/bold/md">Live fabric probe</Text>
+        <Button kind="secondary" size="small" onClick={runProbe} disabled={loading}>
+          {loading ? "Probing…" : node ? "Re-probe" : "Probe fabric"}
+        </Button>
+      </Flex>
+      <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginBottom: 12 }}>
+        Classifies a representative compute node's NICs into compute rails vs the storage/NS plane
+        (the map NCCL/UCX use), and compares against the platform's expected fabric profile.
+      </Text>
+
+      {error && (
+        <Banner status="error" kind="inline">
+          {error}
+        </Banner>
+      )}
+
+      {fabric && (
+        <>
+          {node && (
+            <Text kind="mono/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginBottom: 8 }}>
+              node: {node}
+            </Text>
+          )}
+          {fabric.discrepancies.length > 0 ? (
+            <Banner status="warning" kind="inline">
+              {`Fabric discrepancy vs expected profile: ${fabric.discrepancies.join("; ")}`}
+            </Banner>
+          ) : (
+            <Banner status="success" kind="inline">
+              Detected fabric matches the platform's expected profile.
+            </Banner>
+          )}
+          <Box sx={{ mt: 1.5 }}>
+            {rows.map(([label, value]) => (
+              <Flex key={label} align="center" justify="between" style={{ padding: "4px 0" }}>
+                <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                  {label}
+                </Text>
+                <Text kind="mono/sm">{value}</Text>
+              </Flex>
+            ))}
+          </Box>
+        </>
+      )}
+    </Card>
+  );
+}
+
 interface InfrastructureViewProps {
   segment: InfraSegment;
 }
@@ -117,6 +213,8 @@ export function InfrastructureView({ segment }: InfrastructureViewProps) {
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader contentId={SEGMENT_CONTENT_ID[segment]} title={cfg.title} description={cfg.description} />
       <PreviewBanner note="Topology, counters, and health will be sourced from the platform fabric probes and Grafana." />
+
+      {segment === "ib-nvlink" && <FabricProbeCard />}
 
       <Box
         sx={{

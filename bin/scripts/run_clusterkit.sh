@@ -23,7 +23,8 @@
 #   NVIS_CLUSTERKIT_HPCX_INIT — override path to hpcx-init.sh
 # UCX defaults for Slurm jobs: nvis-ucx-job-env.inc.sh (sourced from clusterkit.sbatch); override UCX_* in the job env.
 
-module load slurm
+# Slurm CLI on PATH (non-login SSH shells don't init Modules — see slurm-init.inc.sh).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091

@@ -19,11 +19,26 @@ export interface ToolsLiveOutputDialogProps {
 
 export function ToolsLiveOutputDialog({ open, title, logText, running = false, onClose }: ToolsLiveOutputDialogProps) {
   const preRef = useRef<HTMLPreElement>(null);
+  // Follow the tail by default, but stop auto-scrolling once the user scrolls up to read
+  // (re-engages when they scroll back near the bottom). Avoids yanking the viewport on
+  // every streamed update.
+  const stickToBottomRef = useRef(true);
+
+  const handleScroll = () => {
+    const el = preRef.current;
+    if (!el) return;
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
 
   useEffect(() => {
-    if (!open || !preRef.current) return;
-    preRef.current.scrollTop = preRef.current.scrollHeight;
+    const el = preRef.current;
+    if (!open || !el) return;
+    if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [logText, open, running]);
+
+  useEffect(() => {
+    if (open) stickToBottomRef.current = true;
+  }, [open]);
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth aria-labelledby="tools-live-output-title">
@@ -37,6 +52,7 @@ export function ToolsLiveOutputDialog({ open, title, logText, running = false, o
         <Box
           component="pre"
           ref={preRef}
+          onScroll={handleScroll}
           sx={{
             m: 0,
             p: 1.5,

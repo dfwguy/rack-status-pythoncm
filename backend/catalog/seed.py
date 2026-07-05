@@ -86,6 +86,7 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "CORE_TO_HCA_SCRIPT": "core_to_hca_dgxgb200.sh",
             "CUDA_MAJ": "12",
         },
+        "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 400, "ns_ifname": "bond0"},
         "status": "ga",
         "description": "Grace-Blackwell GB200, 72-GPU NVLink domain (NVL72).",
         "source": "seed",
@@ -116,6 +117,7 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "CORE_TO_HCA_SCRIPT": "core_to_hca_dgxgb300.sh",
             "CUDA_MAJ": "12",
         },
+        "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 800, "ns_ifname": "bond0"},
         "status": "ga",
         "description": "Grace-Blackwell Ultra GB300, 72-GPU NVLink domain (NVL72).",
         "source": "seed",
@@ -144,6 +146,7 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "RACK_CLUSTER_PRODUCT_LINE": "b200",
             "CUDA_MAJ": "12",
         },
+        "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 400, "ns_ifname": "bond0"},
         "status": "ga",
         "description": "HGX B200 8-GPU node, Intel x86 host (Dell/other OEM).",
         "source": "seed",
@@ -173,6 +176,7 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "NVIS_RDMA_LINK_TECH": "roce",
             "CUDA_MAJ": "12",
         },
+        "fabric": {"scaleout": "roce", "rails_per_gpu": 1, "rail_rate_gbps": 400, "ns_ifname": "bond0"},
         "status": "ga",
         "description": "HGX B200 8-GPU node, AMD x86 host (Supermicro/other OEM), RoCE fabric.",
         "source": "seed",
@@ -201,6 +205,7 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "RACK_CLUSTER_PRODUCT_LINE": "b300",
             "CUDA_MAJ": "12",
         },
+        "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 800, "ns_ifname": "bond0"},
         "status": "ga",
         "description": "HGX B300 8-GPU node, x86 host.",
         "source": "seed",
@@ -229,6 +234,7 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "RACK_CLUSTER_PRODUCT_LINE": "dgx-b200",
             "CUDA_MAJ": "12",
         },
+        "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 400, "ns_ifname": "bond0"},
         "status": "ga",
         "description": "NVIDIA DGX B200 8-GPU appliance.",
         "source": "seed",
@@ -257,6 +263,7 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "RACK_CLUSTER_PRODUCT_LINE": "vr200",
             "CUDA_MAJ": "13",
         },
+        "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 800, "ns_ifname": "bond0"},
         "status": "future",
         "description": "Vera Rubin VR200 NVL (forward-looking; geometry provisional).",
         "source": "seed",
@@ -285,6 +292,7 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "RACK_CLUSTER_PRODUCT_LINE": "r200",
             "CUDA_MAJ": "13",
         },
+        "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 800, "ns_ifname": "bond0"},
         "status": "future",
         "description": "Rubin R200 HGX, x86 host (forward-looking).",
         "source": "seed",
@@ -346,10 +354,37 @@ SEED_TOOLS: list[dict[str, Any]] = [
         description="pdsh hardware sanity check across rack nodes.",
     ),
     _tool(
+        "fabric-probe", "Fabric Probe (NIC classifier)", "networking",
+        "fabric_probe.sh", "RACK_FABRIC_PROBE_SCRIPT", ["infraIbNvlink"], "sync", "node",
+        description=(
+            "Classifies a compute node's RDMA devices into the compute rails (the plane "
+            "NCCL/UCX should use) vs the storage/NS plane, and flags detected-vs-expected "
+            "discrepancies against the active platform's fabric profile."
+        ),
+        ai_context=(
+            "fabric_probe.sh sources lib/fabric.inc.sh to pick ACTIVE mlx5 ports on the desired "
+            "link layer (InfiniBand or RoCE) at the top line rate, excludes slower BlueField-3 "
+            "storage NICs, and emits NCCL_IB_HCA / NCCL_SOCKET_IFNAME / UCX_NET_DEVICES as JSON. "
+            "Surfaced by GET /api/fabric-probe and the Infrastructure > InfiniBand/NVLink view."
+        ),
+    ),
+    _tool(
         "validation-singlerack", "Singlerack Validation (NCCL + NEMO)", "validation",
         "run_singlerack.sh", "RACK_VALIDATION_SCRIPT", ["rackDetail.validation"], "async", "rack",
         description="NCCL collectives + Nemotron training validation for one rack.",
         ai_context="run_singlerack runs NCCL all-reduce and a Nemotron training step per rack.",
+    ),
+    _tool(
+        "nccl-fullrack-rounds", "NCCL Benchmark (Stage-1)", "validation",
+        "nccl_fullrack_rounds.sh", "RACK_NCCL_FULLRACK_SCRIPT", ["rackDetail.validation"], "async", "rack",
+        capabilities=["nvlink"],
+        description="Standalone Stage-1 NCCL acceptance: N rounds of all_reduce (1K..16G) via the working portable launcher.",
+        ai_context=(
+            "nccl_fullrack_rounds runs the Stage-1 NCCL acceptance test (default 5 rounds of "
+            "all_reduce_perf, 1K..16G) on one rack using the bond0-pinned/portable launcher, and "
+            "drops an NCCL-1Rack-<rack> log into log_dir so the dashboard + parser pick it up. "
+            "Use this to validate NCCL alone, independent of the full NEMO training run."
+        ),
     ),
     _tool(
         "nemo-xrack", "Multirack NEMO", "validation", "run-nemo-xrack.sh", "RACK_NEMO_XRACK_SCRIPT",
@@ -372,6 +407,34 @@ SEED_TOOLS: list[dict[str, Any]] = [
         "RACK_NVLOOM_SINGLERACK_SCRIPT", ["rackDetail.networking"], "async", "rack",
         capabilities=["nvlink"],
         description="NVLoom NVLink bandwidth heatmaps for one rack.",
+    ),
+    _tool(
+        "llmb-nccl", "NCCL Microbenchmark (LLMB)", "performance", "run_llmb_nccl.sh",
+        "RACK_LLMB_NCCL_SCRIPT", ["rackDetail.networking", "tools"], "async", "rack",
+        capabilities=["nvlink"],
+        description=(
+            "NCCL microbenchmark via dgxc-benchmarking llmb-run (microbenchmark_nccl, fp8). "
+            "Resolves NVIS rack ids to real Slurm nodes and computes GPU scale (nodes*4)."
+        ),
+        ai_context=(
+            "run_llmb_nccl wraps llmb-run submit -w microbenchmark_nccl -d fp8 (MOP §7.3). "
+            "Single-rack GB300 NVL72 = scale 72 (18 nodes * 4 GPUs). It resolves the real "
+            "Slurm node hostnames from sinfo (rack id != node hostname) before submitting."
+        ),
+    ),
+    _tool(
+        "llmb-nccl-multirack", "NCCL Microbenchmark (LLMB, Multi-Rack)", "performance",
+        "run_llmb_nccl.sh", "RACK_LLMB_NCCL_SCRIPT", ["multirack", "tools"], "async", "multirack",
+        capabilities=["nvlink"],
+        description=(
+            "Cross-rack NCCL microbenchmark via llmb-run across multiple NVIS racks "
+            "(one RACK arg per rack)."
+        ),
+        ai_context=(
+            "Cross-rack form of run_llmb_nccl (MOP §7.3): passes multiple rack ids; GPU scale "
+            "= 72 x number of GB300 NVL72 racks. Same wrapper/script as the single-rack tool "
+            "(llmb-nccl), differentiated by the multirack surface/target."
+        ),
     ),
     _tool(
         "mnubergemm-stress", "MNU Bergemm Stress", "performance", "run_mnubergemm_stress.sh",

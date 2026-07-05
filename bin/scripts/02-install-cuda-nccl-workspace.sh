@@ -28,7 +28,8 @@ if [[ "$INSTALL_CUDA" != "1" && "$BUILD_NCCL" != "1" ]]; then
 fi
 
 write_cuda_env_sh() {
-  mkdir -p "${TOPDIR}/cuda"
+  # ${TOPDIR}/cuda is a symlink to cuda${CUDA_MAJ} (created by the caller); write env.sh
+  # through it so CUDA_HOME=${TOPDIR}/cuda resolves to the real toolkit.
   cat > "${TOPDIR}/cuda/env.sh" <<EOF
 #!/bin/bash
 export CUDA_HOME=${TOPDIR}/cuda
@@ -47,11 +48,18 @@ install_cuda_toolkit_from_existing_run() {
     exit 1
   fi
   chmod +x "${TOPDIR}/${RUN_FILE}" 2>/dev/null || true
-  mkdir -p "${TOPDIR}/cuda"
   bash "${TOPDIR}/${RUN_FILE}" --silent --toolkit --no-opengl-libs --no-drm --installpath="${TOPDIR}/cuda${CUDA_MAJ}"
+  # ${TOPDIR}/cuda must be a *symlink* to cuda${CUDA_MAJ}. Do NOT pre-create it as a
+  # directory: `ln -sfn` cannot replace an existing dir (it would drop the link inside
+  # it, leaving ${TOPDIR}/cuda/bin/nvcc missing). Remove any stale path (dir or link) first.
+  rm -rf "${TOPDIR}/cuda"
   ln -sfn "${TOPDIR}/cuda${CUDA_MAJ}" "${TOPDIR}/cuda"
+  if [[ ! -x "${TOPDIR}/cuda/bin/nvcc" ]]; then
+    echo "ERROR: ${TOPDIR}/cuda/bin/nvcc not found after install — symlink to cuda${CUDA_MAJ} failed." >&2
+    exit 1
+  fi
   write_cuda_env_sh
-  echo "OK: CUDA toolkit at ${TOPDIR}/cuda (→ cuda${CUDA_MAJ})."
+  echo "OK: CUDA toolkit at ${TOPDIR}/cuda (→ cuda${CUDA_MAJ}), nvcc=$(${TOPDIR}/cuda/bin/nvcc --version | sed -n 's/.*release //p')"
 }
 
 if [[ "$INSTALL_CUDA" == "1" ]]; then

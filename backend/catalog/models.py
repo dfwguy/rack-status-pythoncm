@@ -103,6 +103,39 @@ class PlatformGeometry:
 
 
 @dataclass
+class PlatformFabric:
+    """Expected scale-out fabric shape (drives NIC auto-map + validation).
+
+    Consumed by ``bin/scripts/lib/fabric.inc.sh`` (via low-overlay env) to pick the
+    compute rails and to flag detected-vs-expected discrepancies (e.g. an 800G RA
+    that comes up 400G). ``scaleout`` == ``ib`` or ``roce``; ``rail_rate_gbps`` is
+    the expected per-rail line rate (400 for NDR, 800 for XDR/CX-8).
+    """
+
+    scaleout: str = ""  # ib | roce (scale-out technology)
+    rails_per_gpu: int = 1  # compute NICs per GPU
+    rail_rate_gbps: int = 0  # expected per-rail rate (400, 800); 0 == unknown
+    ns_ifname: str = ""  # north-south / bootstrap netdev hint (e.g. bond0)
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "PlatformFabric":
+        d = _as_dict(d)
+
+        def _i(key: str, default: int) -> int:
+            try:
+                return int(d.get(key, default))
+            except (TypeError, ValueError):
+                return default
+
+        return cls(
+            scaleout=_as_str(d.get("scaleout")).lower(),
+            rails_per_gpu=_i("rails_per_gpu", 1),
+            rail_rate_gbps=_i("rail_rate_gbps", 0),
+            ns_ifname=_as_str(d.get("ns_ifname")),
+        )
+
+
+@dataclass
 class Platform:
     id: str
     name: str
@@ -114,6 +147,7 @@ class Platform:
     system_vendor: str = ""  # NVIDIA, DGX, Dell, SMC
     form_factor: str = ""  # NVL72, NVL36, HGX-8
     geometry: PlatformGeometry = field(default_factory=PlatformGeometry)
+    fabric: PlatformFabric = field(default_factory=PlatformFabric)
     interconnect: dict[str, str] = field(default_factory=dict)  # {scaleup, scaleout}
     capabilities: list[str] = field(default_factory=list)  # nvlink, nvswitch, imex, mnnvl, roce
     tool_param_defaults: dict[str, str] = field(default_factory=dict)
@@ -135,6 +169,7 @@ class Platform:
             system_vendor=_as_str(d.get("system_vendor")),
             form_factor=_as_str(d.get("form_factor")),
             geometry=PlatformGeometry.from_dict(d.get("geometry")),
+            fabric=PlatformFabric.from_dict(d.get("fabric")),
             interconnect={k: _as_str(v) for k, v in _as_dict(d.get("interconnect")).items()},
             capabilities=_as_str_list(d.get("capabilities")),
             tool_param_defaults={

@@ -62,7 +62,17 @@ select_ns_nic() {
 ns_nic=$(select_ns_nic)
 echo "INFO: ns_nic=${ns_nic} (auto: bond0 vs enP22s22f0np0)"
 set -x
-ew_nics=($(echo mlx5_{0..3}))
+# East-west (compute) rails via the shared classifier (ACTIVE + IB/RoCE + top line
+# rate; excludes slower BlueField-3 storage NICs). Falls back to mlx5_0..3.
+_nvis_lib="$(dirname "${BASH_SOURCE[0]}")/lib/fabric.inc.sh"
+# shellcheck disable=SC1090
+[[ -f "${_nvis_lib}" ]] && . "${_nvis_lib}"
+if declare -F nvis_fabric_scan >/dev/null 2>&1; then eval "$(nvis_fabric_scan 2>/dev/null)"; fi
+if [[ -n "${NVIS_FAB_IB_HCA:-}" ]]; then
+  IFS=',' read -r -a ew_nics <<< "${NVIS_FAB_IB_HCA}"
+else
+  ew_nics=($(echo mlx5_{0..3}))
+fi
 export MELLANOX_VISIBLE_DEVICES=all
 export PMIX_MCA_gds=hash
 #

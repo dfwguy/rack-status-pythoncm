@@ -15,7 +15,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from native_status import validation_status_hint
+from native_status import (
+    compute_stage_states,
+    empty_stage_summary,
+    tally_stage,
+    validation_status_hint,
+)
 
 _DEMO_POD = 5
 _DEMO_RACK_COUNT = 18
@@ -76,6 +81,9 @@ def _generate_rows(now_ts: float) -> list[dict[str, str]]:
             ll_b = rng.random() < 0.55
             if nc_b and ll_b:
                 ll_b = False
+        elif state == "ongoing":
+            # Stage 1 (NCCL) usually completes before Stage 2 (NeMo) — show a mix.
+            nc_b = True if rng.random() < 0.5 else None
         nemo_hint = validation_status_hint(
             nemo,
             job_id,
@@ -83,10 +91,13 @@ def _generate_rows(now_ts: float) -> list[dict[str, str]]:
             llm_ok=ll_b,
             validation_test="nccl_all_reduce,llm",
         )
+        stage1, stage2 = compute_stage_states(nemo, nc_b, ll_b, "nccl_all_reduce,llm")
 
         rows.append({
             "rack": rack_id,
             "nemo": nemo,
+            "stage1": stage1,
+            "stage2": stage2,
             "last_job": job_id,
             "sinfo": sinfo_cell,
             "ct_down_unk": ct_cell,
@@ -112,8 +123,10 @@ def _condense(nums: list[int]) -> str:
     return ",".join(out)
 
 
-def _compute_summary(rows: list[dict[str, str]]) -> dict[str, int]:
-    summary = {"done": 0, "fail": 0, "ongoing": 0, "pending": 0}
+def _compute_summary(rows: list[dict[str, str]]) -> dict:
+    summary: dict = {"done": 0, "fail": 0, "ongoing": 0, "pending": 0}
+    stage1_summary = empty_stage_summary()
+    stage2_summary = empty_stage_summary()
     for row in rows:
         nemo = row["nemo"]
         if nemo == "done":
@@ -124,6 +137,10 @@ def _compute_summary(rows: list[dict[str, str]]) -> dict[str, int]:
             summary["ongoing"] += 1
         else:
             summary["pending"] += 1
+        tally_stage(stage1_summary, row.get("stage1", "pending"))
+        tally_stage(stage2_summary, row.get("stage2", "pending"))
+    summary["stage1"] = stage1_summary
+    summary["stage2"] = stage2_summary
     return summary
 
 

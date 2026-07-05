@@ -1,6 +1,7 @@
 import Box from "@mui/material/Box";
 import { Card, Flex, Tag, Text } from "@nvidia/foundations-react-core";
-import type { RackSummary } from "../types/api";
+import type { RackSummary, StageState, StageSummary } from "../types/api";
+import { VALIDATION_STAGES, stageStateColor, stageStateLabel } from "../lib/validationStages";
 
 export type ValidationSummaryCategory = "done" | "fail" | "ongoing" | "pending";
 
@@ -26,6 +27,23 @@ function validationTagColor(state: ValidationSummaryCategory): "green" | "red" |
   }
 }
 
+const STAGE_ORDER: StageState[] = ["done", "ongoing", "fail", "pending"];
+
+function StageLine({ label, tool, stage }: { label: string; tool: string; stage: StageSummary }) {
+  return (
+    <Flex gap="2" align="center" wrap="wrap">
+      <Text kind="body/semibold/sm" style={{ color: "var(--text-color-secondary)", minWidth: 128 }}>
+        {label} · {tool}
+      </Text>
+      {STAGE_ORDER.map((state) => (
+        <Tag key={state} color={stageStateColor(state)} kind="outline" readOnly density="compact">
+          {stage[state]} {stageStateLabel(state)}
+        </Tag>
+      ))}
+    </Flex>
+  );
+}
+
 export function StatusSummary({
   summary,
   updatedAt,
@@ -35,6 +53,7 @@ export function StatusSummary({
 }: StatusSummaryProps) {
   const total = summary.done + summary.fail + summary.ongoing + summary.pending;
   const interactive = Boolean(onToggleValidationCategory);
+  const hasStages = Boolean(summary.stage1 && summary.stage2);
 
   const chip = (category: ValidationSummaryCategory, count: number, label: string) => {
     const active = validationFilters.includes(category);
@@ -92,6 +111,25 @@ export function StatusSummary({
           Updated: {new Date(updatedAt).toLocaleTimeString()}
         </Text>
       </Flex>
+      {hasStages && (
+        <Box sx={{ mt: 1.5, display: "flex", flexDirection: "column", gap: 0.75 }}>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-subtle)", display: "block" }}>
+            By stage — a rack is validated once both stages pass:
+          </Text>
+          {VALIDATION_STAGES.map((stage) => {
+            const stageSummary = summary[stage.key];
+            if (!stageSummary) return null;
+            return (
+              <StageLine
+                key={stage.key}
+                label={stage.label}
+                tool={stage.tool}
+                stage={stageSummary}
+              />
+            );
+          })}
+        </Box>
+      )}
       {legend && (
         <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)", marginTop: 8, display: "block" }}>
           {legend}

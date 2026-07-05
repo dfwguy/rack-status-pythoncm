@@ -170,40 +170,9 @@ jobid_from_fname() {
   [[ "$b" =~ N-([0-9]+)\.txt$ ]] && echo "${BASH_REMATCH[1]}" || echo "?"
 }
 
-# Peak out-of-place busbw (GB/s) at largest message size, per collective block order in log: reduce, alltoall, gather.
-nccl_busbw_csv() {
-  awk '
-    /^# Collective test starting: all_reduce_perf_mpi$/  { in_ar=1 }
-    /^# Collective test concluded: all_reduce_perf_mpi$/ { in_ar=0 }
-    in_ar && $1 ~ /^1717/ { ar=$8 }
-    /^# Collective test starting: alltoall_perf_mpi$/   { in_aa=1 }
-    /^# Collective test concluded: alltoall_perf_mpi$/  { in_aa=0 }
-    in_aa && $1 ~ /^1717/ { aa=$8 }
-    /^# Collective test starting: all_gather_perf_mpi$/ { in_ag=1 }
-    /^# Collective test concluded: all_gather_perf_mpi$/ { in_ag=0 }
-    in_ag && $1 ~ /^1717/ { ag=$8 }
-    END { print ar "," aa "," ag }
-  ' "$1"
-}
-
-nccl_oob_csv() {
-  grep 'Out of bounds values' "$1" 2>/dev/null | awk '{ print $NF }' | paste -sd, - || true
-}
-
-# First all_reduce_perf_mpi block only: rack, job_id, size (B), out-of-place bus_bw (GB/s).
-nccl_allreduce_series_append() {
-  local f=$1 rack=$2 jid=$3
-  [[ -f "$f" ]] || return 0
-  awk -v rack="$rack" -v jid="$jid" -v OFS='\t' '
-    /^# Collective test starting: all_reduce_perf_mpi$/ { in_ar = 1; next }
-    in_ar && /^# Collective test concluded: all_reduce_perf_mpi$/ { exit }
-    in_ar && NF >= 9 && $1 ~ /^[0-9]+$/ {
-      bus = $8
-      if (bus == "N/A" || bus !~ /^[0-9]+\.?[0-9]*$/ && bus !~ /^[0-9]*\.[0-9]+$/) next
-      print rack, jid, $1, bus
-    }
-  ' "$f"
-}
+# NCCL busbw / oob / series helpers are shared with rack_status.sh via nccl_parse.inc.sh
+# (sourced below, next to validation_test_env.sh) so a parsing fix lands in both the parser and
+# the dashboard at once.
 
 slurm_hard_fail() {
   grep -E -q 'srun:.*error:.*Exited|error:.*SIGNAL' "$1" 2>/dev/null
@@ -271,6 +240,8 @@ llm_label() {
 _PARSER_SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=/dev/null
 source "${_PARSER_SCRIPTS_DIR}/validation_test_env.sh"
+# shellcheck source=/dev/null
+source "${_PARSER_SCRIPTS_DIR}/nccl_parse.inc.sh"
 
 # Per-line Nemotron steps: rack, job_id, iteration (NR = 1-based line index in extracted step lines), step_time (s, $4).
 # Iterations 11..2010 (skip first 10 lines; same grep stream as stats; cap avoids huge JSON on long runs).

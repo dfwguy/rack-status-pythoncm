@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, lazy, Suspense } from "react";
 import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import { Text } from "@nvidia/foundations-react-core";
@@ -15,24 +15,27 @@ import { ClusterDashboardView } from "./views/ClusterDashboardView";
 import { SingleRackView } from "./views/SingleRackView";
 import { useClusterOverview } from "./hooks/useClusterOverview";
 import { RackDetailView } from "./views/RackDetailView";
-import { MultirackView } from "./views/MultirackView";
-import { SlurmView } from "./views/SlurmView";
-import { ReportsView } from "./views/ReportsView";
-import { AnalyticsView } from "./views/AnalyticsView";
-import { ToolsView } from "./views/ToolsView";
-import { WorkflowsView } from "./views/WorkflowsView";
-import { MetricsView } from "./views/MetricsView";
-import { LogsView } from "./views/LogsView";
-import { EventsView } from "./views/EventsView";
-import { InfrastructureView } from "./views/InfrastructureView";
-import { TerminalPlaceholderView } from "./views/TerminalPlaceholderView";
-import { SettingsView } from "./views/SettingsView";
-import { ProjectsView } from "./views/ProjectsView";
-import { PlatformCatalogView } from "./views/PlatformCatalogView";
-import { ToolRegistryView } from "./views/ToolRegistryView";
+// Lazy-loaded routes: keep the initial (index) bundle small by code-splitting each view. Heavy
+// deps move into their own on-demand chunks (reactflow -> Workflows, chart.js -> Analytics/Metrics,
+// the large ToolsView -> Tools). ClusterDashboard + SingleRack stay eager for fast first paint.
+const MultirackView = lazy(() => import("./views/MultirackView").then((m) => ({ default: m.MultirackView })));
+const SlurmView = lazy(() => import("./views/SlurmView").then((m) => ({ default: m.SlurmView })));
+const ReportsView = lazy(() => import("./views/ReportsView").then((m) => ({ default: m.ReportsView })));
+const AnalyticsView = lazy(() => import("./views/AnalyticsView").then((m) => ({ default: m.AnalyticsView })));
+const ToolsView = lazy(() => import("./views/ToolsView").then((m) => ({ default: m.ToolsView })));
+const WorkflowsView = lazy(() => import("./views/WorkflowsView").then((m) => ({ default: m.WorkflowsView })));
+const MetricsView = lazy(() => import("./views/MetricsView").then((m) => ({ default: m.MetricsView })));
+const LogsView = lazy(() => import("./views/LogsView").then((m) => ({ default: m.LogsView })));
+const EventsView = lazy(() => import("./views/EventsView").then((m) => ({ default: m.EventsView })));
+const InfrastructureView = lazy(() => import("./views/InfrastructureView").then((m) => ({ default: m.InfrastructureView })));
+const TerminalPlaceholderView = lazy(() => import("./views/TerminalPlaceholderView").then((m) => ({ default: m.TerminalPlaceholderView })));
+const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ default: m.SettingsView })));
+const ProjectsView = lazy(() => import("./views/ProjectsView").then((m) => ({ default: m.ProjectsView })));
+const PlatformCatalogView = lazy(() => import("./views/PlatformCatalogView").then((m) => ({ default: m.PlatformCatalogView })));
+const ToolRegistryView = lazy(() => import("./views/ToolRegistryView").then((m) => ({ default: m.ToolRegistryView })));
 import { ActiveClusterProvider } from "./context/ActiveClusterContext";
 import { LoginPage } from "./pages/LoginPage";
-import TerminalView from "./views/TerminalView";
+const TerminalView = lazy(() => import("./views/TerminalView"));
 import { useRackStatus } from "./hooks/useRackStatus";
 import type { RackStatusResponse } from "./types/api";
 import { RackCommandsStoreProvider } from "./context/RackCommandsStoreContext";
@@ -80,6 +83,16 @@ function getInitialSidebarState(): boolean {
  * from the shared rack-status data (kept in `AppContent` so it persists across
  * navigation). Keeps `RackDetailView`'s existing prop contract.
  */
+function ViewSuspenseFallback() {
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "40vh" }}>
+      <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
+        Loading…
+      </Text>
+    </Box>
+  );
+}
+
 function RackDetailRoute({
   data,
   onBack,
@@ -265,6 +278,7 @@ function AppContent() {
           reconnecting={reconnecting}
           onReconnect={() => void handleReconnect()}
         />
+        <Suspense fallback={<ViewSuspenseFallback />}>
         <Routes>
           <Route path="/" element={<Navigate to={DEFAULT_PATH} replace />} />
           <Route
@@ -324,6 +338,7 @@ function AppContent() {
           />
           <Route path="*" element={<Navigate to={DEFAULT_PATH} replace />} />
         </Routes>
+        </Suspense>
       </RackCommandsStoreProvider>
       <AIChatWidget />
       <HelpPanel />

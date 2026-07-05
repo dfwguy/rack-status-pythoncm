@@ -1,7 +1,7 @@
 import Box from "@mui/material/Box";
 import { Text, Divider } from "@nvidia/foundations-react-core";
 import { ActionCard } from "./ActionCard";
-import { Play, Flame, Zap, Boxes, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine, Network } from "lucide-react";
+import { Play, Flame, Zap, Boxes, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine, Network, Gauge, Activity } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
 import { llamaNodesBody, slurmTargetBody, validationFamilyBody } from "../../lib/rackCommandBodies";
 import type { NvisNamingSchema } from "../../types/naming";
@@ -25,12 +25,29 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)", marginTop: 8 }}>
-        Benchmarks &amp; Tests
+        Validation Stages
       </Text>
 
       <ActionCard
-        title="Run Validation (NEMO)"
-        description={`Launch single-rack NEMO/NCCL validation on ${nodeCount} selected node(s) in ${rack}. Runs the configured NEMO validation script via Slurm.`}
+        title="Stage 1 — NCCL Benchmark"
+        description={`Stage-1 NCCL acceptance: 5 rounds of all_reduce (1G..16G) on ${nodeCount} selected node(s) in ${rack} via the portable launcher. Writes an NCCL-1Rack log to log_dir so it appears on the dashboard + parser results.`}
+        icon={<Activity size={20} />}
+        buttonLabel="Run NCCL"
+        disabled={disabled}
+        selectedNodes={selectedNodes}
+        onRun={() =>
+          runAsyncValidationFamily(
+            "NCCL Benchmark (Stage-1)",
+            "validation",
+            "/api/run-nccl-fullrack-async",
+            (jid) => `/api/run-nccl-fullrack-status?job_id=${encodeURIComponent(jid)}`,
+            validationBody(),
+          )
+        }
+      />
+      <ActionCard
+        title="Stage 2 — NEMO Training (NCCL + LLMB)"
+        description={`Stage-2 single-rack validation on ${nodeCount} selected node(s) in ${rack}: NCCL collectives + Nemotron (LLMB) training via Slurm.`}
         icon={<Play size={20} />}
         buttonLabel="Run NEMO"
         disabled={disabled}
@@ -45,6 +62,17 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
           )
         }
       />
+
+      <div style={{ margin: "8px 0" }}>
+        <Divider />
+      </div>
+      <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)" }}>
+        Optional Tests &amp; Diagnostics
+      </Text>
+      <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginTop: -8 }}>
+        Stage 3 (cross-rack) runs from the multi-rack action menu.
+      </Text>
+
       <ActionCard
         title="Run Llama"
         description={`Launch Llama inference benchmark on ${nodeCount} selected node(s) in ${rack}. Submits a Slurm job using the Llama validation script.`}
@@ -109,6 +137,24 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
             "validation",
             "/api/run-clusterkit-async",
             (jid) => `/api/run-clusterkit-status?job_id=${encodeURIComponent(jid)}`,
+            validationBody(),
+          )
+        }
+      />
+
+      <ActionCard
+        title="Run NCCL Microbenchmark (LLMB)"
+        description={`Launch the NCCL microbenchmark (llmb-run microbenchmark_nccl, fp8) on ${rack}. Resolves NVIS rack ids to real Slurm nodes and computes GPU scale (nodes*4); single rack = scale 72 on GB300 NVL72.`}
+        icon={<Gauge size={20} />}
+        buttonLabel="Run LLMB NCCL"
+        disabled={disabled}
+        selectedNodes={selectedNodes}
+        onRun={() =>
+          runAsyncValidationFamily(
+            "NCCL Microbenchmark (LLMB)",
+            "validation",
+            "/api/run-llmb-nccl-async",
+            (jid) => `/api/run-llmb-nccl-status?job_id=${encodeURIComponent(jid)}`,
             validationBody(),
           )
         }

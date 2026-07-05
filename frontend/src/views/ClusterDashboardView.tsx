@@ -533,8 +533,10 @@ export function ClusterDashboardView({
             <Box
               sx={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                gridAutoFlow: "column",
+                gridAutoColumns: "minmax(0, 1fr)",
                 gap: 2,
+                overflowX: "auto",
               }}
             >
               <StatTile label="Racks" value={data.rack_count} unit="total" />
@@ -543,6 +545,24 @@ export function ClusterDashboardView({
               {s && <StatTile label="Failed" value={s.fail} accentColor={s.fail > 0 ? STATUS_RED : undefined} unit="racks" />}
               {s && <StatTile label="Ongoing" value={s.ongoing} accentColor={s.ongoing > 0 ? STATUS_YELLOW : undefined} unit="racks" />}
               {s && <StatTile label="Pending" value={s.pending} unit="racks" />}
+              {s?.stage1 && (
+                <StatTile
+                  label="Stage 1 · NCCL"
+                  value={s.stage1.done}
+                  unit={`/ ${data.rack_count} done`}
+                  accentColor={s.stage1.done > 0 ? NVIDIA_GREEN : undefined}
+                  caption={`${s.stage1.ongoing} running · ${s.stage1.fail} fail`}
+                />
+              )}
+              {s?.stage2 && (
+                <StatTile
+                  label="Stage 2 · NeMo"
+                  value={s.stage2.done}
+                  unit={`/ ${data.rack_count} done`}
+                  accentColor={s.stage2.done > 0 ? NVIDIA_GREEN : undefined}
+                  caption={`${s.stage2.ongoing} running · ${s.stage2.fail} fail`}
+                />
+              )}
               <StatTile label="Dashboard users" value={connected} unit="online" />
             </Box>
           </Box>

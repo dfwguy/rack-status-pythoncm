@@ -61,6 +61,12 @@ import {
   type TailLogStreamBody,
 } from "../lib/rackLog";
 import { validationStatusTooltip } from "../lib/validationStatusTooltip";
+import {
+  VALIDATION_STAGES,
+  stageStates,
+  stageStateColor,
+  stageStateLabel,
+} from "../lib/validationStages";
 import type { RackRow } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 import {
@@ -180,26 +186,57 @@ function sinfoIcon(state: string) {
   }
 }
 
+/** Compact colored badges for each per-rack validation stage (NCCL, NeMo). */
+function StageBadges({ row }: { row: RackRow }) {
+  const states = stageStates(row);
+  return (
+    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+      {VALIDATION_STAGES.map((stage) => {
+        const state = states[stage.key];
+        return (
+          <Tooltip
+            key={stage.key}
+            title={`${stage.label} — ${stage.tool}: ${stageStateLabel(state)}`}
+            enterDelay={350}
+            arrow
+          >
+            <span style={{ display: "inline-flex", cursor: "default" }}>
+              <Tag color={stageStateColor(state)} kind="outline" readOnly density="compact">
+                {stage.short} {stage.tool}
+              </Tag>
+            </span>
+          </Tooltip>
+        );
+      })}
+    </Box>
+  );
+}
+
 function ValidationTag({ row }: { row: RackRow }) {
   const nemo = row.nemo;
   const color = validationTagColor(nemoCategory(nemo));
   const tip = validationStatusTooltip(row);
-  const tag = (
+  const overall = (
     <Tag color={color} kind="solid" readOnly density="compact">
       {nemo}
     </Tag>
   );
-  if (!tip) {
-    return tag;
-  }
-  return (
+  const overallWithTip = !tip ? (
+    overall
+  ) : (
     <Tooltip
       title={<span style={{ display: "block", maxWidth: 420, whiteSpace: "pre-wrap" }}>{tip}</span>}
       enterDelay={350}
       arrow
     >
-      <span style={{ display: "inline-flex", cursor: "default" }}>{tag}</span>
+      <span style={{ display: "inline-flex", cursor: "default" }}>{overall}</span>
     </Tooltip>
+  );
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, alignItems: "flex-start" }}>
+      {overallWithTip}
+      <StageBadges row={row} />
+    </Box>
   );
 }
 
@@ -522,7 +559,7 @@ export function RackTable({
         setRunMenuAnchor(null);
         return;
       }
-      if (["nemo", "llama", "stress", "nvloom", "clusterkit"].includes(key) && !logDir?.trim()) {
+      if (["nemo", "llama", "stress", "nvloom", "clusterkit", "llmb"].includes(key) && !logDir?.trim()) {
         setSnackbar({
           open: true,
           message: "Set log directory (toolbar / settings) before launching validation or Llama jobs.",
@@ -589,6 +626,18 @@ export function RackTable({
               "validation",
               "/api/run-clusterkit-async",
               (jid) => `/api/run-clusterkit-status?job_id=${encodeURIComponent(jid)}`,
+              validationFamilyBody(rack, ld, nodesFullRack(rack), naming),
+            ),
+          );
+          break;
+        case "llmb":
+          fireBulkParallel("NCCL Microbenchmark (LLMB)", (rack) =>
+            void store.runAsyncValidationFamily(
+              rack,
+              "NCCL Microbenchmark (LLMB)",
+              "validation",
+              "/api/run-llmb-nccl-async",
+              (jid) => `/api/run-llmb-nccl-status?job_id=${encodeURIComponent(jid)}`,
               validationFamilyBody(rack, ld, nodesFullRack(rack), naming),
             ),
           );
@@ -1014,6 +1063,9 @@ export function RackTable({
                 </MenuItem>
                 <MenuItem onClick={() => handleBulkRun("clusterkit")}>
                   <ListItemText primary="Run ClusterKit" secondary="Async · log_dir/clusterkit/" />
+                </MenuItem>
+                <MenuItem onClick={() => handleBulkRun("llmb")}>
+                  <ListItemText primary="Run NCCL Microbenchmark (LLMB)" secondary="Async · llmb-run microbenchmark_nccl" />
                 </MenuItem>
                 <MenuItem onClick={() => handleBulkRun("power_on")}>
                   <ListItemText primary="Power on" secondary="Async" />

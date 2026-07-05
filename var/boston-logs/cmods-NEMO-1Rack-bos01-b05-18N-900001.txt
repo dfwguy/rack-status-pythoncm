@@ -1,0 +1,13 @@
+# NVIS OVA Stage-1 NCCL all_reduce — b05 full rack (18 nodes / 72 GPUs), imported 2026-07-01
+# Collective test starting: all_reduce_perf_mpi
+#                                                              out-of-place                       in-place
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)
+  1073741824     268435456     float     sum      -1  2871.21  373.97  737.55       0  2944.36  364.68  719.22       0
+  2147483648     536870912     float     sum      -1  5295.41  405.54  799.81       0  5314.01  404.12  797.01       0
+  4294967296    1073741824     float     sum      -1  10050.4  427.34  842.82       0  10127.1  424.11  836.44       0
+  8589934592    2147483648     float     sum      -1  19167.8  448.14  883.84       0  19226.7  446.77  881.13       0
+ 17179869184    4294967296     float     sum      -1  37130.6  462.69  912.52       0  37087.1  463.23  913.59       0
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 832.393
+# Collective test concluded: all_reduce_perf_mpi

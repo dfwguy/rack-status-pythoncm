@@ -73,7 +73,17 @@ select_ns_nic() {
 ns_nic=$(select_ns_nic)
 echo "INFO: ns_nic=${ns_nic} (auto: bond0 vs enP22s22f0np0)"
 set -x
-ew_nics=($(echo mlx5_{0..3}))
+# East-west (compute) rails via the shared classifier (ACTIVE + IB/RoCE + top line
+# rate; excludes slower BlueField-3 storage NICs). Falls back to mlx5_0..3.
+_nvis_lib="$(dirname "${BASH_SOURCE[0]}")/lib/fabric.inc.sh"
+# shellcheck disable=SC1090
+[[ -f "${_nvis_lib}" ]] && . "${_nvis_lib}"
+if declare -F nvis_fabric_scan >/dev/null 2>&1; then eval "$(nvis_fabric_scan 2>/dev/null)"; fi
+if [[ -n "${NVIS_FAB_IB_HCA:-}" ]]; then
+  IFS=',' read -r -a ew_nics <<< "${NVIS_FAB_IB_HCA}"
+else
+  ew_nics=($(echo mlx5_{0..3}))
+fi
 export MELLANOX_VISIBLE_DEVICES=all
 export PMIX_MCA_gds=hash
 #
@@ -116,6 +126,29 @@ export NCCL_P2P_NET_CHUNKSIZE=262144
 #export NCCL_GDRCOPY_ENABLE=1
 #export NCCL_GDRCOPY_SYNC_ENABLE=1
 
+# --- Container NCCL workaround (validated 2026-07-02 on bos01-b05 / bos01-b06) --------------------
+# The nemo-25.11.01 container's bundled NCCL 2.28.3 SEGFAULTS at MNNVL init on GB200 NVL72
+# ("NCCL INFO MNNVL busId ... healthMask 0xaa" -> SIGSEGV, srun exit 139) — even on a SINGLE node —
+# while the host NCCL 2.28.9 drives the SAME fabric fine (portable all_reduce = ~914 GB/s; nvlink
+# preflight PASS; torch CUDA in-container OK). Root cause is the container NCCL, not the fabric.
+# Fix: bind-mount the host NCCL dir into the container and LD_PRELOAD the newer libnccl so every rank
+# (the NCCL pre-checks AND the training) uses it. Override via NVIS_NCCL_PRELOAD_SRC / _LIB; if the
+# lib is absent we fall back to the container's own NCCL (and warn).
+CONT_MOUNTS="/dev:/dev"
+EXPORT_ARG="ALL"
+NCCL_PRELOAD_SRC="${NVIS_NCCL_PRELOAD_SRC:-/home/cmods/workspace/nccl/bins}"
+NCCL_PRELOAD_LIB="${NVIS_NCCL_PRELOAD_LIB:-}"
+if [ -z "$NCCL_PRELOAD_LIB" ] && [ -d "$NCCL_PRELOAD_SRC" ]; then
+  NCCL_PRELOAD_LIB=$(ls "$NCCL_PRELOAD_SRC"/libnccl.so.2.* 2>/dev/null | sort -V | tail -1 | xargs -r basename)
+fi
+if [ -n "$NCCL_PRELOAD_LIB" ] && [ -f "${NCCL_PRELOAD_SRC}/${NCCL_PRELOAD_LIB}" ]; then
+  CONT_MOUNTS="${CONT_MOUNTS},${NCCL_PRELOAD_SRC}:/host-nccl"
+  EXPORT_ARG="ALL,LD_PRELOAD=/host-nccl/${NCCL_PRELOAD_LIB}"
+  echo "INFO: NCCL preload workaround ON -> /host-nccl/${NCCL_PRELOAD_LIB} (host ${NCCL_PRELOAD_SRC}); container NCCL 2.28.3 MNNVL segfault bypass"
+else
+  echo "WARN: host NCCL preload not found under ${NCCL_PRELOAD_SRC}; container's own NCCL will be used (may segfault at MNNVL init)"
+fi
+
 srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/null
 
 ## test nccl
@@ -126,11 +159,11 @@ echo "* NCCL ALL-Reduce                           *"
 echo "*********************************************"
 
 timeout 300 \
-srun --export=ALL --cpu-bind=none --mpi=pmix \
+srun --export=${EXPORT_ARG} --cpu-bind=none --mpi=pmix \
 --container-name=nemo \
 --container-writable \
 --container-image=$CONT \
---container-mounts=/dev:/dev \
+--container-mounts=${CONT_MOUNTS} \
 all_reduce_perf_mpi -dfloat -b 8 -f 2 -g 1 -e 16G --iters 20
 exitcode=$?
 if [ $exitcode -ne 0 ]; then
@@ -148,11 +181,11 @@ echo "* NCCL ALL-to-ALL                            *"
 echo "*********************************************"
 
 timeout 300 \
-srun --export=ALL --cpu-bind=none --mpi=pmix \
+srun --export=${EXPORT_ARG} --cpu-bind=none --mpi=pmix \
 --container-name=nemo \
 --container-writable \
 --container-image=$CONT \
---container-mounts=/dev:/dev \
+--container-mounts=${CONT_MOUNTS} \
 alltoall_perf_mpi -dfloat -b 8 -f 2 -g 1 -e 16G --iters 20
 exitcode=$?
 if [ $exitcode -ne 0 ]; then
@@ -169,11 +202,11 @@ echo "* NCCL ALL-Gather                           *"
 echo "*********************************************"
 
 timeout 300 \
-srun --export=ALL --cpu-bind=none --mpi=pmix \
+srun --export=${EXPORT_ARG} --cpu-bind=none --mpi=pmix \
 --container-name=nemo \
 --container-writable \
 --container-image=$CONT \
---container-mounts=/dev:/dev \
+--container-mounts=${CONT_MOUNTS} \
 all_gather_perf_mpi -dfloat -b 8 -f 2 -g 1 -e 16G --iters 20
 exitcode=$?
 if [ $exitcode -ne 0 ]; then
@@ -221,11 +254,11 @@ export UB_SKIPMC=0
 # export MAX_STEPS=2010 #For stress test, you can set a large number for MAX_STEPS. 
 #export MAX_STEPS=110
 export MAX_STEPS=2010
-srun --export=ALL --cpu-bind=none --mpi=pmix \
+srun --export=${EXPORT_ARG} --cpu-bind=none --mpi=pmix \
 --container-name=nemo \
 --container-writable \
 --container-image=$CONT \
---container-mounts=/dev:/dev \
+--container-mounts=${CONT_MOUNTS} \
 bash <<- '__END__'
 set -ex
 export HF_HUB_OFFLINE=1

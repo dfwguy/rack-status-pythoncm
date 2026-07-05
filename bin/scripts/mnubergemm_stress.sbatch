@@ -80,26 +80,99 @@ nic=bond0
 GPUS_PER_NODE=4
 
 ## Ref: https://confluence.nvidia.com/pages/viewpage.action?spaceKey=DCGM&title=Mndiag+and+mnubergemm+testing+on+GB200+Colorado+%28Equinix%29+cluster+8x+NVL72
+##
+## NOTE: this sbatch is the SINGLE-NODE per-host ubergemm soak (a GPU power/thermal/GEMM
+## stress, srun-ed directly on each allocated node). The real MULTI-NODE NVLink/fabric
+## stress is `dcgmi mndiag -r mnubergemm` (DCGM 4.3+) which orchestrates the hidden
+## `mnubergemm` MPI binary itself — see run_mndiag_mnubergemm.sh. The two binaries differ:
+##   * ubergemm        — single-node GEMM kernel (DCGM 4.6 ships v1.31; GEMM-only CLI).
+##   * mnubergemm      — multi-node MPI app, launched ONLY via `dcgmi mndiag`, not srun.
+## DCGM 4.6's `ubergemm 1.31` dropped the legacy --NET_*/--CE_*/--MM_max_workload/
+## --MM_sm_count options, so we build the arg set from what the discovered binary supports.
 duration_sec=$((SLURM_JOB_END_TIME - SLURM_JOB_START_TIME - 600))
 [[ "$duration_sec" -le 0 ]] && duration_sec=86000
+# Legacy multi-engine mnubergemm args (kept for clusters that ship the old binary).
 STD="--dynamic_adj --MM_max_workload 65536 --max_workload 65536 --time_to_run ${duration_sec} --workload GNC"
 MM="--MM_M 0 --MM_N 4096 --MM_sm_count 112 --MM_type SX_SX_SSS --MM_force_cublas_algo SQAAABQAAAAiAAAAAQAAAAAAAAAAAAAAAAAAAAAACQAAAAAARdgBAAAAAAAAAAAAAAAAAE0AAAAAAAAAAAAAAA=="
 NET="--NET_sm_count 32 --NET_link_order scatter_sum --NET_size 20480000"
 CE="--CE_type H --CE_size 4194304"
+# Frequency/duty shaping — valid on both legacy mnubergemm and ubergemm 1.31.
 FREQQ="--freq 400 --duty 0.98 --dual_mode --dual_freq 0.0013888889 --dual_duty 0.50"
 
 : "${NVIS_SYSINFO_SH:=${NVIS_BIN_SCRIPTS}/sysinfo.sh}"
 : "${NVIS_CHECKER_SH:=${NVIS_BIN_SCRIPTS}/checker.sh}"
 
+# sysinfo.sh / checker.sh are root-only HW health checks. This soak job usually runs as a
+# non-root Slurm user, so prefer passwordless sudo when available; otherwise run directly
+# (they print "Please run as root" and are skipped — non-fatal pre/post snapshots).
+if [[ "$(id -u)" -eq 0 ]]; then
+  _ROOT_RUN=""
+elif sudo -n true 2>/dev/null; then
+  _ROOT_RUN="sudo -n"
+else
+  _ROOT_RUN=""
+  echo "WARN: not root and passwordless sudo unavailable; sysinfo/checker health snapshots will be skipped." >&2
+fi
+
 set -x
 #1. Check nodes status
-timeout 120 bash "${NVIS_SYSINFO_SH}"
-#2. Run mnubergemm
-MNUBERGEMM=/cm/local/apps/cuda-dcgm/4.5.2/libexec/datacenter-gpu-manager-4/plugins/cuda13/mnubergemm
-if [[ ! -x ${MNUBERGEMM} ]]; then
-  MNUBERGEMM=/usr/libexec/datacenter-gpu-manager-4/plugins/cuda13/mnubergemm
+timeout 120 ${_ROOT_RUN} bash "${NVIS_SYSINFO_SH}" || true
+#2. Run mnubergemm. The binary name/location varies by DCGM build: it ships as
+#   `mnubergemm` on some clusters and `ubergemm` on others, sometimes tucked under an
+#   `updated/` subdir, and under cuda12 or cuda13 plugin trees. Probe a candidate matrix
+#   (honor NVIS_MNUBERGEMM_BIN to pin an explicit path) instead of hard-coding one path.
+MNUBERGEMM="${NVIS_MNUBERGEMM_BIN:-}"
+if [[ -z "${MNUBERGEMM}" || ! -x "${MNUBERGEMM}" ]]; then
+  MNUBERGEMM=""
+  # Search the workspace DCGM extract first (install-dcgm-workspace.sh, shared /home),
+  # then the system DCGM trees. The workspace binary is self-contained: its libdcgm*.so
+  # resolve via a baked-in relative RPATH ($ORIGIN/../../../../../lib/<triplet>).
+  for _root in "${WORKSPACE_DIR}/dcgm/current/usr/libexec/datacenter-gpu-manager-4/plugins" \
+               "${WORKSPACE_DIR}/dcgm/root/usr/libexec/datacenter-gpu-manager-4/plugins" \
+               /cm/local/apps/cuda-dcgm/*/libexec/datacenter-gpu-manager-4/plugins \
+               /usr/libexec/datacenter-gpu-manager-4/plugins; do
+    for _cu in "cuda${CUDA_MAJ}" cuda13 cuda12; do
+      for _sub in "" "/updated"; do
+        for _name in mnubergemm ubergemm; do
+          _cand="${_root}/${_cu}${_sub}/${_name}"
+          if [[ -x "${_cand}" ]]; then MNUBERGEMM="${_cand}"; break 4; fi
+        done
+      done
+    done
+  done
 fi
-ldd "${MNUBERGEMM}"
+if [[ -z "${MNUBERGEMM}" || ! -x "${MNUBERGEMM}" ]]; then
+  echo "ERROR: mnubergemm/ubergemm binary not found under the DCGM plugins tree." >&2
+  echo "       searched WORKSPACE_DIR/dcgm + cuda${CUDA_MAJ}/cuda13/cuda12 [+/updated] for names mnubergemm, ubergemm." >&2
+  echo "       Install via Tools -> Operations & Scripts -> Install DCGM/DCGMI, or pin NVIS_MNUBERGEMM_BIN=/abs/path." >&2
+  exit 1
+fi
+# If the binary lives in an extracted DCGM tree (…/usr/libexec/datacenter-gpu-manager-4/…),
+# also prepend its usr/lib dirs to LD_LIBRARY_PATH as a fallback for builds without RPATH.
+_dcgm_usr="${MNUBERGEMM%/libexec/datacenter-gpu-manager-4/*}"
+if [[ "${_dcgm_usr}" != "${MNUBERGEMM}" && -d "${_dcgm_usr}" ]]; then
+  for _libd in "${_dcgm_usr}/lib/aarch64-linux-gnu" "${_dcgm_usr}/lib/x86_64-linux-gnu" \
+               "${_dcgm_usr}/lib64" "${_dcgm_usr}/lib"; do
+    [[ -d "${_libd}" ]] && export LD_LIBRARY_PATH="${_libd}:${LD_LIBRARY_PATH:-}"
+  done
+fi
+echo "Using mnubergemm binary: ${MNUBERGEMM}"
+ldd "${MNUBERGEMM}" || true
+
+# Pick the arg set from what THIS binary actually supports. The legacy multi-engine
+# mnubergemm exposes --NET_*/--CE_* (workload "GNC"); DCGM 4.6's single-node ubergemm
+# 1.31 dropped them and rejects --MM_max_workload/--MM_sm_count too (exit 2 on parse).
+# Probe --help (bounded by timeout in case a build runs instead of printing usage).
+_ug_help="$(timeout 20 "${MNUBERGEMM}" --help 2>&1 || true)"
+if printf '%s' "${_ug_help}" | grep -q -- '--NET_sm_count'; then
+  echo "Detected legacy multi-engine mnubergemm CLI (NET/CE supported)."
+  UBERGEMM_ARGS="${STD} ${FREQQ} ${MM} ${NET} ${CE}"
+else
+  echo "Detected single-node ubergemm CLI (GEMM-only; NET/CE/MM_max_workload not supported)."
+  # GEMM power/thermal soak: high duty, dual waveform, dynamic adjust, full walltime.
+  UBERGEMM_ARGS="--dynamic_adj --max_workload 65536 --time_to_run ${duration_sec} --workload G ${FREQQ}"
+fi
+echo "ubergemm args: ${UBERGEMM_ARGS}"
 
 export SLURM_CPU_BIND=none
 export NCCL_NVLS_ENABLE=1
@@ -124,10 +197,12 @@ export OMPI_MCA_oob_tcp_if_include=${nic}
 export OMPI_MCA_btl_openib_warn_default_gid_prefix=0
 
 srun --export=ALL --cpu-bind=none --mpi=pmix --label \
-  "${MNUBERGEMM}" ${STD} ${FREQQ} ${MM} ${NET} ${CE}
+  "${MNUBERGEMM}" ${UBERGEMM_ARGS}
 #3. Check nodes' healthiness, drain if any issue found
 _checker_q=$(printf '%q' "${NVIS_CHECKER_SH}")
+# checker.sh hard-requires root; use the same sudo decision as above (per-node over pdsh,
+# each remote shell re-evaluates sudo -n so this works even if the local node differs).
 # shellcheck disable=SC2029
 pdsh -R ssh -f 32 -w "$(echo "${hosts[*]}" | tr ' ' ',')" \
-  "bash ${_checker_q} -e 2>/dev/null | grep -v PASS || true"
+  "if [ \"\$(id -u)\" -ne 0 ] && sudo -n true 2>/dev/null; then _R='sudo -n'; else _R=''; fi; \$_R bash ${_checker_q} -e 2>/dev/null | grep -v PASS || true"
 set +x

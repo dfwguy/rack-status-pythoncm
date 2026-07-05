@@ -350,8 +350,8 @@ nvis-rack-status/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RACK_AI_API_KEY` | — | API key for LLM endpoint |
-| `RACK_AI_ENDPOINT` | `https://integrate.api.nvidia.com/v1/chat/completions` | OpenAI-compatible endpoint |
-| `RACK_AI_MODEL` | `nvidia/llama-3.1-nemotron-ultra-253b-v1` | Model identifier |
+| `RACK_AI_ENDPOINT` | `https://inference-api.nvidia.com/v1/chat/completions` | OpenAI-compatible endpoint |
+| `RACK_AI_MODEL` | `nvidia/nvidia/nemotron-3-super-v3` | Model identifier |
 
 ### Other
 

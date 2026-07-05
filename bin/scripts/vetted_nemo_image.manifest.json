@@ -1,0 +1,25 @@
+{
+  "_comment": "Pinned spec for the vetted NeMo validation container baked by build_vetted_nemo_image.sh. Ships in the repo so every customer cluster (Boston/NSCALE/Firmus) builds the SAME image; the ~34GB .sqsh artifact itself lives on NFS (and optionally a dist/ air-gapped bundle), not in git.",
+  "base_image": "nemo-25.11.01.sqsh",
+  "output_image": "nemo-vetted-nccl2.28.9.sqsh",
+  "arch": "aarch64",
+  "swaps": [
+    {
+      "component": "nccl",
+      "from": "2.28.3",
+      "to": "2.28.9",
+      "path_in_image": "/usr/lib/aarch64-linux-gnu/libnccl.so.2",
+      "reason": "container NCCL 2.28.3 segfaults at MNNVL init on GB200 NVL72 (single- and multi-node); PyTorch loads this same system libnccl, so one swap fixes NCCL pre-checks AND training"
+    }
+  ],
+  "not_touched": {
+    "hpcx": "v2.24.1",
+    "ucx": "1.20.0",
+    "note": "UCX/HPC-X are the crash REPORTER (signal handler), not the cause — left as-is"
+  },
+  "validated": {
+    "date": "2026-07-02",
+    "racks": ["bos01-b05", "bos01-b06"],
+    "evidence": "LD_PRELOAD of 2.28.9 into the stock container -> all_reduce_perf_mpi clean, 0 wrong, no segfault; host portable NCCL 2.28.9 = ~914 GB/s over MNNVL; nvlink_preflight PASS"
+  }
+}

@@ -2,6 +2,12 @@ import Tooltip from "@mui/material/Tooltip";
 import { Card, Flex, Tag, Text, Divider } from "@nvidia/foundations-react-core";
 import type { RackRow } from "../../types/api";
 import { validationStatusTooltip } from "../../lib/validationStatusTooltip";
+import {
+  VALIDATION_STAGES,
+  stageStates,
+  stageStateColor,
+  stageStateLabel,
+} from "../../lib/validationStages";
 
 interface RackOverviewProps {
   row: RackRow;
@@ -26,6 +32,22 @@ function ValidationTag({ row }: { row: RackRow }) {
   );
 }
 
+function StageBreakdown({ row }: { row: RackRow }) {
+  const states = stageStates(row);
+  return (
+    <Flex gap="2" align="center" wrap="wrap">
+      {VALIDATION_STAGES.map((stage) => {
+        const state = states[stage.key];
+        return (
+          <Tag key={stage.key} color={stageStateColor(state)} kind="outline" readOnly density="compact">
+            {stage.label} · {stage.tool}: {stageStateLabel(state)}
+          </Tag>
+        );
+      })}
+    </Flex>
+  );
+}
+
 function InfoItem({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ minWidth: 120 }}>
@@ -43,6 +65,12 @@ export function RackOverview({ row, comment }: RackOverviewProps) {
       <Flex gap="4" align="center" wrap="wrap">
         <InfoItem label="Validation State">
           <ValidationTag row={row} />
+        </InfoItem>
+
+        <Divider orientation="vertical" />
+
+        <InfoItem label="Stages (2 to validate)">
+          <StageBreakdown row={row} />
         </InfoItem>
 
         <Divider orientation="vertical" />

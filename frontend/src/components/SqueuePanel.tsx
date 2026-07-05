@@ -19,6 +19,7 @@ import {
   type SlurmCmdJson,
 } from "../lib/slurmHelpers";
 import { parseSqueueStdout } from "../lib/parseSqueueStdout";
+import { slurmReasonTone, slurmToneColor } from "../lib/slurmReasonTone";
 import type { JobStdoutTailPayload } from "../lib/rackLog";
 import { TailLogDialog } from "./TailLogDialog";
 
@@ -195,6 +196,8 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
   const headers = parsed && !parsed.useRaw && parsed.headers.length ? parsed.headers : [];
   const rows = parsed && !parsed.useRaw && parsed.headers.length ? parsed.rows : [];
   const jobCol = headers.length ? findSqueueJobColumnIndex(headers) : -1;
+  const reasonCol = headers.findIndex((h) => /REASON/i.test(h));
+  const stCol = headers.findIndex((h) => h === "ST" || /^STATE$/i.test(h));
   const showRaw = !parsed || parsed.useRaw || !headers.length;
 
   return (
@@ -250,24 +253,46 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
                 const jid = slurmJobIdForScancel(rawJob);
                 return (
                   <TableRow key={ri} hover sx={{ "&:nth-of-type(even)": { bgcolor: "action.hover" } }}>
-                    {headers.map((_, ci) => (
-                      <TableCell key={ci} sx={{ fontFamily: "monospace", fontSize: 12, whiteSpace: "nowrap", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {ci === jobCol && jid ? (
-                          <Link
-                            component="button"
-                            type="button"
-                            underline="always"
-                            onClick={() => void showScontrol(jid)}
-                            sx={{ fontFamily: "inherit", fontSize: "inherit", cursor: "pointer" }}
-                            title={`scontrol show job ${jid} (output below table)`}
-                          >
-                            {rawJob}
-                          </Link>
-                        ) : (
-                          (cells[ci] ?? "")
-                        )}
-                      </TableCell>
-                    ))}
+                    {headers.map((_, ci) => {
+                      const value = cells[ci] ?? "";
+                      const isReason = ci === reasonCol;
+                      // Color the reason (and ST) cell by severity so launch/prolog failures pop.
+                      const toneSource = isReason || ci === stCol ? value : "";
+                      const tone = toneSource ? slurmReasonTone(toneSource) : "none";
+                      const toneColor = slurmToneColor(tone);
+                      return (
+                        <TableCell
+                          key={ci}
+                          title={value}
+                          sx={{
+                            fontFamily: "monospace",
+                            fontSize: 12,
+                            whiteSpace: isReason ? "normal" : "nowrap",
+                            maxWidth: isReason ? 360 : 240,
+                            overflow: isReason ? "visible" : "hidden",
+                            textOverflow: isReason ? "clip" : "ellipsis",
+                            wordBreak: isReason ? "break-word" : "normal",
+                            color: toneColor,
+                            fontWeight: toneColor ? 600 : undefined,
+                          }}
+                        >
+                          {ci === jobCol && jid ? (
+                            <Link
+                              component="button"
+                              type="button"
+                              underline="always"
+                              onClick={() => void showScontrol(jid)}
+                              sx={{ fontFamily: "inherit", fontSize: "inherit", cursor: "pointer" }}
+                              title={`scontrol show job ${jid} (output below table)`}
+                            >
+                              {rawJob}
+                            </Link>
+                          ) : (
+                            value
+                          )}
+                        </TableCell>
+                      );
+                    })}
                     <TableCell sx={{ whiteSpace: "nowrap" }}>
                       {jid ? (
                         <Button
