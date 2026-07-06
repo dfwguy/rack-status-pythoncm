@@ -205,6 +205,10 @@ def geometry_defaults(platform: models.Platform, cluster: models.Cluster | None 
         if g.gpus_per_rack > 0:
             per_tray = max(1, round(g.gpus_per_rack / trays))
             out["RACK_CLUSTER_GPU_PER_TRAY"] = str(per_tray)
+    # GPUs per compute node (NVL=4, HGX=8, …) so launchers don't assume a generation.
+    # Lowest precedence: an explicit env or on-node nvidia-smi still wins.
+    if g.gpus_per_node > 0:
+        out["GPUS_PER_NODE"] = str(g.gpus_per_node)
     return out
 
 

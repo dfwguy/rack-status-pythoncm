@@ -58,3 +58,16 @@ nvis_nodes_scale() {
 nvis_nodes_first() {
   scontrol show hostnames "${NVIS_NODELIST}" 2>/dev/null | head -1
 }
+
+# GPUs per node from Slurm GRES (head-side, no GPUs needed). Handles Gres=gpu:4
+# and Gres=gpu:<type>:4[(S:...)]. Echoes the count, or nothing if undetectable.
+# $1 = a node hostname.
+nvis_nodes_gpus_per_node() {
+  local n="${1:-}" g
+  [[ -n "$n" ]] || return 1
+  g="$(scontrol -o show node "$n" 2>/dev/null \
+        | grep -oE 'Gres=[^ ]+' \
+        | grep -oE 'gpu(:[A-Za-z0-9_]+)?:[0-9]+' \
+        | grep -oE '[0-9]+$' | head -1)"
+  [[ -n "$g" ]] && printf '%s' "$g"
+}

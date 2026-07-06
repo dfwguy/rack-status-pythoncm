@@ -1,7 +1,19 @@
 #!/bin/bash
 # Author: Junli Zhang<junliz@nvidia.com>
+# Author: Rafael M. Koike & Cursor Agent ("Ada")  # node-user + per-node sudo refactor
 export topdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-[ $(id -u) -ne 0 ] && echo "ERROR: Please run as root" && exit 1
+# This script does NOT require root on the head node. It fans out to the compute
+# nodes via pdsh+ssh as the invoking (rack-status) user, and escalates ONLY the
+# few node-local commands that need root (dmidecode/dmesg/mlxlink/ipmitool) with
+# `sudo -n` ON EACH NODE (a no-op when already root). This matches clusters where
+# the app user has passwordless node SSH + sudo, and still works where the
+# invoking user is root. Do NOT run this whole script under sudo on the head:
+# pdsh would then ssh to the nodes AS ROOT, which usually has no node SSH set up
+# (every node returns "ssh exited with exit code 255").
+#
+# NOTE: pdsh executes its stdin payload LINE BY LINE (each line is a separate
+# remote shell), so a privileged check's `sudo` resolution and the command it
+# guards MUST stay on the SAME line: `S=; ... && S="sudo -n"; $S <command>`.
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 ## Caution: this script highly depends on pdsh to run command on all nodes, the BCM should be properly configured(or just leave with default settings) to let pdsh work without password.
@@ -49,7 +61,7 @@ EOF
 
 echo -e "\n########INFO: Check Memory"
 pdsh -f 100 -R ssh -w ${NODELIST} <<- 'EOF' | dshbak -c
-dmidecode -t memory|grep -P '\tVolatile Size:'|tr -d '\t'|sort|uniq -c
+S=; [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && S="sudo -n"; $S dmidecode -t memory|grep -P '\tVolatile Size:'|tr -d '\t'|sort|uniq -c
 EOF
 echo -e "\n########INFO: Check NUMA_BALANCING and THP(Expected: NUMA_BALANCING=0 and THP=madvise)"
 pdsh -f 100 -R ssh -w ${NODELIST} <<- 'EOF' | dshbak -c
@@ -100,7 +112,7 @@ EOF
 echo -e "\n########INFO: Check IB Link Down status(Expected: No issue found)"
 #Bypass those 4 ports IB HCA is connected to nvswitch on B200/B300.
 pdsh -f 100 -R ssh -w ${NODELIST} <<- 'EOF' | dshbak -c
-ls -l /sys/class/infiniband|grep -v $((lspci -D | grep -i Infiniband|awk '{print $1}'|cut -d '.' -f 1|sort|uniq -c|grep -w 4||echo NONE)|awk '{print $NF}'|xargs -I {} echo "-e {}.")|grep infiniband|awk -F'/' '{print $(NF-2),$NF}'|while read bdf dev; do ret=$(mlxlink -d $bdf 2>&1|grep Recommendation|cut -f2- -d ':'|grep -v 'No issue was observed'||true); [ "X$ret" != "X" ] && echo "$dev:${ret}"; done|paste -s -d','
+S=; [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && S="sudo -n"; ls -l /sys/class/infiniband|grep -v $((lspci -D | grep -i Infiniband|awk '{print $1}'|cut -d '.' -f 1|sort|uniq -c|grep -w 4||echo NONE)|awk '{print $NF}'|xargs -I {} echo "-e {}.")|grep infiniband|awk -F'/' '{print $(NF-2),$NF}'|while read bdf dev; do ret=$($S mlxlink -d $bdf 2>&1|grep Recommendation|cut -f2- -d ':'|grep -v 'No issue was observed'||true); [ "X$ret" != "X" ] && echo "$dev:${ret}"; done|paste -s -d','
 EOF
 
 echo -e "\n########INFO: Check IB Link Down counters(Expected: No issue found)"
@@ -149,7 +161,7 @@ EOF
 
 echo -e "\n########INFO: Check Bond interfaces(Expected: all nodes the same)"
 pdsh -f 100 -R ssh -w ${NODELIST} <<- 'EOF' | dshbak -c
-for i in /proc/net/bonding/*; do { ethtool ${i##*/} | grep -e Speed -e Link; echo '==DETAILS=='; grep -e 'Bonding Mode' -e 'Transmit Hash Policy' $i; for j in $(grep 'Slave Interface' $i |awk '{print $NF}'|sort); do grep -A5 $j $i | grep -e 'Slave Interface' -e 'MII Status' -e 'Speed' | paste -s -d' '; done; }| xargs -I {} echo "${i}: {}"; done
+S=; [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && S="sudo -n"; for i in /proc/net/bonding/*; do { $S ethtool ${i##*/} | grep -e Speed -e Link; echo '==DETAILS=='; grep -e 'Bonding Mode' -e 'Transmit Hash Policy' $i; for j in $(grep 'Slave Interface' $i |awk '{print $NF}'|sort); do grep -A5 $j $i | grep -e 'Slave Interface' -e 'MII Status' -e 'Speed' | paste -s -d' '; done; }| xargs -I {} echo "${i}: {}"; done
 EOF
 
 echo -e "\n########INFO: Check IMEX channel devices(Expected: At least one channel exist on GBXX)"
@@ -189,37 +201,37 @@ EOF
 
 echo -e "\n########INFO: Check dmesg - NV_ERR(Expected: No NV_ERR_*)"
 pdsh -f 100 -R ssh -w ${NODELIST} <<- 'EOF' | dshbak -c
-dmesg|grep -o  NV_ERR_[^\]]*|sort|uniq
+S=; [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && S="sudo -n"; $S dmesg|grep -o  NV_ERR_[^\]]*|sort|uniq
 EOF
 
 echo -e "\n########INFO: Check dmesg - Call trace(Expected: No Call trace)"
 pdsh -f 100 -R ssh -w ${NODELIST} <<- 'EOF' | dshbak -c
-dmesg|grep -i "Call trace"|wc -l
+S=; [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && S="sudo -n"; $S dmesg|grep -i "Call trace"|wc -l
 EOF
 
 echo -e "\n########INFO: Check dmesg - Hardware Error(Expected: No Hardware Error)"
 pdsh -f 100 -R ssh -w ${NODELIST} <<- 'EOF'|dshbak -c
-dmesg|grep "Hardware Error"|wc -l
+S=; [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && S="sudo -n"; $S dmesg|grep "Hardware Error"|wc -l
 EOF
 
 echo -e "\n########INFO: Check dmesg - Xid(Expected: No Xid)"
 pdsh -f 100 -R ssh -w ${NODELIST} <<- 'EOF'|dshbak -c
-dmesg|grep -E -o 'Xid ([^)].*): [0-9]+,'|tr -d ','|awk '{print $1":"$NF}'|sort|uniq|paste -s -d','
+S=; [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && S="sudo -n"; $S dmesg|grep -E -o 'Xid ([^)].*): [0-9]+,'|tr -d ','|awk '{print $1":"$NF}'|sort|uniq|paste -s -d','
 EOF
 
 echo -e "\n########INFO: Check dmesg - knvlinkDiscoverPostRxDetLinks(Expected: No knvlinkDiscoverPostRxDetLinks)"
 pdsh -f 100 -R ssh -w ${NODELIST} <<- 'EOF'|dshbak -c
-dmesg|grep "NVRM: knvlinkDiscoverPostRxDetLinks"|wc -l
+S=; [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && S="sudo -n"; $S dmesg|grep "NVRM: knvlinkDiscoverPostRxDetLinks"|wc -l
 EOF
 
 echo -e "\n########INFO: Check dmesg - ipmi_ssif(Expected: No ipmi_ssif Not present errors)"
 pdsh -f 100 -R ssh -w ${NODELIST} <<- 'EOF'|dshbak -c
-ipmitool mc info &>/dev/null||(dmesg --since "8 hour ago" | grep "ipmi_ssif.*i2c-.*Not present"|wc -l)
+S=; [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && S="sudo -n"; $S ipmitool mc info &>/dev/null||($S dmesg --since "8 hour ago" | grep "ipmi_ssif.*i2c-.*Not present"|wc -l)
 EOF
 
 echo -e "\n########INFO: Check dmesg - mlx5_core.*Health issue observed.*ERROR(Expected: No mlx5_core Health issue observed errors)"
 pdsh -f 100 -R ssh -w ${NODELIST} <<- 'EOF'|dshbak -c
-dmesg --since "8 hour ago" | grep "mlx5_core.*Health issue observed.*ERROR"|wc -l
+S=; [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && S="sudo -n"; $S dmesg --since "8 hour ago" | grep "mlx5_core.*Health issue observed.*ERROR"|wc -l
 EOF
 
 #echo -e "\n########INFO: Check dmesg - NVRM:.*Assertion failed(Expected: No NVRM Assertion failed errors)"
