@@ -11,11 +11,11 @@ import Autocomplete from "@mui/material/Autocomplete";
 import { Text, Card, Banner } from "@nvidia/foundations-react-core";
 import { Save, Play, Sparkles, Code2, LayoutGrid, Eye } from "lucide-react";
 import { mermaidToReactFlow, EDGE_PATTERNS, parseNodeDef } from "./editor/mermaidToReactFlow";
-import { parseFrontmatter, serializeFrontmatter, getNodeMetadata, setNodeMetadata, type NodeMetadata } from "./editor/frontmatter";
+import { parseFrontmatter, serializeFrontmatter, getNodeMetadata, setNodeMetadata, type NodeMetadata, type WorkflowMetadata } from "./editor/frontmatter";
 import FlowDiagram from "./editor/FlowDiagram";
 import NodePropertiesDialog from "./NodePropertiesDialog";
 import WorkflowAIGenerator from "./WorkflowAIGenerator";
-import type { Workflow, WorkflowTarget } from "../../services/workflowService";
+import type { Workflow, WorkflowTarget, WorkflowStep } from "../../services/workflowService";
 import type { Node } from "reactflow";
 
 interface WorkflowDesignerProps {
@@ -43,8 +43,40 @@ export default function WorkflowDesigner({ workflow, onSave, onRun, availableRac
     if (workflow) {
       setName(workflow.name || "");
       setDescription(workflow.description || "");
-      setMermaidCode(workflow.mermaid || "");
       setTargetRacks(workflow.target?.racks || []);
+      // Hydrate the editor frontmatter from steps[] so per-step fields authored in
+      // YAML (composition blocks, method/body/options/on_complete) are preserved and
+      // not stripped on the next Save.
+      const { metadata: fmMeta, mermaidCode: body } = parseFrontmatter(workflow.mermaid || "");
+      const merged: WorkflowMetadata = { ...fmMeta };
+      for (const s of workflow.steps || []) {
+        const m: NodeMetadata = { ...(fmMeta[s.id] || {}) };
+        if (s.name) m.name = s.name;
+        if (s.description) m.description = s.description;
+        if (s.type) m.type = s.type;
+        if (s.command) m.command = s.command;
+        if (s.capability) m.capability = s.capability;
+        if (s.run) m.run = s.run;
+        if (s.method) m.method = s.method;
+        if (s.parameters) m.parameters = s.parameters;
+        if (s.output) m.output = s.output;
+        if (s.timeout !== undefined) m.timeout = s.timeout;
+        if (s.retries !== undefined) m.retries = s.retries;
+        if (s.on_success) m.on_success = s.on_success;
+        if (s.on_failure) m.on_failure = s.on_failure;
+        if (s.on_complete) m.on_complete = s.on_complete;
+        if (s.connection) m.connection = s.connection as Record<string, unknown>;
+        if (s.scheduler) m.scheduler = s.scheduler as Record<string, unknown>;
+        if (s.evaluation) m.evaluation = s.evaluation as Record<string, unknown>;
+        if (s.fanout) m.fanout = s.fanout as Record<string, unknown>;
+        if (s.resolve) m.resolve = s.resolve as Record<string, unknown>;
+        if (s.body) m.body = s.body;
+        if (s.options) m.options = s.options;
+        merged[s.id] = m;
+      }
+      setMermaidCode(
+        Object.keys(merged).length ? serializeFrontmatter(merged, body) : (workflow.mermaid || ""),
+      );
     }
   }, [workflow]);
 
@@ -101,11 +133,22 @@ export default function WorkflowDesigner({ workflow, onSave, onRun, availableRac
         ...(meta?.description ? { description: meta.description } : {}),
         ...(meta?.command ? { command: meta.command } : {}),
         ...(meta?.parameters ? { parameters: meta.parameters } : {}),
+        ...(meta?.capability ? { capability: meta.capability } : {}),
+        ...(meta?.run ? { run: meta.run } : {}),
+        ...(meta?.method ? { method: meta.method } : {}),
         ...(meta?.output ? { output: meta.output } : {}),
         ...(meta?.timeout ? { timeout: meta.timeout } : {}),
         ...(meta?.retries ? { retries: meta.retries } : {}),
         ...(meta?.on_success ? { on_success: meta.on_success } : {}),
         ...(meta?.on_failure ? { on_failure: meta.on_failure } : {}),
+        ...(meta?.on_complete ? { on_complete: meta.on_complete } : {}),
+        ...(meta?.connection ? { connection: meta.connection as WorkflowStep["connection"] } : {}),
+        ...(meta?.scheduler ? { scheduler: meta.scheduler as WorkflowStep["scheduler"] } : {}),
+        ...(meta?.evaluation ? { evaluation: meta.evaluation as WorkflowStep["evaluation"] } : {}),
+        ...(meta?.fanout ? { fanout: meta.fanout as WorkflowStep["fanout"] } : {}),
+        ...(meta?.resolve ? { resolve: meta.resolve as WorkflowStep["resolve"] } : {}),
+        ...(meta?.body ? { body: meta.body } : {}),
+        ...(meta?.options ? { options: meta.options as WorkflowStep["options"] } : {}),
       };
     });
 

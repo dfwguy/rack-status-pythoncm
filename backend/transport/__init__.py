@@ -21,6 +21,9 @@ from transport.factory import (
     TransportConfig,
     build_connection,
 )
+from transport.chain import HopSpec, apply_hop, build_chain
+from transport.fanout import NodeResult, fanout, fanout_errors, group_outputs
+from transport.hop import HopConnection
 from transport.local import LocalConnection
 from transport.ssh import SSHConfig, SSHConnection
 
@@ -30,6 +33,7 @@ __all__ = [
     "LocalConnection",
     "SSHConnection",
     "SSHConfig",
+    "HopConnection",
     "EnvForwardingConnection",
     "RoutingConnection",
     "SudoConnection",
@@ -38,6 +42,13 @@ __all__ = [
     "TransportConfig",
     "FORWARD_ENV_PREFIXES",
     "FORWARD_ENV_NAMES",
+    "fanout",
+    "group_outputs",
+    "fanout_errors",
+    "NodeResult",
+    "HopSpec",
+    "build_chain",
+    "apply_hop",
     "as_shell_str",
     "env_export_prefix",
     "merge_env",

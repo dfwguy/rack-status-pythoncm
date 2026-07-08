@@ -15,6 +15,23 @@ describe("mermaidToReactFlow", () => {
     expect(edges[0].target).toBe("B");
   });
 
+  it("parses a linear flowchart TD chain of automated steps ending in a done stadium", () => {
+    // Mirrors the generated sysinfo-precheck workflow: underscore ids, spaced labels,
+    // a --> chain, and a final done(["Done"]) stadium.
+    const code = `flowchart TD
+      bios["BIOS"] --> cpu_freq["CPU Frequency   1800 MHz"]
+      cpu_freq["CPU Frequency   1800 MHz"] --> ib_devices["IB devices status  all active"]
+      ib_devices["IB devices status  all active"] --> done(["Done"])`;
+
+    const { nodes, edges } = mermaidToReactFlow(code);
+    expect(nodes).toHaveLength(4);
+    expect(edges).toHaveLength(3);
+    const ids = nodes.map((n) => n.id);
+    expect(ids).toEqual(expect.arrayContaining(["bios", "cpu_freq", "ib_devices", "done"]));
+    const done = nodes.find((n) => n.id === "done");
+    expect(done?.data.stepType).toBe("manual"); // stadium
+  });
+
   it("recognizes diamond shape as decision type", () => {
     const code = `graph TD
     decide{"Is it raining?"}`;

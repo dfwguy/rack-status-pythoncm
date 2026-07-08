@@ -1,19 +1,82 @@
 import { apiFetch } from "../lib/apiFetch";
 
+/** Per-step composition axes (all optional; absent == today's behavior). */
+export interface StepConnection {
+  profile?: "control" | "script";
+  exec?: "local" | "ssh";
+  sudo?: boolean;
+}
+
+export interface StepScheduler {
+  kind?: "slurm" | "local" | "runai" | "slinky" | "maas";
+  nodes?: number | string;
+  nodelist?: string;
+  ntasks_per_node?: number | string;
+  script?: string;
+  command?: string;
+  image?: string;
+  output?: string;
+  reservation?: string;
+}
+
+export interface StepEvaluation {
+  success_when?: Record<string, unknown>;
+  extract?: { name: string; regex: string; type?: string; source?: string }[];
+  assert?: string[];
+}
+
+/** One hop in an N-level connection chain (app -> [vpn] -> head -> ... -> node). */
+export interface HopSpec {
+  kind?: "local" | "ssh" | "vpn";
+  host?: string;
+  user?: string;
+  key?: string;
+  port?: string;
+  sudo?: boolean;
+  extra_opts?: string[];
+  connect_timeout?: string;
+}
+
+/** Resolve rack(s) -> a real node list, stored as a run output (default "nodelist"). */
+export interface StepResolve {
+  racks?: string;
+  into?: string;
+}
+
+/** Fan-out a step's `run` across N nodes over a composed Connection chain. */
+export interface StepFanout {
+  nodes?: string;          // targets for the final (fanned) hop; e.g. "${nodelist}"
+  hops?: HopSpec[];        // shared prefix (app->...->gateway); omitted = app control connection
+  node?: HopSpec;          // per-node hop template (host filled from nodes)
+  max_workers?: number;
+}
+
 export interface WorkflowStep {
   id: string;
   type: "automated" | "manual" | "decision" | "ai_query" | "delay";
   name: string;
   command?: string;
+  capability?: string;
+  run?: string;
   method?: string;
   body?: Record<string, unknown>;
+  parameters?: Record<string, string>;
   instructions?: string;
   question?: string;
   options?: { label: string; next: string; id?: string }[];
+  description?: string;
+  output?: string;
+  timeout?: number;
+  retries?: number;
   on_success?: string;
   on_failure?: string;
   on_complete?: string;
-  timeout?: number;
+  // Composition axes:
+  connection?: StepConnection;
+  scheduler?: StepScheduler;
+  evaluation?: StepEvaluation;
+  fanout?: StepFanout;
+  resolve?: StepResolve;
 }
 
 export interface WorkflowTarget {

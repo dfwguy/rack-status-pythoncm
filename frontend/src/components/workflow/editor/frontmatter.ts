@@ -8,13 +8,30 @@ export interface NodeMetadata {
   description?: string;
   type?: "automated" | "manual" | "decision" | "ai_query" | "delay";
   command?: string;
+  capability?: string;
+  method?: string;
+  run?: string;
   parameters?: Record<string, string>;
   output?: string;
   timeout?: number;
   retries?: number;
   on_success?: string;
   on_failure?: string;
+  on_complete?: string;
+  // Composition axes + fields authored in YAML; stored as objects, serialized as
+  // compact JSON in the (frontend-internal) frontmatter so they survive round-trips.
+  connection?: Record<string, unknown>;
+  scheduler?: Record<string, unknown>;
+  evaluation?: Record<string, unknown>;
+  fanout?: Record<string, unknown>;
+  resolve?: Record<string, unknown>;
+  body?: Record<string, unknown>;
+  options?: unknown[];
 }
+
+// Keys whose values are stored as compact JSON (nested objects / arrays, and the
+// multi-line ``run`` script — JSON keeps newlines/quotes intact on one line).
+const JSON_KEYS = ["connection", "scheduler", "evaluation", "fanout", "resolve", "body", "options", "run"] as const;
 
 export type WorkflowMetadata = Record<string, NodeMetadata>;
 
@@ -63,11 +80,22 @@ export function serializeFrontmatter(metadata: WorkflowMetadata, mermaidCode: st
         yamlLines.push(`      ${k}: "${v}"`);
       }
     }
+    if (props.capability) yamlLines.push(`    capability: ${props.capability}`);
+    if (props.method) yamlLines.push(`    method: ${props.method}`);
+    // Multi-line run script: single-quoted JSON string (newlines -> \n) so it stays
+    // on one frontmatter line and round-trips via JSON.parse (see JSON_KEYS).
+    if (props.run) yamlLines.push(`    run: '${JSON.stringify(props.run)}'`);
     if (props.output) yamlLines.push(`    output: "${props.output}"`);
     if (props.timeout !== undefined) yamlLines.push(`    timeout: ${props.timeout}`);
     if (props.retries !== undefined) yamlLines.push(`    retries: ${props.retries}`);
     if (props.on_success) yamlLines.push(`    on_success: ${props.on_success}`);
     if (props.on_failure) yamlLines.push(`    on_failure: ${props.on_failure}`);
+    if (props.on_complete) yamlLines.push(`    on_complete: ${props.on_complete}`);
+    for (const jkey of JSON_KEYS) {
+      const v = (props as Record<string, unknown>)[jkey];
+      const nonEmpty = Array.isArray(v) ? v.length > 0 : v && typeof v === "object" && Object.keys(v).length > 0;
+      if (nonEmpty) yamlLines.push(`    ${jkey}: '${JSON.stringify(v)}'`);
+    }
   }
 
   yamlLines.push("---");
@@ -138,7 +166,16 @@ function parseSimpleYaml(yaml: string): WorkflowMetadata {
       if (colonIdx === -1) continue;
       const key = content.slice(0, colonIdx).trim();
       let value = content.slice(colonIdx + 1).trim();
-      value = value.replace(/^"(.*)"$/, "$1");
+      value = value.replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+
+      if ((JSON_KEYS as readonly string[]).includes(key)) {
+        try {
+          (metadata[currentNodeId] as Record<string, unknown>)[key] = JSON.parse(value);
+        } catch {
+          // ignore malformed JSON block
+        }
+        continue;
+      }
 
       switch (key) {
         case "name":
@@ -152,6 +189,12 @@ function parseSimpleYaml(yaml: string): WorkflowMetadata {
           break;
         case "command":
           metadata[currentNodeId].command = value;
+          break;
+        case "capability":
+          metadata[currentNodeId].capability = value;
+          break;
+        case "method":
+          metadata[currentNodeId].method = value;
           break;
         case "output":
           metadata[currentNodeId].output = value;
@@ -167,6 +210,9 @@ function parseSimpleYaml(yaml: string): WorkflowMetadata {
           break;
         case "on_failure":
           metadata[currentNodeId].on_failure = value;
+          break;
+        case "on_complete":
+          metadata[currentNodeId].on_complete = value;
           break;
       }
       continue;

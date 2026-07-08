@@ -366,17 +366,22 @@ def _host_path(path: str) -> Path:
 
 
 def _host_log_entries(base: str) -> list[tuple[str, int, int]]:
-    """List ``*.txt`` files (non-recursive) in *base* on the EXEC host as ``(path, mtime_ns, size)``.
+    """List ``*.txt``/``*.out`` files (non-recursive) in *base* on the EXEC host as ``(path, mtime_ns, size)``.
 
     Routes through ``host_exec`` so log discovery + stat honor ``RACK_EXEC_MODE`` exactly like
     script execution: SSH to the target when remote, local filesystem when on-node. One ``find``
     call per dir (GNU ``-printf``) avoids a stat round-trip per file over SSH.
+
+    ``.out`` is included so multi-rack NCCL launchers (``run_nccl_mpi.sh`` → ``nccl-mpi_*.out`` /
+    ``llmb-nccl_*.out``) are discoverable; callers filter by basename (``_nemo_nccl_bn`` /
+    ``_is_multirack_bn`` / single-rack ``nemo``/``1rack``), so single-rack views are unaffected.
     """
     if host_exec.is_remote():
         try:
             proc = host_exec.run_on_host(
                 [
-                    "find", base, "-maxdepth", "1", "-type", "f", "-name", "*.txt",
+                    "find", base, "-maxdepth", "1", "-type", "f",
+                    "(", "-name", "*.txt", "-o", "-name", "*.out", ")",
                     "-printf", r"%p\t%s\t%T@\n",
                 ],
                 timeout=max(30, _env_int("RACK_NATIVE_LOGLIST_TIMEOUT_SEC", 60)),
@@ -402,7 +407,7 @@ def _host_log_entries(base: str) -> list[tuple[str, int, int]]:
     try:
         with os.scandir(base) as it:
             for e in it:
-                if not e.name.endswith(".txt"):
+                if not e.name.endswith((".txt", ".out")):
                     continue
                 try:
                     if not e.is_file():
@@ -810,6 +815,16 @@ def shlex_split_safe(s: str) -> list[str]:
         return shlex.split(s, posix=True)
     except ValueError:
         return s.split()
+
+
+def rack_total_sinfo_nodes(rack: str, counts: dict[tuple[str, str], int]) -> int:
+    """Total Slurm nodes reported by sinfo for *rack* (sum across all node states).
+
+    Zero means the rack has no compute nodes in Slurm — i.e. a non-GB200 rack (switch /
+    management / networking). Used to keep such "0/0" racks out of the validation
+    statistics (they are not part of the node/rack count we need to validate).
+    """
+    return sum(cnt for (rr, _st), cnt in counts.items() if rr == rack)
 
 
 def format_sinfo_cell(rack: str, counts: dict[tuple[str, str], int]) -> str:
@@ -1340,11 +1355,16 @@ class NativeRackTableState:
                 want.add(lj0)
         augment_running_set_for_job_ids(running, job_times, want)
         for rack in sorted(racks, key=_rack_sort_key):
+            # A rack with 0 Slurm nodes (once sinfo is done) is a non-GB200 rack
+            # (switch / mgmt / networking) — keep it in the table/floor but exclude it
+            # from the validation statistics so the counts reflect only compute racks.
+            countable = not (sinfo_done and rack_total_sinfo_nodes(rack, sct) == 0)
             pr_full = by_rack.get(rack)
             if not pr_full:
-                n_pending += 1
-                tally_stage(stage1_summary, "pending")
-                tally_stage(stage2_summary, "pending")
+                if countable:
+                    n_pending += 1
+                    tally_stage(stage1_summary, "pending")
+                    tally_stage(stage2_summary, "pending")
                 rows.append(
                     {
                         "rack": rack,
@@ -1369,7 +1389,7 @@ class NativeRackTableState:
             if in_slurm:
                 tm = job_times.get(jid_s, "?")
                 nemo = f"ongoing [{tm}]"
-                n_on += 1
+                cat = "ongoing"
             else:
                 st = str(pr.get("nemo_state") or "fail").strip().lower()
                 if st == "ongoing":
@@ -1378,20 +1398,21 @@ class NativeRackTableState:
                     # the job, re-classify like rack_status.sh once the run is no longer queued.
                     nccl_ok = bool(pr.get("nccl_ok"))
                     llm_ok = bool(pr.get("llm_ok"))
-                    if nccl_ok and llm_ok:
-                        nemo = "done"
-                        n_done += 1
-                    else:
-                        nemo = "fail"
-                        n_fail += 1
+                    cat = "done" if (nccl_ok and llm_ok) else "fail"
+                    nemo = cat
                 elif st == "done":
                     nemo = "done"
-                    n_done += 1
-                elif st == "fail":
-                    nemo = "fail"
-                    n_fail += 1
+                    cat = "done"
                 else:
                     nemo = "fail"
+                    cat = "fail"
+            # Non-GB200 (0-node) racks stay in the table but are not tallied into the stats.
+            if countable:
+                if cat == "ongoing":
+                    n_on += 1
+                elif cat == "done":
+                    n_done += 1
+                else:
                     n_fail += 1
 
             siv = "?" if not sinfo_done else format_sinfo_cell(rack, sct)
@@ -1413,8 +1434,9 @@ class NativeRackTableState:
                 validation_test=vt or None,
             )
             stage1, stage2 = compute_stage_states(nemo, nc_b, ll_b, vt or None)
-            tally_stage(stage1_summary, stage1)
-            tally_stage(stage2_summary, stage2)
+            if countable:
+                tally_stage(stage1_summary, stage1)
+                tally_stage(stage2_summary, stage2)
 
             rows.append(
                 {

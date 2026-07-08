@@ -19,6 +19,22 @@ class SSHConfig:
     connect_timeout: str = "10"
     alive_interval: str = "5"
     alive_count: str = "2"
+    # SSH connection multiplexing (ControlMaster). When on, repeated/concurrent ssh
+    # to this host reuse one TCP + handshake — essential for fan-out, where N node
+    # hops otherwise open N simultaneous app->head sessions and trip sshd MaxStartups
+    # ("kex_exchange_identification: Connection reset by peer").
+    multiplex: bool = True
+    mux_persist: str = "60"
+
+
+def _mux_control_dir() -> str:
+    """A writable dir for ControlMaster sockets (~/.ssh preferred, else temp)."""
+    import tempfile
+
+    d = os.path.expanduser("~/.ssh")
+    if os.path.isdir(d) and os.access(d, os.W_OK):
+        return d
+    return tempfile.gettempdir()
 
 
 class SSHConnection(Connection):
@@ -57,6 +73,15 @@ class SSHConnection(Connection):
         ]
         if cfg.key and os.path.isfile(cfg.key):
             argv.extend(["-i", cfg.key])
+        if cfg.multiplex:
+            # %C = short hash of (localuser,host,port,remoteuser) -> stable, avoids the
+            # ~104-char ControlPath limit. ControlPersist keeps the master briefly so a
+            # fan-out's concurrent hops all attach to one connection.
+            argv.extend([
+                "-o", "ControlMaster=auto",
+                "-o", f"ControlPath={_mux_control_dir()}/nvis-mux-%C",
+                "-o", f"ControlPersist={cfg.mux_persist or '60'}",
+            ])
         argv.extend(cfg.extra_opts)
         argv.append(f"{cfg.user}@{cfg.host}")
         return argv

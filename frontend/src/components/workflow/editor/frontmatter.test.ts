@@ -1,143 +1,89 @@
 import { describe, it, expect } from "vitest";
-import {
-  parseFrontmatter,
-  serializeFrontmatter,
-  getNodeMetadata,
-  setNodeMetadata,
-  removeNodeMetadata,
-} from "./frontmatter";
+import { serializeFrontmatter, parseFrontmatter, type WorkflowMetadata } from "./frontmatter";
 
-describe("parseFrontmatter", () => {
-  it("returns empty metadata when no frontmatter", () => {
-    const code = "graph TD\n    A --> B";
-    const { metadata, mermaidCode } = parseFrontmatter(code);
-    expect(metadata).toEqual({});
-    expect(mermaidCode).toBe(code);
-  });
-
-  it("parses metadata with all fields", () => {
-    const code = `---
-metadata:
-  check_status:
-    name: "Check Status"
-    description: "Verify nodes"
-    type: automated
-    command: "/api/status"
-    parameters:
-      rack: "p34-r07"
-      timeout: "30"
-    output: "result"
-    timeout: 120
-    retries: 3
-    on_success: next_step
-    on_failure: error_step
----
-graph TD
-    check_status["Check Status"] --> next_step`;
-
-    const { metadata, mermaidCode } = parseFrontmatter(code);
-    expect(metadata.check_status).toBeDefined();
-    expect(metadata.check_status.name).toBe("Check Status");
-    expect(metadata.check_status.description).toBe("Verify nodes");
-    expect(metadata.check_status.type).toBe("automated");
-    expect(metadata.check_status.command).toBe("/api/status");
-    expect(metadata.check_status.parameters).toEqual({ rack: "p34-r07", timeout: "30" });
-    expect(metadata.check_status.output).toBe("result");
-    expect(metadata.check_status.timeout).toBe(120);
-    expect(metadata.check_status.retries).toBe(3);
-    expect(metadata.check_status.on_success).toBe("next_step");
-    expect(metadata.check_status.on_failure).toBe("error_step");
-    expect(mermaidCode).toContain("graph TD");
-  });
-
-  it("handles multiple nodes in metadata", () => {
-    const code = `---
-metadata:
-  step1:
-    name: "Step 1"
-    type: automated
-  step2:
-    name: "Step 2"
-    type: manual
----
-graph TD
-    step1 --> step2`;
-
-    const { metadata } = parseFrontmatter(code);
-    expect(Object.keys(metadata)).toHaveLength(2);
-    expect(metadata.step1.type).toBe("automated");
-    expect(metadata.step2.type).toBe("manual");
-  });
-});
-
-describe("serializeFrontmatter", () => {
-  it("returns just mermaid code when metadata is empty", () => {
-    const result = serializeFrontmatter({}, "graph TD\n    A --> B");
-    expect(result).toBe("graph TD\n    A --> B");
-    expect(result).not.toContain("---");
-  });
-
-  it("serializes metadata with frontmatter delimiters", () => {
-    const metadata = {
-      step1: { name: "Test", type: "automated" as const, timeout: 60 },
+describe("frontmatter composition round-trip", () => {
+  it("preserves connection/scheduler/evaluation/capability/on_complete (no strip)", () => {
+    const meta: WorkflowMetadata = {
+      nccl: {
+        name: "NCCL",
+        type: "automated",
+        capability: "sysinfo",
+        on_complete: "done",
+        connection: { profile: "script", sudo: true },
+        scheduler: {
+          kind: "slurm",
+          script: "nccl_allreduce.sbatch",
+          nodelist: "${target}",
+          ntasks_per_node: "4",
+        },
+        evaluation: {
+          success_when: { exit_code: 0 },
+          extract: [{ name: "bw", regex: "busbw ([0-9.]+)", type: "float" }],
+          assert: ["bw >= 300"],
+        },
+      },
     };
-    const result = serializeFrontmatter(metadata, "graph TD\n    step1");
-    expect(result).toContain("---");
-    expect(result).toContain("metadata:");
-    expect(result).toContain("step1:");
-    expect(result).toContain('name: "Test"');
-    expect(result).toContain("type: automated");
-    expect(result).toContain("timeout: 60");
-    expect(result).toContain("graph TD");
+    const code = serializeFrontmatter(meta, "flowchart TD\n  nccl --> done");
+    const { metadata, mermaidCode } = parseFrontmatter(code);
+
+    expect(metadata.nccl.connection).toEqual({ profile: "script", sudo: true });
+    expect(metadata.nccl.scheduler).toEqual({
+      kind: "slurm",
+      script: "nccl_allreduce.sbatch",
+      nodelist: "${target}",
+      ntasks_per_node: "4",
+    });
+    expect(metadata.nccl.evaluation).toEqual(meta.nccl.evaluation);
+    expect(metadata.nccl.capability).toBe("sysinfo");
+    expect(metadata.nccl.on_complete).toBe("done");
+    expect(mermaidCode).toContain("nccl --> done");
   });
 
-  it("round-trips correctly", () => {
-    const metadata = {
-      node1: { name: "Node One", type: "decision" as const, command: "host:test" },
+  it("round-trips a fanout block (N-level hops + per-node hop)", () => {
+    const meta: WorkflowMetadata = {
+      chk: {
+        name: "IB", type: "automated", run: "ibstatus",
+        fanout: {
+          nodes: "${nodelist}",
+          max_workers: 32,
+          hops: [{ kind: "ssh", host: "${head}", user: "cmods" }],
+          node: { kind: "ssh", user: "cmods", sudo: true },
+        },
+      },
     };
-    const mermaid = "graph TD\n    node1 --> done";
-    const serialized = serializeFrontmatter(metadata, mermaid);
-    const { metadata: parsed, mermaidCode } = parseFrontmatter(serialized);
-    expect(parsed.node1.name).toBe("Node One");
-    expect(parsed.node1.type).toBe("decision");
-    expect(parsed.node1.command).toBe("host:test");
-    expect(mermaidCode).toContain("graph TD");
-  });
-});
-
-describe("getNodeMetadata", () => {
-  it("returns empty object for missing node", () => {
-    const result = getNodeMetadata({}, "missing");
-    expect(result).toEqual({});
+    const { metadata } = parseFrontmatter(serializeFrontmatter(meta, "graph TD\n chk --> done"));
+    expect(metadata.chk.fanout).toEqual(meta.chk.fanout);
   });
 
-  it("returns node metadata when present", () => {
-    const metadata = { step1: { name: "Test", type: "automated" as const } };
-    const result = getNodeMetadata(metadata, "step1");
-    expect(result.name).toBe("Test");
-  });
-});
-
-describe("setNodeMetadata", () => {
-  it("creates new entry", () => {
-    const result = setNodeMetadata({}, "new_node", { name: "New", type: "manual" });
-    expect(result.new_node.name).toBe("New");
-    expect(result.new_node.type).toBe("manual");
+  it("round-trips a resolve block", () => {
+    const meta: WorkflowMetadata = {
+      resolve: { name: "Resolve", type: "automated", resolve: { racks: "${rack}", into: "nodelist" } },
+    };
+    const { metadata } = parseFrontmatter(serializeFrontmatter(meta, "graph TD\n resolve --> done"));
+    expect(metadata.resolve.resolve).toEqual({ racks: "${rack}", into: "nodelist" });
   });
 
-  it("merges with existing", () => {
-    const existing = { step1: { name: "Old", type: "automated" as const } };
-    const result = setNodeMetadata(existing, "step1", { command: "/api/test" });
-    expect(result.step1.name).toBe("Old");
-    expect(result.step1.command).toBe("/api/test");
+  it("round-trips a multi-line run script", () => {
+    const script = "export X=1\npdsh -w ${nodelist} <<'EOF' | dshbak -c\nnvidia-smi -L\nEOF\nexit 0";
+    const meta: WorkflowMetadata = { chk: { name: "Check", type: "automated", run: script } };
+    const { metadata } = parseFrontmatter(serializeFrontmatter(meta, "graph TD\n chk --> done"));
+    expect(metadata.chk.run).toBe(script);
   });
-});
 
-describe("removeNodeMetadata", () => {
-  it("removes a node entry", () => {
-    const metadata = { a: { name: "A" }, b: { name: "B" } };
-    const result = removeNodeMetadata(metadata, "a");
-    expect(result.a).toBeUndefined();
-    expect(result.b).toBeDefined();
+  it("round-trips classic fields without regression", () => {
+    const meta: WorkflowMetadata = {
+      s1: { name: "S1", type: "manual", command: "host:echo hi", timeout: 30, on_success: "done" },
+    };
+    const { metadata } = parseFrontmatter(serializeFrontmatter(meta, "graph TD\n s1 --> done"));
+    expect(metadata.s1.command).toBe("host:echo hi");
+    expect(metadata.s1.timeout).toBe(30);
+    expect(metadata.s1.on_success).toBe("done");
+  });
+
+  it("omits empty composition blocks", () => {
+    const meta: WorkflowMetadata = { s1: { name: "S1", connection: {}, scheduler: {}, options: [] } };
+    const code = serializeFrontmatter(meta, "graph TD\n s1");
+    expect(code).not.toContain("connection:");
+    expect(code).not.toContain("scheduler:");
   });
 });

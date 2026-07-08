@@ -25,11 +25,25 @@ Do NOT manually run `python3 backend/app.py` or `npm run build` separately — a
 
 To run locally against a real cluster via SSH:
 
-1. Upload scripts to the head node:
+1. Deploy scripts to the head node.
+
+**The repo's `bin/scripts/` is the SOURCE OF TRUTH; the head node (NFS) holds a deployed copy
+under `RACK_REMOTE_BASE_PATH/bin/scripts`.** Always sync with `bin/deploy-scripts.sh` — a
+checksum-based `rsync` wrapper — NOT per-file `scp` (per-file copies silently drift; e.g. an
+edited `sysinfo.sh`/`*.sbatch` left stale on the head). It reads the same `RACK_SSH_*` /
+`RACK_REMOTE_BASE_PATH` env the app uses, excludes Python build artifacts, and does not delete
+head-only files.
+
 ```bash
-scp -i <key> -r bin/scripts root@<head-node>:/home/cmsupport/nvis-rack-status/bin/
-ssh -i <key> root@<head-node> "chmod +x /home/cmsupport/nvis-rack-status/bin/scripts/*.sh"
+bin/deploy-scripts.sh boston-slogin              # via an ~/.ssh/config alias
+bin/deploy-scripts.sh --dry-run boston-slogin    # preview what would change (checksum diff)
+RACK_SSH_HOST=<head-ip> RACK_SSH_USER=root RACK_SSH_KEY=~/.ssh/<key> \
+  RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status bin/deploy-scripts.sh
 ```
+
+After editing anything under `bin/scripts/`, re-run `bin/deploy-scripts.sh` so local↔head stay
+in sync; a `--dry-run` returning no lines means they match. (Scripts are executed on the head
+in SSH mode — an unsynced edit means the app runs the old version.)
 
 2. Start the app with SSH env vars:
 ```bash

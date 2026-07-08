@@ -330,6 +330,29 @@ export default function WorkflowRunPanel({ runId, onClose }: WorkflowRunPanelPro
                       </Text>
                     </Box>
 
+                    {/* Evaluation message (why it passed/failed) */}
+                    {entry.message && (
+                      <Text
+                        kind="body/regular/sm"
+                        style={{
+                          display: "block",
+                          marginBottom: 4,
+                          color: entry.success === false ? "var(--text-color-danger, #f87171)" : "var(--text-color-secondary)",
+                        }}
+                      >
+                        {entry.message}
+                      </Text>
+                    )}
+                    {/* Agent triage hint */}
+                    {entry.prompt && entry.success === false && (
+                      <Text
+                        kind="body/regular/sm"
+                        style={{ display: "block", marginBottom: 4, color: "var(--text-color-secondary)", fontStyle: "italic" }}
+                      >
+                        Hint: {entry.prompt}
+                      </Text>
+                    )}
+
                     {/* Output snippet */}
                     {entry.output_snippet && (
                       <Box

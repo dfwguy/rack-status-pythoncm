@@ -239,7 +239,90 @@ change** — only the env differs.
 
 ---
 
-## 6. Checklist for adding a new cluster tool/script
+## 6. Fan-out at scale: the composable connection chain and the gateway sshd ceiling
+
+The execution layer has evolved from `host_exec` + in-script `pdsh` into a composable
+**`transport.Connection`** abstraction (`backend/transport/`). A connection's target can be
+a host **or another connection**, so the path to a compute node is just connections chained:
+
+```
+app  ──►  head (control)  ──►  node        # control.hop(node)
+```
+
+`Connection.hop(host, sudo=…)` runs `ssh host <cmd>` **through** the base connection (the
+node leg executes on the head, using the head's credentials), and **`transport.fanout()`**
+scales that across N nodes — the modern, Perl-free replacement for `pdsh`/`dshbak`
+(`bin/scripts/nvis_fanout.py` is the standalone equivalent). See
+[`docs/WORKFLOW_COMPOSITION.md`](WORKFLOW_COMPOSITION.md).
+
+### Symptom
+
+Fanning a workflow check across a full 18-node rack, a few nodes intermittently failed:
+
+```
+--- errors ---
+bos01-b05-16-…: Connection closed by 10.29.136.8 port 22
+bos01-b05-33-…: kex_exchange_identification: read: Connection reset by peer
+--- fanout: 18 node(s), 16 ok ---
+```
+
+### Root cause — everything funnels through **one** sshd
+
+`10.29.136.8` is not a node; it's the **head the app SSHes through**. Because every node hop
+is `app → head → node`, all N hops open sessions against the **head's single sshd**, which
+enforces two ceilings:
+
+| Topology | Ceiling hit | Server knob (default) |
+|----------|-------------|-----------------------|
+| N separate SSH connections | connection **MaxStartups** | `10:30:100` |
+| N sessions over one multiplexed master | **MaxSessions** per connection | `10` |
+
+So concurrency ≳10 through a single gateway trips one limit or the other — **SSH
+ControlMaster multiplexing alone does not fix it** (it just trades MaxStartups for
+MaxSessions). This is *not* a node/reachability problem (contrast §2/§3, which are transport
+and naming).
+
+### Fix — multiplex **+** bounded concurrency **+** retry
+
+Three knobs together (all validated on Boston: 14/18 with resets → **18/18, 0 errors, ~6s**):
+
+1. **ControlMaster multiplexing** on the app→head connection (`SSHConfig.multiplex`, default
+   on; opt-out `RACK_SSH_MULTIPLEX=0`). Concurrent hops reuse **one** TCP + handshake
+   (`ControlMaster=auto` + `%C`-hashed `ControlPath` + `ControlPersist`), plus a serial
+   *warm-up* that establishes the master before the parallel wave (avoids the create-race).
+2. **Bounded concurrency** — `transport.fanout` `max_workers` defaults to **8**, under the
+   typical sshd ceiling (~10). All concurrent sessions ride one master; larger racks run in
+   waves that reuse the persistent master (no re-auth). Tunable via `RACK_FANOUT_MAX_WORKERS`.
+3. **Retry transient handshake errors** — `kex_exchange_identification`, connection
+   reset/closed, `Session open refused`, etc. are retried with a short backoff (real command
+   failures are not).
+
+### Scalability notes (important)
+
+> **Note 1 — raising throughput.** `RACK_FANOUT_MAX_WORKERS` (default 8) is deliberately
+> conservative for a single gateway sshd. If the head's `sshd_config` allows more
+> (`MaxStartups` / `MaxSessions` raised), increase it for faster large-rack fan-out. Keep it
+> **≤ the head's `MaxSessions`** when multiplexing, or you reintroduce the reset storm.
+
+> **Note 2 — the single-gateway ceiling is fundamental to app-tier fan-out.** Routing every
+> node hop through one head sshd (`app → head → node ×N`) will always be capped by that one
+> daemon. The scalable long-term model (how `pdsh` avoids this) is to **run the fan-out *on*
+> the head** so the N connections spread across N **distinct node** sshds — no single-gateway
+> ceiling. In the Connection model this is a "fan-out at the gateway" mode: one `app → head`
+> connection whose single remote invocation fans `head → node ×N` in parallel and returns the
+> coalesced result. It's an optional, not-yet-default execution mode (bounded app-tier
+> concurrency covers rack scale today); reach for it at cluster scale.
+
+### Design rule
+
+> **Fan-out through a shared gateway is bounded by that gateway's sshd.** Multiplex to cut
+> handshakes, cap concurrency at/under the sshd session limit, and retry transient resets.
+> To scale past one gateway, move the fan-out to where it's one hop from the targets (on the
+> head), so load spreads across the targets' own daemons.
+
+---
+
+## 7. Checklist for adding a new cluster tool/script
 
 When you add a script that touches compute nodes, verify it survives all three contexts:
 
@@ -255,3 +338,6 @@ When you add a script that touches compute nodes, verify it survives all three c
       `SQUEUE_*`, `PDSH_*`) so they cross the SSH boundary.
 - [ ] Remote paths are treated as opaque POSIX strings — no local `.resolve()`/`expanduser`.
 - [ ] Any user-facing path default is env-driven, not a hardcoded `/home/<user>/...`.
+- [ ] If it fans out to many nodes, it goes through `transport.fanout` (or a bounded
+      `Connection.hop` loop) — **not** an unbounded parallel SSH storm. Respect the gateway
+      sshd ceiling: multiplex on, concurrency ≤ `MaxSessions` (`RACK_FANOUT_MAX_WORKERS`). See §6.

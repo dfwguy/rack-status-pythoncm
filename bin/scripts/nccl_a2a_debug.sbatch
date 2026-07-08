@@ -1,0 +1,64 @@
+#!/bin/bash
+# nccl_a2a_debug.sbatch — single cross-rack alltoall_perf_mpi run with NCCL_DEBUG=INFO.
+# Author: Rafael M. Koike & Cursor Agent ("Ada")
+#
+# WHY: root-cause the multi-domain NVL72 "bootstrap Message truncated (512 vs 256)" that fails
+# cross-rack alltoall on BOTH NCCL 2.28.9 and 2.30.7 (jobs 198/199) while all-reduce PASSES. INFO
+# always emits the NCCL version banner first (so we CONFIRM which libnccl actually loaded per rank —
+# no guessing from the container name) and then the full INIT/BOOTSTRAP/NET/GRAPH trace up to the
+# truncation. Fails fast at init, so the log is bounded even at INFO.
+#
+# RUN: sbatch -N<cross-rack pair> -w <nodelist> \
+#        --export=ALL,NVIS_SCRIPTS_DIR=/home/cmods/nvis-rack-status/bin/scripts,\
+#                 NVIS_NEMO_CONT=/raid/data/nemo-nccl2.30.7.sqsh \
+#        --output=/home/cmods/workspace/nccl_a2a_debug-%j.log nccl_a2a_debug.sbatch
+#SBATCH --job-name=nccl-a2a-dbg
+#SBATCH --exclusive
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=36
+#SBATCH --gpus-per-node=4
+#SBATCH --time=00:15:00
+set -uo pipefail
+
+CONT="${NVIS_NEMO_CONT:-/raid/data/nemo-nccl2.30.7.sqsh}"
+SCR="${NVIS_SCRIPTS_DIR:-/home/cmods/nvis-rack-status/bin/scripts}"
+SIZES="${NVIS_A2A_SIZES:--b 8 -e 1M -f 2 -g 1 --iters 2}"   # tiny: bug hits at init, before real xfer
+
+echo "== nccl_a2a_debug: NNODES=${SLURM_NNODES} CONT=${CONT} =="
+echo "== nodelist: ${SLURM_JOB_NODELIST} =="
+
+# --- Fabric env: identical to the multi-rack NeMo / A/B path -----------------------------------
+ns_nic=bond0
+# shellcheck disable=SC1090,SC1091
+[[ -f "${SCR}/lib/fabric.inc.sh" ]] && . "${SCR}/lib/fabric.inc.sh"
+if declare -F nvis_fabric_scan >/dev/null 2>&1; then eval "$(nvis_fabric_scan 2>/dev/null)"; fi
+if [[ -n "${NVIS_FAB_IB_HCA:-}" ]]; then
+  IFS=',' read -r -a ew <<< "${NVIS_FAB_IB_HCA}"
+else
+  ew=(mlx5_0 mlx5_1 mlx5_4 mlx5_5)
+fi
+export MELLANOX_VISIBLE_DEVICES=all PMIX_MCA_gds=hash
+export UCX_TLS=rc
+export UCX_NET_DEVICES="$(printf '%s:1\n' "${ew[@]}" | paste -sd,)"
+export NCCL_IB_HCA="=$(printf '%s\n' "${ew[@]}" | paste -sd,)"
+export NCCL_SOCKET_IFNAME=${ns_nic} OMPI_MCA_btl_tcp_if_include=${ns_nic} OMPI_MCA_oob_tcp_if_include=${ns_nic}
+export OMPI_ALLOW_RUN_AS_ROOT=1 OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 OMPI_MCA_coll_hcoll_enable=0 SLURM_CPU_BIND=none
+export NCCL_NVLS_ENABLE=1 NCCL_MIN_CTAS=16 NCCL_RUNTIME_CONNECT=0 NCCL_IB_QPS_PER_CONNECTION=2 CUDA_MODULE_LOADING=EAGER
+unset NCCL_MNNVL_ENABLE
+
+# --- The whole point: verbose NCCL so we SEE the version + bootstrap path ----------------------
+export NCCL_DEBUG="${NVIS_NCCL_DEBUG:-INFO}"
+export NCCL_DEBUG_SUBSYS="${NVIS_NCCL_DEBUG_SUBSYS:-INIT,BOOTSTRAP,NET,ENV,GRAPH}"
+echo "== NCCL_DEBUG=${NCCL_DEBUG} SUBSYS=${NCCL_DEBUG_SUBSYS} NCCL_IB_HCA=${NCCL_IB_HCA} =="
+
+# UNIQUE per-job container name — pyxis reuses a fixed --container-name and IGNORES --container-image
+# (and the old `enroot remove -f nccl_dbg` never matched the pyxis-prefixed "pyxis_nccl_dbg"), so a
+# fixed name silently runs a stale container/image. Per-job name = guaranteed fresh import of ${CONT}.
+CNAME="nccl_dbg_${SLURM_JOB_ID}"
+srun -N"${SLURM_NNODES}" --ntasks-per-node=1 enroot remove -f "pyxis_${CNAME}" &>/dev/null || true
+timeout 200 srun --export=ALL --cpu-bind=none --mpi=pmix \
+  --container-name="${CNAME}" --container-writable --container-image="${CONT}" --container-mounts=/dev:/dev \
+  alltoall_perf_mpi ${SIZES}
+rc=$?
+srun -N"${SLURM_NNODES}" --ntasks-per-node=1 enroot remove -f "pyxis_${CNAME}" &>/dev/null || true
+echo "== alltoall_perf_mpi rc=${rc} =="

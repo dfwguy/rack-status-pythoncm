@@ -3,6 +3,7 @@ import { Text } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { SqueuePanel } from "../components/SqueuePanel";
+import { RecentJobsPanel } from "../components/RecentJobsPanel";
 import { SinfoPanel } from "../components/SinfoPanel";
 
 interface SlurmViewProps {
@@ -20,6 +21,7 @@ export function SlurmView({ logDir }: SlurmViewProps) {
 
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "stretch" }}>
         <SqueuePanel logDir={logDir} active tableMaxHeight={560} />
+        <RecentJobsPanel logDir={logDir} active limit={10} />
         <SinfoPanel active tableMaxHeight={560} />
       </Box>
     </Box>

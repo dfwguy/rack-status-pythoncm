@@ -20,6 +20,7 @@ import yaml
 
 import host_exec
 import rack_locks
+import workflow_models
 
 _logger = logging.getLogger(__name__)
 
@@ -90,6 +91,12 @@ def save_workflow(data: dict) -> dict:
     data.setdefault("name", wf_id)
     data.setdefault("steps", [])
     data.setdefault("mermaid", "")
+
+    # Validate the optional composition blocks (connection/scheduler/evaluation/
+    # capability). Absent blocks == today's behavior, so existing workflows pass.
+    problems = workflow_models.validate_workflow(data)
+    if problems:
+        raise ValueError("invalid workflow: " + "; ".join(problems))
     if "target" in data and isinstance(data["target"], dict):
         data["target"].setdefault("mode", "rack")
         data["target"].setdefault("racks", [])
@@ -454,6 +461,7 @@ def _execute_run(run_id: str) -> None:
 
         if step_type == "automated":
             success, output = _execute_automated_step(run, step)
+            _eval_meta = run.get("evaluations", {}).get(step_id, {})
             run["history"].append({
                 "step_id": step_id,
                 "type": "automated",
@@ -461,12 +469,23 @@ def _execute_run(run_id: str) -> None:
                 "output_snippet": _get_output_snippet(output),
                 "output_file": f"{run['run_id']}/{step_id}.log",
                 "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                **({"message": _eval_meta["message"]} if _eval_meta.get("message") else {}),
+                **({"prompt": _eval_meta["prompt"]} if _eval_meta.get("prompt") else {}),
             })
+            if not success:
+                run["had_failure"] = True
+            # ``continue_on_failure`` (workflow-level): keep walking the sequence past a
+            # failed automated step so every check runs; the overall run is then marked
+            # failed if any step failed. Absent -> unchanged fail-fast behavior.
+            cont = bool(wf.get("continue_on_failure"))
             next_id = step.get("on_success") if success else step.get("on_failure")
-            if not next_id and success:
+            if not next_id and (success or cont):
                 next_id = _find_next_step_in_sequence(steps, wf.get("steps", []), step_id)
             if not next_id or next_id == "done":
-                run["state"] = "completed" if success else "failed"
+                if run.get("had_failure"):
+                    run["state"] = "failed"
+                else:
+                    run["state"] = "completed" if success else "failed"
                 run["current_step_id"] = None
                 run["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 _save_run(run)
@@ -529,13 +548,466 @@ def _execute_run(run_id: str) -> None:
         return
 
 
+def _resolve_step_connection(step: dict) -> tuple[Any, str]:
+    """Resolve a per-step (connection, profile) from the step's ``connection`` block.
+
+    Returns ``(None, profile)`` to use the app's global connection via
+    ``host_exec.run_on_host(profile=...)`` (default, unchanged behavior), or a
+    dedicated ``transport`` connection when the step overrides sudo. Semantics:
+      * ``profile: control|script`` -- route (default ``control``).
+      * ``sudo: true``  -- run under sudo (implies the ``script`` route).
+      * ``sudo: false`` -- never sudo (even on the ``script`` route).
+      * ``sudo`` absent -- keep the global behavior (script route sudoes iff
+        ``RACK_SCRIPT_SUDO`` is set).
+    """
+    spec = step.get("connection") or {}
+    if not isinstance(spec, dict):
+        return None, "control"
+    profile = spec.get("profile") or "control"
+    sudo = spec.get("sudo")
+    if sudo is True:
+        profile = "script"  # sudo implies the privileged route
+    if sudo is None:
+        return None, profile
+    try:
+        from transport import TransportConfig, build_connection
+
+        cfg = TransportConfig.from_env()
+        cfg.script_sudo = bool(sudo)
+        return build_connection(cfg), profile
+    except Exception:  # never let transport composition break execution
+        return None, profile
+
+
+def _run_step_command(step: dict, host_cmd: str, timeout: int):
+    """Run *host_cmd* through the step's resolved connection (or the global one)."""
+    conn, profile = _resolve_step_connection(step)
+    if conn is not None:
+        return conn.run(host_cmd, timeout=timeout, profile=profile)
+    return host_exec.run_on_host(host_cmd, timeout=timeout, profile=profile)
+
+
+def _apply_evaluation(run: dict, step: dict, returncode: int, stdout: str, stderr: str,
+                      output: str) -> tuple[bool, str]:
+    """Judge a step via its ``evaluation`` block (default: exit_code == 0).
+
+    Persists extracted values on the run (``run['outputs']``) so later steps can
+    reference them, and appends an evaluation summary to the step output.
+    """
+    ev = step.get("evaluation")
+    if not ev:
+        return returncode == 0, output
+    import workflow_eval
+
+    ok, outputs, detail = workflow_eval.evaluate(
+        ev, returncode=returncode, stdout=stdout, stderr=stderr, outputs=run.get("outputs"),
+    )
+    run["outputs"] = outputs
+    message, prompt = workflow_eval.resolve_messages(ev, ok, outputs)
+    if detail:
+        output = output + "\n--- evaluation ---\n" + "\n".join(detail) + \
+            f"\nresult: {'PASS' if ok else 'FAIL'}\n"
+    if message:
+        output += f"message: {message}\n"
+    if prompt and not ok:
+        output += f"hint: {prompt}\n"
+    # Persist result metadata so the UI and AI agents can explain/triage the step.
+    step_id = step.get("id", "unknown")
+    run.setdefault("evaluations", {})[step_id] = {
+        "result": "pass" if ok else "fail",
+        "message": message,
+        "prompt": prompt,
+    }
+    return ok, output
+
+
+def _scripts_dir() -> str:
+    """Resolve the scripts dir (remote base when in SSH mode, else repo bin/scripts)."""
+    base = os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
+    return f"{base}/bin/scripts" if base else str(REPO_ROOT / "bin" / "scripts")
+
+
+def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
+    """Execute a step's ``scheduler`` block via the Scheduler abstraction.
+
+    Builds a :class:`schedulers.JobSpec` from the block (substituting ``${param}``
+    and ``${gpus_per_node}``), resolves the step's connection, submits via the
+    selected backend (default ``slurm``), waits, and returns ``(success, output)``
+    where output is the job's captured stdout (for evaluation).
+    """
+    from schedulers import JobSpec, build_scheduler
+
+    params = {**run.get("outputs", {}), **run.get("params", {})}
+    block = step.get("scheduler") or {}
+    run_id = run["run_id"]
+    step_id = step.get("id", "unknown")
+
+    def sub(v):
+        if not isinstance(v, str):
+            return v
+        for k, val in params.items():
+            v = v.replace(f"${{{k}}}", str(val))
+        v = v.replace("${gpus_per_node}", os.environ.get("GPUS_PER_NODE", "4"))
+        v = v.replace("${log_dir}", os.environ.get("DEFAULT_LOG_DIR", ""))
+        return v
+
+    nodelist = (sub(block.get("nodelist") or "") or None)
+    nodes = block.get("nodes")
+    nodes = int(sub(nodes)) if isinstance(nodes, str) and sub(nodes) else (int(nodes) if nodes else None)
+    if not nodes and nodelist:
+        nodes = len([n for n in re.split(r"[,\s]+", nodelist) if n]) or None
+    ntasks = block.get("ntasks_per_node")
+    ntasks = sub(ntasks) if ntasks is not None else os.environ.get("GPUS_PER_NODE")
+    ntasks = int(ntasks) if ntasks else None
+
+    script = sub(block.get("script") or "") or None
+    if script and not os.path.isabs(script):
+        script = f"{_scripts_dir()}/{script}"
+    command = sub(block.get("command") or "") or None
+    output = sub(block.get("output") or "") or None
+
+    # nccl_allreduce.sbatch (and peers) resolve lib/ via NVIS_SCRIPTS_DIR; forward it +
+    # GPUS_PER_NODE through sbatch --export so the batch script finds lib/fabric.inc.sh.
+    extra = list(block.get("extra_args") or [])
+    exports = ["ALL", f"NVIS_SCRIPTS_DIR={_scripts_dir()}"]
+    if ntasks:
+        exports.append(f"GPUS_PER_NODE={ntasks}")
+    extra.append(f"--export={','.join(exports)}")
+
+    spec = JobSpec(
+        name=block.get("name") or step_id,
+        nodes=nodes,
+        nodelist=nodelist,
+        ntasks_per_node=ntasks,
+        script=script,
+        command=command,
+        output=output,
+        reservation=(sub(block.get("reservation") or "") or None),
+        extra_args=extra,
+        timeout=int(step.get("timeout", block.get("timeout", 1800))),
+    )
+
+    conn, profile = _resolve_step_connection(step)
+    try:
+        sched = build_scheduler(block.get("kind"), connection=conn, profile=profile)
+        handle = sched.submit(spec)
+        _logger.info("Workflow %s step %s submitted job %s via %s", run_id, step_id, handle.job_id, sched.kind)
+        result = sched.wait(handle, timeout=spec.timeout)
+        out = result.stdout or ""
+        out += f"\n--- scheduler={sched.kind} job={result.job_id} state={result.state} ---\n"
+        success, out = _apply_evaluation(run, step, result.returncode, result.stdout or "",
+                                         result.stderr or "", out)
+        _save_step_output(run_id, step_id, out)
+        return success, out
+    except Exception as exc:
+        out = f"[Scheduler error] {exc}"
+        _save_step_output(run_id, step_id, out)
+        _logger.error("Workflow %s scheduler step %s failed: %s", run_id, step_id, exc)
+        return False, out
+
+
+def _resolve_capability(cap: str, params: dict) -> tuple[str | None, dict, list[str]]:
+    """Resolve a catalog Tool ``capability`` id to a command + param defaults.
+
+    Returns ``(command, params_with_defaults, problems)``. The command is the
+    tool's ``env_key`` (so it flows through the ``RACK_*_SCRIPT`` resolution) or a
+    ``host:bash <scripts_dir>/<script>`` fallback. Required tool params missing from
+    the merged params are reported as problems (step fails rather than mis-running).
+    """
+    try:
+        from catalog.store import TABLE_TOOLS, get_repo
+        tools = get_repo().list(TABLE_TOOLS)
+    except Exception as exc:  # registry unavailable
+        return None, params, [f"capability registry unavailable: {exc}"]
+    tool = next((t for t in tools if t.get("id") == cap), None)
+    if not tool:
+        return None, params, [f"capability '{cap}' not found in tool registry"]
+    merged = dict(params)
+    for p in tool.get("params") or []:
+        key = p.get("key")
+        if key and key not in merged and p.get("default"):
+            merged[key] = p["default"]
+    missing = [
+        p.get("key") for p in (tool.get("params") or [])
+        if p.get("required") and not merged.get(p.get("key"))
+    ]
+    if missing:
+        return None, merged, [f"capability '{cap}' missing required params: {missing}"]
+    env_key = (tool.get("env_key") or "").strip()
+    script = (tool.get("script") or "").strip()
+    if env_key:
+        return env_key, merged, []
+    if script:
+        return f"host:bash {_scripts_dir()}/{script}", merged, []
+    return None, merged, [f"capability '{cap}' has no env_key or script"]
+
+
+def _execute_resolve_step(run: dict, step: dict) -> tuple[bool, str]:
+    """Resolve rack(s) → a real Slurm node list once, and store it as a run output.
+
+    ``resolve`` block::
+
+        resolve:
+          racks: "${rack}"     # optional; default = the run's rack/target
+          into: nodelist       # output name (default "nodelist")
+
+    Downstream steps then reference ``${nodelist}`` (fan-out targets, etc.). Handles
+    multi-rack selection ("rackA,rackB") by resolving each rack via live Slurm
+    inventory and concatenating (de-duplicated, order-preserving).
+    """
+    params = {**run.get("outputs", {}), **(step.get("parameters") or {}), **run.get("params", {})}
+    run_id = run["run_id"]
+    step_id = step.get("id", "unknown")
+    block = step.get("resolve") or {}
+    into = (block.get("into") or "nodelist").strip() or "nodelist"
+
+    def sub(v):
+        if not isinstance(v, str):
+            return v
+        for k, val in params.items():
+            v = v.replace(f"${{{k}}}", str(val))
+        return v
+
+    racks_raw = sub(block.get("racks") or "")
+    if "$" in racks_raw:
+        racks_raw = ""
+    racks_raw = racks_raw or params.get("rack") or ""
+    target = params.get("target") or ""
+
+    all_nodes: list[str] = []
+    try:
+        import app as _app
+        racks = [r for r in re.split(r"[,\s]+", racks_raw) if r]
+        if racks:
+            for rk in racks:
+                nl = _app.validation_target_for_rack(rk, None) or ""
+                all_nodes += [n for n in re.split(r"[,\s]+", nl) if n]
+        elif target:
+            # explicit hostlist/target override (no rack) — resolve/trust as-is
+            nl = _app.validation_target_for_rack("", target) or target
+            all_nodes += [n for n in re.split(r"[,\s]+", nl) if n]
+    except Exception as exc:
+        out = f"[Resolve error] {exc}"
+        _save_step_output(run_id, step_id, out)
+        return False, out
+
+    seen: set[str] = set()
+    nodes = [n for n in all_nodes if n and "$" not in n and not (n in seen or seen.add(n))]
+    nodelist = ",".join(nodes)
+    run.setdefault("outputs", {})[into] = nodelist
+
+    n_racks = len([r for r in re.split(r"[,\s]+", racks_raw) if r])
+    out = f"Resolved {n_racks or 'target'} rack(s) → {len(nodes)} node(s)\n{into}={nodelist}\n"
+    _save_step_output(run_id, step_id, out)
+    if not nodes:
+        return False, out + "\n[Resolve] no nodes resolved from rack/target\n"
+    return True, out
+
+
+def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
+    """Execute a step's ``fanout`` block: run ``run`` across N nodes over the
+    Connection chain, coalesce output, and evaluate.
+
+    ``fanout`` shape (all optional except the target)::
+
+        fanout:
+          nodes: "${nodelist}"        # targets for the final (fanned) hop
+          hops: [ {kind: ssh, host: "${head}", user: cmods}, ... ]  # shared prefix;
+                                        # omitted -> the app's active control connection
+          node: { kind: ssh, user: cmods, sudo: true }  # per-node hop template
+          max_workers: 32
+
+    The base connection is an N-level chain (``local -> [vpn] -> head -> …``); only
+    the final ``node`` hop is expanded across ``nodes``. Gating is via the step's
+    ``evaluation`` block on the grouped stdout (e.g. ``success_when: {stdout_empty: true}``).
+    """
+    import host_exec
+    from transport import HopSpec, build_chain, fanout, fanout_errors, group_outputs
+
+    params = {**run.get("outputs", {}), **(step.get("parameters") or {}), **run.get("params", {})}
+    params.setdefault("scripts_dir", _scripts_dir())
+    run_id = run["run_id"]
+    step_id = step.get("id", "unknown")
+    block = step.get("fanout") or {}
+
+    def sub(v):
+        if not isinstance(v, str):
+            return v
+        for k, val in params.items():
+            v = v.replace(f"${{{k}}}", str(val))
+        v = v.replace("${gpus_per_node}", os.environ.get("GPUS_PER_NODE", "4"))
+        return v
+
+    def sub_hop(d: dict) -> dict:
+        return {k: (sub(v) if isinstance(v, str) else v) for k, v in (d or {}).items()}
+
+    # Resolve the node list: explicit fanout.nodes, then ${nodelist}, then the run's
+    # rack/target via live Slurm inventory. An unresolved ``${...}`` (e.g. ${nodelist}
+    # with no matching run param) is treated as empty so the rack fallback still fires.
+    nodes_raw = sub(block.get("nodes") or "")
+    if "$" in nodes_raw:
+        nodes_raw = ""
+    if not nodes_raw:
+        nodes_raw = params.get("nodelist") or ""
+    if not nodes_raw and (params.get("rack") or params.get("target")):
+        try:
+            import app as _app
+            nodes_raw = _app.validation_target_for_rack(
+                params.get("rack") or "", params.get("target") or None,
+            ) or ""
+        except Exception:
+            nodes_raw = params.get("target") or ""
+    # Drop empties and any residual unresolved ${...} placeholders.
+    nodes = [n for n in re.split(r"[,\s]+", nodes_raw) if n and "$" not in n]
+    if not nodes:
+        out = "[Fanout error] no target nodes resolved (set fanout.nodes or a rack/${nodelist})"
+        _save_step_output(run_id, step_id, out)
+        return False, out
+
+    cmd = sub(str(step.get("run") or step.get("command") or ""))
+    if not cmd.strip():
+        out = "[Fanout error] step has no `run` command to fan out"
+        _save_step_output(run_id, step_id, out)
+        return False, out
+
+    # Base connection: declared hop chain, else the app's active control connection.
+    try:
+        hops = block.get("hops")
+        if hops:
+            base = build_chain([sub_hop(h) for h in hops])
+        else:
+            base = host_exec.connection("control")
+        node_spec = HopSpec.from_dict(sub_hop(block.get("node") or {"kind": "ssh"}))
+        timeout = int(step.get("timeout", block.get("timeout", 300)))
+        default_workers = int(os.environ.get("RACK_FANOUT_MAX_WORKERS", "8") or "8")
+        results = fanout(
+            base, nodes, cmd,
+            timeout=timeout,
+            max_workers=int(block.get("max_workers", default_workers)),
+            user=node_spec.user or None,
+            key=node_spec.key,
+            extra_opts=node_spec.extra_opts,
+            connect_timeout=node_spec.connect_timeout,
+            sudo=node_spec.sudo,
+        )
+    except Exception as exc:
+        out = f"[Fanout error] {exc}"
+        _save_step_output(run_id, step_id, out)
+        _logger.error("Workflow %s fanout step %s failed: %s", run_id, step_id, exc)
+        return False, out
+
+    grouped = group_outputs(results)
+    errs = fanout_errors(results)
+    output = grouped + (("\n--- errors ---\n" + errs) if errs else "")
+    output += f"\n--- fanout: {len(nodes)} node(s), {sum(1 for r in results if r.returncode == 0)} ok ---\n"
+    rc = 0 if (results and all(r.returncode == 0 for r in results)) else 1
+    success, output = _apply_evaluation(run, step, rc, grouped, errs, output)
+    _save_step_output(run_id, step_id, output)
+    return success, output
+
+
+def _execute_inline_run(run: dict, step: dict, params: dict, script_text: str) -> tuple[bool, str]:
+    """Execute a step's embedded ``run:`` batch script / command line.
+
+    The script (single- or multi-line, incl. heredocs) is ``${param}``-substituted,
+    base64-encoded, and piped to ``bash`` on the resolved connection so quoting is
+    preserved verbatim over SSH. Success = exit 0 unless an ``evaluation`` block
+    overrides it. This makes each step a self-contained "lego block" (e.g. one
+    sysinfo check per step) with its own pass/fail.
+    """
+    import base64
+
+    run_id = run["run_id"]
+    step_id = step.get("id", "unknown")
+    for key, val in params.items():
+        script_text = script_text.replace(f"${{{key}}}", str(val))
+    timeout = int(step.get("timeout", 300))
+    b64 = base64.b64encode(script_text.encode("utf-8")).decode("ascii")
+    host_cmd = f"printf %s {b64} | base64 -d | bash"
+
+    rack_norm: str | None = None
+    if params.get("rack"):
+        try:
+            rack_norm = rack_locks.normalize_rack_id(params["rack"])
+        except ValueError:
+            rack_norm = None
+    operator_label = f"workflow:{run_id[:8]}"
+    claimed = False
+    if rack_norm:
+        try:
+            rack_locks.upsert_claim(rack_norm, operator_label, note=f"workflow step {step_id}",
+                                    ttl_sec=max(60, timeout + 60))
+            claimed = True
+        except PermissionError:
+            pass
+    try:
+        proc = _run_step_command(step, host_cmd, timeout)
+        out, err = proc.stdout or "", proc.stderr or ""
+        output = out + ("\n--- stderr ---\n" + err if err else "")
+        output += f"\n--- exit {proc.returncode} ---\n"
+        if not output.strip():
+            output = f"[Command completed with exit code {proc.returncode}]"
+        success, output = _apply_evaluation(run, step, proc.returncode, out, err, output)
+        _save_step_output(run_id, step_id, output)
+        return success, output
+    except Exception as exc:
+        output = f"[Error] {exc}"
+        _save_step_output(run_id, step_id, output)
+        _logger.error("Workflow %s inline-run step %s failed: %s", run_id, step_id, exc)
+        return False, output
+    finally:
+        if claimed and rack_norm:
+            try:
+                rack_locks.release_claim(rack_norm, operator_label)
+            except (PermissionError, ValueError):
+                pass
+
+
 def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
     """Execute an automated step. Returns (success, output)."""
+    if step.get("resolve"):
+        return _execute_resolve_step(run, step)
+    if step.get("scheduler"):
+        return _execute_scheduler_step(run, step)
+    if step.get("fanout"):
+        return _execute_fanout_step(run, step)
     command = step.get("command", "")
     method = step.get("method", "GET").upper()
-    params = run.get("params", {})
+    # Merge extracted outputs + step.parameters (run params win) so a command can
+    # reference ${extracted_name} from an earlier evaluation or a step-declared param.
+    params = {**run.get("outputs", {}), **(step.get("parameters") or {}), **run.get("params", {})}
     step_id = step.get("id", "unknown")
     run_id = run["run_id"]
+
+    # Expose ${scripts_dir} and ${nodelist} (resolved real Slurm hostnames) so
+    # host:/capability steps can target a rack's nodes directly (e.g. a decomposed
+    # per-check sysinfo step: `host:bash ${scripts_dir}/sysinfo.sh --check X ${nodelist}`).
+    params.setdefault("scripts_dir", _scripts_dir())
+    if params.get("rack") and not params.get("nodelist"):
+        try:
+            import app as _app
+
+            _nl = _app.validation_target_for_rack(params["rack"], params.get("target") or None)
+            if _nl:
+                params["nodelist"] = _nl
+                params.setdefault("target", _nl)
+                run.setdefault("params", {})["nodelist"] = _nl  # persist for later steps
+        except Exception:
+            pass
+
+    # capability: resolve a catalog Tool id -> command (+ param defaults / validation).
+    cap = step.get("capability")
+    if cap:
+        cap_cmd, params, cap_problems = _resolve_capability(cap, params)
+        if cap_problems:
+            out = "[Capability error] " + "; ".join(cap_problems)
+            _save_step_output(run_id, step_id, out)
+            return False, out
+        command = cap_cmd
+
+    # Inline batch script / command line embedded in the step (multi-line supported).
+    if step.get("run"):
+        return _execute_inline_run(run, step, params, str(step["run"]))
 
     for key, val in params.items():
         command = command.replace(f"${{{key}}}", str(val))
@@ -585,16 +1057,14 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
                 )
 
         try:
-            proc = host_exec.run_on_host(host_cmd, timeout=timeout)
-            output = ""
-            if proc.stdout:
-                output += proc.stdout
-            if proc.stderr:
-                output += "\n--- stderr ---\n" + proc.stderr
+            proc = _run_step_command(step, host_cmd, timeout)
+            out, err = proc.stdout or "", proc.stderr or ""
+            output = out + ("\n--- stderr ---\n" + err if err else "")
             if not output.strip():
                 output = f"[Command completed with exit code {proc.returncode}]"
+            success, output = _apply_evaluation(run, step, proc.returncode, out, err, output)
             _save_step_output(run_id, step_id, output)
-            return proc.returncode == 0, output
+            return success, output
         except Exception as exc:
             output = f"[Error] {exc}"
             _save_step_output(run_id, step_id, output)
@@ -646,9 +1116,27 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
             return False, output
         host_cmd = f"bash {resolved}"
         target = params.get("target", "")
-        if not target and params.get("rack"):
-            ct_range = _os.environ.get("RACK_VALIDATION_CT_RANGE", "01-18").strip() or "01-18"
-            target = f"{params['rack']}-ct[{ct_range}]"
+        rack_for_target = params.get("rack") or step.get("rack") or ""
+        if rack_for_target:
+            # Resolve to REAL node hostnames from live Slurm inventory (same path the
+            # sysinfo/hw-check endpoints use), so pdsh/ssh targets resolvable hosts
+            # (e.g. bos01-b05-11-s1-dgx-05-c01) instead of the -ct[NN] naming template
+            # (bos01-b05-ct01), which is not a real hostname on every site.
+            try:
+                import app as _app
+
+                # Only honor a *plain* host-list override; a range template (…-ct[NN])
+                # is the buggy default and must not defeat inventory resolution.
+                override = target if (target and "[" not in target) else None
+                target = _app.validation_target_for_rack(rack_for_target, override)
+            except Exception as exc:
+                _logger.warning(
+                    "Workflow %s step %s: node-target resolution failed (%s); using CT template",
+                    run_id, step_id, exc,
+                )
+                if not target:
+                    ct_range = _os.environ.get("RACK_VALIDATION_CT_RANGE", "01-18").strip() or "01-18"
+                    target = f"{rack_for_target}-ct[{ct_range}]"
         if target:
             host_cmd += f" {target}"
         timeout = int(step.get("timeout", 300))
@@ -670,17 +1158,15 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
                 pass
 
         try:
-            proc = host_exec.run_on_host(host_cmd, timeout=timeout)
-            output = ""
-            if proc.stdout:
-                output += proc.stdout
-            if proc.stderr:
-                output += "\n--- stderr ---\n" + proc.stderr
+            proc = _run_step_command(step, host_cmd, timeout)
+            out, err = proc.stdout or "", proc.stderr or ""
+            output = out + ("\n--- stderr ---\n" + err if err else "")
             output += f"\n--- exit {proc.returncode} ---\n"
             if not output.strip():
                 output = f"[Command completed with exit code {proc.returncode}]"
+            success, output = _apply_evaluation(run, step, proc.returncode, out, err, output)
             _save_step_output(run_id, step_id, output)
-            return proc.returncode == 0, output
+            return success, output
         except Exception as exc:
             output = f"[Error] {exc}"
             _save_step_output(run_id, step_id, output)

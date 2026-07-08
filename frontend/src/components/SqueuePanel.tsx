@@ -9,7 +9,8 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import LinearProgress from "@mui/material/LinearProgress";
-import { Text, Button } from "@nvidia/foundations-react-core";
+import { Text, Button, Modal, ModalCloseButton, Flex } from "@nvidia/foundations-react-core";
+import { XCircle } from "lucide-react";
 import {
   fetchSlurmJson,
   findSqueueJobColumnIndex,
@@ -50,6 +51,10 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
   const [tailTitle, setTailTitle] = useState("");
   const [tailPayload, setTailPayload] = useState<JobStdoutTailPayload | null>(null);
   const [tailBusyJob, setTailBusyJob] = useState<string | null>(null);
+
+  // scancel confirmation modal (KUI) — holds the job id awaiting confirmation, or null when closed.
+  const [scancelJobId, setScancelJobId] = useState<string | null>(null);
+  const [scancelBusy, setScancelBusy] = useState(false);
 
   const resetBody = useCallback(() => {
     setBannerErr("");
@@ -158,13 +163,10 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
     [logDir]
   );
 
-  const runScancel = useCallback(
+  // Runs after the user confirms in the KUI modal. Errors surface in the panel banner (no browser alert).
+  const doScancel = useCallback(
     async (jobId: string) => {
-      if (
-        !window.confirm(`Cancel Slurm job ${jobId}?\n\nmodule load slurm && scancel ${jobId}`)
-      ) {
-        return;
-      }
+      setScancelBusy(true);
       try {
         const res = await fetch("/api/slurm-scancel", {
           method: "POST",
@@ -177,17 +179,20 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
         try {
           data = raw ? (JSON.parse(raw) as SlurmCmdJson) : {};
         } catch {
-          window.alert(`Invalid JSON (HTTP ${res.status}): ${raw.slice(0, 400)}`);
+          setBannerErr(`Invalid JSON (HTTP ${res.status}): ${raw.slice(0, 400)}`);
           return;
         }
         const detail = formatSlurmCmdDetail(data);
         if (!res.ok || !data.ok) {
-          window.alert(`${data.error || "scancel failed"}\n\n${detail}`);
+          setBannerErr(`${data.error || "scancel failed"}\n\n${detail}`);
           return;
         }
+        setScancelJobId(null);
         await load();
       } catch (e) {
-        window.alert(String(e));
+        setBannerErr(String(e));
+      } finally {
+        setScancelBusy(false);
       }
     },
     [load]
@@ -308,7 +313,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
                     </TableCell>
                     <TableCell sx={{ whiteSpace: "nowrap" }}>
                       {jid ? (
-                        <Button size="small" kind="tertiary" color="danger" onClick={() => void runScancel(jid)} title={`scancel ${jid}`}>
+                        <Button size="small" kind="tertiary" color="danger" onClick={() => setScancelJobId(jid)} title={`scancel ${jid}`}>
                           scancel
                         </Button>
                       ) : null}
@@ -387,6 +392,57 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
         payload={tailPayload}
         streamEndpoint="/api/tail-job-stdout-stream"
       />
+
+      <Modal
+        open={scancelJobId !== null}
+        onOpenChange={(o) => {
+          if (!o && !scancelBusy) setScancelJobId(null);
+        }}
+        modal={true}
+        style={{ width: "460px", maxWidth: "90vw" }}
+        slotHeading={
+          <>
+            <XCircle size={18} color="var(--text-color-error, #f44336)" />
+            Cancel Slurm job {scancelJobId}?
+          </>
+        }
+        slotFooter={
+          <>
+            <ModalCloseButton kind="tertiary" disabled={scancelBusy}>
+              Keep job
+            </ModalCloseButton>
+            <Button
+              kind="primary"
+              color="danger"
+              onClick={() => {
+                if (scancelJobId) void doScancel(scancelJobId);
+              }}
+              disabled={scancelBusy || !scancelJobId}
+            >
+              {scancelBusy ? "Cancelling…" : "Cancel job"}
+            </Button>
+          </>
+        }
+      >
+        <Flex direction="col" gap="2">
+          <Text kind="body/regular/md">
+            This immediately terminates the job and any running steps. This cannot be undone.
+          </Text>
+          <Text
+            kind="mono/sm"
+            style={{
+              display: "block",
+              padding: "8px 10px",
+              borderRadius: 6,
+              background: "var(--surface-color, #1a1a1a)",
+              color: "var(--text-color-secondary)",
+              wordBreak: "break-all",
+            }}
+          >
+            module load slurm &amp;&amp; scancel {scancelJobId}
+          </Text>
+        </Flex>
+      </Modal>
     </Paper>
   );
 }

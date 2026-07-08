@@ -1,0 +1,46 @@
+id: nccl-allreduce
+name: NCCL All-Reduce (multi-rack)
+description: >-
+  Cross-rack NCCL all_reduce via the host nccl-tests binary + mpirun (MPI bootstrap
+  ob1/tcp on the routable NS iface, NCCL data on the IB rails). Submits
+  nccl_allreduce.sbatch through the Scheduler abstraction and gates on the result.
+  Run with target nodes (params.target = the Slurm nodelist).
+version: 1
+target:
+  mode: node
+  racks: []
+  nodes: []
+mermaid: |
+  flowchart TD
+    start(["Start"]) -->|"begin"| nccl["NCCL all_reduce"]
+    nccl -->|"pass"| done(["Done"])
+    nccl -->|"fail"| review(["Review"])
+steps:
+  - id: start
+    type: manual
+    name: Start
+    instructions: "Confirm the target nodes, then start the cross-rack NCCL test."
+    on_complete: nccl
+  - id: nccl
+    type: automated
+    name: NCCL all_reduce
+    connection:
+      profile: control
+    scheduler:
+      kind: slurm
+      script: nccl_allreduce.sbatch
+      nodelist: "${target}"
+      ntasks_per_node: "${gpus_per_node}"
+      output: "${log_dir}/nccl-mpi_%j.out"
+    timeout: 1800
+    on_success: done
+    on_failure: review
+  - id: review
+    type: manual
+    name: Review
+    instructions: "NCCL test failed; review the job output for fabric/UCX/exit-code issues."
+    on_complete: done
+  - id: done
+    type: manual
+    name: Done
+    instructions: "NCCL all-reduce complete."

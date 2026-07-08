@@ -83,7 +83,7 @@ echo "nccl_allreduce: NCCL_IB_HCA=${NCCL_IB_HCA:-<auto>} NCCL_SOCKET_IFNAME=${NS
 # plm=rsh launches orted via ssh across the allocated nodes (works in-allocation).
 mpirun -np "${NP}" --hostfile "${HF}" --map-by "ppr:${GPUS_PER_NODE}:node" --bind-to none \
   --mca plm rsh --mca plm_rsh_agent ssh \
-  --mca pml ob1 --mca btl tcp,self,vader --mca btl_tcp_if_include "${NS_IF}" \
+  --mca pml ob1 --mca btl tcp,self --mca btl_tcp_if_include "${NS_IF}" \
   --mca oob_tcp_if_include "${NS_IF}" \
   -x LD_LIBRARY_PATH -x PATH \
   -x NCCL_SOCKET_IFNAME="${NS_IF}" \

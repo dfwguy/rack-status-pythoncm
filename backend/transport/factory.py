@@ -64,6 +64,11 @@ class TransportConfig:
         alive_interval = (e.get("RACK_SSH_ALIVE_INTERVAL") or "5").strip() or "5"
         alive_count = (e.get("RACK_SSH_ALIVE_COUNT") or "2").strip() or "2"
         key = (e.get("RACK_SSH_KEY") or "/run/secrets/ssh_key").strip()
+        # Connection multiplexing on by default (fixes fan-out MaxStartups resets);
+        # opt out with RACK_SSH_MULTIPLEX=0.
+        mux_raw = e.get("RACK_SSH_MULTIPLEX")
+        multiplex = True if mux_raw is None else _truthy(mux_raw)
+        mux_persist = (e.get("RACK_SSH_MUX_PERSIST") or "60").strip() or "60"
         control = SSHConfig(
             host=(e.get("RACK_SSH_HOST") or "").strip(),
             user=(e.get("RACK_SSH_USER") or "root").strip() or "root",
@@ -73,6 +78,8 @@ class TransportConfig:
             connect_timeout=connect_timeout,
             alive_interval=alive_interval,
             alive_count=alive_count,
+            multiplex=multiplex,
+            mux_persist=mux_persist,
         )
         script_host = (e.get("RACK_SCRIPT_SSH_HOST") or "").strip()
         script = None
@@ -86,6 +93,8 @@ class TransportConfig:
                 connect_timeout=connect_timeout,
                 alive_interval=alive_interval,
                 alive_count=alive_count,
+                multiplex=multiplex,
+                mux_persist=mux_persist,
             )
         sudo_password = (e.get("RACK_SUDO_PASSWORD") or "").strip()
         # Enable sudo on the privileged route when explicitly asked, or implicitly

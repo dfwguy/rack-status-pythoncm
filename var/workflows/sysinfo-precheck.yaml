@@ -1,0 +1,317 @@
+id: sysinfo-precheck
+name: Sysinfo Precheck (per-check)
+description: >-
+  Node inventory / precheck decomposed into one step per check. Each step declares
+  a `fanout` (run its `run` command across ${nodelist} over the Connection chain:
+  app -> head -> each node) so pass/fail is per-check. Privileged checks set the
+  per-node hop sudo=true (whole payload runs as root on the node); no pdsh/dshbak.
+  Informational checks display only; gating checks use `evaluation` on the grouped
+  output. continue_on_failure runs every check and fails the run if any check fails.
+version: 2
+continue_on_failure: true
+mermaid: |
+  flowchart TD
+      resolve["Resolve rack → nodes"] --> bios["BIOS"]
+      bios["BIOS"] --> os["OS"]
+      os["OS"] --> kernel_param["Kernel Params"]
+      kernel_param["Kernel Params"] --> cpu["CPU"]
+      cpu["CPU"] --> cpu_freq["CPU Frequency"]
+      cpu_freq["CPU Frequency"] --> memory["Memory"]
+      memory["Memory"] --> numa_balancing_thp["NUMA_BALANCING and THP"]
+      numa_balancing_thp["NUMA_BALANCING and THP"] --> numa["NUMA"]
+      numa["NUMA"] --> gpu_basic["GPU basic"]
+      gpu_basic["GPU basic"] --> nvlink_status["NVLINK status"]
+      nvlink_status["NVLINK status"] --> nvlink_ber["NVLINK BER"]
+      nvlink_ber["NVLINK BER"] --> p2p_nvlink["P2P nvlink"]
+      p2p_nvlink["P2P nvlink"] --> p2p_pcie["P2P pcie"]
+      p2p_pcie["P2P pcie"] --> cuuid["CUUID"]
+      cuuid["CUUID"] --> ib_devices["IB devices"]
+      ib_devices["IB devices"] --> ib_link_down_status["IB Link Down status"]
+      ib_link_down_status["IB Link Down status"] --> ib_link_down_counters["IB Link Down counters"]
+      ib_link_down_counters["IB Link Down counters"] --> ib_pkey["IB PKEY"]
+      ib_pkey["IB PKEY"] --> ib_fw["IB FW"]
+      ib_fw["IB FW"] --> pcie_lnk["PCIe LnkCap"]
+      pcie_lnk["PCIe LnkCap"] --> pcie_acs["PCIe ACS"]
+      pcie_acs["PCIe ACS"] --> pcie_mrrs["PCIe MRRS"]
+      pcie_mrrs["PCIe MRRS"] --> iface["IFace"]
+      iface["IFace"] --> bond["Bond"]
+      bond["Bond"] --> imex_channel["IMEX channel"]
+      imex_channel["IMEX channel"] --> imex_profile["IMEX profile"]
+      imex_profile["IMEX profile"] --> imex_nodes_config["IMEX nodes_config"]
+      imex_nodes_config["IMEX nodes_config"] --> imex_service["IMEX service"]
+      imex_service["IMEX service"] --> imex_readiness["IMEX readiness"]
+      imex_readiness["IMEX readiness"] --> imex_connection["IMEX connection"]
+      imex_connection["IMEX connection"] --> enroot["Enroot dir"]
+      enroot["Enroot dir"] --> dmesg_nv_err["dmesg NV_ERR"]
+      dmesg_nv_err["dmesg NV_ERR"] --> dmesg_call_trace["dmesg Call trace"]
+      dmesg_call_trace["dmesg Call trace"] --> dmesg_hw_error["dmesg Hardware Error"]
+      dmesg_hw_error["dmesg Hardware Error"] --> dmesg_xid["dmesg Xid"]
+      dmesg_xid["dmesg Xid"] --> dmesg_knvlink["dmesg knvlink"]
+      dmesg_knvlink["dmesg knvlink"] --> dmesg_ipmi_ssif["dmesg ipmi_ssif"]
+      dmesg_ipmi_ssif["dmesg ipmi_ssif"] --> dmesg_mlx5_health["dmesg mlx5 health"]
+      dmesg_mlx5_health["dmesg mlx5 health"] --> done(["Done"])
+target:
+  mode: node
+  racks: []
+  nodes: []
+steps:
+  - id: resolve
+    type: automated
+    name: "Resolve rack → nodes"
+    resolve: { racks: "${rack}", into: nodelist }
+
+  - id: bios
+    type: automated
+    name: "BIOS"
+    fanout: { nodes: "${nodelist}" }
+    run: "grep -r . /sys/class/dmi/id/bios_* 2>/dev/null | cut -d'/' -f6- | sort | paste -s -d','"
+
+  - id: os
+    type: automated
+    name: "OS"
+    fanout: { nodes: "${nodelist}" }
+    run: "uname -r; df -Th | grep /cm/node-installer &>/dev/null || echo 'OS is READY'"
+
+  - id: kernel_param
+    type: automated
+    name: "Kernel Params"
+    fanout: { nodes: "${nodelist}" }
+    run: "uname -r; cat /proc/cmdline | tr ' ' '\\n' | grep -v -E 'ip=|BOOT' | sort | paste -s -d ' '"
+
+  - id: cpu
+    type: automated
+    name: "CPU"
+    fanout: { nodes: "${nodelist}" }
+    run: "lscpu | awk '/Architecture:/,/L3 cache:/{print $0}' | grep -E -v 'GHz|MHz|BogoMIPS|Flags:|cache:'"
+
+  - id: cpu_freq
+    type: automated
+    name: "CPU Frequency (>1800 MHz)"
+    fanout: { nodes: "${nodelist}" }
+    evaluation: { success_when: { stdout_not_contains: "FAIL" } }
+    run: |
+      if [ -f /sys/devices/system/cpu/cpufreq/policy0/scaling_governor ]; then cat /sys/devices/system/cpu/cpufreq/policy*/scaling_governor|sort|uniq -c; else echo "CPU frequency scaling not supported"; fi
+      [ $(uname -m) == x86_64 ] && { cpupower monitor -m Mperf|awk '/Mperf/,/^$/{print $0}'|grep -v -e Mperf -e Freq|awk -F '|' '{print $1,$NF}'|sort -n|awk '{key=$1; val=$2; sum[key]+=val;count[key]++} END{for(k in sum){avg=sum[k]/count[k]; status=(avg > 1800 ? "PASS" : "FAIL");printf "CPU Freq: Socket%s %s\n", k, status}}'|paste -s -d','; } || true
+      [ $(uname -m) == aarch64 ] && { m=; if [ -f /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_cur_freq ]; then m=cpuinfo_cur_freq; else [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq ] && m=scaling_cur_freq; fi; [ ! -z ${m} ] && { for i in $(ls -1 /sys/devices/system/node|grep node|sed -e 's:node::g'); do cat /sys/devices/system/node/node${i}/cpu*/cpufreq/$m 2>/dev/null|awk -v node=$i 'BEGIN{sum=0}{sum+=$1}END{if(NR>0){ret=int(sum/NR/1000); if(ret>1800){printf "%s freq PASS\n", node}else{printf "%s freq FAILED\n", node}}}'; done } || echo "CPU frequency info not available"; } || true
+
+  - id: memory
+    type: automated
+    name: "Memory"
+    fanout: { nodes: "${nodelist}", node: { kind: ssh, sudo: true } }
+    run: "dmidecode -t memory | grep -P '\\tVolatile Size:' | tr -d '\\t' | sort | uniq -c"
+
+  - id: numa_balancing_thp
+    type: automated
+    name: "NUMA_BALANCING and THP"
+    fanout: { nodes: "${nodelist}" }
+    run: "sysctl kernel.numa_balancing; cat /sys/kernel/mm/transparent_hugepage/enabled"
+
+  - id: numa
+    type: automated
+    name: "NUMA"
+    fanout: { nodes: "${nodelist}" }
+    run: "numactl -H | grep size: | grep -v ' 0 MB' | awk '{print \"N\"$2\"=\"int($(NF-1)/1000)\"GB\"}' | paste -s -d','"
+
+  - id: gpu_basic
+    type: automated
+    name: "GPU basic"
+    fanout: { nodes: "${nodelist}" }
+    run: "nvidia-smi --format=csv --query-gpu gpu_bus_id,gpu_name,vbios_version,pstate,enforced.power.limit,ecc.errors.uncorrected.aggregate.total,remapped_rows.failure,remapped_rows.uncorrectable,remapped_rows.pending"
+
+  - id: nvlink_status
+    type: automated
+    name: "NVLINK status"
+    fanout: { nodes: "${nodelist}" }
+    run: |
+      nvidia-smi nvlink -s | grep '5[0-9].* GB/s' | wc -l
+      nvidia-smi --format=csv --query-gpu gpu_bus_id,fabric.state,fabric.status
+
+  - id: nvlink_ber
+    type: automated
+    name: "NVLINK BER (expect none)"
+    fanout: { nodes: "${nodelist}" }
+    evaluation: { success_when: { stdout_empty: true } }
+    run: "nvidia-smi nvlink -e | grep BER | grep -v 15e-255 || true"
+
+  - id: p2p_nvlink
+    type: automated
+    name: "P2P nvlink capability"
+    fanout: { nodes: "${nodelist}" }
+    run: "nvidia-smi topo -p2p n 2>&1 | grep GPU[0-9].*OK || true"
+
+  - id: p2p_pcie
+    type: automated
+    name: "P2P pcie capability"
+    fanout: { nodes: "${nodelist}" }
+    run: "nvidia-smi topo -p2p p 2>&1 | grep GPU[0-9].*OK || true"
+
+  - id: cuuid
+    type: automated
+    name: "CUUID"
+    fanout: { nodes: "${nodelist}" }
+    run: "nvidia-smi -q | grep -E 'Bus Id|CliqueId|ClusterUUID'"
+
+  - id: ib_devices
+    type: automated
+    name: "IB devices status (all active)"
+    fanout: { nodes: "${nodelist}" }
+    evaluation: { success_when: { stdout_empty: true } }
+    run: "ibstatus 2>/dev/null | grep -i 'state:' | grep -iv 'ACTIVE' || true"
+
+  - id: ib_link_down_status
+    type: automated
+    name: "IB Link Down status (no issue)"
+    fanout: { nodes: "${nodelist}", node: { kind: ssh, sudo: true } }
+    evaluation: { success_when: { stdout_empty: true } }
+    run: |
+      ls -l /sys/class/infiniband | grep -v $((lspci -D | grep -i Infiniband|awk '{print $1}'|cut -d '.' -f 1|sort|uniq -c|grep -w 4||echo NONE)|awk '{print $NF}'|xargs -I {} echo "-e {}.") | grep infiniband | awk -F'/' '{print $(NF-2),$NF}' | while read bdf dev; do ret=$(mlxlink -d $bdf 2>&1|grep Recommendation|cut -f2- -d ':'|grep -v 'No issue was observed'||true); [ "X$ret" != "X" ] && echo "$dev:${ret}"; done | paste -s -d','
+
+  - id: ib_link_down_counters
+    type: automated
+    name: "IB Link Down counters (no issue)"
+    fanout: { nodes: "${nodelist}" }
+    evaluation: { success_when: { stdout_empty: true } }
+    run: |
+      for dev in $(ls -l /sys/class/infiniband | grep -v $((lspci -D | grep -i Infiniband|awk '{print $1}'|cut -d '.' -f 1|sort|uniq -c|grep -w 4||echo NONE)|awk '{print $NF}'|xargs -I {} echo "-e {}.") | grep infiniband | awk -F'/' '{print $NF}'); do link_downed=$(</sys/class/infiniband/${dev}/ports/1/counters/link_downed); symbol_error=$(</sys/class/infiniband/${dev}/ports/1/counters/symbol_error); if [[ ${link_downed} -ne 0 || ${symbol_error} -ne 0 ]]; then echo ${dev}:link_downed=${link_downed},symbol_error=${symbol_error}; fi; done
+
+  - id: ib_pkey
+    type: automated
+    name: "IB PKEY (uniform)"
+    fanout: { nodes: "${nodelist}" }
+    run: |
+      for i in $(ls -l /sys/class/infiniband | grep -v $((lspci -D | grep -i Infiniband|awk '{print $1}'|cut -d '.' -f 1|sort|uniq -c|grep -w 4||echo NONE)|awk '{print $NF}'|xargs -I {} echo "-e {}.") | grep infiniband | awk -F'/' '{print $NF}'|grep -v bond_|sort -t'_' -k2n); do ret=$(cat /sys/class/infiniband/${i}/ports/1/pkeys/*|grep -E -v '0x0000'|sort|uniq|paste -s -d','); [ ! -z $ret ] && echo "${i}: ${ret}"; done || true
+
+  - id: ib_fw
+    type: automated
+    name: "IB FW (uniform)"
+    fanout: { nodes: "${nodelist}" }
+    run: "for i in /sys/class/infiniband/*; do printf '%50s%15s\\n' ${i}/fw_ver $(<$i/fw_ver); done"
+
+  - id: pcie_lnk
+    type: automated
+    name: "PCIe LnkCap+LnkStat"
+    fanout: { nodes: "${nodelist}" }
+    run: |
+      [ $(uname -m) == x86_64 ] && { lspci -d 15b3: -nn|awk '{print $1}'|while read i; do [ $(lspci -s $i -vvv|grep -e LnkCap: -e LnkSta:|grep -o Speed.*|awk -F',' '{print $1, $2}'|tr -s ' '|sort|uniq -c|wc -l) -ne 1 ] && echo $i || true; done; } || true
+      [ $(uname -m) == aarch64 ] && { lspci -d 15b3: -nn|grep controller|awk '{print $1}'|while read i; do [ $(lspci -s $i -vvv|grep -e LnkCap: -e LnkSta:|grep -o Speed.*|awk -F',' '{print $1, $2}'|tr -s ' '|sort|uniq -c|wc -l) -ne 1 ] && echo $i || true; done; } || true
+
+  - id: pcie_acs
+    type: automated
+    name: "PCIe ACS"
+    fanout: { nodes: "${nodelist}" }
+    run: "lspci -vvv | grep 'ACSCtl:.*SrcValid-' | wc -l"
+
+  - id: pcie_mrrs
+    type: automated
+    name: "PCIe MRRS"
+    fanout: { nodes: "${nodelist}" }
+    run: "lspci -d 15b3: -nn | awk '{print $1}' | xargs -I {} lspci -s {} -vvv | grep -o MaxReadReq.* | awk '{print $(NF-1)}' | sort | uniq -c"
+
+  - id: iface
+    type: automated
+    name: "IFace device status"
+    fanout: { nodes: "${nodelist}" }
+    run: "ip r sh | grep default | grep -o dev.* | cut -f2 -d' '"
+
+  - id: bond
+    type: automated
+    name: "Bond interfaces"
+    fanout: { nodes: "${nodelist}", node: { kind: ssh, sudo: true } }
+    run: |
+      for i in /proc/net/bonding/*; do { ethtool ${i##*/} | grep -e Speed -e Link; echo '==DETAILS=='; grep -e 'Bonding Mode' -e 'Transmit Hash Policy' $i; for j in $(grep 'Slave Interface' $i |awk '{print $NF}'|sort); do grep -A5 $j $i | grep -e 'Slave Interface' -e 'MII Status' -e 'Speed' | paste -s -d' '; done; }| xargs -I {} echo "${i}: {}"; done
+
+  - id: imex_channel
+    type: automated
+    name: "IMEX channel devices"
+    fanout: { nodes: "${nodelist}" }
+    run: "[ $(uname -m) == aarch64 ] && { ls -1 /dev/nvidia-caps-imex-channels/ 2>/dev/null || true; } || true"
+
+  - id: imex_profile
+    type: automated
+    name: "IMEX profile"
+    fanout: { nodes: "${nodelist}" }
+    run: "[ $(uname -m) == aarch64 ] && { grep -E '^(SERVER_PORT|IMEX_CMD_PORT|IMEX_CMD_ENABLED|IMEX_CMD_BIND_INTERFACE_IP)=' /etc/nvidia-imex/config.cfg 2>/dev/null|paste -s -d ' '; } || true"
+
+  - id: imex_nodes_config
+    type: automated
+    name: "IMEX nodes_config"
+    fanout: { nodes: "${nodelist}" }
+    run: "[ $(uname -m) == aarch64 ] && { md5sum /etc/nvidia-imex/nodes_config.cfg 2>/dev/null || true; } || true"
+
+  - id: imex_service
+    type: automated
+    name: "IMEX service status"
+    fanout: { nodes: "${nodelist}" }
+    run: "[ $(uname -m) == aarch64 ] && { ss -lntp|grep nvidia-imex|grep -v nv-hostengine|wc -l; systemctl is-active nvidia-imex.service || true; ls /cm/local/apps/slurm/var/*/*imex* 2>/dev/null||true; } || true"
+
+  - id: imex_readiness
+    type: automated
+    name: "IMEX readiness"
+    fanout: { nodes: "${nodelist}" }
+    run: "[ $(uname -m) == aarch64 ] && { nvidia-imex-ctl -q 2>&1 || true; } || true"
+
+  - id: imex_connection
+    type: automated
+    name: "IMEX connection status"
+    fanout: { nodes: "${nodelist}" }
+    run: "[ $(uname -m) == aarch64 ] && { nvidia-imex-ctl -N 2>&1 | awk '/Nodes:/,/Domain State:/{print $0}'|sed -e 's:\\*: :g' -e 's:-::g'|tr -s ' '; } || true"
+
+  - id: enroot
+    type: automated
+    name: "Enroot runtime dir (writable)"
+    fanout: { nodes: "${nodelist}" }
+    evaluation:
+      success_when: { stdout_not_contains: "read-only" }
+      message_fail: "Enroot runtime path is not writable by the invoking user — container (pyxis/enroot) jobs may fail to stage their runtime."
+      message_pass: "Enroot runtime path is writable on all nodes."
+      prompt: "Check ENROOT_RUNTIME_PATH in /etc/enroot/enroot.conf and the ownership/mode of that dir on a node. If it is root-owned, this may be a permission artifact of the unprivileged probe rather than a truly read-only mount — consider probing under sudo (fanout.node.sudo: true) to confirm the real mount state."
+    run: "a=$(grep ENROOT_RUNTIME_PATH /etc/enroot/enroot.conf 2>/dev/null|grep -o /.\\*/); if [ ! -z ${a} ]; then mkdir -p ${a} 2>/dev/null; touch ${a}/test &>/dev/null && (echo \"${a} is writable\"; rm -f ${a}/test) || echo \"${a} is read-only\"; else echo 'ENROOT_RUNTIME_PATH not set'; fi"
+
+  - id: dmesg_nv_err
+    type: automated
+    name: "dmesg NV_ERR (expect none)"
+    fanout: { nodes: "${nodelist}", node: { kind: ssh, sudo: true } }
+    evaluation: { success_when: { stdout_empty: true } }
+    run: "dmesg | grep -o NV_ERR_[^]]* | sort | uniq"
+
+  - id: dmesg_call_trace
+    type: automated
+    name: "dmesg Call trace (expect none)"
+    fanout: { nodes: "${nodelist}", node: { kind: ssh, sudo: true } }
+    evaluation: { success_when: { stdout_empty: true } }
+    run: "c=$(dmesg | grep -ic 'Call trace'); [ \"$c\" -gt 0 ] && echo \"$c Call trace line(s)\" || true"
+
+  - id: dmesg_hw_error
+    type: automated
+    name: "dmesg Hardware Error (expect none)"
+    fanout: { nodes: "${nodelist}", node: { kind: ssh, sudo: true } }
+    evaluation: { success_when: { stdout_empty: true } }
+    run: "c=$(dmesg | grep -c 'Hardware Error'); [ \"$c\" -gt 0 ] && echo \"$c Hardware Error(s)\" || true"
+
+  - id: dmesg_xid
+    type: automated
+    name: "dmesg Xid (expect none)"
+    fanout: { nodes: "${nodelist}", node: { kind: ssh, sudo: true } }
+    evaluation: { success_when: { stdout_empty: true } }
+    run: "dmesg | grep -E -o 'Xid ([^)].*): [0-9]+,' | tr -d ',' | awk '{print $1\":\"$NF}' | sort | uniq | paste -s -d','"
+
+  - id: dmesg_knvlink
+    type: automated
+    name: "dmesg knvlinkDiscoverPostRxDetLinks (expect none)"
+    fanout: { nodes: "${nodelist}", node: { kind: ssh, sudo: true } }
+    evaluation: { success_when: { stdout_empty: true } }
+    run: "c=$(dmesg | grep -c 'NVRM: knvlinkDiscoverPostRxDetLinks'); [ \"$c\" -gt 0 ] && echo \"$c knvlink line(s)\" || true"
+
+  - id: dmesg_ipmi_ssif
+    type: automated
+    name: "dmesg ipmi_ssif Not present (expect none)"
+    fanout: { nodes: "${nodelist}", node: { kind: ssh, sudo: true } }
+    evaluation: { success_when: { stdout_empty: true } }
+    run: "ipmitool mc info &>/dev/null || { c=$(dmesg --since '8 hour ago' | grep -c 'ipmi_ssif.*i2c-.*Not present'); [ \"$c\" -gt 0 ] && echo \"$c ipmi_ssif error(s)\" || true; }"
+
+  - id: dmesg_mlx5_health
+    type: automated
+    name: "dmesg mlx5_core Health issue (expect none)"
+    fanout: { nodes: "${nodelist}", node: { kind: ssh, sudo: true } }
+    evaluation: { success_when: { stdout_empty: true } }
+    run: "c=$(dmesg --since '8 hour ago' | grep -c 'mlx5_core.*Health issue observed.*ERROR'); [ \"$c\" -gt 0 ] && echo \"$c mlx5 health error(s)\" || true"

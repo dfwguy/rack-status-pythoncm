@@ -94,13 +94,13 @@ type MultirackLaunchKind = "nemo" | "llmb";
 
 const LAUNCH_META: Record<MultirackLaunchKind, { label: string; asyncUrl: string }> = {
   nemo: { label: "Multirack NEMO validation", asyncUrl: "/api/run-nemo-xrack-async" },
-  llmb: { label: "NCCL Microbenchmark (LLMB)", asyncUrl: "/api/run-llmb-nccl-async" },
+  llmb: { label: "NCCL Microbenchmark (direct)", asyncUrl: "/api/run-llmb-nccl-async" },
 };
 
 const TERMINAL_PHASES = new Set(["done", "error", "timeout"]);
 
 function jobKindLabel(kind: string): string {
-  return kind === "llmb" ? "NCCL (LLMB)" : "NEMO x-rack";
+  return kind === "llmb" ? "NCCL (direct)" : "NEMO x-rack";
 }
 
 function jobPhaseColor(phase: string): TagColor {
@@ -392,7 +392,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           </MuiButton>
           <FormControlLabel
             control={<Checkbox checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} size="small" />}
-            label="Dry run (LLMB only — print command, don't submit)"
+            label="Dry run (NCCL only — print command, don't submit)"
           />
           <Flex gap="2" align="center" wrap="wrap" style={{ marginLeft: "auto" }}>
             <Button
@@ -417,7 +417,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
         </Flex>
 
         <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 12, display: "block" }}>
-          Eligible racks have validation done, Slurm sinfo showing only idle, and no DN trays. LLMB GPU scale = 72 × racks on
+          Eligible racks have validation done, Slurm sinfo showing only idle, and no DN trays. NCCL GPU scale = 72 × racks on
           GB300 NVL72.
         </Text>
 

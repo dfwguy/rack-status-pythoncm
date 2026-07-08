@@ -140,6 +140,30 @@ class Connection(ABC):
         """
         return list(cmd) if isinstance(cmd, list) else ["bash", "-lc", cmd]
 
+    def hop(
+        self,
+        host: str,
+        *,
+        user: str | None = None,
+        key: str = "",
+        extra_opts: list[str] | None = None,
+        connect_timeout: str = "15",
+        sudo: bool = False,
+    ) -> "Connection":
+        """Return a Connection that runs on *host* by tunnelling ssh through ``self``.
+
+        Composition primitive: ``control.hop(node)`` runs ``ssh node <cmd>`` on the
+        control target (e.g. the head), so the node leg uses the head's credentials.
+        Chainable to N levels: ``self.hop(a).hop(b)``. ``sudo=True`` runs the payload
+        under passwordless sudo on *host*.
+        """
+        from transport.hop import HopConnection
+
+        return HopConnection(
+            self, host, user=user, key=key, extra_opts=extra_opts,
+            connect_timeout=connect_timeout, sudo=sudo,
+        )
+
     def resolve_path(self, path: str) -> str:
         """Resolve *path* for this target.
 

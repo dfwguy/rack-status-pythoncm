@@ -77,6 +77,16 @@ def _conn() -> RoutingConnection:
     return _CONN
 
 
+def connection(profile: str = "control"):
+    """Return the composed :class:`transport.Connection` for *profile*.
+
+    Exposed so higher layers (e.g. the workflow fan-out) can use the app's active
+    connection as the base of a chain (``conn.hop(node)``) instead of re-deriving
+    transport settings. ``profile`` selects the control (default) or script route.
+    """
+    return _conn().select(profile)
+
+
 def invalidate_connection() -> None:
     """Drop the cached connection so the next call rebuilds it from current env.
 

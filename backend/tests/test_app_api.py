@@ -191,7 +191,9 @@ class TestRunLlmbNccl:
         assert data["ok"] is True
         assert data.get("job_id")
         assert data.get("racks") == ["p5-r01"]
-        assert "run_llmb_nccl.sh" in (data.get("command_display") or "")
+        # Multi-rack NCCL now defaults to the direct path (run_nccl_mpi.sh), not the
+        # llmb-run container. RACK_LLMB_NCCL_USE_CONTAINER=1 switches back.
+        assert "run_nccl_mpi.sh" in (data.get("command_display") or "")
         assert "--dry-run" in (data.get("command_display") or "")
 
     def test_multi_rack_starts_job(self, client):

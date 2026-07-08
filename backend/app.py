@@ -675,6 +675,12 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
+        "key": "RACK_NCCL_MPI_SIZE_MAX",
+        "label": "Multi-rack NCCL max message size",
+        "description": "Max all_reduce message size for the direct x-rack NCCL test (run_nccl_mpi.sh --size-max). Default 16G. Accepts nccl-tests sizes like 8, 512M, 16G.",
+    },
+    {
+        "section": "jobs_cluster",
         "key": "NVIS_SLURM_HOSTLIST",
         "label": "Slurm sbatch -w override (comma-separated)",
         "description": "Optional. If set, run_clusterkit.sh / run_nvloom_singlerack.sh / run_mnubergemm_stress.sh use this exact NodeName list for sbatch -w instead of expanding the validation target. Use when Slurm NodeNames differ from NVIS hostnames (FQDN, prefix, or casing). Leave empty to auto-expand via scontrol.",
@@ -2482,7 +2488,13 @@ def _rack_id_from_log_basename(name: str) -> str | None:
 
 
 def _nemo_log_file_looks_successful(path: Path) -> bool:
-    """Match parser.sh llm_label: exclude Slurm hard-fail; require LLM step markers (OK path).
+    """Match parser.sh llm_label: exclude Slurm hard-fail; require a completed-run marker (OK path).
+
+    Accepts either a NEMO training run (``train_step_timing`` / ``MODEL_TFLOP/s/GPU``) or a completed
+    NCCL sweep (``Avg bus bandwidth`` is printed by ``all_reduce_perf`` only after every message size
+    finishes) so multi-rack NCCL logs (``nccl-mpi_*.out`` / ``llmb-nccl_*.out``) surface in the
+    Multirack analytics. An aborted NCCL run never reaches the ``Avg bus bandwidth`` line, so it's
+    still excluded.
 
     Host-aware: runs ``grep`` through ``host_exec`` so it works whether the log is on the local fs
     (app on the head node) or on a remote head (app on a laptop over SSH). A remote path is passed
@@ -2497,7 +2509,11 @@ def _nemo_log_file_looks_successful(path: Path) -> bool:
         if getattr(fail, "returncode", 1) == 0:
             return False
         ok = host_exec.run_on_host(
-            ["grep", "-E", "-q", r"train_step_timing.*consumed_samples|Step Time.*MODEL_TFLOP/s/GPU", lp],
+            [
+                "grep", "-E", "-q",
+                r"train_step_timing.*consumed_samples|Step Time.*MODEL_TFLOP/s/GPU|Avg bus bandwidth",
+                lp,
+            ],
             timeout=timeout,
         )
         return getattr(ok, "returncode", 1) == 0
@@ -3394,6 +3410,13 @@ def _clusterkit_script_path() -> Path:
 
 def _run_llmb_nccl_script_path() -> Path:
     p = _eget("RACK_LLMB_NCCL_SCRIPT", str(SCRIPTS_DIR / "run_llmb_nccl.sh")) or str(SCRIPTS_DIR / "run_llmb_nccl.sh")
+    return _resolve_path(Path(p))
+
+
+def _run_nccl_mpi_script_path() -> Path:
+    """Direct-NCCL launcher: resolves racks → nodes → submits nccl_allreduce.sbatch
+    (host nccl-tests + mpirun over IB; no llmb-run/container/UCX-verbs guesswork)."""
+    p = _eget("RACK_NCCL_MPI_SCRIPT", str(SCRIPTS_DIR / "run_nccl_mpi.sh")) or str(SCRIPTS_DIR / "run_nccl_mpi.sh")
     return _resolve_path(Path(p))
 
 
@@ -6409,35 +6432,42 @@ def _nvswitch_sdn_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str],
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        proc = subprocess.run(
-            cmd,
-            cwd=str(log_dir),
-            env=_subprocess_env(),
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
+        # profile="script" routes to the privileged node-operational SSH target
+        # (RACK_SCRIPT_SSH_*, root+nmxc) when configured, else falls back to control.
+        hp = host_exec.popen_on_host(
+            cmd, cwd=_host_job_cwd(log_dir), env=_subprocess_env(), profile="script"
         )
-        ok = proc.returncode == 0
+        try:
+            out, err = hp.communicate(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            hp.kill()
+            try:
+                hp.communicate(timeout=15)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            _patch(
+                phase="error",
+                ok=False,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                returncode=-1,
+                stdout="",
+                stderr=f"timeout after {timeout_sec}s",
+                command_display=display_cmd,
+                error=f"NVLink SDN reset timed out after {timeout_sec}s",
+            )
+            _reset_job_purge_later(job_id)
+            return
+        rc = hp.returncode if hp.returncode is not None else -1
+        ok = rc == 0
         _patch(
             phase="done" if ok else "error",
             ok=ok,
             finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=proc.returncode,
-            stdout=(proc.stdout or "").strip(),
-            stderr=(proc.stderr or "").strip(),
+            returncode=rc,
+            stdout=(out or "").strip(),
+            stderr=(err or "").strip(),
             command_display=display_cmd,
             error=None if ok else "nvswitch_sdn_reset.sh exited non-zero (see stdout/stderr)",
-        )
-    except subprocess.TimeoutExpired:
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr=f"timeout after {timeout_sec}s",
-            command_display=display_cmd,
-            error=f"NVLink SDN reset timed out after {timeout_sec}s",
         )
     except Exception as e:
         _patch(
@@ -6530,35 +6560,42 @@ def _nvswitch_system_reset_async_worker(job_id: str, log_dir: Path, cmd: list[st
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        proc = subprocess.run(
-            cmd,
-            cwd=str(log_dir),
-            env=_subprocess_env(),
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
+        # profile="script" routes to the privileged node-operational SSH target
+        # (RACK_SCRIPT_SSH_*, root+nmxc) when configured, else falls back to control.
+        hp = host_exec.popen_on_host(
+            cmd, cwd=_host_job_cwd(log_dir), env=_subprocess_env(), profile="script"
         )
-        ok = proc.returncode == 0
+        try:
+            out, err = hp.communicate(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            hp.kill()
+            try:
+                hp.communicate(timeout=15)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            _patch(
+                phase="error",
+                ok=False,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                returncode=-1,
+                stdout="",
+                stderr=f"timeout after {timeout_sec}s",
+                command_display=display_cmd,
+                error=f"NVLink system reset timed out after {timeout_sec}s",
+            )
+            _reset_job_purge_later(job_id)
+            return
+        rc = hp.returncode if hp.returncode is not None else -1
+        ok = rc == 0
         _patch(
             phase="done" if ok else "error",
             ok=ok,
             finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=proc.returncode,
-            stdout=(proc.stdout or "").strip(),
-            stderr=(proc.stderr or "").strip(),
+            returncode=rc,
+            stdout=(out or "").strip(),
+            stderr=(err or "").strip(),
             command_display=display_cmd,
             error=None if ok else "nvswitch_system_reset.sh exited non-zero (see stdout/stderr)",
-        )
-    except subprocess.TimeoutExpired:
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr=f"timeout after {timeout_sec}s",
-            command_display=display_cmd,
-            error=f"NVLink system reset timed out after {timeout_sec}s",
         )
     except Exception as e:
         _patch(
@@ -6667,35 +6704,42 @@ def _imex_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str], display
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        proc = subprocess.run(
-            cmd,
-            cwd=str(log_dir),
-            env=_subprocess_env(),
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
+        # profile="script" routes to the privileged node-operational SSH target
+        # (RACK_SCRIPT_SSH_*, root+nmxc) when configured, else falls back to control.
+        hp = host_exec.popen_on_host(
+            cmd, cwd=_host_job_cwd(log_dir), env=_subprocess_env(), profile="script"
         )
-        ok = proc.returncode == 0
+        try:
+            out, err = hp.communicate(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            hp.kill()
+            try:
+                hp.communicate(timeout=15)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            _patch(
+                phase="error",
+                ok=False,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                returncode=-1,
+                stdout="",
+                stderr=f"timeout after {timeout_sec}s",
+                command_display=display_cmd,
+                error=f"IMEX reset timed out after {timeout_sec}s",
+            )
+            _reset_job_purge_later(job_id)
+            return
+        rc = hp.returncode if hp.returncode is not None else -1
+        ok = rc == 0
         _patch(
             phase="done" if ok else "error",
             ok=ok,
             finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=proc.returncode,
-            stdout=(proc.stdout or "").strip(),
-            stderr=(proc.stderr or "").strip(),
+            returncode=rc,
+            stdout=(out or "").strip(),
+            stderr=(err or "").strip(),
             command_display=display_cmd,
             error=None if ok else "imex_reset.sh exited non-zero (see stdout/stderr)",
-        )
-    except subprocess.TimeoutExpired:
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr=f"timeout after {timeout_sec}s",
-            command_display=display_cmd,
-            error=f"IMEX reset timed out after {timeout_sec}s",
         )
     except Exception as e:
         _patch(
@@ -7526,6 +7570,149 @@ def api_slurm_squeue():
     except OSError as e:
         return jsonify({"ok": False, "error": str(e)}), 500
     return jsonify(result)
+
+
+_SACCT_FIELD_ORDER = (
+    "job_id", "name", "partition", "nnodes", "nodelist", "start", "end", "elapsed", "state", "exit_code",
+)
+_SLURM_STDOUT_RE = re.compile(r"StdOut=(\S+)")
+# Terminal (finished) job states — what the Scheduler "recent jobs" panel shows so a
+# job that has left squeue (success OR failure) is still visible with its log.
+_SACCT_TERMINAL_STATES = frozenset({
+    "COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "NODE_FAIL",
+    "OUT_OF_MEMORY", "PREEMPTED", "BOOT_FAIL", "DEADLINE",
+})
+
+
+def _run_sacct_recent(limit: int = 10, state: str = "COMPLETED") -> dict:
+    """Recent finished Slurm jobs from ``sacct`` — the accounting DB retains history
+    that ``squeue`` drops the instant a job ends (the "blink and you miss it" gap).
+
+    Allocation rows only (``-X``), pipe-parseable (``-P``), newest-first, capped to *limit*.
+    """
+    plat = _get_platform()
+    st = (state or "COMPLETED").strip().upper()
+    if not re.fullmatch(r"[A-Z_,]+", st):
+        st = "COMPLETED"
+    since = (_eget("RACK_SLURM_SACCT_SINCE") or "now-7days").strip() or "now-7days"
+    if not re.fullmatch(r"[A-Za-z0-9:_+\-]+", since):
+        since = "now-7days"
+    # NB: do NOT pass sacct --state=… : with only -S it returns nothing on this Slurm
+    # even though the same jobs report State=COMPLETED. Fetch all and filter in Python.
+    fmt = "JobID,JobName,Partition,NNodes,NodeList,Start,End,Elapsed,State,ExitCode"
+    args = f"-X -n -P -S {shlex.quote(since)} -o {shlex.quote(fmt)}"
+    shell_cmd = plat.sacct_cmd(args)
+    timeout = max(5, _env_int("RACK_SLURM_SACCT_TIMEOUT", 60))
+    try:
+        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
+    except FileNotFoundError:
+        raise OSError("sacct executable not found; ensure Slurm accounting (sacct) is available") from None
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False, "returncode": -1, "stdout": "", "stderr": f"timeout after {timeout}s",
+            "command_display": shell_cmd, "jobs": [],
+        }
+    if st == "ALL":
+        want_states: set[str] = set()
+    elif st in ("FINISHED", "TERMINAL"):
+        want_states = set(_SACCT_TERMINAL_STATES)
+    else:
+        want_states = {s for s in st.split(",") if s}
+    jobs: list[dict] = []
+    for line in (proc.stdout or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("|")
+        if len(parts) < len(_SACCT_FIELD_ORDER):
+            continue
+        row = dict(zip(_SACCT_FIELD_ORDER, [p.strip() for p in parts]))
+        if not _slurm_job_base_id(row.get("job_id")):
+            continue
+        # State can carry a suffix, e.g. "CANCELLED by 12345"; match the leading token.
+        row_state = (row.get("state") or "").split()[0].upper() if (row.get("state") or "").strip() else ""
+        if want_states and row_state not in want_states:
+            continue
+        jobs.append(row)
+    # Newest first: End is ISO-ish (sorts lexically); tie-break on numeric job id.
+    jobs.sort(key=lambda r: (r.get("end") or "", int(_slurm_job_base_id(r.get("job_id")) or 0)), reverse=True)
+    jobs = jobs[: max(1, limit)]
+    return {
+        "ok": proc.returncode == 0, "returncode": proc.returncode,
+        "stdout": (proc.stdout or "").strip(), "stderr": (proc.stderr or "").strip(),
+        "command_display": shell_cmd, "jobs": jobs,
+    }
+
+
+@app.route("/api/slurm-sacct-recent", methods=["GET"])
+def api_slurm_sacct_recent():
+    """Recent finished Slurm jobs via ``sacct`` — query ``limit`` (1-50, default 10) and ``state`` (default COMPLETED)."""
+    if os.environ.get("RACK_SLURM_SACCT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "sacct disabled (RACK_SLURM_SACCT_DISABLED)", "jobs": []}), 403
+    try:
+        limit = int((request.args.get("limit") or "10").strip())
+    except (TypeError, ValueError):
+        limit = 10
+    limit = min(50, max(1, limit))
+    state = (request.args.get("state") or "COMPLETED").strip() or "COMPLETED"
+    try:
+        result = _run_sacct_recent(limit=limit, state=state)
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e), "jobs": []}), 500
+    return jsonify(result)
+
+
+def _slurm_job_log_path(job_id: str, log_dir: Path) -> tuple[str, str]:
+    """Resolve a finished job's stdout path: ``scontrol`` ``StdOut=`` (jobs still within
+    MinJobAge), else glob the dashboard log dir for the launcher's ``*_<jid>.out`` /
+    ``*-<jid>.txt`` (for jobs that have aged out of the controller)."""
+    jid = _slurm_job_base_id(job_id) or ""
+    if not jid:
+        return "", "invalid"
+    try:
+        r = _run_scontrol_show_job(jid)
+        if r.get("ok"):
+            m = _SLURM_STDOUT_RE.search(str(r.get("stdout") or ""))
+            if m:
+                p = m.group(1).strip()
+                if p and p.lower() not in ("(null)", "/dev/null", "none", "(none)"):
+                    return p, "scontrol"
+    except (ValueError, OSError):
+        pass
+    d = str(log_dir).rstrip("/")
+    if d:
+        listing = (
+            f"ls -1t {shlex.quote(d)}/*[_-]{jid}.out {shlex.quote(d)}/*[_-]{jid}.txt "
+            f"{shlex.quote(d)}/*-{jid}.out {shlex.quote(d)}/slurm-{jid}.out 2>/dev/null | head -1"
+        )
+        try:
+            proc = host_exec.run_on_host(listing, timeout=max(5, _env_int("RACK_SLURM_LOGFIND_TIMEOUT", 20)))
+            lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+            if lines:
+                return lines[0], "logdir"
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return "", "not_found"
+
+
+@app.route("/api/slurm-job-log-path", methods=["GET"])
+def api_slurm_job_log_path():
+    """Resolve a finished job's stdout log path (for the Recent-jobs 'open log' action)."""
+    job_id = (request.args.get("job_id") or "").strip()
+    if not _slurm_job_base_id(job_id):
+        return jsonify({"ok": False, "error": "job_id must be a Slurm job id"}), 400
+    try:
+        log_dir = _resolve_log_dir((request.args.get("log_dir") or "").strip() or None)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    try:
+        path, source = _slurm_job_log_path(job_id, log_dir)
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    if not path:
+        return jsonify(
+            {"ok": False, "error": f"no stdout log found for job {job_id} (aged out of scontrol; no matching file under log_dir)"}
+        ), 404
+    return jsonify({"ok": True, "job_id": _slurm_job_base_id(job_id), "path": path, "source": source})
 
 
 def _run_sinfo_r() -> dict:
@@ -8946,60 +9133,72 @@ def api_analytics_aggregate():
     scaling_entries: dict[int, list[dict[str, object]]] = {}
 
     for rack in done_racks:
-        lp = pick_log_for_rack(log_dir, rack, None)
-        # pick_log_for_rack already returns only discovered/existing logs; no local .is_file() (which
-        # would break on the remote PurePosixPath in SSH mode).
-        if lp is None:
+        cands = find_log_paths_for_rack(log_dir, rack)
+        if not cands:
             continue
-        if not _nemo_log_file_looks_successful(lp):
-            continue
-        parsed, err = _parser_json_for_log_path(log_dir, lp)
-        if parsed is None:
-            continue
-        nc = _pick_nccl_row(parsed, rack)
-        nm = _pick_nemotron_row(parsed, rack)
-        lf = lp.name
-        ar_series: list[dict[str, float]] = []
-        if isinstance(nc, dict):
-            raw_ser = nc.get("all_reduce_busbw_series") or []
-            if isinstance(raw_ser, list):
-                for p in raw_ser:
-                    if not isinstance(p, dict):
-                        continue
-                    try:
-                        sz = int(p.get("size_bytes") or 0)
-                        bw = float(p.get("bus_bw_gbps") or 0)
-                    except (TypeError, ValueError):
-                        continue
-                    if sz > 0 and bw >= 0:
-                        ar_series.append({"size_bytes": float(sz), "bus_bw_gbps": bw})
-            if ar_series:
-                series_by_rack[rack] = ar_series
-            scalar_rows.append(
-                {
-                    "rack": rack,
-                    "log_file": lf,
-                    "all_reduce_gbps": _parse_gbps_scalar(nc.get("all_reduce_gbps")),
-                    "all_gather_gbps": _parse_gbps_scalar(nc.get("all_gather_gbps")),
-                    "alltoall_gbps": _parse_gbps_scalar(nc.get("alltoall_gbps")),
-                }
-            )
-        if isinstance(nm, dict):
-            med = _parse_gbps_scalar(nm.get("median_step_time"))
-            if med is None:
-                med = _parse_gbps_scalar(nm.get("step_s"))
-            tf = _parse_gbps_scalar(nm.get("tflops_per_gpu"))
-            nemotron_rows.append(
-                {
-                    "rack": rack,
-                    "log_file": lf,
-                    "median_step_time": med,
-                    "tflops_per_gpu": tf,
-                    "step_time_cv_pct": _step_series_cv_pct(nm),
-                }
-            )
-            if med is not None and tf is not None:
-                _nemotron_scaling_append_entry(scaling_entries, 1, lp, float(tf), float(med))
+        # Select the NCCL and NEMO single-rack logs INDEPENDENTLY (candidates are newest-first).
+        # Previously we picked the single newest *1Rack*.txt and gated it on the NEMO-success
+        # grep (LLM step markers); that silently dropped any rack whose most-recent single-rack
+        # log was a standalone NCCL sweep — so a fresh NCCL run would hide the rack from
+        # analytics even though its logs are present and valid.
+        nccl_lp = next((p for p in cands if "nccl" in p.name.lower()), None)
+        nemo_lp = next(
+            (p for p in cands if "nccl" not in p.name.lower() and _nemo_log_file_looks_successful(p)),
+            None,
+        )
+
+        # --- NCCL (all_reduce bus-bw) from the newest NCCL single-rack log --------------
+        if nccl_lp is not None:
+            parsed_nc, _ = _parser_json_for_log_path(log_dir, nccl_lp)
+            nc = _pick_nccl_row(parsed_nc, rack) if isinstance(parsed_nc, dict) else None
+            if isinstance(nc, dict):
+                lf = nccl_lp.name
+                ar_series: list[dict[str, float]] = []
+                raw_ser = nc.get("all_reduce_busbw_series") or []
+                if isinstance(raw_ser, list):
+                    for p in raw_ser:
+                        if not isinstance(p, dict):
+                            continue
+                        try:
+                            sz = int(p.get("size_bytes") or 0)
+                            bw = float(p.get("bus_bw_gbps") or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if sz > 0 and bw >= 0:
+                            ar_series.append({"size_bytes": float(sz), "bus_bw_gbps": bw})
+                if ar_series:
+                    series_by_rack[rack] = ar_series
+                scalar_rows.append(
+                    {
+                        "rack": rack,
+                        "log_file": lf,
+                        "all_reduce_gbps": _parse_gbps_scalar(nc.get("all_reduce_gbps")),
+                        "all_gather_gbps": _parse_gbps_scalar(nc.get("all_gather_gbps")),
+                        "alltoall_gbps": _parse_gbps_scalar(nc.get("alltoall_gbps")),
+                    }
+                )
+
+        # --- Nemotron from the newest successful NEMO single-rack log -------------------
+        if nemo_lp is not None:
+            parsed_nm, _ = _parser_json_for_log_path(log_dir, nemo_lp)
+            nm = _pick_nemotron_row(parsed_nm, rack) if isinstance(parsed_nm, dict) else None
+            if isinstance(nm, dict):
+                lf = nemo_lp.name
+                med = _parse_gbps_scalar(nm.get("median_step_time"))
+                if med is None:
+                    med = _parse_gbps_scalar(nm.get("step_s"))
+                tf = _parse_gbps_scalar(nm.get("tflops_per_gpu"))
+                nemotron_rows.append(
+                    {
+                        "rack": rack,
+                        "log_file": lf,
+                        "median_step_time": med,
+                        "tflops_per_gpu": tf,
+                        "step_time_cv_pct": _step_series_cv_pct(nm),
+                    }
+                )
+                if med is not None and tf is not None:
+                    _nemotron_scaling_append_entry(scaling_entries, 1, nemo_lp, float(tf), float(med))
 
     size_to_vals: dict[int, list[float]] = {}
     for _rk, ser in series_by_rack.items():
@@ -10614,9 +10813,15 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
     if not rack_ids:
         return None, (jsonify({"ok": False, "error": "no valid rack ids"}), 400)
 
-    script = _run_llmb_nccl_script_path()
+    # Multi-rack NCCL now runs the DIRECT path (run_nccl_mpi.sh → nccl_allreduce.sbatch:
+    # host nccl-tests + mpirun, NCCL over the IB rails). This replaces the llmb-run
+    # pyxis/enroot container, whose UCX could not see the RDMA verbs devices inside the
+    # container ("network devices 'mlx5_*:1' are not available" → no active transport →
+    # job killed). Set RACK_LLMB_NCCL_USE_CONTAINER=1 to fall back to the old container.
+    use_container = _truthy_env("RACK_LLMB_NCCL_USE_CONTAINER")
+    script = _run_llmb_nccl_script_path() if use_container else _run_nccl_mpi_script_path()
     if not _script_exists(script):
-        return None, (jsonify({"ok": False, "error": f"run_llmb_nccl script not found: {script}"}), 500)
+        return None, (jsonify({"ok": False, "error": f"NCCL launcher not found: {script}"}), 500)
 
     cmd: list[str] = ["bash", str(script)]
     reservation = (body.get("reservation") or _eget("RACK_LLMB_NCCL_RESERVATION") or "").strip()
@@ -10625,11 +10830,20 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
     dry_run = bool(body.get("dry_run"))
     if dry_run:
         cmd.append("--dry-run")
+    # Direct path only: cap the all_reduce sweep (nccl-tests -e). Default 16G so the
+    # x-rack test exercises large messages; overridable per-request or via Settings.
+    size_max = ""
+    if not use_container:
+        size_max = (body.get("size_max") or _eget("RACK_NCCL_MPI_SIZE_MAX") or "16G").strip()
+        if size_max:
+            cmd += ["--size-max", size_max]
     cmd += rack_ids
 
     display_cmd = "./" + script.name + (
         (" --reservation " + shlex.quote(reservation)) if reservation else ""
-    ) + (" --dry-run" if dry_run else "") + " " + " ".join(shlex.quote(r) for r in rack_ids)
+    ) + (" --dry-run" if dry_run else "") + (
+        (" --size-max " + shlex.quote(size_max)) if size_max else ""
+    ) + " " + " ".join(shlex.quote(r) for r in rack_ids)
     timeout = max(120, _job_env_int("RACK_LLMB_NCCL_TIMEOUT", 14400))
     return (
         {
@@ -13976,6 +14190,8 @@ def api_workflow_save():
     try:
         wf = workflow_engine.save_workflow(body)
         return jsonify({"ok": True, "workflow": wf})
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 

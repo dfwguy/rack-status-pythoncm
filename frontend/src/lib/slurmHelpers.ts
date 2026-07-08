@@ -13,6 +13,19 @@ export function parseSlurmStdOutPathFromScontrolText(text: string): string {
   return p;
 }
 
+export type SlurmSacctJob = {
+  job_id: string;
+  name: string;
+  partition: string;
+  nnodes: string;
+  nodelist: string;
+  start: string;
+  end: string;
+  elapsed: string;
+  state: string;
+  exit_code: string;
+};
+
 export type SlurmCmdJson = {
   ok?: boolean;
   error?: string;
@@ -21,6 +34,11 @@ export type SlurmCmdJson = {
   command_display?: string;
   returncode?: number;
   job_id?: string;
+  /** /api/slurm-sacct-recent */
+  jobs?: SlurmSacctJob[];
+  /** /api/slurm-job-log-path */
+  path?: string;
+  source?: string;
 };
 
 export function formatSlurmCmdDetail(data: SlurmCmdJson): string {
