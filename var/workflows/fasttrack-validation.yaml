@@ -1,0 +1,240 @@
+id: fasttrack-validation
+name: FastTrack Validation (VR200/GB300/GB200)
+description: >-
+  NVIS FastTrack systems-level validation for VR200/GB300/GB200 NVL72/NVL144 clusters,
+  modeled on Giovanni Mascari's MOP (nvis-npi/validation-mops ::
+  VR200_GBx00_FastTrack_Validation_MOP.md). Phase 1 = health, stress & workload
+  validation (NHC/nvbandwidth/dcgmi -> single-rack NCCL, MNUBERGEMM, Nemotron-H ->
+  cross-rack NCCL + Nemotron); Phase 2 = diagnostics & remediation (troubleshooting
+  cycle / single-node Nemotron -> remediate -> re-test); Phase 3 = optional customer /
+  Exemplar acceptance. Rack-by-rack: validate, remediate, scale to cross-rack, then
+  hand over "Hardware Good". Run-time params: rack, nodelist, scale, gpus_per_node,
+  log_dir, xrack_nodelist, xrack_scale.
+version: 1
+target:
+  mode: rack
+  racks: []
+  nodes: []
+mermaid: |
+  flowchart TD
+    start(["Start - confirm target rack & prerequisites"]) -->|"begin"| inventory["Inventory & Health (NHC / nvidia-smi / dcgmi)"]
+    inventory -->|"healthy"| clusterminder(["ClusterMinder telemetry & firmware baseline"])
+    inventory -->|"errors"| troubleshoot(["Phase 2 - Troubleshooting cycle"])
+    clusterminder --> cvt(["CVT - Layer-1 cabling vs golden P2P"])
+    cvt --> preflight["Pre-flight (nvbandwidth / dcgmi -r 4)"]
+    preflight -->|"pass"| nccl_rack["Single-rack NCCL collectives"]
+    preflight -->|"fail"| troubleshoot
+    nccl_rack -->|"pass"| mnubergemm["MNUBERGEMM burn-in (thermal & power)"]
+    nccl_rack -->|"fail"| rack_result{"Rack result?"}
+    mnubergemm -->|"pass"| nemo_rack["Nemotron-H 56B workload (single-rack)"]
+    mnubergemm -->|"fail"| rack_result
+    nemo_rack --> rack_result
+    rack_result -->|"within baselines"| nccl_xrack["Cross-rack NCCL collectives"]
+    rack_result -->|"hard fail"| troubleshoot
+    rack_result -->|"outside baselines"| single_node_nemo["Single-node Nemotron (min scale)"]
+    troubleshoot --> remediate(["Remediate & re-test affected steps"])
+    single_node_nemo --> remediate
+    remediate --> nccl_rack
+    nccl_xrack -->|"pass"| nemo_xrack["Cross-rack Nemotron-H scaling"]
+    nccl_xrack -->|"fail"| troubleshoot
+    nemo_xrack -->|"pass"| handover(["Handover - Hardware Good"])
+    nemo_xrack -->|"fail"| troubleshoot
+    handover --> phase3_gate{"Customer acceptance requested?"}
+    phase3_gate -->|"yes"| acceptance(["Phase 3 - Acceptance / Exemplar"])
+    phase3_gate -->|"no"| done(["Done - Validation complete"])
+    acceptance --> done
+steps:
+  - id: start
+    type: manual
+    name: Start - confirm target & prerequisites
+    instructions: >-
+      Confirm the target rack/nodelist, that BCM + Slurm (Pyxis/Enroot) + Docker are active,
+      and that the P2P/NVLink topology and inventory (MAC / Rack / CT / NVSwitch IDs) files
+      are available (MOP §3 Prerequisites). Set run params: rack, nodelist, gpus_per_node
+      (4), log_dir, and the NCCL/Nemotron scale = GPUs = 72 for GB200/GB300 (NVL72) or 144
+      for VR200 (NVL144); xrack_scale = 72/144 x #racks.
+    on_complete: inventory
+  - id: inventory
+    type: automated
+    name: Inventory & Health (NHC / nvidia-smi / dcgmi)
+    capability: sysinfo
+    command: "host:nhc"
+    method: GET
+    evaluation:
+      message_pass: "Inventory/BOM, GPU/NVLink, NIC, drive and firmware checks passed (no errors)."
+      message_fail: "NHC reported errors - branch to Phase 2 troubleshooting."
+    on_success: clusterminder
+    on_failure: troubleshoot
+  - id: clusterminder
+    type: manual
+    name: ClusterMinder telemetry & firmware baseline
+    instructions: >-
+      Deploy/run ClusterMinder to capture cluster-wide power, thermals, alerts and the
+      firmware baseline across racks and NVLink domains (see ClusterMinder-MOP.md).
+    on_complete: cvt
+  - id: cvt
+    type: manual
+    name: CVT - Layer-1 cabling vs golden P2P
+    instructions: >-
+      Run the Cable Validation Tool to verify physical host/switch cabling matches the
+      golden P2P topology for this cluster (see Cable-Validation-Tool-MOP.md).
+    on_complete: preflight
+  - id: preflight
+    type: automated
+    name: Pre-flight (nvbandwidth / dcgmi -r 4)
+    connection:
+      profile: control
+    command: "host:bash -lc 'for t in device_to_device_memcpy_read_ce device_to_device_bidirectional_memcpy_read_ce host_to_device_memcpy_ce device_to_host_memcpy_ce device_local_copy; do nvbandwidth -t $t || exit 1; done && dcgmi diag -r 4'"
+    method: GET
+    evaluation:
+      message_pass: "GPU<->GPU / host<->GPU / HBM bandwidth suite and dcgmi -r 4 diagnostics passed."
+      message_fail: "Pre-flight bandwidth/diagnostics failed - branch to Phase 2 troubleshooting."
+    on_success: nccl_rack
+    on_failure: troubleshoot
+  - id: nccl_rack
+    type: automated
+    name: Single-rack NCCL collectives
+    capability: nccl-fullrack-rounds
+    connection:
+      profile: control
+    scheduler:
+      kind: slurm
+      script: nccl_allreduce.sbatch
+      nodelist: "${nodelist}"
+      ntasks_per_node: "${gpus_per_node}"
+      output: "${log_dir}/NCCL-1Rack-${rack}_%j.out"
+    timeout: 3600
+    evaluation:
+      message_pass: "Full-rack NCCL bus bandwidth within baseline variance."
+      message_fail: "NCCL result failed/outside baseline - classify at Rack result."
+    on_success: mnubergemm
+    on_failure: rack_result
+  - id: mnubergemm
+    type: automated
+    name: MNUBERGEMM burn-in (thermal & power)
+    capability: mnubergemm-stress
+    connection:
+      profile: control
+    scheduler:
+      kind: slurm
+      script: mnubergemm.sbatch
+      nodelist: "${nodelist}"
+      ntasks_per_node: "${gpus_per_node}"
+      output: "${log_dir}/MNUBERGEMM-${rack}_%j.out"
+    timeout: 7200
+    evaluation:
+      message_pass: "MNUBERGEMM stress passed: no Xids/reboots; temps/power/clocks within range."
+      message_fail: "MNUBERGEMM stress failed (Xid / throttle / node fallout) - classify at Rack result."
+    on_success: nemo_rack
+    on_failure: rack_result
+  - id: nemo_rack
+    type: automated
+    name: Nemotron-H 56B workload (single-rack)
+    command: "host:bash -lc 'MAX_STEPS=2010 llmb-run submit -w pretrain_nemotron-h -s 56b --dtype fp8 --scale ${scale} --nodelist ${nodelist}'"
+    method: GET
+    timeout: 5400
+    evaluation:
+      message_pass: "Nemotron-H 56B reached first train step; step-time/TFLOPS within range."
+      message_fail: "Nemotron-H workload could not start/complete - classify at Rack result."
+    on_success: rack_result
+    on_failure: rack_result
+  - id: rack_result
+    type: decision
+    name: Rack result?
+    question: >-
+      Based on the single-rack NCCL, MNUBERGEMM and Nemotron results, how did the rack
+      perform against baselines?
+    options:
+      - label: Within baselines
+        next: nccl_xrack
+      - label: Hard fail (Xid / segfault / thermal)
+        next: troubleshoot
+      - label: Outside baselines
+        next: single_node_nemo
+  - id: troubleshoot
+    type: manual
+    name: Phase 2 - Troubleshooting cycle
+    instructions: >-
+      Isolate to the smallest affected unit (node / cable / link / NVLink domain). Use
+      ClusterKit BW/latency heatmaps, dcgmi diag, partnerdiag, nvlmapper and nvidia-imex-ctl
+      to find root cause. Re-seat/replace cables, align firmware/driver, isolate bad nodes.
+    on_complete: remediate
+  - id: single_node_nemo
+    type: automated
+    name: Single-node Nemotron (min scale)
+    command: "host:bash -lc 'MAX_STEPS=2010 llmb-run submit -w pretrain_nemotron-h -s 56b --dtype fp8 --scale ${gpus_per_node} --nodelist ${node}'"
+    method: GET
+    timeout: 3600
+    evaluation:
+      message_pass: "Single-node Nemotron within reference TFLOPS band."
+      message_fail: "Single-node underperforms - suspect CPU/mem/PCIe/NUMA/GPU on this host."
+    on_success: remediate
+    on_failure: remediate
+  - id: remediate
+    type: manual
+    name: Remediate & re-test affected steps
+    instructions: >-
+      Apply the remediation (cable/firmware/node), document root cause + action, then
+      re-run the affected Phase 1 tests. Requires all issues to have documented root
+      cause and no open hardware/fabric tickets before advancing.
+    on_complete: nccl_rack
+  - id: nccl_xrack
+    type: automated
+    name: Cross-rack NCCL collectives
+    capability: llmb-nccl-multirack
+    connection:
+      profile: control
+    scheduler:
+      kind: slurm
+      script: nccl_allreduce.sbatch
+      nodelist: "${xrack_nodelist}"
+      ntasks_per_node: "${gpus_per_node}"
+      output: "${log_dir}/NCCL-XRack-${rack}_%j.out"
+    timeout: 3600
+    evaluation:
+      message_pass: "Inter-rack NCCL fabric within baseline; no persistent outliers."
+      message_fail: "Cross-rack NCCL degraded - return to troubleshooting."
+    on_success: nemo_xrack
+    on_failure: troubleshoot
+  - id: nemo_xrack
+    type: automated
+    name: Cross-rack Nemotron-H scaling
+    command: "host:bash -lc 'MAX_STEPS=2010 llmb-run submit -w pretrain_nemotron-h -s 56b --dtype fp8 --scale ${xrack_scale} --nodelist ${xrack_nodelist}'"
+    method: GET
+    timeout: 7200
+    evaluation:
+      message_pass: "Cross-rack Nemotron scaling efficiency within target; TTFT recorded."
+      message_fail: "Cross-rack scaling failed/regressed - return to troubleshooting."
+    on_success: handover
+    on_failure: troubleshoot
+  - id: handover
+    type: manual
+    name: Handover - Hardware Good
+    instructions: >-
+      All racks validated within variance and remediation closed. Mark the cluster
+      "Hardware Good", tag validated nodes/NVLink domains for KPIs (GPUs validated,
+      domains validated, % capacity ready), and generate the Hand-Over Report.
+    on_complete: phase3_gate
+  - id: phase3_gate
+    type: decision
+    name: Customer acceptance requested?
+    question: >-
+      Has the customer / requesting team explicitly requested Phase 3 acceptance or
+      Exemplar verification (and provided recipes + success criteria)?
+    options:
+      - label: "Yes - acceptance requested"
+        next: acceptance
+      - label: "No - hardware-good handover only"
+        next: done
+  - id: acceptance
+    type: manual
+    name: Phase 3 - Acceptance / Exemplar
+    instructions: >-
+      Execute the requesting team's acceptance / Exemplar recipes exactly as provided on
+      the validated baseline. Capture required metrics (throughput/latency/Top500/TTFT),
+      compare against their criteria, and report validation status vs acceptance status.
+    on_complete: done
+  - id: done
+    type: manual
+    name: Done - Validation complete
+    instructions: "FastTrack validation complete. Artifacts archived; hand-over report delivered."
