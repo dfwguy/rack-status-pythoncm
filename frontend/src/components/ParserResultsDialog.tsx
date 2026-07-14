@@ -601,12 +601,14 @@ function StepTimeChart({ rows }: { rows: NemotronRow[] }) {
 
 function NemoReviewSection({
   rows,
+  rack,
   grafanaEmbed,
   grafanaUri,
   grafanaPort,
   parserDisplayTimezone,
 }: {
   rows: NemotronRow[];
+  rack?: string;
   grafanaEmbed: GrafanaEmbedPayload | null | undefined;
   grafanaUri?: string;
   grafanaPort?: string | number;
@@ -620,6 +622,7 @@ function NemoReviewSection({
         grafanaUri={grafanaUri}
         grafanaPort={grafanaPort}
         parserDisplayTimezone={parserDisplayTimezone}
+        rack={rack}
       />
     </Box>
   );
@@ -994,6 +997,7 @@ export function ParserResultsDialog({
             {effectiveTab === 2 && (
               <NemoReviewSection
                 rows={nemoRows}
+                rack={rack}
                 grafanaEmbed={result.grafana_embed}
                 grafanaUri={result.grafana_uri}
                 grafanaPort={result.grafana_port}

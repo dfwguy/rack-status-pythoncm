@@ -52,6 +52,7 @@ import {
 import { useRackCommandsStore } from "../context/RackCommandsStoreContext";
 import { RackTableCommandIndicator } from "./RackTableCommandIndicator";
 import { ParserResultsDialog } from "./ParserResultsDialog";
+import { GrafanaLinksMenu } from "./GrafanaLinksMenu";
 import { TailLogDialog } from "./TailLogDialog";
 import { HwCheckRunDialog } from "./rack/HwCheckRunDialog";
 import {
@@ -1284,6 +1285,7 @@ export function RackTable({
                           <LineChart size={18} />
                         </IconButton>
                       </Tooltip>
+                      <GrafanaLinksMenu rack={row.rack} disabled={selectMode} />
                     </Box>
                   </TableCell>
                 </TableRow>

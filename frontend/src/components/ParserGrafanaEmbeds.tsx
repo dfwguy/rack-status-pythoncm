@@ -5,6 +5,9 @@
 import Box from "@mui/material/Box";
 import Link from "@mui/material/Link";
 import { Text, Card } from "@nvidia/foundations-react-core";
+import { ExternalLink } from "lucide-react";
+import { buildGrafanaDeepLink } from "../lib/grafanaLinks";
+import { useGrafanaDeeplinks } from "../lib/useGrafanaDeeplinks";
 
 export interface GrafanaEmbedPayload {
   iframe_ready?: boolean;
@@ -67,6 +70,52 @@ export interface ParserGrafanaEmbedsProps {
   grafanaPort?: string | number;
   /** Effective Grafana timezone= (IANA or utc); same as legacy parser_display_timezone resolution. */
   parserDisplayTimezone: string;
+  /** Rack id used to scope the "Open in Grafana" deep-links (full BCM/NMC dashboards). */
+  rack?: string;
+}
+
+/**
+ * "Open in Grafana" deep-links to full BCM/NMC dashboards, scoped to this rack (and single
+ * node, when the job ran on exactly one host) plus the job's time window. These work even when
+ * iframe embedding is disabled, so they render independently of the /d-solo/ embeds below.
+ */
+function GrafanaJobDeepLinks({ rack, ge }: { rack?: string; ge: GrafanaEmbedPayload | null | undefined }) {
+  const cfg = useGrafanaDeeplinks();
+  if (!cfg || !cfg.enabled || cfg.dashboards.length === 0) return null;
+  const host = ge && ge.hosts && ge.hosts.length === 1 ? ge.hosts[0] : undefined;
+  const fromMs = ge && ge.from_ms != null ? ge.from_ms : undefined;
+  const toMs = ge && ge.to_ms != null ? ge.to_ms : undefined;
+  const windowNote =
+    fromMs != null && toMs != null
+      ? "job time window"
+      : "live window (now-1h)";
+  const scopeNote = host ? `node ${host}` : rack ? `rack ${rack}` : "cluster";
+  return (
+    <Card style={{ padding: 12, marginBottom: 16 }}>
+      <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4 }}>
+        Open in Grafana (full dashboards)
+      </Text>
+      <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginBottom: 8 }}>
+        Scoped to {scopeNote}, {windowNote}. Opens the BCM/NMC dashboards in a new tab (no embedding required).
+      </Text>
+      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5 }}>
+        {cfg.dashboards.map((d) => (
+          <Link
+            key={d.uid}
+            href={buildGrafanaDeepLink(cfg, d, { rack, host, fromMs, toMs })}
+            target="_blank"
+            rel="noopener noreferrer"
+            variant="body2"
+            title={d.desc || d.label}
+            sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}
+          >
+            {d.label}
+            <ExternalLink size={13} />
+          </Link>
+        ))}
+      </Box>
+    </Card>
+  );
 }
 
 export function ParserGrafanaEmbeds({
@@ -74,23 +123,30 @@ export function ParserGrafanaEmbeds({
   grafanaUri,
   grafanaPort,
   parserDisplayTimezone,
+  rack,
 }: ParserGrafanaEmbedsProps) {
   if (!ge || ge.disabled) {
     return (
-      <Card style={{ padding: 16 }}>
-        <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-          {(ge && ge.note) || "Grafana embed not available."}
-        </Text>
-      </Card>
+      <Box sx={{ mt: 2 }}>
+        <GrafanaJobDeepLinks rack={rack} ge={ge} />
+        <Card style={{ padding: 16 }}>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+            {(ge && ge.note) || "Grafana embed not available."}
+          </Text>
+        </Card>
+      </Box>
     );
   }
   if (!ge.iframe_ready || ge.from_ms == null || ge.to_ms == null) {
     return (
-      <Card style={{ padding: 16 }}>
-        <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-          {ge.note || "Grafana context not available (check Slurm host expansion / embed settings)."}
-        </Text>
-      </Card>
+      <Box sx={{ mt: 2 }}>
+        <GrafanaJobDeepLinks rack={rack} ge={ge} />
+        <Card style={{ padding: 16 }}>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+            {ge.note || "Grafana context not available (check Slurm host expansion / embed settings)."}
+          </Text>
+        </Card>
+      </Box>
     );
   }
 
@@ -123,6 +179,7 @@ export function ParserGrafanaEmbeds({
 
   return (
     <Box sx={{ mt: 2 }}>
+      <GrafanaJobDeepLinks rack={rack} ge={ge} />
       <Text kind="body/bold/md" style={{ display: "block", marginBottom: 8 }}>
         Grafana — GPU thermal and power
       </Text>

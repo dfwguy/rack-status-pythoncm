@@ -387,6 +387,30 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "description": "browser, utc, or an IANA zone. When empty, the server uses the same zone as RACK_PROMETHEUS_LOG_TIMESTAMP_TZ.",
     },
     {
+        "section": "external",
+        "key": "RACK_WEB_GRAFANA_VAR_RACK",
+        "label": "Grafana rack variable",
+        "description": "Template variable name used to scope deep-linked dashboards by rack (default 'Rack' for BCM/NMC dashboards). Sent as var-<name>=<rack id>.",
+    },
+    {
+        "section": "external",
+        "key": "RACK_WEB_GRAFANA_VAR_HOST",
+        "label": "Grafana host variable",
+        "description": "Template variable name used to scope deep-linked dashboards by node/host (default 'hostname' for BCM/NMC dashboards). Sent as var-<name>=<node>.",
+    },
+    {
+        "section": "external",
+        "key": "RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS",
+        "label": "Grafana deep-link dashboards (JSON)",
+        "description": "JSON list of dashboards to expose as 'Open in Grafana' deep-links, e.g. [{\"id\":\"dcgm\",\"label\":\"GPU / DCGM\",\"uid\":\"...\",\"slug\":\"...\",\"scope\":\"host\"}]. scope = host|rack|cluster. Empty uses the built-in BCM/NMC GB200 catalog (DCGM, power, NVLink, health, Slurm, overview).",
+    },
+    {
+        "section": "external",
+        "key": "RACK_WEB_GRAFANA_DEEPLINK_DISABLED",
+        "label": "Disable Grafana deep-links",
+        "description": "Set to 1 to hide the 'Open in Grafana' deep-link menus in the rack table and parser results.",
+    },
+    {
         "section": "native_cmsh",
         "key": "RACK_STATUS_SCRIPT",
         "label": "rack_status.sh path",
@@ -3228,6 +3252,122 @@ def _rack_web_grafana_port() -> str:
     return p
 
 
+# --- Grafana deep-links (open full BCM/NMC dashboards in a new tab, scoped by rack/host) --------
+#
+# Unlike the /d-solo/ *embeds* (which need GF_SECURITY_ALLOW_EMBEDDING and a homegrown 2-panel
+# dashboard), deep-links open a full Grafana dashboard in a new tab. On a BCM 11 / Mission Control
+# (NMC) head node these dashboards already exist and are scoped by the ``$Rack`` / ``$hostname``
+# template variables — so we just build ``/d/<uid>/<slug>?var-<Rack>=..&var-<hostname>=..`` URLs.
+# The catalog below defaults to the stock NMC GB200 dashboards but is fully overridable via
+# ``RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS`` (JSON) so this is not hardwired to any one site.
+
+_GRAFANA_DEEPLINK_DEFAULT: list[dict[str, str]] = [
+    {
+        "id": "dcgm",
+        "label": "GPU / DCGM",
+        "uid": "f4f4474d-f3e1-4e73-a2dc-33c52cb07bd4",
+        "slug": "02-dgx-gb200-dcgm-dashboard",
+        "scope": "host",
+        "desc": "GPU util, temp, power, NVLink BW, XID errors, HBM (per node/GPU).",
+    },
+    {
+        "id": "power",
+        "label": "Rack power & thermal",
+        "uid": "2394651a-f07b-42d4-b0ff-affa31d0a254",
+        "slug": "05-dgx-gb200-rack-power-analysis",
+        "scope": "rack",
+        "desc": "Rack-level power draw and thermal analysis.",
+    },
+    {
+        "id": "nvlink",
+        "label": "NVLink",
+        "uid": "0f0286bc-b007-4a38-a359-8384ee11a90a",
+        "slug": "10-dgx-gb200-nvlink-dashboard",
+        "scope": "host",
+        "desc": "NVLink / NVSwitch fabric bandwidth and errors.",
+    },
+    {
+        "id": "health",
+        "label": "Health status",
+        "uid": "16a8973d-e9fd-4cdf-9649-b2041705a810",
+        "slug": "04-dgx-gb200-health-status",
+        "scope": "rack",
+        "desc": "GB200 node/GPU health status roll-up.",
+    },
+    {
+        "id": "slurm",
+        "label": "Slurm",
+        "uid": "006a04e0-fd06-4ba4-9d44-251394198796",
+        "slug": "06-slurm-dashboard",
+        "scope": "cluster",
+        "desc": "Slurm queue, allocation and node-state overview.",
+    },
+    {
+        "id": "overall",
+        "label": "SuperPOD overview",
+        "uid": "b0dfdff4-f570-47a9-949a-3ab535474c2b",
+        "slug": "01-superpod-overall-dashboard",
+        "scope": "cluster",
+        "desc": "Cluster-wide overview (all racks).",
+    },
+]
+
+
+def _grafana_var_rack() -> str:
+    return (_eget("RACK_WEB_GRAFANA_VAR_RACK") or "Rack").strip() or "Rack"
+
+
+def _grafana_var_host() -> str:
+    return (_eget("RACK_WEB_GRAFANA_VAR_HOST") or "hostname").strip() or "hostname"
+
+
+def _grafana_deeplinks_enabled() -> bool:
+    """Deep-links are enabled unless explicitly disabled; a base URL is required to be useful."""
+    if _truthy_env("RACK_WEB_GRAFANA_DEEPLINK_DISABLED"):
+        return False
+    return True
+
+
+def _grafana_deeplink_dashboards() -> list[dict[str, str]]:
+    """Parsed deep-link dashboard catalog.
+
+    Override with ``RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS`` = JSON list of objects, each with
+    ``uid`` (required), ``label``, ``slug``, ``scope`` (``host``|``rack``|``cluster``) and
+    ``desc``. Invalid JSON or a non-list falls back to the built-in NMC catalog.
+    """
+    raw = (_eget("RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS") or "").strip()
+    if not raw:
+        return [dict(d) for d in _GRAFANA_DEEPLINK_DEFAULT]
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        _logger.warning("RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS is not valid JSON; using defaults")
+        return [dict(d) for d in _GRAFANA_DEEPLINK_DEFAULT]
+    if not isinstance(parsed, list):
+        return [dict(d) for d in _GRAFANA_DEEPLINK_DEFAULT]
+    out: list[dict[str, str]] = []
+    for i, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            continue
+        uid = str(item.get("uid") or "").strip()
+        if not uid:
+            continue
+        scope = str(item.get("scope") or "rack").strip().lower()
+        if scope not in ("host", "rack", "cluster"):
+            scope = "rack"
+        out.append(
+            {
+                "id": str(item.get("id") or f"dash{i}").strip() or f"dash{i}",
+                "label": str(item.get("label") or uid).strip() or uid,
+                "uid": uid,
+                "slug": str(item.get("slug") or "d").strip() or "d",
+                "scope": scope,
+                "desc": str(item.get("desc") or "").strip(),
+            }
+        )
+    return out or [dict(d) for d in _GRAFANA_DEEPLINK_DEFAULT]
+
+
 def _iso_utc_z(ts: float) -> str:
     """RFC3339 UTC with Z suffix for Grafana ``from`` / ``to`` URL params."""
     dt = datetime.fromtimestamp(ts, tz=timezone.utc)
@@ -3511,6 +3651,10 @@ def _job_env_effective_values() -> dict[str, str]:
         "RACK_WEB_GRAFANA_DASH_UID": _grafana_dash_uid(),
         "RACK_WEB_GRAFANA_DASH_SLUG": _grafana_dash_slug(),
         "RACK_WEB_GRAFANA_TIMEZONE": (_eget("RACK_WEB_GRAFANA_TIMEZONE") or "").strip(),
+        "RACK_WEB_GRAFANA_VAR_RACK": _grafana_var_rack(),
+        "RACK_WEB_GRAFANA_VAR_HOST": _grafana_var_host(),
+        "RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS": (_eget("RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS") or "").strip(),
+        "RACK_WEB_GRAFANA_DEEPLINK_DISABLED": (_eget("RACK_WEB_GRAFANA_DEEPLINK_DISABLED") or "").strip(),
         "RACK_PROMETHEUS_BASIC_AUTH_USER": (_eget("RACK_PROMETHEUS_BASIC_AUTH_USER") or "").strip(),
         "RACK_PROMETHEUS_BASIC_AUTH_PASSWORD": (_eget("RACK_PROMETHEUS_BASIC_AUTH_PASSWORD") or "").strip(),
         "RACK_WEB_PROJECT_NAME": (_eget("RACK_WEB_PROJECT_NAME") or "").strip(),
@@ -13572,6 +13716,28 @@ def _job_environment_settings_payload() -> dict[str, object]:
         "variables": variables,
         "path": str(_job_env_overrides_path()),
     }
+
+
+@app.route("/api/grafana/deeplinks")
+def api_grafana_deeplinks():
+    """Config for 'Open in Grafana' deep-links (full dashboards scoped by rack/host, opened in a new tab).
+
+    Unlike the /d-solo/ parser embeds, these need no embedding config — they link to the existing
+    BCM/NMC dashboards. Response: ``enabled``, ``base`` (may be empty -> resolve to same host),
+    ``port``, ``var_rack`` / ``var_host`` (template var names), ``timezone`` and ``dashboards``.
+    """
+    return jsonify(
+        {
+            "ok": True,
+            "enabled": _grafana_deeplinks_enabled(),
+            "base": _rack_web_grafana_uri(),
+            "port": _rack_web_grafana_port(),
+            "var_rack": _grafana_var_rack(),
+            "var_host": _grafana_var_host(),
+            "timezone": _grafana_url_timezone_param(),
+            "dashboards": _grafana_deeplink_dashboards(),
+        }
+    )
 
 
 @app.route("/api/settings/job-environment", methods=["GET", "PUT"])

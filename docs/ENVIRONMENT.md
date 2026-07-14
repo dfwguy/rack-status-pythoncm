@@ -195,6 +195,10 @@ Requires `RACK_WEB_SECRET_KEY`, **Settings → `RACK_PROJECT_TOKEN`**, vault NVF
 | **`RACK_WEB_GRAFANA_EMBED_DISABLED`** | *(unset)* | Truthy → no iframes. |
 | **`RACK_WEB_GRAFANA_TIME_PAD_SEC`** | `120` | Time window padding (seconds). |
 | **`RACK_WEB_GRAFANA_TIMEZONE`** | *(unset)* | `browser`, `utc`, or IANA; else follows **`RACK_PROMETHEUS_LOG_TIMESTAMP_TZ`**. |
+| **`RACK_WEB_GRAFANA_VAR_RACK`** | `Rack` | Template-var name for rack-scoped deep-links (`var-<name>=<rack>`). BCM/NMC dashboards use `Rack`. |
+| **`RACK_WEB_GRAFANA_VAR_HOST`** | `hostname` | Template-var name for host-scoped deep-links (`var-<name>=<node>`). BCM/NMC dashboards use `hostname`. |
+| **`RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS`** | *(unset)* | JSON list of "Open in Grafana" deep-link dashboards (`{id,label,uid,slug,scope}`, scope=`host`\|`rack`\|`cluster`). Empty → built-in BCM/NMC GB200 catalog. |
+| **`RACK_WEB_GRAFANA_DEEPLINK_DISABLED`** | *(unset)* | Truthy → hide the "Open in Grafana" deep-link menus (rack table + parser results). |
 | **`RACK_PROMETHEUS_LOG_TIMESTAMP_TZ`** | `UTC` | Log timestamp parsing zone. |
 
 Legacy name **`RACK_APP_GRAFANA_URL`** → use **`RACK_WEB_GRAFANA_URI`**.
@@ -464,11 +468,15 @@ RACK_WEB_AUTH_USER
 RACK_WEB_COOKIE_SECURE
 RACK_WEB_GRAFANA_DASH_SLUG
 RACK_WEB_GRAFANA_DASH_UID
+RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS
+RACK_WEB_GRAFANA_DEEPLINK_DISABLED
 RACK_WEB_GRAFANA_EMBED_DISABLED
 RACK_WEB_GRAFANA_PORT
 RACK_WEB_GRAFANA_TIME_PAD_SEC
 RACK_WEB_GRAFANA_TIMEZONE
 RACK_WEB_GRAFANA_URI
+RACK_WEB_GRAFANA_VAR_HOST
+RACK_WEB_GRAFANA_VAR_RACK
 RACK_WEB_HW_CHECK                 # set by hw_check_pdsh.sh on targets (see §9)
 RACK_WEB_PAM_HELPER_PYTHON
 RACK_WEB_PAM_SERVICE
