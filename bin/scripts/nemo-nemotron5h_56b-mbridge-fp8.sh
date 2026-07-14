@@ -211,6 +211,16 @@ else
   fi
 fi
 
+# NCCL flight-recorder dump dir on NFS, mounted into the container at /nccl_traces. The training
+# container is ephemeral (enroot remove at job end), so a dump written to the container's /tmp is
+# lost (job 322). Point TORCH_NCCL_DEBUG_INFO_TEMP_FILE at this NFS-backed mount so per-rank traces
+# from a watchdog-timeout survive for post-mortem. $(pwd) is the NFS submit/log dir (same path on all
+# nodes). Override the location with NVIS_NCCL_TRACE_HOST_DIR.
+NVIS_NCCL_TRACE_HOST_DIR="${NVIS_NCCL_TRACE_HOST_DIR:-$(pwd)/nccl_traces/${SLURM_JOB_ID:-0}}"
+mkdir -p "${NVIS_NCCL_TRACE_HOST_DIR}" 2>/dev/null || true
+CONT_MOUNTS="${CONT_MOUNTS},${NVIS_NCCL_TRACE_HOST_DIR}:/nccl_traces"
+echo "INFO: NCCL flight-recorder dumps -> ${NVIS_NCCL_TRACE_HOST_DIR} (container:/nccl_traces)"
+
 srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/null
 
 ## test nccl
@@ -378,6 +388,16 @@ export NVTE_BWD_LAYERNORM_SM_MARGIN=16
 export NCCL_P2P_NET_CHUNKSIZE=2097152
 export TORCH_NCCL_HIGH_PRIORITY=1
 export PYTHONPATH=/opt/Megatron-Bridge/scripts/performance:$PYTHONPATH
+
+# NCCL flight recorder (job 320 post-mortem: DATA_PARALLEL collective hung, 10-min watchdog aborted
+# the whole run but did not name the rank that stalled FIRST). The recorder ring-buffers the last N
+# collectives per rank and, on the watchdog timeout, dumps them so the stuck rank/op is identified.
+# Dumps land on node-local /tmp (collect with pdsh after a hang: /tmp/nccl_trace_<jobid>_<rank>).
+# Low overhead; overridable via NVIS_NCCL_TRACE_BUFFER_SIZE. NCCL_DEBUG is already INFO for training.
+export TORCH_NCCL_TRACE_BUFFER_SIZE=${NVIS_NCCL_TRACE_BUFFER_SIZE:-20000}
+export TORCH_NCCL_DUMP_ON_TIMEOUT=${NVIS_NCCL_DUMP_ON_TIMEOUT:-1}
+# Dump to the NFS-mounted /nccl_traces (see CONT_MOUNTS above) so traces survive container teardown.
+export TORCH_NCCL_DEBUG_INFO_TEMP_FILE=/nccl_traces/trace_${SLURM_JOB_ID:-0}_rank
 
 ## Rule: num_gpus % (ep * et * tp * pp) == 0
 #With CUDA graphs, then expandable segments must be disabled by "unset PYTORCH_CUDA_ALLOC_CONF".

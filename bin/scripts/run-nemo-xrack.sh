@@ -102,7 +102,15 @@ echo "run-nemo-xrack: staged OK on all ${#hosts[@]} nodes"
 # NEMO_SQSH_SRC=<vetted image> would be staged but not actually used).
 export NVIS_NEMO_CONT="/raid/data/${_sqsh_b}"
 
-_out_stem="root-NEMO-${spec_tag}-${n}N"
+# Log filename uses just the racks included in the test. The arg may be a full curated nodelist
+# (real hostnames) rather than rack-ct specs; using it verbatim would blow past the 255-byte
+# filename limit for --output and make sbatch fail before writing any log (job dies ~2s,
+# ExitCode 0:53). Derive the distinct rack ids from the resolved hosts instead. Site-agnostic:
+# collapse each hostname to its "<cluster>-<rack>" prefix (first two dash-delimited segments of
+# the NVIS naming convention, e.g. bos01-b05-11-s1-dgx-05-c01 -> bos01-b05).
+_racktag=$(printf '%s\n' "${hosts[@]}" | sed -E 's/^([^-]+-[^-]+)-.*/\1/' | sort -u | paste -sd+ | tr -d ' ')
+[[ -n "${_racktag}" ]] || _racktag="${spec_tag}"
+_out_stem="root-NEMO-${_racktag}-${n}N"
 
 # Export the real scripts dir to the job so the batch script can find lib/fabric.inc.sh
 # (Slurm spools only the batch script, not lib/). Without it the fabric classifier no-ops
@@ -110,7 +118,7 @@ _out_stem="root-NEMO-${spec_tag}-${n}N"
 export NVIS_SCRIPTS_DIR="${SCRIPT_DIR}"
 sbatch -N "${n}" \
   -w "$(echo "${hosts[*]}" | tr ' ' ',')" \
-  -t 03:00:00 \
+  -t "${NVIS_NEMO_WALLTIME:-03:00:00}" \
   --job-name="NEMO-${n}N" \
   --export="ALL,NVIS_SCRIPTS_DIR=${SCRIPT_DIR},NVIS_NEMO_CONT=${NVIS_NEMO_CONT},NVIS_NCCL_PRELOAD_DISABLE=${NVIS_NCCL_PRELOAD_DISABLE:-0},NVIS_NCCL_IGNORE_COLLNET_MISMATCH=${NVIS_NCCL_IGNORE_COLLNET_MISMATCH:-1}" \
   --output="${_out_stem}-%j.txt" \
