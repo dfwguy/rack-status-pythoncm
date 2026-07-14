@@ -1,0 +1,26 @@
+id = "nta"
+name = "NVIDIA Telemetry Agent ( NTA)"
+aliases = []
+summary = "Telemetry observability"
+portfolio_role = "validation-plane"
+capability = "continuous-health"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "production"
+personas = ["InfrastructureSRE"]
+stacks = ["OOB and IB api calls wrapped in a python script ( NVIDIA tools like nvidia-smi, dcgm, Redfish URIs, etc.)"]
+scopes = ["Both (Single + Multi)"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Pradeep Kumar Shima US Gabe de la Mora US", role = "PICs listed in workbook" }]
+inputs = ["Specifications and testing logs"]
+outputs = ["Consumes Telemetry catalog and collects information leveraging various methods described in the Telemetry catalog and can be integrated into health monitoring service to provide observability into AI Infrastructure health."]
+owns = ["Telemetry observability"]
+does_not_own = []
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["TBD", "Alignment on consumption and integration to health check initiatives"] }

@@ -1,0 +1,26 @@
+id = "server-ras-catalog"
+name = "Server RAS Catalog"
+aliases = []
+summary = "Validation, Failure attribution and Debug"
+portfolio_role = "validation-plane"
+capability = "contractual-scope"
+evidence_depth = "document-verified"
+maturity = "unknown"
+deployment = "not-deployed"
+personas = ["Compute / Hardware Ops"]
+stacks = ["N/A"]
+scopes = ["Both (Single + Multi)"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Vignesh Harish Kashyap US", role = "PICs listed in workbook" }]
+inputs = ["Specifications and testing logs"]
+outputs = ["The Server-RAS-Catalog is a central catalog of server-platform RAS events and error IDs. It captures, per error, the platform applicability, description, corrected/uncorrected type, blast radius, SBIOS/software behavior, telemetry, customer guidance, Redfish log fields, and injection hooks used by NVRASTool"]
+owns = ["Validation, Failure attribution and Debug"]
+does_not_own = []
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["TBD", "Alignment on consumption and integration to health check initiatives"] }

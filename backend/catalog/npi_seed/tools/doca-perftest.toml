@@ -1,0 +1,28 @@
+id = "doca-perftest"
+name = "NVNetPerf / DOCA Perftest"
+aliases = []
+summary = "RDMA fabric bandwidth/latency benchmarking after fabric bring-up. ('NVNetPerf' is a rebrand not yet in the repo — tool is doca_perftest.)"
+portfolio_role = "test"
+capability = "building-block-diagnostic"
+evidence_depth = "code-verified"
+maturity = "active"
+deployment = "unknown"
+personas = ["E/W bisection + per-rail NIC characterization and N/S baselines after fabric bring-up."]
+stacks = ["IB / RoCE fabric"]
+execution_surfaces = ["slurm"]
+scopes = []
+phases = ["phase-2", "phase-3"]
+layers = ["layer-5"]
+phase_note = "2–3 (fabric)"
+npi_model_status = "mapped"
+owners = [{ name = "Shaul Erez", email = "serez@nvidia.com", role = "Lead / release driver (Performance)" }]
+inputs = ["Active"]
+outputs = ["test or health result"]
+owns = ["test definition and execution described in the legacy report"]
+does_not_own = ["portfolio-wide health semantics unless explicitly stated"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/performance/doca-perftest", branch = "main", commit = "92a6e03", path_prefix = "", id = "primary" }]
+reports = ["reports/building-blocks.md"]
+tests = [{ name = "RDMA fabric BW/latency", runs = "Traffic patterns one-to-one, one-to-many, many-to-one, all-to-all, bisection, ring; verbs read/write/send/write_imm (+atomic), RC/UC, uni/bidir.", parameters = "topology partitions GLOBAL/RAILED/CROSS_RAILED/LOCAL/REMOTE/REMOTE_CROSS_RAILED; pass via --bw_threshold/--lat_threshold; Slurm hostlist -n 'node[001-008]'", code = [{ label = "README.md", path = "README.md", line = 0, url = "https://gitlab-master.nvidia.com/performance/doca-perftest/-/blob/main/README.md", repository_id = "primary", revision = "92a6e03" }, { label = "meson.build", path = "meson.build", line = 0, url = "https://gitlab-master.nvidia.com/performance/doca-perftest/-/blob/main/meson.build", repository_id = "primary", revision = "92a6e03" }], primitives = ["rdma-fabric"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "rdma-fabric-bw-latency" }]
+sources = ["legacy-generator", "local-source-audit"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Highest lifetime committer Ben Lugassi (blugassi@nvidia.com) — alt PIC."] }
+component_kind = "executable-payload"

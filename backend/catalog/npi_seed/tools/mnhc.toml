@@ -1,0 +1,28 @@
+id = "mnhc"
+name = "MNHC"
+aliases = []
+summary = "Config-driven multi-node health-rule engine. Ingests rack telemetry, evaluates operator-supplied rules (12 signal types), emits Health Events. Ships no production catalog — operators define rules."
+portfolio_role = "test-framework"
+capability = "screen-test-execution"
+evidence_depth = "code-verified"
+maturity = "active"
+deployment = "not-deployed"
+personas = ["CSP Tenants, Enterprise Customers, Internal Engineering Teams"]
+stacks = ["Go, Helm, sqlite. Configuration driven rules engine that converts raw scraped / streamed rack data into structured, enriched Health Events"]
+execution_surfaces = ["host", "kubernetes"]
+scopes = ["Multi Node"]
+phases = ["phase-3", "phase-4"]
+layers = ["layer-6"]
+phase_note = "3 / 4"
+npi_model_status = "mapped"
+owners = [{ name = "Nick Curry", email = "ncurry@nvidia.com", role = "Lead maintainer (DCGM)" }]
+inputs = ["Switch Tray NVUE API, Compute Tray Tools, Compute Tray Agents (DCGM-Exporter, Fleet Inteliigence Agent, etc), RedFish API, RedFish Server-Sent Events, NiCo Health OTLP Logs"]
+outputs = ["Health monitoring"]
+owns = ["Rules-engine consumption"]
+does_not_own = ["Catalog ownership"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/dcgm/mnhc/mnhc", branch = "main", commit = "a24dbb9", path_prefix = "", id = "primary" }]
+reports = ["reports/framework-mnhc.md"]
+tests = [{ name = "Signal / rule types", runs = "12 evaluation methods over telemetry.", parameters = "value, rate, counter, label_value, label_compare, label_set, present, count, field_compare, uniform, label_uniform, diagnostic; ops > < = != in not_in; severity warning/error/critical", code = [{ label = "internal/model/test.go", path = "internal/model/test.go", line = 0, url = "https://gitlab-master.nvidia.com/dcgm/mnhc/mnhc/-/blob/main/internal/model/test.go", repository_id = "primary", revision = "a24dbb9" }], primitives = ["host-health-observation"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "signal-rule-types" }, { name = "Active diagnostics wrapped", runs = "Runs nvbandwidth, nccl-tests, nvloom, dcgm-mndiag as diagnostic-type signals.", parameters = "nvbandwidth multinode-read/write-ce; nccl all-reduce/all-to-all; nvloom fabric-smoke; dcgm-mndiag mnubergemm", code = [{ label = "internal/diagnostics/catalog.go", path = "internal/diagnostics/catalog.go", line = 0, url = "https://gitlab-master.nvidia.com/dcgm/mnhc/mnhc/-/blob/main/internal/diagnostics/catalog.go", repository_id = "primary", revision = "a24dbb9" }], primitives = ["nccl-collectives", "dcgm-eud", "gpu-copy-bandwidth", "nvlink-fabric-characterization"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "active-diagnostics-wrapped" }, { name = "Example catalogs", runs = "Demonstration tests (temperature, error-rate, firmware uniformity, NMX-C fabric events).", parameters = "examples only — not shipped policy", code = [{ label = "examples/tests/", path = "examples/tests", line = 0, url = "https://gitlab-master.nvidia.com/dcgm/mnhc/mnhc/-/blob/main/examples/tests", repository_id = "primary", revision = "a24dbb9" }], primitives = [], sources = [], coverage_status = "not-applicable", check_id = "example-catalogs", coverage_rationale = "Records example catalogs rather than deployed validation policy or a workload." }]
+sources = ["legacy-generator", "cross-nvidia-workbook", "local-source-audit"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Mgr Brent Stolle (bstolle@nvidia.com); 2nd dev Yu-Chen Lin.", "Can consume data from Compute Tray Agents, NiCo Health, Rack Scale Analyzer. Emits Health Events destined for tools like Minvera.", "Implement better support for go-health / ATLAS catalog.", "Decision needed: Schema boundary"] }
+relationships = [{ target = "go-health", type = "candidate_for_convergence", summary = "Legacy report records that mnhc candidate for convergence go-health.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "panoptes", type = "feeds", summary = "Legacy report records that mnhc feeds panoptes.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "nvbandwidth", type = "invokes", summary = "internal/diagnostics/catalog.go declares MNHC nvbandwidth multi-node copy-engine read/write presets and its diagnostic runner.", sources = ["local-source-audit"], review_status = "verified", evidence_refs = [{ tool_id = "mnhc", check_id = "active-diagnostics-wrapped" }] }, { target = "nccl-tests", type = "invokes", summary = "Checked source repos/mnhc/internal/diagnostics/catalog.go: ToolNCCLTests declares the nccl-tests runner and all-reduce, all-to-all, and suite presets for all_reduce_perf and alltoall_perf.", sources = ["local-source-audit"], review_status = "verified", evidence_refs = [{ tool_id = "mnhc", check_id = "active-diagnostics-wrapped" }] }, { target = "nvloom", type = "invokes", summary = "Checked source repos/mnhc/internal/diagnostics/catalog.go declares ToolNVLoom and its fabric-smoke preset; internal/diagnostics/command.go:42-72 builds nvloom_cli diagnostic commands.", sources = ["local-source-audit"], review_status = "verified", evidence_refs = [{ tool_id = "mnhc", check_id = "active-diagnostics-wrapped" }] }, { target = "dcgm", type = "invokes", summary = "Checked source repos/mnhc/internal/diagnostics/catalog.go:158-170 declares ToolDCGMMnDiag and its mnubergemm preset; internal/diagnostics/command.go:93-109 builds dcgmi mndiag execution.", sources = ["local-source-audit"], review_status = "verified", evidence_refs = [{ tool_id = "mnhc", check_id = "active-diagnostics-wrapped" }] }]

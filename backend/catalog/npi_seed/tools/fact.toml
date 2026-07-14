@@ -1,0 +1,27 @@
+id = "fact"
+name = "NVIDIA Attribution (FACT)"
+aliases = []
+summary = "Evidence-bearing failure attribution service: combines workload context and observations to classify workload/node failures and return symptoms with provenance."
+portfolio_role = "failure-attribution"
+capability = "failure-attribution"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "production"
+personas = ["CSP Tenants"]
+stacks = ["Attribution library + REST attribution service + Attribution Blueprint/SDK + Slurm/Kueue adapters; containerized/Helm deployment; internal PM pipeline on Slurm using Loki, Prometheus/Mimir, NVDataflow/Kinesis, and Elasticsearch/ELK"]
+scopes = ["Both (Single + Multi)"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "outside-core-model"
+owners = [{ name = "Ben Gueret", email = "bgueret@nvidia.com", role = "product manager" }, { name = "Aaron Blakeman", email = "ablakeman@nvidia.com", role = "primary developer listed in legacy contacts" }, { name = "Pasha Shamis", email = "pshamis@nvidia.com", role = "engineering contact listed in workbook and legacy contacts" }]
+inputs = ["Workload metadata plus application/syslog/fabric logs, metrics, scheduler context, and telemetry observations"]
+outputs = ["Evidence-bearing workload and node/global failure attribution, symptoms, and provenance"]
+owns = ["Attribution verdicts"]
+does_not_own = ["Test or benchmark execution", "Automatic remediation"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/fact/fact-service" }]
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook", "legacy-generator"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Pin a revision and add a source audit for fact/fact-service.", "Confirm the accountable engineering owner versus product manager and primary developer roles.", "Interacts with Health Validation and broader DSX resilience portfolio", "Confirm scope, boundaries, and interaction points", "Decision needed: Attr vs HV split"] }
+relationships = [{ target = "panoptes", type = "feeds", summary = "Legacy report records that fact feeds panoptes.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "mnhc", type = "counterpart_of", summary = "Workbook identifies an interface between fact and mnhc.", sources = ["cross-nvidia-workbook"], review_status = "review-needed" }]

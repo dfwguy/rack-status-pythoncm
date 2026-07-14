@@ -1,0 +1,27 @@
+id = "xpa"
+name = "XPA"
+aliases = []
+summary = "Documented error-analysis/catalog-facing initiative. Its repository identity, current runtime behavior, and actuator authority remain unverified."
+portfolio_role = "reference-catalog"
+capability = "error-catalog"
+evidence_depth = "document-verified"
+maturity = "unknown"
+deployment = "not-deployed"
+personas = ["Compute / Hardware Ops"]
+stacks = ["Catalog driven CLI tool built with python"]
+scopes = ["Single Node"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Pradeep Kumar Shima US Satyajit Desai US Alisha Joshi US", role = "PICs listed in workbook" }]
+inputs = ["Specifications and customer fleet issue learnings"]
+outputs = ["Workbook-described XID mapping/correlation and fleet analysis claims; code evidence and product identity are still unverified"]
+owns = ["Debuggability, Observability"]
+does_not_own = ["Test or benchmark execution", "Verified remediation authority"]
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Relies on XID Catalog. Same logic used by FACT.", "Alignment on consumption and integration to health check initiatives", "Decision needed: Confirm scope"] }
+relationships = [{ target = "xid-catalog", type = "uses_catalog", summary = "Workbook identifies an interface between xpa and xid-catalog.", sources = ["cross-nvidia-workbook"], review_status = "review-needed" }]

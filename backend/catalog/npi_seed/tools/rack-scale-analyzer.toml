@@ -1,0 +1,27 @@
+id = "rack-scale-analyzer"
+name = "Rack Scale Analyzer"
+aliases = []
+summary = "Listen to streamed in redfish events from NICo HW health and NVOS events from Minerva collector. Issue in one rack component (compute or switch or rack level lead to events in components). Aims to co-relate events at nvl domain scale and contribute rules to centralized health catalog to improve and drive consistency around resolution actions."
+portfolio_role = "health-monitoring"
+capability = "continuous-health"
+evidence_depth = "document-verified"
+maturity = "unknown"
+deployment = "not-deployed"
+personas = ["Infra operators."]
+stacks = ["Go based containerized service (as an OTEL Connector) that listens to OTEL Logs/Metrics based stream of events and applies grrouping policy for Compute and Scale up Domain level events."]
+scopes = ["Multi Node"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Sumeet Kochar US; Matt Koci US", role = "PICs listed in workbook" }]
+inputs = ["NICO HW health OTEL sink. Produces structured NVL Domain level health records in JSON with resolution actions. Leverages and contributes to health catalog"]
+outputs = ["Health monitoring / consumer"]
+owns = ["scaleup;nvl domain telemetry"]
+does_not_own = ["Catalog ownership; uses it and contributes to it"]
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Likely overlap with XPA for control plane XID/CPER lookup. Dependent on NiCo-health for OOB streaming compute logs and Rack Switch telemetry - from Minerva Collector or NiCo-health.", "Confirm PIC and baseline scope", "Decision needed: Confirm scope"] }
+relationships = [{ target = "nico-health", type = "consumes", summary = "Workbook identifies an interface between rack-scale-analyzer and nico-health.", sources = ["cross-nvidia-workbook"], review_status = "review-needed" }]

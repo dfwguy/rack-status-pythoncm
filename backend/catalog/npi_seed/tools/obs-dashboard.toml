@@ -1,0 +1,27 @@
+id = "obs-dashboard"
+name = "OBS Dashboard (aka DCPS dashboard)"
+aliases = []
+summary = "Debuggability, Observability"
+portfolio_role = "validation-plane"
+capability = "continuous-health"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "production"
+personas = ["Compute / Hardware Ops"]
+stacks = ["Provisioning check logs (NVVCT), Field Diag logs, live oob/rf telemetry and Nvbugs"]
+scopes = ["Both (Single + Multi)"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Pradeep Kumar Shima US Gabe de la Mora US", role = "PICs listed in workbook" }]
+inputs = ["Provisioning check logs (NVVCT), Field Diag logs, live oob/rf telemetry and Nvbugs"]
+outputs = ["Holistic health status of each rack in colossus (Provisoned health, Screened health, Telemetry Health, User reported health)"]
+owns = ["Debuggability, Observability"]
+does_not_own = []
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Relies on NTA", "Alignment on consumption and integration to health check initiatives"] }
+relationships = [{ target = "nta", type = "consumes", summary = "Workbook identifies an interface between obs-dashboard and nta.", sources = ["cross-nvidia-workbook"], review_status = "review-needed" }]

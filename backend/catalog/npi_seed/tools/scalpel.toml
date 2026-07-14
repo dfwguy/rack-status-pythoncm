@@ -1,0 +1,28 @@
+id = "scalpel"
+name = "SCALPEL"
+aliases = []
+summary = "GPU-telemetry analytics pipeline. Core archives and processes Prometheus data into Parquet/feature datasets; the DGX Cloud companion adds NVIDIA-specific analytics, RMA policy, and offline research prediction. It is not a validation workload runner or deployed remediation service."
+portfolio_role = "telemetry-analytics"
+capability = "telemetry-analytics"
+evidence_depth = "code-verified"
+maturity = "active"
+deployment = "unknown"
+personas = ["Telemetry ingestion for GPU-failure investigation; predictive/RMA pieces are research-stage in the companion repo."]
+stacks = ["Agnostic (Python)"]
+execution_surfaces = ["scheduler-agnostic"]
+scopes = []
+phases = ["phase-3", "phase-4"]
+layers = []
+phase_note = "3–4 (research)"
+npi_model_status = "outside-core-model"
+owners = [{ name = "Tyler House", email = "thouse@nvidia.com", role = "Owner / maintainer (SysEng) ⚠ inferred" }]
+inputs = ["Passive"]
+outputs = ["Archived Prometheus telemetry, Parquet/feature datasets, and companion analysis/RMA-eligibility artifacts"]
+owns = ["Telemetry ingestion, processing, storage coordination, and companion analytics integrations"]
+does_not_own = ["Diagnostic or benchmark workload execution", "Deployed real-time inference", "Automatic alerting, node drain, or remediation"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/dgxc-cosi/syseng/scalpel", branch = "main", commit = "03f5b18", path_prefix = "", id = "core" }, { url = "https://gitlab-master.nvidia.com/dgxc-cosi/syseng/scalpel-dgx-cloud", branch = "main", commit = "6d9e618", path_prefix = "scalpel_dgx_cloud/", id = "companion" }]
+reports = ["reports/building-blocks.md"]
+tests = [{ name = "Telemetry ingestion (core)", runs = "Prometheus time-series → JSON.gz archives → Parquet → feature datasets. CLI: archive / process-archives / pipeline / sync / query / fetch / cleanup / mark. No ML in the core.", parameters = "checkpoint state in Postgres/SQLite; generic PromQL batch query", code = [{ label = "docs/DESIGN.md", path = "docs/DESIGN.md", line = 0, url = "https://gitlab-master.nvidia.com/dgxc-cosi/syseng/scalpel/-/blob/main/docs/DESIGN.md", repository_id = "core", revision = "03f5b18" }], primitives = [], sources = [], coverage_status = "not-applicable", check_id = "telemetry-ingestion-core", coverage_rationale = "Describes telemetry ingestion rather than an active validation-domain check." }, { name = "Companion analytics", runs = "NVIDIA/DCGM metrics, FACT/Maestro/Panoptes/Stackumen clients, feature engineering, health scoring, Kaplan-Meier/MTBF, analysis/predictors, RMA strike/eligibility.", parameters = "research: XID-149 predicted from per-port BER (77% / ~44h lead, backtest)", code = [{ label = "analysis/predictors/", path = "scalpel_dgx_cloud/analysis/predictors", line = 0, url = "https://gitlab-master.nvidia.com/dgxc-cosi/syseng/scalpel-dgx-cloud/-/blob/main/scalpel_dgx_cloud/analysis/predictors", repository_id = "companion", revision = "6d9e618" }, { label = "rma/", path = "scalpel_dgx_cloud/rma", line = 0, url = "https://gitlab-master.nvidia.com/dgxc-cosi/syseng/scalpel-dgx-cloud/-/blob/main/scalpel_dgx_cloud/rma", repository_id = "companion", revision = "6d9e618" }], primitives = [], sources = [], coverage_status = "not-applicable", check_id = "companion-analytics", coverage_rationale = "Describes analytics and research behavior rather than a validation-domain check." }]
+sources = ["legacy-generator", "local-source-audit"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["194/200 commits; 2nd dev Aaron Woods (awoods@nvidia.com); Jira GPUHEALTH."] }
+relationships = [{ target = "panoptes", type = "feeds", summary = "Legacy report records that scalpel feeds panoptes.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "fact", type = "feeds", summary = "Legacy report records that scalpel feeds fact.", sources = ["legacy-generator"], review_status = "review-needed" }]

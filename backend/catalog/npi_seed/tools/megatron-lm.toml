@@ -1,0 +1,28 @@
+id = "megatron-lm"
+name = "Megatron-LM"
+aliases = ["Megatron"]
+summary = "Large-model pretraining implementation used as a workload dependency by validation frameworks. It supplies executable training workloads; it is not a portfolio executor, certification framework, or universal performance target."
+portfolio_role = "test"
+capability = "benchmark-performance"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "unknown"
+personas = ["Framework maintainers and operators selecting representative pretraining workloads."]
+stacks = ["Python / PyTorch / distributed training; executor-provided launcher and container"]
+execution_surfaces = ["scheduler-agnostic"]
+scopes = []
+phases = ["phase-3", "phase-4"]
+layers = ["layer-4"]
+phase_note = "3–4 when a framework selects a Megatron-LM workload; the dependency itself sets no gate."
+npi_model_status = "mapped"
+owners = []
+inputs = ["Executor-provided model configuration, training data, GPU topology, launcher, and container"]
+outputs = ["Pretraining workload progress and throughput measurements"]
+owns = ["Large-model pretraining implementation and workload code"]
+does_not_own = ["Portfolio workload scheduling", "Certification workflow orchestration", "A universal platform target, pass/fail policy, or remediation"]
+repositories = [{ url = "https://github.com/NVIDIA/Megatron-LM" }, { url = "ssh://git@gitlab-master.nvidia.com:12051/ADLR/megatron-lm.git" }]
+reports = []
+tests = [{ name = "Representative pretraining workload", runs = "Provides pretraining workload code that a framework can configure and launch for representative training performance evidence.", parameters = "Model, scale, launcher, container, and target are deployment-specific; no platform target is asserted here.", code = [{ label = "pretrain_gpt.py", path = "pretrain_gpt.py", line = 0, url = "https://github.com/NVIDIA/Megatron-LM/blob/main/pretrain_gpt.py" }, { label = "README.md", path = "README.md", line = 0, url = "https://github.com/NVIDIA/Megatron-LM/blob/main/README.md" }], primitives = ["nemotron-megatron"], sources = [], coverage_status = "attributed", check_id = "representative-pretraining-workload" }]
+sources = []
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Audit and pin the public Megatron-LM revision before upgrading evidence depth.", "The internal ADLR repository and revision are selected per deployment; do not treat any one Maestro configuration pin as a global revision."] }
+component_kind = "workload-asset"

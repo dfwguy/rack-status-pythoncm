@@ -1,0 +1,29 @@
+id = "nvis-nhc"
+name = "NVIS-NHC"
+aliases = []
+summary = "NVIS field node health checks (LBNL nhc-based) for OEM/ROW hardware where NVSM is absent. Single-node pre-workload conformance."
+portfolio_role = "test"
+capability = "building-block-diagnostic"
+evidence_depth = "code-verified"
+maturity = "active"
+deployment = "production"
+personas = ["NVIS field deployment engineers / Cluster operators (ROW + APAC)"]
+stacks = ["Directly from CI, README, and scripts"]
+execution_surfaces = ["host", "slurm", "kubernetes"]
+scopes = ["Single Node"]
+phases = ["phase-2"]
+layers = ["layer-5"]
+phase_note = "2 (NVIS field)"
+npi_model_status = "mapped"
+owners = [{ name = "Maksim Kunin", email = "mkunin@nvidia.com", role = "Top maintainer (nvis-row)" }]
+inputs = ["Extracted directly from the check scripts (nvidia-smi, dmidecode, ipmitool, sysfs, etc.)"]
+outputs = ["Node-level health validation (pre-workload readiness checks for firmware, GPU, IB, storage, network, OS, and DMI conformance)"]
+owns = ["test definition and execution described in the legacy report", "Node-level configuration and hardware conformance validation"]
+does_not_own = ["portfolio-wide health semantics unless explicitly stated"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/nvis-row/nvis-nhc", branch = "main", commit = "b5b3d43", path_prefix = "", id = "primary" }]
+reports = ["reports/building-blocks.md"]
+tests = [{ name = "Node conformance checks", runs = "BMC/IPMI credentials, OFED/IB firmware, NVLink, GPU vbios/driver/inforom, DCGM diag, BIOS/DMI conformance (dominant check), HBM remap, XID, power, ACS, IB link flaps.", parameters = "expected values hardcoded per-vendor nhc.conf.<MODEL> (DGX/ASUS/DELL/LENOVO/SMC/GB300); commands nvidia-smi, dmidecode, ipmitool, ofed_info, dcgmi", code = [{ label = "GH_nhc.conf", path = "GH_nhc.conf", line = 0, url = "https://gitlab-master.nvidia.com/nvis-row/nvis-nhc/-/blob/main/GH_nhc.conf", repository_id = "primary", revision = "b5b3d43" }], primitives = ["node-hardware-firmware-conformance"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "node-conformance-checks" }]
+sources = ["legacy-generator", "cross-nvidia-workbook", "local-source-audit"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Team lead Giovanni Mascari (gmascari@nvidia.com); devs Benjamin Barthe, Gauthier Delerce.", "Overlaps with Health Validation / Health Catalog (canonical check definitions); NVSM (NVIS native health tooling); DCGM (GPU health checks). NVIS-NHC is used where NVIS/NVSM is absent (OEM hardware) or where those tools fall short. Active go-health trial opportunity proposed — would consume Health Validation catalog."] }
+relationships = [{ target = "go-health", type = "candidate_for_convergence", summary = "Legacy report records that nvis-nhc candidate for convergence go-health.", sources = ["legacy-generator"], review_status = "review-needed" }]
+component_kind = "diagnostic-package"

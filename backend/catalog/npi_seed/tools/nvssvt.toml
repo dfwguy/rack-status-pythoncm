@@ -1,0 +1,28 @@
+id = "nvssvt"
+name = "NVSSVT"
+aliases = []
+summary = "NVIDIA System Software Validation Tool — server/system SW & FW verification run from a client against a device-under-test. The SNST snst-nvssvt subtest."
+portfolio_role = "test"
+capability = "building-block-diagnostic"
+evidence_depth = "code-verified"
+maturity = "active"
+deployment = "unknown"
+personas = ["Incoming server / firmware qualification (Phase 2) and the SNST snst-nvssvt subtest (Phase 3)."]
+stacks = ["BMC (Redfish+IPMI) + host SSH"]
+execution_surfaces = ["host", "out-of-band"]
+scopes = []
+phases = ["phase-2", "phase-3"]
+layers = ["layer-5"]
+phase_note = "2–3"
+npi_model_status = "mapped"
+owners = [{ name = "Sanjana Kandi", email = "skandi@nvidia.com", role = "Author / owner (DGX SPS)" }, { name = "Rohith Sudheer", email = "rsudheer@nvidia.com", role = "primary developer" }]
+inputs = ["Active"]
+outputs = ["test or health result"]
+owns = ["test definition and execution described in the legacy report"]
+does_not_own = ["portfolio-wide health semantics unless explicitly stated"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/dgx/sps/nvssvt", branch = "dev", commit = "adf7258", path_prefix = "", id = "primary" }]
+reports = ["reports/building-blocks.md"]
+tests = [{ name = "Server SW/FW verification", runs = "Runs from a client host against a DUT over BMC + host SSH; 27 platform configs.", parameters = "./nvssvt --bmcip --bmcuser --bmcpwd --hostip ... --config <platform.yaml>", code = [{ label = "README.md", path = "README.md", line = 0, url = "https://gitlab-master.nvidia.com/dgx/sps/nvssvt/-/blob/dev/README.md", repository_id = "primary", revision = "adf7258" }], primitives = ["node-hardware-firmware-conformance"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "server-sw-fw-verification" }, { name = "Compliance / RAS / firmware", runs = "OCP compliance suite, RAS incl. EINJ error injection, Redfish/DMTF checks, firmware update/verify, OOB log collection.", parameters = "src/resiliency*, firmware_update/, firmware_security.py", code = [{ label = "src/firmware_update/", path = "src/firmware_update", line = 0, url = "https://gitlab-master.nvidia.com/dgx/sps/nvssvt/-/blob/dev/src/firmware_update", repository_id = "primary", revision = "adf7258" }], primitives = ["node-hardware-firmware-conformance"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "compliance-ras-firmware" }, { name = "Microbenchmarks", runs = "DGEMM/cublas, nvbandwidth, stream, fma, multichase, fio compute/IO sanity.", parameters = "invoked by Hobbits as snst-nvssvt profile gb200_local", code = [{ label = "src/microbenchmarks.py", path = "src/microbenchmarks.py", line = 0, url = "https://gitlab-master.nvidia.com/dgx/sps/nvssvt/-/blob/dev/src/microbenchmarks.py", repository_id = "primary", revision = "adf7258" }], primitives = ["server-software-firmware-validation"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "microbenchmarks" }]
+sources = ["legacy-generator", "local-source-audit"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["README co-author Deepak Rajpurohit (email unresolved)."] }
+component_kind = "diagnostic-package"

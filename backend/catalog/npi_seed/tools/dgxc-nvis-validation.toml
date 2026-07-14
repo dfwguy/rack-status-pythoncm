@@ -1,0 +1,28 @@
+id = "dgxc-nvis-validation"
+name = "DGXC-NVIS-Validation"
+aliases = []
+summary = "The contract: a 3×3 matrix of nine validation-requirement docs (platform × executing party) + a handover-generator that emits the acceptance .docx. ~30 validation activities with required evidence and pass/fail criteria."
+portfolio_role = "test-framework"
+capability = "screen-test-execution"
+evidence_depth = "code-verified"
+maturity = "active"
+deployment = "unknown"
+personas = ["Phase-1 fixes validation scope; Phase-5 generates the Technical Handover + evidence bundle."]
+stacks = ["Docs + Python generator"]
+execution_surfaces = ["scheduler-agnostic"]
+scopes = []
+phases = ["phase-1", "phase-5"]
+layers = ["layer-1"]
+phase_note = "1 / 5"
+npi_model_status = "mapped"
+owners = [{ name = "Joe Handzik", email = "jhandzik@nvidia.com", role = "Owner / tech lead (NVIS)" }]
+inputs = ["n/a"]
+outputs = ["test or health result"]
+owns = ["test definition and execution described in the legacy report"]
+does_not_own = ["portfolio-wide health semantics unless explicitly stated"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/nvis-npi/DGXC-NVIS-Validation", branch = "main", commit = "4038205", path_prefix = "", id = "primary" }]
+reports = ["reports/framework-dgxc-nvis-validation.md"]
+tests = [{ name = "Validation activities + evidence", runs = "~30 activities: factory logs, physical/inventory, fabric bring-up, pre-validation perf, single-node (dcgmi -r 4, NCCL loopback/single-node, NVLoom, MNUbergemm, Nemotron), rack/multi-rack, checkpoint, Exemplar.", parameters = "per-activity required evidence + pass/fail; Exemplar 512 GPUs, ±5% of NVIDIA RA baseline", code = [{ label = "handover-generator/evidence.yaml", path = "handover-generator/evidence.yaml", line = 0, url = "https://gitlab-master.nvidia.com/nvis-npi/DGXC-NVIS-Validation/-/blob/main/handover-generator/evidence.yaml", repository_id = "primary", revision = "4038205" }, { label = "generate_handover.py", path = "handover-generator/generate_handover.py", line = 0, url = "https://gitlab-master.nvidia.com/nvis-npi/DGXC-NVIS-Validation/-/blob/main/handover-generator/generate_handover.py", repository_id = "primary", revision = "4038205" }], primitives = [], sources = [], coverage_status = "not-applicable", check_id = "validation-activities-evidence", coverage_rationale = "Summarizes contractual validation activities and evidence rather than one runnable validation-domain check." }]
+sources = ["legacy-generator", "local-source-audit"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Mgr Brent Strickland (bstrickland@nvidia.com); 2nd dev Charles Peri."] }
+relationships = [{ target = "hobbits", type = "scopes", summary = "Legacy report records that dgxc-nvis-validation scopes hobbits.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "excalibur", type = "scopes", summary = "Legacy report records that dgxc-nvis-validation scopes excalibur.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "aresbench", type = "scopes", summary = "Legacy report records that dgxc-nvis-validation scopes aresbench.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "stormbreaker", type = "scopes", summary = "Legacy report records that dgxc-nvis-validation scopes stormbreaker.", sources = ["legacy-generator"], review_status = "review-needed" }]

@@ -1,0 +1,26 @@
+id = "panoptes"
+name = "Panoptes / Kratos"
+aliases = []
+summary = "Analytics surface referenced by the legacy relationship graph."
+portfolio_role = "validation-plane"
+capability = "continuous-health"
+evidence_depth = "document-verified"
+maturity = "unknown"
+deployment = "unknown"
+personas = []
+stacks = []
+scopes = []
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "outside-core-model"
+owners = []
+inputs = []
+outputs = []
+owns = []
+does_not_own = []
+repositories = []
+reports = []
+tests = []
+sources = ["legacy-generator"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = [] }

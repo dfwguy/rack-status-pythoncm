@@ -36,6 +36,7 @@ REPO_ROOT = APP_DIR.parent
 TABLE_PLATFORMS = "platforms"
 TABLE_TOOLS = "tools"
 TABLE_PROJECTS = "projects"
+TABLE_NPI_TOOLS = "npi_tools"
 TABLE_META = "meta"
 
 SCHEMA_VERSION = 1

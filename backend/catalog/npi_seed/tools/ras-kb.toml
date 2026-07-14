@@ -1,0 +1,26 @@
+id = "ras-kb"
+name = "RAS KB"
+aliases = []
+summary = "Debuggability, Observability"
+portfolio_role = "validation-plane"
+capability = "contractual-scope"
+evidence_depth = "document-verified"
+maturity = "unknown"
+deployment = "not-deployed"
+personas = ["Compute / Hardware Ops"]
+stacks = ["Stored in PostGress DB, has MCP access for health agents"]
+scopes = ["Single Node"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Erwin Tsaur US John Holm US", role = "PICs listed in workbook" }]
+inputs = ["Specifications , error injection testing and customer fleet issues"]
+outputs = ["RAS Knowledge Base intended to be the source of truth for platform and rack RAS errors, so raw CPER/XID/HMC data can be turned into consistent root-cause context, fixes, errata, and next steps for humans and AI agents"]
+owns = ["Debuggability, Observability"]
+does_not_own = []
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["TBD", "Alignment on consumption and integration to health check initiatives"] }

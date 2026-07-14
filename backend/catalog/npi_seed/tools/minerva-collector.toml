@@ -1,0 +1,26 @@
+id = "minerva-collector"
+name = "Minerva Collector"
+aliases = []
+summary = "Collection / telemetry layer for various protocols (OTLP, syslog, gNMI)"
+portfolio_role = "validation-plane"
+capability = "continuous-health"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "production"
+personas = ["InfrastructureSRE"]
+stacks = ["OpenTelemetry-based Minerva collector"]
+scopes = ["Both (Single + Multi)"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Bhupesh Kothari", role = "PIC listed in component inventory" }, { name = "Rahul Aggarwal", role = "PIC listed in component inventory" }]
+inputs = ["Full stack AI telemetry"]
+outputs = ["Telemetry / collection"]
+owns = ["Collection / telemetry layer for various protocols (OTLP, syslog, gNMI)"]
+does_not_own = []
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Owner conflict: the component inventory lists Bhupesh Kothari and Rahul Aggarwal, while the boundary sheet lists Brian DiCarlo and Rahul Aggrawal. Confirm identities and accountable owner.", "Target is to provide standalone collector, which is work-in-progress"] }

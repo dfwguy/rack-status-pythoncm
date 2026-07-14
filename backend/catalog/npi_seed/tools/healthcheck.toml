@@ -1,0 +1,29 @@
+id = "healthcheck"
+name = "Healthcheck.py"
+aliases = []
+summary = "Active Slurm/node job-boundary check gate: concurrent GPU, fabric, configuration, software, and log checks can drain failed nodes; selected checks may run a local fix then recheck. It is not a benchmark runner or general remediation orchestrator."
+portfolio_role = "test"
+capability = "building-block-diagnostic"
+evidence_depth = "code-verified"
+maturity = "active"
+deployment = "unknown"
+personas = ["Continuous job-boundary gate fleet-wide; per-node pre/post gate inside NCCL pre-flight; first step of break/fix triage."]
+stacks = ["Slurm prolog/epilog"]
+execution_surfaces = ["slurm", "host"]
+scopes = []
+phases = ["phase-1", "phase-2", "phase-3", "phase-4", "phase-5"]
+layers = ["layer-5"]
+phase_note = "all (gate)"
+npi_model_status = "mapped"
+owners = [{ name = "Donald Plummer", email = "dplummer@nvidia.com", role = "De-facto lead (DCA / Lazarus)" }]
+inputs = ["Active+Passive"]
+outputs = ["test or health result"]
+owns = ["test definition and execution described in the legacy report"]
+does_not_own = ["portfolio-wide health semantics unless explicitly stated"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/datacenter-automation/dca-health-checks", branch = "main", commit = "9bd3fb0", path_prefix = "", id = "primary" }]
+reports = ["reports/building-blocks.md"]
+tests = [{ name = "Check groups & drain", runs = "Runs grouped checks; a failed check on a Slurm node drains the host and alerts Slack/email.", parameters = "--group prolog|epilog|gpu|logs; --no-drain suppresses draining; --no-slurm/--force bypasses Slurm integration; config can also suppress draining for specified checks or hosts", code = [{ label = "healthcheck.py", path = "healthcheck.py", line = 0, url = "https://gitlab-master.nvidia.com/datacenter-automation/dca-health-checks/-/blob/main/healthcheck.py", repository_id = "primary", revision = "9bd3fb0" }, { label = "check_lib.py", path = "check_lib.py", line = 0, url = "https://gitlab-master.nvidia.com/datacenter-automation/dca-health-checks/-/blob/main/check_lib.py", repository_id = "primary", revision = "9bd3fb0" }], primitives = ["node-config-gate"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "check-groups-drain" }, { name = "Representative checks", runs = "Individual checks across GPU/fabric/system/config domains.", parameters = "sw_sys_net_ib_ip (IB iface has valid IP, prolog); sw_sys_logs_numa_oom (epilog); sw_sys_net_arp_flux (epilog); sw_drv_fs_lustre_tuning", code = [{ label = "sw_sys_net_ib_ip.py", path = "health_checks/sw_sys_net_ib_ip.py", line = 0, url = "https://gitlab-master.nvidia.com/datacenter-automation/dca-health-checks/-/blob/main/health_checks/sw_sys_net_ib_ip.py", repository_id = "primary", revision = "9bd3fb0" }, { label = "health_checks/", path = "health_checks", line = 0, url = "https://gitlab-master.nvidia.com/datacenter-automation/dca-health-checks/-/blob/main/health_checks", repository_id = "primary", revision = "9bd3fb0" }], primitives = ["node-config-gate"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "representative-checks" }]
+sources = ["legacy-generator", "local-source-audit"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Group-owned (@lazarus); devs Aaron Thomas, Jon Brady, Pankti Shah."] }
+relationships = [{ target = "go-health", type = "candidate_for_convergence", summary = "Legacy report records that healthcheck candidate for convergence go-health.", sources = ["legacy-generator"], review_status = "review-needed" }]
+component_kind = "diagnostic-package"

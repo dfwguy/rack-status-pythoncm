@@ -1,0 +1,26 @@
+id = "fleet-intelligence"
+name = "Fleet Intelligence"
+aliases = []
+summary = "Consume shared health semantics and decide toolkit-vs-library model"
+portfolio_role = "validation-plane"
+capability = "continuous-health"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "production"
+personas = ["Operators and adjacent Atlas consumers"]
+stacks = ["Open-source, Go-based Fleet Intelligence agent (derived from Lepton GPUd) that collects standardized CPU/GPU/memory/disk and DCGM health telemetry from clusters and streams it to a managed NVIDIA NGC-hosted Fleet Intelligence service/dashboard; service-layer analytics and prediction are built around FACT, Slurm, XID analyzer, NVSentinel, and broader fleet telemetry, with DGXC deployments commonly packaged as Kubernetes/ArgoCD pods alongside DCGM hostengine."]
+scopes = ["Single Node"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "outside-core-model"
+owners = [{ name = "John Platt US", role = "PICs listed in workbook" }]
+inputs = ["Production fleet / customer-facing health surface"]
+outputs = ["Fleet / intelligence / attribution"]
+owns = ["Fleet intelligence surface"]
+does_not_own = ["Canonical health truth"]
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["GPUd shared-library direction; trust boundary; out-of-band telemetry", "Resolve consumption model before V1.1 planning hardens", "Decision needed: Consumption model"] }

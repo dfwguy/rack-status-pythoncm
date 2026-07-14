@@ -1,0 +1,28 @@
+id = "dgxc-benchmarking"
+name = "DGXC Benchmarking"
+aliases = ["dgxc-benchmarking"]
+summary = "Repository of executable, production-representative workload benchmark assets. The recorded Nemotron4-15B asset supplies workload evidence when selected by an executor; the repository is not a general test executor or certification framework."
+portfolio_role = "test"
+capability = "benchmark-performance"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "unknown"
+personas = ["Framework maintainers and operators selecting representative training workloads."]
+stacks = ["Training workload assets and their executor-provided container, launcher, and cluster configuration"]
+execution_surfaces = ["scheduler-agnostic"]
+scopes = []
+phases = ["phase-3", "phase-4"]
+layers = ["layer-4"]
+phase_note = "3–4 when a framework selects a workload asset for performance evidence."
+npi_model_status = "mapped"
+owners = []
+inputs = ["Executor-provided training environment, model configuration, and dataset access"]
+outputs = ["Real-workload performance measurements"]
+owns = ["Executable workload benchmark assets"]
+does_not_own = ["Generic workload scheduling", "Certification workflow orchestration", "Portfolio pass/fail policy or remediation"]
+repositories = [{ url = "https://github.com/NVIDIA/dgxc-benchmarking" }]
+reports = []
+tests = [{ name = "Nemotron4-15B training workload", runs = "Provides the Nemotron4-15B executable workload asset for a framework-selected training benchmark.", parameters = "The selecting framework supplies platform, scale, container, launch parameters, and any target; no general platform target is asserted here.", code = [{ label = "nemotron4-15b/launch.sh", path = "nemotron4-15b/launch.sh", line = 0, url = "https://github.com/NVIDIA/dgxc-benchmarking/blob/main/nemotron4-15b/launch.sh" }, { label = "nemotron4-15b/metadata.yaml", path = "nemotron4-15b/metadata.yaml", line = 0, url = "https://github.com/NVIDIA/dgxc-benchmarking/blob/main/nemotron4-15b/metadata.yaml" }], primitives = ["nemotron-megatron"], sources = [], coverage_status = "attributed", check_id = "nemotron4-15b-training-workload" }]
+sources = []
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Audit and pin a checked-out dgxc-benchmarking revision before upgrading evidence depth.", "Confirm the exact workload path and consumers before adding invocation relationships."] }
+component_kind = "workload-asset"

@@ -1,0 +1,28 @@
+id = "stormbreaker"
+name = "Stormbreaker"
+aliases = []
+summary = "MARS/MLOps scale-test framework. Runs real training/NCCL workloads single-node→whole-cluster against hardcoded per-platform targets; nodes >10% below target are flagged CRITICAL. The WLST slow-node screener."
+portfolio_role = "test-framework"
+capability = "benchmark-performance"
+evidence_depth = "code-verified"
+maturity = "active"
+deployment = "unknown"
+personas = ["Phase-3 WLST slow-performance-node screening; produces classifications for downstream triage."]
+stacks = ["Slurm"]
+execution_surfaces = ["slurm"]
+scopes = []
+phases = ["phase-3"]
+layers = ["layer-4"]
+phase_note = "3"
+npi_model_status = "mapped"
+owners = [{ name = "Aman Shanbhag", email = "amshanbhag@nvidia.com", role = "PIC (MARS MLOps); team mgr Pierre-Yves Aquilanti" }, { name = "Maxime Hugues", email = "mhugues@nvidia.com", role = "primary developer" }]
+inputs = ["Active"]
+outputs = ["test or health result"]
+owns = ["test definition and execution described in the legacy report"]
+does_not_own = ["portfolio-wide health semantics unless explicitly stated"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/hwinf-mlops/stormbreaker", branch = "main", commit = "17156f1", path_prefix = "", id = "primary" }]
+reports = ["reports/framework-stormbreaker.md"]
+tests = [{ name = "Outcome classification", runs = "delta = measured/target − 1; classifies each run.", parameters = "ACCEPTABLE ≥−0.05; MINOR −0.10..−0.05; CRITICAL <−0.10; FAILED; NO_TARGET", code = [{ label = "src/analyze/outcome.py", path = "src/analyze/outcome.py", line = 0, url = "https://gitlab-master.nvidia.com/hwinf-mlops/stormbreaker/-/blob/main/src/analyze/outcome.py", repository_id = "primary", revision = "17156f1" }], primitives = [], sources = [], coverage_status = "not-applicable", check_id = "outcome-classification", coverage_rationale = "Describes outcome classification rather than a distinct validation-domain workload." }, { name = "NCCL (all_reduce/alltoall/loopback)", runs = "busbw at ceiling msg size; node/rack/scale.", parameters = "all_reduce_perf_mpi -b 8 -e 32G -f 2 -g 1 -c 1 -n 100; targets node/rack gb300 690/930, gb200 680/900, b300 840/760, h100 480/358; loopback=90% NIC line-rate", code = [{ label = "parse/testcases/nccl.py:204 (targets)", path = "src/parse/testcases/nccl.py", line = 204, url = "https://gitlab-master.nvidia.com/hwinf-mlops/stormbreaker/-/blob/main/src/parse/testcases/nccl.py#L204", repository_id = "primary", revision = "17156f1" }, { label = "src/testcases/nccl/", path = "src/testcases/nccl", line = 0, url = "https://gitlab-master.nvidia.com/hwinf-mlops/stormbreaker/-/blob/main/src/testcases/nccl", repository_id = "primary", revision = "17156f1" }], primitives = ["nccl-collectives"], sources = [], coverage_status = "attributed", check_id = "nccl-all-reduce-alltoall-loopback" }, { name = "Megatron pre-training (Nemotron5/6)", runs = "avg TFLOP/s/GPU over iters 5–100.", parameters = "Nemotron5 8B (32L,h4096,seq8192,GQA8,TP1/2/8) targets gb200 750/700/500; 56B (TP4) gb200 871/750; Nemotron6 Ultra 55B gb200 493/470", code = [{ label = "parse/testcases/megatron_lm.py:181 (targets)", path = "src/parse/testcases/megatron_lm.py", line = 181, url = "https://gitlab-master.nvidia.com/hwinf-mlops/stormbreaker/-/blob/main/src/parse/testcases/megatron_lm.py#L181", repository_id = "primary", revision = "17156f1" }, { label = "nemotron5_proxy/", path = "src/testcases/pre_training/nemotron5_proxy", line = 0, url = "https://gitlab-master.nvidia.com/hwinf-mlops/stormbreaker/-/blob/main/src/testcases/pre_training/nemotron5_proxy", repository_id = "primary", revision = "17156f1" }], primitives = ["nemotron-megatron"], sources = [], coverage_status = "attributed", check_id = "megatron-pre-training-nemotron5-6" }, { name = "AV (MCMF) / COSMOS (Predict) / cublas", runs = "Alpamayo AV + COSMOS predict workloads (NO_TARGET → correctness only); cublasMatmulBench compute sanity.", parameters = "aml_mcmf_2B, amo_wm_images_300M (h100, 8 GPU); predict_2pt5_2B (b200/gb200)", code = [{ label = "src/config/testcases_config.yaml", path = "src/config/testcases_config.yaml", line = 0, url = "https://gitlab-master.nvidia.com/hwinf-mlops/stormbreaker/-/blob/main/src/config/testcases_config.yaml", repository_id = "primary", revision = "17156f1" }], primitives = ["dense-gemm"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "av-mcmf-cosmos-predict-cublas" }]
+sources = ["legacy-generator", "local-source-audit"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Org owner: Pierre-Yves Aquilanti (paquilanti@nvidia.com)."] }
+relationships = [{ target = "maestro", type = "hands_off_to", summary = "Legacy report records that stormbreaker hands off to maestro.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "nccl-tests", type = "invokes", summary = "Checked source repos/stormbreaker/src/testcases/nccl/nccl_all_reduce.sh runs all_reduce_perf_mpi and nccl_alltoall.sh runs alltoall_perf_mpi via srun --container-image.", sources = ["local-source-audit"], review_status = "verified", evidence_refs = [{ tool_id = "stormbreaker", check_id = "nccl-all-reduce-alltoall-loopback" }] }]

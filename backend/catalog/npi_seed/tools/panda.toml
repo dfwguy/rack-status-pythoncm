@@ -1,0 +1,26 @@
+id = "panda"
+name = "Panda"
+aliases = []
+summary = "Autonomous AI-driven data center operations — detect, predict, and remediate infrastructure issues via agentic workflows"
+portfolio_role = "execution-orchestrator"
+capability = "remediation"
+evidence_depth = "document-verified"
+maturity = "unknown"
+deployment = "not-deployed"
+personas = ["Infrastructure SRE; Data center operators; Network/Fabric Ops"]
+stacks = ["Multi-agent architecture (monitoring agent, troubleshooting agent, remediation agent); LLM-based agentic workflows; designed to integrate with Fleet Intelligence, FACT, Heimdall, and the broader ATLAS resilience stack"]
+scopes = ["Both (Single + Multi)"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "JP Vasseur FR", role = "PICs listed in workbook" }]
+inputs = ["Consumes telemetry and signals from FACT attribution, DCGM, network telemetry, Panoptes observability stack, health check verdicts, scheduler metadata, system logs"]
+outputs = ["Agentic autonomous troubleshooting, prediction, and remediation of data center issues across compute, storage, and networking"]
+owns = ["Autonomous AI-driven data center operations — detect, predict, and remediate infrastructure issues via agentic workflows"]
+does_not_own = []
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Heimdall Agent (general troubleshooting — Panda specializes in networking); FACT Agent (operational metrics/reports — Panda consumes FACT attribution); Fleet Intelligence (data collection agent Panda builds on); Health Checks / Health Validation (Panda consumes verdicts); NVRx/Maestro (remediation — Panda adds agentic orchestration layer on top)"] }

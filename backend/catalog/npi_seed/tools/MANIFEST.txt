@@ -1,0 +1,9 @@
+source=gitlab-master.nvidia.com/pshamis/NPI-Knowledge-Portal
+ref=main
+commit=d4cdfc0
+subpath=reports/catalog/tools
+snapshot=full
+records=44
+fetched=2026-07-13T15:38:41Z
+note=Full vendored snapshot of the NPI Knowledge Portal tool catalog. Refresh with
+     bin/scripts/fetch_npi_catalog.sh (var/cache/npi_catalog/tools takes precedence).

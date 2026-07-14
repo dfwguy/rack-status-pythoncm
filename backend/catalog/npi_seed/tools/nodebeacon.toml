@@ -1,0 +1,28 @@
+id = "nodebeacon"
+name = "NodeBeacon"
+aliases = ["NodeBeacon (HFT)"]
+summary = "Per-node MTBF beacon: ~150 Go plugin checks producing a health score, aggregated node→NVL→SU→cluster. The Phase-4 soak watchdog."
+portfolio_role = "test-framework"
+capability = "screen-test-execution"
+evidence_depth = "code-verified"
+maturity = "active"
+deployment = "unknown"
+personas = ["InfrastructureSRE"]
+stacks = ["High Frequency telemtry"]
+execution_surfaces = ["host"]
+scopes = []
+phases = ["phase-4"]
+layers = ["layer-6"]
+phase_note = "4"
+npi_model_status = "mapped"
+owners = [{ name = "Yugi Guvvala", email = "yguvvala@nvidia.com", role = "Roadmap/PM owner" }, { name = "Tyler Wang", email = "tywang@nvidia.com", role = "primary developer" }]
+inputs = ["Active+Passive"]
+outputs = ["High frequency (100 ms range) DCGM and NVLINK telemetry collection for failure signals"]
+owns = ["test definition and execution described in the legacy report", "High frequency (100 ms range) DCGM and NVLINK telemetry collection for failure signals"]
+does_not_own = ["portfolio-wide health semantics unless explicitly stated"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/SRE/nodebeacon", branch = "main", commit = "46f3c89", path_prefix = "", id = "primary" }]
+reports = ["reports/framework-nodebeacon.md"]
+tests = [{ name = "GPU checks (~45)", runs = "temp/thermal, power/clock throttle, ECC SBE/DBE/retired/remapped, NVLink CRC/replay/recovery/fabric, PCIe, VBIOS/InfoROM, XID (log-triggered).", parameters = "per-check intervals/thresholds in JSON", code = [{ label = "internal/hcgpu/", path = "internal/hcgpu", line = 0, url = "https://gitlab-master.nvidia.com/SRE/nodebeacon/-/blob/main/internal/hcgpu", repository_id = "primary", revision = "46f3c89" }], primitives = ["host-health-observation"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "gpu-checks-45" }, { name = "Network / System / BMC checks", runs = "IB/Eth link/BER/firmware, Lustre, RDMA; CPU/NUMA, MCE, SMBIOS/FWTS, NVMe SMART, syslog patterns; IPMI/Redfish firmware/temp/fans/PSU.", parameters = "ValidatorContinuous / SystemData / LogEvent", code = [{ label = "internal/hcnetwork/", path = "internal/hcnetwork", line = 0, url = "https://gitlab-master.nvidia.com/SRE/nodebeacon/-/blob/main/internal/hcnetwork", repository_id = "primary", revision = "46f3c89" }, { label = "internal/hcsystem/", path = "internal/hcsystem", line = 0, url = "https://gitlab-master.nvidia.com/SRE/nodebeacon/-/blob/main/internal/hcsystem", repository_id = "primary", revision = "46f3c89" }, { label = "internal/hcbmc/", path = "internal/hcbmc", line = 0, url = "https://gitlab-master.nvidia.com/SRE/nodebeacon/-/blob/main/internal/hcbmc", repository_id = "primary", revision = "46f3c89" }], primitives = ["host-health-observation"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "network-system-bmc-checks" }]
+sources = ["legacy-generator", "cross-nvidia-workbook", "local-source-audit"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Org PIC Sivakumar Arayandi Thottakara (sivak@nvidia.com); co-devs Ian Coffey, Giorgio Di Guardia."] }
+relationships = [{ target = "go-health", type = "candidate_for_convergence", summary = "Legacy report records that nodebeacon candidate for convergence go-health.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "panoptes", type = "feeds", summary = "Legacy report records that nodebeacon feeds panoptes.", sources = ["legacy-generator"], review_status = "review-needed" }]

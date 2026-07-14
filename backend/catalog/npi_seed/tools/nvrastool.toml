@@ -1,0 +1,27 @@
+id = "nvrastool"
+name = "NVRASTool"
+aliases = []
+summary = "Validation, Failure attribution and Debug"
+portfolio_role = "validation-plane"
+capability = "continuous-health"
+evidence_depth = "document-verified"
+maturity = "unknown"
+deployment = "not-deployed"
+personas = ["Compute / Hardware Ops"]
+stacks = ["Catalog driven CLI tool built with python"]
+scopes = ["Single Node"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Vignesh Harish Kashyap US Erwin Tsaur US", role = "PICs listed in workbook" }]
+inputs = ["Specifications , error injection testing"]
+outputs = ["NVRASTool injects controlled hardware and software faults and validates the resulting platform, firmware, telemetry, and software behavior, so teams can verify end-to-end RAS resilience and recovery flows."]
+owns = ["Validation, Failure attribution and Debug"]
+does_not_own = []
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Relies on Server RAS Catalog", "Alignment on consumption and integration to health check initiatives"] }
+relationships = [{ target = "server-ras-catalog", type = "uses_catalog", summary = "Workbook identifies an interface between nvrastool and server-ras-catalog.", sources = ["cross-nvidia-workbook"], review_status = "review-needed" }]

@@ -1,0 +1,26 @@
+id = "heimdall"
+name = "Heimdall"
+aliases = []
+summary = "Documented workload-level training recovery policy/advice and goodput observability. An external adopter-side controller applies actions; Heimdall is not evidenced as a node validator or direct infrastructure repair engine."
+portfolio_role = "workload-recovery"
+capability = "workload-recovery"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "production"
+personas = ["AI lab infrastructure engineers (CSP/NCP tenants)"]
+stacks = ["Single Helm-deployed Core of cloud-native microservices (Anomaly Detector + Anomaly Remediation Manager + Anomaly Policy Engine + Job Manager + KPI/Metrics + Advisor API + Cockpit UI on Kaizen 1.0.0) + internal Event Bus (RabbitMQ) + adopter-provided Loki/Prometheus telemetry, MySQL 8.0+ state/audit store, Slack notifications + read-only Advisor API (OpenAPI 3.1 REST + SSE) in three forms (Slurm daemon / HTTP / K8s Advice CRD) consumed by an external adopter-side Controller applying actions across bare-metal Slurm / Slinky / KAI+JobSet through one adapter + optional ADI + NV Attribution, feature-flagged + Helm-on-Kubernetes deployment, source + charts only, Apache 2.0"]
+scopes = ["Both (Single + Multi)"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Ian Gibbs US + Dong Ahn US", role = "PICs listed in workbook" }]
+inputs = ["Application/workload logs (Loki, LogQL) polled at 15s against the symptom-pattern catalog, the default v1.x detection path / GPU and node metrics (DCGM via Prometheus, PromQL), metrics-based detection experimental / scheduler state (Slurm squeue, sacct, StateReasonCode; Kubernetes pod, JobSet, and node-condition status) / checkpoint-progress signals / optional NV Attribution verdict via ADI / Heimdall-emitted audit trail (MySQL) and KPI metrics (MTTR, MTTD)"]
+outputs = ["Training workload recovery and observability."]
+owns = ["Workload recovery policy/advice and goodput observability"]
+does_not_own = ["Node validation", "Direct infrastructure repair", "Direct NVSentinel integration"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/ai-efficiency/warthog/heimdall-oss" }, { url = "https://github.com/NVIDIA-dev/Heimdall-OSS" }]
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Interacts directly with NVAttribution (aka FACT). The following components are complimentary but there is no direct interaction: NVSentinel, NVRx. NVRx in-process restart is separate and distinct from Heimdall workload recovery.", "Confirm scope, boundaries, and interaction points", "Audit candidate repository recovery-module ownership and behavior before upgrading evidence or claiming workload-recovery semantics from source.", "Decision needed: Verdict vs action split"] }

@@ -1,0 +1,28 @@
+id = "nccl-tests"
+name = "NCCL Tests"
+aliases = ["nccl-tests"]
+summary = "Reusable collective microbenchmark package that builds all_reduce_perf, all_gather_perf, alltoall_perf, and MPI variants on top of the NCCL communication library. It is a payload package, not NCCL itself and not a framework that selects targets, applies thresholds, or remediates nodes."
+portfolio_role = "test"
+capability = "benchmark-performance"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "unknown"
+personas = ["Framework maintainers and operators selecting collective-performance payloads."]
+stacks = ["C++ / CUDA / NCCL; optional MPI build variants"]
+execution_surfaces = ["scheduler-agnostic"]
+scopes = []
+phases = ["phase-3", "phase-4"]
+layers = ["layer-5"]
+phase_note = "3–4 when selected by a screen-test, benchmark, or health framework."
+npi_model_status = "mapped"
+owners = []
+inputs = ["NCCL runtime, participating GPUs, and an executor-provided launch environment"]
+outputs = ["Collective bandwidth, latency, and correctness measurements"]
+owns = ["Collective microbenchmark executable definitions"]
+does_not_own = ["The NCCL communication library", "Framework scheduling, pass/fail policy, target selection, or remediation"]
+repositories = [{ url = "https://github.com/NVIDIA/nccl-tests" }]
+reports = []
+tests = [{ name = "NCCL collective microbenchmarks", runs = "Builds and runs all_reduce_perf, all_gather_perf, and alltoall_perf, plus all_reduce_perf_mpi, all_gather_perf_mpi, and alltoall_perf_mpi for MPI launches.", parameters = "Executor selects message sizes, GPU/rank count, launcher, and any pass/fail threshold.", code = [{ label = "src/all_reduce.cu", path = "src/all_reduce.cu", line = 0, url = "https://github.com/NVIDIA/nccl-tests/blob/master/src/all_reduce.cu" }, { label = "src/all_gather.cu", path = "src/all_gather.cu", line = 0, url = "https://github.com/NVIDIA/nccl-tests/blob/master/src/all_gather.cu" }, { label = "src/alltoall.cu", path = "src/alltoall.cu", line = 0, url = "https://github.com/NVIDIA/nccl-tests/blob/master/src/alltoall.cu" }, { label = "Makefile (MPI variants)", path = "Makefile", line = 0, url = "https://github.com/NVIDIA/nccl-tests/blob/master/Makefile" }], primitives = ["nccl-collectives"], sources = [], coverage_status = "attributed", check_id = "nccl-collective-microbenchmarks" }]
+sources = []
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Audit and pin a checked-out nccl-tests revision before upgrading evidence depth.", "Confirm the image/package revision selected by each consumer."] }
+component_kind = "executable-payload"

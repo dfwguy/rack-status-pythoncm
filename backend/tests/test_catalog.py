@@ -129,7 +129,9 @@ class TestSeed:
         assert s1["tools_added"] == len(seed.SEED_TOOLS)
         assert s1["default_project_created"] is True
         s2 = seed.migrate(repo, env={})
-        assert s2 == {"platforms_added": 0, "tools_added": 0, "default_project_created": False}
+        assert s2["platforms_added"] == 0
+        assert s2["tools_added"] == 0
+        assert s2["default_project_created"] is False
 
     def test_seed_preserves_edits(self, repo):
         seed.migrate(repo, env={})

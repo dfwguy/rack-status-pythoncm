@@ -39,6 +39,58 @@ EXEC_MODES = ("async", "sync", "stream")
 EXEC_TARGETS = ("rack", "multirack", "cluster", "node")
 STATUSES = ("ga", "preview", "future", "deprecated")
 
+# --- NPI Knowledge Portal vocabulary (mirrors reports/site/portal_model.py) ---
+# These drive the imported reference catalog (see catalog.npi_import). Kept as tuples
+# for UI hints; unknown values are tolerated (the upstream catalog may add more).
+NPI_PORTFOLIO_ROLES = (
+    "test",
+    "test-framework",
+    "validation-plane",
+    "execution-orchestrator",
+    "telemetry-analytics",
+    "failure-attribution",
+    "reference-catalog",
+    "workload-recovery",
+    "health-monitoring",
+)
+NPI_CAPABILITIES = (
+    "contractual-scope",
+    "config-functional",
+    "screen-test-execution",
+    "benchmark-performance",
+    "building-block-diagnostic",
+    "continuous-health",
+    "remediation",
+    "telemetry-analytics",
+    "failure-attribution",
+    "error-catalog",
+    "workload-recovery",
+)
+NPI_MATURITIES = ("active", "emerging", "research", "legacy", "unknown")
+
+# How an NPI capability maps onto our runnable-tool categories (for promotion + filters).
+_NPI_CAPABILITY_TO_CATEGORY = {
+    "benchmark-performance": "performance",
+    "screen-test-execution": "validation",
+    "config-functional": "validation",
+    "contractual-scope": "validation",
+    "building-block-diagnostic": "validation",
+    "continuous-health": "maintenance",
+    "remediation": "maintenance",
+    "telemetry-analytics": "maintenance",
+    "failure-attribution": "maintenance",
+    "error-catalog": "maintenance",
+    "workload-recovery": "maintenance",
+}
+# NPI maturity -> our status vocabulary.
+_NPI_MATURITY_TO_STATUS = {
+    "active": "ga",
+    "emerging": "preview",
+    "research": "preview",
+    "legacy": "deprecated",
+    "unknown": "future",
+}
+
 
 def slugify(value: str) -> str:
     """Turn a label into a stable id slug (lowercase, dash-separated)."""
@@ -62,6 +114,12 @@ def _as_str_list(v: Any) -> list[str]:
 
 def _as_dict(v: Any) -> dict[str, Any]:
     return dict(v) if isinstance(v, dict) else {}
+
+
+def _as_dict_list(v: Any) -> list[dict[str, Any]]:
+    if not isinstance(v, (list, tuple)):
+        return []
+    return [dict(x) for x in v if isinstance(x, dict)]
 
 
 # ---------------------------------------------------------------------------
@@ -476,3 +534,140 @@ class Project:
             if c.id == cluster_id:
                 return c
         return None
+
+
+# ---------------------------------------------------------------------------
+# NpiTool (reference entry imported from the NVIDIA NPI Knowledge Portal)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class NpiTool:
+    """A validation/perf tool as curated by the NVIDIA NPI Knowledge Portal.
+
+    This is a *reference/taxonomy* record (source of truth for which tools exist and how
+    they are classified), distinct from :class:`Tool` which is a runnable local script.
+    The full NPI envelope (portfolio_role, capability, phases, layers, primitives,
+    relationships, per-check ``tests``) is preserved faithfully so nothing is lost on
+    round-trip. Selected entries can later be *promoted* into a runnable :class:`Tool`
+    via :meth:`to_tool_stub`.
+
+    Populated by :mod:`catalog.npi_import` from the portal's ``reports/catalog/tools/*.toml``.
+    """
+
+    id: str
+    name: str
+    summary: str = ""
+    aliases: list[str] = field(default_factory=list)
+    portfolio_role: str = ""
+    component_kind: str = ""
+    capability: str = ""
+    evidence_depth: str = ""
+    maturity: str = ""
+    deployment: str = ""
+    personas: list[str] = field(default_factory=list)
+    stacks: list[str] = field(default_factory=list)
+    scopes: list[str] = field(default_factory=list)
+    phases: list[str] = field(default_factory=list)
+    layers: list[str] = field(default_factory=list)
+    phase_note: str = ""
+    npi_model_status: str = ""
+    execution_surfaces: list[str] = field(default_factory=list)
+    owners: list[dict[str, Any]] = field(default_factory=list)
+    inputs: list[str] = field(default_factory=list)
+    outputs: list[str] = field(default_factory=list)
+    repositories: list[dict[str, Any]] = field(default_factory=list)
+    reports: list[str] = field(default_factory=list)
+    tests: list[dict[str, Any]] = field(default_factory=list)
+    relationships: list[dict[str, Any]] = field(default_factory=list)
+    review: dict[str, Any] = field(default_factory=dict)
+    # Provenance: which upstream commit/file this was imported from.
+    source: str = "npi-catalog"
+    source_ref: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "NpiTool":
+        d = _as_dict(d)
+        return cls(
+            id=_as_str(d.get("id")),
+            name=_as_str(d.get("name")) or _as_str(d.get("id")),
+            summary=_as_str(d.get("summary")),
+            aliases=_as_str_list(d.get("aliases")),
+            portfolio_role=_as_str(d.get("portfolio_role")),
+            component_kind=_as_str(d.get("component_kind")),
+            capability=_as_str(d.get("capability")),
+            evidence_depth=_as_str(d.get("evidence_depth")),
+            maturity=_as_str(d.get("maturity")),
+            deployment=_as_str(d.get("deployment")),
+            personas=_as_str_list(d.get("personas")),
+            stacks=_as_str_list(d.get("stacks")),
+            scopes=_as_str_list(d.get("scopes")),
+            phases=_as_str_list(d.get("phases")),
+            layers=_as_str_list(d.get("layers")),
+            phase_note=_as_str(d.get("phase_note")),
+            npi_model_status=_as_str(d.get("npi_model_status")),
+            execution_surfaces=_as_str_list(d.get("execution_surfaces")),
+            owners=_as_dict_list(d.get("owners")),
+            inputs=_as_str_list(d.get("inputs")),
+            outputs=_as_str_list(d.get("outputs")),
+            repositories=_as_dict_list(d.get("repositories")),
+            reports=_as_str_list(d.get("reports")),
+            tests=_as_dict_list(d.get("tests")),
+            relationships=_as_dict_list(d.get("relationships")),
+            review=_as_dict(d.get("review")),
+            source=_as_str(d.get("source")) or "npi-catalog",
+            source_ref=_as_str(d.get("source_ref")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        if not valid_id(self.id):
+            problems.append(f"invalid npi tool id: {self.id!r}")
+        if not self.name:
+            problems.append("npi tool name is required")
+        return problems
+
+    def category(self) -> str:
+        """Best-fit runnable-tool category for filtering / promotion."""
+        return _NPI_CAPABILITY_TO_CATEGORY.get(self.capability, "validation")
+
+    def status(self) -> str:
+        """Map NPI maturity onto our tool status vocabulary."""
+        return _NPI_MATURITY_TO_STATUS.get(self.maturity, "future")
+
+    def is_runnable_kind(self) -> bool:
+        """True for entries that are actual tests/workloads (vs frameworks/telemetry planes)."""
+        return self.portfolio_role in ("test", "test-framework")
+
+    def to_tool_stub(self, *, id_prefix: str = "npi-") -> dict[str, Any]:
+        """Produce a :class:`Tool`-shaped dict for later promotion into the runnable registry.
+
+        The ``script`` is intentionally left blank — an operator wires the local launcher
+        when promoting. Ids are namespaced (default ``npi-<slug>``) so imported reference
+        entries never collide with hand-authored runnable tools (e.g. our ``nvloom``).
+        """
+        surfaces = ["catalog.npi"]
+        target = "multirack" if any(
+            "multi" in s.lower() for s in self.scopes
+        ) else "rack"
+        ai = self.summary
+        if self.phase_note:
+            ai = f"{ai} (NPI phase {self.phase_note})".strip()
+        return {
+            "id": f"{id_prefix}{self.id}",
+            "name": self.name,
+            "category": self.category(),
+            "script": "",
+            "env_key": "",
+            "params": [],
+            "compatible": {"match": "all"},
+            "surfaces": surfaces,
+            "execution": {"mode": "async", "target": target},
+            "description": self.summary,
+            "ai_context": ai,
+            "status": self.status(),
+            "source": "npi-catalog",
+        }

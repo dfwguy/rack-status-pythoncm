@@ -1,0 +1,27 @@
+id = "gpud"
+name = "GPUd"
+aliases = []
+summary = "Lepton per-host GPU/node health telemetry agent. Its built-in checks are low-overhead and read-only; plugins may run configured scripts and suggested repair actions require an external control plane."
+portfolio_role = "health-monitoring"
+capability = "continuous-health"
+evidence_depth = "code-verified"
+maturity = "active"
+deployment = "production"
+personas = ["Host-based GPU health / control plane"]
+stacks = ["Go-based, self-contained host health agent/system daemon (based on github.com/leptonai/gpud with an internal NVIDIA fork) shipped as a binary via deb/rpm installer; integrates with Docker, containerd, Kubernetes, and NVIDIA ecosystems, performs low-overhead read-only GPU/node health monitoring, keeps some local state in SQLite, and exposes localhost machine-info and /v1/metrics APIs for telemetry/status."]
+execution_surfaces = ["host", "kubernetes"]
+scopes = ["Single Node"]
+phases = ["phase-4"]
+layers = ["layer-6"]
+phase_note = "4 (Lepton fleet)"
+npi_model_status = "mapped"
+owners = [{ name = "Gyuho Lee", email = "gyuhol@nvidia.com", role = "Creator / maintainer (ex-Lepton)" }]
+inputs = ["Host agent / control plane"]
+outputs = ["Telemetry / collection"]
+owns = ["Host health evaluation"]
+does_not_own = ["Catalog ownership"]
+repositories = [{ url = "https://github.com/leptonai/gpud", branch = "main", commit = "e83c104", path_prefix = "", id = "primary" }]
+reports = ["reports/building-blocks.md"]
+tests = [{ name = "NVIDIA component checks", runs = "clock-speed, ecc, error-xid, error-sxid, fabric-manager, gpm, hw-slowdown, infiniband, memory, nccl, nvlink, peermem, persistence-mode, power, processes, remapped-rows, temperature, utilization.", parameters = "read-only; APIs /v1/components, /v1/metrics, /v1/states, /v1/events", code = [{ label = "components/all/all.go", path = "components/all/all.go", line = 0, url = "https://github.com/leptonai/gpud/blob/main/components/all/all.go", repository_id = "primary", revision = "e83c104" }], primitives = ["host-health-observation"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "nvidia-component-checks" }, { name = "System checks", runs = "cpu, memory, disk, os, pci, kernel-module, library (libnvidia-ml/libcuda), network-latency, nfs, fuse, containerd, docker, kubelet, tailscale.", parameters = "host agent via deb/rpm; SQLite local state", code = [{ label = "components/all/all.go", path = "components/all/all.go", line = 0, url = "https://github.com/leptonai/gpud/blob/main/components/all/all.go", repository_id = "primary", revision = "e83c104" }], primitives = ["host-health-observation"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "system-checks" }]
+sources = ["legacy-generator", "cross-nvidia-workbook", "local-source-audit"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Public leptonai repo; external community contributors.", "Potential duplication with Health Checks; host-vs-cloud model differences", "Follow up after stable build approval", "Decision needed: Host vs catalog split"] }

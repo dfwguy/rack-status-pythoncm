@@ -1,0 +1,28 @@
+id = "nvbandwidth"
+name = "NVBandwidth"
+aliases = ["nvbandwidth"]
+summary = "Reusable GPU-memory-copy bandwidth and latency microbenchmark package. It includes multi-node copy-engine tests; it is distinct from NVLoom's NVLink-fabric characterization and from DCGM or framework wrappers that launch and interpret it."
+portfolio_role = "test"
+capability = "benchmark-performance"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "unknown"
+personas = ["Framework maintainers and operators selecting GPU interconnect microbenchmarks."]
+stacks = ["CUDA / C++; optional MPI multi-node launches"]
+execution_surfaces = ["scheduler-agnostic"]
+scopes = []
+phases = ["phase-3", "phase-4"]
+layers = ["layer-5"]
+phase_note = "3–4 when selected by a screen-test, benchmark, or health framework."
+npi_model_status = "mapped"
+owners = []
+inputs = ["Participating GPUs, memory-copy path, and an executor-provided launch environment"]
+outputs = ["GPU memory-copy bandwidth and latency measurements"]
+owns = ["GPU memory-copy microbenchmark executable definitions"]
+does_not_own = ["NVLink topology or fabric heatmaps", "DCGM diagnostics", "Framework scheduling, pass/fail policy, or remediation"]
+repositories = [{ url = "https://github.com/NVIDIA/nvbandwidth" }]
+reports = []
+tests = [{ name = "NVLink/NVSwitch copy-engine bandwidth", runs = "Includes multinode_device_to_device_memcpy_read_ce and multinode_device_to_device_memcpy_write_ce multi-node copy-engine tests.", parameters = "nvbandwidth -t <testcase>; executor selects launcher, ranks, sizes, baselines, and pass/fail threshold.", code = [{ label = "multinode_testcases.cpp", path = "multinode_testcases.cpp", line = 0, url = "https://github.com/NVIDIA/nvbandwidth/blob/main/multinode_testcases.cpp" }, { label = "multinode_memcpy.cpp", path = "multinode_memcpy.cpp", line = 0, url = "https://github.com/NVIDIA/nvbandwidth/blob/main/multinode_memcpy.cpp" }], primitives = ["gpu-copy-bandwidth"], sources = [], coverage_status = "attributed", check_id = "nvlink-nvswitch-copy-engine-bandwidth" }]
+sources = []
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Audit and pin a checked-out nvbandwidth revision before upgrading evidence depth.", "Confirm production thresholds and additional framework consumers for the gpu-copy-bandwidth primitive."] }
+component_kind = "executable-payload"

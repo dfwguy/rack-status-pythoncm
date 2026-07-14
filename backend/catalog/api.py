@@ -24,6 +24,7 @@ from flask import Blueprint, jsonify, request
 
 from . import context, models
 from .store import (
+    TABLE_NPI_TOOLS,
     TABLE_PLATFORMS,
     TABLE_PROJECTS,
     TABLE_TOOLS,
@@ -184,6 +185,64 @@ def delete_project(doc_id: str):
 
 
 # ---------------------------------------------------------------------------
+# NPI reference catalog (imported from the NVIDIA NPI Knowledge Portal)
+# ---------------------------------------------------------------------------
+
+
+@catalog_bp.get("/npi-tools")
+def list_npi_tools():
+    """List imported NPI reference tools. Filter with ?role= / ?capability= / ?runnable=1."""
+    role = (request.args.get("role") or "").strip()
+    capability = (request.args.get("capability") or "").strip()
+    runnable = (request.args.get("runnable") or "").strip() in ("1", "true", "yes")
+    rows = [models.NpiTool.from_dict(r) for r in get_repo().list(TABLE_NPI_TOOLS)]
+    if role:
+        rows = [t for t in rows if t.portfolio_role == role]
+    if capability:
+        rows = [t for t in rows if t.capability == capability]
+    if runnable:
+        rows = [t for t in rows if t.is_runnable_kind()]
+    items = [t.to_dict() for t in rows]
+    items.sort(key=lambda d: (d.get("name") or d.get("id") or "").lower())
+    return jsonify({"ok": True, "items": items, "count": len(items)})
+
+
+@catalog_bp.get("/npi-tools/<doc_id>")
+def get_npi_tool(doc_id: str):
+    raw = get_repo().get(TABLE_NPI_TOOLS, doc_id)
+    if raw is None:
+        return _err(f"npi tool not found: {doc_id}", 404)
+    tool = models.NpiTool.from_dict(raw)
+    item = tool.to_dict()
+    item["derived"] = {
+        "category": tool.category(),
+        "status": tool.status(),
+        "runnable": tool.is_runnable_kind(),
+        "tool_stub": tool.to_tool_stub(),
+    }
+    return jsonify({"ok": True, "item": item})
+
+
+@catalog_bp.post("/npi-tools/import")
+def import_npi_tools():
+    """Re-sync the NPI reference catalog from the configured snapshot/source dir."""
+    from .npi_import import import_npi_catalog
+
+    body = _body()
+    source_dir = (body.get("source_dir") or "").strip() or None
+    prune = body.get("prune", True)
+    summary = import_npi_catalog(get_repo(), source_dir, prune=bool(prune))
+    if not summary.get("source_dir"):
+        return _err(
+            "no NPI catalog source found (set NVIS_NPI_CATALOG_DIR or run "
+            "bin/scripts/fetch_npi_catalog.sh)",
+            404,
+        )
+    context.notify_changed()
+    return jsonify({"ok": True, "summary": summary})
+
+
+# ---------------------------------------------------------------------------
 # Active context + vocab + overview
 # ---------------------------------------------------------------------------
 
@@ -232,6 +291,9 @@ def vocab():
             "exec_modes": list(models.EXEC_MODES),
             "exec_targets": list(models.EXEC_TARGETS),
             "statuses": list(models.STATUSES),
+            "npi_portfolio_roles": list(models.NPI_PORTFOLIO_ROLES),
+            "npi_capabilities": list(models.NPI_CAPABILITIES),
+            "npi_maturities": list(models.NPI_MATURITIES),
         }
     )
 
@@ -242,12 +304,14 @@ def overview():
     platforms = [models.Platform.from_dict(r).to_dict() for r in repo.list(TABLE_PLATFORMS)]
     tools = [models.Tool.from_dict(r).to_dict() for r in repo.list(TABLE_TOOLS)]
     projects = [models.Project.from_dict(r).to_dict() for r in repo.list(TABLE_PROJECTS)]
+    npi_tools = [models.NpiTool.from_dict(r).to_dict() for r in repo.list(TABLE_NPI_TOOLS)]
     return jsonify(
         {
             "ok": True,
             "platforms": sorted(platforms, key=lambda d: d["name"].lower()),
             "tools": sorted(tools, key=lambda d: (d.get("category", ""), d["name"].lower())),
             "projects": sorted(projects, key=lambda d: d["name"].lower()),
+            "npi_tools": sorted(npi_tools, key=lambda d: (d.get("name") or d.get("id") or "").lower()),
             "active": context.get_active(),
         }
     )

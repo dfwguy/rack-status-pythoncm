@@ -1,0 +1,29 @@
+id = "dcgm"
+name = "DCGM / EUD"
+aliases = ["DCGM"]
+summary = "NVIDIA Data Center GPU Manager — the GPU diagnostics engine behind dcgmi diag, invoked by Hobbits (snst-eud), Excalibur (dcgm-level4) and break/fix (dcgm_diag). Telemetry feeds MNHC/NodeBeacon/NVSentinel/GPUd."
+portfolio_role = "test"
+capability = "building-block-diagnostic"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "production"
+personas = ["GPU health runtime"]
+stacks = ["C/C++ shared library + nv-hostengine daemon + dcgmi CLI + Python bindings, built on NVIDIA driver/NVML/CUDA; typically integrated with Go-based DCGM-Exporter for Prometheus/Kubernetes telemetry."]
+execution_surfaces = ["host", "kubernetes"]
+scopes = ["Both (Single + Multi)"]
+phases = ["phase-2", "phase-3", "phase-4"]
+layers = ["layer-5"]
+phase_note = "2–4"
+npi_model_status = "mapped"
+owners = [{ name = "David Beer", email = "dbeer@nvidia.com", role = "DCGM engineering lead" }]
+inputs = ["GPU metrics / executed checks"]
+outputs = ["Telemetry collection, passive health checks, active production diagnostics"]
+owns = ["GPU telemetry; check runtime"]
+does_not_own = ["Threshold source of truth"]
+repositories = [{ url = "https://github.com/NVIDIA/DCGM", branch = "master", path_prefix = "" }]
+reports = ["reports/building-blocks.md"]
+tests = [{ name = "dcgmi diag run-levels", runs = "r1 deployment/SW (NVML, driver, persistence, page-retirement); r2 +PCIe/NVLink bandwidth; r3 +HW (SM stress, GPU memory, diagnostics); r4 long/production +targeted stress, targeted power, EUD/memtest.", parameters = "dcgmi diag -r {1..4}; run_tests=compute,high_vf,memory,misc; configurable runtime / JSON", code = [{ label = "github.com/NVIDIA/DCGM", path = "", line = 0, url = "https://github.com/NVIDIA/DCGM" }], primitives = ["dcgm-eud"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "dcgmi-diag-run-levels" }, { name = "dcgm-mndiag (multinode)", runs = "Multinode diagnostic (mnubergemm) across nodes; used by MNHC.", parameters = "dcgm-mndiag mnubergemm", code = [{ label = "github.com/NVIDIA/DCGM", path = "", line = 0, url = "https://github.com/NVIDIA/DCGM" }], primitives = [], sources = [], coverage_status = "not-applicable", check_id = "dcgm-mndiag-multinode", coverage_rationale = "Records a multi-node diagnostic executable for traceability; its validation-domain mapping has not yet been reviewed." }]
+sources = ["legacy-generator", "cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Public project; also Brent Stolle (bstolle@nvidia.com).", "Boundary with DCA / NVSM / catalog semantics", "We have advocated for a centralized location for failure thresholds. We would like for this to still happen so that we can ensure failure criteria stays in sync.", "Decision needed: DCGM vs catalog split"] }
+relationships = [{ target = "mnhc", type = "feeds", summary = "Legacy report records that dcgm feeds mnhc.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "nodebeacon", type = "feeds", summary = "Legacy report records that dcgm feeds nodebeacon.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "nvsentinel", type = "feeds", summary = "Legacy report records that dcgm feeds nvsentinel.", sources = ["legacy-generator"], review_status = "review-needed" }, { target = "gpud", type = "feeds", summary = "Legacy report records that dcgm feeds gpud.", sources = ["legacy-generator"], review_status = "review-needed" }]
+component_kind = "diagnostic-package"

@@ -1,0 +1,26 @@
+id = "doca-health"
+name = "DOCA Health"
+aliases = []
+summary = "Node level Networking Health"
+portfolio_role = "health-monitoring"
+capability = "continuous-health"
+evidence_depth = "document-verified"
+maturity = "unknown"
+deployment = "not-deployed"
+personas = ["Infrastructure SRE; Network/Fabric Ops"]
+stacks = ["DOCA Service"]
+scopes = ["Single Node"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Eli Harel IL Amit Zala GB", role = "PICs listed in workbook" }]
+inputs = ["Linux OS, MFT, DOCA Telemetry; node-local REST APIs and event emission to DCA; configurable rules, baselines, and hard-fail policies; and support for ConnectX and BlueField platforms"]
+outputs = ["Host- and DPU-resident service that continuously collects authoritative health signals, evaluates them against policies and baselines, and exposes the results through APIs and events for NVIDIA partner systems"]
+owns = ["Node level Networking Health"]
+does_not_own = []
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["TBD"] }

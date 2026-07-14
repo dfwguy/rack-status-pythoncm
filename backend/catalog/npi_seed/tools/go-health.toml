@@ -1,0 +1,28 @@
+id = "go-health"
+name = "go-health / NVIDIA Health Validation"
+aliases = ["Atlas", "Health Catalog", "Health Validation", "Health Validation / Health Catalog"]
+summary = "The intended canonical health catalog that MNHC, NodeBeacon, NVIS-NHC, Healthcheck.py and NVSentinel converge to. A Go library (not a daemon): catalog (CEL rules + thresholds) + toolkit (NVML sensors)."
+portfolio_role = "test"
+capability = "contractual-scope"
+evidence_depth = "code-verified"
+maturity = "active"
+deployment = "production"
+personas = ["Node-level health validation / downstream consumers"]
+stacks = ["Go + two independently versioned modules (Catalog + Toolkit) + DCGM / nvidia-smi / dmesg / sysfs sensors + Go query engine + JSON / Prometheus / OTEL outputs + Slurm prolog/epilog / CLI / container deployment + GitHub Releases / pkg.go.dev / NGC packaging."]
+execution_surfaces = ["host", "slurm", "kubernetes"]
+scopes = ["Single Node"]
+phases = ["phase-1", "phase-2", "phase-3", "phase-4", "phase-5"]
+layers = ["layer-6"]
+phase_note = "all (catalog SOT)"
+npi_model_status = "mapped"
+owners = [{ name = "Johnny Mensel", email = "jmensel@nvidia.com", role = "Owning Eng Manager (DCA); PM Ben Gueret" }, { name = "Wesley Graybill", email = "wgraybill@nvidia.com", role = "primary developer" }]
+inputs = ["Canonical catalog"]
+outputs = ["Validation / catalog"]
+owns = ["Check defs; thresholds; verdicts"]
+does_not_own = ["Remediation; fleet ops"]
+repositories = [{ url = "https://gitlab-master.nvidia.com/datacenter-automation/go-health-validation", branch = "main", commit = "ccd9acf", path_prefix = "", id = "primary" }]
+reports = ["reports/building-blocks.md"]
+tests = [{ name = "Catalog checks", runs = "gpu_count, nvlink_active, nvlink_fabric_health, nvlink_bandwidth_count_speed, per-XID (gpu_xid_* incl gpu_xid_154 INFO, gpu_xid_warning).", parameters = "thresholds expected_gpu_count, max_inactive_nvlinks; CEL rules; ECC checks in the private repo", code = [{ label = "catalog/checks.go:12", path = "catalog/checks.go", line = 12, url = "https://gitlab-master.nvidia.com/datacenter-automation/go-health-validation/-/blob/main/catalog/checks.go#L12", repository_id = "primary", revision = "ccd9acf" }, { label = "catalog/nvlink/", path = "catalog/nvlink", line = 0, url = "https://gitlab-master.nvidia.com/datacenter-automation/go-health-validation/-/blob/main/catalog/nvlink", repository_id = "primary", revision = "ccd9acf" }], primitives = ["host-health-observation"], sources = ["local-source-audit"], coverage_status = "attributed", check_id = "catalog-checks" }, { name = "Verdict output", runs = "Per-node verdict JSON — gate on overall_severity, NOT exit code.", parameters = "overall_severity, severity_by_domain (string keys), check_results[] severity PASS/INFO/WARNING/CRITICAL/UNKNOWN, recommended_action; Slurm prolog: CRITICAL → scontrol drain. (No impact_scope field.)", code = [{ label = "catalog/health/verdict.go", path = "catalog/health/verdict.go", line = 0, url = "https://gitlab-master.nvidia.com/datacenter-automation/go-health-validation/-/blob/main/catalog/health/verdict.go", repository_id = "primary", revision = "ccd9acf" }], primitives = [], sources = [], coverage_status = "not-applicable", check_id = "verdict-output", coverage_rationale = "Describes a verdict output format rather than a validation-domain workload." }]
+sources = ["legacy-generator", "cross-nvidia-workbook", "local-source-audit"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["PM Ben Gueret (bgueret@nvidia.com); catalog Michael Basnight (mbasnight@nvidia.com).", "Interacts with DCGM, NVSentinel, DSX, Fleet Intelligence, Maestro, and remediation layers", "Fill scope, boundaries, active/passive split, and interfaces", "Decision needed: Runtime vs catalog"] }
+component_kind = "rule-catalog"

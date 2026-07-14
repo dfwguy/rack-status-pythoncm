@@ -1,0 +1,27 @@
+id = "xpa-dashboard"
+name = "XPA Dashboard"
+aliases = []
+summary = "Documented XID fleet-data dashboard/ETL consumer. Its repository identity, detailed runtime behavior, and remediation authority remain unverified."
+portfolio_role = "telemetry-analytics"
+capability = "telemetry-analytics"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "production"
+personas = ["Compute / Hardware Ops"]
+stacks = ["ETL Pipeline buillt on top of XPA"]
+scopes = ["Single Node"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Pradeep Kumar Shima US Alisha Joshi US", role = "PICs listed in workbook" }]
+inputs = ["Inventory data and XID lists from fleets"]
+outputs = ["Analyze XID data stream coming in from select customer fleets"]
+owns = ["Debuggability, Observability"]
+does_not_own = ["Test or benchmark execution", "Verified remediation authority"]
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Relies on XPA", "Alignment on consumption and integration to health check initiatives"] }
+relationships = [{ target = "xpa", type = "consumes", summary = "Workbook identifies an interface between xpa-dashboard and xpa.", sources = ["cross-nvidia-workbook"], review_status = "review-needed" }]

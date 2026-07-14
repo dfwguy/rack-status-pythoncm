@@ -556,7 +556,11 @@ def build_default_project_from_env(env: dict[str, str] | None = None) -> models.
 
 def migrate(repo: Repo, *, env: dict[str, str] | None = None) -> dict[str, Any]:
     """Idempotently seed/migrate the catalog. Returns a small summary for logging."""
-    summary = {"platforms_added": 0, "tools_added": 0, "default_project_created": False}
+    summary: dict[str, Any] = {
+        "platforms_added": 0,
+        "tools_added": 0,
+        "default_project_created": False,
+    }
 
     # Seed platforms/tools that don't yet exist (preserve operator edits).
     for p in SEED_PLATFORMS:
@@ -577,6 +581,16 @@ def migrate(repo: Repo, *, env: dict[str, str] | None = None) -> dict[str, Any]:
             {"project": proj.id, "cluster": proj.clusters[0].id if proj.clusters else ""},
         )
         summary["default_project_created"] = True
+
+    # Mirror the NVIDIA NPI Knowledge Portal reference catalog when a snapshot is present
+    # (env dir, var/cache sync, or vendored offline copy). No-op otherwise -- purely
+    # additive, never touches the runnable ``tools`` table.
+    try:
+        from .npi_import import import_npi_catalog
+
+        summary["npi"] = import_npi_catalog(repo)
+    except Exception:  # pragma: no cover - defensive: import must never break boot
+        summary["npi"] = {}
 
     repo.set_meta("schema_version", SCHEMA_VERSION)
     return summary

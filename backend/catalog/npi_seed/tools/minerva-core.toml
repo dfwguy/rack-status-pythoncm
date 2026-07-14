@@ -1,0 +1,27 @@
+id = "minerva-core"
+name = "Minerva Core"
+aliases = []
+summary = "Detection / telemetry layer"
+portfolio_role = "health-monitoring"
+capability = "continuous-health"
+evidence_depth = "document-verified"
+maturity = "unknown"
+deployment = "unknown"
+personas = ["TBD"]
+stacks = ["Minerva core is an external observability/anomaly-detection platform with topology mapping, root-cause diagnosis, and ML, backed internally by Druid/Kafka/query services and deployed on Ubuntu + Docker Swarm"]
+scopes = []
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Bhupesh Kothari", role = "PIC listed in component inventory" }, { name = "Rahul Aggarwal", role = "PIC listed in component inventory" }]
+inputs = ["TBD"]
+outputs = ["Telemetry / Detection"]
+owns = ["Collection / telemetry"]
+does_not_own = ["Catalog semantics"]
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Owner conflict: the component inventory lists Bhupesh Kothari and Rahul Aggarwal, while the boundary sheet lists Brian DiCarlo and Rahul Aggrawal. Confirm identities and accountable owner.", "Scope and persona are not populated in the workbook.", "Decision needed: Collector vs catalog"] }
+relationships = [{ target = "minerva-collector", type = "consumes", summary = "Workbook identifies an interface between minerva-core and minerva-collector.", sources = ["cross-nvidia-workbook"], review_status = "review-needed" }]

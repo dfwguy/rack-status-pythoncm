@@ -1,0 +1,26 @@
+id = "nico-health"
+name = "HW Health service that runs in NICo"
+aliases = []
+summary = "Retrieve metrics and health status from BMCs to figure out if a node, rack, or other component is healthy or not to make decisions if a node can be allocated to a tenant, and to forward raw metrics to otelemetry so multiple services don't have to talk to the BMC (health monitoring and telemetry collection)"
+portfolio_role = "health-monitoring"
+capability = "continuous-health"
+evidence_depth = "document-verified"
+maturity = "active"
+deployment = "production"
+personas = ["Question not understood"]
+stacks = ["NICo includes a service that collectes health data from underlying BMC components, deployed as nico-hardware-health. It discovers BMC endpoints from the NICo API or static config, uses Redfish API to collect Redfish sensor, firmware, log data, leak, and event data, processes events into health reports, exports metrics/logs OTLP, and submits machine/rack/switch/power-shelf health reports back to the NICo API that are used in machine state influence"]
+scopes = ["Both (Single + Multi)"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Ivan Anisimov CA Andrew Forgue US Deepak Poornachandra US", role = "PICs listed in workbook" }]
+inputs = ["BMC of all hardware components (Compute Trays, Ancillary servers, NVSwitches, etc). Anything provided by hardware platforms through Redfish Mockups"]
+outputs = ["Retrieve metrics and health status from BMCs to figure out if a node, rack, or other component is healthy or not to make decisions if a node can be allocated to a tenant, and to forward raw metrics to otelemetry so multiple services don't have to talk to the BMC (health monitoring and telemetry collection)"]
+owns = ["Retrieve metrics and health status from BMCs to figure out if a node, rack, or other component is healthy or not to make decisions if a node can be allocated to a tenant, and to forward raw metrics to otelemetry so multiple services don't have to talk to the BMC (health monitoring and telemetry collection)"]
+does_not_own = []
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Potential overlap with NICO machine validation and verdict consistency", "Health check catalog integration consideration - backlog item currently", "Decision needed: Same as NICO?"] }

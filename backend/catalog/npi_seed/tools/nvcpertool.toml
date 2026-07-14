@@ -1,0 +1,26 @@
+id = "nvcpertool"
+name = "NVCPERTool"
+aliases = []
+summary = "Validation, Failure attribution and Debug"
+portfolio_role = "validation-plane"
+capability = "continuous-health"
+evidence_depth = "document-verified"
+maturity = "unknown"
+deployment = "not-deployed"
+personas = ["Compute / Hardware Ops"]
+stacks = ["Python based parsing tool, leverages libcper"]
+scopes = ["Single Node"]
+phases = []
+layers = []
+phase_note = ""
+npi_model_status = "not-mapped"
+owners = [{ name = "Erwin Tsaur US", role = "PICs listed in workbook" }]
+inputs = ["Specifications , error injection testing and customer fleet issues"]
+outputs = ["NVCPERTool parses, correlates, and diagnoses CPERs across formats, turning low-level CPER data into rule-based error signatures and actionable diagnostic reports for faster triage"]
+owns = ["Validation, Failure attribution and Debug"]
+does_not_own = []
+repositories = []
+reports = []
+tests = []
+sources = ["cross-nvidia-workbook"]
+review = { status = "review-needed", confidence = "medium", reviewed_by = [], open_questions = ["Relies on libcper and CPER events from the platform", "Alignment on consumption and integration to health check initiatives"] }
