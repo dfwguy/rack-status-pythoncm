@@ -92,16 +92,71 @@ export function slurmTargetBody(
   return body;
 }
 
+/** Per-launch knobs shared by the NCCL/NEMO launch surfaces. */
+export interface LaunchOptions {
+  /** NCCL debug level: "VERSION" | "WARN" | "INFO" | "TRACE". "off"/"" leaves the script default. */
+  ncclDebug?: string;
+  /** Extra environment variables forwarded to the job (e.g. OMPI_MCA_coll_hcoll_enable=0). */
+  env?: Record<string, string>;
+  /**
+   * NCCL library version for the direct NCCL microbenchmark: "2.30.7" (vetted default),
+   * "system" (host build, 2.28.9), or another vetted "X.Y.Z". The sbatch loads the matching
+   * libnccl from the NFS workspace via LD_LIBRARY_PATH. Ignored by container/NEMO launches.
+   */
+  ncclVersion?: string;
+  /**
+   * NCCL sweep rounds — how many times to run the all_reduce sweep in one job. Stage-1
+   * acceptance requires 5 passing rounds (the modal defaults to 5). Integer ≥ 1.
+   */
+  iters?: number;
+}
+
+const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Parse a "KEY=VALUE per line" textarea into a validated env map. Invalid lines
+ * (no `=`, bad key name) are dropped. Blank lines and `# comments` are ignored.
+ */
+export function parseEnvVars(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const rawLine of (text ?? "").split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    const val = line.slice(eq + 1).trim();
+    if (!ENV_KEY_RE.test(key)) continue;
+    out[key] = val;
+  }
+  return out;
+}
+
+/** Attach optional launch knobs (NCCL debug, custom env vars) to a POST body. */
+export function attachLaunchOptions(body: Record<string, unknown>, opts?: LaunchOptions): Record<string, unknown> {
+  const dbg = (opts?.ncclDebug ?? "").trim();
+  if (dbg && dbg.toLowerCase() !== "off") body.nccl_debug = dbg;
+  if (opts?.env && Object.keys(opts.env).length > 0) body.env = opts.env;
+  const ver = (opts?.ncclVersion ?? "").trim();
+  if (ver) body.nccl_version = ver;
+  const iters = opts?.iters;
+  if (typeof iters === "number" && Number.isFinite(iters) && iters >= 1) {
+    body.iters = Math.round(iters);
+  }
+  return body;
+}
+
 export function validationFamilyBody(
   rack: string,
   logDir: string | undefined,
   selected: Set<string>,
   naming?: NvisNamingSchema,
+  opts?: LaunchOptions,
 ): Record<string, unknown> {
   const body = attachLogDir({ rack }, logDir);
   const t = validationTargetFromNodes(rack, selected, naming);
   if (t) body.target = t;
-  return body;
+  return attachLaunchOptions(body, opts);
 }
 
 /** Llama API expects `nodes_spec` (Slurm fragment); use bracket target when possible. */

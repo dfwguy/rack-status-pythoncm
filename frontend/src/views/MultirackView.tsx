@@ -14,6 +14,8 @@ import Snackbar from "@mui/material/Snackbar";
 import Alert from "@mui/material/Alert";
 import CircularProgress from "@mui/material/CircularProgress";
 import { Card, Text, Tag, Button, Banner, Flex } from "@nvidia/foundations-react-core";
+import { attachLaunchOptions, type LaunchOptions } from "../lib/rackCommandBodies";
+import { LaunchOptionsDialog } from "../components/rack/LaunchOptionsDialog";
 import { Layers, LineChart, Gauge, ScrollText } from "lucide-react";
 import Tooltip from "@mui/material/Tooltip";
 import { PageHeader } from "../components/layout/PageHeader";
@@ -99,6 +101,11 @@ const LAUNCH_META: Record<MultirackLaunchKind, { label: string; asyncUrl: string
 
 const TERMINAL_PHASES = new Set(["done", "error", "timeout"]);
 
+const LAUNCH_TITLE: Record<MultirackLaunchKind, string> = {
+  nemo: "Launch Multirack NEMO Validation",
+  llmb: "Launch NCCL Microbenchmark",
+};
+
 function jobKindLabel(kind: string): string {
   return kind === "llmb" ? "NCCL (direct)" : "NEMO x-rack";
 }
@@ -137,6 +144,7 @@ function fmtWhen(iso: string): string {
 
 export function MultirackView({ data, logDir }: MultirackViewProps) {
   const [dryRun, setDryRun] = useState(false);
+  const [pendingKind, setPendingKind] = useState<MultirackLaunchKind | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [launchingKind, setLaunchingKind] = useState<MultirackLaunchKind | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: "success" | "error" | "info" }>({
@@ -280,7 +288,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     }
   }, [logDir]);
 
-  const handleLaunch = async (kind: MultirackLaunchKind) => {
+  const handleLaunch = async (kind: MultirackLaunchKind, opts: LaunchOptions) => {
     if (selected.size === 0 || launchingKind) return;
     const meta = LAUNCH_META[kind];
     const racks = [...selected].sort();
@@ -288,6 +296,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     try {
       const body: Record<string, unknown> = { racks, log_dir: logDir };
       if (kind === "llmb") body.dry_run = dryRun;
+      attachLaunchOptions(body, opts);
       const res = await fetch(meta.asyncUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -306,6 +315,12 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     } finally {
       setLaunchingKind(null);
     }
+  };
+
+  const confirmLaunch = (opts: LaunchOptions) => {
+    const kind = pendingKind;
+    setPendingKind(null);
+    if (kind) void handleLaunch(kind, opts);
   };
 
   const handleDismissJob = useCallback(
@@ -398,7 +413,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
             <Button
               kind="primary"
               size="small"
-              onClick={() => void handleLaunch("nemo")}
+              onClick={() => setPendingKind("nemo")}
               disabled={noRacks || selected.size === 0 || launchingKind !== null}
             >
               <Layers size={16} style={{ marginRight: 6 }} />
@@ -407,7 +422,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
             <Button
               kind="secondary"
               size="small"
-              onClick={() => void handleLaunch("llmb")}
+              onClick={() => setPendingKind("llmb")}
               disabled={noRacks || selected.size === 0 || launchingKind !== null}
             >
               <Gauge size={16} style={{ marginRight: 6 }} />
@@ -739,6 +754,17 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
         }
         logText={viewLogsText}
         running={viewLogsJob ? !TERMINAL_PHASES.has(viewLogsJob.phase) : false}
+      />
+
+      <LaunchOptionsDialog
+        open={pendingKind !== null}
+        onClose={() => setPendingKind(null)}
+        onConfirm={confirmLaunch}
+        title={pendingKind ? LAUNCH_TITLE[pendingKind] : "Launch options"}
+        subtitle={`${selected.size} rack(s) selected${pendingKind === "llmb" && dryRun ? " — dry run" : ""}`}
+        confirmLabel="Launch"
+        showNcclVersion={pendingKind === "llmb"}
+        showIters={pendingKind === "llmb"}
       />
 
       <ParserResultsDialog

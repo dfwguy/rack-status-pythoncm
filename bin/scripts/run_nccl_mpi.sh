@@ -8,12 +8,21 @@
 # data on the IB rails). No llmb-run, no container, no UCX-verbs guesswork.
 #
 # Usage:
-#   run_nccl_mpi.sh [--dry-run] [--reservation NAME] [--size-max 1G] RACK [RACK ...]
+#   run_nccl_mpi.sh [--dry-run] [--reservation NAME] [--size-max 1G] [--nccl-version 2.30.7] \
+#                   [--rounds 5] [--app-log-rack RACK] RACK [RACK ...]
 #   run_nccl_mpi.sh [--dry-run] --nodelist '<slurm-nodelist>'
+#
+# --rounds N           : run the all_reduce sweep N times in one job (Stage-1 acceptance = 5).
+#                        Forwarded to the sbatch as NVIS_NCCL_ROUNDS. Default 1.
+#
+# --app-log-rack RACK  : name the Slurm output "<user>-NCCL-1Rack-<RACK>-<N>N-<jobid>.txt" so the
+#                        app captures it as the single-rack Stage-1 NCCL validation (dashboard +
+#                        parser). Without it, the log is "nccl-mpi_<label>_<jobid>.out" (x-rack style).
 #
 # Env: GPUS_PER_NODE (default 4), RACK_TO_NODE_SED / RACK_NODE_MATCH_SUFFIX
 #      (see lib/nodes.inc.sh), NVIS_HPCX_DIR / NVIS_NCCL_TESTS_BIN / NVIS_NCCL_LIB /
 #      NVIS_CUDA_LIB (host toolchain, auto-discovered on the node when unset),
+#      NVIS_NCCL_VERSION (which vetted libnccl to load: 2.30.7 default | system | <X.Y.Z>),
 #      NCCL_SIZE_MIN / NCCL_SIZE_MAX, RACK_JOB_LOG_DIR (defaults to cwd).
 set -uo pipefail
 
@@ -24,6 +33,9 @@ DRY_RUN=0
 RESERVATION=""
 EXPLICIT_NODELIST=""
 SIZE_MAX_OVERRIDE=""
+NCCL_VERSION_OVERRIDE=""
+ROUNDS_OVERRIDE=""
+APP_LOG_RACK=""
 RACKS=()
 
 die() { echo "run_nccl_mpi: $*" >&2; exit 2; }
@@ -37,6 +49,12 @@ while [[ $# -gt 0 ]]; do
     --nodelist=*) EXPLICIT_NODELIST="${1#*=}"; shift ;;
     --size-max) SIZE_MAX_OVERRIDE="${2:?}"; shift 2 ;;
     --size-max=*) SIZE_MAX_OVERRIDE="${1#*=}"; shift ;;
+    --nccl-version) NCCL_VERSION_OVERRIDE="${2:?}"; shift 2 ;;
+    --nccl-version=*) NCCL_VERSION_OVERRIDE="${1#*=}"; shift ;;
+    --rounds) ROUNDS_OVERRIDE="${2:?}"; shift 2 ;;
+    --rounds=*) ROUNDS_OVERRIDE="${1#*=}"; shift ;;
+    --app-log-rack) APP_LOG_RACK="${2:?}"; shift 2 ;;
+    --app-log-rack=*) APP_LOG_RACK="${1#*=}"; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --) shift; while [[ $# -gt 0 ]]; do RACKS+=("$1"); shift; done ;;
     -*) die "unknown option: $1" ;;
@@ -75,7 +93,15 @@ echo "run_nccl_mpi: gpus/node=${GPUS_PER_NODE}"
 SBATCH="${_D}/nccl_allreduce.sbatch"
 [[ -f "${SBATCH}" ]] || die "nccl_allreduce.sbatch not found next to this launcher"
 OUTPUT=""
-[[ -n "${JOB_LOG_DIR}" ]] && OUTPUT="${JOB_LOG_DIR%/}/nccl-mpi_${_label}_%j.out"
+if [[ -n "${JOB_LOG_DIR}" ]]; then
+  if [[ -n "${APP_LOG_RACK}" ]]; then
+    # App-discoverable single-rack NCCL log: the dashboard + parser key off the
+    # "…-NCCL-1Rack-<rack>-<N>N-…txt" basename to flip the rack's Stage-1 NCCL status.
+    OUTPUT="${JOB_LOG_DIR%/}/${USER:-root}-NCCL-1Rack-${APP_LOG_RACK}-${NVIS_NNODES}N-%j.txt"
+  else
+    OUTPUT="${JOB_LOG_DIR%/}/nccl-mpi_${_label}_%j.out"
+  fi
+fi
 
 echo "run_nccl_mpi: nodes=${NVIS_NNODES} nodelist=${NVIS_NODELIST}"
 echo "run_nccl_mpi: sbatch=${SBATCH}${OUTPUT:+ output=${OUTPUT}}"
@@ -83,8 +109,17 @@ echo "run_nccl_mpi: sbatch=${SBATCH}${OUTPUT:+ output=${OUTPUT}}"
 # Export the real scripts dir so the batch script (run from Slurm's spool) can find
 # lib/fabric.inc.sh; --export=ALL carries it (+ the submit env) to the job.
 export NVIS_SCRIPTS_DIR="${_D}"
+# NCCL version: --nccl-version wins; else inherit NVIS_NCCL_VERSION from the env; else
+# the sbatch default (2.30.7). Forwarded explicitly so the batch script picks the right
+# vetted libnccl (loaded via LD_LIBRARY_PATH from the NFS workspace).
+[[ -n "${NCCL_VERSION_OVERRIDE}" ]] && export NVIS_NCCL_VERSION="${NCCL_VERSION_OVERRIDE}"
+# Sweep rounds: --rounds wins; else inherit NVIS_NCCL_ROUNDS from the env; else sbatch default (1).
+[[ -n "${ROUNDS_OVERRIDE}" ]] && export NVIS_NCCL_ROUNDS="${ROUNDS_OVERRIDE}"
+_export="ALL,NVIS_SCRIPTS_DIR=${_D},GPUS_PER_NODE=${GPUS_PER_NODE}"
+[[ -n "${NVIS_NCCL_VERSION:-}" ]] && _export="${_export},NVIS_NCCL_VERSION=${NVIS_NCCL_VERSION}"
+[[ -n "${NVIS_NCCL_ROUNDS:-}" ]] && _export="${_export},NVIS_NCCL_ROUNDS=${NVIS_NCCL_ROUNDS}"
 cmd=( sbatch -N "${NVIS_NNODES}" --nodelist="${NVIS_NODELIST}" --ntasks-per-node="${GPUS_PER_NODE}"
-      --export="ALL,NVIS_SCRIPTS_DIR=${_D},GPUS_PER_NODE=${GPUS_PER_NODE}" )
+      --export="${_export}" )
 [[ -n "${OUTPUT}" ]] && cmd+=( --output="${OUTPUT}" )
 [[ -n "${RESERVATION}" ]] && cmd+=( --reservation="${RESERVATION}" )
 [[ -n "${SIZE_MAX_OVERRIDE}" ]] && export NCCL_SIZE_MAX="${SIZE_MAX_OVERRIDE}"

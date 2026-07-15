@@ -46,8 +46,35 @@ _pick_first() {
   done
 }
 HPCX_DIR="${NVIS_HPCX_DIR:-$(_pick_first '/home/*/workspace/hpcx-*cuda*' '/home/*/workspace/hpcx-*' '/opt/hpcx*')}"
+# --- NCCL version selection -----------------------------------------------------
+# nccl-tests dynamically links libnccl.so.2, so the runtime NCCL version is chosen by
+# which vetted lib dir is first on LD_LIBRARY_PATH (all NCCL 2.x share the soname
+# libnccl.so.2 — a single test binary runs any 2.x lib). Vetted libs live on the
+# NFS-shared workspace (visible on every compute node). Convention:
+#   system | 2.28.9  ->  <ws>/nccl/build/lib              (system default host build)
+#   <X.Y.Z>          ->  <ws>/nccl-<X.Y.Z>/nccl/build/lib  (vetted per-version build)
+# Override the resolved dir with NVIS_NCCL_LIB, or the test binary with NVIS_NCCL_TESTS_BIN.
+NVIS_NCCL_VERSION="${NVIS_NCCL_VERSION:-2.30.7}"
+case "${NVIS_NCCL_VERSION}" in
+  system|default|2.28.9) _nccl_lib_glob='/home/*/workspace/nccl/build/lib/libnccl.so.2' ;;
+  *)                     _nccl_lib_glob="/home/*/workspace/nccl-${NVIS_NCCL_VERSION}/nccl/build/lib/libnccl.so.2" ;;
+esac
+if [ -n "${NVIS_NCCL_LIB:-}" ]; then
+  NCCL_LIB="${NVIS_NCCL_LIB}"
+else
+  _nccl_lib_so="$(ls -t ${_nccl_lib_glob} 2>/dev/null | head -1)"
+  [ -n "${_nccl_lib_so}" ] || { echo "nccl_allreduce: NCCL ${NVIS_NCCL_VERSION} libnccl.so.2 not found (looked: ${_nccl_lib_glob}). Build it on the NFS workspace or choose the 'system' version."; exit 2; }
+  NCCL_LIB="$(dirname "${_nccl_lib_so}")"
+fi
+# Prefer a version-matched nccl-tests build when present; else the system build
+# (ABI-compatible: a 2.28-built binary runs any 2.x libnccl loaded via LD_LIBRARY_PATH).
+if [ -z "${NVIS_NCCL_TESTS_BIN:-}" ]; then
+  case "${NVIS_NCCL_VERSION}" in
+    system|default|2.28.9) : ;;
+    *) _vt="$(ls -t /home/*/workspace/nccl-${NVIS_NCCL_VERSION}/nccl-tests/build/all_reduce_perf 2>/dev/null | head -1)"; [ -n "${_vt}" ] && NVIS_NCCL_TESTS_BIN="${_vt}" ;;
+  esac
+fi
 NCCL_TESTS_BIN="${NVIS_NCCL_TESTS_BIN:-$(ls -t /home/*/workspace/nccl/nccl-tests/build/all_reduce_perf 2>/dev/null | head -1)}"
-NCCL_LIB="${NVIS_NCCL_LIB:-$(dirname "$(ls -t /home/*/workspace/nccl/build/lib/libnccl.so.2 2>/dev/null | head -1)" 2>/dev/null)}"
 CUDA_LIB="${NVIS_CUDA_LIB:-$(_pick_first '/home/*/workspace/cuda*/targets/*/lib' '/usr/local/cuda*/targets/*/lib')}"
 
 [ -n "${NCCL_TESTS_BIN}" ] && [ -x "${NCCL_TESTS_BIN}" ] || { echo "nccl_allreduce: all_reduce_perf not found (set NVIS_NCCL_TESTS_BIN)"; exit 2; }
@@ -75,21 +102,73 @@ HF="$(mktemp "${TMPDIR:-/tmp}/nccl_hf.XXXXXX")"
 printf '%s\n' "${NODES}" | sed "s/\$/ slots=${GPUS_PER_NODE}/" > "${HF}"
 trap 'rm -f "${HF}"' EXIT
 
-echo "nccl_allreduce: nodes=${NNODES} np=${NP} gpus/node=${GPUS_PER_NODE} sizes=${SIZE_MIN}..${SIZE_MAX}"
-echo "nccl_allreduce: bin=${NCCL_TESTS_BIN}"
+# Forward custom launch env vars to the remote orted ranks. mpirun only propagates
+# explicitly -x'd vars to nodes other than the one running mpirun, so without this a
+# custom var (e.g. NCCL_NET_PLUGIN=none from the UI launch dialog) would silently apply
+# to the local ranks only, leaving remote ranks on a different config.
+#
+# Primary source: NVIS_EXTRA_ENV_KEYS — a space-separated list of the exact keys the app
+# forwarded (any prefix). Fallback (when unset): scan the batch env for NCCL_*/UCX_*/OMPI_MCA_*.
+# OMPI_MCA_* (e.g. OMPI_MCA_coll_hcoll_enable=0) are auto-propagated by mpirun, but we also
+# forward them explicitly so they are visible in the log line and land on every rank's env.
+EXTRA_X=()
+_already=" NCCL_SOCKET_IFNAME NCCL_IB_HCA NCCL_DEBUG "   # forwarded explicitly below
+if [ -n "${NVIS_EXTRA_ENV_KEYS:-}" ]; then
+  for _k in ${NVIS_EXTRA_ENV_KEYS}; do
+    case "${_already}" in *" ${_k} "*) continue ;; esac
+    [ -n "${!_k+x}" ] && EXTRA_X+=( -x "${_k}" )
+  done
+else
+  while IFS='=' read -r _k _; do
+    case "${_already}" in *" ${_k} "*) continue ;; esac
+    case "${_k}" in NCCL_*|UCX_*|OMPI_MCA_*) EXTRA_X+=( -x "${_k}" ) ;; esac
+  done < <(env)
+fi
+if [ "${#EXTRA_X[@]}" -gt 0 ]; then
+  echo "nccl_allreduce: forwarding extra env to all ranks:$(printf ' %s' "${EXTRA_X[@]}" | sed 's/ -x//g')"
+fi
+
+# Per-collective watchdog (nccl-tests -T/--timeout, seconds). nccl-tests' testStreamSynchronize
+# polls with cudaStreamQuery and, if a single collective's sync exceeds this, calls ncclCommAbort
+# (unblocking the stuck kernel) + prints "Test timeout" on the offending host and FAILS — instead
+# of hanging forever on a degraded link/plane. 0 disables. Default 120s (a legit all_reduce at 16G
+# is seconds, so this only trips on a real stall).
+TEST_TIMEOUT="${NVIS_NCCL_TEST_TIMEOUT:-120}"
+
+# Sweep rounds: run the whole all_reduce message-size sweep this many times. Stage-1
+# acceptance requires N passing rounds (the app defaults single-rack Stage-1 to 5); the
+# cross-rack callers leave it at 1 unless set. Any round failing fails the job (fail-fast).
+ROUNDS="${NVIS_NCCL_ROUNDS:-1}"
+case "${ROUNDS}" in ''|*[!0-9]*) ROUNDS=1 ;; esac
+[ "${ROUNDS}" -ge 1 ] 2>/dev/null || ROUNDS=1
+
+echo "nccl_allreduce: nodes=${NNODES} np=${NP} gpus/node=${GPUS_PER_NODE} sizes=${SIZE_MIN}..${SIZE_MAX} rounds=${ROUNDS}"
+echo "nccl_allreduce: NCCL version=${NVIS_NCCL_VERSION} lib=${NCCL_LIB}"
+echo "nccl_allreduce: bin=${NCCL_TESTS_BIN} per-collective timeout=${TEST_TIMEOUT}s (nccl-tests -T)"
 echo "nccl_allreduce: NCCL_IB_HCA=${NCCL_IB_HCA:-<auto>} NCCL_SOCKET_IFNAME=${NS_IF} (MPI bootstrap: ob1/tcp over ${NS_IF})"
 
 # MPI bootstrap over tcp/${NS_IF} (routable cross-rack); NCCL data over IB rails.
 # plm=rsh launches orted via ssh across the allocated nodes (works in-allocation).
-mpirun -np "${NP}" --hostfile "${HF}" --map-by "ppr:${GPUS_PER_NODE}:node" --bind-to none \
-  --mca plm rsh --mca plm_rsh_agent ssh \
-  --mca pml ob1 --mca btl tcp,self --mca btl_tcp_if_include "${NS_IF}" \
-  --mca oob_tcp_if_include "${NS_IF}" \
-  -x LD_LIBRARY_PATH -x PATH \
-  -x NCCL_SOCKET_IFNAME="${NS_IF}" \
-  ${NCCL_IB_HCA:+-x NCCL_IB_HCA="${NCCL_IB_HCA}"} \
-  -x NCCL_DEBUG="${NCCL_DEBUG:-WARN}" \
-  "${NCCL_TESTS_BIN}" -b "${SIZE_MIN}" -e "${SIZE_MAX}" -f 2 -g 1
-rc=$?
+rc=0
+for _round in $(seq 1 "${ROUNDS}"); do
+  echo "===== nccl_allreduce round ${_round}/${ROUNDS} ====="
+  mpirun -np "${NP}" --hostfile "${HF}" --map-by "ppr:${GPUS_PER_NODE}:node" --bind-to none \
+    --mca plm rsh --mca plm_rsh_agent ssh \
+    --mca pml ob1 --mca btl tcp,self --mca btl_tcp_if_include "${NS_IF}" \
+    --mca oob_tcp_if_include "${NS_IF}" \
+    -x LD_LIBRARY_PATH -x PATH \
+    -x NCCL_SOCKET_IFNAME="${NS_IF}" \
+    ${NCCL_IB_HCA:+-x NCCL_IB_HCA="${NCCL_IB_HCA}"} \
+    -x NCCL_DEBUG="${NCCL_DEBUG:-WARN}" \
+    ${EXTRA_X[@]+"${EXTRA_X[@]}"} \
+    "${NCCL_TESTS_BIN}" -b "${SIZE_MIN}" -e "${SIZE_MAX}" -f 2 -g 1 -T "${TEST_TIMEOUT}"
+  _rc=$?
+  if [ "${_rc}" -ne 0 ]; then
+    rc=${_rc}
+    echo "nccl_allreduce: round ${_round}/${ROUNDS} FAILED rc=${_rc} (stopping)"
+    break
+  fi
+  echo "nccl_allreduce: round ${_round}/${ROUNDS} OK"
+done
 echo "nccl_allreduce: exit ${rc}"
 exit ${rc}

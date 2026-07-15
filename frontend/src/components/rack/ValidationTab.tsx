@@ -1,9 +1,11 @@
+import { useState } from "react";
 import Box from "@mui/material/Box";
 import { Text, Divider } from "@nvidia/foundations-react-core";
 import { ActionCard } from "./ActionCard";
+import { LaunchOptionsDialog } from "./LaunchOptionsDialog";
 import { Play, Flame, Zap, Boxes, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine, Network, Gauge, Activity } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
-import { llamaNodesBody, slurmTargetBody, validationFamilyBody } from "../../lib/rackCommandBodies";
+import { llamaNodesBody, slurmTargetBody, validationFamilyBody, type LaunchOptions } from "../../lib/rackCommandBodies";
 import type { NvisNamingSchema } from "../../types/naming";
 
 interface ValidationTabProps {
@@ -16,11 +18,42 @@ interface ValidationTabProps {
   onViewResults?: () => void;
 }
 
+/** A NCCL/NEMO launch deferred until the user confirms options in the modal. */
+interface PendingLaunch {
+  label: string;
+  postUrl: string;
+  statusUrl: (jobId: string) => string;
+  /** Modal title/subtitle for context. */
+  title: string;
+  /**
+   * Show the NCCL library-version selector — only for the direct NCCL path
+   * (run-llmb-nccl-async → nccl_allreduce.sbatch), which resolves libnccl via
+   * LD_LIBRARY_PATH. Container/NEMO launches ignore it.
+   */
+  showNcclVersion?: boolean;
+  /** Show the iterations (sweep-rounds) stepper — direct NCCL paths only. */
+  showIters?: boolean;
+}
+
 export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, jobId, onViewResults }: ValidationTabProps) {
   const { runAsyncValidationFamily, runSyncJson, openText } = useRackCommands();
   const nodeCount = selectedNodes.size;
+  const [pendingLaunch, setPendingLaunch] = useState<PendingLaunch | null>(null);
 
   const validationBody = () => validationFamilyBody(rack, logDir, selectedNodes, naming);
+
+  const confirmLaunch = (opts: LaunchOptions) => {
+    const p = pendingLaunch;
+    setPendingLaunch(null);
+    if (!p) return;
+    void runAsyncValidationFamily(
+      p.label,
+      "validation",
+      p.postUrl,
+      p.statusUrl,
+      validationFamilyBody(rack, logDir, selectedNodes, naming, opts),
+    );
+  };
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -30,19 +63,20 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
 
       <ActionCard
         title="Stage 1 — NCCL Benchmark"
-        description={`Stage-1 NCCL acceptance: 5 rounds of all_reduce (1G..16G) on ${nodeCount} selected node(s) in ${rack} via the portable launcher. Writes an NCCL-1Rack log to log_dir so it appears on the dashboard + parser results.`}
+        description={`Stage-1 NCCL acceptance: all_reduce sweep (…16G) on ${nodeCount} selected node(s) in ${rack} via the direct nccl-tests path (same launcher as the cross-rack test), with a selectable NCCL version. Writes an NCCL-1Rack log to log_dir so it appears on the dashboard + parser results.`}
         icon={<Activity size={20} />}
         buttonLabel="Run NCCL"
         disabled={disabled}
         selectedNodes={selectedNodes}
         onRun={() =>
-          runAsyncValidationFamily(
-            "NCCL Benchmark (Stage-1)",
-            "validation",
-            "/api/run-nccl-fullrack-async",
-            (jid) => `/api/run-nccl-fullrack-status?job_id=${encodeURIComponent(jid)}`,
-            validationBody(),
-          )
+          setPendingLaunch({
+            label: "NCCL Benchmark (Stage-1)",
+            postUrl: "/api/run-nccl-fullrack-async",
+            statusUrl: (jid) => `/api/run-nccl-fullrack-status?job_id=${encodeURIComponent(jid)}`,
+            title: "Launch Stage-1 NCCL Benchmark",
+            showNcclVersion: true,
+            showIters: true,
+          })
         }
       />
       <ActionCard
@@ -53,13 +87,12 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         disabled={disabled}
         selectedNodes={selectedNodes}
         onRun={() =>
-          runAsyncValidationFamily(
-            "NEMO validation",
-            "validation",
-            "/api/run-validation-async",
-            (jid) => `/api/run-validation-status?job_id=${encodeURIComponent(jid)}`,
-            validationBody(),
-          )
+          setPendingLaunch({
+            label: "NEMO validation",
+            postUrl: "/api/run-validation-async",
+            statusUrl: (jid) => `/api/run-validation-status?job_id=${encodeURIComponent(jid)}`,
+            title: "Launch Stage-2 NEMO Training",
+          })
         }
       />
 
@@ -150,13 +183,14 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         disabled={disabled}
         selectedNodes={selectedNodes}
         onRun={() =>
-          runAsyncValidationFamily(
-            "NCCL Microbenchmark (LLMB)",
-            "validation",
-            "/api/run-llmb-nccl-async",
-            (jid) => `/api/run-llmb-nccl-status?job_id=${encodeURIComponent(jid)}`,
-            validationBody(),
-          )
+          setPendingLaunch({
+            label: "NCCL Microbenchmark (LLMB)",
+            postUrl: "/api/run-llmb-nccl-async",
+            statusUrl: (jid) => `/api/run-llmb-nccl-status?job_id=${encodeURIComponent(jid)}`,
+            title: "Launch NCCL Microbenchmark (LLMB)",
+            showNcclVersion: true,
+            showIters: true,
+          })
         }
       />
 
@@ -207,6 +241,17 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         disabled={disabled}
         selectedNodes={selectedNodes}
         onRun={() => runSyncJson("Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, selectedNodes, naming))}
+      />
+
+      <LaunchOptionsDialog
+        open={pendingLaunch !== null}
+        onClose={() => setPendingLaunch(null)}
+        onConfirm={confirmLaunch}
+        title={pendingLaunch?.title ?? "Launch options"}
+        subtitle={`${nodeCount} selected node(s) in ${rack}`}
+        confirmLabel="Launch"
+        showNcclVersion={pendingLaunch?.showNcclVersion ?? false}
+        showIters={pendingLaunch?.showIters ?? false}
       />
     </Box>
   );

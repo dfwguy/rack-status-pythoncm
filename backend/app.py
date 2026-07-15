@@ -1259,8 +1259,20 @@ def _validation_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
     threading.Thread(target=_purge, daemon=True).start()
 
 
-def _validation_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_cmd: str) -> None:
-    """Run validation bash in a background thread; update _validation_jobs[job_id]."""
+def _validation_worker(
+    job_id: str,
+    cmd: list[str],
+    cwd: str,
+    timeout: int,
+    display_cmd: str,
+    *,
+    env_updates: dict[str, str] | None = None,
+) -> None:
+    """Run validation bash in a background thread; update _validation_jobs[job_id].
+
+    ``env_updates`` carries per-launch env knobs (NCCL debug + custom vars) from the launch
+    modal; they are merged into the subprocess env and forwarded to the remote over SSH.
+    """
 
     def _patch(**kwargs: object) -> None:
         with _validation_jobs_lock:
@@ -1276,7 +1288,7 @@ def _validation_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, disp
         # NeMo/validation launchers run on the privileged "script" target (root@slogin):
         # they pdsh-rsync the .sqsh into root-owned /raid/data on compute nodes and submit
         # via sbatch — neither possible as the unprivileged control-plane user on the head.
-        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(), profile="script")
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates), profile="script")
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -1419,11 +1431,20 @@ def _xrack_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
     threading.Thread(target=_purge, daemon=True).start()
 
 
-def _xrack_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_cmd: str) -> None:
+def _xrack_worker(
+    job_id: str,
+    cmd: list[str],
+    cwd: str,
+    timeout: int,
+    display_cmd: str,
+    *,
+    env_updates: dict[str, str] | None = None,
+) -> None:
     """Run run-nemo-xrack.sh in a background thread; update _xrack_jobs[job_id].
 
     Phase transitions are mirrored into the durable ``multirack_jobs`` store so the launch
-    is visible across sessions / restarts.
+    is visible across sessions / restarts. ``env_updates`` carries per-launch env knobs
+    (NCCL debug + custom vars) from the launch modal, merged into the subprocess env.
     """
 
     def _patch(**kwargs: object) -> None:
@@ -1441,7 +1462,7 @@ def _xrack_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
         # NeMo/validation launchers run on the privileged "script" target (root@slogin):
         # they pdsh-rsync the .sqsh into root-owned /raid/data on compute nodes and submit
         # via sbatch — neither possible as the unprivileged control-plane user on the head.
-        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(), profile="script")
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates), profile="script")
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -10215,6 +10236,108 @@ def api_export_logs_zip():
     )
 
 
+_NCCL_DEBUG_LEVELS = ("VERSION", "WARN", "INFO", "TRACE")
+
+# Custom launch env vars (UI "Extra environment variables" field). A key must be a valid
+# POSIX-ish env name; values are single-line and length-capped; the count is bounded. These
+# guardrails keep a well-formed KEY=VALUE map without allowing injection of newlines / huge
+# payloads into the job environment. Forwarded as env_extra (bypasses the SSH allowlist) and
+# chained to the container via each launcher's --export=ALL.
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ENV_MAX_VARS = 32
+_ENV_MAX_VALUE_LEN = 2048
+
+
+def _custom_env_from_body(body: dict) -> dict[str, str]:
+    """Validated user-supplied ``env`` map from the POST body ({"KEY": "VALUE", ...}).
+
+    Silently drops entries with an invalid key, a multi-line/oversized value, or beyond the
+    per-launch cap (the UI validates too, so a bad row just doesn't get applied).
+    """
+    extra = body.get("env")
+    if not isinstance(extra, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in extra.items():
+        key = str(k).strip()
+        if not _ENV_KEY_RE.match(key):
+            continue
+        val = str(v)
+        if "\n" in val or "\r" in val or len(val) > _ENV_MAX_VALUE_LEN:
+            continue
+        out[key] = val
+        if len(out) >= _ENV_MAX_VARS:
+            break
+    return out
+
+
+def _launch_env_from_body(body: dict) -> dict[str, str]:
+    """Per-launch env knobs parsed from the POST body: NCCL debug level + custom env vars.
+
+    ``nccl_debug`` accepts VERSION/WARN/INFO/TRACE (case-insensitive). ``off``/``default``/
+    empty/absent means "leave the script default" (no override). We set BOTH
+    ``NVIS_NCCL_DEBUG`` (honored by the NEMO launchers, which otherwise hard-code the
+    level) and raw ``NCCL_DEBUG`` (read directly by ``nccl_allreduce.sbatch`` and the
+    portable Stage-1 launcher) so the toggle reaches every NCCL/NEMO launch path.
+
+    ``env`` is a user-supplied KEY=VALUE map from the launch dialog (e.g.
+    ``OMPI_MCA_coll_hcoll_enable=0``). Explicit keys win over the NCCL-debug defaults.
+
+    All of these are threaded to the worker as ``env_extra`` so they reach the remote
+    cluster over SSH (the forward allowlist is bypassed for explicit ``env_extra`` keys)
+    and are forwarded into the container by each launcher's ``--export=ALL``.
+    """
+    out: dict[str, str] = {}
+    raw = body.get("nccl_debug")
+    if raw is not None:
+        lvl = str(raw).strip().upper()
+        if lvl and lvl not in ("OFF", "DEFAULT", "NONE") and lvl in _NCCL_DEBUG_LEVELS:
+            out["NVIS_NCCL_DEBUG"] = lvl
+            out["NCCL_DEBUG"] = lvl
+    # User-supplied vars win over the debug defaults above.
+    custom = _custom_env_from_body(body)
+    out.update(custom)
+    # Advertise the exact set of user-supplied keys so multi-node launchers can forward
+    # precisely these to remote ranks. nccl_allreduce.sbatch only propagates an explicit
+    # -x allowlist to orted on nodes other than the mpirun host; without this, a custom
+    # var (e.g. NCCL_NET_PLUGIN=none) would apply to local ranks only.
+    if custom:
+        out["NVIS_EXTRA_ENV_KEYS"] = " ".join(sorted(custom))
+    return out
+
+
+def _nccl_version_cli(body: dict) -> list[str] | tuple[object, int]:
+    """Validate ``body['nccl_version']`` → ``["--nccl-version", v]`` for run_nccl_mpi.sh.
+
+    Shared by the direct NCCL launch surfaces (single-rack Stage-1 + cross-rack) so the
+    version selector behaves identically. Returns ``[]`` when unset/default, or an
+    ``(jsonify(error), 400)`` tuple on an invalid token. "system"/"default" = host build
+    (2.28.9); "X.Y.Z" = a vetted NFS build loaded via LD_LIBRARY_PATH.
+    """
+    ver = (body.get("nccl_version") or _eget("RACK_NCCL_MPI_VERSION") or "").strip()
+    if not ver:
+        return []
+    if not re.match(r"^(system|default|[0-9]+(\.[0-9]+){1,3})$", ver):
+        return (jsonify({"ok": False, "error": f"invalid nccl_version: {ver!r}"}), 400)
+    return ["--nccl-version", ver]
+
+
+def _nccl_rounds_from_body(body: dict, default: int | None) -> int | None:
+    """NCCL sweep rounds from the launch body (``iters``), clamped to 1..50.
+
+    ``default`` is returned when the body omits ``iters`` (single-rack Stage-1 passes 5 so the
+    acceptance sweep runs 5 times; the x-rack path passes ``None`` to leave the sbatch default).
+    """
+    raw = body.get("iters")
+    if raw is None:
+        return default
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(n, 50))
+
+
 def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
     """Shared parse for sync and async validation. Returns (prep, None) or (None, (jsonify(...), code))."""
     if os.environ.get("RACK_VALIDATION_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -10252,6 +10375,7 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
             "cmd": cmd,
             "display_cmd": display_cmd,
             "timeout": timeout,
+            "env_updates": _launch_env_from_body(body),
         },
         None,
     )
@@ -10314,6 +10438,8 @@ def api_run_validation_async():
     cmd = prep["cmd"]
     display_cmd = str(prep["display_cmd"])
     timeout = int(prep["timeout"])
+    _eu = prep.get("env_updates")
+    env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) and _eu else None
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     with _validation_jobs_lock:
@@ -10331,6 +10457,7 @@ def api_run_validation_async():
     threading.Thread(
         target=_validation_worker,
         args=(job_id, cmd, str(log_dir), timeout, display_cmd),
+        kwargs={"env_updates": env_merged},
         daemon=True,
     ).start()
     return jsonify(
@@ -10400,6 +10527,7 @@ def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int]
             "timeout": timeout,
             "arg": arg,
             "racks": sorted(seen),
+            "env_updates": _launch_env_from_body(body),
         },
         None,
     )
@@ -10422,6 +10550,8 @@ def api_run_nemo_xrack_async():
     timeout = int(prep["timeout"])
     arg = str(prep["arg"])
     racks = [str(r) for r in prep.get("racks") or []]
+    _eu = prep.get("env_updates")
+    env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) and _eu else None
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
@@ -10451,6 +10581,7 @@ def api_run_nemo_xrack_async():
     threading.Thread(
         target=_xrack_worker,
         args=(job_id, cmd, cwd, timeout, display_cmd),
+        kwargs={"env_updates": env_merged},
         daemon=True,
     ).start()
     return jsonify(
@@ -10704,12 +10835,14 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
 
 
 def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
-    """Shared parse for the standalone Stage-1 NCCL benchmark (nccl_fullrack_rounds.sh).
+    """Shared parse for the standalone Stage-1 NCCL benchmark.
 
-    Runs N rounds of an all_reduce_perf sweep on the working portable launcher and drops an
-    app-discoverable ``…-NCCL-1Rack-<rack>-<n>N-<epoch>.txt`` log into ``log_dir`` so the dashboard
-    row + "View Parser Results" pick it up. Uses the ``script`` profile (root@slogin) like the other
-    NCCL/validation launchers.
+    Converged onto the SAME direct path as the cross-rack test (``run_nccl_mpi.sh`` →
+    ``nccl_allreduce.sbatch``: host nccl-tests + mpirun, NCCL over the IB rails, library
+    version selectable via LD_LIBRARY_PATH). ``--app-log-rack`` names the Slurm output
+    ``<user>-NCCL-1Rack-<rack>-<n>N-<jobid>.txt`` so the dashboard row + parser flip the
+    rack's Stage-1 NCCL status, exactly as the legacy portable launcher did. Uses the
+    ``script`` profile (root@slogin) like the other NCCL launchers.
     """
     if os.environ.get("RACK_NCCL_FULLRACK_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (
@@ -10729,40 +10862,49 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
     tgt_ov = body.get("target")
     if tgt_ov is not None and not isinstance(tgt_ov, str):
         return None, (jsonify({"ok": False, "error": "target must be a string"}), 400)
+    tgt_ov_s = tgt_ov.strip() if isinstance(tgt_ov, str) else ""
+    # Resolve the node target. When the UI sends an explicit node selection we submit those
+    # exact trays via ``--nodelist`` (so e.g. a rack minus a down/faulted node runs on 17);
+    # with no selection we pass the rack id and let run_nccl_mpi.sh resolve the full rack.
     try:
-        target = validation_target_for_rack(rack, tgt_ov if isinstance(tgt_ov, str) else None)
-    except ValueError as e:
-        return None, (jsonify({"ok": False, "error": str(e)}), 400)
-    script = _nccl_fullrack_script_path()
+        target = validation_target_for_rack(rack, tgt_ov_s or None)
+    except ValueError:
+        target = rk
+    script = _run_nccl_mpi_script_path()
     if not _script_exists(script):
-        return None, (jsonify({"ok": False, "error": f"nccl benchmark script not found: {script}"}), 500)
-    try:
-        rounds_req = int(body.get("rounds")) if body.get("rounds") is not None else _job_env_int(
-            "RACK_NCCL_FULLRACK_ROUNDS", 5
-        )
-    except (TypeError, ValueError):
-        rounds_req = _job_env_int("RACK_NCCL_FULLRACK_ROUNDS", 5)
-    rounds = max(1, min(50, rounds_req))
-    beg = (body.get("beg") or _eget("RACK_NCCL_FULLRACK_BEG") or "1K").strip()
-    end = (body.get("end") or _eget("RACK_NCCL_FULLRACK_END") or "16G").strip()
-    # rk is passed positionally ($5) because env (NVIS_RACK) is not forwarded to the remote by
-    # popen_on_host; it is also kept in env_updates below for local-mode runs.
-    cmd = ["bash", str(script), target, str(rounds), beg, end, rk]
-    display_cmd = (
-        "./" + script.name + " " + shlex.quote(target)
-        + f" {rounds} {shlex.quote(beg)} {shlex.quote(end)} {shlex.quote(rk)}"
-    )
+        return None, (jsonify({"ok": False, "error": f"NCCL launcher not found: {script}"}), 500)
+    # Cap the all_reduce sweep. Accept the legacy `end`/RACK_NCCL_FULLRACK_END knobs too.
+    size_max = (
+        body.get("size_max") or body.get("end") or _eget("RACK_NCCL_MPI_SIZE_MAX")
+        or _eget("RACK_NCCL_FULLRACK_END") or "16G"
+    ).strip()
+    cmd: list[str] = ["bash", str(script), "--app-log-rack", rk]
+    if size_max:
+        cmd += ["--size-max", size_max]
+    vc = _nccl_version_cli(body)
+    if isinstance(vc, tuple):
+        return None, vc
+    cmd += vc
+    nccl_version = vc[1] if vc else ""
+    # Stage-1 acceptance runs the sweep 5× by default; the UI modal can override via ``iters``.
+    rounds = _nccl_rounds_from_body(body, 5) or 5
+    cmd += ["--rounds", str(rounds)]
+    if tgt_ov_s:
+        cmd += ["--nodelist", target]
+        node_arg_display = " --nodelist " + shlex.quote(target)
+    else:
+        cmd.append(rk)
+        node_arg_display = " " + shlex.quote(rk)
+    display_cmd = "./" + script.name + " --app-log-rack " + shlex.quote(rk) + (
+        (" --size-max " + shlex.quote(size_max)) if size_max else ""
+    ) + (
+        (" --nccl-version " + shlex.quote(nccl_version)) if nccl_version else ""
+    ) + " --rounds " + str(rounds) + node_arg_display
     timeout = max(120, _job_env_int("RACK_NCCL_FULLRACK_TIMEOUT", 7200))
-    env_updates: dict[str, str] = {
-        # The script drops the app-discoverable log here; also its own cwd is log_dir (see worker).
-        "NVIS_DASH_LOGDIR": str(log_dir),
-        "NVIS_RACK": rk,
-    }
-    for k in ("NCCL_WS", "NCCL_LAUNCH", "RACK_NCCL_FULLRACK_LAUNCH"):
-        v = (_eget(k) or "").strip()
-        if v:
-            # RACK_NCCL_FULLRACK_LAUNCH is an app-facing alias for the script's NCCL_LAUNCH.
-            env_updates["NCCL_LAUNCH" if k == "RACK_NCCL_FULLRACK_LAUNCH" else k] = v
+    # run_nccl_mpi.sh writes its Slurm --output under RACK_JOB_LOG_DIR (defaults to cwd; the
+    # worker cwd is log_dir, but set it explicitly so the app log always lands in log_dir).
+    env_updates: dict[str, str] = {"RACK_JOB_LOG_DIR": str(log_dir), "NVIS_RACK": rk}
+    env_updates.update(_launch_env_from_body(body))
     return (
         {
             "log_dir": log_dir,
@@ -10977,16 +11119,33 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
     # Direct path only: cap the all_reduce sweep (nccl-tests -e). Default 16G so the
     # x-rack test exercises large messages; overridable per-request or via Settings.
     size_max = ""
+    nccl_version = ""
     if not use_container:
         size_max = (body.get("size_max") or _eget("RACK_NCCL_MPI_SIZE_MAX") or "16G").strip()
         if size_max:
             cmd += ["--size-max", size_max]
+        # NCCL version selector (direct path only): which vetted libnccl the sbatch loads
+        # via LD_LIBRARY_PATH. Shared validator with the single-rack Stage-1 path.
+        _vc = _nccl_version_cli(body)
+        if isinstance(_vc, tuple):
+            return None, _vc
+        cmd += _vc
+        nccl_version = _vc[1] if _vc else ""
+    # Sweep rounds: honor an explicit ``iters`` from the launch modal; else leave the sbatch
+    # default (1) so existing cross-rack behavior is unchanged when the knob isn't sent.
+    rounds = _nccl_rounds_from_body(body, None) if not use_container else None
+    if rounds:
+        cmd += ["--rounds", str(rounds)]
     cmd += rack_ids
 
     display_cmd = "./" + script.name + (
         (" --reservation " + shlex.quote(reservation)) if reservation else ""
     ) + (" --dry-run" if dry_run else "") + (
         (" --size-max " + shlex.quote(size_max)) if size_max else ""
+    ) + (
+        (" --nccl-version " + shlex.quote(nccl_version)) if nccl_version else ""
+    ) + (
+        (" --rounds " + str(rounds)) if rounds else ""
     ) + " " + " ".join(shlex.quote(r) for r in rack_ids)
     timeout = max(120, _job_env_int("RACK_LLMB_NCCL_TIMEOUT", 14400))
     return (
@@ -10997,6 +11156,7 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
             "display_cmd": display_cmd,
             "timeout": timeout,
             "dry_run": dry_run,
+            "env_updates": _launch_env_from_body(body),
         },
         None,
     )
@@ -11282,6 +11442,8 @@ def api_run_llmb_nccl_async():
     display_cmd = str(prep["display_cmd"])
     timeout = int(prep["timeout"])
     dry_run = bool(prep["dry_run"])
+    _eu = prep.get("env_updates")
+    env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) and _eu else None
     rack_label = racks[0] if len(racks) == 1 else f"{len(racks)} racks"
     cwd = _host_job_cwd(log_dir)
     job_id = str(uuid.uuid4())
@@ -11312,7 +11474,12 @@ def api_run_llmb_nccl_async():
     threading.Thread(
         target=_stress_worker,
         args=(job_id, cmd, cwd, timeout, display_cmd),
-        kwargs={"error_label": "run_llmb_nccl script", "profile": "script", "persist": True},
+        kwargs={
+            "error_label": "run_llmb_nccl script",
+            "profile": "script",
+            "persist": True,
+            "env_updates": env_merged,
+        },
         daemon=True,
     ).start()
     client_poll_deadline_ms = min(int(timeout) * 1000 + 600000, 48 * 3600 * 1000)
