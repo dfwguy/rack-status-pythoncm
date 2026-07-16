@@ -19,6 +19,16 @@ SYSINFO_SH=${SLURM_SUBMIT_DIR}/sysinfo.sh
 
 single_rack=1
 [ $SLURM_NNODES -gt 18 ] && single_rack=0
+# Force multi-rack (IB + auto-MNNVL) path regardless of node count. The heuristic above assumes
+# <=18 nodes == one NVL72 rack, but a SMALL job whose nodes span >1 rack (>1 NVLink/IMEX domain)
+# MUST use IB between racks — the single-rack path sets NCCL_IB_DISABLE=1 and forces
+# NCCL_MNNVL_ENABLE=1, and MNNVL cannot cross a rack boundary ("Cuda failure 400 invalid resource
+# handle"). run-nemo-xrack.sh sets NVIS_NEMO_XRACK=1 automatically when the allocation spans >1
+# rack. NVIS_NEMO_XRACK=1 forces multi-rack; =0 forces single-rack; unset keeps the count heuristic.
+if [ -n "${NVIS_NEMO_XRACK:-}" ]; then
+  if [ "${NVIS_NEMO_XRACK}" = 1 ]; then single_rack=0; else single_rack=1; fi
+fi
+echo "INFO: nnodes=${SLURM_NNODES} single_rack=${single_rack} (NVIS_NEMO_XRACK=${NVIS_NEMO_XRACK:-<unset>})"
 if [ $(( ${SLURM_NNODES} % 2 )) != 0 ]
 then
   echo "ERROR: SLURM_NNODES=$SLURM_NNODES is not multiple of 2!!!"
@@ -221,10 +231,22 @@ mkdir -p "${NVIS_NCCL_TRACE_HOST_DIR}" 2>/dev/null || true
 CONT_MOUNTS="${CONT_MOUNTS},${NVIS_NCCL_TRACE_HOST_DIR}:/nccl_traces"
 echo "INFO: NCCL flight-recorder dumps -> ${NVIS_NCCL_TRACE_HOST_DIR} (container:/nccl_traces)"
 
+# Optional HF cache overlay: pre-staged tokenizer/config on NFS for OFFLINE compute nodes (some recipes,
+# e.g. nemotron_3_nano, need a HuggingFace tokenizer the nodes can't fetch). Mount it in + point HF_HOME
+# there + run offline. Pre-cache on the head (has network): HF_TOKEN=.. HF_HOME=<dir> huggingface_hub
+# snapshot_download('<repo>', allow_patterns=['*.json','tokenizer*',...]).
+if [ -n "${NVIS_NEMO_HF_HOME:-}" ]; then
+  CONT_MOUNTS="${CONT_MOUNTS},${NVIS_NEMO_HF_HOME}:/hf-cache"
+  export NVIS_HF_HOME_CONT=/hf-cache
+  echo "INFO: HF cache overlay -> ${NVIS_NEMO_HF_HOME} (container:/hf-cache); HF_HOME=/hf-cache, offline"
+fi
+
 srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/null
 
 ## test nccl
-export NCCL_DEBUG=WARN
+# NCCL pre-flight verbosity — default WARN (quiet). Override from the UI/launch (NVIS_NCCL_DEBUG=
+# INFO|TRACE) to diagnose a silent cross-rack hang: INFO names the stuck rank/peer connection.
+export NCCL_DEBUG="${NVIS_NCCL_DEBUG:-WARN}"
 export NCCL_NVLS_ENABLE=1
 
 # NCCL pre-flight selector: which collectives to run before NeMo training (space/comma
@@ -357,12 +379,45 @@ sleep 10
 ## export NCCL_NVLS_ENABLE=0
 ## export UB_SKIPMC=1
 ### For optimal performance, it's recommended to keep NVLS enabled and let UB use multicast if possible.
-export NCCL_DEBUG=INFO
-export NCCL_NVLS_ENABLE=1
-export UB_SKIPMC=0
+# Training-phase verbosity — default INFO; overridable from the UI/launch via NVIS_NCCL_DEBUG.
+export NCCL_DEBUG="${NVIS_NCCL_DEBUG:-INFO}"
+# NVLS multicast + UserBuffers multicast. BF16 exercises the TP-comm-overlap UserBuffers path harder
+# than FP8; on a marginal NVLink/NVSwitch multicast state this throws "CUDA Error ... create_communicator
+# grouped2" / "Cuda failure 226 invalid peer access over nvlink". Documented workaround: UB_SKIPMC=1
+# (UserBuffers fall back to IPC; keeps NVLS for NCCL). Set NVIS_NEMO_UB_SKIPMC=1 (and optionally
+# NVIS_NEMO_NVLS_ENABLE=0) for BF16 acceptance on GB200 if the full-multicast path is unstable.
+export NCCL_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-1}
+export UB_SKIPMC=${NVIS_NEMO_UB_SKIPMC:-0}
 # export MAX_STEPS=2010 #For stress test, you can set a large number for MAX_STEPS. 
 #export MAX_STEPS=110
-export MAX_STEPS=2010
+# Stage-2 soak defaults (2010 steps, fp8, GBS=12*nodes). Stage-3 LLM acceptance overrides these via
+# env so the SAME engine serves both: the soak AND the short perf benchmark (e.g. NVIS_NEMO_MAX_STEPS=50,
+# NVIS_NEMO_DTYPE=bf16). compute_dtype choices: bf16|fp8_cs|fp8_mx|fp8_sc|nvfp4. GBS must stay divisible
+# by the data-parallel size (TP=2 -> DP=nodes*2); the 12*nodes default satisfies this (18N->216, 36N->432).
+export MAX_STEPS=${NVIS_NEMO_MAX_STEPS:-2010}
+export NVIS_NEMO_DTYPE=${NVIS_NEMO_DTYPE:-fp8_cs}
+export NVIS_NEMO_MODEL_SIZE=${NVIS_NEMO_MODEL_SIZE:-56b}
+export NVIS_NEMO_GBS=${NVIS_NEMO_GBS:-$((192*SLURM_NNODES/16))}
+# Parallelism/overlap args. Default: explicit perf config (tp2/pp1/gbs, FSDP off, TE CUDA graphs) —
+# preserves the validated FP8 soak. NVIS_NEMO_RECIPE_DEFAULT=1 drops ALL of these so run_script.py
+# uses the DGXC recipe's built-in optimal parallelism for the model/size/dtype (mirrors Mayo's
+# run_nemotronh.sh, which passed no tp/pp/mb/gb) — use for BF16 where the hardcoded config OOMs.
+if [ "${NVIS_NEMO_RECIPE_DEFAULT:-0}" = 1 ]; then
+  export NVIS_NEMO_EXTRA_ARGS=""
+else
+  export NVIS_NEMO_EXTRA_ARGS="--use_megatron_fsdp 0 -tp 2 -pp 1 -cp 1 -ep 1 -mb 1 -gb ${NVIS_NEMO_GBS} --cuda_graph_impl transformer_engine --cuda_graph_scope mamba,attn"
+fi
+# Container CLI style + GPU config token. legacy = 25.11.01 (--model_name/--model_size);
+# v2 = 26.02.01+ (--model_family_name/--model_recipe_name/--offline; has the precision-decoupled
+# recipe so BF16 resolves a config). GPU token (gb200/gb300/b200/h100) selects the per-platform base.
+export NVIS_NEMO_GPU_TYPE=${NVIS_NEMO_GPU:-gb300}
+if [ "${NVIS_NEMO_CLI:-legacy}" = "v2" ]; then
+  export NVIS_NEMO_MODEL_ARGS="--model_family_name nemotronh --model_recipe_name ${NVIS_NEMO_RECIPE_NAME:-nemotronh_${NVIS_NEMO_MODEL_SIZE}}"
+else
+  export NVIS_NEMO_MODEL_ARGS="--model_name nemotronh --model_size ${NVIS_NEMO_MODEL_SIZE}"
+fi
+echo "INFO: LLM params model=nemotronh size=${NVIS_NEMO_MODEL_SIZE} dtype=${NVIS_NEMO_DTYPE} gbs=${NVIS_NEMO_GBS} max_steps=${MAX_STEPS} recipe_default=${NVIS_NEMO_RECIPE_DEFAULT:-0} cli=${NVIS_NEMO_CLI:-legacy} gpu=${NVIS_NEMO_GPU_TYPE}"
+echo "INFO: model_args=[${NVIS_NEMO_MODEL_ARGS}] extra_args=[${NVIS_NEMO_EXTRA_ARGS}]"
 srun --export=${EXPORT_ARG} --cpu-bind=none --mpi=pmix \
 --container-name=nemo \
 --container-writable \
@@ -372,7 +427,7 @@ bash <<- '__END__'
 set -ex
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
-export HF_HOME=/root/.cache/huggingface
+export HF_HOME=${NVIS_HF_HOME_CONT:-/root/.cache/huggingface}
 
 export NEMORUN_HOME=/mnt/nemo
 export CPATH=/usr/local/cuda/include
@@ -385,6 +440,13 @@ export NVTE_FUSED_ATTN=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NVTE_FWD_LAYERNORM_SM_MARGIN=16
 export NVTE_BWD_LAYERNORM_SM_MARGIN=16
+# Mayo-proven NemotronH perf/stability env (from the delivered DGXC recipe, dgxc-runai/run_nemotronh.sh).
+# NCCL_GRAPH_REGISTER=0 is REQUIRED with expandable_segments + CUDA graphs (else "illegal memory access");
+# the NVTE amax knobs match the recipe. NVLS multicast is controlled outside via NVIS_NEMO_NVLS_ENABLE
+# (set 0 for BF16 to avoid the UserBuffers reduce-scatter / Cuda-226 multicast failure seen on GB200).
+export NCCL_GRAPH_REGISTER=0
+export NVTE_DP_AMAX_REDUCE_INTERVAL=0
+export NVTE_ASYNC_AMAX_REDUCTION=1
 export NCCL_P2P_NET_CHUNKSIZE=2097152
 export TORCH_NCCL_HIGH_PRIORITY=1
 export PYTHONPATH=/opt/Megatron-Bridge/scripts/performance:$PYTHONPATH
@@ -399,6 +461,29 @@ export TORCH_NCCL_DUMP_ON_TIMEOUT=${NVIS_NCCL_DUMP_ON_TIMEOUT:-1}
 # Dump to the NFS-mounted /nccl_traces (see CONT_MOUNTS above) so traces survive container teardown.
 export TORCH_NCCL_DEBUG_INFO_TEMP_FILE=/nccl_traces/trace_${SLURM_JOB_ID:-0}_rank
 
+# NVIS BF16 force-enable for nemotronh-56b (benchmark-only). The DGXC recipe ships FP8_CS base
+# configs ONLY; the workload base config is precision-INDEPENDENT parallelism (actual precision is
+# applied separately via get_precision_config("bf16")=bf16_mixed). So alias the BF16 config names to
+# the FP8_CS_V1 base so get_workload_base_config() resolves, then --compute_dtype bf16 runs true BF16.
+# flock-serialized + idempotent (one writer per node). NOTE: this is a FORCE-ENABLED, NVIDIA-unvalidated
+# BF16 config for this model — use for HW throughput benchmarking, label it as such in any report.
+if [ "${NVIS_NEMO_FORCE_BF16_ALIAS:-0}" = 1 ]; then
+  _nvcfg=/opt/Megatron-Bridge/scripts/performance/configs/nemotronh/__init__.py
+  (
+    flock 9
+    if ! grep -q "NVIS BF16 alias" "$_nvcfg" 2>/dev/null; then
+      {
+        echo ""
+        echo "# NVIS BF16 alias (force-enable, benchmark-only): base config is precision-independent parallelism"
+        echo "NEMOTRONH_56B_PRETRAIN_CONFIG_GB200_BF16_V1 = NEMOTRONH_56B_PRETRAIN_CONFIG_GB200_FP8_CS_V1"
+        echo "NEMOTRONH_56B_PRETRAIN_CONFIG_GB200_BF16_V2 = NEMOTRONH_56B_PRETRAIN_CONFIG_GB200_FP8_CS_V1"
+        echo "NEMOTRONH_56B_PRETRAIN_CONFIG_GB200_BF16 = NEMOTRONH_56B_PRETRAIN_CONFIG_GB200_FP8_CS_V1"
+      } >> "$_nvcfg"
+      echo "INFO: NVIS BF16 alias injected into $_nvcfg"
+    fi
+  ) 9>/tmp/nvis_bf16_patch.lock
+fi
+
 ## Rule: num_gpus % (ep * et * tp * pp) == 0
 #With CUDA graphs, then expandable segments must be disabled by "unset PYTORCH_CUDA_ALLOC_CONF".
 #For arguments explanation, please refer to 
@@ -412,19 +497,12 @@ python /opt/Megatron-Bridge/scripts/performance/run_script.py \
   --log_dir ${NEMORUN_HOME} \
   --container_image ${NEMORUN_HOME}/nemo-25.11.01.sqsh \
   --nemo_home ${NEMORUN_HOME}/experiments \
-  --gpu gb300 \
+  --gpu ${NVIS_NEMO_GPU_TYPE} \
   --num_gpus $[4*${SLURM_NNODES}] \
   --gpus_per_node 4 \
-  --compute_dtype fp8_cs \
-  --model_name nemotronh --model_size 56b \
-  --use_megatron_fsdp 0 \
-  -tp 2 \
-  -pp 1 \
-  -cp 1 \
-  -ep 1 \
-  -mb 1 \
-  -gb $[192*${SLURM_NNODES}/16] \
-  --cuda_graph_impl transformer_engine --cuda_graph_scope mamba,attn \
+  --compute_dtype ${NVIS_NEMO_DTYPE} \
+  ${NVIS_NEMO_MODEL_ARGS} \
+  ${NVIS_NEMO_EXTRA_ARGS} \
   --max_steps ${MAX_STEPS} \
   train.manual_gc=true train.manual_gc_interval=100
 __END__

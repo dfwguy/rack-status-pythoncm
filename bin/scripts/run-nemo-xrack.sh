@@ -14,6 +14,11 @@ export PDSH_RCMD_TYPE=ssh
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
+# Which NeMo batch script to submit. Default = the Stage-2 soak / Stage-3 LLM engine
+# (nemo-nemotron5h_56b-mbridge-fp8.sh, now parametrized by NVIS_NEMO_DTYPE/MAX_STEPS/GBS/MODEL_SIZE).
+# Override with NVIS_NEMO_BATCH_SCRIPT to point at a different launcher.
+NVIS_NEMO_BATCH_SCRIPT="${NVIS_NEMO_BATCH_SCRIPT:-nemo-nemotron5h_56b-mbridge-fp8.sh}"
+
 # Make the Slurm CLI (scontrol/sbatch) usable in non-login SSH shells: the dashboard
 # launches this over `ssh host '<cmd>'` where Environment Modules aren't initialized,
 # so scontrol/sbatch would be "command not found". Idempotent; also on the head.
@@ -62,6 +67,16 @@ echo "run-nemo-xrack: resolved ${#hosts[@]} nodes: ${hosts[0]} ... ${hosts[-1]}"
 
 n=$(( ${#hosts[*]} / 2 * 2 ))
 
+# Force the batch script's multi-rack (IB) path when this allocation spans >1 rack, even if it is
+# <=18 nodes. The batch script otherwise infers single-rack from node count and would disable IB +
+# force MNNVL (fatal across a rack boundary). Explicit NVIS_NEMO_XRACK from the caller wins.
+_nracks=$(printf '%s\n' "${hosts[@]}" | sed -E 's/^(bos01-[a-z][0-9]+)-.*/\1/' | sort -u | grep -c .)
+if [[ -z "${NVIS_NEMO_XRACK:-}" ]]; then
+  if (( _nracks > 1 )); then NVIS_NEMO_XRACK=1; else NVIS_NEMO_XRACK=0; fi
+fi
+export NVIS_NEMO_XRACK
+echo "run-nemo-xrack: ${_nracks} distinct rack(s) -> NVIS_NEMO_XRACK=${NVIS_NEMO_XRACK}"
+
 # Prefer the NCCL 2.30.7 image (libnccl + nccl-tests baked at 2.30.7) when present. This overrides
 # the caller's NEMO_SQSH_SRC (incl. the app/UI default of the stock image) so every launch uses the
 # matched-NCCL image without needing per-launch env. Set NVIS_NEMO_USE_VETTED=0 to force the caller's
@@ -105,10 +120,8 @@ export NVIS_NEMO_CONT="/raid/data/${_sqsh_b}"
 # Log filename uses just the racks included in the test. The arg may be a full curated nodelist
 # (real hostnames) rather than rack-ct specs; using it verbatim would blow past the 255-byte
 # filename limit for --output and make sbatch fail before writing any log (job dies ~2s,
-# ExitCode 0:53). Derive the distinct rack ids from the resolved hosts instead. Site-agnostic:
-# collapse each hostname to its "<cluster>-<rack>" prefix (first two dash-delimited segments of
-# the NVIS naming convention, e.g. bos01-b05-11-s1-dgx-05-c01 -> bos01-b05).
-_racktag=$(printf '%s\n' "${hosts[@]}" | sed -E 's/^([^-]+-[^-]+)-.*/\1/' | sort -u | paste -sd+ | tr -d ' ')
+# ExitCode 0:53). Derive the distinct rack ids from the resolved hosts instead.
+_racktag=$(printf '%s\n' "${hosts[@]}" | sed -E 's/^(bos01-[a-z][0-9]+)-.*/\1/' | sort -u | paste -sd+ | tr -d ' ')
 [[ -n "${_racktag}" ]] || _racktag="${spec_tag}"
 _out_stem="root-NEMO-${_racktag}-${n}N"
 
@@ -120,6 +133,6 @@ sbatch -N "${n}" \
   -w "$(echo "${hosts[*]}" | tr ' ' ',')" \
   -t "${NVIS_NEMO_WALLTIME:-03:00:00}" \
   --job-name="NEMO-${n}N" \
-  --export="ALL,NVIS_SCRIPTS_DIR=${SCRIPT_DIR},NVIS_NEMO_CONT=${NVIS_NEMO_CONT},NVIS_NCCL_PRELOAD_DISABLE=${NVIS_NCCL_PRELOAD_DISABLE:-0},NVIS_NCCL_IGNORE_COLLNET_MISMATCH=${NVIS_NCCL_IGNORE_COLLNET_MISMATCH:-1}" \
+  --export="ALL,NVIS_SCRIPTS_DIR=${SCRIPT_DIR},NVIS_NEMO_CONT=${NVIS_NEMO_CONT},NVIS_NEMO_XRACK=${NVIS_NEMO_XRACK},NVIS_NCCL_PRELOAD_DISABLE=${NVIS_NCCL_PRELOAD_DISABLE:-0},NVIS_NCCL_IGNORE_COLLNET_MISMATCH=${NVIS_NCCL_IGNORE_COLLNET_MISMATCH:-1},NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-},NVIS_NEMO_MAX_STEPS=${NVIS_NEMO_MAX_STEPS:-},NVIS_NEMO_DTYPE=${NVIS_NEMO_DTYPE:-},NVIS_NEMO_MODEL_SIZE=${NVIS_NEMO_MODEL_SIZE:-},NVIS_NEMO_GBS=${NVIS_NEMO_GBS:-},NVIS_NEMO_UB_SKIPMC=${NVIS_NEMO_UB_SKIPMC:-},NVIS_NEMO_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-},NVIS_NEMO_RECIPE_DEFAULT=${NVIS_NEMO_RECIPE_DEFAULT:-},NVIS_NCCL_PRELOAD_SRC=${NVIS_NCCL_PRELOAD_SRC:-},NVIS_NCCL_NET_PLUGIN=${NVIS_NCCL_NET_PLUGIN:-},NVIS_NEMO_CLI=${NVIS_NEMO_CLI:-},NVIS_NEMO_GPU=${NVIS_NEMO_GPU:-},NVIS_NEMO_FORCE_BF16_ALIAS=${NVIS_NEMO_FORCE_BF16_ALIAS:-},NVIS_NEMO_RECIPE_NAME=${NVIS_NEMO_RECIPE_NAME:-},NVIS_NEMO_HF_HOME=${NVIS_NEMO_HF_HOME:-},NVIS_HF_HOME_CONT=${NVIS_HF_HOME_CONT:-}" \
   --output="${_out_stem}-%j.txt" \
-  "$SCRIPT_DIR/nemo-nemotron5h_56b-mbridge-fp8.sh"
+  "$SCRIPT_DIR/${NVIS_NEMO_BATCH_SCRIPT}"
