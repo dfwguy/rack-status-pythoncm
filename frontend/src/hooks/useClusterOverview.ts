@@ -9,68 +9,22 @@ const emptyClusterDashboardMetadata = (): ClusterOverviewResponse["cluster_dashb
 import { getClientId } from "./useRackStatus";
 
 const POLL_MS = 30_000;
-const CACHE_KEY = "nvis.clusterOverview.lastGood";
-
-function loadCached(): ClusterOverviewResponse | null {
-  try {
-    if (typeof localStorage === "undefined") return null;
-    const raw = localStorage.getItem(CACHE_KEY);
-    return raw ? (JSON.parse(raw) as ClusterOverviewResponse) : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveCached(d: ClusterOverviewResponse): void {
-  try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(d));
-  } catch {
-    /* ignore quota / serialization errors */
-  }
-}
-
-/**
- * A payload is "ready" once the rack-status cache it derives from is warm. While
- * the cache is cold the backend reports zeroed rack/tray/validation counts; we use
- * those as a signal to keep the previous good stats rather than flashing zeros.
- */
-function statsReady(d: ClusterOverviewResponse): boolean {
-  return (d.rack_count ?? 0) > 0 || (d.tray_hosts ?? 0) > 0 || Boolean(d.status_updated_at);
-}
-
-/** Carry forward the last-good rack-derived stats when a fresh payload is still cold. */
-function mergePreservingStats(
-  fresh: ClusterOverviewResponse,
-  prev: ClusterOverviewResponse
-): ClusterOverviewResponse {
-  return {
-    ...fresh,
-    rack_count: prev.rack_count,
-    tray_hosts: prev.tray_hosts,
-    estimated_gpu_count: prev.estimated_gpu_count,
-    validation_summary: prev.validation_summary,
-    validation_cells_total: prev.validation_cells_total,
-    status_updated_at: prev.status_updated_at,
-  };
-}
 
 export function useClusterOverview(logDir: string) {
-  const [data, setData] = useState<ClusterOverviewResponse | null>(loadCached);
-  // Only block the UI with a skeleton when there is nothing cached to show.
-  const [loading, setLoading] = useState(() => loadCached() === null);
+  const [data, setData] = useState<ClusterOverviewResponse | null>(null);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dataRef = useRef<ClusterOverviewResponse | null>(data);
-  dataRef.current = data;
 
-  const fetchOverview = useCallback(async () => {
+  const fetchOverview = useCallback(async (forceRefresh = false) => {
     setRefreshing(true);
     try {
       const params = new URLSearchParams();
       if (logDir) params.set("log_dir", logDir);
       params.set("client_id", getClientId());
+      if (forceRefresh) params.set("refresh", "1");
       const res = await fetch(`/api/cluster-overview?${params}`, { cache: "no-store" });
       const json = (await res.json()) as ClusterOverviewResponse | { ok: false; error?: string };
       if (!res.ok) {
@@ -87,20 +41,16 @@ export function useClusterOverview(logDir: string) {
           (json as ClusterOverviewResponse).cluster_dashboard_metadata ?? emptyClusterDashboardMetadata(),
       };
 
-      const prev = dataRef.current;
-      const ready = statsReady(fresh);
-      // Cold payload + we already have good stats -> keep the stats, refresh the rest.
-      const next = !ready && prev && statsReady(prev) ? mergePreservingStats(fresh, prev) : fresh;
-
-      setData(next);
+      setData(fresh);
       setError(null);
-      if (statsReady(next)) {
-        saveCached(next);
+      if (fresh.snapshot.id && (fresh.snapshot.state === "fresh" || fresh.snapshot.state === "stale")) {
         setLastUpdated(Date.now());
       }
+      return fresh.snapshot.state;
     } catch (err) {
       // Keep the last good data on screen; surface the error non-destructively.
       setError(err instanceof Error ? err.message : "Unknown error");
+      return undefined;
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -108,18 +58,26 @@ export function useClusterOverview(logDir: string) {
   }, [logDir]);
 
   useEffect(() => {
-    fetchOverview();
-    const poll = () => {
-      timerRef.current = setTimeout(async () => {
-        await fetchOverview();
-        poll();
-      }, POLL_MS);
+    let cancelled = false;
+    const poll = async () => {
+      const state = await fetchOverview();
+      if (cancelled) return;
+      timerRef.current = setTimeout(poll, state === "initializing" ? 3_000 : POLL_MS);
     };
-    poll();
+    void poll();
     return () => {
+      cancelled = true;
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, [fetchOverview]);
 
-  return { data, loading, refreshing, error, lastUpdated, refresh: fetchOverview };
+  return {
+    data,
+    loading,
+    refreshing,
+    error,
+    lastUpdated,
+    refresh: () => fetchOverview(false),
+    retry: () => fetchOverview(true),
+  };
 }

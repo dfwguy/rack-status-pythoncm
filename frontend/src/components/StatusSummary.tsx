@@ -7,7 +7,7 @@ export type ValidationSummaryCategory = "done" | "fail" | "ongoing" | "pending";
 
 interface StatusSummaryProps {
   summary: RackSummary;
-  updatedAt: string;
+  updatedAt: string | null;
   legend?: string;
   /** Active validation filters (same strings as the rack table). When used with ``onToggleValidationCategory``, summary tags toggle filters. */
   validationFilters?: string[];
@@ -107,9 +107,11 @@ export function StatusSummary({
         <Text kind="body/semibold/md" style={{ color: "var(--text-color-secondary)" }}>
           {total} racks total
         </Text>
-        <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)", marginLeft: "auto" }}>
-          Updated: {new Date(updatedAt).toLocaleTimeString()}
-        </Text>
+        {updatedAt && (
+          <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)", marginLeft: "auto" }}>
+            Updated: {new Date(updatedAt).toLocaleTimeString()}
+          </Text>
+        )}
       </Flex>
       {hasStages && (
         <Box sx={{ mt: 1.5, display: "flex", flexDirection: "column", gap: 0.75 }}>

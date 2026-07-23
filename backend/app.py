@@ -109,6 +109,8 @@ if _app_dir_s not in sys.path:
 
 import native_status  # noqa: E402 — after sys.path so ``import native_status`` works when cwd != APP_DIR
 import nvis_id_templates  # noqa: E402
+import cluster_snapshot  # noqa: E402
+import cluster_overview_live  # noqa: E402
 
 
 def _nvis_naming() -> nvis_id_templates.NvisNaming:
@@ -233,6 +235,12 @@ _rack_status_cache: dict[str, dict] = {}
 _rack_status_registry: set[str] = set()
 _rack_status_bg_thread_lock = threading.Lock()
 _rack_status_bg_thread: threading.Thread | None = None
+_cluster_snapshot_repo_lock = threading.Lock()
+_cluster_snapshot_repo_cache: tuple[str, cluster_snapshot.SnapshotRepository] | None = None
+_cluster_overview_live_service_lock = threading.Lock()
+_cluster_overview_live_service_cache: (
+    tuple[str, cluster_overview_live.ClusterOverviewLiveService] | None
+) = None
 
 # Dashboard Settings → job / validation env overrides (merged into subprocess env and ``_eget`` reads).
 # ``section`` groups rows in Settings (see ``JOB_ENV_SECTION_ORDER``).
@@ -2119,6 +2127,7 @@ _configure_session(app)
 # Keys we materialized into os.environ from the catalog, with their pre-existing value
 # (or None if absent) so a project switch can restore the baseline before re-applying.
 _catalog_env_saved: dict[str, str | None] = {}
+_catalog_status_context_fingerprint: str | None = None
 
 
 def _catalog_restore_environ_baseline() -> None:
@@ -2149,11 +2158,32 @@ def _apply_catalog_active_to_environ() -> None:
     and is always written; the *low* overlay (platform geometry/tool defaults) only
     fills keys that have no explicit env/Settings value.
     """
+    global _catalog_status_context_fingerprint
     if not (_CATALOG_AVAILABLE and catalog_context is not None):
         return
     try:
         _catalog_restore_environ_baseline()
         high, low = catalog_context.overlays_for_active()
+        active = catalog_context.get_active()
+        fingerprint = json.dumps(
+            {
+                "active": active,
+                "status_high": {k: high.get(k, "") for k in sorted(_STATUS_ROW_ENV_KEYS)},
+                "status_low": {k: low.get(k, "") for k in sorted(_STATUS_ROW_ENV_KEYS)},
+                "connection": {
+                    k: high.get(k, "")
+                    for k in (
+                        "RACK_EXEC_MODE",
+                        "RACK_PLATFORM",
+                        "RACK_REMOTE_BASE_PATH",
+                        "RACK_SSH_HOST",
+                        "RACK_SSH_USER",
+                    )
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         for key, val in high.items():
             if val and val.strip():
                 _catalog_set_environ(key, val.strip())
@@ -2175,7 +2205,12 @@ def _apply_catalog_active_to_environ() -> None:
             native_status.invalidate_job_env_file_cache()
         except Exception:
             pass
-        _rack_status_cache_clear_all()
+        if (
+            _catalog_status_context_fingerprint is not None
+            and fingerprint != _catalog_status_context_fingerprint
+        ):
+            _rack_status_cache_clear_all()
+        _catalog_status_context_fingerprint = fingerprint
     except Exception:
         _logger.exception("catalog: applying active context to environ failed")
 
@@ -4702,8 +4737,141 @@ def _rack_status_background_interval_sec() -> int:
     return max(5, _job_env_int("RACK_STATUS_BACKGROUND_INTERVAL_SEC", 30))
 
 
+def _cluster_snapshot_db_path() -> Path:
+    configured = (os.environ.get("RACK_CLUSTER_SNAPSHOT_DB") or "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (REPO_ROOT / "var" / "cache" / "cluster_snapshots.sqlite3").resolve()
+
+
+def _cluster_snapshot_repository() -> cluster_snapshot.SnapshotRepository:
+    global _cluster_snapshot_repo_cache
+    path = str(_cluster_snapshot_db_path())
+    with _cluster_snapshot_repo_lock:
+        if _cluster_snapshot_repo_cache is None or _cluster_snapshot_repo_cache[0] != path:
+            _cluster_snapshot_repo_cache = (
+                path,
+                cluster_snapshot.SnapshotRepository(path),
+            )
+        return _cluster_snapshot_repo_cache[1]
+
+
+def _cluster_snapshot_identity() -> str:
+    """Stable, non-secret active cluster identity used in the shared snapshot key."""
+    if _CATALOG_AVAILABLE and catalog_context is not None:
+        try:
+            active = catalog_context.get_active()
+            project_id = str(active.get("project") or "").strip()
+            cluster_id = str(active.get("cluster") or "").strip()
+            if project_id or cluster_id:
+                return f"catalog:{project_id}/{cluster_id}"
+        except Exception:
+            pass
+    configured = (
+        os.environ.get("RACK_CLUSTER_ID")
+        or os.environ.get("RACK_CLUSTER_NAME")
+        or os.environ.get("CLUSTER_NAME")
+        or os.environ.get("RACK_SSH_HOST")
+        or ""
+    ).strip()
+    return f"cluster:{configured or socket.gethostname()}"
+
+
+def _cluster_overview_live_db_path() -> Path:
+    """SQLite path for progressive overview live probes (sibling of inventory snapshot DB)."""
+    configured = (os.environ.get("RACK_CLUSTER_OVERVIEW_LIVE_DB") or "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (_cluster_snapshot_db_path().parent / "cluster_overview_live.sqlite3").resolve()
+
+
+def _live_collect_bcm_version() -> str:
+    value, err = _cluster_probe_bcm_cmsh_version()
+    err_s = (err or "").strip()
+    val_s = (value or "").strip()
+    if err_s or not val_s:
+        raise RuntimeError(err_s or "empty bcm version")
+    return val_s
+
+
+def _live_collect_slurm_version() -> str:
+    value, err = _cluster_probe_slurm_version()
+    err_s = (err or "").strip()
+    val_s = (value or "").strip()
+    if err_s or not val_s:
+        raise RuntimeError(err_s or "empty slurm version")
+    return val_s
+
+
+def _live_collect_queue() -> dict[str, object]:
+    block = _cluster_squeue_overview_block()
+    if not isinstance(block, dict):
+        raise RuntimeError("invalid squeue overview block")
+    if not block.get("ok"):
+        raise RuntimeError(str(block.get("error") or "squeue failed"))
+    return block
+
+
+def _get_cluster_overview_live_service() -> cluster_overview_live.ClusterOverviewLiveService:
+    """Lazy singleton keyed by live DB path so Gunicorn workers share one SQLite file."""
+    global _cluster_overview_live_service_cache
+    path = str(_cluster_overview_live_db_path())
+    with _cluster_overview_live_service_lock:
+        if (
+            _cluster_overview_live_service_cache is None
+            or _cluster_overview_live_service_cache[0] != path
+        ):
+            _cluster_overview_live_service_cache = (
+                path,
+                cluster_overview_live.ClusterOverviewLiveService(
+                    path,
+                    collectors={
+                        "bcm": _live_collect_bcm_version,
+                        "slurm": _live_collect_slurm_version,
+                        "queue": _live_collect_queue,
+                    },
+                    ttls={"bcm": 3600, "slurm": 3600, "queue": 15},
+                ),
+            )
+        return _cluster_overview_live_service_cache[1]
+
+
+def _collect_canonical_rack_status(log_dir: Path) -> dict:
+    """Collect inventory before it becomes a persisted snapshot.
+
+    ``run_rack_status`` / ``build_native_rack_status`` already produce rows and
+    ``native_workers``. Do not call ``_merge_live_native_workers_into_status``
+    here — that rebuilds the table and re-runs ``squeue``.
+    """
+    return run_rack_status(log_dir, include_raw=False)
+
+
+def get_cluster_snapshot(
+    log_dir: Path,
+    *,
+    force_refresh: bool = False,
+    wait: bool = True,
+) -> cluster_snapshot.ClusterSnapshot:
+    """Return the canonical cross-process inventory snapshot for both APIs."""
+    log_root = _rack_status_cache_key(log_dir)
+    _register_rack_status_log_dir(log_dir)
+    service = cluster_snapshot.ClusterSnapshotService(
+        _cluster_snapshot_repository(),
+        collector=lambda: _collect_canonical_rack_status(log_dir),
+        lease_seconds=max(30, _env_int("RACK_STATUS_TIMEOUT", 300) + 30),
+    )
+    return service.get_cluster_snapshot(
+        _cluster_snapshot_identity(),
+        log_root,
+        max_age_seconds=_rack_status_background_interval_sec(),
+        force_refresh=force_refresh,
+        wait=wait,
+    )
+
+
 def _rack_status_cache_clear_all() -> None:
-    """Invalidate cached native payloads so the next ``/api/status`` uses current job-env overrides."""
+    """Shared invalidation entry point for status-affecting configuration changes."""
+    _cluster_snapshot_repository().bump_configuration_generation()
     with _rack_status_cache_lock:
         _rack_status_cache.clear()
 
@@ -4723,13 +4891,14 @@ def _register_rack_status_log_dir(log_dir: Path) -> str:
 
 
 def _cached_rack_status_copy(log_dir: Path) -> dict | None:
-    """Return a shallow copy of the cached /api/status payload for *log_dir*, or ``None``."""
-    if not _rack_status_background_enabled():
-        return None
-    key = _rack_status_cache_key(log_dir)
-    with _rack_status_cache_lock:
-        hit = _rack_status_cache.get(key)
-    return dict(hit) if hit else None
+    """Compatibility reader backed by SQLite, including background-disabled mode."""
+    repository = _cluster_snapshot_repository()
+    snapshot = repository.get(
+        _cluster_snapshot_identity(),
+        _rack_status_cache_key(log_dir),
+        repository.configuration_generation(),
+    )
+    return dict(snapshot.payload) if snapshot is not None and snapshot.payload is not None else None
 
 
 def _ensure_rack_status_background_thread() -> None:
@@ -4757,19 +4926,18 @@ def _ensure_rack_status_background_thread() -> None:
 
 
 def _rack_status_background_loop() -> None:
-    """Refresh cached rack_status for every registered ``log_dir``; one subprocess at a time."""
-    first = True
+    """Periodically refresh shared snapshots; SQLite leases coordinate workers."""
     while True:
-        if not first:
-            interval = max(5, _rack_status_background_interval_sec())
-            time.sleep(float(interval))
-        first = False
+        if not _rack_status_background_enabled():
+            return
+        interval = max(5, _rack_status_background_interval_sec())
+        time.sleep(float(interval))
+        if not _rack_status_background_enabled():
+            return
+        # Skip slow inventory collects during SSH/VPN outages (local mode is always reachable).
+        if not host_exec.cluster_reachable():
+            continue
         try:
-            # Skip the heavy SSH refresh while the cluster link is down so the loop
-            # doesn't spend each cycle stacking up connect timeouts. A cheap cached
-            # reachability probe lets it resume automatically once the VPN returns.
-            if host_exec.is_remote() and not host_exec.cluster_reachable():
-                continue
             with _rack_status_cache_lock:
                 dirs = sorted(_rack_status_registry)
             if not dirs:
@@ -4777,16 +4945,11 @@ def _rack_status_background_loop() -> None:
             for d in dirs:
                 p = Path(d)
                 try:
-                    with _rack_status_exec_lock:
-                        payload = run_rack_status(p, include_raw=False)
-                    with _rack_status_cache_lock:
-                        _rack_status_cache[_rack_status_cache_key(p)] = payload
-                except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-                    continue
+                    get_cluster_snapshot(p, force_refresh=True)
                 except Exception:
-                    continue
+                    _logger.exception("cluster snapshot background refresh failed")
         except Exception:
-            continue
+            _logger.exception("cluster snapshot background loop failed")
 
 
 def _nemo_done_rack_ids_from_rack_status(log_dir: Path) -> frozenset[str] | None:
@@ -4796,14 +4959,10 @@ def _nemo_done_rack_ids_from_rack_status(log_dir: Path) -> frozenset[str] | None
     Returns an empty frozenset if the table loaded but no rack is ``done``.
     """
     try:
-        cached = _cached_rack_status_copy(log_dir)
-        if cached is not None:
-            data = cached
-        elif _rack_status_background_enabled():
-            with _rack_status_exec_lock:
-                data = run_rack_status(log_dir, include_raw=False)
-        else:
-            data = run_rack_status(log_dir, include_raw=False)
+        snapshot = get_cluster_snapshot(log_dir)
+        if snapshot.payload is None:
+            return None
+        data = snapshot.payload
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     except Exception:
@@ -13637,27 +13796,29 @@ def update_cluster_dashboard_metadata(updates: dict[str, object]) -> dict[str, s
     return read_cluster_dashboard_metadata()
 
 
-def build_cluster_overview(log_dir: Path) -> dict[str, object]:
+def build_cluster_overview(
+    log_dir: Path,
+    snapshot: cluster_snapshot.ClusterSnapshot | None = None,
+) -> dict[str, object]:
     """Aggregate cluster facts for the React dashboard (env + head-only Slurm; no node SSH/pdsh)."""
-    base = _cached_rack_status_copy(log_dir)
-    cached: dict | None = dict(base) if isinstance(base, dict) else None
-    if cached is not None:
-        _merge_fresh_comments_into_status_payload(cached)
-        if not _truthy_env("RACK_STATUS_USE_SHELL_TABLE"):
-            _merge_live_native_workers_into_status(cached, log_dir)
-    rows = list(cached.get("rows") or []) if isinstance(cached, dict) else []
+    current = snapshot or get_cluster_snapshot(log_dir)
+    cached = dict(current.payload) if isinstance(current.payload, dict) else None
+    rows = list(cached.get("rows") or []) if cached is not None else []
     rack_ids = sorted({str(r.get("rack") or "").strip() for r in rows if r.get("rack")})
-    rack_count = len(rack_ids)
-    summary = dict(cached.get("summary") or {}) if isinstance(cached, dict) else {}
-    for k in ("done", "fail", "ongoing", "pending"):
-        if k not in summary:
-            summary[k] = 0
-    phys = dict(cached.get("physical_rf0") or {}) if isinstance(cached, dict) else {}
-    tray_hosts = len(phys)
+    rack_count = len(rack_ids) if cached is not None else None
+    summary = dict(cached.get("summary") or {}) if cached is not None else None
+    if summary is not None:
+        for k in ("done", "fail", "ongoing", "pending"):
+            if k not in summary:
+                summary[k] = 0
+    phys = dict(cached.get("physical_rf0") or {}) if cached is not None else {}
+    tray_hosts = len(phys) if cached is not None else None
     gpus_per_tray = max(1, _eget_int("RACK_CLUSTER_GPU_PER_TRAY", 8))
-    estimated_gpus = tray_hosts * gpus_per_tray
-    validation_total = int(summary.get("done", 0) or 0) + int(summary.get("fail", 0) or 0)
-    validation_total += int(summary.get("ongoing", 0) or 0) + int(summary.get("pending", 0) or 0)
+    estimated_gpus = tray_hosts * gpus_per_tray if tray_hosts is not None else None
+    validation_total = None
+    if summary is not None:
+        validation_total = int(summary.get("done", 0) or 0) + int(summary.get("fail", 0) or 0)
+        validation_total += int(summary.get("ongoing", 0) or 0) + int(summary.get("pending", 0) or 0)
 
     cluster_name = _cluster_env_pick("RACK_CLUSTER_NAME", "CLUSTER_NAME")
     if not cluster_name:
@@ -13688,33 +13849,19 @@ def build_cluster_overview(log_dir: Path) -> dict[str, object]:
         "NEMO_SQSH_SRC",
     )
 
+    # Live BCM/Slurm/queue probes run only via ``/api/cluster-overview/live``.
+    # Keep env-configured versions here; queue is a non-live placeholder for FE compat.
+    # Never probe SSH here — cold/stale reachability must not run ``ssh true``.
+    reachable, reach_detail = host_exec.cached_reachability_state()
     probes: dict[str, object] = {}
-    # Skip live head-node probes when the cluster link is down (VPN drop / dead tunnel)
-    # so the overview returns last-known facts immediately instead of blocking on SSH.
-    reachable, reach_detail = host_exec.reachability_state()
-    skip_probes = _truthy_env("RACK_CLUSTER_OVERVIEW_DISABLE_PROBES") or not reachable
-
-    if not skip_probes and not slurm_version:
-        v, err = _cluster_probe_slurm_version()
-        slurm_version = v or "—"
-        probes["slurm"] = {"ok": bool(v) and not err, "detail": err or v}
-
-    if not skip_probes and not (bcm_version or "").strip():
-        v_b, err_b = _cluster_probe_bcm_cmsh_version()
-        bcm_version = v_b or bcm_version
-        probes["bcm_cmsh"] = {"ok": bool(v_b) and not err_b, "detail": (err_b or v_b)[:4000]}
-
-    if reachable:
-        squeue_block = _cluster_squeue_overview_block()
-    else:
-        squeue_block = {
-            "ok": False,
-            "stdout": "",
-            "stderr": "",
-            "command_display": "",
-            "returncode": -1,
-            "error": "cluster unreachable (head node not reachable over SSH)",
-        }
+    squeue_block: dict[str, object] = {
+        "ok": False,
+        "stdout": "",
+        "stderr": "",
+        "command_display": "",
+        "returncode": -1,
+        "error": "live details load separately",
+    }
 
     if hw_vendor == "":
         hw_vendor = "—"
@@ -13727,7 +13874,7 @@ def build_cluster_overview(log_dir: Path) -> dict[str, object]:
 
     cuda_nccl_build_host_candidates = sorted(phys.keys(), key=str.casefold)
 
-    return {
+    out: dict[str, object] = {
         "ok": True,
         "cluster_name": cluster_name,
         "customer_name": customer,
@@ -13744,15 +13891,24 @@ def build_cluster_overview(log_dir: Path) -> dict[str, object]:
         "estimated_gpu_count": estimated_gpus,
         "validation_summary": summary,
         "validation_cells_total": validation_total,
-        "status_updated_at": (cached or {}).get("updated_at") if isinstance(cached, dict) else None,
+        "status_updated_at": cached.get("updated_at") if cached is not None else None,
+        "snapshot": current.metadata(),
         "probes": probes,
         "app_version": _app_version(),
         "squeue": squeue_block,
         "cluster_dashboard_metadata": dash_meta,
-        "cluster_reachable": reachable,
-        "cluster_unreachable_detail": ("" if reachable else (reach_detail or "head node not reachable over SSH")),
+        "cluster_unreachable_detail": "",
         "exec_mode": "ssh" if host_exec.is_remote() else "local",
     }
+    # Unknown cached reachability: leave unset/None rather than inventing down/up.
+    if reachable is None:
+        out["cluster_reachable"] = None
+    else:
+        out["cluster_reachable"] = reachable
+        out["cluster_unreachable_detail"] = (
+            "" if reachable else (reach_detail or "head node not reachable over SSH")
+        )
+    return out
 
 
 @app.route("/api/nvftp-sync/status", methods=["GET"])
@@ -13994,7 +14150,8 @@ def api_settings_job_environment():
 
 @app.route("/api/cluster-overview", methods=["GET"])
 def api_cluster_overview():
-    """Cluster-wide facts for the dashboard tab (env + head Slurm; uses cached /api/status rows)."""
+    """Cluster-wide facts whose inventory fields use the canonical shared snapshot."""
+    _ensure_rack_status_background_thread()
     nvftp_cache_sync.ensure_background_thread()
     try:
         log_dir = _resolve_log_dir(request.args.get("log_dir"))
@@ -14003,11 +14160,54 @@ def api_cluster_overview():
     client_id = (request.args.get("client_id") or "").strip()
     connected_users = _touch_app_client(client_id)
     try:
-        payload = build_cluster_overview(log_dir)
+        force_refresh = (request.args.get("refresh") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        # Demo inventory is instant — wait so clients never see an initializing flash.
+        # Real clusters return immediately and refresh in the background.
+        snapshot = get_cluster_snapshot(
+            log_dir,
+            force_refresh=force_refresh,
+            wait=_truthy_env("RACK_STATUS_DEMO"),
+        )
+        payload = build_cluster_overview(log_dir, snapshot)
         payload["connected_users"] = connected_users
         return jsonify(payload)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/cluster-overview/live", methods=["GET"])
+def api_cluster_overview_live():
+    """Non-blocking BCM / Slurm / queue live probes with per-section cache state."""
+    force_refresh = (request.args.get("refresh") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    try:
+        reachable, reach_detail = host_exec.reachability_state()
+        cluster_id = _cluster_snapshot_identity()
+        snapshot = _get_cluster_overview_live_service().get_snapshot(
+            cluster_id,
+            force_refresh=force_refresh,
+            allow_refresh=reachable,
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "cluster_id": cluster_id,
+                "reachable": reachable,
+                "unreachable_detail": (
+                    "" if reachable else (reach_detail or "head node not reachable over SSH")
+                ),
+                "sections": snapshot.get("sections") or {},
+            }
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": cluster_overview_live.safe_error(e)}), 500
 
 
 @app.route("/api/cluster-health", methods=["GET"])
@@ -14091,7 +14291,7 @@ def api_app_stats():
 
 
 def _merge_project_name_into_status_payload(payload: dict) -> None:
-    """SPA sidebar / titles: ``RACK_WEB_PROJECT_NAME`` (and shell ``PROJECT_NAME``) via ``_project_name()``."""
+    """SPA payload: optional ``RACK_WEB_PROJECT_NAME`` / ``PROJECT_NAME`` label."""
     payload["project_name"] = _project_name()
 
 
@@ -14151,6 +14351,11 @@ def _degraded_status_payload(log_dir: Path, detail: str) -> dict:
 
 @app.route("/api/status")
 def api_status():
+    """Rack status from the canonical snapshot.
+
+    ``raw=1`` remains a diagnostic collector bypass. It is never persisted and
+    therefore can never become the source of Overview inventory counts.
+    """
     _start_cmsh_rack_list_warm_thread()
     _ensure_rack_status_background_thread()
     nvftp_cache_sync.ensure_background_thread()
@@ -14161,71 +14366,63 @@ def api_status():
     want_raw = request.args.get("raw") == "1"
     interval = _rack_status_background_interval_sec()
     reachable, reach_detail = host_exec.reachability_state()
-    if _rack_status_background_enabled() and not want_raw:
-        cache_key = _register_rack_status_log_dir(log_dir)
-        with _rack_status_cache_lock:
-            cached = _rack_status_cache.get(cache_key)
-        if cached is not None:
-            out = dict(cached)
-            out["served_from_cache"] = True
-            out["rack_status_background_interval_sec"] = interval
-            _merge_fresh_comments_into_status_payload(out)
-            _merge_live_native_workers_into_status(out, log_dir)
-            _merge_project_name_into_status_payload(out)
-            _merge_naming_into_status_payload(out)
-            _merge_cluster_reachable_into_status_payload(out, reachable, reach_detail)
-            return jsonify(out)
-        # Cold cache + unreachable link: return fast instead of blocking on SSH.
-        if not reachable:
-            return jsonify(_degraded_status_payload(log_dir, reach_detail))
+    if want_raw:
         try:
-            with _rack_status_exec_lock:
-                with _rack_status_cache_lock:
-                    cached = _rack_status_cache.get(cache_key)
-                if cached is not None:
-                    out = dict(cached)
-                    out["served_from_cache"] = True
-                    out["rack_status_background_interval_sec"] = interval
-                    _merge_fresh_comments_into_status_payload(out)
-                    _merge_live_native_workers_into_status(out, log_dir)
-                    _merge_project_name_into_status_payload(out)
-                    _merge_naming_into_status_payload(out)
-                    _merge_cluster_reachable_into_status_payload(out, reachable, reach_detail)
-                    return jsonify(out)
-                data = run_rack_status(log_dir, include_raw=False)
+            data = run_rack_status(log_dir, include_raw=True)
         except subprocess.TimeoutExpired:
             return jsonify({"ok": False, "error": "rack_status.sh timed out"}), 504
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
-        with _rack_status_cache_lock:
-            _rack_status_cache[cache_key] = data
-        out = dict(data)
-        out["served_from_cache"] = False
-        out["rack_status_background_interval_sec"] = interval
-        _merge_fresh_comments_into_status_payload(out)
-        _merge_live_native_workers_into_status(out, log_dir)
-        _merge_project_name_into_status_payload(out)
-        _merge_naming_into_status_payload(out)
-        _merge_cluster_reachable_into_status_payload(out, reachable, reach_detail)
-        return jsonify(out)
-    if not reachable and not want_raw:
-        return jsonify(_degraded_status_payload(log_dir, reach_detail))
+        _merge_live_native_workers_into_status(data, log_dir)
+        data["snapshot_bypass"] = True
+        _merge_fresh_comments_into_status_payload(data)
+        _merge_project_name_into_status_payload(data)
+        _merge_naming_into_status_payload(data)
+        _merge_cluster_reachable_into_status_payload(data, reachable, reach_detail)
+        return jsonify(data)
+
     try:
-        if _rack_status_background_enabled():
-            with _rack_status_exec_lock:
-                data = run_rack_status(log_dir, include_raw=want_raw)
-        else:
-            data = run_rack_status(log_dir, include_raw=want_raw)
-    except subprocess.TimeoutExpired:
-        return jsonify({"ok": False, "error": "rack_status.sh timed out"}), 504
+        force_refresh = (request.args.get("refresh") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        # Demo inventory is instant — wait so clients never see an initializing flash.
+        # Real clusters return immediately and refresh in the background.
+        snapshot = get_cluster_snapshot(
+            log_dir,
+            force_refresh=force_refresh,
+            wait=_truthy_env("RACK_STATUS_DEMO"),
+        )
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
-    _merge_fresh_comments_into_status_payload(data)
-    _merge_live_native_workers_into_status(data, log_dir)
-    _merge_project_name_into_status_payload(data)
-    _merge_naming_into_status_payload(data)
-    _merge_cluster_reachable_into_status_payload(data, reachable, reach_detail)
-    return jsonify(data)
+
+    if snapshot.payload is not None:
+        out = dict(snapshot.payload)
+    else:
+        out = {
+            "ok": True,
+            "returncode": 0,
+            "updated_at": None,
+            "log_dir": str(log_dir),
+            "script": "",
+            "stderr": "",
+            "legend": "",
+            "rows": [],
+            "summary": {"done": 0, "fail": 0, "ongoing": 0, "pending": 0},
+            "footnotes": [],
+            "comments": {},
+            "physical_rf0": {},
+            "native_workers": {"mode": "snapshot_unavailable"},
+        }
+    out["snapshot"] = snapshot.metadata()
+    out["served_from_cache"] = snapshot.payload is not None
+    out["rack_status_background_interval_sec"] = interval
+    _merge_fresh_comments_into_status_payload(out)
+    _merge_project_name_into_status_payload(out)
+    _merge_naming_into_status_payload(out)
+    _merge_cluster_reachable_into_status_payload(out, reachable, reach_detail)
+    return jsonify(out)
 
 
 _SPA_DIR = REPO_ROOT / "static" / "spa"
@@ -14743,8 +14940,21 @@ class _WebSocketTerminalMiddleware:
 
     def __call__(self, environ, start_response):  # type: ignore[no-untyped-def]
         path = environ.get("PATH_INFO", "")
-        if path == "/ws/terminal" and "werkzeug.socket" in environ and _TERMINAL_ENABLED:
-            self._handle_terminal(environ)
+        upgrade = (environ.get("HTTP_UPGRADE") or "").strip().lower()
+        has_socket = "werkzeug.socket" in environ or "gunicorn.socket" in environ
+        # Werkzeug injects werkzeug.socket for *every* request, so require Upgrade:
+        # websocket before claiming this path. simple_websocket writes the HTTP 101
+        # response on the raw socket and never calls start_response; Werkzeug still
+        # finalizes with write(b""), so we must call start_response before returning.
+        if path == "/ws/terminal" and upgrade == "websocket" and has_socket and _TERMINAL_ENABLED:
+            try:
+                self._handle_terminal(environ)
+            finally:
+                try:
+                    start_response("200 OK", [])
+                except Exception:
+                    # Headers may already be set, or the peer already closed the socket.
+                    pass
             return []
         return self.wsgi_app(environ, start_response)
 
@@ -14813,15 +15023,20 @@ class _WebSocketTerminalMiddleware:
         from simple_websocket import Server as _WSServer, ConnectionClosed as _WSClosed
         from urllib.parse import parse_qs
 
-        ws = _WSServer(environ)
+        ws = None
         outq = None
         sess = None
         try:
+            ws = _WSServer(environ)
             qs = parse_qs(environ.get("QUERY_STRING", ""))
             sess = self._get_or_create_session(qs)
 
             if sess is None:
-                reason = "Demo mode — terminal connections are disabled" if _truthy_env("RACK_STATUS_DEMO") else "Missing target node"
+                reason = (
+                    "Demo mode — terminal connections are disabled"
+                    if _truthy_env("RACK_STATUS_DEMO")
+                    else "Missing target node"
+                )
                 ws.send(json.dumps({"type": "error", "error": reason}))
                 return
 
@@ -14854,8 +15069,11 @@ class _WebSocketTerminalMiddleware:
                 try:
                     msg = ws.receive(timeout=0.05)
                 except _WSClosed:
-                    _logger.info("WebSocket terminal: client disconnected from %s (session %s)",
-                                 sess.target, sess.session_id)
+                    _logger.info(
+                        "WebSocket terminal: client disconnected from %s (session %s)",
+                        sess.target,
+                        sess.session_id,
+                    )
                     return
                 except OSError:
                     return
@@ -14895,10 +15113,11 @@ class _WebSocketTerminalMiddleware:
                         args=(sess.session_id,),
                         daemon=True,
                     ).start()
-            try:
-                ws.close()
-            except Exception:
-                pass
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
 
 
 if _TERMINAL_ENABLED:

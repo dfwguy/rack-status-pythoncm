@@ -25,7 +25,6 @@ fi
 # ---- Cluster defaults (only applied when NOT in demo mode) ----
 if [[ "${RACK_STATUS_DEMO}" != "1" ]]; then
   export VALIDATION_TEST="${VALIDATION_TEST:-nccl_allreduce,llm}"
-  export RACK_WEB_PROJECT_NAME="${RACK_WEB_PROJECT_NAME:-Mistral Phase 2}"
   export NEMO_SQSH_SRC="${NEMO_SQSH_SRC:-/home/cmsupport/nemo-25.11.01.sqsh}"
   export RACK_STATUS_LOG_DIR="${RACK_STATUS_LOG_DIR:-/home/cmsupport/aihpc_val-main/validation/nemo}" 
 fi

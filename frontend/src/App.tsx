@@ -14,6 +14,7 @@ import AIChatWidget from "./components/ai/AIChatWidget";
 import { ClusterDashboardView } from "./views/ClusterDashboardView";
 import { SingleRackView } from "./views/SingleRackView";
 import { useClusterOverview } from "./hooks/useClusterOverview";
+import { useClusterOverviewLive } from "./hooks/useClusterOverviewLive";
 import { RackDetailView } from "./views/RackDetailView";
 // Lazy-loaded routes: keep the initial (index) bundle small by code-splitting each view. Heavy
 // deps move into their own on-demand chunks (reactflow -> Workflows, chart.js -> Analytics/Metrics,
@@ -141,6 +142,7 @@ function AppContent() {
     backendConnected,
     lastUpdated: statusLastUpdated,
     refresh,
+    retry: retryStatus,
     activeUsers,
   } = useRackStatus(logDir);
   const {
@@ -150,11 +152,18 @@ function AppContent() {
     error: clusterError,
     lastUpdated: clusterLastUpdated,
     refresh: refreshCluster,
+    retry: retryCluster,
   } = useClusterOverview(logDir);
+  const {
+    data: clusterLive,
+    loading: clusterLiveLoading,
+    error: clusterLiveError,
+    retry: retryClusterLive,
+  } = useClusterOverviewLive(logDir);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([refresh(), refreshCluster()]);
-  }, [refresh, refreshCluster]);
+    await Promise.all([refresh(), refreshCluster(), retryClusterLive()]);
+  }, [refresh, refreshCluster, retryClusterLive]);
 
   const [reconnecting, setReconnecting] = useState(false);
   const clusterUnreachable =
@@ -242,7 +251,6 @@ function AppContent() {
           onToggle={handleSidebarToggle}
           activeView={activeView}
           onNavigate={handleNavigate}
-          projectName={data?.project_name}
         />
       }
       toolbar={
@@ -290,7 +298,12 @@ function AppContent() {
                 refreshing={clusterRefreshing}
                 lastUpdated={clusterLastUpdated}
                 error={clusterError}
+                onRetry={retryCluster}
                 onClusterMetadataSaved={refreshCluster}
+                liveData={clusterLive}
+                liveLoading={clusterLiveLoading}
+                liveError={clusterLiveError}
+                onLiveRetry={retryClusterLive}
               />
             }
           />
@@ -301,6 +314,7 @@ function AppContent() {
                 data={data}
                 loading={loading}
                 error={error}
+                onRetry={retryStatus}
                 onRackSelect={handleRackSelect}
                 onCommentChange={handleCommentChange}
               />

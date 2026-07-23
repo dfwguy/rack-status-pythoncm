@@ -198,3 +198,49 @@ class TestScriptProfileRouting:
         argv = host_exec.wrap_for_host(["bash", "sysinfo.sh", "rack01"], profile="script")
         assert "root@127.0.0.1" in argv
         assert argv[-1].endswith("bash sysinfo.sh rack01")
+
+
+class TestCachedReachabilityState:
+    def teardown_method(self):
+        host_exec.invalidate_reachability()
+        _reset()
+
+    def test_local_mode_returns_reachable_without_probe(self):
+        _init(RACK_EXEC_MODE="local")
+        calls = {"n": 0}
+
+        def boom():
+            calls["n"] += 1
+            return False, "no"
+
+        with mock.patch.object(host_exec, "_probe_reachable", boom):
+            assert host_exec.cached_reachability_state() == (True, "")
+        assert calls["n"] == 0
+
+    def test_ssh_unknown_returns_none_without_probe(self):
+        _init(RACK_EXEC_MODE="ssh", RACK_SSH_HOST="10.0.0.1", RACK_SSH_USER="root")
+        host_exec.invalidate_reachability()
+        calls = {"n": 0}
+
+        def boom():
+            calls["n"] += 1
+            return False, "no"
+
+        with mock.patch.object(host_exec, "_probe_reachable", boom):
+            assert host_exec.cached_reachability_state() == (None, "")
+        assert calls["n"] == 0
+
+    def test_ssh_returns_stale_cache_without_reprobe(self):
+        _init(RACK_EXEC_MODE="ssh", RACK_SSH_HOST="10.0.0.1", RACK_SSH_USER="root")
+        host_exec._reach_ok = False
+        host_exec._reach_detail = "vpn down"
+        host_exec._reach_checked_at = 0.0  # expired TTL
+        calls = {"n": 0}
+
+        def boom():
+            calls["n"] += 1
+            return True, ""
+
+        with mock.patch.object(host_exec, "_probe_reachable", boom):
+            assert host_exec.cached_reachability_state() == (False, "vpn down")
+        assert calls["n"] == 0

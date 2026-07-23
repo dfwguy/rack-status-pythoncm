@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import MuiButton from "@mui/material/Button";
@@ -8,15 +8,22 @@ import DialogContent from "@mui/material/DialogContent";
 import DialogActions from "@mui/material/DialogActions";
 import TextField from "@mui/material/TextField";
 import { RefreshCw } from "lucide-react";
-import { Text, Button } from "@nvidia/foundations-react-core";
+import { Text, Button, Skeleton } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { StatTile, InfoTile } from "../components/dashboard/StatTiles";
-import { LoadingSkeleton } from "../components/LoadingSkeleton";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { ClusterSqueueOverview } from "../components/ClusterSqueueOverview";
+import { ClusterSnapshotState } from "../components/ClusterSnapshotState";
+import { ClusterLiveDetailsState } from "../components/ClusterLiveDetailsState";
 import { apiFetch } from "../lib/apiFetch";
-import type { ClusterDashboardMetadata, ClusterOverviewResponse } from "../types/api";
+import type {
+  ClusterDashboardMetadata,
+  ClusterOverviewLiveResponse,
+  ClusterOverviewResponse,
+  ClusterSqueueBlock,
+  LiveProbeSection,
+} from "../types/api";
 
 const NVFTP_TOKENS_URL =
   "https://nvftp.nvidia.com/workspace/1099ff0b-621c-490f-a662-c69583ccabad/tokens";
@@ -32,7 +39,12 @@ interface ClusterDashboardViewProps {
   refreshing?: boolean;
   lastUpdated?: number | null;
   error: string | null;
+  onRetry?: () => void;
   onClusterMetadataSaved?: () => void;
+  liveData?: ClusterOverviewLiveResponse | null;
+  liveLoading?: boolean;
+  liveError?: string | null;
+  onLiveRetry?: () => void;
 }
 
 function formatAgo(ts: number): string {
@@ -51,13 +63,65 @@ const emptyMeta = (): ClusterDashboardMetadata => ({
   customer_name: "",
 });
 
+function isConfiguredValue(value: string | undefined): boolean {
+  return Boolean(value && value !== "—");
+}
+
+function liveStringValue(
+  configured: string | undefined,
+  section: LiveProbeSection<string> | undefined,
+  liveLoading: boolean,
+): ReactNode {
+  if (section?.state === "fresh" || section?.state === "stale") {
+    return section.value ?? (isConfiguredValue(configured) ? configured! : "—");
+  }
+  if (isConfiguredValue(configured)) return configured!;
+  if (section?.state === "initializing" || (liveLoading && !section)) {
+    return <Skeleton style={{ width: "10ch", height: "1.2em" }} aria-hidden />;
+  }
+  return "—";
+}
+
+function resolveQueuePresentation(
+  base: ClusterSqueueBlock | undefined,
+  section: LiveProbeSection<ClusterSqueueBlock> | undefined,
+  liveLoading: boolean,
+): {
+  squeue: ClusterSqueueBlock | null;
+  loading: boolean;
+  failed: boolean;
+} {
+  if (section?.state === "fresh" || section?.state === "stale") {
+    return { squeue: section.value, loading: false, failed: false };
+  }
+  if (section?.state === "initializing" || (liveLoading && !section)) {
+    return { squeue: null, loading: true, failed: false };
+  }
+  if (section?.state === "failed") {
+    return {
+      squeue: section.value ?? { ok: false, stdout: "", error: section.last_error ?? "Queue unavailable" },
+      loading: false,
+      failed: true,
+    };
+  }
+  if (base?.ok) {
+    return { squeue: base, loading: false, failed: false };
+  }
+  return { squeue: null, loading: liveLoading, failed: !liveLoading };
+}
+
 export function ClusterDashboardView({
   data,
   loading,
   refreshing = false,
   lastUpdated = null,
   error,
+  onRetry,
   onClusterMetadataSaved,
+  liveData = null,
+  liveLoading = false,
+  liveError = null,
+  onLiveRetry,
 }: ClusterDashboardViewProps) {
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [productLine, setProductLine] = useState("");
@@ -316,10 +380,20 @@ export function ClusterDashboardView({
     }
   }, [productLine, hwVendor, customerName, onClusterMetadataSaved]);
 
-  if (loading && !data) return <LoadingSkeleton />;
-
   const s = data?.validation_summary;
   const connected = data?.connected_users ?? 0;
+  const inventoryReady =
+    data?.snapshot.state === "fresh" || data?.snapshot.state === "stale";
+  const inventoryInitializing = data?.snapshot.state === "initializing";
+  const inventoryValue = (n: number | null | undefined) =>
+    inventoryReady && n != null ? n : "—";
+  const queuePresentation = resolveQueuePresentation(
+    data?.squeue,
+    liveData?.sections.queue,
+    liveLoading,
+  );
+  const bcmVersion = liveStringValue(data?.bcm_version, liveData?.sections.bcm, liveLoading);
+  const slurmVersion = liveStringValue(data?.slurm_version, liveData?.sections.slurm, liveLoading);
 
   return (
     <Box
@@ -332,6 +406,22 @@ export function ClusterDashboardView({
       }}
     >
       <PageHeader contentId="dashboard" title="Overview" />
+
+      {data?.snapshot && (
+        <Box sx={{ mb: 2 }}>
+          <ClusterSnapshotState snapshot={data.snapshot} onRetry={onRetry} />
+        </Box>
+      )}
+
+      {(liveData || liveError || liveLoading) && (
+        <Box sx={{ mb: 2 }}>
+          <ClusterLiveDetailsState
+            liveData={liveData}
+            liveError={liveError}
+            onLiveRetry={onLiveRetry}
+          />
+        </Box>
+      )}
 
       {data && (refreshing || lastUpdated) && (
         <Box
@@ -533,37 +623,61 @@ export function ClusterDashboardView({
             <Box
               sx={{
                 display: "grid",
-                gridAutoFlow: "column",
-                gridAutoColumns: "minmax(0, 1fr)",
+                gridTemplateColumns: {
+                  xs: "1fr",
+                  sm: "repeat(2, minmax(0, 1fr))",
+                  md: "repeat(3, minmax(0, 1fr))",
+                  lg: "repeat(5, minmax(0, 1fr))",
+                },
                 gap: 2,
-                overflowX: "auto",
               }}
             >
-              <StatTile label="Racks" value={data.rack_count} unit="total" />
-              <StatTile label="Nodes" value={data.tray_hosts} unit="trays" />
-              {s && <StatTile label="Done" value={s.done} accentColor={NVIDIA_GREEN} unit="racks" />}
-              {s && <StatTile label="Failed" value={s.fail} accentColor={s.fail > 0 ? STATUS_RED : undefined} unit="racks" />}
-              {s && <StatTile label="Ongoing" value={s.ongoing} accentColor={s.ongoing > 0 ? STATUS_YELLOW : undefined} unit="racks" />}
-              {s && <StatTile label="Pending" value={s.pending} unit="racks" />}
-              {s?.stage1 && (
-                <StatTile
-                  label="Stage 1 · NCCL"
-                  value={s.stage1.done}
-                  unit={`/ ${data.rack_count} done`}
-                  accentColor={s.stage1.done > 0 ? NVIDIA_GREEN : undefined}
-                  caption={`${s.stage1.ongoing} running · ${s.stage1.fail} fail`}
-                />
+              <StatTile label="Racks" value={inventoryValue(data.rack_count)} unit="total" />
+              <StatTile label="Nodes" value={inventoryValue(data.tray_hosts)} unit="trays" />
+              {inventoryReady && s ? (
+                <>
+                  <StatTile label="Done" value={s.done} accentColor={NVIDIA_GREEN} unit="racks" />
+                  <StatTile label="Failed" value={s.fail} accentColor={s.fail > 0 ? STATUS_RED : undefined} unit="racks" />
+                  <StatTile label="Ongoing" value={s.ongoing} accentColor={s.ongoing > 0 ? STATUS_YELLOW : undefined} unit="racks" />
+                  <StatTile label="Pending" value={s.pending} unit="racks" />
+                  {s.stage1 && (
+                    <StatTile
+                      label="Stage 1 · NCCL"
+                      value={s.stage1.done}
+                      unit={`/ ${data.rack_count} done`}
+                      accentColor={s.stage1.done > 0 ? NVIDIA_GREEN : undefined}
+                      caption={`${s.stage1.ongoing} running · ${s.stage1.fail} fail`}
+                    />
+                  )}
+                  {s.stage2 && (
+                    <StatTile
+                      label="Stage 2 · NeMo"
+                      value={s.stage2.done}
+                      unit={`/ ${data.rack_count} done`}
+                      accentColor={s.stage2.done > 0 ? NVIDIA_GREEN : undefined}
+                      caption={`${s.stage2.ongoing} running · ${s.stage2.fail} fail`}
+                    />
+                  )}
+                  <StatTile label="Dashboard users" value={connected} unit="online" />
+                </>
+              ) : (
+                <>
+                  {(["Done", "Failed", "Ongoing"] as const).map((label) => (
+                    <StatTile
+                      key={label}
+                      label={label}
+                      value={
+                        inventoryInitializing ? (
+                          <Skeleton style={{ width: "3ch", height: "1.2em" }} aria-hidden />
+                        ) : (
+                          "—"
+                        )
+                      }
+                      unit="racks"
+                    />
+                  ))}
+                </>
               )}
-              {s?.stage2 && (
-                <StatTile
-                  label="Stage 2 · NeMo"
-                  value={s.stage2.done}
-                  unit={`/ ${data.rack_count} done`}
-                  accentColor={s.stage2.done > 0 ? NVIDIA_GREEN : undefined}
-                  caption={`${s.stage2.ongoing} running · ${s.stage2.fail} fail`}
-                />
-              )}
-              <StatTile label="Dashboard users" value={connected} unit="online" />
             </Box>
           </Box>
 
@@ -681,14 +795,60 @@ export function ClusterDashboardView({
             >
               <InfoTile label="Product line" value={data.product_line} hint="RACK_CLUSTER_PRODUCT_LINE" />
               <InfoTile label="HW vendor" value={data.hw_vendor} hint="RACK_CLUSTER_HW_VENDOR" />
-              <InfoTile label="BCM version" value={data.bcm_version} mono hint='RACK_CLUSTER_BCM_VERSION, else cmsh versioninfo' />
-              <InfoTile label="Slurm version" value={data.slurm_version} mono hint="RACK_CLUSTER_SLURM_VERSION, else Slurm on head" />
+              <InfoTile label="BCM version" value={bcmVersion} mono hint='RACK_CLUSTER_BCM_VERSION, else cmsh versioninfo' />
+              <InfoTile label="Slurm version" value={slurmVersion} mono hint="RACK_CLUSTER_SLURM_VERSION, else Slurm on head" />
               <InfoTile label="NEMO container" value={data.nemo_container} mono hint="RACK_CLUSTER_NEMO_* or NEMO_SQSH_SRC" />
               <InfoTile label="Dashboard build" value={data.app_version} mono hint="RACK_WEB_VERSION" />
             </Box>
           </Box>
 
-          <ClusterSqueueOverview squeue={data.squeue} />
+          <ClusterSqueueOverview
+            squeue={queuePresentation.squeue}
+            loading={queuePresentation.loading}
+            failed={queuePresentation.failed}
+          />
+        </Box>
+      )}
+
+      {loading && !data && (
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <Box>
+            <Text
+              kind="body/bold/sm"
+              style={{ display: "block", marginBottom: 12, color: "var(--text-color-secondary)", textTransform: "uppercase", letterSpacing: 0.06 }}
+            >
+              Cluster statistics
+            </Text>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: {
+                  xs: "1fr",
+                  sm: "repeat(2, minmax(0, 1fr))",
+                  md: "repeat(3, minmax(0, 1fr))",
+                  lg: "repeat(5, minmax(0, 1fr))",
+                },
+                gap: 2,
+              }}
+            >
+              {Array.from({ length: 5 }).map((_, index) => (
+                <Skeleton key={index} style={{ width: "100%", height: 88 }} aria-hidden />
+              ))}
+            </Box>
+          </Box>
+          <Paper
+            elevation={0}
+            sx={{
+              p: 2.5,
+              border: `1px solid rgba(118, 185, 0, 0.45)`,
+              background: `linear-gradient(135deg, ${NVIDIA_GREEN_DIM} 0%, transparent 55%)`,
+            }}
+          >
+            <Skeleton style={{ width: "40%", height: 24, marginBottom: 12 }} aria-hidden />
+            <Skeleton style={{ width: "60%", height: 32, marginBottom: 8 }} aria-hidden />
+            <Skeleton style={{ width: "50%", height: 20 }} aria-hidden />
+          </Paper>
+          <ClusterSqueueOverview squeue={null} loading={liveLoading || !liveData} />
         </Box>
       )}
     </Box>

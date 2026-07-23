@@ -1,7 +1,7 @@
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import Table from "@mui/material/Table";
-import { Text } from "@nvidia/foundations-react-core";
+import { Skeleton, Text } from "@nvidia/foundations-react-core";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
@@ -12,8 +12,58 @@ import type { ClusterSqueueBlock } from "../types/api";
 
 const NVIDIA_GREEN = "#76B900";
 
-export function ClusterSqueueOverview({ squeue }: { squeue: ClusterSqueueBlock | null | undefined }) {
-  if (!squeue) return null;
+interface ClusterSqueueOverviewProps {
+  squeue: ClusterSqueueBlock | null | undefined;
+  loading?: boolean;
+  failed?: boolean;
+}
+
+export function ClusterSqueueOverview({
+  squeue,
+  loading = false,
+  failed = false,
+}: ClusterSqueueOverviewProps) {
+  if (loading) {
+    return (
+      <Paper
+        variant="outlined"
+        sx={{
+          borderLeft: `4px solid ${NVIDIA_GREEN}`,
+          overflow: "hidden",
+        }}
+      >
+        <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover" }}>
+          <Text kind="body/bold/md" style={{ fontWeight: 700, color: NVIDIA_GREEN, display: "block" }}>
+            Slurm queue (squeue)
+          </Text>
+        </Box>
+        <Box sx={{ p: 2 }}>
+          <Skeleton style={{ width: "100%", height: 120 }} aria-hidden />
+        </Box>
+      </Paper>
+    );
+  }
+
+  if (failed || !squeue) {
+    return (
+      <Paper
+        variant="outlined"
+        sx={{
+          borderLeft: `4px solid ${NVIDIA_GREEN}`,
+          overflow: "hidden",
+        }}
+      >
+        <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover" }}>
+          <Text kind="body/bold/md" style={{ fontWeight: 700, color: NVIDIA_GREEN, display: "block" }}>
+            Slurm queue (squeue)
+          </Text>
+          <Text kind="body/regular/md" style={{ display: "block", marginTop: 8, color: "var(--text-color-error, #f44336)" }}>
+            {squeue?.error || "Queue details unavailable"}
+          </Text>
+        </Box>
+      </Paper>
+    );
+  }
 
   const raw = squeue.stdout || "";
   const parsed = parseSqueueStdout(raw);

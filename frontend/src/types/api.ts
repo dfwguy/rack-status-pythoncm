@@ -79,7 +79,7 @@ export interface MultirackJobsResponse {
 export interface RackStatusResponse {
   ok: boolean;
   returncode: number;
-  updated_at: string;
+  updated_at: string | null;
   log_dir: string;
   script: string;
   stderr: string;
@@ -96,7 +96,7 @@ export interface RackStatusResponse {
   native_workers: NativeWorkers;
   served_from_cache?: boolean;
   rack_status_background_interval_sec?: number;
-  /** From ``RACK_WEB_PROJECT_NAME`` / ``PROJECT_NAME`` (sidebar brand when set). */
+  /** From ``RACK_WEB_PROJECT_NAME`` / ``PROJECT_NAME`` (optional title / customer fallback). */
   project_name?: string;
   /** False when the head node is not reachable over SSH (e.g. VPN drop). */
   cluster_reachable?: boolean;
@@ -104,6 +104,7 @@ export interface RackStatusResponse {
   /** True when the backend returned a fast placeholder because the link is down. */
   degraded?: boolean;
   exec_mode?: "ssh" | "local";
+  snapshot: ClusterSnapshotMeta;
 }
 
 /** Count of racks in each state for a single validation stage. */
@@ -155,9 +156,25 @@ export interface ClusterDashboardMetadata {
   customer_name: string;
 }
 
+export type ClusterSnapshotState = "initializing" | "fresh" | "stale" | "failed";
+
+/** Canonical cross-process inventory snapshot metadata returned by both inventory APIs. */
+export interface ClusterSnapshotMeta {
+  id: string | null;
+  state: ClusterSnapshotState;
+  cluster_id: string;
+  log_root: string;
+  configuration_generation: number;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  age_seconds: number | null;
+  last_error: string | null;
+}
+
 /** GET /api/cluster-overview — cluster-wide facts (env + head-only Slurm; no compute-node SSH/pdsh). */
 export interface ClusterOverviewResponse {
   ok: true;
+  snapshot: ClusterSnapshotMeta;
   cluster_name: string;
   customer_name: string;
   product_line: string;
@@ -171,21 +188,51 @@ export interface ClusterOverviewResponse {
   tools_workspace_default?: string;
   /** Compute hostnames from rack status ``physical_rf0`` keys (suggestions for CUDA/NCCL pdsh build host). */
   cuda_nccl_build_host_candidates?: string[];
-  rack_count: number;
-  tray_hosts: number;
-  estimated_gpu_count: number;
-  validation_summary: RackSummary;
-  validation_cells_total: number;
+  rack_count: number | null;
+  tray_hosts: number | null;
+  estimated_gpu_count: number | null;
+  validation_summary: RackSummary | null;
+  validation_cells_total: number | null;
   status_updated_at: string | null;
   probes: Record<string, unknown>;
   app_version: string;
   connected_users: number;
   squeue: ClusterSqueueBlock;
   cluster_dashboard_metadata: ClusterDashboardMetadata;
-  /** False when the head node is not reachable over SSH (e.g. VPN drop). */
-  cluster_reachable?: boolean;
+  /**
+   * Head-node reachability from the base overview route.
+   * ``null`` when the backend has no cached reachability yet (unknown).
+   */
+  cluster_reachable?: boolean | null;
   cluster_unreachable_detail?: string;
   exec_mode?: "ssh" | "local";
+}
+
+/** Per-section state for progressive `/api/cluster-overview/live` probes. */
+export type LiveProbeState = "initializing" | "fresh" | "stale" | "failed";
+
+export interface LiveProbeSection<T = unknown> {
+  state: LiveProbeState;
+  value: T | null;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  age_seconds: number | null;
+  last_error: string | null;
+}
+
+export interface ClusterOverviewLiveSections {
+  bcm: LiveProbeSection<string>;
+  slurm: LiveProbeSection<string>;
+  queue: LiveProbeSection<ClusterSqueueBlock>;
+}
+
+/** GET /api/cluster-overview/live — independent BCM / Slurm / queue probes. */
+export interface ClusterOverviewLiveResponse {
+  ok: true;
+  cluster_id: string;
+  reachable: boolean;
+  unreachable_detail: string;
+  sections: ClusterOverviewLiveSections;
 }
 
 /** GET /api/cluster-health — cheap cached reachability for the connection banner. */

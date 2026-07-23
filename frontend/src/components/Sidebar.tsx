@@ -11,6 +11,7 @@ import IconButton from "@mui/material/IconButton";
 import { Text, VerticalNav, type VerticalNavBaseItem } from "@nvidia/foundations-react-core";
 import { viewIdToPath } from "../routes";
 import { useOptionalHelpPanel } from "../context/HelpPanelContext";
+import { useActiveCluster } from "../context/ActiveClusterContext";
 import {
   LayoutDashboard,
   Layers,
@@ -181,8 +182,6 @@ interface SidebarProps {
   onToggle: () => void;
   activeView: ViewId;
   onNavigate: (view: ViewId) => void;
-  /** When set (from server env / overrides), shown top-left instead of "Rack Status". */
-  projectName?: string;
 }
 
 /**
@@ -419,9 +418,18 @@ function CollapsedRail({
   );
 }
 
-export function Sidebar({ open, onToggle, activeView, onNavigate, projectName }: SidebarProps) {
+export function Sidebar({ open, onToggle, activeView, onNavigate }: SidebarProps) {
   const width = open ? DRAWER_WIDTH_OPEN : DRAWER_WIDTH_CLOSED;
-  const brandLabel = projectName?.trim() ? projectName.trim() : "Rack Status";
+  const { projects, activeProject, activeCluster } = useActiveCluster();
+  // Match ProjectSwitcher: multi-project → "Project / Cluster", else cluster (or project) name.
+  const brandLabel = (() => {
+    const projectName = activeProject?.name?.trim() || "";
+    const clusterName = activeCluster?.name?.trim() || "";
+    if (projectName && clusterName) {
+      return projects.length > 1 ? `${projectName} / ${clusterName}` : clusterName;
+    }
+    return clusterName || projectName || "Rack Status";
+  })();
   const helpPanel = useOptionalHelpPanel();
   const openHelp = () => helpPanel?.openHelp();
 

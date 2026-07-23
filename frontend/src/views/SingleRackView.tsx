@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import Box from "@mui/material/Box";
-import { Flex, SegmentedControl } from "@nvidia/foundations-react-core";
+import { Flex, SegmentedControl, Skeleton, Text } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { StatusSummary, type ValidationSummaryCategory } from "../components/StatusSummary";
@@ -10,6 +10,7 @@ import { WorkerStatusPanel } from "../components/WorkerStatus";
 import { FooterNotes } from "../components/FooterNotes";
 import { LoadingSkeleton } from "../components/LoadingSkeleton";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { ClusterSnapshotState } from "../components/ClusterSnapshotState";
 import type { RackStatusResponse } from "../types/api";
 
 type DashboardView = "table" | "floor";
@@ -23,12 +24,13 @@ interface SingleRackViewProps {
   data: RackStatusResponse | null;
   loading: boolean;
   error: string | null;
+  onRetry?: () => void;
   onRackSelect?: (rack: string) => void;
   onCommentChange?: (rack: string, comment: string | null) => void;
 }
 
 /** Per-rack validation table, workers, and filters (formerly the main dashboard). */
-export function SingleRackView({ data, loading, error, onRackSelect, onCommentChange }: SingleRackViewProps) {
+export function SingleRackView({ data, loading, error, onRetry, onRackSelect, onCommentChange }: SingleRackViewProps) {
   const [validationFilters, setValidationFilters] = useState<string[]>([]);
   const [view, setView] = useState<DashboardView>(
     () => ((typeof localStorage !== "undefined" && localStorage.getItem(VIEW_STORAGE_KEY)) as DashboardView) || "table"
@@ -58,7 +60,13 @@ export function SingleRackView({ data, loading, error, onRackSelect, onCommentCh
 
       {error && <ErrorBanner message={error} />}
 
-      {data && (
+      {data?.snapshot && (
+        <Box sx={{ mb: 2 }}>
+          <ClusterSnapshotState snapshot={data.snapshot} onRetry={onRetry} />
+        </Box>
+      )}
+
+      {data && (data.snapshot.state === "fresh" || data.snapshot.state === "stale") ? (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <StatusSummary
             summary={data.summary}
@@ -99,7 +107,25 @@ export function SingleRackView({ data, loading, error, onRackSelect, onCommentCh
 
           <FooterNotes footnotes={data.footnotes} />
         </Box>
-      )}
+      ) : data?.snapshot.state === "initializing" ? (
+        <Box
+          aria-label="Loading rack inventory"
+          role="status"
+          sx={{ display: "flex", flexDirection: "column", gap: 1.5, mt: 1 }}
+        >
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+            Rack table will appear when inventory is ready.
+          </Text>
+          <Skeleton style={{ height: 48 }} />
+          <Skeleton style={{ height: 120 }} />
+        </Box>
+      ) : data ? (
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 1, mt: 1 }}>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+            Rack table unavailable until inventory collection succeeds.
+          </Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }

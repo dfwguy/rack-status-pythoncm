@@ -29,13 +29,13 @@ export function useRackStatus(logDir: string, pollMs = DEFAULT_POLL_MS) {
   const [activeUsers, setActiveUsers] = useState(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dataRef = useRef<RackStatusResponse | null>(null);
-  dataRef.current = data;
 
-  const fetchStatus = useCallback(async () => {
+  const fetchStatus = useCallback(async (forceRefresh = false) => {
     try {
       const params = new URLSearchParams();
       if (logDir) params.set("log_dir", logDir);
       params.set("client_id", getClientId());
+      if (forceRefresh) params.set("refresh", "1");
       const res = await fetch(`/api/status?${params}`, { cache: "no-store" });
       const json: RackStatusResponse & { active_clients?: number; error?: string } = await res.json();
       // We got a response from the Flask backend (even a degraded one).
@@ -48,42 +48,49 @@ export function useRackStatus(logDir: string, pollMs = DEFAULT_POLL_MS) {
       setReachable(!isUnreachable);
       setUnreachableDetail(isUnreachable ? json.cluster_unreachable_detail || "Cluster unreachable" : null);
       // Keep the last good table on screen while the link is down instead of
-      // replacing it with the empty degraded placeholder.
-      if (isUnreachable && dataRef.current) {
+      // replacing it with an unavailable placeholder. A stale snapshot already
+      // contains canonical last-good rows and must replace the prior fresh state.
+      const hasSnapshotPayload =
+        Boolean(json.snapshot?.id) &&
+        (json.snapshot?.state === "fresh" || json.snapshot?.state === "stale");
+      if (isUnreachable && dataRef.current && !hasSnapshotPayload) {
         // preserve previous data; only refresh comments if the placeholder carries them
         if (json.comments) {
-          setData({ ...dataRef.current, comments: json.comments });
+          const preserved = { ...dataRef.current, comments: json.comments };
+          dataRef.current = preserved;
+          setData(preserved);
         }
       } else {
+        dataRef.current = json;
         setData(json);
       }
       setError(null);
       if (json.active_clients != null) {
         setActiveUsers(json.active_clients);
       }
+      return json.snapshot?.state;
     } catch (err) {
       // A TypeError from fetch means we never reached the backend (server down /
       // page offline); an HTTP error means the backend answered but failed.
       if (err instanceof TypeError) setBackendConnected(false);
       setError(err instanceof Error ? err.message : "Unknown error");
+      return undefined;
     } finally {
       setLoading(false);
     }
   }, [logDir]);
 
   useEffect(() => {
-    setLoading(true);
-    fetchStatus();
-
-    const poll = () => {
-      timerRef.current = setTimeout(async () => {
-        await fetchStatus();
-        poll();
-      }, pollMs);
+    let cancelled = false;
+    const poll = async () => {
+      const state = await fetchStatus();
+      if (cancelled) return;
+      timerRef.current = setTimeout(poll, state === "initializing" ? 3_000 : pollMs);
     };
-    poll();
+    void poll();
 
     return () => {
+      cancelled = true;
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, [fetchStatus, pollMs]);
@@ -96,7 +103,8 @@ export function useRackStatus(logDir: string, pollMs = DEFAULT_POLL_MS) {
     unreachableDetail,
     backendConnected,
     lastUpdated,
-    refresh: fetchStatus,
+    refresh: () => fetchStatus(false),
+    retry: () => fetchStatus(true),
     activeUsers,
   };
 }

@@ -198,6 +198,23 @@ def reachability_state(force: bool = False) -> tuple[bool, str]:
     return ok, detail
 
 
+def cached_reachability_state() -> tuple[bool | None, str]:
+    """Return last-known reachability **without** running ``ssh … true``.
+
+    Local mode always ``(True, "")``. SSH mode returns ``(None, "")`` when no
+    probe has completed yet; otherwise the cached ``(ok, detail)`` even when the
+    TTL has expired. Callers that must never block on SSH (e.g. base Overview)
+    should use this instead of :func:`reachability_state`.
+    """
+    _ensure_init()
+    if _EXEC_MODE != "ssh":
+        return True, ""
+    with _reach_lock:
+        if _reach_ok is None:
+            return None, ""
+        return bool(_reach_ok), _reach_detail
+
+
 def cluster_reachable(force: bool = False) -> bool:
     """Convenience boolean wrapper around :func:`reachability_state`."""
     ok, _ = reachability_state(force=force)
