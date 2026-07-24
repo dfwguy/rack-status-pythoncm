@@ -175,7 +175,9 @@ export function Toolbar({
           <Text kind="body/bold/md">{title}</Text>
 
           <Box sx={{ flexGrow: 1, display: "flex", alignItems: "center", ml: 2 }}>
-            <ProjectSwitcher onSwitched={onClusterSwitched} />
+            <Box sx={{ width: "33%", minWidth: 220 }}>
+              <ProjectSwitcher onSwitched={onClusterSwitched} />
+            </Box>
           </Box>
 
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>

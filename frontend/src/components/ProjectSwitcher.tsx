@@ -30,7 +30,7 @@ export function ProjectSwitcher({ onSwitched }: ProjectSwitcherProps) {
   const value = active.project && active.cluster ? `${active.project}${SEP}${active.cluster}` : "";
 
   if (loading && items.length === 0) return null;
-  if (items.length <= 1) return null; // nothing to switch between
+  if (items.length === 0) return null; // no clusters to show at all
 
   return (
     <Combobox
@@ -38,6 +38,7 @@ export function ProjectSwitcher({ onSwitched }: ProjectSwitcherProps) {
       value={value}
       size="small"
       aria-label="Active project and cluster"
+      style={{ width: "100%" }}
       onValueChange={(v: string | string[]) => {
         const next = Array.isArray(v) ? v[0] : v;
         if (!next || next === value) return;
