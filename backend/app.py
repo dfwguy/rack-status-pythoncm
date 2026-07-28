@@ -2712,14 +2712,14 @@ def _multirack_txt_paths_under_failed(log_dir: Path, pat: str) -> list[Path]:
     Multirack jobs often write logs only under ``failed/``; include them in Excel/zip export so
     parser results match the Multirack tab.
     """
-    root = _rpath(log_dir)
-    failed = root / "failed"
-    if not failed.is_dir():
-        return []
+    failed = _rpath(log_dir) / "failed"
     out: list[Path] = []
-    for p in failed.glob(pat):
-        if p.is_file() and _nemo_nccl_in_log_basename(p.name) and _is_multirack_log_basename(p.name):
-            out.append(p)
+    # One listing through the connection: the directory lives on the execution
+    # host, and stat_dir already returns regular files only (absent dir -> {}).
+    for path_s in host_exec.stat_dir(failed, patterns=(pat,)):
+        p = PurePosixPath(path_s)
+        if _nemo_nccl_in_log_basename(p.name) and _is_multirack_log_basename(p.name):
+            out.append(p)  # type: ignore[arg-type]
     return out
 
 
@@ -2743,7 +2743,8 @@ def list_log_txt_paths_for_export(
     # ZERO files against a remote log dir, which is why the Logs page reported
     # "1 of 1" while 13 real logs sat in the directory.
     root = _rpath(log_dir)
-    for path_s in host_exec.stat_dir(root, patterns=(pat,)):
+    root_stats = host_exec.stat_dir(root, patterns=(pat,))
+    for path_s in root_stats:
         name = PurePosixPath(path_s).name
         if name and _nemo_nccl_in_log_basename(name):
             root_files.append(PurePosixPath(path_s))  # type: ignore[arg-type]
@@ -2768,10 +2769,9 @@ def list_log_txt_paths_for_export(
         successful = [p for p in paths if _nemo_log_file_looks_successful(p)]
         if not successful:
             continue
-        try:
-            best = max(successful, key=lambda x: x.stat().st_mtime)
-        except OSError:
-            continue
+        # mtimes come from the listing above; the files are on the execution host,
+        # so p.stat() would be a local call against a path that is not local.
+        best = max(successful, key=lambda x: root_stats[str(x)].mtime)
         selected_rack.append(best)
 
     tail_failed = (
@@ -2779,7 +2779,9 @@ def list_log_txt_paths_for_export(
     )
     merged: dict[str, Path] = {}
     for p in others + selected_rack + tail_failed:
-        merged[str(p.resolve())] = p
+        # Already absolute and normalised by _rpath/stat_dir, so dedupe on the
+        # string; .resolve() is a local-filesystem call and these are exec-host paths.
+        merged[str(p)] = p
     out = sorted(merged.values(), key=lambda p: p.name.lower())
     return out
 
@@ -2824,12 +2826,14 @@ def find_nvloom_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
     except ValueError:
         return []
     pat = f"*NVLOOM-{rk}-*.txt"
-    out: list[Path] = []
-    for base in (log_dir / "nvloom", log_dir / "nvloom" / "failed"):
-        if base.is_dir():
-            out.extend(p for p in base.glob(pat) if p.is_file())
-    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return out
+    root = _rpath(log_dir)
+    # mtime comes back with the listing, so ordering costs no extra round trip.
+    scored: list[tuple[float, Path]] = []
+    for base in (root / "nvloom", root / "nvloom" / "failed"):
+        for path_s, st in host_exec.stat_dir(base, patterns=(pat,)).items():
+            scored.append((st.mtime, PurePosixPath(path_s)))  # type: ignore[arg-type]
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [p for _m, p in scored]
 
 
 _NVLOOM_HEATMAPS_LOG_MAX_BYTES = 40 * 1024 * 1024
@@ -5934,104 +5938,42 @@ def _local_bug_report_inventory() -> tuple[list[dict[str, str]], str | None]:
         return [], ensure_notice
     if ensure_notice and ensure_notice.startswith("could not create"):
         return [], ensure_notice
+    # One listing of the whole reports tree on the execution host. This replaced
+    # five globs per hostname subdirectory, each of which was a round trip and a
+    # local-filesystem call against a path that lives on the remote host.
+    base_p = PurePosixPath(str(base))
+    entries = host_exec.stat_dir(
+        base_p,
+        patterns=("nvidia-bug-report*.log.gz", "nvlmapper.*.zip", "*.csv", "*.xls", "*.xlsx"),
+        maxdepth=2,
+    )
+
+    def _wanted(name: str) -> bool:
+        if name.startswith("nvidia-bug-report") and name.endswith(".log.gz"):
+            return True
+        if name.endswith(".zip"):
+            return bool(_NVLMAPPER_ZIP_BASENAME_RE.fullmatch(name))
+        if name.endswith((".csv", ".xls")):
+            return bool(_NVLMAPPER_TABLE_BASENAME_RE.fullmatch(name))
+        if name.endswith(".xlsx"):
+            return bool(_REPORT_EXCEL_BASENAME_RE.fullmatch(name))
+        return False
+
     items: list[dict[str, str]] = []
-    try:
-        for sub in sorted(base.iterdir(), key=lambda p: p.name.lower()):
-            if not sub.is_dir():
+    for path_s in entries:
+        f = PurePosixPath(path_s)
+        if not _wanted(f.name):
+            continue
+        if f.parent == base_p:
+            # Workbooks placed directly under the reports base, not under a hostname subdir.
+            if not f.name.endswith(".xlsx"):
                 continue
-            if not _BUG_REPORT_SUBDIR_RE.fullmatch(sub.name):
-                continue
-            try:
-                for f in sorted(
-                    sub.glob("nvidia-bug-report*.log.gz"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                ):
-                    if not f.is_file():
-                        continue
-                    try:
-                        f.resolve().relative_to(base)
-                    except ValueError:
-                        continue
-                    items.append({"host": sub.name, "name": f.name})
-                for f in sorted(
-                    sub.glob("nvlmapper.*.zip"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                ):
-                    if not f.is_file():
-                        continue
-                    if not _NVLMAPPER_ZIP_BASENAME_RE.fullmatch(f.name):
-                        continue
-                    try:
-                        f.resolve().relative_to(base)
-                    except ValueError:
-                        continue
-                    items.append({"host": sub.name, "name": f.name})
-                for f in sorted(
-                    sub.glob("*.csv"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                ):
-                    if not f.is_file():
-                        continue
-                    if not _NVLMAPPER_TABLE_BASENAME_RE.fullmatch(f.name):
-                        continue
-                    try:
-                        f.resolve().relative_to(base)
-                    except ValueError:
-                        continue
-                    items.append({"host": sub.name, "name": f.name})
-                for f in sorted(
-                    sub.glob("*.xls"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                ):
-                    if not f.is_file():
-                        continue
-                    if not _NVLMAPPER_TABLE_BASENAME_RE.fullmatch(f.name):
-                        continue
-                    try:
-                        f.resolve().relative_to(base)
-                    except ValueError:
-                        continue
-                    items.append({"host": sub.name, "name": f.name})
-                for f in sorted(
-                    sub.glob("*.xlsx"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                ):
-                    if not f.is_file():
-                        continue
-                    if not _REPORT_EXCEL_BASENAME_RE.fullmatch(f.name):
-                        continue
-                    try:
-                        f.resolve().relative_to(base)
-                    except ValueError:
-                        continue
-                    items.append({"host": sub.name, "name": f.name})
-            except OSError:
-                continue
-        # Workbooks placed directly under the reports base (not under a hostname subdir).
-        try:
-            for f in sorted(
-                base.glob("*.xlsx"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            ):
-                if not f.is_file():
-                    continue
-                if not _REPORT_EXCEL_BASENAME_RE.fullmatch(f.name):
-                    continue
-                try:
-                    f.resolve().relative_to(base.resolve())
-                except ValueError:
-                    continue
-                items.append({"host": _BUG_REPORT_EXCEL_ROOT_HOST, "name": f.name})
-        except OSError:
-            pass
-    except OSError as e:
-        return [], str(e)
+            items.append({"host": _BUG_REPORT_EXCEL_ROOT_HOST, "name": f.name})
+            continue
+        # Containment: exactly one level down, under a well-formed hostname dir.
+        if f.parent.parent != base_p or not _BUG_REPORT_SUBDIR_RE.fullmatch(f.parent.name):
+            continue
+        items.append({"host": f.parent.name, "name": f.name})
     items.sort(key=lambda x: (x["host"].lower(), x["name"].lower()))
     notice = ensure_notice if ensure_notice and ensure_notice.startswith("created ") else None
     return items, notice
@@ -10078,49 +10020,55 @@ def api_clusterkit_results():
         rk = _normalize_rack_id(rack_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    base = _clusterkit_rack_dir(log_dir, rk)
-    if not base.is_dir():
+    root = _rpath(log_dir)
+    base = _rpath(_clusterkit_rack_dir(root, rk))
+    # One listing covers every run directory under this rack. These files live on
+    # the execution host, so the previous iterdir()/stat()/read_text() walk was
+    # both a local-filesystem call on a remote path and a round trip per run.
+    found = host_exec.stat_dir(
+        base, patterns=("bandwidth.json", "latency.json"), maxdepth=2
+    )
+    if not found:
         return jsonify({"ok": True, "rack": rk, "runs": []})
+
+    def _rel_to_log_dir(p: PurePosixPath) -> str:
+        try:
+            return str(p.relative_to(root))
+        except ValueError:
+            return str(p)
+
+    with_latency = {
+        PurePosixPath(s).parent for s in found if PurePosixPath(s).name == "latency.json"
+    }
     runs_out: list[dict[str, object]] = []
-    try:
-        subdirs = [p for p in base.iterdir() if p.is_dir()]
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    for sub in subdirs:
-        bw = sub / "bandwidth.json"
-        if not bw.is_file():
+    for path_s, st in found.items():
+        bw = PurePosixPath(path_s)
+        # Only <rack>/<run>/bandwidth.json; skip a stray file directly under the rack dir.
+        if bw.name != "bandwidth.json" or bw.parent == base:
+            continue
+        entry: dict[str, object] = {
+            "dir": bw.parent.name,
+            "rel_path": _rel_to_log_dir(bw),
+            "mtime": int(st.mtime),
+        }
+        if st.size > _CLUSTERKIT_JSON_MAX_BYTES:
+            entry["error"] = f"bandwidth.json too large ({st.size} bytes)"
+            runs_out.append(entry)
+            continue
+        raw, read_meta = host_exec.read_text(bw, whole_bytes=_CLUSTERKIT_JSON_MAX_BYTES)
+        if read_meta.get("read_error"):
+            entry["error"] = str(read_meta["read_error"])
+            runs_out.append(entry)
             continue
         try:
-            st = bw.stat()
-        except OSError:
-            continue
-        if st.st_size > _CLUSTERKIT_JSON_MAX_BYTES:
-            runs_out.append(
-                {
-                    "dir": sub.name,
-                    "rel_path": str(bw.resolve().relative_to(_rpath(log_dir))),
-                    "mtime": int(st.st_mtime),
-                    "error": f"bandwidth.json too large ({st.st_size} bytes)",
-                }
-            )
-            continue
-        try:
-            raw = bw.read_text(encoding="utf-8", errors="replace")
             data = json.loads(raw)
-        except (OSError, json.JSONDecodeError) as e:
-            runs_out.append(
-                {
-                    "dir": sub.name,
-                    "rel_path": str(bw.resolve().relative_to(_rpath(log_dir))),
-                    "mtime": int(st.st_mtime),
-                    "error": str(e),
-                }
-            )
+        except json.JSONDecodeError as e:
+            entry["error"] = str(e)
+            runs_out.append(entry)
             continue
         if not isinstance(data, dict):
             continue
-        summ = _clusterkit_bandwidth_summary_from_data(data)
-        meta_only = {
+        entry["meta"] = {
             "hca_tag": data.get("HCA_Tag"),
             "units": data.get("Units"),
             "date_and_time": data.get("Date_and_Time"),
@@ -10128,64 +10076,54 @@ def api_clusterkit_results():
             "bidirectional": data.get("Bidirectional"),
             "cluster": data.get("Cluster"),
         }
-        has_lat = (sub / "latency.json").is_file()
-        runs_out.append(
-            {
-                "dir": sub.name,
-                "rel_path": str(bw.resolve().relative_to(_rpath(log_dir))),
-                "mtime": int(st.st_mtime),
-                "meta": meta_only,
-                "summary": summ or {},
-                "has_latency": has_lat,
-            }
-        )
+        entry["summary"] = _clusterkit_bandwidth_summary_from_data(data) or {}
+        entry["has_latency"] = bw.parent in with_latency
+        runs_out.append(entry)
     runs_out.sort(key=lambda r: int(r.get("mtime") or 0), reverse=True)
     out: dict[str, object] = {"ok": True, "rack": rk, "runs": runs_out}
     run_q = (request.args.get("run") or "").strip()
-    if run_q and run_q == Path(run_q).name and re.fullmatch(r"[A-Za-z0-9_.\-]+", run_q):
-        target = base / run_q / "bandwidth.json"
-        try:
-            sub_resolved = (base / run_q).resolve()
-            if target.is_file() and sub_resolved.parent == base.resolve():
-                sz = target.stat().st_size
-                if sz <= _CLUSTERKIT_JSON_MAX_BYTES:
-                    data = json.loads(target.read_text(encoding="utf-8", errors="replace"))
-                    if isinstance(data, dict):
-                        parsed = _clusterkit_parse_bandwidth_payload(data)
-                        if parsed:
-                            labels, matrix, meta = parsed
-                            summ = _clusterkit_bandwidth_summary_from_data(data)
-                            detail: dict[str, object] = {
-                                "dir": run_q,
-                                "labels": labels,
-                                "matrix": matrix,
-                                "meta": meta,
-                                "summary": summ or {},
-                            }
-                            lat_path = sub_resolved / "latency.json"
-                            try:
-                                if lat_path.is_file():
-                                    lst = lat_path.stat().st_size
-                                    if lst <= _CLUSTERKIT_JSON_MAX_BYTES:
-                                        lat_data = json.loads(
-                                            lat_path.read_text(encoding="utf-8", errors="replace")
-                                        )
-                                        if isinstance(lat_data, dict):
-                                            lat_parsed = _clusterkit_parse_bandwidth_payload(lat_data)
-                                            if lat_parsed:
-                                                ll, lm, lmeta = lat_parsed
-                                                lsumm = _clusterkit_pairwise_positive_summary(lat_data)
-                                                detail["latency"] = {
-                                                    "labels": ll,
-                                                    "matrix": lm,
-                                                    "meta": lmeta,
-                                                    "summary": lsumm or {},
-                                                }
-                            except (OSError, json.JSONDecodeError, ValueError, TypeError):
-                                pass
-                            out["detail"] = detail
-        except (OSError, json.JSONDecodeError, ValueError):
-            pass
+    if run_q and run_q == PurePosixPath(run_q).name and re.fullmatch(r"[A-Za-z0-9_.\-]+", run_q):
+        # Containment comes from the listing: `found` only holds paths under base,
+        # so a traversal attempt simply misses instead of needing a resolve() check.
+        sub = base / run_q
+
+        def _load_json(p: PurePosixPath) -> dict | None:
+            st = found.get(str(p))
+            if st is None or st.size > _CLUSTERKIT_JSON_MAX_BYTES:
+                return None
+            text, meta = host_exec.read_text(p, whole_bytes=_CLUSTERKIT_JSON_MAX_BYTES)
+            if meta.get("read_error"):
+                return None
+            try:
+                loaded = json.loads(text)
+            except json.JSONDecodeError:
+                return None
+            return loaded if isinstance(loaded, dict) else None
+
+        data = _load_json(sub / "bandwidth.json")
+        parsed = _clusterkit_parse_bandwidth_payload(data) if data is not None else None
+        if parsed:
+            labels, matrix, bw_meta = parsed
+            detail: dict[str, object] = {
+                "dir": run_q,
+                "labels": labels,
+                "matrix": matrix,
+                "meta": bw_meta,
+                "summary": _clusterkit_bandwidth_summary_from_data(data) or {},
+            }
+            lat_data = _load_json(sub / "latency.json")
+            lat_parsed = (
+                _clusterkit_parse_bandwidth_payload(lat_data) if lat_data is not None else None
+            )
+            if lat_parsed:
+                ll, lm, lmeta = lat_parsed
+                detail["latency"] = {
+                    "labels": ll,
+                    "matrix": lm,
+                    "meta": lmeta,
+                    "summary": _clusterkit_pairwise_positive_summary(lat_data) or {},
+                }
+            out["detail"] = detail
     return jsonify(out)
 
 
@@ -11170,9 +11108,8 @@ def _glob_one_rack_nemo_logs_for_rack_status(log_dir: Path) -> list[Path]:
     root = _rpath(log_dir)
     naming = _nvis_naming()
     out: list[Path] = []
-    for p in sorted(root.glob("*.txt"), key=lambda x: x.name.lower()):
-        if not p.is_file():
-            continue
+    listing = [PurePosixPath(s) for s in host_exec.stat_dir(root, patterns=("*.txt",))]
+    for p in sorted(listing, key=lambda x: x.name.lower()):
         if not _nemo_single_rack_log_basename(p.name):
             continue
         if naming.is_llama_slurm_stdout_basename(p.name):
@@ -11802,15 +11739,32 @@ def api_export_logs_zip():
             }
         ), 404
     root = _rpath(log_dir)
+    # The logs live on the execution host, so each one is pulled through the
+    # connection and written from memory: zipfile.write() resolves and opens the
+    # path locally, which finds nothing when the log dir is on the head node.
+    cap = max(1, _env_int("RACK_LOG_EXPORT_MAX_BYTES", 64 * 1024 * 1024))
     bio = io.BytesIO()
+    written = 0
+    skipped: list[str] = []
     try:
         with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as zf:
             for p in paths:
-                rp = p.resolve()
-                arc = str(rp.relative_to(root))
-                zf.write(str(rp), arcname=arc)
-    except OSError as e:
+                text, meta = host_exec.read_text(p, whole_bytes=cap)
+                if meta.get("read_error"):
+                    skipped.append(p.name)
+                    continue
+                try:
+                    arc = str(PurePosixPath(str(p)).relative_to(root))
+                except ValueError:
+                    arc = p.name
+                zf.writestr(arc, text)
+                written += 1
+    except (OSError, zipfile.BadZipFile) as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    if not written:
+        return jsonify(
+            {"ok": False, "error": f"could not read any of the {len(paths)} matching logs"}
+        ), 500
     body = bio.getvalue()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     fname = f"rack-logs-export-{stamp}.zip"
@@ -11821,7 +11775,8 @@ def api_export_logs_zip():
             "Content-Disposition": f'attachment; filename="{fname}"',
             "Cache-Control": "no-store, max-age=0",
             "Pragma": "no-cache",
-            "X-Export-Log-Count": str(len(paths)),
+            "X-Export-Log-Count": str(written),
+            "X-Export-Skipped": str(len(skipped)),
         },
     )
 
@@ -12307,10 +12262,7 @@ def api_run_llama_status():
 
 def _sn_llama_txt_paths_for_rack(log_dir: Path, rack: str, *, exclude: Path | None = None) -> list[Path]:
     """``log_dir/sn-llama/*.txt`` whose names suggest LLAMA and match *rack* (case-insensitive substring on rack id tokens)."""
-    root = _rpath(log_dir)
-    d = root / "sn-llama"
-    if not d.is_dir():
-        return []
+    d = _rpath(log_dir) / "sn-llama"
     needles: list[str] = []
     for rid in _nvis_naming().find_rack_ids_in_string(rack or ""):
         needles.append(rid)
@@ -12318,22 +12270,20 @@ def _sn_llama_txt_paths_for_rack(log_dir: Path, rack: str, *, exclude: Path | No
         t = (rack or "").strip().lower()
         if t:
             needles = [t]
-    ex = exclude.resolve() if exclude is not None else None
+    ex = str(_rpath(exclude)) if exclude is not None else None
     out: list[Path] = []
-    try:
-        paths = sorted(d.glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
-    except OSError:
-        return []
+    # One listing on the execution host; mtime arrives with it, so the newest-first
+    # ordering below needs no per-file stat.
+    entries = host_exec.stat_dir(d, patterns=("*.txt",))
+    paths = [
+        PurePosixPath(s)
+        for s in sorted(entries, key=lambda s: entries[s].mtime, reverse=True)
+    ]
     cap = max(1, _env_int("RACK_PARSER_SN_LLAMA_MAX_FILES", 25))
     for p in paths:
         if len(out) >= cap:
             break
-        try:
-            if not p.is_file():
-                continue
-            if ex is not None and p.resolve() == ex:
-                continue
-        except OSError:
+        if ex is not None and str(p) == ex:
             continue
         nl = p.name.casefold()
         if "llama" not in nl:
@@ -12354,24 +12304,15 @@ def api_sn_llama_logs():
         return jsonify({"ok": False, "error": str(e)}), 400
     rack_f = (request.args.get("rack") or "").strip().lower()
     d = _rpath(log_dir) / "sn-llama"
-    if not d.is_dir():
-        return jsonify({"ok": True, "files": []})
+    # Single listing through the connection: name + mtime is all this endpoint
+    # reports, and an absent directory comes back empty.
+    entries = host_exec.stat_dir(d, patterns=("*.txt",))
     out: list[dict[str, object]] = []
-    try:
-        paths = sorted(d.glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    for p in paths[:200]:
-        try:
-            if not p.is_file():
-                continue
-            nm = p.name.lower()
-            if rack_f and rack_f not in nm:
-                continue
-            st = p.stat()
-            out.append({"name": p.name, "mtime": int(st.st_mtime)})
-        except OSError:
+    for path_s in sorted(entries, key=lambda s: entries[s].mtime, reverse=True)[:200]:
+        name = PurePosixPath(path_s).name
+        if rack_f and rack_f not in name.lower():
             continue
+        out.append({"name": name, "mtime": int(entries[path_s].mtime)})
     return jsonify({"ok": True, "files": out})
 
 

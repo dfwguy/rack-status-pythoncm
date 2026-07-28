@@ -26,11 +26,14 @@ Environment variables
 """
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 import subprocess
 import threading
 import time
+
+from collections.abc import Callable
 
 from transport import (
     DEFAULT_HEAD_BYTES,
@@ -42,10 +45,20 @@ from transport import (
     TransportConfig,
     build_connection,
 )
+from transport.topology import (
+    DEFAULT_ROLE,
+    SSHDefaults,
+    TopologyError,
+    build_topology,
+    describe_topology,
+    role_roots,
+)
 
 # HostProcess is retained as a public name for back-compat; it is the transport
 # Process wrapper (communicate/kill/poll/returncode).
 HostProcess = Process
+
+_logger = logging.getLogger(__name__)
 
 _init_lock = threading.Lock()
 
@@ -54,11 +67,102 @@ _CONN: RoutingConnection | None = None
 _CONTROL_SSH: SSHExecutor | None = None  # raw control SSH leaf (reachability/PTY argv)
 _CONFIG: TransportConfig | None = None
 
+_ROLE_ROOTS: dict[str, str] = {}
+_TOPOLOGY_DESC: dict[str, object] = {}
+
 _which_lock = threading.Lock()
-_which_cache: dict[str, str | None] = {}
+_which_cache: dict[tuple[str, str], str | None] = {}
 
 _isdir_lock = threading.Lock()
-_isdir_cache: dict[str, tuple[float, bool]] = {}
+_isdir_cache: dict[tuple[str, str], tuple[float, bool]] = {}
+
+# Supplies the declarative topology (endpoints, roles). Injected so this module
+# does not import the catalog (and so tests can hand it a topology directly);
+# when unset, the catalog's active cluster is consulted lazily.
+_topology_provider: Callable[[], tuple[list[dict], list[dict]] | None] | None = None
+
+
+def set_topology_provider(
+    fn: Callable[[], tuple[list[dict], list[dict]] | None] | None,
+) -> None:
+    """Install the source of ``(endpoints, roles)``; ``None`` restores the default."""
+    global _topology_provider
+    _topology_provider = fn
+    invalidate_connection()
+
+
+def _catalog_topology() -> tuple[list[dict], list[dict]] | None:
+    """``(endpoints, roles)`` from the active cluster, or ``None`` if undeclared."""
+    try:
+        from catalog import context as catalog_context
+    except ImportError:
+        return None
+    try:
+        _project, cluster, _platform = catalog_context.resolve()
+    except Exception:
+        # A missing or corrupt store must not take execution down: fall back to env.
+        return None
+    if cluster is None or not cluster.connection.endpoints:
+        return None
+    conn = cluster.connection
+    return (
+        [e.__dict__ | {"opts": list(e.opts)} for e in conn.endpoints],
+        [r.__dict__ for r in conn.roles],
+    )
+
+
+def _load_topology() -> tuple[list[dict], list[dict]] | None:
+    provider = _topology_provider or _catalog_topology
+    try:
+        return provider()
+    except Exception:
+        _logger.exception("topology provider failed; falling back to environment")
+        return None
+
+
+def _legacy_role_roots() -> dict[str, str]:
+    """Role roots implied by the flat env contract, for deployments without a topology.
+
+    ``RACK_REMOTE_BASE_PATH`` is the single-var precursor of per-role placement: it
+    points scripts *and* logs at one tree on one host. Expressing it as role roots
+    means call sites can ask for ``role_root("scripts")`` uniformly, whether or not
+    the deployment has moved to a declared topology.
+    """
+    roots: dict[str, str] = {}
+    base = (os.environ.get("RACK_REMOTE_BASE_PATH") or "").strip()
+    if base:
+        roots["scripts"] = f"{base.rstrip('/')}/bin/scripts"
+        roots["logs"] = f"{base.rstrip('/')}/var/logs"
+    log_dir = (os.environ.get("RACK_STATUS_LOG_DIR") or "").strip()
+    if log_dir:
+        roots["logs"] = log_dir
+    return roots
+
+
+def _overlay_resolver():
+    """The same env-forwarding policy the single-target factory applies."""
+    from transport.compose import make_env_resolver
+    from transport.factory import FORWARD_ENV_NAMES, FORWARD_ENV_PREFIXES
+
+    return make_env_resolver(FORWARD_ENV_PREFIXES, FORWARD_ENV_NAMES, None)
+
+
+def _ssh_defaults(cfg: TransportConfig) -> SSHDefaults:
+    """Per-endpoint ssh tuning inherited from the existing RACK_SSH_* contract."""
+    c = cfg.control
+    if c is None:
+        return SSHDefaults()
+    return SSHDefaults(
+        port=c.port,
+        connect_timeout=c.connect_timeout,
+        alive_interval=c.alive_interval,
+        alive_count=c.alive_count,
+        multiplex=c.multiplex,
+        mux_persist=c.mux_persist,
+        extra_opts=list(c.extra_opts),
+        key=c.key,
+        user=c.user,
+    )
 
 
 def _dir_cache_ttl() -> int:
@@ -69,16 +173,52 @@ def _dir_cache_ttl() -> int:
 
 
 def _ensure_init() -> None:
-    global _CONN, _CONTROL_SSH, _CONFIG
+    global _CONN, _CONTROL_SSH, _CONFIG, _ROLE_ROOTS, _TOPOLOGY_DESC
     if _CONN is not None:
         return
     with _init_lock:
         if _CONN is not None:
             return
         cfg = TransportConfig.from_env()
-        conn = build_connection(cfg)
+        conn: RoutingConnection | None = None
+        roots: dict[str, str] = {}
+        desc: dict[str, object] = {}
+
+        # A declared topology wins: it is the only form that can express hop chains
+        # and per-role placement. Without one, fall back to the flat single-target
+        # env contract so existing deployments are unaffected.
+        spec = _load_topology()
+        if spec is not None:
+            endpoints, roles = spec
+            try:
+                conn = build_topology(
+                    endpoints,
+                    roles,
+                    resolver=_overlay_resolver(),
+                    defaults=_ssh_defaults(cfg),
+                    sudo_password=cfg.sudo_password,
+                    sudo_preserve_env=cfg.sudo_preserve_env,
+                )
+                roots = role_roots(roles)
+                desc = describe_topology(endpoints, roles)
+            except TopologyError:
+                _logger.exception(
+                    "connection topology is invalid; falling back to the "
+                    "RACK_SSH_* environment contract"
+                )
+                conn = None
+
+        if conn is None:
+            # No topology declared: keep the original single-target composition
+            # (unchanged semantics for every existing deployment) but still answer
+            # role queries, so call sites can be written role-first everywhere.
+            conn = build_connection(cfg)
+            roots = _legacy_role_roots()
+            desc = {}
         _CONFIG = cfg
         _CONN = conn
+        _ROLE_ROOTS = roots
+        _TOPOLOGY_DESC = desc
         # Keep a handle to the raw control SSH leaf for reachability probes and
         # interactive PTY argv (which need ssh_argv/interactive_argv, not run()).
         if cfg.exec_mode == "ssh":
@@ -110,11 +250,13 @@ def invalidate_connection() -> None:
     transport/sudo, like ``RACK_SCRIPT_SUDO``) so the change takes effect without
     an app restart.
     """
-    global _CONN, _CONTROL_SSH, _CONFIG
+    global _CONN, _CONTROL_SSH, _CONFIG, _ROLE_ROOTS, _TOPOLOGY_DESC
     with _init_lock:
         _CONN = None
         _CONTROL_SSH = None
         _CONFIG = None
+        _ROLE_ROOTS = {}
+        _TOPOLOGY_DESC = {}
     with _which_lock:
         _which_cache.clear()
     with _isdir_lock:
@@ -157,19 +299,48 @@ def wrap_for_host(
 # Filesystem  –  the execution host's files, wherever that host is
 # ---------------------------------------------------------------------------
 
-def resolve(path: object) -> str:
-    """Canonical path string for *path* on the execution host.
+def target(role: str = DEFAULT_ROLE):
+    """The :class:`transport.Connection` bound to *role*.
+
+    Roles name a place in the deployment's terms — ``logs``, ``scripts``, ``bcm``,
+    or anything a site defines — so call sites never encode which host that is. An
+    unknown role falls back to ``control``, which keeps a call site working on a
+    deployment that has not split that role out.
+    """
+    return _conn().select(role)
+
+
+def role_root(role: str) -> str:
+    """Configured base directory for *role*, or ``""`` when it declares none."""
+    _ensure_init()
+    return _ROLE_ROOTS.get(role, "")
+
+
+def role_names() -> list[str]:
+    """Every role the active topology defines (empty under the legacy env config)."""
+    _ensure_init()
+    return sorted(_CONN.targets) if isinstance(_CONN, RoutingConnection) else []
+
+
+def describe_roles() -> dict[str, object]:
+    """Per-role endpoint, hop path and root — for diagnostics and the Settings UI."""
+    _ensure_init()
+    return dict(_TOPOLOGY_DESC)
+
+
+def resolve(path: object, *, role: str = DEFAULT_ROLE) -> str:
+    """Canonical path string for *path* on the host that owns *role*.
 
     The single path resolver for the whole app. Replaces the several local
     variants that each re-implemented "``.resolve()`` unless remote" and got the
     remote case subtly different.
     """
-    return _conn().resolve(path)
+    return target(role).resolve(path)
 
 
-def stat(path: object) -> FileStat | None:
-    """``FileStat(mtime, size)`` from the execution host, or ``None`` if absent."""
-    return _conn().stat(path)
+def stat(path: object, *, role: str = DEFAULT_ROLE) -> FileStat | None:
+    """``FileStat(mtime, size)`` from the role's host, or ``None`` if absent."""
+    return target(role).stat(path)
 
 
 def stat_dir(
@@ -177,14 +348,15 @@ def stat_dir(
     *,
     patterns: tuple[str, ...] | None = None,
     maxdepth: int = 1,
+    role: str = DEFAULT_ROLE,
 ) -> dict[str, FileStat]:
     """``{path: FileStat}`` for regular files under *base* (one round trip)."""
-    return _conn().stat_dir(base, patterns=patterns, maxdepth=maxdepth)
+    return target(role).stat_dir(base, patterns=patterns, maxdepth=maxdepth)
 
 
-def makedirs(path: object) -> str | None:
-    """Create *path* on the execution host. ``None`` on success, else an error string."""
-    return _conn().makedirs(path)
+def makedirs(path: object, *, role: str = DEFAULT_ROLE) -> str | None:
+    """Create *path* on the role's host. ``None`` on success, else an error string."""
+    return target(role).makedirs(path)
 
 
 def read_text(
@@ -194,52 +366,55 @@ def read_text(
     tail_bytes: int = DEFAULT_TAIL_BYTES,
     whole_bytes: int | None = None,
     timeout: int = 120,
+    role: str = DEFAULT_ROLE,
 ) -> tuple[str, dict[str, object]]:
-    """Head+tail capped read of *path* on the execution host. Never raises."""
-    return _conn().read_text(
+    """Head+tail capped read of *path* on the role's host. Never raises."""
+    return target(role).read_text(
         path, head_bytes=head_bytes, tail_bytes=tail_bytes,
         whole_bytes=whole_bytes, timeout=timeout,
     )
 
 
-def is_file(path: object) -> bool:
-    """True when *path* is an existing file on the execution host."""
-    return _conn().is_file(path)
+def is_file(path: object, *, role: str = DEFAULT_ROLE) -> bool:
+    """True when *path* is an existing file on the role's host."""
+    return target(role).is_file(path)
 
 
-def is_dir(path: object) -> bool:
-    """True when *path* is a directory on the execution host.
+def is_dir(path: object, *, role: str = DEFAULT_ROLE) -> bool:
+    """True when *path* is a directory on the role's host.
 
     Cached for ``RACK_FS_DIR_CACHE_TTL_SEC`` (default 30s). Callers use this to
     validate a log directory on request paths that are polled continuously, and
     for a remote target each miss is an SSH round trip. Directory existence is
-    stable enough that a short TTL is safe.
+    stable enough that a short TTL is safe. The role is part of the cache key: the
+    same path can exist on one role's host and not on another's.
     """
-    key = str(path)
+    key = (role, str(path))
     now = time.monotonic()
     with _isdir_lock:
         hit = _isdir_cache.get(key)
         if hit is not None and (now - hit[0]) < _dir_cache_ttl():
             return hit[1]
-    found = _conn().is_dir(path)
+    found = target(role).is_dir(path)
     with _isdir_lock:
         _isdir_cache[key] = (time.monotonic(), found)
     return found
 
 
-def which(name: str) -> str | None:
-    """Absolute path of executable *name* on the execution host, else ``None``.
+def which(name: str, *, role: str = DEFAULT_ROLE) -> str | None:
+    """Absolute path of executable *name* on the role's host, else ``None``.
 
     Memoised: for a remote target this is an SSH round trip, and callers use it as
     a cheap "is this tool installed?" guard on polled endpoints. The cache is
     dropped by :func:`invalidate_connection`.
     """
+    key = (role, name)
     with _which_lock:
-        if name in _which_cache:
-            return _which_cache[name]
-    found = _conn().which(name)
+        if key in _which_cache:
+            return _which_cache[key]
+    found = target(role).which(name)
     with _which_lock:
-        _which_cache[name] = found
+        _which_cache[key] = found
     return found
 
 

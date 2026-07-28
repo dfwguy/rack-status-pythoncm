@@ -98,6 +98,8 @@ interface NcclRow {
   // parser.sh emits these via nccl_busbw_ext_csv() (llmb sweeps run all five collectives).
   reduce_scatter_gbps?: string | number;
   sendrecv_gbps?: string | number;
+  /** Per-collective bus_bw series (parser.sh nccl_series_by_collective_append). */
+  busbw_series_by_collective?: Record<string, NcclPoint[]>;
   oob_ar_ag_aa?: string;
 }
 
@@ -160,6 +162,10 @@ function normalizeNcclRow(row: RawNccl): NcclRow {
     alltoall_gbps: row.alltoall_gbps as string | number | undefined,
     reduce_scatter_gbps: row.reduce_scatter_gbps as string | number | undefined,
     sendrecv_gbps: row.sendrecv_gbps as string | number | undefined,
+    busbw_series_by_collective:
+      row.busbw_series_by_collective && typeof row.busbw_series_by_collective === "object"
+        ? (row.busbw_series_by_collective as Record<string, NcclPoint[]>)
+        : undefined,
     oob_ar_ag_aa: row.oob_ar_ag_aa != null ? String(row.oob_ar_ag_aa) : undefined,
   };
 }
@@ -421,14 +427,21 @@ function NcclLog2LineCharts({ rows }: { rows: NcclRow[] }) {
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
       {rows.map((row, idx) => {
-        const raw = row.all_reduce_busbw_series || [];
-        const pts = raw
-          .map((p) => ({
-            x: p.size_bytes,
-            y: p.bus_bw_gbps,
-          }))
-          .filter((p) => Number.isFinite(p.x) && p.x > 0 && Number.isFinite(p.y))
-          .sort((a, b) => a.x - b.x);
+        const toPts = (arr: NcclPoint[]) =>
+          (arr || [])
+            .map((p) => ({ x: p.size_bytes, y: p.bus_bw_gbps }))
+            .filter((p) => Number.isFinite(p.x) && p.x > 0 && Number.isFinite(p.y))
+            .sort((a, b) => a.x - b.x);
+        // One line per collective when the parser supplied them (llmb sweeps run five);
+        // otherwise fall back to the legacy all_reduce-only series so older logs still chart.
+        const byColl = row.busbw_series_by_collective || {};
+        const collNames = Object.keys(byColl)
+          .filter((c) => (byColl[c] || []).length > 0)
+          .sort();
+        const collPts: { name: string; pts: { x: number; y: number }[] }[] = collNames.length
+          ? collNames.map((c) => ({ name: c, pts: toPts(byColl[c]) }))
+          : [{ name: "all_reduce", pts: toPts(row.all_reduce_busbw_series || []) }];
+        const pts = collPts.flatMap((c) => c.pts);
         if (!pts.length) {
           if (row.peak_busbw_gbps > 0) {
             return (
@@ -450,37 +463,46 @@ function NcclLog2LineCharts({ rows }: { rows: NcclRow[] }) {
         return (
           <Card key={idx} style={{ padding: 16 }}>
             <Flex gap="2" align="center" style={{ marginBottom: 8 }} wrap="wrap">
-              <Text kind="body/bold/md">NCCL all_reduce out-of-place bus_bw vs message size</Text>
+              <Text kind="body/bold/md">NCCL out-of-place bus_bw vs message size — {collPts.length > 1 ? `${collPts.length} collectives` : collPts[0]?.name}</Text>
               <Tag color="green" kind="solid" readOnly density="compact">
                 Peak: {row.peak_busbw_gbps} GB/s
               </Tag>
             </Flex>
             <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 8, display: "block" }}>
-              {pts.length} points — x-axis message size (bytes, log scale), y-axis bus_bw (GB/s); job {row.job_id}
+              {pts.length} points across {collPts.length} collective{collPts.length === 1 ? "" : "s"} — x-axis message size (bytes, log scale), y-axis bus_bw (GB/s); job {row.job_id}. Best-performing sweep block per collective.
             </Text>
             <div style={{ height: 280 }}>
               <Line
                 data={{
-                  datasets: [
-                    {
-                      label: `bus_bw (GB/s) — job ${row.job_id}`,
-                      data: pts.map((p) => ({ x: p.x, y: p.y })),
-                      borderColor: "#ffb454",
-                      backgroundColor: "rgba(255, 180, 84, 0.12)",
+                  datasets: collPts.map((c, ci) => {
+                    const palette = [
+                      "#ffb454", // all_reduce
+                      "#76b900", // NVIDIA green
+                      "#4fc3f7",
+                      "#ba68c8",
+                      "#ef5350",
+                      "#26a69a",
+                    ];
+                    const color = palette[ci % palette.length];
+                    return {
+                      label: c.name,
+                      data: c.pts.map((p) => ({ x: p.x, y: p.y })),
+                      borderColor: color,
+                      backgroundColor: color,
                       borderWidth: 2,
-                      pointRadius: 3,
+                      pointRadius: 2,
                       pointHoverRadius: 5,
                       tension: 0.1,
-                      fill: true,
-                    },
-                  ],
+                      fill: false,
+                    };
+                  }),
                 }}
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
                   parsing: false,
                   plugins: {
-                    legend: { display: false },
+                    legend: { display: true, position: "bottom" },
                     tooltip: {
                       callbacks: {
                         title: (items) => {
@@ -489,7 +511,7 @@ function NcclLog2LineCharts({ rows }: { rows: NcclRow[] }) {
                           if (sz == null || !Number.isFinite(sz)) return "";
                           return `size: ${formatBytes(sz)}`;
                         },
-                        label: (ctx) => `${(ctx.parsed.y ?? 0).toFixed(2)} GB/s`,
+                        label: (ctx) => `${ctx.dataset.label}: ${(ctx.parsed.y ?? 0).toFixed(2)} GB/s`,
                       },
                     },
                   },
