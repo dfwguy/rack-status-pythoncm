@@ -70,6 +70,9 @@ class _FakeExecutor(Executor):
     def makedirs(self, path):
         return None
 
+    def write_bytes(self, path, data):
+        return None
+
     def read_text(self, path, **kwargs):
         return "", {}
 

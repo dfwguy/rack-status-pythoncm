@@ -566,6 +566,9 @@ class ClusterConnection:
             roles=[ConnectionRole.from_dict(x) for x in _as_dict_list(d.get("roles"))],
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
     def endpoint(self, endpoint_id: str) -> Endpoint | None:
         for e in self.endpoints:
             if e.id == endpoint_id:

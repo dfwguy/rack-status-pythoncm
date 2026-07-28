@@ -184,6 +184,45 @@ class TestRoleBinding:
             build_topology([BASTION, HEAD], [CONTROL_ROLE, {"id": "x", "endpoint": "ghost"}])
 
 
+class TestWriteBytes:
+    """The write half of the filesystem API, which artifacts (exports) rely on."""
+
+    def test_local_write_creates_parents_and_content(self, tmp_path):
+        ex = build_executors([LOCAL])["here"]
+        dest = tmp_path / "nested" / "deeper" / "report.bin"
+        assert ex.write_bytes(dest, b"\x00\x01binary\xff") is None
+        assert dest.read_bytes() == b"\x00\x01binary\xff"
+
+    def test_local_write_leaves_no_temp_file(self, tmp_path):
+        ex = build_executors([LOCAL])["here"]
+        dest = tmp_path / "report.bin"
+        ex.write_bytes(dest, b"x")
+        assert [p.name for p in tmp_path.iterdir()] == ["report.bin"]
+
+    def test_local_write_reports_error_instead_of_raising(self, tmp_path):
+        ex = build_executors([LOCAL])["here"]
+        blocker = tmp_path / "afile"
+        blocker.write_text("not a directory")
+        err = ex.write_bytes(blocker / "child.bin", b"x")
+        assert err and "Error" in err
+
+    def test_remote_write_ships_base64_and_renames(self):
+        ex = build_executors([BASTION])["bastion"]
+        sent: list[str] = []
+
+        def fake_run(argv, **kwargs):
+            sent.append(argv[-1] if isinstance(argv, list) else argv)
+            return __import__("subprocess").CompletedProcess(argv, 0, "", "")
+
+        ex.run = fake_run  # type: ignore[method-assign]
+        assert ex.write_bytes("/tmp/out/report.xlsx", b"\x50\x4b\x03\x04") is None
+        script = sent[0]
+        assert base64.b64encode(b"\x50\x4b\x03\x04").decode() in script
+        assert "mkdir -p /tmp/out" in script
+        assert "base64 -d" in script
+        assert "mv -f" in script  # atomic rename, never a partial artifact
+
+
 class TestRoleRootsAndDescription:
     def test_role_roots_collects_declared_roots_only(self):
         roles = [

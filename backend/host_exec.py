@@ -359,6 +359,16 @@ def makedirs(path: object, *, role: str = DEFAULT_ROLE) -> str | None:
     return target(role).makedirs(path)
 
 
+def write_bytes(path: object, data: bytes, *, role: str = DEFAULT_ROLE) -> str | None:
+    """Write *data* to *path* on the role's host, creating parents.
+
+    Lets a handler drop a produced artifact (an export workbook, a report) beside
+    the data it came from, without knowing whether that directory is in this
+    container or on a host several hops away. ``None`` on success, else an error.
+    """
+    return target(role).write_bytes(path, data)
+
+
 def read_text(
     path: object,
     *,
@@ -586,16 +596,23 @@ def run_on_host(
     cwd: str | None = None,
     env: dict[str, str] | None = None,
     login_shell: bool = True,
-    profile: str = "control",
+    profile: str = DEFAULT_ROLE,
+    role: str | None = None,
     env_extra: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Execute *cmd* on the host, locally or via SSH.
+    """Execute *cmd* on the host that owns the requested role.
 
     Parameters
     ----------
     cmd
         A shell string **or** argv list. For an SSH target an argv list is joined
         with ``shlex.join``.
+    profile, role
+        The same thing under two names: which route runs this. ``profile`` is the
+        historical spelling (workflow YAML, schedulers, older call sites);
+        ``role`` matches the filesystem helpers and reads better for the named
+        places a topology declares (``scripts``, ``logs``, ``bcm``). ``role``
+        wins when both are given.
     timeout
         Seconds before the call times out.
     cwd
@@ -611,8 +628,8 @@ def run_on_host(
         outside the allowlisted prefixes (e.g. ``NCCL_*``).
     """
     return _conn().run(
-        cmd, timeout=timeout, cwd=cwd, env=env, login_shell=login_shell, profile=profile,
-        env_extra=env_extra,
+        cmd, timeout=timeout, cwd=cwd, env=env, login_shell=login_shell,
+        profile=role or profile, env_extra=env_extra,
     )
 
 
@@ -621,15 +638,17 @@ def popen_on_host(
     *,
     cwd: str | None = None,
     env: dict[str, str] | None = None,
-    profile: str = "control",
+    profile: str = DEFAULT_ROLE,
+    role: str | None = None,
     env_extra: dict[str, str] | None = None,
 ) -> HostProcess:
     """Start a long-running command, returning a :class:`HostProcess`.
 
     For an SSH target the command runs on the remote host via an SSH channel that
-    stays open until ``communicate()`` / ``kill()`` is called.
+    stays open until ``communicate()`` / ``kill()`` is called. ``role`` is the
+    preferred spelling of ``profile`` (see :func:`run_on_host`).
     """
-    return _conn().popen(cmd, cwd=cwd, env=env, profile=profile, env_extra=env_extra)
+    return _conn().popen(cmd, cwd=cwd, env=env, profile=role or profile, env_extra=env_extra)
 
 
 # ---------------------------------------------------------------------------

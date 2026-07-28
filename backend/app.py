@@ -174,6 +174,22 @@ else:
     DEFAULT_LOG_DIR = REPO_ROOT / "var" / "logs"
 
 DEFAULT_SCRIPT = SCRIPTS_DIR / "rack_status.sh"
+
+
+def _scripts_dir() -> str:
+    """Directory holding ``bin/scripts`` on the host that actually runs them.
+
+    Prefers the ``scripts`` role's declared root, so a deployment can keep the
+    script tree on a different machine from the app (or from the logs). Falls back
+    to the module-level ``SCRIPTS_DIR``, which is the single-host answer derived
+    from ``RACK_REMOTE_BASE_PATH``.
+    """
+    return host_exec.role_root("scripts") or str(SCRIPTS_DIR)
+
+
+def _logs_dir_default() -> str:
+    """Default log root on the host that owns the ``logs`` role."""
+    return host_exec.role_root("logs") or str(DEFAULT_LOG_DIR)
 # Output basename for Tools → 05-download-containers.sh (must match script).
 _TOOLS_NEMO_CONTAINER_SQSH = "nemo-25.11.01.sqsh"
 
@@ -2332,6 +2348,10 @@ def _bootstrap_catalog_at_startup() -> None:
             _logger.info("catalog seeded: %s", summary)
         # Re-materialize on any later catalog change (active switch or doc edits).
         catalog_context.add_change_hook(_apply_catalog_active_to_environ)
+        # The cluster document also carries the connection topology, so a catalog
+        # change can move where commands run. Drop the composed transport with it,
+        # or the app keeps talking to the previous cluster's hosts.
+        catalog_context.add_change_hook(host_exec.invalidate_connection)
         _apply_catalog_active_to_environ()
     except Exception:
         _logger.exception("catalog bootstrap failed; continuing with legacy env behavior")
@@ -6639,13 +6659,20 @@ def api_hw_check_help():
     env = _subprocess_env({"RACK_WEB_PRINT_HELP": "1"})
     timeout = max(5, _env_int("RACK_HW_CHECK_HELP_TIMEOUT", 20))
     try:
-        proc = subprocess.run(
+        # The script and its working directory belong to the scripts role, which may
+        # be a different host from the app. Running this locally only worked while
+        # the two happened to coincide.
+        #
+        # RACK_WEB_PRINT_HELP goes through env_extra, not env: env is a local-only
+        # subprocess argument, so over ssh the flag that skips checker.sh's root
+        # check would be dropped and --help would fail with "Please run as root".
+        proc = host_exec.run_on_host(
             ["bash", str(script), "--help"],
-            cwd=str(SCRIPTS_DIR),
+            cwd=_scripts_dir(),
             env=env,
-            capture_output=True,
-            text=True,
+            env_extra={"RACK_WEB_PRINT_HELP": "1"},
             timeout=timeout,
+            role="scripts",
         )
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": "checker.sh --help timed out", "help": ""}), 504
@@ -11604,8 +11631,10 @@ def _parser_excel_report_copy_dir() -> Path:
     """
     raw = (_eget("RACK_PARSER_EXCEL_REPORT_DIR") or "").strip()
     if raw:
-        return Path(os.path.expanduser(raw)).resolve()
-    return (_bug_report_local_base_path() / "parser-excel").resolve()
+        # An exec-host path: expanduser/resolve would answer from this process's
+        # filesystem and home directory, which is not where the reports live.
+        return _rpath(raw)
+    return _bug_report_local_base_path() / "parser-excel"
 
 
 @app.route("/api/parser-export-excel")
@@ -11632,20 +11661,27 @@ def api_parser_export_excel():
     parser = _parser_path()
     if not _script_exists(parser):
         return jsonify({"ok": False, "error": f"parser.sh not found: {parser}"}), 500
+    root = _rpath(log_dir)
     rel_args: list[str] = []
     for p in paths:
-        rel_args.append(str(p.resolve().relative_to(_rpath(log_dir))))
+        # Already absolute exec-host paths from the listing; .resolve() would ask
+        # the *local* filesystem about a directory that may live elsewhere.
+        try:
+            rel_args.append(str(PurePosixPath(str(p)).relative_to(root)))
+        except ValueError:
+            rel_args.append(str(p))
     env = _subprocess_env({"NO_COLOR": "1"})
     cmd = ["bash", str(parser), *_parser_extra_args(), "--json", *rel_args]
     timeout = max(60, _env_int("RACK_PARSER_EXPORT_TIMEOUT", 900))
     try:
-        proc = subprocess.run(
+        # parser.sh reads the logs, so it has to run where they are: the logs role's
+        # host, with the log dir as cwd. A local subprocess found neither.
+        proc = host_exec.run_on_host(
             cmd,
-            cwd=str(log_dir),
+            cwd=str(root),
             env=env,
-            capture_output=True,
-            text=True,
             timeout=timeout,
+            role="logs",
         )
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": f"parser.sh --json timed out after {timeout}s"}), 504
@@ -11696,10 +11732,12 @@ def api_parser_export_excel():
         "X-Export-Log-Count": str(len(paths)),
     }
     try:
-        report_dir = _parser_excel_report_copy_dir()
-        report_dir.mkdir(parents=True, exist_ok=True)
-        dest = report_dir / fname
-        dest.write_bytes(body)
+        dest = _parser_excel_report_copy_dir() / fname
+        # The reports directory belongs to the execution host, so the copy travels
+        # through the connection; a local write would land inside the container.
+        err = host_exec.write_bytes(dest, body)
+        if err:
+            raise OSError(err)
         hdrs["X-Export-Report-Copy"] = str(dest)
     except OSError as e:
         _logger.warning("parser Excel: could not write report copy: %s", e)

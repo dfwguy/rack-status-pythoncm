@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import binascii
 import os
+import shlex
 import subprocess
 
 from transport.base import DEFAULT_HEAD_BYTES, DEFAULT_TAIL_BYTES, FileStat
@@ -156,4 +157,31 @@ class ShellFilesystem:
         if proc.returncode != 0:
             detail = (proc.stderr or "").strip().splitlines()
             return detail[-1][:300] if detail else f"mkdir exit {proc.returncode}"
+        return None
+
+    def write_bytes(self, path: object, data: bytes) -> str | None:
+        """Ship *data* base64-encoded and decode it on the far side.
+
+        Base64 keeps arbitrary bytes (an .xlsx, a gzip) safe through the shell and
+        the nested quoting of any hop chain. The payload goes inline in the command
+        rather than over stdin, because a hop's payload is itself re-encoded at
+        every leg and stdin is not plumbed through them.
+        """
+        target = str(path)
+        parent = os.path.dirname(target)
+        b64 = base64.b64encode(data).decode("ascii")
+        # Decode to a temp file and rename, so a concurrent reader never sees a
+        # partial artifact (mirrors the local executor's write-then-replace).
+        tmp = f"{target}.tmp"
+        script = (
+            (f"mkdir -p {shlex.quote(parent)} && " if parent else "")
+            + f"printf %s {b64} | base64 -d > {shlex.quote(tmp)} "
+            + f"&& mv -f {shlex.quote(tmp)} {shlex.quote(target)}"
+        )
+        proc = self._quiet_run(["sh", "-c", script], timeout=300)
+        if proc is None:
+            return "remote write failed"
+        if proc.returncode != 0:
+            detail = (proc.stderr or "").strip().splitlines()
+            return detail[-1][:300] if detail else f"write exit {proc.returncode}"
         return None

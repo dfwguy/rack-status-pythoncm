@@ -217,6 +217,16 @@ class Executor(ABC):
         """
 
     @abstractmethod
+    def write_bytes(self, path: object, data: bytes) -> str | None:
+        """Write *data* to *path* on this target, creating parent directories.
+
+        The write half of the filesystem API: a caller that produced an artifact
+        (an export workbook, a generated config) can place it next to the data it
+        describes without knowing whether that directory is local or on a host
+        three hops away. ``None`` on success, else an error string.
+        """
+
+    @abstractmethod
     def read_text(
         self,
         path: object,
@@ -333,6 +343,9 @@ class Connection:
 
     def makedirs(self, path: object) -> str | None:
         return self.executor.makedirs(path)
+
+    def write_bytes(self, path: object, data: bytes) -> str | None:
+        return self.executor.write_bytes(path, data)
 
     def read_text(
         self,

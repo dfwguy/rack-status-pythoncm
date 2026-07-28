@@ -81,6 +81,9 @@ class ExecutorDecorator(Executor):
     def makedirs(self, path: object) -> str | None:
         return self.inner.makedirs(path)
 
+    def write_bytes(self, path: object, data: bytes) -> str | None:
+        return self.inner.write_bytes(path, data)
+
     def read_text(
         self,
         path: object,

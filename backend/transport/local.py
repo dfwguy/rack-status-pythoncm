@@ -130,6 +130,21 @@ class LocalExecutor(Executor):
             return f"{type(e).__name__}: {e}"
         return None
 
+    def write_bytes(self, path: object, data: bytes) -> str | None:
+        target = str(path)
+        try:
+            parent = os.path.dirname(target)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            # Write-then-rename so a reader never sees a half-written artifact.
+            tmp = f"{target}.tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp, target)
+        except OSError as e:
+            return f"{type(e).__name__}: {e}"
+        return None
+
     def read_text(
         self,
         path: object,
