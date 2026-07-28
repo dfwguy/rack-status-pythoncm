@@ -1,0 +1,48 @@
+---
+description: Multi-cluster deployment map (Mayo / Firmus / Boston) — worktree dir, branch, catalog file, and connection details to avoid silently targeting the wrong cluster
+alwaysApply: true
+---
+
+# Multi-Cluster Deployments — DO NOT MIX
+
+Three customer deployments share this repo. Before running anything cluster-specific,
+state which cluster you are targeting. The wrong host/catalog silently hits the wrong cluster.
+
+## Quick map
+
+| Cluster | Worktree dir | Branch | Catalog file | Project / Customer |
+|-----|-----|-----|-----|-----|
+| **Mayo Clinic** | `~/Documents/code/nvis-rack-status` | `v3` | `var/store/catalog.json` | Mayo Clinic / MAYO |
+| **Firmus** (MEL01) | `~/Documents/code/nvis-mel01` | `mel01-validation` | `var/store/catalog.json` (default) | Firmus BK2 / Firmus |
+| **Boston Markley** (BOS01) | `~/Documents/code/nvis-mel01` | `mel01-validation` | `var/store/catalog-boston.json` | Boston Markley / NVIDIA |
+
+⚠️ **Firmus and Boston share the `nvis-mel01` worktree.** They are distinguished ONLY by
+`NVIS_CATALOG_FILE`: Firmus = default `catalog.json`; Boston = `catalog-boston.json` (set by
+`dist/run-local-boston.sh`). Never let Boston overrides leak into Firmus's `catalog.json` or
+`var/cache/job_env_overrides.json`, or vice versa.
+
+## Connection details
+
+**Firmus / MEL01** — `ssh mbcm01` (root@10.136.128.9, `ProxyJump meljump` = nvis@10.130.18.62).
+Single-host: cmsh / slurm / root scripts all run on the head node. Container deployed on
+mbcm01; reach the UI via an SSH tunnel.
+
+**Boston Markley** — hybrid split, key `~/.ssh/nvis_container`:
+- control plane (cmsh / slurm): `cmods@10.29.136.8` (head)
+- script/root plane (pdsh, root-owned `/raid`, sbatch via shared `SLURM_CONF`):
+ `root@10.29.136.11` (slogin = `bos01-a09-13-s1-mgmt-01`)
+- `boston-bcm` alias = 10.29.136.10. Local dev: `dist/run-local-boston.sh` → port **5050**.
+- Naming `bos01-[A-Z]…`, rows a/b. Validation/NeMo/pdsh run on the **script** profile.
+
+**Mayo Clinic** — main repo on `v3`. SSH/deploy specifics are not captured here; confirm with
+the operator before acting on Mayo.
+
+## Rules of engagement
+
+- Announce the target cluster at the start of any cluster task.
+- Boston: privileged tools (validation, NeMo, sysinfo, hw-check, cuda-nccl) use the **script**
+ profile (root@slogin); cmsh/slurm queries use **control** (cmods@head). Firmus does it all on
+ the single head.
+- Commits: Boston/Firmus → `mel01-validation`; Mayo → `v3`.
+- `:5000` on macOS is the AirPlay Receiver and returns **403 Forbidden** — never tunnel a
+ container to local `:5000`; pick another local port (e.g. `ssh -L 8080:localhost:<remote>`).
