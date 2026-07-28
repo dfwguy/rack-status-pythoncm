@@ -137,6 +137,26 @@ else
   echo "run_llmb_nccl: NVIS_FABRIC_SKIP=1 — using inherited/overridden fabric env" >&2
 fi
 
+# --- Container reality check: drop host-only UCX pins ---------------------------
+# llmb-run executes inside the NeMo pyxis/enroot container, which exposes only
+# tcp/IPoIB netdevs -- no mlx5 verbs devices. The fabric probe above is written for the
+# HOST mpirun path; two of its exports are fatal in-container:
+#   UCX_TLS=^tcp        forbids the only transport the container actually has, so UCX
+#                       reports "no active messages transport" and every rank is Killed.
+#   UCX_NET_DEVICES=mlx5_*:1  names devices that do not exist inside the container.
+# Job 65827 died this way on EVERY tray, including 4-rail ones -- it is a transport
+# problem, not a rail-count problem. MPI is only the bootstrap here (NCCL does the
+# collectives over IB directly), so letting UCX use tcp costs nothing.
+# Set NVIS_LLMB_KEEP_UCX_ENV=1 to keep the host pins (host/non-container runs only).
+if [[ "${NVIS_LLMB_KEEP_UCX_ENV:-0}" != "1" ]]; then
+  for _v in UCX_TLS UCX_NET_DEVICES; do
+    if [[ -n "${!_v:-}" ]]; then
+      echo "run_llmb_nccl: unsetting ${_v}=${!_v} (host-only pin; fatal inside the llmb container)" >&2
+      unset "${_v}"
+    fi
+  done
+fi
+
 # --- Pin llmb's own sbatch to the nodelist + redirect --output ------------------
 if [[ ${#RACKS[@]} -gt 0 ]]; then _rack_label="$(IFS=+; echo "${RACKS[*]}")"; else _rack_label="nodes"; fi
 _rack_label="$(printf '%s' "${_rack_label}" | tr -c 'A-Za-z0-9._+-' '_')"
@@ -150,8 +170,18 @@ fi
 [[ -n "${RESERVATION}" ]] && export SBATCH_RESERVATION="${RESERVATION}"
 
 # --- Build + run llmb-run -------------------------------------------------------
-cmd=( "${LLMB_RUN}" single -w "${LLMB_WORKLOAD}" -s "${LLMB_MODEL_SIZE}" --dtype "${LLMB_DTYPE}" --scale "${SCALE}" )
-[[ "${DRY_RUN}" -eq 1 ]] && cmd+=( --dryrun )
+# CLI changed between llmb releases:
+#   v25.10.01 : llmb-run single -w W -s SIZE --dtype D --scale N [--dryrun]
+#   v26.06.00+: llmb-run submit -w W -s SIZE --dtype D --scale N [--dry-run]
+# `single` was removed ("No such command 'single'"), and --dryrun became --dry-run.
+# Probe the installed binary rather than pinning a version.
+if "${LLMB_RUN}" submit --help >/dev/null 2>&1; then
+  LLMB_SUBCMD="submit"; LLMB_DRY_FLAG="--dry-run"
+else
+  LLMB_SUBCMD="single"; LLMB_DRY_FLAG="--dryrun"
+fi
+cmd=( "${LLMB_RUN}" "${LLMB_SUBCMD}" -w "${LLMB_WORKLOAD}" -s "${LLMB_MODEL_SIZE}" --dtype "${LLMB_DTYPE}" --scale "${SCALE}" )
+[[ "${DRY_RUN}" -eq 1 ]] && cmd+=( "${LLMB_DRY_FLAG}" )
 
 echo "run_llmb_nccl: workload=${LLMB_WORKLOAD} model_size=${LLMB_MODEL_SIZE} dtype=${LLMB_DTYPE} nodes=${NNODES} scale=${SCALE}"
 echo "run_llmb_nccl: nodelist=${NODELIST} (pinned via sbatch --nodelist shim)${RESERVATION:+ reservation=${RESERVATION}}"
@@ -161,5 +191,44 @@ echo "run_llmb_nccl: fabric: NCCL_IB_HCA=${NCCL_IB_HCA:-<auto>} NCCL_SOCKET_IFNA
 printf 'run_llmb_nccl: exec:'; printf ' %q' "${cmd[@]}"; echo
 
 cd "${LLMB_INSTALL}" || die "cannot cd to LLMB_INSTALL=${LLMB_INSTALL}"
-"${cmd[@]}"
-exit $?
+
+# llmb-run SUBMITS and returns immediately, so the nccl-tests tables do not exist yet. They land
+# under $LLMB_INSTALL/workloads/*/experiments/*_<jobid>/ when the Slurm job finishes, in a layout
+# parser.sh cannot see. Capture the jobid, then detach a watcher that waits for the job to leave
+# the queue and runs collect_llmb_nccl_log.sh, which writes the aggregated
+# <user>-NCCL-1Rack-<rack>-<N>N-<jobid>.txt into the dashboard log dir.
+# Disable with NVIS_LLMB_AUTOCOLLECT=0 (then run collect_llmb_nccl_log.sh <jobid> by hand).
+_llmb_out="$(mktemp 2>/dev/null || echo /tmp/nvis_llmb_$$.out)"
+"${cmd[@]}" 2>&1 | tee "${_llmb_out}"
+_rc="${PIPESTATUS[0]}"
+
+if [[ "${DRY_RUN}" -eq 0 && "${NVIS_LLMB_AUTOCOLLECT:-1}" == "1" ]]; then
+  _jid="$(grep -oE 'jobid=[0-9]+' "${_llmb_out}" 2>/dev/null | head -1 | cut -d= -f2)"
+  if [[ -n "${_jid}" ]]; then
+    _collect="$(dirname "${BASH_SOURCE[0]}")/collect_llmb_nccl_log.sh"
+    if [[ -x "${_collect}" ]]; then
+      echo "run_llmb_nccl: auto-collect armed for job ${_jid} -> ${_collect}"
+      _squeue="${RACK_SLURM_SQUEUE:-$(command -v squeue || echo /cm/local/apps/slurm/current/bin/squeue)}"
+      setsid nohup bash -c '
+        jid="$1"; collect="$2"; squeue="$3"; logdir="$4"; llmb="$5"
+        export RACK_JOB_LOG_DIR="$logdir" LLMB_INSTALL="$llmb"
+        # Wait for the job to leave the queue (cap ~8h so a hung watcher cannot linger forever).
+        for _ in $(seq 1 2880); do
+          "$squeue" -h -j "$jid" -o %i 2>/dev/null | grep -q . || break
+          sleep 10
+        done
+        sleep 15   # let the last ranks flush their stdout
+        bash "$collect" "$jid"
+      ' _ "${_jid}" "${_collect}" "${_squeue}" "${JOB_LOG_DIR}" "${LLMB_INSTALL}" \
+        >> "${JOB_LOG_DIR%/}/llmb-autocollect_${_jid}.log" 2>&1 < /dev/null &
+    else
+      echo "run_llmb_nccl: WARNING: collect_llmb_nccl_log.sh not found/executable at ${_collect};" \
+           "results will not appear in the dashboard until it is run manually" >&2
+    fi
+  else
+    echo "run_llmb_nccl: WARNING: could not parse jobid from llmb-run output; auto-collect skipped" >&2
+  fi
+fi
+
+rm -f "${_llmb_out}" 2>/dev/null || true
+exit "${_rc}"

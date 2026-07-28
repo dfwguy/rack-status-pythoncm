@@ -154,7 +154,20 @@ def test_sinfo_and_ds_match_cmsh_bright_hostname():
 def test_rack_id_from_log_basename_bright():
     n = nid.NvisNaming.from_templates(nid.DEFAULT_NVIS_RACK_ID, nid.DEFAULT_NVIS_CT_ID)
     assert n.rack_id_from_log_basename("root-NEMO-1Rack-p5-r03-14N-23806.txt") == "p5-r03"
-    assert n.rack_id_from_log_basename("root-NCCL-p5-r03-ct12-N-22417.txt") is None
+
+
+def test_rack_id_from_log_basename_attributes_single_rack_nccl():
+    """An NCCL sweep naming exactly one rack is attributed to that rack.
+
+    ``nccl`` entered the tool marker table when the basename predicate was widened
+    to accept any plausible result log, so these are surfaced rather than dropped.
+    Attribution stays safe because the caller still demands exactly one rack id,
+    and the multirack / Llama basenames below are excluded before that check.
+    """
+    n = nid.NvisNaming.from_templates(nid.DEFAULT_NVIS_RACK_ID, nid.DEFAULT_NVIS_CT_ID)
+    assert n.rack_id_from_log_basename("root-NCCL-p5-r03-ct12-N-22417.txt") == "p5-r03"
+    assert n.rack_id_from_log_basename("root-NCCL-4Rack-p5-r03-N-1.txt") is None
+    assert n.rack_id_from_log_basename("root-NCCL-p5-r03-p5-r04-N-1.txt") is None
 
 
 def test_rack_id_from_llama_slurm_basename_bright():

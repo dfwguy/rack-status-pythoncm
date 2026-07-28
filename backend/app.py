@@ -49,6 +49,7 @@ when logs are wall-clock local but the server env was UTC).
 """
 from __future__ import annotations
 
+import base64
 import fcntl
 import hashlib
 import io
@@ -84,6 +85,7 @@ from pathlib import Path, PurePosixPath
 from flask import (
     Flask,
     Response,
+    g,
     jsonify,
     redirect,
     request,
@@ -111,6 +113,23 @@ import native_status  # noqa: E402 — after sys.path so ``import native_status`
 import nvis_id_templates  # noqa: E402
 import cluster_snapshot  # noqa: E402
 import cluster_overview_live  # noqa: E402
+
+# --- optional backend modules (added 2026-07-28) -------------------------------------
+# Both are bind-mounted read-only from the repo (docker-compose.override.yml). A missing
+# mount, a syntax error or an unavailable stdlib feature MUST degrade to the previous
+# behaviour, never stop the app booting mid cluster bring-up — hence the soft import and
+# the ``is None`` guards at every call site (``_history_enabled`` / ``_universal_enabled``).
+try:
+    import results_history  # noqa: E402 — durable run/metric history (SQLite under var/history)
+    import lake_sink  # noqa: E402 — Parquet data-lake sink (run results + provenance artifacts)
+except Exception as _rh_exc:  # pragma: no cover - defensive
+    results_history = None  # type: ignore[assignment]
+    logging.getLogger(__name__).warning("results_history unavailable: %s", _rh_exc)
+try:
+    import universal_parser as _uparse  # noqa: E402 — tool-agnostic log normaliser
+except Exception as _up_exc:  # pragma: no cover - defensive
+    _uparse = None  # type: ignore[assignment]
+    logging.getLogger(__name__).warning("universal_parser unavailable: %s", _up_exc)
 
 
 def _nvis_naming() -> nvis_id_templates.NvisNaming:
@@ -160,10 +179,12 @@ _TOOLS_NEMO_CONTAINER_SQSH = "nemo-25.11.01.sqsh"
 
 
 def _script_exists(path: Path) -> bool:
-    """Check if a script file exists. In SSH mode, skip the check (file is on the remote host)."""
-    if host_exec.is_remote():
-        return True
-    return path.is_file()
+    """Check whether a script exists on the execution host.
+
+    Previously this returned True unconditionally for a remote target, because the
+    local check could only ever be wrong there. The connection can answer for both.
+    """
+    return host_exec.is_file(path)
 
 app = Flask(__name__, static_folder=str(REPO_ROOT / "static"), static_url_path="/static")
 _logger = logging.getLogger(__name__)
@@ -210,6 +231,25 @@ except ImportError:
 
 if _CATALOG_AVAILABLE and catalog_bp is not None:
     app.register_blueprint(catalog_bp)
+
+# Grafana panel-embed API (/api/observability/dashboards, /dashboards/<view>, /health).
+# Optional by design: a missing bind mount or an unreadable grafana_embed_map.json must
+# not stop the app booting — the SPA renders its own "not wired yet" state instead.
+try:
+    from grafana_embeds import grafana_embeds_bp  # noqa: E402
+
+    app.register_blueprint(grafana_embeds_bp)
+    from metrics_query import metrics_query_bp  # noqa: E402
+    app.register_blueprint(metrics_query_bp)
+
+    @app.route("/api/lake/health")
+    def api_lake_health():  # noqa: ANN202
+        """Is the Parquet lake reachable and accepting run provenance writes?"""
+        if lake_sink is None:
+            return jsonify({"ok": False, "error": "lake_sink not loaded"})
+        return jsonify(lake_sink.health())
+except Exception as _ge_exc:  # pragma: no cover - observability embeds are optional
+    _logger.warning("grafana_embeds blueprint unavailable: %s", _ge_exc)
 
 _validation_jobs_lock = threading.Lock()
 _validation_jobs: dict[str, dict[str, object]] = {}
@@ -710,6 +750,41 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "key": "RACK_NCCL_MPI_SIZE_MAX",
         "label": "Multi-rack NCCL max message size",
         "description": "Max all_reduce message size for the direct x-rack NCCL test (run_nccl_mpi.sh --size-max). Default 16G. Accepts nccl-tests sizes like 8, 512M, 16G.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "NVIS_EXEMPLAR_REPO_BRANCH",
+        "label": "Exemplar/llmb repo tag",
+        "description": (
+            "git tag/branch of NVIDIA/dgxc-benchmarking for Tools > Download/Setup Exemplar. Empty "
+            "= the tool's default v25.10.01, whose nccl recipe supports gb200/b200/h100 only. "
+            "v26.06.00 adds native gb300 and b300 blocks (verified upstream 2026-07-28), which is "
+            "what a GB300 NVL72 needs. The tool's form has no field for this."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "NVIS_EXEMPLAR_WORKLOADS",
+        "label": "Exemplar/llmb workloads to install",
+        "description": (
+            "Comma-separated llmb workloads for Tools > Download/Setup Exemplar. Empty = the stock "
+            "default 'microbenchmark_nccl,pretrain_nemotron-h'. Set to 'microbenchmark_nccl' to "
+            "install ONLY the NCCL microbenchmark and skip the NeMo container download, which is "
+            "what makes the install action take hours. Add pretrain workloads later when needed."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "NVIS_NCCL_VERSION",
+        "label": "NCCL version (build + run)",
+        "description": (
+            "Selects the NCCL used by BOTH the workspace build and the NCCL test run. "
+            "'system' (or 2.28.9) builds/loads <workspace>/nccl/build/lib; any other X.Y.Z uses "
+            "<workspace>/nccl-X.Y.Z/nccl/build/lib. The Tools > CUDA/NCCL installer checks out tag "
+            "v<X.Y.Z>-1 and fails loudly listing real tags if it does not exist. Build the version "
+            "you intend to run: selecting a version with no build on disk makes every NCCL job exit 2 "
+            "with 'libnccl.so.2 not found'."
+        ),
     },
     {
         "section": "jobs_cluster",
@@ -1239,7 +1314,7 @@ def get_physical_rf0_map() -> dict[str, str]:
         _physical_rf0_map = {}
         plat = _get_platform()
         cmd = plat.physical_rf0_cmd()
-        if not host_exec.is_remote() and not shutil.which(cmd[0]):
+        if not host_exec.which(cmd[0]):
             _physical_rf0_loaded = True
             return {}
         try:
@@ -1283,10 +1358,16 @@ def _validation_worker(
     """
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _validation_jobs_lock:
             row = _validation_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     try:
         _patch(
@@ -1296,7 +1377,8 @@ def _validation_worker(
         # NeMo/validation launchers run on the privileged "script" target (root@slogin):
         # they pdsh-rsync the .sqsh into root-owned /raid/data on compute nodes and submit
         # via sbatch — neither possible as the unprivileged control-plane user on the head.
-        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates), profile="script")
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates),
+                                     profile="script", env_extra=env_updates)
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -1383,7 +1465,8 @@ def _stress_worker(
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates), profile=profile)
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates),
+                                     profile=profile, env_extra=env_updates)
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -1470,7 +1553,8 @@ def _xrack_worker(
         # NeMo/validation launchers run on the privileged "script" target (root@slogin):
         # they pdsh-rsync the .sqsh into root-owned /raid/data on compute nodes and submit
         # via sbatch — neither possible as the unprivileged control-plane user on the head.
-        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates), profile="script")
+        hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates),
+                                     profile="script", env_extra=env_updates)
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -1607,10 +1691,16 @@ def _power_reset_worker(job_id: str, specs: list[str]) -> None:
     """Run cmsh power cycle in a background thread."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     sleep_sec = max(0, _env_int("RACK_POWER_RESET_SLEEP_SEC", 10))
     try:
@@ -1767,10 +1857,16 @@ def _services_restart_worker(job_id: str, pdsh_w: str) -> None:
     """Run services-restart pdsh in a background thread."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     try:
         _patch(
@@ -1809,10 +1905,16 @@ def _gpu_reset_worker(job_id: str, pdsh_w: str) -> None:
     """Run gpu_reset.sh in a background thread."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     try:
         _patch(
@@ -2050,7 +2152,9 @@ def _auth_mode() -> str:
     explicit = (os.environ.get("RACK_WEB_AUTH_MODE") or "").strip().lower()
     if explicit in ("pam", "token"):
         return explicit
-    return "token" if host_exec.is_remote() else "pam"
+    # PAM authenticates against *this* machine's accounts, so it is only meaningful
+    # when the app runs on the target host; a remote target has no such mapping.
+    return "pam" if host_exec.exec_kind() == "local" else "token"
 
 
 def _auth_token() -> str | None:
@@ -2376,12 +2480,12 @@ def _api_json_no_store(response):
 
 def _script_path() -> Path:
     p = _eget("RACK_STATUS_SCRIPT", str(DEFAULT_SCRIPT)) or str(DEFAULT_SCRIPT)
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _parser_path() -> Path:
     p = _eget("RACK_PARSER_SCRIPT", str(SCRIPTS_DIR / "parser.sh")) or str(SCRIPTS_DIR / "parser.sh")
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _parser_extra_args() -> list[str]:
@@ -2543,16 +2647,17 @@ def _resolve_nemo_log_basename_in_dir(log_dir: Path, basename: str) -> Path | No
         return None
     if not _nemo_nccl_in_log_basename(bn):
         return None
-    root = log_dir.resolve()
+    # The log dir belongs to the execution host, so existence is asked of the
+    # connection. Doing it locally used to make every lookup on a remote target
+    # return "log file not found" for files that plainly existed.
+    root = _rpath(log_dir)
     for sub in (root, root / "failed", root / "sn-llama"):
-        if not sub.is_dir():
-            continue
-        cand = (sub / bn).resolve()
+        cand = _rpath(sub / bn)
         try:
             cand.relative_to(root)
         except ValueError:
             continue
-        if cand.is_file():
+        if host_exec.is_file(cand):
             return cand
     return None
 
@@ -2580,7 +2685,7 @@ def _nemo_log_file_looks_successful(path: Path) -> bool:
     (app on the head node) or on a remote head (app on a laptop over SSH). A remote path is passed
     verbatim (no local ``.resolve()``, which would break on a ``PurePosixPath``).
     """
-    lp = str(path) if host_exec.is_remote() else str(Path(path).resolve())
+    lp = str(_rpath(path))
     timeout = max(30, _env_int("RACK_EXPORT_SUCCESS_GREP_TIMEOUT", 180))
     try:
         fail = host_exec.run_on_host(
@@ -2607,7 +2712,7 @@ def _multirack_txt_paths_under_failed(log_dir: Path, pat: str) -> list[Path]:
     Multirack jobs often write logs only under ``failed/``; include them in Excel/zip export so
     parser results match the Multirack tab.
     """
-    root = log_dir.resolve()
+    root = _rpath(log_dir)
     failed = root / "failed"
     if not failed.is_dir():
         return []
@@ -2633,12 +2738,15 @@ def list_log_txt_paths_for_export(
     passes false so nothing under ``failed/`` is included.
     """
     pat = _parser_export_glob()
-    root = log_dir.resolve()
     root_files: list[Path] = []
-    if root.is_dir():
-        for p in root.glob(pat):
-            if p.is_file() and _nemo_nccl_in_log_basename(p.name):
-                root_files.append(p)
+    # One directory listing through the connection. Listing locally used to yield
+    # ZERO files against a remote log dir, which is why the Logs page reported
+    # "1 of 1" while 13 real logs sat in the directory.
+    root = _rpath(log_dir)
+    for path_s in host_exec.stat_dir(root, patterns=(pat,)):
+        name = PurePosixPath(path_s).name
+        if name and _nemo_nccl_in_log_basename(name):
+            root_files.append(PurePosixPath(path_s))  # type: ignore[arg-type]
 
     done_racks: frozenset[str] | None = None
     if not _truthy_env("RACK_LOG_EXPORT_SKIP_NEMO_DONE_FILTER"):
@@ -3153,27 +3261,22 @@ def _parse_ts_unix(raw_ts: str, tz: tzinfo) -> float | None:
 
 
 def _host_read_text(path: Path, *, max_bytes: int = 0) -> str | None:
-    """Read a file's text from the EXEC host (SSH when remote, local when on-node) — same
-    abstraction as script execution. Returns None on error. ``max_bytes>0`` caps the read."""
-    p = str(path)
-    if host_exec.is_remote():
-        cmd = ["head", "-c", str(max_bytes), p] if max_bytes > 0 else ["cat", p]
-        try:
-            proc = host_exec.run_on_host(
-                cmd, timeout=max(30, _job_env_int("RACK_HOST_READ_TIMEOUT", 90))
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-        if getattr(proc, "returncode", 1) != 0:
-            return None
-        return proc.stdout or ""
-    try:
-        data = Path(p).read_bytes()
-    except OSError:
+    """Read a file's text from the execution host. ``None`` on error.
+
+    ``max_bytes>0`` caps the read at the head of the file (the historical
+    ``head -c`` semantics); 0 means "no cap", expressed as a very large head.
+    """
+    cap = max_bytes if max_bytes > 0 else (1 << 62)
+    text, meta = host_exec.read_text(
+        path,
+        head_bytes=cap,
+        tail_bytes=0,
+        whole_bytes=cap,
+        timeout=max(30, _job_env_int("RACK_HOST_READ_TIMEOUT", 90)),
+    )
+    if meta.get("read_error"):
         return None
-    if max_bytes > 0:
-        data = data[:max_bytes]
-    return data.decode("utf-8", errors="replace")
+    return text
 
 
 _LLM_WALL_MAX_BYTES = 64 * 1024 * 1024
@@ -3570,57 +3673,65 @@ def _validation_ct_inner() -> str:
     return s
 
 
-def _resolve_path(p: Path) -> Path:
-    """Resolve a filesystem path; skip .resolve() in SSH mode (paths refer to the remote host)."""
-    p = p.expanduser()
-    if host_exec.is_remote():
-        return p
-    return p.resolve()
+def _rpath(p: object) -> PurePosixPath:
+    """The single path resolver: canonicalise *p* against the execution host.
+
+    Returns a :class:`PurePosixPath` deliberately. The path names a file on the
+    execution host, which is not necessarily this machine, so local filesystem
+    calls on it are a category error — and an inert path type makes that a loud
+    ``AttributeError`` at the call site instead of a silently wrong answer.
+    Ask the connection instead: ``host_exec.is_file`` / ``stat`` / ``read_text``.
+
+    Replaces the three overlapping resolvers this module used to carry
+    (``_resolve_path``, ``_lp_resolve``, and the inline
+    ``str(x) if is_remote() else str(x.resolve())`` idiom).
+    """
+    return PurePosixPath(host_exec.resolve(p))
 
 
 def _validation_script_path() -> Path:
     p = _eget("RACK_VALIDATION_SCRIPT", str(SCRIPTS_DIR / "run_singlerack.sh")) or str(
         SCRIPTS_DIR / "run_singlerack.sh"
     )
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _mnubergemm_stress_script_path() -> Path:
     p = _eget("RACK_MNUBERGEMM_STRESS_SCRIPT", str(SCRIPTS_DIR / "run_mnubergemm_stress.sh")) or str(
         SCRIPTS_DIR / "run_mnubergemm_stress.sh"
     )
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _nvloom_singlerack_script_path() -> Path:
     p = _eget("RACK_NVLOOM_SINGLERACK_SCRIPT", str(SCRIPTS_DIR / "run_nvloom_singlerack.sh")) or str(
         SCRIPTS_DIR / "run_nvloom_singlerack.sh"
     )
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _clusterkit_script_path() -> Path:
     p = _eget("RACK_CLUSTERKIT_SCRIPT", str(SCRIPTS_DIR / "run_clusterkit.sh")) or str(SCRIPTS_DIR / "run_clusterkit.sh")
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _run_llmb_nccl_script_path() -> Path:
     p = _eget("RACK_LLMB_NCCL_SCRIPT", str(SCRIPTS_DIR / "run_llmb_nccl.sh")) or str(SCRIPTS_DIR / "run_llmb_nccl.sh")
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _run_nccl_mpi_script_path() -> Path:
     """Direct-NCCL launcher: resolves racks → nodes → submits nccl_allreduce.sbatch
     (host nccl-tests + mpirun over IB; no llmb-run/container/UCX-verbs guesswork)."""
     p = _eget("RACK_NCCL_MPI_SCRIPT", str(SCRIPTS_DIR / "run_nccl_mpi.sh")) or str(SCRIPTS_DIR / "run_nccl_mpi.sh")
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _nccl_fullrack_script_path() -> Path:
     p = _eget("RACK_NCCL_FULLRACK_SCRIPT", str(SCRIPTS_DIR / "nccl_fullrack_rounds.sh")) or str(
         SCRIPTS_DIR / "nccl_fullrack_rounds.sh"
     )
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _clusterkit_product_line_for_job(body: dict) -> str:
@@ -3645,54 +3756,54 @@ def _nvis_workspace_dir_effective() -> str:
 
 def _sysinfo_script_path() -> Path:
     p = _eget("RACK_SYSINFO_SCRIPT", str(SCRIPTS_DIR / "sysinfo.sh")) or str(SCRIPTS_DIR / "sysinfo.sh")
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _nvswitches_rack_audit_script_path() -> Path:
     p = _eget("RACK_NVSWITCH_AUDIT_SCRIPT", str(SCRIPTS_DIR / "nvswitches_rack_audit.sh")) or str(
         SCRIPTS_DIR / "nvswitches_rack_audit.sh"
     )
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _nvswitch_sdn_reset_script_path() -> Path:
     p = _eget("RACK_NVSWITCH_SDN_RESET_SCRIPT", str(SCRIPTS_DIR / "nvswitch_sdn_reset.sh")) or str(
         SCRIPTS_DIR / "nvswitch_sdn_reset.sh"
     )
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _nvswitch_system_reset_script_path() -> Path:
     p = _eget("RACK_NVSWITCH_SYSTEM_RESET_SCRIPT", str(SCRIPTS_DIR / "nvswitch_system_reset.sh")) or str(
         SCRIPTS_DIR / "nvswitch_system_reset.sh"
     )
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _imex_reset_script_path() -> Path:
     p = _eget("RACK_IMEX_RESET_SCRIPT", str(SCRIPTS_DIR / "imex_reset.sh")) or str(
         SCRIPTS_DIR / "imex_reset.sh"
     )
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _imex_check_script_path() -> Path:
     p = _eget("RACK_IMEX_CHECK_SCRIPT", str(SCRIPTS_DIR / "imex_check.sh")) or str(
         SCRIPTS_DIR / "imex_check.sh"
     )
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _nemo_xrack_script_path() -> Path:
     p = _eget("RACK_NEMO_XRACK_SCRIPT", str(SCRIPTS_DIR / "run-nemo-xrack.sh")) or str(
         SCRIPTS_DIR / "run-nemo-xrack.sh"
     )
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _run_llama_script_path() -> Path:
     p = _eget("RACK_LLAMA_SCRIPT", str(SCRIPTS_DIR / "run-llama.sh")) or str(SCRIPTS_DIR / "run-llama.sh")
-    return _resolve_path(Path(p))
+    return _rpath(Path(p))
 
 
 def _job_env_effective_values() -> dict[str, str]:
@@ -3843,38 +3954,28 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
     )
 
 
-def _default_log_dir() -> Path:
-    p = os.environ.get("RACK_STATUS_LOG_DIR", str(DEFAULT_LOG_DIR))
-    path = Path(p)
-    if host_exec.is_remote():
-        return path
-    return path.resolve()
+def _default_log_dir() -> PurePosixPath:
+    return _rpath(os.environ.get("RACK_STATUS_LOG_DIR", str(DEFAULT_LOG_DIR)))
 
 
-def _allowed_roots() -> list[Path]:
+def _allowed_roots() -> list[PurePosixPath]:
     raw = os.environ.get("RACK_STATUS_ALLOWED_PREFIXES", "")
     if not raw.strip():
         return []
-    remote = host_exec.is_remote()
-    return [Path(x.strip()) if remote else Path(x.strip()).resolve() for x in raw.split(",") if x.strip()]
+    return [_rpath(x.strip()) for x in raw.split(",") if x.strip()]
 
 
-def _resolve_log_dir(raw: str | None) -> Path:
-    base = Path(raw or _default_log_dir()).expanduser()
-    if host_exec.is_remote():
-        s = str(base)
-        _MACOS_FIRMLINK = "/System/Volumes/Data"
-        if s.startswith(_MACOS_FIRMLINK + "/"):
-            s = s[len(_MACOS_FIRMLINK):]
-        log_dir = Path(s)
-    else:
-        log_dir = base.resolve()
+def _resolve_log_dir(raw: str | None) -> PurePosixPath:
+    # No macOS firmlink fixup any more: that existed to undo a local .resolve()
+    # applied to a head-node path, and the connection never resolves a remote path
+    # against this filesystem in the first place.
+    log_dir = _rpath(raw or _default_log_dir())
     roots = _allowed_roots()
     if roots:
         ok = any(str(log_dir).startswith(str(r) + os.sep) or log_dir == r for r in roots)
         if not ok:
             raise ValueError(f"log_dir must be under one of: {[str(r) for r in roots]}")
-    if not host_exec.is_remote() and not log_dir.is_dir():
+    if not host_exec.is_dir(log_dir):
         raise ValueError(f"not a directory: {log_dir}")
     return log_dir
 
@@ -3887,7 +3988,7 @@ def _host_job_cwd(log_dir: Path) -> str:
     exist on the head node and makes the remote ``cd`` fail before the script runs. Resolve
     only when executing locally.
     """
-    return str(log_dir) if host_exec.is_remote() else str(log_dir.resolve())
+    return str(_rpath(log_dir))
 
 
 def _tools_check_destination_allowed(p: Path) -> None:
@@ -3912,32 +4013,15 @@ def _resolve_tools_destination(raw: str) -> Path:
     s = (raw or "").strip()
     if not s:
         raise ValueError("destination is required")
-    if host_exec.is_remote():
-        # Remote path: the destination lives on the *cluster*, not the dashboard host.
-        # Treat it as an opaque POSIX path — never .resolve() (firmlink rewrite on macOS,
-        # e.g. /home/cmods -> /System/Volumes/Data/home/cmods) and never stat the local FS.
-        rp = PurePosixPath(s)
-        if not rp.is_absolute():
-            raise ValueError("destination must be an absolute path")
-        if rp.suffix.lower() == ".sqsh":
-            raise ValueError("destination must be a directory path, not a .sqsh file path")
-        dest = Path(str(rp))
-        _tools_check_destination_allowed(dest)
-        return dest
-    p = Path(s).expanduser()
-    if not p.is_absolute():
+    if not PurePosixPath(s).is_absolute():
         raise ValueError("destination must be an absolute path")
-    try:
-        p = p.resolve()
-    except (OSError, RuntimeError):
-        p = Path(os.path.abspath(str(p)))
-    try:
-        if p.is_file():
-            raise ValueError("destination must be a directory, not a file")
-        if not p.is_dir() and p.suffix.lower() == ".sqsh":
-            raise ValueError("destination must be a directory path, not a .sqsh file path")
-    except OSError as e:
-        raise ValueError(f"destination is not usable: {e}") from e
+    # The destination lives on the execution host, so existence is asked of the
+    # connection rather than stat-ed locally.
+    p = _rpath(s)
+    if host_exec.is_file(p):
+        raise ValueError("destination must be a directory, not a file")
+    if not host_exec.is_dir(p) and p.suffix.lower() == ".sqsh":
+        raise ValueError("destination must be a directory path, not a .sqsh file path")
     _tools_check_destination_allowed(p)
     return p
 
@@ -3996,7 +4080,7 @@ def _tools_find_existing_sqsh_for_skip(dest_dir: Path) -> tuple[Path | None, lis
             if hit:
                 return hit, checked
         try:
-            nemo = _resolve_path(Path(raw))
+            nemo = _rpath(Path(raw))
         except (OSError, ValueError, RuntimeError):
             nemo = None
         if nemo is not None and nemo.suffix.lower() == ".sqsh":
@@ -4467,7 +4551,7 @@ def _merge_live_native_workers_into_status(out: dict, log_dir: Path) -> None:
     """
     if _truthy_env("RACK_STATUS_USE_SHELL_TABLE"):
         return
-    ld = log_dir.resolve()
+    ld = _rpath(log_dir)
     snap = native_status.worker_snapshot_for_log_dir(ld)
     if snap is not None:
         out["native_workers"] = snap
@@ -4600,7 +4684,7 @@ def _try_populate_cmsh_rack_list_file() -> None:
             return
         plat = _get_platform()
         cmd = plat.list_racks_cmd()
-        if not host_exec.is_remote() and not shutil.which(cmd[0]):
+        if not host_exec.which(cmd[0]):
             _CMSH_RACK_LIST_STATE = "failed"
             return
         try:
@@ -4880,7 +4964,7 @@ def _rack_status_cache_key(log_dir: Path) -> str:
     # Do NOT local-resolve in SSH mode: the background loop uses this key as the actual log_dir,
     # and resolving a remote path on the app host corrupts it (/home/... -> /System/Volumes/Data/...),
     # so the SSH `find` would look for a nonexistent path and every rack stays "pending".
-    return str(log_dir) if host_exec.is_remote() else str(log_dir.resolve())
+    return str(_rpath(log_dir))
 
 
 def _register_rack_status_log_dir(log_dir: Path) -> str:
@@ -5158,8 +5242,8 @@ def api_power_on_async():
 def _gpu_reset_script_path() -> Path:
     raw = (_eget("RACK_GPU_RESET_SCRIPT") or "").strip()
     if raw:
-        return _resolve_path(Path(raw))
-    return _resolve_path(SCRIPTS_DIR / "gpu_reset.sh")
+        return _rpath(Path(raw))
+    return _rpath(SCRIPTS_DIR / "gpu_reset.sh")
 
 
 def run_gpu_reset(pdsh_w: str) -> dict:
@@ -5296,15 +5380,15 @@ _HOSTNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$", re.IGNORECASE)
 def _bmc_recovery_script_path() -> Path:
     raw = (_eget("RACK_BMC_RECOVERY_SCRIPT") or "").strip()
     if raw:
-        return _resolve_path(Path(raw))
-    return _resolve_path(SCRIPTS_DIR / "bmc-recovery.sh")
+        return _rpath(Path(raw))
+    return _rpath(SCRIPTS_DIR / "bmc-recovery.sh")
 
 
 def _macswap_script_path() -> Path:
     raw = (_eget("RACK_MACSWAP_SCRIPT") or "").strip()
     if raw:
-        return _resolve_path(Path(raw))
-    return _resolve_path(SCRIPTS_DIR / "macswap" / "macswap")
+        return _rpath(Path(raw))
+    return _rpath(SCRIPTS_DIR / "macswap" / "macswap")
 
 
 def _macswap_python_module() -> str:
@@ -5398,10 +5482,16 @@ def _bmc_recovery_worker(job_id: str, nodes: list[str], iface: str) -> None:
     """Run bmc-recovery.sh against each selected node serially; aggregate into _reset_jobs."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     results: list[dict] = []
     try:
@@ -5594,10 +5684,16 @@ def _mac_change_worker(
     """Run macswap once (single node) and aggregate into _reset_jobs."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     try:
         _patch(
@@ -5817,22 +5913,17 @@ _BUG_REPORT_SUBDIR_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 
 
 def _bug_report_local_base_path() -> Path:
-    return _resolve_path(Path(_bug_report_remote_dir()))
+    return _rpath(Path(_bug_report_remote_dir()))
 
 
 def _ensure_bug_report_local_base_dir() -> tuple[Path, str | None]:
-    """Create ``RACK_BUG_REPORT_REMOTE_DIR`` when missing (local dashboard host only)."""
+    """Create ``RACK_BUG_REPORT_REMOTE_DIR`` on the execution host when missing."""
     base = _bug_report_local_base_path()
-    if host_exec.is_remote():
+    if host_exec.is_dir(base):
         return base, None
-    if base.exists():
-        if not base.is_dir():
-            return base, f"not a directory: {base}"
-        return base, None
-    try:
-        base.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        return base, f"could not create reports directory {base}: {e}"
+    err = host_exec.makedirs(base)
+    if err:
+        return base, f"could not create reports directory {base}: {err}"
     return base, f"created reports directory: {base}"
 
 
@@ -6000,10 +6091,16 @@ def _bug_report_worker(job_id: str, pdsh_w: str) -> None:
     """Run pdsh nvidia-bug-report.sh, then discover .log.gz paths per host."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     try:
         _patch(
@@ -6289,6 +6386,23 @@ _HW_CHECK_PRESETS: dict[str, list[str]] = {
     "with_imex_spx": ["-i", "1", "-x", "1"],
     "with_process": ["-p", "1"],
     "sys_only": ["-e", "0", "-s", "1", "-g", "0", "-i", "0", "-b", "0", "-x", "0", "-p", "0"],
+    # --- NscaleTX validation presets (MOP GB300 §7.1.1 / FastTrack §7) ---
+    # dcgmi diag standardised on -r 3 (2026-07-26). Long-running: minutes per node.
+    "dcgm_diag": ["-e", "0", "-s", "0", "-g", "0", "-i", "0", "-b", "0", "-x", "0",
+                  "-p", "0", "-D", "1", "-L", "3"],
+    "nvbandwidth": ["-e", "0", "-s", "0", "-g", "0", "-i", "0", "-b", "0", "-x", "0",
+                    "-p", "0", "-N", "1"],
+    # BOM / inventory: nvidia-smi -L, ECC, nvlink -s, fabric state, topo -p2p n
+    "bom_inventory": ["-e", "0", "-s", "0", "-g", "1", "-i", "0", "-b", "0", "-x", "0", "-p", "0"],
+    # Job-launch stack: slurmd, munge, Prolog/Epilog (incl. a dry execution), pyxis SPANK
+    # plugin, enroot runtime dirs. Added 2026-07-28 after job 63850 was CANCELLED with
+    # Reason=Prolog while every GPU/NVLink/CUDA check on the tray passed — nothing here
+    # covered the launch path, so a tray that could not start a job still reported healthy.
+    "slurm_stack": ["-e", "0", "-s", "0", "-g", "0", "-i", "0", "-b", "0", "-x", "0",
+                    "-p", "0", "-S", "1"],
+    # Full MOP pre-flight: BOM + dcgmi diag -r 3 + nvbandwidth + launch stack
+    "mop_preflight": ["-e", "1", "-s", "1", "-g", "1", "-i", "0", "-b", "1", "-x", "0",
+                      "-p", "0", "-D", "1", "-L", "3", "-N", "1", "-S", "1"],
 }
 
 _HW_CHECK_ARG_TOKEN_RE = re.compile(r"^[-a-zA-Z0-9_=.,]+$")
@@ -6327,8 +6441,8 @@ def _hw_check_argv_from_custom_string(raw: str) -> list[str]:
 def _hw_check_pdsh_script_path() -> Path:
     raw = (_eget("RACK_HW_CHECK_SCRIPT") or "").strip()
     if raw:
-        return _resolve_path(Path(raw))
-    return _resolve_path(SCRIPTS_DIR / "hw_check_pdsh.sh")
+        return _rpath(Path(raw))
+    return _rpath(SCRIPTS_DIR / "hw_check_pdsh.sh")
 
 
 def _hw_check_argv_for_preset(preset: str) -> list[str]:
@@ -6475,10 +6589,16 @@ def _hw_check_worker(job_id: str, pdsh_w: str, preset: str, checker_argv: list[s
     """Run hw_check_pdsh.sh in a background thread."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     try:
         _patch(
@@ -6554,7 +6674,7 @@ def api_hw_check_async():
 
 def _checker_script_path() -> Path:
     """Bundled checker.sh (same directory as hw_check_pdsh.sh)."""
-    return _resolve_path(SCRIPTS_DIR / "checker.sh")
+    return _rpath(SCRIPTS_DIR / "checker.sh")
 
 
 @app.route("/api/hw-check-presets", methods=["GET"])
@@ -6629,10 +6749,16 @@ def _nvswitch_fix_async_worker(job_id: str, log_dir: Path, cmd: list[str], displ
     """Run ``nvswitches_rack_audit.sh --fix`` in a background thread (cwd = log_dir)."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     timeout_sec = max(60, _env_int("RACK_NVSWITCH_AUDIT_TIMEOUT", 7200))
     try:
@@ -6745,10 +6871,16 @@ def _nvswitch_sdn_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str],
     """Run ``nvswitch_sdn_reset.sh RACK`` in a background thread."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     timeout_sec = max(60, _env_int("RACK_NVSWITCH_SDN_RESET_TIMEOUT", 1800))
     try:
@@ -6873,10 +7005,16 @@ def _nvswitch_system_reset_async_worker(job_id: str, log_dir: Path, cmd: list[st
     """Run ``nvswitch_system_reset.sh RACK NVSWITCH_HOST`` in a background thread."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     timeout_sec = max(60, _env_int("RACK_NVSWITCH_SYSTEM_RESET_TIMEOUT", 1800))
     try:
@@ -7017,10 +7155,16 @@ def _imex_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str], display
     """Run ``imex_reset.sh RACK`` in a background thread."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     timeout_sec = max(60, _env_int("RACK_IMEX_RESET_TIMEOUT", 1800))
     try:
@@ -7183,10 +7327,16 @@ def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
     """Stage ``nvlmapper`` + ``run_nvlmapper.sh``, run ``./run_nvlmapper.sh``, then clean staging only (keep outputs)."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     timeout_sec = max(120, _env_int("RACK_NVLMAPPER_TIMEOUT", 14400))
     work = (_nvlmapper_reports_base() / rack).resolve()
@@ -7346,10 +7496,16 @@ def _precheck_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_c
     """Run async precheck via sysinfo.sh in a background thread."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     timeout_sec = max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800))
     try:
@@ -7458,10 +7614,16 @@ def _nvswitch_check_async_worker(
     """Run async nvswitch check (nvswitches_rack_audit.sh without --fix)."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     timeout_sec = max(60, _env_int("RACK_NVSWITCH_AUDIT_TIMEOUT", 7200))
     try:
@@ -7569,10 +7731,16 @@ def _imex_check_async_worker(job_id: str, log_dir: Path, cmd: list[str], display
     """Run async IMEX check in a background thread."""
 
     def _patch(**kwargs: object) -> None:
+        finished = None
         with _reset_jobs_lock:
             row = _reset_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
 
     timeout_sec = max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800))
     try:
@@ -7792,8 +7960,22 @@ def api_slurm_drain():
         return jsonify({"ok": False, "error": str(e)}), 500
     ok = bool(result.get("ok"))
     payload: dict = {"ok": ok, "rack": _normalize_rack_id((body.get("rack") or "").strip()), "target": target, **result}
-    if not ok:
-        payload["error"] = "scontrol update failed (see stdout/stderr)"
+    if ok:
+        payload["message"] = f"Undrain (state=resume) applied to {len(target.split(','))} node(s)."
+    else:
+        err = f"{result.get('stderr') or ''} {result.get('stdout') or ''}".strip()
+        # Say WHAT went wrong, not just "see stdout/stderr" — the operator cannot act on that.
+        if "Invalid node state" in err:
+            payload["error"] = (
+                "scontrol rejected the state change — usually because none of these nodes are "
+                "drained or down, so there is nothing to undrain. Check Slurm state first "
+                "(sinfo -R). No change was made.")
+        elif "Invalid node name" in err:
+            payload["error"] = "scontrol did not recognise one or more node names. No change was made."
+        elif "Access/permission denied" in err or "Invalid user" in err:
+            payload["error"] = "scontrol denied the update — the service account lacks Slurm operator rights."
+        else:
+            payload["error"] = f"scontrol update failed: {err[:300] or 'no output'}"
     return jsonify(payload), (200 if ok else 502)
 
 
@@ -7807,15 +7989,68 @@ def api_slurm_undrain():
     if err:
         return jsonify({"ok": False, "error": err}), 400
     rk_for_lock = (body.get("rack") or "").strip()
+    rk_norm = _normalize_rack_id((body.get("rack") or "").strip())
+
+    # Ask Slurm WHICH of these nodes is actually drained/down before touching anything.
+    # Slurm rejects BOTH `state=idle` and `state=resume` with "Invalid node state specified" when
+    # the target set contains no drained/down node — an operator clicking Undrain on a healthy rack
+    # got a red "scontrol update failed" that looked like a broken cluster. Nothing was ever wrong.
+    drained: list[str] = []
+    state_err = ""
+    try:
+        # run_slurm_on_host supplies the modules init that puts sinfo on PATH. The
+        # previous call named a helper that does not exist, so this probe raised
+        # NameError every time: `drained` stayed empty, `state_err` was set, and the
+        # undrain fell through to the blanket update the comment above says it must
+        # avoid.
+        probe = host_exec.run_slurm_on_host(
+            f"sinfo -h -N -o '%N %t' -n {shlex.quote(target)}",
+            timeout=max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120)),
+        )
+        for line in (probe.stdout or "").splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and any(
+                k in parts[1].lower() for k in ("drain", "down", "fail", "inval")
+            ):
+                drained.append(parts[0])
+    except Exception as e:  # noqa: BLE001 - fall through to the plain update
+        state_err = str(e)
+
+    if not drained and not state_err:
+        # Nothing to do, and saying so is the honest answer — not an error.
+        return jsonify({
+            "ok": True, "rack": rk_norm, "target": target, "changed": 0,
+            "message": (
+                f"Nothing to undrain — all {len(target.split(','))} node(s) are already "
+                "schedulable (no drain/down state). No change was made."
+            ),
+        }), 200
+
+    apply_to = ",".join(drained) if drained else target
     try:
         with _track_sync_op(rk_for_lock, "slurm_undrain", _operator_from_request()):
-            result = _run_scontrol_node_update(target, ["state=idle"])
+            # `state=resume` is the canonical verb for returning a DOWN/DRAINED node to service.
+            result = _run_scontrol_node_update(apply_to, ["state=resume"])
     except OSError as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
     ok = bool(result.get("ok"))
-    payload: dict = {"ok": ok, "rack": _normalize_rack_id((body.get("rack") or "").strip()), "target": target, **result}
-    if not ok:
-        payload["error"] = "scontrol update failed (see stdout/stderr)"
+    payload: dict = {"ok": ok, "rack": rk_norm, "target": apply_to,
+                     "changed": len(drained), **result}
+    if ok:
+        payload["message"] = (
+            f"Undrained {len(drained) or 'all targeted'} node(s): {apply_to[:200]}")
+    else:
+        err = f"{result.get('stderr') or ''} {result.get('stdout') or ''}".strip()
+        if "Invalid node state" in err:
+            payload["error"] = ("Slurm rejected the state change — none of these nodes are "
+                                "drained or down. No change was made.")
+        elif "Invalid node name" in err:
+            payload["error"] = "Slurm did not recognise one or more node names. No change was made."
+        elif "denied" in err.lower():
+            payload["error"] = "Slurm denied the update — the service account lacks operator rights."
+        else:
+            payload["error"] = f"scontrol update failed: {err[:300] or 'no output'}"
     return jsonify(payload), (200 if ok else 502)
 
 
@@ -8167,16 +8402,11 @@ def _resolve_slurm_job_stdout_path(path_raw: str, log_dir_raw: str | None) -> Pa
     raw = (path_raw or "").strip()
     if not raw or ".." in raw or "://" in raw:
         raise ValueError("invalid path")
-    p = _resolve_path(Path(raw))
-    # In SSH mode the file lives on the cluster head, not in this container, so the
-    # local existence/regular-file checks would always fail (the bug behind the
-    # "path does not exist" error on Scheduler → open log). The tail/read runs on
-    # the host via host_exec; here we only enforce the path-prefix policy below.
-    if not host_exec.is_remote():
-        if not p.exists():
-            raise ValueError("path does not exist")
-        if not p.is_file():
-            raise ValueError("path is not a regular file")
+    p = _rpath(Path(raw))
+    # Asked of the execution host, which is where the file lives. Checking locally
+    # was the bug behind "path does not exist" on Scheduler → open log.
+    if not host_exec.is_file(p):
+        raise ValueError("path does not exist")
     roots = _allowed_roots()
     if roots:
         ok = any(str(p).startswith(str(r) + os.sep) or p == r for r in roots)
@@ -8347,14 +8577,28 @@ def _rack_log_resolve(
             ),
             404,
         )
-    root = log_dir.resolve()
-    lp = log_path.resolve()
-    try:
-        lp.relative_to(root)
-    except ValueError:
-        return jsonify({"ok": False, "error": "invalid log path"}), 400
-    if not lp.is_file():
-        return jsonify({"ok": False, "error": "log file not found"}), 404
+    # In ssh mode these are REMOTE paths (PurePosixPath): .resolve()/.is_file() touch the local
+    # filesystem and raise AttributeError, which Flask turns into a 500 -> an HTML error page ->
+    # "Unexpected token '<'" in the SPA. Only do filesystem checks for genuinely local paths.
+    if isinstance(log_dir, Path) and isinstance(log_path, Path):
+        root = _rpath(log_dir)
+        lp = _rpath(log_path)
+        try:
+            lp.relative_to(root)
+        except ValueError:
+            return jsonify({"ok": False, "error": "invalid log path"}), 400
+        if not lp.is_file():
+            return jsonify({"ok": False, "error": "log file not found"}), 404
+    else:
+        # PurePath.relative_to does not collapse "..", so normalise textually before the
+        # containment check or "<dir>/../../etc/passwd" would pass it.
+        root = PurePosixPath(os.path.normpath(str(log_dir)))
+        lp = PurePosixPath(os.path.normpath(str(log_path)))
+        try:
+            lp.relative_to(root)
+        except ValueError:
+            return jsonify({"ok": False, "error": "invalid log path"}), 400
+        # Existence is not checkable from here; a missing remote file surfaces as a read error.
     return log_dir, lp, rk
 
 
@@ -8367,9 +8611,28 @@ def api_rack_log_download():
         request.args.get("job_id"),
         request.args.get("log_file"),
     )
-    if not isinstance(out[0], Path):
+    # Arity, not isinstance -- see the note in api_rack_log_content(); log_dir is a PurePosixPath
+    # in ssh mode and would otherwise be returned to Flask as if it were an error tuple.
+    if len(out) != 3:
         return out
     _log_dir, lp, _rk = out
+    if not isinstance(lp, Path):
+        # Remote (ssh mode): the file is on the head node, so send_file() cannot reach it.
+        # Stream it over the same transport that produced the path.
+        q = shlex.quote(str(lp))
+        cp = host_exec.run_on_host(f"base64 -w0 {q}")
+        if cp.returncode != 0 or not (cp.stdout or "").strip():
+            return jsonify(
+                {"ok": False, "error": f"cannot read remote log: {lp} {(cp.stderr or '').strip()}"}
+            ), 404
+        try:
+            blob = base64.b64decode((cp.stdout or "").strip())
+        except ValueError as e:  # binascii.Error subclasses ValueError
+            return jsonify({"ok": False, "error": f"decode failed: {e}"}), 500
+        resp = app.response_class(blob, mimetype="text/plain; charset=utf-8")
+        resp.headers["Content-Disposition"] = f'attachment; filename="{lp.name}"'
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
     return send_file(
         str(lp),
         as_attachment=True,
@@ -8389,13 +8652,34 @@ def api_rack_log_content():
         request.args.get("job_id"),
         request.args.get("log_file"),
     )
-    if not isinstance(out[0], Path):
+    # _rack_log_resolve returns (jsonify, code) on error and (log_dir, lp, rk) on success.
+    # Do NOT discriminate with isinstance(out[0], Path): in ssh mode log_dir is a PurePosixPath,
+    # which is NOT a Path subclass, so every successful remote resolve was mistaken for an error
+    # and returned raw to Flask ->
+    #   TypeError: The view function did not return a valid response ... it was a PurePosixPath
+    # i.e. a 500 on EVERY log view in ssh mode. Discriminate on arity instead.
+    if len(out) != 3:
         return out
     _log_dir, lp, _rk = out
-    try:
-        sz = lp.stat().st_size
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+    # The log lives on the head node in ssh mode, so lp is a PurePosixPath and .stat()/.read_bytes()
+    # raise AttributeError -> 500 -> an HTML error page -> "Unexpected token '<'" in the SPA.
+    # Read it over the same transport that produced the path.
+    remote = not isinstance(lp, Path)
+    if remote:
+        q = shlex.quote(str(lp))
+        cp = host_exec.run_on_host(f"stat -c %s {q} 2>/dev/null || echo -1")
+        rc, so, se = cp.returncode, (cp.stdout or ""), (cp.stderr or "")
+        try:
+            sz = int(so.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            sz = -1
+        if rc != 0 or sz < 0:
+            return jsonify({"ok": False, "error": f"log file not found: {lp} {(se or '').strip()}"}), 404
+    else:
+        try:
+            sz = lp.stat().st_size
+        except OSError as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
     if sz > max_inline:
         return jsonify(
             {
@@ -8406,11 +8690,17 @@ def api_rack_log_content():
                 "max_inline_bytes": max_inline,
             }
         )
-    try:
-        raw = lp.read_bytes()
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    text = raw.decode("utf-8", errors="replace")
+    if remote:
+        cp = host_exec.run_on_host(f"cat {shlex.quote(str(lp))}")
+        if cp.returncode != 0:
+            return jsonify({"ok": False, "error": (cp.stderr or "remote read failed").strip()}), 500
+        text = cp.stdout or ""
+    else:
+        try:
+            raw = lp.read_bytes()
+        except OSError as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        text = raw.decode("utf-8", errors="replace")
     return jsonify(
         {
             "ok": True,
@@ -8474,6 +8764,920 @@ def _demo_parser_results():
     })
 
 
+# =====================================================================================
+# Universal log ingest + durable run history  (added 2026-07-28 — STRICTLY ADDITIVE)
+#
+# Nothing below changes an existing response shape.  Two new module surfaces are used,
+# both optional (``results_history`` / ``universal_parser`` are soft-imported at the top
+# of this file and may be ``None`` when their bind mount is missing):
+#
+#   * ``universal_parser``  normalises ANY log — including the *.log / *.json / no-extension
+#     files and the sub-directories that ``native_status._host_log_entries`` never lists —
+#     into one dict.  It is used as a FALLBACK: parser.sh stays authoritative whenever it
+#     actually produced a number.
+#   * ``results_history``   persists every parse as a run + metric rows in SQLite under
+#     ``/app/var/history`` (the ``rack-data`` named volume), giving the first real history.
+#
+# Every call site is wrapped: an exception here must degrade to the pre-2026-07-28
+# behaviour, never 500 a request that used to work.
+# =====================================================================================
+
+# Head+tail caps mirror universal_parser's own DEFAULT_HEAD_BYTES / DEFAULT_TAIL_BYTES so a
+# remote read produces the same text the module would have produced locally.
+_UNIVERSAL_HEAD_BYTES = 2 * 1024 * 1024
+_UNIVERSAL_TAIL_BYTES = 1 * 1024 * 1024
+_UNIVERSAL_WHOLE_BYTES = _UNIVERSAL_HEAD_BYTES + _UNIVERSAL_TAIL_BYTES
+# Extra extensions the legacy discovery path (*.txt / *.out only) can never see.
+_UNIVERSAL_INVENTORY_MAX_FILES = 4000
+_UNIVERSAL_SCAN_DEFAULT_FILES = 25
+_UNIVERSAL_SCAN_MAX_FILES = 400
+
+
+def _truthy_arg(val: object, *, default: bool = False) -> bool:
+    """Query-string / JSON-body boolean. Absent or blank -> *default*."""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    if not s:
+        return default
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _universal_enabled() -> bool:
+    """True when the universal log normaliser is importable and not disabled by env."""
+    return _uparse is not None and not _truthy_env("RACK_UNIVERSAL_PARSER_DISABLED")
+
+
+def _history_enabled() -> bool:
+    """True when the SQLite run-history store is importable and not disabled by env."""
+    return results_history is not None and not _truthy_env("RACK_RESULTS_HISTORY_DISABLED")
+
+
+# --- host-aware stat lookup ----------------------------------------------------------
+_HIST_STAT_TTL_SEC = 20.0
+_hist_stat_lock = threading.Lock()
+_hist_stat_cache: dict[str, tuple[float, dict[str, tuple[float, int]]]] = {}
+
+
+def _host_log_stat_map(base: str) -> dict[str, tuple[float, int]]:
+    """``{abs path: (mtime_epoch, size_bytes)}`` for one directory on the EXEC host.
+
+    ``native_status._host_log_entries`` shells out to ``find`` (over SSH when remote), and
+    parser-results is polled by the dashboard, so the answer is memoised for ~20 s. The
+    (mtime, size) pair is what makes a history ``run_id`` stable, so it must be the real
+    head-node value — never a container-local ``stat``. Never raises.
+    """
+    key = str(base).rstrip("/") or "/"
+    now = time.time()
+    with _hist_stat_lock:
+        hit = _hist_stat_cache.get(key)
+        if hit is not None and (now - hit[0]) < _HIST_STAT_TTL_SEC:
+            return hit[1]
+    out: dict[str, tuple[float, int]] = {}
+    try:
+        for path, mtime_ns, size in native_status._host_log_entries(key):
+            out[str(path)] = (int(mtime_ns) / 1_000_000_000.0, int(size))
+    except Exception as e:  # noqa: BLE001 - discovery is best-effort
+        _logger.debug("host log stat map failed for %s: %s", key, e)
+        return {}
+    with _hist_stat_lock:
+        _hist_stat_cache[key] = (now, out)
+    return out
+
+
+def _log_stat_for_path(log_dir: Path, log_path_s: str) -> tuple[float | None, int | None]:
+    """``(mtime_epoch, size_bytes)`` for one log on the exec host, or ``(None, None)``."""
+    p = str(log_path_s)
+    bases: list[str] = []
+    parent = os.path.dirname(p)
+    if parent:
+        bases.append(parent)
+    try:
+        root = str(native_status._host_resolve(log_dir)).rstrip("/")
+    except Exception:  # noqa: BLE001
+        root = ""
+    if root and root not in bases:
+        bases.append(root)
+    for b in bases:
+        m = _host_log_stat_map(b)
+        hit = m.get(p)
+        if hit is not None:
+            return hit
+    return (None, None)
+
+
+# --- "did parser.sh actually parse anything?" ----------------------------------------
+_PARSER_PLACEHOLDER_TOKENS = {"", "-", "--", "---", "?", "n/a", "na", "none", "null", "unk"}
+
+
+def _parser_scalar_is_real(v: object) -> bool:
+    """True when a parser.sh table cell holds a genuine number (not ``-`` / ``---`` / ``?``)."""
+    if v is None or isinstance(v, bool):
+        return False
+    if isinstance(v, (int, float)):
+        return math.isfinite(float(v))
+    s = str(v).strip().replace(",", "")
+    if s.lower() in _PARSER_PLACEHOLDER_TOKENS:
+        return False
+    try:
+        return math.isfinite(float(s))
+    except (TypeError, ValueError):
+        return False
+
+
+def _parser_json_has_usable_rows(parsed: object) -> bool:
+    """True when a ``parser.sh --json`` object carries at least one real measurement.
+
+    parser.sh runs every extractor on every input file unconditionally, so it emits a
+    fully-formed placeholder row (``'---'`` / ``'?'`` / status ``FAIL``) even for a log the
+    extractor did not apply to. "The tables are non-empty" is therefore NOT evidence that
+    anything was parsed — this predicate is what decides whether the universal fallback runs.
+    """
+    if not isinstance(parsed, dict):
+        return False
+    tables = (
+        ("nccl_peak_out_of_place_busbw_gbps",
+         ("all_reduce_gbps", "all_gather_gbps", "alltoall_gbps"),
+         ("all_reduce_busbw_series",)),
+        ("nemotron_5h_56b_train_window",
+         ("step_s", "median_step_time", "tflops_per_gpu", "step_time_std", "perf_std", "mfu_percent"),
+         ("step_series",)),
+        ("mnubergemm_stress",
+         ("gflops_max", "gflops_median", "nodes", "ranks"),
+         ()),
+        ("sn_llama_nemotron",
+         ("step_s", "median_step_time", "tflops_per_gpu"),
+         ("step_series",)),
+    )
+    for key, scalars, series_keys in tables:
+        rows = parsed.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if any(_parser_scalar_is_real(row.get(f)) for f in scalars):
+                return True
+            for sk in series_keys:
+                ser = row.get(sk)
+                if isinstance(ser, list) and ser:
+                    return True
+    return False
+
+
+# --- host-aware capped log read ------------------------------------------------------
+def _read_log_text_capped(log_path_s: str, *, timeout: int = 120) -> tuple[str, dict[str, object]]:
+    """Head+tail capped read of a log on the execution host. ``(text, meta)``; never raises.
+
+    Thin wrapper over the connection, which applies the same head/tail cap wherever
+    the log lives. ``remote`` is kept in *meta* for the existing API consumers.
+    """
+    text, meta = host_exec.read_text(
+        log_path_s,
+        head_bytes=_UNIVERSAL_HEAD_BYTES,
+        tail_bytes=_UNIVERSAL_TAIL_BYTES,
+        whole_bytes=_UNIVERSAL_WHOLE_BYTES,
+        timeout=timeout,
+    )
+    meta["remote"] = meta.get("target") == "ssh"
+    return text, meta
+
+
+def _universal_parse_log(
+    log_dir: Path,
+    log_path_s: str,
+    *,
+    kind: str | None = None,
+    running_hint: bool | None = None,
+    timeout: int = 120,
+) -> dict[str, object] | None:
+    """Run ``universal_parser.parse`` over one log on the exec host. ``None`` when unavailable."""
+    if not _universal_enabled():
+        return None
+    text, meta = _read_log_text_capped(log_path_s, timeout=timeout)
+    if meta.get("read_error") and not text:
+        # A read failure is still a result: universal_parser turns it into a ``fail`` with the
+        # reason attached, which is far more useful than a blank panel.
+        text = ""
+    try:
+        return _uparse.parse(
+            log_path_s,
+            text,
+            kind=kind,
+            running_hint=running_hint,
+            meta={k: v for k, v in meta.items() if k in ("bytes", "truncated", "read_error", "gzip")},
+            head_bytes=_UNIVERSAL_HEAD_BYTES,
+            tail_bytes=_UNIVERSAL_TAIL_BYTES,
+        )
+    except Exception as e:  # noqa: BLE001 - the module promises not to raise; belt and braces
+        _logger.warning("universal_parser.parse failed for %s: %s", log_path_s, e)
+        return None
+
+
+# --- history ingest ------------------------------------------------------------------
+def _history_record_from_universal(
+    res: dict[str, object],
+    *,
+    source_log_path: str,
+    log_mtime: float | None,
+    log_size: int | None,
+    rack_hint: str | None = None,
+    source: str = "universal_parser",
+) -> dict[str, object]:
+    """Map a ``universal_parser.parse`` result onto a ``results_history.ingest_run`` record."""
+    size = log_size if log_size is not None else res.get("bytes")
+    extra: dict[str, object] = {
+        "parser_version": res.get("parser_version"),
+        "headline": res.get("headline"),
+        "exit_code": res.get("exit_code"),
+        "truncated": bool(res.get("truncated")),
+        "racks": res.get("racks") or [],
+        "errors": (res.get("errors") or [])[:10],
+        "warnings": (res.get("warnings") or [])[:10],
+    }
+    if isinstance(res.get("extra"), dict) and res["extra"]:
+        extra["parser_extra"] = res["extra"]
+    rec: dict[str, object] = {
+        # Salted so a universal record can never collide with the parser.sh records for the
+        # same log snapshot (results_history salts those with ""/nccl/nemo/mnubergemm).
+        "run_id": results_history.make_run_id(source_log_path, log_mtime, size, salt="universal"),
+        "source_log_path": str(source_log_path),
+        "log_basename": res.get("log_basename") or os.path.basename(str(source_log_path)),
+        "log_mtime": log_mtime,
+        "log_size": size,
+        "workload_kind": res.get("kind"),
+        "rack": res.get("rack") or rack_hint,
+        "nodes": res.get("nodes") or [],
+        "job_id": res.get("job_id"),
+        "started_at": res.get("started_at"),
+        "ended_at": res.get("ended_at"),
+        "status": res.get("status"),
+        "metrics": res.get("metrics") or [],
+        "source": source,
+        "extra": extra,
+    }
+    return rec
+
+
+def _history_ingest_universal(
+    res: dict[str, object] | None,
+    *,
+    source_log_path: str,
+    log_mtime: float | None = None,
+    log_size: int | None = None,
+    rack_hint: str | None = None,
+    source: str = "universal_parser",
+) -> str | None:
+    """Persist one universal_parser result. Returns the run_id, or ``None`` on any problem."""
+    if not res or not _history_enabled():
+        return None
+    run_id: str | None = None
+    try:
+        run_id = results_history.ingest_run(
+            _history_record_from_universal(
+                res,
+                source_log_path=source_log_path,
+                log_mtime=log_mtime,
+                log_size=log_size,
+                rack_hint=rack_hint,
+                source=source,
+            )
+        )
+    except Exception as e:  # noqa: BLE001 - history is best-effort
+        _logger.warning("results_history universal ingest failed for %s: %s", source_log_path, e)
+        return None
+
+    # Every run that reaches SQLite must also reach the Parquet lake — this is the single choke
+    # point all parsed runs flow through, so wiring it here is what makes "no more misses" true.
+    # Best-effort: the lake must never break a validation run, but a failure is LOGGED, never
+    # silently swallowed (a quiet provenance gap is indistinguishable from a successful capture).
+    _lake_push_universal(res, source_log_path=source_log_path, run_id=run_id)
+    return run_id
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Universal action capture: EVERY API call lands in the Parquet lake.
+#
+# User requirement, verbatim: *"every fucking thing - along with a flag"* — the click, the request,
+# the script execution and the output. _lake_push_job covers async workers and sync tracked ops;
+# this after_request hook is the catch-all so a route nobody remembered to instrument is still
+# recorded. Provenance you have to remember to add is provenance you will forget to add.
+#
+# RACK_LAKE_CAPTURE:
+#   actions  (default) every mutating call (POST/PUT/PATCH/DELETE) + explicit action GETs
+#   all                every API call, including read-only polls (very chatty — debugging only)
+#   off                nothing
+# ---------------------------------------------------------------------------------------------
+_LAKE_CAPTURE_SKIP = frozenset({
+    # High-frequency SPA polls with no operator intent — they would swamp the lake and bury the
+    # actions that matter. Still captured under RACK_LAKE_CAPTURE=all.
+    "/api/rack-locks", "/api/status", "/api/cluster-overview", "/api/reset-job-status",
+    "/api/metrics/health", "/api/lake/health", "/api/observability/health",
+})
+# Read-only by verb but a deliberate operator action, so worth keeping even in "actions" mode.
+_LAKE_CAPTURE_GET_ALLOW = ("/api/hw-check", "/api/slurm-", "/api/history/capture-job",
+                           "/api/rack-log-content", "/api/parser-results", "/api/tools/")
+_LAKE_BODY_MAX = 64 * 1024
+
+
+def _lake_capture_mode() -> str:
+    return (os.environ.get("RACK_LAKE_CAPTURE") or "actions").strip().lower()
+
+
+def _lake_should_capture(path: str, method: str) -> bool:
+    mode = _lake_capture_mode()
+    if mode == "off" or not path.startswith("/api/"):
+        return False
+    if mode == "all":
+        return True
+    if method in ("POST", "PUT", "PATCH", "DELETE"):
+        return path not in _LAKE_CAPTURE_SKIP
+    return any(path.startswith(pfx) for pfx in _LAKE_CAPTURE_GET_ALLOW) and path not in _LAKE_CAPTURE_SKIP
+
+
+@app.before_request
+def _lake_capture_start():  # noqa: ANN201
+    try:
+        g._lake_t0 = time.time()
+        # Read the body here: after the view runs it may already be consumed.
+        if _lake_should_capture(request.path, request.method):
+            g._lake_body = (request.get_data(cache=True) or b"")[:_LAKE_BODY_MAX]
+    except Exception:  # noqa: BLE001 - capture must never break a request
+        pass
+
+
+@app.after_request
+def _lake_capture_request(response):  # noqa: ANN001, ANN201
+    try:
+        if lake_sink is None or lake_sink.is_disabled():
+            return response
+        if not _lake_should_capture(request.path, request.method):
+            return response
+        # Streaming responses (SSE log tails) must not be materialised — reading .data would
+        # consume the generator and break the stream in the browser.
+        if response.direct_passthrough:
+            body = "<streaming response — not captured>"
+        else:
+            body = (response.get_data() or b"")[:_LAKE_BODY_MAX].decode("utf-8", "replace")
+        raw = getattr(g, "_lake_body", b"") or b""
+        rack = ""
+        try:
+            payload = json.loads(raw.decode("utf-8", "replace")) if raw else {}
+            if isinstance(payload, dict):
+                rack = str(payload.get("rack") or "")
+        except Exception:  # noqa: BLE001
+            payload = {}
+        rack = rack or (request.args.get("rack") or "")
+        action = request.path.replace("/api/", "").strip("/").replace("/", "_") or "root"
+        record = {
+            "kind": "rackstatus_request",
+            "status": "pass" if response.status_code < 400 else "fail",
+            "action": action,
+            "method": request.method,
+            "path": request.path,
+            "query": dict(request.args),
+            "request_body": raw.decode("utf-8", "replace"),
+            "http_status": response.status_code,
+            "duration_ms": round((time.time() - getattr(g, "_lake_t0", time.time())) * 1000, 1),
+            "operator": _operator_from_request(),
+            "remote_addr": request.headers.get("X-Forwarded-For") or request.remote_addr,
+            "rack": rack,
+        }
+        lake_sink.push_run(
+            run_id=lake_sink.make_run_id(f"req-{action}", rack, uuid.uuid4().hex[:12]),
+            workload="rackstatus_request", rack=rack, job_id=None, nodes=[],
+            status=record["status"], parsed=record,
+            log_path=f"synthesized:{action}.response.json", log_text=body,
+        )
+    except Exception as e:  # noqa: BLE001 - never break a response
+        _logger.warning("lake request capture failed: %s", e)
+    return response
+
+
+def _lake_push_job(job_id: str, row: dict) -> None:
+    """Mirror ANY completed Rack Status action (hw_check, validation, reset, stress, bug-report…)
+    into the Parquet lake.
+
+    The user's requirement, verbatim: *"any check any click on any test I do in rackstatus goes into
+    parquet"*. Result-log parsing alone missed everything that is not a Slurm workload — a hardware
+    check that finds a fault, a gpu-reset, a drain — none of which write a log to the log dir. Those
+    ARE events and must be as recoverable as a benchmark number.
+
+    Best-effort and never raises: an action must not fail because provenance capture did.
+    """
+    if lake_sink is None or lake_sink.is_disabled():
+        return
+    try:
+        kind = str(row.get("kind") or "action")
+        rack = str(row.get("rack") or "")
+        phase = str(row.get("phase") or "")
+        rc = row.get("returncode")
+        status = "pass" if (phase == "done" and (rc in (0, None))) else "fail"
+        record = {
+            "kind": f"rackstatus_{kind}",
+            "status": status,
+            "job_id": job_id,
+            "rack": rack,
+            "phase": phase,
+            "returncode": rc,
+            "operator": row.get("operator"),
+            "preset": row.get("preset"),
+            "checker_args": row.get("checker_args"),
+            "command": row.get("command_display"),
+            "created_at": row.get("created_at"),
+            "finished_at": row.get("finished_at"),
+            "error": row.get("error"),
+            "nodes": row.get("specs") or row.get("nodes") or [],
+        }
+        # stdout/stderr are the actual evidence (which trays failed, and why) — archive verbatim.
+        body = "\n".join(
+            x for x in (
+                f"$ {row.get('command_display') or ''}",
+                "--- stdout ---", str(row.get("stdout") or ""),
+                "--- stderr ---", str(row.get("stderr") or ""),
+            ) if x is not None
+        )
+        out = lake_sink.push_run(
+            run_id=lake_sink.make_run_id(f"action-{kind}", rack, job_id),
+            workload=f"rackstatus_{kind}",
+            rack=rack,
+            job_id=job_id,
+            nodes=[str(n) for n in (record["nodes"] or [])],
+            status=status,
+            parsed=record,
+            log_path=f"synthesized:{kind}-{job_id}.log",
+            log_text=body,
+        )
+        if not out.get("ok"):
+            _logger.warning("lake action push failed (%s %s): %s", kind, job_id, out.get("error"))
+    except Exception as e:  # noqa: BLE001 - provenance must never break an action
+        _logger.warning("lake action push raised (%s): %s", job_id, e)
+
+
+def _lake_push_universal(
+    res: dict[str, object],
+    *,
+    source_log_path: str,
+    run_id: str | None,
+) -> None:
+    """Mirror one parsed run into the Parquet lake (run_artifacts: result + raw log + inputs)."""
+    if lake_sink is None or lake_sink.is_disabled():
+        return
+    try:
+        workload = str(res.get("kind") or "unknown")
+        rack = str(res.get("rack") or "")
+        job_id = res.get("job_id")
+        lake_run_id = lake_sink.make_run_id(workload, rack, job_id or run_id)
+        out = lake_sink.push_run(
+            run_id=lake_run_id,
+            workload=workload,
+            rack=rack,
+            job_id=job_id,
+            nodes=[str(n) for n in (res.get("nodes") or [])],
+            status=str(res.get("status") or "unknown"),
+            parsed=res,
+            log_path=source_log_path,
+            # `tail` is what the parser actually read; the full log lives on the head node and is
+            # re-readable via /api/rack-log-content, so we archive the excerpt, not a re-fetch.
+            log_text=str(res.get("tail") or ""),
+        )
+        if not out.get("ok"):
+            _logger.warning("lake push failed for %s: %s", source_log_path, out.get("error"))
+    except Exception as e:  # noqa: BLE001 - never let provenance break a run
+        _logger.warning("lake push raised for %s: %s", source_log_path, e)
+
+
+def _history_ingest_parser_json(
+    parsed: object,
+    log_dir: Path,
+    log_path_s: str,
+    *,
+    rack_hint: str | None = None,
+    source: str = "parser.sh",
+) -> list[str]:
+    """Persist a ``parser.sh --json`` payload. Returns run_ids (empty list on any problem)."""
+    if not isinstance(parsed, dict) or not _history_enabled():
+        return []
+    try:
+        mt, sz = _log_stat_for_path(log_dir, log_path_s)
+        return list(
+            results_history.ingest_parser_json(
+                parsed,
+                source_log_path=str(log_path_s),
+                log_mtime=mt,
+                log_size=sz,
+                rack_hint=rack_hint,
+                source=source,
+            )
+            or []
+        )
+    except Exception as e:  # noqa: BLE001 - history is best-effort
+        _logger.warning("results_history parser ingest failed for %s: %s", log_path_s, e)
+        return []
+
+
+def _universal_fallback_for_log(
+    log_dir: Path,
+    log_path_s: str,
+    *,
+    rack_hint: str | None = None,
+    ingest: bool = True,
+) -> dict[str, object] | None:
+    """Universal parse + optional history ingest for one log. ``None`` when unavailable."""
+    res = _universal_parse_log(log_dir, log_path_s)
+    if res is None:
+        return None
+    if ingest:
+        mt, sz = _log_stat_for_path(log_dir, log_path_s)
+        rid = _history_ingest_universal(
+            res,
+            source_log_path=log_path_s,
+            log_mtime=mt,
+            log_size=sz,
+            rack_hint=rack_hint,
+        )
+        if rid:
+            res = {**res, "history_run_id": rid}
+    return res
+
+
+# --- whole-directory inventory (every extension, every depth) ------------------------
+def _universal_inventory(log_dir: Path, *, maxdepth: int = 2, limit: int | None = None) -> dict[str, object]:
+    """List EVERY file under the log dir on the exec host — not just ``*.txt`` / ``*.out``.
+
+    ``native_status._host_log_entries`` (the only directory listing the rest of the app has)
+    is hardcoded to ``-maxdepth 1 -type f ( -name '*.txt' -o -name '*.out' )``, so a ``*.log``,
+    ``*.json``, ``*.csv``, extension-less or sub-directory result is invisible to every legacy
+    endpoint. This is deliberately a SEPARATE listing so that behaviour is untouched.
+
+    Each entry reports the legacy eligibility gates too, so an operator can see exactly WHY a
+    file does or does not appear in the rack table.
+    """
+    base = str(native_status._host_resolve(log_dir)).rstrip("/") or str(log_dir)
+    depth = max(1, min(int(maxdepth or 1), 6))
+    cap = max(1, min(int(limit or _UNIVERSAL_INVENTORY_MAX_FILES), _UNIVERSAL_INVENTORY_MAX_FILES))
+    err: str | None = None
+    entries: list[tuple[str, int, float]] = [
+        (path, st.size, st.mtime)
+        for path, st in host_exec.stat_dir(base, maxdepth=depth).items()
+    ]
+    if not entries and not host_exec.is_dir(base):
+        return {"ok": False, "log_dir": base, "error": f"not a directory: {base}", "files": []}
+
+    entries.sort(key=lambda t: t[2], reverse=True)
+    truncated = len(entries) > cap
+    entries = entries[:cap]
+
+    naming = _nvis_naming()
+    files: list[dict[str, object]] = []
+    kind_counts: dict[str, int] = {}
+    for path, size, mtime in entries:
+        name = os.path.basename(path)
+        kind = "unknown"
+        if _uparse is not None:
+            try:
+                # No content read here: sniff_kind falls back to the filename when head_text
+                # is empty, which is exactly the cheap listing behaviour we want.
+                kind = _uparse.sniff_kind(path, None)
+            except Exception:  # noqa: BLE001
+                kind = "unknown"
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        try:
+            legacy_rack = naming.rack_id_from_log_basename(name)
+        except Exception:  # noqa: BLE001
+            legacy_rack = None
+        try:
+            legacy_listed = name.endswith((".txt", ".out")) and os.path.dirname(path).rstrip("/") == base
+            legacy_eligible = bool(legacy_listed and _nemo_single_rack_log_basename(name) and legacy_rack)
+        except Exception:  # noqa: BLE001
+            legacy_listed, legacy_eligible = False, False
+        files.append(
+            {
+                "path": path,
+                "basename": name,
+                "dir": os.path.dirname(path),
+                "size_bytes": size,
+                "mtime_epoch": mtime,
+                "mtime_iso": datetime.fromtimestamp(mtime, timezone.utc).isoformat(),
+                "kind_guess": kind,
+                "rack": legacy_rack,
+                # Why the legacy path does / does not show this file:
+                "legacy_listed": legacy_listed,       # survives the *.txt/*.out + maxdepth-1 find
+                "legacy_eligible": legacy_eligible,   # …and the basename + one-rack-id gates
+            }
+        )
+    return {
+        "ok": True,
+        "log_dir": base,
+        "maxdepth": depth,
+        "file_count": len(files),
+        "truncated": truncated,
+        "kind_counts": kind_counts,
+        "legacy_visible_count": sum(1 for f in files if f["legacy_eligible"]),
+        "error": err,
+        "files": files,
+    }
+
+
+def _universal_path_under_log_dir(log_dir: Path, raw: str) -> str | None:
+    """Resolve a caller-supplied path/basename to an absolute path INSIDE the log dir.
+
+    Anything with ``..`` or outside the log-dir prefix is rejected — the value is fed to a
+    remote shell, so a traversal here would be a real read-anything primitive.
+    """
+    s = (raw or "").strip()
+    if not s or "\x00" in s:
+        return None
+    base = str(native_status._host_resolve(log_dir)).rstrip("/") or str(log_dir)
+    cand = s if s.startswith("/") else f"{base}/{s}"
+    cand = PurePosixPath(cand).as_posix()
+    if ".." in PurePosixPath(cand).parts:
+        return None
+    if cand != base and not cand.startswith(base.rstrip("/") + "/"):
+        return None
+    return cand
+
+
+# --- history read routes -------------------------------------------------------------
+_HISTORY_FILTER_KEYS = (
+    "workload_kind", "kind", "rack", "job_id", "status", "run_id",
+    "since", "until", "search", "source_log_path", "has_metric",
+)
+
+
+def _history_filters_from_args() -> dict[str, object]:
+    """Query-string -> ``results_history`` filter mapping (repeatable params become lists)."""
+    out: dict[str, object] = {}
+    for key in _HISTORY_FILTER_KEYS:
+        vals = [v.strip() for v in request.args.getlist(key) if v and v.strip()]
+        if not vals:
+            continue
+        out[key] = vals[0] if len(vals) == 1 else vals
+    return out
+
+
+def _history_unavailable_response():
+    return jsonify(
+        {
+            "ok": False,
+            "error": "results history unavailable",
+            "detail": (
+                "backend/results_history.py is not importable — check the bind mount "
+                "in docker-compose.override.yml (or RACK_RESULTS_HISTORY_DISABLED)."
+            ),
+        }
+    ), 503
+
+
+@app.route("/api/history/runs")
+def api_history_runs():
+    """Paged run history. Filters: workload_kind, rack, job_id, status, since, until, search."""
+    if not _history_enabled():
+        return _history_unavailable_response()
+    try:
+        limit = max(1, min(int(request.args.get("limit") or 100), 1000))
+        offset = max(0, int(request.args.get("offset") or 0))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "limit/offset must be integers"}), 400
+    filters = _history_filters_from_args()
+    include_metrics = _truthy_arg(request.args.get("metrics"), default=True)
+    order = "asc" if str(request.args.get("order") or "").lower().startswith("a") else "desc"
+    try:
+        runs = results_history.list_runs(
+            filters, limit, offset, order=order, include_metrics=include_metrics
+        )
+        total = results_history.count_runs(filters)
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("history runs query failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify(
+        {"ok": True, "total": total, "limit": limit, "offset": offset,
+         "filters": filters, "runs": runs}
+    )
+
+
+@app.route("/api/history/runs/<path:run_id>")
+def api_history_run(run_id: str):
+    """One run with every metric row (series points included)."""
+    if not _history_enabled():
+        return _history_unavailable_response()
+    try:
+        run = results_history.get_run(run_id)
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("history run lookup failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+    if not run:
+        return jsonify({"ok": False, "error": "run not found", "run_id": run_id}), 404
+    return jsonify({"ok": True, "run": run})
+
+
+@app.route("/api/history/metrics")
+def api_history_metrics():
+    """``?metric=<name>`` -> the trend series. Without ``metric`` -> the available names."""
+    if not _history_enabled():
+        return _history_unavailable_response()
+    name = (request.args.get("metric") or request.args.get("name") or "").strip()
+    filters = _history_filters_from_args()
+    try:
+        if not name:
+            return jsonify(
+                {"ok": True, "filters": filters, "metrics": results_history.metric_names(filters)}
+            )
+        include_series = _truthy_arg(request.args.get("series"), default=False)
+        limit = max(1, min(int(request.args.get("limit") or 5000), 200000))
+        points = results_history.metric_series(
+            name, filters, limit=limit, include_series_points=include_series
+        )
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "limit must be an integer"}), 400
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("history metric series failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "metric": name.lower(), "filters": filters,
+                    "count": len(points), "points": points})
+
+
+# Alias kept because TRACK-A's integration note documents this spelling.
+@app.route("/api/history/metric-series")
+def api_history_metric_series():
+    """Alias of ``/api/history/metrics`` that requires ``?metric=``."""
+    if not (request.args.get("metric") or request.args.get("name") or "").strip():
+        return jsonify({"ok": False, "error": "metric is required"}), 400
+    return api_history_metrics()
+
+
+@app.route("/api/history/summary")
+def api_history_summary():
+    """Fleet baseline (count / median / p05 / p95 / latest per metric) + store health."""
+    if not _history_enabled():
+        return _history_unavailable_response()
+    kind = (request.args.get("workload_kind") or request.args.get("kind") or "").strip() or None
+    filters = _history_filters_from_args()
+    filters.pop("workload_kind", None)
+    filters.pop("kind", None)
+    try:
+        summary = results_history.summary_stats(kind, filters or None)
+        stats = results_history.db_stats()
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("history summary failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "summary": summary, "db": stats})
+
+
+# --- universal ingest routes ---------------------------------------------------------
+@app.route("/api/universal/inventory")
+def api_universal_inventory():
+    """Every file in the log dir on the exec host — all extensions, sub-dirs included."""
+    if not _universal_enabled():
+        return jsonify(
+            {"ok": False, "error": "universal_parser unavailable",
+             "detail": "check the backend/universal_parser.py bind mount in docker-compose.override.yml"}
+        ), 503
+    try:
+        log_dir = _resolve_log_dir(request.args.get("log_dir"))
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    try:
+        depth = int(request.args.get("maxdepth") or 2)
+    except (TypeError, ValueError):
+        depth = 2
+    try:
+        out = _universal_inventory(log_dir, maxdepth=depth)
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("universal inventory failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify(out)
+
+
+@app.route("/api/universal/parse")
+def api_universal_parse():
+    """Normalise ONE log of any kind. ``?path=`` (abs or relative to the log dir) or ``?log_file=``."""
+    if not _universal_enabled():
+        return jsonify(
+            {"ok": False, "error": "universal_parser unavailable",
+             "detail": "check the backend/universal_parser.py bind mount in docker-compose.override.yml"}
+        ), 503
+    try:
+        log_dir = _resolve_log_dir(request.args.get("log_dir"))
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    raw = (request.args.get("path") or request.args.get("log_file") or "").strip()
+    target = _universal_path_under_log_dir(log_dir, raw)
+    if not target:
+        return jsonify(
+            {"ok": False, "error": "path is required and must resolve inside the log directory"}
+        ), 400
+    rack_hint = (request.args.get("rack") or "").strip() or None
+    ingest = _truthy_arg(request.args.get("ingest"), default=True)
+    res = _universal_fallback_for_log(log_dir, target, rack_hint=rack_hint, ingest=ingest)
+    if res is None:
+        return jsonify({"ok": False, "error": "universal parse failed", "path": target}), 500
+    return jsonify({"ok": True, "log_dir": str(log_dir), "path": target, "result": res})
+
+
+@app.route("/api/universal/scan", methods=["POST"])
+def api_universal_scan():
+    """Parse + persist a batch of logs from the log dir (newest first). Backfills history.
+
+    Body/query: ``log_dir``, ``maxdepth`` (default 2), ``max_files`` (default 25, max 400),
+    ``budget_sec`` (default 120), ``kind``/``search`` filters, ``ingest`` (default true).
+    Safe to re-run: ingest is idempotent per (path, mtime, size) snapshot.
+    """
+    if not _universal_enabled():
+        return jsonify(
+            {"ok": False, "error": "universal_parser unavailable",
+             "detail": "check the backend/universal_parser.py bind mount in docker-compose.override.yml"}
+        ), 503
+    body = request.get_json(silent=True) or {}
+
+    def _arg(name, default=None):
+        v = body.get(name)
+        if v is None:
+            v = request.args.get(name)
+        return default if v is None or str(v).strip() == "" else v
+
+    try:
+        log_dir = _resolve_log_dir(str(_arg("log_dir")) if _arg("log_dir") else None)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    try:
+        depth = max(1, min(int(_arg("maxdepth", 2)), 6))
+        max_files = max(1, min(int(_arg("max_files", _UNIVERSAL_SCAN_DEFAULT_FILES)),
+                               _UNIVERSAL_SCAN_MAX_FILES))
+        budget = max(10, min(int(_arg("budget_sec", 120)), 900))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "maxdepth/max_files/budget_sec must be integers"}), 400
+    want_kind = (str(_arg("kind", "")) or "").strip().lower()
+    want_search = (str(_arg("search", "")) or "").strip().lower()
+    ingest = _truthy_arg(_arg("ingest"), default=True)
+
+    inv = _universal_inventory(log_dir, maxdepth=depth)
+    if not inv.get("ok"):
+        return jsonify(inv), 502
+    started = time.monotonic()
+    scanned: list[dict[str, object]] = []
+    skipped = 0
+    for f in inv.get("files") or []:
+        if len(scanned) >= max_files:
+            break
+        if (time.monotonic() - started) > budget:
+            break
+        name = str(f.get("basename") or "")
+        if want_search and want_search not in name.lower():
+            skipped += 1
+            continue
+        if want_kind and str(f.get("kind_guess") or "") != want_kind:
+            skipped += 1
+            continue
+        path = str(f.get("path") or "")
+        res = _universal_parse_log(log_dir, path)
+        if res is None:
+            skipped += 1
+            continue
+        run_id = None
+        if ingest:
+            run_id = _history_ingest_universal(
+                res,
+                source_log_path=path,
+                log_mtime=f.get("mtime_epoch"),
+                log_size=f.get("size_bytes"),
+                rack_hint=f.get("rack"),
+            )
+        scanned.append(
+            {
+                "path": path,
+                "basename": name,
+                "kind": res.get("kind"),
+                "status": res.get("status"),
+                "rack": res.get("rack"),
+                "job_id": res.get("job_id"),
+                "metric_count": len(res.get("metrics") or []),
+                "headline": res.get("headline"),
+                "run_id": run_id,
+            }
+        )
+    return jsonify(
+        {
+            "ok": True,
+            "log_dir": inv.get("log_dir"),
+            "file_count": inv.get("file_count"),
+            "parsed": len(scanned),
+            "skipped": skipped,
+            "ingested": sum(1 for s in scanned if s.get("run_id")),
+            "history_enabled": _history_enabled(),
+            "elapsed_sec": round(time.monotonic() - started, 3),
+            "results": scanned,
+        }
+    )
+
+
 @app.route("/api/parser-results")
 def api_parser_results():
     """Run parser.sh --json on the log for rack (same cwd convention as rack_status log_dir).
@@ -8533,7 +9737,7 @@ def api_parser_results():
         return jsonify({"ok": False, "error": f"parser.sh not found: {parser}"}), 500
     env = _subprocess_env({"NO_COLOR": "1"})
     # Route parser.sh through host_exec (SSH when remote) and don't local-resolve a remote path.
-    lp = str(log_path) if host_exec.is_remote() else str(log_path.resolve())
+    lp = str(_rpath(log_path))
     cmd = [
         "bash",
         str(parser),
@@ -8572,10 +9776,17 @@ def api_parser_results():
     display_cmd = "./parser.sh --json " + shlex.quote(log_path.name)
     sn_nemo: list[object] = []
     # sn-llama secondary pass reads local files; skip in SSH mode (main NCCL/NEMO charts still work).
-    sn_paths = [] if host_exec.is_remote() else _sn_llama_txt_paths_for_rack(log_dir, rk, exclude=log_path)
+    # Secondary pass: runs parser.sh through a *local* subprocess against local
+    # files, so it only applies when the app is on the target host. The primary
+    # NCCL/NEMO charts above go through the connection and work either way.
+    sn_paths = (
+        _sn_llama_txt_paths_for_rack(log_dir, rk, exclude=log_path)
+        if host_exec.exec_kind() == "local"
+        else []
+    )
     if sn_paths:
         try:
-            rel_sn = [str(p.resolve().relative_to(log_dir.resolve())) for p in sn_paths]
+            rel_sn = [str(p.resolve().relative_to(_rpath(log_dir))) for p in sn_paths]
             cmd_sn = ["bash", str(parser), *_parser_extra_args(), "--json", *rel_sn]
             proc_sn = subprocess.run(
                 cmd_sn,
@@ -8607,6 +9818,28 @@ def api_parser_results():
     pdisp = _grafana_url_timezone_param()
     if isinstance(g_embed, dict) and g_embed.get("display_timezone"):
         pdisp = str(g_embed["display_timezone"])
+
+    # --- universal ingest + durable history (2026-07-28) -----------------------------
+    # Additive only: the four parser.sh tables in ``data`` are untouched, so the NCCL /
+    # Nemotron / MNUBERGEMM charts keep rendering exactly what they rendered before. When
+    # parser.sh produced nothing usable (a foreign tool, or the stale head-node v6 that
+    # returns rack='?' and '---' for a real MNUBERGEMM log) a ``data.universal`` key is
+    # added with the normalised result so the log still surfaces. Never fails the request.
+    universal_res = None
+    try:
+        if not _parser_json_has_usable_rows(parsed):
+            universal_res = _universal_fallback_for_log(log_dir, lp, rack_hint=rk or None)
+            if universal_res is not None:
+                merged_data = {**merged_data, "universal": universal_res}
+    except Exception as e:  # noqa: BLE001 - never break the charts for this
+        _logger.warning("universal fallback failed for %s: %s", lp, e)
+    try:
+        if universal_res is None:
+            _history_ingest_parser_json(parsed, log_dir, lp, rack_hint=rk or None,
+                                        source="api/parser-results")
+    except Exception as e:  # noqa: BLE001 - history is best-effort
+        _logger.warning("results_history ingest failed for %s: %s", lp, e)
+
     return jsonify(
         {
             "ok": proc.returncode == 0,
@@ -8660,10 +9893,10 @@ def api_nvloom_heatmaps_log():
             }
         ), 404
     log_path = cands[0]
-    try:
-        sz = log_path.stat().st_size
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+    st = host_exec.stat(log_path)
+    if st is None:
+        return jsonify({"ok": False, "error": f"NVLOOM log not readable: {log_path}"}), 404
+    sz = st.size
     if sz > _NVLOOM_HEATMAPS_LOG_MAX_BYTES:
         return jsonify(
             {
@@ -8671,11 +9904,15 @@ def api_nvloom_heatmaps_log():
                 "error": f"NVLOOM log too large ({sz} bytes; max {_NVLOOM_HEATMAPS_LOG_MAX_BYTES})",
             }
         ), 413
-    try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify({"ok": True, "path": str(log_path.resolve()), "content": text})
+    text, rmeta = host_exec.read_text(
+        log_path,
+        head_bytes=_NVLOOM_HEATMAPS_LOG_MAX_BYTES,
+        tail_bytes=0,
+        whole_bytes=_NVLOOM_HEATMAPS_LOG_MAX_BYTES,
+    )
+    if rmeta.get("read_error"):
+        return jsonify({"ok": False, "error": str(rmeta["read_error"])}), 500
+    return jsonify({"ok": True, "path": str(_rpath(log_path)), "content": text})
 
 
 _CLUSTERKIT_JSON_MAX_BYTES = 80 * 1024 * 1024
@@ -8861,7 +10098,7 @@ def api_clusterkit_results():
             runs_out.append(
                 {
                     "dir": sub.name,
-                    "rel_path": str(bw.resolve().relative_to(log_dir.resolve())),
+                    "rel_path": str(bw.resolve().relative_to(_rpath(log_dir))),
                     "mtime": int(st.st_mtime),
                     "error": f"bandwidth.json too large ({st.st_size} bytes)",
                 }
@@ -8874,7 +10111,7 @@ def api_clusterkit_results():
             runs_out.append(
                 {
                     "dir": sub.name,
-                    "rel_path": str(bw.resolve().relative_to(log_dir.resolve())),
+                    "rel_path": str(bw.resolve().relative_to(_rpath(log_dir))),
                     "mtime": int(st.st_mtime),
                     "error": str(e),
                 }
@@ -8895,7 +10132,7 @@ def api_clusterkit_results():
         runs_out.append(
             {
                 "dir": sub.name,
-                "rel_path": str(bw.resolve().relative_to(log_dir.resolve())),
+                "rel_path": str(bw.resolve().relative_to(_rpath(log_dir))),
                 "mtime": int(st.st_mtime),
                 "meta": meta_only,
                 "summary": summ or {},
@@ -8960,7 +10197,7 @@ def _parser_json_for_log_path(log_dir: Path, log_path: Path) -> tuple[dict | Non
     env = _subprocess_env({"NO_COLOR": "1"})
     # Route parser.sh through host_exec (SSH when remote) and pass an absolute path; don't
     # local-resolve a remote path (``.resolve()`` breaks on the PurePosixPath returned in SSH mode).
-    lp = str(log_path) if host_exec.is_remote() else str(log_path.resolve())
+    lp = str(_rpath(log_path))
     cmd = ["bash", str(parser), *_parser_extra_args(), "--json", lp]
     timeout = max(30, _job_env_int("RACK_PARSER_TIMEOUT", 300))
     try:
@@ -8984,7 +10221,17 @@ def _parser_json_for_log_path(log_dir: Path, log_path: Path) -> tuple[dict | Non
         parsed = json.loads(raw)
     except json.JSONDecodeError:
         return None, "parser stdout is not valid JSON"
-    return (parsed if isinstance(parsed, dict) else None), None
+    if not isinstance(parsed, dict):
+        return None, None
+    # Durable history (2026-07-28). This is the single choke point every analytics /
+    # multirack parser call goes through, so hooking it here records a run for each parsed
+    # log with no change to the return contract. Best-effort: swallowed on any failure.
+    try:
+        if _parser_json_has_usable_rows(parsed):
+            _history_ingest_parser_json(parsed, log_dir, lp, source="parser_json_for_log_path")
+    except Exception as e:  # noqa: BLE001
+        _logger.debug("history ingest (parser_json_for_log_path) failed for %s: %s", lp, e)
+    return parsed, None
 
 
 def _parse_gbps_scalar(v: object) -> float | None:
@@ -9382,6 +10629,138 @@ def _demo_analytics_aggregate() -> dict[str, object]:
     }
 
 
+# Metrics worth a fleet baseline, per workload kind. Names match what
+# ``results_history`` stores from parser.sh (records_from_parser_json) and from
+# ``universal_parser`` — both write the same lower-cased metric_name.
+_ANALYTICS_HISTORY_METRICS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("nccl", ("all_reduce_gbps", "all_gather_gbps", "alltoall_gbps", "busbw_gbps",
+              "reduce_scatter_gbps", "sendrecv_gbps")),
+    ("nemo", ("step_s", "step_time_s", "tflops_per_gpu", "mfu_percent")),
+    ("mnubergemm", ("gflops_max", "gflops_median")),
+    ("hpl", ("gflops", "tflops")),
+    ("nvbandwidth", ("bandwidth_gbps",)),
+    ("nvloom", ("bandwidth_gbps",)),
+)
+_ANALYTICS_HISTORY_SERIES_LIMIT = 5000
+
+
+def _analytics_history_block(since: str | None = None) -> dict[str, object]:
+    """Fleet baseline computed over the PERSISTED run history, not just today's log dir.
+
+    The existing single-rack/multirack tables in ``/api/analytics/aggregate`` are derived
+    from whatever logs happen to sit in ``log_dir`` right now *and* are gated on the rack's
+    ``nemo`` cell being ``done``; both facts are unchanged here. This adds a parallel view
+    whose baseline is every run ever ingested, so a deviation figure exists even when zero
+    racks are currently ``done``.
+
+    Returned under a NEW top-level ``history`` key — no existing field is touched.
+    """
+    if not _history_enabled():
+        return {
+            "available": False,
+            "reason": "results_history unavailable (check the bind mount in docker-compose.override.yml)",
+        }
+    base_filters: dict[str, object] = {}
+    if since:
+        base_filters["since"] = since
+    out: dict[str, object] = {
+        "available": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "since": since,
+        "workloads": {},
+    }
+    try:
+        out["db"] = results_history.db_stats()
+    except Exception as e:  # noqa: BLE001
+        out["db"] = {"error": str(e)}
+    for kind, metric_names in _ANALYTICS_HISTORY_METRICS:
+        try:
+            summary = results_history.summary_stats(kind, base_filters or None)
+        except Exception as e:  # noqa: BLE001
+            _logger.debug("history summary for %s failed: %s", kind, e)
+            continue
+        if not summary or not int(summary.get("run_count") or 0):
+            continue
+        stats = summary.get("metrics") or {}
+        per_metric: dict[str, object] = {}
+        for metric in metric_names:
+            st = stats.get(metric)
+            if not isinstance(st, dict) or not st.get("count"):
+                continue
+            median = st.get("median")
+            filt = dict(base_filters)
+            filt["workload_kind"] = kind
+            try:
+                pts = results_history.metric_series(
+                    metric, filt, limit=_ANALYTICS_HISTORY_SERIES_LIMIT
+                )
+            except Exception as e:  # noqa: BLE001
+                _logger.debug("history series for %s/%s failed: %s", kind, metric, e)
+                pts = []
+            # metric_series returns oldest-first, so the last row per rack is its latest run.
+            latest_by_rack: dict[str, dict[str, object]] = {}
+            for p in pts:
+                rk = p.get("rack")
+                if not rk:
+                    continue
+                latest_by_rack[str(rk)] = p
+            racks_out: list[dict[str, object]] = []
+            for rk in sorted(latest_by_rack):
+                p = latest_by_rack[rk]
+                val = p.get("value")
+                dev = None
+                if val is not None and isinstance(median, (int, float)) and float(median) > 0:
+                    dev = round((float(val) - float(median)) / float(median) * 100.0, 2)
+                racks_out.append(
+                    {
+                        "rack": rk,
+                        "value": val,
+                        "unit": p.get("unit"),
+                        "run_id": p.get("run_id"),
+                        "job_id": p.get("job_id"),
+                        "status": p.get("status"),
+                        "log_file": p.get("log_basename"),
+                        "started_at": p.get("started_at"),
+                        "pct_vs_history_median": dev,
+                    }
+                )
+            per_metric[metric] = {
+                "unit": st.get("unit"),
+                "sample_count": st.get("count"),
+                "median": median,
+                "mean": st.get("mean"),
+                "p05": st.get("p05"),
+                "p95": st.get("p95"),
+                "min": st.get("min"),
+                "max": st.get("max"),
+                "latest_per_rack": racks_out,
+            }
+        if not per_metric:
+            continue
+        out["workloads"][kind] = {
+            "run_count": summary.get("run_count"),
+            "pass_count": summary.get("pass_count"),
+            "fail_count": summary.get("fail_count"),
+            "first_started_at": summary.get("first_started_at"),
+            "last_started_at": summary.get("last_started_at"),
+            "metrics": per_metric,
+        }
+    return out
+
+
+@app.route("/api/analytics/history", methods=["GET"])
+def api_analytics_history():
+    """Fleet baseline over the persisted run history (``?since=`` ISO-8601 or epoch)."""
+    if not _history_enabled():
+        return _history_unavailable_response()
+    since = (request.args.get("since") or "").strip() or None
+    try:
+        return jsonify({"ok": True, "history": _analytics_history_block(since)})
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("analytics history failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/analytics/last", methods=["GET"])
 def api_analytics_last():
     """Return the last saved analytics aggregate for ``log_dir`` (written after a successful POST)."""
@@ -9397,7 +10776,7 @@ def api_analytics_last():
         log_dir = _resolve_log_dir(request.args.get("log_dir"))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    hit = _analytics_aggregate_cache_get(str(log_dir.resolve()))
+    hit = _analytics_aggregate_cache_get(str(_rpath(log_dir)))
     if not hit:
         return jsonify({"ok": False, "error": "no cached analysis for this log directory"}), 404
     out: dict[str, object] = dict(hit)
@@ -9443,12 +10822,49 @@ def api_analytics_aggregate():
             continue
         rk = str(ent.get("rack", "")).strip()
         nemo = str(ent.get("nemo", "")).strip().lower()
-        if not rk or nemo != "done":
+        # A rack qualifies if EITHER plane has a result. Gating on nemo=="done" alone made
+        # Analytics empty for any rack that ran only a Stage-1 NCCL sweep -- and with no
+        # Nemotron run anywhere on the cluster that meant "Run Analytics" returned nothing at
+        # all (48 racks: 12 nemo=fail, 36 nemo=pending, 0 done, while h03 had a COMPLETED
+        # 24-test NCCL sweep, job 65828). The NCCL and NEMO logs are already selected
+        # independently below, so admitting NCCL-only racks here needs no downstream change.
+        stage1 = str(ent.get("stage1", "")).strip().lower()
+        nccl = str(ent.get("nccl", "")).strip().lower()
+        if not rk or not (nemo == "done" or stage1 == "done" or nccl == "done"):
             continue
         try:
             done_racks.append(_normalize_rack_id(rk))
         except ValueError:
             continue
+
+    # The SPA posts ONLY {rack, nemo} -- AnalyticsView.tsx bodyRows does
+    #   rows.map(r => ({ rack: r.rack, nemo: r.nemo }))
+    # so stage1/nccl above can never arrive from the browser (they only work for API callers).
+    # The frontend is baked into the image, so instead of requiring a rebuild, discover racks
+    # that have a single-rack NCCL log straight from the log dir. ONE listing for the whole
+    # directory, not one per rack, so this costs a single round trip over SSH.
+    try:
+        _naming = _nvis_naming()
+        _base_root = str(native_status._host_resolve(log_dir)).rstrip("/")
+        for _base in (_base_root, _base_root + "/failed"):
+            for _path, _mt, _sz in native_status._host_log_entries(_base):
+                _name = os.path.basename(_path)
+                if "nccl" not in _name.lower():
+                    continue
+                if not _nemo_single_rack_log_basename(_name) or _is_multirack_log_basename(_name):
+                    continue
+                if _naming.is_llama_slurm_stdout_basename(_name):
+                    continue
+                _rid = _naming.rack_id_from_log_basename(_name) or ""
+                if not _rid:
+                    continue
+                try:
+                    done_racks.append(_normalize_rack_id(_rid))
+                except ValueError:
+                    continue
+    except Exception as _e:  # discovery is best-effort; never break the posted-rows path
+        app.logger.warning("analytics: NCCL rack discovery failed: %s", _e)
+
     done_racks = sorted(set(done_racks))
 
     series_by_rack: dict[str, list[dict[str, float]]] = {}
@@ -9499,6 +10915,9 @@ def api_analytics_aggregate():
                         "all_reduce_gbps": _parse_gbps_scalar(nc.get("all_reduce_gbps")),
                         "all_gather_gbps": _parse_gbps_scalar(nc.get("all_gather_gbps")),
                         "alltoall_gbps": _parse_gbps_scalar(nc.get("alltoall_gbps")),
+                        # NVIS 2026-07-28: parser.sh now also emits these two (nccl_busbw_ext_csv).
+                        "reduce_scatter_gbps": _parse_gbps_scalar(nc.get("reduce_scatter_gbps")),
+                        "sendrecv_gbps": _parse_gbps_scalar(nc.get("sendrecv_gbps")),
                     }
                 )
 
@@ -9554,6 +10973,8 @@ def api_analytics_aggregate():
         ("all_reduce_gbps", "all_reduce_gbps"),
         ("all_gather_gbps", "all_gather_gbps"),
         ("alltoall_gbps", "alltoall_gbps"),
+        ("reduce_scatter_gbps", "reduce_scatter_gbps"),
+        ("sendrecv_gbps", "sendrecv_gbps"),
     ):
         vals = [float(r[key]) for r in scalar_rows if r.get(key) is not None]
         if not vals:
@@ -9694,8 +11115,18 @@ def api_analytics_aggregate():
             "nemotron_throughput_scaling": nemotron_throughput_scaling,
         },
     }
+    # NEW key only — ``single_rack`` / ``multirack`` above are byte-for-byte what they were.
+    # The fleet baseline here is computed over the durable run history, so it is populated
+    # even when no rack's ``nemo`` cell is ``done`` (the gate the tables above still apply).
     try:
-        _analytics_aggregate_cache_put(str(log_dir.resolve()), payload)
+        payload["history"] = _analytics_history_block(
+            (body.get("since") or "").strip() or None if isinstance(body.get("since"), str) else None
+        )
+    except Exception as e:  # noqa: BLE001 - never fail the analytics response for this
+        _logger.warning("analytics history block failed: %s", e)
+        payload["history"] = {"available": False, "reason": str(e)}
+    try:
+        _analytics_aggregate_cache_put(str(_rpath(log_dir)), payload)
     except OSError:
         _logger.exception("analytics aggregate cache write failed")
     return jsonify(payload)
@@ -9706,7 +11137,7 @@ def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
     script = _script_path()
     if not _script_exists(script):
         return None
-    ap = abs_path if host_exec.is_remote() else abs_path.resolve()
+    ap = _rpath(abs_path)
     mvt = (_eget("RACK_MULTIRACK_VALIDATION_TEST") or "nccl_all_reduce").strip() or "nccl_all_reduce"
     vt_if_unset = mvt if _is_multirack_log_basename(ap.name) else "nccl_all_reduce,llm"
     env = _subprocess_env({"NO_COLOR": "1"}, validation_test_if_unset=vt_if_unset)
@@ -9736,7 +11167,7 @@ _LOG_ANALYSIS_CACHE_PATH = REPO_ROOT / "var" / "cache" / "log_analysis_cache.jso
 
 def _glob_one_rack_nemo_logs_for_rack_status(log_dir: Path) -> list[Path]:
     """NEMO single-rack validation logs in log_dir root (not failed/, not NCCL-only, no Llama stdout)."""
-    root = log_dir.resolve()
+    root = _rpath(log_dir)
     naming = _nvis_naming()
     out: list[Path] = []
     for p in sorted(root.glob("*.txt"), key=lambda x: x.name.lower()):
@@ -10266,7 +11697,7 @@ def api_parser_export_excel():
         return jsonify({"ok": False, "error": f"parser.sh not found: {parser}"}), 500
     rel_args: list[str] = []
     for p in paths:
-        rel_args.append(str(p.resolve().relative_to(log_dir.resolve())))
+        rel_args.append(str(p.resolve().relative_to(_rpath(log_dir))))
     env = _subprocess_env({"NO_COLOR": "1"})
     cmd = ["bash", str(parser), *_parser_extra_args(), "--json", *rel_args]
     timeout = max(60, _env_int("RACK_PARSER_EXPORT_TIMEOUT", 900))
@@ -10370,7 +11801,7 @@ def api_export_logs_zip():
                 ),
             }
         ), 404
-    root = log_dir.resolve()
+    root = _rpath(log_dir)
     bio = io.BytesIO()
     try:
         with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -10534,7 +11965,19 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
             "cmd": cmd,
             "display_cmd": display_cmd,
             "timeout": timeout,
-            "env_updates": _launch_env_from_body(body),
+            # Settings -> job env values must reach run_llmb_nccl.sh, which otherwise falls back
+            # to its built-in defaults (/home/nvis/dgxc-benchmarking, /home/nvis/llmb_venv) —
+            # the wrong user on this cluster, and paths that do not exist. Mirrors how the
+            # ClusterKit prepare pulls its RACK_CLUSTERKIT_* keys via _eget.
+            "env_updates": {
+                **{
+                    k: v
+                    for k in ("LLMB_INSTALL", "LLMB_REPO", "LLMB_VENV", "NVIS_WORKSPACE_DIR")
+                    if (v := (_eget(k) or "").strip())
+                },
+                # Launch-dialog vars win over the stored Settings values.
+                **_launch_env_from_body(body),
+            },
         },
         None,
     )
@@ -10864,7 +12307,7 @@ def api_run_llama_status():
 
 def _sn_llama_txt_paths_for_rack(log_dir: Path, rack: str, *, exclude: Path | None = None) -> list[Path]:
     """``log_dir/sn-llama/*.txt`` whose names suggest LLAMA and match *rack* (case-insensitive substring on rack id tokens)."""
-    root = log_dir.resolve()
+    root = _rpath(log_dir)
     d = root / "sn-llama"
     if not d.is_dir():
         return []
@@ -10910,7 +12353,7 @@ def api_sn_llama_logs():
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     rack_f = (request.args.get("rack") or "").strip().lower()
-    d = log_dir.resolve() / "sn-llama"
+    d = _rpath(log_dir) / "sn-llama"
     if not d.is_dir():
         return jsonify({"ok": True, "files": []})
     out: list[dict[str, object]] = []
@@ -10970,10 +12413,10 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
         "WORKSPACE_DIR": ws,
         "NVIS_WORKSPACE_DIR": ws,
         "TOPDIR": ws,
-        "NVIS_BIN_SCRIPTS": str(_resolve_path(SCRIPTS_DIR)),
+        "NVIS_BIN_SCRIPTS": str(_rpath(SCRIPTS_DIR)),
         "CUDA_MAJ": cuda_m,
         "NVIS_SYSINFO_SH": str(_sysinfo_script_path()),
-        "NVIS_CHECKER_SH": str(_resolve_path(SCRIPTS_DIR / "checker.sh")),
+        "NVIS_CHECKER_SH": str(_rpath(SCRIPTS_DIR / "checker.sh")),
     }
     for k in ("NVIS_HPCX_ROOT", "NVIS_NCCL_PATH", "RACK_MNUBERGEMM_PARTITION"):
         v = (_eget(k) or "").strip()
@@ -10991,6 +12434,23 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
         },
         None,
     )
+
+
+def _llmb_env_updates(body: dict) -> dict[str, str]:
+    """Env for the llmb-run launchers.
+
+    ``_eget()`` reads Settings out of ``var/cache/job_env_overrides.json``, which is NOT part
+    of ``os.environ`` and therefore does NOT cross the SSH hop to the head node. Without this,
+    ``run_llmb_nccl.sh`` silently falls back to its built-in ``/home/nvis/...`` defaults and
+    cannot find llmb-run. Forward the workspace keys explicitly.
+    """
+    out: dict[str, str] = {}
+    for key in ("LLMB_INSTALL", "LLMB_REPO", "LLMB_VENV", "LLMB_RUN", "NVIS_WORKSPACE_DIR"):
+        val = (_eget(key) or "").strip()
+        if val:
+            out[key] = val
+    out.update(_launch_env_from_body(body))
+    return out
 
 
 def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
@@ -11029,41 +12489,71 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
         target = validation_target_for_rack(rack, tgt_ov_s or None)
     except ValueError:
         target = rk
-    script = _run_nccl_mpi_script_path()
+    # Stage-1 runs through llmb-run (run_llmb_nccl.sh), not raw sbatch. Operator ask
+    # 2026-07-28: "fix stage 1 NCCL to use llmb run - no more sbatch - only for MNUberGEMM
+    # everything else is llmbrun". One llmb submit runs the whole pre-generated testset
+    # (24 tests: all_reduce, all_gather, reduce_scatter, alltoall, sendrecv), so the
+    # per-collective knobs below (--size-max / --nccl-version / --rounds) do not apply --
+    # the sweep is defined by llmb_repo/nccl/config/testset.toml and baked into launch.sh.
+    # Set RACK_NCCL_FULLRACK_LAUNCHER=mpi to fall back to run_nccl_mpi.sh + nccl_allreduce.sbatch.
+    launcher = (_eget("RACK_NCCL_FULLRACK_LAUNCHER") or "llmb").strip().lower()
+    use_llmb = launcher not in ("mpi", "sbatch", "direct", "nccl_mpi")
+    script = _run_llmb_nccl_script_path() if use_llmb else _run_nccl_mpi_script_path()
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"NCCL launcher not found: {script}"}), 500)
-    # Cap the all_reduce sweep. Accept the legacy `end`/RACK_NCCL_FULLRACK_END knobs too.
-    size_max = (
-        body.get("size_max") or body.get("end") or _eget("RACK_NCCL_MPI_SIZE_MAX")
-        or _eget("RACK_NCCL_FULLRACK_END") or "16G"
-    ).strip()
-    cmd: list[str] = ["bash", str(script), "--app-log-rack", rk]
-    if size_max:
-        cmd += ["--size-max", size_max]
-    vc = _nccl_version_cli(body)
-    if isinstance(vc, tuple):
-        return None, vc
-    cmd += vc
-    nccl_version = vc[1] if vc else ""
-    # Stage-1 acceptance runs the sweep 5× by default; the UI modal can override via ``iters``.
-    rounds = _nccl_rounds_from_body(body, 5) or 5
-    cmd += ["--rounds", str(rounds)]
-    if tgt_ov_s:
-        cmd += ["--nodelist", target]
-        node_arg_display = " --nodelist " + shlex.quote(target)
-    else:
-        cmd.append(rk)
-        node_arg_display = " " + shlex.quote(rk)
-    display_cmd = "./" + script.name + " --app-log-rack " + shlex.quote(rk) + (
-        (" --size-max " + shlex.quote(size_max)) if size_max else ""
-    ) + (
-        (" --nccl-version " + shlex.quote(nccl_version)) if nccl_version else ""
-    ) + " --rounds " + str(rounds) + node_arg_display
-    timeout = max(120, _job_env_int("RACK_NCCL_FULLRACK_TIMEOUT", 7200))
-    # run_nccl_mpi.sh writes its Slurm --output under RACK_JOB_LOG_DIR (defaults to cwd; the
-    # worker cwd is log_dir, but set it explicitly so the app log always lands in log_dir).
     env_updates: dict[str, str] = {"RACK_JOB_LOG_DIR": str(log_dir), "NVIS_RACK": rk}
-    env_updates.update(_launch_env_from_body(body))
+
+    if use_llmb:
+        cmd = ["bash", str(script)]
+        reservation = (body.get("reservation") or _eget("RACK_LLMB_NCCL_RESERVATION") or "").strip()
+        if reservation:
+            cmd += ["--reservation", reservation]
+        if bool(body.get("dry_run")):
+            cmd.append("--dry-run")
+        # Explicit tray selection -> --nodelist; otherwise let the script expand the rack id.
+        if tgt_ov_s:
+            cmd += ["--nodelist", target]
+            node_arg_display = " --nodelist " + shlex.quote(target)
+        else:
+            cmd.append(rk)
+            node_arg_display = " " + shlex.quote(rk)
+        display_cmd = "./" + script.name + (
+            (" --reservation " + shlex.quote(reservation)) if reservation else ""
+        ) + (" --dry-run" if body.get("dry_run") else "") + node_arg_display
+        timeout = max(120, _job_env_int("RACK_LLMB_NCCL_TIMEOUT", 14400))
+        env_updates.update(_llmb_env_updates(body))
+    else:
+        # Cap the all_reduce sweep. Accept the legacy `end`/RACK_NCCL_FULLRACK_END knobs too.
+        size_max = (
+            body.get("size_max") or body.get("end") or _eget("RACK_NCCL_MPI_SIZE_MAX")
+            or _eget("RACK_NCCL_FULLRACK_END") or "16G"
+        ).strip()
+        cmd = ["bash", str(script), "--app-log-rack", rk]
+        if size_max:
+            cmd += ["--size-max", size_max]
+        vc = _nccl_version_cli(body)
+        if isinstance(vc, tuple):
+            return None, vc
+        cmd += vc
+        nccl_version = vc[1] if vc else ""
+        # Stage-1 acceptance runs the sweep 5× by default; the UI modal can override via ``iters``.
+        rounds = _nccl_rounds_from_body(body, 5) or 5
+        cmd += ["--rounds", str(rounds)]
+        if tgt_ov_s:
+            cmd += ["--nodelist", target]
+            node_arg_display = " --nodelist " + shlex.quote(target)
+        else:
+            cmd.append(rk)
+            node_arg_display = " " + shlex.quote(rk)
+        display_cmd = "./" + script.name + " --app-log-rack " + shlex.quote(rk) + (
+            (" --size-max " + shlex.quote(size_max)) if size_max else ""
+        ) + (
+            (" --nccl-version " + shlex.quote(nccl_version)) if nccl_version else ""
+        ) + " --rounds " + str(rounds) + node_arg_display
+        timeout = max(120, _job_env_int("RACK_NCCL_FULLRACK_TIMEOUT", 7200))
+        # run_nccl_mpi.sh writes its Slurm --output under RACK_JOB_LOG_DIR (defaults to cwd; the
+        # worker cwd is log_dir, but set it explicitly so the app log always lands in log_dir).
+        env_updates.update(_launch_env_from_body(body))
     return (
         {
             "log_dir": log_dir,
@@ -11119,7 +12609,7 @@ def _prepare_run_nvloom_singlerack(body: dict) -> tuple[dict | None, tuple[objec
         "WORKSPACE_DIR": ws,
         "NVIS_WORKSPACE_DIR": ws,
         "TOPDIR": ws,
-        "NVIS_BIN_SCRIPTS": str(_resolve_path(SCRIPTS_DIR)),
+        "NVIS_BIN_SCRIPTS": str(_rpath(SCRIPTS_DIR)),
         "CUDA_MAJ": cuda_m,
     }
     for k in ("NVIS_NVLOOM_HPCX_INIT", "NVIS_NVLOOM_CLI", "NVIS_NVLOOM_UCX_TLS", "RACK_NVLOOM_PARTITION"):
@@ -11178,7 +12668,7 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
         "WORKSPACE_DIR": ws,
         "NVIS_WORKSPACE_DIR": ws,
         "TOPDIR": ws,
-        "NVIS_BIN_SCRIPTS": str(_resolve_path(SCRIPTS_DIR)),
+        "NVIS_BIN_SCRIPTS": str(_rpath(SCRIPTS_DIR)),
         "CUDA_MAJ": cuda_m,
         "RACK_CLUSTERKIT_RACK": rk,
     }
@@ -11805,7 +13295,12 @@ def _merged_stdout_stream_generator(
     as the unprivileged control-plane user on the head node.
     """
     cmd_run = list(cmd)
-    remote = host_exec.is_remote()
+    # Transport-boundary code: this builds a streaming Popen by hand out of
+    # host_exec.wrap_for_host(), so unlike ordinary callers it does have to know the
+    # mechanism (whether cwd/env apply locally or travel inside the SSH command).
+    # It should eventually move behind a streaming Connection API; until then the
+    # dependency is explicit rather than hidden behind a predicate.
+    remote = host_exec.exec_kind() == "ssh"
     linebuffer_on = (_eget(linebuffer_env_var, linebuffer_default) or "").strip().lower() in (
         "1",
         "true",
@@ -11819,12 +13314,9 @@ def _merged_stdout_stream_generator(
     # shell/curl/C tools. coreutils `stdbuf` is standard on the cluster nodes; for local
     # we can verify it exists first.
     if linebuffer_on:
-        if remote:
-            cmd_run = ["stdbuf", "-oL", "-eL", *cmd_run]
-        else:
-            stdbuf = shutil.which("stdbuf")
-            if stdbuf:
-                cmd_run = [stdbuf, "-oL", "-eL", *cmd_run]
+        stdbuf = host_exec.which("stdbuf")
+        if stdbuf:
+            cmd_run = [stdbuf, "-oL", "-eL", *cmd_run]
     # Python keeps its OWN block buffer on a non-TTY stdout that stdbuf cannot change, so
     # force unbuffered Python explicitly (the common cause of "logs only update in bursts"
     # for Python tools like llmb-install). Harmless for non-Python commands. Forwarded over
@@ -11912,7 +13404,7 @@ def _merged_stdout_stream_generator(
 def _sysinfo_stream_generator(prep: dict):
     """Yield stdout+stderr bytes from sysinfo.sh until process exit (or timeout)."""
     timeout_sec = max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800))
-    cwd = _REMOTE_BASE if host_exec.is_remote() and _REMOTE_BASE else str(prep["log_dir"])
+    cwd = _REMOTE_BASE if (_REMOTE_BASE and host_exec.exec_kind() == "ssh") else str(prep["log_dir"])
     yield from _merged_stdout_stream_generator(
         list(prep["cmd"]),
         cwd,
@@ -11974,7 +13466,7 @@ def _parse_nvswitch_audit_request(body: dict) -> tuple[dict | None, tuple[object
 def _nvswitch_audit_stream_generator(prep: dict):
     """Stream nvswitches_rack_audit.sh (check-only or --fix)."""
     timeout_sec = max(60, _env_int("RACK_NVSWITCH_AUDIT_TIMEOUT", 7200))
-    cwd = _REMOTE_BASE if host_exec.is_remote() and _REMOTE_BASE else str(prep["log_dir"])
+    cwd = _REMOTE_BASE if (_REMOTE_BASE and host_exec.exec_kind() == "ssh") else str(prep["log_dir"])
     yield from _merged_stdout_stream_generator(
         list(prep["cmd"]),
         cwd,
@@ -13070,7 +14562,13 @@ def _validate_exemplar_params(
     arch = str(body.get("arch") or "aarch64").strip()
     if arch not in ("aarch64", "x86_64"):
         return None, 'arch must be "aarch64" or "x86_64"', None
-    workloads = str(body.get("workloads") or "microbenchmark_nccl,pretrain_nemotron-h").strip()
+    # Settings -> job env NVIS_EXEMPLAR_WORKLOADS lets an operator narrow the install without a
+    # frontend field. The stock default also pulls pretrain_nemotron-h, which downloads a NeMo
+    # container via Slurm and is the main reason this action runs for hours — when only the NCCL
+    # microbenchmark is wanted that download is pure cost.
+    workloads = str(
+        body.get("workloads") or _eget("NVIS_EXEMPLAR_WORKLOADS") or "microbenchmark_nccl,pretrain_nemotron-h"
+    ).strip()
     if not re.fullmatch(r"[A-Za-z0-9_.,\- ]+", workloads):
         return None, "workloads has invalid characters", None
     extra: dict[str, str] = {
@@ -13087,7 +14585,11 @@ def _validate_exemplar_params(
         ("image_folder", "NVIS_EXEMPLAR_IMAGE_FOLDER"),
         ("repo_branch", "NVIS_EXEMPLAR_REPO_BRANCH"),
     ):
-        val = str(body.get(key) or "").strip()
+        # Fall back to Settings -> job env when the form has no field for it. The UI exposes only
+        # workspace/action/gpu_type/image_folder/uv/trust-git, so repo_branch (and the rest) were
+        # unreachable: the body key is absent and nothing read the env, so the installer silently
+        # used its built-in default. Body still wins when the form does provide a value.
+        val = str(body.get(key) or _eget(env_name) or "").strip()
         if val:
             if not re.fullmatch(r"[A-Za-z0-9_./:@+\- ]+", val):
                 return None, f"{key} has invalid characters", None
@@ -13345,8 +14847,12 @@ def _parse_tail_log_request(body: dict) -> tuple[dict | None, tuple[object, int]
                 ),
                 404,
             )
-    root = log_dir.resolve()
-    lp = log_path.resolve()
+    # ssh mode: the log lives on the head node, so these are PurePosixPath and .resolve() raises
+    # AttributeError -> 500 -> an HTML error page -> "Unexpected token '<'" / "500 Internal Server
+    # Error" in the SPA. Fifth site of this same bug class in this file; branch on EXEC MODE, not
+    # on the object type (_resolve_log_dir always returns a local Path object either way).
+    root = _rpath(log_dir)
+    lp = _rpath(log_path)
     try:
         lp.relative_to(root)
     except ValueError:
@@ -13374,24 +14880,21 @@ def _tail_log_stream_generator(prep: dict) -> object:
     # SSH mode: the log lives on the cluster head — tail must run there, not in this
     # container. Wrap via host_exec (ssh 'cd <log_dir> && tail …'); local stdbuf and
     # local cwd only apply to local execution. Mirrors _merged_stdout_stream_generator.
-    remote = host_exec.is_remote()
+    # See _merged_stdout_stream_generator: hand-built streaming Popen, so the
+    # mechanism matters here in a way it does not for ordinary callers.
+    remote = host_exec.exec_kind() == "ssh"
     if (_eget("RACK_TAIL_LINEBUFFER", "1") or "").strip().lower() in (
         "1",
         "true",
         "yes",
         "on",
     ):
-        if remote:
-            # A remote `tail -f` writes to the SSH pipe (not a TTY) and is therefore
-            # block-buffered: a short/slow live log never fills the buffer, so nothing
-            # reaches the browser and the viewer hangs on "connecting". Force line
-            # buffering on the remote side — bare "stdbuf" resolves on the remote PATH
-            # (do NOT use the local shutil.which path, which may not exist remotely).
-            cmd = ["stdbuf", "-oL", "-eL", *cmd]
-        else:
-            stdbuf = shutil.which("stdbuf")
-            if stdbuf:
-                cmd = [stdbuf, "-oL", "-eL", *cmd]
+        # `tail -f` writing to a pipe (no TTY) is block-buffered, so a slow live log
+        # never fills the buffer and the viewer hangs on "connecting". Resolve stdbuf
+        # on the *execution* host — the local path may not exist there.
+        stdbuf = host_exec.which("stdbuf")
+        if stdbuf:
+            cmd = [stdbuf, "-oL", "-eL", *cmd]
     cwd_local = str(prep["log_dir"])
     remote_cwd = _translate_cwd_for_remote(cwd_local) if remote else None
     cmd = host_exec.wrap_for_host(cmd, cwd=remote_cwd)
@@ -13625,7 +15128,7 @@ def _cluster_probe_bcm_cmsh_version() -> tuple[str, str]:
     cmsh = (_eget("RACK_CMSH") or "cmsh").strip() or "cmsh"
     cmd = [cmsh, "-c", "main; versioninfo"]
     timeout = max(10, _env_int("RACK_CLUSTER_BCM_CMSH_TIMEOUT", 60))
-    if not host_exec.is_remote() and not shutil.which(cmsh):
+    if not host_exec.which(cmsh):
         return "", "cmsh not in PATH"
     try:
         proc = host_exec.run_on_host(cmd, timeout=timeout)
@@ -13639,9 +15142,13 @@ def _cluster_probe_bcm_cmsh_version() -> tuple[str, str]:
         return "", err_tail or f"exit {proc.returncode}"
     if not out:
         return "", err_tail or "empty stdout"
-    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
-    cap = max(80, _env_int("RACK_CLUSTER_BCM_CMSH_DISPLAY_MAX", 600))
-    snippet = " | ".join(lines[:4]) if lines else out
+    # cmsh versioninfo pads columns with runs of spaces ("Cluster Manager          11.0")
+    # and emits 4+ build lines. Joining them raw produced an unreadable blob in the
+    # Compute overview header. Collapse whitespace and show the Cluster Manager line only.
+    lines = [re.sub(r"\s+", " ", ln.strip()) for ln in out.splitlines() if ln.strip()]
+    cap = max(40, _env_int("RACK_CLUSTER_BCM_CMSH_DISPLAY_MAX", 120))
+    n_lines = max(1, _env_int("RACK_CLUSTER_BCM_CMSH_DISPLAY_LINES", 1))
+    snippet = " | ".join(lines[:n_lines]) if lines else out
     if len(snippet) > cap:
         snippet = snippet[: cap - 3].rstrip() + "…"
     return snippet, ""
@@ -13693,7 +15200,7 @@ _CLUSTER_DM_KEYS: tuple[str, ...] = ("product_line", "hw_vendor", "customer_name
 def _cluster_dashboard_metadata_path() -> Path:
     raw = (os.environ.get("RACK_CLUSTER_DASHBOARD_METADATA_FILE") or "").strip()
     if raw:
-        return _resolve_path(Path(raw))
+        return _rpath(Path(raw))
     return (REPO_ROOT / "var" / "cache" / "cluster_dashboard_metadata.json").resolve()
 
 
@@ -13898,7 +15405,7 @@ def build_cluster_overview(
         "squeue": squeue_block,
         "cluster_dashboard_metadata": dash_meta,
         "cluster_unreachable_detail": "",
-        "exec_mode": "ssh" if host_exec.is_remote() else "local",
+        "exec_mode": host_exec.exec_kind(),
     }
     # Unknown cached reachability: leave unset/None rather than inventing down/up.
     if reachable is None:
@@ -14148,6 +15655,29 @@ def api_settings_job_environment():
     return jsonify(payload)
 
 
+@app.route("/api/ds-diag", methods=["GET"])
+def api_ds_diag():
+    """Diagnostic: what did `cmsh -c ds` actually return on the last worker pass?"""
+    import native_status as _ns
+    states = {}
+    try:
+        reg = getattr(_ns, "_states", None) or {}
+        for k, st in list(reg.items()):
+            with st.lock:
+                states[str(k)] = {
+                    "racks": len(st.racks),
+                    "rack_sample": list(st.racks)[:3],
+                    "ct_by_rack_len": len(st.ct_by_rack),
+                    "ct_keys_sample": list(st.ct_by_rack)[:3],
+                    "ds_done": st.ds_done,
+                    "errors": list(st.last_errors)[-3:],
+                }
+    except Exception as e:
+        states["_error"] = str(e)
+    return jsonify({"ok": True, "diag": dict(getattr(_ns, "DS_LAST_DIAG", {}) or {}),
+                    "states": states})
+
+
 @app.route("/api/cluster-overview", methods=["GET"])
 def api_cluster_overview():
     """Cluster-wide facts whose inventory fields use the canonical shared snapshot."""
@@ -14317,7 +15847,7 @@ def _merge_cluster_reachable_into_status_payload(out: dict, reachable: bool, det
     """Tag a /api/status payload with cluster link state for the SPA connection banner."""
     out["cluster_reachable"] = reachable
     out["cluster_unreachable_detail"] = "" if reachable else (detail or "head node not reachable over SSH")
-    out["exec_mode"] = "ssh" if host_exec.is_remote() else "local"
+    out["exec_mode"] = host_exec.exec_kind()
 
 
 def _degraded_status_payload(log_dir: Path, detail: str) -> dict:
@@ -15131,3 +16661,160 @@ _bootstrap_nvftp_sync_at_startup()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG") == "1", threaded=True)
+
+# ---------------------------------------------------------------------------------------------
+# Job-attempt capture — a run that never produces a log MUST still be recorded.
+#
+# Job 63850 (MNUBERGEMM, h01) was CANCELLED in the Slurm prolog: RunTime 00:00:00, no stdout file
+# ever created. It therefore left NO trace in the log dir, in results_history, or in the lake — the
+# attempt was invisible even though it consumed an 18-node allocation and drained a tray. Capturing
+# only successful runs is the same blank-read-as-success failure this platform exists to catch.
+# ---------------------------------------------------------------------------------------------
+_SCONTROL_FIELDS = (
+    "JobId", "JobName", "UserId", "JobState", "Reason", "ExitCode", "DerivedExitCode",
+    "RunTime", "SubmitTime", "StartTime", "EndTime", "NodeList", "ReqNodeList",
+    "NumNodes", "NumCPUs", "Partition", "StdOut", "StdErr", "WorkDir", "Command",
+)
+
+
+def _parse_scontrol_job(text: str) -> dict:
+    """scontrol emits `Key=Value` pairs, space-separated, values may contain `/` and `:` but not ` `."""
+    out: dict[str, str] = {}
+    for m in re.finditer(r"([A-Za-z][A-Za-z0-9_]*)=(\S*)", text or ""):
+        k, v = m.group(1), m.group(2)
+        if k in _SCONTROL_FIELDS and k not in out:
+            out[k] = v
+    return out
+
+
+def capture_job_attempt(job_id: str) -> dict:
+    """Record one Slurm job attempt (state, reason, exit code, nodes) to history + the lake.
+
+    Works whether or not the job produced output — that is the entire point.
+    """
+    res: dict[str, object] = {"ok": False, "job_id": job_id, "error": None}
+    try:
+        raw = _run_scontrol_show_job(job_id)
+        text = raw.get("stdout") if isinstance(raw, dict) else str(raw)
+    except Exception as e:  # noqa: BLE001
+        res["error"] = f"scontrol failed: {e}"
+        return res
+
+    f = _parse_scontrol_job(text or "")
+    if not f.get("JobId"):
+        # scontrol only remembers a job for MinJobAge after it ends. A 40-minute soak checked an
+        # hour later is simply GONE — which silently missed three completed MNUBERGEMM runs.
+        # sacct reads the accounting DB and retains them, so fall back to it.
+        try:
+            sa = host_exec.run_on_host(
+                # Explicit SLURM_CONF + absolute sacct: this runs in a NON-LOGIN ssh shell with
+                # no PATH and no SLURM_CONF, exactly like every other Slurm call in this file.
+                f"export SLURM_CONF={shlex.quote(os.environ.get('RACK_SLURM_CONF','/cm/shared-ubuntu2404-x86_64/apps/slurm/etc/slurm/slurm.conf'))}; "
+                f"$(ls -1 /cm/local/apps/slurm/*/bin/sacct /cm/local/apps/slurm/current/bin/sacct 2>/dev/null | tail -1) "
+                f"-j {shlex.quote(job_id)} -X -P -n "
+                "-o JobID,JobName,State,Elapsed,ExitCode,Start,End,NodeList,User"
+            )
+            line = (sa.stdout or "").strip().splitlines()
+            if line:
+                c = line[0].split("|")
+                if len(c) >= 8:
+                    f = {
+                        "JobId": c[0], "JobName": c[1], "JobState": c[2].split()[0],
+                        "RunTime": c[3], "ExitCode": c[4], "StartTime": c[5],
+                        "EndTime": c[6], "NodeList": c[7],
+                        "Reason": "(from sacct — not in scontrol)",
+                    }
+                    res["source"] = "sacct"
+        except Exception as e:  # noqa: BLE001
+            res["error"] = f"sacct fallback failed: {e}"
+            return res
+    if not f.get("JobId"):
+        res["error"] = "job not found in scontrol or sacct"
+        return res
+
+    state = f.get("JobState", "UNKNOWN")
+    reason = f.get("Reason", "")
+    nodelist = f.get("NodeList", "")
+    rack = ""
+    m = re.match(r"(ink50-dh01-[a-z0-9]+)-", nodelist)
+    if m:
+        rack = m.group(1)
+    # A job cancelled by the prolog reports ExitCode 0:<sig> and RunTime 00:00:00 — treat it as a
+    # FAILED attempt, never as a pass, even though Slurm's own ExitCode field starts with 0.
+    rt = f.get("RunTime", "00:00:00")
+    ran = rt not in ("00:00:00", "")
+    # A soak workload (MNUBERGEMM) is EXPECTED to hit the walltime — the soak deliberately outruns
+    # it. TIMEOUT after substantial runtime is a PASS on MOP 7.2 criteria; only a TIMEOUT with no
+    # runtime is a real failure. Mislabelling it cost h03's successful 75.7 kW run a "fail" record.
+    status = {"COMPLETED": "pass", "RUNNING": "running", "PENDING": "pending"}.get(state)
+    if status is None:
+        if state == "TIMEOUT":
+            status = "timeout" if ran else "fail"
+        elif not ran or state in ("CANCELLED", "FAILED", "NODE_FAIL", "BOOT_FAIL", "DEADLINE"):
+            status = "fail"
+        else:
+            status = "unknown"
+
+    record = {
+        "kind": "job_attempt",
+        "status": status,
+        "job_id": job_id,
+        "rack": rack,
+        "nodes": [n for n in re.split(r"[,\s]+", nodelist) if n.startswith("ink50")],
+        "scontrol": f,
+        "state": state,
+        "reason": reason,
+        "exit_code": f.get("ExitCode", ""),
+        "run_time": f.get("RunTime", ""),
+        "produced_log": False,
+        "tail": text[:4000],
+    }
+    res["state"], res["reason"], res["status"] = state, reason, status
+
+    try:
+        rid = results_history.ingest_run({
+            "run_id": f"attempt-{job_id}",
+            # sacct does NOT return StdOut, so a job recovered from the accounting DB has no
+            # log path. results_history requires one, and without a fallback every sacct-sourced
+            # run landed in Parquet but silently failed the SQLite ingest ("source_log_path is
+            # required") — i.e. half-captured, which is worse than not captured because the lake
+            # looks complete. Synthesise a stable identifier instead.
+            "source_log_path": f.get("StdOut") or f"sacct:{job_id}",
+            "log_basename": (f.get("StdOut", "") or "").rsplit("/", 1)[-1] or f"job-{job_id}",
+            "workload_kind": "job_attempt",
+            "rack": rack,
+            "nodes": record["nodes"],
+            "job_id": job_id,
+            "started_at": f.get("StartTime", ""),
+            "ended_at": f.get("EndTime", ""),
+            "status": status,
+            "metrics": [],
+            "extra": record,
+        })
+        res["history_run_id"] = rid
+    except Exception as e:  # noqa: BLE001
+        res["error"] = f"history: {e}"
+
+    if lake_sink is not None and not lake_sink.is_disabled():
+        out = lake_sink.push_run(
+            run_id=lake_sink.make_run_id("jobattempt", rack, job_id),
+            workload="job_attempt", rack=rack, job_id=job_id,
+            nodes=record["nodes"], status=status, parsed=record,
+            log_path=f.get("StdOut", ""), log_text=text or "",
+        )
+        res["lake"] = out
+        if not out.get("ok"):
+            _logger.warning("lake job-attempt push failed for %s: %s", job_id, out.get("error"))
+
+    res["ok"] = True
+    return res
+
+
+@app.route("/api/history/capture-job", methods=["GET", "POST"])
+def api_capture_job_attempt():
+    """``?job_id=`` — record a Slurm attempt (even one that produced no log) to history + lake."""
+    jid = (request.args.get("job_id") or (request.get_json(silent=True) or {}).get("job_id") or "").strip()
+    if not jid or not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
+        return jsonify({"ok": False, "error": "valid job_id required"}), 400
+    return jsonify(capture_job_attempt(jid))
+

@@ -1,11 +1,11 @@
-"""Chained (jump) connection: run a command on a host *through* another Connection.
+"""Chained (jump) execution: run a command on a host *through* another Executor.
 
-This is the composition primitive behind "a Connection's target can be a host OR
-another Connection": :meth:`Connection.hop` wraps any base connection and an ssh
-target so that ``base.hop(node).run(cmd)`` executes ``ssh <node> <cmd>`` **on the
-base's target**. For ``app -> head -> node`` that means the ``ssh node`` leg runs
-on the head, using the head's credentials/reachability — no direct app->node route
-or app key on the node required. Hops nest arbitrarily (``base.hop(a).hop(b)``).
+This is the composition primitive behind "a target can be a host OR another
+connection": :meth:`Connection.hop` wraps any base executor and an ssh target so
+that ``base.hop(node).run(cmd)`` executes ``ssh <node> <cmd>`` **on the base's
+target**. For ``app -> head -> node`` that means the ``ssh node`` leg runs on the
+head, using the head's credentials/reachability — no direct app->node route or app
+key on the node required. Hops nest arbitrarily (``base.hop(a).hop(b)``).
 
 The per-hop payload is base64-encoded, so nested shell quoting is a non-issue at
 every level (each leg ships an opaque token that the *next* host decodes and runs).
@@ -16,15 +16,29 @@ import base64
 import shlex
 import subprocess
 
-from transport.base import Connection, Process, as_shell_str, env_export_prefix
+from transport.base import (
+    Connection,
+    Executor,
+    Process,
+    as_shell_str,
+    env_export_prefix,
+)
+from transport.shellfs import ShellFilesystem
 
 
-class HopConnection(Connection):
-    """Run commands on ``host`` by tunnelling an ssh invocation through ``base``."""
+class HopExecutor(ShellFilesystem, Executor):
+    """Runs commands on ``host`` by tunnelling an ssh invocation through ``base``.
+
+    Filesystem access resolves against ``host`` (the far end of the hop), not the
+    base target, because :class:`~transport.shellfs.ShellFilesystem` issues its
+    ``stat`` / ``find`` / ``cat`` through this executor's own ``run``.
+    """
+
+    kind = "ssh"
 
     def __init__(
         self,
-        base: Connection,
+        base: Executor,
         host: str,
         *,
         user: str | None = None,
@@ -43,9 +57,6 @@ class HopConnection(Connection):
         # (sudo the `bash` runner, so whole pipelines run privileged — not just the
         # first command). Head→node ssh itself stays unprivileged.
         self.sudo = bool(sudo)
-
-    def is_remote(self) -> bool:
-        return True
 
     def _ssh_prefix(self) -> list[str]:
         argv = [
@@ -97,3 +108,11 @@ class HopConnection(Connection):
 
     def wrap_argv(self, cmd, *, cwd: str | None = None, env_extra=None) -> list[str]:
         return self.base.wrap_argv(self._ssh_command(cmd, cwd, env_extra))
+
+    def describe(self) -> dict[str, object]:
+        return {"kind": self.kind, "host": self.host}
+
+
+def HopConnection(base: Connection, host: str, **kwargs) -> Connection:
+    """Back-compat factory: a :class:`Connection` hopping from *base* to *host*."""
+    return Connection(HopExecutor(base.executor, host, **kwargs))

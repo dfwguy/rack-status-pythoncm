@@ -43,5 +43,16 @@ args_q=()
 for a in "$@"; do args_q+=("$(printf '%q' "$a")"); done
 qargs="${args_q[*]}"
 
-pdsh -R ssh -w "${PDSH_W}" -f 64 "RACK_WEB_HW_CHECK=1 bash ${TMP} ${qargs}"
+# checker.sh hard-requires root. This script's header always claimed it ran "as root", but the
+# pdsh line never elevated — it only worked if the pdsh identity was already root, i.e. when the
+# privileged profile (RACK_SCRIPT_SSH_USER=root) was configured. On NscaleTX it is not, and
+# cmods has NO sudo on the head node — so every node returned "ERROR: Please run as root".
+# cmods DOES have NOPASSWD sudo on the compute trays (verified), so elevate there instead.
+#
+# `sudo -n env VAR=…` is deliberate: sudo strips the environment, and RACK_WEB_HW_CHECK=1 is what
+# stops checker.sh calling `scontrol drain`. Passing it as `sudo -n VAR=… bash` would silently drop
+# it and a hardware check could DRAIN THE RACK. Do not "simplify" this.
+_remote="RACK_WEB_HW_CHECK=1 bash ${TMP} ${qargs}"
+pdsh -R ssh -w "${PDSH_W}" -f 64 \
+  "if [ \"\$(id -u)\" -ne 0 ] && sudo -n true 2>/dev/null; then sudo -n env ${_remote}; else ${_remote}; fi"
 exit $?

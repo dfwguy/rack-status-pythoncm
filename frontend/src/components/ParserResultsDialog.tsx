@@ -95,6 +95,9 @@ interface NcclRow {
   all_reduce_gbps?: string | number;
   all_gather_gbps?: string | number;
   alltoall_gbps?: string | number;
+  // parser.sh emits these via nccl_busbw_ext_csv() (llmb sweeps run all five collectives).
+  reduce_scatter_gbps?: string | number;
+  sendrecv_gbps?: string | number;
   oob_ar_ag_aa?: string;
 }
 
@@ -155,6 +158,8 @@ function normalizeNcclRow(row: RawNccl): NcclRow {
     all_reduce_gbps: row.all_reduce_gbps as string | number | undefined,
     all_gather_gbps: row.all_gather_gbps as string | number | undefined,
     alltoall_gbps: row.alltoall_gbps as string | number | undefined,
+    reduce_scatter_gbps: row.reduce_scatter_gbps as string | number | undefined,
+    sendrecv_gbps: row.sendrecv_gbps as string | number | undefined,
     oob_ar_ag_aa: row.oob_ar_ag_aa != null ? String(row.oob_ar_ag_aa) : undefined,
   };
 }
@@ -374,6 +379,8 @@ function NcclPeakTable({ rows }: { rows: NcclRow[] }) {
             <TableCell>all_reduce</TableCell>
             <TableCell>all_gather</TableCell>
             <TableCell>alltoall</TableCell>
+            <TableCell>reduce_scatter</TableCell>
+            <TableCell>sendrecv</TableCell>
             <TableCell>OOB (AR,AG,AA)</TableCell>
             <TableCell>Peak bus_bw</TableCell>
           </TableRow>
@@ -386,6 +393,8 @@ function NcclPeakTable({ rows }: { rows: NcclRow[] }) {
               <TableCell>{r.all_reduce_gbps ?? "—"}</TableCell>
               <TableCell>{r.all_gather_gbps ?? "—"}</TableCell>
               <TableCell>{r.alltoall_gbps ?? "—"}</TableCell>
+              <TableCell>{r.reduce_scatter_gbps ?? "—"}</TableCell>
+              <TableCell>{r.sendrecv_gbps ?? "—"}</TableCell>
               <TableCell sx={{ fontSize: 12 }}>{r.oob_ar_ag_aa ?? "—"}</TableCell>
               <TableCell>{r.peak_busbw_gbps > 0 ? `${r.peak_busbw_gbps} GB/s` : "—"}</TableCell>
             </TableRow>

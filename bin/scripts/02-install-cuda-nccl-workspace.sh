@@ -97,29 +97,66 @@ if [[ "$BUILD_NCCL" == "1" ]]; then
     exit 1
   fi
 
-  echo "==> NCCL + nccl-tests (installation/03-build-nccl.sh)"
-  cd "$TOPDIR"
-  if [[ ! -d "${TOPDIR}/nccl/.git" ]]; then
-    git clone https://github.com/NVIDIA/nccl.git "${TOPDIR}/nccl"
+  # Version + on-disk layout MUST match what nccl_allreduce.sbatch globs, or the build succeeds
+  # and the run still reports "libnccl.so.2 not found":
+  #   system|default|2.28.9 -> <TOPDIR>/nccl/build/lib/libnccl.so.2
+  #   <X.Y.Z>               -> <TOPDIR>/nccl-<X.Y.Z>/nccl/build/lib/libnccl.so.2
+  # Previously the tag AND the directory were both hardcoded to 2.28.9, so selecting any other
+  # version in the dashboard could never resolve.
+  NCCL_VER="${NVIS_NCCL_VERSION:-2.28.9}"
+  case "${NCCL_VER}" in
+    system|default|2.28.9) NCCL_ROOT="${TOPDIR}/nccl" ;;
+    *)                     NCCL_ROOT="${TOPDIR}/nccl-${NCCL_VER}/nccl" ;;
+  esac
+
+  echo "==> NCCL ${NCCL_VER} + nccl-tests -> ${NCCL_ROOT}"
+  mkdir -p "$(dirname "${NCCL_ROOT}")"
+  if [[ ! -d "${NCCL_ROOT}/.git" ]]; then
+    git clone https://github.com/NVIDIA/nccl.git "${NCCL_ROOT}"
   fi
-  cd "${TOPDIR}/nccl"
+  cd "${NCCL_ROOT}"
   git fetch --tags 2>/dev/null || true
-  git checkout v2.28.9-1
-  make -j "$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)" src.build
-  if [[ ! -d nccl-tests/.git ]]; then
-    git clone https://github.com/NVIDIA/nccl-tests.git
+  # Upstream tags are "v<X.Y.Z>-<n>"; try the common -1 suffix, then the bare tag. Fail LOUDLY with
+  # the real candidates rather than silently building whatever HEAD happens to be.
+  _tag=""
+  for _c in "v${NCCL_VER}-1" "v${NCCL_VER}" "${NCCL_VER}"; do
+    if git rev-parse --verify --quiet "refs/tags/${_c}" >/dev/null; then _tag="${_c}"; break; fi
+  done
+  if [[ -z "${_tag}" ]]; then
+    echo "ERROR: no git tag for NCCL version '${NCCL_VER}'. Available near it:" >&2
+    git tag --list "v${NCCL_VER%%.*}.*" | tail -15 >&2
+    exit 1
   fi
-  cd nccl-tests
-  make -j "$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)" MPI=1 MPI_HOME="${OMPI_HOME}" NCCL_HOME="${PWD}/../build"
-  mkdir -p ../bins
-  cp -arv build/ ../bins/
-  cd ../bins
+  echo "==> checkout ${_tag}"
+  git checkout "${_tag}"
+  make -j "$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)" src.build
+  # nccl-tests MUST land where nccl_allreduce.sbatch looks, and the two globs are NOT symmetric:
+  #   lib   -> <TOPDIR>/nccl-<VER>/nccl/build/lib/libnccl.so.2   (inside nccl/)
+  #   tests -> <TOPDIR>/nccl-<VER>/nccl-tests/build/all_reduce_perf   (SIBLING of nccl/, no /nccl/)
+  # Cloning nccl-tests inside nccl/ (as the system layout does) would build fine and then fail the
+  # run with "all_reduce_perf not found". Put it beside nccl/ for versioned builds.
+  case "${NCCL_VER}" in
+    system|default|2.28.9) TESTS_ROOT="${NCCL_ROOT}/nccl-tests" ;;
+    *)                     TESTS_ROOT="$(dirname "${NCCL_ROOT}")/nccl-tests" ;;
+  esac
+  echo "==> nccl-tests -> ${TESTS_ROOT}"
+  mkdir -p "$(dirname "${TESTS_ROOT}")"
+  if [[ ! -d "${TESTS_ROOT}/.git" ]]; then
+    git clone https://github.com/NVIDIA/nccl-tests.git "${TESTS_ROOT}"
+  fi
+  cd "${TESTS_ROOT}"
+  make -j "$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)" MPI=1 MPI_HOME="${OMPI_HOME}" NCCL_HOME="${NCCL_ROOT}/build"
+  mkdir -p "${NCCL_ROOT}/bins"
+  cp -arv build/. "${NCCL_ROOT}/bins/"
+  cd "${NCCL_ROOT}/bins"
   rm -fr *.o verifiable 2>/dev/null || true
-  for f in ../build/lib/libnccl*so*; do
+  for f in "${NCCL_ROOT}"/build/lib/libnccl*so*; do
     [[ -e "$f" ]] || continue
     cp -av "$f" .
   done
-  echo "OK: NCCL binaries under ${TOPDIR}/nccl/bins"
+  [[ -x "${TESTS_ROOT}/build/all_reduce_perf" ]] \
+    || { echo "ERROR: all_reduce_perf not built at ${TESTS_ROOT}/build/" >&2; exit 1; }
+  echo "OK: NCCL ${NCCL_VER}  lib=${NCCL_ROOT}/build/lib/libnccl.so.2  tests=${TESTS_ROOT}/build/all_reduce_perf"
 fi
 
 echo "OK: CUDA / NCCL remote install finished (CUDA ${CUDA_MAJ}, ${ARCH})."
