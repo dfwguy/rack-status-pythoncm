@@ -32,16 +32,28 @@ for anything that touches the cluster. The layer has two responsibilities:
 
 | Responsibility | Why it matters |
 |----------------|----------------|
-| **Mode switch** (`RACK_EXEC_MODE=local\|ssh`) | In `local` mode it runs a direct subprocess; in `ssh` mode it wraps the command in an SSH invocation to the head node. The caller writes the command **once**. |
+| **Mechanism** | The layer holds a composed connection and applies the right mechanism — direct subprocess, SSH, or a chain of hops. The caller writes the command **once** and never branches on where it runs. (`RACK_EXEC_MODE` is deprecated and defaults to `ssh`; there is no `is_remote()` predicate to test.) |
 | **Environment forwarding** | A local subprocess inherits the daemon's env for free. An **SSH** session does **not** — so `host_exec` re-exports a whitelist of variables on the remote side. |
+| **Filesystem** | The same connection answers `stat_dir` / `read_text` / `write_bytes` / `is_dir`, so a path is always evaluated against the host that owns it rather than the one the process happens to run on. |
 
 ### 1.1 Environment forwarding whitelist
 
 ```python
-# backend/host_exec.py
-_FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_", "NVIS_", "PDSH_")
-_FORWARD_ENV_NAMES    = ("CUDA_MAJ", "GPU_MODEL_FLAG", "MNNVL_TOPOLOGY", "CORE_TO_HCA_SCRIPT")
+# backend/transport/factory.py  (moved from host_exec.py so transport is self-contained)
+FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_", "NVIS_", "PDSH_", "NGC_", "LLMB_")
+FORWARD_ENV_NAMES = (
+    "CUDA_MAJ", "GPU_MODEL_FLAG", "MNNVL_TOPOLOGY", "CORE_TO_HCA_SCRIPT",
+    # Fabric wireup overrides (lib/fabric.inc.sh)
+    "GPUS_PER_NODE", "NCCL_IB_HCA", "NCCL_SOCKET_IFNAME", "UCX_NET_DEVICES", "UCX_TLS",
+    "OMPI_MCA_coll_ucc_enable", "OMPI_MCA_btl_tcp_if_include", "OMPI_MCA_oob_tcp_if_include",
+)
 ```
+
+A **per-call** value that is not in the allowlist goes through `env_extra`, which is
+exported on the far side regardless of prefix (this is what makes the launch
+dialog's free-form "Extra environment variables" work for `NCCL_*`). The `env`
+argument is a local-subprocess parameter and is **dropped** when the target is
+remote.
 
 **Pattern:** any knob a remote script needs must match a forwarded prefix/name, otherwise it
 exists on the dashboard host but vanishes over SSH. This is why all our tunables are prefixed
@@ -57,7 +69,8 @@ Some clusters split capability across two hosts. Boston Markley is the canonical
 | **control** (`RACK_SSH_*`) | `cmods@head` | `cmsh`, `module load slurm`, `sinfo`/`squeue` | **no root**, no `cmsh` is missing on slogin |
 | **script** (`RACK_SCRIPT_SSH_*`) | `root@slogin` | root, `pdsh`/`pdcp` fan-out to compute nodes, `ipmitool` | `cmsh` not present |
 
-`host_exec` selects the target with a `profile` argument:
+`host_exec` selects the target with a `profile` argument (`role=` is the newer
+spelling of the same thing — see §7):
 
 ```python
 host_exec.run_on_host(cmd, env=_subprocess_env(), profile="script")  # root@slogin
@@ -322,14 +335,96 @@ Three knobs together (all validated on Boston: 14/18 with resets → **18/18, 0 
 
 ---
 
-## 7. Checklist for adding a new cluster tool/script
+## 7. Declaring where things are: endpoints and roles
+
+§6 gives the *mechanism* for reaching a host through another one. This section is
+the **configuration** that makes it usable, and it is what lets one build run on a
+laptop, in a container, or on the head node without a code change.
+
+### The gap it closes
+
+The flat `RACK_SSH_*` contract can express exactly one hop to one host, and
+`RACK_REMOTE_BASE_PATH` points scripts *and* logs at one tree on that host. So
+"scripts here, logs there, BCM somewhere else", or "reach the head through a
+bastion", were unsayable — `HopExecutor` existed but nothing could ask for it.
+Worse, locations were bound to *paths only*, never to a connection, so any call
+site that wanted a file had to assume it was local.
+
+### The model
+
+Two lists on the cluster document (`connection.endpoints`, `connection.roles`):
+
+| Concept | Answers | Fields |
+|---------|---------|--------|
+| **Endpoint** | *how do I get there?* | `id`, `type` (`local`/`ssh`), `host`, `user`, `key`, `port`, `via`, `sudo`, `opts` |
+| **Role** | *what does this call site want?* | `id`, `endpoint`, `root`, `sudo` |
+
+`via` names another endpoint, and each leg runs **on** its predecessor using that
+host's credentials. N hops is N links — no special two-hop code path:
+
+```
+app ──► bastion ──► head ──► node        # three endpoints, each via the last
+```
+
+Roles are the indirection that matters. `control`, `scripts`, `logs` and `bcm` are
+seeded because the shipped call sites ask for them, but the set is **open**: a site
+can invent any role name and bind it. Code names the role and the deployment
+decides which host that is:
+
+```python
+host_exec.run_on_host(cmd, cwd=_scripts_dir(), role="scripts")
+host_exec.stat_dir(log_dir, patterns=("*.txt",), role="logs")
+host_exec.read_text(p, role="logs")
+```
+
+An unknown role falls back to `control`, so a call site written role-first still
+works on a deployment that has not split that role out.
+
+> **`script` vs `scripts`.** These read alike and are *different axes*. `script` is
+> the privileged trust domain of §1.2 (root/`pdsh`, `RACK_SCRIPT_SSH_*`); `scripts`
+> is a *location* (where `bin/scripts` lives). `script` therefore falls back to
+> `control`, never to `scripts` — aliasing them would route privileged node
+> operations to whichever host merely stores the files. Declare a `script` role
+> explicitly when the privileged route is a separate host.
+
+### Where it lives, and back-compat
+
+The topology sits on the catalog's `Cluster` document, so it is per-cluster
+(switching the active cluster switches the whole route), runtime-editable through
+the store the Projects UI already writes, and covered by the existing overlay
+invalidation. `GET/PUT /api/catalog/topology` exposes it; `GET` also returns the
+**resolved** view (per role: endpoint, hop path, root), which is the useful thing
+when asking "which host did that command actually run on?".
+
+Deployments that declare nothing are untouched: the original single-target
+composition is built exactly as before, with role roots derived from
+`RACK_REMOTE_BASE_PATH` so call sites read the same either way. `transport/
+topology.py` takes plain dicts and imports no catalog or Flask, so the resolver
+stays standalone and unit-testable (`backend/tests/test_topology.py`).
+
+### Design rule
+
+> **A call site names a *role*, never a host, a transport, or a bare path.** Where
+> that role lives — same box, one hop, or four — is deployment configuration. If a
+> fix needs to know where something is, the fix is a role binding, not a branch.
+
+---
+
+## 8. Checklist for adding a new cluster tool/script
 
 When you add a script that touches compute nodes, verify it survives all three contexts:
 
 - [ ] Invoked via `host_exec.run_on_host(...)` / `popen_on_host(...)` — **never** raw
-      `subprocess` for cluster work.
-- [ ] Correct `profile` (`script` if it needs root or `pdsh` fan-out; `control` for
-      cmsh/slurm reads).
+      `subprocess` for cluster work. This includes anything passing `cwd`: a cluster
+      directory does not exist in the container.
+- [ ] Correct `role`/`profile` (`script` if it needs root or `pdsh` fan-out;
+      `scripts`/`logs` for work that must happen where those trees are; `control` for
+      cmsh/slurm reads). See §7.
+- [ ] Files touched through `host_exec` (`stat_dir`, `read_text`, `write_bytes`,
+      `is_dir`, `makedirs`) — **never** `pathlib`/`shutil`, which answer for the
+      local filesystem.
+- [ ] Per-call env passed as `env_extra` (crosses the SSH boundary), not `env`
+      (local-subprocess only, silently dropped when remote).
 - [ ] Node targets come from **live inventory** (`validation_target_for_rack` /
       `_rack_node_hostnames_from_inventory`), not a name template.
 - [ ] Any `pdsh`/`pdcp` forces **ssh** transport (`PDSH_RCMD_TYPE=ssh` + `-R ssh` +
