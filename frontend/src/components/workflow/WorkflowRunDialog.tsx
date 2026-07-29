@@ -97,6 +97,7 @@ export default function WorkflowRunDialog({
 
         <Autocomplete<string, true>
           multiple
+          limitTags={3}
           options={availableRacks}
           value={selectedRacks}
           onChange={(_, value) => setSelectedRacks(value)}

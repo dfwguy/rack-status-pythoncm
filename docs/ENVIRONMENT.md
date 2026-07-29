@@ -143,7 +143,10 @@ Requires `RACK_WEB_SECRET_KEY`, **Settings → `RACK_PROJECT_TOKEN`**, vault NVF
 | **`RACK_STATUS_LOG_DIR`** | `APP_DIR/var/logs` | Default log root. |
 | **`RACK_STATUS_SCRIPT`** | `bin/scripts/rack_status.sh` | Shell table script path. |
 | **`RACK_STATUS_EXTRA_ARGS`** | *(unset)* | Extra args for `rack_status.sh`. |
-| **`RACK_STATUS_ALLOWED_PREFIXES`** | *(unset)* | Allowed `log_dir` path prefixes (comma-separated). |
+| **`RACK_STATUS_ALLOWED_PREFIXES`** | *(unset)* | Allowed `log_dir` path prefixes (comma-separated). Must include the bring-up `results` root when the Nodes view reads Travis's per-node artifacts. |
+| **`RACK_BRINGUP_HOME`** | `/home/cmods/bringup` | Root of Travis's bring-up automation tree on the execution host. `/api/bringup/node` shells out to `<home>/daily-report.sh` and `<home>/status-check.sh`; `/api/bringup/config` probes `<home>/results`. |
+| **`RACK_BRINGUP_DISABLED`** | *(unset)* | Truthy → hide the Nodes "Bring-up" panel (`/api/bringup/*` returns disabled). |
+| **`RACK_BRINGUP_CACHE_TTL_SEC`** | `30` | TTL for the cached cluster-wide `daily-report.sh -c` (it re-scans every result dir; the cache makes repeated node opens cheap). |
 | **`RACK_STATUS_TIMEOUT`** | `300` | `rack_status.sh` timeout (shell mode). |
 | **`RACK_STATUS_DEFAULT_REFRESH`** | `30` | UI default refresh (clamped 5–86400). |
 | **`RACK_STATUS_BACKGROUND_DISABLED`** | *(unset)* | Truthy → no `rack-status-bg` cache thread. |
@@ -375,6 +378,9 @@ its name matches a forwarded prefix (`RACK_`, `NEMO_`, `VALIDATION_`, `SQUEUE_`,
 Use this as a checklist against **`app.py`** / **`native_status.py`**. Defaults and semantics are in §§4–14.
 
 ```
+RACK_BRINGUP_CACHE_TTL_SEC
+RACK_BRINGUP_DISABLED
+RACK_BRINGUP_HOME
 RACK_BUG_REPORT_DISABLED
 RACK_BUG_REPORT_DRY_RUN
 RACK_BUG_REPORT_LIST_TIMEOUT

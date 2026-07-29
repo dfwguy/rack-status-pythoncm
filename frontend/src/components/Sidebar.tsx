@@ -43,6 +43,7 @@ import {
 
 export type ViewId =
   | "dashboard"
+  | "nodes"
   | "singleRack"
   | "slurm"
   | "infraEthernet"
@@ -105,6 +106,7 @@ const navEntries: NavEntry[] = [
     icon: <Cpu size={ICON_SIZE} />,
     leaves: [
       { id: "dashboard", label: "Cluster overview", icon: <LayoutDashboard size={ICON_SIZE} /> },
+      { id: "nodes", label: "Nodes", icon: <CircuitBoard size={ICON_SIZE} /> },
       { id: "singleRack", label: "Racks", icon: <Server size={ICON_SIZE} /> },
       { id: "multirack", label: "Multirack operations", icon: <Layers size={ICON_SIZE} /> },
       { id: "slurm", label: "Scheduler", icon: <CalendarClock size={ICON_SIZE} /> },

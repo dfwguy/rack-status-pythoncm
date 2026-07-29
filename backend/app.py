@@ -129,6 +129,11 @@ try:
 except Exception as _up_exc:  # pragma: no cover - defensive
     _uparse = None  # type: ignore[assignment]
     logging.getLogger(__name__).warning("universal_parser unavailable: %s", _up_exc)
+try:
+    import bringup as _bringup  # noqa: E402 — per-node Travis bring-up results
+except Exception as _bu_exc:  # pragma: no cover - defensive
+    _bringup = None  # type: ignore[assignment]
+    logging.getLogger(__name__).warning("bringup unavailable: %s", _bu_exc)
 
 
 def _nvis_naming() -> nvis_id_templates.NvisNaming:
@@ -9688,6 +9693,39 @@ def api_universal_scan():
     )
 
 
+@app.route("/api/bringup/config")
+def api_bringup_config():
+    """Discovery: whether Travis's bring-up automation tree is present, and where."""
+    if _truthy_env("RACK_STATUS_DEMO"):
+        return jsonify({"ok": True, "enabled": True, "present": True, "home": "/home/cmods/bringup"})
+    if _bringup is None:
+        return jsonify({"ok": True, "enabled": False, "present": False, "home": ""})
+    try:
+        return jsonify({"ok": True, **_bringup.config()})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/bringup/node")
+def api_bringup_node():
+    """Per-node bring-up job summary (status+reason from status-check, metric from daily-report)."""
+    node = (request.args.get("node") or "").strip()
+    if not node or not re.match(r"^[A-Za-z0-9._-]+$", node):
+        return jsonify({"ok": False, "error": "a valid node name is required"}), 400
+    if _truthy_env("RACK_STATUS_DEMO"):
+        data = _bringup.demo_node_summary(node) if _bringup else {"node": node, "jobs": []}
+        return jsonify({"ok": True, "data": data})
+    if _bringup is None or not _bringup.is_enabled():
+        return jsonify({"ok": False, "error": "bring-up integration disabled or unavailable"}), 404
+    try:
+        data = _bringup.node_summary(node)
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "bring-up report timed out"}), 504
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "data": data})
+
+
 @app.route("/api/parser-results")
 def api_parser_results():
     """Run parser.sh --json on the log for rack (same cwd convention as rack_status log_dir).
@@ -9709,10 +9747,20 @@ def api_parser_results():
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     log_fn = (request.args.get("log_file") or "").strip()
+    path_arg = (request.args.get("path") or "").strip()
     rack = (request.args.get("rack") or "").strip()
     job_raw = (request.args.get("job_id") or "").strip()
     job_id = job_raw if job_raw and job_raw != "-" else None
-    if log_fn:
+    if path_arg:
+        # Explicit allowlisted path (e.g. a Travis bring-up node log
+        # results/<node>/allreduce.txt) — bypasses the NEMO/NCCL basename filter but
+        # must live under RACK_STATUS_ALLOWED_PREFIXES (validated by the shared resolver).
+        try:
+            log_path = _resolve_slurm_job_stdout_path(path_arg, request.args.get("log_dir"))
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        rk = rack
+    elif log_fn:
         log_path = _resolve_nemo_log_basename_in_dir(log_dir, log_fn)
         if log_path is None:
             return jsonify(

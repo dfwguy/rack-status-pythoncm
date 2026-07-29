@@ -405,6 +405,7 @@ export default function WorkflowDesigner({ workflow, onSave, onRun, availableRac
 
         <Autocomplete<string, true>
           multiple
+          limitTags={3}
           size="small"
           options={availableRacks}
           value={targetRacks}

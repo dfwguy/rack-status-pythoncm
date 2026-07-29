@@ -27,7 +27,8 @@ import MuiButton from "@mui/material/Button";
 import Snackbar from "@mui/material/Snackbar";
 import Alert from "@mui/material/Alert";
 import CircularProgress from "@mui/material/CircularProgress";
-import { Tag, Text, Flex, Combobox, Button } from "@nvidia/foundations-react-core";
+import { Tag, Text, Flex, Button } from "@nvidia/foundations-react-core";
+import { MultiSelectCombobox } from "./MultiSelectCombobox";
 import Tooltip from "@mui/material/Tooltip";
 import {
   CircleCheck,
@@ -973,11 +974,10 @@ export function RackTable({
             <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 4, display: "block" }}>
               Validation
             </Text>
-            <Combobox
+            <MultiSelectCombobox
               items={VALIDATION_OPTIONS}
-              multiple
               value={validationFilters}
-              onValueChange={(v: string[]) => { setValidationFilters(v); setPage(0); }}
+              onValueChange={(v) => { setValidationFilters(v); setPage(0); }}
               size="small"
               disabled={selectMode}
               aria-label="Filter by validation status"
@@ -988,11 +988,10 @@ export function RackTable({
             <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 4, display: "block" }}>
               Sinfo
             </Text>
-            <Combobox
+            <MultiSelectCombobox
               items={SINFO_OPTIONS}
-              multiple
               value={sinfoFilters}
-              onValueChange={(v: string[]) => { setSinfoFilters(v); setPage(0); }}
+              onValueChange={(v) => { setSinfoFilters(v); setPage(0); }}
               size="small"
               disabled={selectMode}
               aria-label="Filter by sinfo state"
@@ -1003,14 +1002,13 @@ export function RackTable({
             <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 4, display: "block" }}>
               Nodes status
             </Text>
-            <Combobox
+            <MultiSelectCombobox
               items={[
                 { value: "has_down", children: "Has down nodes" },
                 { value: "all_up", children: "All nodes up" },
               ]}
-              multiple
               value={deviceFilters}
-              onValueChange={(v: string[]) => { setDeviceFilters(v); setPage(0); }}
+              onValueChange={(v) => { setDeviceFilters(v); setPage(0); }}
               size="small"
               disabled={selectMode}
               aria-label="Filter by nodes status"

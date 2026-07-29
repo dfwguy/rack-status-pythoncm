@@ -19,6 +19,7 @@ import { RackDetailView } from "./views/RackDetailView";
 // Lazy-loaded routes: keep the initial (index) bundle small by code-splitting each view. Heavy
 // deps move into their own on-demand chunks (reactflow -> Workflows, chart.js -> Analytics/Metrics,
 // the large ToolsView -> Tools). ClusterDashboard + SingleRack stay eager for fast first paint.
+const NodesView = lazy(() => import("./views/NodesView").then((m) => ({ default: m.NodesView })));
 const MultirackView = lazy(() => import("./views/MultirackView").then((m) => ({ default: m.MultirackView })));
 const SlurmView = lazy(() => import("./views/SlurmView").then((m) => ({ default: m.SlurmView })));
 const ReportsView = lazy(() => import("./views/ReportsView").then((m) => ({ default: m.ReportsView })));
@@ -50,6 +51,7 @@ const SIDEBAR_STORAGE_KEY = "nvis-sidebar-open";
 
 const VIEW_TITLES: Record<ViewId, string> = {
   dashboard: "Cluster overview",
+  nodes: "Nodes",
   singleRack: "Racks",
   slurm: "Scheduler",
   infraEthernet: "Ethernet",
@@ -307,6 +309,7 @@ function AppContent() {
               />
             }
           />
+          <Route path="/compute/nodes" element={<NodesView data={data} logDir={logDir} />} />
           <Route
             path="/compute/racks"
             element={

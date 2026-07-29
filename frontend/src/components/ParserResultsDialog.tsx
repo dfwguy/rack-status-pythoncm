@@ -78,6 +78,12 @@ export interface ParserResultsDialogProps {
    * When set, request uses log_file=… and optional rack= for Grafana context (job_id omitted unless also provided).
    */
   logFileBasename?: string;
+  /**
+   * Explicit allowlisted log path (e.g. a Travis bring-up node log
+   * ``results/<node>/allreduce.txt``). Highest precedence: parses that exact file
+   * via ``/api/parser-results?path=…``, bypassing the rack/basename resolution.
+   */
+  logPath?: string;
   /** 0 = Summary, 1 = NCCL, 2 = NEMO, 3 = LLAMA when server returned rows, 4 = NVLOOM (or LLAMA then NVLOOM), 5 = ClusterKit when runs exist. */
   initialTabIndex?: number;
 }
@@ -795,6 +801,7 @@ export function ParserResultsDialog({
   jobId,
   logDir,
   logFileBasename,
+  logPath,
   initialTabIndex = 0,
 }: ParserResultsDialogProps) {
   const [loading, setLoading] = useState(false);
@@ -834,8 +841,12 @@ export function ParserResultsDialog({
 
     const params = new URLSearchParams();
     if (logDir) params.set("log_dir", logDir);
+    const lp = (logPath ?? "").trim();
     const lf = (logFileBasename ?? "").trim();
-    if (lf) {
+    if (lp) {
+      params.set("path", lp);
+      if (rack.trim()) params.set("rack", rack.trim());
+    } else if (lf) {
       params.set("log_file", lf);
       if (rack.trim()) params.set("rack", rack.trim());
     } else {
@@ -859,7 +870,7 @@ export function ParserResultsDialog({
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [open, rack, jobId, logDir, logFileBasename, chartsTz]);
+  }, [open, rack, jobId, logDir, logFileBasename, logPath, chartsTz]);
 
   useEffect(() => {
     if (!open || !(logDir || "").trim() || !rack.trim() || !result) {
