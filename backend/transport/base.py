@@ -1,21 +1,28 @@
 """Connection abstraction for NVIS host command execution.
 
-A :class:`Connection` is the composable transport seam that every tool/launcher
-uses to *launch* work, without caring whether it lands on the local machine, a
+A :class:`Connection` is the seam that every tool/launcher uses to *launch* work
+and to *inspect files*, without caring whether the target is the local machine, a
 head node over SSH, a privileged node, a bastion hop, or (later) a container.
 
-Design: policy vs mechanism.
-  * Leaf connections (:class:`~transport.local.LocalConnection`,
-    :class:`~transport.ssh.SSHConnection`) own the *mechanism* of running a
-    command and how to apply an env dict natively (subprocess ``env=`` locally,
-    ``export …;`` prefix over SSH).
-  * Composite connections (:mod:`transport.compose`) own *policy*: which env
-    vars to forward (:class:`~transport.compose.EnvForwardingConnection`) and
-    which target a profile routes to (:class:`~transport.compose.RoutingConnection`).
+Design: composition over inheritance.
+  * An :class:`Executor` owns the *mechanism* — how to run a command and how to
+    inspect the filesystem on one target. There are two leaves,
+    :class:`~transport.local.LocalExecutor` and
+    :class:`~transport.ssh.SSHExecutor`, plus decorators in
+    :mod:`transport.compose` / :mod:`transport.hop` that add policy (env
+    forwarding, sudo escalation, ssh hops) by wrapping another Executor.
+  * :class:`Connection` is a single concrete class that *holds* an Executor and
+    delegates to it. Callers depend only on Connection; swapping local for SSH is
+    swapping the composed executor, never a different Connection subclass.
 
-Return types intentionally mirror :mod:`subprocess` (``CompletedProcess``) and
-the historical ``HostProcess`` so existing call sites in ``host_exec`` / ``app``
-keep working unchanged.
+Because the Executor answers filesystem questions too, callers never need to ask
+"am I remote?". A path is resolved, stat-ed, or read *through the connection*, and
+the executor applies the right mechanism. This is what removed the old
+``is_remote()`` predicate: mode was leaking into ~50 call sites, and every leak was
+a chance to call a local ``pathlib`` method on a remote path.
+
+Return types intentionally mirror :mod:`subprocess` (``CompletedProcess``) and the
+historical ``HostProcess`` so existing call sites keep working unchanged.
 """
 from __future__ import annotations
 
@@ -62,7 +69,7 @@ def env_export_prefix(env_extra: dict[str, str] | None) -> str:
     return "; ".join(exports) + "; " if exports else ""
 
 
-def as_shell_str(cmd: "str | list[str]") -> str:
+def as_shell_str(cmd: str | list[str]) -> str:
     """Render a command (string or argv) as a single shell string."""
     return cmd if isinstance(cmd, str) else shlex.join(cmd)
 
@@ -96,17 +103,45 @@ class Process:
         return rc
 
 
-class Connection(ABC):
-    """Executes commands on some target. Composable via decorators/composites."""
+@dataclass(frozen=True)
+class FileStat:
+    """Minimal stat result that is meaningful on every target.
 
-    @abstractmethod
-    def is_remote(self) -> bool:
-        """True when commands leave the local machine (e.g. SSH)."""
+    ``mtime`` is epoch seconds and ``size`` is bytes — the pair the history layer
+    hashes into a stable ``run_id``, so it must always come from the *execution*
+    host and never from a container-local ``os.stat``.
+    """
+
+    mtime: float
+    size: int
+
+
+# Head/tail capping defaults for :meth:`Executor.read_text`. A validation log can
+# be gigabytes; the parser only ever needs the two ends.
+DEFAULT_HEAD_BYTES = 256 * 1024
+DEFAULT_TAIL_BYTES = 256 * 1024
+DEFAULT_WHOLE_BYTES = DEFAULT_HEAD_BYTES + DEFAULT_TAIL_BYTES
+
+
+class Executor(ABC):
+    """Runs commands and inspects files on one target.
+
+    Subclasses are either *leaves* (local subprocess, ssh) or *decorators* that
+    wrap another Executor to add policy. Decorators must forward the filesystem
+    methods to the inner executor unchanged: sudo and env-forwarding change how a
+    command runs, not which host owns the files.
+    """
+
+    #: Short target discriminator, ``"local"`` or ``"ssh"``. Diagnostics and
+    #: status endpoints report this; control flow should not branch on it.
+    kind: str = "local"
+
+    # -- execution ----------------------------------------------------------
 
     @abstractmethod
     def run(
         self,
-        cmd: "str | list[str]",
+        cmd: str | list[str],
         *,
         timeout: int = 120,
         cwd: str | None = None,
@@ -119,7 +154,7 @@ class Connection(ABC):
     @abstractmethod
     def popen(
         self,
-        cmd: "str | list[str]",
+        cmd: str | list[str],
         *,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
@@ -129,16 +164,217 @@ class Connection(ABC):
 
     def wrap_argv(
         self,
-        cmd: "str | list[str]",
+        cmd: str | list[str],
         *,
         cwd: str | None = None,
         env_extra: dict[str, str] | None = None,
     ) -> list[str]:
-        """Return an argv suitable for ``subprocess.Popen`` (e.g. for PTYs).
-
-        Local default: the command as-is. SSH overrides to wrap in ``ssh …``.
-        """
+        """Return an argv suitable for ``subprocess.Popen`` (e.g. for PTYs)."""
         return list(cmd) if isinstance(cmd, list) else ["bash", "-lc", cmd]
+
+    # -- filesystem ---------------------------------------------------------
+    #
+    # These exist so callers never reach for pathlib against a path that may live
+    # on another host. Every method is total: it returns a neutral value rather
+    # than raising, because "the head node is unreachable" is data the UI renders,
+    # not an exception the request handler should die on.
+
+    @abstractmethod
+    def resolve(self, path: object) -> str:
+        """Canonical absolute path string for this target.
+
+        Local targets resolve symlinks. Remote targets normalise textually — a
+        local ``.resolve()`` would rewrite the path through the *container's*
+        filesystem (and macOS firmlinks) and break the remote ``cd``. Normalising
+        still collapses ``..`` so containment checks stay meaningful.
+        """
+
+    @abstractmethod
+    def stat(self, path: object) -> FileStat | None:
+        """``FileStat`` for *path*, or ``None`` when it does not exist."""
+
+    @abstractmethod
+    def stat_dir(
+        self,
+        base: object,
+        *,
+        patterns: tuple[str, ...] | None = None,
+        maxdepth: int = 1,
+    ) -> dict[str, FileStat]:
+        """``{absolute path: FileStat}`` for the regular files under *base*.
+
+        One batched call per directory: the dashboard polls parser results, and a
+        per-file round trip over SSH would be one connection per log. *patterns*
+        filters on basename glob; *maxdepth* mirrors ``find -maxdepth``.
+        """
+
+    @abstractmethod
+    def makedirs(self, path: object) -> str | None:
+        """Create *path* (and parents) on this target.
+
+        Returns ``None`` on success or an error string — never raises, matching
+        the rest of the filesystem API.
+        """
+
+    @abstractmethod
+    def write_bytes(self, path: object, data: bytes) -> str | None:
+        """Write *data* to *path* on this target, creating parent directories.
+
+        The write half of the filesystem API: a caller that produced an artifact
+        (an export workbook, a generated config) can place it next to the data it
+        describes without knowing whether that directory is local or on a host
+        three hops away. ``None`` on success, else an error string.
+        """
+
+    @abstractmethod
+    def read_text(
+        self,
+        path: object,
+        *,
+        head_bytes: int = DEFAULT_HEAD_BYTES,
+        tail_bytes: int = DEFAULT_TAIL_BYTES,
+        whole_bytes: int | None = None,
+        timeout: int = 120,
+    ) -> tuple[str, dict[str, object]]:
+        """Head+tail capped text read. Returns ``(text, meta)`` and never raises.
+
+        *meta* carries ``bytes`` (true size), ``read_bytes``, ``truncated``,
+        ``gzip``, ``read_error`` and ``target``.
+        """
+
+    @abstractmethod
+    def which(self, name: str) -> str | None:
+        """Absolute path of executable *name* on this target, else ``None``."""
+
+    def is_file(self, path: object) -> bool:
+        st = self.stat(path)
+        return st is not None
+
+    def is_dir(self, path: object) -> bool:
+        """True when *path* is a directory on this target."""
+        return self._test_flag(path, "-d")
+
+    @abstractmethod
+    def _test_flag(self, path: object, flag: str) -> bool:
+        """Backend for ``test <flag> <path>`` style predicates."""
+
+    # -- introspection ------------------------------------------------------
+
+    def describe(self) -> dict[str, object]:
+        """Structured description of the target, for status endpoints."""
+        return {"kind": self.kind}
+
+
+class Connection:
+    """Executes commands and inspects files on a target, via a composed Executor.
+
+    Concrete by design: there is no ``LocalConnection`` / ``SSHConnection`` class
+    hierarchy any more, only different executors handed to the same Connection.
+    """
+
+    def __init__(self, executor: Executor):
+        self.executor = executor
+
+    # -- introspection ------------------------------------------------------
+
+    @property
+    def kind(self) -> str:
+        """``"local"`` or ``"ssh"`` — for diagnostics, not for branching."""
+        return self.executor.kind
+
+    def describe(self) -> dict[str, object]:
+        return self.executor.describe()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<Connection {self.executor.__class__.__name__} kind={self.kind}>"
+
+    # -- execution ----------------------------------------------------------
+
+    def run(
+        self,
+        cmd: str | list[str],
+        *,
+        timeout: int = 120,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        login_shell: bool = True,
+        env_extra: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return self.executor.run(
+            cmd, timeout=timeout, cwd=cwd, env=env, login_shell=login_shell,
+            env_extra=env_extra,
+        )
+
+    def popen(
+        self,
+        cmd: str | list[str],
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        env_extra: dict[str, str] | None = None,
+    ) -> Process:
+        return self.executor.popen(cmd, cwd=cwd, env=env, env_extra=env_extra)
+
+    def wrap_argv(
+        self,
+        cmd: str | list[str],
+        *,
+        cwd: str | None = None,
+        env_extra: dict[str, str] | None = None,
+    ) -> list[str]:
+        return self.executor.wrap_argv(cmd, cwd=cwd, env_extra=env_extra)
+
+    # -- filesystem ---------------------------------------------------------
+
+    def resolve(self, path: object) -> str:
+        return self.executor.resolve(path)
+
+    def stat(self, path: object) -> FileStat | None:
+        return self.executor.stat(path)
+
+    def stat_dir(
+        self,
+        base: object,
+        *,
+        patterns: tuple[str, ...] | None = None,
+        maxdepth: int = 1,
+    ) -> dict[str, FileStat]:
+        return self.executor.stat_dir(base, patterns=patterns, maxdepth=maxdepth)
+
+    def makedirs(self, path: object) -> str | None:
+        return self.executor.makedirs(path)
+
+    def write_bytes(self, path: object, data: bytes) -> str | None:
+        return self.executor.write_bytes(path, data)
+
+    def read_text(
+        self,
+        path: object,
+        *,
+        head_bytes: int = DEFAULT_HEAD_BYTES,
+        tail_bytes: int = DEFAULT_TAIL_BYTES,
+        whole_bytes: int | None = None,
+        timeout: int = 120,
+    ) -> tuple[str, dict[str, object]]:
+        return self.executor.read_text(
+            path, head_bytes=head_bytes, tail_bytes=tail_bytes,
+            whole_bytes=whole_bytes, timeout=timeout,
+        )
+
+    def is_file(self, path: object) -> bool:
+        return self.executor.is_file(path)
+
+    def is_dir(self, path: object) -> bool:
+        return self.executor.is_dir(path)
+
+    def which(self, name: str) -> str | None:
+        return self.executor.which(name)
+
+    # Historical alias: ``resolve_path`` predates the wider filesystem API.
+    def resolve_path(self, path: str) -> str:
+        return self.executor.resolve(path)
+
+    # -- composition --------------------------------------------------------
 
     def hop(
         self,
@@ -149,7 +385,7 @@ class Connection(ABC):
         extra_opts: list[str] | None = None,
         connect_timeout: str = "15",
         sudo: bool = False,
-    ) -> "Connection":
+    ) -> Connection:
         """Return a Connection that runs on *host* by tunnelling ssh through ``self``.
 
         Composition primitive: ``control.hop(node)`` runs ``ssh node <cmd>`` on the
@@ -157,20 +393,11 @@ class Connection(ABC):
         Chainable to N levels: ``self.hop(a).hop(b)``. ``sudo=True`` runs the payload
         under passwordless sudo on *host*.
         """
-        from transport.hop import HopConnection
+        from transport.hop import HopExecutor
 
-        return HopConnection(
-            self, host, user=user, key=key, extra_opts=extra_opts,
-            connect_timeout=connect_timeout, sudo=sudo,
+        return Connection(
+            HopExecutor(
+                self.executor, host, user=user, key=key, extra_opts=extra_opts,
+                connect_timeout=connect_timeout, sudo=sudo,
+            )
         )
-
-    def resolve_path(self, path: str) -> str:
-        """Resolve *path* for this target.
-
-        Remote targets return the path unchanged (a local ``.resolve()`` would
-        rewrite it through macOS firmlinks and break the remote ``cd``). Local
-        targets resolve to an absolute canonical path.
-        """
-        if self.is_remote():
-            return str(path)
-        return str(os.path.realpath(path))

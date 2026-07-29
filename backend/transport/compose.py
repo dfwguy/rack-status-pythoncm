@@ -1,4 +1,4 @@
-"""Composite connections: env-forwarding decorator, sudo escalation, profile routing."""
+"""Composite executors (env forwarding, sudo escalation) and profile routing."""
 from __future__ import annotations
 
 import os
@@ -6,7 +6,15 @@ import shlex
 import subprocess
 from collections.abc import Callable
 
-from transport.base import Connection, Process, as_shell_str
+from transport.base import (
+    DEFAULT_HEAD_BYTES,
+    DEFAULT_TAIL_BYTES,
+    Connection,
+    Executor,
+    FileStat,
+    Process,
+    as_shell_str,
+)
 
 EnvResolver = Callable[[dict[str, str] | None], dict[str, str]]
 
@@ -44,20 +52,73 @@ def make_env_resolver(
     return resolve
 
 
-class EnvForwardingConnection(Connection):
-    """Decorator that injects the forwardable env subset into every call.
+class ExecutorDecorator(Executor):
+    """Wraps another Executor, adding policy to *execution* only.
+
+    Filesystem access is forwarded verbatim: escalating with sudo or forwarding
+    environment variables changes how a command runs, never which host owns the
+    files. Subclasses therefore only override the execution methods.
+    """
+
+    def __init__(self, inner: Executor):
+        self.inner = inner
+
+    @property
+    def kind(self) -> str:  # type: ignore[override]
+        return self.inner.kind
+
+    # -- filesystem (pass-through) ------------------------------------------
+
+    def resolve(self, path: object) -> str:
+        return self.inner.resolve(path)
+
+    def stat(self, path: object) -> FileStat | None:
+        return self.inner.stat(path)
+
+    def stat_dir(self, base: object, **kwargs) -> dict[str, FileStat]:
+        return self.inner.stat_dir(base, **kwargs)
+
+    def makedirs(self, path: object) -> str | None:
+        return self.inner.makedirs(path)
+
+    def write_bytes(self, path: object, data: bytes) -> str | None:
+        return self.inner.write_bytes(path, data)
+
+    def read_text(
+        self,
+        path: object,
+        *,
+        head_bytes: int = DEFAULT_HEAD_BYTES,
+        tail_bytes: int = DEFAULT_TAIL_BYTES,
+        whole_bytes: int | None = None,
+        timeout: int = 120,
+    ) -> tuple[str, dict[str, object]]:
+        return self.inner.read_text(
+            path, head_bytes=head_bytes, tail_bytes=tail_bytes,
+            whole_bytes=whole_bytes, timeout=timeout,
+        )
+
+    def which(self, name: str) -> str | None:
+        return self.inner.which(name)
+
+    def _test_flag(self, path: object, flag: str) -> bool:
+        return self.inner._test_flag(path, flag)
+
+    def describe(self) -> dict[str, object]:
+        return self.inner.describe()
+
+
+class EnvForwardingExecutor(ExecutorDecorator):
+    """Injects the forwardable env subset into every call.
 
     Policy (which vars to forward) lives here; mechanism (how to apply them:
     subprocess ``env=`` locally, ``export`` prefix over SSH) lives in the leaf,
     which receives the resolved dict via ``env_extra``.
     """
 
-    def __init__(self, inner: Connection, resolver: EnvResolver):
-        self.inner = inner
+    def __init__(self, inner: Executor, resolver: EnvResolver):
+        super().__init__(inner)
         self.resolver = resolver
-
-    def is_remote(self) -> bool:
-        return self.inner.is_remote()
 
     def run(self, cmd, *, timeout=120, cwd=None, env=None, login_shell=True, env_extra=None):
         return self.inner.run(
@@ -75,12 +136,9 @@ class EnvForwardingConnection(Connection):
     def wrap_argv(self, cmd, *, cwd=None, env_extra=None) -> list[str]:
         return self.inner.wrap_argv(cmd, cwd=cwd, env_extra=self.resolver(env_extra))
 
-    def resolve_path(self, path: str) -> str:
-        return self.inner.resolve_path(path)
 
-
-class SudoConnection(Connection):
-    """Decorator that escalates every command with ``sudo`` before delegating.
+class SudoExecutor(ExecutorDecorator):
+    """Escalates every command with ``sudo`` before delegating.
 
     Applied to the privileged ("script") route so root-requiring node tools
     (``sysinfo.sh``, hardware checks, switch/IMEX/BMC actions) run as root even
@@ -96,17 +154,14 @@ class SudoConnection(Connection):
 
     def __init__(
         self,
-        inner: Connection,
+        inner: Executor,
         *,
         password: str | None = None,
         preserve_env: bool = True,
     ):
-        self.inner = inner
+        super().__init__(inner)
         self.password = password or None
         self.preserve_env = preserve_env
-
-    def is_remote(self) -> bool:
-        return self.inner.is_remote()
 
     def _opts(self) -> list[str]:
         opts = ["sudo"]
@@ -118,7 +173,7 @@ class SudoConnection(Connection):
             opts.append("-E")
         return opts
 
-    def _wrap(self, cmd: "str | list[str]") -> "str | list[str]":
+    def _wrap(self, cmd: str | list[str]) -> str | list[str]:
         # Password mode requires a shell pipe, so collapse to a string.
         if self.password:
             piped = f"printf '%s\\n' {shlex.quote(self.password)} | "
@@ -143,16 +198,14 @@ class SudoConnection(Connection):
     def wrap_argv(self, cmd, *, cwd=None, env_extra=None) -> list[str]:
         return self.inner.wrap_argv(self._wrap(cmd), cwd=cwd, env_extra=env_extra)
 
-    def resolve_path(self, path: str) -> str:
-        return self.inner.resolve_path(path)
-
 
 class RoutingConnection(Connection):
     """Routes by *profile* to one of several underlying connections.
 
     Makes the historical ``control`` (head / cmsh / slurm) vs ``script``
     (privileged node-operational) split an explicit, n-way composition. Also a
-    valid :class:`Connection` itself, defaulting to the ``control`` profile.
+    valid :class:`Connection` itself, defaulting to the ``control`` profile —
+    including for filesystem access, which always belongs to the control target.
     """
 
     def __init__(self, targets: dict[str, Connection], default: str = "control"):
@@ -160,12 +213,10 @@ class RoutingConnection(Connection):
             raise ValueError(f"default profile {default!r} not in targets {list(targets)}")
         self.targets = targets
         self.default = default
+        super().__init__(targets[default].executor)
 
     def select(self, profile: str = "control") -> Connection:
         return self.targets.get(profile) or self.targets[self.default]
-
-    def is_remote(self) -> bool:
-        return self.select().is_remote()
 
     def run(
         self,

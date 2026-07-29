@@ -277,11 +277,87 @@ def set_active():
     return jsonify({"ok": True, "active": sel})
 
 
+@catalog_bp.get("/topology")
+def get_topology():
+    """The active cluster's connection topology, as declared and as resolved.
+
+    ``declared`` is what the cluster document says; ``resolved`` is what the
+    transport actually built from it (per role: endpoint, hop path, root), which is
+    the useful thing when diagnosing "which host did that command run on?". They
+    differ when the topology is absent or invalid and the flat env contract is
+    serving instead — ``source`` says which.
+    """
+    _project, cluster, _platform = context.resolve()
+    if cluster is None:
+        return _err("no active cluster", 404)
+    conn = cluster.connection
+    declared = {
+        "endpoints": [e.__dict__ | {"opts": list(e.opts)} for e in conn.endpoints],
+        "roles": [r.__dict__ for r in conn.roles],
+    }
+    resolved: dict[str, Any] = {}
+    try:
+        import host_exec
+
+        resolved = {
+            "roles": host_exec.describe_roles(),
+            "names": host_exec.role_names(),
+            "kind": host_exec.exec_kind(),
+        }
+    except Exception as exc:  # diagnostics must not fail with the transport
+        resolved = {"error": str(exc)}
+    return jsonify(
+        {
+            "ok": True,
+            "cluster": cluster.id,
+            "source": "topology" if conn.endpoints else "environment",
+            "declared": declared,
+            "resolved": resolved,
+            "problems": conn.validate(),
+        }
+    )
+
+
+@catalog_bp.put("/topology")
+def set_topology():
+    """Replace the active cluster's ``endpoints``/``roles`` and rebuild the transport."""
+    body = _body()
+    _project, cluster, _platform = context.resolve()
+    if cluster is None:
+        return _err("no active cluster", 404)
+    active = context.get_active()
+    raw = get_repo().get(TABLE_PROJECTS, active.get("project") or "")
+    if raw is None:
+        return _err("active project not found", 404)
+
+    updated = models.ClusterConnection.from_dict(
+        cluster.connection.to_dict()
+        | {"endpoints": body.get("endpoints") or [], "roles": body.get("roles") or []}
+    )
+    problems = updated.validate()
+    if problems:
+        return _err(problems, 400)
+
+    project = models.Project.from_dict(raw)
+    for c in project.clusters:
+        if c.id == cluster.id:
+            c.connection = updated
+            break
+    else:
+        return _err(f"cluster not found in project: {cluster.id}", 404)
+
+    get_repo().upsert(TABLE_PROJECTS, project.to_dict())
+    context.notify_changed()
+    return jsonify({"ok": True, "cluster": cluster.id, "connection": updated.to_dict()})
+
+
 @catalog_bp.get("/vocab")
 def vocab():
     return jsonify(
         {
             "ok": True,
+            "endpoint_types": list(models.ENDPOINT_TYPES),
+            "connection_roles": list(models.CONNECTION_ROLES),
             "gpu_models": list(models.GPU_MODELS),
             "cpu_vendors": list(models.CPU_VENDORS),
             "system_vendors": list(models.SYSTEM_VENDORS),

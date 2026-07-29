@@ -377,6 +377,95 @@ f_check_dmesg(){
   fi
 }
 
+
+f_check_dcgm_diag(){
+  # MOP GB300 §7.1.1 step 2 — standardised on -r 3 (NscaleTX decision 2026-07-26;
+  # MOP text says -r 2, FastTrack says -r 4).
+  local lvl="${dcgm_diag_level:-3}"
+  if ! command -v dcgmi &>/dev/null; then
+    echo "WARN: dcgmi not found, skip DCGM diag"
+    return 0
+  fi
+  echo "INFO: running dcgmi diag -r ${lvl} (this can take several minutes)"
+  local out
+  out=$(dcgmi diag -r "${lvl}" 2>&1)
+  echo "${out}"
+  if echo "${out}" | grep -qiE '\bfail\b|error'; then
+    echo "ERROR: dcgmi diag -r ${lvl} reported failures"
+    reason="${reason} dcgm_diag_r${lvl}_fail"
+    global_status=$((global_status+1))
+  else
+    echo "INFO: dcgmi diag -r ${lvl} PASSED"
+  fi
+}
+
+f_check_nvbandwidth(){
+  # MOP incubation/nvbandwidth-single-node-mop.md; FastTrack §7 pre-flight tests.
+  #
+  # nvbandwidth is NOT shipped as a node binary — the MOP delivers it as an OCI container
+  # imported to a shared .sqsh ("Delivery: OCI container ... launched via Slurm + Pyxis +
+  # Enroot"). The original `command -v nvbandwidth` test therefore skipped on every node,
+  # forever, while still printing "Health check PASSED". So: try the binary, then fall back
+  # to running the staged container with enroot directly (this script runs ON the tray, so
+  # srun is not available to us — enroot is the right tool here).
+  local NVB_RUN=""  NVB_MODE=""  ctr="" sq=""
+
+  if command -v nvbandwidth &>/dev/null; then
+    NVB_RUN="nvbandwidth"; NVB_MODE="binary"
+  else
+    for sq in ${NVIS_NVBANDWIDTH_SQSH:-} \
+              /home/cmods/bringup/containers/nvbandwidth-v0.9-arm.sqsh \
+              /home/cmods/bringup/containers/nvbandwidth*.sqsh \
+              /cm/shared/containers/nvbandwidth*.sqsh \
+              /cm/shared/apps/llmb/images/nvbandwidth*.sqsh; do
+      [[ -s "${sq}" ]] && { ctr="${sq}"; break; }
+    done
+    if [[ -n "${ctr}" ]] && command -v enroot &>/dev/null; then
+      NVB_MODE="container:${ctr}"
+    fi
+  fi
+
+  if [[ -z "${NVB_MODE}" ]]; then
+    # Loud and unambiguous. Deliberately NOT counted as a failure (that could drain the
+    # node), but it must never read as a silent pass.
+    echo "WARN: *** nvbandwidth SKIPPED — no binary on PATH and no .sqsh found ***"
+    echo "WARN: *** THIS NODE WAS NOT BANDWIDTH-TESTED. 'PASSED' below excludes nvbandwidth. ***"
+    echo "WARN: stage the image (MOP §4.1) or set NVIS_NVBANDWIDTH_SQSH=/path/to.sqsh"
+    return 0
+  fi
+  echo "INFO: nvbandwidth mode=${NVB_MODE}"
+
+  local ename="" t rc
+  if [[ "${NVB_MODE}" == container:* ]]; then
+    ename="nvbw_$$_${RANDOM}"
+    # MELLANOX_VISIBLE_DEVICES=none: enroot's 99-mellanox.sh hook tries to bind
+    # /sys/class/infiniband_mad, which does not exist on these trays — it exits 1 and the
+    # container never starts. Same fault that killed MNUBERGEMM job 62114.
+    if ! enroot create --name "${ename}" "${ctr}" >/dev/null 2>&1; then
+      echo "ERROR: enroot create failed for ${ctr}"
+      reason="${reason} nvbandwidth_container_create_fail"
+      global_status=$((global_status+1))
+      return 0
+    fi
+    NVB_RUN="env NVIDIA_VISIBLE_DEVICES=all MELLANOX_VISIBLE_DEVICES=none enroot start ${ename} nvbandwidth"
+  fi
+
+  for t in device_to_device_memcpy_read_ce \
+           device_to_device_bidirectional_memcpy_read_ce \
+           host_to_device_memcpy_ce; do
+    echo "INFO: nvbandwidth -t ${t}"
+    ${NVB_RUN} -t "${t}" 2>&1; rc=$?
+    if [ ${rc} -ne 0 ]; then
+      echo "ERROR: nvbandwidth ${t} failed (rc=${rc})"
+      reason="${reason} nvbandwidth_${t}_fail"
+      global_status=$((global_status+1))
+    fi
+  done
+
+  [[ -n "${ename}" ]] && enroot remove -f "${ename}" >/dev/null 2>&1
+  return 0
+}
+
 f_help(){
   echo "$(basename $0)"
   echo "  options:"
@@ -388,8 +477,210 @@ f_help(){
   echo "    -b | --check-ib    <Check IB, 1:enable, 0:disable. Default: enable>"
   echo "    -x | --check-spx   <Check SPX, 1:enable, 0:disable. Default: disable>"
   echo "    -p | --check-process   <Check processes, 1:enable, 0:disable. Default: disable>"
+  echo "    -D | --check-dcgm-diag <Run dcgmi diag, 1:enable, 0:disable. Default: disable>"
+  echo "    -L | --dcgm-diag-level <dcgmi diag level r1-r4. Default: 3>"
+  echo "    -N | --check-nvbandwidth <Run nvbandwidth pre-flight, 1:enable, 0:disable. Default: disable>"
+  echo "    -S | --check-slurm-stack <slurmd/munge/prolog/epilog/pyxis/enroot, 1:enable. Default: disable>"
   echo "    -h | --help"
   exit 0
+}
+
+f_check_slurm_stack(){
+  ## Job-launch stack: slurmd, munge, prolog/epilog, pyxis SPANK plugin, enroot runtime.
+  ## WHY: job 63850 (MNUBERGEMM, 18 trays) was CANCELLED with Reason=Prolog at RunTime 00:00:00.
+  ## Every GPU/NVLink/CUDA check on that tray passed - the fault was entirely in the launch
+  ## stack, which nothing here covered. A tray that cannot start a job is not "healthy".
+  local st plug prolog epilog SC CFG
+  ## sudo -n env ... strips PATH and SLURM_CONF (see hw_check_pdsh.sh), so `scontrol show config`
+  ## silently returns NOTHING and every field parses as empty. The first version of this check
+  ## reported that as "no Prolog configured" -> PASSED, on a tray whose job had just died with
+  ## Reason=Prolog. Resolve both explicitly, and treat an unreadable config as an ERROR.
+  SC=$(command -v scontrol 2>/dev/null)
+  [ -x "$SC" ] || SC=$(ls -1 /cm/local/apps/slurm/*/bin/scontrol 2>/dev/null | tail -1)
+  [ -x "$SC" ] || SC=$(ls -1 /cm/local/apps/slurm/current/bin/scontrol 2>/dev/null | tail -1)
+  if [ -z "${SLURM_CONF}" ]; then
+    export SLURM_CONF=$(ls -1 /cm/shared-*/apps/slurm/etc/slurm/slurm.conf /cm/shared/apps/slurm/etc/slurm/slurm.conf 2>/dev/null | head -1)
+  fi
+  if [ -z "$SC" ] || [ ! -x "$SC" ]; then
+    msg='ERROR: scontrol not found on this node - cannot verify Prolog/Epilog/pyxis'
+    echo $msg; global_status=$[global_status+1]; return
+  fi
+  CFG=$("$SC" show config 2>&1)
+  if [ $? -ne 0 ] || [ -z "$CFG" ] || ! echo "$CFG" | grep -q '='; then
+    msg="ERROR: 'scontrol show config' returned nothing (SLURM_CONF=${SLURM_CONF:-unset}) - Prolog/Epilog/pyxis state UNKNOWN, not healthy"
+    echo $msg; global_status=$[global_status+1]; return
+  fi
+  echo "INFO: slurm config readable (SLURM_CONF=${SLURM_CONF:-default}, scontrol=${SC})"
+
+  for svc in slurmd munge; do
+    st=$(systemctl is-active ${svc} 2>/dev/null)
+    if [ "X${st}" != "Xactive" ]; then
+      msg="ERROR: ${svc} is not active (systemctl is-active = ${st:-unknown})"
+      echo $msg; global_status=$[global_status+1]
+    else
+      echo "INFO: ${svc} active"
+    fi
+    # A unit can be 'active' and still have failed its last start attempt.
+    if systemctl is-failed ${svc} &>/dev/null; then
+      msg="ERROR: ${svc} is in a failed state"; echo $msg; global_status=$[global_status+1]
+    fi
+  done
+
+  ## ---- LOCAL slurm.conf Prolog (READ-ONLY diagnostic) -----------------------------------
+  ## `scontrol show config` queries SLURMCTLD, not this node's file — which is why it reported
+  ## "no Prolog configured" on trays whose slurmd was demonstrably failing a prolog. slurmd runs
+  ## the Prolog from its LOCAL slurm.conf. Read that file directly.
+  _lc="${SLURM_CONF}"
+  [ -r "${_lc}" ] || _lc=$(ls -1 /etc/slurm/slurm.conf /cm/local/apps/slurm/var/etc/slurm.conf 2>/dev/null | head -1)
+  if [ -r "${_lc}" ]; then
+    _lp=$(grep -iE '^[[:space:]]*Prolog[[:space:]]*=' "${_lc}" | tail -1 | cut -d= -f2- | tr -d '[:space:]')
+    if [ -n "${_lp}" ]; then
+      echo "INFO: LOCAL slurm.conf Prolog = ${_lp}  (from ${_lc})"
+      if [ ! -f "${_lp}" ]; then
+        msg="ERROR: local Prolog script MISSING on this node: ${_lp}"
+        echo $msg; global_status=$[global_status+1]
+      elif [ ! -x "${_lp}" ]; then
+        msg="ERROR: local Prolog script NOT EXECUTABLE: ${_lp}"
+        echo $msg; global_status=$[global_status+1]
+      else
+        echo "INFO: local Prolog present+executable ($(stat -c '%A %U:%G %s bytes' "${_lp}" 2>/dev/null))"
+        ## BCM's prolog dispatches a directory of parts; a single failing part is the usual cause.
+        for _d in "${_lp}.d" /cm/local/apps/cmd/scripts/prolog.d /etc/slurm/prolog.d; do
+          [ -d "${_d}" ] || continue
+          echo "INFO: prolog parts in ${_d}: $(ls -1 "${_d}" 2>/dev/null | tr '\n' ' ')"
+          for _f in "${_d}"/*; do
+            [ -f "${_f}" ] || continue
+            [ -x "${_f}" ] || { msg="ERROR: prolog part NOT EXECUTABLE: ${_f}"; echo $msg; global_status=$[global_status+1]; }
+          done
+        done
+      fi
+    else
+      echo "INFO: no Prolog= line in ${_lc}"
+    fi
+  else
+    echo "WARNING: could not read a local slurm.conf to check Prolog="
+  fi
+  ## Widen the journal window and keep MORE context — the earlier 3-line tail cut off the
+  ## prolog's own stderr, which is the line that actually says why it failed.
+  if command -v journalctl >/dev/null 2>&1; then
+    _pctx=$(journalctl -u slurmd --since "-24h" --no-pager 2>/dev/null \
+            | grep -iE "prolog" | tail -12)
+    [ -n "${_pctx}" ] && { echo "INFO: ---- last 12 prolog journal lines (24h) ----"; echo "${_pctx}"; }
+  fi
+
+  ## ---- NODE STATE / DRAIN REASON (controller-side) --------------------------------------
+  ## THE THING THIS CHECK EXISTED FOR AND ORIGINALLY MISSED.
+  ## "Prolog error" is not visible in the tray's slurm.conf — the trays report *no Prolog
+  ## configured*. It is slurmctld's DRAIN REASON, held in controller node state. So a tray whose
+  ## jobs are being killed by the prolog looked perfectly healthy here. Ask the controller.
+  _me=$(hostname -s 2>/dev/null || hostname)
+  _ns=$("$SC" show node "${_me}" 2>/dev/null)
+  if [ -z "${_ns}" ]; then
+    msg="ERROR: scontrol show node ${_me} returned nothing - node state UNKNOWN"
+    echo $msg; global_status=$[global_status+1]
+  else
+    _state=$(echo "${_ns}" | awk -F'State=' 'NF>1{print $2}' | awk '{print $1}')
+    _reason=$(echo "${_ns}" | sed -n 's/.*Reason=\(.*\)$/\1/p' | head -1)
+    echo "INFO: slurm node state = ${_state:-unknown}"
+    case "${_state}" in
+      *DRAIN*|*DOWN*|*FAIL*|*INVAL*)
+        msg="ERROR: node is ${_state} in Slurm — Reason: ${_reason:-none given}"
+        echo $msg; global_status=$[global_status+1]
+        ;;
+      *)
+        [ -n "${_reason}" ] && echo "INFO: slurm reason: ${_reason}"
+        ;;
+    esac
+    ## A drain reason can be cleared while the underlying fault remains. Surface any recent
+    ## prolog/epilog failure from the local journal too — that is the tray-side evidence.
+    if command -v journalctl >/dev/null 2>&1; then
+      _pj=$(journalctl -u slurmd --since "-2h" --no-pager 2>/dev/null \
+            | grep -iE "prolog|epilog" | grep -iE "error|fail|timeout" | tail -3)
+      if [ -n "${_pj}" ]; then
+        msg="ERROR: slurmd journal shows prolog/epilog failures in the last 2h: $(echo "${_pj}" | tr '\n' ' | ')"
+        echo $msg; global_status=$[global_status+1]
+      else
+        echo "INFO: no prolog/epilog errors in slurmd journal (last 2h)"
+      fi
+    fi
+  fi
+
+  ## Prolog/Epilog: read the paths Slurm ACTUALLY uses, do not assume the BCM default.
+  for kind in Prolog Epilog; do
+    path=$(echo "$CFG" | awk -v k="^${kind}[ ]*=" '$0 ~ k {print $3}')
+    if [ "X${path}" == "X" ] || [ "X${path}" == "X(null)" ]; then
+      ## "(null)" from a CONFIRMED-readable config genuinely means none is set.
+      echo "INFO: no ${kind} configured (confirmed from scontrol show config)"
+      continue
+    fi
+    if [ ! -f "${path}" ]; then
+      msg="ERROR: ${kind} script missing: ${path}"; echo $msg; global_status=$[global_status+1]
+    elif [ ! -x "${path}" ]; then
+      msg="ERROR: ${kind} script not executable: ${path}"; echo $msg; global_status=$[global_status+1]
+    else
+      echo "INFO: ${kind} present and executable: ${path}"
+      ## Dry-run it. This is the ONLY check that reproduces the actual failure mode: a prolog
+      ## that exits non-zero drains the node and cancels the whole allocation.
+      if [ ${dry_run} -eq 0 ]; then
+        out=$(SLURM_JOB_ID=0 SLURM_JOB_USER=${USER:-root} timeout 60 "${path}" 2>&1); rc=$?
+        if [ ${rc} -ne 0 ]; then
+          msg="ERROR: ${kind} exited ${rc} on dry execution: $(echo "$out"|tail -3|tr '\n' ' ')"
+          echo $msg; global_status=$[global_status+1]
+        else
+          echo "INFO: ${kind} dry execution returned 0"
+        fi
+      fi
+    fi
+  done
+
+  ## Pyxis is a SPANK plugin; if plugstack cannot load it every containerised job dies at launch.
+  plug=$(echo "$CFG" | awk '/^PlugStackConfig/ {print $3}')
+  [ "X${plug}" == "X" ] && plug=/etc/slurm/plugstack.conf
+  if [ -f "${plug}" ] || [ -d "${plug}.d" ]; then
+    if grep -rqs pyxis "${plug}" "${plug}.d" 2>/dev/null; then
+      so=$(grep -rhs pyxis "${plug}" "${plug}.d" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /\.so$/) print $i}' | head -1)
+      if [ "X${so}" != "X" ] && [ ! -f "${so}" ]; then
+        msg="ERROR: pyxis plugin declared but .so missing: ${so}"; echo $msg; global_status=$[global_status+1]
+      else
+        echo "INFO: pyxis SPANK plugin configured${so:+ (${so})}"
+      fi
+    else
+      ## Only a real signal when a plugstack file EXISTS and omits pyxis.
+      echo "WARNING: no pyxis entry in ${plug} - verify containerised jobs launch"
+    fi
+  else
+    ## PlugStackConfig=(null) means Slurm uses its compiled-in default path; BCM wires pyxis
+    ## elsewhere. PROVEN NOT FATAL: h01 ran MNUBERGEMM (job 63870) in a pyxis/enroot container at
+    ## 72 kW with this exact condition on all 18 trays. Informational only - do NOT fail the node.
+    echo "INFO: PlugStackConfig unset (${plug}) - Slurm default path; pyxis not verifiable from here"
+  fi
+
+  ## Enroot: binary + writable runtime/cache/data dirs. NFS cannot do overlayfs whiteout mknod,
+  ## so a runtime path on NFS breaks every container even though the dir looks writable.
+  if ! command -v enroot &>/dev/null; then
+    msg='ERROR: enroot not found in PATH'; echo $msg; global_status=$[global_status+1]
+  else
+    echo "INFO: enroot $(enroot version 2>/dev/null|head -1)"
+    for v in ENROOT_RUNTIME_PATH ENROOT_CACHE_PATH ENROOT_DATA_PATH; do
+      d=$(enroot config 2>/dev/null | awk -v k="^${v}" '$0 ~ k {print $2}')
+      [ "X${d}" == "X" ] && continue
+      d=$(eval echo "${d}")
+      if [ ! -d "${d}" ]; then
+        echo "INFO: ${v}=${d} (not yet created)"
+      elif ! touch "${d}/.hcheck" 2>/dev/null; then
+        msg="ERROR: ${v} not writable: ${d}"; echo $msg; global_status=$[global_status+1]
+      else
+        rm -f "${d}/.hcheck"
+        fstype=$(stat -f -c %T "${d}" 2>/dev/null)
+        if [ "X${fstype}" == "Xnfs" ]; then
+          msg="ERROR: ${v} is on NFS (${d}) - overlayfs whiteout will fail for every container"
+          echo $msg; global_status=$[global_status+1]
+        else
+          echo "INFO: ${v}=${d} writable (${fstype})"
+        fi
+      fi
+    done
+  fi
 }
 
 f_check_process(){
@@ -442,11 +733,25 @@ check_imex=0
 check_ew_ib=1
 check_ew_spx=0
 check_process=0
+check_dcgm_diag=0
+check_nvbandwidth=0
+check_slurm_stack=0
+dcgm_diag_level=3
 
 dry_run=0
-options=d,e:,s:,g:,i:,b:,x:,p:,h
-optionl=dry-run,extra-check:,check-sys:,check-gpu:,check-imex:,check-ib:,check-spx:,check-process:,help
-OPTS=$(getopt -a -n $0 --options $options --longoptions $optionl -- "$@")
+# D:/L:/N: were MISSING here while the -D/-L/-N case arms, the f_check_dcgm_diag /
+# f_check_nvbandwidth functions and their dispatch all existed. getopt therefore rejected
+# them, and because its exit status was unchecked the script carried on with the surviving
+# options and printed "Health check PASSED" having run nothing. The dcgm_diag, nvbandwidth
+# and mop_preflight presets were silent no-ops reporting success.
+options=d,e:,s:,g:,i:,b:,x:,p:,h,D:,L:,N:,S:
+optionl=dry-run,extra-check:,check-sys:,check-gpu:,check-imex:,check-ib:,check-spx:,check-process:,help,check-dcgm-diag:,dcgm-diag-level:,check-nvbandwidth:,check-slurm-stack:
+# Fail loudly on an unparsable option instead of silently running a subset. A health checker
+# that reports PASSED without executing its checks is worse than one that errors.
+if ! OPTS=$(getopt -a -n "$0" --options $options --longoptions $optionl -- "$@"); then
+  echo "ERROR: invalid options: $*" >&2
+  exit 2
+fi
 eval set -- "$OPTS"
 while :
 do
@@ -492,6 +797,22 @@ do
       check_process="$2"
       shift 2
       ;;
+    -D | --check-dcgm-diag )
+      check_dcgm_diag="$2"
+      shift 2
+      ;;
+    -L | --dcgm-diag-level )
+      dcgm_diag_level="$2"
+      shift 2
+      ;;
+    -S | --check-slurm-stack )
+      check_slurm_stack="$2"
+      shift 2
+      ;;
+    -N | --check-nvbandwidth )
+      check_nvbandwidth="$2"
+      shift 2
+      ;;
     --)
       shift;
       break
@@ -521,6 +842,9 @@ fi
 [ ${check_ew_ib} -eq 1 ] && f_check_ew_ib
 [ ${check_ew_spx} -eq 1 ] && f_check_ew_spx
 [ ${check_process} -eq 1 ] && f_check_process
+[ ${check_dcgm_diag} -eq 1 ] && f_check_dcgm_diag
+[ ${check_nvbandwidth} -eq 1 ] && f_check_nvbandwidth
+[ ${check_slurm_stack} -eq 1 ] && f_check_slurm_stack
 ## Print health check status
 if [ ${global_status} -ne 0 ]; then
   echo 'INFO: Health check FAILED'

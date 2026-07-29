@@ -15,11 +15,17 @@ import host_exec
 
 
 def _reset() -> None:
-    """Force host_exec to rebuild its connection from the current environment."""
+    """Force host_exec to rebuild its connection from the current environment.
+
+    Also drops the ``which``/``is_dir`` memoization: those caches are keyed by
+    name/path only, so a hit recorded against a local connection would otherwise
+    be served to a test that has since switched the target to ssh.
+    """
     host_exec._CONN = None
     host_exec._CONTROL_SSH = None
     host_exec._CONFIG = None
-    host_exec._EXEC_MODE = None
+    host_exec._which_cache.clear()
+    host_exec._isdir_cache.clear()
 
 
 def _init(**env: str) -> None:
@@ -28,7 +34,13 @@ def _init(**env: str) -> None:
         host_exec._ensure_init()
 
 
-class TestIsRemote:
+class TestExecKind:
+    """``exec_kind()`` replaces the old ``is_remote()`` predicate.
+
+    It reports the target for diagnostics only; callers ask the connection to do
+    the work rather than branching on the answer.
+    """
+
     def teardown_method(self):
         _reset()
 
@@ -36,7 +48,7 @@ class TestIsRemote:
         with mock.patch.dict(os.environ, {"RACK_EXEC_MODE": "local"}, clear=False):
             _reset()
             host_exec._ensure_init()
-            assert host_exec.is_remote() is False
+            assert host_exec.exec_kind() == "local"
 
     def test_ssh_mode(self):
         with mock.patch.dict(
@@ -44,7 +56,7 @@ class TestIsRemote:
         ):
             _reset()
             host_exec._ensure_init()
-            assert host_exec.is_remote() is True
+            assert host_exec.exec_kind() == "ssh"
         _reset()
 
 

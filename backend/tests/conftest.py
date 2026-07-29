@@ -28,3 +28,18 @@ os.environ.pop("RACK_AI_API_KEY", None)
 os.environ["RACK_AI_SETTINGS_FILE"] = os.path.join(
     tempfile.mkdtemp(prefix="nvis-ai-test-"), "ai_settings.json"
 )
+
+# Keep the NVFTP sync daemon's *work* out of the suite. Importing ``app`` starts a
+# thread that sleeps 30s and then calls run_sync() on a timer; a full run takes
+# about a minute, so it wakes mid-suite and races the nvftp tests, which
+# monkeypatch the very module globals (CACHE_DIR, SYNC_STATE_FILE) it reads —
+# producing a failure that moved between tests from run to run.
+#
+# The loop body is replaced rather than ``ensure_background_thread`` because tests
+# cover the thread lifecycle itself and patch this same hook locally. Done at
+# import time because the thread starts when ``app`` is imported, during
+# collection, before any fixture could intervene. RACK_NVFTP_SYNC_DISABLED is not
+# equivalent: it would also switch off the sync behaviour the tests assert on.
+import nvftp_cache_sync  # noqa: E402
+
+nvftp_cache_sync._background_loop = lambda: None

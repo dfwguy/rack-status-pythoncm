@@ -1,20 +1,53 @@
 """Assemble a composite :class:`Connection` from config (env or catalog)."""
 from __future__ import annotations
 
+import logging
 import os
 import shlex
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from transport.base import Connection
+from transport.base import Connection, Executor
 from transport.compose import (
-    EnvForwardingConnection,
+    EnvForwardingExecutor,
     RoutingConnection,
-    SudoConnection,
+    SudoExecutor,
     make_env_resolver,
 )
-from transport.local import LocalConnection
-from transport.ssh import SSHConfig, SSHConnection
+from transport.local import LocalExecutor
+from transport.ssh import SSHConfig, SSHExecutor
+
+_logger = logging.getLogger(__name__)
+
+#: Every connection is remote unless explicitly told otherwise. The app is
+#: designed to run anywhere (container, laptop, head node) and drive the cluster
+#: over the transport, so SSH is the honest default; ``local`` is the special case
+#: of the app already sitting on the target.
+DEFAULT_EXEC_MODE = "ssh"
+
+VALID_EXEC_MODES = ("local", "ssh")
+
+_warn_lock = threading.Lock()
+_warned_deprecated = False
+
+
+def _warn_exec_mode_deprecated(raw: str) -> None:
+    """Emit the ``RACK_EXEC_MODE`` deprecation notice once per process."""
+    global _warned_deprecated
+    with _warn_lock:
+        if _warned_deprecated:
+            return
+        _warned_deprecated = True
+    _logger.warning(
+        "RACK_EXEC_MODE=%s is DEPRECATED and will be removed in a future release. "
+        "Execution is selected by the connection's executor, not by a global mode "
+        "flag; connections now default to %s. Configure the target with "
+        "RACK_SSH_HOST/RACK_SSH_USER/RACK_SSH_KEY instead. Set RACK_EXEC_MODE=local "
+        "only while the app runs directly on the target host.",
+        raw,
+        DEFAULT_EXEC_MODE,
+    )
 
 
 def _truthy(v: str) -> bool:
@@ -46,7 +79,7 @@ FORWARD_ENV_NAMES = (
 class TransportConfig:
     """Resolved transport settings for the control + optional privileged targets."""
 
-    exec_mode: str = "local"  # local | ssh
+    exec_mode: str = DEFAULT_EXEC_MODE  # local | ssh (deprecated; see DEFAULT_EXEC_MODE)
     control: SSHConfig | None = None
     script: SSHConfig | None = None  # privileged "script" profile (optional)
     # Sudo escalation for the privileged ("script") route (root-requiring node tools).
@@ -55,9 +88,23 @@ class TransportConfig:
     sudo_preserve_env: bool = True
 
     @classmethod
-    def from_env(cls, env: dict[str, str] | None = None) -> "TransportConfig":
+    def from_env(cls, env: dict[str, str] | None = None) -> TransportConfig:
         e = env if env is not None else os.environ
-        exec_mode = (e.get("RACK_EXEC_MODE") or "local").strip().lower()
+        raw_mode = (e.get("RACK_EXEC_MODE") or "").strip()
+        if raw_mode:
+            _warn_exec_mode_deprecated(raw_mode)
+            exec_mode = raw_mode.lower()
+            if exec_mode not in VALID_EXEC_MODES:
+                # Previously an unrecognised value fell through to local, silently
+                # running cluster commands inside the container. Fail loudly-ish:
+                # log and use the documented default instead.
+                _logger.error(
+                    "RACK_EXEC_MODE=%r is not one of %s; using %r.",
+                    raw_mode, VALID_EXEC_MODES, DEFAULT_EXEC_MODE,
+                )
+                exec_mode = DEFAULT_EXEC_MODE
+        else:
+            exec_mode = DEFAULT_EXEC_MODE
         raw_opts = (e.get("RACK_SSH_OPTS") or "").strip()
         extra_opts = shlex.split(raw_opts) if raw_opts else []
         connect_timeout = (e.get("RACK_SSH_CONNECT_TIMEOUT") or "10").strip() or "10"
@@ -121,33 +168,45 @@ def build_connection(
 ) -> RoutingConnection:
     """Compose the transport: RoutingConnection{control, privileged}.
 
-    Local mode: both profiles are the same :class:`LocalConnection`.
-    SSH mode: each profile is an SSH leaf wrapped by an
-    :class:`EnvForwardingConnection`; the privileged ("script") profile falls
-    back to the control target when unconfigured.
+    The composition happens at the *executor* level — leaf (local or ssh) wrapped
+    by env forwarding, optionally wrapped by sudo — and each composed executor is
+    then handed to one plain :class:`Connection`. Local mode differs from SSH mode
+    only in which leaf executor is built.
     """
     resolver = make_env_resolver(FORWARD_ENV_PREFIXES, FORWARD_ENV_NAMES, overlay_provider)
 
-    def _maybe_sudo(conn: Connection) -> Connection:
+    def _maybe_sudo(ex: Executor) -> Executor:
         """Wrap the privileged route in sudo escalation when configured."""
         if not config.script_sudo:
-            return conn
-        return SudoConnection(
-            conn,
+            return ex
+        return SudoExecutor(
+            ex,
             password=config.sudo_password or None,
             preserve_env=config.sudo_preserve_env,
         )
 
     if config.exec_mode == "ssh":
-        control_ssh = SSHConnection(config.control or SSHConfig(host=""))
-        control: Connection = EnvForwardingConnection(control_ssh, resolver)
-        script_base: Connection = (
-            EnvForwardingConnection(SSHConnection(config.script), resolver)
-            if config.script is not None
-            else control
+        control_ex: Executor = EnvForwardingExecutor(
+            SSHExecutor(config.control or SSHConfig(host="")), resolver
         )
-        script = _maybe_sudo(script_base)
-        return RoutingConnection({"control": control, "script": script}, default="control")
+        script_base: Executor = (
+            EnvForwardingExecutor(SSHExecutor(config.script), resolver)
+            if config.script is not None
+            else control_ex
+        )
+        return RoutingConnection(
+            {
+                "control": Connection(control_ex),
+                "script": Connection(_maybe_sudo(script_base)),
+            },
+            default="control",
+        )
 
-    local = LocalConnection()
-    return RoutingConnection({"control": local, "script": _maybe_sudo(local)}, default="control")
+    local_ex: Executor = LocalExecutor()
+    return RoutingConnection(
+        {
+            "control": Connection(local_ex),
+            "script": Connection(_maybe_sudo(local_ex)),
+        },
+        default="control",
+    )

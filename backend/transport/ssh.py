@@ -1,4 +1,4 @@
-"""SSH leaf connection (single target)."""
+"""SSH execution mechanism (single target)."""
 from __future__ import annotations
 
 import os
@@ -6,7 +6,14 @@ import shlex
 import subprocess
 from dataclasses import dataclass, field
 
-from transport.base import Connection, Process, as_shell_str, env_export_prefix
+from transport.base import (
+    Connection,
+    Executor,
+    Process,
+    as_shell_str,
+    env_export_prefix,
+)
+from transport.shellfs import ShellFilesystem
 
 
 @dataclass
@@ -37,21 +44,24 @@ def _mux_control_dir() -> str:
     return tempfile.gettempdir()
 
 
-class SSHConnection(Connection):
-    """Runs commands on one remote host over ``ssh``.
+class SSHExecutor(ShellFilesystem, Executor):
+    """Runs commands and inspects files on one remote host over ``ssh``.
 
     Env forwarding is *not* done here (that is the
-    :class:`~transport.compose.EnvForwardingConnection` decorator's job, which
+    :class:`~transport.compose.EnvForwardingExecutor` decorator's job, which
     passes the resolved env dict down as ``env_extra``). This leaf only serializes
     whatever ``env_extra`` it receives into an ``export …;`` prefix, preserving the
     historical ordering ``export …; cd <cwd> && <cmd>``.
+
+    Filesystem access comes from :class:`~transport.shellfs.ShellFilesystem`, so a
+    caller holding a head-node path can stat or read it without knowing where it
+    lives.
     """
+
+    kind = "ssh"
 
     def __init__(self, config: SSHConfig):
         self.config = config
-
-    def is_remote(self) -> bool:
-        return True
 
     # -- argv builders ------------------------------------------------------
 
@@ -59,8 +69,8 @@ class SSHConnection(Connection):
         cfg = self.config
         if not cfg.host:
             raise RuntimeError(
-                "RACK_EXEC_MODE=ssh but no SSH host is set. "
-                "Point RACK_SSH_HOST at the head-node hostname or IP."
+                "No SSH host is configured. Point RACK_SSH_HOST at the head-node "
+                "hostname or IP."
             )
         argv = [
             "ssh",
@@ -105,7 +115,7 @@ class SSHConnection(Connection):
 
     def _remote_cmd(
         self,
-        cmd: "str | list[str]",
+        cmd: str | list[str],
         cwd: str | None,
         env_extra: dict[str, str] | None,
     ) -> str:
@@ -114,7 +124,7 @@ class SSHConnection(Connection):
             shell_str = f"cd {shlex.quote(cwd)} && {shell_str}"
         return env_export_prefix(env_extra) + shell_str
 
-    # -- Connection API -----------------------------------------------------
+    # -- execution ----------------------------------------------------------
 
     def run(
         self,
@@ -127,7 +137,9 @@ class SSHConnection(Connection):
         env_extra: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         argv = self.ssh_argv() + [self._remote_cmd(cmd, cwd, env_extra)]
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout, check=False
+        )
 
     def popen(
         self,
@@ -145,3 +157,11 @@ class SSHConnection(Connection):
 
     def wrap_argv(self, cmd, *, cwd: str | None = None, env_extra=None) -> list[str]:
         return self.ssh_argv() + [self._remote_cmd(cmd, cwd, env_extra)]
+
+    def describe(self) -> dict[str, object]:
+        return {"kind": self.kind, "host": self.config.host or None}
+
+
+def SSHConnection(config: SSHConfig) -> Connection:
+    """Back-compat factory: a :class:`Connection` over an :class:`SSHExecutor`."""
+    return Connection(SSHExecutor(config))

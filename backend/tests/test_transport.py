@@ -1,19 +1,31 @@
-"""Unit tests for the composable transport layer."""
+"""Unit tests for the composable transport layer.
+
+The layer is composition-based: an :class:`Executor` owns the mechanism (run a
+command, inspect a file) for one target, decorators add policy (env forwarding,
+sudo, ssh hops), and a single concrete :class:`Connection` holds whichever
+executor was composed. These tests therefore assemble executors directly and
+assert on the composed behaviour, rather than on a connection subclass.
+"""
 import base64
+import gzip
 import os
 import re
 import subprocess
 from unittest import mock
 
 import pytest
-
 from transport import (
-    EnvForwardingConnection,
+    Connection,
+    EnvForwardingExecutor,
+    Executor,
+    FileStat,
     LocalConnection,
+    LocalExecutor,
     RoutingConnection,
+    ShellFilesystem,
     SSHConfig,
-    SSHConnection,
-    SudoConnection,
+    SSHExecutor,
+    SudoExecutor,
     TransportConfig,
     build_connection,
     fanout,
@@ -22,18 +34,17 @@ from transport import (
     make_env_resolver,
     merge_env,
 )
-from transport.base import Connection
+from transport import factory as factory_mod
 
 
-class _FakeBase(Connection):
+class _FakeExecutor(Executor):
     """Records the (ssh) command strings handed to it; returns canned stdout by node."""
+
+    kind = "ssh"
 
     def __init__(self, outputs=None):
         self.calls: list[str] = []
         self.outputs = outputs or {}
-
-    def is_remote(self) -> bool:
-        return True
 
     def run(self, cmd, *, timeout=120, cwd=None, env=None, login_shell=True, env_extra=None):
         self.calls.append(cmd)
@@ -45,6 +56,43 @@ class _FakeBase(Connection):
     def popen(self, cmd, *, cwd=None, env=None, env_extra=None):  # pragma: no cover
         raise NotImplementedError
 
+    # Filesystem: inert. These cases exercise execution and composition only, but
+    # the Executor contract is total, so answer neutrally instead of raising.
+    def resolve(self, path):
+        return str(path)
+
+    def stat(self, path):
+        return None
+
+    def stat_dir(self, base, *, patterns=None, maxdepth=1):
+        return {}
+
+    def makedirs(self, path):
+        return None
+
+    def write_bytes(self, path, data):
+        return None
+
+    def read_text(self, path, **kwargs):
+        return "", {}
+
+    def which(self, name):
+        return None
+
+    def _test_flag(self, path, flag):
+        return False
+
+
+class _FakeBase(Connection):
+    """A Connection over a recording executor — what hop/fanout compose against."""
+
+    def __init__(self, outputs=None, executor: Executor | None = None):
+        super().__init__(executor if executor is not None else _FakeExecutor(outputs))
+
+    @property
+    def calls(self) -> list[str]:
+        return self.executor.calls
+
 
 def _decode_payload(ssh_str: str) -> str:
     m = re.search(r"printf %s ([A-Za-z0-9+/=]+) \| base64", ssh_str)
@@ -52,7 +100,7 @@ def _decode_payload(ssh_str: str) -> str:
     return base64.b64decode(m.group(1)).decode("utf-8")
 
 
-class TestLocalConnection:
+class TestLocalExecutor:
     def test_run_string(self):
         r = LocalConnection().run("echo hi", timeout=5)
         assert r.returncode == 0 and "hi" in r.stdout
@@ -71,12 +119,196 @@ class TestLocalConnection:
         out, _ = p.communicate(timeout=5)
         assert p.returncode == 0 and "popen" in out
 
-    def test_is_remote_false(self):
-        assert LocalConnection().is_remote() is False
+    def test_kind_is_local(self):
+        assert LocalConnection().kind == "local"
 
     def test_resolve_path_local_is_absolute(self, tmp_path):
         rp = LocalConnection().resolve_path(str(tmp_path))
         assert os.path.isabs(rp)
+
+
+class TestLocalFilesystem:
+    """The filesystem half of the Executor contract, on the local leaf."""
+
+    def test_resolve_collapses_dotdot(self, tmp_path):
+        messy = str(tmp_path / "sub" / ".." / "file.log")
+        assert LocalExecutor().resolve(messy) == str(tmp_path / "file.log")
+
+    def test_stat_returns_size_and_mtime(self, tmp_path):
+        p = tmp_path / "a.log"
+        p.write_text("12345")
+        st = LocalExecutor().stat(p)
+        assert isinstance(st, FileStat) and st.size == 5 and st.mtime > 0
+
+    def test_stat_missing_is_none(self, tmp_path):
+        assert LocalExecutor().stat(tmp_path / "nope") is None
+
+    def test_is_file_and_is_dir(self, tmp_path):
+        p = tmp_path / "a.log"
+        p.write_text("x")
+        ex = LocalExecutor()
+        assert ex.is_file(p) is True and ex.is_dir(p) is False
+        assert ex.is_dir(tmp_path) is True
+
+    def test_stat_dir_filters_by_pattern(self, tmp_path):
+        (tmp_path / "keep.txt").write_text("a")
+        (tmp_path / "drop.bin").write_text("b")
+        found = LocalExecutor().stat_dir(tmp_path, patterns=("*.txt",))
+        assert [os.path.basename(k) for k in found] == ["keep.txt"]
+
+    def test_stat_dir_respects_maxdepth(self, tmp_path):
+        (tmp_path / "top.txt").write_text("a")
+        nested = tmp_path / "sub"
+        nested.mkdir()
+        (nested / "deep.txt").write_text("b")
+        ex = LocalExecutor()
+        shallow = ex.stat_dir(tmp_path, maxdepth=1)
+        deep = ex.stat_dir(tmp_path, maxdepth=2)
+        assert {os.path.basename(k) for k in shallow} == {"top.txt"}
+        assert {os.path.basename(k) for k in deep} == {"top.txt", "deep.txt"}
+
+    def test_read_text_whole_small_file(self, tmp_path):
+        p = tmp_path / "a.log"
+        p.write_text("hello")
+        text, meta = LocalExecutor().read_text(p)
+        assert text == "hello"
+        assert meta["bytes"] == 5 and meta["truncated"] is False and meta["target"] == "local"
+
+    def test_read_text_caps_large_file(self, tmp_path):
+        p = tmp_path / "big.log"
+        p.write_bytes(b"A" * 500 + b"B" * 500)
+        text, meta = LocalExecutor().read_text(p, head_bytes=10, tail_bytes=10)
+        assert meta["truncated"] is True and meta["bytes"] == 1000
+        assert text.startswith("A" * 10) and text.endswith("B" * 10)
+        assert "bytes elided" in text
+
+    def test_read_text_gzip(self, tmp_path):
+        p = tmp_path / "a.log.gz"
+        with gzip.open(p, "wb") as fh:
+            fh.write(b"compressed payload")
+        text, meta = LocalExecutor().read_text(p)
+        assert text == "compressed payload" and meta["gzip"] is True
+
+    def test_read_text_missing_reports_error(self, tmp_path):
+        text, meta = LocalExecutor().read_text(tmp_path / "nope")
+        assert text == "" and meta["read_error"]
+
+    def test_which(self):
+        ex = LocalExecutor()
+        assert ex.which("sh")
+        assert ex.which("nvis-definitely-not-installed") is None
+
+    def test_makedirs_creates_parents(self, tmp_path):
+        target = tmp_path / "a" / "b" / "c"
+        ex = LocalExecutor()
+        assert ex.makedirs(target) is None
+        assert ex.is_dir(target) is True
+
+
+class _ScriptedExecutor(ShellFilesystem, Executor):
+    """ShellFilesystem over a canned ``run`` — asserts the commands it builds."""
+
+    kind = "ssh"
+
+    def __init__(self, responses=None):
+        self.calls: list[list[str]] = []
+        self.responses = list(responses or [])
+
+    def run(self, cmd, *, timeout=120, cwd=None, env=None, login_shell=True, env_extra=None):
+        self.calls.append(cmd)
+        if self.responses:
+            rc, out, err = self.responses.pop(0)
+            return subprocess.CompletedProcess(cmd, rc, out, err)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def popen(self, cmd, *, cwd=None, env=None, env_extra=None):  # pragma: no cover
+        raise NotImplementedError
+
+
+class TestShellFilesystem:
+    """Remote filesystem access, expressed as shell commands."""
+
+    def test_resolve_is_textual_and_offline(self):
+        ex = _ScriptedExecutor()
+        # Must not shell out: this runs on nearly every request, and a local
+        # realpath() would rewrite the path through the container's filesystem.
+        assert ex.resolve("/data/logs/../logs/a.txt") == "/data/logs/a.txt"
+        assert ex.calls == []
+
+    def test_stat_parses_mtime_and_size(self):
+        ex = _ScriptedExecutor([(0, "1700000000 4096\n", "")])
+        st = ex.stat("/var/log/a.log")
+        assert st == FileStat(mtime=1700000000.0, size=4096)
+        assert ex.calls[0][:3] == ["stat", "-c", "%Y %s"]
+
+    def test_stat_missing_is_none(self):
+        assert _ScriptedExecutor([(1, "", "No such file")]).stat("/nope") is None
+
+    def test_stat_garbage_output_is_none(self):
+        assert _ScriptedExecutor([(0, "not-a-stat\n", "")]).stat("/x") is None
+
+    def test_stat_dir_parses_find_printf(self):
+        out = "/logs/a.txt\t10\t1700000000\n/logs/b.txt\t20\t1700000001\n"
+        ex = _ScriptedExecutor([(0, out, "")])
+        found = ex.stat_dir("/logs", patterns=("*.txt",), maxdepth=2)
+        assert found["/logs/a.txt"] == FileStat(mtime=1700000000.0, size=10)
+        assert found["/logs/b.txt"].size == 20
+        argv = ex.calls[0]
+        assert argv[:2] == ["find", "/logs"]
+        assert "-maxdepth" in argv and argv[argv.index("-maxdepth") + 1] == "2"
+        assert "-name" in argv and "*.txt" in argv
+
+    def test_stat_dir_unreachable_is_empty(self):
+        assert _ScriptedExecutor([(255, "", "ssh: connect failed")]).stat_dir("/logs") == {}
+
+    def test_read_text_decodes_base64_payload(self):
+        payload = b"hello from the head node"
+        blob = base64.b64encode(payload).decode()
+        ex = _ScriptedExecutor([(0, f"{len(payload)}\n{blob}", "")])
+        text, meta = ex.read_text("/var/log/a.log")
+        assert text == "hello from the head node"
+        assert meta["bytes"] == len(payload)
+        assert meta["truncated"] is False and meta["target"] == "ssh"
+
+    def test_read_text_flags_truncation(self):
+        blob = base64.b64encode(b"partial").decode()
+        ex = _ScriptedExecutor([(0, f"999999\n{blob}", "")])
+        _text, meta = ex.read_text("/var/log/big.log", head_bytes=10, tail_bytes=10)
+        assert meta["truncated"] is True and meta["bytes"] == 999999
+
+    def test_read_text_missing_reports_error(self):
+        ex = _ScriptedExecutor([(3, "-1\n", "stat: No such file")])
+        text, meta = ex.read_text("/nope")
+        assert text == "" and "No such file" in str(meta["read_error"])
+
+    def test_read_text_uses_zcat_for_gzip(self):
+        blob = base64.b64encode(b"x").decode()
+        ex = _ScriptedExecutor([(0, f"1\n{blob}", "")])
+        _text, meta = ex.read_text("/var/log/a.log.gz")
+        assert meta["gzip"] is True
+        assert "zcat" in " ".join(ex.calls[0])
+
+    def test_which_returns_first_line(self):
+        ex = _ScriptedExecutor([(0, "/usr/bin/cmsh\n", "")])
+        assert ex.which("cmsh") == "/usr/bin/cmsh"
+        assert ex.calls[0] == ["command", "-v", "cmsh"]
+
+    def test_which_absent_is_none(self):
+        assert _ScriptedExecutor([(1, "", "")]).which("cmsh") is None
+
+    def test_is_dir_uses_test_flag(self):
+        ex = _ScriptedExecutor([(0, "", "")])
+        assert ex.is_dir("/data") is True
+        assert ex.calls[0] == ["test", "-d", "/data"]
+
+    def test_makedirs_reports_error(self):
+        ex = _ScriptedExecutor([(1, "", "mkdir: Permission denied")])
+        assert "Permission denied" in str(ex.makedirs("/root/x"))
+
+    def test_makedirs_success_is_none(self):
+        ex = _ScriptedExecutor([(0, "", "")])
+        assert ex.makedirs("/tmp/x") is None
+        assert ex.calls[0] == ["mkdir", "-p", "/tmp/x"]
 
 
 class TestMergeEnv:
@@ -98,30 +330,30 @@ class TestMergeEnv:
         assert merged["FOO"] == "new"
 
 
-class TestSSHConnection:
-    def _conn(self):
-        return SSHConnection(SSHConfig(host="10.0.0.1", user="root", key="/nonexistent", port="22"))
+class TestSSHExecutor:
+    def _exec(self):
+        return SSHExecutor(SSHConfig(host="10.0.0.1", user="root", key="/nonexistent", port="22"))
 
     def test_ssh_argv_includes_host(self):
-        argv = self._conn().ssh_argv()
+        argv = self._exec().ssh_argv()
         assert argv[0] == "ssh" and "root@10.0.0.1" in argv
 
     def test_ssh_argv_requires_host(self):
         with pytest.raises(RuntimeError, match="SSH host"):
-            SSHConnection(SSHConfig(host="")).ssh_argv()
+            SSHExecutor(SSHConfig(host="")).ssh_argv()
 
     def test_remote_cmd_env_prefix_before_cd(self):
-        argv = self._conn().wrap_argv("run.sh", cwd="/tmp/x", env_extra={"A": "b"})
+        argv = self._exec().wrap_argv("run.sh", cwd="/tmp/x", env_extra={"A": "b"})
         remote = argv[-1]
         assert remote.startswith("export A=b; ")
         assert "cd /tmp/x && run.sh" in remote
 
     def test_connect_timeout_override(self):
-        argv = self._conn().ssh_argv(connect_timeout="3")
+        argv = self._exec().ssh_argv(connect_timeout="3")
         assert "ConnectTimeout=3" in argv
 
-    def test_is_remote_true(self):
-        assert self._conn().is_remote() is True
+    def test_kind_is_ssh(self):
+        assert self._exec().kind == "ssh"
 
 
 class TestEnvResolver:
@@ -148,40 +380,51 @@ class TestEnvResolver:
 class TestEnvForwardingDecorator:
     def test_injects_resolved_env(self):
         resolver = make_env_resolver(("RACK_",), ())
-        conn = EnvForwardingConnection(
-            SSHConnection(SSHConfig(host="h", user="u")), resolver
-        )
+        ex = EnvForwardingExecutor(SSHExecutor(SSHConfig(host="h", user="u")), resolver)
         with mock.patch.dict(os.environ, {"RACK_Y": "z"}, clear=False):
-            argv = conn.wrap_argv("cmd")
+            argv = ex.wrap_argv("cmd")
         assert "export RACK_Y=z" in argv[-1]
 
+    def test_filesystem_passes_through_to_inner(self, tmp_path):
+        p = tmp_path / "a.log"
+        p.write_text("data")
+        # Env forwarding changes how a command runs, never which host owns files.
+        ex = EnvForwardingExecutor(LocalExecutor(), make_env_resolver(("RACK_",), ()))
+        assert ex.is_file(p) is True
+        assert ex.stat(p).size == 4
+        assert ex.kind == "local"
 
-class TestSudoConnection:
+
+class TestSudoExecutor:
     def test_wrap_list_non_interactive(self):
-        conn = SudoConnection(LocalConnection())
-        argv = conn.wrap_argv(["bash", "sysinfo.sh", "rack01"])
+        ex = SudoExecutor(LocalExecutor())
+        argv = ex.wrap_argv(["bash", "sysinfo.sh", "rack01"])
         assert argv[:3] == ["sudo", "-n", "-E"]
         assert argv[3:] == ["bash", "sysinfo.sh", "rack01"]
 
     def test_no_preserve_env(self):
-        conn = SudoConnection(LocalConnection(), preserve_env=False)
-        argv = conn.wrap_argv(["id"])
+        ex = SudoExecutor(LocalExecutor(), preserve_env=False)
+        argv = ex.wrap_argv(["id"])
         assert "-E" not in argv and argv[:2] == ["sudo", "-n"]
 
     def test_password_mode_uses_stdin(self):
-        conn = SudoConnection(
-            SSHConnection(SSHConfig(host="h", user="cmods")), password="s3cret"
-        )
-        argv = conn.wrap_argv(["bash", "sysinfo.sh"])
+        ex = SudoExecutor(SSHExecutor(SSHConfig(host="h", user="cmods")), password="s3cret")
+        argv = ex.wrap_argv(["bash", "sysinfo.sh"])
         remote = argv[-1]
         assert "sudo -S" in remote and "s3cret" in remote
 
     def test_sudo_over_ssh_prepends_before_cmd_after_cd(self):
         # export…; cd …; sudo -n -E <cmd>
-        inner = SSHConnection(SSHConfig(host="h", user="cmods"))
-        conn = SudoConnection(inner)
-        remote = conn.wrap_argv("sysinfo.sh", cwd="/work")[-1]
+        inner = SSHExecutor(SSHConfig(host="h", user="cmods"))
+        ex = SudoExecutor(inner)
+        remote = ex.wrap_argv("sysinfo.sh", cwd="/work")[-1]
         assert "cd /work && sudo -n -E sysinfo.sh" in remote
+
+    def test_filesystem_passes_through_to_inner(self, tmp_path):
+        # Escalation is about privilege to run, not about which host owns files.
+        ex = SudoExecutor(LocalExecutor())
+        assert ex.is_dir(tmp_path) is True
+        assert ex.kind == "local"
 
 
 class TestRoutingConnection:
@@ -192,17 +435,55 @@ class TestRoutingConnection:
         assert r.select("control") is a
         assert r.select("unknown") is a  # falls back to default
 
+    def test_rejects_unknown_default(self):
+        with pytest.raises(ValueError, match="default profile"):
+            RoutingConnection({"control": LocalConnection()}, default="script")
+
+    def test_is_a_connection_over_the_default_profile(self, tmp_path):
+        r = RoutingConnection({"control": LocalConnection()}, default="control")
+        # Filesystem access always belongs to the control target.
+        assert r.kind == "local"
+        assert r.is_dir(tmp_path) is True
+
+
+class TestExecModeDeprecation:
+    """``RACK_EXEC_MODE`` is on the way out; SSH is the default."""
+
+    def setup_method(self):
+        # The notice is emitted once per process; re-arm it for each case.
+        factory_mod._warned_deprecated = False
+
+    def test_unset_defaults_to_ssh(self):
+        assert TransportConfig.from_env({}).exec_mode == "ssh"
+        assert TransportConfig().exec_mode == "ssh"
+
+    def test_explicit_mode_still_honoured(self):
+        assert TransportConfig.from_env({"RACK_EXEC_MODE": "local"}).exec_mode == "local"
+
+    def test_unknown_mode_falls_back_to_ssh(self, caplog):
+        # Previously an unrecognised value silently ran commands inside the container.
+        with caplog.at_level("ERROR", logger="transport.factory"):
+            cfg = TransportConfig.from_env({"RACK_EXEC_MODE": "hybrid"})
+        assert cfg.exec_mode == "ssh"
+        assert "hybrid" in caplog.text
+
+    def test_warns_once(self, caplog):
+        with caplog.at_level("WARNING", logger="transport.factory"):
+            TransportConfig.from_env({"RACK_EXEC_MODE": "local"})
+            TransportConfig.from_env({"RACK_EXEC_MODE": "local"})
+        assert caplog.text.count("DEPRECATED") == 1
+
 
 class TestBuildConnection:
     def test_local(self):
         conn = build_connection(TransportConfig(exec_mode="local"))
-        assert conn.is_remote() is False
+        assert conn.kind == "local"
         assert conn.run("echo z", timeout=5).stdout.strip() == "z"
 
     def test_ssh_composition(self):
         cfg = TransportConfig(exec_mode="ssh", control=SSHConfig(host="10.0.0.1", user="root"))
         conn = build_connection(cfg)
-        assert conn.is_remote() is True
+        assert conn.kind == "ssh"
         with mock.patch.dict(os.environ, {"RACK_W": "q"}, clear=False):
             argv = conn.wrap_argv(["true"], profile="control")
         assert "root@10.0.0.1" in argv and "export RACK_W=q" in argv[-1]
@@ -248,8 +529,8 @@ class TestHopChaining:
         assert ssh_str.startswith("ssh ") and "cmods@node1" in ssh_str
         assert _decode_payload(ssh_str) == "nvidia-smi -L"
 
-    def test_hop_is_remote(self):
-        assert _FakeBase().hop("n").is_remote() is True
+    def test_hop_kind_is_ssh(self):
+        assert _FakeBase().hop("n").kind == "ssh"
 
     def test_hop_applies_cwd_and_env(self):
         base = _FakeBase()
@@ -267,6 +548,14 @@ class TestHopChaining:
         assert head_payload.startswith("ssh ") and "node" in head_payload
         assert _decode_payload(head_payload) == "hostname"
 
+    def test_hop_filesystem_targets_the_hopped_host(self):
+        # The hop owns the files too: a stat must travel the extra leg, not be
+        # answered by the base host.
+        base = _FakeBase()
+        base.hop("node1").stat("/var/log/a.log")
+        assert "node1" in base.calls[0]
+        assert _decode_payload(base.calls[0]).startswith("stat -c")
+
 
 class TestFanout:
     def test_runs_all_nodes_and_groups(self):
@@ -282,13 +571,13 @@ class TestFanout:
         assert group_outputs(results) == ""  # "expect no output" stays empty
 
     def test_errors_captured_separately_from_stdout(self):
-        class Boom(_FakeBase):
+        class _BoomExecutor(_FakeExecutor):
             def run(self, cmd, **k):
                 if "bad" in cmd:
                     raise TimeoutError("boom")
                 return subprocess.CompletedProcess(cmd, 0, "ok\n", "")
 
-        results = fanout(Boom(), ["good", "bad"], "x")
+        results = fanout(_FakeBase(executor=_BoomExecutor()), ["good", "bad"], "x")
         errs = fanout_errors(results)
         assert "bad:" in errs and "boom" in errs
         assert "ok" in group_outputs(results)
@@ -317,12 +606,12 @@ class TestFanout:
 
 class TestSSHMultiplex:
     def test_control_master_opts_present_by_default(self):
-        argv = SSHConnection(SSHConfig(host="h", user="u")).ssh_argv()
+        argv = SSHExecutor(SSHConfig(host="h", user="u")).ssh_argv()
         joined = " ".join(argv)
         assert "ControlMaster=auto" in joined and "ControlPath=" in joined and "ControlPersist=" in joined
 
     def test_multiplex_can_be_disabled(self):
-        argv = SSHConnection(SSHConfig(host="h", user="u", multiplex=False)).ssh_argv()
+        argv = SSHExecutor(SSHConfig(host="h", user="u", multiplex=False)).ssh_argv()
         assert "ControlMaster=auto" not in " ".join(argv)
 
     def test_from_env_opt_out(self):

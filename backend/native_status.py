@@ -23,7 +23,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import threading
 from collections import defaultdict
@@ -224,9 +223,45 @@ def validate_cmsh_ds_find_parse_patterns(find_pat: str, parse_pat: str) -> str |
     return None
 
 
+_RACK_ALIAS_CACHE: list | None = None
+
+
+def _rack_alias_rules() -> list:
+    """Optional hostname-rack -> BCM-rack rewrites, for sites where the BCM rack
+    object id is NOT a prefix of the tray hostname.
+
+    NscaleTX: BCM rack objects are ``WH1H1``..``WH1H22`` while trays are
+    ``ink50-dh01-h01-11``. Without a rewrite the ds parse can never attach trays to
+    racks and every rack row renders "-".
+
+    Configure with RACK_ID_ALIAS_RULES = "<regex>=><replacement>[;<regex>=><replacement>]"
+    (Python re.sub syntax, matched case-insensitively against the lowercased
+    hostname-derived rack id). Unset = no rewriting, original behaviour.
+    """
+    global _RACK_ALIAS_CACHE
+    if _RACK_ALIAS_CACHE is None:
+        rules = []
+        raw = (os.environ.get("RACK_ID_ALIAS_RULES") or "").strip()
+        for part in raw.split(";"):
+            part = part.strip()
+            if not part or "=>" not in part:
+                continue
+            pat, repl = part.split("=>", 1)
+            try:
+                rules.append((re.compile(pat.strip(), re.IGNORECASE), repl.strip()))
+            except re.error:
+                continue
+        _RACK_ALIAS_CACHE = rules
+    return _RACK_ALIAS_CACHE
+
+
 def _normalize_rack_key_for_ds(rack_raw: str) -> str:
     """Align ds-derived rack ids with ``rack; list`` (``p5-r1`` → ``p5-r01``)."""
     rr = rack_raw.strip().lower()
+    for pat, repl in _rack_alias_rules():
+        if pat.match(rr):
+            rr = pat.sub(repl, rr)
+            break
     c = canonical_rack_id(rr)
     return c if c else rr
 
@@ -319,12 +354,12 @@ def extract_physical_rack_ids_from_multirack_log(path: Path) -> list[str]:
     of the file are scanned for ``pN-rMM`` tokens (same word-boundary rules as cmsh rack scraping).
     """
     max_b = max(8192, _env_int("RACK_MULTIRACK_LOG_RACK_SCAN_BYTES", 524288))
-    try:
-        with open(path, "rb") as f:
-            chunk = f.read(max_b)
-    except OSError:
+    # Read through the connection: the log lives on the execution host, which for a
+    # containerised deployment is not this filesystem. Only the head of the file is
+    # needed, so the tail cap is zero.
+    text, meta = host_exec.read_text(path, head_bytes=max_b, tail_bytes=0, whole_bytes=max_b)
+    if meta.get("read_error"):
         return []
-    text = chunk.decode("utf-8", errors="replace")
     naming = _nvis_naming()
     racks: set[str] = set()
     nodem = _NODELIST_LINE_RE.search(text)
@@ -343,26 +378,25 @@ def extract_physical_rack_ids_from_multirack_log(path: Path) -> list[str]:
     return out
 
 
-def _host_resolve(p: Path) -> Path:
-    """Local-resolve only when executing locally; keep the raw (remote) path in SSH mode.
+def _host_resolve(p: Path) -> PurePosixPath:
+    """Canonicalise *p* against the execution host.
 
-    In SSH mode the log dir lives on the exec host, so ``Path.resolve()`` on the app host
-    (e.g. a laptop) would corrupt it (``/home/... -> /System/Volumes/Data/home/...``). This
-    mirrors how script execution is host-agnostic via ``host_exec``.
+    Delegates to the active connection, so the path is resolved wherever it
+    actually lives rather than against this process's filesystem (which, for a
+    containerised app driving a head node, is the wrong machine entirely).
     """
-    if host_exec.is_remote():
-        return p
-    try:
-        return p.resolve()
-    except OSError:
-        return p
+    return _host_path(host_exec.resolve(p))
 
 
-def _host_path(path: str) -> Path:
-    """Wrap a host path string: real ``Path`` locally, ``PurePosixPath`` remotely (no local FS ops)."""
-    if host_exec.is_remote():
-        return PurePosixPath(path)
-    return Path(path)
+def _host_path(path: str) -> PurePosixPath:
+    """Wrap an execution-host path string.
+
+    Always a :class:`PurePosixPath`: the file belongs to the exec host, so local
+    filesystem operations on it are a category error. Ask the connection instead
+    (``host_exec.is_file`` / ``stat`` / ``read_text``), which reaches the right
+    host either way.
+    """
+    return PurePosixPath(str(path))
 
 
 def _host_log_entries(base: str) -> list[tuple[str, int, int]]:
@@ -375,51 +409,15 @@ def _host_log_entries(base: str) -> list[tuple[str, int, int]]:
     ``.out`` is included so multi-rack NCCL launchers (``run_nccl_mpi.sh`` → ``nccl-mpi_*.out`` /
     ``llmb-nccl_*.out``) are discoverable; callers filter by basename (``_nemo_nccl_bn`` /
     ``_is_multirack_bn`` / single-rack ``nemo``/``1rack``), so single-rack views are unaffected.
+
+    One batched directory listing via the connection, so a remote target costs a
+    single round trip rather than a stat per file.
     """
-    if host_exec.is_remote():
-        try:
-            proc = host_exec.run_on_host(
-                [
-                    "find", base, "-maxdepth", "1", "-type", "f",
-                    "(", "-name", "*.txt", "-o", "-name", "*.out", ")",
-                    "-printf", r"%p\t%s\t%T@\n",
-                ],
-                timeout=max(30, _env_int("RACK_NATIVE_LOGLIST_TIMEOUT_SEC", 60)),
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return []
-        if getattr(proc, "returncode", 1) != 0:
-            return []
-        out: list[tuple[str, int, int]] = []
-        for line in (proc.stdout or "").splitlines():
-            parts = line.rstrip("\r\n").split("\t")
-            if len(parts) != 3:
-                continue
-            path, size_s, mt_s = parts
-            try:
-                size = int(size_s)
-                mtime_ns = int(float(mt_s) * 1_000_000_000)
-            except ValueError:
-                continue
-            out.append((path, mtime_ns, size))
-        return out
-    out2: list[tuple[str, int, int]] = []
-    try:
-        with os.scandir(base) as it:
-            for e in it:
-                if not e.name.endswith((".txt", ".out")):
-                    continue
-                try:
-                    if not e.is_file():
-                        continue
-                    st = e.stat()
-                except OSError:
-                    continue
-                mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))
-                out2.append((e.path, int(mtime_ns), int(st.st_size)))
-    except OSError:
-        return []
-    return out2
+    entries = host_exec.stat_dir(base, patterns=("*.txt", "*.out"))
+    return [
+        (path, int(st.mtime * 1_000_000_000), int(st.size))
+        for path, st in entries.items()
+    ]
 
 
 def _glob_multirack_logs(log_dir: Path) -> list[tuple[Path, int, int]]:
@@ -516,7 +514,7 @@ def extract_rack_ids_from_cmsh_text(text: str) -> list[str]:
 def _cmsh_rack_list() -> list[str]:
     plat = _get_platform()
     cmd = plat.list_racks_cmd()
-    if not host_exec.is_remote() and not shutil.which(cmd[0]):
+    if not host_exec.which(cmd[0]):
         return []
     try:
         proc = host_exec.run_on_host(
@@ -528,19 +526,40 @@ def _cmsh_rack_list() -> list[str]:
     return extract_rack_ids_from_cmsh_text(proc.stdout or "")
 
 
+DS_LAST_DIAG: dict = {}
+
+
 def _cmsh_ds_text() -> str:
+    """Fetch `cmsh -c ds`. Records a diagnostic instead of silently returning "".
+
+    The original swallowed OSError/TimeoutExpired and returned an empty string, so a
+    failing remote call was indistinguishable from a cluster with no devices — every
+    rack row then rendered "-" with no error anywhere. DS_LAST_DIAG is surfaced via
+    /api/ds-diag.
+    """
     plat = _get_platform()
     cmd = plat.device_status_cmd()
-    if not host_exec.is_remote() and not shutil.which(cmd[0]):
+    DS_LAST_DIAG.clear()
+    DS_LAST_DIAG["cmd"] = " ".join(cmd)
+    DS_LAST_DIAG["target"] = host_exec.exec_kind()
+    DS_LAST_DIAG["remote"] = DS_LAST_DIAG["target"] == "ssh"
+    if not host_exec.which(cmd[0]):
+        DS_LAST_DIAG["error"] = "%s not on PATH on the %s target" % (cmd[0], DS_LAST_DIAG["target"])
         return ""
     try:
         proc = host_exec.run_on_host(
             cmd,
             timeout=max(30, _env_int("RACK_NATIVE_DS_TIMEOUT_SEC", 300)),
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as e:
+        DS_LAST_DIAG["error"] = "%s: %s" % (type(e).__name__, e)
         return ""
-    return proc.stdout or ""
+    out = proc.stdout or ""
+    DS_LAST_DIAG["returncode"] = getattr(proc, "returncode", None)
+    DS_LAST_DIAG["stdout_len"] = len(out)
+    DS_LAST_DIAG["stdout_head"] = out[:400]
+    DS_LAST_DIAG["stderr_head"] = (getattr(proc, "stderr", "") or "")[:400]
+    return out
 
 
 def condense_ct_nums(nums: list[int]) -> str:
@@ -715,6 +734,12 @@ def _parse_cmsh_ds_nvis_templates(ds_text: str) -> dict[str, str]:
         else:
             st = "INST"
         for hm in matcher.find_in_line(line):
+            # Skip NVSwitch trays: the compute CT template matches the
+            # "<rack>-<slot>" prefix inside "<rack>-<slot>-nv", which would fold
+            # NVSwitch slots (19-27) into the compute tray range.
+            after = line[line.find(hm.hostname) + len(hm.hostname):]
+            if after[:3].lower().startswith("-nv"):
+                continue
             ingest(hm.hostname, hm.rack_id, hm.tray, st)
 
     ct_dn: dict[str, str] = {}
@@ -759,7 +784,7 @@ def sinfo_state_trim(s: str) -> str:
 def collect_sinfo_counts() -> dict[tuple[str, str], int]:
     """Map (rack_id, trimmed_state) -> count of nodes (after hostname expansion)."""
     plat = _get_platform()
-    if not host_exec.is_remote() and not shutil.which("sinfo"):
+    if not host_exec.which("sinfo"):
         return {}
     opts = (os.environ.get("SINFO_OPTS") or "").strip()
     extra = "-N -h -o '%N %t'"
@@ -1644,7 +1669,7 @@ class MultirackTableState:
                     rec = dict(rec)
                     need_save = False
                 racks_norm = _normalize_physical_racks_probe(rec.get("physical_racks"))
-                if not racks_norm and not host_exec.is_remote():
+                if not racks_norm:
                     racks_norm = extract_physical_rack_ids_from_multirack_log(p)
                 prev_r = rec.get("physical_racks")
                 if racks_norm and prev_r != racks_norm:

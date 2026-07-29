@@ -51,7 +51,7 @@ type AnalyticsPayload = {
   /** True when body came from ``GET /api/analytics/last`` disk cache. */
   cached?: boolean;
   single_rack?: {
-    nccl_collectives: { rack: string; log_file: string; all_reduce_gbps: number | null; all_gather_gbps: number | null; alltoall_gbps: number | null }[];
+    nccl_collectives: { rack: string; log_file: string; all_reduce_gbps: number | null; all_gather_gbps: number | null; alltoall_gbps: number | null; reduce_scatter_gbps?: number | null; sendrecv_gbps?: number | null }[];
     nccl_collectives_deviation_pct: {
       metric: string;
       rack: string;

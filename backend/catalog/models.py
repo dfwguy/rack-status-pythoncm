@@ -27,6 +27,23 @@ CPU_VENDORS = ("Grace", "Intel", "AMD")
 SYSTEM_VENDORS = ("NVIDIA", "DGX", "Dell", "SMC", "Supermicro")
 FORM_FACTORS = ("NVL72", "NVL36", "HGX-8", "HGX-4", "MGX")
 CLUSTER_MANAGERS = ("bcm", "maas")
+
+# How an endpoint is reached. "local" is the app's own host; "ssh" is everything
+# else, including each leg of a multi-hop chain.
+ENDPOINT_TYPES = ("local", "ssh")
+
+# Roles a site is expected to define. The set is open on purpose -- a deployment can
+# invent any role name and bind it to an endpoint -- but these four are what the
+# shipped call sites ask for, so they are seeded and surfaced in the UI:
+#   control  cluster reads (cmsh, sinfo/squeue); the default route
+#   scripts  where bin/scripts lives and runs
+#   logs     where validation logs are written and read
+#   bcm      the cluster manager, when it is not the control host
+# "script" stays as the historical alias of the privileged route (see
+# docs/EXECUTION_ARCHITECTURE.md §1.2).
+CONNECTION_ROLES = ("control", "scripts", "logs", "bcm")
+DEFAULT_CONNECTION_ROLE = "control"
+LEGACY_PRIVILEGED_ROLE = "script"
 TOOL_CATEGORIES = (
     "validation",
     "performance",
@@ -110,6 +127,12 @@ def _as_str_list(v: Any) -> list[str]:
     if not isinstance(v, (list, tuple)):
         return []
     return [x.strip() for x in v if isinstance(x, str) and x.strip()]
+
+
+def _as_bool(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _as_dict(v: Any) -> dict[str, Any]:
@@ -427,12 +450,108 @@ class ClusterGeometry:
 
 
 @dataclass
+class Endpoint:
+    """One place the app can execute: a host, or a hop *through* another endpoint.
+
+    ``via`` names another endpoint in the same cluster. Resolution chains them, so
+    ``app -> bastion -> head -> bcm`` is four endpoints where each names its
+    predecessor; each leg runs on the previous endpoint using *that* host's
+    credentials and reachability, exactly like ``Connection.hop``. Depth is not
+    limited: N hops is N ``via`` links.
+    """
+
+    id: str
+    type: str = "ssh"  # local | ssh
+    host: str = ""
+    user: str = ""
+    key: str = ""
+    port: str = ""
+    via: str = ""  # id of the endpoint this one is reached through ("" == from the app)
+    sudo: bool = False  # run payloads under `sudo -n -E` on this endpoint
+    opts: list[str] = field(default_factory=list)  # extra ssh -o flags
+    description: str = ""
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "Endpoint":
+        d = _as_dict(d)
+        return cls(
+            id=_as_str(d.get("id")),
+            type=_as_str(d.get("type")).lower() or "ssh",
+            host=_as_str(d.get("host")),
+            user=_as_str(d.get("user")),
+            key=_as_str(d.get("key")),
+            port=_as_str(d.get("port")),
+            via=_as_str(d.get("via")),
+            sudo=_as_bool(d.get("sudo")),
+            opts=_as_str_list(d.get("opts")),
+            description=_as_str(d.get("description")),
+        )
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        if not valid_id(self.id):
+            problems.append(f"invalid endpoint id: {self.id!r}")
+        if self.type not in ENDPOINT_TYPES:
+            problems.append(f"unknown endpoint type {self.type!r} (expected {ENDPOINT_TYPES})")
+        if self.type == "ssh" and not self.host:
+            problems.append(f"endpoint {self.id!r}: ssh endpoints need a host")
+        if self.type == "local" and self.via:
+            problems.append(f"endpoint {self.id!r}: a local endpoint cannot be reached via a hop")
+        return problems
+
+
+@dataclass
+class ConnectionRole:
+    """What a call site asks for, decoupled from where that happens to live.
+
+    A role binds a name (``logs``, ``scripts``, ``bcm``, or anything a site invents)
+    to an endpoint plus an optional ``root`` directory on it. Code says "list the
+    logs" and the deployment decides which host that means, so scripts, logs and the
+    cluster manager can each sit somewhere different.
+    """
+
+    id: str
+    endpoint: str = ""  # endpoint id; "" == the endpoint bound to the control role
+    root: str = ""  # base directory for this role on that endpoint
+    sudo: bool = False  # escalate on top of whatever the endpoint does
+    description: str = ""
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "ConnectionRole":
+        d = _as_dict(d)
+        return cls(
+            id=_as_str(d.get("id")),
+            endpoint=_as_str(d.get("endpoint")),
+            root=_as_str(d.get("root")),
+            sudo=_as_bool(d.get("sudo")),
+            description=_as_str(d.get("description")),
+        )
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        if not valid_id(self.id):
+            problems.append(f"invalid role id: {self.id!r}")
+        return problems
+
+
+@dataclass
 class ClusterConnection:
+    """How this cluster is reached.
+
+    The flat ``exec_mode``/``ssh_*``/``remote_base_path`` fields are the original
+    single-hop form and stay authoritative when no ``endpoints`` are declared, so
+    existing clusters keep working untouched. Declaring ``endpoints``/``roles``
+    unlocks multi-hop and per-role placement; the flat fields are then derived from
+    the control role for the env-var contract that shell scripts still read.
+    """
+
     exec_mode: str = ""  # local | ssh
     ssh_host: str = ""
     ssh_user: str = ""
     ssh_key: str = ""
     remote_base_path: str = ""
+    endpoints: list[Endpoint] = field(default_factory=list)
+    roles: list[ConnectionRole] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: Any) -> "ClusterConnection":
@@ -443,7 +562,66 @@ class ClusterConnection:
             ssh_user=_as_str(d.get("ssh_user")),
             ssh_key=_as_str(d.get("ssh_key")),
             remote_base_path=_as_str(d.get("remote_base_path")),
+            endpoints=[Endpoint.from_dict(x) for x in _as_dict_list(d.get("endpoints"))],
+            roles=[ConnectionRole.from_dict(x) for x in _as_dict_list(d.get("roles"))],
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def endpoint(self, endpoint_id: str) -> Endpoint | None:
+        for e in self.endpoints:
+            if e.id == endpoint_id:
+                return e
+        return None
+
+    def role(self, role_id: str) -> ConnectionRole | None:
+        for r in self.roles:
+            if r.id == role_id:
+                return r
+        return None
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        seen: set[str] = set()
+        for e in self.endpoints:
+            problems.extend(e.validate())
+            if e.id in seen:
+                problems.append(f"duplicate endpoint id: {e.id!r}")
+            seen.add(e.id)
+        for e in self.endpoints:
+            if e.via and e.via not in seen:
+                problems.append(f"endpoint {e.id!r}: via references unknown endpoint {e.via!r}")
+        problems.extend(self._cycle_problems())
+        role_ids: set[str] = set()
+        for r in self.roles:
+            problems.extend(r.validate())
+            if r.id in role_ids:
+                problems.append(f"duplicate role id: {r.id!r}")
+            role_ids.add(r.id)
+            if r.endpoint and r.endpoint not in seen:
+                problems.append(f"role {r.id!r}: unknown endpoint {r.endpoint!r}")
+        if self.endpoints and "control" not in role_ids:
+            problems.append("a 'control' role is required once endpoints are declared")
+        return problems
+
+    def _cycle_problems(self) -> list[str]:
+        """Report any endpoint whose ``via`` chain loops (which would never resolve)."""
+        problems: list[str] = []
+        by_id = {e.id: e for e in self.endpoints}
+        for start in self.endpoints:
+            seen = {start.id}
+            cur = start
+            while cur.via:
+                if cur.via in seen:
+                    problems.append(f"endpoint {start.id!r}: via chain forms a cycle")
+                    break
+                seen.add(cur.via)
+                nxt = by_id.get(cur.via)
+                if nxt is None:
+                    break
+                cur = nxt
+        return problems
 
 
 @dataclass
@@ -484,6 +662,7 @@ class Cluster:
             problems.append(
                 f"unknown cluster_manager {self.cluster_manager!r} (expected {CLUSTER_MANAGERS})"
             )
+        problems.extend(self.connection.validate())
         return problems
 
 

@@ -59,14 +59,18 @@ _script_q=$(printf '%q' "${_SCRIPT_DIR}/02-install-cuda-nccl-workspace.sh")
 _top_q=$(printf '%q' "$TOPDIR")
 _maj_q=$(printf '%q' "$CUDA_MAJ")
 _arch_q=$(printf '%q' "$ARCH")
+# NVIS_NCCL_VERSION selects BOTH the git tag and the on-disk layout in 02-install. It must be
+# forwarded explicitly: pdsh runs a non-login shell and only the vars named below survive, so
+# omitting it silently built 2.28.9 no matter what the dashboard asked for.
+_nver_q=$(printf '%q' "${NVIS_NCCL_VERSION:-2.28.9}")
 
 _pds_inner=$(printf \
-  'export NVIS_INSTALL_CUDA_TOOLKIT=%s; export NVIS_BUILD_NCCL=%s; export TOPDIR=%s; export CUDA_MAJ=%s; export ARCH=%s; exec bash %s %s %s %s' \
-  "$_ic" "$_ib" "$_top_q" "$_maj_q" "$_arch_q" "$_script_q" "$_top_q" "$_maj_q" "$_arch_q")
+  'export NVIS_INSTALL_CUDA_TOOLKIT=%s; export NVIS_BUILD_NCCL=%s; export NVIS_NCCL_VERSION=%s; export TOPDIR=%s; export CUDA_MAJ=%s; export ARCH=%s; exec bash %s %s %s %s' \
+  "$_ic" "$_ib" "$_nver_q" "$_top_q" "$_maj_q" "$_arch_q" "$_script_q" "$_top_q" "$_maj_q" "$_arch_q")
 
 _remote_quoted=$(printf '%q' "$_pds_inner")
 
-echo "==> Phase 2: pdsh -w ${HOST} (NVIS_INSTALL_CUDA_TOOLKIT=${_ic} NVIS_BUILD_NCCL=${_ib})"
+echo "==> Phase 2: pdsh -w ${HOST} (NVIS_INSTALL_CUDA_TOOLKIT=${_ic} NVIS_BUILD_NCCL=${_ib} NVIS_NCCL_VERSION=${NVIS_NCCL_VERSION:-2.28.9})"
 echo "==> remote: ${_pds_inner}"
 # shellcheck disable=SC2029
 pdsh -R ssh -w "$HOST" bash -c "$_remote_quoted"

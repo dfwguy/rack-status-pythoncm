@@ -54,6 +54,41 @@ _slurm_expand_to_wlist() {
     fi
   fi
 
+  # ── NscaleTX: drop nodes Slurm cannot schedule ────────────────────────────
+  # sbatch -w fails the WHOLE submission with "Requested node configuration is
+  # not available" if any single node is down/drained. During bring-up most racks
+  # have a mix, so filter to schedulable states and tell the operator what was
+  # dropped. Set RACK_SLURM_ALLOW_STATES to override (default: idle,mix,alloc).
+  _filter_schedulable() {
+    local list="$1" allow keep drop n st
+    allow="${RACK_SLURM_ALLOW_STATES:-idle,mix,mixed,alloc,allocated,completing}"
+    keep=""; drop=""
+    while IFS=' ' read -r n st; do
+      [[ -z "${n}" ]] && continue
+      st="$(echo "${st}" | tr '[:upper:]' '[:lower:]' | tr -d '*~#$@+')"
+      if [[ ",${allow}," == *",${st},"* ]]; then
+        keep="${keep:+${keep},}${n}"
+      else
+        drop="${drop:+${drop} }${n}(${st})"
+      fi
+    done < <(sinfo -h -N -o '%N %T' -n "${list}" 2>/dev/null | sort -u)
+    if [[ -n "${drop}" ]]; then
+      echo "notice: skipping non-schedulable nodes: ${drop}" >&2
+    fi
+    printf '%s' "${keep}"
+  }
+
+  if [[ "${RACK_SLURM_STATE_FILTER:-1}" == "1" && -n "${csv}" ]]; then
+    local _filtered
+    _filtered="$(_filter_schedulable "${csv}")"
+    if [[ -z "${_filtered}" ]]; then
+      echo "error: no schedulable nodes in: ${raw}" >&2
+      echo "hint: check 'sinfo -N -o \"%N %T\" -n ${csv}' — all nodes are down/drained." >&2
+      return 1
+    fi
+    csv="${_filtered}"
+  fi
+
   if [[ -z "${csv}" ]]; then
     echo "error: scontrol could not expand hostlist for: ${raw}" >&2
     echo "hint: on the Slurm head run: scontrol show hostnames '${raw}'" >&2

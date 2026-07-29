@@ -146,9 +146,26 @@ _nvis_fabric_apply() {
     return 0
   fi
 
-  # Compute-plane device selection (overridable).
-  export NCCL_IB_HCA="${NCCL_IB_HCA:-${NVIS_FAB_IB_HCA}}"
-  export UCX_NET_DEVICES="${UCX_NET_DEVICES:-${NVIS_FAB_UCX_NET_DEVICES}}"
+  # Compute-plane device selection.
+  #
+  # Rail NAMES are per-node facts, not rack facts. A scan performed on one node (or on
+  # rank 0 of a batch job) must NOT be broadcast to the others: on a rack where one tray
+  # is missing a rail, pinning the scanning node's list makes NCCL open a device that does
+  # not exist there. Job 65648 died exactly this way -- NCCL_IB_HCA=mlx5_0..3 forced onto
+  # h03-12 (no mlx5_2) and h03-37 (no mlx5_3) ->
+  #   "Detected mixed local CollNet device counts across ranks (min 3, max 4)".
+  #
+  # Default is therefore AUTO: export nothing device-specific and let every rank discover
+  # its own HCAs locally. Set NVIS_FABRIC_PIN_DEVICES=1 to restore the old pinned behaviour
+  # (single-node/homogeneous runs only). An explicit NCCL_IB_HCA/UCX_NET_DEVICES from the
+  # operator is always honoured, pinning on or off.
+  if [[ "${NVIS_FABRIC_PIN_DEVICES:-0}" == "1" ]]; then
+    export NCCL_IB_HCA="${NCCL_IB_HCA:-${NVIS_FAB_IB_HCA}}"
+    export UCX_NET_DEVICES="${UCX_NET_DEVICES:-${NVIS_FAB_UCX_NET_DEVICES}}"
+  else
+    [[ -n "${NCCL_IB_HCA:-}" ]] && export NCCL_IB_HCA
+    [[ -n "${UCX_NET_DEVICES:-}" ]] && export UCX_NET_DEVICES
+  fi
   # Bootstrap / north-south plane (routable) for NCCL + Open MPI wireup.
   export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${NVIS_FAB_NS_IFNAME}}"
   export OMPI_MCA_btl_tcp_if_include="${OMPI_MCA_btl_tcp_if_include:-${NVIS_FAB_NS_IFNAME}}"
@@ -160,7 +177,7 @@ _nvis_fabric_apply() {
   export OMPI_MCA_coll_ucc_enable="${OMPI_MCA_coll_ucc_enable:-0}"
 
   echo "nvis_fabric: link=${NVIS_FAB_LINK} rate=${NVIS_FAB_RATE}G rails=${NVIS_FAB_RAILS}" \
-       "NCCL_IB_HCA=${NCCL_IB_HCA} NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME}" >&2
+       "NCCL_IB_HCA=${NCCL_IB_HCA:-<auto: per-node detect>} NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME}" >&2
 }
 
 # On-node: scan local sysfs + export.

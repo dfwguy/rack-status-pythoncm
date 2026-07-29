@@ -4,52 +4,78 @@ Public surface::
 
     from transport import build_connection, TransportConfig, Connection
 
-See :mod:`transport.base` for the design (policy vs mechanism).
+See :mod:`transport.base` for the design (composition over inheritance: a plain
+``Connection`` delegating to a composed ``Executor``).
 """
 from __future__ import annotations
 
-from transport.base import Connection, Process, as_shell_str, env_export_prefix, merge_env
+from transport.base import (
+    DEFAULT_HEAD_BYTES,
+    DEFAULT_TAIL_BYTES,
+    DEFAULT_WHOLE_BYTES,
+    Connection,
+    Executor,
+    FileStat,
+    Process,
+    as_shell_str,
+    env_export_prefix,
+    merge_env,
+)
+from transport.chain import HopSpec, apply_hop, build_chain
 from transport.compose import (
-    EnvForwardingConnection,
+    EnvForwardingExecutor,
+    ExecutorDecorator,
     RoutingConnection,
-    SudoConnection,
+    SudoExecutor,
     make_env_resolver,
 )
 from transport.factory import (
+    DEFAULT_EXEC_MODE,
     FORWARD_ENV_NAMES,
     FORWARD_ENV_PREFIXES,
     TransportConfig,
     build_connection,
 )
-from transport.chain import HopSpec, apply_hop, build_chain
 from transport.fanout import NodeResult, fanout, fanout_errors, group_outputs
-from transport.hop import HopConnection
-from transport.local import LocalConnection
-from transport.ssh import SSHConfig, SSHConnection
+from transport.hop import HopConnection, HopExecutor
+from transport.local import LocalConnection, LocalExecutor
+from transport.shellfs import ShellFilesystem
+from transport.ssh import SSHConfig, SSHConnection, SSHExecutor
 
 __all__ = [
-    "Connection",
-    "Process",
-    "LocalConnection",
-    "SSHConnection",
-    "SSHConfig",
-    "HopConnection",
-    "EnvForwardingConnection",
-    "RoutingConnection",
-    "SudoConnection",
-    "make_env_resolver",
-    "build_connection",
-    "TransportConfig",
-    "FORWARD_ENV_PREFIXES",
+    "DEFAULT_EXEC_MODE",
+    "DEFAULT_HEAD_BYTES",
+    "DEFAULT_TAIL_BYTES",
+    "DEFAULT_WHOLE_BYTES",
     "FORWARD_ENV_NAMES",
-    "fanout",
-    "group_outputs",
-    "fanout_errors",
-    "NodeResult",
+    "FORWARD_ENV_PREFIXES",
+    "Connection",
+    "EnvForwardingExecutor",
+    "Executor",
+    "ExecutorDecorator",
+    "FileStat",
+    "HopConnection",
+    "HopExecutor",
     "HopSpec",
-    "build_chain",
+    "LocalConnection",
+    "LocalExecutor",
+    "NodeResult",
+    "Process",
+    "RoutingConnection",
+    "SSHConfig",
+    "SSHConnection",
+    "SSHExecutor",
+    "ShellFilesystem",
+    "SudoExecutor",
+    "TransportConfig",
     "apply_hop",
     "as_shell_str",
+    "build_chain",
+    "build_connection",
     "env_export_prefix",
+    "fanout",
+    "fanout_errors",
+    "group_outputs",
+    "make_env_resolver",
     "merge_env",
 ]

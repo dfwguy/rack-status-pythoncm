@@ -211,7 +211,7 @@ Legacy name **`RACK_APP_GRAFANA_URL`** → use **`RACK_WEB_GRAFANA_URI`**.
 |----------|---------|--------|
 | **`RACK_SLURM_MODULE`** | `slurm` | `module load` name. |
 | **`RACK_SLURM_SKIP_MODULE_LOAD`** | *(unset)* | Truthy → skip `module load`. |
-| **`RACK_SLURM_SCONTROL`**, **`RACK_SLURM_SCANCEL`**, **`RACK_SLURM_SQUEUE`**, **`RACK_SLURM_SINFO`** | binary names | Override Slurm CLI paths. |
+| **`RACK_SLURM_SCONTROL`**, **`RACK_SLURM_SCANCEL`**, **`RACK_SLURM_SQUEUE`**, **`RACK_SLURM_SINFO`**, **`RACK_SLURM_SACCT`** | binary names | Override Slurm CLI paths. Required with `RACK_SLURM_SKIP_MODULE_LOAD=1` when the binaries are not on the non-login shell's `PATH`. |
 | **`RACK_SLURM_SCONTROL_TIMEOUT`** | `120` | Slurm CLI timeouts. |
 | **`RACK_SLURM_DRAIN_REASON`** | `admin` | Default drain reason. |
 | **`RACK_SLURM_NODES_STATE_DISABLED`** | *(unset)* | Truthy → disable drain/undrain. |
@@ -332,6 +332,44 @@ Search in **`app.py`** for: `_DISABLED`, `_DRY_RUN`, `_TIMEOUT`, `_DISABLED` on 
 
 ---
 
+## 17. Execution target: connection topology vs. the flat env contract
+
+How NVIS reaches the cluster can be expressed two ways. The env vars below are the
+**single-host** form and remain fully supported; a declared **topology** supersedes
+them when present. See [`docs/EXECUTION_ARCHITECTURE.md`](EXECUTION_ARCHITECTURE.md) §7.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| **`RACK_EXEC_MODE`** | `ssh` | **Deprecated.** `local` or `ssh`; logs a warning whenever it is set. Connections default to `ssh`. |
+| **`RACK_SSH_HOST`** | *(unset)* | Head-node hostname / IP for the control route. |
+| **`RACK_SSH_USER`** | `root` | SSH user. |
+| **`RACK_SSH_KEY`** | `/run/secrets/ssh_key` | Private key path. Passed as `-i` only when the file exists. |
+| **`RACK_SSH_PORT`** | `22` | SSH port. |
+| **`RACK_SSH_OPTS`** | *(unset)* | Extra `ssh` flags (space-separated). |
+| **`RACK_SSH_MULTIPLEX`** | `1` | ControlMaster multiplexing; `0` opts out (see §6 of the architecture doc). |
+| **`RACK_SCRIPT_SSH_*`** | *(unset)* | Same fields for the privileged (`script`) route. Unset → both routes collapse to control. |
+| **`RACK_SCRIPT_SUDO`** | *(unset)* | Truthy → privileged route runs under `sudo -n -E`. |
+| **`RACK_REMOTE_BASE_PATH`** | *(unset)* | One tree on one host: `SCRIPTS_DIR` = `…/bin/scripts`, `DEFAULT_LOG_DIR` = `…/var/logs`. Surfaced as the `scripts` / `logs` role roots when no topology is declared. |
+| **`RACK_FANOUT_MAX_WORKERS`** | `8` | Concurrency cap for workflow node fan-out (`workflow_engine.py`); keep ≤ the gateway's `MaxSessions`. |
+| **`RACK_FS_DIR_CACHE_TTL_SEC`** | `30` | TTL for the `is_dir` cache (each miss is a round trip on a remote target). |
+
+### When the flat form is not enough
+
+It can only say *one hop to one host*, with scripts and logs in the same tree. A
+deployment that needs a bastion in front of the head, or the log directory on a
+different machine from the script tree, declares **endpoints** (`via` chains them,
+N hops) and **roles** (`control`, `scripts`, `logs`, `bcm`, or any site-defined
+name) on the cluster document instead — `GET/PUT /api/catalog/topology`. Roles may
+carry a `root`, which is what `host_exec.role_root(...)` returns.
+
+Env forwarding still applies over every hop: a knob only reaches a remote script if
+its name matches a forwarded prefix (`RACK_`, `NEMO_`, `VALIDATION_`, `SQUEUE_`,
+`NVIS_`, `PDSH_`, `NGC_`, `LLMB_`) or the `FORWARD_ENV_NAMES` list in
+`backend/transport/factory.py`. Per-call values must be passed as `env_extra`, not
+`env` — the latter is a local-subprocess parameter and is dropped when remote.
+
+---
+
 ## Appendix A — Every `RACK_*` name referenced under `nvis-rack-status/` (sorted)
 
 Use this as a checklist against **`app.py`** / **`native_status.py`**. Defaults and semantics are in §§4–14.
@@ -429,6 +467,7 @@ RACK_SLURM_NODES_STATE_DRY_RUN
 RACK_SLURM_SCONTROL
 RACK_SLURM_SCONTROL_SHOW_JOB_DISABLED
 RACK_SLURM_SCONTROL_TIMEOUT
+RACK_SLURM_SACCT
 RACK_SLURM_SCANCEL
 RACK_SLURM_SCANCEL_DISABLED
 RACK_SLURM_SINFO

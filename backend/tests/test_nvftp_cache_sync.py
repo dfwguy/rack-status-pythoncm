@@ -18,6 +18,15 @@ import nvftp_cache_sync as sync  # noqa: E402
 import token_vault  # noqa: E402
 
 
+#: Settings this module's tests run against. Held in an explicit table rather than
+#: read back out of ``os.environ`` — see ``isolated`` below.
+_SETTINGS = {
+    "RACK_PROJECT_TOKEN": "proj-alpha",
+    "RACK_NVFTP_SFTP_USER": "nv-test-user",
+    "RACK_WEB_SECRET_KEY": "test-secret",
+}
+
+
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     cache = tmp_path / "cache"
@@ -30,15 +39,27 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(token_vault, "NVFTP_VAULT_FILE", vault / "nvftp_token.vault.json")
     monkeypatch.setattr(token_vault, "FLOCK_FILE", vault / "nvftp_token.vault.flock")
     monkeypatch.setattr(token_vault, "VAULT_DIR", vault)
-    monkeypatch.setenv("RACK_PROJECT_TOKEN", "proj-alpha")
-    monkeypatch.setenv("RACK_NVFTP_SFTP_USER", "nv-test-user")
-    monkeypatch.setenv("RACK_WEB_SECRET_KEY", "test-secret")
+    for key, val in _SETTINGS.items():
+        monkeypatch.setenv(key, val)
     token_vault.store_nvftp_token("nvftp-pass-token")
 
-    def _eget_env_only(key: str, default: str = "") -> str:
+    def _eget_test(key: str, default: str = "") -> str:
+        """Resolve a setting from the table above, falling back to ``os.environ``.
+
+        Deliberately not a plain ``os.environ`` read. Once any other test module
+        has imported ``app``, the catalog registers a change hook that
+        re-materializes the active project into ``os.environ``, first restoring
+        the baseline it captured at import — which *deletes* the keys that were
+        unset back then, ``RACK_PROJECT_TOKEN`` among them. ``store_nvftp_token``
+        above is such a change, so it would wipe the value set a line earlier and
+        leave this module's tests configured differently depending on whether
+        they ran alone or after the rest of the suite.
+        """
+        if key in _SETTINGS:
+            return _SETTINGS[key]
         return (os.environ.get(key) or default).strip()
 
-    monkeypatch.setattr(sync, "_eget", _eget_env_only)
+    monkeypatch.setattr(sync, "_eget", _eget_test)
     yield
 
 

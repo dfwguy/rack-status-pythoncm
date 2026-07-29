@@ -44,12 +44,19 @@ class PlatformProvider(ABC):
 
     def slurm_prefix(self, cmd: str) -> str:
         """Wrap *cmd* with ``module load slurm && …`` unless skipped."""
+        # NscaleTX: BCM 11 splits /cm/shared by arch and does NOT export SLURM_CONF for
+        # non-login ssh, so Slurm CLIs die with "Could not establish a configuration source"
+        # (DNS SRV fallback) even when given absolute paths. RACK_SLURM_CONF exports it in
+        # the remote shell. Documented in RACKSTATUS_GO_LIVE.md.
+        conf = (os.environ.get("RACK_SLURM_CONF") or "").strip()
+        pre = f"export SLURM_CONF={shlex.quote(conf)}; " if conf else ""
         if self._skip_module_load():
-            return cmd
+            return pre + cmd
         mod = self._slurm_module()
         # Prefer silent module load; stderr from Slurm bash-completion is harmless but noisy.
         return (
-            f"module load -s {shlex.quote(mod)} 2>/dev/null || "
+            pre
+            + f"module load -s {shlex.quote(mod)} 2>/dev/null || "
             f"module load {shlex.quote(mod)} 2>/dev/null; {cmd}"
         )
 
@@ -69,7 +76,10 @@ class PlatformProvider(ABC):
         return self.slurm_prefix(cmd)
 
     def sacct_cmd(self, extra_args: str = "") -> str:
-        cmd = f"sacct {extra_args}" if extra_args else "sacct"
+        sacct = (os.environ.get("RACK_SLURM_SACCT") or "sacct").strip() or "sacct"
+        cmd = shlex.quote(sacct)
+        if extra_args:
+            cmd = f"{cmd} {extra_args}"
         return self.slurm_prefix(cmd)
 
     def scontrol_cmd(self, extra_args: str = "") -> str:

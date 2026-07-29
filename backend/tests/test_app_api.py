@@ -24,6 +24,20 @@ def client():
 
 
 @pytest.fixture
+def log_dir(tmp_path):
+    """An existing, empty directory for endpoints that validate ``log_dir``.
+
+    Demo mode synthesises the rows, so the *contents* are irrelevant — but the
+    path has to resolve to a real directory. This replaces a literal
+    ``"var/logs/"``, which was relative and therefore only resolved when pytest
+    happened to be invoked from the repository root.
+    """
+    d = tmp_path / "logs"
+    d.mkdir()
+    return str(d)
+
+
+@pytest.fixture
 def isolated_locks_file(tmp_path, monkeypatch):
     """Redirect the claims file so rack-locks tests don't leak into ./var/cache."""
     monkeypatch.setattr(rack_locks, "CLAIMS_FILE", tmp_path / "rack_locks.json")
@@ -43,8 +57,8 @@ class TestAuthEndpoints:
 
 
 class TestStatusEndpoint:
-    def test_demo_status(self, client):
-        resp = client.get("/api/status?log_dir=var/logs/")
+    def test_demo_status(self, client, log_dir):
+        resp = client.get("/api/status", query_string={"log_dir": log_dir})
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["ok"] is True
@@ -52,8 +66,8 @@ class TestStatusEndpoint:
         assert "summary" in data
         assert "comments" in data
 
-    def test_status_has_native_workers(self, client):
-        resp = client.get("/api/status?log_dir=var/logs/")
+    def test_status_has_native_workers(self, client, log_dir):
+        resp = client.get("/api/status", query_string={"log_dir": log_dir})
         data = resp.get_json()
         assert data["native_workers"]["mode"] == "demo"
 
@@ -309,7 +323,7 @@ class TestSharedClusterSnapshotAPI:
 
         he = app_module.host_exec
         # Nested context restores env + every setattr'd global on exit so later
-        # tests re-read local mode (plain assignments would leave _EXEC_MODE=ssh).
+        # tests re-read local mode (plain assignments would leave ssh init globals).
         with monkeypatch.context() as m:
             m.setenv("RACK_EXEC_MODE", "ssh")
             m.setenv("RACK_SSH_HOST", "10.0.0.1")
@@ -318,7 +332,6 @@ class TestSharedClusterSnapshotAPI:
             m.setattr(he, "_CONN", None)
             m.setattr(he, "_CONTROL_SSH", None)
             m.setattr(he, "_CONFIG", None)
-            m.setattr(he, "_EXEC_MODE", None)
             m.setattr(he, "_reach_ok", None)
             m.setattr(he, "_reach_detail", "")
             m.setattr(he, "_reach_checked_at", 0.0)
@@ -357,24 +370,23 @@ class TestSharedClusterSnapshotAPI:
         m_outer.setattr(he, "_CONN", None)
         m_outer.setattr(he, "_CONTROL_SSH", None)
         m_outer.setattr(he, "_CONFIG", None)
-        m_outer.setattr(he, "_EXEC_MODE", None)
         m_outer.setattr(he, "_reach_ok", None)
         m_outer.setattr(he, "_reach_detail", "")
         m_outer.setattr(he, "_reach_checked_at", 0.0)
         m_outer.setattr(he, "_reach_wall_at", 0.0)
         assert (os.environ.get("RACK_EXEC_MODE") or "local").strip().lower() == "local"
-        assert he.is_remote() is False
+        assert he.exec_kind() == "local"
 
     def test_host_exec_is_local_after_ssh_cold_overview(self, client, monkeypatch):
         """Order-sensitive guard: SSH-cold overview must not leak ssh init globals.
 
         Run after ``test_overview_never_runs_live_probes_with_fresh_snapshot``. With
-        plain host_exec global assignments, ``_EXEC_MODE`` stays ``ssh`` even though
+        plain host_exec global assignments, ssh init globals can leak even though
         monkeypatch restored ``RACK_EXEC_MODE=local``.
         """
         assert (os.environ.get("RACK_EXEC_MODE") or "local").strip().lower() == "local"
         # Do not clear host_exec caches here — that would hide the leak.
-        assert app_module.host_exec.is_remote() is False
+        assert app_module.host_exec.exec_kind() == "local"
 
 
 class TestClusterOverviewLiveAPI:
@@ -722,10 +734,10 @@ class TestRackLocksAPI:
 class TestRunLlmbNccl:
     """Async + status endpoints for the NCCL Microbenchmark (LLMB) tool."""
 
-    def test_single_rack_starts_job(self, client):
+    def test_single_rack_starts_job(self, client, log_dir):
         resp = client.post(
             "/api/run-llmb-nccl-async",
-            json={"rack": "p5-r01", "log_dir": "var/logs/", "dry_run": True},
+            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
         )
         assert resp.status_code == 200
         data = resp.get_json()
@@ -737,10 +749,10 @@ class TestRunLlmbNccl:
         assert "run_nccl_mpi.sh" in (data.get("command_display") or "")
         assert "--dry-run" in (data.get("command_display") or "")
 
-    def test_multi_rack_starts_job(self, client):
+    def test_multi_rack_starts_job(self, client, log_dir):
         resp = client.post(
             "/api/run-llmb-nccl-async",
-            json={"racks": ["p5-r01", "p5-r02", "p5-r01"], "log_dir": "var/logs/"},
+            json={"racks": ["p5-r01", "p5-r02", "p5-r01"], "log_dir": log_dir},
         )
         assert resp.status_code == 200
         data = resp.get_json()
@@ -748,8 +760,10 @@ class TestRunLlmbNccl:
         # Duplicates removed, order preserved.
         assert data.get("racks") == ["p5-r01", "p5-r02"]
 
-    def test_missing_rack_returns_400(self, client):
-        resp = client.post("/api/run-llmb-nccl-async", json={"log_dir": "var/logs/"})
+    def test_missing_rack_returns_400(self, client, log_dir):
+        # A valid log_dir keeps this assertion about the *missing rack*; with an
+        # unresolvable one it would pass on the wrong 400.
+        resp = client.post("/api/run-llmb-nccl-async", json={"log_dir": log_dir})
         assert resp.status_code == 400
         assert resp.get_json()["ok"] is False
 
@@ -757,10 +771,10 @@ class TestRunLlmbNccl:
         resp = client.get("/api/run-llmb-nccl-status")
         assert resp.status_code == 400
 
-    def test_status_for_started_job(self, client):
+    def test_status_for_started_job(self, client, log_dir):
         start = client.post(
             "/api/run-llmb-nccl-async",
-            json={"rack": "p5-r01", "log_dir": "var/logs/", "dry_run": True},
+            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
         ).get_json()
         job_id = start["job_id"]
         resp = client.get(f"/api/run-llmb-nccl-status?job_id={job_id}")
