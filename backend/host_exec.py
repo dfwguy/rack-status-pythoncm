@@ -507,7 +507,7 @@ def cached_reachability_state() -> tuple[bool | None, str]:
     should use this instead of :func:`reachability_state`.
     """
     _ensure_init()
-    if _EXEC_MODE != "ssh":
+    if _CONTROL_SSH is None:
         return True, ""
     with _reach_lock:
         if _reach_ok is None:

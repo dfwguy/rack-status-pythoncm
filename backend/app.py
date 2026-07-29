@@ -8468,10 +8468,13 @@ def api_slurm_job_stdout_content():
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     max_inline = max(0, _env_int("RACK_LOG_INLINE_MAX_BYTES", 10 * 1024 * 1024))
-    try:
-        sz = lp.stat().st_size
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+    # The stdout file lives on the execution host, so size and content must be asked
+    # of the connection. Calling Path.stat()/read_bytes() here read the container's
+    # own filesystem and raised AttributeError on the remote PurePosixPath.
+    st = host_exec.stat(lp)
+    if st is None:
+        return jsonify({"ok": False, "error": "path does not exist"}), 404
+    sz = int(st.size)
     if sz > max_inline:
         return jsonify(
             {
@@ -8483,11 +8486,7 @@ def api_slurm_job_stdout_content():
                 "download_hint": "Use GET /api/slurm-job-stdout-download with the same query parameters.",
             }
         )
-    try:
-        raw = lp.read_bytes()
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    text = raw.decode("utf-8", errors="replace")
+    text, _meta = host_exec.read_text(lp, whole_bytes=max_inline)
     return jsonify(
         {
             "ok": True,
@@ -8510,8 +8509,24 @@ def api_slurm_job_stdout_download():
         lp = _resolve_slurm_job_stdout_path(path_raw, request.args.get("log_dir"))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    if not lp.is_file():
+    if not host_exec.is_file(lp):
         return jsonify({"ok": False, "error": "not a file"}), 404
+    if not isinstance(lp, Path):
+        # Remote (ssh mode): the file is on the execution host, so send_file() cannot
+        # reach it. Same transfer as api_rack_log_download().
+        cp = host_exec.run_on_host(f"base64 -w0 {shlex.quote(str(lp))}")
+        if cp.returncode != 0 or not (cp.stdout or "").strip():
+            return jsonify(
+                {"ok": False, "error": f"cannot read remote log: {lp} {(cp.stderr or '').strip()}"}
+            ), 404
+        try:
+            blob = base64.b64decode((cp.stdout or "").strip())
+        except ValueError as e:  # binascii.Error subclasses ValueError
+            return jsonify({"ok": False, "error": f"decode failed: {e}"}), 500
+        resp = app.response_class(blob, mimetype="text/plain; charset=utf-8")
+        resp.headers["Content-Disposition"] = f'attachment; filename="{lp.name}"'
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
     return send_file(
         str(lp),
         as_attachment=True,
@@ -9114,8 +9129,10 @@ def _lake_capture_request(response):  # noqa: ANN001, ANN201
         if not _lake_should_capture(request.path, request.method):
             return response
         # Streaming responses (SSE log tails) must not be materialised — reading .data would
-        # consume the generator and break the stream in the browser.
-        if response.direct_passthrough:
+        # consume the generator and break the stream in the browser. A generator-backed
+        # Response leaves direct_passthrough False, so is_streamed is the load-bearing check:
+        # without it a `tail -f` body is swallowed here and the viewer hangs on "Connecting…".
+        if response.direct_passthrough or response.is_streamed:
             body = "<streaming response — not captured>"
         else:
             body = (response.get_data() or b"")[:_LAKE_BODY_MAX].decode("utf-8", "replace")

@@ -211,7 +211,7 @@ Legacy name **`RACK_APP_GRAFANA_URL`** → use **`RACK_WEB_GRAFANA_URI`**.
 |----------|---------|--------|
 | **`RACK_SLURM_MODULE`** | `slurm` | `module load` name. |
 | **`RACK_SLURM_SKIP_MODULE_LOAD`** | *(unset)* | Truthy → skip `module load`. |
-| **`RACK_SLURM_SCONTROL`**, **`RACK_SLURM_SCANCEL`**, **`RACK_SLURM_SQUEUE`**, **`RACK_SLURM_SINFO`** | binary names | Override Slurm CLI paths. |
+| **`RACK_SLURM_SCONTROL`**, **`RACK_SLURM_SCANCEL`**, **`RACK_SLURM_SQUEUE`**, **`RACK_SLURM_SINFO`**, **`RACK_SLURM_SACCT`** | binary names | Override Slurm CLI paths. Required with `RACK_SLURM_SKIP_MODULE_LOAD=1` when the binaries are not on the non-login shell's `PATH`. |
 | **`RACK_SLURM_SCONTROL_TIMEOUT`** | `120` | Slurm CLI timeouts. |
 | **`RACK_SLURM_DRAIN_REASON`** | `admin` | Default drain reason. |
 | **`RACK_SLURM_NODES_STATE_DISABLED`** | *(unset)* | Truthy → disable drain/undrain. |
@@ -467,6 +467,7 @@ RACK_SLURM_NODES_STATE_DRY_RUN
 RACK_SLURM_SCONTROL
 RACK_SLURM_SCONTROL_SHOW_JOB_DISABLED
 RACK_SLURM_SCONTROL_TIMEOUT
+RACK_SLURM_SACCT
 RACK_SLURM_SCANCEL
 RACK_SLURM_SCANCEL_DISABLED
 RACK_SLURM_SINFO

@@ -76,7 +76,10 @@ class PlatformProvider(ABC):
         return self.slurm_prefix(cmd)
 
     def sacct_cmd(self, extra_args: str = "") -> str:
-        cmd = f"sacct {extra_args}" if extra_args else "sacct"
+        sacct = (os.environ.get("RACK_SLURM_SACCT") or "sacct").strip() or "sacct"
+        cmd = shlex.quote(sacct)
+        if extra_args:
+            cmd = f"{cmd} {extra_args}"
         return self.slurm_prefix(cmd)
 
     def scontrol_cmd(self, extra_args: str = "") -> str:

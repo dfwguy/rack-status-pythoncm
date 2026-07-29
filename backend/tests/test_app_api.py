@@ -323,7 +323,7 @@ class TestSharedClusterSnapshotAPI:
 
         he = app_module.host_exec
         # Nested context restores env + every setattr'd global on exit so later
-        # tests re-read local mode (plain assignments would leave _EXEC_MODE=ssh).
+        # tests re-read local mode (plain assignments would leave ssh init globals).
         with monkeypatch.context() as m:
             m.setenv("RACK_EXEC_MODE", "ssh")
             m.setenv("RACK_SSH_HOST", "10.0.0.1")
@@ -332,7 +332,6 @@ class TestSharedClusterSnapshotAPI:
             m.setattr(he, "_CONN", None)
             m.setattr(he, "_CONTROL_SSH", None)
             m.setattr(he, "_CONFIG", None)
-            m.setattr(he, "_EXEC_MODE", None)
             m.setattr(he, "_reach_ok", None)
             m.setattr(he, "_reach_detail", "")
             m.setattr(he, "_reach_checked_at", 0.0)
@@ -371,7 +370,6 @@ class TestSharedClusterSnapshotAPI:
         m_outer.setattr(he, "_CONN", None)
         m_outer.setattr(he, "_CONTROL_SSH", None)
         m_outer.setattr(he, "_CONFIG", None)
-        m_outer.setattr(he, "_EXEC_MODE", None)
         m_outer.setattr(he, "_reach_ok", None)
         m_outer.setattr(he, "_reach_detail", "")
         m_outer.setattr(he, "_reach_checked_at", 0.0)
@@ -383,7 +381,7 @@ class TestSharedClusterSnapshotAPI:
         """Order-sensitive guard: SSH-cold overview must not leak ssh init globals.
 
         Run after ``test_overview_never_runs_live_probes_with_fresh_snapshot``. With
-        plain host_exec global assignments, ``_EXEC_MODE`` stays ``ssh`` even though
+        plain host_exec global assignments, ssh init globals can leak even though
         monkeypatch restored ``RACK_EXEC_MODE=local``.
         """
         assert (os.environ.get("RACK_EXEC_MODE") or "local").strip().lower() == "local"
