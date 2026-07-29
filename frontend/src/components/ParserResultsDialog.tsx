@@ -18,7 +18,7 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Paper from "@mui/material/Paper";
-import { Button, Text, Banner, Card, Flex, Tag } from "@nvidia/foundations-react-core";
+import { Button, Text, Banner, Card, Flex, Tag, Checkbox } from "@nvidia/foundations-react-core";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -50,6 +50,8 @@ ChartJS.register(
 
 /** Same key as legacy index.html (displayTzSelect). */
 const DISPLAY_TZ_KEY = "rackWebDisplayTimezone";
+/** Persist "Full rack validation (18N)" preference across opens. */
+const FULL_RACK_KEY = "rackWebParserFullRack";
 
 function browserIana(): string {
   try {
@@ -65,6 +67,16 @@ function chartsTzForApi(stored: string): string {
   if (!u) return "";
   if (u === "browser") return browserIana() || "";
   return u;
+}
+
+function initFullRackFromStorage(): boolean {
+  try {
+    const raw = localStorage.getItem(FULL_RACK_KEY);
+    if (raw === null) return true; // default ON — avoid partial 1N sweeps looking like rack results
+    return raw === "1" || raw.toLowerCase() === "true";
+  } catch {
+    return true;
+  }
 }
 
 export interface ParserResultsDialogProps {
@@ -237,6 +249,9 @@ interface ParserResponse {
   ok: boolean;
   rack: string;
   log_file: string;
+  job_id?: string;
+  full_rack?: boolean;
+  full_rack_nodes?: number | null;
   data: ParserData;
   error?: string;
   returncode?: number;
@@ -809,6 +824,7 @@ export function ParserResultsDialog({
   const [result, setResult] = useState<ParserResponse | null>(null);
   const [tabIndex, setTabIndex] = useState(0);
   const [chartsTz, setChartsTz] = useState(initChartsTzFromStorage);
+  const [fullRack, setFullRack] = useState(initFullRackFromStorage);
   const [nvloomPath, setNvloomPath] = useState("");
   const [nvloomContent, setNvloomContent] = useState("");
   const [nvloomLoading, setNvloomLoading] = useState(false);
@@ -817,9 +833,13 @@ export function ParserResultsDialog({
   const [clusterkitListLoading, setClusterkitListLoading] = useState(false);
   const [clusterkitListError, setClusterkitListError] = useState("");
 
+  /** Explicit path/basename skips rack resolution — full-rack filter does not apply. */
+  const rackResolveMode = !(logPath ?? "").trim() && !(logFileBasename ?? "").trim();
+
   useEffect(() => {
     if (!open) return;
     setChartsTz(initChartsTzFromStorage());
+    setFullRack(initFullRackFromStorage());
     setTabIndex(Math.min(Math.max(0, initialTabIndex), 10));
   }, [open, initialTabIndex]);
 
@@ -828,6 +848,15 @@ export function ParserResultsDialog({
     try {
       if (!value) localStorage.removeItem(DISPLAY_TZ_KEY);
       else localStorage.setItem(DISPLAY_TZ_KEY, value);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const persistFullRack = (checked: boolean) => {
+    setFullRack(checked);
+    try {
+      localStorage.setItem(FULL_RACK_KEY, checked ? "1" : "0");
     } catch {
       /* ignore */
     }
@@ -852,6 +881,7 @@ export function ParserResultsDialog({
     } else {
       if (rack) params.set("rack", rack);
       if (jobId && jobId !== "-") params.set("job_id", jobId);
+      if (fullRack) params.set("full_rack", "1");
     }
     const tzApi = chartsTzForApi(chartsTz);
     if (tzApi) params.set("display_timezone", tzApi);
@@ -870,7 +900,7 @@ export function ParserResultsDialog({
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [open, rack, jobId, logDir, logFileBasename, logPath, chartsTz]);
+  }, [open, rack, jobId, logDir, logFileBasename, logPath, chartsTz, fullRack]);
 
   useEffect(() => {
     if (!open || !(logDir || "").trim() || !rack.trim() || !result) {
@@ -971,6 +1001,10 @@ export function ParserResultsDialog({
     setTabIndex((t) => Math.min(t, maxTabIdx));
   }, [maxTabIdx]);
   const pdisp = String(result?.parser_display_timezone ?? "").trim() || "utc";
+  const displayJobId =
+    (result?.job_id && result.job_id !== "-" ? result.job_id : "") ||
+    (jobId && jobId !== "-" ? jobId : "");
+  const nodesLabel = result?.full_rack_nodes ?? 18;
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth aria-label="Parser results: NCCL and NEMO benchmark charts">
@@ -978,26 +1012,39 @@ export function ParserResultsDialog({
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}>
           <span>
             Parser results — {rack}
-            {jobId && jobId !== "-" ? ` (job ${jobId})` : ""}
+            {displayJobId ? ` (job ${displayJobId})` : ""}
+            {result?.full_rack ? ` · full rack (${nodesLabel}N)` : ""}
           </span>
-          <FormControl size="small" sx={{ minWidth: 200 }}>
-            <InputLabel id="parser-charts-tz-label">Charts TZ</InputLabel>
-            <Select
-              labelId="parser-charts-tz-label"
-              label="Charts TZ"
-              value={chartsTz || ""}
-              onChange={(e) => persistChartsTz(String(e.target.value))}
-              disabled={loading}
-            >
-              <MenuItem value="">
-                <em>Server default</em>
-              </MenuItem>
-              <MenuItem value="browser">Browser local (IANA)</MenuItem>
-              <MenuItem value="utc">UTC</MenuItem>
-              <MenuItem value="Europe/Berlin">Europe/Berlin</MenuItem>
-              <MenuItem value="America/Los_Angeles">America/Los_Angeles</MenuItem>
-            </Select>
-          </FormControl>
+          <Flex align="center" gap="3" wrap="wrap">
+            {rackResolveMode && (
+              <Checkbox
+                checked={fullRack}
+                disabled={loading}
+                onCheckedChange={(v) => persistFullRack(v === true)}
+                slotLabel={
+                  <Text kind="body/regular/sm">Full rack validation ({nodesLabel}N)</Text>
+                }
+              />
+            )}
+            <FormControl size="small" sx={{ minWidth: 200 }}>
+              <InputLabel id="parser-charts-tz-label">Charts TZ</InputLabel>
+              <Select
+                labelId="parser-charts-tz-label"
+                label="Charts TZ"
+                value={chartsTz || ""}
+                onChange={(e) => persistChartsTz(String(e.target.value))}
+                disabled={loading}
+              >
+                <MenuItem value="">
+                  <em>Server default</em>
+                </MenuItem>
+                <MenuItem value="browser">Browser local (IANA)</MenuItem>
+                <MenuItem value="utc">UTC</MenuItem>
+                <MenuItem value="Europe/Berlin">Europe/Berlin</MenuItem>
+                <MenuItem value="America/Los_Angeles">America/Los_Angeles</MenuItem>
+              </Select>
+            </FormControl>
+          </Flex>
         </Box>
       </DialogTitle>
       <DialogContent dividers sx={{ minWidth: 0, boxSizing: "border-box" }}>

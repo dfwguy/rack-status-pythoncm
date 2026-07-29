@@ -2863,16 +2863,64 @@ def find_nvloom_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
 _NVLOOM_HEATMAPS_LOG_MAX_BYTES = 40 * 1024 * 1024
 
 
-def pick_log_for_rack(log_dir: Path, rack: str, job_id: str | None) -> Path | None:
+_FULL_RACK_NODES_RE = re.compile(r"-(\d+)N-", re.IGNORECASE)
+
+
+def _node_count_from_log_basename(name: str) -> int | None:
+    """Slurm node count from ``…-<N>N-<jobid>.txt`` (e.g. ``18`` from ``…-18N-75270.txt``)."""
+    m = _FULL_RACK_NODES_RE.search(name or "")
+    if not m:
+        return None
+    try:
+        return int(m.group(1), 10)
+    except ValueError:
+        return None
+
+
+def _full_rack_expected_nodes() -> int:
+    """Expected full-rack Slurm node count for parser ``full_rack`` filtering (default 18 / NVL72)."""
+    raw = (_eget("RACK_FULL_RACK_NODES") or "").strip()
+    if raw.isdigit():
+        n = int(raw, 10)
+        if n > 0:
+            return n
+    return 18
+
+
+def pick_log_for_rack(
+    log_dir: Path,
+    rack: str,
+    job_id: str | None,
+    *,
+    full_rack: bool = False,
+    full_rack_nodes: int | None = None,
+) -> Path | None:
+    """Pick a single-rack validation log for *rack*.
+
+    Default: newest matching log (by mtime); if *job_id* is set, prefer that job's file.
+
+    When *full_rack* is true, only consider logs whose basename encodes the full-rack
+    node count (``-18N-`` by default / ``RACK_FULL_RACK_NODES``). A row job_id that
+    points at a partial run (e.g. ``-1N-``) is ignored so the dialog can still surface
+    the latest full-rack acceptance log.
+    """
     cands = find_log_paths_for_rack(log_dir, rack)
     if not cands:
         return None
+    if full_rack:
+        need = int(full_rack_nodes) if full_rack_nodes and full_rack_nodes > 0 else _full_rack_expected_nodes()
+        cands = [p for p in cands if _node_count_from_log_basename(p.name) == need]
+        if not cands:
+            return None
     j = (job_id or "").strip()
     if j.isdigit():
         suf = f"N-{j}.txt"
         for p in cands:
             if p.name.endswith(suf):
                 return p
+        # full_rack: job_id may be a partial (1N) sweep — fall through to newest full-rack log
+        if not full_rack:
+            return cands[0]
     return cands[0]
 
 
@@ -9733,6 +9781,11 @@ def api_parser_results():
     Optional ``log_file``: basename under log_dir (or failed/) for multirack / explicit logs (must
     contain NEMO or NCCL in the basename). When set, ``rack`` is optional (used for Grafana context).
 
+    Optional ``full_rack=1``: when resolving by rack (no ``log_file``/``path``), only consider logs
+    whose basename encodes the full-rack node count (``-18N-`` by default; override with
+    ``full_rack_nodes`` or ``RACK_FULL_RACK_NODES``). A row ``job_id`` that points at a partial
+    (e.g. ``-1N-``) run is ignored so the newest full-rack log is used instead.
+
     Optional ``display_timezone`` query (IANA, e.g. ``Europe/Berlin``): zone for naive wall-clock
     timestamps in the NEMO log when deriving the LLM/Grafana time window (same as Charts TZ in the UI).
 
@@ -9751,6 +9804,11 @@ def api_parser_results():
     rack = (request.args.get("rack") or "").strip()
     job_raw = (request.args.get("job_id") or "").strip()
     job_id = job_raw if job_raw and job_raw != "-" else None
+    full_rack = (request.args.get("full_rack") or "").strip().lower() in ("1", "true", "yes", "on")
+    fr_nodes_raw = (request.args.get("full_rack_nodes") or "").strip()
+    full_rack_nodes: int | None = None
+    if fr_nodes_raw.isdigit():
+        full_rack_nodes = int(fr_nodes_raw, 10) if int(fr_nodes_raw, 10) > 0 else None
     if path_arg:
         # Explicit allowlisted path (e.g. a Travis bring-up node log
         # results/<node>/allreduce.txt) — bypasses the NEMO/NCCL basename filter but
@@ -9779,17 +9837,21 @@ def api_parser_results():
             rk = _normalize_rack_id(rack)
         except ValueError as e:
             return jsonify({"ok": False, "error": str(e)}), 400
-        log_path = pick_log_for_rack(log_dir, rack, job_id)
+        log_path = pick_log_for_rack(
+            log_dir, rack, job_id, full_rack=full_rack, full_rack_nodes=full_rack_nodes
+        )
         if log_path is None:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": (
-                        f"no matching *.txt for rack {rk!r} under {log_dir} or {log_dir / 'failed'} "
-                        f"(NEMO/NCCL basename, or ClusterKit root-CK-/clusterkit with one rack id)"
-                    ),
-                }
-            ), 404
+            need_n = full_rack_nodes if full_rack_nodes and full_rack_nodes > 0 else _full_rack_expected_nodes()
+            detail = (
+                f"no matching *-{need_n}N-*.txt for rack {rk!r} under {log_dir} "
+                f"(full-rack filter on; uncheck Full rack validation to use the latest partial log)"
+                if full_rack
+                else (
+                    f"no matching *.txt for rack {rk!r} under {log_dir} or {log_dir / 'failed'} "
+                    f"(NEMO/NCCL basename, or ClusterKit root-CK-/clusterkit with one rack id)"
+                )
+            )
+            return jsonify({"ok": False, "error": detail}), 404
     parser = _parser_path()
     if not _script_exists(parser):
         return jsonify({"ok": False, "error": f"parser.sh not found: {parser}"}), 500
@@ -9900,6 +9962,13 @@ def api_parser_results():
             "returncode": proc.returncode,
             "rack": rk,
             "log_file": lp,
+            "job_id": _jobid_from_nemo_log_basename(Path(lp).name) or job_raw or "",
+            "full_rack": bool(full_rack) if not (path_arg or log_fn) else False,
+            "full_rack_nodes": (
+                (full_rack_nodes if full_rack_nodes and full_rack_nodes > 0 else _full_rack_expected_nodes())
+                if full_rack and not (path_arg or log_fn)
+                else None
+            ),
             "command_display": display_cmd,
             "data": merged_data,
             "stderr": err_tail,
