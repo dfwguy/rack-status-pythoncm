@@ -64,7 +64,6 @@ import secrets
 import select
 import signal
 import shlex
-import shutil
 import socket
 import statistics
 import struct
@@ -4055,18 +4054,16 @@ def _tools_destination_dir_for_status_probe(raw: str) -> Path:
     s = (raw or "").strip()
     if not s:
         raise ValueError("destination is required")
-    p = Path(s).expanduser()
-    if not p.is_absolute():
+    if not PurePosixPath(s).is_absolute():
         raise ValueError("destination must be an absolute path")
-    try:
-        p = p.resolve()
-    except (OSError, RuntimeError):
-        p = Path(os.path.abspath(str(p)))
-    try:
-        is_dir = p.is_dir()
-        is_file = p.is_file()
-    except OSError as e:
-        raise ValueError(f"destination is not usable: {e}") from e
+    # The container is downloaded to the cluster, so the destination is an
+    # execution-host directory: it is normalised textually and inspected over the
+    # connection. This is the path that expanduser/.resolve() used to rewrite
+    # through the local filesystem (on macOS turning /home into
+    # /System/Volumes/Data/home) -- see docs/EXECUTION_ARCHITECTURE.md 4.
+    p = _rpath(s)
+    is_dir = host_exec.is_dir(p)
+    is_file = host_exec.is_file(p)
     if is_file and p.suffix.lower() != ".sqsh":
         raise ValueError("destination must be a directory or a NEMO .sqsh file path")
     if (is_file and p.suffix.lower() == ".sqsh") or (not is_dir and p.suffix.lower() == ".sqsh"):
@@ -4109,7 +4106,7 @@ def _tools_find_existing_sqsh_for_skip(dest_dir: Path) -> tuple[Path | None, lis
             nemo = None
         if nemo is not None and nemo.suffix.lower() == ".sqsh":
             try:
-                if nemo.parent.resolve() == dest_dir.resolve():
+                if _rpath(nemo.parent) == _rpath(dest_dir):
                     hit = try_path(nemo)
                     if hit:
                         return hit, checked
@@ -6231,15 +6228,18 @@ def api_bug_report_file():
     ):
         return jsonify({"ok": False, "error": "invalid file name"}), 400
     base = _bug_report_local_base_path()
+    # Reports live on the execution host, so containment is checked on the
+    # normalised path text (which still collapses "..") rather than by resolving
+    # against this container's filesystem, and existence is asked of that host.
     if host == _BUG_REPORT_EXCEL_ROOT_HOST:
-        path = (base / name).resolve()
+        path = _rpath(base / name)
     else:
-        path = (base / host / name).resolve()
+        path = _rpath(base / host / name)
     try:
-        path.relative_to(base.resolve())
+        path.relative_to(_rpath(base))
     except ValueError:
         return jsonify({"ok": False, "error": "path outside reports directory"}), 400
-    if not path.is_file():
+    if not host_exec.is_file(path):
         return jsonify({"ok": False, "error": "file not found"}), 404
     is_zip = bool(_NVLMAPPER_ZIP_BASENAME_RE.fullmatch(name))
     is_xlsx = bool(_REPORT_EXCEL_BASENAME_RE.fullmatch(name))
@@ -6735,13 +6735,15 @@ def _nvswitch_fix_async_worker(job_id: str, log_dir: Path, cmd: list[str], displ
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        proc = subprocess.run(
+        # A cluster script with the log dir as cwd: both belong to the execution
+        # host, so this goes through the connection on the privileged route (see
+        # docs/EXECUTION_ARCHITECTURE.md 1.2) rather than a local subprocess.
+        proc = host_exec.run_on_host(
             cmd,
             cwd=str(log_dir),
             env=_subprocess_env(),
-            capture_output=True,
-            text=True,
             timeout=timeout_sec,
+            role="script",
         )
         ok = proc.returncode == 0
         _patch(
@@ -7226,8 +7228,10 @@ def api_imex_reset_async():
 
 
 def _nvlmapper_reports_base() -> Path:
+    # An execution-host directory: expanduser/resolve would answer with this
+    # process's home and filesystem, which is not where the reports are written.
     raw = (_eget("RACK_NVLMAPPER_REPORTS_BASE") or "/home/cmsupport/reports").strip()
-    return Path(os.path.expanduser(raw or "/home/cmsupport/reports")).resolve()
+    return _rpath(raw or "/home/cmsupport/reports")
 
 
 def _prepare_nvlmapper_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
@@ -7260,36 +7264,36 @@ def _prepare_nvlmapper_async(body: dict) -> tuple[dict[str, object] | None, tupl
 
 def _nvlmapper_zip_path_allowed(path: Path, rack: str) -> bool:
     """Legacy: allow only a finished-job zip under ``reports/<rack>/`` (new runs no longer create zips)."""
-    base = (_nvlmapper_reports_base() / rack).resolve()
+    base = _rpath(_nvlmapper_reports_base() / rack)
     try:
-        path.resolve().relative_to(base)
+        _rpath(path).relative_to(base)
     except ValueError:
         return False
     name = path.name
     if not name.startswith(f"nvlmapper.{rack}.") or not name.lower().endswith(".zip"):
         return False
-    return path.is_file()
+    return host_exec.is_file(path)
 
 
 def _nvlmapper_stage_cleanup_keep_outputs(work: Path, rack: str) -> None:
     """Remove staged ``nvlmapper`` binary and ``run_nvlmapper.sh``; drop generated YAML with credentials.
 
     CSV / XLS / XLSX (and other outputs) remain under *work* for operators to copy from ``reports/<rack>/``.
+
+    Runs on the execution host: the staging directory is wherever the tool ran,
+    which is also the only place the credential-bearing YAML exists. Deleting it
+    locally would leave the real one in place.
     """
-    for name in ("nvlmapper", "run_nvlmapper.sh"):
-        p = work / name
-        try:
-            if p.is_file():
-                p.unlink(missing_ok=True)
-        except OSError:
-            pass
-    for yaml_name in (f"config-{rack}.yaml", f"config_{rack}.yaml"):
-        p = work / yaml_name
-        try:
-            if p.is_file():
-                p.unlink(missing_ok=True)
-        except OSError:
-            pass
+    doomed = [
+        f"{work}/{name}"
+        for name in ("nvlmapper", "run_nvlmapper.sh", f"config-{rack}.yaml", f"config_{rack}.yaml")
+    ]
+    # -f so an absent file is not an error; the YAML only exists on some runs.
+    host_exec.run_on_host(
+        "rm -f " + " ".join(shlex.quote(p) for p in doomed),
+        timeout=60,
+        role="scripts",
+    )
 
 
 def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
@@ -7308,7 +7312,7 @@ def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
             _lake_push_job(job_id, finished)
 
     timeout_sec = max(120, _env_int("RACK_NVLMAPPER_TIMEOUT", 14400))
-    work = (_nvlmapper_reports_base() / rack).resolve()
+    work = _rpath(_nvlmapper_reports_base() / rack)
     display_cmd = f"(cd {shlex.quote(str(work))} && ./run_nvlmapper.sh {shlex.quote(rack)})"
     env = _subprocess_env()
     work_dir_s = str(work)
@@ -7320,18 +7324,32 @@ def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
             command_display=display_cmd,
             nvlmapper_work_dir=work_dir_s,
         )
-        work.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(SCRIPTS_DIR / "nvlmapper", work / "nvlmapper")
-        shutil.copy2(SCRIPTS_DIR / "run_nvlmapper.sh", work / "run_nvlmapper.sh")
-        (work / "nvlmapper").chmod(0o755)
-        (work / "run_nvlmapper.sh").chmod(0o755)
-        proc = subprocess.run(
+        # Stage on the execution host, not here: the nvlmapper binary lives in the
+        # scripts tree over there and the work dir is where the tool must run, so
+        # a local mkdir/copy staged the files onto the wrong machine and then ran
+        # nothing. One command keeps the copy on the far side of the connection.
+        scripts_root = _scripts_dir()
+        staged = [f"{work_dir_s}/nvlmapper", f"{work_dir_s}/run_nvlmapper.sh"]
+        stage_cmd = " && ".join(
+            [
+                f"mkdir -p {shlex.quote(work_dir_s)}",
+                f"cp -f {shlex.quote(scripts_root + '/nvlmapper')} {shlex.quote(staged[0])}",
+                f"cp -f {shlex.quote(scripts_root + '/run_nvlmapper.sh')} {shlex.quote(staged[1])}",
+                "chmod 755 " + " ".join(shlex.quote(p) for p in staged),
+            ]
+        )
+        stage_proc = host_exec.run_on_host(stage_cmd, timeout=180, role="scripts")
+        if stage_proc.returncode != 0:
+            raise OSError(
+                f"could not stage nvlmapper in {work_dir_s}: "
+                f"{(stage_proc.stderr or '').strip()[:300]}"
+            )
+        proc = host_exec.run_on_host(
             ["./run_nvlmapper.sh", rack],
-            cwd=str(work),
+            cwd=work_dir_s,
             env=env,
-            capture_output=True,
-            text=True,
             timeout=timeout_sec,
+            role="scripts",
         )
         out = (proc.stdout or "").strip()
         err = (proc.stderr or "").strip()
@@ -7400,7 +7418,7 @@ def api_nvlmapper_async():
             "phase": "starting",
             "created_at": created,
             "nvlmapper_zip": "",
-            "nvlmapper_work_dir": str((_nvlmapper_reports_base() / rack).resolve()),
+            "nvlmapper_work_dir": str(_rpath(_nvlmapper_reports_base() / rack)),
         }
     threading.Thread(
         target=_nvlmapper_async_worker,
@@ -7482,13 +7500,15 @@ def _precheck_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_c
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        proc = subprocess.run(
+        # A cluster script with the log dir as cwd: both belong to the execution
+        # host, so this goes through the connection on the privileged route (see
+        # docs/EXECUTION_ARCHITECTURE.md 1.2) rather than a local subprocess.
+        proc = host_exec.run_on_host(
             cmd,
             cwd=str(log_dir),
             env=_subprocess_env(),
-            capture_output=True,
-            text=True,
             timeout=timeout_sec,
+            role="script",
         )
         ok = proc.returncode == 0
         _patch(
@@ -7600,13 +7620,15 @@ def _nvswitch_check_async_worker(
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        proc = subprocess.run(
+        # A cluster script with the log dir as cwd: both belong to the execution
+        # host, so this goes through the connection on the privileged route (see
+        # docs/EXECUTION_ARCHITECTURE.md 1.2) rather than a local subprocess.
+        proc = host_exec.run_on_host(
             cmd,
             cwd=str(log_dir),
             env=_subprocess_env(),
-            capture_output=True,
-            text=True,
             timeout=timeout_sec,
+            role="script",
         )
         ok = proc.returncode == 0
         _patch(
@@ -7717,13 +7739,15 @@ def _imex_check_async_worker(job_id: str, log_dir: Path, cmd: list[str], display
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        proc = subprocess.run(
+        # A cluster script with the log dir as cwd: both belong to the execution
+        # host, so this goes through the connection on the privileged route (see
+        # docs/EXECUTION_ARCHITECTURE.md 1.2) rather than a local subprocess.
+        proc = host_exec.run_on_host(
             cmd,
             cwd=str(log_dir),
             env=_subprocess_env(),
-            capture_output=True,
-            text=True,
             timeout=timeout_sec,
+            role="script",
         )
         ok = proc.returncode == 0
         _patch(
@@ -9744,26 +9768,22 @@ def api_parser_results():
         return jsonify({"ok": False, "error": "parser JSON root must be an object"}), 502
     display_cmd = "./parser.sh --json " + shlex.quote(log_path.name)
     sn_nemo: list[object] = []
-    # sn-llama secondary pass reads local files; skip in SSH mode (main NCCL/NEMO charts still work).
-    # Secondary pass: runs parser.sh through a *local* subprocess against local
-    # files, so it only applies when the app is on the target host. The primary
-    # NCCL/NEMO charts above go through the connection and work either way.
-    sn_paths = (
-        _sn_llama_txt_paths_for_rack(log_dir, rk, exclude=log_path)
-        if host_exec.exec_kind() == "local"
-        else []
-    )
+    # Secondary sn-llama pass. This used to be skipped unless the app ran on the
+    # target host, because it shelled out locally against local files; going
+    # through the logs role runs it wherever the logs actually are, so the
+    # sn-llama series is no longer missing from the charts on a remote deployment.
+    root = _rpath(log_dir)
+    sn_paths = _sn_llama_txt_paths_for_rack(log_dir, rk, exclude=log_path)
     if sn_paths:
         try:
-            rel_sn = [str(p.resolve().relative_to(_rpath(log_dir))) for p in sn_paths]
+            rel_sn = [str(PurePosixPath(str(p)).relative_to(root)) for p in sn_paths]
             cmd_sn = ["bash", str(parser), *_parser_extra_args(), "--json", *rel_sn]
-            proc_sn = subprocess.run(
+            proc_sn = host_exec.run_on_host(
                 cmd_sn,
-                cwd=str(log_dir),
+                cwd=str(root),
                 env=env,
-                capture_output=True,
-                text=True,
                 timeout=max(60, _job_env_int("RACK_PARSER_TIMEOUT", 300)),
+                role="logs",
             )
             if proc_sn.returncode == 0 and (proc_sn.stdout or "").strip():
                 sn_parsed = json.loads(proc_sn.stdout)

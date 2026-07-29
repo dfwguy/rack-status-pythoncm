@@ -218,8 +218,16 @@ def build_topology(
     # Keep the historical privileged profile resolvable even when a site only
     # declares the new role names; workflow YAML and older call sites still say
     # profile="script".
+    #
+    # It falls back to control, not to the similarly-named "scripts" role. The two
+    # are different axes that happen to read alike: "script" is a *trust domain*
+    # (the root/pdsh route, RACK_SCRIPT_SSH_*), while "scripts" is a *location*
+    # (where the bin/scripts tree lives). Aliasing them would silently send
+    # privileged node operations to whichever host merely stores the scripts.
+    # Control is what the flat env contract falls back to, so this keeps parity; a
+    # site with a separate privileged route declares a "script" role explicitly.
     if LEGACY_PRIVILEGED_ROLE not in targets:
-        targets[LEGACY_PRIVILEGED_ROLE] = targets.get("scripts") or targets[DEFAULT_ROLE]
+        targets[LEGACY_PRIVILEGED_ROLE] = targets[DEFAULT_ROLE]
 
     return RoutingConnection(targets, default=DEFAULT_ROLE)
 

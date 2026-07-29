@@ -149,12 +149,22 @@ class TestRoleBinding:
         conn = build_topology([BASTION, HEAD], [CONTROL_ROLE])
         assert "script" in conn.targets
 
-    def test_legacy_script_profile_prefers_the_scripts_role(self):
+    def test_legacy_script_profile_does_not_alias_the_scripts_role(self):
+        # "script" is the privileged trust domain; "scripts" is merely where the
+        # script tree lives. Aliasing them would route root operations by filename.
         conn = build_topology(
             [LOCAL, BASTION, HEAD],
             [CONTROL_ROLE, {"id": "scripts", "endpoint": "here"}],
         )
-        assert conn.select("script").kind == "local"
+        assert conn.select("script").kind == "ssh"
+        assert _argv_str(conn.select("script")) == _argv_str(conn.select("control"))
+
+    def test_explicit_script_role_wins_over_the_fallback(self):
+        conn = build_topology(
+            [LOCAL, BASTION, HEAD, {"id": "slogin", "type": "ssh", "host": "slogin", "user": "root"}],
+            [CONTROL_ROLE, {"id": "script", "endpoint": "slogin"}],
+        )
+        assert "root@slogin" in _argv_str(conn.select("script"))
 
     def test_role_sudo_escalates(self):
         conn = build_topology(
