@@ -6,7 +6,8 @@
 #   On a live cluster people fix things in place, and those edits land where git never sees
 #   them:
 #     * the deployment tree bind-mounted into the container (backend/*.py), and
-#     * the head node's bin/scripts copy, which is what actually executes in SSH mode.
+#     * the head node's bin/scripts copy, which is what the connection actually executes
+#       whenever the target endpoint is remote.
 #   The next deploy overwrites both. Run this BEFORE deploying so real fixes get harvested
 #   instead of destroyed.
 #
@@ -156,7 +157,7 @@ if [[ "$SURFACE" == "tree" || "$SURFACE" == "all" ]]; then
 fi
 
 if [[ "$SURFACE" == "scripts" || "$SURFACE" == "all" ]]; then
-  echo "== head node bin/scripts (what actually executes in SSH mode) =="
+  echo "== head node bin/scripts (what the connection actually executes) =="
   if [[ -z "${RACK_SSH_HOST:-}" ]]; then
     echo "  (skipped: set RACK_SSH_HOST)"
   else

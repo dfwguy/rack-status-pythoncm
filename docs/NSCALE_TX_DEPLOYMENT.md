@@ -209,7 +209,7 @@ The most expensive lesson from this site. Fixes get made **directly on the live 
 two places git never sees, and a deploy overwrites both:
 
 * the deployment tree's bind-mounted `backend/*.py`, and
-* the head node's `bin/scripts` copy, which is what actually executes in SSH mode.
+* the head node's `bin/scripts` copy, which is what the connection actually executes.
 
 On 2026-07-30 six real fixes existed only on the cluster (Undrain's sinfo probe, the llmb
 double-ingest, `collect_sinfo_counts` returning `{}`, NCCL per-collective parsing,

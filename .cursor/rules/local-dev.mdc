@@ -43,7 +43,7 @@ RACK_SSH_HOST=<head-ip> RACK_SSH_USER=root RACK_SSH_KEY=~/.ssh/<key> \
 
 After editing anything under `bin/scripts/`, re-run `bin/deploy-scripts.sh` so local↔head stay
 in sync; a `--dry-run` returning no lines means they match. (Scripts are executed on the head
-in SSH mode — an unsynced edit means the app runs the old version.)
+whenever the target endpoint is remote — an unsynced edit means the app runs the old version.)
 
 **Run `bin/prod-drift.sh` BEFORE any deploy.** On a live customer cluster other people fix
 things in place, in two spots git never sees: the deployment tree's bind-mounted `backend/*.py`
