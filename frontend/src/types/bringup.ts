@@ -33,3 +33,23 @@ export interface BringupConfig {
   present: boolean;
   home: string;
 }
+
+/** One node in the fleet feed. Same job shape as a node summary, minus the per-node probe. */
+export interface BringupFleetNode {
+  node: string;
+  slurm_state: string;
+  jobs: BringupJob[];
+}
+
+/**
+ * Fleet-wide bring-up state from GET /api/bringup/fleet — every node in one response, which
+ * is what a cluster heatmap and the daily report need.
+ */
+export interface BringupFleet {
+  home: string;
+  /** Active benchmark columns, in the order the bring-up report defines them. */
+  columns: string[];
+  /** Metric label per column, for columns that produce a number. */
+  metric_labels: Record<string, string>;
+  nodes: BringupFleetNode[];
+}

@@ -338,7 +338,7 @@ function AppContent() {
           <Route path="/tools/operations" element={<ToolsView logDir={logDir} />} />
           <Route path="/tools/workflows" element={<WorkflowsView rackData={data} />} />
           <Route path="/tools/terminal" element={<TerminalPlaceholderView />} />
-          <Route path="/analytics/overview" element={<AnalyticsView logDir={logDir} rows={data?.rows ?? []} />} />
+          <Route path="/analytics/overview" element={<AnalyticsView logDir={logDir} rows={data?.rows ?? []} status={data} />} />
           <Route path="/analytics/reports" element={<ReportsView />} />
           <Route path="/platform/projects" element={<ProjectsView />} />
           <Route path="/platform/catalog" element={<PlatformCatalogView />} />
