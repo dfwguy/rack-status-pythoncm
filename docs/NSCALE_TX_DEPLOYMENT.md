@@ -198,10 +198,58 @@ recreate, drop the `deploy-secrets/index.html` and `kaizen-*.css` mounts from
    Fix at that point: re-`docker cp` the assets, or add a bind mount for
    `static/spa` (must then also place the kaizen CSS inside that tree).
 
-3. **The deployment tree drifts from git.** Deploys copy files in rather than `git pull`,
-   so the tree sits at an older commit with modified files. Git remains the source of
-   truth; the tree is an artifact. (The OVA also has **no route to GitLab** — sync code in
-   with `git bundle` or `scp`/`tar`, not `git fetch`.)
+3. ~~**The deployment tree drifts from git.**~~ **Resolved 2026-07-30.** The tree is now a
+   real checkout at a known commit and `bin/prod-drift.sh` reports it clean. Keep it that way:
+   sync with a `git bundle` (below), not by copying individual files. The OVA still has **no
+   route to GitLab**, so `git fetch origin` will not work.
+
+### Other people edit this deployment — check before you deploy
+
+The most expensive lesson from this site. Fixes get made **directly on the live cluster**, in
+two places git never sees, and a deploy overwrites both:
+
+* the deployment tree's bind-mounted `backend/*.py`, and
+* the head node's `bin/scripts` copy, which is what actually executes in SSH mode.
+
+On 2026-07-30 six real fixes existed only on the cluster (Undrain's sinfo probe, the llmb
+double-ingest, `collect_sinfo_counts` returning `{}`, NCCL per-collective parsing,
+`NVIS_NCCL_HCA_AUTO`, the NEMO `--export` set). Deploying would have destroyed all six.
+
+**Always run this first, and harvest anything it reports:**
+
+```bash
+NVIS_DEPLOY_SSH=nscale-tx-ova \
+NVIS_DEPLOY_PATH=/opt/observability/nvis-rack-status-v3 \
+NVIS_HEAD_VIA=nscale-tx-ova RACK_SSH_HOST=192.168.10.2 RACK_SSH_USER=cmods \
+RACK_SSH_KEY=/home/nvis/.ssh/id_bcm RACK_REMOTE_BASE_PATH=/home/cmods/nvis-rack-status \
+  bin/prod-drift.sh --fetch /tmp/drift        # exit 1 = drift; harvest before deploying
+```
+
+It compares by content against the **deployment's own base commit**, which separates "we are
+ahead and the deploy will deliver it" from "somebody edited prod". `--fetch` writes the remote
+and git copies side by side for a `git merge-file` 3-way merge against that base.
+
+**Not everything on the cluster is newer.** The head's `parser.sh` was a *pre-v4* copy that
+never received the universal-ingest work and was then patched locally; taking it would have
+reverted 600 lines. Before merging a drifted file, check whether it is a superset of ours or a
+different lineage — line counts are a quick tell.
+
+### Syncing code in (no route to GitLab)
+
+```bash
+git bundle create /tmp/v3.bundle <deployed-commit>..v3   # thin bundle; the tree has the base
+scp /tmp/v3.bundle nscale-tx-ova:/tmp/
+ssh nscale-tx-ova 'cd /opt/observability/nvis-rack-status-v3 \
+  && git fetch -q /tmp/v3.bundle v3:refs/remotes/bundle/v3 \
+  && git reset --hard refs/remotes/bundle/v3'
+docker restart nvis-rack-status-v3      # re-resolves per-file bind mounts onto the new inodes
+# then push scripts to the head node (from the OVA — the only route to it):
+ssh nscale-tx-ova 'cd /opt/observability/nvis-rack-status-v3 && rsync -avc --exclude="*.bak*" \
+  -e "ssh -i /home/nvis/.ssh/id_bcm" bin/scripts/ cmods@192.168.10.2:/home/cmods/nvis-rack-status/bin/scripts/'
+```
+
+`git reset --hard` replaces files rather than editing them, so the container must be
+**restarted**: a per-file bind mount otherwise keeps pointing at the old inode.
 
 ### Auth
 
@@ -319,6 +367,9 @@ Design principles this engagement reinforced:
 ## 8. Runbook
 
 ```bash
+# BEFORE ANY DEPLOY — has anyone edited the live cluster? (see §3; exit 1 = harvest first)
+bin/prod-drift.sh --fetch /tmp/drift              # env as in §3
+
 # Tunnel / connectivity
 ~/Documents/code/ns-tun.sh status
 ssh nscale-tx-ova 'echo ok'                       # human: establishes the ControlMaster

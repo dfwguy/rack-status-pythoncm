@@ -34,6 +34,9 @@ IGNORED_PREFIXES = (
     "var/",  # runtime state and caches
     ".git/",
 )
+# Per-deployment config that is gitignored on purpose. Without these every clean deployment
+# still reports drift, which is how a check like this gets ignored.
+IGNORED_FILES = frozenset({".env", "docker-compose.override.yml"})
 # Directory names that can appear at any depth: dependency, venv and cache trees.
 IGNORED_DIRS = frozenset(
     {
@@ -53,6 +56,8 @@ IGNORED_SUFFIXES = (".pyc", ".DS_Store", ".log", ".sqlite3", ".sqlite3-wal", ".s
 
 def ignored(rel: str) -> bool:
     if rel.startswith(IGNORED_PREFIXES) or rel.endswith(IGNORED_SUFFIXES):
+        return True
+    if rel in IGNORED_FILES:
         return True
     parts = rel.split("/")
     if IGNORED_DIRS.intersection(parts[:-1]):

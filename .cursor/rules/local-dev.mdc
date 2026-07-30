@@ -45,6 +45,15 @@ After editing anything under `bin/scripts/`, re-run `bin/deploy-scripts.sh` so l
 in sync; a `--dry-run` returning no lines means they match. (Scripts are executed on the head
 in SSH mode — an unsynced edit means the app runs the old version.)
 
+**Run `bin/prod-drift.sh` BEFORE any deploy.** On a live customer cluster other people fix
+things in place, in two spots git never sees: the deployment tree's bind-mounted `backend/*.py`
+and the head node's `bin/scripts` copy. A deploy overwrites both — on Nscale TX this nearly
+destroyed six real fixes. `prod-drift` compares by content against the *deployment's own base
+commit* (so "we are ahead" is not confused with "prod was edited"), exits 1 on drift, and
+`--fetch DIR` lays the remote and git copies out for a `git merge-file` 3-way merge. Harvest and
+commit what it finds first. Do not assume the cluster copy is newer: verify a drifted file is a
+superset of ours, not a stale lineage that was patched locally.
+
 2. Start the app with SSH env vars:
 ```bash
 RACK_EXEC_MODE=ssh \
