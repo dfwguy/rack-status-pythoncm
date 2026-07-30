@@ -16,9 +16,10 @@ import { RefreshCw } from "lucide-react";
 import type { BringupFleet } from "../../types/bringup";
 import type { NodeInfo } from "../rack/NodeSelector";
 import {
-  STATUS_BORDER,
   STATUS_FILL,
   STATUS_VIEW_ID,
+  VERDICT_BORDER,
+  borderFor,
   groupByRack,
   heatmapViews,
   metricOf,
@@ -81,7 +82,11 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
           <Text kind="title/sm">Node heatmap</Text>
           <Text kind="body/regular/sm" style={{ color: "var(--nv-color-text-secondary)" }}>
             {total} node{total === 1 ? "" : "s"} across {rows.length} rack
-            {rows.length === 1 ? "" : "s"}. Border shows up/down on every view.
+            {rows.length === 1 ? "" : "s"}.{" "}
+            {view?.column
+              ? "Border is this benchmark's verdict; bar length is the value."
+              : "Border and bar are node up/down."}{" "}
+            Hover a node for all of its metrics.
           </Text>
         </div>
         <Flex align="center" style={{ gap: 8 }}>
@@ -167,7 +172,7 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
                             width: CELL_W,
                             height: CELL_H,
                             background: paint.cellBg,
-                            border: `2px solid ${STATUS_BORDER[status]}`,
+                            border: `2px solid ${borderFor(view, node, status)}`,
                             borderRadius: 4,
                             boxSizing: "border-box",
                             display: "flex",
@@ -257,6 +262,26 @@ function Swatch({ color, label }: { color: string; label: string }) {
   );
 }
 
+/** An outline swatch, for the border channel. */
+function BorderSwatch({ color, label }: { color: string; label: string }) {
+  return (
+    <Flex align="center" style={{ gap: 5 }}>
+      <div
+        style={{
+          width: 16,
+          height: 12,
+          border: `2px solid ${color}`,
+          borderRadius: 3,
+          boxSizing: "border-box",
+        }}
+      />
+      <Text kind="body/regular/sm" style={{ color: "var(--nv-color-text-secondary)" }}>
+        {label}
+      </Text>
+    </Flex>
+  );
+}
+
 /** States the scale in words, so a colour is never left to interpretation. */
 function Legend({
   view,
@@ -273,6 +298,9 @@ function Legend({
         <Swatch color={STATUS_FILL.down} label="down" />
         <Swatch color={STATUS_FILL.inst} label="installing" />
         <Swatch color={STATUS_FILL.unknown} label="unknown" />
+        <Text kind="body/regular/sm" style={{ color: "var(--nv-color-text-secondary)" }}>
+          · pick a benchmark to colour the border by its verdict
+        </Text>
       </Flex>
     );
   }
@@ -294,8 +322,13 @@ function Legend({
           {range ? `${Math.round(range.max)} ${view.unit}` : view.unit}
         </Text>
       </Flex>
-      <Swatch color="#fecaca" label="failed, no value" />
-      <Swatch color="#f1f5f9" label="not run" />
+      <BorderSwatch color={VERDICT_BORDER.PASS} label="passed" />
+      <BorderSwatch color={VERDICT_BORDER.FAIL} label="failed" />
+      <BorderSwatch color={VERDICT_BORDER.RETRY} label="retry / incomplete" />
+      <BorderSwatch color={VERDICT_BORDER.NOT_RUN} label="not run" />
+      <Text kind="body/regular/sm" style={{ color: "var(--nv-color-text-secondary)" }}>
+        · an empty bar means no value was recorded
+      </Text>
     </Flex>
   );
 }

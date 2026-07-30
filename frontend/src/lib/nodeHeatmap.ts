@@ -72,14 +72,40 @@ export const STATUS_BORDER: Record<NodeInfo["status"], string> = {
   unknown: "#4b5563",
 };
 
-/** Fill for a cell with no measurement: a verdict, not a value. */
-export const VERDICT_FILL: Record<string, string> = {
-  FAIL: "#fecaca",
-  NOT_RUN: "#f1f5f9",
-  INCOMPLETE: "#fde68a",
-  RETRY: "#fde68a",
-  RUNNING: "#bfdbfe",
+/**
+ * Border colour per benchmark verdict, used on a metric view.
+ *
+ * On a metric view the border answers "did this benchmark pass on this node", which is the
+ * question being asked; node liveness is one click away on the status view. Green/red match the
+ * up/down borders so the palette stays consistent across views.
+ */
+export const VERDICT_BORDER: Record<string, string> = {
+  PASS: "#15803d",
+  DONE: "#15803d",
+  FAIL: "#b91c1c",
+  RETRY: "#b45309",
+  INCOMPLETE: "#b45309",
+  RUNNING: "#1d4ed8",
+  NOT_RUN: "#4b5563",
 };
+/** Verdict we do not recognise, or a node the fleet feed never mentioned. */
+export const VERDICT_BORDER_UNKNOWN = "#4b5563";
+
+/**
+ * Border for a cell: node up/down on the status view, benchmark verdict on a metric view.
+ *
+ * Deliberately one function so the two views cannot drift apart, and so the legend and the cells
+ * are guaranteed to describe the same thing.
+ */
+export function borderFor(
+  view: HeatmapView,
+  node: BringupFleetNode | undefined,
+  status: NodeInfo["status"],
+): string {
+  if (!view.column) return STATUS_BORDER[status];
+  const verdict = node ? verdictOf(node, view.column) : "";
+  return VERDICT_BORDER[verdict] ?? VERDICT_BORDER_UNKNOWN;
+}
 
 export const STATUS_VIEW_ID = "status";
 
@@ -153,15 +179,15 @@ export interface CellPaint {
 }
 
 /**
- * How to draw one cell: a load bar inside a status-bordered box.
+ * How to draw one cell: a load bar inside a bordered box.
  *
- * Two channels that do not compete for the same pixels — the border (drawn by the component) is
- * always node up/down, and the bar length plus colour is the selected metric.
+ * Two channels with their own geometry so they never compete for the same pixels — the border
+ * (see :func:`borderFor`) carries the verdict, and the bar length plus colour is the magnitude.
  *
- * A metric view still has to represent nodes with no number: a FAIL that produced nothing, or a
- * test that never ran. Those get an empty bar and a tinted background rather than a zero-length
- * bar on a normal background, because "measured 0 GB/s" and "never ran" are different facts and
- * drawing them identically would invent a result.
+ * A cell with no number draws an empty bar. It used to tint the background per verdict too, but
+ * once the border took that job the tint was saying the same thing twice, and an unrecognised
+ * verdict fell through to the same near-white as "never ran" — so pink-vs-white was ambiguous
+ * exactly where it mattered. The border now explains why a bar is empty.
  */
 export function paintCell(
   view: HeatmapView,
@@ -175,13 +201,7 @@ export function paintCell(
   }
   const value = node ? metricOf(node, view.column) : null;
   if (value === null) {
-    const verdict = node ? verdictOf(node, view.column) : "";
-    return {
-      bar: 0,
-      barColor: "transparent",
-      cellBg: VERDICT_FILL[verdict] ?? VERDICT_FILL.NOT_RUN,
-      norm: null,
-    };
+    return { bar: 0, barColor: "transparent", cellBg: CELL_TRACK, norm: null };
   }
   // Anchor at zero so bars are comparable in absolute terms; only the top end adapts.
   const top = range && range.max > 0 ? range.max : value || 1;

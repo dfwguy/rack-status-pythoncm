@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  STATUS_BORDER,
   STATUS_FILL,
   STATUS_VIEW_ID,
+  VERDICT_BORDER,
+  VERDICT_BORDER_UNKNOWN,
+  borderFor,
   groupByRack,
   heatmapViews,
   metricOf,
@@ -83,27 +87,52 @@ describe("paintCell", () => {
   });
 
   it("distinguishes an unmeasured node from one that measured zero", () => {
-    /** "never ran" and "measured 0" are different facts; drawing them alike invents a result. */
+    /**
+     * Both draw an empty bar, so the border is what separates them — a measured 0 passed its
+     * gate, a NOT_RUN never ran. That is why the tint was removed: it said this twice, and said
+     * it ambiguously for verdicts it did not recognise.
+     */
     const notRun = paintCell(metricView, FLEET.nodes[2], "up", range);
     const zero = paintCell(metricView, node("x", "DONE", "0"), "up", range);
     expect(notRun.norm).toBeNull();
     expect(zero.norm).toBe(0);
-    // Both have an empty bar, so the background is what tells them apart.
     expect(notRun.bar).toBe(0);
     expect(zero.bar).toBe(0);
-    expect(notRun.cellBg).not.toBe(zero.cellBg);
-  });
-
-  it("tints a failure differently from a test that never ran", () => {
-    const failed = paintCell(metricView, node("f", "FAIL", null), "up", range);
-    const notRun = paintCell(metricView, node("n", "NOT_RUN", null), "up", range);
-    expect(failed.cellBg).not.toBe(notRun.cellBg);
+    expect(borderFor(metricView, FLEET.nodes[2], "up")).toBe(VERDICT_BORDER.NOT_RUN);
+    expect(borderFor(metricView, node("x", "DONE", "0"), "up")).toBe(VERDICT_BORDER.PASS);
   });
 
   it("falls back to an empty cell for a node absent from the fleet feed", () => {
     const missing = paintCell(metricView, undefined, "unknown", range);
     expect(missing.norm).toBeNull();
     expect(missing.bar).toBe(0);
+  });
+});
+
+describe("borderFor", () => {
+  const [statusView, metricView] = heatmapViews(FLEET);
+
+  it("shows node up/down on the status view", () => {
+    expect(borderFor(statusView, FLEET.nodes[0], "up")).toBe(STATUS_BORDER.up);
+    expect(borderFor(statusView, FLEET.nodes[0], "down")).toBe(STATUS_BORDER.down);
+  });
+
+  it("shows the benchmark verdict on a metric view, green pass / red fail", () => {
+    expect(borderFor(metricView, FLEET.nodes[0], "up")).toBe(VERDICT_BORDER.PASS);
+    expect(borderFor(metricView, FLEET.nodes[1], "up")).toBe(VERDICT_BORDER.FAIL);
+    expect(borderFor(metricView, FLEET.nodes[2], "up")).toBe(VERDICT_BORDER.NOT_RUN);
+  });
+
+  it("does not let a healthy node hide a failed benchmark", () => {
+    /** The point of switching the border to the verdict: an UP node that failed reads as failed. */
+    expect(borderFor(metricView, FLEET.nodes[1], "up")).not.toBe(STATUS_BORDER.up);
+  });
+
+  it("falls back to the unknown colour for an unrecognised or missing verdict", () => {
+    expect(borderFor(metricView, node("odd", "WEIRD_STATE", null), "up")).toBe(
+      VERDICT_BORDER_UNKNOWN,
+    );
+    expect(borderFor(metricView, undefined, "up")).toBe(VERDICT_BORDER_UNKNOWN);
   });
 });
 
