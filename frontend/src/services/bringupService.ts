@@ -1,11 +1,33 @@
 import { apiFetch } from "../lib/apiFetch";
 import type { BringupConfig, BringupFleet, BringupNodeSummary } from "../types/bringup";
 
+/**
+ * Parse a JSON API response, or explain why it is not JSON.
+ *
+ * A bare `res.json()` here surfaced `Unexpected token '<', "<html> <"...`, which tells an
+ * operator nothing. HTML from an `/api/*` path has two ordinary causes worth naming: the SPA
+ * catch-all served `index.html` because the route does not exist in the running backend (it
+ * was added but the process has not restarted — bind mounts change the file, not the loaded
+ * routes), or an auth layer redirected to a login page.
+ */
 async function apiJson<T>(url: string): Promise<T> {
   const res = await apiFetch(url);
-  const data = await res.json();
+  const body = await res.text();
+  let data: { ok?: boolean; error?: string };
+  try {
+    data = JSON.parse(body) as { ok?: boolean; error?: string };
+  } catch {
+    const looksHtml = /^\s*<(?:!doctype|html)/i.test(body);
+    throw new Error(
+      looksHtml
+        ? `${url} returned an HTML page instead of JSON (HTTP ${res.status}). ` +
+          "Either the session expired — reload and sign in — or the backend does not have " +
+          "this endpoint yet and needs a restart."
+        : `${url} returned a non-JSON response (HTTP ${res.status}): ${body.slice(0, 120)}`,
+    );
+  }
   if (!res.ok || data.ok === false) {
-    throw new Error(data?.error || `HTTP ${res.status}`);
+    throw new Error(data.error || `HTTP ${res.status}`);
   }
   return data as T;
 }
