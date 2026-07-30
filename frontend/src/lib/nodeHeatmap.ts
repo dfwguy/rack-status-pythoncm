@@ -138,20 +138,30 @@ export function verdictOf(node: BringupFleetNode, column: string | null): string
   return (node.jobs.find((j) => j.name === column)?.status || "").toUpperCase();
 }
 
+/** Cell background when there is a value to show; the bar carries the magnitude. */
+export const CELL_TRACK = "#1f2530";
+
 export interface CellPaint {
-  fill: string;
-  text: string;
-  /** Normalised position in the range, for the metric views. */
+  /** Bar length as a fraction of the cell, 0–1. */
+  bar: number;
+  /** Bar colour. */
+  barColor: string;
+  /** Cell background — tinted when the cell has a verdict but no number. */
+  cellBg: string;
+  /** Normalised position in the range, or null when nothing was measured. */
   norm: number | null;
 }
 
 /**
- * Fill + text colour for one cell.
+ * How to draw one cell: a load bar inside a status-bordered box.
  *
- * A metric view still has to represent nodes with no number — a FAIL that produced nothing, or
- * a test that never ran. Those get a verdict colour instead of being painted as zero, because
- * "measured 0 GB/s" and "never ran" are different facts and colouring them alike would invent
- * a result.
+ * Two channels that do not compete for the same pixels — the border (drawn by the component) is
+ * always node up/down, and the bar length plus colour is the selected metric.
+ *
+ * A metric view still has to represent nodes with no number: a FAIL that produced nothing, or a
+ * test that never ran. Those get an empty bar and a tinted background rather than a zero-length
+ * bar on a normal background, because "measured 0 GB/s" and "never ran" are different facts and
+ * drawing them identically would invent a result.
  */
 export function paintCell(
   view: HeatmapView,
@@ -160,17 +170,36 @@ export function paintCell(
   range: MetricRange | null,
 ): CellPaint {
   if (!view.column) {
-    return { fill: STATUS_FILL[status], text: "#ffffff", norm: null };
+    // Status view: the bar restates the border so the view still reads at a glance.
+    return { bar: 1, barColor: STATUS_FILL[status], cellBg: CELL_TRACK, norm: null };
   }
   const value = node ? metricOf(node, view.column) : null;
   if (value === null) {
     const verdict = node ? verdictOf(node, view.column) : "";
-    return { fill: VERDICT_FILL[verdict] ?? VERDICT_FILL.NOT_RUN, text: "#334155", norm: null };
+    return {
+      bar: 0,
+      barColor: "transparent",
+      cellBg: VERDICT_FILL[verdict] ?? VERDICT_FILL.NOT_RUN,
+      norm: null,
+    };
   }
-  // Anchor at zero so cells are comparable in absolute terms; only the top end adapts.
+  // Anchor at zero so bars are comparable in absolute terms; only the top end adapts.
   const top = range && range.max > 0 ? range.max : value || 1;
   const norm = Math.max(0, Math.min(1, value / top));
-  return { fill: throughputColor(norm), text: textColorFor(norm), norm };
+  return { bar: norm, barColor: throughputColor(norm), cellBg: CELL_TRACK, norm };
+}
+
+/** Every measured job on a node, for the tooltip. */
+export function nodeMetrics(
+  node: BringupFleetNode | undefined,
+): Array<{ name: string; status: string; metric: string | null; unit: string; reason: string }> {
+  return (node?.jobs ?? []).map((j) => ({
+    name: j.name,
+    status: (j.status || "").toUpperCase(),
+    metric: j.metric,
+    unit: j.metric_label ?? "",
+    reason: j.reason || "",
+  }));
 }
 
 /** Group nodes by rack for display, preserving the order racks appear in. */

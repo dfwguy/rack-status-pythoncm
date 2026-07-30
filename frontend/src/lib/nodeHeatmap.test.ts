@@ -66,30 +66,44 @@ describe("paintCell", () => {
   const [statusView, metricView] = heatmapViews(FLEET);
   const range = metricRange(FLEET, "allreduce");
 
-  it("colours the status view by up/down", () => {
-    expect(paintCell(statusView, FLEET.nodes[0], "up", null).fill).toBe(STATUS_FILL.up);
-    expect(paintCell(statusView, FLEET.nodes[0], "down", null).fill).toBe(STATUS_FILL.down);
+  it("shows a full bar in the status colour on the status view", () => {
+    expect(paintCell(statusView, FLEET.nodes[0], "up", null)).toMatchObject({
+      bar: 1,
+      barColor: STATUS_FILL.up,
+    });
+    expect(paintCell(statusView, FLEET.nodes[0], "down", null).barColor).toBe(STATUS_FILL.down);
   });
 
-  it("scales a measured value against the fleet range", () => {
+  it("sizes the bar from the value's position in the fleet range", () => {
     const top = paintCell(metricView, FLEET.nodes[0], "up", range);
     const low = paintCell(metricView, FLEET.nodes[1], "up", range);
-    expect(top.norm).toBeCloseTo(1, 5);
-    expect(low.norm).toBeLessThan(0.05);
-    expect(top.fill).not.toBe(low.fill);
+    expect(top.bar).toBeCloseTo(1, 5);
+    expect(low.bar).toBeLessThan(0.05);
+    expect(top.barColor).not.toBe(low.barColor);
   });
 
-  it("does not paint an unmeasured node as zero", () => {
-    /** "never ran" and "measured 0" are different facts; colouring them alike invents a result. */
+  it("distinguishes an unmeasured node from one that measured zero", () => {
+    /** "never ran" and "measured 0" are different facts; drawing them alike invents a result. */
     const notRun = paintCell(metricView, FLEET.nodes[2], "up", range);
     const zero = paintCell(metricView, node("x", "DONE", "0"), "up", range);
     expect(notRun.norm).toBeNull();
     expect(zero.norm).toBe(0);
-    expect(notRun.fill).not.toBe(zero.fill);
+    // Both have an empty bar, so the background is what tells them apart.
+    expect(notRun.bar).toBe(0);
+    expect(zero.bar).toBe(0);
+    expect(notRun.cellBg).not.toBe(zero.cellBg);
   });
 
-  it("falls back to a not-run colour for a node absent from the fleet feed", () => {
-    expect(paintCell(metricView, undefined, "unknown", range).norm).toBeNull();
+  it("tints a failure differently from a test that never ran", () => {
+    const failed = paintCell(metricView, node("f", "FAIL", null), "up", range);
+    const notRun = paintCell(metricView, node("n", "NOT_RUN", null), "up", range);
+    expect(failed.cellBg).not.toBe(notRun.cellBg);
+  });
+
+  it("falls back to an empty cell for a node absent from the fleet feed", () => {
+    const missing = paintCell(metricView, undefined, "unknown", range);
+    expect(missing.norm).toBeNull();
+    expect(missing.bar).toBe(0);
   });
 });
 

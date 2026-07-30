@@ -48,6 +48,11 @@ function cell(id: string) {
   return screen.getByTestId(`heatmap-cell-${id}`);
 }
 
+/** The load bar inside a cell: its width is the metric, its colour the intensity. */
+function bar(id: string) {
+  return screen.getByTestId(`heatmap-bar-${id}`);
+}
+
 describe("NodeHeatmap", () => {
   it("renders one cell per node, grouped by rack", () => {
     renderHeatmap();
@@ -59,10 +64,10 @@ describe("NodeHeatmap", () => {
     expect(screen.getByText(/3 nodes across 2 racks/)).toBeInTheDocument();
   });
 
-  it("defaults to the up/down view", () => {
+  it("defaults to the up/down view, drawn as a full bar in the status colour", () => {
     renderHeatmap();
-    expect(cell("r01-11")).toHaveStyle({ background: STATUS_FILL.up });
-    expect(cell("r02-11")).toHaveStyle({ background: STATUS_FILL.down });
+    expect(bar("r01-11")).toHaveStyle({ background: STATUS_FILL.up, width: "100%" });
+    expect(bar("r02-11")).toHaveStyle({ background: STATUS_FILL.down });
   });
 
   it("keeps up/down as the border so liveness survives a metric view", () => {
@@ -81,7 +86,27 @@ describe("NodeHeatmap", () => {
     /** Bring-up may know a node the dashboard has not reported; dropping it under-reports. */
     renderHeatmap({ nodes: [{ id: "r01-11", status: "up" }] });
     expect(cell("r02-11")).toBeInTheDocument();
-    expect(cell("r02-11")).toHaveStyle({ background: STATUS_FILL.unknown });
+    expect(bar("r02-11")).toHaveStyle({ background: STATUS_FILL.unknown });
+  });
+
+  it("shows every metric for a node on hover, not just the selected view", async () => {
+    /** When a cell looks wrong, the next question is what else is true about that node. */
+    renderHeatmap();
+    fireEvent.mouseOver(cell("r01-12"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip).toHaveTextContent("r01-12");
+    expect(tip).toHaveTextContent("allreduce");
+    expect(tip).toHaveTextContent("2.28 busbw GB/s");
+    expect(tip).toHaveTextContent("FAIL");
+    // The failure reason travels with it.
+    expect(tip).toHaveTextContent("below floor");
+  });
+
+  it("says so in the tooltip when a node has no bring-up results", async () => {
+    renderHeatmap({ nodes: [{ id: "ghost-01", status: "up" }], fleet: { ...FLEET, nodes: [] } });
+    fireEvent.mouseOver(cell("ghost-01"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip).toHaveTextContent("No bring-up results for this node.");
   });
 
   it("surfaces an error without hiding the panel", () => {

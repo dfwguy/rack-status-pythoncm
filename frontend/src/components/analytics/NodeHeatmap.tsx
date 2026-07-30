@@ -23,6 +23,7 @@ import {
   heatmapViews,
   metricOf,
   metricRange,
+  nodeMetrics,
   paintCell,
   verdictOf,
 } from "../../lib/nodeHeatmap";
@@ -38,7 +39,10 @@ export interface NodeHeatmapProps {
   onRefresh?: () => void;
 }
 
-const CELL = 22;
+// Wide enough for the load bar to read as a proportion rather than a dot.
+const CELL_W = 40;
+const CELL_H = 20;
+const BAR_H = 10;
 
 export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }: NodeHeatmapProps) {
   const views = useMemo(() => heatmapViews(fleet), [fleet]);
@@ -144,26 +148,45 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
                     const paint = paintCell(view, node, status, range);
                     const value = node ? metricOf(node, view?.column ?? null) : null;
                     const verdict = node ? verdictOf(node, view?.column ?? null) : "";
-                    const detail =
-                      view?.column === null || view === undefined
-                        ? `status ${status.toUpperCase()}`
-                        : value !== null
-                          ? `${value} ${view.unit} (${verdict || "—"})`
-                          : verdict || "no result";
+                    const detail = !view?.column
+                      ? `status ${status.toUpperCase()}`
+                      : value !== null
+                        ? `${value} ${view.unit} (${verdict || "—"})`
+                        : verdict || "no result";
                     return (
-                      <Tooltip key={id} title={`${id} — ${detail}`} arrow>
+                      <Tooltip
+                        key={id}
+                        title={<CellTooltip node={id} status={status} fleetNode={node} />}
+                        arrow
+                        placement="top"
+                      >
                         <div
                           data-testid={`heatmap-cell-${id}`}
                           aria-label={`${id}: ${detail}`}
                           style={{
-                            width: CELL,
-                            height: CELL,
-                            background: paint.fill,
+                            width: CELL_W,
+                            height: CELL_H,
+                            background: paint.cellBg,
                             border: `2px solid ${STATUS_BORDER[status]}`,
-                            borderRadius: 3,
+                            borderRadius: 4,
                             boxSizing: "border-box",
+                            display: "flex",
+                            alignItems: "center",
+                            padding: 2,
                           }}
-                        />
+                        >
+                          {/* Load bar: length and colour are the metric; the border stays status. */}
+                          <div
+                            data-testid={`heatmap-bar-${id}`}
+                            style={{
+                              width: `${Math.round(paint.bar * 100)}%`,
+                              height: BAR_H,
+                              background: paint.barColor,
+                              borderRadius: 2,
+                              transition: "width 120ms ease-out",
+                            }}
+                          />
+                        </div>
                       </Tooltip>
                     );
                   })}
@@ -174,6 +197,52 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
         </>
       )}
     </Card>
+  );
+}
+
+/**
+ * Everything known about one node, not just the selected view.
+ *
+ * The selected view answers one question across the fleet; when a cell looks wrong the next
+ * question is always "what else is true about this node", and that should not require switching
+ * views or opening another page.
+ */
+function CellTooltip({
+  node,
+  status,
+  fleetNode,
+}: {
+  node: string;
+  status: NodeInfo["status"];
+  fleetNode: BringupFleet["nodes"][number] | undefined;
+}) {
+  const rows = nodeMetrics(fleetNode);
+  return (
+    <div style={{ minWidth: 220, lineHeight: 1.45 }}>
+      <div style={{ fontFamily: "monospace", fontWeight: 700, marginBottom: 2 }}>{node}</div>
+      <div style={{ opacity: 0.85, marginBottom: rows.length ? 6 : 0 }}>
+        {status.toUpperCase()}
+        {fleetNode?.slurm_state ? ` · slurm ${fleetNode.slurm_state}` : ""}
+      </div>
+      {!rows.length && <div style={{ opacity: 0.85 }}>No bring-up results for this node.</div>}
+      {rows.map((r) => (
+        <div key={r.name} style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>
+          <span style={{ fontFamily: "monospace" }}>{r.name}</span>
+          <span style={{ whiteSpace: "nowrap" }}>
+            {r.metric !== null ? `${r.metric} ${r.unit}` : "—"}
+            <span style={{ opacity: 0.75 }}> · {r.status || "—"}</span>
+          </span>
+        </div>
+      ))}
+      {rows.some((r) => r.reason) && (
+        <div style={{ marginTop: 6, opacity: 0.85 }}>
+          {rows
+            .filter((r) => r.reason)
+            .map((r) => `${r.name}: ${r.reason}`)
+            .join(" · ")}
+        </div>
+      )}
+    </div>
   );
 }
 
