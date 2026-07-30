@@ -189,6 +189,21 @@ recreate, drop the `deploy-secrets/index.html` and `kaizen-*.css` mounts from
    `ModuleNotFoundError: No module named 'cluster_snapshot'` after the tree was checked
    out to `v3`: the new `app.py` imported modules the image did not have and that were
    not yet mounted. **When adding a backend module: `docker cp` it *and* add the mount.**
+   Verified again on 2026-07-30 shipping `node_report.py`: `bringup.py` is *declared* in the
+   override but still not an active mount, so the container was running a stale `docker cp`
+   copy and the new `/api/bringup/fleet` returned `module 'bringup' has no attribute
+   'fleet_summary'`. Check what is actually live before assuming an edit landed:
+
+   ```bash
+   docker inspect nvis-rack-status-v3 --format '{{range .Mounts}}{{.Destination}}
+   {{end}}' | grep /app/backend/
+   ```
+
+   Two extras that bit on the same deploy: a **new dependency** must be installed in the
+   container too (`docker exec … pip install jsonschema` — the OVA does reach PyPI), and a
+   module that loads a **data file** needs the directory mounted as well, not just the `.py`
+   (`backend/schemas/` alongside `node_report.py`). Both are soft-imported, so without them the
+   feature degrades silently rather than failing loudly — which is worse to diagnose.
 
 2. **A full recreate (`compose down/up`) will currently break the SPA.** The container's
    `assets/` has accumulated seven `index-*.js` bundles in its *writable layer*; the
