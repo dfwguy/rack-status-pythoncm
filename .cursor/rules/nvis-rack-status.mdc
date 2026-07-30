@@ -14,7 +14,7 @@ Flask backend + React 19 SPA (Vite + NVIDIA Kaizen UI + MUI), Dockerized with SS
 - **Secondary**: MUI — retained only for complex existing widgets with no easy KUI migration (RackTable, sidebar Drawer, AppBar/Toolbar shell). New features should use KUI equivalents.
 - **Icons**: Lucide React (`lucide-react`) exclusively. No `@mui/icons-material`.
 - **Theming**: KUI `ThemeProvider` is outer wrapper (`global`); MUI `ThemeProvider` synced via `ThemeBridge` in `src/context/ThemeContext.tsx`. Use `useThemeMode()` for dark/light toggle.
-- **KUI CSS**: `base.css` + `components.css` from Kaizen CDN (`1.0.0`) in `index.html`. Without these, KUI components have no styles.
+- **KUI CSS**: `base.css` + `components.css` (`1.0.0`) plus their 16 `fonts/*.woff2` are **vendored** at `frontend/src/styles/kaizen/` and imported by `src/main.tsx` (before `index.css`/`kaizen-oss.css`) so Vite bundles and hashes them. Without these, KUI components have no styles. Do **not** re-add the `webassets.nvidia.com` CDN `<link>` tags to `index.html` — operators browse over an SSH tunnel and air-gapped hosts cannot reach the CDN. The npm package does not ship the CSS. When bumping, keep the vendored version in lockstep with `@nvidia/foundations-react-core` **and** re-apply the `@font-face` rewrite from `brand-assets.cne.ngc.nvidia.com` to relative `./fonts/` (easy to miss — the CSS looks fine while fonts silently fall back). Procedure + a "no external requests" build check: `frontend/src/styles/kaizen/README.md`.
 - **Charts**: Chart.js via `react-chartjs-2` (`Bar`, `Line` components).
 
 ## KUI Component API
