@@ -9,3 +9,4 @@ tinydb>=4.8,<5
 flask-compress>=1.14,<2
 brotli>=1.1,<2
 gunicorn>=22.0,<24
+jsonschema>=4.23,<5

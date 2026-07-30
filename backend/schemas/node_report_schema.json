@@ -1,0 +1,449 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nscale.com/schemas/test-result-report/v1.0.json",
+  "title": "NScale Test Result Report",
+  "description": "Schema for NScale Consolidated Test Plan execution reports. Captures system-under-test, firmware/hardware inventory (per-node BMC, NIC, and GPU FRU detail), and per-test results with Microsoft acceptance traceability.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["report_metadata", "system_under_test", "firmware_inventory", "summary", "test_results"],
+
+  "$defs": {
+    "isoDateTime": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp (e.g. 2026-05-04T08:00:00Z)"
+    },
+    "macAddress": {
+      "type": "string",
+      "pattern": "^([0-9A-F]{2}:){5}[0-9A-F]{2}$",
+      "description": "Colon-delimited uppercase MAC address (e.g. AA:BB:CC:DD:EE:01)"
+    },
+    "pcieBdf": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-9a-fA-F]$",
+      "description": "PCIe Bus:Device.Function address with domain (e.g. 0000:01:00.0)"
+    },
+    "ipv4Address": {
+      "type": "string",
+      "format": "ipv4"
+    },
+    "gpuUuid": {
+      "type": "string",
+      "pattern": "^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "description": "NVIDIA GPU UUID as reported by 'nvidia-smi --query-gpu=uuid'"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+
+    "status": {
+      "enum": ["PASS", "FAIL", "WAIVED", "NOT_RUN", "BLOCKED"]
+    },
+    "owner": {
+      "enum": ["Dell", "NVIS"]
+    },
+    "category": {
+      "enum": ["GPU Benchmark", "Health Check", "System Stress", "Network Stress", "UFM Validations"]
+    },
+    "scopeType": {
+      "enum": ["single_node", "node_pair", "rack", "cross_rack", "SU", "tranche"]
+    },
+
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "$ref": "#/$defs/scopeType" },
+        "id":   { "type": "string", "description": "Identifier of the scope (rack ID, SU ID, etc.)" },
+        "node_count": { "type": "integer", "minimum": 1 },
+        "rack_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name":    { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "path"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Logical artifact type (e.g. dcgm_json_report, console_log, nccl_csv, ibstat_dump, screenshot)"
+        },
+        "path":   { "type": "string", "description": "Relative path under artifacts/<test_id>/" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size_bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "bmcEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ip", "mac", "firmware"],
+      "properties": {
+        "ip":       { "$ref": "#/$defs/ipv4Address" },
+        "mac":      { "$ref": "#/$defs/macAddress" },
+        "firmware": { "type": "string" }
+      }
+    },
+
+    "nicEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device", "port", "pcie_bdf", "mac", "firmware"],
+      "properties": {
+        "device":   { "type": "string", "description": "Kernel device name (e.g. mlx5_ib0)" },
+        "port":     { "type": "integer", "minimum": 1 },
+        "pcie_bdf": { "$ref": "#/$defs/pcieBdf" },
+        "mac":      { "$ref": "#/$defs/macAddress" },
+        "ip":       { "$ref": "#/$defs/ipv4Address" },
+        "firmware": { "type": "string" }
+      }
+    },
+
+    "gpuEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "uuid", "serial", "model", "pcie_bdf", "vbios_version"],
+      "properties": {
+        "index":          { "type": "integer", "minimum": 0 },
+        "uuid":           { "$ref": "#/$defs/gpuUuid" },
+        "serial":         { "type": "string" },
+        "model":          { "type": "string" },
+        "pcie_bdf":       { "$ref": "#/$defs/pcieBdf" },
+        "slot":           { "type": "string", "description": "Physical chassis slot label (e.g. GPU0)" },
+        "vbios_version":  { "type": "string" },
+        "nvlink_count":   { "type": "integer", "minimum": 0 },
+        "c2c_link_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostname", "serial", "rack_id", "bmc", "nics", "gpus"],
+      "properties": {
+        "hostname":  { "type": "string" },
+        "serial":    { "type": "string" },
+        "rack_id":   { "type": "string" },
+        "rack_unit": { "type": "string" },
+        "bmc":       { "$ref": "#/$defs/bmcEntry" },
+        "nics":      { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nicEntry" } },
+        "gpus":      { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/gpuEntry" } },
+        "firmware_overrides": {
+          "type": "object",
+          "description": "Per-node deltas from shared_baseline (key = baseline path, value = node-specific value)",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+
+    "testResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "test_id", "test_name", "category", "owner", "scope",
+        "execution", "acceptance_criteria", "status",
+        "microsoft_acceptance_test", "microsoft_criteria_satisfied"
+      ],
+      "properties": {
+        "test_id":   { "type": "string", "pattern": "^(GPU|CH|ST|NET|UFM)-[0-9]{2}$" },
+        "test_name": { "type": "string" },
+        "category":  { "$ref": "#/$defs/category" },
+        "owner":     { "$ref": "#/$defs/owner" },
+        "scope":     { "$ref": "#/$defs/scope" },
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["started_at", "completed_at", "duration_seconds", "operator", "tool", "command"],
+          "properties": {
+            "started_at":       { "$ref": "#/$defs/isoDateTime" },
+            "completed_at":     { "$ref": "#/$defs/isoDateTime" },
+            "duration_seconds": { "type": "integer", "minimum": 0 },
+            "operator":         { "type": "string" },
+            "tool":             { "$ref": "#/$defs/tool" },
+            "command":          { "type": "string" },
+            "host_count":       { "type": "integer", "minimum": 1 }
+          }
+        },
+        "acceptance_criteria": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text"],
+          "properties": {
+            "text":       { "type": "string" },
+            "thresholds": { "type": "object", "additionalProperties": true }
+          }
+        },
+        "measurements": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Free-form measured values; per-test schema. Common fields: bandwidth_gbps, latency_us, pass_rate_pct, xid_count, subtest_results, per_node[]."
+        },
+        "status":                       { "$ref": "#/$defs/status" },
+        "microsoft_acceptance_test":    { "type": "boolean" },
+        "microsoft_criteria_satisfied": { "type": "array", "items": { "type": "string" } },
+        "artifacts":   { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+        "deviations":  { "type": "array", "items": { "type": "string" } },
+        "notes":       { "type": "string" }
+      }
+    }
+  },
+
+  "properties": {
+    "report_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "report_id", "generated_at", "test_plan_reference", "operator", "execution_window"],
+      "properties": {
+        "schema_version": { "type": "string", "const": "1.0" },
+        "report_id":      { "type": "string" },
+        "generated_at":   { "$ref": "#/$defs/isoDateTime" },
+        "test_plan_reference": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name":         { "type": "string" },
+            "version":      { "type": "string" },
+            "date":         { "type": "string", "format": "date" },
+            "document_uri": { "type": "string", "format": "uri-reference" }
+          }
+        },
+        "operator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "organization"],
+          "properties": {
+            "name":         { "type": "string" },
+            "email":        { "type": "string", "format": "email" },
+            "organization": { "type": "string" }
+          }
+        },
+        "execution_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["started_at", "completed_at"],
+          "properties": {
+            "started_at":   { "$ref": "#/$defs/isoDateTime" },
+            "completed_at": { "$ref": "#/$defs/isoDateTime" }
+          }
+        }
+      }
+    },
+
+    "system_under_test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "compute_model"],
+      "properties": {
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "id", "node_count"],
+          "properties": {
+            "type":        { "$ref": "#/$defs/scopeType" },
+            "id":          { "type": "string" },
+            "tranche_id":  { "type": ["string", "null"] },
+            "rack_ids":    { "type": "array", "items": { "type": "string" } },
+            "node_count":  { "type": "integer", "minimum": 1 }
+          }
+        },
+        "compute_model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["platform", "chassis_model", "compute_module", "cpu", "gpu", "memory", "interconnect"],
+          "properties": {
+            "platform":         { "type": "string", "description": "Reference platform name (e.g. GB200 NVL72)" },
+            "chassis_model":    { "type": "string" },
+            "compute_module":   { "type": "string", "description": "Compute module / accelerator reference (e.g. GB200)" },
+            "cpu": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "cores_per_socket", "sockets_per_node"],
+              "properties": {
+                "model":            { "type": "string" },
+                "cores_per_socket": { "type": "integer", "minimum": 1 },
+                "sockets_per_node": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "gpu": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "count_per_node"],
+              "properties": {
+                "model":          { "type": "string" },
+                "count_per_node": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "memory": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["system_memory_gb"],
+              "properties": {
+                "system_memory_gb": { "type": "integer", "minimum": 1 },
+                "memory_type":      { "type": "string" }
+              }
+            },
+            "interconnect": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["intra_node", "inter_node", "ib_devices_per_node"],
+              "properties": {
+                "intra_node":          { "type": "string" },
+                "inter_node":          { "type": "string" },
+                "ib_devices_per_node": { "type": "integer", "minimum": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "firmware_inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["captured_at", "shared_baseline", "nodes"],
+      "properties": {
+        "captured_at":     { "$ref": "#/$defs/isoDateTime" },
+        "shared_baseline": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["host", "bmc", "nic", "gpu", "fabric", "software"],
+          "properties": {
+            "host": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["bios_version"],
+              "properties": {
+                "bios_version":            { "type": "string" },
+                "cpld_version":            { "type": "string" },
+                "pcie_retimer_firmware":   { "type": "string" }
+              }
+            },
+            "bmc": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "firmware"],
+              "properties": {
+                "model":            { "type": "string" },
+                "firmware":         { "type": "string" },
+                "ipmi_version":     { "type": "string" },
+                "redfish_version":  { "type": "string" }
+              }
+            },
+            "nic": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "firmware", "ofed_version", "ports_per_node", "link_speed"],
+              "properties": {
+                "model":          { "type": "string" },
+                "firmware":       { "type": "string" },
+                "ofed_version":   { "type": "string" },
+                "ports_per_node": { "type": "integer", "minimum": 1 },
+                "link_speed":     { "type": "string" }
+              }
+            },
+            "gpu": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "count_per_node", "vbios_version", "driver_version"],
+              "properties": {
+                "model":                  { "type": "string" },
+                "count_per_node":         { "type": "integer", "minimum": 1 },
+                "vbios_version":          { "type": "string" },
+                "driver_version":         { "type": "string" },
+                "fabric_manager_version": { "type": "string" },
+                "imex_version":           { "type": "string" },
+                "cuda_runtime":           { "type": "string" }
+              }
+            },
+            "fabric": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["switch_model", "switch_firmware", "ufm_version"],
+              "properties": {
+                "switch_model":         { "type": "string" },
+                "switch_firmware":      { "type": "string" },
+                "nvswitch_firmware":    { "type": "string" },
+                "ufm_version":          { "type": "string" },
+                "ufm_appliance_model":  { "type": "string" }
+              }
+            },
+            "software": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["os", "kernel"],
+              "properties": {
+                "os":             { "type": "string" },
+                "kernel":         { "type": "string" },
+                "nccl_version":   { "type": "string" },
+                "dcgm_version":   { "type": "string" },
+                "hpcx_version":   { "type": "string" }
+              }
+            }
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/node" }
+        }
+      }
+    },
+
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total_tests", "passed", "failed", "waived", "not_run", "by_category", "msft_acceptance"],
+      "properties": {
+        "total_tests": { "type": "integer", "minimum": 0 },
+        "passed":      { "type": "integer", "minimum": 0 },
+        "failed":      { "type": "integer", "minimum": 0 },
+        "waived":      { "type": "integer", "minimum": 0 },
+        "not_run":     { "type": "integer", "minimum": 0 },
+        "by_category": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["total", "passed", "failed", "waived", "not_run"],
+            "properties": {
+              "total":   { "type": "integer", "minimum": 0 },
+              "passed":  { "type": "integer", "minimum": 0 },
+              "failed":  { "type": "integer", "minimum": 0 },
+              "waived":  { "type": "integer", "minimum": 0 },
+              "not_run": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "msft_acceptance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["criteria_total", "criteria_satisfied"],
+          "properties": {
+            "criteria_total":     { "type": "integer", "minimum": 0 },
+            "criteria_satisfied": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+
+    "test_results": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/testResult" }
+    }
+  }
+}

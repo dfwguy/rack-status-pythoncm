@@ -134,6 +134,11 @@ try:
 except Exception as _bu_exc:  # pragma: no cover - defensive
     _bringup = None  # type: ignore[assignment]
     logging.getLogger(__name__).warning("bringup unavailable: %s", _bu_exc)
+try:
+    import node_report as _node_report  # noqa: E402 — schema-validated daily node report
+except Exception as _nr_exc:  # pragma: no cover - defensive
+    _node_report = None  # type: ignore[assignment]
+    logging.getLogger(__name__).warning("node_report unavailable: %s", _nr_exc)
 
 
 def _nvis_naming() -> nvis_id_templates.NvisNaming:
@@ -9828,6 +9833,71 @@ def api_bringup_fleet():
     except Exception as e:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(e)}), 500
     return jsonify({"ok": True, "data": data})
+
+
+@app.route("/api/node-report")
+def api_node_report():
+    """Daily node-validation report as schema-validated JSON.
+
+    Generated server-side so it can be checked against the vendored contract
+    (``backend/schemas/node_report_schema.json``) before anyone downloads it; the browser just
+    saves what it is given. ``?download=1`` sets a filename so the SPA can hand it straight to
+    the user.
+    """
+    if _node_report is None:
+        return jsonify({"ok": False, "error": "report generator unavailable"}), 503
+    try:
+        if _truthy_env("RACK_STATUS_DEMO"):
+            nodes = [n for n in (request.args.get("nodes") or "").split(",") if n.strip()]
+            fleet = _bringup.demo_fleet_summary(nodes) if _bringup else {"nodes": [], "columns": []}
+        elif _bringup is None or not _bringup.is_enabled():
+            return jsonify({"ok": False, "error": "bring-up integration disabled or unavailable"}), 404
+        else:
+            fleet = _bringup.fleet_summary()
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "bring-up fleet report timed out"}), 504
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+    # The schema requires at least one test result, and rightly so: a validation report with no
+    # tests in it says nothing. Refuse clearly instead of emitting an invalid document.
+    if not (fleet.get("columns") and fleet.get("nodes")):
+        return jsonify({
+            "ok": False,
+            "error": "no bring-up results to report on yet",
+            "detail": "the bring-up tree reported no active test columns for any node",
+        }), 409
+
+    project = cluster = platform = None
+    try:
+        project, cluster, platform = catalog_context.resolve()
+    except Exception as e:  # noqa: BLE001 - a missing catalog must not block the report
+        _logger.warning("node-report: catalog context unavailable: %s", e)
+
+    def _as_dict(obj):
+        return obj.to_dict() if hasattr(obj, "to_dict") else (obj or {})
+
+    report = _node_report.build_report(
+        fleet,
+        platform=_as_dict(platform),
+        cluster=_as_dict(cluster),
+        project=_as_dict(project),
+    )
+    errors = _node_report.validate(report)
+    if errors:
+        # Surface it rather than shipping an invalid document to a customer-facing report.
+        _logger.error("node-report failed schema validation: %s", errors[:5])
+        return jsonify({"ok": False, "error": "report failed schema validation", "detail": errors[:20]}), 500
+
+    body = json.dumps(report, indent=2)
+    if _truthy_arg(request.args.get("download")):
+        name = f"{report['report_metadata']['report_id']}.json"
+        return Response(
+            body,
+            mimetype="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
+    return Response(body, mimetype="application/json")
 
 
 @app.route("/api/parser-results")
