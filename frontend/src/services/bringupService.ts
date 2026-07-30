@@ -10,8 +10,28 @@ import type { BringupConfig, BringupFleet, BringupNodeSummary } from "../types/b
  * was added but the process has not restarted — bind mounts change the file, not the loaded
  * routes), or an auth layer redirected to a login page.
  */
-async function apiJson<T>(url: string): Promise<T> {
-  const res = await apiFetch(url);
+/** Path without the query, for error messages. */
+function forMessage(url: string): string {
+  return url.split("?")[0];
+}
+
+/**
+ * POST a JSON payload, or GET when there is nothing to send.
+ *
+ * Cluster-sized arguments belong in a body, not a URL: a 591-node list is a ~12 KB query string
+ * and gunicorn rejects any request line over 4094 bytes with a bare 400. Request bodies have no
+ * such limit, so the node list travels as JSON.
+ */
+function jsonPost(payload: unknown): RequestInit {
+  return {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  };
+}
+
+async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(url, init);
   const body = await res.text();
   let data: { ok?: boolean; error?: string };
   try {
@@ -20,10 +40,11 @@ async function apiJson<T>(url: string): Promise<T> {
     const looksHtml = /^\s*<(?:!doctype|html)/i.test(body);
     throw new Error(
       looksHtml
-        ? `${url} returned an HTML page instead of JSON (HTTP ${res.status}). ` +
+        ? `${forMessage(url)} returned an HTML page instead of JSON (HTTP ${res.status}). ` +
           "Either the session expired — reload and sign in — or the backend does not have " +
           "this endpoint yet and needs a restart."
-        : `${url} returned a non-JSON response (HTTP ${res.status}): ${body.slice(0, 120)}`,
+        : `${forMessage(url)} returned a non-JSON response (HTTP ${res.status}): ` +
+          body.slice(0, 120),
     );
   }
   if (!res.ok || data.ok === false) {
@@ -53,8 +74,10 @@ export async function getBringupNode(node: string): Promise<BringupNodeSummary> 
  * the synthetic fleet from the names the dashboard is already showing.
  */
 export async function getBringupFleet(nodes?: string[]): Promise<BringupFleet> {
-  const query = nodes?.length ? `?nodes=${encodeURIComponent(nodes.join(","))}` : "";
-  const data = await apiJson<{ ok: true; data: BringupFleet }>(`/api/bringup/fleet${query}`);
+  const data = await apiJson<{ ok: true; data: BringupFleet }>(
+    "/api/bringup/fleet",
+    jsonPost({ nodes: nodes ?? [] }),
+  );
   return data.data;
 }
 
@@ -66,16 +89,14 @@ export async function getBringupFleet(nodes?: string[]): Promise<BringupFleet> {
  * response body that is actually a JSON error payload.
  */
 export async function downloadNodeReport(nodes?: string[]): Promise<string> {
-  const params = new URLSearchParams({ download: "1" });
-  if (nodes?.length) params.set("nodes", nodes.join(","));
-  const res = await apiFetch(`/api/node-report?${params.toString()}`);
+  const res = await apiFetch("/api/node-report", jsonPost({ nodes: nodes ?? [], download: true }));
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     try {
-      const body = await res.json();
+      const body = (await res.json()) as { error?: string };
       detail = body?.error || detail;
     } catch {
-      // Non-JSON error body; the status line is the best we have.
+      // Non-JSON error body (a proxy page, say); the status line is the best we have.
     }
     throw new Error(detail);
   }

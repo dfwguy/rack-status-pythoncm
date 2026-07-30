@@ -9817,18 +9817,32 @@ def api_bringup_node():
     return jsonify({"ok": True, "data": data})
 
 
-@app.route("/api/bringup/fleet")
+def _requested_nodes() -> list[str]:
+    """Node list from a JSON body (preferred) or a ``?nodes=`` query.
+
+    The body is the real channel: a cluster-sized list does not fit in a URL — 591 node names is
+    a ~12 KB query and gunicorn rejects any request line over 4094 bytes with a bare 400. The
+    query form is kept for hand-run curl against a handful of nodes.
+    """
+    body = request.get_json(silent=True) or {}
+    raw = body.get("nodes") if isinstance(body, dict) else None
+    if isinstance(raw, list):
+        return [str(n).strip() for n in raw if str(n).strip()]
+    return [n.strip() for n in (request.args.get("nodes") or "").split(",") if n.strip()]
+
+
+@app.route("/api/bringup/fleet", methods=["GET", "POST"])
 def api_bringup_fleet():
     """Bring-up state for every node — what a cluster heatmap and the daily report need.
 
     One request instead of one per node: the underlying fleet scripts are cheap because they
-    share a verdict cache, so this is ~2 round trips for the whole cluster.
+    share a verdict cache, so this is ~2 round trips for the whole cluster. POST so the node
+    list travels as a JSON body; GET still works for a whole-cluster query with no list.
     """
     if _truthy_env("RACK_STATUS_DEMO"):
         # Seed the synthetic fleet from the demo rack inventory so node names line up with
         # what the dashboard is already showing.
-        nodes = [n for n in (request.args.get("nodes") or "").split(",") if n.strip()]
-        data = _bringup.demo_fleet_summary(nodes) if _bringup else {"nodes": []}
+        data = _bringup.demo_fleet_summary(_requested_nodes()) if _bringup else {"nodes": []}
         return jsonify({"ok": True, "data": data})
     if _bringup is None or not _bringup.is_enabled():
         return jsonify({"ok": False, "error": "bring-up integration disabled or unavailable"}), 404
@@ -9841,20 +9855,20 @@ def api_bringup_fleet():
     return jsonify({"ok": True, "data": data})
 
 
-@app.route("/api/node-report")
+@app.route("/api/node-report", methods=["GET", "POST"])
 def api_node_report():
     """Daily node-validation report as schema-validated JSON.
 
     Generated server-side so it can be checked against the vendored contract
     (``backend/schemas/node_report_schema.json``) before anyone downloads it; the browser just
-    saves what it is given. ``?download=1`` sets a filename so the SPA can hand it straight to
-    the user.
+    saves what it is given. POST carries the node list as a JSON body; ``download`` (body or
+    query) sets a filename so the SPA can hand the file straight to the user.
     """
     if _node_report is None:
         return jsonify({"ok": False, "error": "report generator unavailable"}), 503
     try:
         if _truthy_env("RACK_STATUS_DEMO"):
-            nodes = [n for n in (request.args.get("nodes") or "").split(",") if n.strip()]
+            nodes = _requested_nodes()
             fleet = _bringup.demo_fleet_summary(nodes) if _bringup else {"nodes": [], "columns": []}
         elif _bringup is None or not _bringup.is_enabled():
             return jsonify({"ok": False, "error": "bring-up integration disabled or unavailable"}), 404
@@ -9895,8 +9909,13 @@ def api_node_report():
         _logger.error("node-report failed schema validation: %s", errors[:5])
         return jsonify({"ok": False, "error": "report failed schema validation", "detail": errors[:20]}), 500
 
+    payload = request.get_json(silent=True)
+    download = payload.get("download") if isinstance(payload, dict) else None
+    if download is None:
+        download = request.args.get("download")
+
     body = json.dumps(report, indent=2)
-    if _truthy_arg(request.args.get("download")):
+    if _truthy_arg(download):
         name = f"{report['report_metadata']['report_id']}.json"
         return Response(
             body,
