@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NodesView } from "./NodesView";
 import type { RackStatusResponse } from "../types/api";
 
@@ -22,6 +22,34 @@ vi.mock("../components/rack/ServicesTab", () => ({
 }));
 vi.mock("../components/ParserResultsDialog", () => ({ ParserResultsDialog: () => null }));
 vi.mock("../components/rack/WebTerminalDialog", () => ({ default: () => null }));
+
+// The page size comes from the active catalog geometry (one rack per page). The real provider
+// is mounted at the app root; stub it so each test can state the geometry it is exercising.
+const { catalogGeometry } = vi.hoisted(() => ({
+  catalogGeometry: {
+    current: { activeCluster: null, activePlatform: null } as {
+      activeCluster: { geometry: { trays_per_rack: number } } | null;
+      activePlatform: { geometry: { trays_per_rack: number } } | null;
+    },
+  },
+}));
+vi.mock("../context/ActiveClusterContext", () => ({
+  useActiveCluster: () => catalogGeometry.current,
+}));
+
+function useGeometry(trays: number | null, from: "cluster" | "platform" = "cluster") {
+  if (trays === null) {
+    catalogGeometry.current = { activeCluster: null, activePlatform: null };
+    return;
+  }
+  const entry = { geometry: { trays_per_rack: trays } };
+  catalogGeometry.current =
+    from === "cluster"
+      ? { activeCluster: entry, activePlatform: null }
+      : { activeCluster: null, activePlatform: entry };
+}
+
+beforeEach(() => useGeometry(null));
 
 function rack(id: string) {
   // 8 trays per rack via parseNodesFromRack default fill: ct01..ct02 UP, rest unknown.
@@ -59,15 +87,30 @@ function status(rackIds: string[]): RackStatusResponse {
 }
 
 describe("NodesView", () => {
-  it("renders the page and defaults to 18 rows per page", () => {
+  function visibleRowCount() {
+    const table = screen.getByRole("table", { name: "Compute nodes" });
+    // Subtract the header row.
+    return within(table).getAllByRole("row").length - 1;
+  }
+
+  it("renders the page and falls back to 18 rows when no catalog geometry is active", () => {
     // 3 racks x 8 trays = 24 nodes; page size 18 => 18 visible, count says 24.
     render(<NodesView data={status(["p5-r01", "p5-r02", "p5-r03"])} logDir="/logs" />);
     expect(screen.getByText("Nodes")).toBeInTheDocument();
     expect(screen.getByText("24 of 24 nodes")).toBeInTheDocument();
-    const table = screen.getByRole("table", { name: "Compute nodes" });
-    // 18 body rows (data), plus the header row.
-    const bodyRows = within(table).getAllByRole("row").length - 1;
-    expect(bodyRows).toBe(18);
+    expect(visibleRowCount()).toBe(18);
+  });
+
+  it("sizes the page from the active cluster geometry, not a hardcoded rack shape", () => {
+    useGeometry(9);
+    render(<NodesView data={status(["p5-r01", "p5-r02", "p5-r03"])} logDir="/logs" />);
+    expect(visibleRowCount()).toBe(9);
+  });
+
+  it("falls back to the platform geometry when the cluster does not override it", () => {
+    useGeometry(4, "platform");
+    render(<NodesView data={status(["p5-r01", "p5-r02", "p5-r03"])} logDir="/logs" />);
+    expect(visibleRowCount()).toBe(4);
   });
 
   it("shows the select-a-node banner and no action tabs before selection", () => {

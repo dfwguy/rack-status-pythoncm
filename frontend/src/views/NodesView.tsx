@@ -30,6 +30,7 @@ import { ParserResultsDialog } from "../components/ParserResultsDialog";
 import { BringupResultsPanel } from "../components/bringup/BringupResultsPanel";
 import WebTerminalDialog from "../components/rack/WebTerminalDialog";
 import { RackCommandProvider } from "../context/RackCommandContext";
+import { useActiveCluster } from "../context/ActiveClusterContext";
 import type { RackStatusResponse, RackRow } from "../types/api";
 
 /** One node row in the flattened table: a tray plus the rack/row it belongs to. */
@@ -44,8 +45,8 @@ interface NodeTableRow {
   lastJob?: string;
 }
 
-/** One NVL72 rack of trays fits the default page (Nscale TX = 18 trays/rack). */
-const DEFAULT_ROWS_PER_PAGE = 18;
+/** Used only when no catalog platform/cluster is active to state the rack's real tray count. */
+const FALLBACK_TRAYS_PER_RACK = 18;
 
 interface NodesViewProps {
   data: RackStatusResponse | null;
@@ -107,12 +108,25 @@ export function NodesView({ data, logDir }: NodesViewProps) {
   const [rackFilters, setRackFilters] = useState<string[]>([]);
   const [nameQuery, setNameQuery] = useState("");
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(DEFAULT_ROWS_PER_PAGE);
+  const [rowsPerPageChoice, setRowsPerPageChoice] = useState<number | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tabIndex, setTabIndex] = useState(0);
   const [parserOpen, setParserOpen] = useState(false);
   const [terminalNode, setTerminalNode] = useState("");
+
+  // A page holds exactly one rack, so the page size is that rack's tray count. Cluster geometry
+  // overrides the platform's — the same precedence the backend applies in catalog.context.
+  const { activeCluster, activePlatform } = useActiveCluster();
+  const traysPerRack =
+    activeCluster?.geometry?.trays_per_rack ||
+    activePlatform?.geometry?.trays_per_rack ||
+    FALLBACK_TRAYS_PER_RACK;
+  const rowsPerPage = rowsPerPageChoice ?? traysPerRack;
+  const rowsPerPageOptions = useMemo(() => {
+    const opts = [1, 2, 4, 8].map((multiple) => traysPerRack * multiple);
+    return opts.includes(rowsPerPage) ? opts : [...opts, rowsPerPage].sort((a, b) => a - b);
+  }, [traysPerRack, rowsPerPage]);
 
   const naming = data?.naming;
   const physicalRf0 = useMemo(() => data?.physical_rf0 ?? {}, [data]);
@@ -365,10 +379,10 @@ export function NodesView({ data, logDir }: NodesViewProps) {
           onPageChange={(_, p) => setPage(p)}
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => {
-            setRowsPerPage(parseInt(e.target.value, 10));
+            setRowsPerPageChoice(parseInt(e.target.value, 10));
             setPage(0);
           }}
-          rowsPerPageOptions={[18, 36, 72, 144]}
+          rowsPerPageOptions={rowsPerPageOptions}
         />
       </TableContainer>
 
