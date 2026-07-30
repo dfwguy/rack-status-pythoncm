@@ -411,12 +411,12 @@ fi
 # v2 = 26.02.01+ (--model_family_name/--model_recipe_name/--offline; has the precision-decoupled
 # recipe so BF16 resolves a config). GPU token (gb200/gb300/b200/h100) selects the per-platform base.
 export NVIS_NEMO_GPU_TYPE=${NVIS_NEMO_GPU:-gb300}
-if [ "${NVIS_NEMO_CLI:-legacy}" = "v2" ]; then
+if [ "${NVIS_NEMO_CLI:-v2}" = "v2" ]; then
   export NVIS_NEMO_MODEL_ARGS="--model_family_name nemotronh --model_recipe_name ${NVIS_NEMO_RECIPE_NAME:-nemotronh_${NVIS_NEMO_MODEL_SIZE}}"
 else
   export NVIS_NEMO_MODEL_ARGS="--model_name nemotronh --model_size ${NVIS_NEMO_MODEL_SIZE}"
 fi
-echo "INFO: LLM params model=nemotronh size=${NVIS_NEMO_MODEL_SIZE} dtype=${NVIS_NEMO_DTYPE} gbs=${NVIS_NEMO_GBS} max_steps=${MAX_STEPS} recipe_default=${NVIS_NEMO_RECIPE_DEFAULT:-0} cli=${NVIS_NEMO_CLI:-legacy} gpu=${NVIS_NEMO_GPU_TYPE}"
+echo "INFO: LLM params model=nemotronh size=${NVIS_NEMO_MODEL_SIZE} dtype=${NVIS_NEMO_DTYPE} gbs=${NVIS_NEMO_GBS} max_steps=${MAX_STEPS} recipe_default=${NVIS_NEMO_RECIPE_DEFAULT:-0} cli=${NVIS_NEMO_CLI:-v2} gpu=${NVIS_NEMO_GPU_TYPE}"
 echo "INFO: model_args=[${NVIS_NEMO_MODEL_ARGS}] extra_args=[${NVIS_NEMO_EXTRA_ARGS}]"
 srun --export=${EXPORT_ARG} --cpu-bind=none --mpi=pmix \
 --container-name=nemo \

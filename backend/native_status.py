@@ -782,10 +782,16 @@ def sinfo_state_trim(s: str) -> str:
 
 
 def collect_sinfo_counts() -> dict[tuple[str, str], int]:
-    """Map (rack_id, trimmed_state) -> count of nodes (after hostname expansion)."""
+    """Map (rack_id, trimmed_state) -> count of nodes (after hostname expansion).
+
+    No bare-name ``which("sinfo")`` guard: the Slurm CLI is not on PATH here
+    (``plat.sinfo_cmd()`` supplies the absolute path plus ``SLURM_CONF``), so that probe
+    always returned None and short-circuited this function to ``{}``. Every rack then
+    rendered ``sinfo: "-"``, was treated as a 0-node non-compute rack, and dropped out of
+    the dashboard summary. Matches ``load_squeue_jobs_map()``, which calls
+    ``run_slurm_on_host`` directly with no guard.
+    """
     plat = _get_platform()
-    if not host_exec.which("sinfo"):
-        return {}
     opts = (os.environ.get("SINFO_OPTS") or "").strip()
     extra = "-N -h -o '%N %t'"
     if opts:

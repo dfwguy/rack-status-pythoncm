@@ -8044,15 +8044,25 @@ def api_slurm_undrain():
     drained: list[str] = []
     state_err = ""
     try:
-        # run_slurm_on_host supplies the modules init that puts sinfo on PATH. The
-        # previous call named a helper that does not exist, so this probe raised
-        # NameError every time: `drained` stayed empty, `state_err` was set, and the
-        # undrain fell through to the blanket update the comment above says it must
-        # avoid.
+        # Resolve `sinfo` through the platform layer, exactly as _run_sinfo_r() does. A
+        # bare `sinfo` is not enough: a site may set RACK_SLURM_SKIP_MODULE_LOAD=1 and pin
+        # RACK_SLURM_SINFO to an absolute path, leaving nothing to put it on PATH. The
+        # probe then died with "sinfo: command not found" and its empty stdout read as
+        # "no drained nodes", so Undrain returned a green 200 having done nothing.
+        plat = _get_platform()
         probe = host_exec.run_slurm_on_host(
-            f"sinfo -h -N -o '%N %t' -n {shlex.quote(target)}",
+            plat.sinfo_cmd(f"-h -N -o '%N %t' -n {shlex.quote(target)}"),
             timeout=max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120)),
         )
+        # A probe that FAILED is not evidence that every node is healthy. Treat a
+        # non-zero return as unknown and fall through to the update below, rather than
+        # reporting "nothing to undrain" -- a check that cannot read its input must
+        # never report a healthy state.
+        if probe.returncode != 0:
+            state_err = (
+                f"sinfo probe failed (rc={probe.returncode}): "
+                f"{(probe.stderr or '').strip()[:200]}"
+            )
         for line in (probe.stdout or "").splitlines():
             parts = line.split()
             if len(parts) >= 2 and any(
@@ -8852,6 +8862,24 @@ _UNIVERSAL_WHOLE_BYTES = _UNIVERSAL_HEAD_BYTES + _UNIVERSAL_TAIL_BYTES
 _UNIVERSAL_INVENTORY_MAX_FILES = 4000
 _UNIVERSAL_SCAN_DEFAULT_FILES = 25
 _UNIVERSAL_SCAN_MAX_FILES = 400
+
+# Intermediate artefacts that are SUPERSEDED by an aggregated result log and must not be
+# ingested as runs of their own.
+#
+# llmb-run writes raw sbatch stdout to ``llmb-nccl_nodes_<jobid>.out`` and a collector trace to
+# ``llmb-autocollect_<jobid>.log``; ``collect_llmb_nccl_log.sh`` then aggregates the real result
+# into ``cmods-NCCL-1Rack-<rack>-<N>N-<jobid>.txt``. Ingesting the raw stdout too produced TWO
+# history rows per job, and the raw one is routinely marked ``fail`` because it still contains
+# srun/pmix noise from launch attempts that llmb-run retried successfully — so a passing rack
+# surfaced as failed in the dashboard. Judge a run by its aggregated log, never by sbatch stdout.
+#
+# Override with RACK_UNIVERSAL_SCAN_IGNORE_RE (a full-match regex over the basename); set it to
+# something that matches nothing (e.g. ``$^``) to restore the previous behaviour.
+_UNIVERSAL_SCAN_IGNORE_RE = re.compile(
+    os.environ.get("RACK_UNIVERSAL_SCAN_IGNORE_RE")
+    or r"llmb-nccl_nodes_\d+\.out|llmb-autocollect_\d+\.log",
+    re.IGNORECASE,
+)
 
 
 def _truthy_arg(val: object, *, default: bool = False) -> bool:
@@ -9693,6 +9721,10 @@ def api_universal_scan():
         if (time.monotonic() - started) > budget:
             break
         name = str(f.get("basename") or "")
+        # Never ingest an intermediate artefact that an aggregated log supersedes.
+        if _UNIVERSAL_SCAN_IGNORE_RE.fullmatch(name):
+            skipped += 1
+            continue
         if want_search and want_search not in name.lower():
             skipped += 1
             continue

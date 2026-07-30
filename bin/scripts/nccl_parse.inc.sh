@@ -29,12 +29,68 @@ nccl_busbw_csv() {
   ' "$1"
 }
 
+# NVIS 2026-07-28: reduce_scatter + sendrecv, same definition as nccl_busbw_csv (out-of-place
+# busbw at the LARGEST message size). Deliberately a SEPARATE function returning "rs,sr" so the
+# 3-field "ar,aa,ag" contract of nccl_busbw_csv -- consumed by BOTH parser.sh and rack_status.sh --
+# is unchanged. All five collectives emit NF=13 rows, so $8 is out-of-place busbw for each.
+nccl_busbw_ext_csv() {
+  awk '
+    /^# Collective test starting: reduce_scatter_perf(_mpi)?$/ { cur="rs"; next }
+    /^# Collective test starting: sendrecv_perf(_mpi)?$/       { cur="sr"; next }
+    /^# Collective test starting: /                            { cur="";   next }
+    /^# Collective test concluded:/                            { cur="";   next }
+    cur != "" && NF>=9 && $1 ~ /^[0-9]+$/ && $8 ~ /^[0-9]+(\.[0-9]+)?$/ {
+      sz = $1 + 0
+      if      (cur=="rs" && sz>=rs_sz) { rs_sz=sz; rs=$8 }
+      else if (cur=="sr" && sz>=sr_sz) { sr_sz=sz; sr=$8 }
+    }
+    END { print rs "," sr }
+  ' "$1"
+}
+
 nccl_oob_csv() {
   grep 'Out of bounds values' "$1" 2>/dev/null | awk '{ print $NF }' | paste -sd, - || true
 }
 
 # First all_reduce block only: rack, job_id, size (B), out-of-place bus_bw (GB/s). Stops at the
 # first all_reduce "concluded" line so a multi-round standalone log yields one representative series.
+# NVIS 2026-07-28: per-collective busbw series for ALL five collectives.
+# Emits: rack, jid, collective, size_bytes, busbw   (TAB separated)
+# An llmb sweep runs each collective several times with different env/args (e.g. all_reduce is
+# NCCL_NVLS_ENABLE=[0,1] x -G=[None,2,4] = 6 blocks). nccl_allreduce_series_append() below takes
+# the FIRST all_reduce block, which on GB300 is the NVLS-DISABLED one -- ~700 GB/s vs ~916 GB/s,
+# so the existing chart understates all_reduce by ~30%. Here we pick, per collective, the block
+# with the highest busbw at its largest message size, i.e. the best achieved configuration.
+# Left as a NEW function so nccl_allreduce_series_append()'s output is untouched.
+nccl_series_by_collective_append() {
+  local f=$1 rack=$2 jid=$3
+  [[ -f "$f" ]] || return 0
+  awk -v rack="$rack" -v jid="$jid" -v OFS='\t' '
+    /^# Collective test starting: [a-z_]+_perf(_mpi)?$/ {
+      coll=$5; sub(/_perf(_mpi)?$/,"",coll); blk++; cur=coll; curblk=blk; next
+    }
+    /^# Collective test concluded:/ { cur=""; next }
+    cur != "" && NF>=9 && $1 ~ /^[0-9]+$/ && $8 ~ /^[0-9]+(\.[0-9]+)?$/ {
+      k = cur SUBSEP curblk
+      cnt[k]++
+      sz[k,cnt[k]] = $1
+      bw[k,cnt[k]] = $8
+      if ($1+0 >= maxsz[k]) { maxsz[k] = $1+0; maxbw[k] = $8+0 }
+      blocks[k] = 1
+    }
+    END {
+      for (k in blocks) {
+        split(k, a, SUBSEP); c = a[1]
+        if (!(c in best) || maxbw[k] > best[c]) { best[c] = maxbw[k]; bestk[c] = k }
+      }
+      for (c in bestk) {
+        k = bestk[c]
+        for (i = 1; i <= cnt[k]; i++) print rack, jid, c, sz[k,i], bw[k,i]
+      }
+    }
+  ' "$f"
+}
+
 nccl_allreduce_series_append() {
   local f=$1 rack=$2 jid=$3
   [[ -f "$f" ]] || return 0

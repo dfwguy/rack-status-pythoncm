@@ -92,6 +92,26 @@ export LD_LIBRARY_PATH="${NCCL_LIB}:${CUDA_LIB}:${LD_LIBRARY_PATH:-}"
 # shellcheck disable=SC1091
 source "${_D}/lib/fabric.inc.sh"
 nvis_fabric_export || true            # sets NCCL_IB_HCA + NCCL_SOCKET_IFNAME (on-node)
+
+# --- Per-node HCA auto-detect (NVIS_NCCL_HCA_AUTO=1) -----------------------------
+# nvis_fabric_export probes the rails of the BATCH HOST ONLY, and the mpirun line below
+# then broadcasts that single NCCL_IB_HCA to EVERY rank with -x. Rail state is a PER-NODE
+# property: on 2026-07-28, h07 had 8 IB ports DOWN across 7 of 18 trays (h07-18 had only
+# mlx5_1 up) while the batch host h07-11 had all four ACTIVE. Every rank was therefore told
+# to use devices it could not open, and NCCL aborted with
+#   "Detected mixed local CollNet device counts across ranks (min 1, max 4)"
+#   -> "unhandled system error", rc=3, before measuring anything.
+#
+# With NVIS_NCCL_HCA_AUTO=1 we clear the pinned values so NCCL/UCX enumerate usable devices
+# INDEPENDENTLY ON EACH NODE. This mirrors the bring-up harness's allreduce job, which never
+# sets NCCL_IB_HCA at all and measures 683-698 GB/s on these same trays.
+# NOTE: an EMPTY NCCL_IB_HCA means "any device" to NCCL, not "no devices" — but we must
+# `unset` rather than set "", because fabric.inc.sh uses ${NCCL_IB_HCA:-default} which
+# re-substitutes on empty.
+if [ "${NVIS_NCCL_HCA_AUTO:-0}" = "1" ]; then
+  unset NCCL_IB_HCA UCX_NET_DEVICES
+  echo "nccl_allreduce: NVIS_NCCL_HCA_AUTO=1 — per-node HCA auto-detect (not pinning NCCL_IB_HCA/UCX_NET_DEVICES)"
+fi
 NS_IF="${NCCL_SOCKET_IFNAME:-bond0}"  # routable mgmt iface for MPI + NCCL bootstrap
 
 # --- Build hostfile from the allocation -----------------------------------------

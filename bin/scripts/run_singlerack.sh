@@ -99,13 +99,24 @@ do
 
  n=$[${#hosts[*]}/2*2]
 
+# NVIS_NEMO_CONT MUST be exported: the batch script defaults to
+# CONT="${NVIS_NEMO_CONT:-/raid/data/nemo-25.11.01.sqsh}", but staging above copies
+# /raid/data/$_sqsh_b -- the basename of NEMO_SQSH_SRC. Without this, pyxis looks for the
+# hardcoded 25.11.01 name, fails with "No such file or directory: /raid/data/nemo-25.11.01.sqsh",
+# and the job dies in ~12s at task_init (spank_pyxis.so). run-nemo-xrack.sh already exports it;
+# this single-rack wrapper did not, so single-rack NEMO only ever worked if the image happened to
+# be named exactly nemo-25.11.01.sqsh.
+# NVIS_SCRIPTS_DIR likewise: without it the batch script cannot find lib/fabric.inc.sh and falls
+# back to a hardcoded mlx5_0..3 list, which "may mix IB/RoCE".
+# NOTE: these comments must stay ABOVE the sbatch line -- a comment between backslash-continued
+# argument lines terminates the command ("sbatch: error: Batch script is empty!").
 sbatch \
  -N ${n} \
  -w $(echo "${hosts[*]}"|tr ' ' ',') \
  -t 03:00:00 \
  --job-name=NEMO-1R \
  --output=${USER}-NEMO-1Rack-${rack}-${n}N-%j.txt \
- --export=single_rack,NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-} \
+ --export=ALL,single_rack,NVIS_SCRIPTS_DIR=${_SCRIPT_DIR},NVIS_NEMO_CONT=/raid/data/${_sqsh_b},NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-} \
  "$_SCRIPT_DIR/nemo-nemotron5h_56b-mbridge-fp8.sh"
 
 done
