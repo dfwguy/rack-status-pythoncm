@@ -25,7 +25,7 @@ returns a status dict instead of raising — but it reports failure honestly rat
 
 Config
     RACK_LAKE_URL       default http://host.docker.internal:9410
-    RACK_LAKE_CLUSTER   default NscaleTX
+    RACK_LAKE_CLUSTER   default: active catalog cluster/customer, else "unknown-cluster"
     RACK_LAKE_DISABLED  1 -> no-op (still returns an honest status)
     RACK_LAKE_TIMEOUT   default 20
 """
@@ -43,6 +43,9 @@ import urllib.request
 from typing import Any
 
 _DEFAULT_URL = "http://host.docker.internal:9410"
+# Last resort when neither the lake override nor the active catalog names the cluster. Must
+# satisfy ``_RUN_ID_RE`` since upstream validates the cluster tag too.
+_UNKNOWN_CLUSTER = "unknown-cluster"
 # Upstream enforces this on run_id AND cluster; reject locally so the failure names the real cause
 # instead of surfacing as an opaque upstream 400.
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
@@ -59,7 +62,20 @@ def lake_url() -> str:
 
 
 def cluster() -> str:
-    return _env("RACK_LAKE_CLUSTER", "NscaleTX")
+    """Cluster tag every lake record is filed under.
+
+    ``RACK_LAKE_CLUSTER`` wins; otherwise fall back to the active catalog cluster/customer,
+    which ``catalog.context`` materialises into the environment. This used to default to a
+    single site's name, so any other deployment silently filed its runs under that site —
+    the exact provenance corruption this module exists to prevent. An unidentified cluster
+    is labelled as such rather than mislabelled.
+    """
+    return (
+        _env("RACK_LAKE_CLUSTER")
+        or _env("RACK_CLUSTER_NAME")
+        or _env("RACK_CLUSTER_CUSTOMER_NAME")
+        or _UNKNOWN_CLUSTER
+    )
 
 
 def is_disabled() -> bool:

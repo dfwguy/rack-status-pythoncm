@@ -16820,6 +16820,35 @@ def _parse_scontrol_job(text: str) -> dict:
     return out
 
 
+def _rack_and_nodes_from_nodelist(nodelist: str) -> tuple[str, list[str]]:
+    """Attribute a Slurm ``NodeList`` to ``(rack id, node hostnames)``.
+
+    Two things make this less trivial than it looks:
+      * Slurm reports a *compact* list (``<rack>-[01-18]``), so it has to be expanded before
+        the hostnames mean anything, and ``(null)`` / ``None assigned`` for a job that never
+        got an allocation.
+      * Rack attribution goes through the naming engine (``NVIS_RACK_ID`` / ``NVIS_CT_ID``),
+        so every site's convention works. This used to hardcode one cluster's ``ink50``
+        prefix, which silently produced an empty rack and no nodes everywhere else.
+    """
+    spec = (nodelist or "").strip()
+    if not spec or spec.lower() in ("(null)", "none assigned"):
+        return "", []
+    if _uparse is not None:
+        hosts = _uparse.expand_nodelist(spec)
+    else:  # no normaliser: bracket ranges stay unexpanded, but do not lose the plain names
+        hosts = [h for h in re.split(r"[,\s]+", spec) if h]
+    naming = _nvis_naming()
+    # Prefer recognised trays, but never drop everything: an unrecognised convention should
+    # still surface its nodes rather than report the job as having run nowhere.
+    nodes = [h for h in hosts if naming.is_tray_hostname(h)] or hosts
+    for h in nodes:
+        hit = naming.sinfo_rack_from_host(h)
+        if hit:
+            return (naming.canonical_rack_id(hit[0]) or hit[0]), nodes
+    return "", nodes
+
+
 def capture_job_attempt(job_id: str) -> dict:
     """Record one Slurm job attempt (state, reason, exit code, nodes) to history + the lake.
 
@@ -16868,10 +16897,7 @@ def capture_job_attempt(job_id: str) -> dict:
     state = f.get("JobState", "UNKNOWN")
     reason = f.get("Reason", "")
     nodelist = f.get("NodeList", "")
-    rack = ""
-    m = re.match(r"(ink50-dh01-[a-z0-9]+)-", nodelist)
-    if m:
-        rack = m.group(1)
+    rack, nodes = _rack_and_nodes_from_nodelist(nodelist)
     # A job cancelled by the prolog reports ExitCode 0:<sig> and RunTime 00:00:00 — treat it as a
     # FAILED attempt, never as a pass, even though Slurm's own ExitCode field starts with 0.
     rt = f.get("RunTime", "00:00:00")
@@ -16893,7 +16919,7 @@ def capture_job_attempt(job_id: str) -> dict:
         "status": status,
         "job_id": job_id,
         "rack": rack,
-        "nodes": [n for n in re.split(r"[,\s]+", nodelist) if n.startswith("ink50")],
+        "nodes": nodes,
         "scontrol": f,
         "state": state,
         "reason": reason,
