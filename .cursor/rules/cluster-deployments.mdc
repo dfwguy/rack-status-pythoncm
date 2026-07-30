@@ -13,8 +13,13 @@ state which cluster you are targeting. The wrong host/catalog silently hits the 
 | Cluster | Worktree dir | Branch | Catalog file | Project / Customer |
 |-----|-----|-----|-----|-----|
 | **Mayo Clinic** | `~/Documents/code/nvis-rack-status` | `v3` | `var/store/catalog.json` | Mayo Clinic / MAYO |
+| **Nscale TX** (GB300) | `~/Documents/code/nvis-rack-status` | `v3` | *(deployed on the OVA)* | NscaleTX / NscaleTX-GB300 |
 | **Firmus** (MEL01) | `~/Documents/code/nvis-mel01` | `mel01-validation` | `var/store/catalog.json` (default) | Firmus BK2 / Firmus |
 | **Boston Markley** (BOS01) | `~/Documents/code/nvis-mel01` | `mel01-validation` | `var/store/catalog-boston.json` | Boston Markley / NVIDIA |
+
+⚠️ **Mayo and Nscale TX share the `nvis-rack-status` worktree and the `v3` branch.** They are
+distinguished by *deployment target*, not by checkout: Nscale TX runs as a container on its
+own OVA. Product work for either lands on `v3`.
 
 ⚠️ **Firmus and Boston share the `nvis-mel01` worktree.** They are distinguished ONLY by
 `NVIS_CATALOG_FILE`: Firmus = default `catalog.json`; Boston = `catalog-boston.json` (set by
@@ -33,6 +38,16 @@ mbcm01; reach the UI via an SSH tunnel.
  `root@10.29.136.11` (slogin = `bos01-a09-13-s1-mgmt-01`)
 - `boston-bcm` alias = 10.29.136.10. Local dev: `dist/run-local-boston.sh` → port **5050**.
 - Naming `bos01-[A-Z]…`, rows a/b. Validation/NeMo/pdsh run on the **script** profile.
+
+**Nscale TX** — three hops, three different auth mechanisms: Teleport cert to
+`mobilekit-p-phy-device2.nscale.teleport.sh`, then **password** to `nvis@192.168.10.3`
+(`ssh nscale-tx-ova`), then key `id_bcm` to `cmods@192.168.10.2` (BCM head). Because hop 2 is
+password-only, an agent can never open a fresh session — the human runs
+`ssh nscale-tx-ova 'echo ok'` once, then the agent reuses the `ControlMaster`. Dashboard =
+container on the OVA at `:5056`, reached via a local **5156** forward (`~/Documents/code/ns-tun.sh`).
+**device1/2/3 are NOT interchangeable** — each bridges its own `192.168.10.0/2x`; this kit is
+behind device2 only. `Connection closed by UNKNOWN port 65535` means the jumphost is offline,
+not a cert problem. Full detail: **[docs/NSCALE_TX_DEPLOYMENT.md](../../docs/NSCALE_TX_DEPLOYMENT.md)**.
 
 **Mayo Clinic** — main repo on `v3`. SSH/deploy specifics are not captured here; confirm with
 the operator before acting on Mayo.

@@ -1,0 +1,345 @@
+# Nscale TX (GB300 NVL72) — deployment, connection design, and findings
+
+Reference for operators and AI agents working the **Nscale TX** engagement. Each cluster
+we deploy to has its own way of being reached and operated; this records Nscale TX's,
+plus the product changes it drove. Companion to
+[`.cursor/rules/cluster-deployments.mdc`](../.cursor/rules/cluster-deployments.mdc)
+(Mayo / Firmus / Boston map) — **announce the target cluster before acting, and never mix
+clusters.**
+
+| | |
+|---|---|
+| Customer / cluster | NscaleTX / `NscaleTX-GB300`, GB300 NVL72 |
+| Rack Status deployment | container `nvis-rack-status-v3` on the OVA, port **5056** |
+| Repo branch | `v3` (push to `origin/v3`) |
+| Deployment tree | `/opt/observability/nvis-rack-status-v3` on the OVA |
+| Jira | [NVRACKSTAT-45](https://jirasw.nvidia.com/browse/NVRACKSTAT-45) |
+| Last verified | 2026-07-30 |
+
+No credentials appear in this document. They live in `deploy-secrets/` and
+`docker-compose.override.yml` on the OVA (both git-ignored).
+
+---
+
+## 1. Connection design (the part unique to this site)
+
+Three hops, each with a different auth mechanism. This is the most common source of
+confusion, so it is worth internalising:
+
+```mermaid
+flowchart LR
+  MAC["Your Mac"] -->|"tsh cert (Teleport)"| JUMP["mobilekit-p-phy-device2<br/>nscale.teleport.sh"]
+  JUMP -->|"password (nvis)"| OVA["OVA 'network-server'<br/>192.168.10.3"]
+  OVA -->|"ssh key id_bcm (cmods)"| HEAD["BCM head + Slurm<br/>192.168.10.2"]
+  OVA -.->|"container :5056"| APP["rack-status v3"]
+```
+
+| Hop | Target | Auth |
+|---|---|---|
+| 1 | `mobilekit-p-phy-device2.nscale.teleport.sh` as `rafael.koike.ct` | Teleport cert (`tsh login`), expires ~daily |
+| 2 | `nvis@192.168.10.3` (alias `nscale-tx-ova`) | **password** — `PubkeyAuthentication no` |
+| 3 | `cmods@192.168.10.2` (alias `nscale-tx-node`) | key `/home/nvis/.ssh/id_bcm`, from the OVA/container |
+
+Because hop 2 is password-only, **nothing can open a fresh session non-interactively.**
+An agent can only reuse an existing `ControlMaster` (`ControlMaster auto` +
+`ControlPersist 10m` in `~/.ssh/config`). The standard division of labour: the human runs
+`ssh nscale-tx-ova 'echo ok'` once to establish the master, after which an agent can do
+everything else (including `ssh -O forward`) without a password.
+
+### The device1 / device2 / device3 trap
+
+There are three `mobilekit-p-phy-deviceN` appliances in Teleport. **They are NOT
+interchangeable entry points, and must never be used as failovers for this cluster.**
+Each appliance bridges its *own* local `192.168.10.0/2x` segment:
+
+| Appliance | Its `br0` | What is behind it |
+|---|---|---|
+| device2 | `192.168.10.1/27` | **the Nscale TX kit** — OVA `.3`, BCM head `.2` |
+| device3 | `192.168.10.2/29` | a different kit — empty segment, nothing at `.3`, no `cmsh` |
+
+Verified 2026-07-30 by probing device3: `ip neigh` showed `192.168.10.3 dev br0 FAILED`
+(ARP unanswered), no `cmsh`, no VMs, and a port scan of `.1–.6` found only itself.
+Repointing `ProxyJump` at device3 therefore connects to an **empty** network and fails in
+a confusing way. The `~/.ssh/config` entries carry a comment saying exactly this.
+
+### Failure signatures
+
+| Symptom | Real cause | Fix |
+|---|---|---|
+| `Connection closed by UNKNOWN port 65535` | Jumphost **offline in Teleport** (the proxy closes the stdio connection). *Not* a cert problem. | Wait for device2 to return; it recovered on its own within ~30 min on 2026-07-30 |
+| `ERROR: failed connecting to host …: target host is offline or does not exist` | Same as above, one line earlier — this is the useful message | — |
+| Password prompt / `Permission denied (publickey,password)` | Jump hop **succeeded**; only hop 2 remains | Human enters the password once |
+| `tsh` profile shows `[EXPIRED]` | Cert lapsed (roughly daily) | `tsh login --proxy=nscale.teleport.sh` |
+
+Fastest triage — distinguishes "jumphost down" from cert/password in ~2 s:
+
+```bash
+ssh -o BatchMode=yes -o ConnectTimeout=12 \
+    -l rafael.koike.ct mobilekit-p-phy-device2.nscale.teleport.sh 'echo ONLINE'
+```
+
+### Reaching the dashboard
+
+The container listens on the OVA at `0.0.0.0:5056`; you reach it over an SSH forward.
+Use **local port 5156**, not 5056 — a stale Cursor Remote-SSH forward has repeatedly
+squatted on local 5056 and produces a bound-but-dead port.
+
+```bash
+~/Documents/code/ns-tun.sh            # status, then bring the tunnel up
+~/Documents/code/ns-tun.sh status     # report every layer, change nothing
+~/Documents/code/ns-tun.sh restart
+```
+
+`ns-tun.sh` checks the layers in the order they actually break (cert -> jumphost ->
+master -> forward -> HTTP) and names the culprit. Exit codes: `0` up, `1` down but
+fixable, `2` upstream broken. Equivalent manual command:
+
+```bash
+ssh -N -L 5156:localhost:5056 -o ServerAliveInterval=60 -o ServerAliveCountMax=3 nscale-tx-ova
+```
+
+`~/Documents/code/mount-nscale-tx.sh` SSHFS-mounts the deployment tree locally for
+editing (needs **fuse-t**, not macFUSE — fuse-t is userspace and needs no kernel
+extension or reboot).
+
+---
+
+## 2. Cluster facts
+
+| | |
+|---|---|
+| Nodes | ~864 in Slurm |
+| Racks | `ink50-dh01-h01` … `h22` |
+| Naming | `NVIS_RACK_ID=ink50-dh01-[a-z][\d+]`, `NVIS_CT_ID=ink50-dh01-[a-z][\d+]-[\d+]` |
+| Trays per rack | **18, non-contiguous: `11-18` and `28-37`** |
+| Slurm | 25.05 at `/cm/local/apps/slurm/25.05/bin` |
+| `SLURM_CONF` | `/cm/shared-ubuntu2404-x86_64/apps/slurm/etc/slurm/slurm.conf` |
+| BCM | `cmsh` at `/cm/local/apps/cmd/bin/cmsh` |
+
+Two site-specific traps:
+
+- **Tray numbering.** The built-in default `01-18` targets ten nodes that do not exist and
+  misses ten that do. `RACK_VALIDATION_CT_RANGE=11-18,28-37` fixes it. This only bites when
+  an action is launched *without* an explicit node selection.
+- **Slurm binaries are not on a non-login PATH.** With `RACK_SLURM_SKIP_MODULE_LOAD=1`, every
+  Slurm CLI must be pinned via `RACK_SLURM_*` (`SQUEUE`, `SINFO`, `SCONTROL`, `SCANCEL`, and
+  `SACCT` — see finding F2). Bare `sinfo` over SSH fails with
+  `resolve_ctls_from_dns_srv: res_nsearch error` unless `SLURM_CONF` is exported.
+- **`cmsh` mode names.** On this BCM version the modes are `monitoring action` and
+  `monitoring trigger` (singular). `monitoring setup; actions` does **not** exist and returns
+  `Command not found: actions` while still printing a large unrelated listing — easy to
+  misread as success.
+
+---
+
+## 3. Deployment model
+
+The OVA holds **two trees. Only the v3 one is live:**
+
+| Path | Branch | Role |
+|---|---|---|
+| `/opt/observability/nvis-rack-status-v3` | `v3` | **live** deployment (port 5056) |
+| `/opt/observability/nvis-rack-status-main` | old `main` | legacy — leave alone |
+
+The container runs the image `nvis-rack-status-v3-rack-status`
+(`0.0.0.0:5056->5000`), gunicorn `--workers 1 --threads 24 --worker-class gthread
+--timeout 600`. It is **not** a plain image deployment: selected backend files are
+bind-mounted read-only from the tree, so editing the tree + restarting deploys backend
+changes without rebuilding.
+
+Bind-mounted from the tree: `backend/app.py`, `host_exec.py`, `native_status.py`,
+`nvis_id_templates.py`, `platforms/base.py`, `transport/`, `catalog/`, `metrics_query.py`,
+`lake_sink.py`, `results_history.py`, `universal_parser.py`, `grafana_embeds.py`,
+plus `bin/scripts/checker.sh`, `deploy-secrets/*`, and the SPA `index.html` + kaizen CSS.
+
+### The SPA override
+
+The built SPA is baked into the image, but `/app/static/spa/index.html` is bind-mounted
+from `deploy-secrets/index.html`.
+
+**This override is now vestigial.** It existed because `frontend/index.html` used to pull
+Kaizen `base.css`/`components.css` from `webassets.nvidia.com`, which an air-gapped OVA
+cannot reach — so each deploy rewrote those two `<link>` tags to locally-mounted
+`/assets/kaizen-base.css` and `/assets/kaizen-components.css`. That CDN dependency is gone
+upstream: the Kaizen CSS is vendored at `frontend/src/styles/kaizen/` and imported by
+`src/main.tsx`, so Vite bundles it into the hashed app CSS and the built `index.html` is
+already air-gap clean (see `frontend/src/styles/kaizen/README.md`).
+
+A frontend deploy is therefore just build → ship → restart:
+
+```bash
+# 1. build            (repo)   npx vite build            -> static/spa/, new hashed bundle
+# 2. ship + docker cp  (OVA)   docker cp static/spa/assets/. <container>:/app/static/spa/assets/
+# 3. ship index        (OVA)   cp static/spa/index.html -> deploy-secrets/index.html   (verbatim, no sed)
+# 4. restart           (OVA)   docker restart nvis-rack-status-v3
+```
+
+Because the CSS is hashed into the bundle, `index.html` and `assets/` must ship together —
+a stale mounted `index.html` points at an asset hash that no longer exists. On the next
+recreate, drop the `deploy-secrets/index.html` and `kaizen-*.css` mounts from
+`docker-compose.override.yml` entirely and let the image serve its own baked SPA.
+
+### Two landmines (verified 2026-07-30)
+
+1. **`restart` does not apply new bind mounts; only `compose up` (recreate) does.**
+   `cluster_snapshot.py`, `cluster_overview_live.py` and `bringup.py` are listed in
+   `docker-compose.override.yml` but their mounts are **not active** in the running
+   container — they currently exist only because they were `docker cp`'d into the
+   writable layer. This is why the container crash-looped with
+   `ModuleNotFoundError: No module named 'cluster_snapshot'` after the tree was checked
+   out to `v3`: the new `app.py` imported modules the image did not have and that were
+   not yet mounted. **When adding a backend module: `docker cp` it *and* add the mount.**
+
+2. **A full recreate (`compose down/up`) will currently break the SPA.** The container's
+   `assets/` has accumulated seven `index-*.js` bundles in its *writable layer*; the
+   mounted `index.html` points at the newest (`index-UBEyccvS.js`), which exists **only**
+   there — the image still carries the original. On recreate, `assets/` reverts to image
+   content while `index.html` keeps asking for the new bundle -> 404 -> blank dashboard.
+   Fix at that point: re-`docker cp` the assets, or add a bind mount for
+   `static/spa` (must then also place the kaizen CSS inside that tree).
+
+3. **The deployment tree drifts from git.** Deploys copy files in rather than `git pull`,
+   so the tree sits at an older commit with modified files. Git remains the source of
+   truth; the tree is an artifact. (The OVA also has **no route to GitLab** — sync code in
+   with `git bundle` or `scp`/`tar`, not `git fetch`.)
+
+### Auth
+
+Token mode (`RACK_WEB_AUTH_MODE=token`). For scripted checks, log in for a session cookie:
+
+```bash
+curl -sS -c /tmp/ck.txt -X POST -H 'Content-Type: application/json' \
+     -d '{"password":"<RACK_WEB_AUTH_TOKEN>"}' http://127.0.0.1:5056/api/login
+curl -sS -b /tmp/ck.txt http://127.0.0.1:5056/api/bringup/config
+```
+
+A bare `GET /` returning **302** is healthy — it is the login redirect, not an error.
+
+---
+
+## 4. Environment configuration
+
+Set in `docker-compose.override.yml` on the OVA. The ones that matter here:
+
+| Variable | Why this site needs it |
+|---|---|
+| `RACK_STATUS_ALLOWED_PREFIXES` | Multi-root read allowlist. Operators' job StdOut lands **outside** `RACK_STATUS_LOG_DIR` (e.g. `/home/cmods/bringup/results`), and once this is set it is the *only* gate — every readable root must be listed |
+| `RACK_STATUS_LOG_DIR` | `/home/cmods/benchmark/harish` (a head-node path, not a container path) |
+| `RACK_SLURM_{SQUEUE,SINFO,SCONTROL,SCANCEL,SACCT}` | Absolute paths; required with `RACK_SLURM_SKIP_MODULE_LOAD=1` |
+| `RACK_VALIDATION_CT_RANGE=11-18,28-37` | Non-contiguous trays |
+| `RACK_BRINGUP_HOME` | Travis's tree, default `/home/cmods/bringup` (see §5) |
+| `RACK_LAKE_*` | Parquet lake capture — first site to enable it, which exposed finding F5 |
+| `RACK_GRAFANA_*` | Grafana reachable via `host.docker.internal:3001`, not `localhost` |
+
+Full catalogue: [`docs/ENVIRONMENT.md`](ENVIRONMENT.md).
+
+---
+
+## 5. Travis's bring-up automation (the site's own system)
+
+An independent framework at `/home/cmods/bringup/` continuously validates nodes. Rack
+Status **integrates with it rather than competing with it.**
+
+BCM monitoring fires three actions while a node's `DeviceStatus == UP` (`duringactions`,
+so they re-evaluate every cycle):
+
+| Trigger | Action | Effect |
+|---|---|---|
+| `NodeHealthTrigger` | `node_health.sh` | 38 checks vs a `valid-config` baseline |
+| `FileCopyTrigger` | `file_copy.sh` | rsync container images to node-local `/tmp` |
+| `LaunchJobTrigger` | `launch_job.sh` | hourly sweep: submit the next missing/failing benchmark as `cmods` |
+
+Artifacts, per node: `results/<node>/<job>.txt`, `.fail<N>.txt` archives,
+`quick-view.txt`, `trigger.log`; fleet CSVs in `reports/`.
+
+Key properties:
+
+- **Verdicts are derived, never stored.** `parsers/nvl72/verdict.sh` re-judges every log on
+  each read, so tightening a floor re-judges history. Floors: allreduce **683**, alltoall
+  **623**, both `-nonvlink` **43** GB/s (largest-message out-of-place busbw).
+- **A job can be live.** `sbatch --output` writes `results/<node>/<job>.txt` directly, so a
+  `RUNNING` column is a file being appended to right now. Everything else is static.
+- **Slurm is saturated by it** — ~137 running / ~45 pending `bringup-<node>` jobs, all
+  `--exclusive`. Do not launch competing rack-wide validation; read his artifacts instead.
+- Its own reporting CLIs are the integration surface: `daily-report.sh -c` (fleet CSV, cell
+  is a metric *or* a status word) and `status-check.sh <node>` (per-job status + reason).
+  Neither alone is sufficient: a numeric cell does not say pass/fail, so Rack Status merges
+  metric-from-daily-report with status-from-status-check.
+
+---
+
+## 6. Findings (symptom -> cause -> fix)
+
+| # | Symptom | Cause | Fix |
+|---|---|---|---|
+| F1 | Web terminal shows "WebSocket error" | Middleware only checked `werkzeug.socket`; gunicorn provides `gunicorn.socket`, so the upgrade fell through to auth and 401'd | Accept either key |
+| F2 | Scheduler view: `sacct: command not found` | `sacct` was the one Slurm CLI with no env override, and it is not on a non-login PATH | Added `RACK_SLURM_SACCT` |
+| F3 | Cannot open logs outside the log dir | `RACK_STATUS_ALLOWED_PREFIXES` unset | Set it to all four readable roots |
+| F4 | `AttributeError: 'PurePosixPath' object has no attribute 'stat'` | Endpoints called `Path.stat()/read_bytes()` on a **remote** path | Route through `host_exec.stat/read_text/is_file`; stream downloads as base64 |
+| F5 | Log viewer stuck on "Connecting…" forever | The analytics-lake `after_request` hook called `response.get_data()`, which **consumed the `tail -f` generator**. Its guard only skipped `direct_passthrough`, which is `False` for a generator-backed `Response` | Also skip `response.is_streamed`. Affected every streaming endpoint; only surfaced here because this is the first site with the lake enabled |
+| F6 | Log view flickers, then reads `(stopped)` | An inline `payload={{...}}` object gave `TailLogDialog` a new reference on every parent poll (rack-locks ~5 s), so its effect aborted and restarted the stream | `useMemo` the payload |
+| F7 | Multi-select filters overflow and break layout | KUI `Combobox` renders one tag per selection | `MultiSelectCombobox` wrapper using `multipleMode="count"`; MUI `Autocomplete` uses `limitTags` |
+| F8 | Parser charts showed a partial (1N) run | A newer 1N sweep or a row `job_id` pointing at one out-ranked the full-rack log | `full_rack` mode in `pick_log_for_rack` (`-18N-`, `RACK_FULL_RACK_NODES`) + a "Full rack validation" checkbox |
+| F9 | `-nonvlink` NCCL fails at ~2.3 GB/s vs a 43 floor | NCCL logs `NET/IB : No device found` and falls back to `NET/Socket` over `bond0` — the HCAs are not visible **inside the container**, though the host sees `mlx5_*` | Diagnose with `bringup/ib-visibility.sh <node>`, which separates the four cases (host / container / NCCL-init / TCP fallback) |
+| F10 | A single-node NCCL log "looks like" it ran on `bond0` | It did — but only for **bootstrap**. With `nNodes 1` every channel is `via P2P/MNNVL`, and ~628 GB/s busbw proves NVLink. The Socket fallback only matters for multi-node and the `-nonvlink` pair | Read the channel lines, not the NET plugin lines |
+| F11 | Container crash-loops after a tree checkout | New `app.py` imported modules absent from the image and not bind-mounted | See §3 landmine 1 |
+| F12 | SSH dies overnight; `Connection closed by UNKNOWN port 65535` | Jumphost device2 went offline in Teleport | See §1 |
+
+---
+
+## 7. What this engagement contributed to the product
+
+Everything below is **generic** — it shipped on `v3` for all clusters, not as Nscale-TX
+special-casing.
+
+| Contribution | Where | Reusable pattern |
+|---|---|---|
+| **Compute -> Nodes view** — paginated node inventory (18/page = one NVL72 rack), row/rack/name filters, per-node Validation/Hardware/Networking/Services | [`frontend/src/views/NodesView.tsx`](../frontend/src/views/NodesView.tsx) | Operate at node granularity when the fleet is busy; reuse the rack action tabs with a one-element node set instead of building a parallel UI |
+| **Bring-up results adapter** — `/api/bringup/{config,node}` | [`backend/bringup.py`](../backend/bringup.py) | **Shell out to the site's own scripts** for verdicts rather than re-implementing their pass/fail logic, which drifts. Cache the expensive fleet-wide call; keep the per-node call scoped |
+| **Parse an arbitrary allowlisted log** — `/api/parser-results?path=` | `api_parser_results` | Let a caller name an exact file, gated by `RACK_STATUS_ALLOWED_PREFIXES`, instead of widening the filename heuristic |
+| **Full-rack log selection** — `full_rack` / `RACK_FULL_RACK_NODES` | `pick_log_for_rack` | Node-count-aware log picking so a partial re-run cannot masquerade as an acceptance result |
+| **Adaptive log viewing** | [`JobLogContentDialog.tsx`](../frontend/src/components/JobLogContentDialog.tsx) + `TailLogDialog` | Whole file for a finished job, live `tail -f` only when the job is actually `RUNNING` — decided from status, not guessed |
+| **`MultiSelectCombobox`** | [`frontend/src/components/MultiSelectCombobox.tsx`](../frontend/src/components/MultiSelectCombobox.tsx) | One wrapper so every multi-select filter behaves identically and cannot overflow |
+| **Streaming-response guard** | `_lake_capture_request` | Any `after_request` hook must skip `is_streamed`, not just `direct_passthrough` |
+| **`RACK_SLURM_SACCT`** | [`backend/platforms/base.py`](../backend/platforms/base.py) | Every external CLI gets an env override |
+
+Design principles this engagement reinforced:
+
+1. **Integrate, don't duplicate.** The site already had authoritative validation; the win was
+   surfacing it, not re-running it.
+2. **Reuse before building.** The Nodes view is mostly existing components re-composed.
+3. **Tests ship with the feature.** [`test_bringup.py`](../backend/tests/test_bringup.py),
+   `test_pick_log_full_rack.py`, and four frontend specs, including a regression test for the
+   F6 payload-identity bug.
+4. **Derive, don't store, verdicts** — copied straight from `verdict.sh`, and the reason
+   `/api/bringup/node` re-reads on every request.
+
+---
+
+## 8. Runbook
+
+```bash
+# Tunnel / connectivity
+~/Documents/code/ns-tun.sh status
+ssh nscale-tx-ova 'echo ok'                       # human: establishes the ControlMaster
+
+# Deployment health (on the OVA)
+docker ps --filter name=nvis-rack-status-v3
+docker logs --tail 40 nvis-rack-status-v3
+docker restart nvis-rack-status-v3                # picks up mounted backend edits
+
+# Cluster (from the OVA, via the head node)
+ssh -i /home/nvis/.ssh/id_bcm cmods@192.168.10.2 \
+  'export SLURM_CONF=/cm/shared-ubuntu2404-x86_64/apps/slurm/etc/slurm/slurm.conf; sinfo -h -o "%T %D"'
+
+# Bring-up automation (on the head node, in /home/cmods/bringup)
+bash status-check.sh <node>       # per-job status + reason
+bash status-check.sh -s           # fleet roll-up by worst status
+bash daily-report.sh -c           # fleet CSV with metrics
+bash trigger-log.sh <node>        # why the sequencer did or did not submit
+bash ib-visibility.sh <node>      # the F9 diagnosis
+```
+
+Commit conventions: work for this site lands on `v3` and is pushed to `origin/v3`
+(Boston/Firmus use `mel01-validation`). Recent: `de204e3` (Nodes + bring-up),
+`52ee717` (full-rack parser).
