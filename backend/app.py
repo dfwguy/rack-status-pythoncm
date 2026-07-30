@@ -9806,6 +9806,30 @@ def api_bringup_node():
     return jsonify({"ok": True, "data": data})
 
 
+@app.route("/api/bringup/fleet")
+def api_bringup_fleet():
+    """Bring-up state for every node — what a cluster heatmap and the daily report need.
+
+    One request instead of one per node: the underlying fleet scripts are cheap because they
+    share a verdict cache, so this is ~2 round trips for the whole cluster.
+    """
+    if _truthy_env("RACK_STATUS_DEMO"):
+        # Seed the synthetic fleet from the demo rack inventory so node names line up with
+        # what the dashboard is already showing.
+        nodes = [n for n in (request.args.get("nodes") or "").split(",") if n.strip()]
+        data = _bringup.demo_fleet_summary(nodes) if _bringup else {"nodes": []}
+        return jsonify({"ok": True, "data": data})
+    if _bringup is None or not _bringup.is_enabled():
+        return jsonify({"ok": False, "error": "bring-up integration disabled or unavailable"}), 404
+    try:
+        data = _bringup.fleet_summary()
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "bring-up fleet report timed out"}), 504
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "data": data})
+
+
 @app.route("/api/parser-results")
 def api_parser_results():
     """Run parser.sh --json on the log for rack (same cwd convention as rack_status log_dir).

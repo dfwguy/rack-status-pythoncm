@@ -177,6 +177,119 @@ def run_status_check(node: str, *, timeout: int = 90) -> str:
     return proc.stdout or ""
 
 
+def run_status_check_all(*, timeout: int = 180) -> str:
+    """Run ``status-check.sh`` with no pattern: every node under ``results/``.
+
+    Its own scan cache makes this cheap (~0.5 s for 564 nodes), so a fleet view costs one
+    round trip instead of one per node.
+    """
+    home = bringup_home()
+    proc = host_exec.run_on_host(
+        ["bash", f"{home}/status-check.sh"],
+        cwd=home,
+        timeout=timeout,
+        env_extra=_slurm_env_extra(),
+    )
+    out = proc.stdout or ""
+    if proc.returncode != 0 and not out.strip():
+        raise RuntimeError((proc.stderr or "").strip() or f"status-check.sh exited {proc.returncode}")
+    return out
+
+
+def _expand_nodeset(spec: str) -> list[str]:
+    """Expand ``a-[01-03,07],b-02`` into hostnames, reusing the tested expander.
+
+    Imported lazily: ``universal_parser`` is an optional module in some deployments, and a
+    missing expander must degrade to "treat the line as one host" rather than break the scan.
+    """
+    try:
+        import universal_parser
+
+        return universal_parser.expand_nodelist(spec)
+    except Exception:  # noqa: BLE001 - fall back to comma splitting
+        return [p.strip() for p in spec.split(",") if p.strip()]
+
+
+def parse_status_check_fleet(text: str) -> dict[str, dict[str, dict[str, str]]]:
+    """Parse the fleet form of ``status-check.sh`` into ``{node: {col: {status, reason}}}``.
+
+    With no pattern the script groups nodes that share an identical verdict set, ``dshbak -c``
+    style::
+
+        ----------------
+        rack-[11-18],rack-28
+        ----------------
+        allreduce: DONE
+        allreduce-nonvlink: FAIL -- run error
+
+    So a block is a nodeset line followed by ``col: STATUS[ -- reason]`` lines, and the
+    statuses apply to every node in the set. Blocks are separated by dashed rules; a node line
+    is simply the non-status line that follows one.
+    """
+    out: dict[str, dict[str, dict[str, str]]] = {}
+    pending: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or set(line) == {"-"}:
+            continue
+        m = _STATUS_LINE.search(line)
+        if m and pending:
+            entry = {"status": m.group("status"), "reason": (m.group("reason") or "").strip()}
+            for node in pending:
+                out.setdefault(node, {})[m.group("col")] = entry
+            continue
+        if m:
+            continue  # a status line with no node scope yet — nothing to attribute it to
+        # Not a status line: this is the nodeset heading a new block.
+        pending = _expand_nodeset(line)
+    return out
+
+
+def fleet_summary() -> dict[str, object]:
+    """Bring-up state for every node, in two calls rather than one per node.
+
+    Statuses and reasons come from the fleet ``status-check.sh`` (authoritative verdicts);
+    metrics come from the ``daily-report.sh -c`` CSV. This is the split ``node_summary()``
+    makes for a single node — the CSV alone is not enough because a FAIL keeps its number
+    there, so a numeric cell says nothing about pass/fail.
+    """
+    daily = run_daily_report()
+    columns, rows = parse_daily_report_csv(daily)
+    fleet = parse_status_check_fleet(run_status_check_all())
+
+    # Union so a node known to only one source still appears, ordered by name for a stable UI.
+    names = sorted(set(rows) | set(fleet))
+    cols = columns or sorted({c for per_node in fleet.values() for c in per_node})
+    nodes: list[dict[str, object]] = []
+    for name in names:
+        row = rows.get(name) or {}
+        cells = row.get("cells") if isinstance(row.get("cells"), dict) else {}
+        sc = fleet.get(name, {})
+        jobs: list[dict[str, object]] = []
+        for col in cols:
+            base = _base_job(col)
+            cell = str((cells or {}).get(col, ""))
+            st = _lookup_status(sc, col)
+            metric = cell if _NUMERIC.match(cell) else None
+            jobs.append(
+                {
+                    "name": col,
+                    "base": base,
+                    "status": st["status"] or (cell if not metric else ""),
+                    "reason": st["reason"],
+                    "metric": metric,
+                    "metric_label": METRIC_LABELS.get(base),
+                }
+            )
+        nodes.append({"node": name, "slurm_state": str(row.get("slurm", "")), "jobs": jobs})
+    return {
+        "home": bringup_home(),
+        "columns": cols,
+        "metric_labels": {c: METRIC_LABELS[b] for c in cols if (b := _base_job(c)) in METRIC_LABELS},
+        "nodes": nodes,
+    }
+
+
 def _lookup_status(sc: dict[str, dict[str, str]], col: str) -> dict[str, str]:
     """Find the status entry for a daily-report column across naming variants."""
     for key in (col, col.replace("_run", "-run"), _base_job(col)):
@@ -258,3 +371,49 @@ def demo_node_summary(node: str) -> dict[str, object]:
         {"name": "mnubergemm", "base": "mnubergemm", "status": "BURN-IN OFF", "reason": "", "metric": None, "metric_label": None},
     ]
     return {"node": node, "present": True, "slurm_state": "idle", "home": bringup_home(), "jobs": jobs}
+
+
+def demo_fleet_summary(nodes: list[str] | None = None) -> dict[str, object]:
+    """Synthetic fleet summary for ``RACK_STATUS_DEMO=1``.
+
+    Spreads statuses and busbw values across the given nodes so the heatmap shows a range
+    rather than one flat colour.
+    """
+    names = [n for n in (nodes or []) if n] or [f"demo-r01-{i:02d}" for i in range(1, 19)]
+    cols = ["dcgmi-r1", "nvbandwidth", "allreduce", "alltoall", "allreduce-nonvlink"]
+    out: list[dict[str, object]] = []
+    for i, name in enumerate(names):
+        jobs: list[dict[str, object]] = []
+        for col in cols:
+            base = _base_job(col)
+            label = METRIC_LABELS.get(base)
+            # Deterministic spread: every 7th node fails, every 11th has not run yet.
+            if i % 11 == 10:
+                status, metric = "NOT_RUN", None
+            elif i % 7 == 6:
+                status, metric = "FAIL", (f"{120 + (i % 5) * 7:.2f}" if label else None)
+            else:
+                status, metric = "DONE", (f"{600 + (i * 13) % 120:.2f}" if label else None)
+            jobs.append(
+                {
+                    "name": col,
+                    "base": base,
+                    "status": status,
+                    "reason": "below floor" if status == "FAIL" else "",
+                    "metric": metric,
+                    "metric_label": label,
+                }
+            )
+        out.append(
+            {
+                "node": name,
+                "slurm_state": "down*" if i % 9 == 8 else "idle",
+                "jobs": jobs,
+            }
+        )
+    return {
+        "home": bringup_home(),
+        "columns": cols,
+        "metric_labels": {c: METRIC_LABELS[b] for c in cols if (b := _base_job(c)) in METRIC_LABELS},
+        "nodes": out,
+    }

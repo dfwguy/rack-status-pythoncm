@@ -34,6 +34,26 @@ def _fake_run(daily=DAILY_CSV, status=STATUS_CHECK):
     return run
 
 
+# The fleet form of status-check.sh: dshbak -c groups every node sharing a verdict set behind
+# one Slurm nodeset. Captured from the live head node (566 nodes come back in ~0.5 s).
+FLEET_STATUS = (
+    "----------------\n"
+    "ink50-dh01-h01-[11,14-15]\n"
+    "----------------\n"
+    "allreduce: DONE\n"
+    "allreduce-nonvlink: FAIL -- run error\n"
+    "dcgm: NOT_RUN\n"
+    "nvbandwidth: DONE\n"
+    "----------------\n"
+    "ink50-dh01-h02-11,ink50-dh01-h02-[28-29]\n"
+    "----------------\n"
+    "allreduce: NOT_RUN\n"
+    "allreduce-nonvlink: NOT_RUN\n"
+    "dcgm: NOT_RUN\n"
+    "nvbandwidth: NOT_RUN\n"
+)
+
+
 def test_parse_daily_report_csv():
     cols, rows = bringup.parse_daily_report_csv(DAILY_CSV)
     assert cols == ["dcgm", "nvbandwidth", "allreduce", "allreduce-nonvlink"]
@@ -127,3 +147,59 @@ def test_demo_node_summary():
     assert summary["node"] == "demo-1"
     assert summary["present"] is True
     assert any(j["status"] == "FAIL" for j in summary["jobs"])
+
+
+class TestFleet:
+    """The fleet view: grouped nodesets expanded, then merged with the metric CSV."""
+
+    def test_grouped_nodesets_are_expanded_to_every_node(self):
+        fleet = bringup.parse_status_check_fleet(FLEET_STATUS)
+        assert set(fleet) == {
+            "ink50-dh01-h01-11", "ink50-dh01-h01-14", "ink50-dh01-h01-15",
+            "ink50-dh01-h02-11", "ink50-dh01-h02-28", "ink50-dh01-h02-29",
+        }
+        # Every node in a group carries that group's verdicts, including the reason.
+        for node in ("ink50-dh01-h01-11", "ink50-dh01-h01-15"):
+            assert fleet[node]["allreduce"]["status"] == "DONE"
+            assert fleet[node]["allreduce-nonvlink"]["status"] == "FAIL"
+            assert fleet[node]["allreduce-nonvlink"]["reason"] == "run error"
+        assert fleet["ink50-dh01-h02-28"]["allreduce"]["status"] == "NOT_RUN"
+
+    def test_every_node_gets_the_same_column_count(self):
+        """A short node means a block was mis-attributed; uniformity is the signal."""
+        fleet = bringup.parse_status_check_fleet(FLEET_STATUS)
+        assert {len(v) for v in fleet.values()} == {4}
+
+    def test_fleet_summary_merges_status_with_metric(self, monkeypatch):
+        monkeypatch.setattr(bringup.host_exec, "run_on_host", _fake_run(status=FLEET_STATUS))
+        bringup._daily_cache.clear()
+        data = bringup.fleet_summary()
+
+        assert data["columns"] == ["dcgm", "nvbandwidth", "allreduce", "allreduce-nonvlink"]
+        assert data["metric_labels"]["allreduce"] == "busbw GB/s"
+        by_node = {n["node"]: n for n in data["nodes"]}
+
+        # h01-11 is in both sources: status from status-check, metric from the CSV.
+        jobs = {j["name"]: j for j in by_node["ink50-dh01-h01-11"]["jobs"]}
+        assert jobs["allreduce"]["status"] == "DONE"
+        assert jobs["allreduce"]["metric"] == "688.68"
+        assert by_node["ink50-dh01-h01-11"]["slurm_state"] == "down*"
+
+        # A FAIL keeps its number in the CSV, so the metric must survive alongside the FAIL.
+        assert jobs["allreduce-nonvlink"]["status"] == "FAIL"
+        assert jobs["allreduce-nonvlink"]["metric"] == "2.28"
+        assert jobs["allreduce-nonvlink"]["reason"] == "run error"
+
+    def test_nodes_known_to_only_one_source_still_appear(self, monkeypatch):
+        monkeypatch.setattr(bringup.host_exec, "run_on_host", _fake_run(status=FLEET_STATUS))
+        bringup._daily_cache.clear()
+        names = {n["node"] for n in bringup.fleet_summary()["nodes"]}
+        assert "ink50-dh01-h01-12" in names  # CSV only (not in the status groups)
+        assert "ink50-dh01-h02-28" in names  # status only (not in the CSV)
+
+    def test_demo_fleet_summary_spreads_values(self):
+        data = bringup.demo_fleet_summary([f"demo-r01-{i:02d}" for i in range(1, 19)])
+        assert len(data["nodes"]) == 18
+        statuses = {j["status"] for n in data["nodes"] for j in n["jobs"]}
+        assert {"DONE", "FAIL", "NOT_RUN"} <= statuses
+        assert any(n["slurm_state"] == "down*" for n in data["nodes"])
