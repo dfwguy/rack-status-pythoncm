@@ -1,6 +1,6 @@
 {
   "generated_by": "frontend/scripts/gen-help-content.mjs",
-  "count": 75,
+  "count": 76,
   "entries": [
     {
       "id": "dashboard",
@@ -127,6 +127,68 @@
         "description": "Sortable, filterable table of all racks showing validation status, latest job, comments, and per-rack actions."
       },
       "aiContext": "The Racks page is the main table listing every rack with its validation state, latest job, and comment. Users sort/filter, click status summary tags to filter by state, edit comments, open parser charts, and click a rack to open its detail view (rackDetail)."
+    },
+    {
+      "id": "nodes",
+      "kind": "view",
+      "title": "Nodes",
+      "domain": "Compute",
+      "routePath": "/compute/nodes",
+      "summary": "Flat, filterable inventory of every compute node with per-node actions.",
+      "description": "The Nodes page lists every compute node across the cluster in one paginated table (18 rows by default, one NVL72 rack in view). Filter by datacenter row, rack, or node name, then select a single node to run Validation, Hardware, Networking, and Services actions scoped to just that node. Node inventory and up/down state come from the same live status feed the Racks and Rack Detail views use.",
+      "features": [
+        "Paginated node table (default 18 rows) with sortable node names.",
+        "Filters for row, rack, and node name.",
+        "Per-node status tag (UP / DOWN / INST / UNKNOWN) and BMC/RedFish link.",
+        "Select a node to expose Validation, Hardware, Networking, and Services action tabs scoped to that node.",
+        "Bring-up results panel: per-job status, metric, and reason from the cluster automation (results + reports), with open-log and NCCL charts per job.",
+        "Per-node web terminal."
+      ],
+      "howTo": [
+        {
+          "task": "Run an action on a single node",
+          "steps": [
+            "Open Compute > Nodes.",
+            "Filter by rack or name to find the node.",
+            "Click the node row to select it.",
+            "Open the relevant action tab (Validation, Hardware, Networking, Services) and confirm."
+          ]
+        },
+        {
+          "task": "Narrow the list to one rack",
+          "steps": [
+            "Use the Rack filter and pick one or more racks.",
+            "The table and pagination update to the matching nodes."
+          ]
+        }
+      ],
+      "tips": [
+        "The default page size is 18 so a single NVL72 rack fits on one page.",
+        "Actions here apply to the one selected node; use the Racks view to act on a whole rack."
+      ],
+      "related": [
+        "singleRack",
+        "rackDetail",
+        "validationTab",
+        "hardwareTab",
+        "networkingTab",
+        "servicesTab"
+      ],
+      "keywords": [
+        "nodes",
+        "node",
+        "tray",
+        "inventory",
+        "filter",
+        "single node",
+        "per-node",
+        "compute"
+      ],
+      "aria": {
+        "label": "Nodes inventory page",
+        "description": "Paginated table of every compute node with row/rack/name filters; selecting a node exposes per-node Validation, Hardware, Networking, and Services actions."
+      },
+      "aiContext": "The Nodes page is a flat, paginated inventory of every compute node (default 18 rows). Users filter by row, rack, or name and select a single node to run Validation, Hardware, Networking, and Services actions scoped to that node. A Bring-up results panel shows per-job status/metric/reason from the cluster automation (Travis's /home/cmods/bringup results + reports, via /api/bringup/node) with open-log and NCCL charts per job. Node/tray state reuses the same live status feed as the Racks and Rack Detail views."
     },
     {
       "id": "multirack",

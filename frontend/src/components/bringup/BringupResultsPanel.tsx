@@ -10,11 +10,25 @@ import LinearProgress from "@mui/material/LinearProgress";
 import { Card, Flex, Text, Tag, Button, Banner } from "@nvidia/foundations-react-core";
 import { RefreshCw, ScrollText, LineChart } from "lucide-react";
 import { useBringupNode } from "../../hooks/useBringupNode";
+import { RefreshIntervalSelect } from "../RefreshIntervalSelect";
+import { loadRefreshMs, saveRefreshMs } from "../../lib/refreshInterval";
 import type { BringupJob } from "../../types/bringup";
 import type { JobStdoutTailPayload } from "../../lib/rackLog";
 import { TailLogDialog } from "../TailLogDialog";
 import { JobLogContentDialog } from "../JobLogContentDialog";
 import { ParserResultsDialog } from "../ParserResultsDialog";
+
+/** Persisted auto-refresh cadence for this panel. */
+const REFRESH_KEY = "nvis.bringup.refreshMs";
+
+/** "just now" / "3m ago" — the cache means shown data can be minutes old. */
+function agoLabel(ts: number | null): string {
+  if (!ts) return "";
+  const secs = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (secs < 45) return "just now";
+  const mins = Math.round(secs / 60);
+  return mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`;
+}
 
 /** NCCL jobs whose logs the busbw chart parser understands. */
 const NCCL_CHART_JOBS = new Set([
@@ -62,9 +76,15 @@ interface BringupResultsPanelProps {
  * for NCCL jobs, the busbw charts.
  */
 export function BringupResultsPanel({ node, logDir }: BringupResultsPanelProps) {
-  const { data, loading, error, refresh } = useBringupNode(node);
+  const [refreshMs, setRefreshMs] = useState(() => loadRefreshMs(REFRESH_KEY));
+  const { data, loading, error, lastUpdated, refresh } = useBringupNode(node, refreshMs);
   const [logJob, setLogJob] = useState<BringupJob | null>(null);
   const [chartJob, setChartJob] = useState<BringupJob | null>(null);
+
+  const changeRefresh = (ms: number) => {
+    setRefreshMs(ms);
+    saveRefreshMs(REFRESH_KEY, ms);
+  };
 
   const home = data?.home ?? "";
 
@@ -92,21 +112,35 @@ export function BringupResultsPanel({ node, logDir }: BringupResultsPanelProps) 
           </Text>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
             Live from the cluster automation (results + reports){data?.slurm_state ? ` \u00b7 Slurm ${data.slurm_state}` : ""}
+            {lastUpdated ? ` \u00b7 updated ${agoLabel(lastUpdated)}` : ""}
           </Text>
         </div>
-        <Button kind="tertiary" size="small" onClick={refresh} disabled={loading}>
-          <RefreshCw size={16} style={{ marginRight: 4 }} />
-          Refresh
-        </Button>
+        <Flex gap="2" align="center">
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+            Auto-refresh
+          </Text>
+          <RefreshIntervalSelect
+            valueMs={refreshMs}
+            onChangeMs={changeRefresh}
+            size="small"
+            aria-label="Auto-refresh interval"
+          />
+          <Button kind="tertiary" size="small" onClick={refresh} disabled={loading}>
+            <RefreshCw size={16} style={{ marginRight: 4 }} />
+            Refresh
+          </Button>
+        </Flex>
       </Flex>
 
+      {/* Only a thin bar while refreshing: cached rows stay on screen underneath,
+          which is the point of the cache — a background tick must not blank the table. */}
       {loading && (
         <Box aria-label="Loading bring-up results" sx={{ my: 1 }}>
           <LinearProgress />
         </Box>
       )}
 
-      {!loading && error && (
+      {error && (
         <Banner status="warning">
           {error.includes("disabled") || error.includes("unavailable")
             ? "Bring-up automation is not available for this deployment."
@@ -118,7 +152,7 @@ export function BringupResultsPanel({ node, logDir }: BringupResultsPanelProps) 
         <Banner status="info">No bring-up results recorded for {node} yet.</Banner>
       )}
 
-      {!loading && !error && data && data.jobs.length > 0 && (
+      {data && data.jobs.length > 0 && (
         <TableContainer>
           <Table size="small" aria-label={`Bring-up results for ${node}`}>
             <TableHead>
