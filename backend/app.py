@@ -4099,7 +4099,13 @@ def _resolve_tools_destination(raw: str) -> Path:
     # The destination lives on the execution host, so existence is asked of the
     # connection rather than stat-ed locally.
     p = _rpath(s)
-    if host_exec.is_file(p):
+    # host_exec.is_file() is really "exists": transport/base.py implements it as
+    # `stat(path) is not None`, so it returns True for a DIRECTORY too (is_dir
+    # correctly uses `test -d`). Testing it alone rejected every existing
+    # workspace with "destination must be a directory, not a file" and made the
+    # Exemplar/llmb install unreachable. Exclude directories explicitly here
+    # rather than change is_file(), which has ~46 call sites.
+    if host_exec.is_file(p) and not host_exec.is_dir(p):
         raise ValueError("destination must be a directory, not a file")
     if not host_exec.is_dir(p) and p.suffix.lower() == ".sqsh":
         raise ValueError("destination must be a directory path, not a .sqsh file path")

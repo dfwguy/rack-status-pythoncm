@@ -310,6 +310,33 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 [[ -f "${_SCRIPT_DIR}/slurm-init.inc.sh" ]] && source "${_SCRIPT_DIR}/slurm-init.inc.sh"
 
+# --- Phase 2b: existing install -> incremental add, not a failed re-install ----
+# llmb-install refuses `--play` against a live install ("Existing LLMB installation
+# found ... remove the existing installation") and `express` refuses too ("Express
+# mode does not support incremental installation"). The only supported way to add
+# workloads is its interactive menu, which needs a tty -- and this script runs over a
+# non-interactive SSH exec. llmb_add_workloads.py allocates a pty and answers the two
+# prompts, so the GUI action adds the missing workloads instead of dying. Additive and
+# idempotent: llmb-install filters out what is already installed.
+# Override with NVIS_EXEMPLAR_FORCE_PLAY=1 to take the original --play path anyway.
+if [[ -f "${INSTALL_PATH}/cluster_config.yaml" && "${NVIS_EXEMPLAR_FORCE_PLAY:-0}" != "1" ]]; then
+  echo "==> existing LLMB install detected at ${INSTALL_PATH}"
+  echo "    installed: $(sed -n '/^  installed:/,/^  [a-z]/p' "${INSTALL_PATH}/cluster_config.yaml" 2>/dev/null | grep -oE '^  - .*' | sed 's/^  - //' | tr '\n' ' ')"
+  echo "==> switching to incremental add (llmb_add_workloads.py); requested: ${WORKLOADS}"
+  ADDER="${_SCRIPT_DIR}/llmb_add_workloads.py"
+  if [[ ! -x "${ADDER}" ]]; then
+    echo "ERROR: ${ADDER} missing; cannot add workloads to an existing install." >&2
+    echo "--- exit 1 ---"; exit 1
+  fi
+  export PATH="${HOME}/.local/bin:${PATH}"   # git-lfs lives here; llmb-install aborts without it
+  python3 "${ADDER}" "${INSTALL_PATH}" "${NVIS_EXEMPLAR_ADD_TIMEOUT:-14400}"
+  _add_rc=$?
+  echo "==> incremental add exit=${_add_rc}"
+  echo "    workloads now: $(ls -1 "${INSTALL_PATH}/workloads" 2>/dev/null | tr '\n' ' ')"
+  echo "--- exit ${_add_rc} ---"
+  exit ${_add_rc}
+fi
+
 # --- Phase 0: prerequisites --------------------------------------------------
 # dgxc-benchmarking's install.sh aborts if its prerequisites are missing (e.g.
 # "Git LFS is not installed"). Many BCM/Ubuntu script nodes lack git-lfs and a
