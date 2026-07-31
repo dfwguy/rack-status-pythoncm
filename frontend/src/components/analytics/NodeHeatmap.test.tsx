@@ -131,6 +131,21 @@ describe("NodeHeatmap", () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
+  it("switches between the heatmap and the table", async () => {
+    renderHeatmap();
+    expect(cell("r01-11")).toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "Node benchmark results" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Table" }));
+    expect(
+      await screen.findByRole("table", { name: "Node benchmark results" }),
+    ).toBeInTheDocument();
+    // The grid gives way to the table rather than both rendering.
+    expect(screen.queryByTestId("heatmap-cell-r01-11")).toBeNull();
+    // A single-metric selector is meaningless when every column is shown.
+    expect(screen.queryByRole("combobox", { name: "Heatmap data view" })).toBeNull();
+  });
+
   it("exposes a data-view selector reflecting the active view", () => {
     /** Which views exist is covered in nodeHeatmap.test.ts; here it just has to be wired up. */
     renderHeatmap();

@@ -139,6 +139,27 @@ export interface MetricRange {
   max: number;
 }
 
+/**
+ * Gauge ceiling when the fleet has measured nothing yet, in the metric's own unit.
+ *
+ * Only reachable before any result exists — with even one measurement the observed max is used —
+ * so it exists to keep a gauge from dividing by zero rather than to assert a target. Note the
+ * unit: NCCL busbw is GB/s, and a healthy GB300 node is ~690 GB/s (~5.5 Tbps), so this is a
+ * generous headroom figure rather than a line anyone should pass or fail against.
+ */
+export const FALLBACK_METRIC_MAX = 1800;
+
+/** Gauge ceiling for a column: the fleet's observed max, else the fallback. */
+export function scaleTop(range: MetricRange | null): number {
+  return range && range.max > 0 ? range.max : FALLBACK_METRIC_MAX;
+}
+
+/** Fraction of the gauge to fill for a value, 0–1. */
+export function gaugeFraction(value: number, range: MetricRange | null): number {
+  const top = scaleTop(range);
+  return Math.max(0, Math.min(1, value / top));
+}
+
 /** Observed range for a column across the fleet; null when nothing measured it. */
 export function metricRange(fleet: BringupFleet | null, column: string | null): MetricRange | null {
   if (!fleet || !column) return null;
@@ -203,10 +224,55 @@ export function paintCell(
   if (value === null) {
     return { bar: 0, barColor: "transparent", cellBg: CELL_TRACK, norm: null };
   }
-  // Anchor at zero so bars are comparable in absolute terms; only the top end adapts.
-  const top = range && range.max > 0 ? range.max : value || 1;
-  const norm = Math.max(0, Math.min(1, value / top));
+  // Anchor at zero so gauges are comparable in absolute terms; only the top end adapts.
+  const norm = gaugeFraction(value, range);
   return { bar: norm, barColor: throughputColor(norm), cellBg: CELL_TRACK, norm };
+}
+
+/** Plain-language verdict for a table cell, and the tone to show it in. */
+export interface VerdictLabel {
+  label: string;
+  tone: "green" | "red" | "yellow" | "blue" | "gray";
+}
+
+/**
+ * Map a bring-up verdict onto the words an operator uses.
+ *
+ * "Untested" rather than the raw NOT_RUN, and RETRY/INCOMPLETE collapse to "Running" because
+ * from outside they mean the same thing: the answer is not in yet, so the cell must not read as
+ * either a pass or a failure.
+ */
+export function verdictLabel(verdict: string): VerdictLabel {
+  switch ((verdict || "").toUpperCase()) {
+    case "DONE":
+    case "PASS":
+      return { label: "Pass", tone: "green" };
+    case "FAIL":
+      return { label: "Failed", tone: "red" };
+    case "RUNNING":
+      return { label: "Running", tone: "blue" };
+    case "RETRY":
+    case "INCOMPLETE":
+      return { label: "Running", tone: "yellow" };
+    case "NOT_RUN":
+    case "":
+      return { label: "Untested", tone: "gray" };
+    default:
+      return { label: verdict, tone: "gray" };
+  }
+}
+
+/** Columns that carry a number, and those that are status-only (dcgm and friends). */
+export function splitColumns(fleet: BringupFleet | null): {
+  metric: string[];
+  statusOnly: string[];
+} {
+  const metric: string[] = [];
+  const statusOnly: string[] = [];
+  for (const col of fleet?.columns ?? []) {
+    (fleet?.metric_labels?.[col] ? metric : statusOnly).push(col);
+  }
+  return { metric, statusOnly };
 }
 
 /** Every measured job on a node, for the tooltip. */

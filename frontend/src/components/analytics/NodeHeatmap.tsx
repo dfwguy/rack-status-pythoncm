@@ -9,12 +9,13 @@
  * heatmaps in this codebase are built.
  */
 import { useMemo, useState } from "react";
-import { Banner, Button, Card, Flex, Select, Text } from "@nvidia/foundations-react-core";
+import { Banner, Button, Card, Flex, SegmentedControl, Select, Text } from "@nvidia/foundations-react-core";
 import CircularProgress from "@mui/material/CircularProgress";
 import Tooltip from "@mui/material/Tooltip";
 import { RefreshCw } from "lucide-react";
 import type { BringupFleet } from "../../types/bringup";
 import type { NodeInfo } from "../rack/NodeSelector";
+import { NodeMetricsTable } from "./NodeMetricsTable";
 import {
   STATUS_FILL,
   STATUS_VIEW_ID,
@@ -40,14 +41,20 @@ export interface NodeHeatmapProps {
   onRefresh?: () => void;
 }
 
-// Wide enough for the load bar to read as a proportion rather than a dot.
+// Wide enough for the gauge to read as a proportion rather than a dot.
 const CELL_W = 40;
 const CELL_H = 20;
 const BAR_H = 10;
+/** Unfilled part of the gauge; darker than the cell so the fill boundary is visible. */
+const GAUGE_TRACK = "#0b0f14";
+
+const HEATMAP_MODE = "heatmap";
+const TABLE_MODE = "table";
 
 export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }: NodeHeatmapProps) {
   const views = useMemo(() => heatmapViews(fleet), [fleet]);
   const [viewId, setViewId] = useState(STATUS_VIEW_ID);
+  const [mode, setMode] = useState(HEATMAP_MODE);
   // A column can disappear when the site changes its benchmark set; fall back rather than
   // rendering an empty grid against a view that no longer exists.
   const view = views.find((v) => v.id === viewId) ?? views[0];
@@ -90,13 +97,27 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
           </Text>
         </div>
         <Flex align="center" style={{ gap: 8 }}>
-          <Select
-            aria-label="Heatmap data view"
-            value={view?.id}
-            onValueChange={(v: string) => setViewId(v)}
-            items={views.map((v) => ({ value: v.id, children: v.label }))}
+          <SegmentedControl
+            aria-label="Node view display"
+            value={mode}
+            onValueChange={(m: string) => setMode(m)}
+            items={[
+              { value: HEATMAP_MODE, children: "Heatmap" },
+              { value: TABLE_MODE, children: "Table" },
+            ]}
             size="small"
           />
+          {/* The table shows every benchmark at once, so a single-view selector is only
+              meaningful for the heatmap. */}
+          {mode === HEATMAP_MODE && (
+            <Select
+              aria-label="Heatmap data view"
+              value={view?.id}
+              onValueChange={(v: string) => setViewId(v)}
+              items={views.map((v) => ({ value: v.id, children: v.label }))}
+              size="small"
+            />
+          )}
           {onRefresh && (
             <Button
               kind="secondary"
@@ -130,7 +151,11 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
         </Banner>
       )}
 
-      {total > 0 && (
+      {total > 0 && mode === TABLE_MODE && (
+        <NodeMetricsTable fleet={fleet} nodes={nodes} rackOf={rackOf} />
+      )}
+
+      {total > 0 && mode === HEATMAP_MODE && (
         <>
           <Legend view={view} range={range} />
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
@@ -180,17 +205,29 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
                             padding: 2,
                           }}
                         >
-                          {/* Load bar: length and colour are the metric; the border stays status. */}
+                          {/* Gauge: an explicit track so a part-filled bar reads as a
+                              proportion rather than as a short block of colour. */}
                           <div
-                            data-testid={`heatmap-bar-${id}`}
                             style={{
-                              width: `${Math.round(paint.bar * 100)}%`,
+                              position: "relative",
+                              width: "100%",
                               height: BAR_H,
-                              background: paint.barColor,
+                              background: GAUGE_TRACK,
                               borderRadius: 2,
-                              transition: "width 120ms ease-out",
+                              overflow: "hidden",
                             }}
-                          />
+                          >
+                            <div
+                              data-testid={`heatmap-bar-${id}`}
+                              style={{
+                                position: "absolute",
+                                inset: 0,
+                                width: `${Math.round(paint.bar * 100)}%`,
+                                background: paint.barColor,
+                                transition: "width 120ms ease-out",
+                              }}
+                            />
+                          </div>
                         </div>
                       </Tooltip>
                     );
