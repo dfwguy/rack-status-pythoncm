@@ -84,10 +84,19 @@ describe("NodeMetricsTable", () => {
   });
 
   it("fills the gauge in proportion to the fleet max", () => {
+    /**
+     * The gradient spans the whole cell and this element masks the unfilled remainder, so the
+     * fill length is where the mask starts — that is what makes a longer bar end in a darker
+     * blue instead of every bar being one flat shade.
+     */
     renderTable();
     // 690 is the observed max, 345 is exactly half of it.
-    expect(screen.getByTestId("gauge-fill-r01-11-allreduce")).toHaveStyle({ width: "100%" });
-    expect(screen.getByTestId("gauge-fill-r01-12-allreduce")).toHaveStyle({ width: "50%" });
+    const full = screen.getByTestId("gauge-fill-r01-11-allreduce");
+    const half = screen.getByTestId("gauge-fill-r01-12-allreduce");
+    expect(full).toHaveAttribute("data-fraction", "1.000");
+    expect(half).toHaveAttribute("data-fraction", "0.500");
+    expect(full).toHaveStyle({ left: "100%" });
+    expect(half).toHaveStyle({ left: "50%" });
   });
 
   it("scales each benchmark against its own range", () => {

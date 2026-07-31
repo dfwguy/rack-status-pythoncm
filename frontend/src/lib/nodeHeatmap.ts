@@ -51,6 +51,18 @@ export function throughputColor(norm01: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
+/**
+ * The scale as a CSS gradient, for a gauge fill.
+ *
+ * Painted across the whole cell and then masked to the fill length, rather than colouring the bar
+ * a single value-dependent shade. With a solid fill, values clustered near the ceiling produce
+ * near-identical bars — 690 and 630 GB/s are both "long and blue" — whereas revealing more or
+ * less of a fixed gradient makes the bar's right edge differ row to row.
+ */
+export const GAUGE_GRADIENT = `linear-gradient(to right, ${WHITE_BLUE_STOPS.map(
+  (s) => `rgb(${s.r},${s.g},${s.b}) ${Math.round(s.t * 100)}%`,
+).join(", ")})`;
+
 export function textColorFor(norm01: number): string {
   const [r, g, b] = interpolate(WHITE_BLUE_STOPS, norm01);
   return relativeLuminanceRgb(r, g, b) > 0.52 ? "#111111" : "#f8fafc";
@@ -187,6 +199,9 @@ export function verdictOf(node: BringupFleetNode, column: string | null): string
 
 /** Cell background when there is a value to show; the bar carries the magnitude. */
 export const CELL_TRACK = "#1f2530";
+
+/** Unfilled part of a gauge. Darker than the cell so the fill boundary is visible. */
+export const GAUGE_TRACK = "#0b0f14";
 
 export interface CellPaint {
   /** Bar length as a fraction of the cell, 0–1. */

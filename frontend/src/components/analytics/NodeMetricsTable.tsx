@@ -25,6 +25,8 @@ import type { BringupFleet, BringupFleetNode } from "../../types/bringup";
 import type { NodeInfo } from "../rack/NodeSelector";
 import { MultiSelectCombobox } from "../MultiSelectCombobox";
 import {
+  GAUGE_GRADIENT,
+  GAUGE_TRACK,
   compareMetric,
   gaugeFraction,
   metricOf,
@@ -32,7 +34,6 @@ import {
   scaleTop,
   splitColumns,
   statusRank,
-  throughputColor,
   verdictLabel,
   verdictOf,
   verdictRank,
@@ -465,20 +466,30 @@ function GaugeCell({
           minWidth: 88,
           borderRadius: 3,
           overflow: "hidden",
-          background: "#1f2530",
+          background: GAUGE_TRACK,
           // A failure keeps its number but is outlined, so a fast-but-rejected result cannot
           // pass for a good one just because its gauge is long.
           border: failed ? "1px solid #b91c1c" : "1px solid transparent",
         }}
       >
+        {/* The gradient spans the whole cell; the unfilled remainder is covered rather than the
+            gradient being squeezed into the bar. That is what makes a longer bar end in a darker
+            blue instead of every bar looking alike. */}
+        <span
+          aria-hidden
+          style={{ position: "absolute", inset: 0, background: GAUGE_GRADIENT, opacity: 0.92 }}
+        />
         <span
           data-testid={`gauge-fill-${id}-${column}`}
+          data-fraction={fraction.toFixed(3)}
+          aria-hidden
           style={{
             position: "absolute",
-            inset: 0,
-            width: `${Math.round(fraction * 100)}%`,
-            background: throughputColor(fraction),
-            opacity: 0.9,
+            top: 0,
+            bottom: 0,
+            left: `${Math.round(fraction * 100)}%`,
+            right: 0,
+            background: GAUGE_TRACK,
           }}
         />
         <Text
@@ -487,7 +498,12 @@ function GaugeCell({
             position: "relative",
             display: "block",
             padding: "2px 6px",
-            textShadow: "0 1px 2px rgba(0,0,0,0.55)",
+            // Right-aligned: digits line up for comparison (KUI's guidance for numeric columns),
+            // and the number always sits over the dark end — the track when the bar is short, deep
+            // blue when it is long — so one text colour stays readable either way.
+            textAlign: "right",
+            color: "#f8fafc",
+            textShadow: "0 1px 2px rgba(0,0,0,0.75)",
           }}
         >
           {value}

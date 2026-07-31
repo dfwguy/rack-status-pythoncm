@@ -25,6 +25,8 @@ import type { BringupFleet } from "../../types/bringup";
 import type { NodeInfo } from "../rack/NodeSelector";
 import { NodeMetricsTable } from "./NodeMetricsTable";
 import {
+  GAUGE_GRADIENT,
+  GAUGE_TRACK,
   STATUS_FILL,
   STATUS_VIEW_ID,
   VERDICT_BORDER,
@@ -53,8 +55,6 @@ export interface NodeHeatmapProps {
 const CELL_W = 40;
 const CELL_H = 20;
 const BAR_H = 10;
-/** Unfilled part of the gauge; darker than the cell so the fill boundary is visible. */
-const GAUGE_TRACK = "#0b0f14";
 
 const HEATMAP_MODE = "heatmap";
 const TABLE_MODE = "table";
@@ -230,7 +230,15 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
                                 position: "absolute",
                                 inset: 0,
                                 width: `${Math.round(paint.bar * 100)}%`,
-                                background: paint.barColor,
+                                // Metric views reveal a slice of the shared gradient, so a longer
+                                // bar ends in a darker blue and neighbouring cells differ even
+                                // when their values are close. The status view stays a flat
+                                // red/green, where a gradient would imply a magnitude.
+                                background: view?.column ? GAUGE_GRADIENT : paint.barColor,
+                                backgroundSize: view?.column
+                                  ? `${CELL_W - 8}px 100%`
+                                  : undefined,
+                                backgroundRepeat: "no-repeat",
                                 transition: "width 120ms ease-out",
                               }}
                             />

@@ -6,6 +6,7 @@ import {
   VERDICT_BORDER,
   VERDICT_BORDER_UNKNOWN,
   borderFor,
+  GAUGE_GRADIENT,
   compareMetric,
   groupByRack,
   heatmapViews,
@@ -138,6 +139,20 @@ describe("borderFor", () => {
       VERDICT_BORDER_UNKNOWN,
     );
     expect(borderFor(metricView, undefined, "up")).toBe(VERDICT_BORDER_UNKNOWN);
+  });
+});
+
+describe("GAUGE_GRADIENT", () => {
+  it("runs left-to-right from near-white to deep blue with positioned stops", () => {
+    /**
+     * Anchored to the cell and masked to the fill length, so how much of it shows is the signal.
+     * A solid per-value colour made near-ceiling results indistinguishable.
+     */
+    expect(GAUGE_GRADIENT).toMatch(/^linear-gradient\(to right,/);
+    expect(GAUGE_GRADIENT).toContain("rgb(248,250,252) 0%");
+    expect(GAUGE_GRADIENT).toContain("rgb(12,42,138) 100%");
+    // Stops carry explicit percentages so the scale matches throughputColor().
+    expect(GAUGE_GRADIENT).toContain("50%");
   });
 });
 
