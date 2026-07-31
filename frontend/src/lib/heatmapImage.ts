@@ -10,7 +10,13 @@
  * Geometry lives in `layoutHeatmap` as plain data so it can be tested without a canvas — jsdom
  * has no 2D context, and pixel output is not what is worth asserting on anyway.
  */
-import { COMPACT_NODES_PER_ROW, COMPACT_RACKS_PER_ROW, chunkNodes, groupRacksByRow } from "./nodeHeatmap";
+import {
+  COMPACT_NODES_PER_ROW,
+  COMPACT_RACKS_PER_ROW,
+  chunkNodes,
+  groupRacksByRow,
+  shortRackLabel,
+} from "./nodeHeatmap";
 
 export interface HeatmapImageCell {
   id: string;
@@ -49,21 +55,22 @@ const M = {
   legendH: 22,
   legendSwatch: 11,
   legendGap: 16,
-  rowLabelH: 18,
-  rackLabelH: 15,
+  rowLabelH: 20,
+  rackLabelH: 17,
   rackGapX: 10,
   rackGapY: 12,
-  rowGapY: 10,
+  rowGapY: 12,
   // Matches the on-screen compact cell: big enough that the tray number is readable in a
   // document, which is the only reason the number is drawn at all.
-  cell: 22,
+  cell: 28,
   cellGap: 3,
-  cellFont: 11,
+  cellFont: 14,
+  rackFont: 13,
+  rowFont: 14,
 } as const;
 
-const RACK_W = M.cell * COMPACT_NODES_PER_ROW + M.cellGap * (COMPACT_NODES_PER_ROW - 1);
-/** Rack ids are wider than three cells, and the label must not collide with its neighbour. */
-const BLOCK_W = Math.max(RACK_W, 80);
+/** Blocks are as wide as their cells: the label is shortened to fit rather than the reverse. */
+const BLOCK_W = M.cell * COMPACT_NODES_PER_ROW + M.cellGap * (COMPACT_NODES_PER_ROW - 1);
 
 export interface PlacedCell extends HeatmapImageCell {
   x: number;
@@ -169,14 +176,15 @@ export function drawHeatmap(
 
   for (const row of layout.rows) {
     ctx.fillStyle = INK;
-    ctx.font = "600 12px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.font = `600 ${M.rowFont}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     ctx.fillText(row.row, row.x, row.y);
   }
 
   for (const rack of layout.racks) {
     ctx.fillStyle = INK_SOFT;
-    ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillText(rack.rack, rack.x, rack.y);
+    ctx.font = `${M.rackFont}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    // Short label for the same reason as on screen: the row heading carries the prefix.
+    ctx.fillText(shortRackLabel(rack.rack), rack.x, rack.y);
     for (const cell of rack.cells) {
       ctx.fillStyle = cell.fill;
       ctx.fillRect(cell.x, cell.y, M.cell, M.cell);

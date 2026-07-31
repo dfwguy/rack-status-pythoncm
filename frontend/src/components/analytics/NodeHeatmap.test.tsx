@@ -195,6 +195,21 @@ describe("NodeHeatmap", () => {
     expect(screen.queryByTestId("heatmap-bar-r01-11")).toBeNull();
   });
 
+  it("abbreviates the rack label but keeps the full id on hover", () => {
+    /** 49 blocks repeating the cluster prefix is noise, and it squeezes the tile. */
+    renderHeatmap({
+      nodes: [{ id: "ink50-dh01-h01-11", status: "up" }],
+      fleet: { ...FLEET, nodes: [] },
+      rackOf: (id) => id.slice(0, id.lastIndexOf("-")),
+    });
+    expect(screen.getByTestId("heatmap-rack-ink50-dh01-h01")).toBeInTheDocument();
+    // The heading shows only the tail; the full id is the hover title.
+    const heading = screen.getByTitle("ink50-dh01-h01");
+    expect(heading.textContent).toBe("h01");
+    // The row heading is what carries the prefix instead.
+    expect(screen.getByText("ink50-dh01-h")).toBeInTheDocument();
+  });
+
   it("labels each compact cell with its slot number", () => {
     /** Two digits is what fits, and it is what an operator reads off the rack door. */
     renderHeatmap();

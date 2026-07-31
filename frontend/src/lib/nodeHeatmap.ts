@@ -528,6 +528,18 @@ export function groupRacksByRow<T extends { rack: string }>(
 }
 
 /**
+ * The part of a rack id worth printing on a tile ("ink50-dh01-h01" -> "h01").
+ *
+ * The row heading above the tiles already carries the prefix, so repeating it on all 49 blocks
+ * is noise that also forces the label — and therefore the whole tile — to stay small. The full
+ * id stays available on hover.
+ */
+export function shortRackLabel(rack: string): string {
+  const tail = rack.split("-").pop() ?? "";
+  return tail || rack;
+}
+
+/**
  * The part of a node id that identifies it within its rack ("dh01-h01-14" -> "14").
  *
  * Compact cells are too small for a full hostname but wide enough for a slot number, which is

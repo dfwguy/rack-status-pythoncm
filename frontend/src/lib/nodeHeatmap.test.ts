@@ -24,6 +24,7 @@ import {
   paintCell,
   rackRowOf,
   shortNodeLabel,
+  shortRackLabel,
   statusRank,
   throughputColor,
   toneCounts,
@@ -165,6 +166,17 @@ describe("rack row grouping", () => {
       { row: "dh01-h", racks: [{ rack: "dh01-h01" }, { rack: "dh01-h02" }] },
       { row: "dh01-i", racks: [{ rack: "dh01-i01" }] },
     ]);
+  });
+});
+
+describe("shortRackLabel", () => {
+  it("drops the prefix the row heading already carries", () => {
+    expect(shortRackLabel("ink50-dh01-h01")).toBe("h01");
+    expect(shortRackLabel("bos01-a05")).toBe("a05");
+  });
+
+  it("keeps the id intact when there is nothing to drop", () => {
+    expect(shortRackLabel("r01")).toBe("r01");
   });
 });
 

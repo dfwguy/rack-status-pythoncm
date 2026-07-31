@@ -47,6 +47,7 @@ import {
   nodeMetrics,
   paintCell,
   shortNodeLabel,
+  shortRackLabel,
   throughputColor,
   toneCounts,
   verdictOf,
@@ -82,8 +83,10 @@ const BAR_H = 10;
  * Sized so a two-digit tray number is comfortably readable rather than merely present — the
  * number is the whole point of labelling the square, and at 18px/8pt it was decoration.
  */
-const COMPACT_CELL = 24;
-const COMPACT_FONT = 13;
+const COMPACT_CELL = 30;
+const COMPACT_FONT = 15;
+/** Rack and row headings, sized to sit with the panel's own body text rather than under it. */
+const COMPACT_RACK_FONT = 13;
 
 const HEATMAP_MODE = "heatmap";
 const TABLE_MODE = "table";
@@ -322,7 +325,12 @@ export function NodeHeatmap({
                   {row && (
                     <Text
                       kind="mono/sm"
-                      style={{ display: "block", marginBottom: 4, fontWeight: 600 }}
+                      style={{
+                        display: "block",
+                        marginBottom: 6,
+                        fontSize: COMPACT_RACK_FONT + 1,
+                        fontWeight: 600,
+                      }}
                     >
                       {row}
                     </Text>
@@ -508,17 +516,22 @@ function RackBlock({
   );
   return (
     <div data-testid={`heatmap-rack-${rack}`}>
-      <Flex align="center" style={{ gap: 4, marginBottom: 2 }}>
-        <Text kind="mono/sm" style={{ fontSize: 10, color: "var(--nv-color-text-secondary)" }}>
-          {rack}
+      <Flex align="center" style={{ gap: 4, marginBottom: 3 }}>
+        {/* Short label, full id on hover: the row heading above already names the prefix. */}
+        <Text
+          kind="mono/sm"
+          title={rack}
+          style={{ fontSize: COMPACT_RACK_FONT, color: "var(--nv-color-text-secondary)" }}
+        >
+          {shortRackLabel(rack)}
         </Text>
-        <Flex align="center" style={{ gap: 3, marginLeft: "auto" }}>
+        <Flex align="center" style={{ gap: 4, marginLeft: "auto" }}>
           {(["good", "warn", "bad"] as const).map((tone) =>
             counts[tone] > 0 ? (
               <span
                 key={tone}
                 title={`${counts[tone]} ${tone}`}
-                style={{ fontSize: 9, fontWeight: 700, color: TONE_FILL[tone] }}
+                style={{ fontSize: COMPACT_RACK_FONT - 1, fontWeight: 700, color: TONE_FILL[tone] }}
               >
                 {counts[tone]}
               </span>
