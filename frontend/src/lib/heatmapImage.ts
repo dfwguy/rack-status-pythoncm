@@ -50,17 +50,20 @@ const M = {
   legendSwatch: 11,
   legendGap: 16,
   rowLabelH: 18,
-  rackLabelH: 14,
+  rackLabelH: 15,
   rackGapX: 10,
   rackGapY: 12,
   rowGapY: 10,
-  cell: 16,
+  // Matches the on-screen compact cell: big enough that the tray number is readable in a
+  // document, which is the only reason the number is drawn at all.
+  cell: 22,
   cellGap: 3,
+  cellFont: 11,
 } as const;
 
 const RACK_W = M.cell * COMPACT_NODES_PER_ROW + M.cellGap * (COMPACT_NODES_PER_ROW - 1);
 /** Rack ids are wider than three cells, and the label must not collide with its neighbour. */
-const BLOCK_W = Math.max(RACK_W, 74);
+const BLOCK_W = Math.max(RACK_W, 80);
 
 export interface PlacedCell extends HeatmapImageCell {
   x: number;
@@ -172,19 +175,19 @@ export function drawHeatmap(
 
   for (const rack of layout.racks) {
     ctx.fillStyle = INK_SOFT;
-    ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillText(rack.rack, rack.x, rack.y);
     for (const cell of rack.cells) {
       ctx.fillStyle = cell.fill;
       ctx.fillRect(cell.x, cell.y, M.cell, M.cell);
       ctx.strokeStyle = cell.border;
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(cell.x + 0.75, cell.y + 0.75, M.cell - 1.5, M.cell - 1.5);
+      ctx.lineWidth = 2;
+      ctx.strokeRect(cell.x + 1, cell.y + 1, M.cell - 2, M.cell - 2);
       if (cell.label) {
         ctx.fillStyle = readableOn(cell.fill);
-        ctx.font = "8px ui-monospace, SFMono-Regular, Menlo, monospace";
+        ctx.font = `${M.cellFont}px ui-monospace, SFMono-Regular, Menlo, monospace`;
         const w = ctx.measureText(cell.label).width;
-        ctx.fillText(cell.label, cell.x + (M.cell - w) / 2, cell.y + 4);
+        ctx.fillText(cell.label, cell.x + (M.cell - w) / 2, cell.y + (M.cell - M.cellFont) / 2);
       }
     }
   }

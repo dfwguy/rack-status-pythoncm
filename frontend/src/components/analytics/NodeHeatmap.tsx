@@ -17,6 +17,7 @@ import {
   SegmentedControl,
   Select,
   Spinner,
+  Switch,
   Text,
   Tooltip,
 } from "@nvidia/foundations-react-core";
@@ -75,8 +76,14 @@ const CELL_W = 40;
 const CELL_H = 20;
 const BAR_H = 10;
 
-/** Compact cells carry a slot number instead of a gauge, so they only need to fit two digits. */
-const COMPACT_CELL = 18;
+/**
+ * Compact cells carry a slot number instead of a gauge.
+ *
+ * Sized so a two-digit tray number is comfortably readable rather than merely present — the
+ * number is the whole point of labelling the square, and at 18px/8pt it was decoration.
+ */
+const COMPACT_CELL = 24;
+const COMPACT_FONT = 13;
 
 const HEATMAP_MODE = "heatmap";
 const TABLE_MODE = "table";
@@ -189,15 +196,13 @@ export function NodeHeatmap({
               meaningful for the heatmap. */}
           {mode === HEATMAP_MODE && (
             <>
-              <SegmentedControl
-                aria-label="Heatmap layout"
-                value={layout}
-                onValueChange={(l: string) => setLayout(l)}
-                items={[
-                  { value: COMPACT_LAYOUT, children: "Compact" },
-                  { value: LINEAR_LAYOUT, children: "Linear" },
-                ]}
+              {/* A Switch, not a SegmentedControl: the layout takes effect immediately and
+                  there are exactly two states, which is what a switch is for. */}
+              <Switch
+                slotLabel="Compact"
                 size="small"
+                checked={layout === COMPACT_LAYOUT}
+                onCheckedChange={(on: boolean) => setLayout(on ? COMPACT_LAYOUT : LINEAR_LAYOUT)}
               />
               <Select
                 aria-label="Heatmap data view"
@@ -459,14 +464,14 @@ function CompactCell({
           width: COMPACT_CELL,
           height: COMPACT_CELL,
           background: fill,
-          border: `1.5px solid ${borderFor(view, node, status)}`,
-          borderRadius: 3,
+          border: `2px solid ${borderFor(view, node, status)}`,
+          borderRadius: 4,
           boxSizing: "border-box",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           fontFamily: "var(--nv-font-family-mono, monospace)",
-          fontSize: 8,
+          fontSize: COMPACT_FONT,
           lineHeight: 1,
           color: readableOn(fill),
         }}

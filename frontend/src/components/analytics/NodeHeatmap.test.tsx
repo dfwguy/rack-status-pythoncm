@@ -64,6 +64,11 @@ function bar(id: string) {
   return screen.getByTestId(`heatmap-bar-${id}`);
 }
 
+/** The Compact switch: on tiles racks as blocks, off gives each rack a row with gauges. */
+function compactSwitch() {
+  return screen.getByLabelText("Compact");
+}
+
 /**
  * Render and switch to the linear layout.
  *
@@ -72,7 +77,7 @@ function bar(id: string) {
  */
 function renderLinear(props: Partial<React.ComponentProps<typeof NodeHeatmap>> = {}) {
   const result = renderHeatmap(props);
-  fireEvent.click(screen.getByRole("radio", { name: "Linear" }));
+  fireEvent.click(compactSwitch());
   return result;
 }
 
@@ -207,12 +212,15 @@ describe("NodeHeatmap", () => {
 
   it("switches to the linear layout and back", () => {
     renderHeatmap();
+    expect(compactSwitch()).toBeChecked();
     expect(screen.queryByTestId("heatmap-bar-r01-11")).toBeNull();
 
-    fireEvent.click(screen.getByRole("radio", { name: "Linear" }));
+    fireEvent.click(compactSwitch());
+    expect(compactSwitch()).not.toBeChecked();
     expect(bar("r01-11")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("radio", { name: "Compact" }));
+    fireEvent.click(compactSwitch());
+    expect(compactSwitch()).toBeChecked();
     expect(screen.queryByTestId("heatmap-bar-r01-11")).toBeNull();
   });
 
