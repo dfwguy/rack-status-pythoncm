@@ -9,9 +9,17 @@
  * heatmaps in this codebase are built.
  */
 import { useMemo, useState } from "react";
-import { Banner, Button, Card, Flex, SegmentedControl, Select, Text } from "@nvidia/foundations-react-core";
-import CircularProgress from "@mui/material/CircularProgress";
-import Tooltip from "@mui/material/Tooltip";
+import {
+  Banner,
+  Button,
+  Card,
+  Flex,
+  SegmentedControl,
+  Select,
+  Spinner,
+  Text,
+  Tooltip,
+} from "@nvidia/foundations-react-core";
 import { RefreshCw } from "lucide-react";
 import type { BringupFleet } from "../../types/bringup";
 import type { NodeInfo } from "../rack/NodeSelector";
@@ -140,7 +148,7 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
 
       {loading && !fleet && (
         <Flex align="center" style={{ gap: 8, padding: 24 }}>
-          <CircularProgress size={18} />
+          <Spinner size="small" aria-label="Loading bring-up results" />
           <Text kind="body/regular/sm">Collecting bring-up results for every node…</Text>
         </Flex>
       )}
@@ -186,9 +194,8 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
                     return (
                       <Tooltip
                         key={id}
-                        title={<CellTooltip node={id} status={status} fleetNode={node} />}
-                        arrow
-                        placement="top"
+                        slotContent={<CellTooltip node={id} status={status} fleetNode={node} />}
+                        side="top"
                       >
                         <div
                           data-testid={`heatmap-cell-${id}`}

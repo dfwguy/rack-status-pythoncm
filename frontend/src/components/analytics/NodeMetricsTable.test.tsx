@@ -52,6 +52,17 @@ function cell(node: string, column: string) {
   return screen.getByTestId(`cell-${node}-${column}`);
 }
 
+/**
+ * The header cell for a column. KUI Table makes headers selectable via onColumnSelect rather
+ * than rendering a nested button, so the cell itself is what a test clicks.
+ */
+function headerFor(columnKey: string) {
+  const marker = document.querySelector(`[data-column="${columnKey}"]`);
+  const header = marker?.closest("th");
+  if (!header) throw new Error(`no header for column ${columnKey}`);
+  return header;
+}
+
 describe("NodeMetricsTable", () => {
   it("gives every node a row with its rack and up/down status", () => {
     renderTable();
@@ -143,12 +154,11 @@ describe("NodeMetricsTable", () => {
       nodes: [node("r01-11", "DONE", "690")],
     };
     renderTable(wide);
-    // Each header's sort control carries just the column name.
-    const labels = screen
-      .getAllByRole("columnheader")
-      .map((h) => h.querySelector("[role='button'], button")?.textContent?.trim() ?? "");
-    const benchmarks = labels.filter((l) =>
-      ["allreduce", "alltoall", "nvbandwidth", "alltoall-nonvlink"].includes(l),
+    const keys = [...document.querySelectorAll("[data-column]")].map(
+      (el) => el.getAttribute("data-column") ?? "",
+    );
+    const benchmarks = keys.filter((k) =>
+      ["allreduce", "alltoall", "nvbandwidth", "alltoall-nonvlink"].includes(k),
     );
     expect(benchmarks).toEqual(["allreduce", "alltoall", "nvbandwidth", "alltoall-nonvlink"]);
   });
@@ -164,7 +174,7 @@ describe("NodeMetricsTable", () => {
 
     it("sorts a benchmark by value, fastest first on the first click", () => {
       renderTable();
-      fireEvent.click(screen.getByRole("button", { name: /allreduce/ }));
+      fireEvent.click(headerFor("allreduce"));
       // 690 then 345; the two nodes with no value fall to the bottom.
       expect(nodeColumnValues().slice(0, 2)).toEqual(["r01-11", "r01-12"]);
     });
@@ -175,15 +185,14 @@ describe("NodeMetricsTable", () => {
        * numbers, not a screen of Untested rows.
        */
       renderTable();
-      const header = screen.getByRole("button", { name: /allreduce/ });
-      fireEvent.click(header);
-      fireEvent.click(header);
+      fireEvent.click(headerFor("allreduce"));
+      fireEvent.click(headerFor("allreduce"));
       expect(nodeColumnValues().slice(0, 2)).toEqual(["r01-12", "r01-11"]);
     });
 
     it("sorts node status with the unhealthy first", () => {
       renderTable();
-      fireEvent.click(screen.getByRole("button", { name: "Status" }));
+      fireEvent.click(headerFor("__status"));
       expect(nodeColumnValues()[0]).toBe("r01-13"); // the only DOWN node
     });
   });
@@ -216,6 +225,34 @@ describe("NodeMetricsTable", () => {
     });
   });
 
+  it("omits the pager when everything fits on one page", () => {
+    /** KUI guidance: only render Pagination when totalItems > pageSize. */
+    renderTable();
+    expect(screen.queryByLabelText("Go to next page")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Page size")).not.toBeInTheDocument();
+  });
+
+  it("pages with the KUI pagination controls", () => {
+    const many: BringupFleet = {
+      ...FLEET,
+      nodes: Array.from({ length: 120 }, (_, i) =>
+        node(`r09-${String(i).padStart(3, "0")}`, "DONE", "600"),
+      ),
+    };
+    render(
+      <MemoryRouter>
+        <NodeMetricsTable fleet={many} nodes={[]} rackOf={rackOf} />
+      </MemoryRouter>,
+    );
+    const table = screen.getByRole("table", { name: "Node benchmark results" });
+    expect(within(table).getByText("r09-000")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Go to next page"));
+    expect(within(table).queryByText("r09-000")).not.toBeInTheDocument();
+    expect(within(table).getByText("r09-050")).toBeInTheDocument();
+    expect(screen.getByText(/51–100 of 120 nodes/)).toBeInTheDocument();
+  });
+
   it("paginates rather than rendering an entire cluster at once", () => {
     const many: BringupFleet = {
       ...FLEET,
@@ -229,6 +266,6 @@ describe("NodeMetricsTable", () => {
     const table = screen.getByRole("table", { name: "Node benchmark results" });
     // Default page size is 50, plus the header row.
     expect(within(table).getAllByRole("row")).toHaveLength(51);
-    expect(screen.getByText(/1–50 of 120/)).toBeInTheDocument();
+    expect(screen.getByText(/1–50 of 120 nodes/)).toBeInTheDocument();
   });
 });

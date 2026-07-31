@@ -6,26 +6,24 @@
  * measure", because a gauge alone cannot discriminate values that cluster near the ceiling — a
  * fleet of 600–690 GB/s results is 87–100% of full on every cell. Showing the number solves that,
  * and the gauge behind it keeps the row scannable.
+ *
+ * Built on Kaizen UI (Table, Pagination, TextInput, Tag) per the KUI-first rule for new code.
  */
 import { useMemo, useState } from "react";
-import Table from "@mui/material/Table";
-import TableBody from "@mui/material/TableBody";
-import TableCell from "@mui/material/TableCell";
-import TableContainer from "@mui/material/TableContainer";
-import TableHead from "@mui/material/TableHead";
-import TablePagination from "@mui/material/TablePagination";
-import TableRow from "@mui/material/TableRow";
-import TableSortLabel from "@mui/material/TableSortLabel";
-import TextField from "@mui/material/TextField";
-import InputAdornment from "@mui/material/InputAdornment";
-import Paper from "@mui/material/Paper";
-import Tooltip from "@mui/material/Tooltip";
+import {
+  Flex,
+  Pagination,
+  Table,
+  Tag,
+  Text,
+  TextInput,
+  Tooltip,
+} from "@nvidia/foundations-react-core";
 import { Link } from "react-router-dom";
-import { Flex, Tag, Text } from "@nvidia/foundations-react-core";
-import { Search } from "lucide-react";
-import { MultiSelectCombobox } from "../MultiSelectCombobox";
+import { ArrowDown, ArrowUp, Search } from "lucide-react";
 import type { BringupFleet, BringupFleetNode } from "../../types/bringup";
 import type { NodeInfo } from "../rack/NodeSelector";
+import { MultiSelectCombobox } from "../MultiSelectCombobox";
 import {
   compareMetric,
   gaugeFraction,
@@ -47,13 +45,21 @@ const STATUS_TONE: Record<NodeInfo["status"], "green" | "red" | "yellow" | "gray
   unknown: "gray",
 };
 
+const STATUS_LABEL: Record<NodeInfo["status"], string> = {
+  up: "Up",
+  down: "Down",
+  inst: "Installing",
+  unknown: "Unknown",
+};
+
 export interface NodeMetricsTableProps {
   fleet: BringupFleet | null;
   nodes: NodeInfo[];
   rackOf: (nodeId: string) => string;
 }
 
-const ROWS_PER_PAGE_OPTIONS = [25, 50, 100, 250];
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
+const DEFAULT_PAGE_SIZE = 50;
 
 /** Non-benchmark sort keys. */
 const SORT_NODE = "__node";
@@ -75,26 +81,16 @@ const VERDICT_FILTER_ITEMS = [
 ];
 
 export function NodeMetricsTable({ fleet, nodes, rackOf }: NodeMetricsTableProps) {
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(50);
+  // KUI Pagination is 1-based, unlike MUI's 0-based page index.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [sortKey, setSortKey] = useState<string>(SORT_NODE);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [query, setQuery] = useState("");
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [verdictFilters, setVerdictFilters] = useState<string[]>([]);
 
-  const resetPage = () => setPage(0);
-
-  /** Clicking a header sorts by it; clicking the active one flips direction. */
-  const toggleSort = (key: string, defaultDir: "asc" | "desc") => {
-    if (sortKey === key) {
-      setSortDir(sortDir === "asc" ? "desc" : "asc");
-    } else {
-      setSortKey(key);
-      setSortDir(defaultDir);
-    }
-    resetPage();
-  };
+  const resetPage = () => setPage(1);
 
   const { metric: metricCols, statusOnly } = useMemo(() => splitColumns(fleet), [fleet]);
 
@@ -152,7 +148,8 @@ export function NodeMetricsTable({ fleet, nodes, rackOf }: NodeMetricsTableProps
       if (sortKey === SORT_NODE) return a.localeCompare(b) * dir;
       if (sortKey === SORT_RACK) return (rackOf(a).localeCompare(rackOf(b)) || a.localeCompare(b)) * dir;
       if (sortKey === SORT_STATUS) {
-        const d = statusRank(statusById.get(a) ?? "unknown") - statusRank(statusById.get(b) ?? "unknown");
+        const d =
+          statusRank(statusById.get(a) ?? "unknown") - statusRank(statusById.get(b) ?? "unknown");
         return d !== 0 ? d * dir : a.localeCompare(b);
       }
       const na = fleetByNode.get(a);
@@ -167,15 +164,117 @@ export function NodeMetricsTable({ fleet, nodes, rackOf }: NodeMetricsTableProps
       }
       const d =
         (verdictRank(na ? verdictOf(na, sortKey) : "") -
-          verdictRank(nb ? verdictOf(nb, sortKey) : "")) * dir;
+          verdictRank(nb ? verdictOf(nb, sortKey) : "")) *
+        dir;
       return d !== 0 ? d : a.localeCompare(b);
     });
     return rows;
   }, [filtered, sortKey, sortDir, rackOf, statusById, fleetByNode, metricCols]);
 
-  const maxPage = Math.max(0, Math.ceil(sorted.length / rowsPerPage) - 1);
+  const maxPage = Math.max(1, Math.ceil(sorted.length / pageSize));
   const safePage = Math.min(page, maxPage);
-  const visible = sorted.slice(safePage * rowsPerPage, safePage * rowsPerPage + rowsPerPage);
+  const visible = sorted.slice((safePage - 1) * pageSize, (safePage - 1) * pageSize + pageSize);
+
+  /** Column order drives both the headers and each row's cells, so they cannot disagree. */
+  const sortKeys = useMemo(
+    () => [SORT_NODE, SORT_RACK, SORT_STATUS, ...statusOnly, ...metricCols],
+    [statusOnly, metricCols],
+  );
+
+  const columns = useMemo(
+    () =>
+      sortKeys.map((key) => {
+        const isMetric = metricCols.includes(key);
+        const label =
+          key === SORT_NODE ? "Node" : key === SORT_RACK ? "Rack" : key === SORT_STATUS ? "Status" : key;
+        const sub = isMetric
+          ? `${fleet?.metric_labels?.[key] ?? ""} · 0–${Math.round(scaleTop(ranges.get(key) ?? null))}`
+          : "";
+        return {
+          children: (
+            <HeaderLabel
+              label={label}
+              sub={sub}
+              active={sortKey === key}
+              direction={sortDir}
+              columnKey={key}
+            />
+          ),
+          onColumnSelect: ({ columnIndex }: { columnIndex: number }) => {
+            const next = sortKeys[columnIndex];
+            if (next === sortKey) {
+              setSortDir(sortDir === "asc" ? "desc" : "asc");
+            } else {
+              setSortKey(next);
+              // Descending first on a benchmark: the usual question is "what is the fastest",
+              // and a second click gives the slowest.
+              setSortDir(metricCols.includes(next) ? "desc" : "asc");
+            }
+            resetPage();
+          },
+        };
+      }),
+    [sortKeys, metricCols, fleet, ranges, sortKey, sortDir],
+  );
+
+  const rows = useMemo(
+    () =>
+      visible.map((id) => {
+        const status = statusById.get(id) ?? "unknown";
+        const node = fleetByNode.get(id);
+        return {
+          id,
+          cells: [
+            {
+              children: (
+                // Straight to this node's bring-up panel and logs: the row tells you a node looks
+                // wrong, and the next step should not be manual navigation.
+                <Link
+                  to={`/compute/nodes?node=${encodeURIComponent(id)}`}
+                  title={`Open ${id} in Compute → Nodes`}
+                  style={{
+                    color: "var(--color-brand, #76b900)",
+                    textDecoration: "none",
+                    fontFamily: "monospace",
+                  }}
+                >
+                  {id}
+                </Link>
+              ),
+            },
+            { children: <Text kind="mono/sm">{rackOf(id)}</Text> },
+            {
+              children: (
+                <Tag color={STATUS_TONE[status]} kind="solid" readOnly density="compact">
+                  {STATUS_LABEL[status]}
+                </Tag>
+              ),
+            },
+            ...statusOnly.map((col) => {
+              const v = verdictLabel(node ? verdictOf(node, col) : "");
+              return {
+                children: (
+                  <Tag color={v.tone} kind="outline" readOnly density="compact">
+                    {v.label}
+                  </Tag>
+                ),
+              };
+            }),
+            ...metricCols.map((col) => ({
+              children: (
+                <GaugeCell
+                  node={node}
+                  column={col}
+                  unit={fleet?.metric_labels?.[col] ?? ""}
+                  range={ranges.get(col) ?? null}
+                />
+              ),
+            })),
+          ],
+        };
+      }),
+    [visible, statusById, fleetByNode, rackOf, statusOnly, metricCols, fleet, ranges],
+  );
 
   return (
     <>
@@ -187,25 +286,17 @@ export function NodeMetricsTable({ fleet, nodes, rackOf }: NodeMetricsTableProps
           >
             Node or rack
           </Text>
-          <TextField
+          <TextInput
             value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
+            onValueChange={(v: string) => {
+              setQuery(v);
               resetPage();
             }}
             placeholder="Filter by node or rack…"
             size="small"
-            fullWidth
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Search size={16} />
-                  </InputAdornment>
-                ),
-              },
-              htmlInput: { "aria-label": "Filter by node or rack name" },
-            }}
+            dismissible
+            slotStart={<Search size={14} />}
+            aria-label="Filter by node or rack name"
           />
         </div>
         <div style={{ minWidth: 190 }}>
@@ -251,150 +342,79 @@ export function NodeMetricsTable({ fleet, nodes, rackOf }: NodeMetricsTableProps
         </div>
       </Flex>
 
-      <TableContainer component={Paper} variant="outlined">
-        <Table size="small" aria-label="Node benchmark results">
-          <TableHead>
-            <TableRow>
-              <SortHeader
-                label="Node"
-                active={sortKey === SORT_NODE}
-                direction={sortDir}
-                onClick={() => toggleSort(SORT_NODE, "asc")}
-              />
-              <SortHeader
-                label="Rack"
-                active={sortKey === SORT_RACK}
-                direction={sortDir}
-                onClick={() => toggleSort(SORT_RACK, "asc")}
-              />
-              <SortHeader
-                label="Status"
-                active={sortKey === SORT_STATUS}
-                direction={sortDir}
-                onClick={() => toggleSort(SORT_STATUS, "asc")}
-              />
-              {statusOnly.map((col) => (
-                <SortHeader
-                  key={col}
-                  label={col}
-                  active={sortKey === col}
-                  direction={sortDir}
-                  onClick={() => toggleSort(col, "asc")}
-                />
-              ))}
-              {metricCols.map((col) => (
-                <SortHeader
-                  key={col}
-                  label={col}
-                  align="center"
-                  // Descending first on a benchmark: the usual question is "what is the fastest",
-                  // and a second click gives the slowest.
-                  active={sortKey === col}
-                  direction={sortDir}
-                  onClick={() => toggleSort(col, "desc")}
-                  sub={`${fleet?.metric_labels?.[col] ?? ""} · 0–${Math.round(
-                    scaleTop(ranges.get(col) ?? null),
-                  )}`}
-                />
-              ))}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {visible.map((id) => {
-              const status = statusById.get(id) ?? "unknown";
-              const node = fleetByNode.get(id);
-              return (
-                <TableRow key={id} hover>
-                  <TableCell sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
-                    {/* Straight to this node's bring-up panel and logs: the row tells you a node
-                        looks wrong, and the next step should not be manual navigation. */}
-                    <Link
-                      to={`/compute/nodes?node=${encodeURIComponent(id)}`}
-                      title={`Open ${id} in Compute → Nodes`}
-                      style={{ color: "var(--color-brand, #76b900)", textDecoration: "none" }}
-                    >
-                      {id}
-                    </Link>
-                  </TableCell>
-                  <TableCell sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
-                    {rackOf(id)}
-                  </TableCell>
-                  <TableCell>
-                    <Tag color={STATUS_TONE[status]} kind="solid" readOnly density="compact">
-                      {status === "up" ? "Up" : status === "down" ? "Down" : status.toUpperCase()}
-                    </Tag>
-                  </TableCell>
-                  {statusOnly.map((col) => {
-                    const v = verdictLabel(node ? verdictOf(node, col) : "");
-                    return (
-                      <TableCell key={col}>
-                        <Tag color={v.tone} kind="outline" readOnly density="compact">
-                          {v.label}
-                        </Tag>
-                      </TableCell>
-                    );
-                  })}
-                  {metricCols.map((col) => (
-                    <GaugeCell
-                      key={col}
-                      node={node}
-                      column={col}
-                      unit={fleet?.metric_labels?.[col] ?? ""}
-                      range={ranges.get(col) ?? null}
-                    />
-                  ))}
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      </TableContainer>
-      <TablePagination
-        component="div"
-        count={sorted.length}
-        page={safePage}
-        onPageChange={(_, p) => setPage(p)}
-        rowsPerPage={rowsPerPage}
-        onRowsPerPageChange={(e) => {
-          setRowsPerPage(parseInt(e.target.value, 10));
-          setPage(0);
-        }}
-        rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS}
+      <Table
+        columns={columns}
+        rows={rows}
+        density="compact"
+        layout="auto"
+        hoverableRows
+        aria-label="Node benchmark results"
       />
+
+      {/* Only when it earns its space: a single page needs no pager (KUI Pagination guidance). */}
+      {sorted.length > pageSize && (
+        <div style={{ marginTop: 12 }}>
+          <Pagination
+            displayControls
+            totalItems={sorted.length}
+            page={safePage}
+            pageSize={pageSize}
+            pageSizeOptions={PAGE_SIZE_OPTIONS}
+            onPageChange={setPage}
+            onPageSizeChange={(size: number) => {
+              setPageSize(size);
+              resetPage();
+            }}
+            rangeTextFormatFn={({
+              firstItemIndex,
+              lastItemIndex,
+              totalItems,
+            }: {
+              firstItemIndex: number;
+              lastItemIndex: number;
+              totalItems: number;
+            }) => `${firstItemIndex}–${lastItemIndex} of ${totalItems} nodes`}
+          />
+        </div>
+      )}
     </>
   );
 }
 
-/** A sortable column header, with the unit/scale as a subtitle for metric columns. */
-function SortHeader({
+/** Column header: the name, a sort direction arrow when active, and the unit/scale beneath. */
+function HeaderLabel({
   label,
   sub,
-  align = "left",
   active,
   direction,
-  onClick,
+  columnKey,
 }: {
   label: string;
   sub?: string;
-  align?: "left" | "center";
   active: boolean;
   direction: "asc" | "desc";
-  onClick: () => void;
+  columnKey: string;
 }) {
   return (
-    <TableCell align={align} sortDirection={active ? direction : false}>
-      <TableSortLabel active={active} direction={active ? direction : "asc"} onClick={onClick}>
-        {label}
-      </TableSortLabel>
+    <span data-column={columnKey}>
+      <Flex align="center" style={{ gap: 4 }}>
+        <span>{label}</span>
+        {active &&
+          (direction === "asc" ? (
+            <ArrowUp size={12} aria-label="sorted ascending" />
+          ) : (
+            <ArrowDown size={12} aria-label="sorted descending" />
+          ))}
+      </Flex>
       {sub && (
         <Text
           kind="body/regular/sm"
-          style={{ display: "block", color: "var(--nv-color-text-secondary)" }}
+          style={{ display: "block", color: "var(--nv-color-text-secondary)", fontWeight: 400 }}
         >
           {sub}
         </Text>
       )}
-    </TableCell>
+    </span>
   );
 }
 
@@ -418,63 +438,61 @@ function GaugeCell({
   const value = node ? metricOf(node, column) : null;
   const verdict = node ? verdictOf(node, column) : "";
   const v = verdictLabel(verdict);
+  const id = node?.node ?? "?";
 
   if (value === null) {
     return (
-      <TableCell align="center" data-testid={`cell-${node?.node ?? "?"}-${column}`}>
+      <span data-testid={`cell-${id}-${column}`}>
         <Tag color={v.tone} kind="outline" readOnly density="compact">
           {v.label}
         </Tag>
-      </TableCell>
+      </span>
     );
   }
 
   const fraction = gaugeFraction(value, range);
   const failed = v.label === "Failed";
   return (
-    <TableCell
-      align="center"
-      data-testid={`cell-${node?.node ?? "?"}-${column}`}
-      sx={{ p: 0.5, minWidth: 104 }}
+    <Tooltip
+      slotContent={`${value} ${unit} — ${v.label}${range ? ` · fleet max ${range.max}` : ""}`}
     >
-      <Tooltip title={`${value} ${unit} — ${v.label}${range ? ` · fleet max ${range.max}` : ""}`} arrow>
-        <div
-          data-testid={`gauge-${node?.node ?? "?"}-${column}`}
-          aria-label={`${column} ${value} ${unit}, ${v.label}`}
+      <span
+        data-testid={`cell-${id}-${column}`}
+        aria-label={`${column} ${value} ${unit}, ${v.label}`}
+        style={{
+          position: "relative",
+          display: "block",
+          minWidth: 88,
+          borderRadius: 3,
+          overflow: "hidden",
+          background: "#1f2530",
+          // A failure keeps its number but is outlined, so a fast-but-rejected result cannot
+          // pass for a good one just because its gauge is long.
+          border: failed ? "1px solid #b91c1c" : "1px solid transparent",
+        }}
+      >
+        <span
+          data-testid={`gauge-fill-${id}-${column}`}
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: `${Math.round(fraction * 100)}%`,
+            background: throughputColor(fraction),
+            opacity: 0.9,
+          }}
+        />
+        <Text
+          kind="mono/sm"
           style={{
             position: "relative",
-            borderRadius: 3,
-            overflow: "hidden",
-            background: "var(--nv-color-surface-raised, #1f2530)",
-            // A failure keeps its number but is outlined, so a fast-but-rejected result cannot
-            // pass for a good one just because its gauge is long.
-            border: failed ? "1px solid #b91c1c" : "1px solid transparent",
+            display: "block",
+            padding: "2px 6px",
+            textShadow: "0 1px 2px rgba(0,0,0,0.55)",
           }}
         >
-          <div
-            data-testid={`gauge-fill-${node?.node ?? "?"}-${column}`}
-            style={{
-              position: "absolute",
-              inset: 0,
-              width: `${Math.round(fraction * 100)}%`,
-              background: throughputColor(fraction),
-              opacity: 0.9,
-            }}
-          />
-          <Text
-            kind="mono/sm"
-            style={{
-              position: "relative",
-              display: "block",
-              padding: "3px 6px",
-              color: fraction > 0.55 ? "#f8fafc" : "#e6edf3",
-              textShadow: "0 1px 2px rgba(0,0,0,0.55)",
-            }}
-          >
-            {value}
-          </Text>
-        </div>
-      </Tooltip>
-    </TableCell>
+          {value}
+        </Text>
+      </span>
+    </Tooltip>
   );
 }
