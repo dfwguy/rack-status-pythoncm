@@ -31,6 +31,7 @@ import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { NodeHeatmap } from "../components/analytics/NodeHeatmap";
 import { parseNodesFromRack, type NodeInfo } from "../components/rack/NodeSelector";
 import { downloadNodeReport, getBringupFleet } from "../services/bringupService";
+import { useActiveCluster } from "../context/ActiveClusterContext";
 import type { BringupFleet } from "../types/bringup";
 import type { RackRow, RackStatusResponse } from "../types/api";
 
@@ -156,6 +157,7 @@ function absDeltaExceeds(v: unknown, maxAbsPct: number): boolean {
 }
 
 export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
+  const { activeCluster } = useActiveCluster();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState<AnalyticsPayload | null>(null);
@@ -572,6 +574,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
             loading={fleetLoading}
             error={fleetError}
             onRefresh={() => void loadFleet()}
+            clusterName={activeCluster?.name}
           />
         </Box>
       )}

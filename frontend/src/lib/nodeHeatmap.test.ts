@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  COMPLETION_FILL,
+  COMPLETION_VIEW_ID,
+  GAUGE_TRACK,
   STATUS_BORDER,
   STATUS_FILL,
   STATUS_VIEW_ID,
@@ -7,15 +10,23 @@ import {
   VERDICT_BORDER_UNKNOWN,
   borderFor,
   GAUGE_GRADIENT,
+  cellFill,
+  cellTone,
+  chunkNodes,
   compareMetric,
+  completionOf,
   groupByRack,
+  groupRacksByRow,
   heatmapViews,
   metricOf,
   metricRange,
   orderColumns,
   paintCell,
+  rackRowOf,
+  shortNodeLabel,
   statusRank,
   throughputColor,
+  toneCounts,
   verdictLabel,
   verdictOf,
   verdictRank,
@@ -45,15 +56,136 @@ const FLEET: BringupFleet = {
 };
 
 describe("heatmapViews", () => {
-  it("offers node status first, then one view per measurable column", () => {
+  it("offers status and completion first, then one view per measurable column", () => {
     const views = heatmapViews(FLEET);
-    expect(views.map((v) => v.id)).toEqual([STATUS_VIEW_ID, "allreduce"]);
+    expect(views.map((v) => v.id)).toEqual([STATUS_VIEW_ID, COMPLETION_VIEW_ID, "allreduce"]);
     // dcgmi-r1 produces no number, so it is not a heatmap view.
-    expect(views[1].unit).toBe("busbw GB/s");
+    expect(views[2].unit).toBe("busbw GB/s");
+    expect(views.map((v) => v.kind)).toEqual(["status", "completion", "metric"]);
   });
 
-  it("still offers the status view when there is no fleet data", () => {
-    expect(heatmapViews(null).map((v) => v.id)).toEqual([STATUS_VIEW_ID]);
+  it("still offers the fleet-independent views when there is no data", () => {
+    expect(heatmapViews(null).map((v) => v.id)).toEqual([STATUS_VIEW_ID, COMPLETION_VIEW_ID]);
+  });
+});
+
+describe("completionOf", () => {
+  const jobs = (...statuses: string[]) => ({
+    node: "n",
+    slurm_state: "idle",
+    jobs: statuses.map((status, i) => ({
+      name: `t${i}`, base: `t${i}`, status, reason: "", metric: null, metric_label: null,
+    })),
+  });
+
+  it("counts a test as done once it reaches a verdict, pass or fail", () => {
+    /** Completion asks "has it been tested", not "did it pass" -- a fail is still an answer. */
+    expect(completionOf(jobs("DONE", "PASS", "FAIL"))).toBe("all_done");
+  });
+
+  it("is none_run only when nothing has started", () => {
+    expect(completionOf(jobs("NOT_RUN", "NOT_RUN"))).toBe("none_run");
+    expect(completionOf(jobs("NOT_RUN", ""))).toBe("none_run");
+  });
+
+  it("treats an in-flight test as partial, never as done", () => {
+    /** A running test must not read as finished, or the floor looks greener than it is. */
+    expect(completionOf(jobs("DONE", "RUNNING"))).toBe("partial");
+    expect(completionOf(jobs("RUNNING", "NOT_RUN"))).toBe("partial");
+    expect(completionOf(jobs("DONE", "NOT_RUN"))).toBe("partial");
+  });
+
+  it("distinguishes a node with no results at all from one that ran nothing", () => {
+    expect(completionOf(undefined)).toBe("no_data");
+    expect(completionOf(jobs())).toBe("no_data");
+  });
+});
+
+describe("cellFill", () => {
+  const views = heatmapViews(FLEET);
+  const [statusView, completionView, metricView] = views;
+  const range = metricRange(FLEET, "allreduce");
+
+  it("uses the status palette on the status view", () => {
+    expect(cellFill(statusView, FLEET.nodes[0], "down", range)).toBe(STATUS_FILL.down);
+  });
+
+  it("uses the completion palette on the completion view", () => {
+    // r01-11: dcgmi DONE + allreduce DONE -> everything finished.
+    expect(cellFill(completionView, FLEET.nodes[0], "up", range)).toBe(COMPLETION_FILL.all_done);
+    // r02-11: dcgmi DONE + allreduce NOT_RUN -> started but unfinished.
+    expect(cellFill(completionView, FLEET.nodes[2], "up", range)).toBe(COMPLETION_FILL.partial);
+  });
+
+  it("keeps a metric's magnitude by taking the shade the gauge would have ended on", () => {
+    const fast = cellFill(metricView, FLEET.nodes[0], "up", range);
+    const slow = cellFill(metricView, FLEET.nodes[1], "up", range);
+    expect(fast).toBe(throughputColor(1));
+    expect(fast).not.toBe(slow);
+  });
+
+  it("falls back to the empty track when nothing was measured", () => {
+    expect(cellFill(metricView, FLEET.nodes[2], "up", range)).toBe(GAUGE_TRACK);
+  });
+});
+
+describe("cellTone and toneCounts", () => {
+  const [statusView, completionView, metricView] = heatmapViews(FLEET);
+
+  it("reads tone from the question the current view is asking", () => {
+    expect(cellTone(statusView, FLEET.nodes[0], "up")).toBe("good");
+    expect(cellTone(statusView, FLEET.nodes[0], "down")).toBe("bad");
+    expect(cellTone(completionView, FLEET.nodes[0], "up")).toBe("good");
+    expect(cellTone(completionView, FLEET.nodes[2], "up")).toBe("warn");
+    expect(cellTone(metricView, FLEET.nodes[1], "up")).toBe("bad");
+    expect(cellTone(metricView, FLEET.nodes[2], "up")).toBe("none");
+  });
+
+  it("tallies tones so a rack summary cannot disagree with its own cells", () => {
+    expect(toneCounts(["good", "good", "bad", "none"])).toEqual({
+      good: 2, warn: 0, bad: 1, none: 1,
+    });
+  });
+});
+
+describe("rack row grouping", () => {
+  it("reads the floor row off the rack id by dropping the rack number", () => {
+    expect(rackRowOf("dh01-h01")).toBe("dh01-h");
+    expect(rackRowOf("bos01-a12")).toBe("bos01-a");
+  });
+
+  it("returns no row when the id does not end in a number, rather than inventing one", () => {
+    expect(rackRowOf("unassigned")).toBe("");
+  });
+
+  it("groups racks into rows in first-seen order", () => {
+    expect(
+      groupRacksByRow([{ rack: "dh01-h01" }, { rack: "dh01-h02" }, { rack: "dh01-i01" }]),
+    ).toEqual([
+      { row: "dh01-h", racks: [{ rack: "dh01-h01" }, { rack: "dh01-h02" }] },
+      { row: "dh01-i", racks: [{ rack: "dh01-i01" }] },
+    ]);
+  });
+});
+
+describe("shortNodeLabel", () => {
+  it("keeps the slot number an operator reads off the rack door", () => {
+    expect(shortNodeLabel("dh01-h01-14", "dh01-h01")).toBe("14");
+  });
+
+  it("stays blank when the remainder would not fit in a cell", () => {
+    /** Better an unlabelled square than a smear of unreadable text. */
+    expect(shortNodeLabel("some-very-long-hostname", "rack")).toBe("");
+  });
+});
+
+describe("chunkNodes", () => {
+  it("splits a rack into fixed-width tray rows, short last row included", () => {
+    expect(chunkNodes([1, 2, 3, 4, 5], 3)).toEqual([[1, 2, 3], [4, 5]]);
+  });
+
+  it("never divides by zero on a bad width", () => {
+    expect(chunkNodes([1, 2], 0)).toEqual([[1], [2]]);
   });
 });
 
@@ -73,7 +205,7 @@ describe("metric extraction", () => {
 });
 
 describe("paintCell", () => {
-  const [statusView, metricView] = heatmapViews(FLEET);
+  const [statusView, , metricView] = heatmapViews(FLEET);
   const range = metricRange(FLEET, "allreduce");
 
   it("shows a full bar in the status colour on the status view", () => {
@@ -116,7 +248,7 @@ describe("paintCell", () => {
 });
 
 describe("borderFor", () => {
-  const [statusView, metricView] = heatmapViews(FLEET);
+  const [statusView, , metricView] = heatmapViews(FLEET);
 
   it("shows node up/down on the status view", () => {
     expect(borderFor(statusView, FLEET.nodes[0], "up")).toBe(STATUS_BORDER.up);

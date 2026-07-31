@@ -120,28 +120,78 @@ export function borderFor(
 }
 
 export const STATUS_VIEW_ID = "status";
+export const COMPLETION_VIEW_ID = "completion";
+
+/** How far through its test plan a node is, ignoring whether the tests passed. */
+export type NodeCompletion = "all_done" | "partial" | "none_run" | "no_data";
+
+/**
+ * Fill for the completion view: green all finished, red nothing started, yellow in between.
+ *
+ * Deliberately a different question from every other view — those ask "is it healthy" or "how
+ * fast is it", this one asks "has it been tested yet", which is what a bring-up is tracking
+ * day to day. A node can be solid green here and still have failed every test; the border
+ * (up/down) and the per-benchmark views answer that.
+ */
+export const COMPLETION_FILL: Record<NodeCompletion, string> = {
+  all_done: "#16a34a",
+  partial: "#eab308",
+  none_run: "#dc2626",
+  no_data: "#6b7280",
+};
+
+/** A test that reached a verdict, pass or fail — it is done either way. */
+const FINISHED_VERDICTS = new Set(["PASS", "DONE", "FAIL"]);
+/** Started but no answer yet, so it counts as neither done nor untouched. */
+const PENDING_VERDICTS = new Set(["RUNNING", "RETRY", "INCOMPLETE"]);
+
+export function completionOf(node: BringupFleetNode | undefined): NodeCompletion {
+  const jobs = node?.jobs ?? [];
+  if (!jobs.length) return "no_data";
+  let finished = 0;
+  let pending = 0;
+  for (const job of jobs) {
+    const verdict = (job.status || "").toUpperCase();
+    if (FINISHED_VERDICTS.has(verdict)) finished += 1;
+    else if (PENDING_VERDICTS.has(verdict)) pending += 1;
+  }
+  if (finished === jobs.length) return "all_done";
+  if (finished === 0 && pending === 0) return "none_run";
+  return "partial";
+}
+
+/** What kind of question a view answers, which decides how its cells are painted. */
+export type HeatmapViewKind = "status" | "completion" | "metric";
 
 export interface HeatmapView {
   id: string;
   label: string;
-  /** Metric column this view reads, or null for the up/down view. */
+  /** Metric column this view reads, or null for the status and completion views. */
   column: string | null;
   unit: string;
+  kind: HeatmapViewKind;
 }
 
 /**
- * Available views: node status first, then one per column that produces a number.
+ * Available views: node status, test completion, then one per column that produces a number.
  *
  * Built from the fleet payload rather than hardcoded, so a site running different benchmarks
  * gets its own views without a code change.
  */
 export function heatmapViews(fleet: BringupFleet | null): HeatmapView[] {
   const views: HeatmapView[] = [
-    { id: STATUS_VIEW_ID, label: "Node status (up / down)", column: null, unit: "" },
+    { id: STATUS_VIEW_ID, label: "Node status (up / down)", column: null, unit: "", kind: "status" },
+    {
+      id: COMPLETION_VIEW_ID,
+      label: "Test completion (done / partial / not run)",
+      column: null,
+      unit: "",
+      kind: "completion",
+    },
   ];
   for (const col of fleet?.columns ?? []) {
     const unit = fleet?.metric_labels?.[col];
-    if (unit) views.push({ id: col, label: `${col} — ${unit}`, column: col, unit });
+    if (unit) views.push({ id: col, label: `${col} — ${unit}`, column: col, unit, kind: "metric" });
   }
   return views;
 }
@@ -231,6 +281,9 @@ export function paintCell(
   status: NodeInfo["status"],
   range: MetricRange | null,
 ): CellPaint {
+  if (view.kind === "completion") {
+    return { bar: 1, barColor: COMPLETION_FILL[completionOf(node)], cellBg: CELL_TRACK, norm: null };
+  }
   if (!view.column) {
     // Status view: the bar restates the border so the view still reads at a glance.
     return { bar: 1, barColor: STATUS_FILL[status], cellBg: CELL_TRACK, norm: null };
@@ -364,6 +417,146 @@ export function nodeMetrics(
     unit: j.metric_label ?? "",
     reason: j.reason || "",
   }));
+}
+
+/**
+ * Solid colour for a cell, used where there is no room for a gauge.
+ *
+ * The compact layout fits the whole floor on one screen by shrinking cells to a few pixels, at
+ * which point a bar inside a track is unreadable. Metric views keep their magnitude by taking
+ * the shade the gauge would have ended on, so the same scale and legend still apply.
+ */
+export function cellFill(
+  view: HeatmapView,
+  node: BringupFleetNode | undefined,
+  status: NodeInfo["status"],
+  range: MetricRange | null,
+): string {
+  if (view.kind === "completion") return COMPLETION_FILL[completionOf(node)];
+  if (view.kind === "status") return STATUS_FILL[status];
+  const value = node ? metricOf(node, view.column) : null;
+  if (value === null) return GAUGE_TRACK;
+  return throughputColor(gaugeFraction(value, range));
+}
+
+/**
+ * Whether a cell reads as good, bad, or somewhere in between on the current view.
+ *
+ * One function so a rack's summary counts can never disagree with the colours in that rack —
+ * the counts are literally a tally of what the cells are showing.
+ */
+export type CellTone = "good" | "warn" | "bad" | "none";
+
+export function cellTone(
+  view: HeatmapView,
+  node: BringupFleetNode | undefined,
+  status: NodeInfo["status"],
+): CellTone {
+  if (view.kind === "completion") {
+    const done = completionOf(node);
+    if (done === "all_done") return "good";
+    if (done === "partial") return "warn";
+    if (done === "none_run") return "bad";
+    return "none";
+  }
+  if (view.kind === "status") {
+    if (status === "up") return "good";
+    if (status === "down") return "bad";
+    if (status === "inst") return "warn";
+    return "none";
+  }
+  switch (verdictLabel(node ? verdictOf(node, view.column) : "").label) {
+    case "Pass":
+      return "good";
+    case "Failed":
+      return "bad";
+    case "Running":
+      return "warn";
+    default:
+      return "none";
+  }
+}
+
+export interface ToneCounts {
+  good: number;
+  warn: number;
+  bad: number;
+  none: number;
+}
+
+export function toneCounts(tones: CellTone[]): ToneCounts {
+  const counts: ToneCounts = { good: 0, warn: 0, bad: 0, none: 0 };
+  for (const tone of tones) counts[tone] += 1;
+  return counts;
+}
+
+export const TONE_FILL: Record<CellTone, string> = {
+  good: "#16a34a",
+  warn: "#eab308",
+  bad: "#dc2626",
+  none: "#6b7280",
+};
+
+/**
+ * The row a rack sits in, i.e. its id with the trailing rack number removed
+ * ("dh01-h01" -> "dh01-h"). Returns "" when the id has no trailing number, in which case the
+ * caller should skip row grouping rather than invent one.
+ */
+export function rackRowOf(rack: string): string {
+  const m = /^(.*?[^0-9])[0-9]+$/.exec(rack.trim());
+  return m ? m[1] : "";
+}
+
+/**
+ * Group racks into floor rows, preserving order. Racks whose id has no trailing number fall
+ * into a single unnamed group so nothing is dropped from the picture.
+ */
+export function groupRacksByRow<T extends { rack: string }>(
+  racks: T[],
+): Array<{ row: string; racks: T[] }> {
+  const order: string[] = [];
+  const byRow = new Map<string, T[]>();
+  for (const entry of racks) {
+    const row = rackRowOf(entry.rack);
+    if (!byRow.has(row)) {
+      byRow.set(row, []);
+      order.push(row);
+    }
+    byRow.get(row)!.push(entry);
+  }
+  return order.map((row) => ({ row, racks: byRow.get(row)! }));
+}
+
+/**
+ * The part of a node id that identifies it within its rack ("dh01-h01-14" -> "14").
+ *
+ * Compact cells are too small for a full hostname but wide enough for a slot number, which is
+ * what an operator reads off the rack door. Returns "" when the remainder is too long to fit,
+ * so an unfamiliar naming scheme degrades to an unlabelled square instead of a smear of text.
+ */
+export function shortNodeLabel(nodeId: string, rack: string): string {
+  let rest = nodeId.startsWith(rack) ? nodeId.slice(rack.length) : nodeId;
+  rest = rest.replace(/^[^A-Za-z0-9]+/, "");
+  const tail = rest.split("-").pop() ?? "";
+  return tail.length > 0 && tail.length <= 3 ? tail : "";
+}
+
+/**
+ * Compact layout shape: racks tiled 8 across, each rack's trays 3 across.
+ *
+ * 8 x 3 fits a 49-rack floor on one screen without horizontal scrolling at 1280px, and 3 keeps
+ * an 18-node rack six rows tall — roughly the proportions of the rack itself, so the picture
+ * matches what someone standing in the aisle sees.
+ */
+export const COMPACT_RACKS_PER_ROW = 8;
+export const COMPACT_NODES_PER_ROW = 3;
+
+/** Split a rack's nodes into fixed-width rows, the way trays stack in the rack. */
+export function chunkNodes<T>(nodes: T[], perRow: number): T[][] {
+  const width = Math.max(1, perRow);
+  const out: T[][] = [];
+  for (let i = 0; i < nodes.length; i += width) out.push(nodes.slice(i, i + width));
+  return out;
 }
 
 /** Group nodes by rack for display, preserving the order racks appear in. */

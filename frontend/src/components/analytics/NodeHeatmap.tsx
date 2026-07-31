@@ -8,7 +8,7 @@
  * a two-channel encoding (fill + border), and this is how the existing NVLoom/Clusterkit
  * heatmaps in this codebase are built.
  */
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Banner,
   Button,
@@ -20,25 +20,42 @@ import {
   Text,
   Tooltip,
 } from "@nvidia/foundations-react-core";
-import { RefreshCw } from "lucide-react";
+import { Download, RefreshCw } from "lucide-react";
 import type { BringupFleet } from "../../types/bringup";
 import type { NodeInfo } from "../rack/NodeSelector";
 import { NodeMetricsTable } from "./NodeMetricsTable";
 import {
+  COMPACT_NODES_PER_ROW,
+  COMPACT_RACKS_PER_ROW,
+  COMPLETION_FILL,
   GAUGE_GRADIENT,
   GAUGE_TRACK,
   STATUS_FILL,
   STATUS_VIEW_ID,
+  TONE_FILL,
   VERDICT_BORDER,
   borderFor,
+  cellFill,
+  cellTone,
+  chunkNodes,
   groupByRack,
+  groupRacksByRow,
   heatmapViews,
   metricOf,
   metricRange,
   nodeMetrics,
   paintCell,
+  shortNodeLabel,
+  throughputColor,
+  toneCounts,
   verdictOf,
 } from "../../lib/nodeHeatmap";
+import {
+  type HeatmapImageModel,
+  type ImageFormat,
+  downloadHeatmapImage,
+  readableOn,
+} from "../../lib/heatmapImage";
 
 export interface NodeHeatmapProps {
   fleet: BringupFleet | null;
@@ -49,6 +66,8 @@ export interface NodeHeatmapProps {
   loading?: boolean;
   error?: string | null;
   onRefresh?: () => void;
+  /** Cluster name, for the exported image's caption and filename. */
+  clusterName?: string;
 }
 
 // Wide enough for the gauge to read as a proportion rather than a dot.
@@ -56,13 +75,32 @@ const CELL_W = 40;
 const CELL_H = 20;
 const BAR_H = 10;
 
+/** Compact cells carry a slot number instead of a gauge, so they only need to fit two digits. */
+const COMPACT_CELL = 18;
+
 const HEATMAP_MODE = "heatmap";
 const TABLE_MODE = "table";
 
-export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }: NodeHeatmapProps) {
+const COMPACT_LAYOUT = "compact";
+const LINEAR_LAYOUT = "linear";
+
+export function NodeHeatmap({
+  fleet,
+  nodes,
+  rackOf,
+  loading,
+  error,
+  onRefresh,
+  clusterName,
+}: NodeHeatmapProps) {
   const views = useMemo(() => heatmapViews(fleet), [fleet]);
   const [viewId, setViewId] = useState(STATUS_VIEW_ID);
   const [mode, setMode] = useState(HEATMAP_MODE);
+  // Compact by default: the whole floor on one screen is the reason this view exists. Linear
+  // trades that for the gauge, which needs a cell too wide to tile.
+  const [layout, setLayout] = useState(COMPACT_LAYOUT);
+  const [format, setFormat] = useState<ImageFormat>("png");
+  const [exportError, setExportError] = useState<string | null>(null);
   // A column can disappear when the site changes its benchmark set; fall back rather than
   // rendering an empty grid against a view that no longer exists.
   const view = views.find((v) => v.id === viewId) ?? views[0];
@@ -89,6 +127,36 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
   }, [nodes, fleet, rackOf]);
 
   const total = rows.reduce((sum, r) => sum + r.nodes.length, 0);
+
+  const legendEntries = useMemo(() => imageLegend(view), [view]);
+
+  const handleDownload = useCallback(async () => {
+    if (!view) return;
+    setExportError(null);
+    const model: HeatmapImageModel = {
+      title: `Node heatmap — ${view.label}`,
+      subtitle: `${clusterName || "cluster"} · ${total} nodes across ${rows.length} racks · ${new Date().toLocaleString()}`,
+      legend: legendEntries,
+      racks: rows.map(({ rack, nodes: ids }) => ({
+        rack,
+        cells: ids.map((id) => {
+          const status = statusById.get(id) ?? "unknown";
+          const node = fleetByNode.get(id);
+          return {
+            id,
+            fill: cellFill(view, node, status, range),
+            border: borderFor(view, node, status),
+            label: shortNodeLabel(id, rack),
+          };
+        }),
+      })),
+    };
+    try {
+      await downloadHeatmapImage(model, format, clusterName || "cluster");
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : String(e));
+    }
+  }, [view, clusterName, total, rows, legendEntries, statusById, fleetByNode, range, format]);
 
   return (
     <Card style={{ padding: 16 }}>
@@ -120,13 +188,44 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
           {/* The table shows every benchmark at once, so a single-view selector is only
               meaningful for the heatmap. */}
           {mode === HEATMAP_MODE && (
-            <Select
-              aria-label="Heatmap data view"
-              value={view?.id}
-              onValueChange={(v: string) => setViewId(v)}
-              items={views.map((v) => ({ value: v.id, children: v.label }))}
-              size="small"
-            />
+            <>
+              <SegmentedControl
+                aria-label="Heatmap layout"
+                value={layout}
+                onValueChange={(l: string) => setLayout(l)}
+                items={[
+                  { value: COMPACT_LAYOUT, children: "Compact" },
+                  { value: LINEAR_LAYOUT, children: "Linear" },
+                ]}
+                size="small"
+              />
+              <Select
+                aria-label="Heatmap data view"
+                value={view?.id}
+                onValueChange={(v: string) => setViewId(v)}
+                items={views.map((v) => ({ value: v.id, children: v.label }))}
+                size="small"
+              />
+              <Select
+                aria-label="Image format"
+                value={format}
+                onValueChange={(f: string) => setFormat(f as ImageFormat)}
+                items={[
+                  { value: "png", children: "PNG" },
+                  { value: "jpeg", children: "JPEG" },
+                ]}
+                size="small"
+              />
+              <Button
+                kind="secondary"
+                size="small"
+                onClick={() => void handleDownload()}
+                disabled={total === 0}
+              >
+                <Download size={14} style={{ marginRight: 6 }} />
+                Download image
+              </Button>
+            </>
           )}
           {onRefresh && (
             <Button
@@ -148,6 +247,12 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
         </Banner>
       )}
 
+      {exportError && (
+        <Banner status="error" kind="inline">
+          Could not build the image: {exportError}
+        </Banner>
+      )}
+
       {loading && !fleet && (
         <Flex align="center" style={{ gap: 8, padding: 24 }}>
           <Spinner size="small" aria-label="Loading bring-up results" />
@@ -165,97 +270,275 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
         <NodeMetricsTable fleet={fleet} nodes={nodes} rackOf={rackOf} />
       )}
 
-      {total > 0 && mode === HEATMAP_MODE && (
+      {total > 0 && mode === HEATMAP_MODE && view && (
         <>
           <Legend view={view} range={range} />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
-            {rows.map(({ rack, nodes: ids }) => (
-              <Flex key={rack} align="center" style={{ gap: 8 }}>
-                <Text
-                  kind="mono/sm"
-                  style={{
-                    minWidth: 150,
-                    color: "var(--nv-color-text-secondary)",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {rack}
-                </Text>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-                  {ids.map((id) => {
-                    const status = statusById.get(id) ?? "unknown";
-                    const node = fleetByNode.get(id);
-                    const paint = paintCell(view, node, status, range);
-                    const value = node ? metricOf(node, view?.column ?? null) : null;
-                    const verdict = node ? verdictOf(node, view?.column ?? null) : "";
-                    const detail = !view?.column
-                      ? `status ${status.toUpperCase()}`
-                      : value !== null
-                        ? `${value} ${view.unit} (${verdict || "—"})`
-                        : verdict || "no result";
-                    return (
-                      <Tooltip
+          {layout === LINEAR_LAYOUT ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
+              {rows.map(({ rack, nodes: ids }) => (
+                <Flex key={rack} align="center" style={{ gap: 8 }}>
+                  <Text
+                    kind="mono/sm"
+                    style={{
+                      minWidth: 150,
+                      color: "var(--nv-color-text-secondary)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {rack}
+                  </Text>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                    {ids.map((id) => (
+                      <GaugeCell
                         key={id}
-                        slotContent={<CellTooltip node={id} status={status} fleetNode={node} />}
-                        side="top"
-                      >
-                        <div
-                          data-testid={`heatmap-cell-${id}`}
-                          aria-label={`${id}: ${detail}`}
-                          style={{
-                            width: CELL_W,
-                            height: CELL_H,
-                            background: paint.cellBg,
-                            border: `2px solid ${borderFor(view, node, status)}`,
-                            borderRadius: 4,
-                            boxSizing: "border-box",
-                            display: "flex",
-                            alignItems: "center",
-                            padding: 2,
-                          }}
-                        >
-                          {/* Gauge: an explicit track so a part-filled bar reads as a
-                              proportion rather than as a short block of colour. */}
-                          <div
-                            style={{
-                              position: "relative",
-                              width: "100%",
-                              height: BAR_H,
-                              background: GAUGE_TRACK,
-                              borderRadius: 2,
-                              overflow: "hidden",
-                            }}
-                          >
-                            <div
-                              data-testid={`heatmap-bar-${id}`}
-                              style={{
-                                position: "absolute",
-                                inset: 0,
-                                width: `${Math.round(paint.bar * 100)}%`,
-                                // Metric views reveal a slice of the shared gradient, so a longer
-                                // bar ends in a darker blue and neighbouring cells differ even
-                                // when their values are close. The status view stays a flat
-                                // red/green, where a gradient would imply a magnitude.
-                                background: view?.column ? GAUGE_GRADIENT : paint.barColor,
-                                backgroundSize: view?.column
-                                  ? `${CELL_W - 8}px 100%`
-                                  : undefined,
-                                backgroundRepeat: "no-repeat",
-                                transition: "width 120ms ease-out",
-                              }}
-                            />
-                          </div>
-                        </div>
-                      </Tooltip>
-                    );
-                  })}
+                        id={id}
+                        view={view}
+                        range={range}
+                        status={statusById.get(id) ?? "unknown"}
+                        node={fleetByNode.get(id)}
+                      />
+                    ))}
+                  </div>
+                </Flex>
+              ))}
+            </div>
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 16,
+                marginTop: 12,
+                overflowX: "auto",
+              }}
+            >
+              {groupRacksByRow(rows).map(({ row, racks }) => (
+                <div key={row || "all"}>
+                  {row && (
+                    <Text
+                      kind="mono/sm"
+                      style={{ display: "block", marginBottom: 4, fontWeight: 600 }}
+                    >
+                      {row}
+                    </Text>
+                  )}
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: `repeat(${COMPACT_RACKS_PER_ROW}, max-content)`,
+                      gap: 10,
+                    }}
+                  >
+                    {racks.map(({ rack, nodes: ids }) => (
+                      <RackBlock
+                        key={rack}
+                        rack={rack}
+                        ids={ids}
+                        view={view}
+                        range={range}
+                        statusById={statusById}
+                        fleetByNode={fleetByNode}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </Flex>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </>
       )}
     </Card>
+  );
+}
+
+type FleetNode = BringupFleet["nodes"][number] | undefined;
+
+/** Sentence describing the cell on the current view, for the accessible name and the aria label. */
+function cellDetail(
+  view: ReturnType<typeof heatmapViews>[number],
+  node: FleetNode,
+  status: NodeInfo["status"],
+): string {
+  if (view.kind === "status") return `status ${status.toUpperCase()}`;
+  if (view.kind === "completion") return `tests ${cellTone(view, node, status)}`;
+  const value = node ? metricOf(node, view.column) : null;
+  const verdict = node ? verdictOf(node, view.column) : "";
+  if (value !== null) return `${value} ${view.unit} (${verdict || "—"})`;
+  return verdict || "no result";
+}
+
+/** Wide cell with a load bar: the linear layout, where there is room to show magnitude. */
+function GaugeCell({
+  id,
+  view,
+  range,
+  status,
+  node,
+}: {
+  id: string;
+  view: ReturnType<typeof heatmapViews>[number];
+  range: { min: number; max: number } | null;
+  status: NodeInfo["status"];
+  node: FleetNode;
+}) {
+  const paint = paintCell(view, node, status, range);
+  return (
+    <Tooltip slotContent={<CellTooltip node={id} status={status} fleetNode={node} />} side="top">
+      <div
+        data-testid={`heatmap-cell-${id}`}
+        aria-label={`${id}: ${cellDetail(view, node, status)}`}
+        style={{
+          width: CELL_W,
+          height: CELL_H,
+          background: paint.cellBg,
+          border: `2px solid ${borderFor(view, node, status)}`,
+          borderRadius: 4,
+          boxSizing: "border-box",
+          display: "flex",
+          alignItems: "center",
+          padding: 2,
+        }}
+      >
+        {/* Gauge: an explicit track so a part-filled bar reads as a proportion rather than as a
+            short block of colour. */}
+        <div
+          style={{
+            position: "relative",
+            width: "100%",
+            height: BAR_H,
+            background: GAUGE_TRACK,
+            borderRadius: 2,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            data-testid={`heatmap-bar-${id}`}
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: `${Math.round(paint.bar * 100)}%`,
+              // Metric views reveal a slice of the shared gradient, so a longer bar ends in a
+              // darker blue and neighbouring cells differ even when their values are close. The
+              // status view stays a flat red/green, where a gradient would imply a magnitude.
+              background: view.column ? GAUGE_GRADIENT : paint.barColor,
+              backgroundSize: view.column ? `${CELL_W - 8}px 100%` : undefined,
+              backgroundRepeat: "no-repeat",
+              transition: "width 120ms ease-out",
+            }}
+          />
+        </div>
+      </div>
+    </Tooltip>
+  );
+}
+
+/** Small solid square carrying its slot number: the compact layout. */
+function CompactCell({
+  id,
+  rack,
+  view,
+  range,
+  status,
+  node,
+}: {
+  id: string;
+  rack: string;
+  view: ReturnType<typeof heatmapViews>[number];
+  range: { min: number; max: number } | null;
+  status: NodeInfo["status"];
+  node: FleetNode;
+}) {
+  const fill = cellFill(view, node, status, range);
+  const label = shortNodeLabel(id, rack);
+  return (
+    <Tooltip slotContent={<CellTooltip node={id} status={status} fleetNode={node} />} side="top">
+      <div
+        data-testid={`heatmap-cell-${id}`}
+        aria-label={`${id}: ${cellDetail(view, node, status)}`}
+        style={{
+          width: COMPACT_CELL,
+          height: COMPACT_CELL,
+          background: fill,
+          border: `1.5px solid ${borderFor(view, node, status)}`,
+          borderRadius: 3,
+          boxSizing: "border-box",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "var(--nv-font-family-mono, monospace)",
+          fontSize: 8,
+          lineHeight: 1,
+          color: readableOn(fill),
+        }}
+      >
+        {label}
+      </div>
+    </Tooltip>
+  );
+}
+
+/**
+ * One rack as a labelled block of trays, with a tally of what its cells are showing.
+ *
+ * The tally is what makes a tiled floor scannable: colour alone tells you a rack is mixed, the
+ * counts tell you whether that means one straggler or half the rack.
+ */
+function RackBlock({
+  rack,
+  ids,
+  view,
+  range,
+  statusById,
+  fleetByNode,
+}: {
+  rack: string;
+  ids: string[];
+  view: ReturnType<typeof heatmapViews>[number];
+  range: { min: number; max: number } | null;
+  statusById: Map<string, NodeInfo["status"]>;
+  fleetByNode: Map<string, NonNullable<FleetNode>>;
+}) {
+  const counts = toneCounts(
+    ids.map((id) => cellTone(view, fleetByNode.get(id), statusById.get(id) ?? "unknown")),
+  );
+  return (
+    <div data-testid={`heatmap-rack-${rack}`}>
+      <Flex align="center" style={{ gap: 4, marginBottom: 2 }}>
+        <Text kind="mono/sm" style={{ fontSize: 10, color: "var(--nv-color-text-secondary)" }}>
+          {rack}
+        </Text>
+        <Flex align="center" style={{ gap: 3, marginLeft: "auto" }}>
+          {(["good", "warn", "bad"] as const).map((tone) =>
+            counts[tone] > 0 ? (
+              <span
+                key={tone}
+                title={`${counts[tone]} ${tone}`}
+                style={{ fontSize: 9, fontWeight: 700, color: TONE_FILL[tone] }}
+              >
+                {counts[tone]}
+              </span>
+            ) : null,
+          )}
+        </Flex>
+      </Flex>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        {chunkNodes(ids, COMPACT_NODES_PER_ROW).map((line) => (
+          <div key={line[0]} style={{ display: "flex", gap: 3 }}>
+            {line.map((id) => (
+              <CompactCell
+                key={id}
+                id={id}
+                rack={rack}
+                view={view}
+                range={range}
+                status={statusById.get(id) ?? "unknown"}
+                node={fleetByNode.get(id)}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -316,6 +599,39 @@ function Swatch({ color, label }: { color: string; label: string }) {
   );
 }
 
+/**
+ * The on-screen legend as plain data, for the exported image.
+ *
+ * The export has no gradient strip, so a metric view is described by its ends rather than the
+ * ramp — the shade of a cell is only meaningful next to a stated scale.
+ */
+function imageLegend(view: ReturnType<typeof heatmapViews>[number] | undefined) {
+  if (!view) return [];
+  if (view.kind === "completion") {
+    return [
+      { label: "all tests done", color: COMPLETION_FILL.all_done },
+      { label: "partial", color: COMPLETION_FILL.partial },
+      { label: "none run", color: COMPLETION_FILL.none_run },
+      { label: "no results", color: COMPLETION_FILL.no_data },
+    ];
+  }
+  if (view.kind === "status") {
+    return [
+      { label: "up", color: STATUS_FILL.up },
+      { label: "down", color: STATUS_FILL.down },
+      { label: "installing", color: STATUS_FILL.inst },
+      { label: "unknown", color: STATUS_FILL.unknown },
+    ];
+  }
+  return [
+    { label: `low ${view.unit}`, color: throughputColor(0.15) },
+    { label: `high ${view.unit}`, color: throughputColor(1) },
+    { label: "passed (outline)", color: VERDICT_BORDER.PASS },
+    { label: "failed (outline)", color: VERDICT_BORDER.FAIL },
+    { label: "not run (outline)", color: VERDICT_BORDER.NOT_RUN },
+  ];
+}
+
 /** An outline swatch, for the border channel. */
 function BorderSwatch({ color, label }: { color: string; label: string }) {
   return (
@@ -345,6 +661,19 @@ function Legend({
   range: { min: number; max: number } | null;
 }) {
   if (!view) return null;
+  if (view.kind === "completion") {
+    return (
+      <Flex style={{ gap: 14, flexWrap: "wrap" }}>
+        <Swatch color={COMPLETION_FILL.all_done} label="all tests done" />
+        <Swatch color={COMPLETION_FILL.partial} label="partial" />
+        <Swatch color={COMPLETION_FILL.none_run} label="none run" />
+        <Swatch color={COMPLETION_FILL.no_data} label="no results" />
+        <Text kind="body/regular/sm" style={{ color: "var(--nv-color-text-secondary)" }}>
+          · done counts a test that finished, pass or fail; the border is still node up/down
+        </Text>
+      </Flex>
+    );
+  }
   if (!view.column) {
     return (
       <Flex style={{ gap: 14, flexWrap: "wrap" }}>

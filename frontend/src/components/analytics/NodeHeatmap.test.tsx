@@ -1,8 +1,15 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { NodeHeatmap } from "./NodeHeatmap";
 import { STATUS_BORDER, STATUS_FILL } from "../../lib/nodeHeatmap";
+
+/** jsdom has no 2D canvas context, so the drawing itself is covered in heatmapImage.test.ts. */
+const { downloadSpy } = vi.hoisted(() => ({ downloadSpy: vi.fn() }));
+vi.mock("../../lib/heatmapImage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/heatmapImage")>()),
+  downloadHeatmapImage: downloadSpy,
+}));
 import type { BringupFleet } from "../../types/bringup";
 import type { NodeInfo } from "../rack/NodeSelector";
 
@@ -57,6 +64,18 @@ function bar(id: string) {
   return screen.getByTestId(`heatmap-bar-${id}`);
 }
 
+/**
+ * Render and switch to the linear layout.
+ *
+ * The compact layout is the default because it fits the floor on one screen, but it has no room
+ * for a gauge — anything asserting on bar geometry has to ask for the wide cells.
+ */
+function renderLinear(props: Partial<React.ComponentProps<typeof NodeHeatmap>> = {}) {
+  const result = renderHeatmap(props);
+  fireEvent.click(screen.getByRole("radio", { name: "Linear" }));
+  return result;
+}
+
 describe("NodeHeatmap", () => {
   it("renders one cell per node, grouped by rack", () => {
     renderHeatmap();
@@ -69,14 +88,14 @@ describe("NodeHeatmap", () => {
   });
 
   it("defaults to the up/down view, drawn as a full bar in the status colour", () => {
-    renderHeatmap();
+    renderLinear();
     expect(bar("r01-11")).toHaveStyle({ background: STATUS_FILL.up, width: "100%" });
     expect(bar("r02-11")).toHaveStyle({ background: STATUS_FILL.down });
   });
 
   it("keeps up/down as the border so liveness survives a metric view", () => {
     /** The whole point of the border channel: a fast-but-down node must still read as down. */
-    renderHeatmap();
+    renderLinear();
     expect(cell("r02-11")).toHaveStyle({ border: `2px solid ${STATUS_BORDER.down}` });
     expect(cell("r01-11")).toHaveStyle({ border: `2px solid ${STATUS_BORDER.up}` });
   });
@@ -88,7 +107,7 @@ describe("NodeHeatmap", () => {
 
   it("includes nodes the status feed does not know about", () => {
     /** Bring-up may know a node the dashboard has not reported; dropping it under-reports. */
-    renderHeatmap({ nodes: [{ id: "r01-11", status: "up" }] });
+    renderLinear({ nodes: [{ id: "r01-11", status: "up" }] });
     expect(cell("r02-11")).toBeInTheDocument();
     expect(bar("r02-11")).toHaveStyle({ background: STATUS_FILL.unknown });
   });
@@ -161,5 +180,79 @@ describe("NodeHeatmap", () => {
     for (const label of ["up", "down", "installing", "unknown"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+  });
+
+  it("defaults to tiling racks as blocks so a whole floor fits on one screen", () => {
+    renderHeatmap();
+    expect(screen.getByTestId("heatmap-rack-r01")).toBeInTheDocument();
+    expect(screen.getByTestId("heatmap-rack-r02")).toBeInTheDocument();
+    // Compact cells are solid squares; the gauge belongs to the linear layout.
+    expect(screen.queryByTestId("heatmap-bar-r01-11")).toBeNull();
+  });
+
+  it("labels each compact cell with its slot number", () => {
+    /** Two digits is what fits, and it is what an operator reads off the rack door. */
+    renderHeatmap();
+    expect(cell("r01-11")).toHaveTextContent("11");
+    expect(cell("r01-12")).toHaveTextContent("12");
+  });
+
+  it("summarises each rack so a mixed block says how mixed", () => {
+    /** Colour alone says "mixed"; the tally says whether that is one node or half the rack. */
+    renderHeatmap();
+    const block = screen.getByTestId("heatmap-rack-r01");
+    // r01 holds two up nodes on the default status view.
+    expect(block).toHaveTextContent("2");
+  });
+
+  it("switches to the linear layout and back", () => {
+    renderHeatmap();
+    expect(screen.queryByTestId("heatmap-bar-r01-11")).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Linear" }));
+    expect(bar("r01-11")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Compact" }));
+    expect(screen.queryByTestId("heatmap-bar-r01-11")).toBeNull();
+  });
+
+  it("offers the test-completion view alongside status and the benchmarks", () => {
+    /** Dennis's report question -- how far through the plan is each node -- as a first-class view. */
+    renderHeatmap();
+    expect(screen.getByRole("combobox", { name: "Heatmap data view" })).toBeInTheDocument();
+    expect(screen.getByText(/Test completion/)).toBeInTheDocument();
+  });
+
+  it("keeps every node addressable for assistive tech in the compact layout", () => {
+    renderHeatmap();
+    expect(cell("r02-11")).toHaveAttribute("aria-label", "r02-11: status DOWN");
+  });
+
+  describe("image download", () => {
+    beforeEach(() => downloadSpy.mockReset());
+
+    it("exports every rack and cell currently on the map", async () => {
+      renderHeatmap({ clusterName: "Nscale TX" });
+      fireEvent.click(screen.getByRole("button", { name: /Download image/ }));
+
+      await waitFor(() => expect(downloadSpy).toHaveBeenCalledTimes(1));
+      const [model, format, cluster] = downloadSpy.mock.calls[0];
+      expect(format).toBe("png");
+      expect(cluster).toBe("Nscale TX");
+      expect(model.racks.map((r: { rack: string }) => r.rack)).toEqual(["r01", "r02"]);
+      expect(model.racks[0].cells.map((c: { id: string }) => c.id)).toEqual(["r01-11", "r01-12"]);
+      // The caption has to carry what the picture cannot: which cluster, and when.
+      expect(model.subtitle).toContain("Nscale TX");
+      expect(model.title).toContain("Node status");
+      expect(model.legend.length).toBeGreaterThan(0);
+    });
+
+    it("reports a failure to build the image instead of failing silently", async () => {
+      downloadSpy.mockRejectedValueOnce(new Error("canvas unavailable"));
+      renderHeatmap();
+      fireEvent.click(screen.getByRole("button", { name: /Download image/ }));
+
+      expect(await screen.findByText(/canvas unavailable/)).toBeInTheDocument();
+    });
   });
 });
