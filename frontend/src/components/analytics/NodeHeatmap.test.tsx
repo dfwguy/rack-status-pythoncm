@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { NodeHeatmap } from "./NodeHeatmap";
 import { STATUS_BORDER, STATUS_FILL } from "../../lib/nodeHeatmap";
 import type { BringupFleet } from "../../types/bringup";
@@ -38,9 +39,12 @@ const NODES: NodeInfo[] = [
 
 const rackOf = (id: string) => id.split("-")[0];
 
+/** Wrapped in a router: the table mode links node names into Compute → Nodes. */
 function renderHeatmap(props: Partial<React.ComponentProps<typeof NodeHeatmap>> = {}) {
   return render(
-    <NodeHeatmap fleet={FLEET} nodes={NODES} rackOf={rackOf} {...props} />,
+    <MemoryRouter>
+      <NodeHeatmap fleet={FLEET} nodes={NODES} rackOf={rackOf} {...props} />
+    </MemoryRouter>,
   );
 }
 

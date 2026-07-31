@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { NodesView } from "./NodesView";
 import type { RackStatusResponse } from "../types/api";
 
@@ -51,6 +52,21 @@ function useGeometry(trays: number | null, from: "cluster" | "platform" = "clust
 
 beforeEach(() => useGeometry(null));
 
+/**
+ * NodesView reads ?node= to deep-link from the Analytics table, so it needs a router.
+ * `route` sets the entry so a test can land on a specific node.
+ */
+function renderNodes(
+  data: RackStatusResponse | null,
+  { route = "/compute/nodes", logDir = "/logs" }: { route?: string; logDir?: string } = {},
+) {
+  return render(
+    <MemoryRouter initialEntries={[route]}>
+      <NodesView data={data} logDir={logDir} />
+    </MemoryRouter>,
+  );
+}
+
 function rack(id: string) {
   // 8 trays per rack via parseNodesFromRack default fill: ct01..ct02 UP, rest unknown.
   return { rack: id, nemo: "done", last_job: "1", sinfo: "idle=8", ct_down_unk: `UP:${id}-ct[01-02]` };
@@ -95,7 +111,7 @@ describe("NodesView", () => {
 
   it("renders the page and falls back to 18 rows when no catalog geometry is active", () => {
     // 3 racks x 8 trays = 24 nodes; page size 18 => 18 visible, count says 24.
-    render(<NodesView data={status(["p5-r01", "p5-r02", "p5-r03"])} logDir="/logs" />);
+    renderNodes(status(["p5-r01", "p5-r02", "p5-r03"]));
     expect(screen.getByText("Nodes")).toBeInTheDocument();
     expect(screen.getByText("24 of 24 nodes")).toBeInTheDocument();
     expect(visibleRowCount()).toBe(18);
@@ -103,24 +119,51 @@ describe("NodesView", () => {
 
   it("sizes the page from the active cluster geometry, not a hardcoded rack shape", () => {
     useGeometry(9);
-    render(<NodesView data={status(["p5-r01", "p5-r02", "p5-r03"])} logDir="/logs" />);
+    renderNodes(status(["p5-r01", "p5-r02", "p5-r03"]));
     expect(visibleRowCount()).toBe(9);
   });
 
   it("falls back to the platform geometry when the cluster does not override it", () => {
     useGeometry(4, "platform");
-    render(<NodesView data={status(["p5-r01", "p5-r02", "p5-r03"])} logDir="/logs" />);
+    renderNodes(status(["p5-r01", "p5-r02", "p5-r03"]));
     expect(visibleRowCount()).toBe(4);
   });
 
+  describe("deep link from the Analytics node table", () => {
+    it("opens straight to the linked node, already selected", () => {
+      renderNodes(status(["p5-r01", "p5-r02"]), {
+        route: "/compute/nodes?node=p5-r02-ct01",
+      });
+      // Selected: the actions are live rather than showing the pick-a-node banner.
+      expect(
+        screen.queryByText("Select a node above to run actions against it."),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("validation-tab")).toBeInTheDocument();
+    });
+
+    it("filters to the linked node so its row is not buried on a later page", () => {
+      renderNodes(status(["p5-r01", "p5-r02"]), {
+        route: "/compute/nodes?node=p5-r02-ct01",
+      });
+      expect(screen.getByText("1 of 16 nodes")).toBeInTheDocument();
+    });
+
+    it("behaves normally when no node is linked", () => {
+      renderNodes(status(["p5-r01"]));
+      expect(
+        screen.getByText("Select a node above to run actions against it."),
+      ).toBeInTheDocument();
+    });
+  });
+
   it("shows the select-a-node banner and no action tabs before selection", () => {
-    render(<NodesView data={status(["p5-r01"])} logDir="/logs" />);
+    renderNodes(status(["p5-r01"]));
     expect(screen.getByText("Select a node above to run actions against it.")).toBeInTheDocument();
     expect(screen.queryByTestId("validation-tab")).not.toBeInTheDocument();
   });
 
   it("filters nodes by name", () => {
-    render(<NodesView data={status(["p5-r01", "p5-r02"])} logDir="/logs" />);
+    renderNodes(status(["p5-r01", "p5-r02"]));
     expect(screen.getByText("16 of 16 nodes")).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("Filter by node name…"), {
       target: { value: "r01-ct01" },
@@ -130,7 +173,7 @@ describe("NodesView", () => {
   });
 
   it("enables the action tabs when a node is selected", () => {
-    render(<NodesView data={status(["p5-r01"])} logDir="/logs" />);
+    renderNodes(status(["p5-r01"]));
     fireEvent.click(screen.getByText("p5-r01-ct01"));
     // Selected-node header + default (Validation) tab rendered, banner gone.
     expect(screen.queryByText("Select a node above to run actions against it.")).not.toBeInTheDocument();

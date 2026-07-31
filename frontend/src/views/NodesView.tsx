@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
@@ -104,13 +105,19 @@ function redfishHref(ip: string): string | null {
  * tabs (Validation / Hardware / Networking / Services) scoped to that node.
  */
 export function NodesView({ data, logDir }: NodesViewProps) {
+  // Deep link from the Analytics node table: ?node=<id> opens straight to that node. Applied as
+  // initial state rather than in an effect — it is where the page starts, not something to sync.
+  // The name filter is seeded too, otherwise the row sits on page 30 of a 600-node table.
+  const [searchParams] = useSearchParams();
+  const linkedNode = searchParams.get("node")?.trim() ?? "";
+
   const [rowFilters, setRowFilters] = useState<string[]>([]);
   const [rackFilters, setRackFilters] = useState<string[]>([]);
-  const [nameQuery, setNameQuery] = useState("");
+  const [nameQuery, setNameQuery] = useState(linkedNode);
   const [page, setPage] = useState(0);
   const [rowsPerPageChoice, setRowsPerPageChoice] = useState<number | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(linkedNode || null);
   const [tabIndex, setTabIndex] = useState(0);
   const [parserOpen, setParserOpen] = useState(false);
   const [terminalNode, setTerminalNode] = useState("");

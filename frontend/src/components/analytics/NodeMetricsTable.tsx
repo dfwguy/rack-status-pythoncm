@@ -20,6 +20,7 @@ import TextField from "@mui/material/TextField";
 import InputAdornment from "@mui/material/InputAdornment";
 import Paper from "@mui/material/Paper";
 import Tooltip from "@mui/material/Tooltip";
+import { Link } from "react-router-dom";
 import { Flex, Tag, Text } from "@nvidia/foundations-react-core";
 import { Search } from "lucide-react";
 import { MultiSelectCombobox } from "../MultiSelectCombobox";
@@ -304,7 +305,17 @@ export function NodeMetricsTable({ fleet, nodes, rackOf }: NodeMetricsTableProps
               const node = fleetByNode.get(id);
               return (
                 <TableRow key={id} hover>
-                  <TableCell sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>{id}</TableCell>
+                  <TableCell sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                    {/* Straight to this node's bring-up panel and logs: the row tells you a node
+                        looks wrong, and the next step should not be manual navigation. */}
+                    <Link
+                      to={`/compute/nodes?node=${encodeURIComponent(id)}`}
+                      title={`Open ${id} in Compute → Nodes`}
+                      style={{ color: "var(--color-brand, #76b900)", textDecoration: "none" }}
+                    >
+                      {id}
+                    </Link>
+                  </TableCell>
                   <TableCell sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
                     {rackOf(id)}
                   </TableCell>

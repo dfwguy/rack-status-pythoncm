@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { NodeMetricsTable } from "./NodeMetricsTable";
 import { FALLBACK_METRIC_MAX } from "../../lib/nodeHeatmap";
 import type { BringupFleet } from "../../types/bringup";
@@ -38,8 +39,13 @@ const NODES: NodeInfo[] = [
 
 const rackOf = (id: string) => id.split("-")[0];
 
+/** Wrapped in a router because node names link into Compute → Nodes. */
 function renderTable(fleet: BringupFleet | null = FLEET) {
-  return render(<NodeMetricsTable fleet={fleet} nodes={NODES} rackOf={rackOf} />);
+  return render(
+    <MemoryRouter>
+      <NodeMetricsTable fleet={fleet} nodes={NODES} rackOf={rackOf} />
+    </MemoryRouter>,
+  );
 }
 
 function cell(node: string, column: string) {
@@ -101,6 +107,26 @@ describe("NodeMetricsTable", () => {
     /** A failure that produced nothing must not render as a measured 0. */
     renderTable();
     expect(screen.queryByTestId("gauge-fill-r01-13-allreduce")).not.toBeInTheDocument();
+  });
+
+  it("links each node into Compute → Nodes so a bad row is one click from its logs", () => {
+    renderTable();
+    const link = screen.getByRole("link", { name: "r01-11" });
+    expect(link).toHaveAttribute("href", "/compute/nodes?node=r01-11");
+  });
+
+  it("encodes the node name in the link", () => {
+    /** Node names are hostnames today, but the link must not break on one that needs escaping. */
+    const odd: BringupFleet = { ...FLEET, nodes: [node("rack a/1", "DONE", "600")] };
+    render(
+      <MemoryRouter>
+        <NodeMetricsTable fleet={odd} nodes={[]} rackOf={rackOf} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("link", { name: "rack a/1" })).toHaveAttribute(
+      "href",
+      "/compute/nodes?node=rack%20a%2F1",
+    );
   });
 
   it("pins the benchmarks operators read first, in order", () => {
@@ -195,7 +221,11 @@ describe("NodeMetricsTable", () => {
       ...FLEET,
       nodes: Array.from({ length: 120 }, (_, i) => node(`r09-${i}`, "DONE", "600")),
     };
-    render(<NodeMetricsTable fleet={many} nodes={[]} rackOf={rackOf} />);
+    render(
+      <MemoryRouter>
+        <NodeMetricsTable fleet={many} nodes={[]} rackOf={rackOf} />
+      </MemoryRouter>,
+    );
     const table = screen.getByRole("table", { name: "Node benchmark results" });
     // Default page size is 50, plus the header row.
     expect(within(table).getAllByRole("row")).toHaveLength(51);
