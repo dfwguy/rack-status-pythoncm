@@ -16244,11 +16244,23 @@ _SPA_DIR = REPO_ROOT / "static" / "spa"
 
 
 
+# A client route ("/compute/nodes") must fall back to index.html, but a *build artifact*
+# must not: returning HTML for a missing .js makes the browser report a MIME-type error
+# ("Expected a JavaScript-or-Wasm module script … responded with text/html") and renders a
+# blank page, pointing at the SPA instead of at the deploy that dropped the file. These are
+# requests for a hashed filename nobody types, so a miss is always a broken deploy.
+# Both the `/<path>` and `/spa/<path>` routes arrive here with a leading "assets/".
+_SPA_ARTIFACT_PREFIX = "assets/"
+
+
 def _serve_spa_asset(path: str = "index.html"):
-    """Serve a built SPA asset, fallback to index.html for client routes."""
+    """Serve a built SPA asset; fall back to index.html for client routes only."""
     spa_file = _SPA_DIR / path
     if spa_file.is_file():
         return send_file(spa_file)
+    if path.startswith(_SPA_ARTIFACT_PREFIX):
+        _logger.error("SPA artifact missing: %s — index.html and assets/ are out of sync", path)
+        return jsonify({"ok": False, "error": f"SPA asset not found: {path}"}), 404
     return send_file(_SPA_DIR / "index.html")
 
 

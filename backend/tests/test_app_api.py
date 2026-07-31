@@ -654,6 +654,28 @@ class TestSPAServing:
         assert resp.status_code == 200
         assert b"html" in resp.data.lower()
 
+    def test_client_route_falls_back_to_index(self, client):
+        """A deep link the user typed is the SPA's job to route, so it must get the app."""
+        from pathlib import Path
+        spa_index = Path(__file__).resolve().parent.parent.parent / "static" / "spa" / "index.html"
+        if not spa_index.is_file():
+            pytest.skip("SPA not built (static/spa/ missing in CI)")
+        resp = client.get("/compute/nodes")
+        assert resp.status_code == 200
+        assert b"html" in resp.data.lower()
+
+    def test_missing_build_artifact_404s_instead_of_serving_html(self, client):
+        """A stale index.html asking for a deleted bundle must fail honestly.
+
+        Falling back to index.html here returns HTML for a .js request, so the browser
+        rejects it on MIME type and the dashboard renders blank -- blaming the app for
+        what is really a half-shipped deploy.
+        """
+        resp = client.get("/assets/index-DoesNotExist.js")
+        assert resp.status_code == 404
+        assert "text/html" not in (resp.content_type or "")
+        assert resp.get_json()["ok"] is False
+
 
 class TestRackLocksAPI:
     def test_get_snapshot_shape(self, client, isolated_locks_file):

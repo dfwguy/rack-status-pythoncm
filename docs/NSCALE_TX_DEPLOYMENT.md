@@ -166,19 +166,33 @@ upstream: the Kaizen CSS is vendored at `frontend/src/styles/kaizen/` and import
 already air-gap clean (see `frontend/src/styles/kaizen/README.md`).
 
 Since 2026-07-31 the bundle is a **bind mount** (`static/spa/assets` on the host →
-`/app/static/spa/assets`), so a frontend deploy is just build → sync, with no `docker cp`
-and no restart — the container reads the host tree directly:
+`/app/static/spa/assets`), so shipping assets is a plain `rsync` with no `docker cp`:
 
 ```bash
-# 1. build   (repo)  npx vite build      -> static/spa/, new hashed bundle
-# 2. sync    (repo)  rsync -a --delete static/spa/assets/ nscale-tx-ova:$TREE/static/spa/assets/
-# 3. index   (repo)  rsync -a static/spa/index.html nscale-tx-ova:$TREE/deploy-secrets/index.html
+TREE=/opt/observability/nvis-rack-status-v3
+# 1. build   npx vite build                                    -> static/spa/, new hashed bundle
+# 2. assets  rsync -a  static/spa/assets/ nscale-tx-ova:$TREE/static/spa/assets/   # NO --delete
+# 3. index   ssh nscale-tx-ova "cat > $TREE/deploy-secrets/index.html" < static/spa/index.html
+# 4. restart docker restart nvis-rack-status-v3                 # required; see below
 ```
 
-Use `--delete` on step 2. The host tree must match the build *exactly*: an orphaned chunk is
-harmless, but a **missing** one 404s the moment a user opens the lazy-loaded view that imports
-it. Because the CSS is hashed into the bundle, `index.html` and `assets/` must always ship
-together — a stale mounted `index.html` points at an asset hash that no longer exists.
+Two rules here were learned the hard way on 2026-07-31, in the same ten minutes:
+
+**Never `--delete` on step 2.** Additive is correct. Orphaned chunks from old builds are
+harmless; a *missing* one is not. Anything still asking for the previous bundle — a browser
+holding the old `index.html`, or the container itself between steps 2 and 3 — breaks the moment
+you delete it. Prune old `index-*.js` deliberately when nobody is mid-session, not as part of a
+deploy.
+
+**`index.html` is a single-file bind mount, and rsync replaces files by rename.** A rename gives
+the path a *new inode* while the container keeps the old one mounted, so the container serves the
+pre-deploy `index.html` indefinitely and no amount of rewriting the path fixes it — writes land on
+an inode nothing is reading. Hence `cat >` (truncate in place, same inode) on step 3, and hence
+the restart, which re-resolves the mount and is the only reliable recovery once a rename has
+already detached it. This applies to **every** single-file mount in the override, not just
+`index.html`: `docker cp`-then-rename tooling has the same hazard.
+
+Because the CSS is hashed into the bundle, `index.html` and `assets/` must always ship together.
 
 ### Two landmines (both resolved 2026-07-31)
 
@@ -361,6 +375,7 @@ Key properties:
 | F11 | Container crash-loops after a tree checkout | New `app.py` imported modules absent from the image and not bind-mounted | See §3 landmine 1 |
 | F12 | SSH dies overnight; `Connection closed by UNKNOWN port 65535` | Jumphost device2 went offline in Teleport | See §1 |
 | F13 | Dashboard is a **white screen**; the app's JS 404s | Someone ran `compose up`; the recreate discarded the writable layer holding the `docker cp`'d bundle, while the host-mounted `index.html` kept requesting it | Bind-mount `static/spa/assets`. See §3 landmine 2 |
+| F14 | Console: `Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of "text/html"` | Two bugs at once: `rsync`'s rename detached the `index.html` single-file mount so the container served the pre-deploy copy, and `--delete` had removed the bundle that copy asks for. The SPA catch-all then answered the missing `.js` with `index.html` — HTML at status 200 | `cat >` + restart for `index.html`; drop `--delete`; `_serve_spa_asset` now 404s a missing `assets/*` instead of serving HTML |
 
 ---
 
