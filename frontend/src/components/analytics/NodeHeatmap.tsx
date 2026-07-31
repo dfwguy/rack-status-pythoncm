@@ -94,7 +94,9 @@ export function NodeHeatmap({ fleet, nodes, rackOf, loading, error, onRefresh }:
     <Card style={{ padding: 16 }}>
       <Flex justify="between" align="center" style={{ marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
         <div>
-          <Text kind="title/sm">Node heatmap</Text>
+          <Text kind="title/sm" style={{ display: "block", marginBottom: 4 }}>
+            Node heatmap
+          </Text>
           <Text kind="body/regular/sm" style={{ color: "var(--nv-color-text-secondary)" }}>
             {total} node{total === 1 ? "" : "s"} across {rows.length} rack
             {rows.length === 1 ? "" : "s"}.{" "}
