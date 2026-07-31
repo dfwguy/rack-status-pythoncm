@@ -6,13 +6,18 @@ import {
   VERDICT_BORDER,
   VERDICT_BORDER_UNKNOWN,
   borderFor,
+  compareMetric,
   groupByRack,
   heatmapViews,
   metricOf,
   metricRange,
+  orderColumns,
   paintCell,
+  statusRank,
   throughputColor,
+  verdictLabel,
   verdictOf,
+  verdictRank,
 } from "./nodeHeatmap";
 import type { BringupFleet, BringupFleetNode } from "../types/bringup";
 
@@ -142,6 +147,54 @@ describe("throughputColor", () => {
     expect(throughputColor(1)).toBe("rgb(12,42,138)");
     expect(throughputColor(-5)).toBe(throughputColor(0));
     expect(throughputColor(99)).toBe(throughputColor(1));
+  });
+});
+
+describe("column ordering and sort ranks", () => {
+  it("pins the headline benchmarks first and keeps the rest in place", () => {
+    expect(
+      orderColumns(["dcgmi-r1", "alltoall-nonvlink", "nvbandwidth", "alltoall", "allreduce"]),
+    ).toEqual([
+      "allreduce",
+      "alltoall",
+      "nvbandwidth",
+      "dcgmi-r1",
+      "alltoall-nonvlink",
+    ]);
+  });
+
+  it("does not invent columns a site does not run", () => {
+    expect(orderColumns(["dcgmi-r1", "allreduce"])).toEqual(["allreduce", "dcgmi-r1"]);
+  });
+
+  it("ranks problems before healthy results", () => {
+    expect(verdictRank("FAIL")).toBeLessThan(verdictRank("RUNNING"));
+    expect(verdictRank("RUNNING")).toBeLessThan(verdictRank("NOT_RUN"));
+    expect(verdictRank("NOT_RUN")).toBeLessThan(verdictRank("DONE"));
+    expect(statusRank("down")).toBeLessThan(statusRank("up"));
+  });
+
+  it("keeps unmeasured nodes last in both sort directions", () => {
+    /** Otherwise "sort to find the slowest" returns a screen of blanks. */
+    for (const dir of ["asc", "desc"] as const) {
+      expect(compareMetric(null, 100, dir)).toBeGreaterThan(0);
+      expect(compareMetric(100, null, dir)).toBeLessThan(0);
+    }
+    expect(compareMetric(1, 2, "asc")).toBeLessThan(0);
+    expect(compareMetric(1, 2, "desc")).toBeGreaterThan(0);
+    expect(compareMetric(null, null, "asc")).toBe(0);
+  });
+});
+
+describe("verdictLabel", () => {
+  it("uses the words operators use, and never calls an unfinished run a result", () => {
+    expect(verdictLabel("DONE").label).toBe("Pass");
+    expect(verdictLabel("FAIL").label).toBe("Failed");
+    expect(verdictLabel("NOT_RUN").label).toBe("Untested");
+    // RETRY/INCOMPLETE mean "no answer yet" from outside, so neither passes nor fails.
+    expect(verdictLabel("RETRY").label).toBe("Running");
+    expect(verdictLabel("INCOMPLETE").label).toBe("Running");
+    expect(verdictLabel("").label).toBe("Untested");
   });
 });
 

@@ -262,6 +262,26 @@ export function verdictLabel(verdict: string): VerdictLabel {
   }
 }
 
+/**
+ * Benchmarks that get a fixed leading position in the table.
+ *
+ * The bring-up CSV's own order puts dcgm first and buries the throughput numbers; these are the
+ * ones an operator reads first, so they are pinned. Anything not listed keeps its original
+ * relative order after them, so a site adding a benchmark still sees it without a code change.
+ */
+export const PREFERRED_METRIC_ORDER = [
+  "allreduce",
+  "alltoall",
+  "nvbandwidth",
+  "allreduce-forcesharp",
+];
+
+/** Order columns with the preferred benchmarks first, then everything else as given. */
+export function orderColumns(columns: string[]): string[] {
+  const pinned = PREFERRED_METRIC_ORDER.filter((c) => columns.includes(c));
+  return [...pinned, ...columns.filter((c) => !pinned.includes(c))];
+}
+
 /** Columns that carry a number, and those that are status-only (dcgm and friends). */
 export function splitColumns(fleet: BringupFleet | null): {
   metric: string[];
@@ -269,10 +289,53 @@ export function splitColumns(fleet: BringupFleet | null): {
 } {
   const metric: string[] = [];
   const statusOnly: string[] = [];
-  for (const col of fleet?.columns ?? []) {
+  for (const col of orderColumns(fleet?.columns ?? [])) {
     (fleet?.metric_labels?.[col] ? metric : statusOnly).push(col);
   }
   return { metric, statusOnly };
+}
+
+/**
+ * Sort rank for a verdict: problems first when ascending.
+ *
+ * Sorting a status column is nearly always a hunt for what is broken, so ascending puts failures
+ * at the top rather than sorting the words alphabetically.
+ */
+export function verdictRank(verdict: string): number {
+  switch (verdictLabel(verdict).label) {
+    case "Failed":
+      return 0;
+    case "Running":
+      return 1;
+    case "Untested":
+      return 2;
+    case "Pass":
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+/** Sort rank for node status: unhealthy first when ascending. */
+export function statusRank(status: NodeInfo["status"]): number {
+  return { down: 0, inst: 1, unknown: 2, up: 3 }[status] ?? 4;
+}
+
+/**
+ * Comparator for a metric column: numeric, with unmeasured nodes always last.
+ *
+ * Pinning "no value" to the bottom in both directions is what makes "sort to find the slowest"
+ * useful — otherwise descending shows the fastest and ascending shows a screen of blanks.
+ */
+export function compareMetric(
+  a: number | null,
+  b: number | null,
+  direction: "asc" | "desc",
+): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return direction === "asc" ? a - b : b - a;
 }
 
 /** Every measured job on a node, for the tooltip. */

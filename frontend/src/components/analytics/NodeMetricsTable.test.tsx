@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { NodeMetricsTable } from "./NodeMetricsTable";
 import { FALLBACK_METRIC_MAX } from "../../lib/nodeHeatmap";
@@ -52,10 +52,11 @@ describe("NodeMetricsTable", () => {
     const table = screen.getByRole("table", { name: "Node benchmark results" });
     // 4 nodes + the header row.
     expect(within(table).getAllByRole("row")).toHaveLength(5);
-    expect(screen.getByText("r01-11")).toBeInTheDocument();
-    expect(screen.getAllByText("r01")).toHaveLength(4);
-    expect(screen.getAllByText("Up")).toHaveLength(3);
-    expect(screen.getByText("Down")).toBeInTheDocument();
+    expect(within(table).getByText("r01-11")).toBeInTheDocument();
+    expect(within(table).getAllByText("r01")).toHaveLength(4);
+    // Scoped to the table: the status filter also renders "Up"/"Down" options.
+    expect(within(table).getAllByText("Up")).toHaveLength(3);
+    expect(within(table).getByText("Down")).toBeInTheDocument();
   });
 
   it("shows the measured number, not just a colour", () => {
@@ -100,6 +101,93 @@ describe("NodeMetricsTable", () => {
     /** A failure that produced nothing must not render as a measured 0. */
     renderTable();
     expect(screen.queryByTestId("gauge-fill-r01-13-allreduce")).not.toBeInTheDocument();
+  });
+
+  it("pins the benchmarks operators read first, in order", () => {
+    /** The bring-up CSV puts dcgm first and buries the throughput numbers. */
+    const wide: BringupFleet = {
+      ...FLEET,
+      columns: ["dcgmi-r1", "alltoall-nonvlink", "nvbandwidth", "alltoall", "allreduce"],
+      metric_labels: {
+        "alltoall-nonvlink": "busbw GB/s",
+        nvbandwidth: "min GB/s",
+        alltoall: "busbw GB/s",
+        allreduce: "busbw GB/s",
+      },
+      nodes: [node("r01-11", "DONE", "690")],
+    };
+    renderTable(wide);
+    // Each header's sort control carries just the column name.
+    const labels = screen
+      .getAllByRole("columnheader")
+      .map((h) => h.querySelector("[role='button'], button")?.textContent?.trim() ?? "");
+    const benchmarks = labels.filter((l) =>
+      ["allreduce", "alltoall", "nvbandwidth", "alltoall-nonvlink"].includes(l),
+    );
+    expect(benchmarks).toEqual(["allreduce", "alltoall", "nvbandwidth", "alltoall-nonvlink"]);
+  });
+
+  describe("sorting", () => {
+    function nodeColumnValues() {
+      const table = screen.getByRole("table", { name: "Node benchmark results" });
+      return within(table)
+        .getAllByRole("row")
+        .slice(1)
+        .map((r) => r.querySelector("td")?.textContent ?? "");
+    }
+
+    it("sorts a benchmark by value, fastest first on the first click", () => {
+      renderTable();
+      fireEvent.click(screen.getByRole("button", { name: /allreduce/ }));
+      // 690 then 345; the two nodes with no value fall to the bottom.
+      expect(nodeColumnValues().slice(0, 2)).toEqual(["r01-11", "r01-12"]);
+    });
+
+    it("reverses to slowest first, still keeping unmeasured nodes last", () => {
+      /**
+       * The point of pinning blanks to the bottom: "sort to find the slowest" must show real
+       * numbers, not a screen of Untested rows.
+       */
+      renderTable();
+      const header = screen.getByRole("button", { name: /allreduce/ });
+      fireEvent.click(header);
+      fireEvent.click(header);
+      expect(nodeColumnValues().slice(0, 2)).toEqual(["r01-12", "r01-11"]);
+    });
+
+    it("sorts node status with the unhealthy first", () => {
+      renderTable();
+      fireEvent.click(screen.getByRole("button", { name: "Status" }));
+      expect(nodeColumnValues()[0]).toBe("r01-13"); // the only DOWN node
+    });
+  });
+
+  describe("filtering", () => {
+    it("narrows by node or rack text", () => {
+      renderTable();
+      fireEvent.change(screen.getByLabelText("Filter by node or rack name"), {
+        target: { value: "r01-12" },
+      });
+      const table = screen.getByRole("table", { name: "Node benchmark results" });
+      expect(within(table).getAllByRole("row")).toHaveLength(2); // header + 1
+      expect(screen.getByText("1 of 4 nodes")).toBeInTheDocument();
+    });
+
+    it("matches a rack fragment as well as a node name", () => {
+      renderTable();
+      fireEvent.change(screen.getByLabelText("Filter by node or rack name"), {
+        target: { value: "r01" },
+      });
+      expect(screen.getByText("4 of 4 nodes")).toBeInTheDocument();
+    });
+
+    it("reports when a filter matches nothing rather than silently emptying", () => {
+      renderTable();
+      fireEvent.change(screen.getByLabelText("Filter by node or rack name"), {
+        target: { value: "nosuchnode" },
+      });
+      expect(screen.getByText("0 of 4 nodes")).toBeInTheDocument();
+    });
   });
 
   it("paginates rather than rendering an entire cluster at once", () => {
