@@ -165,24 +165,29 @@ upstream: the Kaizen CSS is vendored at `frontend/src/styles/kaizen/` and import
 `src/main.tsx`, so Vite bundles it into the hashed app CSS and the built `index.html` is
 already air-gap clean (see `frontend/src/styles/kaizen/README.md`).
 
-A frontend deploy is therefore just build → ship → restart:
+Since 2026-07-31 the bundle is a **bind mount** (`static/spa/assets` on the host →
+`/app/static/spa/assets`), so a frontend deploy is just build → sync, with no `docker cp`
+and no restart — the container reads the host tree directly:
 
 ```bash
-# 1. build            (repo)   npx vite build            -> static/spa/, new hashed bundle
-# 2. ship + docker cp  (OVA)   docker cp static/spa/assets/. <container>:/app/static/spa/assets/
-# 3. ship index        (OVA)   cp static/spa/index.html -> deploy-secrets/index.html   (verbatim, no sed)
-# 4. restart           (OVA)   docker restart nvis-rack-status-v3
+# 1. build   (repo)  npx vite build      -> static/spa/, new hashed bundle
+# 2. sync    (repo)  rsync -a --delete static/spa/assets/ nscale-tx-ova:$TREE/static/spa/assets/
+# 3. index   (repo)  rsync -a static/spa/index.html nscale-tx-ova:$TREE/deploy-secrets/index.html
 ```
 
-Because the CSS is hashed into the bundle, `index.html` and `assets/` must ship together —
-a stale mounted `index.html` points at an asset hash that no longer exists. On the next
-recreate, drop the `deploy-secrets/index.html` and `kaizen-*.css` mounts from
-`docker-compose.override.yml` entirely and let the image serve its own baked SPA.
+Use `--delete` on step 2. The host tree must match the build *exactly*: an orphaned chunk is
+harmless, but a **missing** one 404s the moment a user opens the lazy-loaded view that imports
+it. Because the CSS is hashed into the bundle, `index.html` and `assets/` must always ship
+together — a stale mounted `index.html` points at an asset hash that no longer exists.
 
-### Two landmines (verified 2026-07-30)
+### Two landmines (both resolved 2026-07-31)
 
 1. **`restart` does not apply new bind mounts; only `compose up` (recreate) does.**
-   `cluster_snapshot.py`, `cluster_overview_live.py` and `bringup.py` are listed in
+   *Closed 2026-07-31: a recreate has since activated every declared backend mount — verify
+   with the `docker inspect` one-liner below rather than trusting this note.* The history is
+   kept because the failure mode returns the instant someone adds a module without recreating.
+
+   `cluster_snapshot.py`, `cluster_overview_live.py` and `bringup.py` were listed in
    `docker-compose.override.yml` but their mounts are **not active** in the running
    container — they currently exist only because they were `docker cp`'d into the
    writable layer. This is why the container crash-looped with
@@ -205,13 +210,21 @@ recreate, drop the `deploy-secrets/index.html` and `kaizen-*.css` mounts from
    (`backend/schemas/` alongside `node_report.py`). Both are soft-imported, so without them the
    feature degrades silently rather than failing loudly — which is worse to diagnose.
 
-2. **A full recreate (`compose down/up`) will currently break the SPA.** The container's
-   `assets/` has accumulated seven `index-*.js` bundles in its *writable layer*; the
-   mounted `index.html` points at the newest (`index-UBEyccvS.js`), which exists **only**
-   there — the image still carries the original. On recreate, `assets/` reverts to image
-   content while `index.html` keeps asking for the new bundle -> 404 -> blank dashboard.
-   Fix at that point: re-`docker cp` the assets, or add a bind mount for
-   `static/spa` (must then also place the kaizen CSS inside that tree).
+2. ~~**A full recreate (`compose down/up`) will break the SPA.**~~ **Fixed 2026-07-31.**
+   This one detonated first: someone recreated the container at 14:59 UTC and the dashboard
+   went blank. Deployed bundles lived in the *writable layer* (`docker cp`), which a recreate
+   discards, while the mounted `index.html` survived on the host and kept asking for
+   `index-CVxTww0o.js` — 404 on the app's own JS, white screen. Note the asymmetry that makes
+   this bite: the half that survives is the half that names the missing file.
+
+   `static/spa/assets` is now bind-mounted from the host tree, so the bundle survives
+   recreates. The two `kaizen-*.css` mounts were dropped in the same change — they had zero
+   references left in both `index.html` and the bundle once Kaizen was vendored, and nested
+   mounts inside the new `assets/` mount would have been needless fragility. Mounting the
+   whole of `static/spa` was rejected for the same reason: the `docs/*` mounts live under it.
+
+   The price of the fix is that the host tree is now load-bearing for the frontend — see the
+   `--delete` warning in the deploy recipe above.
 
 3. ~~**The deployment tree drifts from git.**~~ **Resolved 2026-07-30.** The tree is now a
    real checkout at a known commit and `bin/prod-drift.sh` reports it clean. Keep it that way:
@@ -347,6 +360,7 @@ Key properties:
 | F10 | A single-node NCCL log "looks like" it ran on `bond0` | It did — but only for **bootstrap**. With `nNodes 1` every channel is `via P2P/MNNVL`, and ~628 GB/s busbw proves NVLink. The Socket fallback only matters for multi-node and the `-nonvlink` pair | Read the channel lines, not the NET plugin lines |
 | F11 | Container crash-loops after a tree checkout | New `app.py` imported modules absent from the image and not bind-mounted | See §3 landmine 1 |
 | F12 | SSH dies overnight; `Connection closed by UNKNOWN port 65535` | Jumphost device2 went offline in Teleport | See §1 |
+| F13 | Dashboard is a **white screen**; the app's JS 404s | Someone ran `compose up`; the recreate discarded the writable layer holding the `docker cp`'d bundle, while the host-mounted `index.html` kept requesting it | Bind-mount `static/spa/assets`. See §3 landmine 2 |
 
 ---
 
