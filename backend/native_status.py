@@ -329,6 +329,22 @@ def _nemo_single_rack_bn(name: str) -> bool:
     return _nvis_naming().auxiliary_single_rack_log_basename(name)
 
 
+def _stage_kind_of_log_bn(name: str) -> str | None:
+    """Which validation stage a single-rack log carries evidence for: ``nccl`` | ``nemo`` | None.
+
+    Stage 1 (NCCL) and stage 2 (NeMo) are separate Slurm jobs here and therefore land in
+    separate logs (``…-NCCL-1Rack-…`` / ``…-NEMO-1Rack-…``). Each stage must be judged from
+    the newest log of ITS OWN kind, otherwise whichever job happened to finish last decides
+    both stages and the other one reads as a failure.
+    """
+    low = name.lower()
+    if "-nccl-1rack-" in low:
+        return "nccl"
+    if "-nemo-1rack-" in low:
+        return "nemo"
+    return None
+
+
 def _is_multirack_bn(name: str) -> bool:
     if not _nemo_nccl_bn(name):
         return False
@@ -1236,6 +1252,7 @@ class NativeRackTableState:
         "sinfo_counts",
         "per_path_probe",
         "by_rack_log",
+        "by_rack_stage_log",
         "ds_thread",
         "sinfo_thread",
         "log_thread",
@@ -1254,6 +1271,10 @@ class NativeRackTableState:
         self.sinfo_counts: dict[tuple[str, str], int] = {}
         self.per_path_probe: dict[str, dict[str, Any]] = {}
         self.by_rack_log: dict[str, dict[str, Any]] = {}
+        # rack -> stage kind ("nccl" | "nemo") -> newest probe record of THAT kind.
+        # by_rack_log alone keeps only the newest log of any kind, which silently discards a
+        # passing NCCL result as soon as a NeMo run for the same rack finishes after it.
+        self.by_rack_stage_log: dict[str, dict[str, dict[str, Any]]] = {}
         self.ds_thread: threading.Thread | None = None
         self.sinfo_thread: threading.Thread | None = None
         self.log_thread: threading.Thread | None = None
@@ -1326,6 +1347,15 @@ class NativeRackTableState:
                             replace = m_this >= float(prev.get("_mtime") or 0.0)
                         if replace:
                             self.by_rack_log[rk] = {**rec_d, "_path": str(p), "_mtime": m_this}
+                        kind = _stage_kind_of_log_bn(p.name)
+                        if kind:
+                            bucket = self.by_rack_stage_log.setdefault(rk, {})
+                            prev_k = bucket.get(kind)
+                            replace_k = prev_k is None
+                            if not replace_k and isinstance(prev_k, dict):
+                                replace_k = m_this >= float(prev_k.get("_mtime") or 0.0)
+                            if replace_k:
+                                bucket[kind] = {**rec_d, "_path": str(p), "_mtime": m_this}
             pruned = {k: v for k, v in disk.items() if k in alive}
             if len(pruned) != len(disk):
                 dirty = True
@@ -1365,6 +1395,7 @@ class NativeRackTableState:
             ct = dict(self.ct_by_rack)
             sct = dict(self.sinfo_counts)
             by_rack = {k: dict(v) for k, v in self.by_rack_log.items()}
+            by_rack_stage = {k: {kk: dict(vv) for kk, vv in v.items()} for k, v in self.by_rack_stage_log.items()}
             errs = list(self.last_errors)
             ds_done = self.ds_done
             sinfo_done = self.sinfo_done
@@ -1417,12 +1448,33 @@ class NativeRackTableState:
             jid_s = _last_job_for_log_row(bn, pr)
             in_slurm = bool(jid_s != "-" and jid_s in running)
 
+            # Judge each stage from the newest log of its OWN kind. NCCL and NeMo run as
+            # separate jobs writing separate logs, so `pr` (newest log of any kind) only ever
+            # carries evidence for one of the two stages; using it for both makes the stage
+            # whose log is older read as a failure even though it passed.
+            #
+            # An empty stage map is NOT treated as "not validated": _stage_kind_of_log_bn needs
+            # the exact "-NEMO-1Rack-"/"-NCCL-1Rack-" infix, while the file filter accepts any
+            # name containing "nemo" or "1rack", so a site naming its logs differently would
+            # have every rack read as pending regardless of a passing probe. Those racks fall
+            # through to the single-log path below, where an unclassifiable probe still yields
+            # pending via the `not st` branch -- which is the case worth protecting.
+            stage_logs = by_rack_stage.get(rack) or {}
+            nccl_src = stage_logs.get("nccl") or pr
+            nemo_src = stage_logs.get("nemo") or pr
+            split_stage_logs = "nccl" in stage_logs and "nemo" in stage_logs
+
             if in_slurm:
                 tm = job_times.get(jid_s, "?")
                 nemo = f"ongoing [{tm}]"
                 cat = "ongoing"
+            elif split_stage_logs:
+                # Both stages have their own log: the rack is done only when each stage's own
+                # log passes. Never read one stage's verdict off the other stage's log.
+                cat = "done" if (bool(nccl_src.get("nccl_ok")) and bool(nemo_src.get("llm_ok"))) else "fail"
+                nemo = cat
             else:
-                st = str(pr.get("nemo_state") or "fail").strip().lower()
+                st = str(pr.get("nemo_state") or "").strip().lower()
                 if st == "ongoing":
                     # Disk probe cache is keyed by log mtime/size only. After the Slurm job ends,
                     # we can still serve a stale probe that says "ongoing". If Slurm does not list
@@ -1434,6 +1486,12 @@ class NativeRackTableState:
                 elif st == "done":
                     nemo = "done"
                     cat = "done"
+                elif not st:
+                    # The probe could not classify this log (it failed, timed out, or returned
+                    # nothing). "Could not determine" is not evidence of a failure -- report it
+                    # as not-yet-validated instead of inventing a red result.
+                    nemo = "pending"
+                    cat = "pending"
                 else:
                     nemo = "fail"
                     cat = "fail"
@@ -1443,6 +1501,8 @@ class NativeRackTableState:
                     n_on += 1
                 elif cat == "done":
                     n_done += 1
+                elif cat == "pending":
+                    n_pending += 1
                 else:
                     n_fail += 1
 
@@ -1453,8 +1513,8 @@ class NativeRackTableState:
                 ctv = ct.get(rack, "-")
 
             vt = str(pr.get("validation_test") or "").strip()
-            nco = pr.get("nccl_ok")
-            llo = pr.get("llm_ok")
+            nco = nccl_src.get("nccl_ok")
+            llo = nemo_src.get("llm_ok")
             nc_b = bool(nco) if isinstance(nco, (bool, int)) else None
             ll_b = bool(llo) if isinstance(llo, (bool, int)) else None
             nh = validation_status_hint(

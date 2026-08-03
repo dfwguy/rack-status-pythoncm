@@ -249,6 +249,12 @@ interface ParserResponse {
   ok: boolean;
   rack: string;
   log_file: string;
+  /**
+   * Which log fed each validation stage, when resolved by rack. NCCL and NeMo run as separate
+   * Slurm jobs, so each stage's numbers come from its own log; a missing key means that stage
+   * has no log for this rack yet. Absent entirely for explicit path/log_file requests.
+   */
+  stage_logs?: Partial<Record<"nccl" | "nemo", string>>;
   job_id?: string;
   full_rack?: boolean;
   full_rack_nodes?: number | null;
@@ -698,6 +704,7 @@ function SummaryTab({
   data,
   rack,
   logFile,
+  stageLogs,
   commandDisplay,
   returncode,
   stderr,
@@ -705,6 +712,7 @@ function SummaryTab({
   data: ParserData;
   rack: string;
   logFile: string;
+  stageLogs?: Partial<Record<"nccl" | "nemo", string>>;
   commandDisplay?: string;
   returncode?: number;
   stderr?: string;
@@ -732,6 +740,27 @@ function SummaryTab({
             Log path
           </Text>
           <Text kind="mono/sm" style={{ wordBreak: "break-all" }}>{logFile}</Text>
+        </Card>
+      )}
+      {/* Two stages, two jobs, two logs: name the source of each tab so a stage that has not
+          run yet reads as missing rather than as a bad result. */}
+      {stageLogs && Object.keys(stageLogs).length > 1 && (
+        <Card style={{ padding: 12 }}>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginBottom: 4 }}>
+            Stage logs
+          </Text>
+          {(["nccl", "nemo"] as const).map((stage) =>
+            stageLogs[stage] ? (
+              <div key={stage} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                <Text kind="body/regular/sm" style={{ minWidth: 44, color: "var(--text-color-secondary)" }}>
+                  {stage === "nccl" ? "NCCL" : "NEMO"}
+                </Text>
+                <Text kind="mono/sm" style={{ wordBreak: "break-all" }}>
+                  {stageLogs[stage]!.split("/").pop()}
+                </Text>
+              </div>
+            ) : null,
+          )}
         </Card>
       )}
       {returncode != null && returncode !== 0 && (
@@ -1077,6 +1106,7 @@ export function ParserResultsDialog({
                 data={result.data}
                 rack={result.rack}
                 logFile={result.log_file}
+                stageLogs={result.stage_logs}
                 commandDisplay={result.command_display}
                 returncode={result.returncode}
                 stderr={result.stderr}

@@ -68,3 +68,118 @@ def test_pick_log_full_rack_prefers_matching_18n_job(monkeypatch, tmp_path):
     )
     got = app_module.pick_log_for_rack(log_dir, "r01", "100", full_rack=True)
     assert got is not None and got.name.endswith("-18N-100.txt")
+
+
+# --- stage-aware selection (NCCL and NeMo are separate jobs since llmb-run) ---------------
+
+
+def _stage_logs(monkeypatch, log_dir, *basenames):
+    """Wire find_log_paths_for_rack to return these basenames, newest first."""
+    paths = [PurePosixPath(str(log_dir / b)) for b in basenames]
+    monkeypatch.setattr(app_module, "find_log_paths_for_rack", lambda *_a, **_k: paths)
+    return paths
+
+
+def test_pick_logs_resolves_one_log_per_stage(monkeypatch, tmp_path):
+    """The whole point: the NeMo job being newer must not cost us the NCCL log."""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    _stage_logs(
+        monkeypatch,
+        log_dir,
+        "cmods-NEMO-1Rack-r01-18N-114257.txt",  # newest
+        "cmods-NCCL-1Rack-r01-18N-114256.txt",
+    )
+    got = app_module.pick_logs_for_rack(log_dir, "r01", None)
+    assert got["nccl"].name.endswith("-NCCL-1Rack-r01-18N-114256.txt")
+    assert got["nemo"].name.endswith("-NEMO-1Rack-r01-18N-114257.txt")
+
+
+def test_pick_logs_takes_the_newest_of_each_stage(monkeypatch, tmp_path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    _stage_logs(
+        monkeypatch,
+        log_dir,
+        "cmods-NEMO-1Rack-r01-18N-300.txt",
+        "cmods-NCCL-1Rack-r01-18N-299.txt",
+        "cmods-NEMO-1Rack-r01-18N-100.txt",
+        "cmods-NCCL-1Rack-r01-18N-99.txt",
+    )
+    got = app_module.pick_logs_for_rack(log_dir, "r01", None)
+    assert got["nemo"].name.endswith("-300.txt")
+    assert got["nccl"].name.endswith("-299.txt")
+
+
+def test_pick_logs_job_id_pins_only_its_own_stage(monkeypatch, tmp_path):
+    """A job id names one stage; the other stage must still resolve to its own newest log."""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    _stage_logs(
+        monkeypatch,
+        log_dir,
+        "cmods-NEMO-1Rack-r01-18N-300.txt",
+        "cmods-NCCL-1Rack-r01-18N-299.txt",
+        "cmods-NEMO-1Rack-r01-18N-100.txt",
+    )
+    got = app_module.pick_logs_for_rack(log_dir, "r01", "100")
+    assert got["nemo"].name.endswith("-100.txt"), "job_id must win for its own stage"
+    assert got["nccl"].name.endswith("-299.txt"), "the other stage keeps its newest log"
+
+
+def test_pick_logs_combined_log_resolves_to_one_file(monkeypatch, tmp_path):
+    """Pre-llmb format: one job, both stages in one file. Must not be parsed twice."""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    paths = _stage_logs(monkeypatch, log_dir, "root-NEMO-1Rack-bos01-b05-18N-294.txt")
+    got = app_module.pick_logs_for_rack(log_dir, "bos01-b05", None)
+    primary = app_module._primary_stage_log(got, None)
+    assert primary is not None and primary.name == paths[0].name
+    assert app_module._parser_secondary_stages(got, primary) == []
+
+
+def test_pick_logs_falls_back_when_no_stage_marker(monkeypatch, tmp_path):
+    """Foreign/legacy naming keeps the old single-log behaviour rather than returning nothing."""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    _stage_logs(monkeypatch, log_dir, "root-CK-clusterkit-r01-18N-42.txt")
+    got = app_module.pick_logs_for_rack(log_dir, "r01", None)
+    assert app_module._primary_stage_log(got, None) is not None
+
+
+def test_pick_logs_honours_full_rack_filter(monkeypatch, tmp_path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    _stage_logs(
+        monkeypatch,
+        log_dir,
+        "cmods-NCCL-1Rack-r01-1N-500.txt",  # newest but partial
+        "cmods-NCCL-1Rack-r01-18N-499.txt",
+        "cmods-NEMO-1Rack-r01-18N-498.txt",
+    )
+    got = app_module.pick_logs_for_rack(log_dir, "r01", None, full_rack=True, full_rack_nodes=18)
+    assert got["nccl"].name.endswith("-18N-499.txt")
+    assert got["nemo"].name.endswith("-18N-498.txt")
+
+
+def test_secondary_stages_lists_only_distinct_files(monkeypatch, tmp_path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    _stage_logs(
+        monkeypatch,
+        log_dir,
+        "cmods-NEMO-1Rack-r01-18N-2.txt",
+        "cmods-NCCL-1Rack-r01-18N-1.txt",
+    )
+    got = app_module.pick_logs_for_rack(log_dir, "r01", None)
+    primary = app_module._primary_stage_log(got, None)
+    secondary = app_module._parser_secondary_stages(got, primary)
+    assert [s for s, _ in secondary] == ["nccl"], "NeMo is primary, so only NCCL needs a parse"
+
+
+def test_stage_kind_of_log_bn():
+    from native_status import _stage_kind_of_log_bn
+
+    assert _stage_kind_of_log_bn("cmods-NCCL-1Rack-r01-18N-1.txt") == "nccl"
+    assert _stage_kind_of_log_bn("cmods-NEMO-1Rack-r01-18N-2.txt") == "nemo"
+    assert _stage_kind_of_log_bn("root-CK-clusterkit-r01.txt") is None

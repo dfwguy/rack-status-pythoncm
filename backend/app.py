@@ -2929,6 +2929,103 @@ def pick_log_for_rack(
     return cands[0]
 
 
+def pick_logs_for_rack(
+    log_dir: Path,
+    rack: str,
+    job_id: str | None,
+    *,
+    full_rack: bool = False,
+    full_rack_nodes: int | None = None,
+) -> dict[str, Path]:
+    """One log per validation stage for *rack*: ``{"nccl": path, "nemo": path}``.
+
+    Since the move to llmb-run, stage 1 (NCCL) and stage 2 (NeMo) are separate Slurm jobs
+    writing separate logs, so a single job id can only ever address ONE of them. Picking one
+    file for the whole dialog therefore guaranteed that one stage's tab was built from the
+    other stage's log — which is how a NeMo log came to be charted as an NCCL result.
+
+    An *job_id* pins the stage whose log carries it; the other stage still resolves to its own
+    newest log. On the older combined format (one job, both stages in one file) both keys
+    resolve to the SAME path, and the caller is expected to parse it once — see
+    ``_parser_stage_sources``.
+
+    Stages are identified by ``native_status._stage_kind_of_log_bn`` so this and the dashboard
+    can never disagree about which file speaks for which stage.
+    """
+    cands = find_log_paths_for_rack(log_dir, rack)
+    if not cands:
+        return {}
+    if full_rack:
+        need = int(full_rack_nodes) if full_rack_nodes and full_rack_nodes > 0 else _full_rack_expected_nodes()
+        cands = [p for p in cands if _node_count_from_log_basename(p.name) == need]
+        if not cands:
+            return {}
+
+    j = (job_id or "").strip()
+    suf = f"N-{j}.txt" if j.isdigit() else None
+    out: dict[str, Path] = {}
+    # cands is newest-first, so the first hit per stage is that stage's newest log.
+    for p in cands:
+        kind = native_status._stage_kind_of_log_bn(p.name)
+        if kind and kind not in out:
+            out[kind] = p
+    # An explicit job_id outranks "newest" for its own stage only.
+    if suf:
+        for p in cands:
+            if p.name.endswith(suf):
+                kind = native_status._stage_kind_of_log_bn(p.name)
+                if kind:
+                    out[kind] = p
+                break
+    if out:
+        return out
+    # Nothing carried a stage marker in its name (foreign or legacy naming). Fall back to the
+    # single-log behaviour so those callers keep working exactly as before.
+    one = pick_log_for_rack(log_dir, rack, job_id, full_rack=full_rack, full_rack_nodes=full_rack_nodes)
+    return {"nemo": one} if one else {}
+
+
+# Which parser.sh table each stage is the authority for. A stage's rows are taken from that
+# stage's own log and nowhere else, so a NeMo log can never contribute NCCL numbers.
+_PARSER_STAGE_TABLES = {
+    "nccl": "nccl_peak_out_of_place_busbw_gbps",
+    "nemo": "nemotron_5h_56b_train_window",
+}
+
+
+def _primary_stage_log(stage_paths: dict[str, Path], job_id: str | None) -> Path | None:
+    """The log the request is 'about': the one carrying *job_id*, else NeMo, else NCCL.
+
+    Everything that can only sensibly take one log (the Grafana time window, sn-llama, history
+    ingest, log adoption) uses this, so adding the second stage cannot change their behaviour.
+    """
+    if not stage_paths:
+        return None
+    j = (job_id or "").strip()
+    if j.isdigit():
+        suf = f"N-{j}.txt"
+        for p in stage_paths.values():
+            if p.name.endswith(suf):
+                return p
+    return stage_paths.get("nemo") or stage_paths.get("nccl")
+
+
+def _parser_secondary_stages(stage_paths: dict[str, Path], primary: Path) -> list[tuple[str, Path]]:
+    """Stages whose log is a DIFFERENT file from *primary*, so they need their own parse.
+
+    On the older combined format both stages resolve to the same file, which yields an empty
+    list — the primary parse already produced both tables and must not be run twice.
+    """
+    seen = {str(primary)}
+    out: list[tuple[str, Path]] = []
+    for stage, path in stage_paths.items():
+        if str(path) in seen:
+            continue
+        seen.add(str(path))
+        out.append((stage, path))
+    return out
+
+
 def _slurm_job_base_id(job_raw: str | None) -> str | None:
     s = (job_raw or "").strip()
     if not s or s == "-":
@@ -9960,6 +10057,9 @@ def api_parser_results():
     full_rack_nodes: int | None = None
     if fr_nodes_raw.isdigit():
         full_rack_nodes = int(fr_nodes_raw, 10) if int(fr_nodes_raw, 10) > 0 else None
+    # Populated only when resolving by rack; an explicit ``path``/``log_file`` request means the
+    # caller named the exact file it wants, so it keeps the single-log behaviour untouched.
+    stage_paths: dict[str, Path] = {}
     if path_arg:
         # Explicit allowlisted path (e.g. a Travis bring-up node log
         # results/<node>/allreduce.txt) — bypasses the NEMO/NCCL basename filter but
@@ -9988,9 +10088,14 @@ def api_parser_results():
             rk = _normalize_rack_id(rack)
         except ValueError as e:
             return jsonify({"ok": False, "error": str(e)}), 400
-        log_path = pick_log_for_rack(
+        # One log per stage: NCCL and NeMo are separate jobs since llmb-run, so a single file
+        # can only carry one stage's evidence. The primary keeps every downstream consumer
+        # (grafana window, sn-llama, history ingest, adoption) on exactly one log as before;
+        # a distinct second stage is parsed after and merged in below.
+        stage_paths = pick_logs_for_rack(
             log_dir, rack, job_id, full_rack=full_rack, full_rack_nodes=full_rack_nodes
         )
+        log_path = _primary_stage_log(stage_paths, job_id)
         if log_path is None:
             need_n = full_rack_nodes if full_rack_nodes and full_rack_nodes > 0 else _full_rack_expected_nodes()
             detail = (
@@ -10072,6 +10177,42 @@ def api_parser_results():
         except (json.JSONDecodeError, OSError, subprocess.TimeoutExpired, ValueError) as e:
             _logger.warning("parser sn-llama bundle failed: %s", e)
     merged_data: dict[str, object] = {**parsed, "sn_llama_nemotron": sn_nemo}
+
+    # --- second stage (2026-08-03) ----------------------------------------------------
+    # Stage 1 (NCCL) and stage 2 (NeMo) are separate jobs writing separate logs, so the file
+    # parsed above holds evidence for only one of them. Parse the other stage's own log and take
+    # ONLY that stage's table from it. Rows are self-describing (each carries rack and job_id),
+    # so this is a concatenation. Best-effort: a missing second stage just means one empty tab.
+    stage_logs: dict[str, str] = {}
+    if stage_paths:
+        stage_logs = {stage: str(_rpath(p)) for stage, p in stage_paths.items()}
+    for stage, spath in _parser_secondary_stages(stage_paths, log_path):
+        table = _PARSER_STAGE_TABLES.get(stage)
+        if not table:
+            continue
+        slp = str(_rpath(spath))
+        try:
+            proc_s = host_exec.run_on_host(
+                ["bash", str(parser), *_parser_extra_args(), "--json", slp],
+                cwd=str(log_dir),
+                env=env,
+                timeout=max(30, _job_env_int("RACK_PARSER_TIMEOUT", 300)),
+            )
+            if proc_s.returncode != 0 or not (proc_s.stdout or "").strip():
+                _logger.warning("parser %s stage returned nothing for %s", stage, slp)
+                continue
+            parsed_s = json.loads(proc_s.stdout)
+            if not isinstance(parsed_s, dict):
+                continue
+            rows_s = parsed_s.get(table)
+            if isinstance(rows_s, list) and rows_s:
+                # Replace, not append: parser.sh emits an all-"---" placeholder row for an
+                # explicitly-named file whatever its content, so the primary log contributes a
+                # junk row to the table it is not the authority for. This stage owns the table.
+                merged_data[table] = list(rows_s)
+        except (json.JSONDecodeError, OSError, subprocess.TimeoutExpired, ValueError) as e:
+            _logger.warning("parser %s stage failed for %s: %s", stage, slp, e)
+
     log_tz_q = _sanitize_display_timezone_query(request.args.get("display_timezone"))
     # Grafana time-window context is optional; never let it 500 the parser charts (it may touch
     # log files, which over SSH can fail). Degrade to no embed on error.
@@ -10113,6 +10254,8 @@ def api_parser_results():
             "returncode": proc.returncode,
             "rack": rk,
             "log_file": lp,
+            # Which file fed each tab. Absent keys mean that stage has no log for this rack yet.
+            "stage_logs": stage_logs,
             "job_id": _jobid_from_nemo_log_basename(Path(lp).name) or job_raw or "",
             "full_rack": bool(full_rack) if not (path_arg or log_fn) else False,
             "full_rack_nodes": (

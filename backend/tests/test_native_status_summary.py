@@ -57,6 +57,74 @@ def test_zero_node_racks_excluded_from_summary(monkeypatch):
     assert summary["stage1"]["pending"] == 0
 
 
+def test_split_stage_logs_judge_each_stage_from_its_own_log(monkeypatch):
+    """A newer NeMo log must not decide the NCCL verdict, or a passing stage 1 reads as failed.
+
+    Stage 1 and stage 2 are separate Slurm jobs since llmb-run, so ``by_rack_log`` (newest log
+    of any kind) only ever holds evidence for one of them.
+    """
+    st = _build(
+        monkeypatch,
+        racks=["r01"],
+        sinfo_counts={("r01", "idle"): 18},
+        by_rack_log={
+            # Newest log is the NeMo one; on its own it says nothing about NCCL.
+            "r01": {"nemo_state": "done", "nccl_ok": False, "llm_ok": True,
+                    "_path": "cmods-NEMO-1Rack-r01-18N-2.txt"},
+        },
+    )
+    st.by_rack_stage_log = {
+        "r01": {
+            "nccl": {"nemo_state": "done", "nccl_ok": True, "llm_ok": False,
+                     "_path": "cmods-NCCL-1Rack-r01-18N-1.txt"},
+            "nemo": {"nemo_state": "done", "nccl_ok": False, "llm_ok": True,
+                     "_path": "cmods-NEMO-1Rack-r01-18N-2.txt"},
+        }
+    }
+    _rows, summary, _f, _l = st.build_table_rows()
+    # NCCL passed in its own log and NeMo passed in its own, so the rack is done.
+    assert summary["done"] == 1
+    assert summary["fail"] == 0
+
+
+def test_split_stage_failure_is_attributed_to_the_failing_stage(monkeypatch):
+    st = _build(
+        monkeypatch,
+        racks=["r01"],
+        sinfo_counts={("r01", "idle"): 18},
+        by_rack_log={
+            "r01": {"nemo_state": "done", "nccl_ok": True, "llm_ok": True,
+                    "_path": "cmods-NEMO-1Rack-r01-18N-2.txt"},
+        },
+    )
+    st.by_rack_stage_log = {
+        "r01": {
+            "nccl": {"nemo_state": "fail", "nccl_ok": False, "llm_ok": False,
+                     "_path": "cmods-NCCL-1Rack-r01-18N-1.txt"},
+            "nemo": {"nemo_state": "done", "nccl_ok": True, "llm_ok": True,
+                     "_path": "cmods-NEMO-1Rack-r01-18N-2.txt"},
+        }
+    }
+    _rows, summary, _f, _l = st.build_table_rows()
+    assert summary["fail"] == 1, "a failed stage 1 must not be masked by a passing stage 2"
+
+
+def test_logs_without_a_stage_marker_keep_the_single_log_verdict(monkeypatch):
+    """Not every site names its logs '-NEMO-1Rack-'; those racks must not all read pending."""
+    st = _build(
+        monkeypatch,
+        racks=["r01"],
+        sinfo_counts={("r01", "idle"): 18},
+        by_rack_log={
+            "r01": {"nemo_state": "done", "nccl_ok": True, "llm_ok": True,
+                    "_path": "cmods-nemo-r01-18N-7.txt"},
+        },
+    )
+    _rows, summary, _f, _l = st.build_table_rows()
+    assert summary["done"] == 1
+    assert summary["pending"] == 0
+
+
 def test_zero_node_racks_counted_until_sinfo_ready(monkeypatch):
     # Before sinfo completes we cannot tell compute from switch racks: count all.
     st = _build(

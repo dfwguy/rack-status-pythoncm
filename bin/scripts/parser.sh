@@ -506,7 +506,11 @@ _inv_scan() {
     doclass && /Step Time.*MODEL_TFLOP\/s\/GPU/                                     { mark("nemotron") }
     doclass && /megatron|Megatron|NeMo|nemotron|Nemotron/                           { mark("nemotron") }
     doclass && /^# Collective test starting:|Avg bus bandwidth|out-of-place/        { mark("nccl") }
-    doclass && /all_reduce_perf|alltoall_perf|all_gather_perf|nccl-tests|NCCL INFO/ { mark("nccl") }
+    # "NCCL INFO" is deliberately NOT here. It is NCCL_DEBUG chatter, not a result: llmb runs
+    # NeMo training with NCCL_DEBUG=INFO, so every NEMO log carries ~32k of it and used to be
+    # marked nccl, which put an all-"---" (or worse, phantom) NCCL row in the parser tables.
+    # The markers above are the ones only real nccl-tests output prints.
+    doclass && /all_reduce_perf|alltoall_perf|all_gather_perf|nccl-tests/           { mark("nccl") }
     doclass && /HPLinpack|T\/V +N +NB|WR[0-9]+[LRC][0-9]+/                          { mark("hpl") }
     doclass && /nvbandwidth|device_to_host_memcpy|host_to_device_memcpy/            { mark("nvbandwidth") }
     doclass && /nvloom|NVLoom|NVLOOM/                                               { mark("nvloom") }

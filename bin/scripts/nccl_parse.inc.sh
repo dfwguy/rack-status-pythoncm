@@ -9,17 +9,38 @@
 #   - NEMO container binaries: all_reduce_perf_mpi / alltoall_perf_mpi / all_gather_perf_mpi,
 #     each bracketed by "# Collective test starting:" and "# Collective test concluded:" lines.
 #   - Standalone portable launcher (nccl-tests): plain all_reduce_perf — NO "starting" line, and
-#     the "concluded" line has no _mpi suffix. When no "starting:" marker appears at all, every
-#     data row is attributed to all_reduce.
+#     the "concluded" line has no _mpi suffix.
+#
+# ARMING (why a data row alone is never enough)
+# ---------------------------------------------
+# A data row is only "NF>=9, numeric $1, numeric $8", which plain text hits by accident. A NeMo
+# training log run with NCCL_DEBUG=INFO prints channel rank lists like
+#     ink50-…: NCCL INFO Channel 05/32 :  0  1  2 … 35
+# and when 36 ranks interleave, the wrap continuation lands on its own line as " 23 24 … 35" —
+# nine-plus numeric fields, read as size=23 and busbw=30. Measured 2026-08-03: every one of the
+# 36 NEMO-1Rack logs on Nscale TX produced 6-18 of these phantom all_reduce points, and the
+# dashboard charted them as a real (terrible) result.
+#
+# So rows are accepted only once the file has proved it contains an nccl-tests TABLE, by either a
+# "# Collective test starting:" marker or the table header nccl-tests always prints:
+#     #                              out-of-place                       in-place
+#     #       size   count   type   redop   root   time   algbw   busbw #wrong   …
+# The header is what keeps the marker-less standalone launcher working: it has no "starting:"
+# line, but it does print the header, so it stays armed while a NeMo log never arms at all.
 
 # Peak out-of-place busbw (GB/s) at the largest message size, per collective. Prints "ar,aa,ag".
 nccl_busbw_csv() {
   awk '
+    /^#/ && /out-of-place/                                 { hdr=1 }
+    /^#/ && /size/ && /busbw/                              { hdr=1 }
     /^# Collective test starting: all_reduce_perf(_mpi)?$/ { cur="ar"; seen=1; next }
     /^# Collective test starting: alltoall_perf(_mpi)?$/   { cur="aa"; seen=1; next }
     /^# Collective test starting: all_gather_perf(_mpi)?$/ { cur="ag"; seen=1; next }
     /^# Collective test concluded:/                        { cur="";   next }
     NF>=9 && $1 ~ /^[0-9]+$/ && $8 ~ /^[0-9]+(\.[0-9]+)?$/ {
+      # No marker and no table header => this is not nccl-tests output. Skip, rather than
+      # assuming all_reduce and charting whatever numbers happen to be on the line.
+      if (!seen && !hdr) next
       c = (seen ? cur : "ar"); sz = $1 + 0
       if      (c=="ar" && sz>=ar_sz) { ar_sz=sz; ar=$8 }
       else if (c=="aa" && sz>=aa_sz) { aa_sz=sz; aa=$8 }
@@ -33,6 +54,8 @@ nccl_busbw_csv() {
 # busbw at the LARGEST message size). Deliberately a SEPARATE function returning "rs,sr" so the
 # 3-field "ar,aa,ag" contract of nccl_busbw_csv -- consumed by BOTH parser.sh and rack_status.sh --
 # is unchanged. All five collectives emit NF=13 rows, so $8 is out-of-place busbw for each.
+# No hdr arming needed here or in nccl_series_by_collective_append: both require cur != "",
+# i.e. a "starting:" marker, so they can never read a row out of an unmarked log.
 nccl_busbw_ext_csv() {
   awk '
     /^# Collective test starting: reduce_scatter_perf(_mpi)?$/ { cur="rs"; next }
@@ -95,11 +118,16 @@ nccl_allreduce_series_append() {
   local f=$1 rack=$2 jid=$3
   [[ -f "$f" ]] || return 0
   awk -v rack="$rack" -v jid="$jid" -v OFS='\t' '
+    /^#/ && /out-of-place/                                            { hdr=1 }
+    /^#/ && /size/ && /busbw/                                         { hdr=1 }
     /^# Collective test starting: all_reduce_perf(_mpi)?$/             { cur="ar";    seen=1; next }
     /^# Collective test starting: (alltoall|all_gather)_perf(_mpi)?$/  { cur="other"; seen=1; next }
     /^# Collective test concluded: all_reduce_perf(_mpi)?$/            { if (captured) exit; cur=""; next }
     /^# Collective test concluded:/                                   { cur=""; next }
     NF >= 9 && $1 ~ /^[0-9]+$/ && $8 ~ /^[0-9]+(\.[0-9]+)?$/ {
+      # See ARMING at the top of this file: without a marker or a table header these nine
+      # numeric fields are as likely to be an NCCL_DEBUG channel list as a sweep row.
+      if (!seen && !hdr) next
       c = (seen ? cur : "ar")
       if (c=="ar") { captured=1; print rack, jid, $1, $8 }
     }

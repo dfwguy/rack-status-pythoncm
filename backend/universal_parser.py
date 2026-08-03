@@ -847,6 +847,10 @@ def _strip_task_prefix(line: str) -> str:
 _NCCL_START_RE = re.compile(r"^#\s*Collective test starting:\s*(\S+)", re.MULTILINE)
 _NCCL_COLL_MAP = {"all_reduce_perf": "all_reduce", "alltoall_perf": "alltoall", "all_gather_perf": "all_gather"}
 _NCCL_OOB_RE = re.compile(r"^#\s*Out of bounds values\s*:\s*(\d+)\s*(\w+)?", re.MULTILINE)
+# The table header nccl-tests always prints above a sweep, in either of its two lines:
+#   #                              out-of-place                       in-place
+#   #       size   count   type   redop   root   time   algbw   busbw #wrong   …
+_NCCL_TABLE_HDR_RE = re.compile(r"^#.*(?:out-of-place|size.*busbw)")
 _NCCL_AVG_RE = re.compile(r"^#\s*Avg bus bandwidth\s*:\s*([\d.]+)", re.MULTILINE)
 
 
@@ -855,17 +859,26 @@ def _extract_nccl(text: str, bag: _MetricBag) -> dict[str, Any]:
 
     Data rows have >=9 whitespace fields with a numeric size in $1 and a numeric out-of-place
     busbw in $8; the collective comes from the preceding ``# Collective test starting:`` line.
-    When no ``starting:`` marker ever appears (standalone nccl-tests launcher) every row is
-    attributed to all_reduce, exactly as the awk does.
+
+    ARMING: that row shape is loose enough to hit ordinary text, so rows count only after the
+    file has proved it holds an nccl-tests table — a ``starting:`` marker or the table header.
+    A NeMo log run with NCCL_DEBUG=INFO prints channel rank lists whose wrap continuations are
+    bare numeric runs (" 23 24 … 35"), which used to be read as size=23 / busbw=30 and charted
+    as a real result. The header is what keeps the marker-less standalone nccl-tests launcher
+    working: it prints no ``starting:`` line but does print the header. Mirrors the awk's
+    ``hdr`` gate in nccl_parse.inc.sh — keep the two in step.
     """
     cur = ""
     seen_marker = False
+    seen_header = False
     peak: dict[str, tuple[int, float]] = {}
     for raw in text.splitlines():
         line = raw.rstrip()
         if not line:
             continue
         if line.lstrip().startswith("#"):
+            if _NCCL_TABLE_HDR_RE.search(line):
+                seen_header = True
             m = _NCCL_START_RE.match(line.lstrip())
             if m:
                 cur = _NCCL_COLL_MAP.get(m.group(1).replace("_mpi", ""), m.group(1))
@@ -874,6 +887,8 @@ def _extract_nccl(text: str, bag: _MetricBag) -> dict[str, Any]:
             if "Collective test concluded" in line:
                 cur = ""
                 continue
+            continue
+        if not (seen_marker or seen_header):
             continue
         f = line.split()
         if len(f) < 9:
