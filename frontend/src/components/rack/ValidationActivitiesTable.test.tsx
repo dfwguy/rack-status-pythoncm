@@ -93,4 +93,28 @@ describe("ValidationActivitiesTable", () => {
       expect(screen.getByText(/No validation activities yet/)).toBeInTheDocument(),
     );
   });
+
+  it("refetches on demand, so polling is never the only way to see a new launch", async () => {
+    const listFetch = mockFetchActivities([sampleActivity]);
+    vi.stubGlobal("fetch", listFetch);
+    render(<ValidationActivitiesTable logDir="/logs" pollMs={0} />);
+    await waitFor(() => expect(screen.getByText("p5-r01")).toBeInTheDocument());
+    const before = listFetch.mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh validation activities" }));
+    await waitFor(() => expect(listFetch.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it("says why the panel is empty instead of just showing zero", async () => {
+    /**
+     * The failure this guards: with the backend half-deployed the endpoint returned the SPA's
+     * HTML, the fetch threw, and the panel read "0 tracked" with no hint that anything was
+     * wrong -- which reads as "the launch was not captured".
+     */
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("no such API endpoint")));
+    render(<ValidationActivitiesTable logDir="/logs" pollMs={0} />);
+    expect(
+      await screen.findByText(/Could not load validation activities: no such API endpoint/),
+    ).toBeInTheDocument();
+  });
 });

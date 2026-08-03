@@ -10,8 +10,8 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Tooltip from "@mui/material/Tooltip";
 import CircularProgress from "@mui/material/CircularProgress";
-import { Card, Text, Tag, Flex } from "@nvidia/foundations-react-core";
-import { LineChart, ScrollText } from "lucide-react";
+import { Banner, Button, Card, Text, Tag, Flex } from "@nvidia/foundations-react-core";
+import { LineChart, RefreshCw, ScrollText } from "lucide-react";
 import { TailLogDialog } from "../TailLogDialog";
 import { ToolsLiveOutputDialog } from "../ToolsLiveOutputDialog";
 import { JobLogContentDialog } from "../JobLogContentDialog";
@@ -140,9 +140,12 @@ export function ValidationActivitiesTable({
   const [tailTitle, setTailTitle] = useState("");
   const [tailPayload, setTailPayload] = useState<JobStdoutTailPayload | null>(null);
   const [staticLogPath, setStaticLogPath] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (!logDir?.trim()) return;
+    setLoading(true);
     try {
       const rows = await fetchValidationActivities({
         logDir,
@@ -150,8 +153,13 @@ export function ValidationActivitiesTable({
         scope: scope?.trim() || undefined,
       });
       setActivities(rows);
-    } catch {
-      // keep last-known on transient errors
+      setLoadError("");
+    } catch (e) {
+      // Keep the last-known rows, but say so. Swallowing this silently is what made a
+      // half-deployed backend read as "0 tracked" -- an empty panel and no clue why.
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
   }, [logDir, rack, scope]);
 
@@ -197,7 +205,22 @@ export function ValidationActivitiesTable({
         <Tag color={activities.length > 0 ? "blue" : "gray"} kind="outline" readOnly density="compact">
           {activities.length} tracked
         </Tag>
+        <Button
+          kind="secondary"
+          size="small"
+          onClick={() => void load()}
+          disabled={loading}
+          aria-label="Refresh validation activities"
+        >
+          <RefreshCw size={14} />
+        </Button>
       </Flex>
+
+      {loadError && (
+        <Banner status="error" kind="inline">
+          Could not load validation activities: {loadError}
+        </Banner>
+      )}
 
       {activities.length === 0 ? (
         <Card style={{ padding: 32, textAlign: "center", marginBottom: 16 }}>

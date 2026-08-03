@@ -177,6 +177,20 @@ def test_secondary_stages_lists_only_distinct_files(monkeypatch, tmp_path):
     assert [s for s, _ in secondary] == ["nccl"], "NeMo is primary, so only NCCL needs a parse"
 
 
+def test_unknown_api_endpoint_404s_instead_of_serving_the_spa():
+    """A frontend calling an endpoint this build lacks must hear so, not get HTML at 200.
+
+    This is how the Validation activities panel came to read "0 tracked" with its backend not
+    deployed: the catch-all answered /api/validation-activities with index.html.
+    """
+    app_module.app.config["TESTING"] = True
+    with app_module.app.test_client() as c:
+        resp = c.get("/api/there-is-no-such-endpoint")
+        assert resp.status_code == 404
+        assert "text/html" not in (resp.content_type or "")
+        assert resp.get_json()["ok"] is False
+
+
 def test_stage_kind_of_log_bn():
     from native_status import _stage_kind_of_log_bn
 
