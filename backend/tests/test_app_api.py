@@ -870,3 +870,85 @@ class TestValidationActivitiesAPI:
         assert resp.status_code == 200
         jobs = resp.get_json().get("jobs") or []
         assert any(j.get("job_id") == start["job_id"] for j in jobs)
+
+    def test_terminal_activity_hydrates_slurm_stdout(
+        self, client, log_dir, isolated_validation_activities, monkeypatch
+    ):
+        """Done wrapper activities still resolve Slurm StdOut for child tasks on list refresh."""
+        aid = validation_activities.record_activity(
+            "llmb-nccl",
+            rack="p5-r01",
+            log_dir=log_dir,
+            operator="tester",
+        )
+        validation_activities.update_activity(
+            aid,
+            phase="done",
+            stdout="SUBMITTED: microbenchmark jobid=114305\n",
+        )
+
+        def _fake_scontrol(job_id: str) -> dict:
+            return {
+                "ok": True,
+                "stdout": (
+                    f"JobId={job_id} JobState=RUNNING "
+                    f"StdOut=/logs/llmb-nccl_nodes_{job_id}.out"
+                ),
+            }
+
+        monkeypatch.setattr(app_module, "_run_scontrol_show_job", _fake_scontrol)
+
+        listed = client.get(
+            "/api/validation-activities",
+            query_string={"log_dir": log_dir, "rack": "p5-r01"},
+        ).get_json()
+        assert listed["ok"] is True
+        rec = next(a for a in listed["activities"] if a["activity_id"] == aid)
+        assert rec["phase"] == "done"
+        tasks = rec.get("tasks") or []
+        assert len(tasks) == 1
+        assert tasks[0]["scheduler_ref"] == "114305"
+        assert tasks[0]["stdout_path"] == "/logs/llmb-nccl_nodes_114305.out"
+        assert tasks[0]["scheduler_state"] == "RUNNING"
+
+        detail = client.get(f"/api/validation-activities/{aid}").get_json()
+        assert detail["activity"]["tasks"][0]["stdout_path"] == "/logs/llmb-nccl_nodes_114305.out"
+
+
+class TestValidationActivitySlurmHydration:
+    def test_task_needs_hydration_when_stdout_missing(self):
+        assert app_module._task_needs_slurm_hydration({"scheduler_ref": "123"}) is True
+
+    def test_task_needs_hydration_when_slurm_still_running(self):
+        task = {
+            "scheduler_ref": "123",
+            "stdout_path": "/logs/out",
+            "scheduler_state": "RUNNING",
+        }
+        assert app_module._task_needs_slurm_hydration(task) is True
+
+    def test_task_skips_hydration_when_slurm_terminal(self):
+        task = {
+            "scheduler_ref": "123",
+            "stdout_path": "/logs/out",
+            "scheduler_state": "COMPLETED",
+        }
+        assert app_module._task_needs_slurm_hydration(task) is False
+
+    def test_hydrate_activity_task_logs(self, isolated_validation_activities, monkeypatch):
+        aid = validation_activities.record_activity("llmb-nccl", rack="p5-r01", log_dir="/logs")
+        validation_activities.sync_tasks_from_stdout(aid, "jobid=999\n")
+        validation_activities.update_activity(aid, phase="done")
+
+        monkeypatch.setattr(
+            app_module,
+            "_run_scontrol_show_job",
+            lambda jid: {
+                "ok": True,
+                "stdout": f"JobId={jid} JobState=COMPLETED StdOut=/logs/llmb-nccl_nodes_{jid}.out",
+            },
+        )
+        app_module._hydrate_activity_task_logs(aid)
+        tasks = validation_activities.get_activity(aid).get("tasks") or []
+        assert tasks[0]["stdout_path"] == "/logs/llmb-nccl_nodes_999.out"
+        assert tasks[0]["scheduler_state"] == "COMPLETED"

@@ -1406,8 +1406,93 @@ def _parse_scontrol_job_fields(text: str) -> tuple[str | None, str | None]:
     return state, stdout
 
 
+_SLURM_TERMINAL_JOB_STATES = frozenset(
+    {
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED",
+        "TIMEOUT",
+        "NODE_FAIL",
+        "PREEMPTED",
+        "OUT_OF_MEMORY",
+        "BOOT_FAIL",
+        "DEADLINE",
+    }
+)
+
+
+def _slurm_job_state_base(state: str | None) -> str:
+    return str(state or "").strip().upper().split("+")[0]
+
+
+def _task_needs_slurm_hydration(task: dict) -> bool:
+    """True when a task has a Slurm ref but still needs stdout path and/or live state."""
+    if not isinstance(task, dict):
+        return False
+    ref = str(task.get("scheduler_ref") or "").strip()
+    if not ref:
+        return False
+    jid = ref.split(".")[0]
+    if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
+        return False
+    if not str(task.get("stdout_path") or "").strip():
+        return True
+    base = _slurm_job_state_base(str(task.get("scheduler_state") or ""))
+    if not base:
+        return True
+    return base not in _SLURM_TERMINAL_JOB_STATES
+
+
+def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> None:
+    """Resolve Slurm StdOut=/JobState= for tasks that have ``scheduler_ref`` but no log path yet."""
+    aid = (activity_id or "").strip()
+    if not aid:
+        return
+    if rec is None:
+        rec = validation_activities.get_activity(aid)
+    if not rec:
+        return
+    for task in rec.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        if not _task_needs_slurm_hydration(task):
+            continue
+        ref = str(task.get("scheduler_ref") or "").strip().split(".")[0]
+        try:
+            sc = _run_scontrol_show_job(ref)
+        except (OSError, ValueError):
+            continue
+        if not sc.get("ok"):
+            continue
+        state, stdout = _parse_scontrol_job_fields(str(sc.get("stdout") or ""))
+        task_phase = str(task.get("phase") or "")
+        if state in ("RUNNING", "COMPLETING"):
+            task_phase = "running"
+        validation_activities.add_or_update_task(
+            aid,
+            ordinal=int(task.get("ordinal") or 1),
+            label=str(task.get("label") or "validation"),
+            task_id=str(task.get("task_id") or ""),
+            scheduler_state=state,
+            stdout_path=stdout,
+            phase=task_phase or None,
+        )
+        if state is not None:
+            task["scheduler_state"] = state
+        if stdout is not None:
+            task["stdout_path"] = stdout
+        if task_phase:
+            task["phase"] = task_phase
+
+
+def _update_validation_activity(activity_id: str, **kwargs: object) -> None:
+    """Persist activity fields and hydrate Slurm task logs when wrapper stdout carries job ids."""
+    validation_activities.update_activity(activity_id, **kwargs)
+    _hydrate_activity_task_logs(activity_id)
+
+
 def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
-    """Best-effort Slurm state + stdout path refresh for non-terminal activities."""
+    """Best-effort Slurm state + stdout path refresh for tasks that still need hydration."""
     if os.environ.get("RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED", "").strip().lower() in (
         "1",
         "true",
@@ -1415,37 +1500,13 @@ def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
     ):
         return
     for rec in rows:
-        phase = str(rec.get("phase") or "")
-        if phase in validation_activities.TERMINAL_PHASES:
-            continue
         aid = str(rec.get("activity_id") or rec.get("job_id") or "")
         if not aid:
             continue
         tasks = rec.get("tasks") or []
-        if not tasks:
+        if not any(_task_needs_slurm_hydration(t) for t in tasks if isinstance(t, dict)):
             continue
-        for task in tasks:
-            if not isinstance(task, dict):
-                continue
-            ref = str(task.get("scheduler_ref") or "").strip()
-            if not ref or not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(ref.split(".")[0]):
-                continue
-            try:
-                sc = _run_scontrol_show_job(ref.split(".")[0])
-            except (OSError, ValueError):
-                continue
-            if not sc.get("ok"):
-                continue
-            state, stdout = _parse_scontrol_job_fields(str(sc.get("stdout") or ""))
-            validation_activities.add_or_update_task(
-                aid,
-                ordinal=int(task.get("ordinal") or 1),
-                label=str(task.get("label") or "validation"),
-                task_id=str(task.get("task_id") or ""),
-                scheduler_state=state,
-                stdout_path=stdout,
-                phase="running" if state in ("RUNNING", "COMPLETING") else str(task.get("phase") or ""),
-            )
+        _hydrate_activity_task_logs(aid, rec)
 
 
 def _maybe_adopt_validation_log(log_path: Path, log_dir: Path, rack: str) -> None:
@@ -1501,7 +1562,7 @@ def _validation_worker(
                 row.update(kwargs)
                 if str(kwargs.get("phase") or "") in ("done", "error"):
                     finished = dict(row)
-        validation_activities.update_activity(job_id, **kwargs)
+        _update_validation_activity(job_id, **kwargs)
         if finished is not None:
             _lake_push_job(job_id, finished)
 
@@ -1594,7 +1655,7 @@ def _stress_worker(
             if row is not None:
                 row.update(kwargs)
         if persist:
-            validation_activities.update_activity(job_id, **kwargs)
+            _update_validation_activity(job_id, **kwargs)
 
     try:
         _patch(
@@ -1679,7 +1740,7 @@ def _xrack_worker(
             row = _xrack_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
-        validation_activities.update_activity(job_id, **kwargs)
+        _update_validation_activity(job_id, **kwargs)
 
     try:
         _patch(
@@ -1754,7 +1815,7 @@ def _llama_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
             row = _llama_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
-        validation_activities.update_activity(job_id, **kwargs)
+        _update_validation_activity(job_id, **kwargs)
 
     try:
         _patch(
