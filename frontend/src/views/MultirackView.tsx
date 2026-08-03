@@ -16,13 +16,13 @@ import CircularProgress from "@mui/material/CircularProgress";
 import { Card, Text, Tag, Button, Banner, Flex } from "@nvidia/foundations-react-core";
 import { attachLaunchOptions, type LaunchOptions } from "../lib/rackCommandBodies";
 import { LaunchOptionsDialog } from "../components/rack/LaunchOptionsDialog";
-import { Layers, LineChart, Gauge, ScrollText } from "lucide-react";
+import { Layers, LineChart, Gauge } from "lucide-react";
 import Tooltip from "@mui/material/Tooltip";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { ParserResultsDialog } from "../components/ParserResultsDialog";
+import { ValidationActivitiesTable } from "../components/rack/ValidationActivitiesTable";
 import { TailLogDialog } from "../components/TailLogDialog";
-import { ToolsLiveOutputDialog } from "../components/ToolsLiveOutputDialog";
 import {
   buildMultirackTailBody,
   openRackLogInNewTab,
@@ -106,42 +106,6 @@ const LAUNCH_TITLE: Record<MultirackLaunchKind, string> = {
   llmb: "Launch NCCL Microbenchmark",
 };
 
-function jobKindLabel(kind: string): string {
-  return kind === "llmb" ? "NCCL (direct)" : "NEMO x-rack";
-}
-
-function jobPhaseColor(phase: string): TagColor {
-  if (phase === "done") return "green";
-  if (phase === "error" || phase === "timeout") return "red";
-  if (phase === "running") return "yellow";
-  return "blue"; // starting / unknown
-}
-
-/** Best-effort match of a launched job to a log-derived results row (by rack ids). */
-function logRowForJob(job: MultirackJob, mrRows: MultirackStatusRow[]): MultirackStatusRow | null {
-  const jr = job.racks.map((r) => r.toLowerCase()).filter(Boolean);
-  if (jr.length === 0) return null;
-  let best: MultirackStatusRow | null = null;
-  let bestScore = 0;
-  for (const row of mrRows) {
-    const hay = `${row.display_rack} ${row.log_file}`.toLowerCase();
-    let score = 0;
-    for (const r of jr) if (hay.includes(r)) score++;
-    if (score > bestScore) {
-      bestScore = score;
-      best = row;
-    }
-  }
-  return bestScore > 0 ? best : null;
-}
-
-function fmtWhen(iso: string): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
-}
-
 export function MultirackView({ data, logDir }: MultirackViewProps) {
   const [dryRun, setDryRun] = useState(false);
   const [pendingKind, setPendingKind] = useState<MultirackLaunchKind | null>(null);
@@ -151,9 +115,8 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     open: false, message: "", severity: "info",
   });
 
-  // Launched jobs — durable state table shared across users/sessions (GET /api/multirack-jobs).
+  // Launched jobs — used to refresh on-disk results when a run finishes.
   const [jobs, setJobs] = useState<MultirackJob[]>([]);
-  const [viewLogsJobId, setViewLogsJobId] = useState<string | null>(null);
 
   // Multirack status (on-disk logs / parser results)
   const [mrRows, setMrRows] = useState<MultirackStatusRow[]>([]);
@@ -323,24 +286,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     if (kind) void handleLaunch(kind, opts);
   };
 
-  const handleDismissJob = useCallback(
-    async (jobId: string) => {
-      try {
-        const res = await fetch(`/api/multirack-jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
-        if (res.ok) {
-          setViewLogsJobId((cur) => (cur === jobId ? null : cur));
-          fetchJobs();
-        } else {
-          setSnackbar({ open: true, message: "Could not dismiss job.", severity: "error" });
-        }
-      } catch (err) {
-        setSnackbar({ open: true, message: `Network error: ${err instanceof Error ? err.message : "unknown"}`, severity: "error" });
-      }
-    },
-    [fetchJobs]
-  );
-
-  // Poll the jobs table; refresh on-disk results whenever a job newly reaches a terminal phase.
+  // Poll launched jobs; refresh on-disk results whenever a job newly reaches a terminal phase.
   useEffect(() => {
     fetchJobs();
     fetchMultirackStatus();
@@ -362,20 +308,6 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   }, [jobs, fetchMultirackStatus]);
 
   const noRacks = !data || rows.length === 0;
-  const anyJobRunning = jobs.some((j) => !TERMINAL_PHASES.has(j.phase));
-  const viewLogsJob = jobs.find((j) => j.job_id === viewLogsJobId) || null;
-  const viewLogsText = viewLogsJob
-    ? [
-        viewLogsJob.command_display ? `$ ${viewLogsJob.command_display}` : "",
-        (viewLogsJob.stdout_tail || "").trim(),
-        (viewLogsJob.stderr_tail || "").trim() ? `[stderr]\n${(viewLogsJob.stderr_tail || "").trim()}` : "",
-        !viewLogsJob.stdout_tail && !viewLogsJob.stderr_tail && !TERMINAL_PHASES.has(viewLogsJob.phase)
-          ? "(running — output is captured when the job finishes)"
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n")
-    : "";
 
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
@@ -509,111 +441,15 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
         )}
       </Card>
 
-      {/* Multi-rack jobs — durable state table (UUID per launch, shared across sessions) */}
-      <Flex gap="2" align="center" wrap="wrap" style={{ marginBottom: 12 }}>
-        <Text kind="title/sm" style={{ marginRight: "auto" }}>
-          Multi-rack jobs
-        </Text>
-        {anyJobRunning && <CircularProgress size={16} />}
-        <Tag color={jobs.length > 0 ? "blue" : "gray"} kind="outline" readOnly density="compact">
-          {jobs.length} tracked
-        </Tag>
-      </Flex>
-
-      {jobs.length === 0 ? (
-        <Card style={{ padding: 32, textAlign: "center", marginBottom: 24 }}>
-          <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
-            No launched jobs yet. Launch a run above — each launch is tracked here with a job id and stays visible across
-            sessions and other operators until dismissed.
-          </Text>
-        </Card>
-      ) : (
-        <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
-          <Table size="small" stickyHeader>
-            <TableHead>
-              <TableRow>
-                <TableCell>Racks</TableCell>
-                <TableCell>Type</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Operator</TableCell>
-                <TableCell>Launched</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {jobs.map((job) => {
-                const logRow = logRowForJob(job, mrRows);
-                const hasLog = Boolean(logRow && logBasenameForParser(logRow.log_file));
-                return (
-                  <TableRow key={job.job_id} hover>
-                    <TableCell sx={{ fontWeight: 600 }}>
-                      {job.racks.length > 0 ? job.racks.join(", ") : "—"}
-                      <Text kind="mono/sm" style={{ display: "block", color: "var(--text-color-subtle)" }}>
-                        {job.job_id.slice(0, 8)}
-                      </Text>
-                    </TableCell>
-                    <TableCell>
-                      <Tag color={job.kind === "llmb" ? "purple" : "teal"} kind="outline" readOnly density="compact">
-                        {jobKindLabel(job.kind)}
-                      </Tag>
-                      {job.dry_run && (
-                        <Tag color="gray" kind="outline" readOnly density="compact">
-                          dry run
-                        </Tag>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Tooltip title={job.error || ""} disableHoverListener={!job.error} arrow>
-                        <span style={{ display: "inline-flex" }}>
-                          <Tag color={jobPhaseColor(job.phase)} kind="solid" readOnly density="compact">
-                            {job.phase}
-                          </Tag>
-                        </span>
-                      </Tooltip>
-                    </TableCell>
-                    <TableCell>
-                      <Text kind="body/regular/sm">{job.operator || "—"}</Text>
-                    </TableCell>
-                    <TableCell>
-                      <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-                        {fmtWhen(job.created_at)}
-                      </Text>
-                    </TableCell>
-                    <TableCell align="right">
-                      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 0.5, flexWrap: "wrap" }}>
-                        <MuiButton
-                          size="small"
-                          variant="outlined"
-                          startIcon={<ScrollText size={16} />}
-                          onClick={() => setViewLogsJobId(job.job_id)}
-                        >
-                          View Logs
-                        </MuiButton>
-                        <Tooltip title={hasLog ? "NCCL / NEMO charts and Grafana" : "Results appear once the run's log is written"}>
-                          <span>
-                            <MuiButton
-                              size="small"
-                              variant="contained"
-                              disabled={!hasLog}
-                              startIcon={<LineChart size={16} />}
-                              onClick={() => logRow && openMultirackParser(logRow, 1)}
-                            >
-                              View Results
-                            </MuiButton>
-                          </span>
-                        </Tooltip>
-                        <MuiButton size="small" color="inherit" onClick={() => void handleDismissJob(job.job_id)}>
-                          Dismiss
-                        </MuiButton>
-                      </Box>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
+      <ValidationActivitiesTable
+        logDir={logDir}
+        scope="multirack"
+        title="Validation activities"
+        logRows={mrRows}
+        onOpenParser={(row, initialTab) =>
+          openMultirackParser(row as MultirackStatusRow, initialTab)
+        }
+      />
 
       {/* On-disk results & logs (parsed from the log directory) */}
       <Text kind="title/sm" style={{ display: "block", marginBottom: 12 }}>
@@ -742,18 +578,6 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
         onClose={() => setTailStream(null)}
         title={tailStream?.title ?? "Tail log"}
         payload={tailStream?.body ?? null}
-      />
-
-      <ToolsLiveOutputDialog
-        open={viewLogsJob !== null}
-        onClose={() => setViewLogsJobId(null)}
-        title={
-          viewLogsJob
-            ? `${jobKindLabel(viewLogsJob.kind)} — ${viewLogsJob.racks.join(", ") || viewLogsJob.job_id.slice(0, 8)}`
-            : "Job output"
-        }
-        logText={viewLogsText}
-        running={viewLogsJob ? !TERMINAL_PHASES.has(viewLogsJob.phase) : false}
       />
 
       <LaunchOptionsDialog

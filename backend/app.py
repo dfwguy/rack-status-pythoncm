@@ -149,6 +149,7 @@ import help_content  # noqa: E402
 import workflow_engine  # noqa: E402
 import rack_locks  # noqa: E402
 import multirack_jobs  # noqa: E402
+import validation_activities  # noqa: E402
 import token_vault  # noqa: E402
 import nvftp_cache_sync  # noqa: E402
 from platforms import get_platform as _get_platform  # noqa: E402
@@ -1356,6 +1357,116 @@ def get_physical_rf0_map() -> dict[str, str]:
         return dict(_physical_rf0_map)
 
 
+def _validation_tool_and_stage() -> tuple[str, str]:
+    """Map configured validation script to activity tool + stage."""
+    name = _validation_script_path().name.lower()
+    if "llmb_nemo" in name:
+        return "llmb-nemo-combined", "combined"
+    return "singlerack", "stage2"
+
+
+def _record_validation_activity(
+    tool: str,
+    *,
+    stage: str,
+    scope: str,
+    rack: str,
+    racks: list[str],
+    log_dir: str,
+    command_display: str,
+    activity_id: str,
+    operator: str = "",
+    dry_run: bool = False,
+    scheduler: str = "slurm",
+) -> str:
+    """Persist a validation launch in the durable activities store."""
+    return validation_activities.record_activity(
+        tool,
+        stage=stage,
+        scope=scope,
+        rack=rack,
+        racks=racks,
+        log_dir=log_dir,
+        operator=operator,
+        command_display=command_display,
+        dry_run=dry_run,
+        scheduler=scheduler,
+        activity_id=activity_id,
+    )
+
+
+def _parse_scontrol_job_fields(text: str) -> tuple[str | None, str | None]:
+    """Return (JobState, StdOut path) from ``scontrol show job`` output."""
+    state_m = re.search(r"JobState=(\S+)", text or "")
+    stdout_m = _SLURM_STDOUT_RE.search(text or "")
+    state = state_m.group(1) if state_m else None
+    stdout = stdout_m.group(1) if stdout_m else None
+    if stdout in ("(none)", "/dev/null", ""):
+        stdout = None
+    return state, stdout
+
+
+def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
+    """Best-effort Slurm state + stdout path refresh for non-terminal activities."""
+    if os.environ.get("RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return
+    for rec in rows:
+        phase = str(rec.get("phase") or "")
+        if phase in validation_activities.TERMINAL_PHASES:
+            continue
+        aid = str(rec.get("activity_id") or rec.get("job_id") or "")
+        if not aid:
+            continue
+        tasks = rec.get("tasks") or []
+        if not tasks:
+            continue
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            ref = str(task.get("scheduler_ref") or "").strip()
+            if not ref or not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(ref.split(".")[0]):
+                continue
+            try:
+                sc = _run_scontrol_show_job(ref.split(".")[0])
+            except (OSError, ValueError):
+                continue
+            if not sc.get("ok"):
+                continue
+            state, stdout = _parse_scontrol_job_fields(str(sc.get("stdout") or ""))
+            validation_activities.add_or_update_task(
+                aid,
+                ordinal=int(task.get("ordinal") or 1),
+                label=str(task.get("label") or "validation"),
+                task_id=str(task.get("task_id") or ""),
+                scheduler_state=state,
+                stdout_path=stdout,
+                phase="running" if state in ("RUNNING", "COMPLETING") else str(task.get("phase") or ""),
+            )
+
+
+def _maybe_adopt_validation_log(log_path: Path, log_dir: Path, rack: str) -> None:
+    """Assign an activity_id when an external validation log is first accessed."""
+    if os.environ.get("RACK_VALIDATION_ACTIVITIES_ADOPT_DISABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return
+    try:
+        validation_activities.adopt_log(
+            str(log_path),
+            log_dir=str(log_dir),
+            rack=rack,
+            operator=_operator_from_request() or "external",
+        )
+    except Exception as e:
+        _logger.debug("validation log adopt skipped for %s: %s", log_path, e)
+
+
 def _validation_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
     """Drop finished job metadata after a delay (avoids unbounded memory)."""
 
@@ -1388,9 +1499,9 @@ def _validation_worker(
             row = _validation_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
-                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
                 if str(kwargs.get("phase") or "") in ("done", "error"):
                     finished = dict(row)
+        validation_activities.update_activity(job_id, **kwargs)
         if finished is not None:
             _lake_push_job(job_id, finished)
 
@@ -1483,7 +1594,7 @@ def _stress_worker(
             if row is not None:
                 row.update(kwargs)
         if persist:
-            multirack_jobs.update_job(job_id, **kwargs)
+            validation_activities.update_activity(job_id, **kwargs)
 
     try:
         _patch(
@@ -1568,7 +1679,7 @@ def _xrack_worker(
             row = _xrack_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
-        multirack_jobs.update_job(job_id, **kwargs)
+        validation_activities.update_activity(job_id, **kwargs)
 
     try:
         _patch(
@@ -1643,6 +1754,7 @@ def _llama_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
             row = _llama_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
+        validation_activities.update_activity(job_id, **kwargs)
 
     try:
         _patch(
@@ -10108,6 +10220,13 @@ def api_parser_results():
                 )
             )
             return jsonify({"ok": False, "error": detail}), 404
+    adopt_rk = (rk or rack or multirack_display_rack_from_basename(log_path.name) or "").strip()
+    if adopt_rk:
+        try:
+            adopt_rk = _normalize_rack_id(adopt_rk)
+        except ValueError:
+            pass
+    _maybe_adopt_validation_log(log_path, log_dir, adopt_rk)
     parser = _parser_path()
     if not _script_exists(parser):
         return jsonify({"ok": False, "error": f"parser.sh not found: {parser}"}), 500
@@ -12485,11 +12604,27 @@ def api_run_validation_async():
     env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) and _eu else None
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
+    operator = _operator_from_request()
+    val_tool, val_stage = _validation_tool_and_stage()
+    _record_validation_activity(
+        val_tool,
+        stage=val_stage,
+        scope="rack",
+        rack=rk,
+        racks=[rk],
+        log_dir=str(log_dir),
+        command_display=display_cmd,
+        activity_id=job_id,
+        operator=operator,
+    )
+    if env_merged is None:
+        env_merged = {}
+    env_merged = {**env_merged, "NVIS_ACTIVITY_ID": job_id}
     with _validation_jobs_lock:
         _validation_jobs[job_id] = {
             "job_id": job_id,
             "kind": "validation",
-            "operator": _operator_from_request(),
+            "operator": operator,
             "rack": rk,
             "target": target,
             "log_dir": str(log_dir),
@@ -12613,13 +12748,16 @@ def api_run_nemo_xrack_async():
             "created_at": created,
             "xrack_arg": arg,
         }
-    multirack_jobs.record_job(
-        "nemo",
-        racks,
-        str(log_dir),
-        operator=operator,
+    _record_validation_activity(
+        "nemo-xrack",
+        stage="multirack",
+        scope="multirack",
+        rack=racks[0] if racks else "",
+        racks=racks,
+        log_dir=str(log_dir),
         command_display=display_cmd,
-        job_id=job_id,
+        activity_id=job_id,
+        operator=operator,
     )
     threading.Thread(
         target=_xrack_worker,
@@ -12704,12 +12842,24 @@ def api_run_llama_async():
     nodes_spec = str(prep["nodes_spec"])
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
+    operator = _operator_from_request()
     cwd = _host_job_cwd(log_dir)
+    _record_validation_activity(
+        "llama",
+        stage="other",
+        scope="rack",
+        rack=rk,
+        racks=[rk],
+        log_dir=cwd,
+        command_display=display_cmd,
+        activity_id=job_id,
+        operator=operator,
+    )
     with _llama_jobs_lock:
         _llama_jobs[job_id] = {
             "job_id": job_id,
             "kind": "llama",
-            "operator": _operator_from_request(),
+            "operator": operator,
             "rack": rk,
             "log_dir": cwd,
             "nodes_spec": nodes_spec,
@@ -13256,11 +13406,23 @@ def api_run_mnubergemm_stress_async():
     env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) else None
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
+    operator = _operator_from_request()
+    _record_validation_activity(
+        "mnubergemm",
+        stage="other",
+        scope="rack",
+        rack=rk,
+        racks=[rk],
+        log_dir=str(log_dir),
+        command_display=display_cmd,
+        activity_id=job_id,
+        operator=operator,
+    )
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
             "job_id": job_id,
             "kind": "mnubergemm",
-            "operator": _operator_from_request(),
+            "operator": operator,
             "rack": rk,
             "target": target,
             "log_dir": str(log_dir),
@@ -13271,7 +13433,7 @@ def api_run_mnubergemm_stress_async():
     threading.Thread(
         target=_stress_worker,
         args=(job_id, cmd, str(log_dir), timeout, display_cmd),
-        kwargs={"env_updates": env_merged},
+        kwargs={"env_updates": env_merged, "persist": True},
         daemon=True,
     ).start()
     client_poll_deadline_ms = min(int(timeout) * 1000 + 600000, 48 * 3600 * 1000)
@@ -13321,11 +13483,26 @@ def api_run_nccl_fullrack_async():
     env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) else None
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
+    operator = _operator_from_request()
+    _record_validation_activity(
+        "nccl-fullrack",
+        stage="stage1",
+        scope="rack",
+        rack=rk,
+        racks=[rk],
+        log_dir=str(log_dir),
+        command_display=display_cmd,
+        activity_id=job_id,
+        operator=operator,
+    )
+    if env_merged is None:
+        env_merged = {}
+    env_merged = {**env_merged, "NVIS_ACTIVITY_ID": job_id}
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
             "job_id": job_id,
             "kind": "nccl-fullrack",
-            "operator": _operator_from_request(),
+            "operator": operator,
             "rack": rk,
             "target": target,
             "log_dir": str(log_dir),
@@ -13336,7 +13513,12 @@ def api_run_nccl_fullrack_async():
     threading.Thread(
         target=_stress_worker,
         args=(job_id, cmd, str(log_dir), timeout, display_cmd),
-        kwargs={"error_label": "nccl benchmark script", "env_updates": env_merged, "profile": "script"},
+        kwargs={
+            "error_label": "nccl benchmark script",
+            "env_updates": env_merged,
+            "profile": "script",
+            "persist": True,
+        },
         daemon=True,
     ).start()
     client_poll_deadline_ms = min(int(timeout) * 1000 + 600000, 48 * 3600 * 1000)
@@ -13386,11 +13568,23 @@ def api_run_nvloom_async():
     env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) else None
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
+    operator = _operator_from_request()
+    _record_validation_activity(
+        "nvloom",
+        stage="other",
+        scope="rack",
+        rack=rk,
+        racks=[rk],
+        log_dir=str(log_dir),
+        command_display=display_cmd,
+        activity_id=job_id,
+        operator=operator,
+    )
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
             "job_id": job_id,
             "kind": "nvloom",
-            "operator": _operator_from_request(),
+            "operator": operator,
             "rack": rk,
             "target": target,
             "log_dir": str(log_dir),
@@ -13401,7 +13595,7 @@ def api_run_nvloom_async():
     threading.Thread(
         target=_stress_worker,
         args=(job_id, cmd, str(log_dir), timeout, display_cmd),
-        kwargs={"error_label": "nvloom singlerack script", "env_updates": env_merged},
+        kwargs={"error_label": "nvloom singlerack script", "env_updates": env_merged, "persist": True},
         daemon=True,
     ).start()
     client_poll_deadline_ms = min(int(timeout) * 1000 + 600000, 48 * 3600 * 1000)
@@ -13451,11 +13645,23 @@ def api_run_clusterkit_async():
     env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) else None
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
+    operator = _operator_from_request()
+    _record_validation_activity(
+        "clusterkit",
+        stage="other",
+        scope="rack",
+        rack=rk,
+        racks=[rk],
+        log_dir=str(log_dir),
+        command_display=display_cmd,
+        activity_id=job_id,
+        operator=operator,
+    )
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
             "job_id": job_id,
             "kind": "clusterkit",
-            "operator": _operator_from_request(),
+            "operator": operator,
             "rack": rk,
             "target": target,
             "log_dir": str(log_dir),
@@ -13466,7 +13672,7 @@ def api_run_clusterkit_async():
     threading.Thread(
         target=_stress_worker,
         args=(job_id, cmd, str(log_dir), timeout, display_cmd),
-        kwargs={"error_label": "clusterkit script", "env_updates": env_merged},
+        kwargs={"error_label": "clusterkit script", "env_updates": env_merged, "persist": True},
         daemon=True,
     ).start()
     client_poll_deadline_ms = min(int(timeout) * 1000 + 600000, 48 * 3600 * 1000)
@@ -13525,6 +13731,22 @@ def api_run_llmb_nccl_async():
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
+    scope = "multirack" if len(racks) > 1 else "rack"
+    _record_validation_activity(
+        "llmb-nccl",
+        stage="stage1",
+        scope=scope,
+        rack=racks[0] if racks else rack_label,
+        racks=racks,
+        log_dir=str(log_dir),
+        command_display=display_cmd,
+        activity_id=job_id,
+        operator=operator,
+        dry_run=dry_run,
+    )
+    if env_merged is None:
+        env_merged = {}
+    env_merged = {**env_merged, "NVIS_ACTIVITY_ID": job_id}
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
             "job_id": job_id,
@@ -13538,15 +13760,6 @@ def api_run_llmb_nccl_async():
             "command_display": display_cmd,
             "created_at": created,
         }
-    multirack_jobs.record_job(
-        "llmb",
-        racks,
-        str(log_dir),
-        operator=operator,
-        command_display=display_cmd,
-        dry_run=dry_run,
-        job_id=job_id,
-    )
     threading.Thread(
         target=_stress_worker,
         args=(job_id, cmd, cwd, timeout, display_cmd),
@@ -13605,15 +13818,107 @@ def api_multirack_jobs():
         limit = int(request.args.get("limit", "100"))
     except (TypeError, ValueError):
         limit = 100
-    return jsonify({"ok": True, "jobs": multirack_jobs.list_jobs(log_dir_filter, limit=limit)})
+    jobs = validation_activities.list_activities(log_dir=log_dir_filter, scope="multirack", limit=limit)
+    _refresh_validation_activities_lazy(jobs)
+    return jsonify({"ok": True, "jobs": jobs})
 
 
 @app.route("/api/multirack-jobs/<job_id>", methods=["DELETE"])
 def api_multirack_job_delete(job_id: str):
     """Dismiss (remove) a launched multi-rack job from the durable state table."""
-    if multirack_jobs.delete_job(job_id):
+    if validation_activities.delete_activity(job_id):
         return jsonify({"ok": True, "job_id": job_id})
     return jsonify({"ok": False, "error": "unknown job_id"}), 404
+
+
+def _validation_activities_query_filters() -> tuple[str | None, str | None, str | None, str | None, int]:
+    log_dir_raw = (request.args.get("log_dir") or "").strip()
+    log_dir_filter: str | None = None
+    if log_dir_raw:
+        try:
+            log_dir_filter = str(_resolve_log_dir(log_dir_raw))
+        except ValueError:
+            log_dir_filter = log_dir_raw
+    rack = (request.args.get("rack") or "").strip() or None
+    tool = (request.args.get("tool") or "").strip() or None
+    scope = (request.args.get("scope") or "").strip() or None
+    try:
+        limit = int(request.args.get("limit", "100"))
+    except (TypeError, ValueError):
+        limit = 100
+    return log_dir_filter, rack, tool, scope, limit
+
+
+@app.route("/api/validation-activities", methods=["GET"])
+def api_validation_activities():
+    """List validation activities (newest first) with optional rack/log_dir/tool/scope filters."""
+    log_dir_filter, rack, tool, scope, limit = _validation_activities_query_filters()
+    rows = validation_activities.list_activities(
+        log_dir=log_dir_filter,
+        rack=rack,
+        tool=tool,
+        scope=scope,
+        limit=limit,
+    )
+    _refresh_validation_activities_lazy(rows)
+    return jsonify({"ok": True, "activities": rows})
+
+
+@app.route("/api/validation-activities/<activity_id>", methods=["GET"])
+def api_validation_activity_detail(activity_id: str):
+    aid = (activity_id or "").strip()
+    if not aid:
+        return jsonify({"ok": False, "error": "activity_id is required"}), 400
+    rec = validation_activities.get_activity(aid)
+    if rec is None:
+        return jsonify({"ok": False, "error": "unknown activity_id"}), 404
+    _refresh_validation_activities_lazy([rec])
+    rec = validation_activities.get_activity(aid) or rec
+    return jsonify({"ok": True, "activity": rec})
+
+
+@app.route("/api/validation-activities/<activity_id>", methods=["DELETE"])
+def api_validation_activity_delete(activity_id: str):
+    aid = (activity_id or "").strip()
+    if validation_activities.delete_activity(aid):
+        return jsonify({"ok": True, "activity_id": aid})
+    return jsonify({"ok": False, "error": "unknown activity_id"}), 404
+
+
+@app.route("/api/validation-activities/adopt", methods=["POST"])
+def api_validation_activities_adopt():
+    """Register an external validation log under a new durable activity id."""
+    body = request.get_json(silent=True) or {}
+    path_raw = (body.get("path") or body.get("log_path") or "").strip()
+    if not path_raw:
+        return jsonify({"ok": False, "error": "path is required"}), 400
+    log_raw = body.get("log_dir")
+    try:
+        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    rack = (body.get("rack") or "").strip()
+    try:
+        if rack:
+            rack = _normalize_rack_id(rack)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    if not rack:
+        rack = multirack_display_rack_from_basename(os.path.basename(path_raw)) or ""
+    try:
+        log_path = _resolve_slurm_job_stdout_path(path_raw, str(log_dir))
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    aid = validation_activities.adopt_log(
+        str(log_path),
+        log_dir=str(log_dir),
+        rack=rack,
+        operator=_operator_from_request() or "external",
+    )
+    if not aid:
+        return jsonify({"ok": False, "error": "could not adopt log"}), 400
+    rec = validation_activities.get_activity(aid)
+    return jsonify({"ok": True, "activity_id": aid, "activity": rec})
 
 
 @app.route("/api/rack-grafana-live-charts", methods=["GET"])

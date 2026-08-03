@@ -3,6 +3,7 @@ import Box from "@mui/material/Box";
 import { Text, Divider } from "@nvidia/foundations-react-core";
 import { ActionCard } from "./ActionCard";
 import { LaunchOptionsDialog } from "./LaunchOptionsDialog";
+import { ValidationActivitiesTable } from "./ValidationActivitiesTable";
 import { Play, Flame, Zap, Boxes, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine, Network, Gauge, Activity } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
 import { llamaNodesBody, slurmTargetBody, validationFamilyBody, type LaunchOptions } from "../../lib/rackCommandBodies";
@@ -95,6 +96,15 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
           })
         }
       />
+
+      {logDir?.trim() ? (
+        <>
+          <div style={{ margin: "8px 0" }}>
+            <Divider />
+          </div>
+          <ValidationActivitiesTable logDir={logDir} rack={rack} title="Validation activities" />
+        </>
+      ) : null}
 
       <div style={{ margin: "8px 0" }}>
         <Divider />

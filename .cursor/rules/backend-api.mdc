@@ -26,6 +26,22 @@ Long-running operations (validation, llama, stress, xrack, power, GPU reset, etc
 4. Phases: `starting` -> `running` -> `done` | `error` | `timeout`
 5. Jobs purge from memory after ~15 minutes
 
+### Durable validation activities (validation-family only)
+
+Ephemeral `job_id` polling still exists for the SPA live dialog. **Validation-family**
+launches (Stage 1/2, Llama, mnubergemm, nvloom, ClusterKit, multirack NEMO/LLMB) are
+**also** persisted via `validation_activities.py` → `var/cache/validation_activities.json`
+(fcntl flock; override `RACK_VALIDATION_ACTIVITIES_FILE`). Canonical id is `activity_id`
+(UUID); async APIs still return `job_id` as the same UUID.
+
+- Record at launch with `_record_validation_activity(...)` before starting the worker.
+- Workers mirror phase/stdout into the store; stdout `jobid=` lines become `tasks[]`.
+- External SA logs are adopted on first parser/log access (`adopt_log`).
+- List/detail GET lazily refreshes Slurm `scheduler_state` / `StdOut=` for open tasks.
+- HTTP: `GET/DELETE /api/validation-activities[/<id>]`, `POST …/adopt`.
+  `GET/DELETE /api/multirack-jobs` remains a compat alias (`scope=multirack`).
+- `multirack_jobs.py` is a thin shim over `validation_activities` (legacy migration on first read).
+
 ## Slurm Commands
 
 All Slurm commands go through the platform provider:

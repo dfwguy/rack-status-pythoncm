@@ -425,6 +425,7 @@ RACK_LOG_ANALYSIS_SQUEUE_TIMEOUT_SEC
 RACK_LOG_EXPORT_DISABLED
 RACK_LOG_EXPORT_SKIP_NEMO_DONE_FILTER
 RACK_LOG_INLINE_MAX_BYTES
+RACK_MULTIRACK_JOBS_FILE          # legacy; migrated into RACK_VALIDATION_ACTIVITIES_FILE
 RACK_MULTIRACK_LOG_RACK_SCAN_BYTES
 RACK_MULTIRACK_PROBE_TIMEOUT
 RACK_MULTIRACK_SITE_PREFIX
@@ -507,6 +508,7 @@ RACK_TAIL_LOG_DISABLED
 RACK_UPTIME_DISABLED
 RACK_UPTIME_DRY_RUN
 RACK_UPTIME_PDSH_TIMEOUT
+RACK_VALIDATION_ACTIVITIES_FILE   # durable validation activity registry (default var/cache/validation_activities.json)
 RACK_VALIDATION_CT_RANGE
 RACK_VALIDATION_DISABLED
 RACK_VALIDATION_SCRIPT
@@ -560,6 +562,21 @@ RACK_WEB_VERSION
 *Generated from repository sources; if a variable is missing, search **`/home/cmsupport/nvis-rack-status/backend/app.py`** and **`backend/native_status.py`** for the exact spelling.*
 
 ---
+
+### Validation activities
+
+Durable registry for validation-family launches and adopted external logs
+(`validation_activities.py`, `GET/DELETE /api/validation-activities[/<id>]`,
+`POST /api/validation-activities/adopt`). Canonical id is `activity_id` (UUID);
+async endpoints still return the same value as `job_id`. Legacy
+`/api/multirack-jobs` remains a compat alias for `scope=multirack`.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| **`RACK_VALIDATION_ACTIVITIES_FILE`** | `var/cache/validation_activities.json` | Durable activity store (fcntl flock, atomic rewrite, cap ~500). |
+| **`RACK_MULTIRACK_JOBS_FILE`** | `var/cache/multirack_jobs.json` | Legacy path. If the new file is absent and this exists, records are migrated once into `validation_activities.json` (old file kept as `.bak`). |
+
+Subprocess env may include **`NVIS_ACTIVITY_ID=<uuid>`** so wrappers can embed the activity id later.
 
 ### Rack locks
 

@@ -14,6 +14,17 @@ import app as app_module
 from app import app
 
 import rack_locks
+import validation_activities
+
+
+@pytest.fixture
+def isolated_validation_activities(tmp_path, monkeypatch):
+    """Redirect validation activity store for API tests."""
+    activities = tmp_path / "validation_activities.json"
+    legacy = tmp_path / "multirack_jobs.json"
+    monkeypatch.setattr(validation_activities, "ACTIVITIES_FILE", activities)
+    monkeypatch.setattr(validation_activities, "LEGACY_JOBS_FILE", legacy)
+    yield activities
 
 
 @pytest.fixture
@@ -808,3 +819,54 @@ class TestRunLlmbNccl:
     def test_status_unknown_job_404(self, client):
         resp = client.get("/api/run-llmb-nccl-status?job_id=does-not-exist")
         assert resp.status_code == 404
+
+
+class TestValidationActivitiesAPI:
+    """Durable validation activity registry HTTP surface."""
+
+    def test_list_empty(self, client, log_dir, isolated_validation_activities):
+        resp = client.get("/api/validation-activities", query_string={"log_dir": log_dir})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["activities"] == []
+
+    def test_async_launch_creates_activity(self, client, log_dir, isolated_validation_activities):
+        start = client.post(
+            "/api/run-llmb-nccl-async",
+            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        ).get_json()
+        assert start["ok"] is True
+        job_id = start["job_id"]
+        listed = client.get(
+            "/api/validation-activities",
+            query_string={"log_dir": log_dir, "rack": "p5-r01"},
+        ).get_json()
+        assert listed["ok"] is True
+        ids = [a["activity_id"] for a in listed["activities"]]
+        assert job_id in ids
+        detail = client.get(f"/api/validation-activities/{job_id}").get_json()
+        assert detail["ok"] is True
+        assert detail["activity"]["tool"] == "llmb-nccl"
+
+    def test_delete_activity(self, client, log_dir, isolated_validation_activities):
+        start = client.post(
+            "/api/run-llmb-nccl-async",
+            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        ).get_json()
+        job_id = start["job_id"]
+        resp = client.delete(f"/api/validation-activities/{job_id}")
+        assert resp.status_code == 200
+        listed = client.get("/api/validation-activities", query_string={"log_dir": log_dir}).get_json()
+        assert listed["activities"] == []
+
+    def test_multirack_jobs_compat_alias(self, client, log_dir, isolated_validation_activities):
+        start = client.post(
+            "/api/run-nemo-xrack-async",
+            json={"racks": ["p5-r01", "p5-r02"], "log_dir": log_dir, "dry_run": True},
+        ).get_json()
+        assert start["ok"] is True
+        resp = client.get("/api/multirack-jobs", query_string={"log_dir": log_dir})
+        assert resp.status_code == 200
+        jobs = resp.get_json().get("jobs") or []
+        assert any(j.get("job_id") == start["job_id"] for j in jobs)

@@ -118,7 +118,8 @@ terminal); `native_status.py` (primary rack/device status collector — merges `
 `ds`, `sinfo`, log-dir probes into in-memory state); `host_exec.py` + `transport/` (local-vs-SSH
 routing, env-forwarding, sudo escalation, SSH ControlMaster multiplexing, jump-host hop, fanout);
 `platforms/` (bcm.py / maas.py / base.py); `schedulers/` (slurm/local + runai/slinky/maas stubs);
-`workflow_engine.py`; `multirack_jobs.py`; `rack_locks.py` (fcntl advisory locks); `catalog/`
+`workflow_engine.py`; `validation_activities.py` (durable validation-family launch registry;
+`multirack_jobs.py` is a thin compat shim); `rack_locks.py` (fcntl advisory locks); `catalog/`
 (TinyDB tool/platform/project catalog blueprint); `ai_chat.py`; `token_vault.py`;
 `nvftp_cache_sync.py`; `rack_web/pam_*` (PAM login); `nvis_id_templates.py` (configurable
 rack/CT/NVSwitch naming templates); and `bin/scripts/` (bundled operational + benchmark bash).
@@ -126,10 +127,12 @@ rack/CT/NVSwitch naming templates); and `bin/scripts/` (bundled operational + be
 **Persistence — file-based only, NO external database.** All runtime state lives under `/app/var`,
 persisted via the compose named volume `rack-data`. TinyDB at `var/store/catalog.json`
 (platforms/tools/projects, atomic writes + flock). Plain JSON under `var/cache/`
-(`rack_locks.json`, `job_env_overrides.json` — holds Prometheus/sudo/NGC secrets, perms-sensitive,
-`ai_settings.json`, log-parse caches, `cmsh_rack_list.txt`, `nvftp_sync_state.json`). Encrypted
-NVFTP token vault. Flask session secret at `var/secrets/.rack_web_secret_key`. Workflows as YAML in
-`var/workflows/` with run state JSON. `rack_comments.json` at repo root.
+(`validation_activities.json` — durable validation launches + adopted external logs, migrated
+from legacy `multirack_jobs.json`; `rack_locks.json`, `job_env_overrides.json` — holds
+Prometheus/sudo/NGC secrets, perms-sensitive, `ai_settings.json`, log-parse caches,
+`cmsh_rack_list.txt`, `nvftp_sync_state.json`). Encrypted NVFTP token vault. Flask session
+secret at `var/secrets/.rack_web_secret_key`. Workflows as YAML in `var/workflows/` with run
+state JSON. `rack_comments.json` at repo root.
 
 ---
 

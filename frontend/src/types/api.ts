@@ -49,11 +49,63 @@ export interface RackHierarchy {
   unmatched: string[];
 }
 
+/** Child scheduler task on a validation activity (NCCL then NeMo, etc.). */
+export interface ActivityTask {
+  task_id: string;
+  ordinal: number;
+  label: string;
+  scheduler_ref?: string | null;
+  scheduler_state?: string | null;
+  phase?: string;
+  stdout_path?: string | null;
+  training_log_path?: string | null;
+  results_log_path?: string | null;
+  updated_at?: string;
+}
+
+/** Durable validation activity (GET /api/validation-activities). */
+export interface ValidationActivity {
+  activity_id: string;
+  job_id: string;
+  tool: string;
+  kind: string;
+  stage: string;
+  scope: string;
+  rack: string;
+  racks: string[];
+  log_dir: string;
+  operator: string;
+  command_display: string;
+  scheduler: string;
+  dry_run: boolean;
+  phase: string;
+  returncode: number | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  stdout_tail: string;
+  stderr_tail: string;
+  source: string;
+  tasks: ActivityTask[];
+}
+
+export interface ValidationActivitiesResponse {
+  ok: boolean;
+  activities: ValidationActivity[];
+  error?: string;
+}
+
 /** A launched multi-rack job from the durable state table (GET /api/multirack-jobs). */
 export interface MultirackJob {
   job_id: string;
+  activity_id?: string;
   /** "nemo" (cross-rack NEMO validation) or "llmb" (NCCL microbenchmark). */
-  kind: "nemo" | "llmb";
+  kind: string;
+  tool?: string;
+  stage?: string;
+  scope?: string;
+  rack?: string;
   racks: string[];
   log_dir: string;
   operator: string;
@@ -68,6 +120,7 @@ export interface MultirackJob {
   finished_at: string | null;
   stdout_tail: string;
   stderr_tail: string;
+  tasks?: ActivityTask[];
 }
 
 export interface MultirackJobsResponse {

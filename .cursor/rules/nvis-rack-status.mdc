@@ -70,11 +70,13 @@ The Python backend lives under `backend/`; runtime assets (`bin/`, `static/`, `v
 - `backend/host_exec.py` — SSH/local command execution with env forwarding
 - `backend/nvis_id_templates.py` — NVIS naming conventions (Firmus/CBR/Bright templates, uses `lru_cache`)
 - `backend/workflow_engine.py` — Workflow state machine, CRUD, execution engine
+- `backend/validation_activities.py` — Durable validation-family activity registry (`activity_id` + `tasks[]`); `multirack_jobs.py` is a compat shim
 - `backend/rack_locks.py` — Advisory rack lock claims, persistence, TTL, heartbeat-based release
 - `backend/platforms/` — BCM and MAAS platform providers
 - `backend/requirements.txt` — Python dependencies
 - `rack-config.env` — Docker deployment configuration
 - `frontend/src/components/RackTable.tsx` — Main dashboard table with filters, menus, charts
+- `frontend/src/components/rack/ValidationActivitiesTable.tsx` — Per-rack / multirack validation activity table (polls `/api/validation-activities`)
 - `frontend/src/components/ParserResultsDialog.tsx` — NCCL/NEMO chart dialog + Grafana embeds
 - `frontend/src/components/workflow/WorkflowDesigner.tsx` — Workflow editor: code panel + canvas + save
 - `frontend/src/components/workflow/editor/FlowDiagram.tsx` — React Flow canvas wrapper (node/edge types, connection handling, toolbar)

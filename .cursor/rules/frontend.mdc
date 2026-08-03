@@ -58,7 +58,8 @@ import { Button } from "@nvidia/foundations-react-core";
 ## Frontend Architecture
 
 - **Views**: SingleRackView, ClusterDashboardView, MultirackView, SlurmView, ReportsView, AnalyticsView, ToolsView, SettingsView
-- **Command tracking**: `RackCommandsStoreContext` manages async job state (launch, poll, results) across all views. `RackCommandContext` per-rack.
+- **Command tracking**: `RackCommandsStoreContext` manages ephemeral async job state (launch, poll, results) across all views. `RackCommandContext` per-rack.
+- **Validation activities**: `ValidationActivitiesTable` (in `ValidationTab` + `MultirackView`) polls durable `/api/validation-activities` — not the same as ephemeral `RackCommandsStoreContext` UUIDs. Service: `validationActivitiesService.ts`; types: `ValidationActivity` / `ActivityTask`.
 - **Hooks**: `useRackStatus` (polling /api/status), `useClusterOverview` (cluster-wide data)
 - **Lib**: `rackCommandTypes.ts`, `rackLog.ts`, `slurmHelpers.ts`, `parseSqueueStdout.ts`, `parseSinfoRStdout.ts`, `nvloomHeatmapParse.ts`
 - **Tests**: Vitest + Testing Library. Co-located `*.test.tsx` files. Run: `npm test`
