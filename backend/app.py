@@ -9158,7 +9158,15 @@ _UNIVERSAL_SCAN_MAX_FILES = 400
 # something that matches nothing (e.g. ``$^``) to restore the previous behaviour.
 _UNIVERSAL_SCAN_IGNORE_RE = re.compile(
     os.environ.get("RACK_UNIVERSAL_SCAN_IGNORE_RE")
-    or r"llmb-nccl_nodes_\d+\.out|llmb-autocollect_\d+\.log",
+    # These are llmb's INTERMEDIATE files, not results. Each has a real aggregated
+    # counterpart (<user>-NCCL-1Rack-… / <user>-NEMO-1Rack-…) that the collectors write;
+    # ingesting the intermediates too produces duplicate or empty rows.
+    #   llmb-nccl_<label>_<jid>.out   sbatch stdout. <label> was `nodes` until 2026-07-31,
+    #                                 when it became the rack id — so match ANY label, or
+    #                                 rack-labelled files silently start being ingested.
+    #   llmb-autocollect_<jid>.log    NCCL collector watcher log
+    #   llmb-nemo-autocollect_<jid>.log  NEMO collector watcher log
+    or r"llmb-nccl_.+_\d+\.out|llmb(-nemo)?-?autocollect_\d+\.log",
     re.IGNORECASE,
 )
 
@@ -11735,11 +11743,23 @@ def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
     vt_if_unset = mvt if _is_multirack_log_basename(ap.name) else "nccl_all_reduce,llm"
     env = _subprocess_env({"NO_COLOR": "1"}, validation_test_if_unset=vt_if_unset)
     _ensure_cmsh_rack_list_env_for_subprocess(env)
+    # ``env=`` is LOCAL ONLY -- run_on_host drops it for an SSH target, which is how this
+    # deployment runs the script. Without env_extra the remote never sees VALIDATION_TEST and
+    # validation_test_env.sh falls back to its strictest suite
+    # (all_reduce + alltoall + allgather + llm) applied to whichever single log is newest,
+    # so racks that passed every stage still render red. Forward the acceptance knobs
+    # explicitly; env_extra bypasses the FORWARD_ENV_PREFIXES allowlist.
+    env_extra = {"NO_COLOR": "1", "VALIDATION_TEST": env.get("VALIDATION_TEST", vt_if_unset)}
+    for _k in ("NEMO_TARGET_STEPS", "RACK_VALIDATION_CT_RANGE", "NVIS_RACK_ID"):
+        _v = (env.get(_k) or "").strip()
+        if _v:
+            env_extra[_k] = _v
     try:
         proc = host_exec.run_on_host(
             [str(script), "--probe-json", str(ap)],
             cwd=str(ap.parent),
             env=env,
+            env_extra=env_extra,
             timeout=max(60, _env_int("RACK_MULTIRACK_PROBE_TIMEOUT", 180)),
         )
     except (OSError, subprocess.TimeoutExpired):

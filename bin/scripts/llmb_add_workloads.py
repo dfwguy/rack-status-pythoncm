@@ -6,8 +6,7 @@ install ("Existing LLMB installation found ... remove the existing
 installation"), and `llmb-install express` refuses too ("Express mode does not
 support incremental installation"). The ONLY supported way to add workloads to
 a live install is the interactive menu, which needs a tty. Rack Status runs
-over a non-interactive SSH exec, so we allocate a pty and answer the two
-prompts.
+over a non-interactive SSH exec, so we allocate a pty and answer the prompts.
 
 The flow, verified against llmb-install 1.13.1 on this cluster:
 
@@ -22,12 +21,29 @@ The flow, verified against llmb-install 1.13.1 on this cluster:
 Already-installed workloads are excluded by llmb-install itself, so this is
 additive and idempotent: nothing is removed or reinstalled.
 
+HOW COMPLETION IS DECIDED -- and why not by string matching
+-----------------------------------------------------------
+Earlier versions broke out of the read loop as soon as the transcript contained
+a "done"-ish string ("Install Summary", "Successfully installed", ...) and then
+SIGKILLed llmb-install. Those strings are printed routinely by uv/pip and after
+every container import, so on 2026-07-30/31 the driver killed the installer
+seconds after its FIRST `enroot import` finished -- three times, ~115 GB of
+downloads, and `cluster_config.yaml` was never written. It then reported exit 0.
+
+So: we never kill on a string. We read until the pty closes, reap the child, and
+use its REAL exit status. Then we re-read `cluster_config.yaml` and report which
+workloads actually appeared. A caller that passes --expect gets a non-zero exit
+when a requested workload is still missing, however cleanly llmb-install exited.
+
 PATH note: the head node's non-login SSH shell lacks ~/.local/bin, where
 git-lfs lives. Without it llmb-install aborts with "Git LFS is not installed"
 even though it is. We prepend it.
 
-Usage:  llmb_add_workloads.py <install_path> [timeout_sec]
-Exit:   0 install finished, 2 timed out, 3 llmb-install reported failure.
+Usage:  llmb_add_workloads.py <install_path> [timeout_sec] [--expect w1,w2]
+Exit:   0 llmb-install exited 0 and every expected workload is installed
+        2 timed out (child killed)
+        3 llmb-install exited non-zero
+        4 llmb-install exited 0 but an expected workload is still missing
 """
 import os
 import pty
@@ -37,57 +53,114 @@ import signal
 import sys
 import time
 
-INSTALL_PATH = sys.argv[1] if len(sys.argv) > 1 else "/home/cmods/workspace/llmb"
-TIMEOUT = int(sys.argv[2]) if len(sys.argv) > 2 else 14400
-VENV_BIN = os.environ.get("LLMB_VENV_BIN", "/home/cmods/workspace/llmb_venv/bin")
-
 ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 MENU_Q = "What would you like to do"
 SELECT_Q = "Select workloads to install"
-DONE_MARKERS = ("Install Summary", "Installation Summary", "installation complete",
-                "Installation complete", "All workloads installed")
-FAIL_MARKERS = ("Install Summary: FAILED", "Installation did not complete")
+# Shown instead of MENU_Q when a previous incremental attempt did not finish (llmb-install
+# records the pending set). Default row is "Yes, resume incremental installation", which is
+# what we want -- it keeps the already-chosen workload set and carries on.
+RESUME_Q = "Continue adding workloads to existing installation"
+
+
+def installed_workloads(install_path):
+    """The `workloads.installed` list from cluster_config.yaml.
+
+    Deliberately a small hand parser: this script runs under the head node's bare
+    system python3, which has no PyYAML.
+    """
+    path = os.path.join(install_path, "cluster_config.yaml")
+    found, in_installed = [], False
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if re.match(r"^\s*installed:\s*$", line):
+                    in_installed = True
+                    continue
+                if in_installed:
+                    m = re.match(r"^\s*-\s*(\S+)\s*$", line)
+                    if m:
+                        found.append(m.group(1))
+                    elif line.strip():
+                        break
+    except OSError:
+        pass
+    return found
 
 
 def main() -> int:
-    if not os.path.isdir(INSTALL_PATH):
-        print(f"ERROR: install path does not exist: {INSTALL_PATH}", flush=True)
+    args = list(sys.argv[1:])
+    expect = []
+    if "--expect" in args:
+        i = args.index("--expect")
+        expect = [w.strip() for w in args[i + 1].split(",") if w.strip()] if i + 1 < len(args) else []
+        del args[i:i + 2]
+
+    install_path = args[0] if args else "/home/cmods/workspace/llmb"
+    timeout = int(args[1]) if len(args) > 1 else 14400
+    venv_bin = os.environ.get("LLMB_VENV_BIN", "/home/cmods/workspace/llmb_venv/bin")
+
+    if not os.path.isdir(install_path):
+        print(f"ERROR: install path does not exist: {install_path}", flush=True)
         return 3
-    os.chdir(INSTALL_PATH)
+    os.chdir(install_path)
+
+    before = installed_workloads(install_path)
+    print(f"=== workloads before: {before or '(none)'} ===", flush=True)
 
     env = dict(os.environ)
-    env["PATH"] = f"{VENV_BIN}:{os.path.expanduser('~')}/.local/bin:" + env.get("PATH", "")
+    env["PATH"] = f"{venv_bin}:{os.path.expanduser('~')}/.local/bin:" + env.get("PATH", "")
     env["TERM"] = "dumb"
 
     pid, fd = pty.fork()
     if pid == 0:
         os.execvpe("llmb-install", ["llmb-install", "--ui-mode", "simple"], env)
 
-    seen = ""          # ANSI-stripped transcript, for prompt detection
+    seen = ""          # ANSI-stripped transcript, for prompt detection only
     answered_menu = False
+    answered_resume = False
     answered_select = False
     start = time.time()
-    rc = 2
+    timed_out = False
 
-    while time.time() - start < TIMEOUT:
-        r, _, _ = select.select([fd], [], [], 5)
+    # Read until the pty closes. llmb-install owns the decision to finish; our only
+    # job is to answer prompts and stay out of the way. No completion strings.
+    while True:
+        if time.time() - start >= timeout:
+            timed_out = True
+            break
+        try:
+            r, _, _ = select.select([fd], [], [], 5)
+        except (OSError, ValueError):
+            break
         if r:
             try:
                 chunk = os.read(fd, 65536)
-            except OSError:
+            except OSError:      # EIO on Linux = the child closed the pty
                 break
             if not chunk:
                 break
             text = chunk.decode(errors="replace")
             sys.stdout.write(text)
             sys.stdout.flush()
-            seen += ANSI.sub("", text)
-            seen = seen[-20000:]
+            seen = (seen + ANSI.sub("", text))[-20000:]
 
+        # Clearing `seen` after each answer keeps a prompt from being re-detected in
+        # scrollback, which would send a stray keystroke into the next screen.
         if not answered_menu and MENU_Q in seen:
             time.sleep(1.0)
             os.write(fd, b"\r")            # take the default: add workloads
             answered_menu = True
+            seen = ""
+            continue
+
+        # Resume path: a prior attempt left a pending set. Default row is
+        # "Yes, resume incremental installation" -- take it and keep the set.
+        if not answered_resume and RESUME_Q in seen:
+            time.sleep(1.0)
+            os.write(fd, b"\r")
+            answered_resume = True
+            answered_menu = True           # resume replaces the top-level menu
+            seen = ""
             continue
 
         if answered_menu and not answered_select and SELECT_Q in seen:
@@ -96,22 +169,42 @@ def main() -> int:
             time.sleep(0.5)
             os.write(fd, b"\r")            # confirm
             answered_select = True
+            seen = ""
             continue
 
-        if answered_select:
-            if any(m in seen for m in FAIL_MARKERS):
-                rc = 3
-                break
-            if any(m in seen for m in DONE_MARKERS):
-                rc = 0
-                break
+    if timed_out:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+        child_rc = None
+    else:
+        try:
+            _, status = os.waitpid(pid, 0)
+            child_rc = os.waitstatus_to_exitcode(status)
+        except (ChildProcessError, OSError):
+            child_rc = None
 
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
-    print(f"\n=== llmb_add_workloads exit={rc} "
-          f"(menu={answered_menu} select={answered_select}) ===", flush=True)
+    after = installed_workloads(install_path)
+    added = [w for w in after if w not in before]
+    missing = [w for w in expect if w not in after]
+
+    if timed_out:
+        rc = 2
+    elif child_rc not in (0, None):
+        rc = 3
+    elif missing:
+        rc = 4
+    else:
+        rc = 0
+
+    print(f"\n=== llmb_add_workloads exit={rc} child_rc={child_rc} "
+          f"(menu={answered_menu} resume={answered_resume} select={answered_select}) ===",
+          flush=True)
+    print(f"=== workloads after: {after or '(none)'} ===", flush=True)
+    print(f"=== added: {added or '(none)'} ===", flush=True)
+    if missing:
+        print(f"=== STILL MISSING (expected): {missing} ===", flush=True)
     return rc
 
 

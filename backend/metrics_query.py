@@ -125,6 +125,33 @@ CHARTS: dict[str, dict[str, Any]] = {
         "range": True,
         "series": {"cluster total": "sum(DCGM_FI_DEV_POWER_USAGE{sel})"},
     },
+    # --- 699 W power-cap detection -------------------------------------------------
+    # DCGM field 164 (ENFORCED_POWER_LIMIT) is the ONLY thing that shows a cap: the GB300
+    # rating is 1400 W, a half-fed power domain enforces exactly 699 W, and
+    # `nvidia-smi --query-gpu=power.limit` still reports 1400 on an affected GPU.
+    # `< 1400` means a rack/host only produces a series while it is actually capped, so a
+    # line vanishing IS the fix landing — which is what we want to see over time.
+    "gpu_power_cap_racks": {
+        "group": "gpu",
+        "title": "GPU power cap — capped GPUs per rack (enforced < 1400 W)",
+        "unit": "GPUs",
+        "kind": "line",
+        "range": True,
+        "expr": "count by (rack) (DCGM_FI_DEV_ENFORCED_POWER_LIMIT{sel} < 1400)",
+        "split_by": "rack",
+    },
+    "gpu_power_cap_nodes": {
+        "group": "gpu",
+        "title": "GPU power cap — capped GPUs per node (pick a rack in the filter)",
+        "unit": "GPUs",
+        "kind": "line",
+        "range": True,
+        # Unfiltered this is ~38 lines, which is legible but busy; scoped to one rack it is
+        # the 1-4 trays that actually need attention. Hostname (not node) so it matches the
+        # `node` query param, which _selector maps onto the Hostname label.
+        "expr": "count by (Hostname) (DCGM_FI_DEV_ENFORCED_POWER_LIMIT{sel} < 1400)",
+        "split_by": "Hostname",
+    },
     "gpu_util_by_rack": {
         "group": "gpu",
         "title": "GPU Utilisation by rack — mean per rack over time",

@@ -45,11 +45,14 @@ CONT="${RACK_MNUBERGEMM_CONT:-${IMAGE_DIR}/mnubergemm-${TAG#tensorrt-}.sqsh}"
 # there is no natural "done". MOP §7.2 uses 86400 (24h), matching the 24-72h burn-in in
 # ai_factory_testing_plan.md. Set RACK_MNUBERGEMM_TIME_TO_RUN for a short smoke run.
 # >>> SOAK LENGTH — the one line to change for a real burn-in <<<
-#   1800  = 30 min soak (current default)
-#   86400 = 24 h, the MOP §7.2 / ai_factory burn-in value
-# Deviates from the MOP default deliberately: NscaleTX is mid-bring-up and rack h04 is not
-# yet complete, so holding 17 trays --exclusive for a day is not the right first move.
-TIME_TO_RUN="${RACK_MNUBERGEMM_TIME_TO_RUN:-1800}"
+#   1800  = 30 min smoke run
+#   86400 = 24 h, the MOP §7.2 / ai_factory burn-in value  (CURRENT DEFAULT)
+# Changed to the MOP value 2026-07-31: single-rack NCCL+NEMO validation is complete across
+# the H row, so the racks are no longer mid-bring-up and holding them --exclusive for a day
+# is now the right move. At >= 86400 no `-t` is passed, so the job takes the partition
+# default (defq: MaxTime=UNLIMITED) rather than being capped.
+# Override with RACK_MNUBERGEMM_TIME_TO_RUN=1800 for a short smoke run.
+TIME_TO_RUN="${RACK_MNUBERGEMM_TIME_TO_RUN:-86400}"
 case "${TIME_TO_RUN}" in ''|*[!0-9]*) die "RACK_MNUBERGEMM_TIME_TO_RUN must be seconds (got '${TIME_TO_RUN}')" ;; esac
 
 # Walltime: MOP passes none (partition default). If a short soak was requested, bound the

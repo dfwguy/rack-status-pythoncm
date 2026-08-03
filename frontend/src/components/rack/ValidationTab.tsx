@@ -64,7 +64,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
 
       <ActionCard
         title="Stage 1 — NCCL Benchmark"
-        description={`Stage-1 NCCL acceptance: all_reduce sweep (…16G) on ${nodeCount} selected node(s) in ${rack} via the direct nccl-tests path (same launcher as the cross-rack test), with a selectable NCCL version. Writes an NCCL-1Rack log to log_dir so it appears on the dashboard + parser results.`}
+        description={`Stage-1 NCCL acceptance on ${nodeCount} selected node(s) in ${rack}, submitted via llmb-run (workload microbenchmark_nccl): the full 24-test sweep across all_reduce / all_gather / reduce_scatter / alltoall / sendrecv up to 16G, including the NVLS variants. Writes an NCCL-1Rack log to log_dir so it appears on the dashboard + parser results.`}
         icon={<Activity size={20} />}
         buttonLabel="Run NCCL"
         disabled={disabled}
@@ -82,7 +82,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       />
       <ActionCard
         title="Stage 2 — NEMO Training (NCCL + LLMB)"
-        description={`Stage-2 single-rack validation on ${nodeCount} selected node(s) in ${rack}: NCCL collectives + Nemotron (LLMB) training via Slurm.`}
+        description={`Stage-2 single-rack validation on ${nodeCount} selected node(s) in ${rack}, both halves submitted via llmb-run: the NCCL sweep (microbenchmark_nccl) followed by Nemotron-H 56B fp8 pretraining (pretrain_nemotron-h). Slurm serialises the two jobs on the rack.`}
         icon={<Play size={20} />}
         buttonLabel="Run NEMO"
         disabled={disabled}

@@ -171,10 +171,17 @@ _build_scale_list() {
   } | sort -n -u | paste -sd, - | sed 's/,/, /g'
 }
 patch_nccl_scales() {
-  local mult scales f patched=0
+  local mult scales f patched=0 wls
+  # Which workloads get the rack-multiple scale list. Upstream ships power-of-two
+  # scales only, so a full NVL72 rack (18 trays x 4 = 72 GPUs) is REJECTED by
+  # llmb-run's metadata validation -- for nemotron-h exactly as it was for nccl.
+  # Deliberately a short list, not every workload: `scales` is a validation
+  # whitelist, and widening it for a workload we never run at 72 would let a bad
+  # config through instead of failing fast.
+  wls="${NVIS_EXEMPLAR_SCALE_PATCH_WORKLOADS:-nccl,nemotron-h}"
   mult="$(_rack_gpus_for_gpu_type "${GPU_TYPE}")"
   if [[ "${mult}" -le 0 ]]; then
-    echo "==> nccl scales: gpu_type='${GPU_TYPE}' is not an NVL rack profile; leaving power-of-two scales"
+    echo "==> scale patch: gpu_type='${GPU_TYPE}' is not an NVL rack profile; leaving power-of-two scales"
     return 0
   fi
   scales="$(_build_scale_list "${mult}")"
@@ -188,14 +195,18 @@ patch_nccl_scales() {
       inblk && /^[[:space:]]*scales:/ {print line; next}
       {print}
     ' "${f}" > "${f}.nvis.new" && mv "${f}.nvis.new" "${f}" && {
-      echo "==> nccl scales: patched '${GPU_TYPE}' block in ${f}"
+      echo "==> scale patch: patched '${GPU_TYPE}' block in ${f}"
       patched=$((patched + 1))
     }
-  done < <(find "${REPO_DIR}" "${INSTALL_PATH}" -type f -path '*nccl/metadata.yaml' 2>/dev/null | sort -u)
+    # IFS is set inside this subshell only, so the comma split cannot leak out.
+  done < <(IFS=','; for w in ${wls}; do
+             find "${REPO_DIR}" "${INSTALL_PATH}" -type f -path "*/${w}/metadata.yaml" 2>/dev/null
+           done | sort -u)
   if [[ "${patched}" -eq 0 ]]; then
-    echo "==> nccl scales: no nccl/metadata.yaml with a '${GPU_TYPE}:' block yet (retried post-install)"
+    echo "==> scale patch: no {${wls}}/metadata.yaml with a '${GPU_TYPE}:' block yet (retried post-install)"
   else
-    echo "==> nccl scales: '${GPU_TYPE}' now allows rack multiples of ${mult} (1..8 racks): [${scales}]"
+    echo "==> scale patch: '${GPU_TYPE}' now allows rack multiples of ${mult} (1..8 racks): [${scales}]"
+    echo "    workloads considered: ${wls}"
   fi
 }
 
@@ -329,7 +340,29 @@ if [[ -f "${INSTALL_PATH}/cluster_config.yaml" && "${NVIS_EXEMPLAR_FORCE_PLAY:-0
     echo "--- exit 1 ---"; exit 1
   fi
   export PATH="${HOME}/.local/bin:${PATH}"   # git-lfs lives here; llmb-install aborts without it
-  python3 "${ADDER}" "${INSTALL_PATH}" "${NVIS_EXEMPLAR_ADD_TIMEOUT:-14400}"
+  # llmb-install downloads HuggingFace config/tokenizer files for EVERY pending workload
+  # before installing any of them, and some repos (meta-llama/*) are gated -> 401 aborts
+  # the whole resume. The playfile's environment_vars.HF_TOKEN only reaches the `--play`
+  # path, never this interactive one, so put the token in the environment the adder (and
+  # therefore llmb-install) inherits. Precedence: caller env, then the UI/API field, then
+  # the standard huggingface_hub token file.
+  if [[ -z "${HF_TOKEN:-}" && -n "${NVIS_EXEMPLAR_HF_TOKEN:-}" ]]; then
+    export HF_TOKEN="${NVIS_EXEMPLAR_HF_TOKEN}"
+  fi
+  if [[ -z "${HF_TOKEN:-}" && -r "${HOME}/.cache/huggingface/token" ]]; then
+    HF_TOKEN="$(tr -d '[:space:]' < "${HOME}/.cache/huggingface/token")"
+    export HF_TOKEN
+  fi
+  if [[ -n "${HF_TOKEN:-}" ]]; then
+    export HUGGING_FACE_HUB_TOKEN="${HF_TOKEN}"   # older huggingface_hub reads this name
+    echo "==> HF token: present (${#HF_TOKEN} chars)"
+  else
+    echo "==> HF token: absent -- gated HuggingFace repos (meta-llama/*) will 401"
+  fi
+  # --expect makes the adder exit 4 when a requested workload is still absent from
+  # cluster_config.yaml, however cleanly llmb-install exited. Without it a silent
+  # no-op install reports success (which is exactly what happened on 2026-07-30/31).
+  python3 "${ADDER}" "${INSTALL_PATH}" "${NVIS_EXEMPLAR_ADD_TIMEOUT:-14400}" --expect "${WORKLOADS}"
   _add_rc=$?
   echo "==> incremental add exit=${_add_rc}"
   echo "    workloads now: $(ls -1 "${INSTALL_PATH}/workloads" 2>/dev/null | tr '\n' ' ')"
