@@ -7,7 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { useEffect } from "react";
 
-import { RackCommandsStoreProvider, useRackCommandsStore } from "./RackCommandsStoreContext";
+import { useRackCommandsStore } from "./RackCommandsStoreContext";
+import { RackCommandsStoreProvider } from "./RackCommandsStoreProvider";
 
 vi.mock("./RackLocksContext", () => ({
   useRackLocksContext: () => ({

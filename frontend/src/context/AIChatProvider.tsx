@@ -1,6 +1,5 @@
+/** AI chat provider: owns the message list and the streaming request. */
 import {
-  createContext,
-  useContext,
   useState,
   useCallback,
   useRef,
@@ -8,49 +7,8 @@ import {
 } from "react";
 import { streamChat, type ChatMessagePayload, type PageContext } from "../services/aiService";
 
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: Date;
-  streaming?: boolean;
-}
+import { AIChatCtx, type ChatMessage } from "./AIChatContext";
 
-interface AIChatState {
-  messages: ChatMessage[];
-  isStreaming: boolean;
-  pageContext: PageContext;
-  isOpen: boolean;
-  isMinimized: boolean;
-}
-
-interface AIChatActions {
-  sendMessage: (content: string) => void;
-  clearHistory: () => void;
-  stopStreaming: () => void;
-  setOpen: (open: boolean) => void;
-  setMinimized: (minimized: boolean) => void;
-  setPageContext: (ctx: PageContext) => void;
-}
-
-type AIChatContextType = AIChatState & AIChatActions;
-
-const AIChatCtx = createContext<AIChatContextType | null>(null);
-
-export function useAIChat(): AIChatContextType {
-  const ctx = useContext(AIChatCtx);
-  if (!ctx) throw new Error("useAIChat must be used within AIChatProvider");
-  return ctx;
-}
-
-/**
- * Like `useAIChat`, but returns null instead of throwing when no provider is
- * present. Used by always-on chrome (e.g. PageHeader) that may render in
- * isolation (tests) or outside the authenticated app shell.
- */
-export function useOptionalAIChat(): AIChatContextType | null {
-  return useContext(AIChatCtx);
-}
 
 let msgCounter = 0;
 function nextMsgId(): string {

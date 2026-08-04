@@ -6,7 +6,10 @@ import type { RackStatusResponse } from "../types/api";
 
 // Isolate NodesView table/filter/selection logic from the heavy action tabs,
 // the parser/terminal dialogs, and the rack-command store.
-vi.mock("../context/RackCommandContext", () => ({
+// The provider lives in its own module now (the context object and hook stayed behind in
+// RackCommandContext.ts), so the stub has to target that path or the real provider runs and
+// throws for want of a RackCommandsStoreProvider.
+vi.mock("../context/RackCommandProvider", () => ({
   RackCommandProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../components/rack/ValidationTab", () => ({

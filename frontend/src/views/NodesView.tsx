@@ -31,7 +31,7 @@ import { ServicesTab } from "../components/rack/ServicesTab";
 import { ParserResultsDialog } from "../components/ParserResultsDialog";
 import { BringupResultsPanel } from "../components/bringup/BringupResultsPanel";
 import WebTerminalDialog from "../components/rack/WebTerminalDialog";
-import { RackCommandProvider } from "../context/RackCommandContext";
+import { RackCommandProvider } from "../context/RackCommandProvider";
 import { useActiveCluster } from "../context/ActiveClusterContext";
 import type { RackStatusResponse, RackRow } from "../types/api";
 

@@ -15,7 +15,7 @@ import { NetworkingTab } from "../components/rack/NetworkingTab";
 import { ServicesTab } from "../components/rack/ServicesTab";
 import { ParserResultsDialog } from "../components/ParserResultsDialog";
 import WebTerminalDialog from "../components/rack/WebTerminalDialog";
-import { RackCommandProvider } from "../context/RackCommandContext";
+import { RackCommandProvider } from "../context/RackCommandProvider";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { VisuallyHidden } from "../components/a11y/VisuallyHidden";
 import { getContent } from "../content";
