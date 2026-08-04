@@ -1419,6 +1419,9 @@ _SLURM_TERMINAL_JOB_STATES = frozenset(
         "DEADLINE",
     }
 )
+_SLURM_RUNNING_JOB_STATES = frozenset(
+    {"RUNNING", "PENDING", "COMPLETING", "CONFIGURING", "SUSPENDED"}
+)
 
 
 def _slurm_job_state_base(state: str | None) -> str:
@@ -1426,7 +1429,7 @@ def _slurm_job_state_base(state: str | None) -> str:
 
 
 def _task_needs_slurm_hydration(task: dict) -> bool:
-    """True when a task has a Slurm ref but still needs stdout path and/or live state."""
+    """True when a task with a Slurm ref still needs ladder refresh."""
     if not isinstance(task, dict):
         return False
     ref = str(task.get("scheduler_ref") or "").strip()
@@ -1435,16 +1438,110 @@ def _task_needs_slurm_hydration(task: dict) -> bool:
     jid = ref.split(".")[0]
     if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
         return False
-    if not str(task.get("stdout_path") or "").strip():
+    wp = str(task.get("work_phase") or "").strip().lower()
+    if wp in validation_activities.OPEN_WORK_PHASES or not wp:
+        return True
+    if not str(task.get("stdout_path") or "").strip() and not str(task.get("results_log_path") or "").strip():
         return True
     base = _slurm_job_state_base(str(task.get("scheduler_state") or ""))
     if not base:
         return True
+    if base in _SLURM_RUNNING_JOB_STATES:
+        return True
+    # Terminal scheduler state but llmb intermediate StdOut with no results yet → keep collecting.
+    stdout = str(task.get("stdout_path") or "")
+    if "llmb-nccl_" in stdout.replace("\\", "/") and not str(task.get("results_log_path") or "").strip():
+        return True
     return base not in _SLURM_TERMINAL_JOB_STATES
 
 
+def _query_scheduler_state_and_stdout(job_id: str) -> tuple[str | None, str | None, str]:
+    """Return (JobState, StdOut path, evidence) via scontrol, then sacct.
+
+    When both miss (purged), returns ``(None, None, \"missing\")`` — callers must fail-closed
+    rather than freeze a prior RUNNING state.
+    """
+    jid = (job_id or "").strip().split(".")[0]
+    if not jid or not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
+        return None, None, "invalid"
+    try:
+        sc = _run_scontrol_show_job(jid)
+    except (OSError, ValueError):
+        sc = {"ok": False, "stdout": ""}
+    if sc.get("ok"):
+        state, stdout = _parse_scontrol_job_fields(str(sc.get("stdout") or ""))
+        if state:
+            return state, stdout, "scontrol"
+    # sacct retains history after MinJobAge; StdOut is not available from accounting.
+    try:
+        conf = os.environ.get(
+            "RACK_SLURM_CONF",
+            "/cm/shared-ubuntu2404-x86_64/apps/slurm/etc/slurm/slurm.conf",
+        )
+        sa = host_exec.run_on_host(
+            f"export SLURM_CONF={shlex.quote(conf)}; "
+            f"$(ls -1 /cm/local/apps/slurm/*/bin/sacct /cm/local/apps/slurm/current/bin/sacct "
+            f"2>/dev/null | tail -1) "
+            f"-j {shlex.quote(jid)} -X -P -n -o JobID,State,ExitCode",
+            timeout=max(10, _env_int("RACK_SACCT_TIMEOUT", 30)),
+        )
+        for line in (sa.stdout or "").strip().splitlines():
+            cols = line.split("|")
+            if len(cols) < 2:
+                continue
+            # Prefer the base job line (not .batch / .extern).
+            raw_id = cols[0].strip()
+            if raw_id.split(".")[0] != jid:
+                continue
+            if "." in raw_id and not raw_id.endswith(jid):
+                continue
+            state = cols[1].strip().split()[0] if cols[1].strip() else None
+            if state:
+                return state, None, "sacct"
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return None, None, "missing"
+
+
+def _stdout_is_llmb_intermediate(path: str | None) -> bool:
+    name = Path(str(path or "")).name.lower()
+    return name.startswith("llmb-nccl_") or "llmb-autocollect" in name
+
+
+def _derive_task_work_phase(
+    *,
+    scheduler_state: str | None,
+    evidence: str,
+    stdout_path: str | None,
+    results_log_path: str | None,
+    label: str,
+) -> str:
+    """Map ladder evidence → tasks[].work_phase."""
+    base = _slurm_job_state_base(scheduler_state)
+    if evidence == "squeue" or base in _SLURM_RUNNING_JOB_STATES:
+        return "running"
+    if results_log_path:
+        if base in ("FAILED", "CANCELLED", "NODE_FAIL", "OUT_OF_MEMORY", "BOOT_FAIL"):
+            return "failed"
+        return "done"
+    if base in _SLURM_TERMINAL_JOB_STATES:
+        # Terminal Slurm but aggregated result not bound yet — llmb collector lag.
+        if _stdout_is_llmb_intermediate(stdout_path) or (
+            (label or "").lower() in ("nccl", "nemo") and not results_log_path
+        ):
+            if base in ("FAILED", "CANCELLED", "NODE_FAIL", "OUT_OF_MEMORY", "BOOT_FAIL"):
+                return "failed"
+            return "collecting"
+        if base == "COMPLETED":
+            return "done"
+        return "failed"
+    if evidence == "missing":
+        return "unknown"
+    return "submitted"
+
+
 def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> None:
-    """Resolve Slurm StdOut=/JobState= for tasks that have ``scheduler_ref`` but no log path yet."""
+    """Evidence ladder: squeue → scontrol/sacct → result artefacts; fail-closed on purge."""
     aid = (activity_id or "").strip()
     if not aid:
         return
@@ -1452,37 +1549,95 @@ def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> No
         rec = validation_activities.get_activity(aid)
     if not rec:
         return
-    for task in rec.get("tasks") or []:
-        if not isinstance(task, dict):
-            continue
+    log_dir = str(rec.get("log_dir") or "")
+    tasks = [t for t in (rec.get("tasks") or []) if isinstance(t, dict)]
+    # Batch squeue lookup for all refs that still need refresh.
+    want_ids = [
+        str(t.get("scheduler_ref") or "").strip().split(".")[0]
+        for t in tasks
+        if _task_needs_slurm_hydration(t)
+    ]
+    running: set[str] = set()
+    job_times: dict[str, str] = {}
+    if want_ids:
+        try:
+            running, job_times = native_status.load_squeue_jobs_map()
+            native_status.augment_running_set_for_job_ids(running, job_times, want_ids)
+        except Exception:  # noqa: BLE001 — hydration is best-effort
+            running, job_times = set(), {}
+
+    for task in tasks:
         if not _task_needs_slurm_hydration(task):
             continue
         ref = str(task.get("scheduler_ref") or "").strip().split(".")[0]
-        try:
-            sc = _run_scontrol_show_job(ref)
-        except (OSError, ValueError):
-            continue
-        if not sc.get("ok"):
-            continue
-        state, stdout = _parse_scontrol_job_fields(str(sc.get("stdout") or ""))
+        label = str(task.get("label") or "validation")
+        stdout_path = str(task.get("stdout_path") or "").strip() or None
+        results_path = str(task.get("results_log_path") or "").strip() or None
+        evidence = "none"
+        state: str | None = None
+
+        if ref in running:
+            state = "RUNNING"
+            evidence = "squeue"
+        else:
+            state, sc_stdout, evidence = _query_scheduler_state_and_stdout(ref)
+            if sc_stdout:
+                stdout_path = sc_stdout
+
+        # Bind aggregated result log when possible (and promote intermediate StdOut).
+        if not results_path:
+            found = validation_activities.find_results_log_for_job(log_dir, ref, label=label)
+            if found:
+                results_path = found
+        if stdout_path and not _stdout_is_llmb_intermediate(stdout_path):
+            low = Path(stdout_path).name.lower()
+            if "nccl-1rack" in low or "nemo-1rack" in low:
+                results_path = results_path or stdout_path
+
+        if evidence == "missing" and not results_path:
+            # Fail-closed: do not keep a stale RUNNING after scontrol/sacct purge.
+            prev = _slurm_job_state_base(str(task.get("scheduler_state") or ""))
+            if prev in _SLURM_RUNNING_JOB_STATES or not prev:
+                state = "UNKNOWN"
+            else:
+                state = prev or "UNKNOWN"
+
+        work_phase = _derive_task_work_phase(
+            scheduler_state=state,
+            evidence=evidence,
+            stdout_path=stdout_path,
+            results_log_path=results_path,
+            label=label,
+        )
         task_phase = str(task.get("phase") or "")
-        if state in ("RUNNING", "COMPLETING"):
+        if work_phase == "running":
             task_phase = "running"
+        elif work_phase in ("done", "failed"):
+            task_phase = "done" if work_phase == "done" else "error"
+
         validation_activities.add_or_update_task(
             aid,
             ordinal=int(task.get("ordinal") or 1),
-            label=str(task.get("label") or "validation"),
+            label=label,
             task_id=str(task.get("task_id") or ""),
             scheduler_state=state,
-            stdout_path=stdout,
+            stdout_path=stdout_path,
+            results_log_path=results_path,
+            work_phase=work_phase,
+            evidence=evidence,
             phase=task_phase or None,
         )
-        if state is not None:
-            task["scheduler_state"] = state
-        if stdout is not None:
-            task["stdout_path"] = stdout
+        task["scheduler_state"] = state
+        if stdout_path is not None:
+            task["stdout_path"] = stdout_path
+        if results_path is not None:
+            task["results_log_path"] = results_path
+        task["work_phase"] = work_phase
+        task["evidence"] = evidence
         if task_phase:
             task["phase"] = task_phase
+
+    rec["work_phase"] = validation_activities.rollup_work_phase(tasks)
 
 
 def _update_validation_activity(activity_id: str, **kwargs: object) -> None:
@@ -1492,7 +1647,7 @@ def _update_validation_activity(activity_id: str, **kwargs: object) -> None:
 
 
 def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
-    """Best-effort Slurm state + stdout path refresh for tasks that still need hydration."""
+    """Best-effort evidence-ladder refresh for tasks that still need hydration."""
     if os.environ.get("RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED", "").strip().lower() in (
         "1",
         "true",
@@ -1505,6 +1660,11 @@ def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
             continue
         tasks = rec.get("tasks") or []
         if not any(_task_needs_slurm_hydration(t) for t in tasks if isinstance(t, dict)):
+            # Still refresh rollup for legacy rows missing work_phase.
+            if tasks and not rec.get("work_phase"):
+                rec["work_phase"] = validation_activities.rollup_work_phase(
+                    [t for t in tasks if isinstance(t, dict)]
+                )
             continue
         _hydrate_activity_task_logs(aid, rec)
 

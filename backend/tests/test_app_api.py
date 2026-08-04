@@ -897,6 +897,10 @@ class TestValidationActivitiesAPI:
             }
 
         monkeypatch.setattr(app_module, "_run_scontrol_show_job", _fake_scontrol)
+        monkeypatch.setattr(app_module.native_status, "load_squeue_jobs_map", lambda: (set(), {}))
+        monkeypatch.setattr(
+            app_module.native_status, "augment_running_set_for_job_ids", lambda *a, **k: None
+        )
 
         listed = client.get(
             "/api/validation-activities",
@@ -910,6 +914,8 @@ class TestValidationActivitiesAPI:
         assert tasks[0]["scheduler_ref"] == "114305"
         assert tasks[0]["stdout_path"] == "/logs/llmb-nccl_nodes_114305.out"
         assert tasks[0]["scheduler_state"] == "RUNNING"
+        assert tasks[0]["work_phase"] == "running"
+        assert rec.get("work_phase") == "running"
 
         detail = client.get(f"/api/validation-activities/{aid}").get_json()
         assert detail["activity"]["tasks"][0]["stdout_path"] == "/logs/llmb-nccl_nodes_114305.out"
@@ -924,14 +930,17 @@ class TestValidationActivitySlurmHydration:
             "scheduler_ref": "123",
             "stdout_path": "/logs/out",
             "scheduler_state": "RUNNING",
+            "work_phase": "running",
         }
         assert app_module._task_needs_slurm_hydration(task) is True
 
-    def test_task_skips_hydration_when_slurm_terminal(self):
+    def test_task_skips_hydration_when_work_terminal(self):
         task = {
             "scheduler_ref": "123",
-            "stdout_path": "/logs/out",
+            "stdout_path": "/logs/cmods-NCCL-1Rack-r01-18N-123.txt",
+            "results_log_path": "/logs/cmods-NCCL-1Rack-r01-18N-123.txt",
             "scheduler_state": "COMPLETED",
+            "work_phase": "done",
         }
         assert app_module._task_needs_slurm_hydration(task) is False
 
@@ -940,6 +949,10 @@ class TestValidationActivitySlurmHydration:
         validation_activities.sync_tasks_from_stdout(aid, "jobid=999\n")
         validation_activities.update_activity(aid, phase="done")
 
+        monkeypatch.setattr(app_module.native_status, "load_squeue_jobs_map", lambda: (set(), {}))
+        monkeypatch.setattr(
+            app_module.native_status, "augment_running_set_for_job_ids", lambda *a, **k: None
+        )
         monkeypatch.setattr(
             app_module,
             "_run_scontrol_show_job",
@@ -952,3 +965,53 @@ class TestValidationActivitySlurmHydration:
         tasks = validation_activities.get_activity(aid).get("tasks") or []
         assert tasks[0]["stdout_path"] == "/logs/llmb-nccl_nodes_999.out"
         assert tasks[0]["scheduler_state"] == "COMPLETED"
+        # Intermediate llmb StdOut without aggregated results → collecting
+        assert tasks[0]["work_phase"] == "collecting"
+
+    def test_hydrate_fail_closed_when_scontrol_and_sacct_missing(
+        self, isolated_validation_activities, monkeypatch
+    ):
+        aid = validation_activities.record_activity("llmb-nccl", rack="p5-r01", log_dir="/tmp")
+        validation_activities.sync_tasks_from_stdout(aid, "jobid=42\n")
+        validation_activities.add_or_update_task(
+            aid, ordinal=1, label="nccl", scheduler_state="RUNNING", work_phase="running"
+        )
+        monkeypatch.setattr(app_module.native_status, "load_squeue_jobs_map", lambda: (set(), {}))
+        monkeypatch.setattr(
+            app_module.native_status, "augment_running_set_for_job_ids", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            app_module, "_run_scontrol_show_job", lambda jid: {"ok": False, "stdout": ""}
+        )
+        monkeypatch.setattr(
+            app_module,
+            "_query_scheduler_state_and_stdout",
+            lambda jid: (None, None, "missing"),
+        )
+        app_module._hydrate_activity_task_logs(aid)
+        task = validation_activities.get_activity(aid)["tasks"][0]
+        assert task["scheduler_state"] == "UNKNOWN"
+        assert task["work_phase"] == "unknown"
+
+    def test_hydrate_binds_results_log_and_marks_done(
+        self, isolated_validation_activities, tmp_path, monkeypatch
+    ):
+        log_dir = tmp_path
+        results = log_dir / "cmods-NCCL-1Rack-p5-r01-18N-77.txt"
+        results.write_text("# Collective test starting: all_reduce_perf\n", encoding="utf-8")
+        aid = validation_activities.record_activity("llmb-nccl", rack="p5-r01", log_dir=str(log_dir))
+        validation_activities.sync_tasks_from_stdout(aid, "jobid=77\n")
+        monkeypatch.setattr(app_module.native_status, "load_squeue_jobs_map", lambda: (set(), {}))
+        monkeypatch.setattr(
+            app_module.native_status, "augment_running_set_for_job_ids", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            app_module,
+            "_query_scheduler_state_and_stdout",
+            lambda jid: ("COMPLETED", f"/tmp/llmb-nccl_nodes_{jid}.out", "sacct"),
+        )
+        app_module._hydrate_activity_task_logs(aid)
+        task = validation_activities.get_activity(aid)["tasks"][0]
+        assert task["results_log_path"] == str(results)
+        assert task["work_phase"] == "done"
+        assert validation_activities.get_activity(aid)["work_phase"] == "done"

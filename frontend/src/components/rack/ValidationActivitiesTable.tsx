@@ -22,9 +22,55 @@ import {
 } from "../../services/validationActivitiesService";
 import type { ValidationActivity } from "../../types/api";
 
+const TERMINAL_PHASES = new Set(["done", "error", "timeout"]);
+const OPEN_WORK_PHASES = new Set(["pending", "submitted", "running", "collecting", "unknown"]);
+
 type TagColor = "green" | "red" | "yellow" | "blue" | "gray" | "purple" | "teal";
 
-const TERMINAL_PHASES = new Set(["done", "error", "timeout"]);
+function phaseColor(phase: string): TagColor {
+  if (phase === "done") return "green";
+  if (phase === "error" || phase === "timeout" || phase === "failed") return "red";
+  if (phase === "running" || phase === "collecting") return "yellow";
+  if (phase === "unknown") return "gray";
+  return "blue";
+}
+
+function activityWorkPhase(activity: ValidationActivity): string {
+  const wp = (activity.work_phase || "").trim();
+  if (wp) return wp;
+  const tasks = activity.tasks ?? [];
+  if (!tasks.length) {
+    // No scheduler tasks — fall back to wrapper phase.
+    return activity.phase || "pending";
+  }
+  const rank: Record<string, number> = {
+    running: 50,
+    collecting: 40,
+    submitted: 30,
+    pending: 20,
+    unknown: 10,
+    failed: 5,
+    done: 0,
+  };
+  let best = "done";
+  let bestRank = -1;
+  for (const t of tasks) {
+    let p = (t.work_phase || "").trim().toLowerCase();
+    if (!p) {
+      const st = (t.scheduler_state || "").toUpperCase().split("+")[0];
+      if (["RUNNING", "PENDING", "COMPLETING", "CONFIGURING"].includes(st)) p = "running";
+      else if (["FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL"].includes(st)) p = "failed";
+      else if (st === "COMPLETED" || t.results_log_path) p = "done";
+      else p = "unknown";
+    }
+    const r = rank[p] ?? 0;
+    if (r > bestRank) {
+      bestRank = r;
+      best = p;
+    }
+  }
+  return best;
+}
 
 export interface ValidationActivitiesLogRow {
   log_file: string;
@@ -47,13 +93,6 @@ function logBasename(path: string): string {
   const s = path.replace(/\\/g, "/").trim();
   const i = s.lastIndexOf("/");
   return i >= 0 ? s.slice(i + 1) : s;
-}
-
-function phaseColor(phase: string): TagColor {
-  if (phase === "done") return "green";
-  if (phase === "error" || phase === "timeout") return "red";
-  if (phase === "running") return "yellow";
-  return "blue";
 }
 
 function toolLabel(tool: string): string {
@@ -171,7 +210,7 @@ export function ValidationActivitiesTable({
   }, [load, pollMs]);
 
   const anyRunning = useMemo(
-    () => activities.some((a) => !TERMINAL_PHASES.has(a.phase)),
+    () => activities.some((a) => OPEN_WORK_PHASES.has(activityWorkPhase(a))),
     [activities],
   );
 
@@ -285,17 +324,43 @@ export function ValidationActivitiesTable({
                           >
                             {t.label}
                             {t.scheduler_ref ? ` ${t.scheduler_ref}` : ""}
-                            {t.scheduler_state ? ` (${t.scheduler_state})` : ""}
+                            {t.work_phase
+                              ? ` [${t.work_phase}]`
+                              : t.scheduler_state
+                                ? ` (${t.scheduler_state})`
+                                : ""}
                           </Text>
                         ))
                       )}
                     </TableCell>
                     <TableCell>
-                      <Tooltip title={activity.error || ""} disableHoverListener={!activity.error} arrow>
-                        <span style={{ display: "inline-flex" }}>
-                          <Tag color={phaseColor(activity.phase)} kind="solid" readOnly density="compact">
-                            {activity.phase}
+                      <Tooltip
+                        title={
+                          [
+                            activity.error || "",
+                            `Launch (wrapper): ${activity.phase}`,
+                            activity.work_phase ? `Work: ${activity.work_phase}` : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")
+                        }
+                        arrow
+                      >
+                        <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                          <Tag
+                            color={phaseColor(activityWorkPhase(activity))}
+                            kind="solid"
+                            readOnly
+                            density="compact"
+                          >
+                            {activityWorkPhase(activity)}
                           </Tag>
+                          {TERMINAL_PHASES.has(activity.phase) &&
+                            OPEN_WORK_PHASES.has(activityWorkPhase(activity)) && (
+                              <Tag color="gray" kind="outline" readOnly density="compact">
+                                launch done
+                              </Tag>
+                            )}
                         </span>
                       </Tooltip>
                     </TableCell>

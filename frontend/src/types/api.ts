@@ -57,6 +57,10 @@ export interface ActivityTask {
   scheduler_ref?: string | null;
   scheduler_state?: string | null;
   phase?: string;
+  /** Work lifecycle: pending|submitted|running|collecting|done|failed|unknown */
+  work_phase?: string | null;
+  /** Evidence source for work_phase: squeue|scontrol|sacct|results_log|missing */
+  evidence?: string | null;
   stdout_path?: string | null;
   training_log_path?: string | null;
   results_log_path?: string | null;
@@ -78,7 +82,10 @@ export interface ValidationActivity {
   command_display: string;
   scheduler: string;
   dry_run: boolean;
+  /** Wrapper/launch lifecycle (not Slurm work completion). */
   phase: string;
+  /** Rolled-up work lifecycle across tasks[]. */
+  work_phase?: string | null;
   returncode: number | null;
   error: string | null;
   created_at: string;

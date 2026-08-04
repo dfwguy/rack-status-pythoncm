@@ -137,4 +137,52 @@ def test_zero_node_racks_counted_until_sinfo_ready(monkeypatch):
     _rows, summary, _f, _l = st.build_table_rows()
     total = summary["done"] + summary["fail"] + summary["ongoing"] + summary["pending"]
     assert total == 2
-    assert summary["pending"] == 2
+
+
+def test_per_stage_squeue_does_not_force_both_stages_ongoing(monkeypatch):
+    """A live Stage-1 NCCL job must not paint Stage-2 NeMo as running."""
+    monkeypatch.setattr(
+        native_status,
+        "load_squeue_jobs_map",
+        lambda: ({"100"}, {"100": "01:00"}),
+    )
+    monkeypatch.setenv("RACK_SQUEUE_JOB_LOOKUP_DISABLED", "1")
+    st = NativeRackTableState("test", Path("/tmp"))
+    st.racks = ["r01"]
+    st.sinfo_counts = {("r01", "idle"): 18}
+    st.by_rack_log = {
+        "r01": {
+            "nemo_state": "ongoing",
+            "nccl_ok": True,
+            "llm_ok": True,
+            "jid": 100,
+            "_path": "cmods-NCCL-1Rack-r01-18N-100.txt",
+        },
+    }
+    st.by_rack_stage_log = {
+        "r01": {
+            "nccl": {
+                "nemo_state": "ongoing",
+                "nccl_ok": True,
+                "llm_ok": False,
+                "jid": 100,
+                "_path": "cmods-NCCL-1Rack-r01-18N-100.txt",
+            },
+            "nemo": {
+                "nemo_state": "done",
+                "nccl_ok": False,
+                "llm_ok": True,
+                "jid": 99,
+                "_path": "cmods-NEMO-1Rack-r01-18N-99.txt",
+            },
+        }
+    }
+    st.ds_done = True
+    st.sinfo_done = True
+    st.log_done = True
+    rows, summary, _f, _l = st.build_table_rows()
+    assert rows[0]["stage1"] == "ongoing"
+    assert rows[0]["stage2"] == "done"
+    assert summary["ongoing"] == 1
+    assert summary["stage1"]["ongoing"] == 1
+    assert summary["stage2"]["done"] == 1

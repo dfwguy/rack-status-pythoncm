@@ -115,6 +115,24 @@ class TestTasks:
         assert len(tasks) == 1
         assert tasks[0]["scheduler_ref"] == "555"
 
+    def test_rollup_work_phase_prefers_running(self):
+        assert va.rollup_work_phase([
+            {"work_phase": "done"},
+            {"work_phase": "running"},
+        ]) == "running"
+        assert va.rollup_work_phase([
+            {"work_phase": "done"},
+            {"work_phase": "collecting"},
+        ]) == "collecting"
+
+    def test_find_results_log_for_job(self, tmp_path):
+        p = tmp_path / "cmods-NCCL-1Rack-r01-18N-42.txt"
+        p.write_text("x", encoding="utf-8")
+        (tmp_path / "other.txt").write_text("y", encoding="utf-8")
+        found = va.find_results_log_for_job(tmp_path, "42", label="nccl")
+        assert found == str(p)
+        assert va.find_results_log_for_job(tmp_path, "99", label="nccl") is None
+
 
 class TestAdoptLog:
     def test_adopt_external_nccl_log(self):

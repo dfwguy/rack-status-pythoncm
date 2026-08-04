@@ -56,6 +56,41 @@ if [[ -n "${LLMB_NODELIST:-}" ]]; then
   for a in "$@"; do case "$a" in -w|-w*|--nodelist|--nodelist=*) _has=1 ;; esac; done
   [[ "${_has}" -eq 0 ]] && pre+=( "--nodelist=${LLMB_NODELIST}" )
 fi
+# 3) force named env vars into the JOB environment (NVIS_FORCE_EXPORT_VARS = space-separated keys).
+# ⚠ THIS DOES **NOT** FIX NCCL_DEBUG FOR THE COMMS-PERF-SUITE WORKLOAD — do not re-try that here.
+# Proven 2026-08-04: templates/nccl.sbatch.j2 emits `--container-env=NCCL_DEBUG=<v>` from
+# testset.toml, an EXPLICIT pyxis assignment, so the job environment is irrelevant to the ranks no
+# matter what --export says. The level must be written into testset.toml instead — run_llmb_nccl.sh
+# does that. This block remains only as a generic job-env passthrough for launchers that DO inherit.
+# MERGE, never replace: if llmb-run passed its own --export we append to ITS list, so its intent
+# is preserved and we only add the keys we were asked to carry.
+_pairs=""
+for _k in ${NVIS_FORCE_EXPORT_VARS:-}; do
+  _v="${!_k:-}"
+  [[ -n "${_v}" ]] || continue
+  # --export is a comma-separated list; a value containing a comma or whitespace would corrupt it.
+  case "${_v}" in *,*|*[[:space:]]*) echo "nvis_sbatch_shim: skipping ${_k} (unsafe value for --export)" >&2; continue ;; esac
+  _pairs="${_pairs},${_k}=${_v}"
+done
+if [[ -n "${_pairs}" ]]; then
+  _merged=0; _out=(); _take=0
+  for a in ${filtered[@]+"${filtered[@]}"}; do
+    if [[ "${_take}" -eq 1 ]]; then a="${a}${_pairs}"; _merged=1; _take=0
+    else
+      case "$a" in
+        --export=*) a="${a}${_pairs}"; _merged=1 ;;
+        --export)   _take=1 ;;
+      esac
+    fi
+    _out+=( "$a" )
+  done
+  filtered=( ${_out[@]+"${_out[@]}"} )
+  [[ "${_merged}" -eq 0 ]] && pre+=( "--export=ALL${_pairs}" )
+  echo "nvis_sbatch_shim: forcing into job env:${_pairs//,/ } (merged_into_llmb_export=${_merged})" >&2
+fi
+# Log llmb-run's own sbatch argv verbatim. Without this, "did llmb pass its own --export?" is
+# unanswerable from the outside and the question gets guessed at instead of read.
+echo "nvis_sbatch_shim: llmb sbatch argv:$(printf ' %q' "$@")" >&2
 exec "${_real}" ${pre[@]+"${pre[@]}"} ${filtered[@]+"${filtered[@]}"}
 SHIM
   chmod +x "${NVIS_SHIM_DIR}/sbatch"

@@ -1415,6 +1415,15 @@ class NativeRackTableState:
             lj0 = _last_job_for_log_row(bn0, pr0)
             if lj0 != "-" and lj0.isdigit():
                 want.add(lj0)
+            for _kind, src in (by_rack_stage.get(rack) or {}).items():
+                if not isinstance(src, dict):
+                    continue
+                sp = str(src.get("_path") or "")
+                sbn = Path(sp).name if sp else ""
+                probe = {k: v for k, v in src.items() if k not in ("_path", "_mtime")}
+                lj = _last_job_for_log_row(sbn, probe)
+                if lj != "-" and lj.isdigit():
+                    want.add(lj)
         augment_running_set_for_job_ids(running, job_times, want)
         for rack in sorted(racks, key=_rack_sort_key):
             # A rack with 0 Slurm nodes (once sinfo is done) is a non-GB200 rack
@@ -1446,7 +1455,6 @@ class NativeRackTableState:
             path_s = str(path) if path else ""
             bn = Path(path_s).name if path_s else ""
             jid_s = _last_job_for_log_row(bn, pr)
-            in_slurm = bool(jid_s != "-" and jid_s in running)
 
             # Judge each stage from the newest log of its OWN kind. NCCL and NeMo run as
             # separate jobs writing separate logs, so `pr` (newest log of any kind) only ever
@@ -1460,12 +1468,35 @@ class NativeRackTableState:
             # through to the single-log path below, where an unclassifiable probe still yields
             # pending via the `not st` branch -- which is the case worth protecting.
             stage_logs = by_rack_stage.get(rack) or {}
-            nccl_src = stage_logs.get("nccl") or pr
-            nemo_src = stage_logs.get("nemo") or pr
+            nccl_src = stage_logs.get("nccl") or pr_full
+            nemo_src = stage_logs.get("nemo") or pr_full
             split_stage_logs = "nccl" in stage_logs and "nemo" in stage_logs
 
+            # Per-stage queue membership — do not paint both stages "ongoing" from one job id.
+            def _jid_of(src: dict[str, Any]) -> str:
+                sp = str(src.get("_path") or "")
+                sbn = Path(sp).name if sp else ""
+                probe = {k: v for k, v in src.items() if k not in ("_path", "_mtime")}
+                return _last_job_for_log_row(sbn, probe)
+
+            nccl_jid = _jid_of(nccl_src) if stage_logs.get("nccl") else ("-" if split_stage_logs else jid_s)
+            nemo_jid = _jid_of(nemo_src) if stage_logs.get("nemo") else ("-" if split_stage_logs else jid_s)
+            # Single-log racks: only the matching stage inherits the newest-log job id.
+            if not split_stage_logs:
+                kind_newest = _stage_kind_of_log_bn(bn)
+                if kind_newest == "nccl":
+                    nccl_jid, nemo_jid = jid_s, "-"
+                elif kind_newest == "nemo":
+                    nccl_jid, nemo_jid = "-", jid_s
+                else:
+                    nccl_jid = nemo_jid = jid_s
+            nccl_in_slurm = bool(nccl_jid != "-" and nccl_jid in running)
+            nemo_in_slurm = bool(nemo_jid != "-" and nemo_jid in running)
+            in_slurm = nccl_in_slurm or nemo_in_slurm
+            live_jid = nccl_jid if nccl_in_slurm else (nemo_jid if nemo_in_slurm else jid_s)
+
             if in_slurm:
-                tm = job_times.get(jid_s, "?")
+                tm = job_times.get(live_jid, "?")
                 nemo = f"ongoing [{tm}]"
                 cat = "ongoing"
             elif split_stage_logs:
@@ -1519,12 +1550,26 @@ class NativeRackTableState:
             ll_b = bool(llo) if isinstance(llo, (bool, int)) else None
             nh = validation_status_hint(
                 nemo,
-                jid_s,
+                live_jid if in_slurm else jid_s,
                 nccl_ok=nc_b,
                 llm_ok=ll_b,
                 validation_test=vt or None,
             )
             stage1, stage2 = compute_stage_states(nemo, nc_b, ll_b, vt or None)
+            # Override per-stage ongoing from that stage's own job id — a live Stage-1 NCCL
+            # must not force Stage-2 NeMo to "running" when its job is not queued.
+            if nccl_in_slurm:
+                stage1 = "ongoing"
+            elif stage1 == "ongoing" and not nccl_in_slurm and nc_b is True:
+                stage1 = "done"
+            elif stage1 == "ongoing" and not nccl_in_slurm and split_stage_logs:
+                stage1 = "done" if nc_b is True else ("fail" if nc_b is False else "pending")
+            if nemo_in_slurm:
+                stage2 = "ongoing"
+            elif stage2 == "ongoing" and not nemo_in_slurm and ll_b is True:
+                stage2 = "done"
+            elif stage2 == "ongoing" and not nemo_in_slurm and split_stage_logs:
+                stage2 = "done" if ll_b is True else ("fail" if ll_b is False else "pending")
             if countable:
                 tally_stage(stage1_summary, stage1)
                 tally_stage(stage2_summary, stage2)
@@ -1535,7 +1580,7 @@ class NativeRackTableState:
                     "nemo": nemo,
                     "stage1": stage1,
                     "stage2": stage2,
-                    "last_job": jid_s,
+                    "last_job": live_jid if in_slurm else jid_s,
                     "sinfo": siv,
                     "ct_down_unk": ctv,
                     "nemo_hint": nh,

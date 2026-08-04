@@ -17,12 +17,13 @@ const sampleActivity: ValidationActivity = {
   command_display: "run_nccl_mpi.sh --dry-run",
   scheduler: "slurm",
   dry_run: true,
-  phase: "running",
+  phase: "done",
+  work_phase: "running",
   returncode: null,
   error: null,
   created_at: "2026-07-31T12:00:00.000Z",
   updated_at: "2026-07-31T12:00:00.000Z",
-  finished_at: null,
+  finished_at: "2026-07-31T12:00:05.000Z",
   stdout_tail: "SUBMITTED: jobid=12345",
   stderr_tail: "",
   source: "ui",
@@ -34,6 +35,8 @@ const sampleActivity: ValidationActivity = {
       scheduler_ref: "12345",
       scheduler_state: "RUNNING",
       phase: "running",
+      work_phase: "running",
+      evidence: "squeue",
       stdout_path: "/logs/out/12345.out",
       training_log_path: null,
       results_log_path: null,
@@ -59,7 +62,9 @@ describe("ValidationActivitiesTable", () => {
     render(<ValidationActivitiesTable logDir="/logs" rack="p5-r01" pollMs={0} />);
     await waitFor(() => expect(screen.getByText("p5-r01")).toBeInTheDocument());
     expect(screen.getByText(/NCCL \(LLMB\)/)).toBeInTheDocument();
-    expect(screen.getByText(/nccl 12345 \(RUNNING\)/)).toBeInTheDocument();
+    expect(screen.getByText(/nccl 12345 \[running\]/)).toBeInTheDocument();
+    expect(screen.getByText("running")).toBeInTheDocument();
+    expect(screen.getByText("launch done")).toBeInTheDocument();
     expect(screen.getByText("alice")).toBeInTheDocument();
   });
 

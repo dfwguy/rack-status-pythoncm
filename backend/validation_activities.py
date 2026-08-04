@@ -36,6 +36,28 @@ MAX_ACTIVITIES = 500
 TAIL_CHARS = 8000
 OPERATOR_MAX_LEN = 64
 TERMINAL_PHASES = frozenset({"done", "error", "timeout"})
+WORK_PHASES = frozenset({
+    "pending",
+    "submitted",
+    "running",
+    "collecting",
+    "done",
+    "failed",
+    "unknown",
+})
+# Open work — still needs refresh / shows as not finished in the UI.
+OPEN_WORK_PHASES = frozenset({"pending", "submitted", "running", "collecting", "unknown"})
+TERMINAL_WORK_PHASES = frozenset({"done", "failed"})
+# Rollup priority: highest open state wins for the activity.
+_WORK_PHASE_RANK = {
+    "running": 50,
+    "collecting": 40,
+    "submitted": 30,
+    "pending": 20,
+    "unknown": 10,
+    "failed": 5,
+    "done": 0,
+}
 
 TOOLS = frozenset({
     "nccl-fullrack",
@@ -420,6 +442,86 @@ def update_activity(activity_id: str, **fields: object) -> None:
         sync_tasks_from_stdout(aid, stdout, combined_nemo=combined)
 
 
+def rollup_work_phase(tasks: list[dict] | None) -> str:
+    """Derive activity-level work_phase from child tasks (worst open state wins)."""
+    if not tasks:
+        return "pending"
+    best = "done"
+    best_rank = -1
+    any_task = False
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        any_task = True
+        wp = str(t.get("work_phase") or "").strip().lower()
+        if not wp:
+            # Legacy rows: infer from scheduler_state / phase.
+            st = str(t.get("scheduler_state") or "").strip().upper().split("+")[0]
+            if st in ("RUNNING", "PENDING", "COMPLETING", "CONFIGURING"):
+                wp = "running"
+            elif st in ("FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY"):
+                wp = "failed"
+            elif st in ("COMPLETED",):
+                wp = "done"
+            elif t.get("results_log_path"):
+                wp = "done"
+            else:
+                wp = "unknown"
+        rank = _WORK_PHASE_RANK.get(wp, 0)
+        if rank > best_rank:
+            best_rank = rank
+            best = wp
+    return best if any_task else "pending"
+
+
+def find_results_log_for_job(
+    log_dir: str | Path | None,
+    job_id: str,
+    *,
+    label: str = "",
+) -> str | None:
+    """Locate an aggregated ``*-NCCL-1Rack-*-{jid}.txt`` / ``*-NEMO-1Rack-*-{jid}.txt`` under log_dir."""
+    jid = (job_id or "").strip()
+    if not jid or not str(jid).isdigit():
+        return None
+    root = Path(str(log_dir or "")).expanduser()
+    if not root.is_dir():
+        return None
+    lab = (label or "").strip().lower()
+    prefer_nccl = lab in ("nccl", "stage1", "") or "nccl" in lab
+    prefer_nemo = lab in ("nemo", "stage2") or "nemo" in lab or "llm" in lab
+    suffix = f"-{jid}.txt"
+    candidates: list[Path] = []
+    try:
+        for p in root.iterdir():
+            if not p.is_file():
+                continue
+            name = p.name
+            if not name.endswith(suffix):
+                continue
+            low = name.lower()
+            if "nccl-1rack" in low or "nemo-1rack" in low:
+                candidates.append(p)
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    if prefer_nemo and not prefer_nccl:
+        for p in candidates:
+            if "nemo-1rack" in p.name.lower():
+                return str(p)
+    if prefer_nccl:
+        for p in candidates:
+            if "nccl-1rack" in p.name.lower():
+                return str(p)
+    # Prefer NCCL then NeMo then any.
+    for needle in ("nccl-1rack", "nemo-1rack"):
+        for p in candidates:
+            if needle in p.name.lower():
+                return str(p)
+    return str(candidates[0])
+
+
 def add_or_update_task(
     activity_id: str,
     *,
@@ -428,6 +530,8 @@ def add_or_update_task(
     scheduler_ref: str | None = None,
     scheduler_state: str | None = None,
     phase: str | None = None,
+    work_phase: str | None = None,
+    evidence: str | None = None,
     stdout_path: str | None = None,
     training_log_path: str | None = None,
     results_log_path: str | None = None,
@@ -469,6 +573,10 @@ def add_or_update_task(
             patch["scheduler_state"] = scheduler_state
         if phase is not None:
             patch["phase"] = phase
+        if work_phase is not None:
+            patch["work_phase"] = work_phase
+        if evidence is not None:
+            patch["evidence"] = evidence
         if stdout_path is not None:
             patch["stdout_path"] = stdout_path
         if training_log_path is not None:
@@ -479,6 +587,8 @@ def add_or_update_task(
             patch.setdefault("scheduler_ref", None)
             patch.setdefault("scheduler_state", None)
             patch.setdefault("phase", "starting")
+            patch.setdefault("work_phase", "pending")
+            patch.setdefault("evidence", None)
             patch.setdefault("stdout_path", None)
             patch.setdefault("training_log_path", None)
             patch.setdefault("results_log_path", None)
@@ -486,6 +596,7 @@ def add_or_update_task(
         else:
             found.update(patch)
         rec["tasks"] = tasks
+        rec["work_phase"] = rollup_work_phase(tasks)
         rec["updated_at"] = now
         rows[aid] = rec
 
