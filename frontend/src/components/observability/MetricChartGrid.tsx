@@ -31,6 +31,7 @@ import {
 import { Line, Bar } from "react-chartjs-2";
 import { useThemeMode } from "../../context/ThemeContext";
 import { apiFetch } from "../../lib/apiFetch";
+import { WINDOWS } from "../../lib/metricWindows";
 
 ChartJS.register(
   CategoryScale,
@@ -75,12 +76,6 @@ const SERIES_COLORS = [
   "#e07b39", "#5b8def", "#c2185b", "#7cb342", "#00838f", "#8d6e63",
 ];
 
-export const WINDOWS = [
-  { value: 15, label: "Last 15 min" },
-  { value: 60, label: "Last 1 hour" },
-  { value: 360, label: "Last 6 hours" },
-  { value: 1440, label: "Last 24 hours" },
-];
 
 /** Epoch-seconds (as sent by the backend) → short local clock label for the x-axis. */
 function timeLabel(epochSeconds: string): string {

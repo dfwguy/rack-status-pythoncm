@@ -5,7 +5,7 @@ import { SlidersHorizontal } from "lucide-react";
 import { ScopeTree } from "./ScopeTree";
 import { allAvailableHostIds, selectionSummary, type ScopeCluster, type ScopeNode, type ScopeRack } from "./mockData";
 import { useRackStatus } from "../../hooks/useRackStatus";
-import { parseNodesFromRack } from "../rack/NodeSelector";
+import { parseNodesFromRack } from "../../lib/parseNodesFromRack";
 import type { RackStatusResponse } from "../../types/api";
 
 /** Width of the scope SidePanel; content reserves this much room when open. */
@@ -56,7 +56,7 @@ function trayLabel(rackId: string, hostId: string): string {
  * ``physical_rf0`` through ``parseNodesFromRack`` — the exact same helper the
  * Rack Detail view uses, so there is one tray-state parser in the SPA.
  */
-export function buildScopeCluster(status: RackStatusResponse | null, clusterName?: string): ScopeCluster {
+function buildScopeCluster(status: RackStatusResponse | null, clusterName?: string): ScopeCluster {
   const clusterLabel = clusterName || clusterLabelFromNaming(status);
   const rows = status?.rows ?? [];
   if (rows.length === 0 && !status?.hierarchy) {
@@ -123,7 +123,7 @@ export interface LiveScopeTopology {
  * layer, no second endpoint. Pass ``clusterLabel`` if the caller already holds a
  * nicer name from /api/cluster-overview.
  */
-export function useLiveScopeTopology(logDir = "", clusterLabel?: string): LiveScopeTopology {
+function useLiveScopeTopology(logDir = "", clusterLabel?: string): LiveScopeTopology {
   const { data, loading, error, reachable } = useRackStatus(logDir, SCOPE_POLL_MS);
   const topology = useMemo(() => buildScopeCluster(data, clusterLabel), [data, clusterLabel]);
   return { topology, loading, error, reachable, updatedAt: data?.updated_at ?? "" };

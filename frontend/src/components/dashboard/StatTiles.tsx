@@ -11,7 +11,7 @@ const compactFormatter = new Intl.NumberFormat("en-US", {
  * Abbreviate large counts so tiles don't overflow at production scale:
  * 250 → "250", 1100 → "1.1K", 1_000_000 → "1M". Non-finite values pass through.
  */
-export function formatCompact(n: number): string {
+function formatCompact(n: number): string {
   if (!Number.isFinite(n)) return String(n);
   return compactFormatter.format(n);
 }
