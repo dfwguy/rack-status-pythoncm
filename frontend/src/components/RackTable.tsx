@@ -444,6 +444,13 @@ export function RackTable({
 
   const [tailStream, setTailStream] = useState<{ title: string; body: TailLogStreamBody } | null>(null);
 
+  // Declared above its first consumer (openLogForRow, just below). When it sat further down,
+  // the React Compiler refused to compile this component at all -- which silently disabled
+  // the memoisation on the six useMemo/useCallback blocks in this file.
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: "success" | "error" }>({
+    open: false, message: "", severity: "success",
+  });
+
   const openLogForRow = useCallback(
     async (row: RackRow) => {
       const job = row.last_job.trim() && row.last_job !== "-" ? row.last_job : undefined;
@@ -480,9 +487,6 @@ export function RackTable({
   // Confirmation + feedback
   const [confirmAction, setConfirmAction] = useState<{ kind: ActionKind; rack: string; jobId?: string } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: "success" | "error" }>({
-    open: false, message: "", severity: "success",
-  });
 
   const store = useRackCommandsStore();
   const [selectMode, setSelectMode] = useState(false);

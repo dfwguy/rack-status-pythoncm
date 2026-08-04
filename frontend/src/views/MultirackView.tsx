@@ -31,6 +31,8 @@ import {
 } from "../lib/rackLog";
 import { validationStatusTooltip } from "../lib/validationStatusTooltip";
 import type { MultirackJob, RackRow, RackStatusResponse } from "../types/api";
+import { usePagedRows } from "../hooks/usePagedRows";
+import { TablePager } from "../components/TablePager";
 
 interface MultirackViewProps {
   data: RackStatusResponse | null;
@@ -106,6 +108,8 @@ const LAUNCH_TITLE: Record<MultirackLaunchKind, string> = {
   llmb: "Launch NCCL Microbenchmark",
 };
 
+const EMPTY_RACK_ROWS: RackRow[] = [];
+
 export function MultirackView({ data, logDir }: MultirackViewProps) {
   const [dryRun, setDryRun] = useState(false);
   const [pendingKind, setPendingKind] = useState<MultirackLaunchKind | null>(null);
@@ -120,6 +124,8 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
 
   // Multirack status (on-disk logs / parser results)
   const [mrRows, setMrRows] = useState<MultirackStatusRow[]>([]);
+  // Grows with every multirack run that leaves a log behind.
+  const mrPage = usePagedRows(mrRows);
   const [mrLoading, setMrLoading] = useState(false);
   const [mrError, setMrError] = useState("");
 
@@ -202,7 +208,11 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     }
   }, [logDir]);
 
-  const rows = data?.rows || [];
+  // Stable empty fallback: `|| []` builds a new array every render, which would re-slice the
+  // pager's memo each time and defeats the point of memoising it.
+  const rows = data?.rows || EMPTY_RACK_ROWS;
+  // One row per rack in the fleet, and this is the picker you scroll to choose from.
+  const rackPage = usePagedRows(rows);
 
   const eligibilityMap = useMemo(() => {
     const map = new Map<string, { eligible: boolean; reason: string }>();
@@ -387,7 +397,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {rows.map((row) => {
+                {rackPage.visible.map((row) => {
                   const { eligible, reason } = eligibilityMap.get(row.rack) || { eligible: false, reason: "unknown" };
                   return (
                     <TableRow
@@ -439,6 +449,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
             </Table>
           </TableContainer>
         )}
+        <TablePager {...rackPage} noun="racks" />
       </Card>
 
       <ValidationActivitiesTable
@@ -484,7 +495,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
               </TableRow>
             </TableHead>
             <TableBody>
-              {mrRows.map((row, i) => {
+              {mrPage.visible.map((row, i) => {
                 const hasLog = Boolean(logBasenameForParser(row.log_file));
                 const live = validationOngoing(row.nemo);
                 return (
@@ -547,6 +558,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           </Table>
         </TableContainer>
       )}
+      <TablePager {...mrPage} noun="runs" />
 
       {!mrLoading && mrRows.length === 0 && !mrError && (
         <Card style={{ padding: 48, textAlign: "center" }}>

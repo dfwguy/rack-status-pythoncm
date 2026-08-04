@@ -451,7 +451,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           }
           setNemoSqshPresent(Boolean(json.exists));
           setNemoSqshPath(json.existing_file?.trim() || null);
-        } catch (e) {
+        } catch {
           if (ac.signal.aborted) return;
           setNemoSqshPresent(false);
           setNemoSqshPath(null);

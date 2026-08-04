@@ -14,6 +14,8 @@ import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import { Text, Tag, Modal, ModalCloseButton, Button as KuiButton } from "@nvidia/foundations-react-core";
 import { Plus, Play, Trash2, Edit, RefreshCw } from "lucide-react";
+import { usePagedRows } from "../../hooks/usePagedRows";
+import { TablePager } from "../../components/TablePager";
 import {
   listWorkflows,
   listRuns,
@@ -42,7 +44,10 @@ const STATE_COLORS: Record<string, "green" | "red" | "yellow" | "blue" | "gray">
 export default function WorkflowList({ onSelect, onNew, onViewRun, onRun }: WorkflowListProps) {
   const [tab, setTab] = useState(0);
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
+  // Saved workflows and their run history both accumulate without bound.
+  const wfPage = usePagedRows(workflows, 10);
   const [runs, setRuns] = useState<WorkflowRunSummary[]>([]);
+  const runsPage = usePagedRows(runs, 10);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
@@ -93,6 +98,7 @@ export default function WorkflowList({ onSelect, onNew, onViewRun, onRun }: Work
       </Box>
 
       {tab === 0 && (
+        <>
         <TableContainer component={Paper} variant="outlined">
           <Table size="small">
             <TableHead>
@@ -114,7 +120,7 @@ export default function WorkflowList({ onSelect, onNew, onViewRun, onRun }: Work
                   </TableCell>
                 </TableRow>
               )}
-              {workflows.map((wf) => (
+              {wfPage.visible.map((wf) => (
                 <TableRow key={wf.id} hover sx={{ cursor: "pointer" }} onClick={() => onSelect(wf.id)}>
                   <TableCell>
                     <Text kind="body/bold/sm">{wf.name}</Text>
@@ -148,9 +154,12 @@ export default function WorkflowList({ onSelect, onNew, onViewRun, onRun }: Work
             </TableBody>
           </Table>
         </TableContainer>
+          <TablePager {...wfPage} noun="workflows" />
+        </>
       )}
 
       {tab === 1 && (
+        <>
         <TableContainer component={Paper} variant="outlined">
           <Table size="small">
             <TableHead>
@@ -173,7 +182,7 @@ export default function WorkflowList({ onSelect, onNew, onViewRun, onRun }: Work
                   </TableCell>
                 </TableRow>
               )}
-              {runs.map((run) => (
+              {runsPage.visible.map((run) => (
                 <TableRow
                   key={run.run_id}
                   hover
@@ -213,6 +222,8 @@ export default function WorkflowList({ onSelect, onNew, onViewRun, onRun }: Work
             </TableBody>
           </Table>
         </TableContainer>
+          <TablePager {...runsPage} noun="runs" />
+        </>
       )}
 
       <Modal

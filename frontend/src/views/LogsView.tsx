@@ -46,6 +46,8 @@ import {
   openRackLogInNewTab,
   type TailLogStreamBody,
 } from "../lib/rackLog";
+import { usePagedRows } from "../hooks/usePagedRows";
+import { TablePager } from "../components/TablePager";
 
 type TagColor = "green" | "blue" | "teal" | "yellow" | "red" | "gray";
 
@@ -394,6 +396,9 @@ export function LogsView({ logDir: logDirProp }: LogsViewProps) {
     );
   }, [entries, filter]);
 
+  // A validation log dir accumulates one file per rack per run, so this list only grows.
+  const logsPage = usePagedRows(visible);
+
   const obsPanels = useMemo(() => normalizeObsPanels(obs), [obs]);
   const embeddingEnabled = obs?.embedding_enabled === true;
 
@@ -483,7 +488,7 @@ export function LogsView({ logDir: logDirProp }: LogsViewProps) {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {visible.map((e) => (
+                {logsPage.visible.map((e) => (
                   <TableRow key={e.key} hover>
                     <TableCell sx={{ fontFamily: "monospace", fontSize: 12, wordBreak: "break-all" }}>
                       {e.file || `newest log for ${e.rack}`}
@@ -540,6 +545,7 @@ export function LogsView({ logDir: logDirProp }: LogsViewProps) {
             </Table>
           </TableContainer>
         )}
+        <TablePager {...logsPage} noun="logs" />
 
         {previewBusy && <LinearProgress sx={{ mt: 2 }} />}
 

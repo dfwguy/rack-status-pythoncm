@@ -103,6 +103,28 @@ export interface WorkflowSummary {
   step_count: number;
 }
 
+/**
+ * One completed step in a run's history.
+ *
+ * Every field past `step_id` is optional because the engine writes different keys per step type
+ * (an automated step reports success plus its output, a manual step reports a prompt and a
+ * message). The panel previously typed these entries `any`, which is what let the extra fields
+ * go undeclared in the first place.
+ */
+export interface WorkflowRunHistoryEntry {
+  step_id: string;
+  action?: unknown;
+  completed_at: string;
+  /** Step type as the engine recorded it (automated / manual / decision). */
+  type?: string;
+  success?: boolean;
+  message?: string;
+  prompt?: string;
+  /** Head of the step's captured output, for the panel; the full text is fetched on demand. */
+  output_snippet?: string;
+  output_file?: string;
+}
+
 export interface WorkflowRun {
   run_id: string;
   workflow_id: string;
@@ -110,7 +132,7 @@ export interface WorkflowRun {
   state: string;
   current_step_id: string | null;
   params?: Record<string, string>;
-  history?: Array<{ step_id: string; action?: unknown; completed_at: string }>;
+  history?: WorkflowRunHistoryEntry[];
   error?: string;
   started_at: string;
   updated_at: string;

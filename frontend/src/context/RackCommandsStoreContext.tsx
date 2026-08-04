@@ -64,7 +64,8 @@ async function pollJobUntilTerminal(statusUrl: string): Promise<Record<string, u
   while (Date.now() < deadline) {
     const res = await apiFetch(statusUrl);
     const raw = await res.text();
-    let data: Record<string, unknown> = {};
+    // No initialiser: the catch throws, so `data` is either parsed or we never reach the use.
+    let data: Record<string, unknown>;
     try {
       data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     } catch {
@@ -238,7 +239,8 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
         body: JSON.stringify(body),
       });
       const raw = await res.text();
-      let data: Record<string, unknown> = {};
+      // No initialiser: the catch returns, so `data` is either parsed or we never use it.
+      let data: Record<string, unknown>;
       try {
         data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
       } catch {

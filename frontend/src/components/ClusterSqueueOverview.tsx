@@ -8,6 +8,8 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import { parseSqueueStdout } from "../lib/parseSqueueStdout";
+import { usePagedRows } from "../hooks/usePagedRows";
+import { TablePager } from "./TablePager";
 import type { ClusterSqueueBlock } from "../types/api";
 
 const NVIDIA_GREEN = "#76B900";
@@ -109,40 +111,58 @@ export function ClusterSqueueOverview({
             {raw || "(empty)"}
           </Box>
         ) : (
-          <TableContainer sx={{ maxHeight: 360 }}>
-            <Table size="small" stickyHeader>
-              <TableHead>
-                <TableRow>
-                  {parsed.headers.map((h) => (
-                    <TableCell
-                      key={h}
-                      sx={{
-                        fontWeight: 700,
-                        bgcolor: "action.hover",
-                        color: NVIDIA_GREEN,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {h}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {parsed.rows.map((cells, ri) => (
-                  <TableRow key={ri} hover sx={{ "&:nth-of-type(even)": { bgcolor: "action.hover" } }}>
-                    {parsed.headers.map((_, ci) => (
-                      <TableCell key={ci} sx={{ fontFamily: "monospace", fontSize: 12, whiteSpace: "nowrap" }}>
-                        {cells[ci] ?? ""}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+          <SqueueRowsTable headers={parsed.headers} rows={parsed.rows} />
         )}
       </Box>
     </Paper>
+  );
+}
+
+/**
+ * The queue rows, paged.
+ *
+ * A separate component only because the parent early-returns for its loading and failed states,
+ * and a hook cannot sit after a conditional return.
+ */
+function SqueueRowsTable({ headers, rows }: { headers: string[]; rows: string[][] }) {
+  const rowsPage = usePagedRows(rows, 10);
+  return (
+    <>
+      <TableContainer sx={{ maxHeight: 360 }}>
+        <Table size="small" stickyHeader>
+          <TableHead>
+            <TableRow>
+              {headers.map((h) => (
+                <TableCell
+                  key={h}
+                  sx={{
+                    fontWeight: 700,
+                    bgcolor: "action.hover",
+                    color: NVIDIA_GREEN,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {h}
+                </TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {rowsPage.visible.map((cells, ri) => (
+              <TableRow key={ri} hover sx={{ "&:nth-of-type(even)": { bgcolor: "action.hover" } }}>
+                {headers.map((_, ci) => (
+                  <TableCell key={ci} sx={{ fontFamily: "monospace", fontSize: 12, whiteSpace: "nowrap" }}>
+                    {cells[ci] ?? ""}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+      <Box sx={{ px: 2, pb: 1 }}>
+        <TablePager {...rowsPage} noun="jobs" compact />
+      </Box>
+    </>
   );
 }

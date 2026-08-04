@@ -11,6 +11,8 @@ import LinearProgress from "@mui/material/LinearProgress";
 import { Text, Button, Banner } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
+import { usePagedRows } from "../hooks/usePagedRows";
+import { TablePager } from "../components/TablePager";
 
 type BugReportItem = { host: string; name: string };
 
@@ -58,6 +60,8 @@ export function ReportsView() {
   const [baseDir, setBaseDir] = useState("");
   const [notice, setNotice] = useState("");
   const [items, setItems] = useState<BugReportItem[]>([]);
+  // One row per report file per node; a fleet-wide bug-report sweep runs to thousands.
+  const reportsPage = usePagedRows(items);
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
 
   const loadInventory = useCallback(async () => {
@@ -118,7 +122,7 @@ export function ReportsView() {
         throw new Error(t.slice(0, 400) || `HTTP ${res.status}`);
       }
       const disp = res.headers.get("Content-Disposition");
-      let fname = parseContentDispositionFilename(disp) || `${host}_${name || "nvidia-bug-report.log.gz"}`;
+      const fname = parseContentDispositionFilename(disp) || `${host}_${name || "nvidia-bug-report.log.gz"}`;
       const blob = await res.blob();
       const a = document.createElement("a");
       const href = URL.createObjectURL(blob);
@@ -218,7 +222,7 @@ export function ReportsView() {
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((it) => {
+              reportsPage.visible.map((it) => {
                 const key = `${it.host}\0${it.name}`;
                 const busy = downloadingKey === key;
                 const fullPath =
@@ -249,6 +253,7 @@ export function ReportsView() {
           </TableBody>
         </Table>
       </TableContainer>
+      <TablePager {...reportsPage} noun="files" />
     </Box>
   );
 }

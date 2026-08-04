@@ -35,6 +35,8 @@ import { Line } from "react-chartjs-2";
 import { ParserGrafanaEmbeds, type GrafanaEmbedPayload } from "./ParserGrafanaEmbeds";
 import { NvloomHeatmapsSection } from "./NvloomHeatmapsSection";
 import { ClusterkitResultsSection, type ClusterkitRunRow } from "./ClusterkitResultsSection";
+import { usePagedRows } from "../hooks/usePagedRows";
+import { TablePager } from "../components/TablePager";
 
 ChartJS.register(
   CategoryScale,
@@ -291,6 +293,9 @@ const LLAMA_SN_CHART_COLORS = [
 ];
 
 function LlamaReportTable({ rows }: { rows: NemotronRow[] }) {
+  // One row per sn-llama log for the rack; a long campaign leaves plenty behind. Compact pager:
+  // this lives inside a dialog, where a page-size selector would crowd the row.
+  const page = usePagedRows(rows, 10);
   if (!rows.length) return null;
   return (
     <TableContainer component={Paper} variant="outlined" sx={{ mt: 1 }}>
@@ -307,7 +312,7 @@ function LlamaReportTable({ rows }: { rows: NemotronRow[] }) {
           </TableRow>
         </TableHead>
         <TableBody>
-          {rows.map((r, i) => (
+          {page.visible.map((r, i) => (
             <TableRow key={`${r.rack}-${r.job_id}-${i}`}>
               <TableCell>{r.rack}</TableCell>
               <TableCell sx={{ fontFamily: "monospace" }}>{r.job_id}</TableCell>
@@ -320,6 +325,7 @@ function LlamaReportTable({ rows }: { rows: NemotronRow[] }) {
           ))}
         </TableBody>
       </Table>
+      <TablePager {...page} noun="logs" compact />
     </TableContainer>
   );
 }

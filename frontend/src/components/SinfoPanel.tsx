@@ -13,6 +13,8 @@ import { Text, Button } from "@nvidia/foundations-react-core";
 import { fetchSlurmJson } from "../lib/slurmHelpers";
 import { parseSinfoRStdout } from "../lib/parseSinfoRStdout";
 import { slurmReasonTone, slurmToneColor } from "../lib/slurmReasonTone";
+import { usePagedRows } from "../hooks/usePagedRows";
+import { TablePager } from "./TablePager";
 
 const NVIDIA_GREEN = "#76B900";
 
@@ -22,6 +24,8 @@ interface SinfoPanelProps {
   /** Optional seed for filter when opening from rack context (toolbar: empty). */
   searchSeed?: string;
 }
+
+const EMPTY_ROWS: string[][] = [];
 
 export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: SinfoPanelProps) {
   const [loading, setLoading] = useState(false);
@@ -90,20 +94,23 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
   }, [active, load]);
 
   const headers = parsed && !parsed.useRaw && parsed.headers.length ? parsed.headers : [];
-  const rows = parsed && !parsed.useRaw && parsed.headers.length ? parsed.rows : [];
+  // EMPTY_ROWS, not a literal `[]`: a fresh array each render re-runs the filter memo below.
+  const rows = parsed && !parsed.useRaw && parsed.headers.length ? parsed.rows : EMPTY_ROWS;
   const showRaw = !parsed || parsed.useRaw || !headers.length;
   const toneCols = headers
     .map((h, i) => (/^(STATE|REASON)$/i.test(h) ? i : -1))
     .filter((i) => i >= 0);
 
-  const visibleRows = useMemo(() => {
+  // Filter, rather than render every row with a `show` flag. The flag version kept all of a
+  // 2000-node sinfo in the DOM and, once paged, would have counted hidden rows in the range text.
+  const matchedRows = useMemo(() => {
+    const all = rows.map((r, i) => ({ r, i }));
     const q = filter.trim().toLowerCase();
-    if (!q) return rows.map((r, i) => ({ r, i, show: true }));
-    return rows.map((r, i) => {
-      const hay = r.join(" ").toLowerCase();
-      return { r, i, show: hay.includes(q) };
-    });
+    if (!q) return all;
+    return all.filter(({ r }) => r.join(" ").toLowerCase().includes(q));
   }, [rows, filter]);
+
+  const rowsPage = usePagedRows(matchedRows);
 
   return (
     <Paper variant="outlined" sx={{ borderLeft: `4px solid ${NVIDIA_GREEN}`, overflow: "hidden" }}>
@@ -160,37 +167,49 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
               </TableRow>
             </TableHead>
             <TableBody>
-              {visibleRows.map(({ r, i, show }) =>
-                show ? (
-                  <TableRow key={i} hover sx={{ "&:nth-of-type(even)": { bgcolor: "action.hover" } }}>
-                    {headers.map((_, ci) => {
-                      const value = r[ci] ?? "";
-                      const tone = toneCols.includes(ci) ? slurmReasonTone(value) : "none";
-                      const toneColor = slurmToneColor(tone);
-                      return (
-                        <TableCell
-                          key={ci}
-                          title={value}
-                          sx={{
-                            fontFamily: "monospace",
-                            fontSize: 11,
-                            whiteSpace: "pre-wrap",
-                            wordBreak: "break-word",
-                            maxWidth: 360,
-                            color: toneColor,
-                            fontWeight: toneColor ? 600 : undefined,
-                          }}
-                        >
-                          {value}
-                        </TableCell>
-                      );
-                    })}
-                  </TableRow>
-                ) : null
+              {rowsPage.visible.map(({ r, i }) => (
+                <TableRow key={i} hover sx={{ "&:nth-of-type(even)": { bgcolor: "action.hover" } }}>
+                  {headers.map((_, ci) => {
+                    const value = r[ci] ?? "";
+                    const tone = toneCols.includes(ci) ? slurmReasonTone(value) : "none";
+                    const toneColor = slurmToneColor(tone);
+                    return (
+                      <TableCell
+                        key={ci}
+                        title={value}
+                        sx={{
+                          fontFamily: "monospace",
+                          fontSize: 11,
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                          maxWidth: 360,
+                          color: toneColor,
+                          fontWeight: toneColor ? 600 : undefined,
+                        }}
+                      >
+                        {value}
+                      </TableCell>
+                    );
+                  })}
+                </TableRow>
+              ))}
+              {!rowsPage.total && (
+                <TableRow>
+                  <TableCell colSpan={Math.max(1, headers.length)}>
+                    <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                      No rows match “{filter.trim()}”.
+                    </Text>
+                  </TableCell>
+                </TableRow>
               )}
             </TableBody>
           </Table>
         </TableContainer>
+      )}
+      {!showRaw && headers.length > 0 && (
+        <Box sx={{ px: 2, pb: 1 }}>
+          <TablePager {...rowsPage} noun="nodes" compact />
+        </Box>
       )}
 
       {showRaw && !loading && (

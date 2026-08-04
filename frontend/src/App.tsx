@@ -233,15 +233,17 @@ function AppContent() {
     navigate(RACKS_PATH);
   }, [navigate]);
 
-  const handleCommentChange = useCallback((rack: string, comment: string | null) => {
-    if (!data) return;
-    if (comment) {
-      data.comments[rack] = comment;
-    } else {
-      delete data.comments[rack];
-    }
+  /**
+   * A comment was saved server-side; pull the status feed so the table shows it.
+   *
+   * This used to also write `data.comments[rack]` directly as an optimistic update, which could
+   * never work: `data` is useRackStatus's own state and the hook exposes no setter, so mutating
+   * it in place neither triggered a re-render nor survived the next fetch — it only risked the
+   * table rendering from an object React believed unchanged. The refresh is what updates the UI.
+   */
+  const handleCommentChange = useCallback(() => {
     refresh();
-  }, [data, refresh]);
+  }, [refresh]);
 
   const toolbarTitle = selectedRack ? selectedRack : VIEW_TITLES[activeView];
 

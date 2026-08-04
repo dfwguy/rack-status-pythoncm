@@ -148,19 +148,34 @@ function FlowDiagramInternal({
   const [nodes, setNodes, onNodesChangeInternal] = useNodesState(decoratedNodes);
   const [edges, setEdges, onEdgesChangeInternal] = useEdgesState(decoratedEdges);
 
-  // Sync local state when parent props change (e.g. mermaid code edited)
-  // After updating, fit the viewport so the diagram is fully visible.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  /**
+   * Latest decorations, read by the sync effect below without becoming a trigger for it.
+   *
+   * The effect must fire ONLY when the source graph changes (the mermaid text was edited), not
+   * when decoration changes. `decoratedNodes`/`decoratedEdges` are recomputed whenever
+   * `activeStepId` or `completedStepIds` change — i.e. on every step transition of a running
+   * workflow — and re-syncing then would throw away node positions the user dragged and re-fit
+   * the viewport mid-run. Depending on the props while reading the decorations through a ref is
+   * how that intent is expressed without lying to the dependency checker.
+   */
+  const latestDecorated = useRef({ decoratedNodes, decoratedEdges, reactFlowInstance });
   useEffect(() => {
-    setNodes(decoratedNodes);
-    setEdges(decoratedEdges);
+    latestDecorated.current = { decoratedNodes, decoratedEdges, reactFlowInstance };
+  }, [decoratedNodes, decoratedEdges, reactFlowInstance]);
+
+  // Sync local state when the parent's graph changes, then fit the viewport to it.
+  useEffect(() => {
+    const { decoratedNodes: nextNodes, decoratedEdges: nextEdges, reactFlowInstance: rf } =
+      latestDecorated.current;
+    setNodes(nextNodes);
+    setEdges(nextEdges);
     // Double-RAF: first frame React Flow updates DOM, second frame we fit
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        reactFlowInstance.fitView({ padding: 0.12, duration: 250 });
+        rf.fitView({ padding: 0.12, duration: 250 });
       });
     });
-  }, [initialNodes, initialEdges]);
+  }, [initialNodes, initialEdges, setNodes, setEdges]);
 
   // Notify parent of graph changes when needed
   const handleGraphChanged = useCallback(() => {

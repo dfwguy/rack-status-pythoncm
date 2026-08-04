@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Text, Tag } from "@nvidia/foundations-react-core";
 import Dialog from "@mui/material/Dialog";
 import DialogTitle from "@mui/material/DialogTitle";
@@ -40,30 +40,47 @@ export default function StepOutputDialog({
   const [fullOutput, setFullOutput] = useState("");
   const [loadingOutput, setLoadingOutput] = useState(false);
 
+  /**
+   * Fetch this step's full output.
+   *
+   * Declared before the effect that calls it, and without the old `if (fullOutput) return`
+   * guard. That guard read a STALE closure: the effect called `setFullOutput("")` and then
+   * invoked this synchronously, so `fullOutput` was still the PREVIOUS step's text and the
+   * fetch was skipped — reopening the dialog on another step showed the wrong pane. Callers
+   * that only want to load once (the tab handler) check before calling instead.
+   */
+  const fetchFullOutput = useCallback(
+    async (signal?: AbortSignal) => {
+      // Clearing the previous step's text is part of starting a load, so it belongs here rather
+      // than in the effect body.
+      setLoadingOutput(true);
+      setFullOutput("");
+      try {
+        const res = await fetch(`/api/workflow-runs/${runId}/output/${stepId}`, {
+          credentials: "same-origin",
+          signal,
+        });
+        const data = await res.json();
+        if (signal?.aborted) return;
+        setFullOutput(data.ok ? data.output : `[Error loading output: ${data.error}]`);
+      } catch {
+        if (signal?.aborted) return;
+        setFullOutput(`[Failed to fetch output]`);
+      } finally {
+        if (!signal?.aborted) setLoadingOutput(false);
+      }
+    },
+    [runId, stepId],
+  );
+
   useEffect(() => {
     if (!open) return;
-    setTab(0);
-    setFullOutput("");
-    fetchFullOutput();
-  }, [open, stepId]);
-
-  const fetchFullOutput = async () => {
-    if (fullOutput) return;
-    setLoadingOutput(true);
-    try {
-      const res = await fetch(`/api/workflow-runs/${runId}/output/${stepId}`, { credentials: "same-origin" });
-      const data = await res.json();
-      if (data.ok) {
-        setFullOutput(data.output);
-      } else {
-        setFullOutput(`[Error loading output: ${data.error}]`);
-      }
-    } catch (e) {
-      setFullOutput(`[Failed to fetch output]`);
-    } finally {
-      setLoadingOutput(false);
-    }
-  };
+    const ac = new AbortController();
+    // The loader owns the state changes (see fetchFullOutput); the effect only starts it and
+    // aborts on close, so a late response cannot overwrite a newer step's output.
+    void fetchFullOutput(ac.signal);
+    return () => ac.abort();
+  }, [open, stepId, fetchFullOutput]);
 
   const handleTabChange = (_: unknown, newTab: number) => {
     setTab(newTab);

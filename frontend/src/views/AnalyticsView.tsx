@@ -32,8 +32,13 @@ import { NodeHeatmap } from "../components/analytics/NodeHeatmap";
 import { parseNodesFromRack, type NodeInfo } from "../components/rack/NodeSelector";
 import { downloadNodeReport, getBringupFleet } from "../services/bringupService";
 import { useActiveCluster } from "../context/ActiveClusterContext";
+import { usePagedRows } from "../hooks/usePagedRows";
+import { TablePager } from "../components/TablePager";
 import type { BringupFleet } from "../types/bringup";
 import type { RackRow, RackStatusResponse } from "../types/api";
+
+/** Stable empty array: a fresh `[]` per render would re-slice the pager's memo every time. */
+const EMPTY_ROWS: never[] = [];
 
 const RACK_TAB = "rack";
 const NODE_TAB = "node";
@@ -301,6 +306,12 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
 
   const sr = data?.single_rack;
   const mr = data?.multirack;
+
+  // Both single-rack tables carry one row per rack (NCCL: per rack PER collective), so on a
+  // 112-rack floor they run to hundreds of rows. Paged rather than capped: every row is a real
+  // measurement someone may need to look up, so hiding the tail behind a "top N" would lose data.
+  const ncclDeviationPage = usePagedRows(sr?.nccl_collectives_deviation_pct ?? EMPTY_ROWS);
+  const nemotronPage = usePagedRows(sr?.nemotron ?? EMPTY_ROWS);
 
   const ncclLineData = useMemo(() => {
     if (!sr?.nccl_ar_series?.sizes_bytes?.length) return null;
@@ -654,7 +665,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {(sr.nccl_collectives_deviation_pct ?? []).map((r, i) => {
+                {ncclDeviationPage.visible.map((r, i) => {
                   const rowFail = absDeltaExceeds(r.pct_vs_median, perfVariationMaxAbsPct);
                   return (
                   <TableRow
@@ -688,6 +699,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
               </TableBody>
             </Table>
           </TableContainer>
+          <TablePager {...ncclDeviationPage} noun="rows" />
 
           <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4, color: "var(--text-color-secondary)" }}>
             NCCL — all_reduce bus BW vs message size (fleet median + each rack)
@@ -715,7 +727,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {(sr.nemotron ?? []).map((r) => {
+                {nemotronPage.visible.map((r) => {
                   const rowFail =
                     absDeltaExceeds(r.pct_vs_mean_tflops, perfVariationMaxAbsPct) ||
                     absDeltaExceeds(r.pct_vs_mean_step_time, perfVariationMaxAbsPct);
@@ -743,6 +755,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
               </TableBody>
             </Table>
           </TableContainer>
+          <TablePager {...nemotronPage} noun="racks" />
 
           <Box
             sx={{

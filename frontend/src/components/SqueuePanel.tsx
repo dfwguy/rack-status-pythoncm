@@ -23,6 +23,8 @@ import { parseSqueueStdout } from "../lib/parseSqueueStdout";
 import { slurmReasonTone, slurmToneColor } from "../lib/slurmReasonTone";
 import type { JobStdoutTailPayload } from "../lib/rackLog";
 import { TailLogDialog } from "./TailLogDialog";
+import { usePagedRows } from "../hooks/usePagedRows";
+import { TablePager } from "./TablePager";
 
 const NVIDIA_GREEN = "#76B900";
 
@@ -200,6 +202,9 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
 
   const headers = parsed && !parsed.useRaw && parsed.headers.length ? parsed.headers : [];
   const rows = parsed && !parsed.useRaw && parsed.headers.length ? parsed.rows : [];
+  // squeue on a 2000-node cluster is routinely hundreds of lines; the 360px scroll box hid
+  // that rather than solving it.
+  const rowsPage = usePagedRows(rows);
   const jobCol = headers.length ? findSqueueJobColumnIndex(headers) : -1;
   const reasonCol = headers.findIndex((h) => /REASON/i.test(h));
   const stCol = headers.findIndex((h) => h === "ST" || /^STATE$/i.test(h));
@@ -253,7 +258,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
               </TableRow>
             </TableHead>
             <TableBody>
-              {rows.map((cells, ri) => {
+              {rowsPage.visible.map((cells, ri) => {
                 const rawJob = jobCol >= 0 && cells[jobCol] != null ? String(cells[jobCol]) : "";
                 const jid = slurmJobIdForScancel(rawJob);
                 return (
@@ -324,6 +329,11 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
             </TableBody>
           </Table>
         </TableContainer>
+      )}
+      {!showRaw && headers.length > 0 && (
+        <Box sx={{ px: 2, pb: 1 }}>
+          <TablePager {...rowsPage} noun="jobs" compact />
+        </Box>
       )}
 
       {showRaw && !loading && (

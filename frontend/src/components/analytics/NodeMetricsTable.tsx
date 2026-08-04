@@ -9,10 +9,9 @@
  *
  * Built on Kaizen UI (Table, Pagination, TextInput, Tag) per the KUI-first rule for new code.
  */
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Flex,
-  Pagination,
   Table,
   Tag,
   Text,
@@ -38,6 +37,8 @@ import {
   verdictOf,
   verdictRank,
 } from "../../lib/nodeHeatmap";
+import { usePagedRows } from "../../hooks/usePagedRows";
+import { TablePager } from "../TablePager";
 
 const STATUS_TONE: Record<NodeInfo["status"], "green" | "red" | "yellow" | "gray"> = {
   up: "green",
@@ -82,16 +83,12 @@ const VERDICT_FILTER_ITEMS = [
 ];
 
 export function NodeMetricsTable({ fleet, nodes, rackOf }: NodeMetricsTableProps) {
-  // KUI Pagination is 1-based, unlike MUI's 0-based page index.
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [sortKey, setSortKey] = useState<string>(SORT_NODE);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [query, setQuery] = useState("");
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [verdictFilters, setVerdictFilters] = useState<string[]>([]);
 
-  const resetPage = () => setPage(1);
 
   const { metric: metricCols, statusOnly } = useMemo(() => splitColumns(fleet), [fleet]);
 
@@ -172,9 +169,18 @@ export function NodeMetricsTable({ fleet, nodes, rackOf }: NodeMetricsTableProps
     return rows;
   }, [filtered, sortKey, sortDir, rackOf, statusById, fleetByNode, metricCols]);
 
-  const maxPage = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const safePage = Math.min(page, maxPage);
-  const visible = sorted.slice((safePage - 1) * pageSize, (safePage - 1) * pageSize + pageSize);
+  // The shared pager: one pagination implementation for every table in the app. It clamps the
+  // page itself, which is what the filters above need on every keystroke.
+  const nodesPage = usePagedRows(sorted, DEFAULT_PAGE_SIZE);
+  const visible = nodesPage.visible;
+  /**
+   * Filters and sorts send the user back to page 1; the hook clamps, this makes it deliberate.
+   *
+   * useCallback because the column definitions memo closes over it: an inline arrow would be a
+   * new value every render and rebuild every column on every keystroke.
+   */
+  const setPage = nodesPage.setPage;
+  const resetPage = useCallback(() => setPage(1), [setPage]);
 
   /** Column order drives both the headers and each row's cells, so they cannot disagree. */
   const sortKeys = useMemo(
@@ -215,7 +221,7 @@ export function NodeMetricsTable({ fleet, nodes, rackOf }: NodeMetricsTableProps
           },
         };
       }),
-    [sortKeys, metricCols, fleet, ranges, sortKey, sortDir],
+    [sortKeys, metricCols, fleet, ranges, sortKey, sortDir, resetPage],
   );
 
   const rows = useMemo(
@@ -352,32 +358,7 @@ export function NodeMetricsTable({ fleet, nodes, rackOf }: NodeMetricsTableProps
         aria-label="Node benchmark results"
       />
 
-      {/* Only when it earns its space: a single page needs no pager (KUI Pagination guidance). */}
-      {sorted.length > pageSize && (
-        <div style={{ marginTop: 12 }}>
-          <Pagination
-            displayControls
-            totalItems={sorted.length}
-            page={safePage}
-            pageSize={pageSize}
-            pageSizeOptions={PAGE_SIZE_OPTIONS}
-            onPageChange={setPage}
-            onPageSizeChange={(size: number) => {
-              setPageSize(size);
-              resetPage();
-            }}
-            rangeTextFormatFn={({
-              firstItemIndex,
-              lastItemIndex,
-              totalItems,
-            }: {
-              firstItemIndex: number;
-              lastItemIndex: number;
-              totalItems: number;
-            }) => `${firstItemIndex}–${lastItemIndex} of ${totalItems} nodes`}
-          />
-        </div>
-      )}
+      <TablePager {...nodesPage} noun="nodes" pageSizeOptions={PAGE_SIZE_OPTIONS} />
     </>
   );
 }

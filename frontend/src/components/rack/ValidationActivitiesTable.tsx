@@ -21,6 +21,8 @@ import {
   fetchValidationActivities,
 } from "../../services/validationActivitiesService";
 import type { ValidationActivity } from "../../types/api";
+import { usePagedRows } from "../../hooks/usePagedRows";
+import { TablePager } from "../TablePager";
 
 const TERMINAL_PHASES = new Set(["done", "error", "timeout"]);
 const OPEN_WORK_PHASES = new Set(["pending", "submitted", "running", "collecting", "unknown"]);
@@ -181,6 +183,8 @@ export function ValidationActivitiesTable({
   const [staticLogPath, setStaticLogPath] = useState<string | null>(null);
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(false);
+  // One row per launch, kept until dismissed, so a day of validation fills the panel.
+  const activitiesPage = usePagedRows(activities, 10);
 
   const load = useCallback(async () => {
     if (!logDir?.trim()) return;
@@ -269,6 +273,7 @@ export function ValidationActivitiesTable({
           </Text>
         </Card>
       ) : (
+        <>
         <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
           <Table size="small" stickyHeader>
             <TableHead>
@@ -283,7 +288,7 @@ export function ValidationActivitiesTable({
               </TableRow>
             </TableHead>
             <TableBody>
-              {activities.map((activity) => {
+              {activitiesPage.visible.map((activity) => {
                 const aid = activity.activity_id || activity.job_id;
                 const logRow = logRowForActivity(activity, logRows);
                 const hasParserLog = Boolean(logRow?.log_file);
@@ -438,6 +443,8 @@ export function ValidationActivitiesTable({
             </TableBody>
           </Table>
         </TableContainer>
+        <TablePager {...activitiesPage} noun="activities" />
+        </>
       )}
 
       <TailLogDialog

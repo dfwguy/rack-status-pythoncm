@@ -23,7 +23,9 @@ const getInitialMode = (): ThemeMode => {
   try {
     const stored = localStorage.getItem("nvis-rack-theme");
     if (stored === "light" || stored === "dark") return stored;
-  } catch {}
+  } catch {
+    // Private browsing / storage disabled: fall through to the default.
+  }
   return "dark";
 };
 
