@@ -81,6 +81,10 @@ typescript-check:
     - cd frontend
     - npm ci --ignore-scripts
     - npx tsc -b --noEmit
+    # Hard gate, no allow_failure: every eslint rule in the config is at zero errors as of
+    # 2026-08-04, so any error here is something this commit introduced. Warnings do not fail
+    # the job -- set-state-in-effect is deliberately a warning and eslint.config.js says why.
+    - npm run lint
 
 # ─── Test ────────────────────────────────────────────────────────────────────
 
