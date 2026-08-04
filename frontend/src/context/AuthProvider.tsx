@@ -1,25 +1,10 @@
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
-
-interface AuthState {
-  authenticated: boolean;
-  user: string | null;
-  loading: boolean;
-}
-
-interface AuthContextValue extends AuthState {
-  login: (password: string) => Promise<{ ok: boolean; error?: string }>;
-  logout: () => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextValue>({
-  authenticated: false,
-  user: null,
-  loading: true,
-  login: async () => ({ ok: false }),
-  logout: async () => {},
-});
-
-export const useAuth = () => useContext(AuthContext);
+/**
+ * Auth provider: checks the session once on mount, then exposes login/logout.
+ *
+ * Components only; the context object and `useAuth` live in AuthContext.ts.
+ */
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { AuthContext, type AuthState } from "./AuthContext";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({

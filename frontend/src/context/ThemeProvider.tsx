@@ -1,4 +1,10 @@
-import { createContext, useContext, useMemo, useCallback, type ReactNode } from "react";
+/**
+ * Theme provider: Kaizen UI is the outer theme owner, MUI is bridged to follow it.
+ *
+ * Components only, so React Refresh can hot-swap this file. The context object, its hook and the
+ * persisted-mode reader live in ThemeContext.ts.
+ */
+import { useCallback, useMemo, type ReactNode } from "react";
 import { ThemeProvider as MuiThemeProvider } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
 import {
@@ -6,29 +12,9 @@ import {
   useTheme as useKuiTheme,
 } from "@nvidia/foundations-react-core";
 import { getTheme, type ThemeMode } from "../theme";
+import { ThemeContext, getInitialMode } from "./ThemeContext";
 
-interface ThemeContextValue {
-  mode: ThemeMode;
-  toggleTheme: () => void;
-}
-
-const ThemeContext = createContext<ThemeContextValue>({
-  mode: "dark",
-  toggleTheme: () => {},
-});
-
-export const useThemeMode = () => useContext(ThemeContext);
-
-const getInitialMode = (): ThemeMode => {
-  try {
-    const stored = localStorage.getItem("nvis-rack-theme");
-    if (stored === "light" || stored === "dark") return stored;
-  } catch {
-    // Private browsing / storage disabled: fall through to the default.
-  }
-  return "dark";
-};
-
+/** Mirrors the KUI theme into MUI and into our own context, so one toggle drives both. */
 const ThemeBridge = ({ children }: { children: ReactNode }) => {
   const { theme, setTheme } = useKuiTheme();
 

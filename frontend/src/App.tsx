@@ -2,8 +2,10 @@ import { useState, useCallback, useEffect, useRef, lazy, Suspense } from "react"
 import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import { Text } from "@nvidia/foundations-react-core";
-import { ThemeProvider, useThemeMode } from "./context/ThemeContext";
-import { AuthProvider, useAuth } from "./context/AuthContext";
+import { useThemeMode } from "./context/ThemeContext";
+import { ThemeProvider } from "./context/ThemeProvider";
+import { useAuth } from "./context/AuthContext";
+import { AuthProvider } from "./context/AuthProvider";
 import { AIChatProvider, useAIChat } from "./context/AIChatContext";
 import { AppLayout } from "./components/AppLayout";
 import { Sidebar, type ViewId } from "./components/Sidebar";
@@ -35,13 +37,13 @@ const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ de
 const ProjectsView = lazy(() => import("./views/ProjectsView").then((m) => ({ default: m.ProjectsView })));
 const PlatformCatalogView = lazy(() => import("./views/PlatformCatalogView").then((m) => ({ default: m.PlatformCatalogView })));
 const ToolRegistryView = lazy(() => import("./views/ToolRegistryView").then((m) => ({ default: m.ToolRegistryView })));
-import { ActiveClusterProvider } from "./context/ActiveClusterContext";
+import { ActiveClusterProvider } from "./context/ActiveClusterProvider";
 import { LoginPage } from "./pages/LoginPage";
 const TerminalView = lazy(() => import("./views/TerminalView"));
 import { useRackStatus } from "./hooks/useRackStatus";
 import type { RackStatusResponse } from "./types/api";
 import { RackCommandsStoreProvider } from "./context/RackCommandsStoreContext";
-import { RackLocksProvider } from "./context/RackLocksContext";
+import { RackLocksProvider } from "./context/RackLocksProvider";
 import { HelpPanelProvider } from "./context/HelpPanelProvider";
 import HelpPanel from "./components/help/HelpPanel";
 import { DEFAULT_PATH, RACKS_PATH, rackDetailPath, pathToRoute, rackIdFromPath, viewIdToPath } from "./routes";

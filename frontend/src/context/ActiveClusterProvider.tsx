@@ -1,35 +1,12 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+/** Loads the active project/cluster from the catalog API; the hook lives in ActiveClusterContext.ts. */
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   getActiveContext,
   listProjects,
   setActiveContext,
 } from "../services/catalogService";
 import type { ActiveSelection, Cluster, Platform, Project } from "../types/catalog";
-
-interface ActiveClusterState {
-  projects: Project[];
-  active: ActiveSelection;
-  activeProject: Project | null;
-  activeCluster: Cluster | null;
-  activePlatform: Platform | null;
-  aiContext: string;
-  loading: boolean;
-  error: string | null;
-  /** Bumps whenever the active project/cluster changes (use as a refetch dep). */
-  version: number;
-  refresh: () => Promise<void>;
-  setActive: (projectId: string, clusterId: string) => Promise<void>;
-}
-
-const ActiveClusterContext = createContext<ActiveClusterState | undefined>(undefined);
+import { ActiveClusterContext, type ActiveClusterState } from "./ActiveClusterContext";
 
 export function ActiveClusterProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -90,12 +67,4 @@ export function ActiveClusterProvider({ children }: { children: ReactNode }) {
   );
 
   return <ActiveClusterContext.Provider value={value}>{children}</ActiveClusterContext.Provider>;
-}
-
-export function useActiveCluster(): ActiveClusterState {
-  const ctx = useContext(ActiveClusterContext);
-  if (!ctx) {
-    throw new Error("useActiveCluster must be used within an ActiveClusterProvider");
-  }
-  return ctx;
 }
