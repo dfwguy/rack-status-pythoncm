@@ -134,6 +134,38 @@ class TestTasks:
         assert va.find_results_log_for_job(tmp_path, "99", label="nccl") is None
 
 
+class TestPickResultsLog:
+    """Basename selection, so a remote log dir can be listed by the caller."""
+
+    NCCL = "cmods-NCCL-1Rack-ink50-dh01-h01-18N-127326.txt"
+    NEMO = "cmods-NEMO-1Rack-ink50-dh01-h01-18N-127326.txt"
+
+    def test_picks_by_label(self):
+        names = [self.NEMO, self.NCCL, "llmb-nccl_x_127326.out"]
+        assert va.pick_results_log(names, "127326", label="nccl") == self.NCCL
+        assert va.pick_results_log(names, "127326", label="nemo") == self.NEMO
+        assert va.pick_results_log(names, "127326", label="stage2") == self.NEMO
+
+    def test_ignores_non_aggregated_and_other_jobs(self):
+        assert va.pick_results_log(["llmb-nccl_x_127326.out"], "127326", label="nccl") is None
+        assert va.pick_results_log([self.NCCL], "999", label="nccl") is None
+
+    def test_job_id_must_match_whole_field(self):
+        """A longer job id ending in the same digits must not be mistaken for a match."""
+        longer = "cmods-NCCL-1Rack-r01-18N-1127326.txt"
+        assert va.pick_results_log([longer], "127326", label="nccl") is None
+
+    def test_rejects_non_numeric_job_id(self):
+        assert va.pick_results_log([self.NCCL], "", label="nccl") is None
+        assert va.pick_results_log([self.NCCL], "abc", label="nccl") is None
+
+    def test_falls_back_to_any_aggregated_log(self):
+        assert va.pick_results_log([self.NEMO], "127326", label="mnubergemm") == self.NEMO
+
+    def test_tolerates_blank_entries(self):
+        assert va.pick_results_log(["", None, self.NCCL], "127326", label="nccl") == self.NCCL
+
+
 class TestAdoptLog:
     def test_adopt_external_nccl_log(self):
         path = "/logs/cmods-NCCL-1Rack-p5-r01-18N-999.txt"

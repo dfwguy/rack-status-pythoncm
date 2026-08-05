@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -551,52 +552,74 @@ def rollup_work_phase(tasks: list[dict] | None) -> str:
     return best if any_task else "pending"
 
 
+def pick_results_log(
+    names: Iterable[str],
+    job_id: str,
+    *,
+    label: str = "",
+) -> str | None:
+    """Choose the aggregated ``*-NCCL-1Rack-*-{jid}.txt`` / ``*-NEMO-1Rack-*-{jid}.txt`` BASENAME.
+
+    Selection only — the caller owns the directory listing. That split matters
+    because the log directory belongs to whichever host runs the jobs: when the
+    app is a container and the cluster is an SSH hop away, a process-local scan of
+    that path sees nothing at all.
+    """
+    jid = (job_id or "").strip()
+    if not jid or not jid.isdigit():
+        return None
+    lab = (label or "").strip().lower()
+    prefer_nccl = lab in ("nccl", "stage1", "") or "nccl" in lab
+    prefer_nemo = lab in ("nemo", "stage2") or "nemo" in lab or "llm" in lab
+    suffix = f"-{jid}.txt"
+    candidates = [
+        n
+        for n in (str(x or "").strip() for x in names)
+        if n.endswith(suffix)
+        and ("nccl-1rack" in n.lower() or "nemo-1rack" in n.lower())
+    ]
+    if not candidates:
+        return None
+    if prefer_nemo and not prefer_nccl:
+        for n in candidates:
+            if "nemo-1rack" in n.lower():
+                return n
+    if prefer_nccl:
+        for n in candidates:
+            if "nccl-1rack" in n.lower():
+                return n
+    # Prefer NCCL then NeMo then any.
+    for needle in ("nccl-1rack", "nemo-1rack"):
+        for n in candidates:
+            if needle in n.lower():
+                return n
+    return candidates[0]
+
+
 def find_results_log_for_job(
     log_dir: str | Path | None,
     job_id: str,
     *,
     label: str = "",
 ) -> str | None:
-    """Locate an aggregated ``*-NCCL-1Rack-*-{jid}.txt`` / ``*-NEMO-1Rack-*-{jid}.txt`` under log_dir."""
+    """``pick_results_log`` over a log_dir visible to THIS process.
+
+    Only usable when the app and the job logs share a filesystem. Callers that may
+    run against a remote execution host list the directory through the transport
+    layer and pass the basenames to :func:`pick_results_log` instead.
+    """
     jid = (job_id or "").strip()
     if not jid or not str(jid).isdigit():
         return None
     root = Path(str(log_dir or "")).expanduser()
     if not root.is_dir():
         return None
-    lab = (label or "").strip().lower()
-    prefer_nccl = lab in ("nccl", "stage1", "") or "nccl" in lab
-    prefer_nemo = lab in ("nemo", "stage2") or "nemo" in lab or "llm" in lab
-    suffix = f"-{jid}.txt"
-    candidates: list[Path] = []
     try:
-        for p in root.iterdir():
-            if not p.is_file():
-                continue
-            name = p.name
-            if not name.endswith(suffix):
-                continue
-            low = name.lower()
-            if "nccl-1rack" in low or "nemo-1rack" in low:
-                candidates.append(p)
+        names = [p.name for p in root.iterdir() if p.is_file()]
     except OSError:
         return None
-    if not candidates:
-        return None
-    if prefer_nemo and not prefer_nccl:
-        for p in candidates:
-            if "nemo-1rack" in p.name.lower():
-                return str(p)
-    if prefer_nccl:
-        for p in candidates:
-            if "nccl-1rack" in p.name.lower():
-                return str(p)
-    # Prefer NCCL then NeMo then any.
-    for needle in ("nccl-1rack", "nemo-1rack"):
-        for p in candidates:
-            if needle in p.name.lower():
-                return str(p)
-    return str(candidates[0])
+    picked = pick_results_log(names, jid, label=label)
+    return str(root / picked) if picked else None
 
 
 def add_or_update_task(
@@ -613,6 +636,7 @@ def add_or_update_task(
     training_log_path: str | None = None,
     results_log_path: str | None = None,
     task_id: str | None = None,
+    collecting_since: str | None = None,
 ) -> str:
     """Add or merge a child task on an activity. Returns ``task_id``."""
     aid = (activity_id or "").strip()
@@ -660,6 +684,9 @@ def add_or_update_task(
             patch["training_log_path"] = training_log_path
         if results_log_path is not None:
             patch["results_log_path"] = results_log_path
+        # Empty string clears it (the task left "collecting"); None leaves it alone.
+        if collecting_since is not None:
+            patch["collecting_since"] = collecting_since or None
         if found is None:
             patch.setdefault("scheduler_ref", None)
             patch.setdefault("scheduler_state", None)
@@ -669,6 +696,7 @@ def add_or_update_task(
             patch.setdefault("stdout_path", None)
             patch.setdefault("training_log_path", None)
             patch.setdefault("results_log_path", None)
+            patch.setdefault("collecting_since", None)
             tasks.append(patch)
         else:
             found.update(patch)

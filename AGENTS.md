@@ -18,6 +18,7 @@ Read these before doing any work — they apply to every task:
 - @.cursor/rules/cluster-naming-conventions.mdc — rack/dashboard id vs real compute node hostname
 - @.cursor/rules/dcgm-mndiag-mnubergemm.mdc — DCGM `mndiag` / `mnubergemm` gotchas
 - @.cursor/rules/bcm-prolog-rogueprocess.mdc — BCM Slurm "Prolog error" drain root cause
+- @.cursor/rules/multirack-nccl-hcoll-nvls.mdc — multi-rack NCCL/MPI: HCOLL abort + NVLS cliqueId hang
 
 ## Read when relevant (task-scoped)
 

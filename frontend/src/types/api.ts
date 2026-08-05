@@ -64,6 +64,8 @@ export interface ActivityTask {
   stdout_path?: string | null;
   training_log_path?: string | null;
   results_log_path?: string | null;
+  /** When the task entered "collecting"; the backend resolves it terminally after a grace period. */
+  collecting_since?: string | null;
   updated_at?: string;
 }
 

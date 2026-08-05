@@ -127,23 +127,35 @@ trap 'rm -f "${HF}"' EXIT
 # custom var (e.g. NCCL_NET_PLUGIN=none from the UI launch dialog) would silently apply
 # to the local ranks only, leaving remote ranks on a different config.
 #
-# Primary source: NVIS_EXTRA_ENV_KEYS — a space-separated list of the exact keys the app
-# forwarded (any prefix). Fallback (when unset): scan the batch env for NCCL_*/UCX_*/OMPI_MCA_*.
-# OMPI_MCA_* (e.g. OMPI_MCA_coll_hcoll_enable=0) are auto-propagated by mpirun, but we also
-# forward them explicitly so they are visible in the log line and land on every rank's env.
+# Two sources, UNIONED — the launch dialog's keys are ADDED to the scan, never a
+# replacement for it:
+#   1. scan of the batch env for NCCL_*/UCX_*/OMPI_MCA_* (what lib/fabric.inc.sh exported:
+#      the plane selection, UCX_TLS, coll_ucc_enable, …).
+#   2. NVIS_EXTRA_ENV_KEYS — the exact keys the app forwarded, ANY prefix, so a custom var
+#      outside those three prefixes (HCOLL_*, NVIS_*, …) reaches remote ranks too.
+# These used to be either/or, so supplying a single custom key from the UI silently stopped
+# forwarding every scanned var: job 127306 sent only OMPI_MCA_coll_hcoll_enable and dropped
+# UCX_TLS. OMPI_MCA_* are auto-propagated by mpirun, but we forward them explicitly so they
+# are visible in the log line and land on every rank's env.
 EXTRA_X=()
-_already=" NCCL_SOCKET_IFNAME NCCL_IB_HCA NCCL_DEBUG "   # forwarded explicitly below
-if [ -n "${NVIS_EXTRA_ENV_KEYS:-}" ]; then
-  for _k in ${NVIS_EXTRA_ENV_KEYS}; do
-    case "${_already}" in *" ${_k} "*) continue ;; esac
-    [ -n "${!_k+x}" ] && EXTRA_X+=( -x "${_k}" )
-  done
-else
-  while IFS='=' read -r _k _; do
-    case "${_already}" in *" ${_k} "*) continue ;; esac
-    case "${_k}" in NCCL_*|UCX_*|OMPI_MCA_*) EXTRA_X+=( -x "${_k}" ) ;; esac
-  done < <(env)
-fi
+_seen=" NCCL_SOCKET_IFNAME NCCL_IB_HCA NCCL_DEBUG "   # forwarded explicitly below
+
+# $1 = env var name. Skips vars that are unset or already queued (the two sources overlap:
+# a custom OMPI_MCA_* key is also found by the scan, and -x FOO twice is not valid).
+_extra_x_add() {
+  _n="$1"
+  case "${_seen}" in *" ${_n} "*) return 0 ;; esac
+  [ -n "${!_n+x}" ] || return 0
+  EXTRA_X+=( -x "${_n}" )
+  _seen="${_seen}${_n} "
+}
+
+while IFS='=' read -r _k _; do
+  case "${_k}" in NCCL_*|UCX_*|OMPI_MCA_*) _extra_x_add "${_k}" ;; esac
+done < <(env)
+for _k in ${NVIS_EXTRA_ENV_KEYS:-}; do
+  _extra_x_add "${_k}"
+done
 if [ "${#EXTRA_X[@]}" -gt 0 ]; then
   echo "nccl_allreduce: forwarding extra env to all ranks:$(printf ' %s' "${EXTRA_X[@]}" | sed 's/ -x//g')"
 fi

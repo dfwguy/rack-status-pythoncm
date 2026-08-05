@@ -70,7 +70,16 @@ n=$(( ${#hosts[*]} / 2 * 2 ))
 # Force the batch script's multi-rack (IB) path when this allocation spans >1 rack, even if it is
 # <=18 nodes. The batch script otherwise infers single-rack from node count and would disable IB +
 # force MNNVL (fatal across a rack boundary). Explicit NVIS_NEMO_XRACK from the caller wins.
-_nracks=$(printf '%s\n' "${hosts[@]}" | sed -E 's/^(bos01-[a-z][0-9]+)-.*/\1/' | sort -u | grep -c .)
+#
+# Group hosts by rack via NVIS_RACK_ID (nvis_nodes_rack_of). This used to hardcode
+# 'bos01-[a-z][0-9]+', which matches nothing outside Boston: elsewhere every hostname
+# stayed distinct, so an 18-node SINGLE-rack run counted 18 "racks" and was pushed
+# onto the cross-rack IB path. Without the template, fall back to the number of rack
+# specs the caller passed (the dashboard always passes one spec per rack).
+_nracks=$(for _h in "${hosts[@]}"; do nvis_nodes_rack_of "${_h}"; echo; done 2>/dev/null | sort -u | grep -c .)
+if (( _nracks == 0 )); then
+  _nracks=$(printf '%s\n' "${racks[@]}" | sort -u | grep -c .)
+fi
 if [[ -z "${NVIS_NEMO_XRACK:-}" ]]; then
   if (( _nracks > 1 )); then NVIS_NEMO_XRACK=1; else NVIS_NEMO_XRACK=0; fi
 fi

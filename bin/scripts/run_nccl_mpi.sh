@@ -20,7 +20,8 @@
 #                        parser). Without it, the log is "nccl-mpi_<label>_<jobid>.out" (x-rack style).
 #
 # Env: GPUS_PER_NODE (default 4), RACK_TO_NODE_SED / RACK_NODE_MATCH_SUFFIX
-#      (see lib/nodes.inc.sh), NVIS_HPCX_DIR / NVIS_NCCL_TESTS_BIN / NVIS_NCCL_LIB /
+#      (rack->node mapping; auto-detected per site when unset — see lib/nodes.inc.sh),
+#      NVIS_HPCX_DIR / NVIS_NCCL_TESTS_BIN / NVIS_NCCL_LIB /
 #      NVIS_CUDA_LIB (host toolchain, auto-discovered on the node when unset),
 #      NVIS_NCCL_VERSION (which vetted libnccl to load: 2.30.7 default | system | <X.Y.Z>),
 #      NCCL_SIZE_MIN / NCCL_SIZE_MAX, RACK_JOB_LOG_DIR (defaults to cwd).

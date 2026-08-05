@@ -968,6 +968,118 @@ class TestValidationActivitySlurmHydration:
         # Intermediate llmb StdOut without aggregated results → collecting
         assert tasks[0]["work_phase"] == "collecting"
 
+    def _stub_slurm(self, monkeypatch, state="COMPLETED", stdout_tpl="/logs/llmb-nccl_nodes_{jid}.out"):
+        monkeypatch.setattr(app_module.native_status, "load_squeue_jobs_map", lambda: (set(), {}))
+        monkeypatch.setattr(
+            app_module.native_status, "augment_running_set_for_job_ids", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            app_module,
+            "_run_scontrol_show_job",
+            lambda jid: {
+                "ok": True,
+                "stdout": f"JobId={jid} JobState={state} StdOut={stdout_tpl.format(jid=jid)}",
+            },
+        )
+
+    def _backdate_collecting(self, aid, when="2020-01-01T00:00:00+00:00"):
+        """Age the task's collecting stamp past the grace period, in place.
+
+        Addressed by task_id: matching on (ordinal, label) would append a second
+        task, because sync_tasks_from_stdout labels a lone job id "validation".
+        """
+        task = validation_activities.get_activity(aid)["tasks"][0]
+        validation_activities.add_or_update_task(
+            aid,
+            ordinal=int(task["ordinal"]),
+            label=str(task["label"]),
+            task_id=str(task["task_id"]),
+            collecting_since=when,
+        )
+
+    def test_results_log_found_on_remote_exec_host(
+        self, isolated_validation_activities, monkeypatch
+    ):
+        """The log dir lives on the execution host; discovery must not use a local scan.
+
+        Regression: in SSH mode the container cannot see the log dir, so llmb tasks
+        (whose StdOut is the intermediate llmb-nccl_*.out) never bound their results
+        and sat in "collecting" forever.
+        """
+        aid = validation_activities.record_activity(
+            "llmb-nccl", rack="ink50-dh01-h01", log_dir="/home/cmods/benchmark/harish"
+        )
+        validation_activities.sync_tasks_from_stdout(aid, "jobid=127326\n")
+        self._stub_slurm(monkeypatch)
+        agg = "/home/cmods/benchmark/harish/cmods-NCCL-1Rack-ink50-dh01-h01-18N-127326.txt"
+        monkeypatch.setattr(
+            app_module.host_exec,
+            "stat_dir",
+            lambda base, **kw: {agg: object(), f"{base}/llmb-nccl_x_127326.out": object()},
+        )
+        app_module._hydrate_activity_task_logs(aid)
+        task = validation_activities.get_activity(aid)["tasks"][0]
+        assert task["results_log_path"] == agg
+        assert task["work_phase"] == "done"
+        assert task.get("collecting_since") is None
+
+    def test_collecting_is_stamped_then_resolves_after_grace(
+        self, isolated_validation_activities, monkeypatch
+    ):
+        aid = validation_activities.record_activity("llmb-nccl", rack="p5-r01", log_dir="/logs")
+        validation_activities.sync_tasks_from_stdout(aid, "jobid=999\n")
+        self._stub_slurm(monkeypatch)
+        monkeypatch.setattr(app_module.host_exec, "stat_dir", lambda base, **kw: {})
+
+        app_module._hydrate_activity_task_logs(aid)
+        task = validation_activities.get_activity(aid)["tasks"][0]
+        assert task["work_phase"] == "collecting"
+        assert task["collecting_since"], "entering collecting must stamp the clock"
+
+        # Backdate the stamp past the grace period: the collector never delivered.
+        self._backdate_collecting(aid)
+        app_module._hydrate_activity_task_logs(aid)
+        task = validation_activities.get_activity(aid)["tasks"][0]
+        assert task["work_phase"] == "done"  # Slurm said COMPLETED
+        assert task["phase"] == "done"
+        assert len(validation_activities.get_activity(aid)["tasks"]) == 1
+
+    def test_collecting_grace_expiry_uses_scheduler_verdict(
+        self, isolated_validation_activities, monkeypatch
+    ):
+        aid = validation_activities.record_activity("llmb-nccl", rack="p5-r01", log_dir="/logs")
+        validation_activities.sync_tasks_from_stdout(aid, "jobid=998\n")
+        self._stub_slurm(monkeypatch, state="TIMEOUT")
+        monkeypatch.setattr(app_module.host_exec, "stat_dir", lambda base, **kw: {})
+        app_module._hydrate_activity_task_logs(aid)
+        assert validation_activities.get_activity(aid)["tasks"][0]["work_phase"] == "collecting"
+        self._backdate_collecting(aid)
+        app_module._hydrate_activity_task_logs(aid)
+        task = validation_activities.get_activity(aid)["tasks"][0]
+        assert task["work_phase"] == "failed"
+
+    def test_grace_expired_task_stops_being_refreshed(self):
+        task = {
+            "scheduler_ref": "123",
+            "stdout_path": "/logs/llmb-nccl_nodes_123.out",
+            "scheduler_state": "COMPLETED",
+            "work_phase": "done",
+            "collecting_since": "2020-01-01T00:00:00+00:00",
+        }
+        assert app_module._task_needs_slurm_hydration(task) is False
+        # Still inside the grace period → keep polling for the collector.
+        fresh = dict(task, work_phase="collecting", collecting_since=None)
+        assert app_module._task_needs_slurm_hydration(fresh) is True
+
+    def test_collecting_grace_expired_helper(self, monkeypatch):
+        assert app_module._collecting_grace_expired(None) is False
+        assert app_module._collecting_grace_expired("not-a-timestamp") is False
+        assert app_module._collecting_grace_expired("2020-01-01T00:00:00+00:00") is True
+        # Naive timestamps are treated as UTC rather than crashing.
+        assert app_module._collecting_grace_expired("2020-01-01T00:00:00") is True
+        monkeypatch.setenv("RACK_VALIDATION_COLLECT_GRACE_SEC", "999999999")
+        assert app_module._collecting_grace_expired("2020-01-01T00:00:00+00:00") is False
+
     def test_hydrate_fail_closed_when_scontrol_and_sacct_missing(
         self, isolated_validation_activities, monkeypatch
     ):

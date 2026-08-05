@@ -1448,9 +1448,15 @@ def _task_needs_slurm_hydration(task: dict) -> bool:
         return True
     if base in _SLURM_RUNNING_JOB_STATES:
         return True
-    # Terminal scheduler state but llmb intermediate StdOut with no results yet → keep collecting.
+    # Terminal scheduler state but llmb intermediate StdOut with no results yet → keep
+    # collecting, but only until the grace period runs out. Past that the collector is
+    # never going to deliver, and re-querying Slurm forever costs an SSH round trip per poll.
     stdout = str(task.get("stdout_path") or "")
-    if "llmb-nccl_" in stdout.replace("\\", "/") and not str(task.get("results_log_path") or "").strip():
+    if (
+        "llmb-nccl_" in stdout.replace("\\", "/")
+        and not str(task.get("results_log_path") or "").strip()
+        and not _collecting_grace_expired(task.get("collecting_since"))
+    ):
         return True
     return base not in _SLURM_TERMINAL_JOB_STATES
 
@@ -1508,6 +1514,55 @@ def _stdout_is_llmb_intermediate(path: str | None) -> bool:
     return name.startswith("llmb-nccl_") or "llmb-autocollect" in name
 
 
+def _find_results_log_on_exec_host(log_dir: str, job_id: str, label: str) -> str | None:
+    """Aggregated results log for *job_id*, discovered on the EXECUTION host.
+
+    The log directory belongs to the host that runs the jobs, so this lists it
+    through the transport layer (one ``find`` round trip) rather than with a
+    process-local scan. In SSH mode that scan always came back empty, so any task
+    whose results log has to be *discovered* — an llmb launch, whose Slurm StdOut is
+    the intermediate ``llmb-nccl_*.out`` rather than the aggregated file — stayed in
+    ``collecting`` forever even though the collector had written the results.
+    """
+    base = (log_dir or "").strip()
+    jid = (job_id or "").strip()
+    if not base or not jid.isdigit():
+        return None
+    try:
+        found = host_exec.stat_dir(base, patterns=(f"*-{jid}.txt",), maxdepth=1)
+    except Exception:  # noqa: BLE001 — discovery is best-effort; fall through to local
+        found = {}
+    if found:
+        by_name = {PurePosixPath(str(p)).name: str(p) for p in found}
+        picked = validation_activities.pick_results_log(list(by_name), jid, label=label)
+        if picked:
+            return by_name.get(picked)
+    # Same-host deployments (RACK_EXEC_MODE=local) where stat_dir is unavailable.
+    return validation_activities.find_results_log_for_job(base, jid, label=label)
+
+
+def _collecting_grace_expired(collecting_since: str | None) -> bool:
+    """True when a task has waited longer than the collector grace period.
+
+    Without a bound, "terminal in Slurm but no aggregated log yet" is a state with
+    no exit: the UI shows the run as unfinished forever and the refresh loop keeps
+    paying for Slurm round trips. A collector that has not produced anything within
+    the grace period is not going to, so the task resolves on the scheduler's
+    verdict instead. ``RACK_VALIDATION_COLLECT_GRACE_SEC`` (default 900) tunes it.
+    """
+    raw = str(collecting_since or "").strip()
+    if not raw:
+        return False
+    try:
+        started = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    grace = max(60, _env_int("RACK_VALIDATION_COLLECT_GRACE_SEC", 900))
+    return (datetime.now(timezone.utc) - started).total_seconds() > grace
+
+
 def _derive_task_work_phase(
     *,
     scheduler_state: str | None,
@@ -1515,6 +1570,7 @@ def _derive_task_work_phase(
     stdout_path: str | None,
     results_log_path: str | None,
     label: str,
+    collecting_since: str | None = None,
 ) -> str:
     """Map ladder evidence → tasks[].work_phase."""
     base = _slurm_job_state_base(scheduler_state)
@@ -1531,6 +1587,10 @@ def _derive_task_work_phase(
         ):
             if base in ("FAILED", "CANCELLED", "NODE_FAIL", "OUT_OF_MEMORY", "BOOT_FAIL"):
                 return "failed"
+            # Waited long enough for a collector that never delivered: take the
+            # scheduler's verdict rather than showing the run as unfinished forever.
+            if _collecting_grace_expired(collecting_since):
+                return "done" if base == "COMPLETED" else "failed"
             return "collecting"
         if base == "COMPLETED":
             return "done"
@@ -1586,7 +1646,7 @@ def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> No
 
         # Bind aggregated result log when possible (and promote intermediate StdOut).
         if not results_path:
-            found = validation_activities.find_results_log_for_job(log_dir, ref, label=label)
+            found = _find_results_log_on_exec_host(log_dir, ref, label)
             if found:
                 results_path = found
         if stdout_path and not _stdout_is_llmb_intermediate(stdout_path):
@@ -1602,13 +1662,21 @@ def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> No
             else:
                 state = prev or "UNKNOWN"
 
+        collecting_since = str(task.get("collecting_since") or "").strip() or None
         work_phase = _derive_task_work_phase(
             scheduler_state=state,
             evidence=evidence,
             stdout_path=stdout_path,
             results_log_path=results_path,
             label=label,
+            collecting_since=collecting_since,
         )
+        # Stamp the clock on entry so the grace period is measured from when the
+        # task first started waiting on a collector, not from the latest refresh.
+        if work_phase == "collecting":
+            collecting_since = collecting_since or datetime.now(timezone.utc).isoformat()
+        else:
+            collecting_since = ""  # empty string clears the stored value
         task_phase = str(task.get("phase") or "")
         if work_phase == "running":
             task_phase = "running"
@@ -1626,6 +1694,7 @@ def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> No
             work_phase=work_phase,
             evidence=evidence,
             phase=task_phase or None,
+            collecting_since=collecting_since,
         )
         task["scheduler_state"] = state
         if stdout_path is not None:
@@ -1634,6 +1703,7 @@ def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> No
             task["results_log_path"] = results_path
         task["work_phase"] = work_phase
         task["evidence"] = evidence
+        task["collecting_since"] = collecting_since or None
         if task_phase:
             task["phase"] = task_phase
 
@@ -7699,6 +7769,11 @@ def api_imex_reset_async():
     if err is not None:
         return err[0], err[1]
     assert prep is not None
+    # `_resolve_log_dir()` returns a **PurePosixPath** in ssh mode (the log dir lives on the head
+    # node), and PurePosixPath is NOT a subclass of Path — so `assert isinstance(log_dir, Path)`
+    # raised AssertionError -> HTTP 500 on EVERY call. This route has never worked in ssh mode.
+    # Same bug class as the log readers fixed earlier (see the comment at api_rack_log_content);
+    # this handler never got the memo. Accept either flavour.
     log_dir = prep["log_dir"]
     assert isinstance(log_dir, (Path, PurePosixPath))
     rack = str(prep["rack"])
@@ -12159,12 +12234,19 @@ def api_multirack_status():
         log_dir = _resolve_log_dir(request.args.get("log_dir"))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    payload = native_status.build_multirack_status(
-        log_dir,
-        _probe_log_json_via_rack_status,
-        multirack_display_rack_from_basename,
-        _multirack_physical_rack_ids,
-    )
+    # Always jsonify failures: an uncaught AttributeError (e.g. PurePosixPath.resolve in
+    # ssh/container mode) becomes Flask's HTML 500 page, and the SPA surfaces
+    # "Unexpected token '<!DOCTYPE' is not valid JSON" in Results & logs on disk.
+    try:
+        payload = native_status.build_multirack_status(
+            log_dir,
+            _probe_log_json_via_rack_status,
+            multirack_display_rack_from_basename,
+            _multirack_physical_rack_ids,
+        )
+    except Exception as e:
+        app.logger.exception("multirack-status failed for log_dir=%s", log_dir)
+        return jsonify({"ok": False, "error": f"multirack-status failed: {e}"}), 500
     return jsonify(payload)
 
 
