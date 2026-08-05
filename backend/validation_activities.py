@@ -442,6 +442,83 @@ def update_activity(activity_id: str, **fields: object) -> None:
         sync_tasks_from_stdout(aid, stdout, combined_nemo=combined)
 
 
+def _task_stage_kind(rec: dict[str, Any], task: dict[str, Any]) -> str | None:
+    """Classify a child task as ``nccl`` (stage 1) or ``nemo`` (stage 2)."""
+    label = str(task.get("label") or "").strip().lower()
+    if label in ("nccl", "stage1") or "nccl" in label:
+        return "nccl"
+    if label in ("nemo", "stage2", "llm") or "nemo" in label or "llm" in label:
+        return "nemo"
+    stage = str(rec.get("stage") or "").strip().lower()
+    if stage in ("stage1", "1", "s1"):
+        return "nccl"
+    if stage in ("stage2", "2", "s2"):
+        return "nemo"
+    tool = str(rec.get("tool") or "").strip().lower()
+    if tool in ("llmb-nccl", "nccl-fullrack"):
+        return "nccl"
+    if tool in ("singlerack", "llmb-nemo-combined", "nemo-xrack", "llama"):
+        return "nemo"
+    return None
+
+
+def live_stage_jobs_by_rack(*, limit: int = 200) -> dict[str, dict[str, str]]:
+    """Map rack → ``{\"nccl\": jid, \"nemo\": jid}`` for open activity tasks still in flight.
+
+    The status table's Stage pills / ``last_job`` historically only flipped to ongoing when the
+    newest on-disk ``*-1Rack-*`` artefact's job id was still in squeue. A newly launched Stage-1
+    run (new Slurm job) would stay painted ``fail`` with the prior job id until collect wrote a
+    new results log. Activities already track the live scheduler ref — expose it here so the
+    console can overlay that truth.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for rec in list_activities(limit=max(1, int(limit))):
+        if not isinstance(rec, dict):
+            continue
+        racks: list[str] = []
+        raw_racks = rec.get("racks")
+        if isinstance(raw_racks, list):
+            for r in raw_racks:
+                if isinstance(r, str) and r.strip():
+                    racks.append(r.strip())
+        if not racks:
+            rk = str(rec.get("rack") or "").strip()
+            if rk:
+                racks = [rk]
+        if not racks:
+            continue
+        act_wp = str(rec.get("work_phase") or "").strip().lower()
+        for task in rec.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            ref = str(task.get("scheduler_ref") or "").strip()
+            if not ref.isdigit():
+                continue
+            wp = str(task.get("work_phase") or "").strip().lower()
+            if wp and wp not in OPEN_WORK_PHASES:
+                continue
+            if not wp:
+                st = str(task.get("scheduler_state") or "").strip().upper().split("+")[0]
+                if st in ("COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY"):
+                    continue
+                # No task-level signal — require the activity itself to still be open.
+                if (
+                    st not in ("RUNNING", "PENDING", "COMPLETING", "CONFIGURING")
+                    and act_wp
+                    and act_wp not in OPEN_WORK_PHASES
+                ):
+                    continue
+            kind = _task_stage_kind(rec, task)
+            if not kind:
+                continue
+            for rack in racks:
+                bucket = out.setdefault(rack, {})
+                # list_activities is newest-first; keep the first jid per stage.
+                if kind not in bucket:
+                    bucket[kind] = ref
+    return out
+
+
 def rollup_work_phase(tasks: list[dict] | None) -> str:
     """Derive activity-level work_phase from child tasks (worst open state wins)."""
     if not tasks:

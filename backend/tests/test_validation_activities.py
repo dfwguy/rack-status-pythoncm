@@ -179,6 +179,47 @@ class TestLegacyMigration:
         assert activities_file.is_file()
 
 
+class TestLiveStageJobsByRack:
+    def test_maps_open_nccl_task_to_rack(self):
+        aid = va.record_activity(
+            "llmb-nccl",
+            stage="stage1",
+            scope="rack",
+            rack="ink50-dh01-i15",
+            racks=["ink50-dh01-i15"],
+            log_dir="/logs",
+        )
+        va.add_or_update_task(
+            aid,
+            ordinal=1,
+            label="nccl",
+            scheduler_ref="117122",
+            work_phase="running",
+            evidence="squeue",
+        )
+        live = va.live_stage_jobs_by_rack()
+        assert live.get("ink50-dh01-i15", {}).get("nccl") == "117122"
+
+    def test_ignores_terminal_work_phase(self):
+        aid = va.record_activity(
+            "llmb-nccl",
+            stage="stage1",
+            scope="rack",
+            rack="r01",
+            racks=["r01"],
+            log_dir="/logs",
+        )
+        va.add_or_update_task(
+            aid,
+            ordinal=1,
+            label="nccl",
+            scheduler_ref="1",
+            work_phase="failed",
+            evidence="sacct",
+        )
+        assert va.live_stage_jobs_by_rack() == {}
+
+
 class TestMultirackJobsShim:
     def test_record_job_and_list_jobs_scope(self):
         jid = va.record_job(

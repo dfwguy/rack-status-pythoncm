@@ -186,3 +186,49 @@ def test_per_stage_squeue_does_not_force_both_stages_ongoing(monkeypatch):
     assert summary["ongoing"] == 1
     assert summary["stage1"]["ongoing"] == 1
     assert summary["stage2"]["done"] == 1
+
+
+def test_live_activity_job_overrides_stale_fail_log(monkeypatch):
+    """A re-launched Stage-1 must paint ongoing even when the newest NCCL log is a prior fail."""
+    monkeypatch.setattr(
+        native_status,
+        "load_squeue_jobs_map",
+        lambda: ({"117122"}, {"117122": "00:10"}),
+    )
+    monkeypatch.setenv("RACK_SQUEUE_JOB_LOOKUP_DISABLED", "1")
+    monkeypatch.setattr(
+        "validation_activities.live_stage_jobs_by_rack",
+        lambda **_kw: {"r01": {"nccl": "117122"}},
+    )
+    st = NativeRackTableState("test", Path("/tmp"))
+    st.racks = ["r01"]
+    st.sinfo_counts = {("r01", "alloc"): 18}
+    st.by_rack_log = {
+        "r01": {
+            "nemo_state": "fail",
+            "nccl_ok": False,
+            "llm_ok": False,
+            "jid": 114307,
+            "_path": "cmods-NCCL-1Rack-r01-18N-114307.txt",
+        },
+    }
+    st.by_rack_stage_log = {
+        "r01": {
+            "nccl": {
+                "nemo_state": "fail",
+                "nccl_ok": False,
+                "llm_ok": False,
+                "jid": 114307,
+                "_path": "cmods-NCCL-1Rack-r01-18N-114307.txt",
+            },
+        }
+    }
+    st.ds_done = True
+    st.sinfo_done = True
+    st.log_done = True
+    rows, summary, _f, _l = st.build_table_rows()
+    assert rows[0]["stage1"] == "ongoing"
+    assert rows[0]["last_job"] == "117122"
+    assert rows[0]["nemo"].startswith("ongoing")
+    assert summary["ongoing"] == 1
+    assert summary["stage1"]["ongoing"] == 1

@@ -1390,6 +1390,15 @@ class NativeRackTableState:
 
     def build_table_rows(self) -> tuple[list[dict[str, str]], dict[str, Any], list[str], str]:
         running, job_times = load_squeue_jobs_map()
+        # Open validation activities carry the live scheduler ref for a just-launched stage,
+        # even when the newest on-disk *-1Rack-* artefact is still from a prior failed job.
+        try:
+            import validation_activities as _va
+
+            live_jobs = _va.live_stage_jobs_by_rack()
+        except Exception:  # noqa: BLE001 — the overlay is best-effort; the rack table must still
+            # render if the activities store is missing, locked or corrupt.
+            live_jobs = {}
         with self.lock:
             racks = list(self.racks)
             ct = dict(self.ct_by_rack)
@@ -1404,6 +1413,13 @@ class NativeRackTableState:
         stage1_summary = empty_stage_summary()
         stage2_summary = empty_stage_summary()
         want: set[str] = set()
+        for kinds in live_jobs.values():
+            if not isinstance(kinds, dict):
+                continue
+            for jid in kinds.values():
+                sj = str(jid or "").strip()
+                if sj.isdigit():
+                    want.add(sj)
         for rack in sorted(racks, key=_rack_sort_key):
             pr_full = by_rack.get(rack)
             if not pr_full:
@@ -1430,8 +1446,37 @@ class NativeRackTableState:
             # (switch / mgmt / networking) — keep it in the table/floor but exclude it
             # from the validation statistics so the counts reflect only compute racks.
             countable = not (sinfo_done and rack_total_sinfo_nodes(rack, sct) == 0)
+            live = live_jobs.get(rack) if isinstance(live_jobs.get(rack), dict) else {}
+            live_nccl = str((live or {}).get("nccl") or "").strip()
+            live_nemo = str((live or {}).get("nemo") or "").strip()
             pr_full = by_rack.get(rack)
             if not pr_full:
+                # No results log yet — still paint ongoing when an activity-tracked job is live.
+                nccl_live = bool(live_nccl and live_nccl in running)
+                nemo_live = bool(live_nemo and live_nemo in running)
+                if nccl_live or nemo_live:
+                    live_jid = live_nccl if nccl_live else live_nemo
+                    tm = job_times.get(live_jid, "?")
+                    nemo = f"ongoing [{tm}]"
+                    stage1 = "ongoing" if nccl_live else "pending"
+                    stage2 = "ongoing" if nemo_live else "pending"
+                    if countable:
+                        n_on += 1
+                        tally_stage(stage1_summary, stage1)
+                        tally_stage(stage2_summary, stage2)
+                    rows.append(
+                        {
+                            "rack": rack,
+                            "nemo": nemo,
+                            "stage1": stage1,
+                            "stage2": stage2,
+                            "last_job": live_jid,
+                            "sinfo": "?" if not sinfo_done else format_sinfo_cell(rack, sct),
+                            "ct_down_unk": "?" if not ds_done else ct.get(rack, "-"),
+                            "nemo_hint": validation_status_hint(nemo, live_jid),
+                        }
+                    )
+                    continue
                 if countable:
                     n_pending += 1
                     tally_stage(stage1_summary, "pending")
@@ -1492,6 +1537,13 @@ class NativeRackTableState:
                     nccl_jid = nemo_jid = jid_s
             nccl_in_slurm = bool(nccl_jid != "-" and nccl_jid in running)
             nemo_in_slurm = bool(nemo_jid != "-" and nemo_jid in running)
+            # Prefer activity-tracked live jobs over a stale results-log jid (re-launch case).
+            if live_nccl and live_nccl in running:
+                nccl_in_slurm = True
+                nccl_jid = live_nccl
+            if live_nemo and live_nemo in running:
+                nemo_in_slurm = True
+                nemo_jid = live_nemo
             in_slurm = nccl_in_slurm or nemo_in_slurm
             live_jid = nccl_jid if nccl_in_slurm else (nemo_jid if nemo_in_slurm else jid_s)
 
@@ -1557,18 +1609,16 @@ class NativeRackTableState:
             )
             stage1, stage2 = compute_stage_states(nemo, nc_b, ll_b, vt or None)
             # Override per-stage ongoing from that stage's own job id — a live Stage-1 NCCL
-            # must not force Stage-2 NeMo to "running" when its job is not queued.
+            # must not force Stage-2 NeMo to "running" when its job is not queued. When the
+            # rack-level cell is painted ongoing from one stage's live job, demote the other
+            # stage back to its probe verdict (fail/done/pending).
             if nccl_in_slurm:
                 stage1 = "ongoing"
-            elif stage1 == "ongoing" and not nccl_in_slurm and nc_b is True:
-                stage1 = "done"
-            elif stage1 == "ongoing" and not nccl_in_slurm and split_stage_logs:
+            elif stage1 == "ongoing" and not nccl_in_slurm:
                 stage1 = "done" if nc_b is True else ("fail" if nc_b is False else "pending")
             if nemo_in_slurm:
                 stage2 = "ongoing"
-            elif stage2 == "ongoing" and not nemo_in_slurm and ll_b is True:
-                stage2 = "done"
-            elif stage2 == "ongoing" and not nemo_in_slurm and split_stage_logs:
+            elif stage2 == "ongoing" and not nemo_in_slurm:
                 stage2 = "done" if ll_b is True else ("fail" if ll_b is False else "pending")
             if countable:
                 tally_stage(stage1_summary, stage1)
