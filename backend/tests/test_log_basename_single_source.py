@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
 """Log-basename classification must have exactly one implementation.
 
@@ -24,10 +23,10 @@ os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
-import app as app_module  # noqa: E402
-import native_status  # noqa: E402
-import nvis_id_templates as nid  # noqa: E402
-import validation_activities  # noqa: E402
+import app as app_module
+import native_status
+import nvis_id_templates as nid
+import validation_activities
 
 BACKEND = Path(__file__).resolve().parent.parent
 
@@ -164,7 +163,7 @@ def test_wrapper_carries_no_classification_logic(module, func):
     module's wrapper and the other view keeps the old behaviour.
     """
     body = (BACKEND / module).read_text(encoding="utf-8")
-    m = re.search(rf"^def {re.escape(func)}\(.*?\n(?=^\S)", body, re.S | re.M)
+    m = re.search(rf"^def {re.escape(func)}\(.*?\n(?=^\S)", body, re.DOTALL | re.MULTILINE)
     assert m, f"{func} not found in {module}"
     src = m.group(0)
     assert "nvis_id_templates." in src or "_nvis_ids." in src, (

@@ -19,6 +19,8 @@ omitted (stray ``pN-r0`` tokens); set ``RACK_CMSH_INCLUDE_R00=1`` if rack 0 exis
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -42,6 +44,10 @@ _NATIVE_LOG_JSON = _REPO_ROOT / "var" / "cache" / "native_log_analysis.json"
 
 # Bump when the per-log probe/parse LOGIC changes (e.g. nccl_parse.inc.sh dialect handling) so stale
 # entries keyed only on log mtime/size are discarded on load instead of serving an outdated PASS/FAIL.
+#
+# Deliberately shared by BOTH the single-rack and multirack caches below: they are produced by the
+# same probe path, so a logic change invalidates both. Giving them separate counters would let one
+# keep serving verdicts from superseded parse logic.
 _NATIVE_LOG_CACHE_VERSION = 2
 
 
@@ -1100,11 +1106,16 @@ def _last_job_for_log_row(basename: str, probe: dict[str, Any]) -> str:
     return jfb if jfb else "-"
 
 
-def _load_disk_log_cache() -> dict[str, Any]:
-    if not _NATIVE_LOG_JSON.is_file():
+def _load_log_cache(path: Path) -> dict[str, Any]:
+    """Probe entries from *path*, or ``{}`` if absent, unreadable or written by older logic.
+
+    No lock: writers publish with ``os.replace``, so a reader sees either the whole old file or
+    the whole new one.
+    """
+    if not path.is_file():
         return {}
     try:
-        with open(_NATIVE_LOG_JSON, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             raw = json.load(f)
     except (OSError, json.JSONDecodeError, TypeError):
         return {}
@@ -1116,36 +1127,62 @@ def _load_disk_log_cache() -> dict[str, Any]:
     return ent if isinstance(ent, dict) else {}
 
 
-def _save_disk_log_cache(entries: dict[str, Any]) -> None:
-    _NATIVE_LOG_JSON.parent.mkdir(parents=True, exist_ok=True)
-    blob = json.dumps({"version": _NATIVE_LOG_CACHE_VERSION, "entries": entries}, indent=2, sort_keys=True) + "\n"
-    tmp = _NATIVE_LOG_JSON.with_name(_NATIVE_LOG_JSON.name + ".tmp")
-    tmp.write_text(blob, encoding="utf-8")
-    os.replace(str(tmp), str(_NATIVE_LOG_JSON))
+@contextlib.contextmanager
+def _log_cache_write_lock(path: Path):
+    """Serialize the read-merge-write in :func:`_save_log_cache` across Gunicorn workers.
 
-
-def _load_multirack_disk_cache() -> dict[str, Any]:
-    if not _MULTIRACK_LOG_JSON.is_file():
-        return {}
+    The lock is a sidecar file, not the cache itself: the cache is published with ``os.replace``,
+    which swaps in a new inode, so a lock held on the cache file would guard an inode the next
+    writer no longer opens. Best-effort -- if the lock cannot be taken the save still proceeds,
+    since losing a cache entry only costs a re-probe.
+    """
+    lock_path = path.with_name(path.name + ".lock")
+    f = None
+    # Acquisition is kept separate from the body so that a read-only var/ (no lock file) falls
+    # through to an unlocked save instead of skipping the save, and so a failure raised by the
+    # body is never mistaken for a failure to lock.
     try:
-        with open(_MULTIRACK_LOG_JSON, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, json.JSONDecodeError, TypeError):
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-    if raw.get("version") != _NATIVE_LOG_CACHE_VERSION:
-        return {}
-    ent = raw.get("entries")
-    return ent if isinstance(ent, dict) else {}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        f = open(lock_path, "a+", encoding="utf-8")  # noqa: SIM115 - released in finally below
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX)
+        except OSError:
+            pass
+    except OSError:
+        f = None
+    try:
+        yield
+    finally:
+        if f is not None:
+            try:
+                fcntl.flock(f, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            f.close()
 
 
-def _save_multirack_disk_cache(entries: dict[str, Any]) -> None:
-    _MULTIRACK_LOG_JSON.parent.mkdir(parents=True, exist_ok=True)
-    blob = json.dumps({"version": _NATIVE_LOG_CACHE_VERSION, "entries": entries}, indent=2, sort_keys=True) + "\n"
-    tmp = _MULTIRACK_LOG_JSON.with_name(_MULTIRACK_LOG_JSON.name + ".tmp")
-    tmp.write_text(blob, encoding="utf-8")
-    os.replace(str(tmp), str(_MULTIRACK_LOG_JSON))
+def _save_log_cache(path: Path, local: dict[str, Any], alive: set[str]) -> None:
+    """Merge *local* into the cache at *path* and prune entries whose log is gone.
+
+    Re-reads under an exclusive lock instead of writing the snapshot this worker loaded minutes
+    ago. Two workers probing concurrently both take ~a minute of remote commands; with a
+    last-writer-wins save, whichever finished second erased the other's fresh entries and those
+    logs were re-probed on the very next cycle. The probe itself stays outside the lock -- only
+    the merge is serialized, so concurrent probing is still parallel.
+
+    *alive* is the set of paths this worker just scanned; entries outside it are dropped so the
+    cache does not grow forever as logs are deleted.
+    """
+    with _log_cache_write_lock(path):
+        merged = dict(_load_log_cache(path))
+        merged.update(local)
+        if alive:
+            merged = {k: v for k, v in merged.items() if k in alive}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        blob = json.dumps({"version": _NATIVE_LOG_CACHE_VERSION, "entries": merged}, indent=2, sort_keys=True) + "\n"
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(blob, encoding="utf-8")
+        os.replace(str(tmp), str(path))
 
 
 def _multirack_node_count_suffix_from_basename(name: str) -> str:
@@ -1274,7 +1311,7 @@ class NativeRackTableState:
 
     def _worker_logs(self, probe_fn: Callable[[Path], dict[str, object] | None]) -> None:
         try:
-            disk = _load_disk_log_cache()
+            disk = _load_log_cache(_NATIVE_LOG_JSON)
             entries = _glob_one_rack_logs(self.log_dir)
             alive: set[str] = set()
             dirty = False
@@ -1317,12 +1354,8 @@ class NativeRackTableState:
                                 replace_k = m_this >= float(prev_k.get("_mtime") or 0.0)
                             if replace_k:
                                 bucket[kind] = {**rec_d, "_path": str(p), "_mtime": m_this}
-            pruned = {k: v for k, v in disk.items() if k in alive}
-            if len(pruned) != len(disk):
-                dirty = True
-            disk = pruned
-            if dirty:
-                _save_disk_log_cache(disk)
+            if dirty or any(k not in alive for k in disk):
+                _save_log_cache(_NATIVE_LOG_JSON, disk, alive)
         except Exception as e:
             with self.lock:
                 self.last_errors.append(f"logs: {e}")
@@ -1767,7 +1800,7 @@ class MultirackTableState:
         paths: list[tuple[Path, int, int]],
     ) -> None:
         try:
-            disk = _load_multirack_disk_cache()
+            disk = _load_log_cache(_MULTIRACK_LOG_JSON)
             alive: set[str] = set()
             dirty = False
             for p, mtime_ns, size in paths:
@@ -1803,12 +1836,8 @@ class MultirackTableState:
                 rec_d = rec if isinstance(rec, dict) else {}
                 with self.lock:
                     self.per_path_probe[keyp] = rec_d
-            pruned = {k: v for k, v in disk.items() if k in alive}
-            if len(pruned) != len(disk):
-                dirty = True
-            disk = pruned
-            if dirty:
-                _save_multirack_disk_cache(disk)
+            if dirty or any(k not in alive for k in disk):
+                _save_log_cache(_MULTIRACK_LOG_JSON, disk, alive)
         except Exception as e:
             with self.lock:
                 self.last_errors.append(f"multirack logs: {e}")

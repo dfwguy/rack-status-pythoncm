@@ -90,6 +90,8 @@ source "${_SCRIPT_DIR}/lib/nodes.inc.sh"
 source "${_SCRIPT_DIR}/lib/fabric.inc.sh"
 # shellcheck disable=SC1091
 source "${_SCRIPT_DIR}/lib/sbatch_pin.inc.sh"
+# shellcheck disable=SC1091
+source "${_SCRIPT_DIR}/lib/llmb_autocollect.inc.sh"
 command -v sinfo >/dev/null 2>&1 || die "sinfo not on PATH (Slurm CLI required)"
 
 # --- Resolve nodes + scale ------------------------------------------------------
@@ -283,37 +285,14 @@ _llmb_out="$(mktemp 2>/dev/null || echo /tmp/nvis_llmb_$$.out)"
 "${cmd[@]}" 2>&1 | tee "${_llmb_out}"
 _rc="${PIPESTATUS[0]}"
 
-if [[ "${DRY_RUN}" -eq 0 && "${NVIS_LLMB_AUTOCOLLECT:-1}" == "1" ]]; then
-  _jid="$(grep -oE 'jobid=[0-9]+' "${_llmb_out}" 2>/dev/null | head -1 | cut -d= -f2)"
-  if [[ -n "${_jid}" ]]; then
-    _collect="$(dirname "${BASH_SOURCE[0]}")/collect_llmb_nccl_log.sh"
-    # Gate on READABLE, not executable: the watcher below invokes it as `bash "$collect"`, which
-    # does not need the execute bit, so -x tested a permission the invocation never uses. The file
-    # is tracked 100644 in git, so every deployed copy lands non-executable and -x could never
-    # pass -- silently disabling auto-collect on every run. A run with no aggregated log is
-    # indistinguishable from a run that never happened.
-    if [[ -r "${_collect}" ]]; then
-      echo "run_llmb_nccl: auto-collect armed for job ${_jid} -> ${_collect}"
-      _squeue="${RACK_SLURM_SQUEUE:-$(command -v squeue || echo /cm/local/apps/slurm/current/bin/squeue)}"
-      setsid nohup bash -c '
-        jid="$1"; collect="$2"; squeue="$3"; logdir="$4"; llmb="$5"
-        export RACK_JOB_LOG_DIR="$logdir" LLMB_INSTALL="$llmb"
-        # Wait for the job to leave the queue (cap ~8h so a hung watcher cannot linger forever).
-        for _ in $(seq 1 2880); do
-          "$squeue" -h -j "$jid" -o %i 2>/dev/null | grep -q . || break
-          sleep 10
-        done
-        sleep 15   # let the last ranks flush their stdout
-        bash "$collect" "$jid"
-      ' _ "${_jid}" "${_collect}" "${_squeue}" "${JOB_LOG_DIR}" "${LLMB_INSTALL}" \
-        >> "${JOB_LOG_DIR%/}/llmb-autocollect_${_jid}.log" 2>&1 < /dev/null &
-    else
-      echo "run_llmb_nccl: WARNING: collect_llmb_nccl_log.sh not found or unreadable at ${_collect};" \
-           "results will not appear in the dashboard until it is run manually" >&2
-    fi
-  else
-    echo "run_llmb_nccl: WARNING: could not parse jobid from llmb-run output; auto-collect skipped" >&2
-  fi
+if [[ "${DRY_RUN}" -eq 0 ]]; then
+  llmb_arm_autocollect \
+    "run_llmb_nccl" \
+    "$(dirname "${BASH_SOURCE[0]}")/collect_llmb_nccl_log.sh" \
+    "${_llmb_out}" \
+    "${JOB_LOG_DIR}" \
+    "${LLMB_INSTALL}" \
+    "llmb-autocollect" || true
 fi
 
 rm -f "${_llmb_out}" 2>/dev/null || true

@@ -102,6 +102,8 @@ source "${_SCRIPT_DIR}/lib/nodes.inc.sh"
 source "${_SCRIPT_DIR}/lib/fabric.inc.sh"
 # shellcheck disable=SC1091
 source "${_SCRIPT_DIR}/lib/sbatch_pin.inc.sh"
+# shellcheck disable=SC1091
+source "${_SCRIPT_DIR}/lib/llmb_autocollect.inc.sh"
 command -v sinfo >/dev/null 2>&1 || die "sinfo not on PATH (Slurm CLI required)"
 
 # --- Resolve nodes + scale ------------------------------------------------------
@@ -242,36 +244,16 @@ _rc="${PIPESTATUS[0]}"
 # never sees. Without this the canonical log holds ~6 KB of shell trace and zero
 # iterations, and the dashboard reports a successful run as "not run" (jobs 84733-84736).
 # Disable with NVIS_LLMB_AUTOCOLLECT=0.
-if [[ "${DRY_RUN}" -eq 0 && "${NVIS_LLMB_AUTOCOLLECT:-1}" == "1" ]]; then
-  _jid="$(grep -oE 'jobid=[0-9]+' "${_out}" 2>/dev/null | head -1 | cut -d= -f2)"
-  _collect="${_SCRIPT_DIR}/collect_llmb_nemo_log.sh"
-  # Gate on READABLE, not executable — the same trap run_llmb_nccl.sh already fixed. The
-  # watcher runs it as `bash "$collect"`, which needs no execute bit, and the deployed copy
-  # on the head node is mode 644 (a base64/cat deploy does not carry the mode), so -x could
-  # never pass there. Job 127327 completed 50/50 iterations and the dashboard showed
-  # "Stage 2 - NeMo: fail", because the canonical log kept only the shell trace.
-  if [[ -n "${_jid}" && -r "${_collect}" ]]; then
-    echo "run_llmb_nemo: auto-collect armed for job ${_jid}"
-    _squeue="${RACK_SLURM_SQUEUE:-$(command -v squeue || echo /cm/local/apps/slurm/current/bin/squeue)}"
-    setsid nohup bash -c '
-      jid="$1"; collect="$2"; squeue="$3"; logdir="$4"; llmb="$5"; rack="$6"
-      export RACK_JOB_LOG_DIR="$logdir" LLMB_INSTALL="$llmb"
-      for _ in $(seq 1 2880); do
-        "$squeue" -h -j "$jid" -o %i 2>/dev/null | grep -q . || break
-        sleep 10
-      done
-      sleep 15
-      bash "$collect" "$jid" "$rack"
-    ' _ "${_jid}" "${_collect}" "${_squeue}" "${JOB_LOG_DIR}" "${LLMB_INSTALL}" "${RACK_ID}" \
-      >> "${JOB_LOG_DIR%/}/llmb-nemo-autocollect_${_jid}.log" 2>&1 < /dev/null &
-  elif [[ -z "${_jid}" ]]; then
-    echo "run_llmb_nemo: WARNING: could not parse jobid; auto-collect skipped" >&2
-  else
-    # Never skip silently: a run with no aggregated log is indistinguishable from a run
-    # that never happened, and that is how a passing rack gets reported as failed.
-    echo "run_llmb_nemo: WARNING: collect_llmb_nemo_log.sh not found or unreadable at ${_collect};" \
-         "job ${_jid} will show as failed until it is run manually" >&2
-  fi
+if [[ "${DRY_RUN}" -eq 0 ]]; then
+  # The rack id is an extra collector arg: the NeMo collector needs it to name the aggregated log.
+  llmb_arm_autocollect \
+    "run_llmb_nemo" \
+    "${_SCRIPT_DIR}/collect_llmb_nemo_log.sh" \
+    "${_out}" \
+    "${JOB_LOG_DIR}" \
+    "${LLMB_INSTALL}" \
+    "llmb-nemo-autocollect" \
+    "${RACK_ID}" || true
 fi
 
 rm -f "${_out}" 2>/dev/null || true

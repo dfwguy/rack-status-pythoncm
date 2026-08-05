@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
 """The NeMo/LLM verdict must be one rule, not one per surface.
 

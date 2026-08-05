@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
 """Rack id and job id from a log basename must be one mapping, not one per script.
 
