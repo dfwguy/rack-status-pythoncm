@@ -2935,51 +2935,25 @@ def _parser_export_glob() -> str:
     return raw
 
 
+# Log-basename classification lives in nvis_id_templates so this module, native_status and
+# the shell probes cannot drift apart on which table a log belongs to. These wrappers exist
+# only to bind the caller's NvisNaming instance; keep them free of logic.
+
+
 def _nemo_nccl_in_log_basename(name: str) -> bool:
-    """Logs with NEMO or NCCL in the basename (multirack tab, exports, legacy shell table)."""
-    low = name.lower()
-    if "nemo" in low or "nccl" in low:
-        return True
-    return _nvis_naming().auxiliary_single_rack_log_basename(name)
+    return nvis_id_templates.nemo_nccl_in_log_basename(name, _nvis_naming())
 
 
 def _nemo_single_rack_log_basename(name: str) -> bool:
-    """Single-rack NEMO validation logs for the dashboard table / Open Log (not NCCL-only sweeps).
-
-    Also accepts standalone single-rack NCCL benchmark logs (``…-NCCL-1Rack-<rack>-…``); the
-    ``1rack`` marker excludes multirack NCCL sweeps (N-rack / comma naming).
-    """
-    low = name.lower()
-    if "nemo" in low or "1rack" in low:
-        return True
-    return _nvis_naming().auxiliary_single_rack_log_basename(name)
-
-
-_MULTIRACK_N_RACK_RE = re.compile(r"(?:[2-9]|[1-9]\d{1,3})rack", re.IGNORECASE)
+    return nvis_id_templates.nemo_single_rack_log_basename(name, _nvis_naming())
 
 
 def _jobid_from_nemo_log_basename(name: str) -> str | None:
-    """Slurm job id from NEMO/NCCL/LLAMA log basenames (aligned with ``rack_status.sh`` ``jobid_from_fname``)."""
-    m = re.search(r"NEMO-LLAMA3_8B-1N-.+-(\d+)\.txt$", name, re.IGNORECASE)
-    if m:
-        return m.group(1)
-    m2 = re.search(r"N-(\d+)\.txt$", name, re.IGNORECASE)
-    return m2.group(1) if m2 else None
+    return nvis_id_templates.job_id_from_log_basename(name)
 
 
 def _is_multirack_log_basename(name: str) -> bool:
-    """True for multi-rack NEMO/NCCL logs (excluded from rack_status single-rack table; listed in multirack tab)."""
-    if not _nemo_nccl_in_log_basename(name):
-        return False
-    if _MULTIRACK_N_RACK_RE.search(name):
-        return True
-    low = name.lower()
-    # run-nemo-xrack.sh: root-NEMO-p5-r[…]-ct[…],p5-r[…]-ct[…]-<n>N-<jid>.txt
-    if (low.startswith("root-nemo-") or low.startswith("root-nccl-")) and _nvis_naming().multirack_comma_after_rack_re().search(
-        low
-    ):
-        return True
-    return len(_nvis_naming().find_rack_ids_in_string(name)) >= 2
+    return nvis_id_templates.is_multirack_log_basename(name, _nvis_naming())
 
 
 def _multirack_site_prefix() -> str:
@@ -3014,14 +2988,7 @@ def _expand_r_inner_to_rack_nums(inner: str) -> list[int]:
 
 
 def _multirack_node_count_suffix(name: str) -> str:
-    """Return `` (36N)`` when basename contains ``-36N-`` / ``-36N.`` style node count."""
-    m = re.search(r"-(\d+)N-\d", name, re.IGNORECASE)
-    if m:
-        return f" ({m.group(1)}N)"
-    m2 = re.search(r"-(\d+)N\.txt$", name, re.IGNORECASE)
-    if m2:
-        return f" ({m2.group(1)}N)"
-    return ""
+    return nvis_id_templates.node_count_suffix_from_basename(name)
 
 
 def multirack_display_rack_from_basename(name: str) -> str:
@@ -11135,9 +11102,9 @@ def _step_series_cv_pct(row: dict) -> float | None:
 
 
 def _multirack_rack_count_from_basename(name: str) -> int:
-    m = _MULTIRACK_N_RACK_RE.search(name)
-    if m:
-        tok = m.group(0).lower()
+    tok = nvis_id_templates.multirack_n_rack_marker(name)
+    if tok:
+        tok = tok.lower()
         if tok.endswith("rack"):
             try:
                 return max(1, int(tok[:-4], 10))

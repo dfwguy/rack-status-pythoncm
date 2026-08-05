@@ -43,3 +43,27 @@ os.environ["RACK_AI_SETTINGS_FILE"] = os.path.join(
 import nvftp_cache_sync  # noqa: E402
 
 nvftp_cache_sync._background_loop = lambda: None
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_naming_caches():
+    """Drop the naming / job-env caches around every test.
+
+    ``native_status`` resolves ``NVIS_RACK_ID`` through its own mtime-keyed subset of
+    ``job_env_overrides.json`` and feeds it to an ``lru_cache``'d ``get_nvis_naming()``. Both
+    outlive a test, so a module that monkeypatches the templates could read a naming instance
+    another module had already warmed -- the same "failure that moved between tests from run to
+    run" this file documents above, seen on ``test_extract_rack_ids_from_cmsh_text_cbr_rk_lines``
+    and the catalog context tests.
+
+    ``invalidate_job_env_file_cache()`` is the module's own documented reset hook (it clears the
+    subset, the ds regex and the naming cache), so this weakens no assertion -- it only stops one
+    test's naming state from leaking into the next.
+    """
+    import native_status
+
+    native_status.invalidate_job_env_file_cache()
+    yield
+    native_status.invalidate_job_env_file_cache()

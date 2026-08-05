@@ -46,7 +46,7 @@ else
   C_RESET='' C_BOLD='' C_DIM='' C_H1='' C_H2='' C_OK='' C_FAIL='' C_WARN='' C_UNK='' C_NOTE='' C_SEP='' C_PENDING=''
 fi
 
-perf=5000
+# `perf` (the MFU denominator) is owned by lib/llm_label.inc.sh, sourced below.
 USE_SQUEUE=1
 USE_CMSH=1
 USE_SINFO=1
@@ -272,53 +272,10 @@ render_tsv_box() {
   '
 }
 
-rack_from_fname() {
-  # NEMO 1Rack: rack id from basename. Llama Slurm stdout: …-NEMO-LLAMA3_8B-1N-<ct-hostname>-<jid>.txt → use CT host (not rack).
-  local b _save
-  b=$(basename "$1")
-  if [[ "$b" =~ 1Rack-(p[0-9]+-r[0-9]+)(\[|-) ]]; then
-    echo "${BASH_REMATCH[1]}"
-    return
-  fi
-  if [[ "$b" =~ 1Rack-(CBR[0-9]{2}-DH[0-9]{2}-SVR-CN[0-9]{4})(\[|-) ]]; then
-    echo "${BASH_REMATCH[1]}"
-    return
-  fi
-  _save=$(shopt -p nocasematch 2>/dev/null || printf 'shopt -u nocasematch\n')
-  shopt -s nocasematch 2>/dev/null || true
-  if [[ "$b" =~ NEMO-LLAMA3_8B-1N-(.+)-([0-9]+)\.txt$ ]]; then
-    echo "${BASH_REMATCH[1]}"
-    eval "$_save"
-    return
-  fi
-  eval "$_save"
-  # Generic site fallback. The branches above only know Bright (p05-r01) and CBR naming, so on a
-  # site like NscaleTX (ink50-dh01-h22) EVERY log — NEMO, NCCL, MNUBERGEMM alike — fell through to
-  # "?" and lost its rack attribution. Match <word>-<word>-<letter><digits>. Override per site with
-  # NVIS_RACK_FNAME_RE (must contain exactly one capture group).
-  if [[ "$b" =~ ${NVIS_RACK_FNAME_RE:-([a-z0-9]+-[a-z0-9]+-[a-z][0-9]+)} ]]; then
-    echo "${BASH_REMATCH[1]}"
-    return
-  fi
-  echo "?"
-}
-
-jobid_from_fname() {
-  # ...-18N-212.txt -> 212 ; LLAMA: ...-ct05-212.txt -> 212 ; generic: ...-<jobid>.txt -> jobid
-  local b
-  b=$(basename "$1")
-  if [[ "$b" =~ NEMO-LLAMA3_8B-1N-.+-([0-9]+)\.txt$ ]]; then
-    echo "${BASH_REMATCH[1]}"
-    return
-  fi
-  if [[ "$b" =~ N-([0-9]+)\.txt$ ]]; then
-    echo "${BASH_REMATCH[1]}"
-    return
-  fi
-  # Generic trailing job id (MNUBERGEMM, nvbandwidth, …-<jobid>.txt) — the N- form above is a
-  # NEMO-ism (…-18N-212.txt) and does not appear in other tools' filenames.
-  [[ "$b" =~ -([0-9]+)\.txt$ ]] && echo "${BASH_REMATCH[1]}" || echo "?"
-}
+# rack_from_fname / rack_or_llama_host_from_fname / jobid_from_fname come from
+# lib/rack_fname.inc.sh (sourced below), shared with rack_status.sh. This file's tables key a
+# Llama log by NODE, so the per-file loop calls rack_or_llama_host_from_fname; that difference
+# is now an explicit choice rather than two copies that quietly disagreed.
 
 mnubergemm_stats_tsv() {
   # MNUBERGEMM soak output. Per-rank lines look like:
@@ -349,74 +306,19 @@ mnubergemm_stats_tsv() {
 # (sourced below, next to validation_test_env.sh) so a parsing fix lands in both the parser and
 # the dashboard at once.
 
-slurm_hard_fail() {
-  grep -E -q 'srun:.*error:.*Exited|error:.*SIGNAL' "$1" 2>/dev/null
-}
-
-# Prints: step_s tflops sstd pstd mfu  (tab-separated) or empty line if no valid window.
-llm_stats_tsv() {
-  local f=$1
-  if grep -q 'Step Time.*MODEL_TFLOP/s/GPU' "$f"; then
-    grep -o 'Step Time.*MODEL_TFLOP/s/GPU' "$f" 2>/dev/null | sed -e 's:s GPU: s GPU:g' -e 's:MODEL_TFLOP: MODEL_TFLOP:g' \
-      | awk -v min_iter=70 -v max_iter=90 -v perf="$perf" '
-BEGIN { ct = 0; ts = 0; ps = 0 }
-(min_iter <= NR && NR < max_iter) { ct++; tv[ct] = $4; ts += $4; pv[ct] = $8; ps += $8 }
-END {
-  if (ct < 1) exit 1
-  t_mean = ts / ct
-  t_var = 0
-  for (i = 1; i <= ct; i++) t_var += (tv[i] - t_mean) ^ 2
-  t_std = (ct > 1 ? sqrt(t_var / (ct - 1)) : 0)
-  p_mean = ps / ct
-  p_var = 0
-  for (i = 1; i <= ct; i++) p_var += (pv[i] - p_mean) ^ 2
-  p_std = (ct > 1 ? sqrt(p_var / (ct - 1)) : 0)
-  mfu = ps / ct / perf * 100
-  printf "%.2f\t%.2f\t%.5f\t%.5f\t%.1f\n", ts / ct, ps / ct, t_std, p_std, mfu
-}'
-    return 0
-  fi
-  if grep -q 'train_step_timing.*consumed_samples' "$f"; then
-    grep -o 'train_step_timing.*consumed_samples' "$f" 2>/dev/null | tr '|' ' ' \
-      | awk -v min_iter=70 -v max_iter=90 -v perf="$perf" '
-BEGIN { ct = 0; ts = 0; ps = 0 }
-(min_iter <= NR && NR < max_iter) { ct++; tv[ct] = $4; ts += $4; pv[ct] = $6; ps += $6 }
-END {
-  if (ct < 1) exit 1
-  t_mean = ts / ct
-  t_var = 0
-  for (i = 1; i <= ct; i++) t_var += (tv[i] - t_mean) ^ 2
-  t_std = (ct > 1 ? sqrt(t_var / (ct - 1)) : 0)
-  p_mean = ps / ct
-  p_var = 0
-  for (i = 1; i <= ct; i++) p_var += (pv[i] - p_mean) ^ 2
-  p_std = (ct > 1 ? sqrt(p_var / (ct - 1)) : 0)
-  mfu = ps / ct / perf * 100
-  printf "%.2f\t%.2f\t%.5f\t%.5f\t%.1f\n", ts / ct, ps / ct, t_std, p_std, mfu
-}'
-    return 0
-  fi
-  return 1
-}
-
-llm_label() {
-  local f=$1 stats
-  if stats=$(llm_stats_tsv "$f" 2>/dev/null) && [[ -n "$stats" ]]; then
-    awk -v OFS='\t' '{ printf "OK\t%s\t%s\t%s\t%s\t%s\n", $1, $2, $3, $4, $5 }' <<<"$stats"
-    return
-  fi
-  if slurm_hard_fail "$f"; then
-    printf 'FAIL\t-\t-\t-\t-\t-\n'
-    return
-  fi
-  printf 'UNK\t-\t-\t-\t-\t-\n'
-}
+# The LLM verdict (llm_label / llm_stats_tsv / slurm_hard_fail / nemo_training_finished_log /
+# nemo_python_fatal_fail) is shared with rack_status.sh via lib/llm_label.inc.sh. It used to be a
+# local copy here that had drifted: it checked only stats then slurm_hard_fail, so a run that
+# reached its declared target without a step-timing window read UNK here while the dashboard read
+# pass, and an OOM/traceback read UNK instead of FAIL. Do not re-inline it.
 
 _PARSER_SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Source the shared includes, but never die if a partial deploy left one behind: without these the
 # script used to abort with "command not found" for every file. Degrade to abstaining stubs so the
 # inventory ("results") still comes out and nothing is silently dropped.
-for _inc in validation_test_env.sh nccl_parse.inc.sh; do
+# llm_label.inc.sh comes first: validation_test_env.sh only defines a fallback
+# nemo_training_finished_log when one is not already present.
+for _inc in lib/llm_label.inc.sh lib/rack_fname.inc.sh validation_test_env.sh nccl_parse.inc.sh; do
   if [[ -r "${_PARSER_SCRIPTS_DIR}/${_inc}" ]]; then
     # shellcheck source=/dev/null
     source "${_PARSER_SCRIPTS_DIR}/${_inc}" || echo "$0: failed to source ${_inc}" >&2
@@ -427,6 +329,13 @@ done
 unset _inc
 declare -F nccl_busbw_csv >/dev/null 2>&1 || nccl_busbw_csv() { echo ",,"; }
 declare -F nccl_oob_csv >/dev/null 2>&1 || nccl_oob_csv() { :; }
+# Abstaining stubs when llm_label.inc.sh is missing: UNK, never a guessed verdict.
+declare -F llm_stats_tsv >/dev/null 2>&1 || llm_stats_tsv() { return 1; }
+declare -F slurm_hard_fail >/dev/null 2>&1 || slurm_hard_fail() { return 1; }
+declare -F llm_label >/dev/null 2>&1 || llm_label() { printf 'UNK\t-\t-\t-\t-\t-\n'; }
+declare -F rack_from_fname >/dev/null 2>&1 || rack_from_fname() { printf '?\n'; }
+declare -F jobid_from_fname >/dev/null 2>&1 || jobid_from_fname() { printf '?\n'; }
+declare -F rack_or_llama_host_from_fname >/dev/null 2>&1 || rack_or_llama_host_from_fname() { rack_from_fname "$1"; }
 declare -F nccl_allreduce_series_append >/dev/null 2>&1 || nccl_allreduce_series_append() { :; }
 declare -F validation_eval_suite_for_file >/dev/null 2>&1 || validation_eval_suite_for_file() {
   _OUT_NCCL_OK=0
@@ -686,7 +595,7 @@ for _i in "${!log_files[@]}"; do
   f="${log_files[$_i]}"
   src="${IN_SRC[$_i]:-explicit}"
   [[ -f "$f" ]] || { echo "${C_WARN}skip (not a file):${C_RESET} $f" >&2; continue; }
-  rack=$(rack_from_fname "$f")
+  rack=$(rack_or_llama_host_from_fname "$f")
   jid=$(jobid_from_fname "$f")
   base=$(basename -- "$f")
   fdir=$(dirname -- "$f")

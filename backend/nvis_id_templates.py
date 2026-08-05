@@ -313,6 +313,119 @@ def is_known_tool_log_basename(name: str) -> bool:
     return any(m in low for m in markers)
 
 
+# ---------------------------------------------------------------------------
+# Log-basename classification (single source of truth)
+#
+# app.py and native_status.py each used to carry their own copy of these four
+# predicates plus a verbatim duplicate of ``_MULTIRACK_N_RACK_RE``. They classify
+# which table a log belongs to, so a drifted copy shows a rack in one view and not
+# the other. They live here because this module already owns the naming templates
+# these predicates depend on.
+#
+# ``naming`` is a parameter rather than a module lookup because callers do not share
+# one instance: native_status builds its NvisNaming from its own job-env-override
+# subset, app.py from the process env. Passing it keeps each caller's behaviour exact.
+# ---------------------------------------------------------------------------
+
+
+def nemo_nccl_in_log_basename(name: str, naming: NvisNaming | None = None) -> bool:
+    """Logs with NEMO or NCCL in the basename (multirack tab, exports, legacy shell table)."""
+    low = (name or "").lower()
+    if "nemo" in low or "nccl" in low:
+        return True
+    return (naming or get_nvis_naming()).auxiliary_single_rack_log_basename(name)
+
+
+def nemo_single_rack_log_basename(name: str, naming: NvisNaming | None = None) -> bool:
+    """Single-rack validation logs for the dashboard table / Open Log.
+
+    Also accepts standalone single-rack NCCL benchmark logs (``…-NCCL-1Rack-<rack>-…``); the
+    ``1rack`` marker is what excludes multirack NCCL sweeps (N-rack / comma naming).
+    """
+    low = (name or "").lower()
+    if "nemo" in low or "1rack" in low:
+        return True
+    return (naming or get_nvis_naming()).auxiliary_single_rack_log_basename(name)
+
+
+def stage_kind_of_log_basename(name: str) -> str | None:
+    """Which validation stage a single-rack log carries evidence for: ``nccl`` | ``nemo`` | None.
+
+    Stage 1 (NCCL) and stage 2 (NeMo) are separate Slurm jobs and therefore land in separate
+    logs. Each stage must be judged from the newest log of ITS OWN kind, otherwise whichever
+    job finished last decides both stages and the other one reads as a failure.
+    """
+    low = (name or "").lower()
+    if "-nccl-1rack-" in low:
+        return "nccl"
+    if "-nemo-1rack-" in low:
+        return "nemo"
+    return None
+
+
+def is_multirack_log_basename(name: str, naming: NvisNaming | None = None) -> bool:
+    """True for multi-rack logs: excluded from the single-rack table, listed in the multirack tab."""
+    n = naming or get_nvis_naming()
+    if not nemo_nccl_in_log_basename(name, n):
+        return False
+    if _MULTIRACK_N_RACK_RE.search(name or ""):
+        return True
+    low = (name or "").lower()
+    # run-nemo-xrack.sh: root-NEMO-p5-r[…]-ct[…],p5-r[…]-ct[…]-<n>N-<jid>.txt
+    if (low.startswith("root-nemo-") or low.startswith("root-nccl-")) and (
+        n.multirack_comma_after_rack_re().search(low)
+    ):
+        return True
+    return len(n.find_rack_ids_in_string(name)) >= 2
+
+
+def multirack_n_rack_marker(name: str) -> str | None:
+    """The ``4Rack`` / ``36Rack`` marker in *name*, or ``None``.
+
+    Exposed so callers do not reach for the module-private regex and end up copying it.
+    """
+    m = _MULTIRACK_N_RACK_RE.search(name or "")
+    return m.group(0) if m else None
+
+
+def job_id_from_log_basename(name: str) -> str | None:
+    """Slurm job id from a validation log basename, or ``None``.
+
+    Llama stdout is checked first: ``…NEMO-LLAMA3_8B-1N-<host>-<jid>.txt`` has no ``N-<jid>``
+    tail, and a hostname ending in ``N`` would otherwise make the generic pattern ambiguous.
+    """
+    base = _basename_only(name)
+    m = re.search(r"NEMO-LLAMA3_8B-1N-.+-(\d+)\.txt$", base, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m2 = re.search(r"N-(\d+)\.txt$", base, re.IGNORECASE)
+    return m2.group(1) if m2 else None
+
+
+def node_count_from_log_basename(name: str) -> int | None:
+    """Node count from a ``-<N>N-`` / ``-<N>N.txt`` basename field, or ``None``.
+
+    Load-bearing: it is how an 18-node acceptance run is told from a 1-node smoke test that
+    otherwise shares the same filename shape.
+    """
+    base = _basename_only(name)
+    m = re.search(r"-(\d+)N-\d", base, re.IGNORECASE) or re.search(
+        r"-(\d+)N\.txt$", base, re.IGNORECASE
+    )
+    if not m:
+        return None
+    try:
+        return int(m.group(1), 10)
+    except ValueError:
+        return None
+
+
+def node_count_suffix_from_basename(name: str) -> str:
+    """`` (36N)`` for display when the basename carries a node count, else ``""``."""
+    n = node_count_from_log_basename(name)
+    return f" ({n}N)" if n is not None else ""
+
+
 @dataclass(frozen=True)
 class ParsedTemplate:
     """Decomposed template: literals and numbered digit slots."""

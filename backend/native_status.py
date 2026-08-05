@@ -299,9 +299,6 @@ def _condense_tray_tokens(nums_s: str) -> str:
 
 _MULTIRACK_LOG_JSON = _REPO_ROOT / "var" / "cache" / "native_multirack_log_analysis.json"
 
-_MULTIRACK_N_RACK_RE = re.compile(r"(?:[2-9]|[1-9]\d{1,3})rack", re.IGNORECASE)
-
-
 def _env_int(name: str, default: int) -> int:
     try:
         v = int((os.environ.get(name) or "").strip())
@@ -310,53 +307,26 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+# Log-basename classification lives in nvis_id_templates so this module, app.py and the shell
+# probes cannot drift apart on which table a log belongs to. These wrappers exist only to bind
+# this module's NvisNaming (built from its own job-env-override subset, not the process env);
+# keep them free of logic.
+
+
 def _nemo_nccl_bn(name: str) -> bool:
-    low = name.lower()
-    if "nemo" in low or "nccl" in low:
-        return True
-    return _nvis_naming().auxiliary_single_rack_log_basename(name)
+    return _nvis_ids.nemo_nccl_in_log_basename(name, _nvis_naming())
 
 
 def _nemo_single_rack_bn(name: str) -> bool:
-    """NEMO validation logs for the single-rack table (excludes NCCL-only multirack sweeps).
-
-    Also accepts standalone single-rack NCCL benchmark logs (``…-NCCL-1Rack-<rack>-…``): the
-    ``1rack`` marker keeps this from matching multirack NCCL sweeps (which use N-rack / comma naming).
-    """
-    low = name.lower()
-    if "nemo" in low or "1rack" in low:
-        return True
-    return _nvis_naming().auxiliary_single_rack_log_basename(name)
+    return _nvis_ids.nemo_single_rack_log_basename(name, _nvis_naming())
 
 
 def _stage_kind_of_log_bn(name: str) -> str | None:
-    """Which validation stage a single-rack log carries evidence for: ``nccl`` | ``nemo`` | None.
-
-    Stage 1 (NCCL) and stage 2 (NeMo) are separate Slurm jobs here and therefore land in
-    separate logs (``…-NCCL-1Rack-…`` / ``…-NEMO-1Rack-…``). Each stage must be judged from
-    the newest log of ITS OWN kind, otherwise whichever job happened to finish last decides
-    both stages and the other one reads as a failure.
-    """
-    low = name.lower()
-    if "-nccl-1rack-" in low:
-        return "nccl"
-    if "-nemo-1rack-" in low:
-        return "nemo"
-    return None
+    return _nvis_ids.stage_kind_of_log_basename(name)
 
 
 def _is_multirack_bn(name: str) -> bool:
-    if not _nemo_nccl_bn(name):
-        return False
-    if _MULTIRACK_N_RACK_RE.search(name):
-        return True
-    low = name.lower()
-    naming = _nvis_naming()
-    if (low.startswith("root-nemo-") or low.startswith("root-nccl-")) and naming.multirack_comma_after_rack_re().search(
-        low
-    ):
-        return True
-    return len(naming.find_rack_ids_in_string(name)) >= 2
+    return _nvis_ids.is_multirack_log_basename(name, _nvis_naming())
 
 
 _NODELIST_LINE_RE = re.compile(r"^\s*NODELIST:\s*(.+)\s*$", re.IGNORECASE | re.MULTILINE)
@@ -459,11 +429,9 @@ def _rack_from_1rack_log(name: str) -> str | None:
 
 
 def _jobid_from_log_name(name: str) -> str | None:
-    m = re.search(r"N-(\d+)\.txt$", name, re.IGNORECASE)
-    if m:
-        return m.group(1)
-    m2 = re.search(r"NEMO-LLAMA3_8B-1N-.+-(\d+)\.txt$", name, re.IGNORECASE)
-    return m2.group(1) if m2 else None
+    # Llama-first, matching app.py and validation_activities: a hostname ending in "N" would
+    # otherwise let the generic ``N-<jid>`` pattern win on a Llama basename.
+    return _nvis_ids.job_id_from_log_basename(name)
 
 
 def _glob_one_rack_logs(log_dir: Path) -> list[tuple[Path, int, int]]:
@@ -1181,14 +1149,7 @@ def _save_multirack_disk_cache(entries: dict[str, Any]) -> None:
 
 
 def _multirack_node_count_suffix_from_basename(name: str) -> str:
-    """Same node-count suffix as app ``_multirack_node_count_suffix`` (for display only)."""
-    m = re.search(r"-(\d+)N-\d", name, re.IGNORECASE)
-    if m:
-        return f" ({m.group(1)}N)"
-    m2 = re.search(r"-(\d+)N\.txt$", name, re.IGNORECASE)
-    if m2:
-        return f" ({m2.group(1)}N)"
-    return ""
+    return _nvis_ids.node_count_suffix_from_basename(name)
 
 
 def _multirack_rack_display_label(
@@ -1886,17 +1847,19 @@ class MultirackTableState:
             probe_map = {k: dict(v) for k, v in self.per_path_probe.items()}
             sinfo_done = self.sinfo_done
         want: set[str] = set()
-        for p in paths:
-            keyp = str(p.resolve())
+        for p, _mtime_ns, _size in paths:
+            # Paths are PurePosixPath (exec-host) — never .resolve() (AttributeError → HTML 500).
+            # Probe cache keys are str(p) from _worker_logs_m; keep the same form here.
+            keyp = str(p)
             probe = probe_map.get(keyp, {})
             lj = _last_job_for_log_row(p.name, probe)
             if lj != "-" and lj.isdigit():
                 want.add(lj)
         augment_running_set_for_job_ids(running, job_times, want)
         rows: list[dict[str, str]] = []
-        for p in paths:
+        for p, _mtime_ns, _size in paths:
             bn = p.name
-            keyp = str(p.resolve())
+            keyp = str(p)
             probe = probe_map.get(keyp, {})
             last_job = _last_job_for_log_row(bn, probe)
             in_slurm = bool(last_job != "-" and last_job in running)
@@ -1932,6 +1895,9 @@ class MultirackTableState:
             )
             rows.append(
                 {
+                    # SPA reads rack / display_rack; rack_display kept for older clients.
+                    "rack": rack_disp,
+                    "display_rack": rack_disp,
                     "rack_display": rack_disp,
                     "log_file": bn,
                     "nemo": nemo,

@@ -217,55 +217,10 @@ render_tsv_box() {
   '
 }
 
-rack_from_fname() {
-  local b
-  b=$(basename "$1")
-  if [[ "$b" =~ 1Rack-(p[0-9]+-r[0-9]+)(\[|-) ]]; then
-    echo "${BASH_REMATCH[1]}"
-    return
-  fi
-  # CBR-style 1Rack logs: …1Rack-CBR01-DH01-SVR-CN0102[11-18]-… (``[`` or ``-`` after rack id)
-  if [[ "$b" =~ 1Rack-(CBR[0-9]{2}-DH[0-9]{2}-SVR-CN[0-9]{4})(\[|-) ]]; then
-    echo "${BASH_REMATCH[1]}"
-    return
-  fi
-  # ClusterKit single-rack logs: root-CK-<rack>-… (rack token must match CBR…CNdddd)
-  if [[ "${b,,}" == *root-ck* ]] && [[ "$b" =~ (CBR[0-9]{2}-DH[0-9]{2}-SVR-CN[0-9]{4}) ]]; then
-    echo "${BASH_REMATCH[1]}"
-    return
-  fi
-  if [[ "${b,,}" == *nemo-llama3_8b-1n-* ]]; then
-    # Slurm stdout: …-NEMO-LLAMA3_8B-1N-<full-hostname>-<jid>.txt (hostname parsed by Python elsewhere; CBR needs full host)
-    if [[ "$b" =~ NEMO-LLAMA3_8B-1N-(p[0-9]+-r[0-9]+)-ct[0-9]+- ]]; then
-      echo "${BASH_REMATCH[1]}"
-      return
-    fi
-    if [[ "$b" =~ NEMO-LLAMA3_8B-1N-(CBR[0-9]{2}-DH[0-9]{2}-SVR-CN[0-9]{6,})-([0-9]+)\.txt$ ]]; then
-      # Hostname CBR01-DH01-SVR-CN010211 → rack CBR01-DH01-SVR-CN0102 (strip last 2 tray digits from CN segment)
-      local host rack_prefix cn_tail
-      host="${BASH_REMATCH[1]}"
-      if [[ "$host" =~ ^(CBR[0-9]{2}-DH[0-9]{2}-SVR-CN)([0-9]+)$ ]]; then
-        rack_prefix="${BASH_REMATCH[1]}"
-        cn_tail="${BASH_REMATCH[2]}"
-        if ((${#cn_tail} >= 3)); then
-          echo "${rack_prefix}${cn_tail:0:${#cn_tail}-2}"
-          return
-        fi
-      fi
-    fi
-  fi
-  echo "?"
-}
-
-jobid_from_fname() {
-  local b
-  b=$(basename "$1")
-  if [[ "$b" =~ NEMO-LLAMA3_8B-1N-.+-([0-9]+)\.txt$ ]]; then
-    echo "${BASH_REMATCH[1]}"
-    return
-  fi
-  [[ "$b" =~ N-([0-9]+)\.txt$ ]] && echo "${BASH_REMATCH[1]}" || echo "?"
-}
+# rack_from_fname / jobid_from_fname come from lib/rack_fname.inc.sh (sourced below), shared
+# with parser.sh. Sourcing it also gains this table the generic NVIS_RACK_FNAME_RE fallback,
+# without which every Nscale TX log (ink50-dh01-h22) showed rack "?" here while the Parser
+# Results tables resolved it correctly.
 
 condense_ct_nums() {
   local -a sorted=() out=()
@@ -343,100 +298,18 @@ format_sinfo_cell() {
   echo "${out[*]}"
 }
 
-perf=5000
-# nccl_busbw_csv / nccl_oob_csv are shared with parser.sh via nccl_parse.inc.sh (sourced below,
-# next to validation_test_env.sh) so the dashboard PASS/FAIL and the parser stay in lockstep.
-
-slurm_hard_fail() {
-  grep -E -q 'srun:.*error:.*Exited|error:.*SIGNAL' "$1" 2>/dev/null
-}
-
-# Megatron lines like "iteration       523/    2010 | ...". Use the last such token in the file (avoids NCCL noise on other lines).
-# Finished when cur>=tot and tot>=NEMO_TARGET_STEPS (default 2010), e.g. 2010/2010 or 3000/3000 with STEPS=2010.
-nemo_training_finished_log() {
-  local f=$1 ms="${NEMO_TARGET_STEPS:-2010}" last cur tot
-  [[ "$ms" =~ ^[0-9]+$ ]] || ms=2010
-  last=$(grep -oE 'iteration[[:space:]]+[0-9]+/[[:space:]]*[0-9]+' "$f" 2>/dev/null | tail -1) || true
-  [[ -n "$last" ]] || return 1
-  [[ "$last" =~ iteration[[:space:]]+([0-9]+)/[[:space:]]*([0-9]+) ]] || return 1
-  cur=$((10#${BASH_REMATCH[1]}))
-  tot=$((10#${BASH_REMATCH[2]}))
-  (( cur >= tot && tot >= ms ))
-}
-
-nemo_python_fatal_fail() {
-  grep -E -q \
-    'Traceback \(most recent call last\)|torch\.cuda\.OutOfMemoryError|torch\.OutOfMemoryError|CUDA out of memory|CudaOutOfMemoryError' \
-    "$1" 2>/dev/null
-}
-
-llm_stats_tsv() {
-  local f=$1
-  if grep -q 'Step Time.*MODEL_TFLOP/s/GPU' "$f"; then
-    grep -o 'Step Time.*MODEL_TFLOP/s/GPU' "$f" 2>/dev/null | sed -e 's:s GPU: s GPU:g' -e 's:MODEL_TFLOP: MODEL_TFLOP:g' \
-      | awk -v min_iter=70 -v max_iter=90 -v perf="$perf" '
-BEGIN { ct = 0; ts = 0; ps = 0 }
-(min_iter <= NR && NR < max_iter) { ct++; tv[ct] = $4; ts += $4; pv[ct] = $8; ps += $8 }
-END {
-  if (ct < 1) exit 1
-  t_mean = ts / ct
-  t_var = 0
-  for (i = 1; i <= ct; i++) t_var += (tv[i] - t_mean) ^ 2
-  t_std = (ct > 1 ? sqrt(t_var / (ct - 1)) : 0)
-  p_mean = ps / ct
-  p_var = 0
-  for (i = 1; i <= ct; i++) p_var += (pv[i] - p_mean) ^ 2
-  p_std = (ct > 1 ? sqrt(p_var / (ct - 1)) : 0)
-  mfu = ps / ct / perf * 100
-  printf "%.2f\t%.2f\t%.5f\t%.5f\t%.1f\n", ts / ct, ps / ct, t_std, p_std, mfu
-}'
-    return 0
-  fi
-  if grep -q 'train_step_timing.*consumed_samples' "$f"; then
-    grep -o 'train_step_timing.*consumed_samples' "$f" 2>/dev/null | tr '|' ' ' \
-      | awk -v min_iter=70 -v max_iter=90 -v perf="$perf" '
-BEGIN { ct = 0; ts = 0; ps = 0 }
-(min_iter <= NR && NR < max_iter) { ct++; tv[ct] = $4; ts += $4; pv[ct] = $6; ps += $6 }
-END {
-  if (ct < 1) exit 1
-  t_mean = ts / ct
-  t_var = 0
-  for (i = 1; i <= ct; i++) t_var += (tv[i] - t_mean) ^ 2
-  t_std = (ct > 1 ? sqrt(t_var / (ct - 1)) : 0)
-  p_mean = ps / ct
-  p_var = 0
-  for (i = 1; i <= ct; i++) p_var += (pv[i] - p_mean) ^ 2
-  p_std = (ct > 1 ? sqrt(p_var / (ct - 1)) : 0)
-  mfu = ps / ct / perf * 100
-  printf "%.2f\t%.2f\t%.5f\t%.5f\t%.1f\n", ts / ct, ps / ct, t_std, p_std, mfu
-}'
-    return 0
-  fi
-  return 1
-}
-
-llm_label() {
-  local f=$1 stats
-  if stats=$(llm_stats_tsv "$f" 2>/dev/null) && [[ -n "$stats" ]]; then
-    awk -v OFS='\t' '{ printf "OK\t%s\t%s\t%s\t%s\t%s\n", $1, $2, $3, $4, $5 }' <<<"$stats"
-    return
-  fi
-  if nemo_training_finished_log "$f"; then
-    printf 'OK\t-\t-\t-\t-\t-\n'
-    return
-  fi
-  if slurm_hard_fail "$f"; then
-    printf 'FAIL\t-\t-\t-\t-\t-\n'
-    return
-  fi
-  if nemo_python_fatal_fail "$f"; then
-    printf 'FAIL\t-\t-\t-\t-\t-\n'
-    return
-  fi
-  printf 'UNK\t-\t-\t-\t-\t-\n'
-}
+# The LLM verdict (llm_label / llm_stats_tsv / nemo_training_finished_log / slurm_hard_fail /
+# nemo_python_fatal_fail) lives in lib/llm_label.inc.sh, and nccl_busbw_csv / nccl_oob_csv in
+# nccl_parse.inc.sh — both shared with parser.sh (sourced below, next to validation_test_env.sh)
+# so the dashboard PASS/FAIL and the Parser Results tables stay in lockstep.
 
 _RACK_SCRIPTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# llm_label.inc.sh first: validation_test_env.sh only defines a fallback
+# nemo_training_finished_log when one is not already present.
+# shellcheck source=/dev/null
+source "${_RACK_SCRIPTS_DIR}/lib/llm_label.inc.sh"
+# shellcheck source=/dev/null
+source "${_RACK_SCRIPTS_DIR}/lib/rack_fname.inc.sh"
 # shellcheck source=/dev/null
 source "${_RACK_SCRIPTS_DIR}/validation_test_env.sh"
 # shellcheck source=/dev/null

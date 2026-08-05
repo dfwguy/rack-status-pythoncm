@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import nvis_id_templates
+
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
 
@@ -83,8 +85,6 @@ _JOBID_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _JOBID_LINE_RE = re.compile(r"jobid=(\d+)", re.IGNORECASE)
-_SLURM_JID_BASENAME_RE = re.compile(r"N-(\d+)\.txt$", re.IGNORECASE)
-_NEMO_LLAMA_JID_RE = re.compile(r"NEMO-LLAMA3_8B-1N-.+-(\d+)\.txt$", re.IGNORECASE)
 
 _UPDATABLE = frozenset({
     "phase",
@@ -306,11 +306,9 @@ def parse_scheduler_job_ids(text: str) -> list[str]:
 
 
 def job_id_from_log_basename(name: str) -> str | None:
-    m = _NEMO_LLAMA_JID_RE.search(name)
-    if m:
-        return m.group(1)
-    m2 = _SLURM_JID_BASENAME_RE.search(name)
-    return m2.group(1) if m2 else None
+    """Slurm job id from a log basename. Delegates so app.py, native_status and this store
+    cannot disagree about which digits in a filename are the job id."""
+    return nvis_id_templates.job_id_from_log_basename(name)
 
 
 def infer_from_log_basename(name: str) -> dict[str, str]:
