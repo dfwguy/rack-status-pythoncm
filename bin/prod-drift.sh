@@ -25,7 +25,11 @@
 #   --ref REF      compare against this ref instead of the deployment's base commit
 #   --surface      which surface to check (default: all)
 #   --fetch DIR    copy each changed remote file to DIR/<surface>/remote/<path> and the git
-#                  version to DIR/<surface>/gitref/<path>, and print the 3-way merge command
+#                  version to DIR/<surface>/gitref/<path>, and print the 3-way merge command.
+#                  Files that exist ONLY on the deployment are pulled too, to
+#                  DIR/<surface>/prodonly/<path> — they have no git copy to merge against, so
+#                  losing one loses it outright. Capped at NVIS_DRIFT_FETCH_CAP (default 40)
+#                  files, since each fetch is an SSH round trip.
 #
 # Env
 #   NVIS_DEPLOY_SSH        ssh alias / user@host holding the deployment tree
@@ -37,6 +41,7 @@
 #   RACK_REMOTE_BASE_PATH  remote install root (bin/scripts lives under it)
 #   NVIS_HEAD_VIA          optional: reach the head node by hopping through this ssh alias
 #                          (Nscale TX: the OVA is the only route to the head node)
+#   NVIS_DRIFT_FETCH_CAP   max remote-only files --fetch will pull (default 40)
 #
 # Example — Nscale TX (head node only reachable via the OVA)
 #   NVIS_DEPLOY_SSH=nscale-tx-ova \

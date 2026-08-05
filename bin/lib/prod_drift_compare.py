@@ -25,6 +25,8 @@ PREFIX = os.environ.get("PREFIX", "")
 REMOTE_DIR = os.environ.get("REMOTE_DIR", "")
 WHERE = os.environ.get("WHERE", "deploy")
 FETCH = os.environ.get("FETCH", "")
+# Bound on how many remote-only files --fetch will pull; each one is an SSH round trip.
+FETCH_ONLY_CAP = int(os.environ.get("NVIS_DRIFT_FETCH_CAP", "40"))
 
 # Paths that are expected to differ or are not code: deployment-local config, caches, build
 # output, and editor/OS leftovers. Listing them keeps the signal about real code drift.
@@ -151,13 +153,31 @@ def main() -> int:
     if not differs and not remote_only:
         print("  clean")
 
-    # Only changed files are worth fetching: they need a 3-way merge. Remote-only files are
-    # usually deployment-local (secrets, generated config) and each fetch is a full SSH round
-    # trip through the jumphost, so pulling hundreds of them would stall the run.
+    # Fetch BOTH classes, into separate trees.
+    #
+    # Changed files need a 3-way merge, so they come with their gitref counterpart. Remote-only
+    # files have no git copy at all, which makes them the higher-risk class, not the lower one:
+    # if a deploy removes one there is nothing to merge back from. This originally skipped them
+    # on the theory that they are deployment-local config, but secrets/caches/build output are
+    # already excluded by ignored() before we get here, so what survives is usually real code.
+    # Measured on Nscale TX 2026-08-05: the three remote-only files were run_llmb_nemo.sh,
+    # collect_llmb_nemo_log.sh and shim/srun -- a Stage 2 launcher the repo's own
+    # validation_activities.py already referenced, its log collector, and an srun shim encoding
+    # why registry pulls cannot run on an airgapped tray. Listing those and moving on would have
+    # been how they got lost.
+    #
+    # Each fetch is a full SSH round trip through the jumphost, so cap the remote-only pull and
+    # say so when the cap bites, rather than silently stalling on a pathological tree.
     if FETCH and differs:
-        fetch_one(differs)
-    elif FETCH and remote_only:
-        print("  (remote-only files are listed, not fetched — copy any you want by hand)")
+        fetch_one(differs, "remote", with_gitref=True)
+    if FETCH and remote_only:
+        if len(remote_only) > FETCH_ONLY_CAP:
+            print(
+                f"  ({len(remote_only)} remote-only files exceeds the {FETCH_ONLY_CAP}-file "
+                f"fetch cap — listed only. Raise NVIS_DRIFT_FETCH_CAP to pull them.)"
+            )
+        else:
+            fetch_one(remote_only, "prodonly", with_gitref=False)
 
     return 1 if (differs or remote_only) else 0
 
@@ -183,11 +203,15 @@ def remote_cat_cmd(path: str) -> str:
     return f"ssh {via} \"{head} '{inner}'\"" if via else f'{head} "{inner}"'
 
 
-def fetch_one(rels: list[str]) -> None:
-    """Copy remote + git copies locally so the drift can be reviewed and 3-way merged."""
+def fetch_one(rels: list[str], subdir: str, *, with_gitref: bool) -> None:
+    """Copy remote files locally so the drift can be reviewed.
+
+    ``with_gitref`` also writes the ref's copy alongside, which only makes sense for files git
+    actually has -- remote-only files land in their own tree with no counterpart to merge from.
+    """
     root = Path(FETCH) / LABEL
     for rel in rels:
-        dest_remote = root / "remote" / rel
+        dest_remote = root / subdir / rel
         dest_remote.parent.mkdir(parents=True, exist_ok=True)
         got = subprocess.run(
             remote_cat_cmd(f"{REMOTE_DIR}/{rel}"),
@@ -199,6 +223,8 @@ def fetch_one(rels: list[str]) -> None:
             print(f"  !! could not fetch {rel}")
             continue
         dest_remote.write_bytes(got.stdout)
+        if not with_gitref:
+            continue
         blob = subprocess.run(
             ["git", "-C", REPO_ROOT, "show", f"{REF}:{PREFIX}{rel}"],
             capture_output=True,
@@ -208,10 +234,17 @@ def fetch_one(rels: list[str]) -> None:
             dest_git = root / "gitref" / rel
             dest_git.parent.mkdir(parents=True, exist_ok=True)
             dest_git.write_bytes(blob.stdout)
+
+    if not with_gitref:
+        # No git counterpart, so there is nothing to merge — these just need adding.
+        print(f"  fetched {len(rels)} remote-only file(s) to {root}/{subdir}/")
+        print("  these exist nowhere in git; to keep one:")
+        print(f"     cp {root}/{subdir}/<file> {PREFIX}<file> && git add {PREFIX}<file>")
+        return
     print(f"  fetched to {root}/ (remote/ and gitref/)")
     print("  to merge a file, using the commit the deployment was based on as the base:")
     print(f"     git show <base-commit>:{PREFIX}<file> > /tmp/base")
-    print(f"     git merge-file -p {PREFIX}<file> /tmp/base {root}/remote/<file> > /tmp/merged")
+    print(f"     git merge-file -p {PREFIX}<file> /tmp/base {root}/{subdir}/<file> > /tmp/merged")
 
 
 if __name__ == "__main__":
