@@ -72,3 +72,8 @@ Thumbs.db
 *~
 .coverage
 frontend/coverage/
+
+# Third-party vendor manuals (Dell/NVIDIA PDFs etc). Keep them in Drive, not here: they are
+# multi-MB, redistribution-restricted, and git history is permanent — a manual committed once
+# is carried by every clone forever. Our own docs are markdown and tracked normally.
+docs/*.pdf
