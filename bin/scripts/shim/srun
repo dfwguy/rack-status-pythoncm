@@ -1,0 +1,74 @@
+#!/bin/bash
+# srun shim: keep REGISTRY PULLS on the head node, pass everything else to real srun.
+#
+# Why: every DGX tray on this cluster is airgapped -- no route to nvcr.io (verified:
+# tray -> https://nvcr.io/v2/ = HTTP 000, head node = HTTP 401 with credentials in
+# ~/.config/enroot/.credentials). llmb-install is configured install_method=slurm
+# (correct: the per-workload uv venvs are aarch64 and the head node is x86_64, so those
+# MUST build on a tray) but it uses the same method for container downloads, emitting
+#   srun --account=... --partition=... -t 35 --exclusive --pty enroot import -o X -a aarch64 docker://...
+# which can never succeed on an airgapped tray, and also burns an exclusive node while
+# it fails.
+#
+# This shim is placed FIRST on PATH only for the installer's own subprocesses. If the
+# command it is asked to launch is `enroot import`, it strips the srun wrapper and runs
+# the import right here on the head node -- `enroot import -a aarch64` is cross-arch, so
+# an x86_64 host produces a valid aarch64 .sqsh. Anything else is exec'd to the real
+# srun unchanged, so venv builds still land on aarch64 nodes.
+#
+# Deliberately narrow: only `enroot import` is intercepted. `enroot remove`/`create` and
+# every other srun payload pass straight through.
+
+_real_srun=""
+for _c in /cm/local/apps/slurm/current/bin/srun /cm/local/apps/slurm/25.05/bin/srun /usr/bin/srun /bin/srun; do
+  [[ -x "$_c" ]] && { _real_srun="$_c"; break; }
+done
+if [[ -z "$_real_srun" ]]; then
+  # Fall back to the next srun on PATH that is not this shim.
+  _self="$(readlink -f "${BASH_SOURCE[0]}")"
+  while IFS= read -r _c; do
+    [[ "$(readlink -f "$_c")" != "$_self" ]] && { _real_srun="$_c"; break; }
+  done < <(type -ap srun 2>/dev/null)
+fi
+
+# Find the payload: the first argument that is not an srun flag or a flag's value.
+_payload_idx=0
+_args=("$@")
+for (( i=0; i<${#_args[@]}; i++ )); do
+  a="${_args[$i]}"
+  case "$a" in
+    -*) continue ;;                       # a flag, or a flag's =value form
+    *)  # first bare word -- but skip it if it is the value of a separated flag
+        prev="${_args[$((i-1))]:-}"
+        case "$prev" in
+          -A|-p|-t|-N|-n|-c|-w|-J|--account|--partition|--time|--nodes|--ntasks|--nodelist|--job-name|--cpus-per-task|--gres|--mem)
+            continue ;;
+        esac
+        _payload_idx=$i; break ;;
+  esac
+done
+
+_cmd="${_args[$_payload_idx]:-}"
+_next="${_args[$((_payload_idx+1))]:-}"
+
+if [[ "$(basename -- "${_cmd:-}")" == "enroot" && "${_next}" == "import" ]]; then
+  echo "srun-shim: intercepting registry pull -> running on $(hostname) (DGX trays are airgapped)" >&2
+  # enroot defaults to /var/lib/enroot + /run/enroot, which need root. cmods has no sudo on
+  # the head node, so without these it dies with
+  #   mkdir: cannot create directory '/var/lib/enroot': Permission denied
+  # Point every enroot path at user-space under the workspace. Respect anything already set.
+  _ebase="${NVIS_ENROOT_BASE:-${NVIS_WORKSPACE_DIR:-/home/cmods/workspace}/enroot}"
+  export ENROOT_DATA_PATH="${ENROOT_DATA_PATH:-${_ebase}/data}"
+  export ENROOT_TEMP_DIR="${ENROOT_TEMP_DIR:-${_ebase}/tmp}"
+  export ENROOT_CACHE_PATH="${ENROOT_CACHE_PATH:-${_ebase}/cache}"
+  export ENROOT_RUNTIME_PATH="${ENROOT_RUNTIME_PATH:-${_ebase}/run}"
+  mkdir -p "$ENROOT_DATA_PATH" "$ENROOT_TEMP_DIR" "$ENROOT_CACHE_PATH" "$ENROOT_RUNTIME_PATH" 2>/dev/null
+  echo "srun-shim: enroot paths under ${_ebase}" >&2
+  exec "${_args[@]:$_payload_idx}"
+fi
+
+if [[ -z "$_real_srun" ]]; then
+  echo "srun-shim: cannot locate the real srun" >&2
+  exit 127
+fi
+exec "$_real_srun" "$@"

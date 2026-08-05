@@ -7284,7 +7284,10 @@ def api_nvswitch_fix_async():
         return err[0], err[1]
     assert prep is not None
     log_dir = prep["log_dir"]
-    assert isinstance(log_dir, Path)
+    # PurePosixPath is NOT a subclass of Path, and ``_resolve_log_dir()`` returns one whenever the
+    # log dir lives on a remote host. Asserting Path alone raised AssertionError -> HTTP 500 on
+    # every call to this route and the six sibling async routes below. Accept either flavour.
+    assert isinstance(log_dir, (Path, PurePosixPath))
     rack = str(prep["rack"])
     cmd = list(prep["cmd"])
     assert isinstance(cmd, list)
@@ -7413,7 +7416,7 @@ def api_nvswitch_sdn_reset_async():
         return err[0], err[1]
     assert prep is not None
     log_dir = prep["log_dir"]
-    assert isinstance(log_dir, Path)
+    assert isinstance(log_dir, (Path, PurePosixPath))
     rack = str(prep["rack"])
     cmd = list(prep["cmd"])
     assert isinstance(cmd, list)
@@ -7558,7 +7561,7 @@ def api_nvswitch_system_reset_async():
         return err[0], err[1]
     assert prep is not None
     log_dir = prep["log_dir"]
-    assert isinstance(log_dir, Path)
+    assert isinstance(log_dir, (Path, PurePosixPath))
     rack = str(prep["rack"])
     cmd = list(prep["cmd"])
     assert isinstance(cmd, list)
@@ -7697,7 +7700,7 @@ def api_imex_reset_async():
         return err[0], err[1]
     assert prep is not None
     log_dir = prep["log_dir"]
-    assert isinstance(log_dir, Path)
+    assert isinstance(log_dir, (Path, PurePosixPath))
     rack = str(prep["rack"])
     cmd = list(prep["cmd"])
     assert isinstance(cmd, list)
@@ -8049,7 +8052,7 @@ def api_precheck_async():
         return err[0], err[1]
     assert prep is not None
     log_dir = prep["log_dir"]
-    assert isinstance(log_dir, Path)
+    assert isinstance(log_dir, (Path, PurePosixPath))
     rack = str(prep["rack"])
     cmd = list(prep["cmd"])
     assert isinstance(cmd, list)
@@ -8169,7 +8172,7 @@ def api_nvswitch_check_async():
         return err[0], err[1]
     assert prep is not None
     log_dir = prep["log_dir"]
-    assert isinstance(log_dir, Path)
+    assert isinstance(log_dir, (Path, PurePosixPath))
     rack = str(prep["rack"])
     cmd = list(prep["cmd"])
     assert isinstance(cmd, list)
@@ -8288,7 +8291,7 @@ def api_imex_check_async():
         return err[0], err[1]
     assert prep is not None
     log_dir = prep["log_dir"]
-    assert isinstance(log_dir, Path)
+    assert isinstance(log_dir, (Path, PurePosixPath))
     rack = str(prep["rack"])
     cmd = list(prep["cmd"])
     assert isinstance(cmd, list)

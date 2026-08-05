@@ -287,7 +287,12 @@ if [[ "${DRY_RUN}" -eq 0 && "${NVIS_LLMB_AUTOCOLLECT:-1}" == "1" ]]; then
   _jid="$(grep -oE 'jobid=[0-9]+' "${_llmb_out}" 2>/dev/null | head -1 | cut -d= -f2)"
   if [[ -n "${_jid}" ]]; then
     _collect="$(dirname "${BASH_SOURCE[0]}")/collect_llmb_nccl_log.sh"
-    if [[ -x "${_collect}" ]]; then
+    # Gate on READABLE, not executable: the watcher below invokes it as `bash "$collect"`, which
+    # does not need the execute bit, so -x tested a permission the invocation never uses. The file
+    # is tracked 100644 in git, so every deployed copy lands non-executable and -x could never
+    # pass -- silently disabling auto-collect on every run. A run with no aggregated log is
+    # indistinguishable from a run that never happened.
+    if [[ -r "${_collect}" ]]; then
       echo "run_llmb_nccl: auto-collect armed for job ${_jid} -> ${_collect}"
       _squeue="${RACK_SLURM_SQUEUE:-$(command -v squeue || echo /cm/local/apps/slurm/current/bin/squeue)}"
       setsid nohup bash -c '
@@ -303,7 +308,7 @@ if [[ "${DRY_RUN}" -eq 0 && "${NVIS_LLMB_AUTOCOLLECT:-1}" == "1" ]]; then
       ' _ "${_jid}" "${_collect}" "${_squeue}" "${JOB_LOG_DIR}" "${LLMB_INSTALL}" \
         >> "${JOB_LOG_DIR%/}/llmb-autocollect_${_jid}.log" 2>&1 < /dev/null &
     else
-      echo "run_llmb_nccl: WARNING: collect_llmb_nccl_log.sh not found/executable at ${_collect};" \
+      echo "run_llmb_nccl: WARNING: collect_llmb_nccl_log.sh not found or unreadable at ${_collect};" \
            "results will not appear in the dashboard until it is run manually" >&2
     fi
   else

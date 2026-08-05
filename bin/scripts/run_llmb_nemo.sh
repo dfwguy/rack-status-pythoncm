@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+# run_llmb_nemo.sh — fire the NEMO (nemotron-h) pretrain validation through
+# `llmb-run`, so NEMO and NCCL come from the SAME harness.
+#
+# Why this exists: the dashboard's validation action ran `run_singlerack.sh`, which
+# hand-rolls its own sbatch + pyxis invocation. NCCL moved to llmb-run on 2026-07-28;
+# NEMO did not, so the two halves of the campaign were produced by different harnesses
+# (different container invocation, env, and parallelism defaults) and were not strictly
+# comparable. This closes that gap.
+#
+# DROP-IN for run_singlerack.sh: the app calls
+#     bash <script> <comma-separated-node-list> <rack-id>
+# (app.py `cmd = ["bash", str(script), target, rk]`), so this script accepts exactly
+# that, and is selected purely by pointing RACK_VALIDATION_SCRIPT at it — no backend
+# change. Flag form is also accepted for CLI testing.
+#
+# Shared machinery (identical to run_llmb_nccl.sh — deliberately, so both paths get
+# the same fabric wireup and log placement):
+#   lib/nodes.inc.sh       rack ids / nodelist -> Slurm nodelist + GPU scale
+#   lib/fabric.inc.sh      NCCL/UCX/OMPI onto the compute rails
+#   lib/sbatch_pin.inc.sh  pin llmb's own sbatch to the nodelist + force --output
+#
+# Usage:
+#   run_llmb_nemo.sh <nodelist-csv> <rack-id>            # app contract
+#   run_llmb_nemo.sh [--dry-run] --nodelist LIST [--rack R] [--scale N]
+#                    [--dtype fp8] [--model-size 56b] [--time-limit 01:00:00]
+#
+# Environment:
+#   NVIS_LLMB_NEMO_TIME_LIMIT  walltime handed to the recipe (default 01:00:00).
+#                              nemotron-h/launch.sh defaults to 00:20:00, which is too
+#                              short for a meaningful run; passed via llmb-run --env.
+#   NVIS_LLMB_NEMO_WORKLOAD    default pretrain_nemotron-h
+#   NVIS_LLMB_NEMO_MODEL_SIZE  default 56b
+#   NVIS_LLMB_NEMO_DTYPE       default fp8
+#   NVIS_FABRIC_SKIP=1         skip the fabric probe
+#   NVIS_LLMB_KEEP_UCX_ENV=1   keep host UCX pins (host/non-container runs only)
+set -uo pipefail
+
+GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
+LLMB_VENV="${LLMB_VENV:-/home/nvis/llmb_venv}"
+LLMB_INSTALL="${LLMB_INSTALL:-/home/nvis/dgxc-benchmarking}"
+LLMB_INSTALL="${LLMB_INSTALL%/}"
+LLMB_REPO="${LLMB_REPO:-}"
+LLMB_REPO="${LLMB_REPO%/}"
+LLMB_RUN="${LLMB_RUN:-}"
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-}}"
+
+LLMB_WORKLOAD="${NVIS_LLMB_NEMO_WORKLOAD:-pretrain_nemotron-h}"
+LLMB_MODEL_SIZE="${NVIS_LLMB_NEMO_MODEL_SIZE:-56b}"
+LLMB_DTYPE="${NVIS_LLMB_NEMO_DTYPE:-fp8}"
+TIME_LIMIT_VAL="${NVIS_LLMB_NEMO_TIME_LIMIT:-01:00:00}"
+
+DRY_RUN=0
+EXPLICIT_NODELIST=""
+SCALE_OVERRIDE=""
+RESERVATION="${NVIS_RESERVATION:-}"
+RACK_ID=""
+POSITIONAL=()
+
+die() { echo "run_llmb_nemo: $*" >&2; exit 2; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -d|--dry-run|--dryrun) DRY_RUN=1; shift ;;
+    --nodelist) EXPLICIT_NODELIST="${2:?--nodelist needs a value}"; shift 2 ;;
+    --nodelist=*) EXPLICIT_NODELIST="${1#*=}"; shift ;;
+    --rack) RACK_ID="${2:?--rack needs a value}"; shift 2 ;;
+    --rack=*) RACK_ID="${1#*=}"; shift ;;
+    --scale) SCALE_OVERRIDE="${2:?--scale needs a value}"; shift 2 ;;
+    --scale=*) SCALE_OVERRIDE="${1#*=}"; shift ;;
+    --dtype) LLMB_DTYPE="${2:?}"; shift 2 ;;
+    --dtype=*) LLMB_DTYPE="${1#*=}"; shift ;;
+    --model-size) LLMB_MODEL_SIZE="${2:?}"; shift 2 ;;
+    --model-size=*) LLMB_MODEL_SIZE="${1#*=}"; shift ;;
+    --time-limit) TIME_LIMIT_VAL="${2:?}"; shift 2 ;;
+    --time-limit=*) TIME_LIMIT_VAL="${1#*=}"; shift ;;
+    --reservation) RESERVATION="${2:?}"; shift 2 ;;
+    --reservation=*) RESERVATION="${1#*=}"; shift ;;
+    -h|--help) sed -n '1,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --) shift; while [[ $# -gt 0 ]]; do POSITIONAL+=( "$1" ); shift; done ;;
+    -*) die "unknown option: $1" ;;
+    *) POSITIONAL+=( "$1" ); shift ;;
+  esac
+done
+
+# run_singlerack.sh contract: $1 = target node list (csv), $2 = rack id.
+if [[ -z "${EXPLICIT_NODELIST}" && ${#POSITIONAL[@]} -ge 1 ]]; then
+  EXPLICIT_NODELIST="${POSITIONAL[0]}"
+fi
+if [[ -z "${RACK_ID}" && ${#POSITIONAL[@]} -ge 2 ]]; then
+  RACK_ID="${POSITIONAL[1]}"
+fi
+[[ -n "${EXPLICIT_NODELIST}" ]] || die "no target: pass a node list as \$1 or --nodelist LIST"
+
+# --- Load Slurm CLI + capability library ----------------------------------------
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+[[ -f "${_SCRIPT_DIR}/slurm-init.inc.sh" ]] && source "${_SCRIPT_DIR}/slurm-init.inc.sh"
+# shellcheck disable=SC1091
+source "${_SCRIPT_DIR}/lib/nodes.inc.sh"
+# shellcheck disable=SC1091
+source "${_SCRIPT_DIR}/lib/fabric.inc.sh"
+# shellcheck disable=SC1091
+source "${_SCRIPT_DIR}/lib/sbatch_pin.inc.sh"
+command -v sinfo >/dev/null 2>&1 || die "sinfo not on PATH (Slurm CLI required)"
+
+# --- Resolve nodes + scale ------------------------------------------------------
+nvis_nodes_resolve --nodelist "${EXPLICIT_NODELIST}" || exit $?
+NODELIST="${NVIS_NODELIST}"
+NNODES="${NVIS_NNODES}"
+if [[ -n "${SCALE_OVERRIDE}" ]]; then SCALE="${SCALE_OVERRIDE}"; else SCALE="$(nvis_nodes_scale "${GPUS_PER_NODE}")"; fi
+
+# --- Resolve the llmb-run binary ------------------------------------------------
+if [[ -z "${LLMB_RUN}" ]]; then
+  _llmb_parent="$(dirname "${LLMB_INSTALL}")"
+  for _cand in \
+    ${LLMB_REPO:+"${LLMB_REPO}/llmb-run"} \
+    "${LLMB_INSTALL}/llmb-run" \
+    "${LLMB_INSTALL}/dgxc-benchmarking/llmb-run" \
+    "${_llmb_parent}/dgxc-benchmarking/llmb-run"; do
+    if [[ -x "${_cand}" || -f "${_cand}" ]]; then LLMB_RUN="${_cand}"; break; fi
+  done
+fi
+if [[ -z "${LLMB_RUN}" || ! ( -x "${LLMB_RUN}" || -f "${LLMB_RUN}" ) ]]; then
+  die "llmb-run not found (searched under LLMB_INSTALL=${LLMB_INSTALL}${LLMB_REPO:+ and LLMB_REPO=${LLMB_REPO}})."
+fi
+# shellcheck disable=SC1091
+[[ -f "${LLMB_VENV}/bin/activate" ]] && source "${LLMB_VENV}/bin/activate"
+export LLMB_INSTALL
+
+# --- Fabric wireup --------------------------------------------------------------
+if [[ "${NVIS_FABRIC_SKIP:-0}" != "1" ]]; then
+  _first_node="$(nvis_nodes_first)"
+  if [[ -n "${_first_node}" ]]; then
+    nvis_fabric_export_from_node "${_first_node}" || true
+  else
+    echo "run_llmb_nemo: WARNING: could not determine a representative node for fabric probe" >&2
+  fi
+fi
+
+# --- Container reality check: drop host-only UCX pins ---------------------------
+# Same rule as run_llmb_nccl.sh: the NeMo pyxis/enroot container exposes only
+# tcp/IPoIB netdevs, so UCX_TLS=^tcp leaves NO transport and every rank dies
+# ("Destination is unreachable"). Killed job 65827 on every tray.
+if [[ "${NVIS_LLMB_KEEP_UCX_ENV:-0}" != "1" ]]; then
+  for _v in UCX_TLS UCX_NET_DEVICES; do
+    if [[ -n "${!_v:-}" ]]; then
+      echo "run_llmb_nemo: unsetting ${_v}=${!_v} (host-only pin; fatal inside the llmb container)" >&2
+      unset "${_v}"
+    fi
+  done
+fi
+
+# --- Stage 1 of this action: the NCCL sweep, also via llmb-run --------------------
+# MUST run BEFORE nvis_sbatch_pin_install below. The shim works by prepending a fake
+# `sbatch` to PATH and recording the real one in LLMB_REAL_SBATCH. run_llmb_nccl.sh
+# installs its OWN shim, and if ours is already on PATH its `command -v sbatch` resolves
+# to OUR shim -- so the inner shim execs the outer shim, which now points at itself.
+# Result: sbatch is never reached and the action hangs forever with no job submitted
+# (observed on h22: two shim processes alive 8+ minutes, rack idle, squeue empty).
+#
+# Why llmb-run at all for NCCL: the old sbatch validation ran an NCCL pre-check INSIDE
+# the NEMO job, so one action produced both halves. llmb-run has no such bundle -- NCCL
+# is its own workload -- so submitting only the pretrain silently dropped half the test.
+# Both jobs request all 18 trays, so Slurm serialises them on the rack by itself.
+# Set NVIS_LLMB_NEMO_WITH_NCCL=0 for a NEMO-only submit.
+if [[ "${NVIS_LLMB_NEMO_WITH_NCCL:-1}" == "1" && "${DRY_RUN}" -eq 0 ]]; then
+  _nccl_script="${_SCRIPT_DIR}/run_llmb_nccl.sh"
+  if [[ -f "${_nccl_script}" ]]; then
+    echo "run_llmb_nemo: === stage 1/2: NCCL sweep via run_llmb_nccl.sh ==="
+    # Pass the RACK ID, not --nodelist: run_llmb_nccl.sh derives its log label from
+    # RACKS[], and --nodelist leaves that empty, producing llmb-nccl_nodes_<jid>.out with
+    # no rack attribution. Resolving a rack id needs these two vars at this site.
+    _nccl_rc=0
+    if [[ -n "${RACK_ID}" ]]; then
+      RACK_TO_NODE_SED="${RACK_TO_NODE_SED:-s/\$/-/}" \
+      RACK_NODE_MATCH_SUFFIX="${RACK_NODE_MATCH_SUFFIX:-[0-9]+\$}" \
+      RACK_JOB_LOG_DIR="${JOB_LOG_DIR}" \
+        bash "${_nccl_script}" "${RACK_ID}" || _nccl_rc=$?
+    else
+      RACK_JOB_LOG_DIR="${JOB_LOG_DIR}" bash "${_nccl_script}" --nodelist "${NODELIST}" || _nccl_rc=$?
+    fi
+    # Do NOT swallow this. A silent stage-1 failure is how h03 got a NEMO-only run
+    # while the action claimed to do NCCL+NEMO.
+    if [[ "${_nccl_rc}" -ne 0 ]]; then
+      echo "run_llmb_nemo: ERROR: NCCL stage failed (rc=${_nccl_rc}); NEMO will still be submitted," \
+           "but this rack has NO stage-1 result from this action." >&2
+    fi
+    echo "run_llmb_nemo: === stage 2/2: NEMO pretrain ==="
+  else
+    echo "run_llmb_nemo: WARNING: ${_nccl_script} not found; submitting NEMO only" >&2
+  fi
+fi
+
+# --- Pin llmb's own sbatch + name the log the way the dashboard expects ---------
+# parser.sh / rack_status.sh key on  <user>-NEMO-1Rack-<rack>-<N>N-<jobid>.txt.
+# The shim STRIPS llmb's own --output and forces ours, and Slurm expands %j, so the
+# aggregated log lands under the dashboard log dir already correctly named — no
+# post-run collector needed (unlike NCCL, whose tables live in per-rank files).
+_rack_label="${RACK_ID:-nodes}"
+_rack_label="$(printf '%s' "${_rack_label}" | tr -c 'A-Za-z0-9._+-' '_')"
+SBATCH_OUTPUT=""
+if [[ -n "${JOB_LOG_DIR}" && -d "${JOB_LOG_DIR}" ]]; then
+  SBATCH_OUTPUT="${JOB_LOG_DIR%/}/${USER:-cmods}-NEMO-1Rack-${_rack_label}-${NNODES}N-%j.txt"
+fi
+
+trap nvis_sbatch_pin_cleanup EXIT
+if [[ "${DRY_RUN}" -eq 0 ]]; then
+  nvis_sbatch_pin_install "${NODELIST}" "${SBATCH_OUTPUT}"
+fi
+[[ -n "${RESERVATION}" ]] && export SBATCH_RESERVATION="${RESERVATION}"
+
+# --- Build + run llmb-run -------------------------------------------------------
+if "${LLMB_RUN}" submit --help >/dev/null 2>&1; then
+  LLMB_SUBCMD="submit"; LLMB_DRY_FLAG="--dry-run"
+else
+  LLMB_SUBCMD="single"; LLMB_DRY_FLAG="--dryrun"
+fi
+cmd=( "${LLMB_RUN}" "${LLMB_SUBCMD}" -w "${LLMB_WORKLOAD}" -s "${LLMB_MODEL_SIZE}"
+      --dtype "${LLMB_DTYPE}" --scale "${SCALE}" )
+# TIME_LIMIT is read by nemotron-h/launch.sh (default 00:20:00) and passed to its
+# --time_limit. --env is the supported override channel in llmb-run v26.06+.
+[[ -n "${TIME_LIMIT_VAL}" ]] && cmd+=( --env "TIME_LIMIT=${TIME_LIMIT_VAL}" )
+[[ "${DRY_RUN}" -eq 1 ]] && cmd+=( "${LLMB_DRY_FLAG}" )
+
+echo "run_llmb_nemo: workload=${LLMB_WORKLOAD} model_size=${LLMB_MODEL_SIZE} dtype=${LLMB_DTYPE} nodes=${NNODES} scale=${SCALE}"
+echo "run_llmb_nemo: rack=${RACK_ID:-<none>} nodelist=${NODELIST} time_limit=${TIME_LIMIT_VAL}"
+echo "run_llmb_nemo: LLMB_INSTALL=${LLMB_INSTALL} LLMB_RUN=${LLMB_RUN}${NVIS_SHIM_DIR:+ sbatch_shim=${NVIS_SHIM_DIR}/sbatch}"
+[[ -n "${SBATCH_OUTPUT}" ]] && echo "run_llmb_nemo: sbatch stdout -> ${SBATCH_OUTPUT}"
+echo "run_llmb_nemo: fabric: NCCL_IB_HCA=${NCCL_IB_HCA:-<auto>} NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-<auto>} UCX_TLS=${UCX_TLS:-<default>}"
+printf 'run_llmb_nemo: exec:'; printf ' %q' "${cmd[@]}"; echo
+
+cd "${LLMB_INSTALL}" || die "cannot cd to LLMB_INSTALL=${LLMB_INSTALL}"
+
+_out="$(mktemp 2>/dev/null || echo /tmp/nvis_llmb_nemo_$$.out)"
+"${cmd[@]}" 2>&1 | tee "${_out}"
+_rc="${PIPESTATUS[0]}"
+
+# --- Auto-collect: llmb's REAL training output is not in our sbatch stdout --------
+# nemo_run's generated batch script runs the work under its own
+# `srun --output <experiments>/.../log-default-default...out`, which our sbatch shim
+# never sees. Without this the canonical log holds ~6 KB of shell trace and zero
+# iterations, and the dashboard reports a successful run as "not run" (jobs 84733-84736).
+# Disable with NVIS_LLMB_AUTOCOLLECT=0.
+if [[ "${DRY_RUN}" -eq 0 && "${NVIS_LLMB_AUTOCOLLECT:-1}" == "1" ]]; then
+  _jid="$(grep -oE 'jobid=[0-9]+' "${_out}" 2>/dev/null | head -1 | cut -d= -f2)"
+  _collect="${_SCRIPT_DIR}/collect_llmb_nemo_log.sh"
+  if [[ -n "${_jid}" && -x "${_collect}" ]]; then
+    echo "run_llmb_nemo: auto-collect armed for job ${_jid}"
+    _squeue="${RACK_SLURM_SQUEUE:-$(command -v squeue || echo /cm/local/apps/slurm/current/bin/squeue)}"
+    setsid nohup bash -c '
+      jid="$1"; collect="$2"; squeue="$3"; logdir="$4"; llmb="$5"; rack="$6"
+      export RACK_JOB_LOG_DIR="$logdir" LLMB_INSTALL="$llmb"
+      for _ in $(seq 1 2880); do
+        "$squeue" -h -j "$jid" -o %i 2>/dev/null | grep -q . || break
+        sleep 10
+      done
+      sleep 15
+      bash "$collect" "$jid" "$rack"
+    ' _ "${_jid}" "${_collect}" "${_squeue}" "${JOB_LOG_DIR}" "${LLMB_INSTALL}" "${RACK_ID}" \
+      >> "${JOB_LOG_DIR%/}/llmb-nemo-autocollect_${_jid}.log" 2>&1 < /dev/null &
+  elif [[ -z "${_jid}" ]]; then
+    echo "run_llmb_nemo: WARNING: could not parse jobid; auto-collect skipped" >&2
+  fi
+fi
+
+rm -f "${_out}" 2>/dev/null || true
+echo "run_llmb_nemo: llmb-run exit=${_rc}"
+exit "${_rc}"
