@@ -64,10 +64,58 @@ Verify: `sinfo -N -h -o '%N %t' | grep <rack>` → all `idle`, and
 - Ask **AIC/BCM admin** to whitelist `sshd` / `systemd --user` in the BCM `rogueprocess` prejob
   healthcheck so ordinary login sessions don't drain nodes.
 
+## Two more ways a run poisons its own rack (Nscale TX, 2026-08-05)
+
+Same end state — a rack that cannot schedule because it drained itself — but different checks,
+and only the first self-heals. All three were seen on one afternoon on `ink50-dh01`.
+
+**A. `rogueprocess` flags orphaned MPI ranks, not just login sessions.** The Boston case above is
+stale `sshd`/`systemd --user`. On Nscale TX the failing check named our own leftovers from a
+*previous NCCL run*:
+
+```text
+rogueprocess is FAIL, .../hpcx-v2.25.1/ompi/bin/orted (cmods),
+  .../nccl-2.30.7/nccl-tests/build/all_reduce_perf (cmods), /usr/sbin/sshd (cmods)
+```
+
+An `srun`/MPI job that does not reap its ranks poisons the rack for the *next* launch: job N+1
+starts, prolog fails, node drains, job goes `launch failed requeued held`. This one **self-heals**
+once the orphans exit and the BCM healthcheck re-passes (observed: ~45 min, node auto-resumed).
+
+**B. `Kill task failed` — the self-inflicted deadlock. Does NOT self-heal.** When a step's tasks
+miss `UnkillableStepTimeout`, root drains those nodes naming the job that owned them:
+
+```text
+ink50-dh01-h15-15  drain  Kill task failed (JobId=127391 StepId=16) [root@...]
+```
+
+The trap: the job is **requeued into PENDING while holding the blame for draining the nodes it
+needs**, so it waits forever on itself (seen on `j01`, 5 nodes, job 126811). Worse for a two-stage
+campaign — Stage 1 NCCL completed `0:0` but its teardown drained two trays, so the Stage 2 NeMo
+job submitted 3 minutes later sat in `ReqNodeNotAvail` indefinitely.
+
+**Before resuming, check the node is actually clean** — this is the difference between the two
+cases. `IDLE+DRAIN` plus no `cmods` processes and no `D`-state tasks means the drain is stale
+bookkeeping and a resume sticks. Resuming while orphans are still present just re-drains on the
+next launch:
+
+```bash
+ssh <node> 'ps -u cmods -o pid=,etimes=,stat=,cmd= | awk "\$2>300"; ps -eo stat=,cmd= | awk "\$1 ~ /D/"'
+scontrol update nodename=ink50-dh01-h15-[15,33] state=resume reason="verified clean"
+```
+
+**`ReqNodeNotAvail, May be reserved for other job` is a liar.** It reads like queue contention. In
+every case above there was *no* competing job — the cluster had ~1890 nodes idle and nothing
+running. The job pinned an exact `ReqNodeList` and needed all N; one drained node blocked it.
+Always check `sinfo -N -n <ReqNodeList>` for a non-`idle` member before assuming contention.
+
 ## Related gotchas seen alongside this
 
-- **`scontrol update ... state=resume` as `cmods` → `Invalid user id`.** cmods is not a Slurm
-  operator/admin; run node state changes via `sudo scontrol` (root is SlurmUser-privileged).
+- **`scontrol update ... state=resume` privileges are per-cluster.** On Boston, `cmods` gets
+  `Invalid user id` and node state changes need `sudo scontrol` (root is SlurmUser-privileged).
+  On **Nscale TX the same account IS a Slurm operator** and `scontrol update state=resume` works
+  directly — while `sudo` on that head node prompts for a password and is unusable non-interactively.
+  Try the direct call before assuming you need root.
 - **`/raid/data` staging (`run_singlerack.sh`) needs root on the *compute* trays.** A passwordless
   `visudo` edit on `slogin` does NOT help — the sudo runs on the nodes. As of 2026-07-02 NOPASSWD is
   propagated to the b0x compute trays, so `sudo -n` works and `RACK_SUDO_PASSWORD` is no longer

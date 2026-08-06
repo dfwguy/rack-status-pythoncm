@@ -330,6 +330,12 @@ Full catalogue: [`docs/ENVIRONMENT.md`](ENVIRONMENT.md).
 An independent framework at `/home/cmods/bringup/` continuously validates nodes. Rack
 Status **integrates with it rather than competing with it.**
 
+> Full integration contract — BCM registration objects, the `SETTINGS` keys that change what our
+> UI shows, `RECOVER_REASONS`, how to verify the framework is actually *running*, and a map into
+> his own 38-file docs tree — is in
+> [`BRINGUP_AUTOMATION_INTEGRATION.md`](BRINGUP_AUTOMATION_INTEGRATION.md). Read that before
+> debugging anything bring-up related; the summary below is orientation only.
+
 BCM monitoring fires three actions while a node's `DeviceStatus == UP` (`duringactions`,
 so they re-evaluate every cycle):
 
