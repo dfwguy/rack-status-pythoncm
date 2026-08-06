@@ -338,6 +338,29 @@ export function buildFloorLayout(rows: RackRow[], naming?: NvisNamingSchema): Fl
 }
 
 /**
+ * Map rack id -> datacenter row label, from the **backend** ``hierarchy``.
+ *
+ * Use this for any row grouping or row filter. The row label is whatever the active
+ * ``NVIS_RACK_ID`` template calls that slot (``d`` for ``ink50-dh01-d16``, ``a`` for
+ * ``bos01-a09``), so it stays correct per site without the SPA parsing rack ids.
+ * Returns an empty map when the response predates ``hierarchy`` — callers should treat
+ * "no rows known" as "offer no row filter" rather than falling back to a guess.
+ */
+export function buildRackRowMap(data: { hierarchy?: RackHierarchy } | null): Map<string, string> {
+  const map = new Map<string, string>();
+  const hierarchy = data?.hierarchy;
+  if (!hierarchy) return map;
+  for (const section of hierarchy.sections) {
+    for (const row of section.rows) {
+      for (const hr of row.racks) {
+        map.set(hr.rack, row.label || "");
+      }
+    }
+  }
+  return map;
+}
+
+/**
  * Build the floor layout from the **backend** ``hierarchy`` payload (the single
  * source of truth). Rack ids are joined back to the flat ``rows`` for per-rack
  * status/health; grouping/labels/order come straight from the server so the SPA

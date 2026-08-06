@@ -1,0 +1,327 @@
+// MultirackView.test.tsx — the rack-picker filters on the Multirack Validation page.
+// Author: Rafael M. Koike & Cursor Agent ("Ada")
+//
+// The picker lists every rack in the fleet (112 on Nscale TX, 5 pages), so "launch on row H"
+// meant paging and hunting. These tests cover the filters and, more importantly, the two places
+// where filtering can mislead an operator into launching on the wrong racks:
+//   * "Select all eligible" must mean the racks currently on screen, not the whole fleet.
+//   * A selection made before filtering stays in the launch count, so it must be surfaced.
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MultirackView } from "./MultirackView";
+import type { RackRow, RackStatusResponse } from "../types/api";
+
+function rack(id: string, nemo: string, opts: Partial<RackRow> = {}): RackRow {
+  return {
+    rack: id,
+    nemo,
+    last_job: "-",
+    // Eligibility wants all-idle sinfo and no DN trays; overridden per case below.
+    sinfo: "idle=18",
+    ct_down_unk: "-",
+    ...opts,
+  } as RackRow;
+}
+
+/** Two rows (d, e) with a mix of statuses, plus one rack the backend never placed in a row. */
+function makeData(): RackStatusResponse {
+  return {
+    ok: true,
+    rows: [
+      rack("ink50-dh01-d01", "done"),
+      rack("ink50-dh01-d02", "done"),
+      rack("ink50-dh01-d03", "pending"),
+      rack("ink50-dh01-e01", "done"),
+      rack("ink50-dh01-e02", "fail"),
+      rack("ink50-dh01-e03", "ongoing [12:34]"),
+      // eligible-looking status but a drained tray -> not eligible
+      rack("ink50-dh01-e04", "done", { sinfo: "idle=17,drain=1" }),
+      rack("orphan-rack-99", "done"),
+    ],
+    hierarchy: {
+      levels: ["section", "row", "rack"],
+      sections: [
+        {
+          key: "ink50-dh01",
+          label: "dh01",
+          rows: [
+            {
+              key: "ink50-dh01-d",
+              label: "d",
+              racks: [
+                { rack: "ink50-dh01-d01", label: "d01" },
+                { rack: "ink50-dh01-d02", label: "d02" },
+                { rack: "ink50-dh01-d03", label: "d03" },
+              ],
+            },
+            {
+              key: "ink50-dh01-e",
+              label: "e",
+              racks: [
+                { rack: "ink50-dh01-e01", label: "e01" },
+                { rack: "ink50-dh01-e02", label: "e02" },
+                { rack: "ink50-dh01-e03", label: "e03" },
+                { rack: "ink50-dh01-e04", label: "e04" },
+              ],
+            },
+          ],
+        },
+      ],
+      unmatched: ["orphan-rack-99"],
+    },
+  } as unknown as RackStatusResponse;
+}
+
+beforeEach(() => {
+  // The view polls multirack jobs and on-disk results on mount; keep both empty and quiet.
+  const emptyBody = JSON.stringify({ ok: true, rows: [], jobs: [] });
+  vi.spyOn(globalThis, "fetch").mockResolvedValue({
+    ok: true,
+    status: 200,
+    text: async () => emptyBody,
+    json: async () => JSON.parse(emptyBody),
+  } as unknown as Response);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+function renderView() {
+  return render(<MultirackView data={makeData()} logDir="/logs" />);
+}
+
+/** Rack ids currently rendered in the picker table. */
+function visibleRacks(): string[] {
+  return screen
+    .getAllByText(/^(ink50-dh01-[de]\d\d|orphan-rack-99)$/)
+    .map((el) => el.textContent || "");
+}
+
+/**
+ * Pick an option in a KUI Combobox. Its listbox lives in a `popover="manual"` element, so it is
+ * outside the accessibility tree until opened and `getByRole("option")` cannot see it -- hence
+ * `hidden: true`. Clicking the option still drives `onValueChange`.
+ */
+function chooseOption(comboboxLabel: string, optionText: string) {
+  const combobox = screen.getByLabelText(comboboxLabel);
+  const listboxId = combobox.getAttribute("aria-controls");
+  const options = screen
+    .getAllByRole("option", { hidden: true })
+    .filter((o) => o.closest(`#${listboxId}`) !== null);
+  const match = options.find((o) => o.textContent === optionText);
+  if (!match) {
+    throw new Error(
+      `option "${optionText}" not in ${comboboxLabel}; saw ${JSON.stringify(options.map((o) => o.textContent))}`
+    );
+  }
+  fireEvent.click(match);
+}
+
+describe("MultirackView rack filters", () => {
+  it("shows every rack before any filter is applied", async () => {
+    renderView();
+    await waitFor(() => expect(visibleRacks().length).toBe(8));
+  });
+
+  it("filters by rack id text", async () => {
+    renderView();
+    await waitFor(() => expect(visibleRacks().length).toBe(8));
+
+    fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), {
+      target: { value: "e0" },
+    });
+
+    await waitFor(() => {
+      const shown = visibleRacks();
+      expect(shown).toEqual(["ink50-dh01-e01", "ink50-dh01-e02", "ink50-dh01-e03", "ink50-dh01-e04"]);
+    });
+    expect(screen.getByText(/4 of 8 racks shown/)).toBeTruthy();
+  });
+
+  it("text filter is case-insensitive", async () => {
+    renderView();
+    fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), {
+      target: { value: "INK50-DH01-D01" },
+    });
+    await waitFor(() => expect(visibleRacks()).toEqual(["ink50-dh01-d01"]));
+  });
+
+  it("offers a row filter built from the backend hierarchy", async () => {
+    renderView();
+    // The hierarchy defines rows d and e; the row control only renders when rows exist.
+    await waitFor(() => expect(screen.getByLabelText("Filter by datacenter row")).toBeTruthy());
+    const listboxId = screen.getByLabelText("Filter by datacenter row").getAttribute("aria-controls");
+    const rowOpts = screen
+      .getAllByRole("option", { hidden: true })
+      .filter((o) => o.closest(`#${listboxId}`) !== null)
+      .map((o) => o.textContent);
+    expect(rowOpts).toEqual(["d", "e"]);
+  });
+
+  it("filters to a single datacenter row", async () => {
+    renderView();
+    await waitFor(() => expect(visibleRacks().length).toBe(8));
+
+    chooseOption("Filter by datacenter row", "d");
+
+    await waitFor(() =>
+      expect(visibleRacks()).toEqual(["ink50-dh01-d01", "ink50-dh01-d02", "ink50-dh01-d03"])
+    );
+    // orphan-rack-99 has no row in the hierarchy, so a row filter must exclude it.
+    expect(visibleRacks()).not.toContain("orphan-rack-99");
+  });
+
+  it("row filter accumulates rather than replacing", async () => {
+    renderView();
+    chooseOption("Filter by datacenter row", "d");
+    await waitFor(() => expect(visibleRacks().length).toBe(3));
+    chooseOption("Filter by datacenter row", "e");
+    await waitFor(() => expect(visibleRacks().length).toBe(7));
+  });
+
+  it("filters by validation status, matching the timed ongoing form", async () => {
+    renderView();
+    await waitFor(() => expect(visibleRacks().length).toBe(8));
+
+    // "ongoing [12:34]" must match the "ongoing" bucket -- raw equality would miss it.
+    chooseOption("Filter by validation status", "ongoing");
+
+    await waitFor(() => expect(visibleRacks()).toEqual(["ink50-dh01-e03"]));
+  });
+
+  it("filters by validation status done", async () => {
+    renderView();
+    chooseOption("Filter by validation status", "done");
+    await waitFor(() =>
+      expect(visibleRacks()).toEqual([
+        "ink50-dh01-d01",
+        "ink50-dh01-d02",
+        "ink50-dh01-e01",
+        "ink50-dh01-e04",
+        "orphan-rack-99",
+      ])
+    );
+  });
+
+  it("combines a row filter with a validation filter", async () => {
+    renderView();
+    chooseOption("Filter by datacenter row", "e");
+    chooseOption("Filter by validation status", "done");
+    // Row e, status done: e01 and e04 (e04 is done but drained, so still listed here).
+    await waitFor(() => expect(visibleRacks()).toEqual(["ink50-dh01-e01", "ink50-dh01-e04"]));
+  });
+
+  it("reports when a filter matches nothing and offers a way out", async () => {
+    renderView();
+    fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), {
+      target: { value: "no-such-rack" },
+    });
+    await waitFor(() => expect(screen.getByText("No racks match the current filter.")).toBeTruthy());
+    // Both the empty state and the toolbar offer a clear; either must restore the full list.
+    fireEvent.click(screen.getAllByText("Clear filters")[0]);
+    await waitFor(() => expect(visibleRacks().length).toBe(8));
+  });
+
+  it("clearing filters restores every rack", async () => {
+    renderView();
+    fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "d0" } });
+    await waitFor(() => expect(visibleRacks().length).toBe(3));
+    fireEvent.click(screen.getByText("Clear filters"));
+    await waitFor(() => expect(visibleRacks().length).toBe(8));
+  });
+
+  it("counts only eligible racks inside the current filter", async () => {
+    renderView();
+    // Fleet-wide: d01,d02,e01,orphan are eligible (e04 is drained, others not done) -> 4.
+    await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "d0" } });
+
+    // Within "d0": d01 and d02 are eligible, d03 is pending.
+    await waitFor(() => expect(screen.getByText("Select all eligible (2)")).toBeTruthy());
+    expect(screen.getByText(/2 eligible here/)).toBeTruthy();
+  });
+
+  it("select-all-eligible selects only the filtered racks, not the whole fleet", async () => {
+    renderView();
+    fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "d0" } });
+    await waitFor(() => expect(screen.getByText("Select all eligible (2)")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Select all eligible (2)"));
+
+    // The launch buttons must offer 2, not the 4 eligible fleet-wide.
+    await waitFor(() => expect(screen.getByText("Launch Multirack Validation (2)")).toBeTruthy());
+    expect(screen.getByText("2 selected")).toBeTruthy();
+  });
+
+  it("warns when a selected rack is hidden by the filter", async () => {
+    renderView();
+    await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeTruthy());
+    fireEvent.click(screen.getByText("Select all eligible (4)"));
+    await waitFor(() => expect(screen.getByText("4 selected")).toBeTruthy());
+
+    // Narrow to row d: the eligible e01 and orphan-rack-99 stay selected but leave the screen.
+    fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "d0" } });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/2 selected racks are hidden by the current filter/)
+      ).toBeTruthy()
+    );
+    // and the launch count still reflects all 4, which is why the warning exists
+    expect(screen.getByText("Launch Multirack Validation (4)")).toBeTruthy();
+  });
+
+  it("no warning when every selected rack is visible", async () => {
+    renderView();
+    fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "d0" } });
+    await waitFor(() => expect(screen.getByText("Select all eligible (2)")).toBeTruthy());
+    fireEvent.click(screen.getByText("Select all eligible (2)"));
+    await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
+    expect(screen.queryByText(/hidden by the current filter/)).toBeNull();
+  });
+
+  it("toggling select-all off clears only the filtered racks", async () => {
+    renderView();
+    await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeTruthy());
+    fireEvent.click(screen.getByText("Select all eligible (4)"));
+    await waitFor(() => expect(screen.getByText("4 selected")).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "d0" } });
+    await waitFor(() => expect(screen.getByText("Clear selection (2)")).toBeTruthy());
+    fireEvent.click(screen.getByText("Clear selection (2)"));
+
+    // d01+d02 dropped; e01 and orphan-rack-99 (selected, hidden) survive.
+    await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
+  });
+
+  it("eligible-only hides racks that cannot be launched", async () => {
+    renderView();
+    await waitFor(() => expect(visibleRacks().length).toBe(8));
+
+    fireEvent.click(screen.getByLabelText("Eligible only"));
+
+    await waitFor(() => {
+      const shown = visibleRacks();
+      expect(shown).toEqual(["ink50-dh01-d01", "ink50-dh01-d02", "ink50-dh01-e01", "orphan-rack-99"]);
+    });
+  });
+
+  it("eligible-only excludes a rack whose trays are drained", async () => {
+    renderView();
+    fireEvent.click(screen.getByLabelText("Eligible only"));
+    // e04 is "done" but has drain=1 in sinfo.
+    await waitFor(() => expect(visibleRacks()).not.toContain("ink50-dh01-e04"));
+  });
+
+  it("filters combine rather than replace each other", async () => {
+    renderView();
+    fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "e0" } });
+    fireEvent.click(screen.getByLabelText("Eligible only"));
+
+    // Of e01..e04 only e01 is eligible.
+    await waitFor(() => expect(visibleRacks()).toEqual(["ink50-dh01-e01"]));
+  });
+});

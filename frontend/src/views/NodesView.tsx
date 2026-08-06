@@ -24,6 +24,7 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { type NodeInfo } from "../components/rack/NodeSelector";
 import { parseNodesFromRack } from "../lib/parseNodesFromRack";
+import { buildRackRowMap } from "../lib/rackTopology";
 import { ValidationTab } from "../components/rack/ValidationTab";
 import { HardwareTab } from "../components/rack/HardwareTab";
 import { NetworkingTab } from "../components/rack/NetworkingTab";
@@ -73,21 +74,6 @@ function statusLabel(status: NodeInfo["status"]): string {
     default:
       return "UNKNOWN";
   }
-}
-
-/** Build rack id -> datacenter row label from the backend-authoritative hierarchy. */
-function buildRackRowMap(data: RackStatusResponse | null): Map<string, string> {
-  const map = new Map<string, string>();
-  const hierarchy = data?.hierarchy;
-  if (!hierarchy) return map;
-  for (const section of hierarchy.sections) {
-    for (const row of section.rows) {
-      for (const hr of row.racks) {
-        map.set(hr.rack, row.label || "");
-      }
-    }
-  }
-  return map;
 }
 
 function redfishHref(ip: string): string | null {

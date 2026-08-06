@@ -13,10 +13,13 @@ import Paper from "@mui/material/Paper";
 import Snackbar from "@mui/material/Snackbar";
 import Alert from "@mui/material/Alert";
 import CircularProgress from "@mui/material/CircularProgress";
+import TextField from "@mui/material/TextField";
+import InputAdornment from "@mui/material/InputAdornment";
 import { Card, Text, Tag, Button, Banner, Flex } from "@nvidia/foundations-react-core";
 import { attachLaunchOptions, type LaunchOptions } from "../lib/rackCommandBodies";
 import { LaunchOptionsDialog } from "../components/rack/LaunchOptionsDialog";
-import { Layers, LineChart, Gauge } from "lucide-react";
+import { MultiSelectCombobox } from "../components/MultiSelectCombobox";
+import { Layers, LineChart, Gauge, Search } from "lucide-react";
 import Tooltip from "@mui/material/Tooltip";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
@@ -30,6 +33,8 @@ import {
   type TailLogStreamBody,
 } from "../lib/rackLog";
 import { validationStatusTooltip } from "../lib/validationStatusTooltip";
+import { VALIDATION_CATEGORIES, nemoCategory } from "../lib/validationStages";
+import { buildRackRowMap } from "../lib/rackTopology";
 import type { MultirackJob, RackRow, RackStatusResponse } from "../types/api";
 import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
@@ -114,6 +119,12 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   const [dryRun, setDryRun] = useState(false);
   const [pendingKind, setPendingKind] = useState<MultirackLaunchKind | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Rack picker filters. 112 racks over 5 pages is unusable for "launch on row H" without them.
+  const [query, setQuery] = useState("");
+  const [rowFilters, setRowFilters] = useState<string[]>([]);
+  const [validationFilters, setValidationFilters] = useState<string[]>([]);
+  const [eligibleOnly, setEligibleOnly] = useState(false);
   const [launchingKind, setLaunchingKind] = useState<MultirackLaunchKind | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: "success" | "error" | "info" }>({
     open: false, message: "", severity: "info",
@@ -186,11 +197,26 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     setMrError("");
     try {
       const res = await fetch(`/api/multirack-status?log_dir=${encodeURIComponent(logDir)}`);
-      const json = await res.json();
+      const body = await res.text();
+      let json: { ok?: boolean; rows?: Record<string, string>[]; error?: string };
+      try {
+        json = JSON.parse(body) as { ok?: boolean; rows?: Record<string, string>[]; error?: string };
+      } catch {
+        // HTML 500 / SPA index from a crashed or missing route — don't surface raw parse noise.
+        const looksHtml = /^\s*<(?:!doctype|html)/i.test(body);
+        setMrError(
+          looksHtml
+            ? `/api/multirack-status returned HTML instead of JSON (HTTP ${res.status}). ` +
+              "The backend likely crashed building the on-disk results table — check container logs."
+            : `Non-JSON response from /api/multirack-status (HTTP ${res.status}): ${body.slice(0, 120)}`
+        );
+        setMrRows([]);
+        return;
+      }
       if (json.ok && Array.isArray(json.rows)) {
         setMrRows(json.rows.map((r: Record<string, string>) => ({
           log_file: r.log_file || r.basename || "",
-          display_rack: r.rack || r.display_rack || "",
+          display_rack: r.rack || r.display_rack || r.rack_display || "",
           nemo: r.nemo || "-",
           last_job: r.last_job || "-",
           sinfo: r.sinfo || "-",
@@ -211,8 +237,6 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   // Stable empty fallback: `|| []` builds a new array every render, which would re-slice the
   // pager's memo each time and defeats the point of memoising it.
   const rows = data?.rows || EMPTY_RACK_ROWS;
-  // One row per rack in the fleet, and this is the picker you scroll to choose from.
-  const rackPage = usePagedRows(rows);
 
   const eligibilityMap = useMemo(() => {
     const map = new Map<string, { eligible: boolean; reason: string }>();
@@ -230,6 +254,71 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     return count;
   }, [eligibilityMap]);
 
+  // Row label comes from the backend hierarchy, so "row" means whatever the site's naming
+  // template calls that slot (d for ink50-dh01-d16, a for bos01-a09) with no id parsing here.
+  const rackRowMap = useMemo(() => buildRackRowMap(data), [data]);
+
+  const rowOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows) {
+      const label = rackRowMap.get(r.rack);
+      if (label) set.add(label);
+    }
+    return [...set]
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((v) => ({ value: v, children: v }));
+  }, [rows, rackRowMap]);
+
+  const filteredRows = useMemo(() => {
+    let result = rows;
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      result = result.filter((r) => r.rack.toLowerCase().includes(q));
+    }
+    if (rowFilters.length > 0) {
+      const set = new Set(rowFilters);
+      result = result.filter((r) => set.has(rackRowMap.get(r.rack) ?? ""));
+    }
+    if (validationFilters.length > 0) {
+      const set = new Set(validationFilters);
+      result = result.filter((r) => set.has(nemoCategory(r.nemo)));
+    }
+    if (eligibleOnly) {
+      result = result.filter((r) => eligibilityMap.get(r.rack)?.eligible);
+    }
+    return result;
+  }, [rows, query, rowFilters, validationFilters, eligibleOnly, rackRowMap, eligibilityMap]);
+
+  // One row per rack in the fleet, and this is the picker you scroll to choose from. Paging the
+  // FILTERED list keeps the pager's range text honest about what is on screen.
+  const rackPage = usePagedRows(filteredRows);
+
+  const filtersActive =
+    query.trim() !== "" || rowFilters.length > 0 || validationFilters.length > 0 || eligibleOnly;
+
+  const clearFilters = () => {
+    setQuery("");
+    setRowFilters([]);
+    setValidationFilters([]);
+    setEligibleOnly(false);
+  };
+
+  // Eligible racks WITHIN the current filter: "select all eligible" that ignored the filter
+  // would silently queue racks the operator cannot see.
+  const filteredEligible = useMemo(
+    () => filteredRows.filter((r) => eligibilityMap.get(r.rack)?.eligible).map((r) => r.rack),
+    [filteredRows, eligibilityMap]
+  );
+
+  // A selection made before filtering can end up off-screen, and the launch buttons count it.
+  const hiddenSelectedCount = useMemo(() => {
+    if (selected.size === 0) return 0;
+    const visible = new Set(filteredRows.map((r) => r.rack));
+    let n = 0;
+    for (const rack of selected) if (!visible.has(rack)) n++;
+    return n;
+  }, [selected, filteredRows]);
+
   const handleToggle = (rack: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -239,13 +328,21 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     });
   };
 
+  // Scoped to the filtered set: with a row filter applied, "select all eligible" means the racks
+  // on screen. Toggles off only those, leaving any selection made under a different filter alone.
+  const allFilteredEligibleSelected =
+    filteredEligible.length > 0 && filteredEligible.every((rack) => selected.has(rack));
+
   const handleSelectAllEligible = () => {
-    const allEligible = rows.filter((r) => eligibilityMap.get(r.rack)?.eligible).map((r) => r.rack);
-    if (selected.size === allEligible.length && allEligible.length > 0) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(allEligible));
-    }
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allFilteredEligibleSelected) {
+        for (const rack of filteredEligible) next.delete(rack);
+      } else {
+        for (const rack of filteredEligible) next.add(rack);
+      }
+      return next;
+    });
   };
 
   // Fetch the durable launched-jobs table (shared across users/sessions).
@@ -343,9 +440,102 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           )}
         </Flex>
 
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Flex gap="4" wrap="wrap" align="end">
+            <div style={{ minWidth: 200, flex: "1 1 220px" }}>
+              <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 4, display: "block" }}>
+                Rack
+              </Text>
+              <TextField
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Filter by rack id…"
+                size="small"
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Search size={16} />
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+                fullWidth
+              />
+            </div>
+
+            {rowOptions.length > 0 && (
+              <div style={{ minWidth: 160 }}>
+                <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 4, display: "block" }}>
+                  Row
+                </Text>
+                <MultiSelectCombobox
+                  items={rowOptions}
+                  value={rowFilters}
+                  onValueChange={setRowFilters}
+                  size="small"
+                  aria-label="Filter by datacenter row"
+                />
+              </div>
+            )}
+
+            <div style={{ minWidth: 180 }}>
+              <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 4, display: "block" }}>
+                Validation
+              </Text>
+              <MultiSelectCombobox
+                items={VALIDATION_CATEGORIES}
+                value={validationFilters}
+                onValueChange={setValidationFilters}
+                size="small"
+                aria-label="Filter by validation status"
+              />
+            </div>
+
+            <FormControlLabel
+              control={
+                <Checkbox checked={eligibleOnly} onChange={(e) => setEligibleOnly(e.target.checked)} size="small" />
+              }
+              label="Eligible only"
+            />
+
+            {filtersActive && (
+              <Button kind="tertiary" size="small" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            )}
+          </Flex>
+
+          {filtersActive && (
+            <Text
+              kind="body/regular/sm"
+              style={{ color: "var(--text-color-secondary)", marginTop: 8, display: "block" }}
+            >
+              {filteredRows.length} of {rows.length} racks shown
+              {filteredEligible.length > 0 ? ` — ${filteredEligible.length} eligible here` : " — none eligible here"}
+            </Text>
+          )}
+        </Paper>
+
+        {hiddenSelectedCount > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <Banner status="warning">
+              {hiddenSelectedCount} selected rack{hiddenSelectedCount === 1 ? " is" : "s are"} hidden by the current
+              filter and would still be included in a launch.
+            </Banner>
+          </div>
+        )}
+
         <Flex gap="2" align="center" wrap="wrap" style={{ marginBottom: 12 }}>
-          <MuiButton size="small" variant="outlined" onClick={handleSelectAllEligible} disabled={eligibleCount === 0}>
-            {selected.size === eligibleCount && eligibleCount > 0 ? "Clear selection" : `Select all eligible (${eligibleCount})`}
+          <MuiButton
+            size="small"
+            variant="outlined"
+            onClick={handleSelectAllEligible}
+            disabled={filteredEligible.length === 0}
+          >
+            {allFilteredEligibleSelected
+              ? `Clear selection (${filteredEligible.length})`
+              : `Select all eligible (${filteredEligible.length})`}
           </MuiButton>
           <FormControlLabel
             control={<Checkbox checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} size="small" />}
@@ -383,6 +573,17 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
             <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
               No rack status available yet. Rack data loads from the dashboard poll.
             </Text>
+          </Card>
+        ) : filteredRows.length === 0 ? (
+          <Card style={{ padding: 32, textAlign: "center" }}>
+            <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)", display: "block" }}>
+              No racks match the current filter.
+            </Text>
+            <div style={{ marginTop: 12 }}>
+              <Button kind="secondary" size="small" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            </div>
           </Card>
         ) : (
           <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: "50vh" }}>

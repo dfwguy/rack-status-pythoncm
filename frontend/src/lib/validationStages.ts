@@ -24,8 +24,15 @@ export const VALIDATION_STAGES: StageMeta[] = [
   { key: "stage2", short: "S2", label: "Stage 2", tool: "NeMo" },
 ];
 
+/**
+ * The four buckets a validation status collapses to. Filter controls should offer these rather
+ * than raw ``nemo`` strings, because the running form carries an elapsed time (``ongoing [12:34]``)
+ * and would never match an equality test.
+ */
+export const VALIDATION_CATEGORIES: StageState[] = ["done", "fail", "ongoing", "pending"];
+
 /** Collapse an ``ongoing [MM:SS]`` label (or any status) to a bare category. */
-function nemoCategory(nemo: string): StageState {
+export function nemoCategory(nemo: string): StageState {
   const n = (nemo || "").trim();
   if (n === "done") return "done";
   if (n === "fail") return "fail";

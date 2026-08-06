@@ -64,7 +64,9 @@ import {
 } from "../lib/rackLog";
 import { validationStatusTooltip } from "../lib/validationStatusTooltip";
 import {
+  VALIDATION_CATEGORIES,
   VALIDATION_STAGES,
+  nemoCategory,
   stageStates,
   stageStateColor,
   stageStateLabel,
@@ -100,7 +102,7 @@ type SortDir = "asc" | "desc";
 type ActionKind = "drain" | "undrain" | "cancel" | "power_up";
 type MenuKind = "sinfo" | "job" | "device" | "comment";
 
-const VALIDATION_OPTIONS = ["done", "fail", "ongoing", "pending"];
+const VALIDATION_OPTIONS: string[] = VALIDATION_CATEGORIES;
 const SINFO_OPTIONS = ["idle", "alloc", "mix", "drain", "down", "comp"];
 
 const ACTION_LABELS: Record<ActionKind, { title: string; description: (rack: string, jobId?: string) => string; confirm: string }> = {
@@ -131,13 +133,6 @@ function nemoSortKey(nemo: string): number {
   if (nemo.startsWith("ongoing")) return 1;
   if (nemo === "pending") return 2;
   return 3;
-}
-
-function nemoCategory(nemo: string): string {
-  if (nemo === "done") return "done";
-  if (nemo === "fail") return "fail";
-  if (nemo.startsWith("ongoing")) return "ongoing";
-  return "pending";
 }
 
 function extractSinfoStates(sinfo: string): string[] {
