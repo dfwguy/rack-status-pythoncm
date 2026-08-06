@@ -8,7 +8,7 @@
 // The UI deliberately distinguishes "inconclusive" from "ready". The script's functional
 // data-path probe is the only check that detects the wedged route, and it self-skips when its
 // venv is absent — so a node whose probe was skipped is shown amber, never green.
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import Dialog from "@mui/material/Dialog";
 import DialogTitle from "@mui/material/DialogTitle";
@@ -24,7 +24,7 @@ import TableRow from "@mui/material/TableRow";
 import Paper from "@mui/material/Paper";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Checkbox from "@mui/material/Checkbox";
-import { Accordion, Banner, Flex, Tag, Text } from "@nvidia/foundations-react-core";
+import { Accordion, Banner, Flex, ProgressBar, Spinner, Tag, Text } from "@nvidia/foundations-react-core";
 import { ShieldCheck } from "lucide-react";
 import { ActionCard } from "./ActionCard";
 import { CollapsibleLog } from "../CollapsibleLog";
@@ -108,18 +108,30 @@ interface NvlinkPreflightPanelProps {
   disabled: boolean;
 }
 
+/** ``1m 12s`` — an elapsed readout so a multi-minute wait is visibly progressing, not stuck. */
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m > 0 ? `${m}m ${String(s).padStart(2, "0")}s` : `${s}s`;
+}
+
 export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: NvlinkPreflightPanelProps) {
   const [quick, setQuick] = useState(false);
   const [running, setRunning] = useState(false);
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<JobStatus | null>(null);
   const [error, setError] = useState("");
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const cancelled = useRef(false);
 
   const run = useCallback(async () => {
     setRunning(true);
     setError("");
     setStatus(null);
+    setStartedAt(Date.now());
+    setElapsed(0);
     cancelled.current = false;
     try {
       const body: Record<string, unknown> = { rack, quick };
@@ -159,6 +171,14 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
   const summary = status?.summary;
   const phase = String(status?.phase || "").toLowerCase();
   const inFlight = running && phase !== "done" && phase !== "error";
+
+  // Tick the elapsed readout only while a run is in flight. The initial 0 is set by the click
+  // handler, so the effect body sets no state — it only owns the interval.
+  useEffect(() => {
+    if (!inFlight || startedAt === null) return;
+    const t = setInterval(() => setElapsed(Date.now() - startedAt), 1000);
+    return () => clearInterval(t);
+  }, [inFlight, startedAt]);
 
   return (
     <>
@@ -212,13 +232,35 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
             </Box>
           )}
 
-          {inFlight && !rows.length && (
+          {inFlight && (
             <Box sx={{ mb: 2 }}>
               <Banner status="info">
                 {quick
                   ? "Running the quick gate on every selected node…"
                   : "Running the full gate. The forced-NVLink probe allows up to 120s per node; nodes are checked in parallel."}
               </Banner>
+              {/* Indeterminate rather than a percentage: the nodes are checked in one parallel
+                  pdsh pass, so no partial count exists until it returns. KUI reserves Spinner
+                  for 1-5s waits and points at a bar for longer ones, and this runs for minutes. */}
+              <Box sx={{ mt: 1.5 }}>
+                <ProgressBar
+                  kind="indeterminate"
+                  aria-label={`NVLink preflight running on ${rack}`}
+                />
+              </Box>
+              <Flex align="center" gap="2" style={{ marginTop: 8 }}>
+                <Spinner size="small" aria-label="Preflight in progress" />
+                <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                  {`Running for ${formatElapsed(elapsed)} — ${selectedNodes.size} node(s)`}
+                  {quick ? "" : ". Typically 1-3 minutes."}
+                </Text>
+              </Flex>
+              <Text
+                kind="body/regular/sm"
+                style={{ display: "block", marginTop: 6, color: "var(--text-color-subtle)" }}
+              >
+                Closing this dialog stops watching; the check keeps running on the cluster.
+              </Text>
             </Box>
           )}
 
