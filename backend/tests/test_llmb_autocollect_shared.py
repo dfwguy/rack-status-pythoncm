@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -151,18 +152,32 @@ def test_watcher_output_lands_in_a_named_log(rig):
     assert log.is_file()
 
 
+# Everything the include and its watcher shell out to, minus setsid. Enumerated so the fake PATH
+# below is complete: a missing tool would fail the watcher for a reason unrelated to setsid.
+_WATCHER_TOOLS = ("bash", "nohup", "grep", "sleep", "seq", "cut", "head", "basename")
+
+
 def test_the_watcher_starts_even_without_setsid(rig):
-    """setsid is missing on some hosts; the watcher must still run rather than die unnoticed."""
+    """setsid is missing on some hosts; the watcher must still run rather than die unnoticed.
+
+    Builds a PATH holding every tool the watcher needs EXCEPT setsid, so the include has to take
+    its nohup fallback. Tools are resolved with shutil.which rather than ``command -v``: the
+    latter is a shell builtin, and only macOS also ships it as /usr/bin/command, so a subprocess
+    call to it passes locally and raises FileNotFoundError in a Debian-based CI image.
+    """
     fake_bin = rig["tmp"] / "nosetsid"
     fake_bin.mkdir()
-    for tool in ("bash", "nohup", "grep", "sleep", "seq", "cut", "head"):
-        src = subprocess.run(["command", "-v", tool], capture_output=True, text=True, shell=False)
-        path = src.stdout.strip() or f"/usr/bin/{tool}"
+    for tool in _WATCHER_TOOLS:
+        resolved = shutil.which(tool)
+        if resolved is None:
+            pytest.skip(f"{tool} not on PATH; cannot build a setsid-free PATH")
         target = fake_bin / tool
-        if not target.exists() and Path(path).exists():
-            target.symlink_to(path)
+        if not target.exists():
+            target.symlink_to(resolved)
+
     proc = _arm(rig, PATH=str(fake_bin))
     assert proc.returncode == 0, proc.stderr
+    assert shutil.which("setsid", path=str(fake_bin)) is None, "fake PATH still exposes setsid"
     assert _wait_for(rig["argv"]), f"watcher did not run without setsid; log: {_watcher_log(rig)}"
 
 
