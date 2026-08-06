@@ -1,0 +1,368 @@
+// NvlinkPreflightPanel.tsx — NVLink/NVLS readiness gate, run before Stage 1.
+// Author: Rafael M. Koike & Cursor Agent ("Ada")
+//
+// Sits at the top of the Validation tab because it is the cheap check that decides whether the
+// expensive ones are worth starting: a wedged NVSwitch SDN route makes NCCL/NeMo collectives
+// hang, and this catches it in minutes instead of a burnt 36-node run.
+//
+// The UI deliberately distinguishes "inconclusive" from "ready". The script's functional
+// data-path probe is the only check that detects the wedged route, and it self-skips when its
+// venv is absent — so a node whose probe was skipped is shown amber, never green.
+import { useCallback, useRef, useState } from "react";
+import Box from "@mui/material/Box";
+import Dialog from "@mui/material/Dialog";
+import DialogTitle from "@mui/material/DialogTitle";
+import DialogContent from "@mui/material/DialogContent";
+import DialogActions from "@mui/material/DialogActions";
+import MuiButton from "@mui/material/Button";
+import Table from "@mui/material/Table";
+import TableBody from "@mui/material/TableBody";
+import TableCell from "@mui/material/TableCell";
+import TableContainer from "@mui/material/TableContainer";
+import TableHead from "@mui/material/TableHead";
+import TableRow from "@mui/material/TableRow";
+import Paper from "@mui/material/Paper";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import Checkbox from "@mui/material/Checkbox";
+import { Accordion, Banner, Flex, Tag, Text } from "@nvidia/foundations-react-core";
+import { ShieldCheck } from "lucide-react";
+import { ActionCard } from "./ActionCard";
+import { CollapsibleLog } from "../CollapsibleLog";
+import { apiFetch } from "../../lib/apiFetch";
+import { validationTargetFromNodes } from "../../lib/validationTargetFromNodes";
+import type { NvisNamingSchema } from "../../types/naming";
+
+const POLL_MS = 2000;
+/** The full gate allows 120s per node plus pdsh fan-out; give it room before giving up. */
+const POLL_MAX_MS = 35 * 60 * 1000;
+
+type NodeStatus = "pass" | "fail" | "skipped" | "incomplete" | "no_response" | "error";
+
+interface PreflightCheck {
+  name: string;
+  state: "pass" | "fail" | "warn" | "skipped";
+  detail: string;
+}
+
+interface PreflightRow {
+  host: string;
+  status: NodeStatus;
+  result_detail: string;
+  started: boolean;
+  quick: boolean | null;
+  checks: PreflightCheck[];
+  passed: number;
+  failed: number;
+  warned: number;
+  skipped: number;
+  first_failure: string;
+  transport_error: string;
+}
+
+interface PreflightSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  incomplete: number;
+  no_response: number;
+  ready: boolean;
+  worst: string;
+}
+
+interface JobStatus {
+  ok?: boolean;
+  phase?: string;
+  error?: string | null;
+  rows?: PreflightRow[];
+  summary?: PreflightSummary;
+  stdout?: string;
+  stderr?: string;
+  command_display?: string;
+  quick?: boolean;
+}
+
+type TagColor = "green" | "red" | "yellow" | "blue" | "gray";
+
+const STATUS_TAG: Record<NodeStatus, { color: TagColor; label: string }> = {
+  pass: { color: "green", label: "ready" },
+  fail: { color: "red", label: "not ready" },
+  // Amber, not green: a skipped functional probe proves nothing about the NVLink data path.
+  skipped: { color: "yellow", label: "inconclusive" },
+  incomplete: { color: "yellow", label: "incomplete" },
+  no_response: { color: "gray", label: "no response" },
+  error: { color: "red", label: "unreachable" },
+};
+
+const CHECK_TAG: Record<PreflightCheck["state"], TagColor> = {
+  pass: "green",
+  fail: "red",
+  warn: "yellow",
+  skipped: "gray",
+};
+
+interface NvlinkPreflightPanelProps {
+  rack: string;
+  naming?: NvisNamingSchema;
+  selectedNodes: Set<string>;
+  disabled: boolean;
+}
+
+export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: NvlinkPreflightPanelProps) {
+  const [quick, setQuick] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState<JobStatus | null>(null);
+  const [error, setError] = useState("");
+  const cancelled = useRef(false);
+
+  const run = useCallback(async () => {
+    setRunning(true);
+    setError("");
+    setStatus(null);
+    cancelled.current = false;
+    try {
+      const body: Record<string, unknown> = { rack, quick };
+      const target = validationTargetFromNodes(rack, selectedNodes, naming);
+      if (target) body.target = target;
+      const res = await apiFetch("/api/nvlink-preflight-async", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const started = (await res.json()) as { ok?: boolean; job_id?: string; error?: string };
+      if (!res.ok || !started.ok || !started.job_id) {
+        throw new Error(started.error || "failed to start the preflight");
+      }
+      setOpen(true);
+      const deadline = Date.now() + POLL_MAX_MS;
+      while (Date.now() < deadline && !cancelled.current) {
+        await new Promise((r) => setTimeout(r, POLL_MS));
+        const sres = await apiFetch(
+          `/api/reset-job-status?job_id=${encodeURIComponent(started.job_id)}`,
+        );
+        const data = (await sres.json()) as JobStatus;
+        setStatus(data);
+        const phase = String(data.phase || "").toLowerCase();
+        if (phase === "done" || phase === "error") return;
+      }
+      if (!cancelled.current) setError("timed out waiting for the preflight to finish");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "preflight failed to start");
+      setOpen(true);
+    } finally {
+      setRunning(false);
+    }
+  }, [rack, quick, selectedNodes, naming]);
+
+  const rows = status?.rows ?? [];
+  const summary = status?.summary;
+  const phase = String(status?.phase || "").toLowerCase();
+  const inFlight = running && phase !== "done" && phase !== "error";
+
+  return (
+    <>
+      <ActionCard
+        title="NVLink Preflight — run this first"
+        description={
+          `Per-node NVLink / NVLS readiness gate on ${selectedNodes.size} selected node(s) in ${rack}. ` +
+          "Checks GPU enumeration, 18 NVLinks, the P2P matrix, fabric registration, IMEX domain and dmesg, " +
+          "and (full mode) forces an NVLink all_reduce under timeout with a RoCE control leg — the only check " +
+          "that detects a wedged NVSwitch route, which otherwise makes NCCL and NeMo hang. Run before Stage 1."
+        }
+        icon={<ShieldCheck size={20} />}
+        buttonLabel={running ? "Checking…" : "Run Preflight"}
+        status={running ? "running" : summary ? (summary.ready ? "success" : "error") : "idle"}
+        disabled={disabled || running}
+        onRun={run}
+      />
+
+      <Box sx={{ mt: -1, mb: 1, ml: 1 }}>
+        <FormControlLabel
+          control={
+            <Checkbox
+              size="small"
+              checked={quick}
+              disabled={running}
+              onChange={(e) => setQuick(e.target.checked)}
+            />
+          }
+          label={
+            <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+              Quick mode — skip the NVLink data-path probe (faster, but will not catch a wedged NVSwitch route)
+            </Text>
+          }
+        />
+      </Box>
+
+      <Dialog
+        open={open}
+        onClose={() => {
+          cancelled.current = true;
+          setOpen(false);
+        }}
+        maxWidth="lg"
+        fullWidth
+      >
+        <DialogTitle>NVLink Preflight — {rack}</DialogTitle>
+        <DialogContent dividers>
+          {error && (
+            <Box sx={{ mb: 2 }}>
+              <Banner status="error">{error}</Banner>
+            </Box>
+          )}
+
+          {inFlight && !rows.length && (
+            <Box sx={{ mb: 2 }}>
+              <Banner status="info">
+                {quick
+                  ? "Running the quick gate on every selected node…"
+                  : "Running the full gate. The forced-NVLink probe allows up to 120s per node; nodes are checked in parallel."}
+              </Banner>
+            </Box>
+          )}
+
+          {summary && (
+            <Box sx={{ mb: 2 }}>
+              <Banner status={summary.ready ? "success" : summary.failed ? "error" : "warning"}>
+                {summary.ready
+                  ? `All ${summary.total} node(s) NVLS-ready — safe to start Stage 1.`
+                  : `${summary.passed}/${summary.total} node(s) ready. ` +
+                    [
+                      summary.failed ? `${summary.failed} failed` : "",
+                      summary.skipped ? `${summary.skipped} inconclusive (a check was skipped, not passed)` : "",
+                      summary.incomplete ? `${summary.incomplete} incomplete` : "",
+                      summary.no_response ? `${summary.no_response} did not respond` : "",
+                    ]
+                      .filter(Boolean)
+                      .join(", ")}
+              </Banner>
+            </Box>
+          )}
+
+          {rows.length > 0 && (
+            <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
+              <Table size="small" stickyHeader aria-label={`NVLink preflight results for ${rack}`}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Node</TableCell>
+                    <TableCell>Result</TableCell>
+                    <TableCell>Checks</TableCell>
+                    <TableCell>Reason</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {rows.map((r) => {
+                    const tag = STATUS_TAG[r.status] ?? STATUS_TAG.no_response;
+                    return (
+                      <TableRow key={r.host} hover>
+                        <TableCell sx={{ fontWeight: 600, fontFamily: "monospace" }}>{r.host}</TableCell>
+                        <TableCell>
+                          <Tag color={tag.color} kind="solid" readOnly density="compact">
+                            {tag.label}
+                          </Tag>
+                        </TableCell>
+                        <TableCell>
+                          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                            {`${r.passed} pass`}
+                            {r.failed ? `, ${r.failed} fail` : ""}
+                            {r.warned ? `, ${r.warned} warn` : ""}
+                            {r.skipped ? `, ${r.skipped} skipped` : ""}
+                          </Text>
+                        </TableCell>
+                        <TableCell>
+                          <Text kind="body/regular/sm" style={{ color: "var(--text-color-subtle)" }}>
+                            {r.first_failure || r.transport_error || r.result_detail || "—"}
+                          </Text>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+
+          {rows.length > 0 && (
+            <Box sx={{ mb: 2 }}>
+              <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 8 }}>
+                Per-node checks
+              </Text>
+              {/* Single-open: an operator inspects one node at a time, per the KUI guidance. */}
+              <Accordion
+                items={rows.map((r) => ({
+                  value: r.host,
+                  slotTrigger: (
+                    <Flex align="center" gap="inherit">
+                      <Tag
+                        color={(STATUS_TAG[r.status] ?? STATUS_TAG.no_response).color}
+                        kind="solid"
+                        readOnly
+                        density="compact"
+                      >
+                        {(STATUS_TAG[r.status] ?? STATUS_TAG.no_response).label}
+                      </Tag>
+                      <Text kind="mono/sm">{r.host}</Text>
+                    </Flex>
+                  ),
+                  slotContent: r.checks.length ? (
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.75, py: 1 }}>
+                      {r.checks.map((c, i) => (
+                        <Flex key={`${c.name}-${i}`} gap="2" align="start" wrap="wrap">
+                          <Tag color={CHECK_TAG[c.state]} kind="outline" readOnly density="compact">
+                            {c.state}
+                          </Tag>
+                          <Text kind="mono/sm" style={{ minWidth: 190 }}>
+                            {c.name}
+                          </Text>
+                          <Text
+                            kind="body/regular/sm"
+                            style={{ color: "var(--text-color-secondary)", flex: 1 }}
+                          >
+                            {c.detail || "—"}
+                          </Text>
+                        </Flex>
+                      ))}
+                    </Box>
+                  ) : (
+                    <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                      {r.transport_error
+                        ? `No checks ran — ${r.transport_error}`
+                        : "This node reported no checks."}
+                    </Text>
+                  ),
+                }))}
+              />
+            </Box>
+          )}
+
+          {status?.command_display && (
+            <Text
+              kind="mono/sm"
+              style={{ display: "block", color: "var(--text-color-subtle)", marginBottom: 8 }}
+            >
+              {status.command_display}
+            </Text>
+          )}
+
+          {status?.stdout ? (
+            <CollapsibleLog text={status.stdout} label="raw preflight output" maxHeight={420} />
+          ) : null}
+          {status?.stderr ? (
+            <CollapsibleLog text={status.stderr} label="stderr" tone="error" maxHeight={240} />
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <MuiButton
+            onClick={() => {
+              cancelled.current = true;
+              setOpen(false);
+            }}
+          >
+            Close
+          </MuiButton>
+        </DialogActions>
+      </Dialog>
+    </>
+  );
+}

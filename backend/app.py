@@ -150,6 +150,7 @@ import workflow_engine  # noqa: E402
 import rack_locks  # noqa: E402
 import multirack_jobs  # noqa: E402
 import validation_activities  # noqa: E402
+import nvlink_preflight  # noqa: E402
 import token_vault  # noqa: E402
 import nvftp_cache_sync  # noqa: E402
 from platforms import get_platform as _get_platform  # noqa: E402
@@ -8355,6 +8356,184 @@ def api_imex_check_async():
         daemon=True,
     ).start()
     return jsonify({"ok": True, "job_id": job_id, "kind": "imex_check", "rack": rack})
+
+
+def _nvlink_preflight_script_path() -> Path:
+    raw = (_eget("RACK_NVLINK_PREFLIGHT_SCRIPT") or "").strip()
+    if raw:
+        return _rpath(Path(raw))
+    return _rpath(SCRIPTS_DIR / "nvlink_preflight.sh")
+
+
+def run_nvlink_preflight_pdsh(pdsh_w: str, *, quick: bool) -> dict:
+    """pdsh ``nvlink_preflight.sh`` across *pdsh_w*; returns per-node rows plus raw output.
+
+    The script runs ON each node, so the deployed copy must be readable there (it lives under
+    the shared RACK_REMOTE_BASE_PATH, which is NFS on BCM). Unlike hw-check there is no wrapper
+    script doing the fan-out, so the pdsh command is built here.
+    """
+    script = _nvlink_preflight_script_path()
+    if not _script_exists(script):
+        raise OSError(f"nvlink_preflight.sh not found: {script}")
+    w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
+    if not w:
+        raise ValueError("empty pdsh -w pattern")
+    expected = [h for h in re.split(r"[,\s]+", w) if h]
+    # The functional probe alone allows 120s per node; pdsh fans out in parallel, so the wall
+    # clock is roughly one node's worth plus scheduling. Quick mode skips it entirely.
+    default_timeout = 600 if quick else 1800
+    timeout = max(60, _env_int("RACK_NVLINK_PREFLIGHT_TIMEOUT", default_timeout))
+    remote = f"bash {shlex.quote(str(script))}" + (" --quick" if quick else " --full")
+    plat = _get_platform()
+    cmd = plat.pdsh_cmd(w, remote)
+    cmd_display = " ".join(shlex.quote(c) for c in cmd)
+    try:
+        proc = host_exec.run_on_host(
+            cmd,
+            timeout=timeout,
+            env=_subprocess_env(),
+            profile="script",
+        )
+    except FileNotFoundError as e:
+        raise OSError(f"pdsh not available on the execution host: {e}") from e
+    out = (proc.stdout or "").strip()
+    err = (proc.stderr or "").strip()
+    rows = nvlink_preflight.parse_nvlink_preflight_output(out, err, expected)
+    summary = nvlink_preflight.summarize(rows)
+    # pdsh exits non-zero when ANY node's command failed, and nvlink_preflight.sh exits 1 on a
+    # FAIL verdict — so a non-zero rc here is the normal "some node is not ready" case, not a
+    # tooling error. The verdict comes from the parsed rows, never from the exit code.
+    return {
+        "returncode": proc.returncode,
+        "stdout": out,
+        "stderr": err,
+        "command_display": cmd_display,
+        "pdsh_w": w,
+        "quick": quick,
+        "rows": rows,
+        "summary": summary,
+    }
+
+
+def _nvlink_preflight_worker(job_id: str, pdsh_w: str, quick: bool, rack: str) -> None:
+    """Run the NVLink preflight in a background thread; patches ``_reset_jobs[job_id]``."""
+
+    def _patch(**kwargs: object) -> None:
+        finished = None
+        with _reset_jobs_lock:
+            row = _reset_jobs.get(job_id)
+            if row is not None:
+                row.update(kwargs)
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            _lake_push_job(job_id, finished)
+
+    try:
+        _patch(phase="running", started_running_at=datetime.now(timezone.utc).isoformat())
+        result = run_nvlink_preflight_pdsh(pdsh_w, quick=quick)
+        summary = result.get("summary") or {}
+        ready = bool(summary.get("ready"))
+        _patch(
+            # "done" means the check completed and every node is ready; anything else is
+            # surfaced as an error phase so the UI cannot paint an un-ready rack green.
+            #
+            # ``phase`` and ``summary.ready`` are the verdict. Do NOT read ``ok`` from
+            # /api/reset-job-status: that route sets ok=True to mean "status query succeeded"
+            # and overwrites whatever the worker stored here.
+            phase="done" if ready else "error",
+            ok=ready,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            returncode=result.get("returncode"),
+            stdout=result.get("stdout", ""),
+            stderr=result.get("stderr", ""),
+            command_display=result.get("command_display", ""),
+            pdsh_w=result.get("pdsh_w", ""),
+            quick=quick,
+            rows=result.get("rows", []),
+            summary=summary,
+            error=None if ready else _nvlink_preflight_error_text(summary),
+        )
+    except (OSError, ValueError) as e:
+        _patch(
+            phase="error",
+            ok=False,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            error=str(e),
+        )
+    finally:
+        _reset_job_purge_later(job_id)
+
+
+def _nvlink_preflight_error_text(summary: dict) -> str:
+    """One line naming what is not ready, so the operator does not have to read the table."""
+    bits: list[str] = []
+    if summary.get("failed"):
+        bits.append(f"{summary['failed']} node(s) FAILED")
+    if summary.get("skipped"):
+        bits.append(f"{summary['skipped']} inconclusive (a check was skipped, not passed)")
+    if summary.get("incomplete"):
+        bits.append(f"{summary['incomplete']} incomplete")
+    if summary.get("no_response"):
+        bits.append(f"{summary['no_response']} did not respond")
+    return "NVLink preflight: " + (", ".join(bits) if bits else "rack not ready")
+
+
+@app.route("/api/nvlink-preflight-async", methods=["POST"])
+def api_nvlink_preflight_async():
+    """POST ``{"rack": …, "specs"|"target": …, "quick": bool}`` — NVLink/NVLS readiness gate.
+
+    Async because the full gate runs a 120s forced-NVLink probe per node. Poll the shared
+    ``/api/reset-job-status?job_id=…``; the finished job carries ``rows`` and ``summary``.
+    """
+    if os.environ.get("RACK_NVLINK_PREFLIGHT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "NVLink preflight disabled (RACK_NVLINK_PREFLIGHT_DISABLED)"}), 403
+    body = request.get_json(silent=True) or {}
+    rack_raw = body.get("rack")
+    if not isinstance(rack_raw, str) or not rack_raw.strip():
+        return jsonify({"ok": False, "error": "rack is required"}), 400
+    try:
+        rack = _normalize_rack_id(rack_raw)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+    # Prefer the operator's node selection; fall back to the whole rack.
+    pdsh_w = ""
+    target_raw = body.get("target")
+    if isinstance(target_raw, str) and target_raw.strip():
+        pdsh_w = target_raw.strip()
+    else:
+        specs_raw = body.get("specs")
+        if isinstance(specs_raw, list) and specs_raw:
+            pdsh_w = ",".join(str(x).strip() for x in specs_raw if str(x).strip())
+    if not pdsh_w:
+        try:
+            pdsh_w = validation_target_for_rack(rack, None)
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+
+    quick = bool(body.get("quick", False))
+    script = _nvlink_preflight_script_path()
+    if not _script_exists(script):
+        return jsonify({"ok": False, "error": f"nvlink_preflight.sh not found: {script}"}), 500
+
+    job_id = str(uuid.uuid4())
+    with _reset_jobs_lock:
+        _reset_jobs[job_id] = {
+            "job_id": job_id,
+            "kind": "nvlink_preflight",
+            "operator": _operator_from_request(),
+            "rack": rack,
+            "quick": quick,
+            "phase": "starting",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    threading.Thread(
+        target=_nvlink_preflight_worker,
+        args=(job_id, pdsh_w, quick, rack),
+        daemon=True,
+    ).start()
+    return jsonify({"ok": True, "job_id": job_id, "kind": "nvlink_preflight", "rack": rack, "pdsh_w": pdsh_w})
 
 
 @app.route("/api/rack-uptime", methods=["POST"])

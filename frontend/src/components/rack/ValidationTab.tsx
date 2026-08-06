@@ -2,6 +2,7 @@ import { useState } from "react";
 import Box from "@mui/material/Box";
 import { Text, Divider } from "@nvidia/foundations-react-core";
 import { ActionCard } from "./ActionCard";
+import { NvlinkPreflightPanel } from "./NvlinkPreflightPanel";
 import { LaunchOptionsDialog } from "./LaunchOptionsDialog";
 import { ValidationActivitiesTable } from "./ValidationActivitiesTable";
 import { Play, Flame, Zap, Boxes, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine, Network, Gauge, Activity } from "lucide-react";
@@ -58,7 +59,22 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      {/* First, above the stages: the cheap gate that decides whether the expensive ones are
+          worth starting. A wedged NVSwitch route makes NCCL/NeMo hang rather than fail. */}
       <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)", marginTop: 8 }}>
+        Preflight
+      </Text>
+
+      <NvlinkPreflightPanel
+        rack={rack}
+        naming={naming}
+        selectedNodes={selectedNodes}
+        disabled={disabled}
+      />
+
+      <Divider />
+
+      <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)" }}>
         Validation Stages
       </Text>
 
