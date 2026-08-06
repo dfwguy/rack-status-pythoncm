@@ -121,7 +121,7 @@ def test_the_command_runs_the_script_via_pdsh_on_the_script_profile(client, stub
     assert stub_pdsh["profile"] == "script"
 
 
-def test_quick_mode_passes_the_flag_and_is_inconclusive(client, stub_pdsh):
+def test_quick_mode_passes_the_flag_and_reports_the_skip(client, stub_pdsh):
     stub_pdsh["out"] = (
         "n01: ### nvlink_preflight n01 (quick=1) ###\n"
         "n01: [PASS] gpus_enumerate 4/4\n"
@@ -132,10 +132,11 @@ def test_quick_mode_passes_the_flag_and_is_inconclusive(client, stub_pdsh):
     ).get_json()
     done = _wait(client, start["job_id"])
     assert "--quick" in " ".join(str(c) for c in stub_pdsh["cmd"])
-    # Quick mode skips the only check that detects a wedged route, so it cannot certify ready.
-    assert done["summary"]["ready"] is False
-    assert done["phase"] == "error"
-    assert done["rows"][0]["status"] == "skipped"
+    # Only failures block: quick mode passes, and the skipped probe is reported alongside.
+    assert done["phase"] == "done"
+    assert done["summary"]["ready"] is True
+    assert done["summary"]["nodes_with_skips"] == 1
+    assert done["rows"][0]["status"] == "pass"
 
 
 def test_selected_nodes_scope_the_run(client, stub_pdsh):

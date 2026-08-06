@@ -8378,7 +8378,11 @@ def run_nvlink_preflight_pdsh(pdsh_w: str, *, quick: bool) -> dict:
     w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
-    expected = [h for h in re.split(r"[,\s]+", w) if h]
+    # Expand brackets rather than splitting on commas: this site's tray range CONTAINS a comma
+    # (``[11-18,28-37]``), and scontrol expansion above is best-effort, so ``w`` may still be
+    # bracketed. A naive split produced "r-[11-18" and "28-37]" and reported a healthy 18-node
+    # rack as "2 nodes did not respond".
+    expected = nvlink_preflight.expand_pdsh_w(w)
     # The functional probe alone allows 120s per node; pdsh fans out in parallel, so the wall
     # clock is roughly one node's worth plus scheduling. Quick mode skips it entirely.
     default_timeout = 600 if quick else 1800
@@ -8386,12 +8390,19 @@ def run_nvlink_preflight_pdsh(pdsh_w: str, *, quick: bool) -> dict:
     remote = f"bash {shlex.quote(str(script))}" + (" --quick" if quick else " --full")
     plat = _get_platform()
     cmd = plat.pdsh_cmd(w, remote)
+    # Force the ssh transport. pdsh on this fleet defaults to rsh, which the compute nodes refuse
+    # with "rcmd: socket: Permission denied" — every pdsh script in bin/scripts sets both of these
+    # for that reason, but Platform.pdsh_cmd() does not, so a direct caller has to.
+    if "pdsh" in (cmd[0] if cmd else "") and "-R" not in cmd:
+        cmd = [cmd[0], "-R", "ssh", *cmd[1:]]
+    env = _subprocess_env()
+    env["PDSH_RCMD_TYPE"] = "ssh"
     cmd_display = " ".join(shlex.quote(c) for c in cmd)
     try:
         proc = host_exec.run_on_host(
             cmd,
             timeout=timeout,
-            env=_subprocess_env(),
+            env=env,
             profile="script",
         )
     except FileNotFoundError as e:
@@ -8466,12 +8477,14 @@ def _nvlink_preflight_worker(job_id: str, pdsh_w: str, quick: bool, rack: str) -
 
 
 def _nvlink_preflight_error_text(summary: dict) -> str:
-    """One line naming what is not ready, so the operator does not have to read the table."""
+    """One line naming what is not ready, so the operator does not have to read the table.
+
+    Only blocking conditions appear here. Skipped checks and warnings are reported in the payload
+    (``nodes_with_skips`` / ``nodes_with_warnings``) but never make a rack not-ready.
+    """
     bits: list[str] = []
     if summary.get("failed"):
         bits.append(f"{summary['failed']} node(s) FAILED")
-    if summary.get("skipped"):
-        bits.append(f"{summary['skipped']} inconclusive (a check was skipped, not passed)")
     if summary.get("incomplete"):
         bits.append(f"{summary['incomplete']} incomplete")
     if summary.get("no_response"):

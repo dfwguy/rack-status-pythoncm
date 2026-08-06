@@ -24,7 +24,19 @@ import TableRow from "@mui/material/TableRow";
 import Paper from "@mui/material/Paper";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Checkbox from "@mui/material/Checkbox";
-import { Accordion, Banner, Flex, ProgressBar, Spinner, Tag, Text } from "@nvidia/foundations-react-core";
+import {
+  Accordion,
+  AnimatedChevron,
+  Banner,
+  Button,
+  Card,
+  Collapsible,
+  Flex,
+  ProgressBar,
+  Spinner,
+  Tag,
+  Text,
+} from "@nvidia/foundations-react-core";
 import { ShieldCheck } from "lucide-react";
 import { ActionCard } from "./ActionCard";
 import { CollapsibleLog } from "../CollapsibleLog";
@@ -36,7 +48,7 @@ const POLL_MS = 2000;
 /** The full gate allows 120s per node plus pdsh fan-out; give it room before giving up. */
 const POLL_MAX_MS = 35 * 60 * 1000;
 
-type NodeStatus = "pass" | "fail" | "skipped" | "incomplete" | "no_response" | "error";
+type NodeStatus = "pass" | "fail" | "incomplete" | "no_response" | "error";
 
 interface PreflightCheck {
   name: string;
@@ -63,9 +75,11 @@ interface PreflightSummary {
   total: number;
   passed: number;
   failed: number;
-  skipped: number;
   incomplete: number;
   no_response: number;
+  /** Informational: nodes that passed but did not run every check. Does not block ready. */
+  nodes_with_skips: number;
+  nodes_with_warnings: number;
   ready: boolean;
   worst: string;
 }
@@ -84,11 +98,12 @@ interface JobStatus {
 
 type TagColor = "green" | "red" | "yellow" | "blue" | "gray";
 
+// Only a failed check turns a node red. A warning (SHARP unprovisioned -> NCCL falls back to
+// NVLS_TREE) and a skipped check are reported in the detail but do not change the verdict.
+// Missing data is not a warning, so a node that never answered or never finished is not green.
 const STATUS_TAG: Record<NodeStatus, { color: TagColor; label: string }> = {
   pass: { color: "green", label: "ready" },
   fail: { color: "red", label: "not ready" },
-  // Amber, not green: a skipped functional probe proves nothing about the NVLink data path.
-  skipped: { color: "yellow", label: "inconclusive" },
   incomplete: { color: "yellow", label: "incomplete" },
   no_response: { color: "gray", label: "no response" },
   error: { color: "red", label: "unreachable" },
@@ -272,13 +287,32 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
                   : `${summary.passed}/${summary.total} node(s) ready. ` +
                     [
                       summary.failed ? `${summary.failed} failed` : "",
-                      summary.skipped ? `${summary.skipped} inconclusive (a check was skipped, not passed)` : "",
                       summary.incomplete ? `${summary.incomplete} incomplete` : "",
                       summary.no_response ? `${summary.no_response} did not respond` : "",
                     ]
                       .filter(Boolean)
                       .join(", ")}
               </Banner>
+              {/* Coverage note, not a blocker: the verdict above already stands. This says which
+                  checks did not run, so a green rack does not imply the data path was proven. */}
+              {(summary.nodes_with_skips > 0 || summary.nodes_with_warnings > 0) && (
+                <Text
+                  kind="body/regular/sm"
+                  style={{ display: "block", marginTop: 6, color: "var(--text-color-secondary)" }}
+                >
+                  {[
+                    summary.nodes_with_skips
+                      ? `${summary.nodes_with_skips} node(s) had a check skipped` +
+                        (quick ? " (quick mode skips the NVLink data-path probe)" : "")
+                      : "",
+                    summary.nodes_with_warnings
+                      ? `${summary.nodes_with_warnings} node(s) raised a warning`
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") + " — see per-node checks below."}
+                </Text>
+              )}
             </Box>
           )}
 
@@ -326,73 +360,108 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
           )}
 
           {rows.length > 0 && (
-            <Box sx={{ mb: 2 }}>
+            <Card style={{ padding: 12, marginBottom: 16 }}>
+              {/* One container for the whole per-node block: 18 flat rows otherwise dominate the
+                  dialog and push the raw log off-screen. Collapsible rather than an outer
+                  Accordion because KUI advises against nesting Accordions. Collapsed by default —
+                  the table above already carries each node's verdict and reason. */}
+              <Collapsible
+                slotTrigger={
+                  <Button asChild kind="tertiary" color="neutral" size="small">
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      {`Per-node checks (${rows.length} node${rows.length === 1 ? "" : "s"})`}
+                      <AnimatedChevron />
+                    </div>
+                  </Button>
+                }
+              >
+                {/* Single-open: an operator inspects one node at a time, per the KUI guidance. */}
+                <Accordion
+                  items={rows.map((r) => ({
+                    value: r.host,
+                    slotTrigger: (
+                      // Host first in a fixed-width column so the tags form a straight edge.
+                      // Tag-first left the hostnames ragged, because "ready", "inconclusive" and
+                      // "unreachable" are different widths.
+                      <Flex align="center" gap="inherit">
+                        <Text kind="mono/sm" style={{ minWidth: 210, textAlign: "left" }}>
+                          {r.host}
+                        </Text>
+                        <Tag
+                          color={(STATUS_TAG[r.status] ?? STATUS_TAG.no_response).color}
+                          kind="solid"
+                          readOnly
+                          density="compact"
+                        >
+                          {(STATUS_TAG[r.status] ?? STATUS_TAG.no_response).label}
+                        </Tag>
+                        <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                          {`${r.passed} pass`}
+                          {r.failed ? `, ${r.failed} fail` : ""}
+                          {r.warned ? `, ${r.warned} warn` : ""}
+                          {r.skipped ? `, ${r.skipped} skipped` : ""}
+                        </Text>
+                      </Flex>
+                    ),
+                    slotContent: r.checks.length ? (
+                      <Box sx={{ display: "flex", flexDirection: "column", gap: 0.75, py: 1 }}>
+                        {r.checks.map((c, i) => (
+                          // Same ordering rule as the trigger: fixed-width name column first,
+                          // then the state tag, so the tags line up down the list.
+                          <Flex key={`${c.name}-${i}`} gap="2" align="start" wrap="nowrap">
+                            <Text kind="mono/sm" style={{ minWidth: 190, flexShrink: 0 }}>
+                              {c.name}
+                            </Text>
+                            <Box sx={{ flexShrink: 0, minWidth: 86 }}>
+                              <Tag color={CHECK_TAG[c.state]} kind="outline" readOnly density="compact">
+                                {c.state}
+                              </Tag>
+                            </Box>
+                            <Text
+                              kind="body/regular/sm"
+                              style={{ color: "var(--text-color-secondary)", flex: 1, minWidth: 0 }}
+                            >
+                              {c.detail || "—"}
+                            </Text>
+                          </Flex>
+                        ))}
+                      </Box>
+                    ) : (
+                      <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                        {r.transport_error
+                          ? `No checks ran — ${r.transport_error}`
+                          : "This node reported no checks."}
+                      </Text>
+                    ),
+                  }))}
+                />
+              </Collapsible>
+            </Card>
+          )}
+
+          {(status?.command_display || status?.stdout || status?.stderr) && (
+            <Card style={{ padding: 12 }}>
               <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 8 }}>
-                Per-node checks
+                Raw output
               </Text>
-              {/* Single-open: an operator inspects one node at a time, per the KUI guidance. */}
-              <Accordion
-                items={rows.map((r) => ({
-                  value: r.host,
-                  slotTrigger: (
-                    <Flex align="center" gap="inherit">
-                      <Tag
-                        color={(STATUS_TAG[r.status] ?? STATUS_TAG.no_response).color}
-                        kind="solid"
-                        readOnly
-                        density="compact"
-                      >
-                        {(STATUS_TAG[r.status] ?? STATUS_TAG.no_response).label}
-                      </Tag>
-                      <Text kind="mono/sm">{r.host}</Text>
-                    </Flex>
-                  ),
-                  slotContent: r.checks.length ? (
-                    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.75, py: 1 }}>
-                      {r.checks.map((c, i) => (
-                        <Flex key={`${c.name}-${i}`} gap="2" align="start" wrap="wrap">
-                          <Tag color={CHECK_TAG[c.state]} kind="outline" readOnly density="compact">
-                            {c.state}
-                          </Tag>
-                          <Text kind="mono/sm" style={{ minWidth: 190 }}>
-                            {c.name}
-                          </Text>
-                          <Text
-                            kind="body/regular/sm"
-                            style={{ color: "var(--text-color-secondary)", flex: 1 }}
-                          >
-                            {c.detail || "—"}
-                          </Text>
-                        </Flex>
-                      ))}
-                    </Box>
-                  ) : (
-                    <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-                      {r.transport_error
-                        ? `No checks ran — ${r.transport_error}`
-                        : "This node reported no checks."}
-                    </Text>
-                  ),
-                }))}
-              />
-            </Box>
+              {status?.command_display && (
+                <Text
+                  kind="mono/sm"
+                  style={{ display: "block", color: "var(--text-color-subtle)", marginBottom: 8 }}
+                >
+                  {status.command_display}
+                </Text>
+              )}
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 1, alignItems: "flex-start" }}>
+                {status?.stdout ? (
+                  <CollapsibleLog text={status.stdout} label="preflight output" maxHeight={420} />
+                ) : null}
+                {status?.stderr ? (
+                  <CollapsibleLog text={status.stderr} label="stderr" tone="error" maxHeight={240} />
+                ) : null}
+              </Box>
+            </Card>
           )}
-
-          {status?.command_display && (
-            <Text
-              kind="mono/sm"
-              style={{ display: "block", color: "var(--text-color-subtle)", marginBottom: 8 }}
-            >
-              {status.command_display}
-            </Text>
-          )}
-
-          {status?.stdout ? (
-            <CollapsibleLog text={status.stdout} label="raw preflight output" maxHeight={420} />
-          ) : null}
-          {status?.stderr ? (
-            <CollapsibleLog text={status.stderr} label="stderr" tone="error" maxHeight={240} />
-          ) : null}
         </DialogContent>
         <DialogActions>
           <MuiButton

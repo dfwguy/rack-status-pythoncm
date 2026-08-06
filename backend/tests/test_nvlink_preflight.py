@@ -19,10 +19,64 @@ os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 from nvlink_preflight import (  # noqa: E402
+    expand_hostlist,
+    expand_pdsh_w,
     parse_nvlink_preflight_output,
     status_label,
     summarize,
 )
+
+
+# --- hostlist expansion --------------------------------------------------------------------
+# The expected-node list cannot be built by splitting on commas: this site's tray range has one
+# inside the brackets, and getting this wrong reported a healthy 18-node rack as "2 did not
+# respond" on the first live run.
+
+
+def test_expand_range_with_an_inner_comma():
+    hosts = expand_hostlist("ink50-dh01-h08-[11-18,28-37]")
+    assert len(hosts) == 18
+    assert hosts[0] == "ink50-dh01-h08-11"
+    assert hosts[7] == "ink50-dh01-h08-18"
+    assert hosts[8] == "ink50-dh01-h08-28"
+    assert hosts[-1] == "ink50-dh01-h08-37"
+
+
+def test_expand_preserves_zero_padding():
+    assert expand_hostlist("p5-r01-ct[01-03]") == ["p5-r01-ct01", "p5-r01-ct02", "p5-r01-ct03"]
+
+
+def test_expand_plain_hostname_is_itself():
+    assert expand_hostlist("ink50-dh01-h08-11") == ["ink50-dh01-h08-11"]
+
+
+def test_expand_single_value_bracket():
+    assert expand_hostlist("p5-r01-ct[07]") == ["p5-r01-ct07"]
+
+
+def test_expand_pdsh_w_splits_only_top_level_commas():
+    w = "ink50-dh01-h02-[11-12],ink50-dh01-h03-[11-12]"
+    assert expand_pdsh_w(w) == [
+        "ink50-dh01-h02-11",
+        "ink50-dh01-h02-12",
+        "ink50-dh01-h03-11",
+        "ink50-dh01-h03-12",
+    ]
+
+
+def test_expand_pdsh_w_handles_plain_comma_lists():
+    assert expand_pdsh_w("n01,n02,n03") == ["n01", "n02", "n03"]
+
+
+def test_expand_pdsh_w_dedupes_and_keeps_order():
+    assert expand_pdsh_w("n02,n01,n02") == ["n02", "n01"]
+
+
+def test_expand_pdsh_w_of_the_real_h08_target():
+    """What validation_target_for_rack produces for a whole rack on this site."""
+    hosts = expand_pdsh_w("ink50-dh01-h08-[11-18,28-37]")
+    assert len(hosts) == 18
+    assert "ink50-dh01-h08-[11-18" not in hosts, "the comma-split bug is back"
 
 # A healthy node, as pdsh prefixes it.
 GOOD = """\
@@ -104,22 +158,23 @@ def test_real_interleaved_pdsh_output_parses_per_node():
         assert r["failed"] == 0
 
 
-def test_quick_mode_is_inconclusive_not_ready():
-    """Quick mode omits the data-path check entirely; absence must not read as a pass.
+def test_quick_mode_passes_but_reports_the_skipped_probe():
+    """Quick mode omits the data-path check; that is recorded, but it does not block the pass.
 
-    Both h08 nodes returned RESULT: PASS, but the probe that detects a wedged NVSwitch route
-    never ran — so the rack is not certified ready by this run.
+    Policy: only a FAILED check makes a node not-ready. The skip still has to be visible, so the
+    missing coverage is reported rather than silently absent.
     """
     hosts = ["ink50-dh01-h08-11", "ink50-dh01-h08-12"]
     rows = parse_nvlink_preflight_output(REAL_QUICK, "", hosts)
     for r in rows:
-        assert r["status"] == "skipped", "quick mode cannot certify NVLS readiness"
+        assert r["status"] == "pass"
         dp = next(c for c in r["checks"] if c["name"] == "nvlink_datapath")
         assert dp["state"] == "skipped"
         assert "quick mode" in dp["detail"]
     s = summarize(rows)
-    assert s["ready"] is False
-    assert s["skipped"] == 2
+    assert s["ready"] is True
+    assert s["nodes_with_skips"] == 2, "the missing coverage must still be reported"
+    assert s["nodes_with_warnings"] == 2, "SHARP unprovisioned is a warning, not a blocker"
 
 
 def test_full_mode_with_the_probe_is_ready():
@@ -152,13 +207,16 @@ def test_failed_node_reports_the_failing_check():
     assert "NVSwitch SDN routing DEAD" in r["first_failure"]
 
 
-def test_a_skipped_check_is_not_a_pass():
-    """The script prints RESULT: PASS, but the data-path probe never ran."""
+def test_a_skipped_check_is_reported_but_still_passes():
+    """A self-skipped probe (missing venv) is recorded and does not withhold the pass."""
     rows = parse_nvlink_preflight_output(SKIPPED, "", ["n03"])
     r = _row(rows, "n03")
     assert r["skipped"] == 1
-    assert r["status"] == "skipped", "a skipped functional gate must not read as ready"
-    assert status_label(r["status"]) == "inconclusive"
+    assert r["status"] == "pass"
+    assert status_label(r["status"]) == "ready"
+    dp = next(c for c in r["checks"] if c["name"] == "nvlink_datapath")
+    assert dp["state"] == "skipped"
+    assert "venv/test missing" in dp["detail"]
 
 
 def test_unreachable_node_still_gets_a_row():
@@ -228,9 +286,10 @@ def test_rack_is_ready_only_when_every_node_passes():
         "total": 2,
         "passed": 1,
         "failed": 1,
-        "skipped": 0,
         "incomplete": 0,
         "no_response": 0,
+        "nodes_with_skips": 0,
+        "nodes_with_warnings": 0,
         "ready": False,
         "worst": "fail",
     }
@@ -242,11 +301,33 @@ def test_all_pass_is_ready():
     assert s["worst"] == "pass"
 
 
-def test_a_single_skipped_node_blocks_ready():
+def test_a_skipped_check_does_not_block_ready():
+    """Per policy: skips are reported, failures block."""
     rows = parse_nvlink_preflight_output(GOOD + SKIPPED, "", ["n01", "n03"])
     s = summarize(rows)
-    assert s["ready"] is False, "an inconclusive node must not report the rack ready"
-    assert s["skipped"] == 1
+    assert s["ready"] is True
+    assert s["nodes_with_skips"] == 1
+
+
+def test_a_warning_does_not_block_ready():
+    warned = (
+        "n08: ### nvlink_preflight n08 (quick=0) ###\n"
+        "n08: [PASS] gpus_enumerate 4/4\n"
+        "n08: [WARN] sharp_hello only 0/4 GPU rails have SHARP\n"
+        "n08: [PASS] nvlink_datapath forced-NVLink rc=0\n"
+        "n08: RESULT n08: PASS (NVLS-ready)\n"
+    )
+    s = summarize(parse_nvlink_preflight_output(warned, "", ["n08"]))
+    assert s["ready"] is True
+    assert s["nodes_with_warnings"] == 1
+    assert s["nodes_with_skips"] == 0
+
+
+def test_one_failing_node_still_blocks_ready_even_with_others_warning():
+    rows = parse_nvlink_preflight_output(REAL_QUICK + WEDGED, "", ["ink50-dh01-h08-11", "n02"])
+    s = summarize(rows)
+    assert s["ready"] is False
+    assert s["failed"] == 1
 
 
 def test_missing_node_blocks_ready():
