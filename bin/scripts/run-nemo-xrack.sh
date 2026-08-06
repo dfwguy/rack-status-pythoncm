@@ -44,10 +44,45 @@ echo "Hosts: ${spec_tag}"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/nodes.inc.sh"
 
+# Split the comma-joined specs on commas that are OUTSIDE [...]. A plain IFS=',' split tears a
+# bracketed range apart wherever the range itself contains a comma: this site's tray range is
+# 11-18,28-37, so "ink50-dh01-h02-[11-18,28-37]" became the two fragments
+# "ink50-dh01-h02-[11-18" and "28-37]". Neither is a rack id, so nvis_nodes_resolve found nothing
+# and we fell through to the per-spec fallback — which works here only because the CT template
+# happens to equal the real hostname, and would produce wrong names on a site where it does not
+# (Boston: real = bos01-b05-11-s1-dgx-05-c01). Bright ranges like [01-18] have no inner comma,
+# which is why this stayed hidden.
+_specs=()
+_buf=""
+_depth=0
+for ((_i = 0; _i < ${#spec_tag}; _i++)); do
+  _c="${spec_tag:_i:1}"
+  case "$_c" in
+    '[') _depth=$((_depth + 1)); _buf+="$_c" ;;
+    ']') _depth=$((_depth > 0 ? _depth - 1 : 0)); _buf+="$_c" ;;
+    ',')
+      if ((_depth > 0)); then _buf+="$_c"; else
+        [[ -n "$_buf" ]] && _specs+=("$_buf")
+        _buf=""
+      fi
+      ;;
+    *) _buf+="$_c" ;;
+  esac
+done
+[[ -n "$_buf" ]] && _specs+=("$_buf")
+
 racks=()
-IFS=',' read -ra _specs <<< "${spec_tag}"
 for _s in "${_specs[@]}"; do
-  racks+=( "$(printf '%s' "${_s}" | sed -E 's/-ct(\[[^]]*\]|[0-9]+)$//')" )
+  # Strip the tray part to leave the rack id. The joiner is site-specific (NVIS_CT_ID): Bright
+  # is <rack>-ct[…] but Nscale TX is <rack>-[…], so matching a literal "-ct" left the whole
+  # spec as the "rack id", nvis_nodes_resolve found nothing, and we silently fell through to the
+  # per-spec fallback below — which bypasses this site's rack->node mapping entirely and only
+  # happens to work where the CT template already equals the real hostname.
+  #
+  # Drop a trailing [ranges] group with an optional "ct" joiner, plus the legacy single-tray
+  # -ct<N> form. Deliberately NOT a bare trailing -<N>: that would turn a real hostname
+  # (ink50-dh01-h02-11) into a truncated prefix instead of leaving it for the fallback.
+  racks+=( "$(printf '%s' "${_s}" | sed -E 's/-(ct)?\[[^]]*\]$//; s/-ct[0-9]+$//')" )
 done
 
 hosts=()

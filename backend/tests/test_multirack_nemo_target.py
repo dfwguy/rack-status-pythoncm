@@ -133,6 +133,77 @@ def test_xrack_script_derives_rack_ids_from_the_template():
     assert body.count("nvis_nodes_rack_of") >= 2, "both derivations should use nvis_nodes_rack_of"
 
 
+@pytest.mark.parametrize(
+    "spec,expected",
+    [
+        # Bright: the joiner carries "ct"
+        ("bos01-b05-ct[01-18]", "bos01-b05"),
+        ("p5-r01-ct[01-18]", "p5-r01"),
+        ("p5-r01-ct01", "p5-r01"),
+        # Nscale TX: the joiner is just "-". Matching a literal "-ct" left the whole spec as the
+        # rack id, so nvis_nodes_resolve found nothing and the intended path was skipped.
+        ("ink50-dh01-h02-[11-18,28-37]", "ink50-dh01-h02"),
+        ("ink50-dh01-h03-[11-18]", "ink50-dh01-h03"),
+        # A real hostname must pass through untouched — stripping a bare trailing -<N> would
+        # truncate it to a prefix instead of leaving it for the hostlist fallback.
+        ("ink50-dh01-h02-11", "ink50-dh01-h02-11"),
+        ("bos01-b05-11-s1-dgx-05-c01", "bos01-b05-11-s1-dgx-05-c01"),
+    ],
+)
+def test_rack_id_strip_is_joiner_agnostic(spec: str, expected: str):
+    """The sed in run-nemo-xrack.sh must derive the rack id under either naming."""
+    import subprocess
+
+    body = (SCRIPTS / "run-nemo-xrack.sh").read_text(encoding="utf-8")
+    line = next((ln for ln in body.splitlines() if "racks+=(" in ln and "sed -E" in ln), None)
+    assert line, "could not find the rack-id strip in run-nemo-xrack.sh"
+    m = re.search(r"sed -E '([^']+)'", line)
+    assert m, f"could not read the sed expression from: {line.strip()}"
+    sed_expr = m.group(1)
+    out = subprocess.run(
+        ["bash", "-c", 'printf %s "$1" | sed -E "$2"', "_", spec, sed_expr],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert out.stdout.strip() == expected, out.stderr
+
+
+@pytest.mark.parametrize(
+    "spec_tag,expected",
+    [
+        # This site's range contains a comma, so a plain IFS=',' split tears it in half.
+        (
+            "ink50-dh01-h02-[11-18,28-37],ink50-dh01-h03-[11-18,28-37]",
+            ["ink50-dh01-h02-[11-18,28-37]", "ink50-dh01-h03-[11-18,28-37]"],
+        ),
+        # Bright ranges have no inner comma — this is why the bug stayed hidden.
+        ("bos01-b05-ct[01-18],bos01-b06-ct[01-18]", ["bos01-b05-ct[01-18]", "bos01-b06-ct[01-18]"]),
+        ("p5-r01-ct[01-18]", ["p5-r01-ct[01-18]"]),
+        # Plain hostnames, no brackets at all.
+        ("ink50-dh01-h02-11,ink50-dh01-h02-12", ["ink50-dh01-h02-11", "ink50-dh01-h02-12"]),
+        ("ink50-dh01-h02-[11-18,28-37]", ["ink50-dh01-h02-[11-18,28-37]"]),
+    ],
+)
+def test_spec_split_keeps_bracketed_ranges_intact(spec_tag: str, expected: list[str]):
+    """Commas inside [...] belong to the range, not to the spec list."""
+    import subprocess
+
+    body = (SCRIPTS / "run-nemo-xrack.sh").read_text(encoding="utf-8")
+    # The whole split block, bounded by the `racks=()` that follows it — anchoring on the first
+    # `_specs+=` would cut the loop in half and yield an unbalanced snippet.
+    m = re.search(r"^(_specs=\(\)\n.*?)\nracks=\(\)$", body, re.S | re.M)
+    assert m, "could not find the bracket-aware split in run-nemo-xrack.sh"
+    snippet = m.group(1)
+    script = f'spec_tag="$1"\n{snippet}\nprintf "%s\\n" "${{_specs[@]}}"\n'
+    out = subprocess.run(
+        ["bash", "-c", script, "_", spec_tag], capture_output=True, text=True, timeout=60, check=False
+    )
+    assert out.returncode == 0, out.stderr
+    assert [ln for ln in out.stdout.splitlines() if ln] == expected, out.stdout
+
+
 def test_staging_verify_requires_a_positive_ok_per_node():
     """Staging must count confirmations, not failures.
 
