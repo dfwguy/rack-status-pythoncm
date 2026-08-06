@@ -12973,6 +12973,7 @@ def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int]
     if not isinstance(racks_raw, list) or len(racks_raw) < 1:
         return None, (jsonify({"ok": False, "error": "racks must be a non-empty array of rack ids"}), 400)
     inner = _validation_ct_inner()
+    naming = _nvis_naming()
     specs: list[str] = []
     seen: set[str] = set()
     for item in racks_raw:
@@ -12980,7 +12981,12 @@ def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int]
         if rk in seen:
             continue
         seen.add(rk)
-        specs.append(f"{rk}-ct[{inner}]")
+        # Build the tray spec from NVIS_CT_ID, never a literal "-ct". The joiner is a naming
+        # property: Bright is <rack>-ct<NN>, but Nscale TX is <rack>-<NN>, so the hardcoded form
+        # produced ink50-dh01-h02-ct[11-18,...] — hosts that exist in neither DNS nor Slurm.
+        # pdsh then failed ssh 255 on every node and sbatch rejected the list with
+        # "Invalid node name specified". Every other tray-spec site already uses ct_blob.
+        specs.append(naming.ct_blob(rk, inner))
     if not specs:
         return None, (jsonify({"ok": False, "error": "no valid rack ids"}), 400)
     script = _nemo_xrack_script_path()

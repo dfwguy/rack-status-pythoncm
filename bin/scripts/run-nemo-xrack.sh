@@ -116,12 +116,26 @@ _hostcsv="$(echo "${hosts[*]}" | tr ' ' ',')"
 _src_size=$(stat -c%s "$NEMO_SQSH_SRC" 2>/dev/null || echo 0)
 echo "run-nemo-xrack: staging ${_sqsh_b} (${_src_size} bytes) to /raid/data on ${#hosts[@]} nodes (sudo rsync)…"
 pdsh -R ssh -w "$_hostcsv" "sudo -n mkdir -p /raid/data && sudo -n rsync -ah '${NEMO_SQSH_SRC}' /raid/data/'${_sqsh_b}'" 2>&1 | dshbak -c 2>/dev/null || true
-_bad=$(pdsh -R ssh -w "$_hostcsv" "s=\$(stat -c%s /raid/data/'${_sqsh_b}' 2>/dev/null || echo 0); [ \"\$s\" = '${_src_size}' ] || echo BAD" 2>/dev/null | grep -c BAD || true)
-if [ "${_bad:-1}" -ne 0 ]; then
-  echo "run-nemo-xrack: ERROR: image not fully staged to /raid/data on ${_bad} node(s) (check sudo -n / /raid space). Aborting before submit." >&2
+# Verify by counting nodes that POSITIVELY confirm the full size, and require all of them.
+#
+# This used to count nodes that answered with a WRONG size ("echo BAD") and pass when that count
+# was zero, with pdsh's stderr sent to /dev/null. A node that could not be reached at all never
+# ran the remote command, so it printed no BAD and was silently counted as staged: a run where
+# ssh failed 255 on all 36 nodes still reported "staged OK on all 36 nodes" and went on to
+# submit. Requiring one OK per node inverts that — unreachable, sudo-denied, out of disk or
+# short file all fail the same way, because none of them produce an OK.
+_verify_out=$(pdsh -R ssh -w "$_hostcsv" \
+  "s=\$(stat -c%s /raid/data/'${_sqsh_b}' 2>/dev/null || echo 0); [ \"\$s\" = '${_src_size}' ] && echo STAGED_OK" 2>&1)
+_ok=$(printf '%s\n' "${_verify_out}" | grep -c 'STAGED_OK' || true)
+if [ "${_ok:-0}" -ne "${#hosts[@]}" ]; then
+  echo "run-nemo-xrack: ERROR: image verified on only ${_ok}/${#hosts[@]} nodes in /raid/data." >&2
+  echo "run-nemo-xrack: check ssh reachability, passwordless sudo (sudo -n) and /raid free space." >&2
+  echo "run-nemo-xrack: first failures reported by pdsh:" >&2
+  printf '%s\n' "${_verify_out}" | grep -v 'STAGED_OK' | head -10 | sed 's/^/  /' >&2
+  echo "run-nemo-xrack: aborting before submit." >&2
   exit 1
 fi
-echo "run-nemo-xrack: staged OK on all ${#hosts[@]} nodes"
+echo "run-nemo-xrack: staged OK on all ${#hosts[@]} nodes (verified ${_ok}/${#hosts[@]})"
 # Tell the batch script which staged image to run (it defaults to the stock name otherwise, so
 # NEMO_SQSH_SRC=<vetted image> would be staged but not actually used).
 export NVIS_NEMO_CONT="/raid/data/${_sqsh_b}"
@@ -130,7 +144,19 @@ export NVIS_NEMO_CONT="/raid/data/${_sqsh_b}"
 # (real hostnames) rather than rack-ct specs; using it verbatim would blow past the 255-byte
 # filename limit for --output and make sbatch fail before writing any log (job dies ~2s,
 # ExitCode 0:53). Derive the distinct rack ids from the resolved hosts instead.
-_racktag=$(printf '%s\n' "${hosts[@]}" | sed -E 's/^(bos01-[a-z][0-9]+)-.*/\1/' | sort -u | paste -sd+ | tr -d ' ')
+#
+# Via nvis_nodes_rack_of (NVIS_RACK_ID), the same way the rack count above does. This was the
+# second place hardcoding 'bos01-[a-z][0-9]+'; only the count was converted. Outside Boston the
+# sed matched nothing, so every hostname stayed distinct and _racktag became all N hostnames
+# joined by '+' — roughly 700 characters for 36 nodes, which is exactly the >255-byte --output
+# name this comment warns about.
+_racktag=$(for _h in "${hosts[@]}"; do nvis_nodes_rack_of "${_h}"; echo; done 2>/dev/null \
+  | sort -u | grep -v '^$' | paste -sd+ | tr -d ' ')
+# No template match: fall back to the rack specs the caller passed (the dashboard passes one per
+# rack), never to the raw hostname list.
+if [[ -z "${_racktag}" ]]; then
+  _racktag=$(printf '%s\n' "${racks[@]}" | sort -u | paste -sd+ | tr -d ' ')
+fi
 [[ -n "${_racktag}" ]] || _racktag="${spec_tag}"
 _out_stem="root-NEMO-${_racktag}-${n}N"
 
