@@ -349,7 +349,7 @@ them when present. See [`docs/EXECUTION_ARCHITECTURE.md`](EXECUTION_ARCHITECTURE
 | **`RACK_SSH_KEY`** | `/run/secrets/ssh_key` | Private key path. Passed as `-i` only when the file exists. |
 | **`RACK_SSH_PORT`** | `22` | SSH port. |
 | **`RACK_SSH_OPTS`** | *(unset)* | Extra `ssh` flags (space-separated). |
-| **`RACK_SSH_MULTIPLEX`** | `1` | ControlMaster multiplexing; `0` opts out (see §6 of the architecture doc). |
+| **`RACK_SSH_MULTIPLEX`** | `1` | ControlMaster multiplexing; `0` opts out (see §6 of the architecture doc). Load-bearing for fan-out — a **stale master** degrades every hop and logs `disabling multiplexing` without this ever changing; recovery in §6.1. |
 | **`RACK_SCRIPT_SSH_*`** | *(unset)* | Same fields for the privileged (`script`) route. Unset → both routes collapse to control. |
 | **`RACK_SCRIPT_SUDO`** | *(unset)* | Truthy → privileged route runs under `sudo -n -E`. |
 | **`RACK_REMOTE_BASE_PATH`** | *(unset)* | One tree on one host: `SCRIPTS_DIR` = `…/bin/scripts`, `DEFAULT_LOG_DIR` = `…/var/logs`. Surfaced as the `scripts` / `logs` role roots when no topology is declared. |

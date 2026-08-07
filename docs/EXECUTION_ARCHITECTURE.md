@@ -326,12 +326,93 @@ Three knobs together (all validated on Boston: 14/18 with resets → **18/18, 0 
 > coalesced result. It's an optional, not-yet-default execution mode (bounded app-tier
 > concurrency covers rack scale today); reach for it at cluster scale.
 
+### 6.1 The stale ControlMaster — multiplexing's own failure mode
+
+Multiplexing is **load-bearing**, not an optimization: with it working, every poll and fan-out
+rides one authenticated TCP connection to the head. When the master goes bad the app keeps
+working but degrades in a way that reads like a cluster or data problem, so it is worth
+recognising on sight. Observed on Nscale TX 2026-08-05.
+
+#### Symptom
+
+The dashboard turns sluggish and shows stale or partly-missing data — not errors. The tell is in
+the container log / any hop's stderr:
+
+```
+mux_client_request_session: session request failed: Session open refused by peer
+ControlSocket /root/.ssh/nvis-mux-<hash> already exists, disabling multiplexing
+```
+
+**"disabling multiplexing" is a per-attempt client fallback, not a configuration change.** Nobody
+turned multiplexing off; OpenSSH found the socket unusable and opened a fresh, unmultiplexed
+connection *for that one command*. `RACK_SSH_MULTIPLEX` is still `1`.
+
+#### Root cause — the master outlives its usefulness, and nothing cleans it up
+
+1. `ControlPersist` (60s) only starts counting when the master goes **idle**. Continuous status
+   polling means it never does, so one master can live for **days** (ours was ~24h old, still
+   reporting `Master running (pid=16)`).
+2. Concurrent API polls open **channels** on that single connection. The head caps channels per
+   connection with `MaxSessions` — **default 10, and typically not set in `sshd_config`**
+   (Nscale TX sets only `MaxStartups 10:30:60`, so the invisible default applies).
+3. Hit that ceiling, or wedge a channel on slow I/O, and the peer starts refusing new sessions.
+   A **full filesystem makes this far more likely** — on Nscale TX `/` was at 94%, so commands
+   touching `/home/cmods` stalled and channels piled up instead of closing.
+4. The client falls back for that command but **leaves the dead socket on disk**. Every later hop
+   rediscovers the same corpse, pays a failed handshake, then reconnects from scratch. The
+   degradation is permanent until someone removes the socket.
+
+The retry logic in §6 does not save you here: this is not a transient reset that succeeds on
+attempt two, it is a stale file that keeps failing identically.
+
+#### Diagnose
+
+Socket path is `<mux dir>/nvis-mux-%C`, where the dir is `~/.ssh` when writable (so `/root/.ssh`
+in the container) else `$TMPDIR` — see `_mux_control_dir()` in `backend/transport/ssh.py`.
+
+```bash
+docker exec nvis-rack-status-v3 bash -lc '
+  ls -la /root/.ssh/nvis-mux-*
+  for s in /root/.ssh/nvis-mux-*; do ssh -O check -o ControlPath="$s" <user>@<head>; done'
+```
+
+`Master running (pid=…)` is **not** proof of health — a half-dead master reports exactly that.
+The real test is whether a second session can attach:
+
+```bash
+ssh -o ControlPath="$s" -o ControlMaster=no <user>@<head> 'echo SECOND_SESSION_OK'
+```
+
+#### Fix (recovery)
+
+```bash
+docker exec nvis-rack-status-v3 bash -lc '
+  for s in /root/.ssh/nvis-mux-*; do ssh -O exit -o ControlPath="$s" <user>@<head>; done
+  rm -f /root/.ssh/nvis-mux-*'
+```
+
+Or `docker restart <container>` — the socket lives in the container filesystem, so a restart
+clears it. The next hop transparently establishes a fresh master; no config change is needed.
+
+#### Prevention
+
+- Raise the head's **`MaxSessions`** explicitly rather than relying on the default 10, and keep
+  `RACK_FANOUT_MAX_WORKERS` ≤ that value (§6, Note 1).
+- **Treat head-node disk pressure as an SSH-reliability issue**, not just a capacity one. Stalled
+  commands hold channels open and are what pushes a long-lived master into the ceiling.
+- When triaging "the dashboard shows odd data", check the mux socket **before** suspecting the
+  data path. A refused-session master and a genuinely broken probe look identical in the UI.
+
 ### Design rule
 
 > **Fan-out through a shared gateway is bounded by that gateway's sshd.** Multiplex to cut
 > handshakes, cap concurrency at/under the sshd session limit, and retry transient resets.
 > To scale past one gateway, move the fan-out to where it's one hop from the targets (on the
 > head), so load spreads across the targets' own daemons.
+
+> **A long-lived ControlMaster is shared mutable state, so treat it as something that can go
+> bad.** `Master running` is not health; the only proof is attaching a second session. When it
+> refuses, SSH degrades silently and does not self-heal — clear the socket (§6.1).
 
 ---
 
