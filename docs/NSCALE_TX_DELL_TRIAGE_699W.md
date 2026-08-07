@@ -1,5 +1,11 @@
 # Nscale TX — Dell-requested triage of the 699 W slot-0 GPU cap
 
+> **RESOLVED 2026-08-05.** AIC + Dell cleared 115 nodes with `ClearOOBSetPoint` +
+> `PATCH PowerLimitWatts` after applying the **Dell iDRAC Datacenter License** — the license gate was
+> the reason every write in this document returned HTTP 500. 6 trays remain capped and the
+> provisioning writer is still unidentified. Current status in
+> [`NSCALE_TX_GB300_SLOT0_POWER_CAP.md`](NSCALE_TX_GB300_SLOT0_POWER_CAP.md).
+
 **Date:** 2026-07-31 · **Cluster:** Nscale TX / `ink50-dh01` · **Node:** `ink50-dh01-i05-30`
 (service tag `9TBHKK4`, BMC `10.40.149.12`) · **GPU asked about:** PCI `00000009:06:00.0` = `GPU_1`
 

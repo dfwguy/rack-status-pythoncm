@@ -1,5 +1,26 @@
 # Nscale TX — service tags for the trays with the 699 W slot-0 GPU cap
 
+> **RESOLVED 2026-08-05 — 115 nodes remediated by AIC + Dell** via `ClearOOBSetPoint` +
+> `PATCH PowerLimitWatts`, unlocked by the **Dell iDRAC Datacenter License** (the missing license was
+> why every Redfish write previously returned HTTP 500). The tag lists below are historical.
+>
+> **6 trays still capped** as of 2026-08-05 22:45 UTC, verified in band and over Redfish:
+>
+> | Node | Service tag | BMC | Note |
+> |---|---|---|---|
+> | h01-33 | 464HKK4 | 10.40.144.15 | known since the first survey — remediation coverage gap |
+> | i17-11 | 5D4HKK4 | 10.40.150.38 | known; HGX Redfish tree also unreadable |
+> | f02-35 | 778HKK4 | 10.40.136.35 | new rack — defect still live on new capacity |
+> | g07-30 | DT7HKK4 | 10.40.141.48 | new rack |
+> | g07-35 | 2M9HKK4 | 10.40.141.53 | new rack |
+> | g07-37 | 6C9HKK4 | 10.40.141.55 | new rack |
+>
+> ```
+> 778HKK4,DT7HKK4,2M9HKK4,6C9HKK4,464HKK4,5D4HKK4
+> ```
+>
+> AIC runs a twice-daily sweep; logs on the head at `/home/nvis/logs/gpu-throttle/`.
+
 **Updated 2026-07-31: the count is now 54, not 36.** All trays are **Dell PowerEdge XE9712**.
 Full analysis: `NSCALE_TX_GB300_SLOT0_POWER_CAP.md`
 

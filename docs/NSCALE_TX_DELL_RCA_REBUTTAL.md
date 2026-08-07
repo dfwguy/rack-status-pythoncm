@@ -3,6 +3,15 @@
 Prepared 2026-07-31. Test node `ink50-dh01-h22-17`, service tag `7Z7HKK4`.
 Full investigation: `NSCALE_TX_GB300_SLOT0_POWER_CAP.md`
 
+> **RESOLVED 2026-08-05 — do not send this rebuttal as-is.** AIC + Dell fixed 115 nodes using
+> `ClearOOBSetPoint` + `PATCH PowerLimitWatts` after applying the **Dell iDRAC Datacenter License**.
+> The HTTP 500 documented at length below was **the license gate**, not a broken request handler —
+> iDRAC returned `InternalError` where it should have returned a 402/403 license error. The
+> conformance argument is still valid as a *defect report about the error code*, but the endpoints
+> work once licensed. 6 trays remain capped (`h01-33`, `i17-11`, `f02-35`, `g07-30`, `g07-35`,
+> `g07-37`) and the provisioning writer that sets 699 W has not been identified, so new racks are
+> still arriving capped. See the main investigation doc for current status.
+
 ## Where we agree
 
 - The **module-level limit is untouched and healthy** — all four GPUs report

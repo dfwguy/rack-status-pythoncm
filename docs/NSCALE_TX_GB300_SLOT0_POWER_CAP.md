@@ -2,6 +2,60 @@
 
 **Date:** 2026-07-30, updated 2026-07-31 · **Cluster:** Nscale TX / `ink50-dh01` · **Node investigated:** `ink50-dh01-i05-30` (idle, no jobs disturbed)
 
+## *** RESOLVED 2026-08-05 — the blocker was a missing Dell iDRAC Datacenter License ***
+
+**AIC + Dell remediated 115 nodes.** The fix was exactly the route this document identified —
+`ClearOOBSetPoint` + `PATCH PowerLimitWatts` — and the reason every one of our attempts returned
+**HTTP 500** was that **those Redfish endpoints require the Dell iDRAC Datacenter License**, which
+the trays did not have. With the license applied, the same calls succeed.
+
+**This is the single most important lesson in this document.** We spent significant effort proving,
+correctly, that the payload was valid, that the resource advertised `Allow: GET, PATCH`, and that an
+empty `{}` PATCH also 500'd — and concluded the request handler was broken. The handler was not
+broken; it was **unlicensed**. iDRAC reported a licensing failure as
+`Base.1.18.InternalError` / `IDRAC.2.15.SYS494` instead of the correct **402/403 with a license
+message**, which is what sent us down the wrong path. Everything below about DSP0266 conformance
+still stands as a defect report — returning 500 for "feature not licensed" is wrong and should be
+filed — but it was never a functional dead end.
+
+Corollary: **check licensing before concluding a Redfish endpoint is defective.** On Dell, the
+Datacenter (not Enterprise) license gates GPU/HGX power management. Verify with
+`racadm license view` or `GET /redfish/v1/LicenseService/Licenses`.
+
+Also corrected: an earlier read of this event attributed the clearing of `h08-16` to that rack's
+power cycle. It was not the power cycle — it was the AIC/Dell Redfish remediation. There is no
+evidence in this investigation that an AC cycle clears the setpoint; a host reboot demonstrably does
+not (see the reboot test below).
+
+Ongoing monitoring: twice-daily sweep by AIC, logs at `/home/nvis/logs/gpu-throttle/` on the head
+node (owned by `nvis`, not readable as `cmods`).
+
+### Still outstanding as of 2026-08-05 22:45 UTC — 6 trays
+
+An independent in-band + Redfish sweep of all **2015** nodes (the cluster has grown again; racks `d`
+through `j`) finds 6 trays still carrying the cap, with the identical partial-write fingerprint
+(`SetPoint 699` + `Persistency True` + `ReqPersist 699.0` on slot-0, no persistent write on slot-1,
+chassis rollup 4198/5600 `Override`):
+
+| Node | Service tag | BMC | Note |
+|---|---|---|---|
+| h01-33 | 464HKK4 | 10.40.144.15 | in the original 36 — missed by the remediation |
+| i17-11 | 5D4HKK4 | 10.40.150.38 | in the original 54; **Redfish tree also unreadable** |
+| f02-35 | 778HKK4 | 10.40.136.35 | newly commissioned rack |
+| g07-30 | DT7HKK4 | 10.40.141.48 | newly commissioned rack |
+| g07-35 | 2M9HKK4 | 10.40.141.53 | newly commissioned rack |
+| g07-37 | 6C9HKK4 | 10.40.141.55 | newly commissioned rack |
+
+Two distinct follow-ups, worth keeping separate:
+
+1. **`h01-33` and `i17-11` were known and did not get fixed** — a coverage gap in the remediation
+   pass, not a new occurrence. `i17-11` additionally returns nothing from its HGX Redfish tree, the
+   same symptom `h06-16` showed, so it may have failed the remediation *because* of that.
+2. **The four in `f02`/`g07` are on racks commissioned after the original survey.** The provisioning
+   defect that writes 699 W is therefore **still live** on new capacity. Fixing the existing trays
+   does not stop new ones appearing — the writer itself still needs to be found and corrected, which
+   remains the open question for Dell/AIC.
+
 ## *** SCOPE UPDATE 2026-07-31 — it is 54 trays, not 36 ***
 
 > **Every "36 trays / 543 trays / 19 racks" figure below is the 2026-07-30 snapshot.** Read them as
