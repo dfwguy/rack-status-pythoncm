@@ -109,6 +109,19 @@ export interface LaunchOptions {
    * acceptance requires 5 passing rounds (the modal defaults to 5). Integer ≥ 1.
    */
   iters?: number;
+  /**
+   * Run the stage-1 NCCL sweep before the NEMO pretrain. ``run_llmb_nemo.sh`` submits both
+   * by default; unchecking skips straight to NEMO (``NVIS_LLMB_NEMO_WITH_NCCL=0``), which is
+   * what you want when the rack already has a fresh NCCL result.
+   */
+  withNccl?: boolean;
+  /**
+   * NEMO training iterations. 50 = short perf benchmark, 2010 = the long soak. Sets both
+   * ``NVIS_NEMO_MAX_STEPS`` (what the job runs) and ``NEMO_TARGET_STEPS`` (what the dashboard
+   * requires before it calls the run finished) — they must agree or a short run never
+   * reaches the "done" label.
+   */
+  maxSteps?: number;
 }
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -142,6 +155,11 @@ export function attachLaunchOptions(body: Record<string, unknown>, opts?: Launch
   const iters = opts?.iters;
   if (typeof iters === "number" && Number.isFinite(iters) && iters >= 1) {
     body.iters = Math.round(iters);
+  }
+  if (typeof opts?.withNccl === "boolean") body.with_nccl = opts.withNccl;
+  const steps = opts?.maxSteps;
+  if (typeof steps === "number" && Number.isFinite(steps) && steps >= 1) {
+    body.max_steps = Math.round(steps);
   }
   return body;
 }

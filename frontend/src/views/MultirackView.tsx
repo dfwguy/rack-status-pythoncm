@@ -802,6 +802,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
         confirmLabel="Launch"
         showNcclVersion={pendingKind === "llmb"}
         showIters={pendingKind === "llmb"}
+        showNemoOptions={pendingKind === "nemo"}
       />
 
       <ParserResultsDialog

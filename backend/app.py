@@ -12957,6 +12957,10 @@ _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ENV_MAX_VARS = 32
 _ENV_MAX_VALUE_LEN = 2048
 
+# Upper bound for the launch dialog's NEMO step selector. The UI offers 50 (perf) and 2010
+# (soak); the cap only rejects absurd hand-crafted payloads, it does not pin the choices.
+_NEMO_MAX_STEPS_LIMIT = 1_000_000
+
 
 def _custom_env_from_body(body: dict) -> dict[str, str]:
     """Validated user-supplied ``env`` map from the POST body ({"KEY": "VALUE", ...}).
@@ -13004,6 +13008,22 @@ def _launch_env_from_body(body: dict) -> dict[str, str]:
         if lvl and lvl not in ("OFF", "DEFAULT", "NONE") and lvl in _NCCL_DEBUG_LEVELS:
             out["NVIS_NCCL_DEBUG"] = lvl
             out["NCCL_DEBUG"] = lvl
+    # NEMO stage toggle: run_llmb_nemo.sh submits the Stage-1 NCCL sweep before the pretrain
+    # unless told otherwise. Only send the var when the caller was explicit, so launches
+    # without the knob keep the launcher's own default.
+    with_nccl = body.get("with_nccl")
+    if isinstance(with_nccl, bool):
+        out["NVIS_LLMB_NEMO_WITH_NCCL"] = "1" if with_nccl else "0"
+    # NEMO training length. NVIS_NEMO_MAX_STEPS is what the job runs; NEMO_TARGET_STEPS is the
+    # minimum DECLARED total the log labeller requires before calling a run finished
+    # (lib/llm_label.inc.sh, default 2010). They MUST move together — a 50-step run left at the
+    # 2010 threshold completes but is never labelled done.
+    steps = body.get("max_steps")
+    if isinstance(steps, bool):
+        steps = None
+    if isinstance(steps, (int, float)) and 1 <= int(steps) <= _NEMO_MAX_STEPS_LIMIT:
+        out["NVIS_NEMO_MAX_STEPS"] = str(int(steps))
+        out["NEMO_TARGET_STEPS"] = str(int(steps))
     # User-supplied vars win over the debug defaults above.
     custom = _custom_env_from_body(body)
     out.update(custom)
