@@ -399,7 +399,16 @@ def job_id_from_log_basename(name: str) -> str | None:
     if m:
         return m.group(1)
     m2 = re.search(r"N-(\d+)\.txt$", base, re.IGNORECASE)
-    return m2.group(1) if m2 else None
+    if m2:
+        return m2.group(1)
+    # Other tools (MNUBERGEMM, nvbandwidth, …): plain trailing -<jid>.txt. This branch existed only
+    # in the shell jobid_from_fname, so the two disagreed on exactly those names.
+    m3 = re.search(r"-(\d+)\.txt$", base, re.IGNORECASE)
+    if m3:
+        return m3.group(1)
+    # MPI launcher stdout: nccl-mpi_<rack>+<rack>_<jid>.out — underscore separator, .out extension.
+    m4 = re.search(r"[_-](\d+)\.out$", base, re.IGNORECASE)
+    return m4.group(1) if m4 else None
 
 
 def node_count_from_log_basename(name: str) -> int | None:

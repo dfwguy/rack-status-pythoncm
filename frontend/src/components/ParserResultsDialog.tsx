@@ -19,6 +19,7 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Paper from "@mui/material/Paper";
 import { Button, Text, Banner, Card, Flex, Tag, Checkbox } from "@nvidia/foundations-react-core";
+import { RefreshCw } from "lucide-react";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -54,6 +55,9 @@ ChartJS.register(
 const DISPLAY_TZ_KEY = "rackWebDisplayTimezone";
 /** Persist "Full rack validation (18N)" preference across opens. */
 const FULL_RACK_KEY = "rackWebParserFullRack";
+
+/** Re-parse cadence while a sweep is still being written. Long enough not to hammer a 10 MB log. */
+const PARTIAL_REPARSE_MS = 20000;
 
 function browserIana(): string {
   try {
@@ -121,6 +125,14 @@ interface NcclRow {
   /** Per-collective bus_bw series (parser.sh nccl_series_by_collective_append). */
   busbw_series_by_collective?: Record<string, NcclPoint[]>;
   oob_ar_ag_aa?: string;
+  /**
+   * Sweep-block counts from parser.sh nccl_sweep_counts(). ``started > concluded`` means the log
+   * was parsed while the job was still writing it, so the series is a partial read and the peak
+   * is meaningless. Without this a 1-point chart looks identical to a genuinely slow rack.
+   */
+  sweep_blocks_started?: number;
+  sweep_blocks_concluded?: number;
+  sweep_complete?: boolean;
 }
 
 interface StepPoint {
@@ -187,7 +199,21 @@ function normalizeNcclRow(row: RawNccl): NcclRow {
         ? (row.busbw_series_by_collective as Record<string, NcclPoint[]>)
         : undefined,
     oob_ar_ag_aa: row.oob_ar_ag_aa != null ? String(row.oob_ar_ag_aa) : undefined,
+    sweep_blocks_started: Number.isFinite(Number(row.sweep_blocks_started))
+      ? Number(row.sweep_blocks_started)
+      : undefined,
+    sweep_blocks_concluded: Number.isFinite(Number(row.sweep_blocks_concluded))
+      ? Number(row.sweep_blocks_concluded)
+      : undefined,
+    // Older parsers (and non-nccl-tests logs) omit the counts entirely; absent means "no reason to
+    // doubt it", so default to complete rather than warning on every log.
+    sweep_complete: row.sweep_complete == null ? true : Boolean(row.sweep_complete),
   };
+}
+
+/** Rows whose sweep was still being written when the log was parsed. */
+function partialNcclRows(rows: NcclRow[] | undefined): NcclRow[] {
+  return (rows ?? []).filter((r) => r.sweep_complete === false);
 }
 
 function initChartsTzFromStorage(): string {
@@ -855,6 +881,9 @@ export function ParserResultsDialog({
   initialTabIndex = 0,
 }: ParserResultsDialogProps) {
   const [loading, setLoading] = useState(false);
+  /** Bumped by the Refresh button and by the partial-sweep timer to re-run parser.sh. */
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [fetchedAt, setFetchedAt] = useState<Date | null>(null);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ParserResponse | null>(null);
   const [tabIndex, setTabIndex] = useState(0);
@@ -902,6 +931,7 @@ export function ParserResultsDialog({
     setLoading(true);
     setError("");
     setResult(null);
+    setFetchedAt(null);
 
     const params = new URLSearchParams();
     if (logDir) params.set("log_dir", logDir);
@@ -927,6 +957,7 @@ export function ParserResultsDialog({
         if (json.ok) {
           const data = normalizeParserPayload(json.data);
           setResult({ ...json, data });
+          setFetchedAt(new Date());
           const nvloomIdx = (data.sn_llama_nemotron?.length ?? 0) > 0 ? 4 : 3;
           setTabIndex((t) => Math.min(t, nvloomIdx));
         } else {
@@ -935,7 +966,19 @@ export function ParserResultsDialog({
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [open, rack, jobId, logDir, logFileBasename, logPath, chartsTz, fullRack]);
+    // refreshNonce re-runs this effect: parser.sh is re-executed against the log, which is the
+    // only way to pick up rows written since the dialog opened.
+  }, [open, rack, jobId, logDir, logFileBasename, logPath, chartsTz, fullRack, refreshNonce]);
+
+  // While a sweep is still being written, re-parse on a timer so the chart fills in instead of
+  // sitting on a partial read until the operator notices. Stops as soon as it is complete.
+  const partialRows = partialNcclRows(result?.data?.nccl_peak_out_of_place_busbw_gbps);
+  const sweepPartial = partialRows.length > 0;
+  useEffect(() => {
+    if (!open || !sweepPartial || loading) return;
+    const t = setTimeout(() => setRefreshNonce((n) => n + 1), PARTIAL_REPARSE_MS);
+    return () => clearTimeout(t);
+  }, [open, sweepPartial, loading, refreshNonce]);
 
   useEffect(() => {
     if (!open || !(logDir || "").trim() || !rack.trim() || !result) {
@@ -1051,6 +1094,20 @@ export function ParserResultsDialog({
             {result?.full_rack ? ` · full rack (${nodesLabel}N)` : ""}
           </span>
           <Flex align="center" gap="3" wrap="wrap">
+            <Button
+              kind="secondary"
+              size="small"
+              disabled={loading}
+              onClick={() => setRefreshNonce((n) => n + 1)}
+            >
+              <RefreshCw size={14} style={{ marginRight: 6 }} />
+              {loading ? "Parsing…" : "Refresh"}
+            </Button>
+            {fetchedAt && (
+              <Text kind="body/regular/sm" style={{ color: "var(--text-color-subtle)" }}>
+                {`parsed ${fetchedAt.toLocaleTimeString()}`}
+              </Text>
+            )}
             {rackResolveMode && (
               <Checkbox
                 checked={fullRack}
@@ -1091,6 +1148,26 @@ export function ParserResultsDialog({
         {error && (
           <div style={{ marginBottom: 16 }}>
             <Banner status="error">{error}</Banner>
+          </div>
+        )}
+        {/* A sweep still being written parses to a truncated series: one data row gives a
+            one-point chart whose "peak" is whatever size happened to be flushed. Say so, rather
+            than presenting a partial read as this rack's result. Re-parses automatically. */}
+        {sweepPartial && (
+          <div style={{ marginBottom: 16 }}>
+            <Banner status="warning">
+              {(() => {
+                const r = partialRows[0];
+                const done = r?.sweep_blocks_concluded ?? 0;
+                const started = r?.sweep_blocks_started ?? 0;
+                const pts = r?.all_reduce_busbw_series?.length ?? 0;
+                return (
+                  `This sweep is still running — ${done} of ${started} block(s) finished, so the ` +
+                  `${pts} point(s) below are a partial read and the peak is not the rack's result. ` +
+                  `Re-checking every ${Math.round(PARTIAL_REPARSE_MS / 1000)}s; or press Refresh.`
+                );
+              })()}
+            </Banner>
           </div>
         )}
         {result && !loading && (

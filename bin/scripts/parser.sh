@@ -652,7 +652,11 @@ for _i in "${!log_files[@]}"; do
     # Table column order: all_reduce, all_gather, alltoall (log order is reduce → alltoall → gather).
     inv_tables="parser_flags"
     if [[ "$want_nccl_row" -eq 1 ]]; then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$rack" "$jid" "${ar_bw:----}" "${ag_bw:----}" "${aa_bw:----}" "$oob_fmt" >>"$tmp_nccl"
+      # Sweep-block counts travel with the row so a consumer can tell a partial read of a running
+      # job from a finished one; without it a 1-point chart is indistinguishable from a slow rack.
+      _sweep_counts=$(nccl_sweep_counts "$f")
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$rack" "$jid" "${ar_bw:----}" "${ag_bw:----}" "${aa_bw:----}" "$oob_fmt" \
+        "${_sweep_counts%%,*}" "${_sweep_counts##*,}" >>"$tmp_nccl"
       nccl_allreduce_series_append "$f" "$rack" "$jid" >>"$tmp_nccl_ar" || true
       inv_tables="nccl_peak_out_of_place_busbw_gbps,$inv_tables"
     fi
@@ -830,6 +834,10 @@ def main() -> None:
         "all_gather_gbps",
         "alltoall_gbps",
         "oob_ar_ag_aa",
+        # Sweep-block counts from nccl_sweep_counts(). started > concluded means the log was read
+        # while the job was still running, so the series below is partial.
+        "sweep_blocks_started",
+        "sweep_blocks_concluded",
     ]
     llm_fields = [
         "rack",
@@ -878,6 +886,14 @@ def main() -> None:
         for d in nccl_dicts:
             key = (str(d.get("rack", "")), str(d.get("job_id", "")))
             d["all_reduce_busbw_series"] = ar_series.get(key, [])
+            # Derived so the UI does not have to know the convention. A log with no markers at all
+            # (0 started) is treated as complete: not every producer brackets its sweeps, and
+            # calling those "partial" forever would cry wolf on every non-nccl-tests log.
+            started = _as_int(d.get("sweep_blocks_started")) or 0
+            concluded = _as_int(d.get("sweep_blocks_concluded")) or 0
+            d["sweep_blocks_started"] = started
+            d["sweep_blocks_concluded"] = concluded
+            d["sweep_complete"] = started == 0 or concluded >= started
 
         llm_dicts = [row_to_dict(r, llm_fields) for r in llm_rows]
         for d in llm_dicts:

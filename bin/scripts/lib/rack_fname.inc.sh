@@ -116,5 +116,11 @@ jobid_from_fname() {
   if [[ "$b" =~ -([0-9]+)\.txt$ ]]; then
     printf '%s\n' "${BASH_REMATCH[1]}"; return 0
   fi
+  # MPI launcher stdout: nccl-mpi_<rack>+<rack>_<jid>.out — an underscore separator and a .out
+  # extension, so none of the .txt patterns above matched and the Parser Results table showed the
+  # job as "?" even though the id is right there in the name.
+  if [[ "$b" =~ [_-]([0-9]+)\.out$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"; return 0
+  fi
   printf '?\n'
 }

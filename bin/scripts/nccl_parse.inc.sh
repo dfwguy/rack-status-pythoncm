@@ -75,6 +75,22 @@ nccl_oob_csv() {
   grep 'Out of bounds values' "$1" 2>/dev/null | awk '{ print $NF }' | paste -sd, - || true
 }
 
+# Sweep-block completeness: "<started>,<concluded>".
+#
+# nccl-tests brackets each sweep with "# Collective test starting:" and "# Collective test
+# concluded:", and prints the per-block summary lines only at the end. A log read WHILE the job is
+# still running therefore has started > concluded and yields a truncated series -- 1 data row gives
+# a 1-point chart with a meaningless peak. Callers use this to say "partial" instead of presenting
+# an in-progress sweep as a result. Measured on Nscale TX job 130406: parsed mid-run it charted a
+# single point; parsed complete, 32 points and 821 GB/s.
+nccl_sweep_counts() {
+  awk '
+    /^# Collective test starting:/  { s++ }
+    /^# Collective test concluded:/ { c++ }
+    END { print (s+0) "," (c+0) }
+  ' "$1" 2>/dev/null || echo "0,0"
+}
+
 # First all_reduce block only: rack, job_id, size (B), out-of-place bus_bw (GB/s). Stops at the
 # first all_reduce "concluded" line so a multi-round standalone log yields one representative series.
 # NVIS 2026-07-28: per-collective busbw series for ALL five collectives.
