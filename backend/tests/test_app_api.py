@@ -424,17 +424,25 @@ class TestClusterOverviewLiveAPI:
 
     @staticmethod
     def _poll_live(client, *, want_state, section="bcm", timeout=5.0, refresh=False):
+        """Poll until EVERY requested section reaches *want_state*.
+
+        ``section`` accepts one name or several. The bcm/slurm/queue collectors run in
+        independent threads and finish in any order, so waiting on one and then asserting on
+        the others is a race — pass every section you are about to assert on.
+        """
+        wanted = (section,) if isinstance(section, str) else tuple(section)
         deadline = time.monotonic() + timeout
         body = None
         q = "?refresh=1" if refresh else ""
         while time.monotonic() < deadline:
             body = client.get(f"/api/cluster-overview/live{q}").get_json()
-            sec = ((body or {}).get("sections") or {}).get(section) or {}
-            if sec.get("state") == want_state:
+            secs = ((body or {}).get("sections") or {})
+            if all(((secs.get(s) or {}).get("state") == want_state) for s in wanted):
                 return body
             time.sleep(0.05)
         assert body is not None
-        assert body["sections"][section]["state"] == want_state
+        for s in wanted:
+            assert body["sections"][s]["state"] == want_state, f"section {s!r} never reached {want_state!r}"
         return body
 
     def test_overview_live_returns_initializing_then_fresh(self, client, monkeypatch):
@@ -475,10 +483,11 @@ class TestClusterOverviewLiveAPI:
         finally:
             release.set()
 
-        fresh = self._poll_live(client, want_state="fresh", section="bcm")
+        # Wait for all three, not just bcm: they are collected by independent threads and can
+        # go fresh in any order, so polling bcm alone then asserting on slurm/queue is a race.
+        fresh = self._poll_live(client, want_state="fresh", section=("bcm", "slurm", "queue"))
         assert fresh["sections"]["bcm"]["value"] == "BCM 11.0"
         assert fresh["sections"]["slurm"]["value"] == "slurm 25.05.0"
-        assert fresh["sections"]["queue"]["state"] == "fresh"
         assert fresh["sections"]["queue"]["value"]["ok"] is True
 
         # Cached re-read is immediate and stays fresh.
