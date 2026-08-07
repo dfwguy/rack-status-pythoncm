@@ -172,7 +172,81 @@ def test_peak_tflops_is_overridable(tmp_path):
     assert abs(halved_peak_mfu - default_mfu * 2) <= 0.2, (default_mfu, halved_peak_mfu)
 
 
+# --- the sample window ---------------------------------------------------------------------
+#
+# The window used to be a fixed "matched lines 70-89". Every current recipe runs 50 steps
+# (NVIS_NEMO_MAX_STEPS), so the window sat entirely PAST the end of the run: awk collected
+# nothing, exited 1, and the log reported OK with a dash for every number. On Nscale TX that
+# silently emptied the Analytics scaling tables -- 13 of the last 14 NeMo runs contributed
+# nothing, including a 4-rack multirack run whose NCCL series was drawn in the chart right
+# above the table it was missing from.
+
+
+def _step_time_samples(n: int) -> str:
+    """*n* Megatron-Bridge samples where the first 20% are deliberately slow warmup."""
+    out = []
+    for i in range(1, n + 1):
+        if i <= n // 5:
+            out.append("Step Time : 9.99s GPU utilization: 900.0MODEL_TFLOP/s/GPU\n")
+        else:
+            out.append("Step Time : 4.22s GPU utilization: 1954.6MODEL_TFLOP/s/GPU\n")
+    return "".join(out)
+
+
+def test_a_fifty_step_run_reports_numbers(tmp_path):
+    """The production case: 50 real samples must average, not vanish."""
+    p = tmp_path / "root-NEMO-p05-r01+p05-r02-72N-131805.txt"
+    p.write_text(_step_time_samples(50), encoding="utf-8")
+    fields = _label_file(p)
+    assert fields[0] == "OK"
+    assert fields[1] != "-", "50 samples must yield a step time, not a dash"
+    assert float(fields[1]) == pytest.approx(4.22, rel=1e-3), "warmup must be excluded"
+    assert float(fields[2]) == pytest.approx(1954.6, rel=1e-3)
+
+
+def test_the_legacy_window_is_unchanged_for_long_runs(tmp_path):
+    """A run with >=70 samples must still average exactly samples 70-89, so numbers recorded
+    before short recipes existed stay directly comparable."""
+    p = tmp_path / "cmods-NEMO-1Rack-p05-r01-18N-9.txt"
+    p.write_text(
+        "".join(f"Step Time : {i}.00s GPU utilization: {i}00.0MODEL_TFLOP/s/GPU\n" for i in range(1, 201)),
+        encoding="utf-8",
+    )
+    fields = _label_file(p)
+    # mean(70..89) = 79.5 -> step 79.50s, tflops 7950.00
+    assert float(fields[1]) == pytest.approx(79.50, rel=1e-4)
+    assert float(fields[2]) == pytest.approx(7950.00, rel=1e-4)
+
+
+def test_a_run_that_died_after_a_handful_of_steps_abstains(tmp_path):
+    """Averaging 4 samples from a run that died early would dress up noise as a measurement."""
+    p = tmp_path / "cmods-NEMO-1Rack-p05-r01-18N-10.txt"
+    p.write_text(_step_time_samples(4), encoding="utf-8")
+    fields = _label_file(p)
+    assert fields[1] == "-", "too few samples must abstain, not average"
+
+
+def test_short_runs_work_in_the_train_step_timing_dialect_too(tmp_path):
+    """The NeMo 2.0 dialect reads TFLOPs from a different field; both share one awk program."""
+    p = tmp_path / "cmods-NEMO-1Rack-p05-r01-18N-11.txt"
+    p.write_text(
+        "".join("x | train_step_timing in s: 4.10 | tflops: 1900.0 | consumed_samples\n" for _ in range(50)),
+        encoding="utf-8",
+    )
+    fields = _label_file(p)
+    assert float(fields[1]) == pytest.approx(4.10, rel=1e-3)
+    assert float(fields[2]) == pytest.approx(1900.0, rel=1e-3)
+
+
 # --- structural guards: the copies must not come back -------------------------------------
+
+
+def test_the_sample_window_is_defined_once():
+    """Both dialects must share one awk program. They used to carry a copy each, differing
+    only in a field index -- the same drift this include exists to prevent."""
+    text = INC.read_text(encoding="utf-8")
+    assert text.count("min_iter=70") == 1, "the window must be declared in exactly one place"
+    assert text.count("_llm_stats_awk") >= 3, "both dialects should call the shared averager"
 
 
 @pytest.mark.parametrize("script", [RACK_STATUS, PARSER])

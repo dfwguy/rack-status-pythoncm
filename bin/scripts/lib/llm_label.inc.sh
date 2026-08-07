@@ -54,58 +54,73 @@ nemo_training_finished_log() {
   (( cur >= tot && tot >= ms ))
 }
 
+# Averages one extracted sample stream. Step time is field 4 in both dialects; $1 is the field
+# carrying TFLOP/s/GPU. Kept as ONE awk program because the two dialects used to carry a copy
+# each — the same drift this file exists to prevent.
+#
+# Sample window:
+#   >= 70 samples -> samples 70-89, the historical window, so every number recorded before
+#                    short recipes existed stays directly comparable.
+#   <  70 samples -> skip a proportional warmup and average the steady-state remainder. A fixed
+#                    offset of 70 lands past the end of a 50-step benchmark, which silently
+#                    produced no metrics at all: the run reported OK with dashes for every
+#                    number and vanished from the analytics scaling tables.
+# A short run must still leave MIN_SAMPLES samples after the warmup; a handful of steps from a
+# run that died early is noise, and abstaining says so honestly.
+_llm_stats_awk() {
+  awk -v tf_field="$1" -v perf="$perf" -v min_iter=70 -v max_iter=90 \
+      -v warmup_frac=0.2 -v min_samples=5 '
+BEGIN { n = 0 }
+{ n++; sv[n] = $4; fv[n] = $(tf_field) }
+END {
+  if (n < 1) exit 1
+  if (n >= min_iter) {
+    lo = min_iter
+    hi = max_iter - 1
+    if (hi > n) hi = n
+  } else {
+    lo = int(n * warmup_frac) + 1
+    hi = n
+    if (hi - lo + 1 < min_samples) exit 1
+  }
+  ct = 0; ts = 0; ps = 0
+  for (i = lo; i <= hi; i++) { ct++; tv[ct] = sv[i]; ts += sv[i]; pv[ct] = fv[i]; ps += fv[i] }
+  if (ct < 1) exit 1
+  t_mean = ts / ct
+  t_var = 0
+  for (i = 1; i <= ct; i++) t_var += (tv[i] - t_mean) ^ 2
+  t_std = (ct > 1 ? sqrt(t_var / (ct - 1)) : 0)
+  p_mean = ps / ct
+  p_var = 0
+  for (i = 1; i <= ct; i++) p_var += (pv[i] - p_mean) ^ 2
+  p_std = (ct > 1 ? sqrt(p_var / (ct - 1)) : 0)
+  mfu = p_mean / perf * 100
+  printf "%.2f\t%.2f\t%.5f\t%.5f\t%.1f\n", t_mean, p_mean, t_std, p_std, mfu
+}'
+}
+
 # Prints: step_s tflops sstd pstd mfu (tab-separated); rc!=0 when there is no valid window.
 # Two log dialects: Megatron-Bridge "Step Time … MODEL_TFLOP/s/GPU" and NeMo 2.0
-# "train_step_timing in s: …". Window is lines 70-89 of the extracted stream, i.e. past warmup.
+# "train_step_timing in s: …".
 llm_stats_tsv() {
   local f=$1
   if grep -q 'Step Time.*MODEL_TFLOP/s/GPU' "$f"; then
     grep -o 'Step Time.*MODEL_TFLOP/s/GPU' "$f" 2>/dev/null | sed -e 's:s GPU: s GPU:g' -e 's:MODEL_TFLOP: MODEL_TFLOP:g' \
-      | awk -v min_iter=70 -v max_iter=90 -v perf="$perf" '
-BEGIN { ct = 0; ts = 0; ps = 0 }
-(min_iter <= NR && NR < max_iter) { ct++; tv[ct] = $4; ts += $4; pv[ct] = $8; ps += $8 }
-END {
-  if (ct < 1) exit 1
-  t_mean = ts / ct
-  t_var = 0
-  for (i = 1; i <= ct; i++) t_var += (tv[i] - t_mean) ^ 2
-  t_std = (ct > 1 ? sqrt(t_var / (ct - 1)) : 0)
-  p_mean = ps / ct
-  p_var = 0
-  for (i = 1; i <= ct; i++) p_var += (pv[i] - p_mean) ^ 2
-  p_std = (ct > 1 ? sqrt(p_var / (ct - 1)) : 0)
-  mfu = ps / ct / perf * 100
-  printf "%.2f\t%.2f\t%.5f\t%.5f\t%.1f\n", ts / ct, ps / ct, t_std, p_std, mfu
-}'
-    return 0
+      | _llm_stats_awk 8
+    return
   fi
   if grep -q 'train_step_timing.*consumed_samples' "$f"; then
     grep -o 'train_step_timing.*consumed_samples' "$f" 2>/dev/null | tr '|' ' ' \
-      | awk -v min_iter=70 -v max_iter=90 -v perf="$perf" '
-BEGIN { ct = 0; ts = 0; ps = 0 }
-(min_iter <= NR && NR < max_iter) { ct++; tv[ct] = $4; ts += $4; pv[ct] = $6; ps += $6 }
-END {
-  if (ct < 1) exit 1
-  t_mean = ts / ct
-  t_var = 0
-  for (i = 1; i <= ct; i++) t_var += (tv[i] - t_mean) ^ 2
-  t_std = (ct > 1 ? sqrt(t_var / (ct - 1)) : 0)
-  p_mean = ps / ct
-  p_var = 0
-  for (i = 1; i <= ct; i++) p_var += (pv[i] - p_mean) ^ 2
-  p_std = (ct > 1 ? sqrt(p_var / (ct - 1)) : 0)
-  mfu = ps / ct / perf * 100
-  printf "%.2f\t%.2f\t%.5f\t%.5f\t%.1f\n", ts / ct, ps / ct, t_std, p_std, mfu
-}'
-    return 0
+      | _llm_stats_awk 6
+    return
   fi
   return 1
 }
 
 # Verdict order matters and is deliberate:
 #   1. perf stats in the window        -> OK with numbers  (a measured, healthy run)
-#   2. reached the declared target      -> OK without numbers (finished; window may be absent
-#                                          for short recipes such as a 50-step benchmark)
+#   2. reached the declared target      -> OK without numbers (finished, but too few samples
+#                                          survived the warmup to average honestly)
 #   3. Slurm hard failure               -> FAIL
 #   4. Python / CUDA fatal              -> FAIL
 #   5. otherwise                        -> UNK (abstain; never guess)

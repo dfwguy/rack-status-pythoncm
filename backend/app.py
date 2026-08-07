@@ -11944,6 +11944,11 @@ def api_analytics_aggregate():
     scalar_rows: list[dict[str, object]] = []
     nemotron_rows: list[dict[str, object]] = []
     scaling_entries: dict[int, list[dict[str, object]]] = {}
+    # Successful runs whose step/TFLOPs could not be averaged, keyed the same way. They get a
+    # row with null means instead of being dropped: a 50-step multirack NeMo run used to pass
+    # every gate, contribute its NCCL series to the chart, and then vanish from the tables with
+    # no indication it had ever been considered.
+    scaling_no_metrics: dict[int, list[str]] = {}
 
     for rack in done_racks:
         cands = find_log_paths_for_rack(log_dir, rack)
@@ -12015,6 +12020,8 @@ def api_analytics_aggregate():
                 )
                 if med is not None and tf is not None:
                     _nemotron_scaling_append_entry(scaling_entries, 1, nemo_lp, float(tf), float(med))
+                else:
+                    scaling_no_metrics.setdefault(1, []).append(lf)
 
     size_to_vals: dict[int, list[float]] = {}
     for _rk, ser in series_by_rack.items():
@@ -12123,31 +12130,40 @@ def api_analytics_aggregate():
                 tf_f = float(tf)
                 st_f = float(st)
                 _nemotron_scaling_append_entry(scaling_entries, n_r, lp, tf_f, st_f)
+            else:
+                scaling_no_metrics.setdefault(n_r, []).append(lp.name)
 
     nemotron_scaling: list[dict[str, object]] = []
     nemotron_throughput_scaling: list[dict[str, object]] = []
-    for n_r in sorted(scaling_entries.keys()):
-        ents = scaling_entries[n_r]
-        if not ents:
+    for n_r in sorted(set(scaling_entries) | set(scaling_no_metrics)):
+        ents = scaling_entries.get(n_r) or []
+        no_metrics = scaling_no_metrics.get(n_r) or []
+        if not ents and not no_metrics:
             continue
-        mean_tf = round(statistics.mean(float(e["tf"]) for e in ents), 3)
-        mean_st = round(statistics.mean(float(e["st"]) for e in ents), 4)
+        mean_tf = round(statistics.mean(float(e["tf"]) for e in ents), 3) if ents else None
+        mean_st = round(statistics.mean(float(e["st"]) for e in ents), 4) if ents else None
         n_logs = len(ents)
         nemotron_scaling.append(
             {
                 "n_racks": n_r,
                 "n_logs": n_logs,
+                "n_logs_no_metrics": len(no_metrics),
+                "logs_no_metrics": no_metrics,
                 "mean_tflops_per_gpu": mean_tf,
                 "mean_step_s": mean_st,
             }
         )
-        rep = max(ents, key=lambda e: _log_mtime_or_zero(e["path"]))  # type: ignore[arg-type]
-        nn = rep.get("num_nodes")
-        ng = rep.get("num_gpus")
-        num_nodes = int(nn) if nn is not None else None
-        num_gpus = int(ng) if ng is not None else None
-        mtps = _mean_finite([e.get("throughput_tokens_s") for e in ents])  # type: ignore[list-item]
-        mtpsg = _mean_finite([e.get("throughput_tokens_s_per_gpu") for e in ents])  # type: ignore[list-item]
+        num_nodes: int | None = None
+        num_gpus: int | None = None
+        mtps = mtpsg = None
+        if ents:
+            rep = max(ents, key=lambda e: _log_mtime_or_zero(e["path"]))  # type: ignore[arg-type]
+            nn = rep.get("num_nodes")
+            ng = rep.get("num_gpus")
+            num_nodes = int(nn) if nn is not None else None
+            num_gpus = int(ng) if ng is not None else None
+            mtps = _mean_finite([e.get("throughput_tokens_s") for e in ents])  # type: ignore[list-item]
+            mtpsg = _mean_finite([e.get("throughput_tokens_s_per_gpu") for e in ents])  # type: ignore[list-item]
         days: float | None = None
         if mtps is not None and mtps > 0:
             days = 1_000_000_000_000.0 / (mtps * 86400.0)
@@ -12155,6 +12171,8 @@ def api_analytics_aggregate():
             {
                 "n_racks": n_r,
                 "n_logs": n_logs,
+                "n_logs_no_metrics": len(no_metrics),
+                "logs_no_metrics": no_metrics,
                 "num_nodes": num_nodes,
                 "num_gpus": num_gpus,
                 "mean_step_s": mean_st,

@@ -8,7 +8,7 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import CircularProgress from "@mui/material/CircularProgress";
-import { Text, Button, Banner, Tabs } from "@nvidia/foundations-react-core";
+import { Text, Button, Banner, Tabs, Tag } from "@nvidia/foundations-react-core";
 import { Download } from "lucide-react";
 import Slider from "@mui/material/Slider";
 import MuiTooltip from "@mui/material/Tooltip";
@@ -92,14 +92,24 @@ type AnalyticsPayload = {
   };
   multirack?: {
     nccl_series_by_log: { label: string; basename: string; series: { size_bytes: number; bus_bw_gbps: number }[] }[];
-    nemotron_scaling: { n_racks: number; n_logs: number; mean_tflops_per_gpu: number; mean_step_s: number }[];
+    nemotron_scaling: {
+      n_racks: number;
+      n_logs: number;
+      /** Successful runs in this bucket whose step/TFLOPs could not be averaged. */
+      n_logs_no_metrics?: number;
+      logs_no_metrics?: string[];
+      mean_tflops_per_gpu: number | null;
+      mean_step_s: number | null;
+    }[];
     nemotron_throughput_scaling?: {
       n_racks: number;
       n_logs: number;
+      n_logs_no_metrics?: number;
+      logs_no_metrics?: string[];
       num_nodes: number | null;
       num_gpus: number | null;
-      mean_step_s: number;
-      mean_tflops_per_gpu: number;
+      mean_step_s: number | null;
+      mean_tflops_per_gpu: number | null;
       mean_throughput_tokens_s: number | null;
       mean_throughput_tokens_s_per_gpu: number | null;
       time_to_train_1t_days: number | null;
@@ -108,6 +118,24 @@ type AnalyticsPayload = {
 };
 
 type NemotronScalingRow = NonNullable<AnalyticsPayload["multirack"]>["nemotron_scaling"][number];
+
+/** A metric that could not be averaged reads as an em dash — never as a blank or a misleading 0. */
+const metricOrDash = (v: number | null | undefined) => (v == null ? "—" : v);
+
+/** Log count that also reports successful runs which yielded no averageable metrics. */
+function LogCountCell({ nLogs, nNoMetrics }: { nLogs: number; nNoMetrics?: number }) {
+  const missing = nNoMetrics ?? 0;
+  return (
+    <TableCell align="right">
+      {nLogs}
+      {missing > 0 ? (
+        <Tag color="yellow" kind="outline" density="compact" readOnly style={{ marginLeft: 8 }}>
+          {`+${missing} no metrics`}
+        </Tag>
+      ) : null}
+    </TableCell>
+  );
+}
 
 const CHART_COLORS = [
   "#76B900",
@@ -416,7 +444,9 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
       return { baselineNRacks: null as number | null, rows: [] as { s: NemotronScalingRow; tflopsEffPct: number | null; stepEffPct: number | null }[] };
     }
     const sorted = [...mr.nemotron_scaling].sort((a, b) => a.n_racks - b.n_racks);
-    const base = sorted[0];
+    // Baseline is the smallest bucket that actually measured something. A bucket present only to
+    // report runs with no metrics carries null means, and using it would null every efficiency.
+    const base = sorted.find((s) => Number(s.mean_tflops_per_gpu) > 0 && Number(s.mean_step_s) > 0) ?? sorted[0];
     const baseTf = Number(base.mean_tflops_per_gpu);
     const baseStep = Number(base.mean_step_s);
     const rows = sorted.map((s) => {
@@ -824,9 +854,9 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
                   {nemotronScalingTableRows.rows.map(({ s, tflopsEffPct, stepEffPct }) => (
                     <TableRow key={s.n_racks}>
                       <TableCell>{s.n_racks}</TableCell>
-                      <TableCell align="right">{s.n_logs}</TableCell>
-                      <TableCell align="right">{s.mean_tflops_per_gpu}</TableCell>
-                      <TableCell align="right">{s.mean_step_s}</TableCell>
+                      <LogCountCell nLogs={s.n_logs} nNoMetrics={s.n_logs_no_metrics} />
+                      <TableCell align="right">{metricOrDash(s.mean_tflops_per_gpu)}</TableCell>
+                      <TableCell align="right">{metricOrDash(s.mean_step_s)}</TableCell>
                       <TableCell align="right">
                         {tflopsEffPct == null ? "—" : `${tflopsEffPct.toFixed(1)}%`}
                       </TableCell>
@@ -842,7 +872,9 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
               <Text kind="body/regular/sm" style={{ display: "block", marginTop: 8, paddingLeft: 4, paddingRight: 4, color: "var(--text-color-secondary)" }}>
                 Scaling efficiency vs the smallest Rack bucket (includes 1R single-rack logs and multirack logs): TFLOPs
                 eff. = 100 × (mean TFLOPs/GPU ÷ baseline); step eff. = 100 × (baseline mean step ÷ mean step). 100%
-                matches baseline; higher step eff. means relatively faster steps.
+                matches baseline; higher step eff. means relatively faster steps. A “no metrics” tag counts successful
+                runs whose step timings could not be averaged (too few samples survived the warmup); they are reported
+                here rather than dropped, but contribute to no mean.
               </Text>
             ) : null}
           </Box>
@@ -873,11 +905,11 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
                   (mr.nemotron_throughput_scaling ?? []).map((row) => (
                     <TableRow key={row.n_racks}>
                       <TableCell>{row.n_racks}</TableCell>
-                      <TableCell align="right">{row.n_logs}</TableCell>
+                      <LogCountCell nLogs={row.n_logs} nNoMetrics={row.n_logs_no_metrics} />
                       <TableCell align="right">{row.num_nodes == null ? "—" : row.num_nodes}</TableCell>
                       <TableCell align="right">{row.num_gpus == null ? "—" : row.num_gpus}</TableCell>
-                      <TableCell align="right">{row.mean_step_s}</TableCell>
-                      <TableCell align="right">{row.mean_tflops_per_gpu}</TableCell>
+                      <TableCell align="right">{metricOrDash(row.mean_step_s)}</TableCell>
+                      <TableCell align="right">{metricOrDash(row.mean_tflops_per_gpu)}</TableCell>
                       <TableCell align="right">
                         {row.mean_throughput_tokens_s == null
                           ? "—"
