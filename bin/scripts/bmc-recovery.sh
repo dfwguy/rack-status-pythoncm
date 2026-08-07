@@ -16,6 +16,10 @@
 set -u
 set -o pipefail
 
+# BCM installs cmsh at an absolute path and does NOT put it on PATH (Nscale TX: BCM 11 keeps
+# it at /cm/local/apps/cmd/bin/cmsh). RACK_CMSH is the same knob the backend uses.
+CMSH=${RACK_CMSH:-cmsh}
+
 PROG=$(basename -- "$0")
 
 SYSLOG_PRIMARY=${SYSLOG_PRIMARY:-/var/log/syslog}
@@ -55,7 +59,7 @@ IFACE=${2:-rf0}
 
 # --- 1. Get the interface MAC from cmsh --------------------------------------
 
-mac_out=$(cmsh -c "device; use ${NODE}; interfaces; get ${IFACE} mac;" 2>&1) || true
+mac_out=$("$CMSH" -c "device; use ${NODE}; interfaces; get ${IFACE} mac;" 2>&1) || true
 
 # Detect "node not found" -- cmsh emits something like:
 #   Unable to find 'ghx02' (type 'list' to see valid names)
@@ -77,7 +81,7 @@ printf '%s: %s MAC = %s\n' "$NODE" "$IFACE" "$MAC"
 
 # Returns exactly two lines: line 1 = username, line 2 = password.
 { read -r BMC_USER; read -r BMC_PASS; } < <(
-    cmsh -c "device; use ${NODE}; bmcsettings; get username; get password;"
+    "$CMSH" -c "device; use ${NODE}; bmcsettings; get username; get password;"
 )
 
 printf '%s: BMC username = %s\n' "$NODE" "$BMC_USER"

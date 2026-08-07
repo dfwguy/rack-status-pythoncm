@@ -39,6 +39,11 @@ fi
 USE_SQUEUE=${USE_SQUEUE:-1}
 USE_CMSH=${USE_CMSH:-1}
 USE_SINFO=${USE_SINFO:-1}
+# BCM installs cmsh at an absolute path and does NOT put it on PATH (Nscale TX: BCM 11 keeps it at
+# /cm/local/apps/cmd/bin/cmsh, reachable only via `module load cmsh`). A bare `cmsh` fails the
+# command -v guards below, silently dropping the rack union and the ct_down_unk column. RACK_CMSH
+# is the same knob the backend uses; honour it so both agree on which binary to run.
+CMSH=${RACK_CMSH:-cmsh}
 tmp_status_arg=
 log_files=()
 probe_json_mode=0
@@ -493,7 +498,7 @@ declare -A in_cm
 cm_ok=0
 declare -A ct_dn ct_inst ct_up ct_acc ct_seen
 ds_ok=0
-if [[ "$USE_CMSH" -eq 1 ]] && command -v cmsh &>/dev/null; then
+if [[ "$USE_CMSH" -eq 1 ]] && command -v "$CMSH" &>/dev/null; then
   # nvis-rack-status may set RACK_CMSH_RACK_LIST_FILE (one pNN-rMM id per line) to avoid ``cmsh -c "rack; list"`` every run.
   if [[ -n "${RACK_CMSH_RACK_LIST_FILE:-}" && -r "${RACK_CMSH_RACK_LIST_FILE}" ]]; then
     if command -v perl &>/dev/null; then
@@ -503,7 +508,7 @@ if [[ "$USE_CMSH" -eq 1 ]] && command -v cmsh &>/dev/null; then
     fi
   elif command -v perl &>/dev/null; then
     # Word boundaries + canonical pN-rMM (two-digit rack): merge p5-r1 with p5-r01 (native_status).
-    mapfile -t cm_racks < <(cmsh -c "rack; list" 2>/dev/null | perl -ne '
+    mapfile -t cm_racks < <("$CMSH" -c "rack; list" 2>/dev/null | perl -ne '
       while (/\bp(\d+)-r(\d+)\b/gi) {
         my ($p, $r) = (0 + $1, 0 + $2);
         next if $r == 0 && !$ENV{RACK_CMSH_INCLUDE_R00};
@@ -511,12 +516,12 @@ if [[ "$USE_CMSH" -eq 1 ]] && command -v cmsh &>/dev/null; then
       }
     ' | sort -uV)
   else
-    mapfile -t cm_racks < <(cmsh -c "rack; list" 2>/dev/null | grep -oE 'p[0-9]+-r[0-9]+' | tr '[:upper:]' '[:lower:]' | sort -uV)
+    mapfile -t cm_racks < <("$CMSH" -c "rack; list" 2>/dev/null | grep -oE 'p[0-9]+-r[0-9]+' | tr '[:upper:]' '[:lower:]' | sort -uV)
   fi
   ((${#cm_racks[@]})) && cm_ok=1
   for rr in "${cm_racks[@]}"; do in_cm[$rr]=1; done
   : >"$tmp_ds"
-  if cmsh -c "ds" >"$tmp_ds" 2>/dev/null && [[ -s "$tmp_ds" ]]; then
+  if "$CMSH" -c "ds" >"$tmp_ds" 2>/dev/null && [[ -s "$tmp_ds" ]]; then
     ds_ok=1
     shopt -s nocasematch
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -680,11 +685,13 @@ echo "${C_DIM}  Summary:${C_RESET} ${C_OK}${n_done} done${C_RESET}  ${C_FAIL}${n
 if [[ "$USE_CMSH" -eq 1 ]] && [[ "$cm_ok" -eq 1 ]] && ((n_cm_no > 0)); then
   echo "${C_DIM}  (${n_cm_no} rack(s) in logs but not matched in cmsh list.)${C_RESET}"
 fi
-if [[ "$USE_CMSH" -eq 1 ]] && ! command -v cmsh &>/dev/null; then
-  echo "${C_NOTE}  cmsh not in PATH (rack union may be log-only). Use --no-cmsh to skip.${C_RESET}"
+if [[ "$USE_CMSH" -eq 1 ]] && ! command -v "$CMSH" &>/dev/null; then
+  # Name the binary we actually looked for. BCM keeps cmsh off PATH, so "cmsh not found" sends
+  # the reader hunting for a PATH problem when the answer is to point RACK_CMSH at it.
+  echo "${C_NOTE}  '${CMSH}' not found (rack union may be log-only). Set RACK_CMSH to its absolute path, or --no-cmsh to skip.${C_RESET}"
 elif [[ "$USE_CMSH" -eq 1 ]] && [[ "$cm_ok" -eq 0 ]]; then
-  echo "${C_NOTE}  cmsh produced no pNN-rMM ids from rack; list (check cmsh -c \"rack; list\").${C_RESET}"
+  echo "${C_NOTE}  cmsh produced no pNN-rMM ids from rack; list (check ${CMSH} -c \"rack; list\").${C_RESET}"
 fi
-if [[ "$USE_CMSH" -eq 1 ]] && command -v cmsh &>/dev/null && [[ "$ds_ok" -eq 0 ]]; then
+if [[ "$USE_CMSH" -eq 1 ]] && command -v "$CMSH" &>/dev/null && [[ "$ds_ok" -eq 0 ]]; then
   echo "${C_NOTE}  cmsh -c ds produced no parseable output; ct_down_unk column is \"?\".${C_RESET}"
 fi

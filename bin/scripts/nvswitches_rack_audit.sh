@@ -17,6 +17,10 @@
 #   nvswitches_rack_audit.sh [--no-header] [--no-color] [--verbose] [--fix | --fix-bmc] [--fix-nmx] [--fix-uphy] [rack ...]
 
 set -uo pipefail
+
+# BCM installs cmsh at an absolute path and does NOT put it on PATH (Nscale TX: BCM 11 keeps
+# it at /cm/local/apps/cmd/bin/cmsh). RACK_CMSH is the same knob the backend uses.
+CMSH=${RACK_CMSH:-cmsh}
 # Never enable errexit in this script: functions must not leave `set -e` on, or a
 # single failed check could abort the whole multi-rack loop before all racks run.
 set +e
@@ -116,7 +120,7 @@ check_bmc_one() {
 	local http_code
 	local detail
 
-	if ! ip=$(cmsh -c "device ; use $nvsw ; interfaces; get rf0 ip" 2>/dev/null) || [[ -z "${ip// }" ]]; then
+	if ! ip=$("$CMSH" -c "device ; use $nvsw ; interfaces; get rf0 ip" 2>/dev/null) || [[ -z "${ip// }" ]]; then
 		echo FAIL >"$outf"
 		detail="no_rf0_ip"
 		[[ -n "${BMC_FAIL_LOG:-}" ]] && printf '%s\t%s\n' "$nvsw" "$detail" >>"$BMC_FAIL_LOG"

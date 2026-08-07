@@ -17,6 +17,10 @@
 
 set -euo pipefail
 
+# BCM installs cmsh at an absolute path and does NOT put it on PATH (Nscale TX: BCM 11 keeps
+# it at /cm/local/apps/cmd/bin/cmsh). RACK_CMSH is the same knob the backend uses.
+CMSH=${RACK_CMSH:-cmsh}
+
 NEW_PASSWORD='WelcomeDell1!'
 PASS_OPENBMC='0penBmc'
 PASS_TEMP='0penBmcTempPass!'
@@ -64,7 +68,7 @@ set_bmc_password_for_node() {
 		printf '%s\t%s\t%s\t%s\n' "$nvsw" "$1" "${2:-}" "${3:-}" >"$result_file"
 	}
 
-	if ! ip=$(cmsh -c "device ; use $nvsw ; interfaces; get rf0 ip" 2>/dev/null) || [[ -z "${ip// }" ]]; then
+	if ! ip=$("$CMSH" -c "device ; use $nvsw ; interfaces; get rf0 ip" 2>/dev/null) || [[ -z "${ip// }" ]]; then
 		echo "${nvsw}: could not resolve rf0 IP" >&2
 		record NO_IP "" "cmsh rf0 IP missing"
 		return 0
