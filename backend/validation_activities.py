@@ -85,6 +85,11 @@ _JOBID_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _JOBID_LINE_RE = re.compile(r"jobid=(\d+)", re.IGNORECASE)
+# Slurm's own sbatch confirmation. Only llmb_autocollect.inc.sh and run_mnubergemm_stress.sh
+# ever printed `jobid=`, so every launcher that just calls sbatch (run-nemo-xrack.sh,
+# run_nccl_mpi.sh, run_clusterkit.sh, run_singlerack.sh) produced an activity with NO tasks —
+# which left the UI with no job id to key on and forced it into rack-name guessing.
+_SBATCH_SUBMITTED_RE = re.compile(r"Submitted batch job\s+(\d+)", re.IGNORECASE)
 
 _UPDATABLE = frozenset({
     "phase",
@@ -287,18 +292,26 @@ def _with_store(mutator) -> None:
 
 
 def parse_scheduler_job_ids(text: str) -> list[str]:
-    """Extract Slurm job ids from llmb-run / wrapper stdout."""
+    """Extract Slurm job ids from llmb-run / wrapper stdout, in submission order.
+
+    Two dialects, because the launchers are not uniform:
+      * ``jobid=<n>``            — llmb_autocollect.inc.sh, run_mnubergemm_stress.sh
+      * ``Submitted batch job N``— Slurm's own sbatch reply, i.e. every other launcher
+
+    Order matters: sync_tasks_from_stdout labels the first id ``nccl`` and the second ``nemo``
+    for combined runs, so ids are returned in the order they appear in the text rather than
+    grouped by which pattern matched.
+    """
     if not text:
         return []
     seen: set[str] = set()
     out: list[str] = []
-    for m in _JOBID_RE.finditer(text):
-        jid = m.group(1)
-        if jid not in seen:
-            seen.add(jid)
-            out.append(jid)
-    for m in _JOBID_LINE_RE.finditer(text):
-        jid = m.group(1)
+    matches = [
+        (m.start(), m.group(1))
+        for pat in (_JOBID_RE, _JOBID_LINE_RE, _SBATCH_SUBMITTED_RE)
+        for m in pat.finditer(text)
+    ]
+    for _pos, jid in sorted(matches, key=lambda t: t[0]):
         if jid not in seen:
             seen.add(jid)
             out.append(jid)
