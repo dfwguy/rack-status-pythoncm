@@ -232,3 +232,45 @@ def test_live_activity_job_overrides_stale_fail_log(monkeypatch):
     assert rows[0]["nemo"].startswith("ongoing")
     assert summary["ongoing"] == 1
     assert summary["stage1"]["ongoing"] == 1
+
+
+def test_multirack_build_rows_accepts_pure_posix_paths(monkeypatch):
+    """SSH/container mode globs return PurePosixPath tuples — unpack + never .resolve().
+
+    A regression here 500s /api/multirack-status as an HTML error page, which the SPA
+    surfaces as ``Unexpected token '<!DOCTYPE' is not valid JSON`` under Results & logs.
+    """
+    from pathlib import PurePosixPath
+
+    from native_status import MultirackTableState
+
+    monkeypatch.setattr(native_status, "load_squeue_jobs_map", lambda: (set(), {}))
+    monkeypatch.setattr(native_status, "augment_running_set_for_job_ids", lambda *a, **k: None)
+    monkeypatch.setenv("RACK_SQUEUE_JOB_LOOKUP_DISABLED", "1")
+
+    remote = PurePosixPath(
+        "/home/cmsupport/nvis-rack-status/var/logs/"
+        "root-NEMO-ink50-dh01-h02,ink50-dh01-h03-36N-12345.txt"
+    )
+    st = MultirackTableState("test-mr", Path("/tmp"))
+    st.log_paths = [(remote, 1, 100)]
+    st.per_path_probe = {
+        str(remote): {
+            "ok": True,
+            "nemo_state": "done",
+            "nccl_ok": True,
+            "llm_ok": True,
+            "jid": 12345,
+            "physical_racks": ["ink50-dh01-h02", "ink50-dh01-h03"],
+        }
+    }
+    st.sinfo_done = True
+    st.log_done = True
+
+    rows = st.build_rows(lambda bn: bn, lambda bn: ["ink50-dh01-h02", "ink50-dh01-h03"])
+    assert len(rows) == 1
+    assert rows[0]["nemo"] == "done"
+    assert rows[0]["last_job"] == "12345"
+    assert "ink50-dh01-h02" in rows[0]["rack"]
+    assert rows[0]["display_rack"] == rows[0]["rack"]
+    assert rows[0]["log_file"].endswith("12345.txt")
