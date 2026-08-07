@@ -15,7 +15,6 @@ import {
   Button as KuiButton,
   TextInput,
   Text as KuiText,
-  Checkbox as KuiCheckbox,
   Select as KuiSelect,
 } from "@nvidia/foundations-react-core";
 import { ChevronDown, ChevronUp } from "lucide-react";
@@ -69,11 +68,8 @@ interface LaunchOptionsDialogProps {
   showNcclVersion?: boolean;
   /** Show the iterations (sweep-rounds) stepper (direct NCCL test only; ignored by NEMO/container). */
   showIters?: boolean;
-  /**
-   * Show the NEMO stage/length knobs: the "run NCCL first" checkbox and the training-steps
-   * selector. NEMO launches only — the direct NCCL test has no such stages.
-   */
-  showNemoOptions?: boolean;
+  /** Show the NEMO training-steps selector. NEMO launches only. */
+  showMaxSteps?: boolean;
 }
 
 /**
@@ -91,12 +87,11 @@ export function LaunchOptionsDialog({
   confirmLabel = "Launch",
   showNcclVersion = false,
   showIters = false,
-  showNemoOptions = false,
+  showMaxSteps = false,
 }: LaunchOptionsDialogProps) {
   const [ncclDebug, setNcclDebug] = useState("off");
   const [ncclVersion, setNcclVersion] = useState(DEFAULT_NCCL_VERSION);
   const [iters, setIters] = useState(DEFAULT_ITERS);
-  const [withNccl, setWithNccl] = useState(true);
   const [maxSteps, setMaxSteps] = useState(DEFAULT_MAX_STEPS);
   const [envText, setEnvText] = useState("");
   const itersInputRef = useRef<HTMLInputElement>(null);
@@ -122,7 +117,6 @@ export function LaunchOptionsDialog({
       setNcclDebug("off");
       setNcclVersion(DEFAULT_NCCL_VERSION);
       setIters(DEFAULT_ITERS);
-      setWithNccl(true);
       setMaxSteps(DEFAULT_MAX_STEPS);
       setEnvText("");
     }
@@ -218,41 +212,27 @@ export function LaunchOptionsDialog({
               </FormHelperText>
             </FormControl>
           ) : null}
-          {showNemoOptions ? (
-            <>
-              <div>
-                <KuiCheckbox
-                  checked={withNccl}
-                  onCheckedChange={(c) => setWithNccl(c === true)}
-                  slotLabel="Run NCCL sweep before NEMO"
-                />
-                <FormHelperText sx={{ mt: 0.5 }}>
-                  Stage 1 submits an NCCL microbenchmark on the same nodes, then stage 2 runs the NEMO
-                  pretrain. Uncheck to submit NEMO only — useful when the racks already have a fresh NCCL
-                  result.
-                </FormHelperText>
-              </div>
-              <div>
-                <KuiText kind="body/bold/sm" style={{ display: "block", marginBottom: 6 }}>
-                  NEMO training steps
-                </KuiText>
-                <KuiSelect
-                  items={[...NEMO_STEP_CHOICES]}
-                  value={String(maxSteps)}
-                  onValueChange={(v) => {
-                    const n = parseInt(String(v), 10);
-                    if (Number.isFinite(n) && n >= 1) setMaxSteps(n);
-                  }}
-                  size="small"
-                  aria-label="NEMO training steps"
-                />
-                <FormHelperText sx={{ mt: 0.5 }}>
-                  How many training iterations the run declares. 50 finishes in minutes and is the
-                  comparable perf number; 2010 is the long soak (hours). The dashboard's "done" threshold
-                  follows this value.
-                </FormHelperText>
-              </div>
-            </>
+          {showMaxSteps ? (
+            <div>
+              <KuiText kind="body/bold/sm" style={{ display: "block", marginBottom: 6 }}>
+                NEMO training steps
+              </KuiText>
+              <KuiSelect
+                items={[...NEMO_STEP_CHOICES]}
+                value={String(maxSteps)}
+                onValueChange={(v) => {
+                  const n = parseInt(String(v), 10);
+                  if (Number.isFinite(n) && n >= 1) setMaxSteps(n);
+                }}
+                size="small"
+                aria-label="NEMO training steps"
+              />
+              <FormHelperText sx={{ mt: 0.5 }}>
+                How many training iterations the run declares. 50 finishes in minutes and is the
+                comparable perf number; 2010 is the long soak (hours). The dashboard's "done" threshold
+                follows this value.
+              </FormHelperText>
+            </div>
           ) : null}
           <FormControl fullWidth size="small">
             <InputLabel id="launch-nccl-debug-label">NCCL debug</InputLabel>
@@ -302,7 +282,7 @@ export function LaunchOptionsDialog({
               env: parsedEnv,
               ...(showNcclVersion ? { ncclVersion } : {}),
               ...(showIters ? { iters } : {}),
-              ...(showNemoOptions ? { withNccl, maxSteps } : {}),
+              ...(showMaxSteps ? { maxSteps } : {}),
             })
           }
           variant="contained"

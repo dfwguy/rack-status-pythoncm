@@ -13008,12 +13008,6 @@ def _launch_env_from_body(body: dict) -> dict[str, str]:
         if lvl and lvl not in ("OFF", "DEFAULT", "NONE") and lvl in _NCCL_DEBUG_LEVELS:
             out["NVIS_NCCL_DEBUG"] = lvl
             out["NCCL_DEBUG"] = lvl
-    # NEMO stage toggle: run_llmb_nemo.sh submits the Stage-1 NCCL sweep before the pretrain
-    # unless told otherwise. Only send the var when the caller was explicit, so launches
-    # without the knob keep the launcher's own default.
-    with_nccl = body.get("with_nccl")
-    if isinstance(with_nccl, bool):
-        out["NVIS_LLMB_NEMO_WITH_NCCL"] = "1" if with_nccl else "0"
     # NEMO training length. NVIS_NEMO_MAX_STEPS is what the job runs; NEMO_TARGET_STEPS is the
     # minimum DECLARED total the log labeller requires before calling a run finished
     # (lib/llm_label.inc.sh, default 2010). They MUST move together — a 50-step run left at the
