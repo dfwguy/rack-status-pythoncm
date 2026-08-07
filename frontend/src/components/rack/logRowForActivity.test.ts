@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { logRowForActivity, type ValidationActivitiesLogRow } from "./ValidationActivitiesTable";
+import { logRowForActivity, type ValidationActivitiesLogRow } from "./logRowForActivity";
 import type { ValidationActivity } from "../../types/api";
 
 /**
