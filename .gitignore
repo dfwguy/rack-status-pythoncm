@@ -23,6 +23,8 @@ var/cache/
 var/workflows/runs/
 # Catalog store (platforms/tools/projects; seeded on boot, cluster-specific)
 var/store/
+# Durable run/metric history (SQLite + WAL; created on boot by results_history.py)
+var/history/
 
 # ---- Token vault (NEVER commit — encrypted NVFTP tokens + master key material) ----
 var/secrets/
