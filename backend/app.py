@@ -76,7 +76,7 @@ import uuid
 import time
 import warnings
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path, PurePosixPath
@@ -3362,6 +3362,68 @@ _PARSER_STAGE_TABLES = {
     "nccl": "nccl_peak_out_of_place_busbw_gbps",
     "nemo": "nemotron_5h_56b_train_window",
 }
+
+# Scalar/series fields that carry an actual measurement, per stage table. A row holding none of
+# these is parser.sh's all-"---" placeholder rather than a result.
+_PARSER_TABLE_VALUE_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "nccl_peak_out_of_place_busbw_gbps": (
+        ("all_reduce_gbps", "all_gather_gbps", "alltoall_gbps"),
+        ("all_reduce_busbw_series",),
+    ),
+    "nemotron_5h_56b_train_window": (
+        ("step_s", "tflops_per_gpu", "step_time_std", "perf_std", "mfu_percent"),
+        ("step_series",),
+    ),
+}
+
+
+def _parser_row_has_measurement(row: object, table: str) -> bool:
+    """True when *row* carries at least one real number for *table*.
+
+    parser.sh emits a fully-formed placeholder row (every field ``"-"``/``"---"``, status UNK or
+    FAIL, empty series) for whatever file it is handed, whether or not that file is the kind the
+    table describes. Parsing an NCCL log therefore still yields a Nemotron row. Mirrors the
+    abstention already applied in ``results_history.records_from_parser_json``.
+    """
+    if not isinstance(row, Mapping):
+        return False
+    scalars, series_keys = _PARSER_TABLE_VALUE_FIELDS.get(table, ((), ()))
+    for key in scalars:
+        raw = row.get(key)
+        if raw is None or isinstance(raw, bool):
+            continue
+        try:
+            float(str(raw).strip())
+        except (TypeError, ValueError):
+            continue
+        return True
+    return any(row.get(key) for key in series_keys)
+
+
+def _drop_parser_placeholder_rows(data: dict[str, object]) -> dict[str, list[str]]:
+    """Strip placeholder rows from every stage table in *data*, in place.
+
+    Returns ``{table: [rack…]}`` for what was dropped, so a rack with no run for a stage reads as
+    an empty table (the truth) instead of a UNK row keyed to the *other* stage's job id. Without
+    this, j15/j16 — NCCL-only racks with no NeMo log at all — rendered a Nemotron row carrying the
+    NCCL job id, which reads as "NeMo ran and was inconclusive" when NeMo never ran.
+    """
+    dropped: dict[str, list[str]] = {}
+    for table in _PARSER_STAGE_TABLES.values():
+        rows = data.get(table)
+        if not isinstance(rows, list) or not rows:
+            continue
+        keep = [r for r in rows if _parser_row_has_measurement(r, table)]
+        if len(keep) == len(rows):
+            continue
+        gone = [
+            str((r or {}).get("rack") or (r or {}).get("job_id") or "?")
+            for r in rows
+            if not _parser_row_has_measurement(r, table)
+        ]
+        data[table] = keep
+        dropped[table] = gone
+    return dropped
 
 
 def _primary_stage_log(stage_paths: dict[str, Path], job_id: str | None) -> Path | None:
@@ -10798,6 +10860,16 @@ def api_parser_results():
         except (json.JSONDecodeError, OSError, subprocess.TimeoutExpired, ValueError) as e:
             _logger.warning("parser %s stage failed for %s: %s", stage, slp, e)
 
+    # The replace-the-table step above only fires when the other stage HAS its own log. A rack that
+    # never ran a stage (NCCL-only racks such as j15/j16 on 2026-08-07) keeps the placeholder row
+    # the primary parse produced for the table it is not the authority for. Drop it by content, so
+    # "stage never ran" reads as an empty table rather than a UNK row wearing the other stage's
+    # job id. Content-based on purpose: a combined-format log legitimately yields both tables from
+    # one parse and must not be stripped.
+    dropped_placeholders = _drop_parser_placeholder_rows(merged_data)
+    if dropped_placeholders:
+        _logger.info("parser placeholder rows dropped for %s: %s", rk or "?", dropped_placeholders)
+
     log_tz_q = _sanitize_display_timezone_query(request.args.get("display_timezone"))
     # Grafana time-window context is optional; never let it 500 the parser charts (it may touch
     # log files, which over SSH can fail). Degrade to no embed on error.
@@ -10850,6 +10922,9 @@ def api_parser_results():
             ),
             "command_display": display_cmd,
             "data": merged_data,
+            # {table: [rack…]} for parser.sh placeholder rows removed above. Non-empty means that
+            # stage produced no run for this rack, as opposed to the tab having failed to load.
+            "dropped_placeholder_rows": dropped_placeholders,
             "stderr": err_tail,
             "grafana_uri": _rack_web_grafana_uri(),
             "grafana_port": _rack_web_grafana_port(),
