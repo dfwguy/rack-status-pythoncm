@@ -965,13 +965,22 @@ def _stage_state(
 
     A stage that is not part of the validation suite reports ``pending`` (not started) —
     e.g. NeMo when only NCCL was run — instead of a vacuous ``done``.
+
+    ``ok is None`` means the stage has no probe evidence of its own (its log does not exist, or
+    could not be classified). That is **not** a failure: it reports ``pending``. Only an explicit
+    ``False`` — a probe that ran and returned a negative verdict — is ``fail``. Without this, a
+    rack that only ever ran NCCL renders as "NeMo FAIL" citing the NCCL job id.
     """
     if not wanted or nemo_lower == "pending":
         return "pending"
     if nemo_lower.startswith("ongoing"):
         return "done" if ok is True else "ongoing"
     # done or fail overall: the stage passed only with a positive probe flag.
-    return "done" if ok is True else "fail"
+    if ok is True:
+        return "done"
+    if ok is None:
+        return "pending"
+    return "fail"
 
 
 def compute_stage_states(
@@ -1510,6 +1519,12 @@ class NativeRackTableState:
             nccl_src = stage_logs.get("nccl") or pr_full
             nemo_src = stage_logs.get("nemo") or pr_full
             split_stage_logs = "nccl" in stage_logs and "nemo" in stage_logs
+            # A NON-EMPTY stage map that lacks one stage means that stage has genuinely never run
+            # on this rack (j15/j16 on 2026-08-07: NCCL only, no NeMo job was ever submitted).
+            # Guarded on a non-empty map on purpose, so the unclassifiable-log-naming case
+            # described above still falls through to the probe instead of going all-pending.
+            nccl_missing = bool(stage_logs) and "nccl" not in stage_logs
+            nemo_missing = bool(stage_logs) and "nemo" not in stage_logs
 
             # Per-stage queue membership — do not paint both stages "ongoing" from one job id.
             def _jid_of(src: dict[str, Any]) -> str:
@@ -1549,6 +1564,15 @@ class NativeRackTableState:
                 # Both stages have their own log: the rack is done only when each stage's own
                 # log passes. Never read one stage's verdict off the other stage's log.
                 cat = "done" if (bool(nccl_src.get("nccl_ok")) and bool(nemo_src.get("llm_ok"))) else "fail"
+                nemo = cat
+            elif nccl_missing or nemo_missing:
+                # Exactly one stage has ever run on this rack. Judge it from its OWN log. If that
+                # stage passed, the rack is INCOMPLETE (pending the other stage), not failed —
+                # a stage that was never submitted is not a failure. If it failed, the rack fails.
+                ran_ok = (
+                    bool(nccl_src.get("nccl_ok")) if nemo_missing else bool(nemo_src.get("llm_ok"))
+                )
+                cat = "pending" if ran_ok else "fail"
                 nemo = cat
             else:
                 st = str(pr.get("nemo_state") or "").strip().lower()
@@ -1594,6 +1618,14 @@ class NativeRackTableState:
             llo = nemo_src.get("llm_ok")
             nc_b = bool(nco) if isinstance(nco, (bool, int)) else None
             ll_b = bool(llo) if isinstance(llo, (bool, int)) else None
+            # A stage with no log of its own has NO evidence, so its flag must be tri-state None,
+            # not the False that fell through from the other stage's log. parser.sh reports
+            # llm_ok=0 when handed an NCCL log and nccl_ok=0 when handed a NeMo log — it conflates
+            # "absent" with "failed" in both directions, and that is what painted j15/j16 red.
+            if nccl_missing:
+                nc_b = None
+            if nemo_missing:
+                ll_b = None
             nh = validation_status_hint(
                 nemo,
                 live_jid if in_slurm else jid_s,
@@ -1602,6 +1634,14 @@ class NativeRackTableState:
                 validation_test=vt or None,
             )
             stage1, stage2 = compute_stage_states(nemo, nc_b, ll_b, vt or None)
+            # When one stage never ran, the rack-level cell is "pending" — but compute_stage_states
+            # maps a "pending" rack to pending for BOTH stages, which would throw away the other
+            # stage's real verdict (j15/j16 passed NCCL at ~916 GB/s and must still read stage1
+            # done). Derive each stage from its OWN evidence instead. Placed before the in-Slurm
+            # overrides below so a live job still wins.
+            if nccl_missing or nemo_missing:
+                stage1 = "pending" if nc_b is None else ("done" if nc_b else "fail")
+                stage2 = "pending" if ll_b is None else ("done" if ll_b else "fail")
             # Override per-stage ongoing from that stage's own job id — a live Stage-1 NCCL
             # must not force Stage-2 NeMo to "running" when its job is not queued. When the
             # rack-level cell is painted ongoing from one stage's live job, demote the other
