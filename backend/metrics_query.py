@@ -30,6 +30,7 @@ Config
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import urllib.error
@@ -427,7 +428,7 @@ def _num(v: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     # NaN/Inf are not valid JSON; Chart.js renders null as a gap, which is the honest rendering.
-    return f if f == f and abs(f) != float("inf") else None
+    return f if math.isfinite(f) else None
 
 
 @metrics_query_bp.route("/api/metrics/query")

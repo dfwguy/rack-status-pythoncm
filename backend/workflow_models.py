@@ -82,9 +82,8 @@ def validate_evaluation(ev: Any) -> list[str]:
                 elif e.get("type") and e["type"] not in EVAL_EXTRACT_TYPES:
                     problems.append(f"evaluation.extract[{i}].type {e['type']!r} invalid (expected {EVAL_EXTRACT_TYPES})")
     asrt = ev.get("assert")
-    if asrt is not None:
-        if not isinstance(asrt, list) or not all(isinstance(a, str) for a in asrt):
-            problems.append("evaluation.assert must be a list of expression strings")
+    if asrt is not None and (not isinstance(asrt, list) or not all(isinstance(a, str) for a in asrt)):
+        problems.append("evaluation.assert must be a list of expression strings")
     for key in ("message", "message_pass", "message_fail", "prompt", "comment"):
         if key in ev and not isinstance(ev[key], str):
             problems.append(f"evaluation.{key} must be a string")
@@ -115,10 +114,9 @@ def validate_fanout(fo: Any) -> list[str]:
     if not isinstance(fo, dict):
         return ["fanout must be a mapping"]
     problems: list[str] = []
-    if not (fo.get("nodes") or fo.get("rack")):
-        # nodes may also come from the run (${nodelist}/rack); only flag if clearly empty
-        if "nodes" in fo and not fo["nodes"]:
-            problems.append("fanout.nodes is empty")
+    # nodes may also come from the run (${nodelist}/rack); only flag if clearly empty
+    if not (fo.get("nodes") or fo.get("rack")) and "nodes" in fo and not fo["nodes"]:
+        problems.append("fanout.nodes is empty")
     hops = fo.get("hops")
     if hops is not None:
         if not isinstance(hops, list):

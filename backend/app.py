@@ -1002,7 +1002,7 @@ def _job_env_flock(shared: bool = True):
         return
     p = _job_env_flock_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    f = open(p, "a+", encoding="utf-8")
+    f = open(p, "a+", encoding="utf-8")  # noqa: SIM115 - handle must outlive this scope: it holds the flock
     locked = False
     try:
         try:
@@ -1075,7 +1075,7 @@ def _tools_exclusive_lock_path(lock_name: str) -> Path:
 def _tools_exclusive_lock(lock_name: str):
     """Hold an advisory exclusive flock for one Utility script (cross-process / multi-worker)."""
     path = _tools_exclusive_lock_path(lock_name)
-    fh = open(path, "a+", encoding="utf-8")
+    fh = open(path, "a+", encoding="utf-8")  # noqa: SIM115 - handle must outlive this scope: it holds the flock
     try:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -1097,7 +1097,7 @@ def _tools_exclusive_lock(lock_name: str):
 def _tools_try_acquire_exclusive_flock_for_stream(lock_name: str):
     """Return ``(fh, None)`` on success, or ``(None, busy_message)`` if another holder has LOCK_EX."""
     path = _tools_exclusive_lock_path(lock_name)
-    fh = open(path, "a+", encoding="utf-8")
+    fh = open(path, "a+", encoding="utf-8")  # noqa: SIM115 - handle must outlive this scope: it holds the flock
     try:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -2805,6 +2805,7 @@ def _pam_verify_subprocess(username: str, password: str, service: str) -> bool:
             capture_output=True,
             timeout=90,
             env=_subprocess_env(),
+            check=False,
         )
     except FileNotFoundError:
         raise RuntimeError(
@@ -4497,7 +4498,7 @@ def _job_env_effective_values() -> dict[str, str]:
 def _normalize_llama_nodes_spec(raw: object) -> str:
     """Slurm nodeset / hostlist fragment for ``run-llama.sh`` (no shell metacharacters)."""
     if not isinstance(raw, str):
-        raise ValueError("nodes_spec must be a string")
+        raise ValueError("nodes_spec must be a string")  # noqa: TRY004 - routes catch ValueError to answer 400; TypeError would 500
     t = raw.strip()
     if not t or len(t) > 800:
         raise ValueError("nodes_spec is empty or too long")
@@ -4786,7 +4787,7 @@ def merge_ct_individuals_for_power(nodes: list[str]) -> list[str]:
     by_rack: dict[str, list[int]] = {}
     for raw in nodes:
         if not isinstance(raw, str):
-            raise ValueError("each entry in specs must be a string")
+            raise ValueError("each entry in specs must be a string")  # noqa: TRY004 - routes catch ValueError to answer 400; TypeError would 500
         token = raw.strip()
         m = single_re.match(token)
         if not m:
@@ -4924,6 +4925,7 @@ def nvswitch_hosts_for_rack_list(rack: str) -> list[str]:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                check=False,
             )
         except FileNotFoundError:
             break
@@ -5250,9 +5252,8 @@ def parse_rack_output(text: str) -> dict:
                 "pending": int(m.group(4)),
             }
             continue
-        if any(mk in stripped for mk in _FOOTNOTE_MARKERS):
-            if stripped not in footnotes:
-                footnotes.append(stripped)
+        if any(mk in stripped for mk in _FOOTNOTE_MARKERS) and stripped not in footnotes:
+            footnotes.append(stripped)
 
     return {
         "legend": legend,
@@ -5496,7 +5497,7 @@ def _live_collect_slurm_version() -> str:
 def _live_collect_queue() -> dict[str, object]:
     block = _cluster_squeue_overview_block()
     if not isinstance(block, dict):
-        raise RuntimeError("invalid squeue overview block")
+        raise RuntimeError("invalid squeue overview block")  # noqa: TRY004 - routes catch ValueError to answer 400; TypeError would 500
     if not block.get("ok"):
         raise RuntimeError(str(block.get("error") or "squeue failed"))
     return block
@@ -6610,6 +6611,7 @@ def _ssh_cat_remote_bytes(host: str, remote_path: str) -> bytes:
         argv,
         capture_output=True,
         timeout=timeout,
+        check=False,
     )
     if proc.returncode != 0:
         err = (proc.stderr or b"")[:2000].decode("utf-8", errors="replace")
@@ -13489,9 +13491,7 @@ def api_run_llama_status():
 def _sn_llama_txt_paths_for_rack(log_dir: Path, rack: str, *, exclude: Path | None = None) -> list[Path]:
     """``log_dir/sn-llama/*.txt`` whose names suggest LLAMA and match *rack* (case-insensitive substring on rack id tokens)."""
     d = _rpath(log_dir) / "sn-llama"
-    needles: list[str] = []
-    for rid in _nvis_naming().find_rack_ids_in_string(rack or ""):
-        needles.append(rid)
+    needles: list[str] = list(_nvis_naming().find_rack_ids_in_string(rack or ""))
     if not needles:
         t = (rack or "").strip().lower()
         if t:
@@ -14817,6 +14817,7 @@ def api_run_sysinfo():
                 capture_output=True,
                 text=True,
                 timeout=max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800)),
+                check=False,
             )
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": "sysinfo.sh timed out", "target": prep["target"]}), 504
@@ -14898,6 +14899,7 @@ def api_tools_download_containers():
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                check=False,
             )
     except _ToolsExclusiveLockBusyError as e:
         return jsonify({"ok": False, "error": str(e), "destination": str(dest_dir)}), 409
@@ -15152,6 +15154,7 @@ def api_tools_launch_grafana_bright_prometheus():
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                check=False,
             )
     except _ToolsExclusiveLockBusyError as e:
         err_resp = (jsonify({"ok": False, "error": str(e)}), 409)
@@ -15322,6 +15325,7 @@ def api_tools_install_hpcx_workspace():
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                check=False,
             )
     except _ToolsExclusiveLockBusyError as e:
         return jsonify({"ok": False, "error": str(e)}), 409
@@ -15486,6 +15490,7 @@ def api_tools_install_dcgm_workspace():
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                check=False,
             )
     except _ToolsExclusiveLockBusyError as e:
         return jsonify({"ok": False, "error": str(e)}), 409
@@ -15635,6 +15640,7 @@ def api_tools_install_cuda_nccl_workspace():
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                check=False,
             )
     except _ToolsExclusiveLockBusyError as e:
         return jsonify({"ok": False, "error": str(e)}), 409
@@ -15782,6 +15788,7 @@ def api_tools_install_nvloom_workspace():
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                check=False,
             )
     except _ToolsExclusiveLockBusyError as e:
         return jsonify({"ok": False, "error": str(e)}), 409
@@ -15985,6 +15992,7 @@ def api_tools_install_dgxc_benchmarking_workspace():
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                check=False,
             )
     except _ToolsExclusiveLockBusyError as e:
         return jsonify({"ok": False, "error": str(e)}), 409
@@ -17881,7 +17889,10 @@ class _WebSocketTerminalMiddleware:
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
-            preexec_fn=os.setsid,
+            # start_new_session is setsid() done by subprocess itself. preexec_fn runs arbitrary
+            # Python between fork and exec, which is not safe in a threaded server (gunicorn runs
+            # this with 24 gthread workers) because the child inherits locks held by other threads.
+            start_new_session=True,
             env=env,
         )
         os.close(slave_fd)

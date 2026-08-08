@@ -305,7 +305,7 @@ class ClusterSnapshotService:
     @staticmethod
     def _validated_payload(result: object) -> dict:
         if not isinstance(result, dict):
-            raise RuntimeError("Cluster inventory collector returned an invalid payload")
+            raise RuntimeError("Cluster inventory collector returned an invalid payload")  # noqa: TRY004 - routes catch ValueError to answer 400; TypeError would 500
         if result.get("ok") is False:
             raise RuntimeError(str(result.get("error") or "Cluster inventory collector failed"))
         returncode = result.get("returncode")
@@ -318,7 +318,7 @@ class ClusterSnapshotService:
             or not isinstance(result.get("physical_rf0"), dict)
             or not isinstance(result.get("summary"), dict)
         ):
-            raise RuntimeError(
+            raise RuntimeError(  # noqa: TRY004 - routes catch ValueError to answer 400; TypeError would 500
                 "Cluster inventory collector returned incomplete inventory"
             )
         return result

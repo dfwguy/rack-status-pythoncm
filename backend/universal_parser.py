@@ -74,6 +74,7 @@ This file is bind-mount-only backend code.  To make it visible inside the contai
 from __future__ import annotations
 
 import gzip
+import math
 import os
 import re
 import statistics
@@ -610,7 +611,7 @@ def _to_num(s: str) -> float | int | None:
         v = float(s)
     except (TypeError, ValueError):
         return None
-    if v != v or v in (float("inf"), float("-inf")):  # NaN / inf
+    if not math.isfinite(v):  # NaN / inf
         return None
     if v.is_integer() and abs(v) < 1e15:
         return int(v)

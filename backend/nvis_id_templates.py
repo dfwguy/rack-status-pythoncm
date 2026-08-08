@@ -577,14 +577,12 @@ def _rebuild_through_slot(parsed: ParsedTemplate, values: list[str], up_to: int)
 def _format_slot_groups(parsed: ParsedTemplate, groups: Iterable[str]) -> list[str]:
     """Map regex capture groups to canonical slot strings (zero-pad only for ``range2`` slots)."""
     out: list[str] = []
-    slot_i = 0
-    for g in groups:
+    for slot_i, g in enumerate(groups):
         kind = parsed.slot_kind(slot_i)
         if kind in ("digits", "alpha"):
             out.append(g)
         else:
             out.append(g.zfill(2))
-        slot_i += 1
     return out
 
 

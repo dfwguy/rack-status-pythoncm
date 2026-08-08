@@ -78,7 +78,7 @@ def _decrypt(blob: dict[str, Any]) -> str:
     salt_b = blob.get("salt")
     ct = blob.get("ciphertext")
     if not isinstance(salt_b, str) or not isinstance(ct, str):
-        raise ValueError("vault file missing salt or ciphertext")
+        raise ValueError("vault file missing salt or ciphertext")  # noqa: TRY004 - routes catch ValueError to answer 400; TypeError would 500
     salt = base64.urlsafe_b64decode(salt_b.encode("ascii"))
     fernet = Fernet(_derive_fernet_key(_master_key_bytes(), salt))
     try:

@@ -542,7 +542,7 @@ def _cmsh_ds_text() -> str:
             timeout=max(30, _env_int("RACK_NATIVE_DS_TIMEOUT_SEC", 300)),
         )
     except (OSError, subprocess.TimeoutExpired) as e:
-        DS_LAST_DIAG["error"] = "{}: {}".format(type(e).__name__, e)
+        DS_LAST_DIAG["error"] = f"{type(e).__name__}: {e}"
         return ""
     out = proc.stdout or ""
     DS_LAST_DIAG["returncode"] = getattr(proc, "returncode", None)

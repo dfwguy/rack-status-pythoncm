@@ -118,9 +118,9 @@ def group_outputs(results: list[NodeResult]) -> str:
         if r.stdout.strip():
             groups.setdefault(r.stdout.rstrip("\n"), []).append(r.node)
     blocks: list[str] = []
-    for out in groups:
+    for out, nodes in groups.items():
         blocks.append("----------------")
-        blocks.append(",".join(sorted(groups[out])))
+        blocks.append(",".join(sorted(nodes)))
         blocks.append("----------------")
         blocks.append(out)
     return "\n".join(blocks)

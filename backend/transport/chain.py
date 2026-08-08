@@ -41,7 +41,7 @@ class HopSpec:
     @classmethod
     def from_dict(cls, d: dict) -> HopSpec:
         if not isinstance(d, dict):
-            raise ValueError("hop spec must be a mapping")
+            raise ValueError("hop spec must be a mapping")  # noqa: TRY004 - routes catch ValueError to answer 400; TypeError would 500
         return cls(
             kind=str(d.get("kind", "ssh")).strip().lower() or "ssh",
             host=str(d.get("host", "")).strip(),
