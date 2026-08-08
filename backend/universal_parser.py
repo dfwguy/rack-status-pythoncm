@@ -79,17 +79,18 @@ import re
 import statistics
 import time as _time
 from collections import OrderedDict
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 __all__ = [
-    "PARSER_VERSION",
     "KINDS",
+    "PARSER_VERSION",
     "STATUSES",
-    "read_capped",
-    "sniff_kind",
+    "empty_result",
     "parse",
     "parse_path",
-    "empty_result",
+    "read_capped",
+    "sniff_kind",
 ]
 
 PARSER_VERSION = 1
@@ -280,7 +281,10 @@ def read_capped(
 # naming: rack / node attribution (soft-imports the repo's template engine)
 # --------------------------------------------------------------------------------------
 try:  # pragma: no cover - exercised only when running inside the app
-    from nvis_id_templates import naming_matcher_from_env, rack_id_scan_re  # type: ignore
+    from nvis_id_templates import (  # type: ignore
+        naming_matcher_from_env,
+        rack_id_scan_re,
+    )
 
     _HAVE_NVIS_NAMING = True
 except Exception:  # noqa: BLE001 - standalone use, or module not on sys.path
@@ -621,7 +625,7 @@ class _MetricBag:
     """
 
     def __init__(self, cap: int = MAX_METRICS) -> None:
-        self._d: "OrderedDict[tuple, dict[str, Any]]" = OrderedDict()
+        self._d: OrderedDict[tuple, dict[str, Any]] = OrderedDict()
         self._cap = cap
 
     def add(

@@ -272,7 +272,7 @@ def _collect_scope_vars(args: Any) -> list[tuple[str, str]]:
 class _UrlOpts:
     """Resolved per-request embed options."""
 
-    __slots__ = ("frm", "to", "theme", "refresh", "timezone", "org_id", "kiosk", "scope")
+    __slots__ = ("frm", "kiosk", "org_id", "refresh", "scope", "theme", "timezone", "to")
 
     def __init__(self, args: Any = None):
         args = args if args is not None else {}
@@ -569,7 +569,7 @@ def api_observability_health():
         "errors": [],
     }
     try:
-        status, headers, body, err = _grafana_request(f"{base}/api/health", timeout)
+        status, _headers, body, err = _grafana_request(f"{base}/api/health", timeout)
         if status is None:
             out["errors"].append(f"/api/health: {err}")
             out["notes"].append(

@@ -3,7 +3,21 @@
 
 from __future__ import annotations
 
-from ctypes import CDLL, CFUNCTYPE, POINTER, Structure, byref, c_char, c_char_p, c_int, c_size_t, c_void_p, cast, memmove, sizeof
+from ctypes import (
+    CDLL,
+    CFUNCTYPE,
+    POINTER,
+    Structure,
+    byref,
+    c_char,
+    c_char_p,
+    c_int,
+    c_size_t,
+    c_void_p,
+    cast,
+    memmove,
+    sizeof,
+)
 from ctypes.util import find_library
 
 __all__ = ("authenticate",)

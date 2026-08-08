@@ -125,9 +125,8 @@ def sync_enabled() -> bool:
         return False
     if not token_vault.get_nvftp_token():
         return False
-    if not _eget("RACK_NVFTP_SFTP_USER"):
-        return False
-    return True
+    # bool(): _eget returns a str, and this function is declared -> bool.
+    return bool(_eget("RACK_NVFTP_SFTP_USER"))
 
 
 def skip_reason() -> str | None:
@@ -171,7 +170,7 @@ def _comments_file() -> Path:
 
 def _is_syncable_cache_file(name: str) -> bool:
     """True for regular cache artifacts; skips lock/temp files only."""
-    return not (name.endswith(".tmp") or name.endswith(".flock"))
+    return not name.endswith((".tmp", ".flock"))
 
 
 def _iter_cache_files() -> list[tuple[Path, str]]:

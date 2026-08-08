@@ -62,8 +62,8 @@ import queue
 import re
 import secrets
 import select
-import signal
 import shlex
+import signal
 import socket
 import statistics
 import struct
@@ -72,8 +72,8 @@ import sys
 import tempfile
 import termios
 import threading
-import uuid
 import time
+import uuid
 import warnings
 import zipfile
 from collections.abc import Iterator, Mapping
@@ -108,10 +108,10 @@ _app_dir_s = str(APP_DIR)
 if _app_dir_s not in sys.path:
     sys.path.insert(0, _app_dir_s)
 
-import native_status  # noqa: E402 — after sys.path so ``import native_status`` works when cwd != APP_DIR
-import nvis_id_templates  # noqa: E402
-import cluster_snapshot  # noqa: E402
-import cluster_overview_live  # noqa: E402
+import cluster_overview_live
+import cluster_snapshot
+import native_status
+import nvis_id_templates
 
 # --- optional backend modules (added 2026-07-28) -------------------------------------
 # Both are bind-mounted read-only from the repo (docker-compose.override.yml). A missing
@@ -119,23 +119,23 @@ import cluster_overview_live  # noqa: E402
 # behaviour, never stop the app booting mid cluster bring-up — hence the soft import and
 # the ``is None`` guards at every call site (``_history_enabled`` / ``_universal_enabled``).
 try:
-    import results_history  # noqa: E402 — durable run/metric history (SQLite under var/history)
-    import lake_sink  # noqa: E402 — Parquet data-lake sink (run results + provenance artifacts)
+    import lake_sink
+    import results_history
 except Exception as _rh_exc:  # pragma: no cover - defensive
     results_history = None  # type: ignore[assignment]
     logging.getLogger(__name__).warning("results_history unavailable: %s", _rh_exc)
 try:
-    import universal_parser as _uparse  # noqa: E402 — tool-agnostic log normaliser
+    import universal_parser as _uparse
 except Exception as _up_exc:  # pragma: no cover - defensive
     _uparse = None  # type: ignore[assignment]
     logging.getLogger(__name__).warning("universal_parser unavailable: %s", _up_exc)
 try:
-    import bringup as _bringup  # noqa: E402 — per-node Travis bring-up results
+    import bringup as _bringup
 except Exception as _bu_exc:  # pragma: no cover - defensive
     _bringup = None  # type: ignore[assignment]
     logging.getLogger(__name__).warning("bringup unavailable: %s", _bu_exc)
 try:
-    import node_report as _node_report  # noqa: E402 — schema-validated daily node report
+    import node_report as _node_report
 except Exception as _nr_exc:  # pragma: no cover - defensive
     _node_report = None  # type: ignore[assignment]
     logging.getLogger(__name__).warning("node_report unavailable: %s", _nr_exc)
@@ -143,25 +143,24 @@ except Exception as _nr_exc:  # pragma: no cover - defensive
 
 def _nvis_naming() -> nvis_id_templates.NvisNaming:
     return nvis_id_templates.get_nvis_naming()
-import host_exec  # noqa: E402
-import ai_chat  # noqa: E402
-import help_content  # noqa: E402
-import workflow_engine  # noqa: E402
-import rack_locks  # noqa: E402
-import multirack_jobs  # noqa: E402
-import validation_activities  # noqa: E402
-import nvlink_preflight  # noqa: E402
-import token_vault  # noqa: E402
-import nvftp_cache_sync  # noqa: E402
-from platforms import get_platform as _get_platform  # noqa: E402
+import ai_chat
+import help_content
+import host_exec
+import nvftp_cache_sync
+import nvlink_preflight
+import rack_locks
+import token_vault
+import validation_activities
+import workflow_engine
+from platforms import get_platform as _get_platform
 
 # Catalog (platforms/tools/projects). Optional at import time so the app still boots if
 # the store is unavailable; all call sites degrade to the legacy env behavior.
 try:
-    from catalog import context as catalog_context  # noqa: E402
-    from catalog import seed as catalog_seed  # noqa: E402
-    from catalog import store as catalog_store  # noqa: E402
-    from catalog.api import catalog_bp  # noqa: E402
+    from catalog import context as catalog_context
+    from catalog import seed as catalog_seed
+    from catalog import store as catalog_store
+    from catalog.api import catalog_bp
 
     _CATALOG_AVAILABLE = True
 except Exception as _catalog_exc:  # pragma: no cover - defensive
@@ -263,14 +262,14 @@ if _CATALOG_AVAILABLE and catalog_bp is not None:
 # Optional by design: a missing bind mount or an unreadable grafana_embed_map.json must
 # not stop the app booting — the SPA renders its own "not wired yet" state instead.
 try:
-    from grafana_embeds import grafana_embeds_bp  # noqa: E402
+    from grafana_embeds import grafana_embeds_bp
 
     app.register_blueprint(grafana_embeds_bp)
-    from metrics_query import metrics_query_bp  # noqa: E402
+    from metrics_query import metrics_query_bp
     app.register_blueprint(metrics_query_bp)
 
     @app.route("/api/lake/health")
-    def api_lake_health():  # noqa: ANN202
+    def api_lake_health():
         """Is the Parquet lake reachable and accepting run provenance writes?"""
         if lake_sink is None:
             return jsonify({"ok": False, "error": "lake_sink not loaded"})
@@ -1289,7 +1288,7 @@ def _parse_physical_rf0_stdout(text: str) -> dict[str, str]:
     lines: list[str] = []
     for ln in raw_lines:
         t = ln.strip()
-        if not t or t.startswith(">") or t.startswith("#"):
+        if not t or t.startswith((">", "#")):
             continue
         lines.append(t)
 
@@ -2602,10 +2601,8 @@ def _pam_service() -> str:
 
 def _session_lifetime() -> timedelta:
     h = _env_int("RACK_WEB_SESSION_HOURS", 8)
-    if h < 1:
-        h = 1
-    if h > 24 * 30:
-        h = 24 * 30
+    h = max(h, 1)
+    h = min(h, 24 * 30)
     return timedelta(hours=h)
 
 
@@ -2868,9 +2865,7 @@ def _is_public_spa_static_path() -> bool:
     p = request.path
     if p in ("/login", "/favicon.svg", "/icons.svg"):
         return True
-    if p.startswith("/assets/") or p.startswith("/spa/"):
-        return True
-    return False
+    return bool(p.startswith(("/assets/", "/spa/")))
 
 
 @app.before_request
@@ -3564,9 +3559,7 @@ def _rack_node_hostnames_from_inventory(rack: str) -> list[str]:
     matched: list[str] = []
     for h in hosts:
         hcf = h.casefold()
-        if hcf == rid_cf:
-            matched.append(h)
-        elif hcf.startswith(rid_cf) and len(h) > len(rid) and h[len(rid)] in seps:
+        if hcf == rid_cf or (hcf.startswith(rid_cf) and len(h) > len(rid) and h[len(rid)] in seps):
             matched.append(h)
     return matched
 
@@ -4093,9 +4086,7 @@ def _grafana_var_host() -> str:
 
 def _grafana_deeplinks_enabled() -> bool:
     """Deep-links are enabled unless explicitly disabled; a base URL is required to be useful."""
-    if _truthy_env("RACK_WEB_GRAFANA_DEEPLINK_DISABLED"):
-        return False
-    return True
+    return not _truthy_env("RACK_WEB_GRAFANA_DEEPLINK_DISABLED")
 
 
 def _grafana_deeplink_dashboards() -> list[dict[str, str]]:
@@ -5207,7 +5198,7 @@ def parse_rack_output(text: str) -> dict:
         stripped = line.strip()
         if stripped.startswith("=========="):
             continue
-        if stripped.startswith("rack; list") or stripped.startswith("cm: rack; list"):
+        if stripped.startswith(("rack; list", "cm: rack; list")):
             legend = stripped
             continue
         if hline_re.match(line):
@@ -5721,13 +5712,15 @@ def api_comment_put(rack_id: str):
         multirack_bn = raw_id[3:].strip() if raw_id.lower().startswith("mr:") else raw_id.strip()
         sk = _multirack_comment_storage_key(multirack_bn)
         if sk is None:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "invalid rack id or multirack log basename (use pN-rMM or mr:<log>.txt)",
-                }
-            ),
-            400
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "invalid rack id or multirack log basename (use pN-rMM or mr:<log>.txt)",
+                    }
+                ),
+                400,
+            )
         is_multirack = True
         storage_key = sk
 
@@ -9525,8 +9518,8 @@ def api_rack_log_content():
 
 def _demo_parser_results():
     """Return synthetic parser results for demo mode (no parser.sh needed)."""
-    import math
     import hashlib as _hl
+    import math
     rack = (request.args.get("rack") or "demo-rack").strip()
     job_id = (request.args.get("job_id") or "0").strip()
     seed = int(_hl.md5(f"{rack}:{job_id}".encode()).hexdigest()[:8], 16)
@@ -9940,7 +9933,7 @@ def _lake_should_capture(path: str, method: str) -> bool:
 
 
 @app.before_request
-def _lake_capture_start():  # noqa: ANN201
+def _lake_capture_start():
     try:
         g._lake_t0 = time.time()
         # Read the body here: after the view runs it may already be consumed.
@@ -9951,7 +9944,7 @@ def _lake_capture_start():  # noqa: ANN201
 
 
 @app.after_request
-def _lake_capture_request(response):  # noqa: ANN001, ANN201
+def _lake_capture_request(response):
     try:
         if lake_sink is None or lake_sink.is_disabled():
             return response
@@ -11408,14 +11401,14 @@ def _read_log_text_chunk(path: Path, max_bytes: int = 14 * 1024 * 1024) -> str:
     return _host_read_text(path, max_bytes=max_bytes) or ""
 
 
-_RE_RUN_GB = re.compile(r"(?<![\w-])-gb\s+(\d+)\b", re.I)
-_RE_RUN_NUM_GPUS = re.compile(r"--num_gpus\s+(\d+)\b", re.I)
-_RE_RUN_GPUS_PER_NODE = re.compile(r"--gpus_per_node\s+(\d+)\b", re.I)
+_RE_RUN_GB = re.compile(r"(?<![\w-])-gb\s+(\d+)\b", re.IGNORECASE)
+_RE_RUN_NUM_GPUS = re.compile(r"--num_gpus\s+(\d+)\b", re.IGNORECASE)
+_RE_RUN_GPUS_PER_NODE = re.compile(r"--gpus_per_node\s+(\d+)\b", re.IGNORECASE)
 _RE_RUN_SLURM_NNODES = re.compile(r"SLURM_NNODES=(\d+)\b")
 _RE_RUN_NODELIST = re.compile(r"NODELIST:\s*(\S+)")
 _RE_SEQ_LEN_CANDIDATES = (
-    re.compile(r"(?:^|[\s|])seq(?:uence)?[_-]?length[=:\s]+(\d+)\b", re.I),
-    re.compile(r"context[_-]?length[=:\s]+(\d+)\b", re.I),
+    re.compile(r"(?:^|[\s|])seq(?:uence)?[_-]?length[=:\s]+(\d+)\b", re.IGNORECASE),
+    re.compile(r"context[_-]?length[=:\s]+(\d+)\b", re.IGNORECASE),
     re.compile(r"(?<![\w-])-sl\s+(\d+)\b"),
 )
 
@@ -12024,7 +12017,7 @@ def api_analytics_aggregate():
                     scaling_no_metrics.setdefault(1, []).append(lf)
 
     size_to_vals: dict[int, list[float]] = {}
-    for _rk, ser in series_by_rack.items():
+    for ser in series_by_rack.values():
         for p in ser:
             sz = int(p["size_bytes"])
             size_to_vals.setdefault(sz, []).append(float(p["bus_bw_gbps"]))
@@ -12120,8 +12113,7 @@ def api_analytics_aggregate():
         nm = _pick_nemotron_row(parsed, "")
         if isinstance(nm, dict):
             n_r = _multirack_rack_count_from_basename(lp.name)
-            if n_r < 1:
-                n_r = 1
+            n_r = max(n_r, 1)
             tf = _parse_gbps_scalar(nm.get("tflops_per_gpu"))
             st = _parse_gbps_scalar(nm.get("median_step_time"))
             if st is None:
@@ -14705,7 +14697,7 @@ def _merged_stdout_stream_generator(
                     rc = proc.wait(timeout=60)
                 except subprocess.TimeoutExpired:
                     rc = -1
-                yield f"\n--- exit {rc} ---\n".encode("utf-8")
+                yield f"\n--- exit {rc} ---\n".encode()
                 return
             try:
                 chunk = outq.get(timeout=min(0.5, max(0.05, remaining)))
@@ -14718,7 +14710,7 @@ def _merged_stdout_stream_generator(
             rc = proc.wait(timeout=600)
         except subprocess.TimeoutExpired:
             rc = proc.poll()
-        yield f"\n--- exit {rc if rc is not None else '?'} ---\n".encode("utf-8")
+        yield f"\n--- exit {rc if rc is not None else '?'} ---\n".encode()
     finally:
         if proc.poll() is None:
             try:
@@ -14952,7 +14944,7 @@ def api_tools_download_containers_stream():
         msg = f"File already exists, skipping download: {found}"
 
         def _skip_gen() -> Iterator[bytes]:
-            yield f"{msg}\n\n--- exit 0 ---\n".encode("utf-8")
+            yield f"{msg}\n\n--- exit 0 ---\n".encode()
 
         return Response(
             stream_with_context(_skip_gen()),
@@ -14990,7 +14982,7 @@ def api_tools_download_containers_stream():
     if lock_busy is not None:
 
         def _lock_busy_gen() -> Iterator[bytes]:
-            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+            yield f"ERROR: {lock_busy}\n".encode()
 
         return Response(
             stream_with_context(_lock_busy_gen()),
@@ -15211,7 +15203,7 @@ def api_tools_launch_grafana_bright_prometheus_stream():
                 yield (
                     "ERROR: Set both Prometheus username and password in Settings → External connections, "
                     "or clear both to use ~/.prometheusrc on the server.\n"
-                ).encode("utf-8")
+                ).encode()
 
             return Response(
                 stream_with_context(_cred_err()),
@@ -15236,7 +15228,7 @@ def api_tools_launch_grafana_bright_prometheus_stream():
                 pass
 
         def _lock_busy_gen() -> Iterator[bytes]:
-            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+            yield f"ERROR: {lock_busy}\n".encode()
 
         return Response(
             stream_with_context(_lock_busy_gen()),
@@ -15386,7 +15378,7 @@ def api_tools_install_hpcx_workspace_stream():
     if lock_busy is not None:
 
         def _lock_busy_gen() -> Iterator[bytes]:
-            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+            yield f"ERROR: {lock_busy}\n".encode()
 
         return Response(
             stream_with_context(_lock_busy_gen()),
@@ -15539,7 +15531,7 @@ def api_tools_install_dcgm_workspace_stream():
     if lock_busy is not None:
 
         def _lock_busy_gen() -> Iterator[bytes]:
-            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+            yield f"ERROR: {lock_busy}\n".encode()
 
         return Response(
             stream_with_context(_lock_busy_gen()),
@@ -15720,7 +15712,7 @@ def api_tools_install_cuda_nccl_workspace_stream():
     if lock_busy is not None:
 
         def _lock_busy_gen() -> Iterator[bytes]:
-            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+            yield f"ERROR: {lock_busy}\n".encode()
 
         return Response(
             stream_with_context(_lock_busy_gen()),
@@ -15845,7 +15837,7 @@ def api_tools_install_nvloom_workspace_stream():
     if lock_busy is not None:
 
         def _lock_busy_gen() -> Iterator[bytes]:
-            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+            yield f"ERROR: {lock_busy}\n".encode()
 
         return Response(
             stream_with_context(_lock_busy_gen()),
@@ -16045,7 +16037,7 @@ def api_tools_install_dgxc_benchmarking_workspace_stream():
     if lock_busy is not None:
 
         def _lock_busy_gen() -> Iterator[bytes]:
-            yield f"ERROR: {lock_busy}\n".encode("utf-8")
+            yield f"ERROR: {lock_busy}\n".encode()
 
         return Response(
             stream_with_context(_lock_busy_gen()),
@@ -16274,7 +16266,7 @@ def _tail_log_stream_generator(prep: dict) -> object:
             yield chunk
         rc = proc.poll()
         if rc is not None and rc != 0:
-            yield f"\n--- tail exited {rc} ---\n".encode("utf-8")
+            yield f"\n--- tail exited {rc} ---\n".encode()
     finally:
         if proc.poll() is None:
             try:
@@ -16417,7 +16409,7 @@ def _pick_slurm_version_line(stdout: str, stderr: str) -> str:
     for ln in lines:
         if _SLURM_VERSION_JUNK_RE.search(ln):
             continue
-        if re.search(r"slurm\s*[\d.]|^slurm\b", ln, re.I):
+        if re.search(r"slurm\s*[\d.]|^slurm\b", ln, re.IGNORECASE):
             return ln
     for ln in lines:
         if _SLURM_VERSION_JUNK_RE.search(ln):
@@ -17751,14 +17743,14 @@ class _TerminalSession:
 
         threading.Thread(target=_pty_reader, daemon=True).start()
 
-    def subscribe(self) -> "queue.Queue[bytes | None]":
+    def subscribe(self) -> queue.Queue[bytes | None]:
         q: queue.Queue[bytes | None] = queue.Queue()
         with self.lock:
             self.subscribers.append(q)
             self.ws_count += 1
         return q
 
-    def unsubscribe(self, q: "queue.Queue[bytes | None]") -> None:
+    def unsubscribe(self, q: queue.Queue[bytes | None]) -> None:
         with self.lock:
             if q in self.subscribers:
                 self.subscribers.remove(q)
@@ -17850,7 +17842,7 @@ class _WebSocketTerminalMiddleware:
                 del self._sessions[session_id]
                 _logger.info("WebSocket terminal: session %s expired after grace period", session_id)
 
-    def _get_or_create_session(self, qs: dict) -> "_TerminalSession | None":
+    def _get_or_create_session(self, qs: dict) -> _TerminalSession | None:
         """Return an existing session for reconnect, or create a new one."""
         session_id = (qs.get("session") or [""])[0].strip()
         if session_id:
@@ -17901,8 +17893,10 @@ class _WebSocketTerminalMiddleware:
         return sess
 
     def _handle_terminal(self, environ):  # type: ignore[no-untyped-def]
-        from simple_websocket import Server as _WSServer, ConnectionClosed as _WSClosed
         from urllib.parse import parse_qs
+
+        from simple_websocket import ConnectionClosed as _WSClosed
+        from simple_websocket import Server as _WSServer
 
         ws = None
         outq = None

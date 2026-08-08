@@ -10,13 +10,9 @@ from __future__ import annotations
 
 from validation_activities import (  # noqa: F401
     ACTIVITIES_FILE as JOBS_FILE,
-    LEGACY_JOBS_FILE,
-    MAX_ACTIVITIES as MAX_JOBS,
-    TERMINAL_PHASES,
-    delete_job,
+)
+from validation_activities import (
     list_activities,
-    record_job,
-    update_job,
 )
 
 # Legacy kind tuple for importers that referenced multirack_jobs.KINDS

@@ -550,9 +550,7 @@ def rollup_work_phase(tasks: list[dict] | None) -> str:
                 wp = "running"
             elif st in ("FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY"):
                 wp = "failed"
-            elif st in ("COMPLETED",):
-                wp = "done"
-            elif t.get("results_log_path"):
+            elif st in ("COMPLETED",) or t.get("results_log_path"):
                 wp = "done"
             else:
                 wp = "unknown"

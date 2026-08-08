@@ -16,11 +16,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 import host_exec
 import rack_locks
 import workflow_models
+import yaml
 
 _logger = logging.getLogger(__name__)
 
@@ -1098,7 +1097,8 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
         # Broaden defaults from the catalog Tool registry (env_key -> script basename),
         # so any registered tool is runnable from a workflow, not just the seven above.
         try:
-            from catalog.store import TABLE_TOOLS, get_repo as _get_repo
+            from catalog.store import TABLE_TOOLS
+            from catalog.store import get_repo as _get_repo
 
             for _t in _get_repo().list(TABLE_TOOLS):
                 ek = (_t.get("env_key") or "").strip()

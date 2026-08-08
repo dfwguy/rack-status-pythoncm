@@ -46,7 +46,7 @@ class NodeResult:
 def fanout(
     base: Connection,
     nodes: list[str],
-    cmd: "str | list[str]",
+    cmd: str | list[str],
     *,
     timeout: int = 120,
     max_workers: int = 8,

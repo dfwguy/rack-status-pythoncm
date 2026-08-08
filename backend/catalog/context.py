@@ -20,7 +20,8 @@ No import of ``app`` here (avoids cycles); ``app.py`` calls into this module.
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from . import models
 from .store import (
@@ -47,7 +48,9 @@ def add_change_hook(fn: Callable[[], None]) -> None:
 
 
 def notify_changed() -> None:
-    for fn in list(_change_hooks):
+    # Iterate a copy: a hook may register or drop another hook while running, and mutating the
+    # list mid-iteration would raise. Not a redundant cast.
+    for fn in list(_change_hooks):  # noqa: PERF101
         try:
             fn()
         except Exception:  # pragma: no cover - hooks must never break a request

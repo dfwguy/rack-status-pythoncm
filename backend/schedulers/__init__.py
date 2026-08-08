@@ -22,15 +22,15 @@ from schedulers.slurm import SlurmScheduler
 from schedulers.stubs import MaaSScheduler, RunAIScheduler, SlinkyScheduler
 
 __all__ = [
-    "Scheduler",
-    "JobSpec",
+    "TERMINAL_STATES",
     "JobHandle",
     "JobResult",
-    "TERMINAL_STATES",
-    "SlurmScheduler",
+    "JobSpec",
     "LocalScheduler",
-    "RunAIScheduler",
-    "SlinkyScheduler",
     "MaaSScheduler",
+    "RunAIScheduler",
+    "Scheduler",
+    "SlinkyScheduler",
+    "SlurmScheduler",
     "build_scheduler",
 ]

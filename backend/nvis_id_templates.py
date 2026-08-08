@@ -220,7 +220,7 @@ def is_log_noise_basename(name: str) -> bool:
     only. A trailing ``/`` (or an empty / ``.`` / ``..`` name) is treated as noise.
     """
     raw = (name or "").strip()
-    if not raw or raw.endswith("/") or raw.endswith("\\"):
+    if not raw or raw.endswith(("/", "\\")):
         return True
     base = _basename_only(raw)
     if not base or base in (".", ".."):
@@ -230,9 +230,7 @@ def is_log_noise_basename(name: str) -> bool:
     if _EDITOR_NOISE_RE.search(base):
         return True
     _stem, exts = _split_log_ext_chain(base)
-    if any(e in _LOG_NOISE_COMPONENTS for e in exts):
-        return True
-    return False
+    return bool(any(e in _LOG_NOISE_COMPONENTS for e in exts))
 
 
 def _effective_log_exts(exts: list[str]) -> list[str]:
@@ -260,7 +258,7 @@ def is_plausible_log_basename(name: str) -> bool:
     base = _basename_only(raw)
     # Hard rejects that no escape hatch may override: empty, ``.``/``..`` and
     # anything that names a directory (trailing separator).
-    if not base or base in (".", "..") or raw.endswith("/") or raw.endswith("\\"):
+    if not base or base in (".", "..") or raw.endswith(("/", "\\")):
         return False
     low = base.lower()
     for m in _env_marker_list("NVIS_LOG_EXCLUDE_MARKERS"):
@@ -372,7 +370,7 @@ def is_multirack_log_basename(name: str, naming: NvisNaming | None = None) -> bo
         return True
     low = (name or "").lower()
     # run-nemo-xrack.sh: root-NEMO-p5-r[…]-ct[…],p5-r[…]-ct[…]-<n>N-<jid>.txt
-    if (low.startswith("root-nemo-") or low.startswith("root-nccl-")) and (
+    if (low.startswith(("root-nemo-", "root-nccl-"))) and (
         n.multirack_comma_after_rack_re().search(low)
     ):
         return True

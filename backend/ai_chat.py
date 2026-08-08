@@ -10,10 +10,10 @@ import json
 import logging
 import os
 import re
-import time
 import threading
+import time
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import requests
 
@@ -127,9 +127,7 @@ def is_ai_enabled() -> bool:
     has_key = bool(settings.get("api_key") or os.environ.get("RACK_AI_API_KEY", "").strip())
     if not has_key:
         return False
-    if settings.get("enabled") is False and not has_key:
-        return False
-    return True
+    return not (settings.get("enabled") is False and not has_key)
 
 
 # ---------------------------------------------------------------------------
@@ -426,18 +424,18 @@ graph TD
     # Rack status
     (
         ["rack status", "rack health", "how.*rack", "status of", "what.*status", "overview"],
-        "Here is the current rack status summary:\n\n"
+        ("Here is the current rack status summary:\n\n"
         "- **p34-r07**: All 18 nodes healthy, NCCL passed, bus BW 42.1 GB/s avg\n"
         "- **p34-r08**: 16/18 nodes healthy, 2 nodes in `drain` (gpu07, gpu12 — Xid 79 errors)\n"
         "- **p34-r09**: All 18 nodes healthy, NCCL passed, bus BW 41.8 GB/s avg\n"
         "- **p34-r10**: 17/18 nodes healthy, 1 node `down` (gpu03 — NVLink failure)\n\n"
         "Overall cluster health: **94.4%** (68/72 nodes operational). "
-        "I'd recommend investigating the Xid 79 errors on p34-r08 first — those are typically recoverable with a GPU reset.",
+        "I'd recommend investigating the Xid 79 errors on p34-r08 first — those are typically recoverable with a GPU reset."),
     ),
     # NCCL
     (
         ["nccl", "all-reduce", "bandwidth", "bus bw", "collective"],
-        "The latest NCCL all-reduce test results across the cluster:\n\n"
+        ("The latest NCCL all-reduce test results across the cluster:\n\n"
         "| Rack | Nodes | Bus BW (avg) | Status |\n"
         "|------|-------|-------------|--------|\n"
         "| p34-r07 | 18/18 | 42.1 GB/s | PASS |\n"
@@ -446,12 +444,12 @@ graph TD
         "| p34-r10 | 17/18 | 40.2 GB/s | PASS — 1 node excluded |\n\n"
         "Expected bus bandwidth for H100 NVLink: **>40 GB/s** per link. "
         "p34-r08 is below threshold — the excluded nodes (gpu07, gpu12) are likely dragging the average when partially tested. "
-        "Run `nccl-tests --rack p34-r08 --exclude gpu07,gpu12` to confirm the healthy nodes pass independently.",
+        "Run `nccl-tests --rack p34-r08 --exclude gpu07,gpu12` to confirm the healthy nodes pass independently."),
     ),
     # Slurm / drain / nodes
     (
         ["slurm", "drain", "undrain", "sinfo", "squeue", "node state", "idle", "alloc", "scontrol"],
-        "Current Slurm node states:\n\n"
+        ("Current Slurm node states:\n\n"
         "- **idle**: 42 nodes\n"
         "- **alloc**: 24 nodes (3 active jobs)\n"
         "- **drain**: 4 nodes — `gpu07@p34-r08` (Xid 79), `gpu12@p34-r08` (Xid 79), `gpu03@p34-r10` (NVLink), `gpu15@p34-r10` (health check timeout)\n"
@@ -460,12 +458,12 @@ graph TD
         "```\nscontrol show node gpu07-p34-r08\n```\n\n"
         "To undrain after fixing:\n"
         "```\nscontrol update nodename=gpu07-p34-r08 state=idle reason=\"cleared\"\n```\n\n"
-        "The Xid 79 errors on p34-r08 nodes are GPU-level faults. Try `nvidia-smi -r` (GPU reset) first before hardware escalation.",
+        "The Xid 79 errors on p34-r08 nodes are GPU-level faults. Try `nvidia-smi -r` (GPU reset) first before hardware escalation."),
     ),
     # GPU issues
     (
         ["gpu", "nvidia-smi", "xid", "reset", "gpu reset", "gpu error", "gpu fail", "gpu health"],
-        "For GPU diagnostics, here's the recommended procedure:\n\n"
+        ("For GPU diagnostics, here's the recommended procedure:\n\n"
         "**1. Check GPU status:**\n"
         "```\nnvidia-smi -q --display=ERRORS\n```\n\n"
         "**2. Check for Xid errors in dmesg:**\n"
@@ -479,12 +477,12 @@ graph TD
         "```\nnvidia-smi -r -i <gpu_id>\n```\n\n"
         "**4. If reset fails, power cycle the node:**\n"
         "```\nipmitool -H <bmc_ip> -U admin -P <pass> chassis power cycle\n```\n\n"
-        "After recovery, run NCCL tests to validate the GPU is performing correctly.",
+        "After recovery, run NCCL tests to validate the GPU is performing correctly."),
     ),
     # NVLink
     (
         ["nvlink", "nv link", "nvswitch", "link error", "link status", "topology"],
-        "NVLink diagnostics:\n\n"
+        ("NVLink diagnostics:\n\n"
         "**Check NVLink topology and status:**\n"
         "```\nnvidia-smi topo -m\nnvidia-smi nvlink -s\n```\n\n"
         "**Check for NVLink errors:**\n"
@@ -495,12 +493,12 @@ graph TD
         "- p34-r09: All links active, 0 CRC errors\n"
         "- p34-r10: gpu03 — NVLink 2 down, hardware fault detected\n\n"
         "For gpu07@p34-r08, try clearing the counters with `nvidia-smi nvlink -r` and re-checking after 10 minutes. "
-        "Persistent CRC errors indicate a cable or connector issue — reseat the NVLink bridge.",
+        "Persistent CRC errors indicate a cable or connector issue — reseat the NVLink bridge."),
     ),
     # InfiniBand / network
     (
         ["infiniband", "ib ", "ibstat", "ibdiag", "network", "switch", "rdma", "opa", "fabric"],
-        "InfiniBand fabric diagnostics:\n\n"
+        ("InfiniBand fabric diagnostics:\n\n"
         "**1. Check local port status:**\n"
         "```\nibstat\nibstatus\n```\n\n"
         "**2. Check for errors and counters:**\n"
@@ -512,12 +510,12 @@ graph TD
         "- 4 ports down: 2 on leaf switch sw-p34-r08-l1 (likely related to drained nodes), 2 on spine switch sw-p34-spine01 (planned maintenance)\n"
         "- Symbol error rate: within threshold on all active ports\n\n"
         "If a node's IB port is down:\n"
-        "```\nibportstate -D 0 1 reset\n```",
+        "```\nibportstate -D 0 1 reset\n```"),
     ),
     # NEMO / validation / training
     (
         ["nemo", "validation", "training", "llm", "megatron", "run validation", "test.*rack"],
-        "To run NEMO validation on a rack:\n\n"
+        ("To run NEMO validation on a rack:\n\n"
         "**Quick validation (NCCL only, ~5 min):**\n"
         "```\n./bin/scripts/01-run-validation.sh --rack p34-r07 --test nccl\n```\n\n"
         "**Full validation (NCCL + NEMO training smoke test, ~30 min):**\n"
@@ -527,12 +525,12 @@ graph TD
         "- p34-r08: NCCL PARTIAL — 2 nodes excluded, re-validation needed after GPU reset\n"
         "- p34-r09: Full validation PASS (last run: 4h ago)\n"
         "- p34-r10: Not run since gpu03 went down\n\n"
-        "I recommend re-running validation on p34-r08 and p34-r10 after addressing the drained/down nodes.",
+        "I recommend re-running validation on p34-r08 and p34-r10 after addressing the drained/down nodes."),
     ),
     # Troubleshooting / help / how to
     (
         ["troubleshoot", "debug", "diagnos", "fix", "issue", "problem", "error", "fail", "wrong", "help"],
-        "Here's a systematic troubleshooting workflow:\n\n"
+        ("Here's a systematic troubleshooting workflow:\n\n"
         "**Step 1 — Identify the issue:**\n"
         "- Check rack status on the Dashboard for an overview\n"
         "- Look for nodes in `drain` or `down` state in the Slurm view\n"
@@ -551,12 +549,12 @@ graph TD
         "- Run NCCL test on the affected rack\n"
         "- Confirm nodes are back to `idle` in Slurm\n"
         "- Run full NEMO validation if training jobs are planned\n\n"
-        "Would you like me to walk through any of these steps in detail?",
+        "Would you like me to walk through any of these steps in detail?"),
     ),
     # Power / IPMI / BMC
     (
         ["power", "ipmi", "bmc", "power cycle", "power on", "power off", "chassis"],
-        "For power management via IPMI/BMC:\n\n"
+        ("For power management via IPMI/BMC:\n\n"
         "**Check power status:**\n"
         "```\nipmitool -H <bmc_ip> -U admin -P <pass> chassis status\n```\n\n"
         "**Power cycle a node:**\n"
@@ -566,12 +564,12 @@ graph TD
         "**Check sensor readings:**\n"
         "```\nipmitool -H <bmc_ip> -U admin -P <pass> sensor list\n```\n\n"
         "Note: Always drain the node in Slurm before power cycling to avoid disrupting running jobs. "
-        "After power cycle, wait 2–3 minutes for POST, then verify with `ssh` and `nvidia-smi`.",
+        "After power cycle, wait 2–3 minutes for POST, then verify with `ssh` and `nvidia-smi`."),
     ),
     # cmsh / BCM
     (
         ["cmsh", "bcm", "base command", "bright", "cluster manager", "cm "],
-        "Base Command Manager (BCM) / cmsh commands:\n\n"
+        ("Base Command Manager (BCM) / cmsh commands:\n\n"
         "**List racks:**\n"
         "```\ncmsh -c \"rack; list\"\n```\n\n"
         "**Check node status in a rack:**\n"
@@ -580,7 +578,7 @@ graph TD
         "```\ncmsh -c \"device; foreach -n gpu*-p34-r07 (setupnetwork)\"\n```\n\n"
         "**View hardware inventory:**\n"
         "```\ncmsh -c \"device; foreach -n gpu01-p34-r07 (get hardwareprofile)\"\n```\n\n"
-        "Current BCM cluster status: 72 managed nodes, 4 in error state (matching the Slurm drain list).",
+        "Current BCM cluster status: 72 managed nodes, 4 in error state (matching the Slurm drain list)."),
     ),
 ]
 

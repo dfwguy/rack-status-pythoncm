@@ -39,7 +39,7 @@ class HopSpec:
     connect_timeout: str = "15"
 
     @classmethod
-    def from_dict(cls, d: dict) -> "HopSpec":
+    def from_dict(cls, d: dict) -> HopSpec:
         if not isinstance(d, dict):
             raise ValueError("hop spec must be a mapping")
         return cls(

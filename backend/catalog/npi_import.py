@@ -29,9 +29,10 @@ edits are not expected on reference records, so they are intentionally overwritt
 from __future__ import annotations
 
 import os
-import tomllib
 from pathlib import Path
 from typing import Any
+
+import tomllib
 
 from . import models
 from .store import REPO_ROOT, TABLE_NPI_TOOLS, Repo

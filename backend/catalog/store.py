@@ -18,8 +18,9 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, Callable, Iterable, Protocol
+from typing import Any, Protocol
 
 from tinydb import Query, TinyDB
 from tinydb.storages import Storage, touch

@@ -534,7 +534,7 @@ def _cmsh_ds_text() -> str:
     DS_LAST_DIAG["target"] = host_exec.exec_kind()
     DS_LAST_DIAG["remote"] = DS_LAST_DIAG["target"] == "ssh"
     if not host_exec.which(cmd[0]):
-        DS_LAST_DIAG["error"] = "%s not on PATH on the %s target" % (cmd[0], DS_LAST_DIAG["target"])
+        DS_LAST_DIAG["error"] = "{} not on PATH on the {} target".format(cmd[0], DS_LAST_DIAG["target"])
         return ""
     try:
         proc = host_exec.run_on_host(
@@ -542,7 +542,7 @@ def _cmsh_ds_text() -> str:
             timeout=max(30, _env_int("RACK_NATIVE_DS_TIMEOUT_SEC", 300)),
         )
     except (OSError, subprocess.TimeoutExpired) as e:
-        DS_LAST_DIAG["error"] = "%s: %s" % (type(e).__name__, e)
+        DS_LAST_DIAG["error"] = "{}: {}".format(type(e).__name__, e)
         return ""
     out = proc.stdout or ""
     DS_LAST_DIAG["returncode"] = getattr(proc, "returncode", None)
@@ -1251,22 +1251,22 @@ _states: dict[str, NativeRackTableState] = {}
 
 class NativeRackTableState:
     __slots__ = (
-        "key",
-        "log_dir",
-        "lock",
-        "racks",
-        "ct_by_rack",
-        "sinfo_counts",
-        "per_path_probe",
         "by_rack_log",
         "by_rack_stage_log",
-        "ds_thread",
-        "sinfo_thread",
-        "log_thread",
+        "ct_by_rack",
         "ds_done",
-        "sinfo_done",
-        "log_done",
+        "ds_thread",
+        "key",
         "last_errors",
+        "lock",
+        "log_dir",
+        "log_done",
+        "log_thread",
+        "per_path_probe",
+        "racks",
+        "sinfo_counts",
+        "sinfo_done",
+        "sinfo_thread",
     )
 
     def __init__(self, key: str, log_dir: Path) -> None:
@@ -1434,7 +1434,7 @@ class NativeRackTableState:
             lj0 = _last_job_for_log_row(bn0, pr0)
             if lj0 != "-" and lj0.isdigit():
                 want.add(lj0)
-            for _kind, src in (by_rack_stage.get(rack) or {}).items():
+            for src in (by_rack_stage.get(rack) or {}).values():
                 if not isinstance(src, dict):
                     continue
                 sp = str(src.get("_path") or "")
@@ -1793,16 +1793,16 @@ _multirack_states: dict[str, MultirackTableState] = {}
 class MultirackTableState:
     __slots__ = (
         "key",
-        "log_dir",
+        "last_errors",
         "lock",
+        "log_dir",
+        "log_done",
         "log_paths",
+        "log_thread",
         "per_path_probe",
         "sinfo_counts",
-        "sinfo_thread",
-        "log_thread",
         "sinfo_done",
-        "log_done",
-        "last_errors",
+        "sinfo_thread",
     )
 
     def __init__(self, key: str, log_dir: Path) -> None:

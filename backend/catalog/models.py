@@ -165,7 +165,7 @@ class PlatformGeometry:
     nvlink_domain: int = 72
 
     @classmethod
-    def from_dict(cls, d: Any) -> "PlatformGeometry":
+    def from_dict(cls, d: Any) -> PlatformGeometry:
         d = _as_dict(d)
 
         def _i(key: str, default: int) -> int:
@@ -199,7 +199,7 @@ class PlatformFabric:
     ns_ifname: str = ""  # north-south / bootstrap netdev hint (e.g. bond0)
 
     @classmethod
-    def from_dict(cls, d: Any) -> "PlatformFabric":
+    def from_dict(cls, d: Any) -> PlatformFabric:
         d = _as_dict(d)
 
         def _i(key: str, default: int) -> int:
@@ -237,7 +237,7 @@ class Platform:
     source: str = "user"  # "seed" for built-ins so user edits are distinguishable
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Platform":
+    def from_dict(cls, d: dict[str, Any]) -> Platform:
         d = _as_dict(d)
         return cls(
             id=_as_str(d.get("id")),
@@ -296,7 +296,7 @@ class ToolParam:
     required: bool = False
 
     @classmethod
-    def from_dict(cls, d: Any) -> "ToolParam":
+    def from_dict(cls, d: Any) -> ToolParam:
         d = _as_dict(d)
         return cls(
             key=_as_str(d.get("key")),
@@ -320,7 +320,7 @@ class ToolCompatibility:
     platform_ids: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, d: Any) -> "ToolCompatibility":
+    def from_dict(cls, d: Any) -> ToolCompatibility:
         d = _as_dict(d)
         return cls(
             match=_as_str(d.get("match")) or "all",
@@ -328,7 +328,7 @@ class ToolCompatibility:
             platform_ids=_as_str_list(d.get("platform_ids")),
         )
 
-    def matches(self, platform: "Platform | None") -> bool:
+    def matches(self, platform: Platform | None) -> bool:
         if self.platform_ids:
             return bool(platform) and platform.id in self.platform_ids
         if self.capabilities:
@@ -353,7 +353,7 @@ class Tool:
     source: str = "user"
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Tool":
+    def from_dict(cls, d: dict[str, Any]) -> Tool:
         d = _as_dict(d)
         params_raw = d.get("params")
         params = [ToolParam.from_dict(p) for p in params_raw] if isinstance(params_raw, list) else []
@@ -411,7 +411,7 @@ class ClusterNaming:
     slurm_hostlist: str = ""
 
     @classmethod
-    def from_dict(cls, d: Any) -> "ClusterNaming":
+    def from_dict(cls, d: Any) -> ClusterNaming:
         d = _as_dict(d)
         return cls(
             rack_id_template=_as_str(d.get("rack_id_template")),
@@ -432,7 +432,7 @@ class ClusterGeometry:
     trays_per_rack: int = 0  # 0 == inherit from platform
 
     @classmethod
-    def from_dict(cls, d: Any) -> "ClusterGeometry":
+    def from_dict(cls, d: Any) -> ClusterGeometry:
         d = _as_dict(d)
 
         def _i(key: str, default: int) -> int:
@@ -472,7 +472,7 @@ class Endpoint:
     description: str = ""
 
     @classmethod
-    def from_dict(cls, d: Any) -> "Endpoint":
+    def from_dict(cls, d: Any) -> Endpoint:
         d = _as_dict(d)
         return cls(
             id=_as_str(d.get("id")),
@@ -517,7 +517,7 @@ class ConnectionRole:
     description: str = ""
 
     @classmethod
-    def from_dict(cls, d: Any) -> "ConnectionRole":
+    def from_dict(cls, d: Any) -> ConnectionRole:
         d = _as_dict(d)
         return cls(
             id=_as_str(d.get("id")),
@@ -554,7 +554,7 @@ class ClusterConnection:
     roles: list[ConnectionRole] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, d: Any) -> "ClusterConnection":
+    def from_dict(cls, d: Any) -> ClusterConnection:
         d = _as_dict(d)
         return cls(
             exec_mode=_as_str(d.get("exec_mode")),
@@ -636,7 +636,7 @@ class Cluster:
     connection: ClusterConnection = field(default_factory=ClusterConnection)
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Cluster":
+    def from_dict(cls, d: dict[str, Any]) -> Cluster:
         d = _as_dict(d)
         return cls(
             id=_as_str(d.get("id")),
@@ -676,7 +676,7 @@ class Project:
     source: str = "user"
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Project":
+    def from_dict(cls, d: dict[str, Any]) -> Project:
         d = _as_dict(d)
         clusters_raw = d.get("clusters")
         clusters = (
@@ -708,7 +708,7 @@ class Project:
             seen.add(c.id)
         return problems
 
-    def get_cluster(self, cluster_id: str) -> "Cluster | None":
+    def get_cluster(self, cluster_id: str) -> Cluster | None:
         for c in self.clusters:
             if c.id == cluster_id:
                 return c
@@ -765,7 +765,7 @@ class NpiTool:
     source_ref: str = ""
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "NpiTool":
+    def from_dict(cls, d: dict[str, Any]) -> NpiTool:
         d = _as_dict(d)
         return cls(
             id=_as_str(d.get("id")),

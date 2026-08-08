@@ -13,11 +13,11 @@ import sqlite3
 import threading
 import time
 import uuid
-from contextlib import contextmanager, closing
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterator
 
 _log = logging.getLogger(__name__)
 
@@ -89,9 +89,8 @@ class LiveProbeRepository:
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
-        with closing(self._connect()) as connection:
-            with connection:
-                yield connection
+        with closing(self._connect()) as connection, connection:
+            yield connection
 
     def _initialize(self) -> None:
         with self._connection() as connection:
