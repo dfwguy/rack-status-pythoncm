@@ -123,22 +123,22 @@ try:
     import results_history
 except Exception as _rh_exc:  # pragma: no cover - defensive
     results_history = None  # type: ignore[assignment]
-    logging.getLogger(__name__).warning("results_history unavailable: %s", _rh_exc)
+    logging.getLogger(__name__).warning("results_history unavailable: %s", _rh_exc, exc_info=True)
 try:
     import universal_parser as _uparse
 except Exception as _up_exc:  # pragma: no cover - defensive
     _uparse = None  # type: ignore[assignment]
-    logging.getLogger(__name__).warning("universal_parser unavailable: %s", _up_exc)
+    logging.getLogger(__name__).warning("universal_parser unavailable: %s", _up_exc, exc_info=True)
 try:
     import bringup as _bringup
 except Exception as _bu_exc:  # pragma: no cover - defensive
     _bringup = None  # type: ignore[assignment]
-    logging.getLogger(__name__).warning("bringup unavailable: %s", _bu_exc)
+    logging.getLogger(__name__).warning("bringup unavailable: %s", _bu_exc, exc_info=True)
 try:
     import node_report as _node_report
 except Exception as _nr_exc:  # pragma: no cover - defensive
     _node_report = None  # type: ignore[assignment]
-    logging.getLogger(__name__).warning("node_report unavailable: %s", _nr_exc)
+    logging.getLogger(__name__).warning("node_report unavailable: %s", _nr_exc, exc_info=True)
 
 
 def _nvis_naming() -> nvis_id_templates.NvisNaming:
@@ -164,7 +164,7 @@ try:
 
     _CATALOG_AVAILABLE = True
 except Exception as _catalog_exc:  # pragma: no cover - defensive
-    logging.getLogger(__name__).warning("catalog unavailable: %s", _catalog_exc)
+    logging.getLogger(__name__).warning("catalog unavailable: %s", _catalog_exc, exc_info=True)
     catalog_context = None  # type: ignore[assignment]
     catalog_seed = None  # type: ignore[assignment]
     catalog_store = None  # type: ignore[assignment]
@@ -246,6 +246,7 @@ except Exception as _compress_exc:  # pragma: no cover - defensive
     _logger.warning(
         "flask-compress unavailable; responses will be uncompressed: %s",
         _compress_exc,
+        exc_info=True,
     )
 
 try:
@@ -275,7 +276,7 @@ try:
             return jsonify({"ok": False, "error": "lake_sink not loaded"})
         return jsonify(lake_sink.health())
 except Exception as _ge_exc:  # pragma: no cover - observability embeds are optional
-    _logger.warning("grafana_embeds blueprint unavailable: %s", _ge_exc)
+    _logger.warning("grafana_embeds blueprint unavailable: %s", _ge_exc, exc_info=True)
 
 _validation_jobs_lock = threading.Lock()
 _validation_jobs: dict[str, dict[str, object]] = {}
@@ -975,7 +976,7 @@ def _materialize_job_env_overrides_into_os_environ(ov: dict[str, str]) -> None:
         try:
             _apply()
         except Exception:
-            pass
+            _logger.debug("_materialize_job_env_overrides_into_os_environ: ignoring error", exc_info=True)
 
 
 def _job_env_status_payload_needs_rebuild(before: dict[str, str], after: dict[str, str]) -> bool:
@@ -1193,13 +1194,13 @@ def _job_env_overrides_write(data: dict[str, str], *, bust_status_cache: bool = 
     try:
         native_status.invalidate_job_env_file_cache()
     except Exception:
-        pass
+        _logger.debug("_job_env_overrides_write: ignoring error", exc_info=True)
     # Rebuild the transport connection so transport-affecting settings (e.g.
     # RACK_SCRIPT_SUDO / RACK_SUDO_PASSWORD) take effect without an app restart.
     try:
         host_exec.invalidate_connection()
     except Exception:
-        pass
+        _logger.debug("_job_env_overrides_write: ignoring error", exc_info=True)
     if bust_status_cache:
         _rack_status_cache_clear_all()
     return clean
@@ -1218,6 +1219,7 @@ def _eget(name: str, default: str | None = None) -> str | None:
         try:
             high, low = catalog_context.overlays_for_active()
         except Exception:
+            _logger.debug("_eget: ignoring error", exc_info=True)
             high, low = {}, {}
     if name in high and high[name].strip():
         return high[name].strip()
@@ -1258,6 +1260,7 @@ def _subprocess_env(
         try:
             high, low = catalog_context.overlays_for_active()
         except Exception:
+            _logger.debug("_subprocess_env: ignoring error", exc_info=True)
             high, low = {}, {}
     # Precedence (later wins): low platform defaults < process env < Settings overrides
     # < active cluster identity < per-call updates.
@@ -1755,7 +1758,7 @@ def _maybe_adopt_validation_log(log_path: Path, log_dir: Path, rack: str) -> Non
             operator=_operator_from_request() or "external",
         )
     except Exception as e:
-        _logger.debug("validation log adopt skipped for %s: %s", log_path, e)
+        _logger.debug("validation log adopt skipped for %s: %s", log_path, e, exc_info=True)
 
 
 def _validation_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
@@ -1839,6 +1842,7 @@ def _validation_worker(
             command_display=display_cmd,
         )
     except Exception as e:
+        _logger.debug("_validation_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             returncode=-1,
@@ -1927,6 +1931,7 @@ def _stress_worker(
             command_display=display_cmd,
         )
     except Exception as e:
+        _logger.debug("_stress_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             returncode=-1,
@@ -2015,6 +2020,7 @@ def _xrack_worker(
             command_display=display_cmd,
         )
     except Exception as e:
+        _logger.debug("_xrack_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             returncode=-1,
@@ -2089,6 +2095,7 @@ def _llama_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
             command_display=display_cmd,
         )
     except Exception as e:
+        _logger.debug("_llama_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             returncode=-1,
@@ -2148,6 +2155,7 @@ def _power_reset_worker(job_id: str, specs: list[str]) -> None:
             error=None if ok_all else "one or more cmsh power reset steps failed (see results)",
         )
     except Exception as e:
+        _logger.debug("_power_reset_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -2315,6 +2323,7 @@ def _services_restart_worker(job_id: str, pdsh_w: str) -> None:
             error=None if ok else "services restart (pdsh) exited non-zero (see stdout/stderr)",
         )
     except Exception as e:
+        _logger.debug("_services_restart_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -2363,6 +2372,7 @@ def _gpu_reset_worker(job_id: str, pdsh_w: str) -> None:
             error=None if ok else "gpu_reset.sh exited non-zero (see stdout/stderr)",
         )
     except Exception as e:
+        _logger.debug("_gpu_reset_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -2730,11 +2740,11 @@ def _apply_catalog_active_to_environ() -> None:
         try:
             nvis_id_templates.clear_nvis_naming_cache()
         except Exception:
-            pass
+            _logger.debug("_apply_catalog_active_to_environ: ignoring error", exc_info=True)
         try:
             native_status.invalidate_job_env_file_cache()
         except Exception:
-            pass
+            _logger.debug("_apply_catalog_active_to_environ: ignoring error", exc_info=True)
         if (
             _catalog_status_context_fingerprint is not None
             and fingerprint != _catalog_status_context_fingerprint
@@ -3837,13 +3847,14 @@ def _zoneinfo_for_log_parsing(override_name: str | None) -> tzinfo:
         try:
             return ZoneInfo(on)
         except Exception:
-            pass
+            _logger.debug("_zoneinfo_for_log_parsing: ignoring error", exc_info=True)
     raw = (_eget("RACK_PROMETHEUS_LOG_TIMESTAMP_TZ") or "UTC").strip() or "UTC"
     if raw.upper() in ("UTC", "GMT", "Z", "UCT"):
         return ZoneInfo("UTC")
     try:
         return ZoneInfo(raw)
     except Exception:
+        _logger.debug("_zoneinfo_for_log_parsing: ignoring error", exc_info=True)
         return timezone.utc
 
 
@@ -3861,6 +3872,7 @@ def _parse_ts_unix(raw_ts: str, tz: tzinfo) -> float | None:
         try:
             dt = dt.replace(tzinfo=tz)
         except Exception:
+            _logger.debug("_parse_ts_unix: ignoring error", exc_info=True)
             dt = dt.replace(tzinfo=timezone.utc)
     return dt.timestamp()
 
@@ -4348,7 +4360,7 @@ def _clusterkit_product_line_for_job(body: dict) -> str:
         if pl:
             return pl
     except Exception:
-        pass
+        _logger.debug("_clusterkit_product_line_for_job: ignoring error", exc_info=True)
     return (_eget("RACK_CLUSTER_PRODUCT_LINE") or _eget("RACK_PRODUCT_LINE") or "").strip()
 
 
@@ -5148,6 +5160,7 @@ def _merge_fresh_comments_into_status_payload(out: dict) -> None:
     try:
         out["comments"] = read_comments()
     except Exception:
+        _logger.debug("_merge_fresh_comments_into_status_payload: ignoring error", exc_info=True)
         out.setdefault("comments", {})
 
 
@@ -5396,6 +5409,7 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
         try:
             out["comments"] = read_comments()
         except Exception:
+            _logger.debug("run_rack_status: ignoring error", exc_info=True)
             out["comments"] = {}
         out["physical_rf0"] = get_physical_rf0_map()
         out["native_workers"] = {
@@ -5415,6 +5429,7 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
     try:
         out["comments"] = read_comments()
     except Exception:
+        _logger.debug("run_rack_status: ignoring error", exc_info=True)
         out["comments"] = {}
     out["physical_rf0"] = get_physical_rf0_map()
     return out
@@ -5457,7 +5472,7 @@ def _cluster_snapshot_identity() -> str:
             if project_id or cluster_id:
                 return f"catalog:{project_id}/{cluster_id}"
         except Exception:
-            pass
+            _logger.debug("_cluster_snapshot_identity: ignoring error", exc_info=True)
     configured = (
         os.environ.get("RACK_CLUSTER_ID")
         or os.environ.get("RACK_CLUSTER_NAME")
@@ -5603,6 +5618,7 @@ def _ensure_rack_status_background_thread() -> None:
         try:
             seed = _rack_status_cache_key(_default_log_dir())
         except Exception:
+            _logger.debug("_ensure_rack_status_background_thread: ignoring error", exc_info=True)
             seed = ""
         if seed:
             with _rack_status_cache_lock:
@@ -5657,6 +5673,7 @@ def _nemo_done_rack_ids_from_rack_status(log_dir: Path) -> frozenset[str] | None
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     except Exception:
+        _logger.debug("_nemo_done_rack_ids_from_rack_status: ignoring error", exc_info=True)
         return None
     rows = data.get("rows")
     if not isinstance(rows, list) or len(rows) == 0:
@@ -6131,6 +6148,7 @@ def _bmc_recovery_worker(job_id: str, nodes: list[str], iface: str) -> None:
             error=None if ok_all else "bmc-recovery.sh failed on one or more nodes (see results)",
         )
     except Exception as e:
+        _logger.debug("_bmc_recovery_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -6329,6 +6347,7 @@ def _mac_change_worker(
             error=None if ok else "macswap exited non-zero (see stdout/stderr)",
         )
     except Exception as e:
+        _logger.debug("_mac_change_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -6684,6 +6703,7 @@ def _bug_report_worker(job_id: str, pdsh_w: str) -> None:
             error=err_msg,
         )
     except Exception as e:
+        _logger.debug("_bug_report_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -7097,6 +7117,7 @@ def _prepare_hw_check(body: dict) -> tuple[dict[str, object] | None, tuple[objec
         try:
             parts = [str(x).strip() for x in custom]
         except Exception:
+            _logger.debug("_prepare_hw_check: ignoring error", exc_info=True)
             return None, (jsonify({"ok": False, "error": "checker_args list must contain strings"}), 400)
         parts = [p for p in parts if p]
         if not parts:
@@ -7171,6 +7192,7 @@ def _hw_check_worker(job_id: str, pdsh_w: str, preset: str, checker_argv: list[s
             error=None if ok else "hw_check_pdsh.sh exited non-zero (see stdout/stderr)",
         )
     except Exception as e:
+        _logger.debug("_hw_check_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -7357,6 +7379,7 @@ def _nvswitch_fix_async_worker(job_id: str, log_dir: Path, cmd: list[str], displ
             error=f"nvswitch fix timed out after {timeout_sec}s",
         )
     except Exception as e:
+        _logger.debug("_nvswitch_fix_async_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -7489,6 +7512,7 @@ def _nvswitch_sdn_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str],
             error=None if ok else "nvswitch_sdn_reset.sh exited non-zero (see stdout/stderr)",
         )
     except Exception as e:
+        _logger.debug("_nvswitch_sdn_reset_async_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -7623,6 +7647,7 @@ def _nvswitch_system_reset_async_worker(job_id: str, log_dir: Path, cmd: list[st
             error=None if ok else "nvswitch_system_reset.sh exited non-zero (see stdout/stderr)",
         )
     except Exception as e:
+        _logger.debug("_nvswitch_system_reset_async_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -7773,6 +7798,7 @@ def _imex_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str], display
             error=None if ok else "imex_reset.sh exited non-zero (see stdout/stderr)",
         )
     except Exception as e:
+        _logger.debug("_imex_reset_async_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -7980,6 +8006,7 @@ def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
             error=f"NVLMAPPER timed out after {timeout_sec}s",
         )
     except Exception as e:
+        _logger.debug("_nvlmapper_async_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -8130,6 +8157,7 @@ def _precheck_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_c
             error=f"Precheck timed out after {timeout_sec}s",
         )
     except Exception as e:
+        _logger.debug("_precheck_async_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -8250,6 +8278,7 @@ def _nvswitch_check_async_worker(
             error=f"NVSWICTH check timed out after {timeout_sec}s",
         )
     except Exception as e:
+        _logger.debug("_nvswitch_check_async_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -8369,6 +8398,7 @@ def _imex_check_async_worker(job_id: str, log_dir: Path, cmd: list[str], display
             error=f"IMEX check timed out after {timeout_sec}s",
         )
     except Exception as e:
+        _logger.debug("_imex_check_async_worker: ignoring error", exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -9941,8 +9971,8 @@ def _lake_capture_start():
         # Read the body here: after the view runs it may already be consumed.
         if _lake_should_capture(request.path, request.method):
             g._lake_body = (request.get_data(cache=True) or b"")[:_LAKE_BODY_MAX]
-    except Exception:  # noqa: BLE001 - capture must never break a request
-        pass
+    except Exception:
+        _logger.debug("_lake_capture_start: ignoring error", exc_info=True)
 
 
 @app.after_request
@@ -10773,6 +10803,7 @@ def api_parser_results():
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": "parser.sh timed out"}), 504
     except Exception as e:
+        _logger.debug("api_parser_results: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
     err_tail = (proc.stderr or "").strip()
     raw_out = proc.stdout or ""
@@ -10873,7 +10904,7 @@ def api_parser_results():
             log_path, rk, job_raw, parsed, log_timestamp_tz=log_tz_q
         )
     except Exception as e:
-        _logger.warning("grafana embed context failed: %s", e)
+        _logger.warning("grafana embed context failed: %s", e, exc_info=True)
         g_embed = None
     pdisp = _grafana_url_timezone_param()
     if isinstance(g_embed, dict) and g_embed.get("display_timezone"):
@@ -11278,6 +11309,7 @@ def _parser_json_for_log_path(log_dir: Path, log_path: Path) -> tuple[dict | Non
     except subprocess.TimeoutExpired:
         return None, "parser.sh timed out"
     except Exception as e:
+        _logger.debug("_parser_json_for_log_path: ignoring error", exc_info=True)
         return None, str(e)
     if proc.returncode != 0:
         tail = ((proc.stderr or "") + "\n" + (proc.stdout or ""))[:800]
@@ -11931,6 +11963,7 @@ def api_analytics_aggregate():
                 except ValueError:
                     continue
     except Exception as _e:  # discovery is best-effort; never break the posted-rows path
+        _logger.debug("api_analytics_aggregate: ignoring error", exc_info=True)
         app.logger.warning("analytics: NCCL rack discovery failed: %s", _e)
 
     done_racks = sorted(set(done_racks))
@@ -12303,6 +12336,7 @@ def _load_log_analysis_cache_entries() -> dict[str, dict[str, object]]:
             try:
                 raw = json.load(f)
             except Exception:
+                _logger.debug("_load_log_analysis_cache_entries: ignoring error", exc_info=True)
                 raw = {}
             finally:
                 if locked:
@@ -12825,6 +12859,7 @@ def api_parser_export_excel():
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": f"parser.sh --json timed out after {timeout}s"}), 504
     except Exception as e:
+        _logger.debug("api_parser_export_excel: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
     if proc.returncode != 0:
         return jsonify(
@@ -13157,6 +13192,7 @@ def api_run_validation():
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": "validation script timed out", "target": target}), 504
     except Exception as e:
+        _logger.debug("api_run_validation: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e), "target": target}), 500
     ok = proc.returncode == 0
     return jsonify(
@@ -14822,6 +14858,7 @@ def api_run_sysinfo():
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": "sysinfo.sh timed out", "target": prep["target"]}), 504
     except Exception as e:
+        _logger.debug("api_run_sysinfo: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e), "target": prep["target"]}), 500
     ok = proc.returncode == 0
     return jsonify(
@@ -14908,6 +14945,7 @@ def api_tools_download_containers():
             {"ok": False, "error": f"download script timed out after {timeout}s", "destination": str(dest_dir)}
         ), 504
     except Exception as e:
+        _logger.debug("api_tools_download_containers: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e), "destination": str(dest_dir)}), 500
     ok = proc.returncode == 0
     return jsonify(
@@ -15161,6 +15199,7 @@ def api_tools_launch_grafana_bright_prometheus():
     except subprocess.TimeoutExpired:
         err_resp = (jsonify({"ok": False, "error": f"script timed out after {timeout}s"}), 504)
     except Exception as e:
+        _logger.debug("api_tools_launch_grafana_bright_prometheus: ignoring error", exc_info=True)
         err_resp = (jsonify({"ok": False, "error": str(e)}), 500)
     finally:
         if tmp_rc is not None:
@@ -15332,6 +15371,7 @@ def api_tools_install_hpcx_workspace():
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": f"install-hpcx-workspace timed out after {timeout}s"}), 504
     except Exception as e:
+        _logger.debug("api_tools_install_hpcx_workspace: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
     ok = proc.returncode == 0
     return jsonify(
@@ -15497,6 +15537,7 @@ def api_tools_install_dcgm_workspace():
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": f"install-dcgm-workspace timed out after {timeout}s"}), 504
     except Exception as e:
+        _logger.debug("api_tools_install_dcgm_workspace: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
     ok = proc.returncode == 0
     return jsonify(
@@ -15647,6 +15688,7 @@ def api_tools_install_cuda_nccl_workspace():
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": f"install-cuda-nccl-workspace timed out after {timeout}s"}), 504
     except Exception as e:
+        _logger.debug("api_tools_install_cuda_nccl_workspace: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
     ok = proc.returncode == 0
     return jsonify(
@@ -15795,6 +15837,7 @@ def api_tools_install_nvloom_workspace():
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": f"install-nvloom-workspace timed out after {timeout}s"}), 504
     except Exception as e:
+        _logger.debug("api_tools_install_nvloom_workspace: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
     ok = proc.returncode == 0
     return jsonify(
@@ -15999,6 +16042,7 @@ def api_tools_install_dgxc_benchmarking_workspace():
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "error": f"install-dgxc-benchmarking timed out after {timeout}s"}), 504
     except Exception as e:
+        _logger.debug("api_tools_install_dgxc_benchmarking_workspace: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
     ok = proc.returncode == 0
     return jsonify(
@@ -16662,6 +16706,7 @@ def build_cluster_overview(
         try:
             cluster_name = socket.gethostname()
         except Exception:
+            _logger.debug("build_cluster_overview: ignoring error", exc_info=True)
             cluster_name = "—"
 
     customer = _cluster_env_pick("RACK_CLUSTER_CUSTOMER_NAME", "RACK_CLUSTER_PROJECT") or _project_name() or "—"
@@ -17003,6 +17048,7 @@ def api_ds_diag():
                     "errors": list(st.last_errors)[-3:],
                 }
     except Exception as e:
+        _logger.debug("api_ds_diag: ignoring error", exc_info=True)
         states["_error"] = str(e)
     return jsonify({"ok": True, "diag": dict(getattr(_ns, "DS_LAST_DIAG", {}) or {}),
                     "states": states})
@@ -17036,6 +17082,7 @@ def api_cluster_overview():
         payload["connected_users"] = connected_users
         return jsonify(payload)
     except Exception as e:
+        _logger.debug("api_cluster_overview: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -17067,6 +17114,7 @@ def api_cluster_overview_live():
             }
         )
     except Exception as e:
+        _logger.debug("api_cluster_overview_live: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": cluster_overview_live.safe_error(e)}), 500
 
 
@@ -17081,6 +17129,7 @@ def api_cluster_health():
         info = host_exec.reachability_info(force=force)
         return jsonify({"ok": True, **info})
     except Exception as e:
+        _logger.debug("api_cluster_health: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -17092,6 +17141,7 @@ def api_cluster_health_reconnect():
         info = host_exec.reachability_info(force=True)
         return jsonify({"ok": True, **info})
     except Exception as e:
+        _logger.debug("api_cluster_health_reconnect: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -17131,6 +17181,7 @@ def api_fabric_probe():
         data = json.loads(json_lines[-1])
         return jsonify({"ok": True, "node": node, "fabric": data})
     except Exception as e:
+        _logger.debug("api_fabric_probe: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -17202,6 +17253,7 @@ def _degraded_status_payload(log_dir: Path, detail: str) -> dict:
     try:
         out["comments"] = read_comments()
     except Exception:
+        _logger.debug("_degraded_status_payload: ignoring error", exc_info=True)
         out["comments"] = {}
     _merge_project_name_into_status_payload(out)
     _merge_naming_into_status_payload(out)
@@ -17232,6 +17284,7 @@ def api_status():
         except subprocess.TimeoutExpired:
             return jsonify({"ok": False, "error": "rack_status.sh timed out"}), 504
         except Exception as e:
+            _logger.debug("api_status: ignoring error", exc_info=True)
             return jsonify({"ok": False, "error": str(e)}), 500
         _merge_live_native_workers_into_status(data, log_dir)
         data["snapshot_bypass"] = True
@@ -17255,6 +17308,7 @@ def api_status():
             wait=_truthy_env("RACK_STATUS_DEMO"),
         )
     except Exception as e:
+        _logger.debug("api_status: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
 
     if snapshot.payload is not None:
@@ -17604,6 +17658,7 @@ def api_workflow_save():
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
+        _logger.debug("api_workflow_save: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
@@ -17739,6 +17794,7 @@ class _TerminalSession:
                                 q.put(msg)
                         break
             except Exception as exc:
+                _logger.debug("_pty_reader: ignoring error", exc_info=True)
                 msg = f"\r\n\x1b[31m[PTY error: {exc}]\x1b[0m\r\n".encode()
                 with self.lock:
                     for q in self.subscribers:
@@ -17790,10 +17846,11 @@ class _TerminalSession:
             self.proc.terminate()
             self.proc.wait(timeout=3)
         except Exception:
+            _logger.debug("destroy: ignoring error", exc_info=True)
             try:
                 self.proc.kill()
             except Exception:
-                pass
+                _logger.debug("destroy: ignoring error", exc_info=True)
         try:
             os.close(self.master_fd)
         except OSError:
@@ -17835,7 +17892,7 @@ class _WebSocketTerminalMiddleware:
                     start_response("200 OK", [])
                 except Exception:
                     # Headers may already be set, or the peer already closed the socket.
-                    pass
+                    _logger.debug("__call__: ignoring error", exc_info=True)
             return []
         return self.wsgi_app(environ, start_response)
 
@@ -17964,7 +18021,7 @@ class _WebSocketTerminalMiddleware:
                 except OSError:
                     return
                 except Exception as exc:
-                    _logger.warning("WebSocket terminal: receive error: %s", exc)
+                    _logger.warning("WebSocket terminal: receive error: %s", exc, exc_info=True)
                     continue
 
                 if msg is None:
@@ -18003,7 +18060,7 @@ class _WebSocketTerminalMiddleware:
                 try:
                     ws.close()
                 except Exception:
-                    pass
+                    _logger.debug("_handle_terminal: ignoring error", exc_info=True)
 
 
 if _TERMINAL_ENABLED:

@@ -18,6 +18,7 @@ re-materializes the active overlay.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from flask import Blueprint, jsonify, request
@@ -30,6 +31,8 @@ from .store import (
     TABLE_TOOLS,
     get_repo,
 )
+
+_logger = logging.getLogger(__name__)
 
 catalog_bp = Blueprint("catalog", __name__, url_prefix="/api/catalog")
 
@@ -305,6 +308,7 @@ def get_topology():
             "kind": host_exec.exec_kind(),
         }
     except Exception as exc:  # diagnostics must not fail with the transport
+        _logger.debug("get_topology: ignoring error", exc_info=True)
         resolved = {"error": str(exc)}
     return jsonify(
         {

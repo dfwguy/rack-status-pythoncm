@@ -20,6 +20,7 @@ No import of ``app`` here (avoids cycles); ``app.py`` calls into this module.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -32,6 +33,8 @@ from .store import (
     current_generation,
     get_repo,
 )
+
+_logger = logging.getLogger(__name__)
 
 # Cache of (high, low) overlays for the active context, keyed by the store generation.
 # ``_eget`` calls this on every config lookup, so resolving TinyDB each time is avoided.
@@ -54,7 +57,7 @@ def notify_changed() -> None:
         try:
             fn()
         except Exception:  # pragma: no cover - hooks must never break a request
-            pass
+            _logger.debug("notify_changed: ignoring error", exc_info=True)
 
 
 def overlays_for_active() -> tuple[dict[str, str], dict[str, str]]:
@@ -70,6 +73,7 @@ def overlays_for_active() -> tuple[dict[str, str], dict[str, str]]:
         high = high_overlay(project, cluster, platform)
         low = low_overlay(platform, cluster)
     except Exception:  # never let catalog issues break config resolution
+        _logger.debug("overlays_for_active: ignoring error", exc_info=True)
         high, low = {}, {}
     _overlay_cache.update({"gen": gen, "high": high, "low": low})
     return high, low

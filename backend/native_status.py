@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import logging
 import os
 import re
 import shlex
@@ -36,6 +37,8 @@ from typing import Any
 import host_exec
 import nvis_id_templates as _nvis_ids
 from platforms import get_platform as _get_platform
+
+_logger = logging.getLogger(__name__)
 
 _PKG_DIR = Path(__file__).resolve().parent
 # Runtime cache lives under repo-root var/ (parent of backend/).
@@ -1303,6 +1306,7 @@ class NativeRackTableState:
                 self.ct_by_rack = col
                 self.ds_done = True
         except Exception as e:
+            _logger.debug("_worker_ds: ignoring error", exc_info=True)
             with self.lock:
                 self.last_errors.append(f"ds: {e}")
                 self.ds_done = True
@@ -1314,6 +1318,7 @@ class NativeRackTableState:
                 self.sinfo_counts = c
                 self.sinfo_done = True
         except Exception as e:
+            _logger.debug("_worker_sinfo: ignoring error", exc_info=True)
             with self.lock:
                 self.last_errors.append(f"sinfo: {e}")
                 self.sinfo_done = True
@@ -1366,6 +1371,7 @@ class NativeRackTableState:
             if dirty or any(k not in alive for k in disk):
                 _save_log_cache(_NATIVE_LOG_JSON, disk, alive)
         except Exception as e:
+            _logger.debug("_worker_logs: ignoring error", exc_info=True)
             with self.lock:
                 self.last_errors.append(f"logs: {e}")
         finally:
@@ -1830,6 +1836,7 @@ class MultirackTableState:
                 self.sinfo_counts = c
                 self.sinfo_done = True
         except Exception as e:
+            _logger.debug("_worker_sinfo_m: ignoring error", exc_info=True)
             with self.lock:
                 self.last_errors.append(f"sinfo: {e}")
                 self.sinfo_done = True
@@ -1879,6 +1886,7 @@ class MultirackTableState:
             if dirty or any(k not in alive for k in disk):
                 _save_log_cache(_MULTIRACK_LOG_JSON, disk, alive)
         except Exception as e:
+            _logger.debug("_worker_logs_m: ignoring error", exc_info=True)
             with self.lock:
                 self.last_errors.append(f"multirack logs: {e}")
         finally:

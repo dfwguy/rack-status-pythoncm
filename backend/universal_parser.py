@@ -74,6 +74,7 @@ This file is bind-mount-only backend code.  To make it visible inside the contai
 from __future__ import annotations
 
 import gzip
+import logging
 import math
 import os
 import re
@@ -82,6 +83,8 @@ import time as _time
 from collections import OrderedDict
 from collections.abc import Iterable, Sequence
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 __all__ = [
     "KINDS",
@@ -304,8 +307,8 @@ def _rack_scan_re() -> re.Pattern[str]:
     if _HAVE_NVIS_NAMING:
         try:
             return rack_id_scan_re(os.environ.get("NVIS_RACK_ID"))
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:
+            _logger.debug("_rack_scan_re: ignoring error", exc_info=True)
     return _FALLBACK_RACK_RE
 
 
@@ -345,8 +348,8 @@ def _find_nodes(text: str, *, limit: int = MAX_NODES) -> list[str]:
                         return out
             if out:
                 return out
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:
+            _logger.debug("_find_nodes: ignoring error", exc_info=True)
     for m in _FALLBACK_NODE_RE.finditer(text):
         tok = m.group(0)
         key = tok.casefold()

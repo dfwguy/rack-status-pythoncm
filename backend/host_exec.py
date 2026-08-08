@@ -100,6 +100,7 @@ def _catalog_topology() -> tuple[list[dict], list[dict]] | None:
         _project, cluster, _platform = catalog_context.resolve()
     except Exception:
         # A missing or corrupt store must not take execution down: fall back to env.
+        _logger.debug("_catalog_topology: ignoring error", exc_info=True)
         return None
     if cluster is None or not cluster.connection.endpoints:
         return None

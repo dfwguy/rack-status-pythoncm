@@ -17,6 +17,7 @@ affinity mapper, ``CUDA_MAJ``) so tool execution can be made platform-aware.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,8 @@ from .store import (
     TABLE_TOOLS,
     Repo,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def _effective_env(env: dict[str, str] | None) -> dict[str, str]:
@@ -590,6 +593,7 @@ def migrate(repo: Repo, *, env: dict[str, str] | None = None) -> dict[str, Any]:
 
         summary["npi"] = import_npi_catalog(repo)
     except Exception:  # pragma: no cover - defensive: import must never break boot
+        _logger.debug("migrate: ignoring error", exc_info=True)
         summary["npi"] = {}
 
     repo.set_meta("schema_version", SCHEMA_VERSION)

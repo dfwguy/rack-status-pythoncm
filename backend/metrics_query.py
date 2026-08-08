@@ -30,6 +30,7 @@ Config
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -39,6 +40,8 @@ import urllib.request
 from typing import Any
 
 from flask import Blueprint, jsonify, request
+
+_logger = logging.getLogger(__name__)
 
 _DEFAULT_URL = "http://host.docker.internal:8429"
 # Label values are interpolated into a PromQL string literal. Anything outside this set could
@@ -321,6 +324,7 @@ def api_metrics_health():
         out["dcgm_hosts"] = int(float(res[0]["value"][1])) if res else 0
         out["ok"] = True
     except Exception as exc:
+        _logger.debug("api_metrics_health: ignoring error", exc_info=True)
         out["error"] = str(exc)
     return jsonify(out)
 
@@ -419,6 +423,7 @@ def api_metrics_chart(chart_id: str):
     except urllib.error.URLError as exc:
         return jsonify({"ok": False, "error": f"metrics upstream unreachable: {exc}"}), 502
     except Exception as exc:
+        _logger.debug("api_metrics_chart: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
@@ -439,6 +444,7 @@ def api_metrics_query():
     try:
         return jsonify({"ok": True, "result": _instant(q)})
     except Exception as exc:
+        _logger.debug("api_metrics_query: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(exc)}), 502
 
 
@@ -455,4 +461,5 @@ def api_metrics_query_range():
         step = request.args.get("step") or f"{max(15, minutes * 60 // 120)}s"
         return jsonify({"ok": True, "result": _range(q, minutes, step)})
     except Exception as exc:
+        _logger.debug("api_metrics_query_range: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": str(exc)}), 502

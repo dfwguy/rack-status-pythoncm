@@ -35,12 +35,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 import re
 import time
 import urllib.error
 import urllib.request
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 _DEFAULT_URL = "http://host.docker.internal:9410"
 # Last resort when neither the lake override nor the active catalog names the cluster. Must
@@ -215,6 +218,7 @@ def push_run(
     try:
         code, body = _post("/v1/artifacts", payload)
     except Exception as exc:  # network/DNS/timeout
+        _logger.debug("push_run: ignoring error", exc_info=True)
         out["error"] = f"{type(exc).__name__}: {exc}"
         return out
 
@@ -244,5 +248,6 @@ def health() -> dict[str, Any]:
             out["ok"] = resp.status == 200
             out["http_status"] = resp.status
     except Exception as exc:
+        _logger.debug("health: ignoring error", exc_info=True)
         out["error"] = f"{type(exc).__name__}: {exc}"
     return out

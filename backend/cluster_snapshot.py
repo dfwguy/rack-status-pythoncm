@@ -327,17 +327,19 @@ class ClusterSnapshotService:
         try:
             result = self._validated_payload(self.collector())
             return self.repository.commit_success(snapshot_key, self.owner, result)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - handler logs; ruff misses that inside a class body
+            _log.debug("_refresh_and_commit: ignoring error", exc_info=True)
             return self.repository.commit_failure(snapshot_key, self.owner, error)
 
     def _start_background_refresh(self, snapshot_key: str) -> None:
         def _run_refresh() -> None:
             try:
                 self._refresh_and_commit(snapshot_key)
-            except Exception:
+            except Exception:  # noqa: BLE001 - handler logs; ruff misses that inside a class body
                 _log.exception(
                     "background cluster snapshot refresh failed for %s",
                     snapshot_key[:8],
+                    exc_info=True,
                 )
 
         threading.Thread(

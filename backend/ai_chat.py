@@ -168,6 +168,7 @@ def _deployment_envelope(context: dict) -> str:
         cluster_id = (context.get("cluster") or context.get("cluster_id") or "").strip() or None
         return catalog_context.build_ai_context_block(cluster_id=cluster_id)
     except Exception:  # pragma: no cover - catalog optional
+        _logger.debug("_deployment_envelope: ignoring error", exc_info=True)
         return ""
 
 
@@ -197,6 +198,7 @@ def build_system_prompt(context: dict, custom_rules: str = "") -> str:
 
             registry_context = help_content.get_ai_context(page, rack)
         except Exception:  # pragma: no cover - registry is optional
+            _logger.debug("build_system_prompt: ignoring error", exc_info=True)
             registry_context = ""
         if registry_context:
             parts.append(f"\nPage context:\n{registry_context}")
@@ -629,6 +631,7 @@ def _help_answer_for_page(context: dict | None) -> str | None:
         if entry is None and page:
             entry = help_content.get_entry(page)
     except Exception:  # pragma: no cover - registry is optional
+        _logger.debug("_help_answer_for_page: ignoring error", exc_info=True)
         entry = None
 
     if not entry:

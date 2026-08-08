@@ -575,6 +575,7 @@ def _resolve_step_connection(step: dict) -> tuple[Any, str]:
         cfg.script_sudo = bool(sudo)
         return build_connection(cfg), profile
     except Exception:  # never let transport composition break execution
+        _logger.debug("_resolve_step_connection: ignoring error", exc_info=True)
         return None, profile
 
 
@@ -701,7 +702,7 @@ def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
     except Exception as exc:
         out = f"[Scheduler error] {exc}"
         _save_step_output(run_id, step_id, out)
-        _logger.error("Workflow %s scheduler step %s failed: %s", run_id, step_id, exc)
+        _logger.exception("Workflow %s scheduler step %s failed", run_id, step_id)
         return False, out
 
 
@@ -717,6 +718,7 @@ def _resolve_capability(cap: str, params: dict) -> tuple[str | None, dict, list[
         from catalog.store import TABLE_TOOLS, get_repo
         tools = get_repo().list(TABLE_TOOLS)
     except Exception as exc:  # registry unavailable
+        _logger.debug("_resolve_capability: ignoring error", exc_info=True)
         return None, params, [f"capability registry unavailable: {exc}"]
     tool = next((t for t in tools if t.get("id") == cap), None)
     if not tool:
@@ -786,6 +788,7 @@ def _execute_resolve_step(run: dict, step: dict) -> tuple[bool, str]:
             nl = _app.validation_target_for_rack("", target) or target
             all_nodes += [n for n in re.split(r"[,\s]+", nl) if n]
     except Exception as exc:
+        _logger.debug("_execute_resolve_step: ignoring error", exc_info=True)
         out = f"[Resolve error] {exc}"
         _save_step_output(run_id, step_id, out)
         return False, out
@@ -855,6 +858,7 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
                 params.get("rack") or "", params.get("target") or None,
             ) or ""
         except Exception:
+            _logger.debug("_execute_fanout_step: ignoring error", exc_info=True)
             nodes_raw = params.get("target") or ""
     # Drop empties and any residual unresolved ${...} placeholders.
     nodes = [n for n in re.split(r"[,\s]+", nodes_raw) if n and "$" not in n]
@@ -892,7 +896,7 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
     except Exception as exc:
         out = f"[Fanout error] {exc}"
         _save_step_output(run_id, step_id, out)
-        _logger.error("Workflow %s fanout step %s failed: %s", run_id, step_id, exc)
+        _logger.exception("Workflow %s fanout step %s failed", run_id, step_id)
         return False, out
 
     grouped = group_outputs(results)
@@ -952,7 +956,7 @@ def _execute_inline_run(run: dict, step: dict, params: dict, script_text: str) -
     except Exception as exc:
         output = f"[Error] {exc}"
         _save_step_output(run_id, step_id, output)
-        _logger.error("Workflow %s inline-run step %s failed: %s", run_id, step_id, exc)
+        _logger.exception("Workflow %s inline-run step %s failed", run_id, step_id)
         return False, output
     finally:
         if claimed and rack_norm:
@@ -992,7 +996,7 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
                 params.setdefault("target", _nl)
                 run.setdefault("params", {})["nodelist"] = _nl  # persist for later steps
         except Exception:
-            pass
+            _logger.debug("_execute_automated_step: ignoring error", exc_info=True)
 
     # capability: resolve a catalog Tool id -> command (+ param defaults / validation).
     cap = step.get("capability")
@@ -1067,7 +1071,7 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
         except Exception as exc:
             output = f"[Error] {exc}"
             _save_step_output(run_id, step_id, output)
-            _logger.error("Workflow automated step failed: %s", exc)
+            _logger.exception("Workflow automated step failed")
             return False, output
         finally:
             if claimed and rack_norm:
@@ -1106,7 +1110,7 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
                 if ek and sc:
                     _SCRIPT_DEFAULTS.setdefault(ek, sc)
         except Exception:
-            pass
+            _logger.debug("_execute_automated_step: ignoring error", exc_info=True)
         resolved = _os.environ.get(command, "").strip()
         if not resolved and default_scripts and command in _SCRIPT_DEFAULTS:
             resolved = str(default_scripts / _SCRIPT_DEFAULTS[command])
@@ -1133,6 +1137,7 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
                 _logger.warning(
                     "Workflow %s step %s: node-target resolution failed (%s); using CT template",
                     run_id, step_id, exc,
+                    exc_info=True,
                 )
                 if not target:
                     ct_range = _os.environ.get("RACK_VALIDATION_CT_RANGE", "01-18").strip() or "01-18"
@@ -1170,7 +1175,7 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
         except Exception as exc:
             output = f"[Error] {exc}"
             _save_step_output(run_id, step_id, output)
-            _logger.error("Workflow tool step failed: %s", exc)
+            _logger.exception("Workflow tool step failed")
             return False, output
         finally:
             if claimed_t and rack_norm_t:
@@ -1203,7 +1208,7 @@ def _execute_ai_step(run: dict, step: dict) -> str:
             response = f"[AI Demo Response]\nAnalysis for: {prompt}\n\nAll checks passed. No issues detected."
     except Exception as exc:
         response = f"[AI Error] {exc}"
-        _logger.error("AI step %s failed: %s", step_id, exc)
+        _logger.exception("AI step %s failed", step_id)
 
     _save_step_output(run_id, step_id, response)
     return response

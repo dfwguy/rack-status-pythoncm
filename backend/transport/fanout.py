@@ -14,11 +14,14 @@ unchanged.)
 """
 from __future__ import annotations
 
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from transport.base import Connection
+
+_logger = logging.getLogger(__name__)
 
 # Transient SSH handshake/relay failures worth retrying (vs a real command failure).
 # These come from the shared gateway's sshd throttling concurrent sessions
@@ -76,7 +79,7 @@ def fanout(
         try:
             base.run("true", timeout=max(10, int(str(connect_timeout)) if str(connect_timeout).isdigit() else 15))
         except Exception:
-            pass
+            _logger.debug("fanout: ignoring error", exc_info=True)
 
     def _attempt(node: str) -> NodeResult:
         conn = base.hop(node, user=user, key=key, extra_opts=extra_opts,
@@ -85,6 +88,7 @@ def fanout(
             p = conn.run(cmd, timeout=timeout, env_extra=env_extra)
             return NodeResult(node, p.stdout or "", p.stderr or "", p.returncode)
         except Exception as exc:  # timeout / transport error -> stderr, non-zero
+            _logger.debug("_attempt: ignoring error", exc_info=True)
             return NodeResult(node, "", f"{type(exc).__name__}: {exc}", 255)
 
     def _one(node: str) -> NodeResult:

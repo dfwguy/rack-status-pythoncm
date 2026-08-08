@@ -335,18 +335,20 @@ class ClusterOverviewLiveService:
         try:
             value = collector()
             return self.repository.commit_success(cluster_id, section, self.owner, value)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - handler logs; ruff misses that inside a class body
+            _log.debug("_refresh_and_commit: ignoring error", exc_info=True)
             return self.repository.commit_failure(cluster_id, section, self.owner, error)
 
     def _start_background_refresh(self, cluster_id: str, section: str) -> None:
         def _run_refresh() -> None:
             try:
                 self._refresh_and_commit(cluster_id, section)
-            except Exception:
+            except Exception:  # noqa: BLE001 - handler logs; ruff misses that inside a class body
                 _log.exception(
                     "background overview live probe refresh failed for %s/%s",
                     cluster_id,
                     section,
+                    exc_info=True,
                 )
 
         threading.Thread(

@@ -89,6 +89,7 @@ def _eget(name: str, default: str = "") -> str:
         v = eget(name, default)  # type: ignore[misc]
         return (v or default).strip() if v is not None else (default or "").strip()
     except Exception:
+        _logger.debug("_eget: ignoring error", exc_info=True)
         return (default or "").strip()
 
 
@@ -433,7 +434,7 @@ def run_sync(*, force: bool = False) -> dict:
                         uploaded.append(rel)
                     except Exception as e:
                         errors.append(f"{rel}: {e}")
-                        _logger.warning("NVFTP upload failed for %s: %s", rel, e)
+                        _logger.warning("NVFTP upload failed for %s: %s", rel, e, exc_info=True)
             finally:
                 sftp.close()
         finally:

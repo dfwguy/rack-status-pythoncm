@@ -7,9 +7,12 @@ build than its stdlib). Run with RACK_WEB_PAM_HELPER_PYTHON (default /usr/bin/py
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import traceback
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
 _rs = str(ROOT)
@@ -35,6 +38,7 @@ def main() -> None:
 
             ok = bool(authenticate(user, password, service=service))
     except Exception as e:
+        _logger.debug("main: ignoring error", exc_info=True)
         err = f"{type(e).__name__}: {e}\n{traceback.format_exc()[-2000:]}"
     if err:
         print(json.dumps({"ok": False, "error": err}))

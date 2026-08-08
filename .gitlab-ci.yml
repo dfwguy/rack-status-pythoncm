@@ -64,10 +64,12 @@ python-lint:
     paths:
       - .pip-cache/
   script:
-    - pip install -q ruff
+    # Pinned on purpose. Unpinned, every ruff release can widen the default rule set under us --
+    # which is how this job sat red at ~310 findings for months while allow_failure hid it. Bump
+    # the pin deliberately, with the new findings fixed in the same commit.
+    - pip install -q ruff==0.16.0
     - ruff check backend/ --exclude tests
     - bash scripts/check_no_vault_in_git.sh
-  allow_failure: true
 
 typescript-check:
   stage: lint

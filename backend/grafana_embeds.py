@@ -108,6 +108,7 @@ def _env(name: str, default: str = "") -> str:
     try:
         return (os.environ.get(name) or "").strip() or default
     except Exception:  # pragma: no cover - defensive
+        _logger.debug("_env: ignoring error", exc_info=True)
         return default
 
 
@@ -220,7 +221,7 @@ def load_map(force: bool = False) -> dict[str, Any]:
             with path.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception as exc:
-            _logger.warning("grafana embed map at %s is unreadable: %s", path, exc)
+            _logger.warning("grafana embed map at %s is unreadable: %s", path, exc, exc_info=True)
             return _empty_map(f"embed map unreadable at {path}: {exc}", searched)
         if not isinstance(data, dict) or not isinstance(data.get("views"), dict):
             return _empty_map(f"embed map at {path} has no 'views' object", searched)
@@ -540,9 +541,11 @@ def _grafana_request(url: str, timeout: float, method: str = "GET") -> tuple[int
         try:
             body = exc.read(65536)
         except Exception:
+            _logger.debug("_grafana_request: ignoring error", exc_info=True)
             body = b""
         return exc.code, {k.lower(): v for k, v in (exc.headers or {}).items()}, body, f"HTTP {exc.code}"
     except Exception as exc:
+        _logger.debug("_grafana_request: ignoring error", exc_info=True)
         return None, {}, b"", f"{type(exc).__name__}: {exc}"
 
 
@@ -584,7 +587,7 @@ def api_observability_health():
                 out["grafana_version"] = h.get("version")
                 out["database"] = h.get("database")
             except Exception:
-                pass
+                _logger.debug("api_observability_health: ignoring error", exc_info=True)
 
         # Dashboard count (needs auth). Never fatal.
         status2, _h2, body2, err2 = _grafana_request(f"{base}/api/search?type=dash-db&limit=500", timeout)
@@ -595,6 +598,7 @@ def api_observability_health():
                     out["dashboards_count"] = len(items)
                     out["authenticated"] = True
             except Exception as exc:
+                _logger.debug("api_observability_health: ignoring error", exc_info=True)
                 out["errors"].append(f"/api/search parse: {exc}")
         elif status2 in (401, 403):
             out["authenticated"] = False

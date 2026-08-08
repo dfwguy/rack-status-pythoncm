@@ -1,6 +1,7 @@
 """Composite executors (env forwarding, sudo escalation) and profile routing."""
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 import subprocess
@@ -15,6 +16,8 @@ from transport.base import (
     Process,
     as_shell_str,
 )
+
+_logger = logging.getLogger(__name__)
 
 EnvResolver = Callable[[dict[str, str] | None], dict[str, str]]
 
@@ -39,7 +42,7 @@ def make_env_resolver(
                     if val is not None:
                         merged[key] = str(val)
             except Exception:  # overlay is best-effort; never break execution
-                pass
+                _logger.debug("resolve: ignoring error", exc_info=True)
         for key, val in os.environ.items():
             if any(key.startswith(p) for p in prefixes) or key in names:
                 merged[key] = val
