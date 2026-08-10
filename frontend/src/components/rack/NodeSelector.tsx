@@ -111,13 +111,13 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
         <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
           {selected.size} of {nodes.length} nodes selected
         </Text>
-        <Button kind="tertiary" size="small" onClick={handleToggleAll}>
+        <Button kind="secondary" size="small" onClick={handleToggleAll}>
           {allSelected ? "Clear all" : "Select all"}
         </Button>
-        <Button kind="tertiary" size="small" onClick={selectDown}>
+        <Button kind="secondary" size="small" onClick={selectDown}>
           Down only
         </Button>
-        <Button kind="tertiary" size="small" onClick={selectUp}>
+        <Button kind="secondary" size="small" onClick={selectUp}>
           Up only
         </Button>
       </Box>

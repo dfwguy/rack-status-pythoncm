@@ -1228,7 +1228,7 @@ export function ParserResultsDialog({
         )}
       </DialogContent>
       <DialogActions>
-        <Button kind="tertiary" onClick={onClose}>Close</Button>
+        <Button kind="secondary" onClick={onClose}>Close</Button>
       </DialogActions>
     </Dialog>
   );

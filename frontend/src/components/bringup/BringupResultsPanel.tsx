@@ -125,7 +125,7 @@ export function BringupResultsPanel({ node, logDir }: BringupResultsPanelProps) 
             size="small"
             aria-label="Auto-refresh interval"
           />
-          <Button kind="tertiary" size="small" onClick={refresh} disabled={loading}>
+          <Button kind="secondary" size="small" onClick={refresh} disabled={loading}>
             <RefreshCw size={16} style={{ marginRight: 4 }} />
             Refresh
           </Button>
@@ -198,7 +198,7 @@ export function BringupResultsPanel({ node, logDir }: BringupResultsPanelProps) 
                     </TableCell>
                     <TableCell align="right">
                       <Button
-                        kind="tertiary"
+                        kind="secondary"
                         size="tiny"
                         onClick={() => setLogJob(job)}
                         disabled={notRun}
@@ -209,7 +209,7 @@ export function BringupResultsPanel({ node, logDir }: BringupResultsPanelProps) 
                     </TableCell>
                     <TableCell align="right">
                       <Button
-                        kind="tertiary"
+                        kind="secondary"
                         size="tiny"
                         onClick={() => setChartJob(job)}
                         disabled={!canChart}

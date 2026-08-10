@@ -28,6 +28,29 @@ See `kui-components.mdc` for the complete component catalog with KUI-to-MUI migr
 | Dropdown multi-select filters | `<Combobox items={[...]} multiple>` | Custom toggle buttons |
 | Dividers in content areas | `<Divider>` from KUI | `<Divider>` from MUI |
 
+### Button variants — this app is bordered-only
+
+A deliberate divergence from stock KUI guidance, for operators driving a dense cluster console:
+**every button carries a border, so nothing that is clickable can read as a caption.**
+
+| Action | Use | Renders |
+|---|---|---|
+| Primary CTA | `kind="primary" color="brand"` | solid NVIDIA green |
+| Everything else | `kind="secondary" color="neutral"` | bordered, theme text |
+| Destructive (cancel/scancel, resets, delete) | `kind="primary" color="danger"` | solid red, white text |
+
+- **Do not use `kind="tertiary"` for a standalone button.** It is intentionally borderless in KUI,
+  which is the look this app rejects.
+- **The one exception is a button nested inside another control** — e.g. the stepper chevrons in
+  `TextInput`'s `slotStart`/`slotEnd` (`LaunchOptionsDialog`). The field already draws the box, so a
+  bordered button there renders a box inside a box and stops reading as part of the input. Those
+  stay `tertiary`; say so in a comment at the call site.
+- **Always pass `color` on a destructive action.** `kind="primary"` alone falls back to the neutral
+  palette, so a Cancel button ends up visually identical to a harmless one (this is exactly what
+  `ActionCard` did until 2026-08-10).
+- Never re-create these variants in local CSS — see the header of `src/kaizen-oss.css` and
+  `docs/EXECUTION_ARCHITECTURE.md` for why a local override silently beat Kaizen's own rules.
+
 ### MUI stays for (no KUI equivalent or renders better in MUI context)
 
 Table, Dialog, Tabs, Sidebar (Drawer + List), AppBar/Toolbar, TextField/Checkbox, Tooltip, IconButton, Menu/MenuItem, Snackbar + Alert (toasts), CircularProgress/LinearProgress, Paper/TableContainer. **Divider inside Drawer/AppBar** — KUI Divider renders differently in MUI shell components.

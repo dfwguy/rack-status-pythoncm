@@ -94,6 +94,9 @@ export function ActionCard({
           </div>
           <KuiButton
             kind={destructive ? "primary" : "secondary"}
+            // Without an explicit colour a destructive action renders in the neutral palette,
+            // i.e. identical to a harmless one. Cancel/Drain must look like what they are.
+            color={destructive ? "danger" : "neutral"}
             size="small"
             onClick={handleClick}
             disabled={disabled || effectiveRunning}

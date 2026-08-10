@@ -253,7 +253,7 @@ export function ProjectsView() {
         slotHeading={projectDraft?.id ? "Edit project" : "New project"}
         slotFooter={
           <>
-            <ModalCloseButton kind="tertiary">Cancel</ModalCloseButton>
+            <ModalCloseButton kind="secondary">Cancel</ModalCloseButton>
             <KuiButton kind="primary" color="brand" disabled={saving} onClick={() => void onSaveProject()}>
               {saving ? "Saving…" : "Save"}
             </KuiButton>
@@ -284,7 +284,7 @@ export function ProjectsView() {
         slotHeading={clusterDraft?.isNew ? "New cluster" : "Edit cluster"}
         slotFooter={
           <>
-            <ModalCloseButton kind="tertiary">Cancel</ModalCloseButton>
+            <ModalCloseButton kind="secondary">Cancel</ModalCloseButton>
             <KuiButton kind="primary" color="brand" disabled={saving} onClick={() => void onSaveCluster()}>
               {saving ? "Saving…" : "Save"}
             </KuiButton>

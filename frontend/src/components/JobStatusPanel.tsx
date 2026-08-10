@@ -160,7 +160,7 @@ export function JobStatusPanel({ jobId, jobKind, statusUrl, onDismiss }: JobStat
 
       {hasOutput && terminal && (
         <Box sx={{ mt: 1.5 }}>
-          <Button kind="tertiary" size="tiny" onClick={() => setShowOutput(!showOutput)}>
+          <Button kind="secondary" size="tiny" onClick={() => setShowOutput(!showOutput)}>
             {showOutput ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             <span style={{ marginLeft: 4 }}>{showOutput ? "Hide output" : "Show output"}</span>
           </Button>

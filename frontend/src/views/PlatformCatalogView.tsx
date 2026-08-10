@@ -234,7 +234,7 @@ export function PlatformCatalogView() {
         slotHeading={draft?.base.id ? "Edit platform" : "New platform"}
         slotFooter={
           <>
-            <ModalCloseButton kind="tertiary">Cancel</ModalCloseButton>
+            <ModalCloseButton kind="secondary">Cancel</ModalCloseButton>
             <KuiButton kind="primary" color="brand" disabled={saving} onClick={() => void onSave()}>
               {saving ? "Saving…" : "Save"}
             </KuiButton>

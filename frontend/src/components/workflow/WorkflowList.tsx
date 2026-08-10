@@ -233,7 +233,7 @@ export default function WorkflowList({ onSelect, onNew, onViewRun, onRun }: Work
         slotHeading="Delete Workflow"
         slotFooter={
           <>
-            <ModalCloseButton kind="tertiary">Cancel</ModalCloseButton>
+            <ModalCloseButton kind="secondary">Cancel</ModalCloseButton>
             <KuiButton kind="primary" color="danger" onClick={handleDeleteConfirm}>
               Delete
             </KuiButton>

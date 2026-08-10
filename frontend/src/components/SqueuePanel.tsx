@@ -316,7 +316,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
                       {jid ? (
                         <Button
                           size="small"
-                          kind="tertiary"
+                          kind="secondary"
                           onClick={() => void openJobLogTail(jid)}
                           disabled={tailBusyJob === jid}
                           title="Live tail of job StdOut= path (same as legacy open log)"
@@ -327,7 +327,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
                     </TableCell>
                     <TableCell sx={{ whiteSpace: "nowrap" }}>
                       {jid ? (
-                        <Button size="small" kind="tertiary" color="danger" onClick={() => setScancelJobId(jid)} title={`scancel ${jid}`}>
+                        <Button size="small" kind="primary" color="danger" onClick={() => setScancelJobId(jid)} title={`scancel ${jid}`}>
                           scancel
                         </Button>
                       ) : null}
@@ -395,7 +395,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
           >
             {scontrolBlock}
           </Box>
-          <Button size="small" kind="tertiary" onClick={() => setScontrolJobId(null)} style={{ marginTop: 8 }}>
+          <Button size="small" kind="secondary" onClick={() => setScontrolJobId(null)} style={{ marginTop: 8 }}>
             Hide scontrol
           </Button>
         </Box>
@@ -427,7 +427,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
         }
         slotFooter={
           <>
-            <ModalCloseButton kind="tertiary" disabled={scancelBusy}>
+            <ModalCloseButton kind="secondary" disabled={scancelBusy}>
               Keep job
             </ModalCloseButton>
             <Button

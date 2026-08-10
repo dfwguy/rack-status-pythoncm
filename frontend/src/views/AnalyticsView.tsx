@@ -637,7 +637,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
           </Box>{" "}
           per log directory; this page loads it automatically when you open Analytics.
         </Text>
-        <Button kind="primary" onClick={() => void runAnalysis()} disabled={loading || !bodyRows.length}>
+        <Button kind="primary" color="brand" onClick={() => void runAnalysis()} disabled={loading || !bodyRows.length}>
           {loading ? "Running…" : "Run analysis"}
         </Button>
         {!bodyRows.length && (

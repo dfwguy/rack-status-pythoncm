@@ -213,7 +213,7 @@ export function ToolRegistryView() {
         slotHeading={draft?.base.id ? "Edit tool" : "New tool"}
         slotFooter={
           <>
-            <ModalCloseButton kind="tertiary">Cancel</ModalCloseButton>
+            <ModalCloseButton kind="secondary">Cancel</ModalCloseButton>
             <KuiButton kind="primary" color="brand" disabled={saving} onClick={() => void onSave()}>
               {saving ? "Saving…" : "Save"}
             </KuiButton>

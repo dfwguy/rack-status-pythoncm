@@ -62,7 +62,7 @@ export function PageHeader({ title, description, actions, contentId }: PageHeade
           <>
             {ai && (
               <Button
-                kind="tertiary"
+                kind="secondary"
                 size="small"
                 color="neutral"
                 onClick={askAI}
@@ -75,7 +75,7 @@ export function PageHeader({ title, description, actions, contentId }: PageHeade
             )}
             {helpPanel && (
               <Button
-                kind="tertiary"
+                kind="secondary"
                 size="small"
                 color="neutral"
                 onClick={() => helpPanel.openHelp(content.id)}

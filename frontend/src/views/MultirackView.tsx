@@ -500,7 +500,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
             />
 
             {filtersActive && (
-              <Button kind="tertiary" size="small" onClick={clearFilters}>
+              <Button kind="secondary" size="small" onClick={clearFilters}>
                 Clear filters
               </Button>
             )}

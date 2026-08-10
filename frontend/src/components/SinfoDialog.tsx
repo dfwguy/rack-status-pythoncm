@@ -18,7 +18,7 @@ export function SinfoDialog({ open, onClose }: SinfoDialogProps) {
         <SinfoPanel active={open} tableMaxHeight={360} />
       </DialogContent>
       <DialogActions>
-        <Button kind="tertiary" onClick={onClose}>
+        <Button kind="secondary" onClick={onClose}>
           Close
         </Button>
       </DialogActions>

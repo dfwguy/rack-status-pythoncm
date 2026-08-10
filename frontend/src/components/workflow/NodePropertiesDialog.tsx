@@ -260,7 +260,7 @@ export default function NodePropertiesDialog({
       }
       slotFooter={
         <>
-          <ModalCloseButton kind="tertiary">Cancel</ModalCloseButton>
+          <ModalCloseButton kind="secondary">Cancel</ModalCloseButton>
           <Button kind="primary" color="brand" onClick={handleSave}>
             Save
           </Button>
@@ -313,7 +313,7 @@ export default function NodePropertiesDialog({
               <Box sx={{ flex: 1 }}>
                 <TextInput value={command} onValueChange={setCommand} placeholder="host:nvidia-smi or /api/endpoint" />
               </Box>
-              <Button kind="tertiary" size="small" onClick={() => { setUseCustomCommand(false); setCommand(""); }}>
+              <Button kind="secondary" size="small" onClick={() => { setUseCustomCommand(false); setCommand(""); }}>
                 Use predefined
               </Button>
             </Flex>

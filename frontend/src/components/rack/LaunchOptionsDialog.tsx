@@ -159,6 +159,9 @@ export function LaunchOptionsDialog({
                     if (Number.isFinite(n)) setIters(clampIters(n));
                   }}
                   aria-label="Number of NCCL sweep rounds"
+                  // Borderless on purpose, against the app-wide bordered rule: these live
+                  // *inside* the TextInput's shell, so a border draws a box within a box and
+                  // the stepper stops reading as part of the field.
                   slotStart={
                     <KuiButton
                       kind="tertiary"

@@ -1015,7 +1015,7 @@ export function RackTable({
           </div>
 
           {hasActiveFilters && (
-            <Button kind="tertiary" size="small" onClick={clearFilters} disabled={selectMode}>
+            <Button kind="secondary" size="small" onClick={clearFilters} disabled={selectMode}>
               Clear filters
             </Button>
           )}

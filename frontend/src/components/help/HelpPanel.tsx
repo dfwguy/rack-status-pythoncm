@@ -53,7 +53,7 @@ export function HelpPanel() {
           />
           {inDetail && (
             <div>
-              <Button kind="tertiary" size="small" color="neutral" onClick={() => selectTopic(null)}>
+              <Button kind="secondary" size="small" color="neutral" onClick={() => selectTopic(null)}>
                 <ArrowLeft size={16} />
                 All topics
               </Button>

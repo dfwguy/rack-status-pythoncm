@@ -194,7 +194,7 @@ export function RecentJobsPanel({ logDir, active, limit = 10, tableMaxHeight = 4
                   <TableCell sx={{ whiteSpace: "nowrap" }}>
                     <Button
                       size="small"
-                      kind="tertiary"
+                      kind="secondary"
                       onClick={() => void openJobLog(j.job_id)}
                       disabled={tailBusyJob === j.job_id}
                       title="Resolve the job's StdOut path and live-tail it"

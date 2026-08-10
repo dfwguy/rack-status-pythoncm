@@ -242,7 +242,7 @@ export function ReportsView() {
                       {it.name}
                     </TableCell>
                     <TableCell>
-                      <Button size="small" kind="tertiary" disabled={busy || loading} onClick={() => void downloadFile(it.host, it.name)}>
+                      <Button size="small" kind="secondary" disabled={busy || loading} onClick={() => void downloadFile(it.host, it.name)}>
                         {busy ? "…" : "Download"}
                       </Button>
                     </TableCell>

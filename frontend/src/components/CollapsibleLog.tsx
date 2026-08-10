@@ -12,11 +12,6 @@ export interface CollapsibleLogProps {
   tone?: "default" | "error";
   /** Max height (px) of the expanded log before it scrolls internally. */
   maxHeight?: number;
-  /**
-   * Trigger button variant. "secondary" draws a border, which reads as clickable in a
-   * dense result panel where a borderless toggle is easily mistaken for a caption.
-   */
-  triggerKind?: "tertiary" | "secondary";
 }
 
 /**
@@ -32,7 +27,6 @@ export function CollapsibleLog({
   defaultOpen = false,
   tone = "default",
   maxHeight = 360,
-  triggerKind = "tertiary",
 }: CollapsibleLogProps) {
   const [open, setOpen] = useState(defaultOpen);
   if (!text) return null;
@@ -45,7 +39,7 @@ export function CollapsibleLog({
       open={open}
       onOpenChange={setOpen}
       slotTrigger={
-        <Button asChild kind={triggerKind} color="neutral" size="small">
+        <Button asChild kind="secondary" color="neutral" size="small">
           <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             {triggerText}
             <AnimatedChevron />

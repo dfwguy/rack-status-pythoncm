@@ -507,7 +507,7 @@ export function LogsView({ logDir: logDirProp }: LogsViewProps) {
                     <TableCell align="right">
                       <Flex gap="1" justify="end" wrap="wrap">
                         <Button
-                          kind="tertiary"
+                          kind="secondary"
                           color="neutral"
                           size="small"
                           onClick={() => void previewLog(e)}
@@ -518,7 +518,7 @@ export function LogsView({ logDir: logDirProp }: LogsViewProps) {
                           Preview
                         </Button>
                         <Button
-                          kind="tertiary"
+                          kind="secondary"
                           color="neutral"
                           size="small"
                           onClick={() => tailLog(e)}
@@ -528,7 +528,7 @@ export function LogsView({ logDir: logDirProp }: LogsViewProps) {
                           Tail
                         </Button>
                         <Button
-                          kind="tertiary"
+                          kind="secondary"
                           color="neutral"
                           size="small"
                           onClick={() => void openLog(e)}

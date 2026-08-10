@@ -79,7 +79,7 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
           <VisuallyHidden id="help-desc-rackDetail">{RACK_DETAIL_HELP.aria.description}</VisuallyHidden>
         )}
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 3, flexWrap: "wrap" }}>
-          <Button kind="tertiary" size="small" onClick={onBack}>
+          <Button kind="secondary" size="small" onClick={onBack}>
             <ArrowLeft size={18} style={{ marginRight: 4 }} />
             Back
           </Button>

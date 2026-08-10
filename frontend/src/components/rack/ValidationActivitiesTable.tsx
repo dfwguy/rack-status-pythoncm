@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Box from "@mui/material/Box";
-import MuiButton from "@mui/material/Button";
 import Paper from "@mui/material/Paper";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
@@ -355,62 +354,59 @@ export function ValidationActivitiesTable({
                     </TableCell>
                     <TableCell align="right">
                       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 0.5, flexWrap: "wrap" }}>
-                        <MuiButton
-                          size="small"
-                          variant="outlined"
-                          startIcon={<ScrollText size={16} />}
-                          onClick={() => setViewLogsId(aid)}
-                        >
+                        <Button kind="secondary" size="small" onClick={() => setViewLogsId(aid)}>
+                          <ScrollText size={16} />
                           Wrapper
-                        </MuiButton>
+                        </Button>
                         {(activity.tasks ?? []).map((t) => (
                           <Box key={`logs-${t.task_id}`} sx={{ display: "inline-flex", gap: 0.5 }}>
                             {t.stdout_path && (
-                              <MuiButton size="small" variant="text" onClick={() => openTail(t.stdout_path!, "StdOut")}>
+                              <Button kind="secondary" size="small" onClick={() => openTail(t.stdout_path!, "StdOut")}>
                                 StdOut
-                              </MuiButton>
+                              </Button>
                             )}
                             {t.training_log_path && (
-                              <MuiButton
+                              <Button
+                                kind="secondary"
                                 size="small"
-                                variant="text"
                                 onClick={() => openTail(t.training_log_path!, "Training")}
                               >
                                 Train
-                              </MuiButton>
+                              </Button>
                             )}
                             {t.results_log_path && (
-                              <MuiButton
+                              <Button
+                                kind="secondary"
                                 size="small"
-                                variant="text"
                                 onClick={() => {
                                   setStaticLogPath(t.results_log_path!);
                                   setTailOpen(false);
                                 }}
                               >
                                 Results
-                              </MuiButton>
+                              </Button>
                             )}
                           </Box>
                         ))}
                         {onOpenParser && (
                           <Tooltip title={hasParserLog ? "NCCL / NEMO charts" : "Results appear once log is on disk"}>
                             <span>
-                              <MuiButton
+                              <Button
+                                kind="primary"
+                                color="brand"
                                 size="small"
-                                variant="contained"
                                 disabled={!hasParserLog}
-                                startIcon={<LineChart size={16} />}
                                 onClick={() => logRow && onOpenParser(logRow, 1)}
                               >
+                                <LineChart size={16} />
                                 Charts
-                              </MuiButton>
+                              </Button>
                             </span>
                           </Tooltip>
                         )}
-                        <MuiButton size="small" color="inherit" onClick={() => void handleDismiss(aid)}>
+                        <Button kind="secondary" size="small" onClick={() => void handleDismiss(aid)}>
                           Dismiss
-                        </MuiButton>
+                        </Button>
                       </Box>
                     </TableCell>
                   </TableRow>
