@@ -3862,7 +3862,144 @@ _LLM_LINE_MARK_RE = re.compile(
 # multi-GB log never crosses the SSH hop and nothing here has to guess from a head/tail window.
 # Everything below that still takes a byte cap is a fallback for when the scanner is missing.
 _LOGSCAN_CACHE: dict[str, dict | None] = {}
-_LOGSCAN_CACHE_MAX = 256
+_LOGSCAN_CACHE_MAX = 4096
+
+
+def _logscan_cache_key(lp: str) -> str:
+    """path + mtime + size, so an appended log is rescanned but a stable one is not."""
+    try:
+        st = host_exec.stat(lp)
+        return f"{lp}:{getattr(st, 'mtime', 0)}:{getattr(st, 'size', 0)}"
+    except Exception:  # noqa: BLE001 - a stat failure just means a weaker key
+        return lp
+
+
+def _logscan_cache_put(lp: str, rec: dict | None) -> None:
+    if len(_LOGSCAN_CACHE) >= _LOGSCAN_CACHE_MAX:
+        _LOGSCAN_CACHE.clear()
+    _LOGSCAN_CACHE[_logscan_cache_key(lp)] = rec
+
+
+def _logscan_batch(
+    paths: list[str], *, on_progress=None, timeout: int = 1800
+) -> dict[str, dict]:
+    """Scan many logs in ONE process, calling *on_progress* as each finishes.
+
+    The analytics aggregate used to run ``parser.sh --json`` per log — a process launch plus
+    about twenty subprocesses and sixteen file reads, each time. Measured on Nscale TX, the whole
+    1020-file / 1973 MB log directory scans in 39.6 s in a single pass here.
+
+    Records arrive as NDJSON, one per file, so progress is a real per-file event rather than a
+    timer pretending to be one. The path list goes over stdin, not argv: 1020 paths is already a
+    ~150 KB command line and a directory scan is capped at 4000.
+    """
+    out: dict[str, dict] = {}
+    if not paths:
+        return out
+    script = str(Path(SCRIPTS_DIR) / "nvis_logscan.py")
+    total = len(paths)
+    try:
+        proc = host_exec.popen_on_host(
+            f"python3 {shlex.quote(script)} --ndjson --no-inventory --paths-from -"
+        )
+    except (OSError, ValueError) as e:
+        _logger.warning("nvis_logscan batch could not start: %s", e)
+        return out
+
+    try:
+        stdin = getattr(proc, "_proc", None)
+        if stdin is not None and stdin.stdin is not None:
+            stdin.stdin.write("\n".join(paths) + "\n")
+            stdin.stdin.close()
+        done = 0
+        for line in proc.iter_stdout():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            p = str(rec.get("path") or "")
+            if p:
+                out[p] = rec
+                # Share the single-file cache: once the batch has read a log, every later
+                # question about it (success probe, run geometry, universal overlay) is a dict
+                # lookup instead of another process.
+                _logscan_cache_put(p, rec)
+            done += 1
+            if on_progress:
+                on_progress(done, total, p)
+    except (OSError, ValueError) as e:
+        _logger.warning("nvis_logscan batch failed after %d/%d: %s", len(out), total, e)
+    finally:
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001 - already finished is the normal case
+            pass
+    return out
+
+
+def _parser_json_from_scan(rec: dict, rack: str, job_id: str) -> dict:
+    """Shape one scanner record like ``parser.sh --json`` so consumers need no changes.
+
+    _pick_nccl_row / _pick_nemotron_row fall back to ``rows[0]`` when no rack matches, so a
+    single-row payload is safe even where the rack string is derived differently.
+    """
+    n, c = rec.get("nemo") or {}, rec.get("nccl") or {}
+    peaks = c.get("peak_busbw_gbps") or {}
+
+    def g(v):
+        return "---" if v is None else str(v)
+
+    started = int(c.get("sweep_blocks_started") or 0)
+    concluded = int(c.get("sweep_blocks_concluded") or 0)
+    nccl_row = {
+        "rack": rack,
+        "job_id": job_id,
+        "all_reduce_gbps": g(peaks.get("ar")),
+        "all_gather_gbps": g(peaks.get("ag")),
+        "alltoall_gbps": g(peaks.get("aa")),
+        "reduce_scatter_gbps": g(peaks.get("rs")),
+        "sendrecv_gbps": g(peaks.get("sr")),
+        "oob_ar_ag_aa": ",".join(c.get("out_of_bounds") or []) or "---",
+        "sweep_blocks_started": started,
+        "sweep_blocks_concluded": concluded,
+        "sweep_blocks_missing": max(0, started - concluded),
+        # A batch scan is never looking at a job it is also running, so a gap here is a lost
+        # marker, not a partial read.
+        "sweep_complete": True,
+        "sweep_running": False,
+        "all_reduce_busbw_series": c.get("all_reduce_series") or [],
+        "busbw_series_by_collective": c.get("series_by_collective") or {},
+    }
+    it = n.get("iteration") or [None, None]
+    nemo_row = {
+        "rack": rack,
+        "job_id": job_id,
+        "status": "OK" if (n.get("step_time_s") is not None or n.get("finished")) else "UNK",
+        "step_s": n.get("step_time_s"),
+        "median_step_time": n.get("step_time_s"),
+        "tflops_per_gpu": n.get("tflops_per_gpu"),
+        "step_time_std": n.get("step_time_std"),
+        "perf_std": n.get("perf_std"),
+        "mfu_percent": n.get("mfu_percent"),
+        "steps_completed": it[0],
+        "steps_target": it[1],
+        "step_series": [
+            {"iteration": i, "step_time": st}
+            for i, st in enumerate(n.get("step_series") or [], start=1)
+            if i >= 11
+        ],
+    }
+    return {
+        "export_version": 7,
+        "nccl_peak_out_of_place_busbw_gbps": [nccl_row],
+        "nemotron_5h_56b_train_window": [nemo_row],
+        "mnubergemm_stress": [],
+        "parser_flags": [],
+        "from_logscan": True,
+    }
 
 
 def _logscan_record(path, *, timeout: int = 300) -> dict | None:
@@ -3871,11 +4008,7 @@ def _logscan_record(path, *, timeout: int = 300) -> dict | None:
     Cached per path+mtime: the analytics aggregate asks for the same log from several places.
     """
     lp = str(_rpath(path))
-    try:
-        st = host_exec.stat(lp)
-        key = f"{lp}:{getattr(st, 'mtime', 0)}:{getattr(st, 'size', 0)}"
-    except Exception:  # noqa: BLE001 - a stat failure just means "do not cache"
-        key = lp
+    key = _logscan_cache_key(lp)
     if key in _LOGSCAN_CACHE:
         return _LOGSCAN_CACHE[key]
 
@@ -3896,9 +4029,7 @@ def _logscan_record(path, *, timeout: int = 300) -> dict | None:
     except (subprocess.TimeoutExpired, OSError, ValueError) as e:
         _logger.debug("nvis_logscan unavailable for %s: %s", lp, e)
 
-    if len(_LOGSCAN_CACHE) >= _LOGSCAN_CACHE_MAX:
-        _LOGSCAN_CACHE.clear()
-    _LOGSCAN_CACHE[key] = rec
+    _logscan_cache_put(lp, rec)
     return rec
 _LOG_TS_SEARCH_RE = re.compile(r"(?P<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
 _DISPLAY_TZ_QUERY_RE = re.compile(r"^[A-Za-z0-9_\-]+(?:/[A-Za-z0-9_\-]+)*$")
@@ -11434,8 +11565,37 @@ def api_clusterkit_results():
     return jsonify(out)
 
 
+#: Per-thread batch of scanner records for the aggregate currently running on this thread.
+#: Thread-local rather than global: two operators can hit Analytics at once, and a batch keyed
+#: only by path would let one request answer from the other's corpus.
+_analytics_scan_ctx = threading.local()
+
+
 def _parser_json_for_log_path(log_dir: Path, log_path: Path) -> tuple[dict | None, str | None]:
-    """Run ``parser.sh --json`` on one log under ``log_dir`` (relative path). Returns ``(parsed, err)``."""
+    """Parsed results for one log under ``log_dir``. Returns ``(parsed, err)``.
+
+    Answers from the thread's batch scan when the aggregate pre-scanned this path, which is the
+    difference between one process for the whole fleet and one ``parser.sh`` per log.
+    """
+    batch = getattr(_analytics_scan_ctx, "batch", None)
+    if batch:
+        rec = batch.get(str(_rpath(log_path)))
+        if rec:
+            base = PurePosixPath(str(log_path)).name
+            # Best-effort only: both pick helpers fall back to rows[0], and a batch payload
+            # carries exactly one row, so a multirack basename with no single rack id is fine.
+            rack = _rack_id_from_log_basename(base) or ""
+            jid = _nvis_naming().job_id_from_log_basename(base) or "?"
+            parsed = _parser_json_from_scan(rec, rack, jid)
+            try:
+                if _parser_json_has_usable_rows(parsed):
+                    _history_ingest_parser_json(
+                        parsed, log_dir, str(_rpath(log_path)), source="logscan_batch"
+                    )
+            except Exception as e:  # noqa: BLE001
+                _logger.debug("history ingest (logscan batch) failed for %s: %s", log_path, e)
+            return parsed, None
+
     parser = _parser_path()
     if not _script_exists(parser):
         return None, "parser.sh not found"
@@ -11542,16 +11702,33 @@ def _step_series_cv_pct(row: dict) -> float | None:
 
 
 def _multirack_rack_count_from_basename(name: str) -> int:
-    tok = nvis_id_templates.multirack_n_rack_marker(name)
-    if tok:
-        tok = tok.lower()
-        if tok.endswith("rack"):
-            try:
-                return max(1, int(tok[:-4], 10))
-            except ValueError:
-                pass
+    # A declared count wins over counting ids in the name. The compacted tag keeps only the first
+    # and last rack, so counting ids read a 32-rack / 576-node run as two racks and filed it under
+    # Rack=2 in the scaling table, next to genuine 36-node pairs.
+    declared = nvis_id_templates.multirack_rack_count(name)
+    if declared:
+        return declared
     phy = _multirack_physical_rack_ids(name)
     return len(phy) if phy else 0
+
+
+def _multirack_candidate_log_paths(log_dir: Path) -> list[tuple[str, float, Path]]:
+    """Every multirack NEMO/NCCL log, BEFORE the successful-log filter.
+
+    Split out so a caller can pre-scan the candidates in one batch; the success test reads the
+    file, so filtering first would cost a process per candidate.
+    """
+    base_root = str(native_status._host_resolve(log_dir)).rstrip("/")
+    out: list[tuple[str, float, Path]] = []
+    for base in (base_root, base_root + "/failed"):
+        for path, mtime_ns, _size in native_status._host_log_entries(base):
+            name = os.path.basename(path)
+            if not _nemo_nccl_in_log_basename(name):
+                continue
+            if not _is_multirack_log_basename(name):
+                continue
+            out.append((path, mtime_ns / 1_000_000_000, native_status._host_path(path)))
+    return out
 
 
 def _multirack_done_log_paths(log_dir: Path) -> list[Path]:
@@ -11560,19 +11737,11 @@ def _multirack_done_log_paths(log_dir: Path) -> list[Path]:
     Host-aware: discovers via ``host_exec`` (SSH when remote) so multirack analytics works whether the
     app runs on the head node or on a laptop over SSH.
     """
-    base_root = str(native_status._host_resolve(log_dir)).rstrip("/")
     merged: dict[str, tuple[float, Path]] = {}
-    for base in (base_root, base_root + "/failed"):
-        for path, mtime_ns, _size in native_status._host_log_entries(base):
-            name = os.path.basename(path)
-            if not _nemo_nccl_in_log_basename(name):
-                continue
-            if not _is_multirack_log_basename(name):
-                continue
-            hp = native_status._host_path(path)
-            if not _nemo_log_file_looks_successful(hp):
-                continue
-            merged[path] = (mtime_ns / 1_000_000_000, hp)
+    for path, mtime, hp in _multirack_candidate_log_paths(log_dir):
+        if not _nemo_log_file_looks_successful(hp):
+            continue
+        merged[path] = (mtime, hp)
     return [p for _m, p in sorted(merged.values(), key=lambda t: t[0], reverse=True)]
 
 
@@ -12068,34 +12237,145 @@ def api_analytics_last():
 
 @app.route("/api/analytics/aggregate", methods=["POST"])
 def api_analytics_aggregate():
-    """POST JSON ``{log_dir, rows:[{rack,nemo},…]}`` — parser-based NCCL/Nemotron analytics (single-rack + multirack).
+    """POST JSON ``{log_dir, rows:[{rack,nemo},…]}`` — parser-based NCCL/Nemotron analytics.
 
-    Single-rack: only rows with ``nemo == "done"``; newest *1Rack-*.txt per rack that passes the
-    successful-log heuristic. NCCL: fleet median baseline for all_reduce bus_bw series and peak
-    scalars. Nemotron: ``median_step_time``, ``tflops_per_gpu``, step-time CV%, deviation vs fleet mean.
-
-    Multirack: successful multirack logs only; NCCL one series per log. Nemotron scaling / throughput / efficiency
-    tables group logs by inferred rack count (``…2rack…`` / distinct ``pN-rMM`` tokens), **including bucket Rack=1**
-    from successful single-rack (1Rack) logs for done racks (same picks as single-rack Nemotron). Per-bucket means
-    for step and TFLOPs; nodes/# GPU shown from the **newest** log in each bucket.
+    Blocking. On a large fleet this can run for minutes, which is fragile behind a proxy, so the
+    SPA uses ``/api/analytics/aggregate-async`` and polls for progress. This route stays for API
+    callers and returns exactly the same payload.
     """
+    err = _analytics_aggregate_guard()
+    if err is not None:
+        return err
+    body = request.get_json(silent=True) or {}
+    parsed, bad = _analytics_aggregate_inputs(body)
+    if bad is not None:
+        return bad
+    log_dir, done_racks = parsed
+    return jsonify(_analytics_aggregate_compute(log_dir, done_racks, body))
+
+
+_analytics_jobs: dict[str, dict] = {}
+_analytics_jobs_lock = threading.Lock()
+_ANALYTICS_JOBS_MAX = 8
+
+
+@app.route("/api/analytics/aggregate-async", methods=["POST"])
+def api_analytics_aggregate_async():
+    """Start the aggregate on a worker thread; poll GET /api/analytics/aggregate-status?job_id=…
+
+    The blocking route can run for minutes on a large fleet, which browsers and proxies both
+    dislike, and it gave the operator nothing but a spinner. The work is a known number of logs,
+    so the job reports ``done``/``total`` as each one is scanned.
+    """
+    err = _analytics_aggregate_guard()
+    if err is not None:
+        return err
+    body = request.get_json(silent=True) or {}
+    parsed, bad = _analytics_aggregate_inputs(body)
+    if bad is not None:
+        return bad
+    log_dir, rows_in = parsed
+
+    job_id = uuid.uuid4().hex
+    with _analytics_jobs_lock:
+        # Keep the table small; an abandoned tab should not pin payloads forever.
+        if len(_analytics_jobs) >= _ANALYTICS_JOBS_MAX:
+            for stale in sorted(_analytics_jobs, key=lambda k: _analytics_jobs[k].get("started", 0))[:2]:
+                _analytics_jobs.pop(stale, None)
+        _analytics_jobs[job_id] = {
+            "state": "running",
+            "done": 0,
+            "total": 0,
+            "current": "",
+            "started": time.time(),
+        }
+
+    def _progress(done: int, total: int, current: str) -> None:
+        with _analytics_jobs_lock:
+            row = _analytics_jobs.get(job_id)
+            if row is not None:
+                row["done"] = done
+                row["total"] = total
+                row["current"] = os.path.basename(current or "")
+
+    def _worker() -> None:
+        try:
+            payload = _analytics_aggregate_compute(log_dir, rows_in, body, progress=_progress)
+            with _analytics_jobs_lock:
+                row = _analytics_jobs.get(job_id)
+                if row is not None:
+                    row.update(state="done", payload=payload, current="")
+        except Exception as e:  # noqa: BLE001 - a worker crash must reach the operator, not a log
+            _logger.exception("analytics aggregate job failed")
+            with _analytics_jobs_lock:
+                row = _analytics_jobs.get(job_id)
+                if row is not None:
+                    row.update(state="error", error=str(e))
+
+    threading.Thread(target=_worker, name=f"analytics-{job_id[:8]}", daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id})
+
+
+@app.route("/api/analytics/aggregate-status", methods=["GET"])
+def api_analytics_aggregate_status():
+    """Progress for a job started by ``/api/analytics/aggregate-async``.
+
+    The payload rides along only once the job is done, so polling stays cheap.
+    """
+    job_id = (request.args.get("job_id") or "").strip()
+    with _analytics_jobs_lock:
+        row = _analytics_jobs.get(job_id)
+        if row is None:
+            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
+        out = {k: v for k, v in row.items() if k != "payload"}
+        if row.get("state") == "done":
+            out["payload"] = row.get("payload")
+            # One successful hand-off is enough; free the payload so a stale tab cannot pin it.
+            row.pop("payload", None)
+            row["state"] = "collected"
+    out["ok"] = True
+    return jsonify(out)
+
+
+def _analytics_aggregate_guard():
+    """Shared refusals for both the blocking and async routes. ``None`` means proceed."""
     if os.environ.get("RACK_ANALYTICS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "analytics disabled (RACK_ANALYTICS_DISABLED)"}), 403
+    return None
+
+
+def _analytics_aggregate_inputs(body: dict):
+    """Validate the POST body. Returns ``((log_dir, done_racks), None)`` or ``(None, response)``."""
+    log_raw = body.get("log_dir")
+    try:
+        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    rows_in = body.get("rows")
+    if not isinstance(rows_in, list):
+        return None, (
+            jsonify(
+                {"ok": False, "error": 'send JSON {"log_dir": "…", "rows": [{"rack":"…","nemo":"…"}, …]}'}
+            ),
+            400,
+        )
+    return (log_dir, rows_in), None
+
+
+def _analytics_aggregate_compute(log_dir, rows_in, body, progress=None):
+    """The aggregate itself. *progress* is called as ``(done, total, current_path)``.
+
+    Multirack: successful multirack logs only; NCCL one series per log. Nemotron scaling /
+    throughput / efficiency tables group logs by inferred rack count, including bucket Rack=1 from
+    successful single-rack logs. Per-bucket means for step and TFLOPs; nodes/# GPU from the newest
+    log in each bucket.
+    """
     if _truthy_env("RACK_STATUS_DEMO"):
         demo = dict(_demo_analytics_aggregate())
         demo["analyzed_at"] = datetime.now(timezone.utc).isoformat()
         demo["rows_fingerprint"] = "demo"
         demo["cached"] = False
-        return jsonify(demo)
-    body = request.get_json(silent=True) or {}
-    log_raw = body.get("log_dir")
-    try:
-        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    rows_in = body.get("rows")
-    if not isinstance(rows_in, list):
-        return jsonify({"ok": False, "error": 'send JSON {"log_dir": "…", "rows": [{"rack":"…","nemo":"…"}, …]}'}), 400
+        return demo
 
     done_racks: list[str] = []
     for ent in rows_in:
@@ -12148,6 +12428,33 @@ def api_analytics_aggregate():
         app.logger.warning("analytics: NCCL rack discovery failed: %s", _e)
 
     done_racks = sorted(set(done_racks))
+
+    # ---- ONE scan for every log this aggregate will look at -----------------------------------
+    # Previously each log below cost a parser.sh launch (about twenty subprocesses and sixteen
+    # reads of the file), which is why this endpoint took minutes on a large fleet. Scanning the
+    # whole corpus in a single pass measured 39.6 s for 1020 files / 1973 MB on Nscale TX, and it
+    # is the only place that knows how many files there are — so it is also what makes an honest
+    # progress bar possible instead of a spinner.
+    prescan_paths: list[str] = []
+    _seen_paths: set[str] = set()
+    try:
+        for rack in done_racks:
+            for p in find_log_paths_for_rack(log_dir, rack):
+                sp = str(_rpath(p))
+                if sp not in _seen_paths:
+                    _seen_paths.add(sp)
+                    prescan_paths.append(sp)
+        # Candidates, not the filtered list: the filter reads each file, so filtering before the
+        # batch would spend a process per candidate to decide what the batch should read.
+        for _path, _mt, p in _multirack_candidate_log_paths(log_dir):
+            sp = str(_rpath(p))
+            if sp not in _seen_paths:
+                _seen_paths.add(sp)
+                prescan_paths.append(sp)
+    except Exception:  # noqa: BLE001 - enumeration is best effort; the loops re-derive anyway
+        _logger.debug("analytics prescan enumeration failed", exc_info=True)
+
+    _analytics_scan_ctx.batch = _logscan_batch(prescan_paths, on_progress=progress) if prescan_paths else {}
 
     series_by_rack: dict[str, list[dict[str, float]]] = {}
     scalar_rows: list[dict[str, object]] = []
@@ -12428,7 +12735,7 @@ def api_analytics_aggregate():
         _analytics_aggregate_cache_put(str(_rpath(log_dir)), payload)
     except OSError:
         _logger.exception("analytics aggregate cache write failed")
-    return jsonify(payload)
+    return payload
 
 
 def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:

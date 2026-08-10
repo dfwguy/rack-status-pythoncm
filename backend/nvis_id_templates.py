@@ -178,6 +178,13 @@ _EDITOR_NOISE_RE = re.compile(r"(?:~$|^#.*#$|^\.#)")
 # native_status.py. Used only to refuse single-rack attribution of a multi-rack sweep.
 _MULTIRACK_N_RACK_RE = re.compile(r"(?:[2-9]|[1-9]\d{1,3})rack", re.IGNORECASE)
 
+# The COMPACTED tag run-nemo-xrack.sh writes when the full rack list would overflow NAME_MAX:
+#   <first-rack>+<last-rack>+<N>r-<hash>      e.g. …-e01+ink50-dh01-h22+32r-a811542455-576N-…
+# It kicks in past 120 characters of rack tag, so roughly every run of eight racks or more.
+# Only two rack ids survive in the name, which is why counting ids reported a 32-rack, 576-node
+# run as TWO racks and parked it in the Rack=2 bucket of the analytics scaling table.
+_MULTIRACK_COMPACT_RE = re.compile(r"\+(\d{1,4})r-[0-9a-f]{6,}", re.IGNORECASE)
+
 
 def _log_basename_mode() -> str:
     """``open`` (default: accept any plausible log) or ``strict`` (legacy marker allowlist)."""
@@ -384,6 +391,34 @@ def multirack_n_rack_marker(name: str) -> str | None:
     """
     m = _MULTIRACK_N_RACK_RE.search(name or "")
     return m.group(0) if m else None
+
+
+def multirack_rack_count(name: str) -> int | None:
+    """Rack count declared by *name*, in either dialect, or ``None`` if it declares neither.
+
+    Two spellings exist and only one was understood:
+      * ``36Rack``  — the long form
+      * ``+32r-<hash>`` — the compacted form, used once the full rack list would overflow the
+        255-byte filename limit
+
+    Callers fall back to counting rack ids in the name, which is right for the long form and
+    badly wrong for the compacted one: it keeps only the first and last rack, so every large run
+    counted as two.
+    """
+    base = _basename_only(name or "")
+    m = _MULTIRACK_COMPACT_RE.search(base)
+    if m:
+        try:
+            return max(1, int(m.group(1), 10))
+        except ValueError:
+            return None
+    tok = multirack_n_rack_marker(base)
+    if tok:
+        try:
+            return max(1, int(tok[:-4], 10))
+        except ValueError:
+            return None
+    return None
 
 
 def job_id_from_log_basename(name: str) -> str | None:
