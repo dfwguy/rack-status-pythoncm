@@ -880,6 +880,45 @@ class TestValidationActivitiesAPI:
         jobs = resp.get_json().get("jobs") or []
         assert any(j.get("job_id") == start["job_id"] for j in jobs)
 
+    def test_multirack_ledger_and_corrective_action_api(
+        self, client, isolated_validation_activities
+    ):
+        aid = validation_activities.record_activity(
+            "nemo-xrack",
+            scope="multirack",
+            rack="p5-r01",
+            racks=["p5-r01", "p5-r02"],
+        )
+        response = client.post(
+            f"/api/validation-activities/{aid}/corrective-actions",
+            json={
+                "issue_summary": "scheduler failed the workload",
+                "action": "fixed the generated output filename",
+                "status": "complete",
+                "result": "submit dry-run passed",
+            },
+        )
+        assert response.status_code == 200
+        activity = response.get_json()["activity"]
+        assert activity["issue_summary"] == "scheduler failed the workload"
+        assert activity["corrective_actions"][0]["status"] == "complete"
+
+        ledger = client.get("/api/validation-activities/ledger")
+        assert ledger.status_code == 200
+        assert ledger.content_type.startswith("text/markdown")
+        assert "fixed the generated output filename" in ledger.get_data(as_text=True)
+
+    def test_corrective_action_api_requires_content(
+        self, client, isolated_validation_activities
+    ):
+        aid = validation_activities.record_activity(
+            "nemo-xrack", scope="multirack", racks=["p5-r01", "p5-r02"]
+        )
+        response = client.post(
+            f"/api/validation-activities/{aid}/corrective-actions", json={}
+        )
+        assert response.status_code == 400
+
     def test_terminal_activity_hydrates_slurm_stdout(
         self, client, log_dir, isolated_validation_activities, monkeypatch
     ):

@@ -11,10 +11,14 @@ Legacy ``multirack_jobs.json`` is migrated on first read when the new file is ab
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
+import logging
 import os
+import queue
 import re
 import shutil
+import threading
 import uuid
 from collections.abc import Iterable
 from datetime import datetime, timezone
@@ -34,10 +38,24 @@ ACTIVITIES_FILE = Path(
     os.environ.get("RACK_VALIDATION_ACTIVITIES_FILE", "")
     or str(REPO_ROOT / "var" / "cache" / "validation_activities.json")
 )
+MULTIRACK_LEDGER_FILE = Path(
+    os.environ.get("RACK_MULTIRACK_LEDGER_FILE", "")
+    or str(REPO_ROOT / "var" / "reports" / "multirack_validation_runs.json")
+)
+MULTIRACK_LEDGER_MARKDOWN_FILE = Path(
+    os.environ.get("RACK_MULTIRACK_LEDGER_MARKDOWN_FILE", "")
+    or str(REPO_ROOT / "var" / "reports" / "MULTIRACK_VALIDATION_RUNS.md")
+)
+MULTIRACK_LEDGER_EXPORT_STATUS_FILE = Path(
+    os.environ.get("RACK_MULTIRACK_LEDGER_EXPORT_STATUS_FILE", "")
+    or str(REPO_ROOT / "var" / "cache" / "multirack_ledger_parquet_status.json")
+)
 
 MAX_ACTIVITIES = 500
 TAIL_CHARS = 8000
 OPERATOR_MAX_LEN = 64
+LEDGER_TEXT_MAX_LEN = 4000
+MAX_CORRECTIVE_ACTIONS = 100
 TERMINAL_PHASES = frozenset({"done", "error", "timeout"})
 WORK_PHASES = frozenset({
     "pending",
@@ -101,7 +119,14 @@ _UPDATABLE = frozenset({
     "command_display",
     "scheduler",
     "tasks",
+    "issue_summary",
+    "outcome_summary",
 })
+
+_logger = logging.getLogger(__name__)
+_ledger_export_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+_ledger_export_worker_lock = threading.Lock()
+_ledger_export_worker_started = False
 
 
 def _now_iso() -> str:
@@ -119,6 +144,39 @@ def _sanitize_operator(operator: object) -> str:
     if not isinstance(operator, str):
         return ""
     return operator.strip().replace("\n", " ").replace("\r", " ")[:OPERATOR_MAX_LEN]
+
+
+def _sanitize_ledger_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().replace("\x00", "")[:LEDGER_TEXT_MAX_LEN]
+
+
+def _sanitize_corrective_actions(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, str]] = []
+    for raw in value[-MAX_CORRECTIVE_ACTIONS:]:
+        if not isinstance(raw, dict):
+            continue
+        action = _sanitize_ledger_text(raw.get("action"))
+        if not action:
+            continue
+        recorded_at = _sanitize_ledger_text(raw.get("recorded_at"))
+        legacy_key = hashlib.sha256(
+            f"{recorded_at}\x00{action}".encode()
+        ).hexdigest()[:20]
+        out.append(
+            {
+                "action_id": _sanitize_ledger_text(raw.get("action_id")) or f"legacy-{legacy_key}",
+                "recorded_at": recorded_at,
+                "operator": _sanitize_operator(raw.get("operator")),
+                "action": action,
+                "result": _sanitize_ledger_text(raw.get("result")),
+                "status": _sanitize_ledger_text(raw.get("status")) or "recorded",
+            }
+        )
+    return out
 
 
 def _sanitize_racks(racks: object) -> list[str]:
@@ -193,6 +251,467 @@ def _write_locked(f, rows: dict[str, dict]) -> None:
         pass
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Replace a process-local report without exposing a partial document."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _merge_multirack_archive(rows: dict[str, dict]) -> list[dict[str, Any]]:
+    """Merge live multirack activities into an unpruned archive.
+
+    The activity table is intentionally capped and UI rows may be dismissed. The ledger is
+    an audit record, so it has a separate append-preserving JSON source and never removes a
+    run merely because it disappeared from the live table.
+    """
+    MULTIRACK_LEDGER_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        f = open(MULTIRACK_LEDGER_FILE, "a+", encoding="utf-8")  # noqa: SIM115
+    except OSError:
+        return []
+    with f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            locked = True
+        except OSError:
+            locked = False
+        try:
+            f.seek(0)
+            try:
+                archive = json.loads(f.read() or "{}")
+            except json.JSONDecodeError:
+                archive = {}
+            if not isinstance(archive, dict):
+                archive = {}
+            stored = archive.get("runs")
+            if not isinstance(stored, dict):
+                stored = {}
+            for aid, rec in rows.items():
+                if not isinstance(rec, dict):
+                    continue
+                if str(rec.get("scope") or "").strip().lower() != "multirack":
+                    continue
+                prior = stored.get(aid)
+                merged = dict(prior) if isinstance(prior, dict) else {}
+                merged.update(rec)
+                # An older activity snapshot must never erase actions already archived.
+                actions = _sanitize_corrective_actions(rec.get("corrective_actions"))
+                if not actions and isinstance(prior, dict):
+                    actions = _sanitize_corrective_actions(prior.get("corrective_actions"))
+                merged["corrective_actions"] = actions
+                stored[aid] = merged
+            archive = {
+                "schema_version": 1,
+                "updated_at": _now_iso(),
+                "runs": stored,
+            }
+            f.seek(0)
+            f.truncate()
+            f.write(json.dumps(archive, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        finally:
+            if locked:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+    out = [dict(rec) for rec in stored.values() if isinstance(rec, dict)]
+    out.sort(key=lambda rec: str(rec.get("created_at") or ""), reverse=True)
+    return out
+
+
+def _scheduler_refs(rec: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    for task in rec.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        ref = str(task.get("scheduler_ref") or "").strip()
+        if ref and ref not in out:
+            out.append(ref)
+    return out
+
+
+def _ledger_outcome(rec: dict[str, Any]) -> str:
+    if bool(rec.get("dry_run")):
+        return "dry_run"
+    work = str(rec.get("work_phase") or "").strip().lower()
+    if work == "failed":
+        return "failed"
+    if work == "done":
+        return "passed"
+    if work in OPEN_WORK_PHASES:
+        return work
+    phase = str(rec.get("phase") or "").strip().lower()
+    if phase in ("error", "timeout"):
+        return phase
+    if phase in ("starting", "running"):
+        return phase
+    # A successful submission wrapper is not a successful Slurm workload.
+    if phase == "done" and _scheduler_refs(rec):
+        return "submitted"
+    if phase == "done" and rec.get("returncode") == 0:
+        return "passed"
+    return phase or "unknown"
+
+
+def _ledger_error(rec: dict[str, Any]) -> str:
+    explicit = _sanitize_ledger_text(rec.get("issue_summary"))
+    if explicit:
+        return explicit
+    err = _sanitize_ledger_text(rec.get("error"))
+    if err:
+        return err
+    failed = []
+    for task in rec.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        wp = str(task.get("work_phase") or "").strip().lower()
+        state = str(task.get("scheduler_state") or "").strip()
+        if wp == "failed" or state.upper().split("+")[0] in (
+            "FAILED",
+            "CANCELLED",
+            "TIMEOUT",
+            "NODE_FAIL",
+            "OUT_OF_MEMORY",
+            "BOOT_FAIL",
+        ):
+            failed.append(
+                f"job {task.get('scheduler_ref') or '?'}: {state or wp or 'failed'}"
+            )
+    if failed:
+        return "; ".join(failed)
+    stderr = _sanitize_ledger_text(rec.get("stderr_tail"))
+    if stderr:
+        return stderr.splitlines()[-1]
+    return ""
+
+
+def _markdown_value(value: object) -> str:
+    return str(value or "").replace("\r", " ").replace("\n", " ").strip()
+
+
+def render_multirack_ledger_markdown(records: Iterable[dict[str, Any]]) -> str:
+    ordered = sorted(
+        (dict(rec) for rec in records if isinstance(rec, dict)),
+        key=lambda rec: str(rec.get("created_at") or ""),
+        reverse=True,
+    )
+    lines = [
+        "# Multi-Rack Validation Run Ledger",
+        "",
+        (
+            "Automatically maintained from the durable validation activity registry. "
+            "A successful launcher only means Slurm accepted the job; the outcome below follows "
+            "the scheduler task state."
+        ),
+        "",
+        f"Last generated: `{_now_iso()}`",
+        "",
+    ]
+    if not ordered:
+        lines.extend(["No multi-rack runs recorded.", ""])
+        return "\n".join(lines)
+    for rec in ordered:
+        refs = _scheduler_refs(rec)
+        label = ", ".join(refs) or str(rec.get("activity_id") or "unknown")
+        outcome = _ledger_outcome(rec)
+        racks = [str(r) for r in rec.get("racks") or [] if str(r).strip()]
+        rack_text = ", ".join(racks)
+        lines.extend(
+            [
+                f"## {label} — {outcome.upper()}",
+                "",
+                f"- Activity ID: `{_markdown_value(rec.get('activity_id'))}`",
+                f"- Created: `{_markdown_value(rec.get('created_at'))}`",
+                f"- Updated: `{_markdown_value(rec.get('updated_at'))}`",
+                f"- Tool: `{_markdown_value(rec.get('tool'))}`",
+                f"- Slurm job IDs: `{_markdown_value(', '.join(refs) or 'not submitted')}`",
+                f"- Racks ({len(racks)}): {_markdown_value(rack_text) or 'not recorded'}",
+                f"- Outcome: `{outcome}`",
+            ]
+        )
+        outcome_summary = _sanitize_ledger_text(rec.get("outcome_summary"))
+        issue = _ledger_error(rec)
+        if outcome_summary:
+            lines.append(f"- Outcome detail: {_markdown_value(outcome_summary)}")
+        if issue:
+            lines.append(f"- Error/issue: {_markdown_value(issue)}")
+        actions = _sanitize_corrective_actions(rec.get("corrective_actions"))
+        lines.extend(["", "Corrective actions:", ""])
+        if actions:
+            for action in actions:
+                result = f" — {action['result']}" if action.get("result") else ""
+                lines.append(
+                    f"- `{action['recorded_at']}` [{action['status']}] "
+                    f"{_markdown_value(action['action'])}{_markdown_value(result)}"
+                )
+        else:
+            lines.append("- None recorded.")
+        command = _markdown_value(rec.get("command_display"))
+        if command:
+            safe_command = command.replace("`", "'")
+            lines.extend(["", f"Command: `{safe_command}`"])
+        lines.append("")
+    return "\n".join(lines)
+
+
+def ledger_record(rec: dict[str, Any]) -> dict[str, Any]:
+    """Flat, schema-stable row sent to the Parquet lake."""
+    refs = _scheduler_refs(rec)
+    tasks = [
+        {key: value for key, value in t.items() if key != "updated_at"}
+        for t in rec.get("tasks") or []
+        if isinstance(t, dict)
+    ]
+    actions = _sanitize_corrective_actions(rec.get("corrective_actions"))
+    return {
+        "schema_version": 1,
+        "activity_id": str(rec.get("activity_id") or ""),
+        "created_at": str(rec.get("created_at") or ""),
+        "updated_at": str(rec.get("updated_at") or ""),
+        "finished_at": str(rec.get("finished_at") or ""),
+        "tool": str(rec.get("tool") or ""),
+        "stage": str(rec.get("stage") or ""),
+        "scope": "multirack",
+        "operator": str(rec.get("operator") or ""),
+        "racks_json": json.dumps(rec.get("racks") or [], ensure_ascii=False),
+        "rack_count": len(rec.get("racks") or []),
+        "scheduler": str(rec.get("scheduler") or ""),
+        "scheduler_job_ids": ",".join(refs),
+        "outcome": _ledger_outcome(rec),
+        "outcome_summary": _sanitize_ledger_text(rec.get("outcome_summary")),
+        "error_summary": _ledger_error(rec),
+        "returncode": rec.get("returncode"),
+        "command_display": str(rec.get("command_display") or ""),
+        "tasks_json": json.dumps(tasks, ensure_ascii=False, sort_keys=True),
+        "corrective_actions_json": json.dumps(actions, ensure_ascii=False, sort_keys=True),
+        "corrective_action_count": len(actions),
+    }
+
+
+def _ledger_export_fingerprint(rec: dict[str, Any]) -> str:
+    semantic = ledger_record(rec)
+    # Hydration stamps updated_at even when scheduler evidence is unchanged. Do not emit a
+    # duplicate Parquet snapshot solely because a dashboard poll touched that timestamp.
+    semantic.pop("updated_at", None)
+    blob = json.dumps(semantic, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _multirack_rows_fingerprint(rows: dict[str, dict]) -> str:
+    semantic = [
+        (aid, _ledger_export_fingerprint(rec))
+        for aid, rec in sorted(rows.items())
+        if isinstance(rec, dict)
+        and str(rec.get("scope") or "").strip().lower() == "multirack"
+    ]
+    return hashlib.sha256(
+        json.dumps(semantic, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def export_multirack_activity_to_lake(rec: dict[str, Any]) -> dict[str, Any]:
+    """Write one ledger snapshot through lakewriter, which persists Parquet rows."""
+    try:
+        import lake_sink
+    except ImportError as exc:
+        return {"ok": False, "error": f"lake_sink unavailable: {exc}"}
+    row = ledger_record(rec)
+    refs = _scheduler_refs(rec)
+    rack = str(rec.get("rack") or "") or "cluster"
+    stable_ref = refs[0] if refs else str(rec.get("activity_id") or "unknown")
+    # The activity UUID exists before sbatch returns and never changes. Keep it in run_id so
+    # launch/submitted/terminal/action snapshots land in one append-only Parquet partition;
+    # the actual scheduler reference remains queryable in job_id and parsed columns.
+    run_id = lake_sink.make_run_id(
+        "multirack-ledger",
+        rack,
+        str(rec.get("activity_id") or stable_ref),
+    )
+    return lake_sink.push_run(
+        run_id=run_id,
+        workload="multirack-ledger",
+        rack=rack,
+        job_id=stable_ref,
+        status=str(row["outcome"]),
+        parsed=row,
+        log_path="synthesized:MULTIRACK_VALIDATION_RUN.md",
+        log_text=render_multirack_ledger_markdown([rec]),
+    )
+
+
+def _ledger_lake_disabled() -> bool:
+    return os.environ.get("RACK_MULTIRACK_LEDGER_LAKE_DISABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _update_ledger_export_status(activity_id: str, mutator) -> None:
+    path = MULTIRACK_LEDGER_EXPORT_STATUS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "a+", encoding="utf-8") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                locked = True
+            except OSError:
+                locked = False
+            try:
+                f.seek(0)
+                try:
+                    status = json.loads(f.read() or "{}")
+                except json.JSONDecodeError:
+                    status = {}
+                if not isinstance(status, dict):
+                    status = {}
+                entry = status.get(activity_id)
+                if not isinstance(entry, dict):
+                    entry = {}
+                if mutator(entry) is False:
+                    return
+                status[activity_id] = entry
+                f.seek(0)
+                f.truncate()
+                f.write(json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+                f.flush()
+            finally:
+                if locked:
+                    try:
+                        fcntl.flock(f, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+
+
+def _ledger_export_loop() -> None:
+    while True:
+        rec = _ledger_export_queue.get()
+        try:
+            aid = str(rec.get("activity_id") or "")
+            fingerprint = _ledger_export_fingerprint(rec)
+            result = export_multirack_activity_to_lake(rec)
+
+            def _done(
+                entry: dict[str, Any],
+                result_snapshot: dict[str, Any] = result,
+                fingerprint_snapshot: str = fingerprint,
+            ) -> None:
+                entry["last_attempt_at"] = _now_iso()
+                entry["pending_fingerprint"] = ""
+                entry["pending_pid"] = None
+                entry["last_result"] = result_snapshot
+                if result_snapshot.get("ok"):
+                    entry["exported_fingerprint"] = fingerprint_snapshot
+                    entry["exported_at"] = _now_iso()
+
+            _update_ledger_export_status(aid, _done)
+        except Exception as exc:  # noqa: BLE001 — a ledger export must never affect a run
+            _logger.warning("multirack ledger Parquet export failed: %s", exc)
+        finally:
+            _ledger_export_queue.task_done()
+
+
+def _ensure_ledger_export_worker() -> None:
+    global _ledger_export_worker_started
+    if _ledger_export_worker_started:
+        return
+    with _ledger_export_worker_lock:
+        if _ledger_export_worker_started:
+            return
+        threading.Thread(
+            target=_ledger_export_loop,
+            name="multirack-ledger-parquet",
+            daemon=True,
+        ).start()
+        _ledger_export_worker_started = True
+
+
+def _schedule_multirack_exports(records: Iterable[dict[str, Any]]) -> None:
+    if _ledger_lake_disabled():
+        return
+    pending: list[dict[str, Any]] = []
+    for rec in records:
+        aid = str(rec.get("activity_id") or "")
+        if not aid:
+            continue
+        fingerprint = _ledger_export_fingerprint(rec)
+        should_queue = False
+
+        def _pending(item: dict[str, Any], fp: str = fingerprint) -> bool:
+            nonlocal should_queue
+            if item.get("exported_fingerprint") == fp:
+                return False
+            # A process can die after persisting "pending" but before its daemon worker
+            # sends the row. Only a pending marker owned by this live process suppresses
+            # another enqueue; a new process recovers it immediately after restart.
+            if (
+                item.get("pending_fingerprint") == fp
+                and item.get("pending_pid") == os.getpid()
+            ):
+                return False
+            item["pending_fingerprint"] = fp
+            item["pending_pid"] = os.getpid()
+            item["queued_at"] = _now_iso()
+            should_queue = True
+            return True
+
+        _update_ledger_export_status(aid, _pending)
+        if should_queue:
+            pending.append(dict(rec))
+    if not pending:
+        return
+    _ensure_ledger_export_worker()
+    for rec in pending:
+        _ledger_export_queue.put(rec)
+
+
+def rebuild_multirack_ledger(rows: dict[str, dict] | None = None) -> list[dict[str, Any]]:
+    """Refresh the archive, human document and asynchronous Parquet outbox."""
+    if rows is None:
+        rows = {
+            str(rec.get("activity_id") or rec.get("job_id") or ""): rec
+            for rec in list_activities(scope="multirack", limit=0)
+        }
+    records = _merge_multirack_archive(rows)
+    if records or MULTIRACK_LEDGER_FILE.exists():
+        _atomic_write_text(
+            MULTIRACK_LEDGER_MARKDOWN_FILE,
+            render_multirack_ledger_markdown(records),
+        )
+    _schedule_multirack_exports(records)
+    return records
+
+
+def read_multirack_ledger_markdown() -> str:
+    rebuild_multirack_ledger()
+    try:
+        return MULTIRACK_LEDGER_MARKDOWN_FILE.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return render_multirack_ledger_markdown([])
+
+
 def _migrate_legacy_if_needed() -> None:
     """One-time import from multirack_jobs.json when the new store file does not exist."""
     if ACTIVITIES_FILE.is_file():
@@ -255,6 +774,9 @@ def _upgrade_legacy_record(rec: dict[str, Any], *, activity_id: str) -> dict[str
         "finished_at": rec.get("finished_at"),
         "stdout_tail": str(rec.get("stdout_tail") or ""),
         "stderr_tail": str(rec.get("stderr_tail") or ""),
+        "issue_summary": _sanitize_ledger_text(rec.get("issue_summary")),
+        "outcome_summary": _sanitize_ledger_text(rec.get("outcome_summary")),
+        "corrective_actions": _sanitize_corrective_actions(rec.get("corrective_actions")),
         "source": str(rec.get("source") or "ui"),
         "tasks": list(rec.get("tasks") or []),
     }
@@ -270,6 +792,8 @@ def _open_rw():
 
 
 def _with_store(mutator) -> None:
+    snapshot: dict[str, dict] | None = None
+    ledger_changed = False
     try:
         with _open_rw() as f:
             try:
@@ -279,8 +803,15 @@ def _with_store(mutator) -> None:
                 locked = False
             try:
                 rows = _read_locked(f)
+                before = _multirack_rows_fingerprint(rows)
                 mutator(rows)
+                ledger_changed = (
+                    before != _multirack_rows_fingerprint(rows)
+                    or not MULTIRACK_LEDGER_FILE.exists()
+                )
                 _write_locked(f, rows)
+                if ledger_changed:
+                    snapshot = {key: dict(value) for key, value in rows.items()}
             finally:
                 if locked:
                     try:
@@ -289,6 +820,11 @@ def _with_store(mutator) -> None:
                         pass
     except OSError:
         pass
+    if ledger_changed and snapshot is not None:
+        try:
+            rebuild_multirack_ledger(snapshot)
+        except Exception as exc:  # noqa: BLE001 — audit side effects must not break launches
+            _logger.warning("could not refresh multirack run ledger: %s", exc)
 
 
 def parse_scheduler_job_ids(text: str) -> list[str]:
@@ -432,6 +968,8 @@ def update_activity(activity_id: str, **fields: object) -> None:
             patch["stdout_tail"] = _tail(val)
         elif key == "stderr":
             patch["stderr_tail"] = _tail(val)
+        elif key in ("issue_summary", "outcome_summary"):
+            patch[key] = _sanitize_ledger_text(val)
         elif key in _UPDATABLE:
             patch[key] = _tail(val) if key in ("stdout_tail", "stderr_tail") else val
     if not patch:
@@ -452,6 +990,57 @@ def update_activity(activity_id: str, **fields: object) -> None:
             "stage 1/2" in stdout.lower() and "stage 2/2" in stdout.lower()
         )
         sync_tasks_from_stdout(aid, stdout, combined_nemo=combined)
+
+
+def annotate_activity(
+    activity_id: str,
+    *,
+    issue_summary: object | None = None,
+    outcome_summary: object | None = None,
+    corrective_action: object | None = None,
+    corrective_action_result: object | None = None,
+    corrective_action_status: object | None = None,
+    operator: object = "",
+) -> dict[str, Any] | None:
+    """Add operator findings/actions without replacing prior corrective actions."""
+    aid = (activity_id or "").strip()
+    if not aid:
+        return None
+    issue = _sanitize_ledger_text(issue_summary) if issue_summary is not None else None
+    outcome = _sanitize_ledger_text(outcome_summary) if outcome_summary is not None else None
+    action_text = (
+        _sanitize_ledger_text(corrective_action) if corrective_action is not None else ""
+    )
+    updated: dict[str, Any] | None = None
+
+    def _mut(rows: dict[str, dict]) -> None:
+        nonlocal updated
+        rec = rows.get(aid)
+        if rec is None:
+            return
+        if issue is not None:
+            rec["issue_summary"] = issue
+        if outcome is not None:
+            rec["outcome_summary"] = outcome
+        if action_text:
+            actions = _sanitize_corrective_actions(rec.get("corrective_actions"))
+            actions.append(
+                {
+                    "action_id": str(uuid.uuid4()),
+                    "recorded_at": _now_iso(),
+                    "operator": _sanitize_operator(operator),
+                    "action": action_text,
+                    "result": _sanitize_ledger_text(corrective_action_result),
+                    "status": _sanitize_ledger_text(corrective_action_status) or "recorded",
+                }
+            )
+            rec["corrective_actions"] = actions[-MAX_CORRECTIVE_ACTIONS:]
+        rec["updated_at"] = _now_iso()
+        rows[aid] = rec
+        updated = dict(rec)
+
+    _with_store(_mut)
+    return updated
 
 
 def _task_stage_kind(rec: dict[str, Any], task: dict[str, Any]) -> str | None:

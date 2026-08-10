@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the single-rack status table without ``rack_status.sh``.
 
-Fast path: ``cmsh -c "rack; list"`` synchronously, render rows with placeholders where needed.
+Fast path: cache ``cmsh -c "rack; list"`` (15-minute default TTL), render rows with placeholders where needed.
 Background threads: ``cmsh -c ds`` (device status), ``sinfo`` (+ ``scontrol`` hostnames), and log-dir
 parsing via ``probe_fn`` (typically ``rack_status.sh --probe-json``). Results merge into in-memory
 state and the next ``/api/status`` read shows updated cells.

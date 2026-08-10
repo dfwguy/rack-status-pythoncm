@@ -22,6 +22,18 @@ os.environ["NVIS_CATALOG_FILE"] = os.path.join(
     tempfile.mkdtemp(prefix="nvis-catalog-test-"), "catalog.json"
 )
 
+# Validation-activity writes also maintain the append-only multi-rack ledger. Keep its
+# generated document/outbox out of the worktree and never let unit tests call lakewriter.
+_ledger_test_root = tempfile.mkdtemp(prefix="nvis-multirack-ledger-test-")
+os.environ["RACK_MULTIRACK_LEDGER_FILE"] = os.path.join(_ledger_test_root, "runs.json")
+os.environ["RACK_MULTIRACK_LEDGER_MARKDOWN_FILE"] = os.path.join(
+    _ledger_test_root, "MULTIRACK_VALIDATION_RUNS.md"
+)
+os.environ["RACK_MULTIRACK_LEDGER_EXPORT_STATUS_FILE"] = os.path.join(
+    _ledger_test_root, "parquet-status.json"
+)
+os.environ["RACK_MULTIRACK_LEDGER_LAKE_DISABLED"] = "1"
+
 # Isolate AI settings so tests exercise the deterministic demo/registry path and do
 # not inherit a developer's locally-configured API key (which would enable live AI).
 os.environ.pop("RACK_AI_API_KEY", None)

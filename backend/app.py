@@ -1603,6 +1603,32 @@ def _derive_task_work_phase(
     return "submitted"
 
 
+def _ingest_new_activity_result(log_dir: str, results_path: str, rack_hint: str | None) -> None:
+    """Persist a newly discovered terminal result in SQLite and the Parquet lake.
+
+    LLMB submission wrappers return as soon as ``sbatch`` accepts the job.  The real
+    aggregated result appears later, so the generic async worker's terminal hook cannot
+    capture it.  Activity hydration is the first place that sees that final path; ingest
+    exactly on the empty-path -> result-path transition to avoid adding recurring reads or
+    SSH work to dashboard polling.
+    """
+    if not results_path or not _universal_enabled() or not _history_enabled():
+        return
+    try:
+        if results_history.latest_run_for_log(results_path) is not None:
+            return
+        parsed = _universal_fallback_for_log(
+            Path(log_dir),
+            results_path,
+            rack_hint=rack_hint,
+            ingest=True,
+        )
+        if not parsed or not parsed.get("history_run_id"):
+            _logger.warning("activity result ingest produced no run for %s", results_path)
+    except Exception as e:  # noqa: BLE001 - capture must not break activity polling
+        _logger.warning("activity result ingest failed for %s: %s", results_path, e)
+
+
 def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> None:
     """Evidence ladder: squeue → scontrol/sacct → result artefacts; fail-closed on purge."""
     aid = (activity_id or "").strip()
@@ -1636,6 +1662,7 @@ def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> No
         label = str(task.get("label") or "validation")
         stdout_path = str(task.get("stdout_path") or "").strip() or None
         results_path = str(task.get("results_log_path") or "").strip() or None
+        had_results_path = bool(results_path)
         evidence = "none"
         state: str | None = None
 
@@ -1685,6 +1712,12 @@ def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> No
             task_phase = "running"
         elif work_phase in ("done", "failed"):
             task_phase = "done" if work_phase == "done" else "error"
+
+        # This is deliberately a one-shot transition hook. A periodic whole-directory scan
+        # would add head-node I/O on every UI poll; one capped read when the final artifact
+        # first appears captures the run without turning observability into workload.
+        if results_path and not had_results_path and work_phase in ("done", "failed"):
+            _ingest_new_activity_result(log_dir, results_path, str(rec.get("rack") or "") or None)
 
         validation_activities.add_or_update_task(
             aid,
@@ -14490,6 +14523,15 @@ def api_validation_activities():
     return jsonify({"ok": True, "activities": rows})
 
 
+@app.route("/api/validation-activities/ledger", methods=["GET"])
+def api_validation_activities_ledger():
+    """Human-readable, append-preserving multi-rack run ledger."""
+    return Response(
+        validation_activities.read_multirack_ledger_markdown(),
+        content_type="text/markdown; charset=utf-8",
+    )
+
+
 @app.route("/api/validation-activities/<activity_id>", methods=["GET"])
 def api_validation_activity_detail(activity_id: str):
     aid = (activity_id or "").strip()
@@ -14501,6 +14543,38 @@ def api_validation_activity_detail(activity_id: str):
     _refresh_validation_activities_lazy([rec])
     rec = validation_activities.get_activity(aid) or rec
     return jsonify({"ok": True, "activity": rec})
+
+
+@app.route(
+    "/api/validation-activities/<activity_id>/corrective-actions",
+    methods=["POST"],
+)
+def api_validation_activity_corrective_action(activity_id: str):
+    """Annotate an activity; corrective actions append and are never overwritten."""
+    aid = (activity_id or "").strip()
+    body = request.get_json(silent=True) or {}
+    action = body.get("action")
+    issue = body.get("issue_summary")
+    outcome = body.get("outcome_summary")
+    if not any(str(value or "").strip() for value in (action, issue, outcome)):
+        return jsonify(
+            {
+                "ok": False,
+                "error": "action, issue_summary, or outcome_summary is required",
+            }
+        ), 400
+    rec = validation_activities.annotate_activity(
+        aid,
+        issue_summary=issue,
+        outcome_summary=outcome,
+        corrective_action=action,
+        corrective_action_result=body.get("result"),
+        corrective_action_status=body.get("status"),
+        operator=_operator_from_request() or body.get("operator") or "operator",
+    )
+    if rec is None:
+        return jsonify({"ok": False, "error": "unknown activity_id"}), 404
+    return jsonify({"ok": True, "activity_id": aid, "activity": rec})
 
 
 @app.route("/api/validation-activities/<activity_id>", methods=["DELETE"])
@@ -18256,4 +18330,3 @@ def api_capture_job_attempt():
     if not jid or not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
         return jsonify({"ok": False, "error": "valid job_id required"}), 400
     return jsonify(capture_job_attempt(jid))
-
