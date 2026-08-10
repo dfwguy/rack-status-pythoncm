@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import Table from "@mui/material/Table";
@@ -12,6 +12,8 @@ import { Text, Button } from "@nvidia/foundations-react-core";
 import { fetchSlurmJson, type SlurmSacctJob } from "../lib/slurmHelpers";
 import type { JobStdoutTailPayload } from "../lib/rackLog";
 import { TailLogDialog } from "./TailLogDialog";
+import { SortableHeaderCell } from "./SortableHeaderCell";
+import { nextSortState, sortRows, type SortState } from "../lib/tableSort";
 
 const NVIDIA_GREEN = "#76B900";
 
@@ -35,6 +37,9 @@ const COLS: { key: keyof SlurmSacctJob; label: string; mono?: boolean }[] = [
   { key: "state", label: "State" },
 ];
 
+/** Stable accessor: column index -> that job field, as text. */
+const cellAt = (job: SlurmSacctJob, col: number) => String(job[COLS[col].key] ?? "");
+
 /** Color a Slurm terminal state: green=success, red=hard failure, orange=timeout/preempt, gray=cancelled. */
 function stateColor(state: string): string | undefined {
   const s = (state || "").split(" ")[0].toUpperCase();
@@ -50,6 +55,10 @@ export function RecentJobsPanel({ logDir, active, limit = 10, tableMaxHeight = 4
   const [cmd, setCmd] = useState("");
   const [bannerErr, setBannerErr] = useState("");
   const [jobs, setJobs] = useState<SlurmSacctJob[]>([]);
+  const [sort, setSort] = useState<SortState>({ col: null, dir: "asc" });
+  // Capped by `limit`, so this table is sorted but not paged. Default order is sacct's own
+  // (most recently finished first), which stays reachable via a third header click.
+  const sortedJobs = useMemo(() => sortRows(jobs, cellAt, sort), [jobs, sort]);
 
   const [tailOpen, setTailOpen] = useState(false);
   const [tailTitle, setTailTitle] = useState("");
@@ -139,21 +148,26 @@ export function RecentJobsPanel({ logDir, active, limit = 10, tableMaxHeight = 4
         </Text>
       )}
 
-      {jobs.length > 0 ? (
+      {sortedJobs.length > 0 ? (
         <TableContainer sx={{ maxHeight: tableMaxHeight }}>
           <Table size="small" stickyHeader>
             <TableHead>
               <TableRow>
-                {COLS.map((c) => (
-                  <TableCell key={c.key} sx={{ fontWeight: 700, bgcolor: "action.hover", color: NVIDIA_GREEN, whiteSpace: "nowrap" }}>
-                    {c.label}
-                  </TableCell>
+                {COLS.map((c, ci) => (
+                  <SortableHeaderCell
+                    key={c.key}
+                    label={c.label}
+                    col={ci}
+                    sortCol={sort.col}
+                    sortDir={sort.dir}
+                    onToggle={(col) => setSort((cur) => nextSortState(cur, col))}
+                  />
                 ))}
                 <TableCell sx={{ fontWeight: 700, bgcolor: "action.hover", color: NVIDIA_GREEN }}>log</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {jobs.map((j) => (
+              {sortedJobs.map((j) => (
                 <TableRow key={j.job_id} hover sx={{ "&:nth-of-type(even)": { bgcolor: "action.hover" } }}>
                   {COLS.map((c) => {
                     const value = j[c.key] ?? "";

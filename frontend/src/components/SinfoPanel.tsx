@@ -13,10 +13,14 @@ import { Text, Button } from "@nvidia/foundations-react-core";
 import { fetchSlurmJson } from "../lib/slurmHelpers";
 import { parseSinfoRStdout } from "../lib/parseSinfoRStdout";
 import { slurmReasonTone, slurmToneColor } from "../lib/slurmReasonTone";
-import { usePagedRows } from "../hooks/usePagedRows";
+import { useSortedPagedRows } from "../hooks/useSortedPagedRows";
 import { TablePager } from "./TablePager";
+import { SortableHeaderCell } from "./SortableHeaderCell";
 
 const NVIDIA_GREEN = "#76B900";
+
+/** Stable accessor: sinfo rows are carried as {r, i} so the original index survives filtering. */
+const cellAt = (entry: { r: string[] }, col: number) => entry.r[col] ?? "";
 
 interface SinfoPanelProps {
   active: boolean;
@@ -110,7 +114,7 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
     return all.filter(({ r }) => r.join(" ").toLowerCase().includes(q));
   }, [rows, filter]);
 
-  const rowsPage = usePagedRows(matchedRows);
+  const rowsPage = useSortedPagedRows(matchedRows, cellAt);
 
   return (
     <Paper variant="outlined" sx={{ borderLeft: `4px solid ${NVIDIA_GREEN}`, overflow: "hidden" }}>
@@ -159,10 +163,15 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
           <Table size="small" stickyHeader>
             <TableHead>
               <TableRow>
-                {headers.map((h) => (
-                  <TableCell key={h} sx={{ fontWeight: 700, bgcolor: "action.hover", color: NVIDIA_GREEN, whiteSpace: "nowrap" }}>
-                    {h}
-                  </TableCell>
+                {headers.map((h, ci) => (
+                  <SortableHeaderCell
+                    key={h}
+                    label={h}
+                    col={ci}
+                    sortCol={rowsPage.sortCol}
+                    sortDir={rowsPage.sortDir}
+                    onToggle={rowsPage.toggleSort}
+                  />
                 ))}
               </TableRow>
             </TableHead>

@@ -23,10 +23,14 @@ import { parseSqueueStdout } from "../lib/parseSqueueStdout";
 import { slurmReasonTone, slurmToneColor } from "../lib/slurmReasonTone";
 import type { JobStdoutTailPayload } from "../lib/rackLog";
 import { TailLogDialog } from "./TailLogDialog";
-import { usePagedRows } from "../hooks/usePagedRows";
+import { useSortedPagedRows } from "../hooks/useSortedPagedRows";
 import { TablePager } from "./TablePager";
+import { SortableHeaderCell } from "./SortableHeaderCell";
 
 const NVIDIA_GREEN = "#76B900";
+
+/** Stable accessor for the sort hook: squeue rows are a plain string matrix. */
+const cellAt = (row: string[], col: number) => row[col] ?? "";
 
 interface SqueuePanelProps {
   logDir?: string;
@@ -203,8 +207,8 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
   const headers = parsed && !parsed.useRaw && parsed.headers.length ? parsed.headers : [];
   const rows = parsed && !parsed.useRaw && parsed.headers.length ? parsed.rows : [];
   // squeue on a 2000-node cluster is routinely hundreds of lines; the 360px scroll box hid
-  // that rather than solving it.
-  const rowsPage = usePagedRows(rows);
+  // that rather than solving it. Sorting applies to every row, not just the visible page.
+  const rowsPage = useSortedPagedRows(rows, cellAt);
   const jobCol = headers.length ? findSqueueJobColumnIndex(headers) : -1;
   const reasonCol = headers.findIndex((h) => /REASON/i.test(h));
   const stCol = headers.findIndex((h) => h === "ST" || /^STATE$/i.test(h));
@@ -248,10 +252,15 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
           <Table size="small" stickyHeader>
             <TableHead>
               <TableRow>
-                {headers.map((h) => (
-                  <TableCell key={h} sx={{ fontWeight: 700, bgcolor: "action.hover", color: NVIDIA_GREEN, whiteSpace: "nowrap" }}>
-                    {h}
-                  </TableCell>
+                {headers.map((h, ci) => (
+                  <SortableHeaderCell
+                    key={h}
+                    label={h}
+                    col={ci}
+                    sortCol={rowsPage.sortCol}
+                    sortDir={rowsPage.sortDir}
+                    onToggle={rowsPage.toggleSort}
+                  />
                 ))}
                 <TableCell sx={{ fontWeight: 700, bgcolor: "action.hover", color: NVIDIA_GREEN }}>log</TableCell>
                 <TableCell sx={{ fontWeight: 700, bgcolor: "action.hover", color: NVIDIA_GREEN }}>scancel</TableCell>
