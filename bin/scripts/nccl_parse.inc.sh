@@ -75,19 +75,25 @@ nccl_oob_csv() {
   grep 'Out of bounds values' "$1" 2>/dev/null | awk '{ print $NF }' | paste -sd, - || true
 }
 
-# Sweep-block completeness: "<started>,<concluded>".
+# Sweep-block completeness: "<started-or-expected>,<concluded>".
 #
 # nccl-tests brackets each sweep with "# Collective test starting:" and "# Collective test
 # concluded:", and prints the per-block summary lines only at the end. A log read WHILE the job is
 # still running therefore has started > concluded and yields a truncated series -- 1 data row gives
-# a 1-point chart with a meaningless peak. Callers use this to say "partial" instead of presenting
-# an in-progress sweep as a result. Measured on Nscale TX job 130406: parsed mid-run it charted a
-# single point; parsed complete, 32 points and 821 GB/s.
+# a 1-point chart with a meaningless peak. LLMB aggregated logs also declare ``tests=N`` in their
+# manifest. That expected count must win when it is larger than the observed starts: a failed test
+# emits no markers at all, so 22 starts == 22 conclusions was previously (and wrongly) called a
+# complete 24-test run. Callers use the first value as the completeness denominator.
 nccl_sweep_counts() {
   awk '
+    /^# job=/ {
+      for (i=1; i<=NF; i++) if ($i ~ /^tests=[0-9]+$/) {
+        split($i, a, "="); if ((a[2]+0) > expected) expected=a[2]+0
+      }
+    }
     /^# Collective test starting:/  { s++ }
     /^# Collective test concluded:/ { c++ }
-    END { print (s+0) "," (c+0) }
+    END { if (expected > s) s=expected; print (s+0) "," (c+0) }
   ' "$1" 2>/dev/null || echo "0,0"
 }
 

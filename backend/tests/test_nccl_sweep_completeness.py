@@ -85,6 +85,18 @@ def test_five_rounds_all_finished(tmp_path):
     assert _counts(p) == (5, 5)
 
 
+def test_llmb_manifest_exposes_tests_that_never_started(tmp_path):
+    """22 successful blocks from a 24-test LLMB run is incomplete, not 22/22 complete."""
+    p = tmp_path / "llmb.txt"
+    p.write_text(
+        "# NVIS: aggregated from llmb-run experiment x_133460\n"
+        "# job=133460 rack=ink50-dh01-i01 nodes=18 tests=24\n"
+        + "".join(_block([(8, 0.0)], concluded=True) for _ in range(22)),
+        encoding="utf-8",
+    )
+    assert _counts(p) == (24, 22)
+
+
 def test_last_round_still_running(tmp_path):
     p = tmp_path / "d.out"
     body = "".join(_block([(8, 0.0), (1 << 34, 821.7)], concluded=True) for _ in range(4))

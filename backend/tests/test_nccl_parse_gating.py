@@ -175,6 +175,28 @@ def test_out_of_bounds_is_still_reported():
     assert out.get("errors")
 
 
+def test_llmb_manifest_missing_tests_forces_failure():
+    text = (
+        "# NVIS: aggregated from llmb-run experiment x_133460\n"
+        "# job=133460 rack=ink50-dh01-i01 nodes=18 tests=24\n"
+        + NCCL_SWEEP * 22
+    )
+    bag = up._MetricBag()
+    out = up._extract_nccl(text, bag)
+    assert out["status"] == "fail"
+    assert out["extra"]["nccl_sweeps_expected"] == 24
+    assert out["extra"]["nccl_sweeps_concluded"] == 22
+    assert any(e["kind"] == "nccl_incomplete_sweep" for e in out["errors"])
+
+
+def test_complete_llmb_manifest_still_pass_hints():
+    text = "# job=7 rack=r01 nodes=18 tests=1\n" + NCCL_SWEEP
+    bag = up._MetricBag()
+    out = up._extract_nccl(text, bag)
+    assert out.get("status") is None
+    assert out["status_hint_pass"] is True
+
+
 @pytest.mark.parametrize("text", [NCCL_SWEEP, NCCL_SWEEP_NO_MARKER, COMBINED])
 def test_sniff_kind_classifies_real_sweeps_as_nccl(text):
     assert up.sniff_kind("whatever.txt", text) == "nccl"

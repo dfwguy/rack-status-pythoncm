@@ -855,6 +855,11 @@ def _strip_task_prefix(line: str) -> str:
 _NCCL_START_RE = re.compile(r"^#\s*Collective test starting:\s*(\S+)", re.MULTILINE)
 _NCCL_COLL_MAP = {"all_reduce_perf": "all_reduce", "alltoall_perf": "alltoall", "all_gather_perf": "all_gather"}
 _NCCL_OOB_RE = re.compile(r"^#\s*Out of bounds values\s*:\s*(\d+)\s*(\w+)?", re.MULTILINE)
+# LLMB's completed-run collector writes this manifest before concatenating the per-test
+# rank-0 logs.  It is stronger than counting markers alone: a failed test has no
+# ``Collective test starting/concluded`` pair, so 22 starts + 22 conclusions can still mean
+# that only 22 of the requested 24 tests ran (Nscale TX job 133460 was the concrete case).
+_NCCL_LLMB_EXPECTED_RE = re.compile(r"^#\s*job=\S+.*\btests=(\d+)\b", re.MULTILINE)
 # The table header nccl-tests always prints above a sweep, in either of its two lines:
 #   #                              out-of-place                       in-place
 #   #       size   count   type   redop   root   time   algbw   busbw #wrong   …
@@ -930,18 +935,41 @@ def _extract_nccl(text: str, bag: _MetricBag) -> dict[str, Any]:
         if v is not None:
             bag.add("nccl_avg_busbw", v, "GB/s")
 
+    started = len(_NCCL_START_RE.findall(text))
+    concluded = text.count("# Collective test concluded:")
+    expected_match = _NCCL_LLMB_EXPECTED_RE.search(text)
+    expected = int(expected_match.group(1)) if expected_match else None
+    if expected is not None:
+        bag.add("nccl_sweeps_expected", expected, None)
+        bag.add("nccl_sweeps_started", started, None)
+        bag.add("nccl_sweeps_concluded", concluded, None)
+
     out: dict[str, Any] = {}
     if "all_reduce" in peak:
         out["headline"] = {"label": "NCCL all_reduce peak busbw", "value": peak["all_reduce"][1], "unit": "GB/s"}
     elif peak:
         k = next(iter(peak))
         out["headline"] = {"label": f"NCCL {k} peak busbw", "value": peak[k][1], "unit": "GB/s"}
-    if oob_seen and oob_total > 0:
+    if expected is not None and (started != expected or concluded != expected):
+        out["errors"] = [{
+            "kind": "nccl_incomplete_sweep",
+            "line": (
+                f"LLMB requested {expected} collective tests but only "
+                f"{started} started and {concluded} concluded"
+            ),
+        }]
+        out["status"] = "fail"
+    elif oob_seen and oob_total > 0:
         out["errors"] = [{"kind": "nccl_out_of_bounds", "line": f"NCCL reported {oob_total} out-of-bounds values"}]
         out["status"] = "fail"
     elif peak:
         out["status_hint_pass"] = True
-    out["extra"] = {"nccl_collectives": sorted(peak)}
+    out["extra"] = {
+        "nccl_collectives": sorted(peak),
+        "nccl_sweeps_started": started,
+        "nccl_sweeps_concluded": concluded,
+        "nccl_sweeps_expected": expected,
+    }
     return out
 
 
