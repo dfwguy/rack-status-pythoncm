@@ -65,7 +65,7 @@ SSH_CMD="ssh -o StrictHostKeyChecking=no"
 echo "deploy-scripts: ${SRC} -> ${DEST}${DRY:+  [dry-run]}${DELETE:+  [--delete]}"
 # -r recursive, -l links, -p perms (keep +x), -t times, -c checksum (content-based), -i itemize.
 rsync -rlptc ${DRY} ${DELETE} -i \
-  --exclude='__pycache__/' --exclude='*.pyc' \
+  --exclude='__pycache__/' --exclude='*.pyc' --exclude='*.bak*' \
   -e "${SSH_CMD}" \
   "${SRC}" "${DEST}"
 

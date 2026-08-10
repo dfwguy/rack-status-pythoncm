@@ -212,7 +212,7 @@ def test_staging_verify_requires_a_positive_ok_per_node():
     nodes still printed "staged OK on all 36 nodes" and submitted.
     """
     body = (SCRIPTS / "run-nemo-xrack.sh").read_text(encoding="utf-8")
-    assert "STAGED_OK" in body, "verify should count positive per-node confirmations"
+    assert "CACHE_OK" in body, "verify should count positive per-node confirmations"
     assert 'grep -c BAD' not in body, "the failure-counting verify is back"
     # and the count must be compared against the node total
     assert re.search(r'_ok.*-ne.*\$\{#hosts\[@\]\}', body), "OK count must equal the node count"

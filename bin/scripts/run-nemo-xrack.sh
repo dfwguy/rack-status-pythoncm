@@ -141,39 +141,103 @@ fi
 # Cross-rack alltoall fix (keeps SHARP). The batch script defaults this to 1 too, but set it here so
 # the launcher is self-documenting and forwards it explicitly. Override with NVIS_NCCL_IGNORE_COLLNET_MISMATCH.
 export NVIS_NCCL_IGNORE_COLLNET_MISMATCH="${NVIS_NCCL_IGNORE_COLLNET_MISMATCH:-1}"
-: "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the head-node path of the nemo .sqsh image to copy under /raid/data/ on compute nodes}"
+: "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the configured nemo .sqsh image}"
 _sqsh_b=$(basename "$NEMO_SQSH_SRC")
 _hostcsv="$(echo "${hosts[*]}" | tr ' ' ',')"
-# Stage the image to each node's LOCAL /raid/data (fast NVMe; avoids saturating NFS with a
-# 36-node container-start read). /raid/data is root-owned on the compute trays, so use
-# passwordless sudo (NOPASSWD is propagated on the b0x trays). Then VERIFY every node has the
-# full image before submitting — otherwise pyxis dies with "No such file" mid-job.
 _src_size=$(stat -c%s "$NEMO_SQSH_SRC" 2>/dev/null || echo 0)
-echo "run-nemo-xrack: staging ${_sqsh_b} (${_src_size} bytes) to /raid/data on ${#hosts[@]} nodes (sudo rsync)…"
-pdsh -R ssh -w "$_hostcsv" "sudo -n mkdir -p /raid/data && sudo -n rsync -ah '${NEMO_SQSH_SRC}' /raid/data/'${_sqsh_b}'" 2>&1 | dshbak -c 2>/dev/null || true
-# Verify by counting nodes that POSITIVELY confirm the full size, and require all of them.
+if [[ ! "${_src_size}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "run-nemo-xrack: ERROR: configured image is missing or empty: ${NEMO_SQSH_SRC}" >&2
+  exit 1
+fi
+
+# Bryan's bringup-agent/FileCopyTrigger keeps every image in the shared container directory
+# warm under /tmp/containers on each compute node. Prefer that copy directly: copying the same
+# 40+ GiB image from the head node at launch defeats the cache and creates a fleet-wide NFS
+# burst before Slurm even sees the job.
+_shared_cache_dir="${NVIS_NEMO_SHARED_CACHE_DIR:-/cluster/containers}"
+_node_cache_dir="${NVIS_NEMO_NODE_CACHE_DIR:-/tmp/containers}"
+_cache_b="${NVIS_NEMO_CACHE_BASENAME:-}"
+
+# build_containers.sh adds an architecture suffix, while the LLMB installer names the same
+# logical image without one. Prefer an exact basename, then the ARM spelling used on this GB300
+# fleet. An explicit NVIS_NEMO_CACHE_BASENAME always wins (needed for a separately vetted image).
+if [[ -z "${_cache_b}" ]]; then
+  _cache_candidates=("${_sqsh_b}")
+  if [[ "${_sqsh_b}" == *.sqsh ]]; then
+    _cache_candidates+=("${_sqsh_b%.sqsh}-arm.sqsh")
+  fi
+  for _candidate in "${_cache_candidates[@]}"; do
+    _candidate_size=$(stat -c%s "${_shared_cache_dir}/${_candidate}" 2>/dev/null || echo 0)
+    if [[ "${_candidate_size}" == "${_src_size}" ]]; then
+      _cache_b="${_candidate}"
+      break
+    fi
+  done
+fi
+
+_shared_cache_path="${_shared_cache_dir}/${_cache_b}"
+_cache_size=$(stat -c%s "${_shared_cache_path}" 2>/dev/null || echo 0)
+if [[ -z "${_cache_b}" || "${_cache_size}" != "${_src_size}" ]]; then
+  echo "run-nemo-xrack: ERROR: no matching pre-cached image for ${NEMO_SQSH_SRC}." >&2
+  echo "run-nemo-xrack: expected ${_src_size} bytes under ${_shared_cache_dir}; refusing the legacy head-node fan-out." >&2
+  echo "run-nemo-xrack: stage the image through FileCopyTrigger, or set NVIS_NEMO_CACHE_BASENAME explicitly." >&2
+  exit 1
+fi
+
+_node_cache_path="${_node_cache_dir}/${_cache_b}"
+echo "run-nemo-xrack: checking pre-cached ${_cache_b} (${_cache_size} bytes) on ${#hosts[@]} node(s)…"
+
+# Verify by counting nodes that POSITIVELY confirm the full readable file, and require all of
+# them. Unreachable nodes and short/absent files cannot accidentally pass. Do not fall back to
+# rsync from /home: a green-button click must never trigger an unbounded 40+ GiB fan-out.
 #
 # This used to count nodes that answered with a WRONG size ("echo BAD") and pass when that count
 # was zero, with pdsh's stderr sent to /dev/null. A node that could not be reached at all never
 # ran the remote command, so it printed no BAD and was silently counted as staged: a run where
 # ssh failed 255 on all 36 nodes still reported "staged OK on all 36 nodes" and went on to
-# submit. Requiring one OK per node inverts that — unreachable, sudo-denied, out of disk or
-# short file all fail the same way, because none of them produce an OK.
+# submit. Requiring one OK per node inverts that — unreachable or short/missing files fail the
+# same way, because none of them produce CACHE_OK.
 _verify_out=$(pdsh -R ssh -w "$_hostcsv" \
-  "s=\$(stat -c%s /raid/data/'${_sqsh_b}' 2>/dev/null || echo 0); [ \"\$s\" = '${_src_size}' ] && echo STAGED_OK" 2>&1)
-_ok=$(printf '%s\n' "${_verify_out}" | grep -c 'STAGED_OK' || true)
+  "s=\$(stat -c%s '${_node_cache_path}' 2>/dev/null || echo 0); if [ \"\$s\" = '${_cache_size}' ] && [ -r '${_node_cache_path}' ]; then echo CACHE_OK; else echo CACHE_MISS_size=\$s; fi" 2>&1)
+_ok=$(printf '%s\n' "${_verify_out}" | grep -c 'CACHE_OK' || true)
 if [ "${_ok:-0}" -ne "${#hosts[@]}" ]; then
-  echo "run-nemo-xrack: ERROR: image verified on only ${_ok}/${#hosts[@]} nodes in /raid/data." >&2
-  echo "run-nemo-xrack: check ssh reachability, passwordless sudo (sudo -n) and /raid free space." >&2
-  echo "run-nemo-xrack: first failures reported by pdsh:" >&2
-  printf '%s\n' "${_verify_out}" | grep -v 'STAGED_OK' | head -10 | sed 's/^/  /' >&2
-  echo "run-nemo-xrack: aborting before submit." >&2
+  echo "run-nemo-xrack: ERROR: local image verified on only ${_ok}/${#hosts[@]} nodes at ${_node_cache_path}." >&2
+  echo "run-nemo-xrack: first cache misses or transport failures:" >&2
+  printf '%s\n' "${_verify_out}" | grep -v 'CACHE_OK' | head -10 | sed 's/^/  /' >&2
+  echo "run-nemo-xrack: aborting before submit; wait for bringup-agent/FileCopyTrigger rather than reading the image from the head node." >&2
   exit 1
 fi
-echo "run-nemo-xrack: staged OK on all ${#hosts[@]} nodes (verified ${_ok}/${#hosts[@]})"
-# Tell the batch script which staged image to run (it defaults to the stock name otherwise, so
-# NEMO_SQSH_SRC=<vetted image> would be staged but not actually used).
-export NVIS_NEMO_CONT="/raid/data/${_sqsh_b}"
+echo "run-nemo-xrack: cache ready on all ${#hosts[@]} nodes (verified ${_ok}/${#hosts[@]}); skipping head-node rsync"
+export NVIS_NEMO_CONT="${_node_cache_path}"
+
+# A node can remain IDLE in Slurm and still have every GPU marked reset-required. In that state
+# nvidia-smi inventory queries succeed, but CUDA context creation fails with "device busy or
+# unavailable" and one bad rack cancels the entire multi-rack step. Require all four GB300 GPUs on
+# every target node to report no pending recovery action before consuming a large allocation.
+# Keep the override explicit for emergency diagnosis; normal UI launches fail closed.
+if [[ "${NVIS_NEMO_GPU_RECOVERY_CHECK:-1}" == "1" ]]; then
+  echo "run-nemo-xrack: checking GPU recovery state on ${#hosts[@]} node(s)…"
+  _gpu_out=$(pdsh -R ssh -w "$_hostcsv" \
+    'a=$(nvidia-smi --query-gpu=gpu_recovery_action --format=csv,noheader 2>&1); rc=$?; n=$(printf "%s\n" "$a" | grep -c "^None$"); if [ "$rc" -eq 0 ] && [ "$n" -eq 4 ]; then echo GPU_READY; else printf "GPU_BLOCKED recovery=%s\n" "$(printf "%s" "$a" | tr "\n" ",")"; fi' 2>&1)
+  _gpu_ok=$(printf '%s\n' "${_gpu_out}" | grep -c 'GPU_READY' || true)
+  if [ "${_gpu_ok:-0}" -ne "${#hosts[@]}" ]; then
+    echo "run-nemo-xrack: ERROR: healthy GPU recovery state confirmed on only ${_gpu_ok}/${#hosts[@]} nodes." >&2
+    echo "run-nemo-xrack: first reset-required, query, or transport failures:" >&2
+    printf '%s\n' "${_gpu_out}" | grep -v 'GPU_READY' | head -20 | sed 's/^/  /' >&2
+    echo "run-nemo-xrack: aborting before submit; recover the affected nodes and rerun the preflight." >&2
+    exit 1
+  fi
+  echo "run-nemo-xrack: GPU recovery state ready on all ${#hosts[@]} nodes (verified ${_gpu_ok}/${#hosts[@]})"
+else
+  echo "run-nemo-xrack: WARNING: GPU recovery check disabled by NVIS_NEMO_GPU_RECOVERY_CHECK=0" >&2
+fi
+
+# Safe preflight mode for operators and automation: perform the same target resolution and cache
+# and GPU-recovery verification as the green button, but stop before sbatch.
+if [[ "${NVIS_NEMO_CACHE_CHECK_ONLY:-0}" == "1" ]]; then
+  echo "run-nemo-xrack: cache-check-only complete; no Slurm job submitted"
+  exit 0
+fi
 
 # Log filename uses just the racks included in the test. The arg may be a full curated nodelist
 # (real hostnames) rather than rack-ct specs; using it verbatim would blow past the 255-byte
@@ -193,12 +257,29 @@ if [[ -z "${_racktag}" ]]; then
   _racktag=$(printf '%s\n' "${racks[@]}" | sort -u | paste -sd+ | tr -d ' ')
 fi
 [[ -n "${_racktag}" ]] || _racktag="${spec_tag}"
+
+# Even a correct rack-only tag exceeds NAME_MAX for a full 16-rack SU (the old tag was 239
+# characters before adding root-NEMO-, node count, job id and .txt). Keep the endpoints and rack
+# count for humans, plus a digest for uniqueness. Slurm otherwise accepts the job, allocates every
+# node, then fails in one second with ExitCode 0:53 because stdout cannot be opened.
+if (( ${#_racktag} > 120 )); then
+  _racktag_full="${_racktag}"
+  _racktag_first="${_racktag_full%%+*}"
+  _racktag_last="${_racktag_full##*+}"
+  _racktag_hash=$(printf '%s' "${_racktag_full}" | sha256sum | cut -c1-10)
+  _racktag="${_racktag_first}+${_racktag_last}+${_nracks}r-${_racktag_hash}"
+  echo "run-nemo-xrack: compacted long rack tag to ${_racktag}"
+fi
 _out_stem="root-NEMO-${_racktag}-${n}N"
 
 # Export the real scripts dir to the job so the batch script can find lib/fabric.inc.sh
 # (Slurm spools only the batch script, not lib/). Without it the fabric classifier no-ops
 # and NCCL falls back to a naive mlx5_0..3 set that mixes IB + RoCE and fails.
 export NVIS_SCRIPTS_DIR="${SCRIPT_DIR}"
+if [[ "${NVIS_NEMO_SUBMIT_DRY_RUN:-0}" == "1" ]]; then
+  echo "run-nemo-xrack: submit-dry-run output=${_out_stem}-%j.txt nodes=${n}; no Slurm job submitted"
+  exit 0
+fi
 sbatch -N "${n}" \
   -w "$(echo "${hosts[*]}" | tr ' ' ',')" \
   -t "${NVIS_NEMO_WALLTIME:-03:00:00}" \
