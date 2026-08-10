@@ -3126,6 +3126,13 @@ def _nemo_log_file_looks_successful(path: Path) -> bool:
     """
     lp = str(_rpath(path))
     timeout = max(30, _env_int("RACK_EXPORT_SUCCESS_GREP_TIMEOUT", 180))
+    # One whole-file pass already answered both questions; the two greps below are the fallback.
+    rec = _logscan_record(path, timeout=timeout)
+    if rec:
+        if rec["failures"]["slurm_hard_fail"]:
+            return False
+        n, c = rec["nemo"], rec["nccl"]
+        return bool(n["samples"] or n["finished"] or c["avg_bus_bandwidth"])
     try:
         fail = host_exec.run_on_host(
             ["grep", "-E", "-q", r"srun:.*error:.*Exited|error:.*SIGNAL", lp], timeout=timeout
@@ -3849,6 +3856,50 @@ _LLM_LINE_MARK_RE = re.compile(
     r"(train_step_timing|Step\s+Time.*MODEL_TFLOP/s/GPU|consumed_samples|iteration\s+\d+/)",
     re.IGNORECASE,
 )
+
+# --- whole-file scanner -----------------------------------------------------------------------
+# nvis_logscan.py reads a log ONCE on the host that holds it and returns a few KB of JSON, so a
+# multi-GB log never crosses the SSH hop and nothing here has to guess from a head/tail window.
+# Everything below that still takes a byte cap is a fallback for when the scanner is missing.
+_LOGSCAN_CACHE: dict[str, dict | None] = {}
+_LOGSCAN_CACHE_MAX = 256
+
+
+def _logscan_record(path, *, timeout: int = 300) -> dict | None:
+    """Whole-file scan of *path* on the exec host, or ``None`` when unavailable.
+
+    Cached per path+mtime: the analytics aggregate asks for the same log from several places.
+    """
+    lp = str(_rpath(path))
+    try:
+        st = host_exec.stat(lp)
+        key = f"{lp}:{getattr(st, 'mtime', 0)}:{getattr(st, 'size', 0)}"
+    except Exception:  # noqa: BLE001 - a stat failure just means "do not cache"
+        key = lp
+    if key in _LOGSCAN_CACHE:
+        return _LOGSCAN_CACHE[key]
+
+    rec: dict | None = None
+    script = str(Path(SCRIPTS_DIR) / "nvis_logscan.py")
+    try:
+        proc = host_exec.run_on_host(
+            ["python3", script, "--ndjson", "--no-inventory", lp], timeout=timeout
+        )
+        if getattr(proc, "returncode", 1) == 0:
+            for line in (proc.stdout or "").splitlines():
+                line = line.strip()
+                if line.startswith("{"):
+                    cand = json.loads(line)
+                    if cand.get("ok"):
+                        rec = cand
+                    break
+    except (subprocess.TimeoutExpired, OSError, ValueError) as e:
+        _logger.debug("nvis_logscan unavailable for %s: %s", lp, e)
+
+    if len(_LOGSCAN_CACHE) >= _LOGSCAN_CACHE_MAX:
+        _LOGSCAN_CACHE.clear()
+    _LOGSCAN_CACHE[key] = rec
+    return rec
 _LOG_TS_SEARCH_RE = re.compile(r"(?P<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
 _DISPLAY_TZ_QUERY_RE = re.compile(r"^[A-Za-z0-9_\-]+(?:/[A-Za-z0-9_\-]+)*$")
 
@@ -3935,6 +3986,21 @@ _LLM_WALL_MAX_BYTES = 64 * 1024 * 1024
 def _llm_wall_times_from_log(path: Path, tz_override: str | None = None) -> list[float]:
     tz = _zoneinfo_for_log_parsing(tz_override)
     times: list[float] = []
+
+    # Whole-file first and last training timestamps. The fallback below reads only the first
+    # 64 MB, so on a 973 MB log the "end" of the run was whatever happened 7% of the way in and
+    # the Grafana window closed hours early.
+    rec = _logscan_record(path)
+    if rec:
+        wall = rec.get("wall") or {}
+        for stamp in (wall.get("first"), wall.get("last")):
+            if stamp:
+                u = _parse_ts_unix(str(stamp), tz)
+                if u is not None:
+                    times.append(u)
+        if times:
+            return times
+
     content = _host_read_text(path, max_bytes=_LLM_WALL_MAX_BYTES)
     if content is None:
         return []
@@ -9861,7 +9927,7 @@ def _universal_parse_log(
         # reason attached, which is far more useful than a blank panel.
         text = ""
     try:
-        return _uparse.parse(
+        res = _uparse.parse(
             log_path_s,
             text,
             kind=kind,
@@ -9873,6 +9939,53 @@ def _universal_parse_log(
     except Exception as e:  # noqa: BLE001 - the module promises not to raise; belt and braces
         _logger.warning("universal_parser.parse failed for %s: %s", log_path_s, e)
         return None
+    return _overlay_logscan_metrics(res, log_path_s, timeout=timeout)
+
+
+#: universal_parser metric name -> where the same number lives in an nvis_logscan record.
+_LOGSCAN_METRIC_OVERLAY = (
+    ("nemo_step_time_mean", ("nemo", "step_time_s"), "s"),
+    ("nemo_step_time_stdev", ("nemo", "step_time_std"), "s"),
+    ("nemo_model_tflops_per_gpu_mean", ("nemo", "tflops_per_gpu"), "TFLOP/s"),
+)
+
+
+def _overlay_logscan_metrics(
+    res: dict[str, object] | None, log_path_s: str, *, timeout: int = 120
+) -> dict[str, object] | None:
+    """Replace metrics that a capped read can only guess at with whole-file values.
+
+    universal_parser sees 2 MB of head and 1 MB of tail. That is fine for a 5 MB log and useless
+    for a 973 MB one, where every training sample sits in the discarded middle: the run reached
+    history and the lake with no metrics at all. When the scanner has read the file, its numbers
+    win and ``truncated`` becomes false, because nothing was truncated.
+    """
+    if not isinstance(res, dict) or not res.get("truncated"):
+        return res
+    rec = _logscan_record(log_path_s, timeout=timeout)
+    if not rec:
+        return res
+
+    by_name = {m.get("name"): m for m in res.get("metrics", []) if isinstance(m, dict)}
+    for name, (section, key), unit in _LOGSCAN_METRIC_OVERLAY:
+        val = (rec.get(section) or {}).get(key)
+        if val is None:
+            continue
+        if name in by_name:
+            by_name[name]["value"] = val
+        else:
+            res.setdefault("metrics", []).append({"name": name, "value": val, "unit": unit})
+
+    it = (rec.get("nemo") or {}).get("iteration")
+    extra = res.get("extra")
+    if isinstance(extra, dict):
+        extra["nemo_training_finished"] = bool((rec.get("nemo") or {}).get("finished"))
+        if it:
+            extra["nemo_last_iteration"] = list(it)
+        extra["metrics_from_whole_file_scan"] = True
+    res["truncated"] = False
+    res["bytes"] = rec.get("bytes", res.get("bytes"))
+    return res
 
 
 # --- history ingest ------------------------------------------------------------------
@@ -11464,6 +11577,12 @@ def _multirack_done_log_paths(log_dir: Path) -> list[Path]:
 
 
 def _read_log_text_chunk(path: Path, max_bytes: int = 14 * 1024 * 1024) -> str:
+    """Head-capped read, kept ONLY as the fallback when nvis_logscan is unavailable.
+
+    Prefer :func:`_logscan_record`: this returns the first *max_bytes* and nothing else, so a
+    ``-gb`` or ``NODELIST:`` line further into a large log is invisible and the analytics scaling
+    table silently loses that run's throughput.
+    """
     # Host-aware (local or SSH); tolerates PurePosixPath remote paths.
     return _host_read_text(path, max_bytes=max_bytes) or ""
 
@@ -11571,12 +11690,41 @@ def _log_mtime_or_zero(path: Path) -> float:
         return 0.0
 
 
+def _nemotron_run_hw_tokens_for_path(lp: Path, st_f: float) -> dict[str, int | float | None]:
+    """Run geometry for *lp*, from the whole file when the scanner is available.
+
+    The fallback reads a 14 MB head, which is why a big multirack log could produce step time and
+    TFLOPs but no throughput: its ``-gb`` / ``NODELIST:`` lines sat past the cap, so the run
+    showed up in the scaling table with blank tokens/s.
+    """
+    rec = _logscan_record(lp)
+    if rec:
+        g = rec.get("geometry") or {}
+        # _nemotron_log_run_hw_tokens is regex-over-text; hand it a tiny synthetic text carrying
+        # exactly the tokens the scanner found, so the arithmetic stays in one place.
+        parts = []
+        if g.get("num_gpus"):
+            parts.append(f"--num_gpus {g['num_gpus']}")
+        if g.get("gpus_per_node"):
+            parts.append(f"--gpus_per_node {g['gpus_per_node']}")
+        if g.get("global_batch"):
+            parts.append(f"-gb {g['global_batch']}")
+        if g.get("slurm_nnodes"):
+            parts.append(f"SLURM_NNODES={g['slurm_nnodes']}")
+        if g.get("nodelist"):
+            parts.append(f"NODELIST: {g['nodelist']}")
+        if g.get("seq_len"):
+            parts.append(f"seq_length={g['seq_len']}")
+        if parts:
+            return _nemotron_log_run_hw_tokens("\n".join(parts), st_f)
+    return _nemotron_log_run_hw_tokens(_read_log_text_chunk(lp), st_f)
+
+
 def _nemotron_scaling_append_entry(
     bucket: dict[int, list[dict[str, object]]], n_r: int, lp: Path, tf_f: float, st_f: float
 ) -> None:
     """Append one log's Nemotron stats + parsed run geometry / throughput for analytics buckets."""
-    log_text = _read_log_text_chunk(lp)
-    mrun = _nemotron_log_run_hw_tokens(log_text, st_f)
+    mrun = _nemotron_run_hw_tokens_for_path(lp, st_f)
     bucket.setdefault(n_r, []).append(
         {
             "path": lp,
