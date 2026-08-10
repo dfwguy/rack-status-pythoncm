@@ -1065,8 +1065,9 @@ def _extract_nemo(text: str, bag: _MetricBag) -> dict[str, Any]:
     than parser.sh's awk column indices, because the exact column layout of the ``Step Time``
     dialect was never sampled on this cluster.  parser.sh stays authoritative for the
     Nemotron table in the Parser Results dialog; this is for history/summary only.
-    Completion test is rack_status.sh's: last ``iteration <cur>/<tot>`` with cur>=tot and
-    tot >= NEMO_TARGET_STEPS (default 2010).
+    Completion test is rack_status.sh's: last ``iteration <cur>/<tot>`` with cur>=tot, i.e. the
+    run reached the target it declared.  ``NEMO_TARGET_STEPS`` is an OPT-IN acceptance floor on
+    that declared total; unset it accepts a 50-step benchmark as readily as a 2010-step soak.
     """
     steps = [v for v in (_to_num(m.group(1)) for m in _NEMO_STEP_TIMING_RE.finditer(text)) if v is not None]
     tflops: list[float] = []
@@ -1103,10 +1104,12 @@ def _extract_nemo(text: str, bag: _MetricBag) -> dict[str, Any]:
                            "value": round(statistics.fmean(steps), 4), "unit": "s"}
 
     try:
-        target = int(os.environ.get("NEMO_TARGET_STEPS", "2010"))
+        target = int(os.environ.get("NEMO_TARGET_STEPS", "0"))
     except ValueError:
-        target = 2010
-    finished = bool(last_iter and last_iter[0] >= last_iter[1] and last_iter[1] >= target)
+        target = 0
+    finished = bool(
+        last_iter and last_iter[1] > 0 and last_iter[0] >= last_iter[1] and last_iter[1] >= target
+    )
     out["extra"] = {"nemo_training_finished": finished,
                     "nemo_last_iteration": list(last_iter) if last_iter else None}
 

@@ -17,12 +17,14 @@
 #   llm_stats_tsv FILE            -> "step_s\ttflops\tstep_std\tperf_std\tmfu" or rc!=0
 #   llm_label FILE                -> "STATUS\tstep_s\ttflops\tstep_std\tperf_std\tmfu"
 #                                    STATUS is OK | FAIL | UNK
+#   nemo_iteration_progress_log F  -> prints "<cur> <tot>" from the last iteration marker
 #   nemo_training_finished_log F   -> rc 0 when the run reached its declared target
 #   slurm_hard_fail FILE           -> rc 0 on a Slurm-level hard failure
 #   nemo_python_fatal_fail FILE    -> rc 0 on a Python/CUDA fatal error
 #
 # Env:
-#   NEMO_TARGET_STEPS      minimum DECLARED total steps for "finished" (default 2010)
+#   NEMO_TARGET_STEPS      OPT-IN minimum declared target for "finished" (default 0 = accept
+#                          whatever the run declared; set it only for formal acceptance gating)
 #   NVIS_LLM_PEAK_TFLOPS   per-GPU peak used as the MFU denominator (default 5000)
 
 # MFU denominator. Peak dense TFLOP/s per GPU is a platform property, so it is overridable;
@@ -40,18 +42,33 @@ nemo_python_fatal_fail() {
 }
 
 # Megatron lines like "iteration       523/    2010 | ...". Use the LAST such token in the file
-# (NCCL noise puts digits on other lines). Finished when cur>=tot AND tot>=NEMO_TARGET_STEPS:
-# the first half rejects a truncated run, the second rejects a run whose declared target was
-# too short to count as acceptance.
-nemo_training_finished_log() {
-  local f=$1 ms="${NEMO_TARGET_STEPS:-2010}" last cur tot
-  [[ "$ms" =~ ^[0-9]+$ ]] || ms=2010
+# (NCCL noise puts digits on other lines). Prints "<cur> <tot>"; rc!=0 when the log has none.
+nemo_iteration_progress_log() {
+  local f=$1 last
   last=$(grep -oE 'iteration[[:space:]]+[0-9]+/[[:space:]]*[0-9]+' "$f" 2>/dev/null | tail -1) || true
   [[ -n "$last" ]] || return 1
   [[ "$last" =~ iteration[[:space:]]+([0-9]+)/[[:space:]]*([0-9]+) ]] || return 1
-  cur=$((10#${BASH_REMATCH[1]}))
-  tot=$((10#${BASH_REMATCH[2]}))
-  (( cur >= tot && tot >= ms ))
+  printf '%s %s' "$((10#${BASH_REMATCH[1]}))" "$((10#${BASH_REMATCH[2]}))"
+}
+
+# Finished means the run reached the target IT DECLARED (cur >= tot). A 50-step benchmark and a
+# 2010-step acceptance run are both real runs and must both report their numbers.
+#
+# The rule used to also demand tot >= NEMO_TARGET_STEPS (2010), which made every short run
+# permanently "unfinished": job 140457 measured 5.75 s/step at 1432 TFLOP/s/GPU across 576 nodes,
+# reached iteration 50/50, and still scored llm_ok=0 — so it never appeared in Charts or
+# Analytics. The dashboard's own launch dialog defaults to 50 steps, so the floor rejected the
+# most common run shape we produce.
+#
+# NEMO_TARGET_STEPS is now an OPT-IN acceptance floor: set it to require a minimum declared
+# target, leave it unset to accept whatever the run declared.
+nemo_training_finished_log() {
+  local f=$1 ms="${NEMO_TARGET_STEPS:-0}" prog cur tot
+  [[ "$ms" =~ ^[0-9]+$ ]] || ms=0
+  prog=$(nemo_iteration_progress_log "$f") || return 1
+  cur="${prog%% *}"
+  tot="${prog##* }"
+  (( tot > 0 && cur >= tot && tot >= ms ))
 }
 
 # Averages one extracted sample stream. Step time is field 4 in both dialects; $1 is the field

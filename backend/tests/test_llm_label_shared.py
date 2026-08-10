@@ -128,8 +128,42 @@ def test_finished_without_a_window_is_ok(tmp_path):
 
 
 def test_finished_below_the_target_is_not_ok(tmp_path):
-    """tot must also clear NEMO_TARGET_STEPS: a 50-step recipe is not a 2010-step soak."""
+    """NEMO_TARGET_STEPS is an OPT-IN acceptance floor: when it IS set, a 50-step recipe still
+    does not clear a 2010-step bar."""
     assert _verdict(tmp_path, FINISHED_NO_WINDOW, target_steps="2010") == "UNK"
+
+
+def _finished_unset_target(tmp_path: Path, text: str) -> bool:
+    """rc of nemo_training_finished_log with NEMO_TARGET_STEPS absent from the environment."""
+    p = tmp_path / "cmods-NEMO-1Rack-p05-r01-18N-4243.txt"
+    p.write_text(text, encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k != "NEMO_TARGET_STEPS"}
+    proc = subprocess.run(
+        ["bash", "-c", f'source "{INC}"; nemo_training_finished_log "$1"', "_", str(p)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    return proc.returncode == 0
+
+
+def test_a_short_run_that_reached_its_own_target_is_finished(tmp_path):
+    """The 140457 case. A 50-step run is a real run: it declared 50 and reached 50.
+
+    The old rule demanded tot >= 2010, so a 576-node run measuring 5.75 s/step at
+    1432 TFLOP/s/GPU scored llm_ok=0 and never reached Charts or Analytics.
+    """
+    assert _finished_unset_target(tmp_path, FINISHED_NO_WINDOW) is True
+
+
+def test_a_truncated_run_is_still_not_finished_without_a_target(tmp_path):
+    """Dropping the floor must not make every log 'finished' — cur >= tot still has to hold."""
+    assert _finished_unset_target(tmp_path, TRUNCATED) is False
+
+
+def test_a_log_with_no_iteration_marker_is_not_finished(tmp_path):
+    assert _finished_unset_target(tmp_path, NOISE) is False
 
 
 def test_truncated_run_abstains(tmp_path):

@@ -3,7 +3,7 @@
 # RACK_CMSH_RACK_LIST_FILE: readable file of one pNN-rMM rack id per line (skips ``cmsh -c "rack; list"``).
 # When unset, defaults to ../../var/cache/cmsh_rack_list.txt under this script’s nvis-rack-status root if that file exists.
 # Used by parser.sh (--tmp-status) or standalone on log files.
-# Training "done" for LLM: Megatron finished (last iteration cur>=tot, tot>=NEMO_TARGET_STEPS), OR job still running (squeue) with perf stats.
+# Training "done" for LLM: Megatron reached the target it declared (last iteration cur>=tot), OR job still running (squeue) with perf stats.
 # Which checks count toward "done" (nccl_ok ∧ llm_ok): VALIDATION_TEST (comma-separated); default all NCCL busbw lines + llm — see validation_test_env.sh.
 # Perf-window OK alone does not mean the run finished; mid-crash logs can still have 90+ Step Time lines.
 # FAIL: Slurm hard errors, or Python traceback / OOM lines in the log.
@@ -105,7 +105,7 @@ while [[ "${1:-}" == -* ]]; do
       echo "  --probe-json FILE  JSON probe for one log (nvis-rack-status multirack API; includes multirack names)." >&2
       echo "  --tmp-status FILE  TSV: rack<TAB>jobid<TAB>ongoing<TAB>nccl_ok<TAB>llm_ok (parser.sh internal)." >&2
       echo "  Otherwise pass NEMO log paths; nccl/llm/squeue are evaluated like parser.sh." >&2
-      echo "Env: NO_COLOR, FORCE_COLOR, SQUEUE_USER, SINFO_OPTS, NEMO_TARGET_STEPS (default 2010; last Megatron iteration cur/tot must reach tot)." >&2
+      echo "Env: NO_COLOR, FORCE_COLOR, SQUEUE_USER, SINFO_OPTS, NEMO_TARGET_STEPS (opt-in floor on the declared total; unset = accept whatever the run declared)." >&2
       exit 1
       ;;
   esac

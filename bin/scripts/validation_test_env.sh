@@ -6,16 +6,19 @@
 # Omit NCCL tokens → no NCCL busbw required; omit llm → LLM not required for pass.
 # Source this file after llm_label is defined. nemo_training_finished_log is defined here only if missing.
 
+# Fallback only — lib/llm_label.inc.sh owns the real definition. Keep the semantics identical:
+# finished means the run reached the target it declared, with NEMO_TARGET_STEPS as an opt-in
+# acceptance floor (unset = accept the declared target, so 50-step runs count).
 if ! declare -F nemo_training_finished_log &>/dev/null; then
   nemo_training_finished_log() {
-    local f=$1 ms="${NEMO_TARGET_STEPS:-2010}" last cur tot
-    [[ "$ms" =~ ^[0-9]+$ ]] || ms=2010
+    local f=$1 ms="${NEMO_TARGET_STEPS:-0}" last cur tot
+    [[ "$ms" =~ ^[0-9]+$ ]] || ms=0
     last=$(grep -oE 'iteration[[:space:]]+[0-9]+/[[:space:]]*[0-9]+' "$f" 2>/dev/null | tail -1) || true
     [[ -n "$last" ]] || return 1
     [[ "$last" =~ iteration[[:space:]]+([0-9]+)/[[:space:]]*([0-9]+) ]] || return 1
     cur=$((10#${BASH_REMATCH[1]}))
     tot=$((10#${BASH_REMATCH[2]}))
-    ((cur >= tot && tot >= ms))
+    ((tot > 0 && cur >= tot && tot >= ms))
   }
 fi
 
@@ -49,11 +52,13 @@ _validation_test_ensure_parsed() {
   _VALIDATION_TEST_PARSED=1
 }
 
-# Args: f ongoing ar_bw aa_bw ag_bw [llm_line]
+# Args: f ongoing ar_bw aa_bw ag_bw [llm_line] [finished]
 # Optional 6th arg: precomputed "$(llm_label "$f")" to avoid calling llm_label twice.
+# Optional 7th arg: precomputed completion (0/1). Pass it when a single-pass scanner already
+# answered "did it reach its declared target", so we do not re-read the whole log to ask again.
 # Sets _OUT_NCCL_OK and _OUT_LLM_OK (0 or 1). Uses llm_label from the sourcing script if arg 6 omitted.
 validation_eval_suite_for_file() {
-  local f=$1 ongoing=$2 ar_bw=$3 aa_bw=$4 ag_bw=$5 llm_line
+  local f=$1 ongoing=$2 ar_bw=$3 aa_bw=$4 ag_bw=$5 llm_line finished="${7:-}"
   _validation_test_ensure_parsed
   _OUT_NCCL_OK=1
   ((WANT_AR)) && { [[ -n "${ar_bw:-}" ]] || _OUT_NCCL_OK=0; }
@@ -68,7 +73,11 @@ validation_eval_suite_for_file() {
   if ((WANT_LLM)); then
     _OUT_LLM_OK=0
     if [[ "${llm_line%%$'\t'*}" == "OK" ]]; then
-      if [[ "$ongoing" -eq 1 ]] || nemo_training_finished_log "$f"; then
+      if [[ "$ongoing" -eq 1 ]]; then
+        _OUT_LLM_OK=1
+      elif [[ -n "$finished" ]]; then
+        [[ "$finished" == "1" ]] && _OUT_LLM_OK=1
+      elif nemo_training_finished_log "$f"; then
         _OUT_LLM_OK=1
       fi
     fi
