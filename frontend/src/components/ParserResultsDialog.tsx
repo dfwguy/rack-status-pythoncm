@@ -126,13 +126,15 @@ interface NcclRow {
   busbw_series_by_collective?: Record<string, NcclPoint[]>;
   oob_ar_ag_aa?: string;
   /**
-   * Sweep-block counts from parser.sh nccl_sweep_counts(). ``started > concluded`` means the log
-   * was parsed while the job was still writing it, so the series is a partial read and the peak
-   * is meaningless. Without this a 1-point chart looks identical to a genuinely slow rack.
+   * Sweep-block counts from parser.sh nccl_sweep_counts(). ``started > concluded`` means blocks
+   * are missing, which is only "still running" while the job is queued — hence sweep_running.
+   * A finished job with a missing marker lost it to interleaved stdout, not to being incomplete.
    */
   sweep_blocks_started?: number;
   sweep_blocks_concluded?: number;
+  sweep_blocks_missing?: number;
   sweep_complete?: boolean;
+  sweep_running?: boolean;
 }
 
 interface StepPoint {
@@ -205,15 +207,30 @@ function normalizeNcclRow(row: RawNccl): NcclRow {
     sweep_blocks_concluded: Number.isFinite(Number(row.sweep_blocks_concluded))
       ? Number(row.sweep_blocks_concluded)
       : undefined,
+    sweep_blocks_missing: Number.isFinite(Number(row.sweep_blocks_missing))
+      ? Number(row.sweep_blocks_missing)
+      : undefined,
     // Older parsers (and non-nccl-tests logs) omit the counts entirely; absent means "no reason to
     // doubt it", so default to complete rather than warning on every log.
     sweep_complete: row.sweep_complete == null ? true : Boolean(row.sweep_complete),
+    sweep_running: Boolean(row.sweep_running),
   };
 }
 
 /** Rows whose sweep was still being written when the log was parsed. */
 function partialNcclRows(rows: NcclRow[] | undefined): NcclRow[] {
   return (rows ?? []).filter((r) => r.sweep_complete === false);
+}
+
+/**
+ * Rows from a FINISHED job that are missing a conclusion marker. Not a partial read: the job has
+ * left the queue, so re-parsing will never add the marker. At 576 nodes the collectives share one
+ * stdout and a marker can be lost to interleaving, so the numbers are real and worth showing.
+ */
+function markerGapNcclRows(rows: NcclRow[] | undefined): NcclRow[] {
+  return (rows ?? []).filter(
+    (r) => r.sweep_complete !== false && !r.sweep_running && (r.sweep_blocks_missing ?? 0) > 0,
+  );
 }
 
 function initChartsTzFromStorage(): string {
@@ -974,6 +991,7 @@ export function ParserResultsDialog({
   // sitting on a partial read until the operator notices. Stops as soon as it is complete.
   const partialRows = partialNcclRows(result?.data?.nccl_peak_out_of_place_busbw_gbps);
   const sweepPartial = partialRows.length > 0;
+  const markerGapRows = markerGapNcclRows(result?.data?.nccl_peak_out_of_place_busbw_gbps);
   useEffect(() => {
     if (!open || !sweepPartial || loading) return;
     const t = setTimeout(() => setRefreshNonce((n) => n + 1), PARTIAL_REPARSE_MS);
@@ -1165,6 +1183,24 @@ export function ParserResultsDialog({
                   `This sweep is still running — ${done} of ${started} block(s) finished, so the ` +
                   `${pts} point(s) below are a partial read and the peak is not the rack's result. ` +
                   `Re-checking every ${Math.round(PARTIAL_REPARSE_MS / 1000)}s; or press Refresh.`
+                );
+              })()}
+            </Banner>
+          </div>
+        )}
+        {/* Finished job, missing marker: the numbers stand. Say the marker is missing without
+            implying the run is incomplete, and do NOT poll — re-parsing cannot add it. */}
+        {!sweepPartial && markerGapRows.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <Banner status="info">
+              {(() => {
+                const r = markerGapRows[0];
+                const done = r?.sweep_blocks_concluded ?? 0;
+                const started = r?.sweep_blocks_started ?? 0;
+                return (
+                  `This job has finished, but only ${done} of ${started} collective(s) printed a ` +
+                  `completion marker. At this node count the ranks share one stdout and a marker ` +
+                  `can be lost to interleaving, so the results below are the run's own numbers.`
                 );
               })()}
             </Banner>

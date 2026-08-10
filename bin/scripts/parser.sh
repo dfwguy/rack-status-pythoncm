@@ -511,15 +511,26 @@ inv_classify() {
 
   if [[ "$_IV_READ" -eq 1 && "$_IV_BIN" -eq 0 && "$_IV_SIZE" =~ ^[0-9]+$ && "$_IV_SIZE" -gt 0 ]]; then
     [[ "$PROBE_CONTENT" != "0" ]] && doclass=1
+    # nvis_logscan already read every byte, so take its kinds and line count instead of sampling.
+    # The window below then only supplies head/tail PREVIEW lines, which a window can answer
+    # honestly. Classifying from one could not: it read a >16 MB file's first and last 2 MB, so a
+    # 973 MB log whose only NeMo markers sat at 98% depth was classified "nccl" and lost its
+    # Nemotron row entirely.
+    local _scan_kinds="" _scan_lines=""
+    if [[ -n "${SCAN_ROW[$f]:-}" ]]; then
+      _scan_kinds=$(printf '%s' "${SCAN_ROW[$f]}" | cut -f19)
+      _scan_lines=$(printf '%s' "${SCAN_ROW[$f]}" | cut -f20)
+      doclass=0
+    fi
     if [[ "$_IV_SIZE" -le "$PROBE_FULL_MAX" ]]; then
       scan_src="$f"
     else
-      # Huge file: read a head+tail window instead of gigabytes. Line count is then unknown.
+      # Big file: read a head+tail window for the preview lines instead of gigabytes.
       { head -c "$PROBE_WIN" -- "$f" 2>/dev/null; printf '\n'; tail -c "$PROBE_WIN" -- "$f" 2>/dev/null; } \
         >"$tmp_probe" 2>/dev/null || : >"$tmp_probe"
       scan_src="$tmp_probe"
       windowed=1
-      _IV_NOTE="${_IV_NOTE:+$_IV_NOTE; }read from ${PROBE_WIN}B head+tail window (file > ${PROBE_FULL_MAX}B)"
+      _IV_NOTE="${_IV_NOTE:+$_IV_NOTE; }preview from ${PROBE_WIN}B head+tail window (file > ${PROBE_FULL_MAX}B)"
     fi
     scanned=$(_inv_scan "$doclass" "$scan_src")
     if [[ -n "$scanned" ]]; then
@@ -529,6 +540,9 @@ inv_classify() {
         _IV_LINES="-"
       fi
     fi
+    # Whole-file answers win over whatever the preview pass happened to see.
+    [[ -n "$_scan_kinds" && "$_scan_kinds" != "-" ]] && ck="$_scan_kinds"
+    [[ "$_scan_lines" =~ ^[0-9]+$ ]] && _IV_LINES="$_scan_lines"
   fi
   nk=$(_inv_name_kinds "$base")
 
@@ -563,6 +577,14 @@ inv_emit() {
 }
 
 running_job_ids() {
+  # Explicit override, honoured even with --no-squeue: lets a caller that already knows which
+  # jobs are queued skip the squeue round trip, and lets tests drive "ongoing" deterministically.
+  # Whether a job is still running is what separates a sweep that is genuinely mid-write from one
+  # that merely lost a marker, so it has to be settable without a live scheduler.
+  if [[ -n "${NVIS_PARSER_RUNNING_JOBS:-}" ]]; then
+    printf '%s\n' "${NVIS_PARSER_RUNNING_JOBS//,/ }" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -u || true
+    return 0
+  fi
   if [[ "$USE_SQUEUE" -eq 0 ]]; then
     return 0
   fi
@@ -589,7 +611,44 @@ tmp_status=$(mktemp)
 tmp_mnub=$(mktemp)
 tmp_inv=$(mktemp)
 tmp_probe=$(mktemp)
-trap 'rm -f "$tmp_nccl" "$tmp_nccl_ar" "$tmp_llm" "$tmp_llm_steps" "$tmp_status" "$tmp_mnub" "$tmp_inv" "$tmp_probe"' EXIT
+tmp_scan=$(mktemp)
+tmp_series=$(mktemp -d)
+trap 'rm -f "$tmp_nccl" "$tmp_nccl_ar" "$tmp_llm" "$tmp_llm_steps" "$tmp_status" "$tmp_mnub" "$tmp_inv" "$tmp_probe" "$tmp_scan"; rm -rf "$tmp_series"' EXIT
+
+# ============================ ONE PASS PER FILE (nvis_logscan.py) =============================
+# The shell extractors below each opened the file again: nccl_busbw_csv, nccl_busbw_ext_csv,
+# nccl_oob_csv, nccl_sweep_counts, two series appenders, llm_stats_tsv (two greps),
+# nemo_training_finished_log, slurm_hard_fail, nemo_python_fatal_fail and the inventory scan —
+# about sixteen reads and twenty processes PER FILE. On a 973 MB log that measured 21 s; one
+# python pass does the same work in 15 s with a flat 13 MB RSS, and one process for the whole
+# batch instead of twenty per file.
+#
+# Worse than the cost, the old inventory path SAMPLED: files over PROBE_FULL_MAX were classified
+# from a head+tail window, so a marker in the middle of a big log was invisible — and the legacy
+# tables are gated on that classification.
+#
+# NVIS_PARSER_ENGINE=shell falls back to the per-function extractors. Keep it working: this runs
+# on live customer clusters and a bad scan must be one env var away from the old behaviour.
+PARSER_ENGINE="${NVIS_PARSER_ENGINE:-scan}"
+_SCANNER="${SCRIPT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}/nvis_logscan.py"
+declare -A SCAN_ROW
+if [[ "$PARSER_ENGINE" == "scan" ]]; then
+  if [[ -r "$_SCANNER" ]] && command -v python3 >/dev/null 2>&1 && ((${#log_files[@]})); then
+    if python3 "$_SCANNER" --tsv --series-dir "$tmp_series" "${log_files[@]}" >"$tmp_scan" 2>/dev/null; then
+      while IFS=$'\t' read -r _p _rest; do
+        [[ -n "$_p" ]] && SCAN_ROW["$_p"]="$_rest"
+      done <"$tmp_scan"
+    else
+      echo "${C_WARN}nvis_logscan failed; falling back to shell extractors${C_RESET}" >&2
+      PARSER_ENGINE="shell"
+    fi
+  else
+    PARSER_ENGINE="shell"
+  fi
+fi
+
+# Series files are named by a hash of the path so bash never has to quote a log name.
+_scan_series_key() { printf '%s' "$1" | sha1sum | cut -c1-16; }
 
 for _i in "${!log_files[@]}"; do
   f="${log_files[$_i]}"
@@ -634,16 +693,37 @@ for _i in "${!log_files[@]}"; do
       case ",$_IV_KINDS," in *,nccl,*) ;; *) want_nccl_row=0 ;; esac
       case ",$_IV_KINDS," in *,nemotron,*) ;; *) want_llm_row=0 ;; esac
     fi
-    bw=$(nccl_busbw_csv "$f")
-    IFS=',' read -r ar_bw aa_bw ag_bw <<<"$bw"
-    oob=$(nccl_oob_csv "$f")
+    _scan="${SCAN_ROW[$f]:-}"
+    if [[ -n "$_scan" ]]; then
+      # Field order is nvis_logscan.TSV_FIELDS minus the leading path.
+      IFS=$'\t' read -r ar_bw ag_bw aa_bw _rs _sr oob _s_started _s_concl \
+        _llm_status _llm_step _llm_tf _llm_sstd _llm_pstd _llm_mfu \
+        _steps_cur _steps_tot _slurm_fail _py_fatal _scan_kinds _scan_lines <<<"$_scan"
+      for _v in ar_bw ag_bw aa_bw oob; do
+        [[ "${!_v}" == "-" ]] && printf -v "$_v" '%s' ""
+      done
+      llm_line=$(printf '%s\t%s\t%s\t%s\t%s\t%s' \
+        "$_llm_status" "$_llm_step" "$_llm_tf" "$_llm_sstd" "$_llm_pstd" "$_llm_mfu")
+    else
+      bw=$(nccl_busbw_csv "$f")
+      IFS=',' read -r ar_bw aa_bw ag_bw <<<"$bw"
+      oob=$(nccl_oob_csv "$f")
+      llm_line=$(llm_label "$f")
+      _steps_cur="-" _steps_tot="-"
+    fi
     IFS=',' read -r oob_ar oob_aa oob_ag _oobx <<<"${oob},,,"
     oob_fmt="${oob_ar:----},${oob_ag:----},${oob_aa:----}"
 
     ongoing=0
     [[ -n "${RUNNING_SET[$jid]:-}" ]] && ongoing=1
-    llm_line=$(llm_label "$f")
-    validation_eval_suite_for_file "$f" "$ongoing" "$ar_bw" "$aa_bw" "$ag_bw" "$llm_line"
+    # Completion from the same pass that produced the numbers: reaching the target the run
+    # DECLARED is what finished means, so 50-step and 2010-step runs both count.
+    _finished=""
+    if [[ -n "$_scan" && "$_steps_tot" =~ ^[0-9]+$ && "$_steps_cur" =~ ^[0-9]+$ ]]; then
+      _finished=0
+      ((_steps_tot > 0 && _steps_cur >= _steps_tot && _steps_tot >= ${NEMO_TARGET_STEPS:-0})) && _finished=1
+    fi
+    validation_eval_suite_for_file "$f" "$ongoing" "$ar_bw" "$aa_bw" "$ag_bw" "$llm_line" "$_finished"
     nccl_ok=$_OUT_NCCL_OK
     llm_ok=$_OUT_LLM_OK
 
@@ -651,18 +731,41 @@ for _i in "${!log_files[@]}"; do
 
     # Table column order: all_reduce, all_gather, alltoall (log order is reduce → alltoall → gather).
     inv_tables="parser_flags"
+    _skey=""
+    [[ -n "$_scan" ]] && _skey=$(_scan_series_key "$f")
     if [[ "$want_nccl_row" -eq 1 ]]; then
       # Sweep-block counts travel with the row so a consumer can tell a partial read of a running
       # job from a finished one; without it a 1-point chart is indistinguishable from a slow rack.
-      _sweep_counts=$(nccl_sweep_counts "$f")
+      if [[ -n "$_scan" ]]; then
+        _sw_started="$_s_started" _sw_concl="$_s_concl"
+      else
+        _sweep_counts=$(nccl_sweep_counts "$f")
+        _sw_started="${_sweep_counts%%,*}" _sw_concl="${_sweep_counts##*,}"
+      fi
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$rack" "$jid" "${ar_bw:----}" "${ag_bw:----}" "${aa_bw:----}" "$oob_fmt" \
-        "${_sweep_counts%%,*}" "${_sweep_counts##*,}" >>"$tmp_nccl"
-      nccl_allreduce_series_append "$f" "$rack" "$jid" >>"$tmp_nccl_ar" || true
+        "$_sw_started" "$_sw_concl" >>"$tmp_nccl"
+      if [[ -n "$_skey" && -s "$tmp_series/$_skey.ar" ]]; then
+        awk -v r="$rack" -v j="$jid" -v OFS='\t' '{ print r, j, $1, $2 }' \
+          "$tmp_series/$_skey.ar" >>"$tmp_nccl_ar" || true
+      elif [[ -z "$_scan" ]]; then
+        nccl_allreduce_series_append "$f" "$rack" "$jid" >>"$tmp_nccl_ar" || true
+      fi
       inv_tables="nccl_peak_out_of_place_busbw_gbps,$inv_tables"
     fi
     if [[ "$want_llm_row" -eq 1 ]]; then
-      printf '%s\t%s\t%s\n' "$rack" "$jid" "$llm_line" >>"$tmp_llm"
-      llm_step_series_append "$f" "$rack" "$jid" >>"$tmp_llm_steps" || true
+      # Carry the run's own step budget so a 50-step perf run and a 2010-step soak are told
+      # apart in the report instead of one of them being written off as unfinished.
+      if [[ -z "$_scan" ]]; then
+        _llm_prog=$(nemo_iteration_progress_log "$f" 2>/dev/null || printf '%s' "- -")
+        _steps_cur="${_llm_prog%% *}" _steps_tot="${_llm_prog##* }"
+      fi
+      printf '%s\t%s\t%s\t%s\t%s\n' "$rack" "$jid" "$llm_line" "$_steps_cur" "$_steps_tot" >>"$tmp_llm"
+      if [[ -n "$_skey" && -s "$tmp_series/$_skey.steps" ]]; then
+        awk -v r="$rack" -v j="$jid" -v OFS='\t' '{ print r, j, $1, $2 }' \
+          "$tmp_series/$_skey.steps" >>"$tmp_llm_steps" || true
+      elif [[ -z "$_scan" ]]; then
+        llm_step_series_append "$f" "$rack" "$jid" >>"$tmp_llm_steps" || true
+      fi
       inv_tables="$inv_tables,nemotron_5h_56b_train_window"
     fi
     mnub_line=$(mnubergemm_stats_tsv "$f")
@@ -848,6 +951,11 @@ def main() -> None:
         "step_time_std",
         "perf_std",
         "mfu_percent",
+        # The run's own step budget, from the last "iteration <cur>/<tot>" marker. A run is
+        # finished when it reaches the target IT declared, so the report has to show which
+        # target that was: 50/50 and 2010/2010 are both complete runs, at different lengths.
+        "steps_completed",
+        "steps_target",
     ]
     st_fields = ["rack", "job_id", "ongoing", "nccl_ok", "llm_ok"]
 
@@ -882,6 +990,13 @@ def main() -> None:
         for k in ar_series:
             ar_series[k].sort(key=lambda x: int(x["size_bytes"]))
 
+        # ongoing comes from squeue (RUNNING_SET), keyed the same way as the tables.
+        ongoing_by: Dict[Tuple[str, str], bool] = {}
+        for r in st_rows:
+            if len(r) < 3:
+                continue
+            ongoing_by[(str(r[0]), str(r[1]))] = str(r[2]) == "1"
+
         nccl_dicts = [row_to_dict(r, nccl_fields) for r in nccl_rows]
         for d in nccl_dicts:
             key = (str(d.get("rack", "")), str(d.get("job_id", "")))
@@ -893,7 +1008,16 @@ def main() -> None:
             concluded = _as_int(d.get("sweep_blocks_concluded")) or 0
             d["sweep_blocks_started"] = started
             d["sweep_blocks_concluded"] = concluded
-            d["sweep_complete"] = started == 0 or concluded >= started
+            # A missing conclusion marker means "still running" ONLY while the job is actually
+            # queued. Once it has left the queue the sweep is as finished as it will ever be, and
+            # a lost marker is a gap in the log, not a running job: at 576 nodes / 2304 ranks the
+            # collectives share one stdout and lines arrive interleaved and spliced (job 140457
+            # concluded 2 of 3 blocks yet every step COMPLETED in Slurm). Reporting that as
+            # "still running" hid a finished 32-rack run behind a permanent progress banner.
+            missing = started - concluded if started > concluded else 0
+            d["sweep_blocks_missing"] = missing
+            d["sweep_complete"] = started == 0 or missing == 0 or not ongoing_by.get(key, False)
+            d["sweep_running"] = missing > 0 and ongoing_by.get(key, False)
 
         llm_dicts = [row_to_dict(r, llm_fields) for r in llm_rows]
         for d in llm_dicts:
@@ -1045,7 +1169,7 @@ render_tsv_box "$_hdr_nccl" "$tmp_nccl" | sed -E \
 
 echo
 echo "${C_SEP}==========${C_RESET} ${C_H1}Nemotron 5H 56B (LLM train window)${C_RESET} ${C_SEP}==========${C_RESET}"
-_hdr_llm=$'rack\tjob_id\tstatus\tstep_s\tTFLOPs/GPU\tSstd\tPstd\tMFU%'
+_hdr_llm=$'rack\tjob_id\tstatus\tstep_s\tTFLOPs/GPU\tSstd\tPstd\tMFU%\tsteps\ttarget'
 render_tsv_box "$_hdr_llm" "$tmp_llm" | sed -E \
   -e '/[|]/s/[|] OK([[:space:]]+)[|]/| '"${C_OK}"'OK'"${C_RESET}"'\1|/g' \
   -e '/[|]/s/[|] FAIL([[:space:]]+)[|]/| '"${C_FAIL}"'FAIL'"${C_RESET}"'\1|/g' \

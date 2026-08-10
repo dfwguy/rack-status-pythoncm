@@ -121,29 +121,61 @@ def test_missing_file_is_zeros(tmp_path):
 # --- the parser surfaces it on the row -----------------------------------------------------
 
 
-@requires_bash4
-@pytest.mark.parametrize("concluded,expect_complete", [(True, True), (False, False)])
-def test_parser_row_carries_sweep_complete(tmp_path, concluded, expect_complete):
-    """parser.sh must expose started/concluded and a derived sweep_complete per NCCL row."""
+def _parser_nccl_row(tmp_path, *, concluded: bool, running: str = "") -> dict:
     import json
 
     log = tmp_path / "cmods-NCCL-1Rack-p5-r01-18N-4242.txt"
     log.write_text(_block([(8, 0.0), (1 << 30, 700.0)], concluded=concluded), encoding="utf-8")
+    env = {**os.environ, "NO_COLOR": "1", "VALIDATION_TEST": "nccl_all_reduce"}
+    if running:
+        env["NVIS_PARSER_RUNNING_JOBS"] = running
     proc = subprocess.run(
         ["bash", str(SCRIPTS / "parser.sh"), "--json", "--no-squeue", "--no-cmsh", "--no-sinfo", str(log)],
         capture_output=True,
         text=True,
         timeout=240,
         check=False,
-        env={**os.environ, "NO_COLOR": "1", "VALIDATION_TEST": "nccl_all_reduce"},
+        env=env,
     )
     d = json.loads(proc.stdout)
     rows = d.get("nccl_peak_out_of_place_busbw_gbps") or []
     assert rows, "expected one NCCL row"
-    r = rows[0]
+    return rows[0]
+
+
+@requires_bash4
+def test_parser_row_carries_sweep_counts(tmp_path):
+    """parser.sh must expose started/concluded per NCCL row."""
+    r = _parser_nccl_row(tmp_path, concluded=True)
     assert r["sweep_blocks_started"] == 1
-    assert r["sweep_blocks_concluded"] == (1 if concluded else 0)
-    assert r["sweep_complete"] is expect_complete
+    assert r["sweep_blocks_concluded"] == 1
+    assert r["sweep_complete"] is True
+    assert r["sweep_blocks_missing"] == 0
+
+
+@requires_bash4
+def test_a_missing_marker_on_a_RUNNING_job_is_a_partial_read(tmp_path):
+    """The 130406 case: the job is still queued, so the series really is half-written."""
+    r = _parser_nccl_row(tmp_path, concluded=False, running="4242")
+    assert r["sweep_blocks_concluded"] == 0
+    assert r["sweep_blocks_missing"] == 1
+    assert r["sweep_running"] is True
+    assert r["sweep_complete"] is False
+
+
+@requires_bash4
+def test_a_missing_marker_on_a_FINISHED_job_is_a_marker_gap_not_a_partial_read(tmp_path):
+    """The 140457 case. The job has left the queue, so re-parsing can never add the marker.
+
+    At 576 nodes the collectives share one stdout and lines arrive interleaved and spliced, so a
+    conclusion marker can simply be lost. Calling that "still running" pinned a finished 32-rack
+    run behind a progress banner that would never clear.
+    """
+    r = _parser_nccl_row(tmp_path, concluded=False, running="")
+    assert r["sweep_blocks_concluded"] == 0
+    assert r["sweep_blocks_missing"] == 1, "the gap is still reported"
+    assert r["sweep_running"] is False
+    assert r["sweep_complete"] is True, "a finished job is not 'still running'"
 
 
 # --- the .out job id ----------------------------------------------------------------------
