@@ -661,12 +661,25 @@ def _tsv_row(rec: dict[str, Any]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Single-pass, bounded-memory validation log scanner.")
-    ap.add_argument("paths", nargs="+")
+    ap.add_argument("paths", nargs="*")
+    # A directory scan is capped at 4000 files, and 1020 paths already make a ~150 KB argv.
+    # Reading the list from a file keeps a full-fleet batch clear of ARG_MAX.
+    ap.add_argument("--paths-from", help="file with one log path per line ('-' for stdin)")
     ap.add_argument("--ndjson", action="store_true", help="one JSON record per line (streaming)")
     ap.add_argument("--tsv", action="store_true", help="one TSV scalar row per file (for parser.sh)")
     ap.add_argument("--series-dir", help="with --tsv, write per-file series TSVs into this dir")
     ap.add_argument("--no-inventory", action="store_true", help="skip kind/head/tail capture")
     args = ap.parse_args(argv)
+
+    paths = list(args.paths)
+    if args.paths_from == "-":
+        paths.extend(ln.strip() for ln in sys.stdin if ln.strip())
+    elif args.paths_from:
+        with open(args.paths_from, encoding="utf-8") as fh:
+            paths.extend(ln.strip() for ln in fh if ln.strip())
+    if not paths:
+        ap.error("no paths given (positional args or --paths-from)")
+    args.paths = paths
 
     inv = not args.no_inventory
     if args.tsv:

@@ -8,7 +8,7 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import CircularProgress from "@mui/material/CircularProgress";
-import { Text, Button, Banner, Tabs, Tag } from "@nvidia/foundations-react-core";
+import { Text, Button, Banner, Tabs, Tag, ProgressBar } from "@nvidia/foundations-react-core";
 import { Download } from "lucide-react";
 import Slider from "@mui/material/Slider";
 import MuiTooltip from "@mui/material/Tooltip";
@@ -184,6 +184,26 @@ interface AnalyticsViewProps {
   status?: RackStatusResponse | null;
 }
 
+/** How often to ask the server how far through the log corpus it is. */
+const ANALYTICS_POLL_MS = 1000;
+
+/** Live position of a running aggregate: one tick per log actually scanned. */
+interface AnalyticsProgress {
+  done: number;
+  total: number;
+  current: string;
+}
+
+interface AnalyticsJobStatus {
+  ok?: boolean;
+  state?: "running" | "done" | "collected" | "error";
+  done?: number;
+  total?: number;
+  current?: string;
+  error?: string;
+  payload?: AnalyticsPayload | null;
+}
+
 /** True when a stored % deviation exceeds the allowed absolute Δ (strictly outside tolerance). */
 function absDeltaExceeds(v: unknown, maxAbsPct: number): boolean {
   if (typeof v !== "number" || !Number.isFinite(v)) return false;
@@ -195,6 +215,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState<AnalyticsPayload | null>(null);
+  const [progress, setProgress] = useState<AnalyticsProgress | null>(null);
   /** Highlight table rows when |Δ%| is greater than this value (NCCL + Nemotron % tables only). */
   const [perfVariationMaxAbsPct, setPerfVariationMaxAbsPct] = useState(5);
   const [tab, setTab] = useState(RACK_TAB);
@@ -269,31 +290,61 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
     [rows]
   );
 
+  /**
+   * Start the aggregate as a job and poll it.
+   *
+   * A plain POST blocked for minutes on a large fleet with nothing to show for it. The server
+   * knows how many logs it is about to read, so poll for done/total and drive a real bar.
+   */
   const runAnalysis = useCallback(async () => {
     setLoading(true);
     setError("");
+    setProgress(null);
     try {
-      const res = await fetch("/api/analytics/aggregate", {
+      const start = await fetch("/api/analytics/aggregate-async", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         cache: "no-store",
         body: JSON.stringify({ log_dir: logDir || undefined, rows: bodyRows }),
       });
-      if (res.status === 401) {
+      if (start.status === 401) {
         window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
         return;
       }
-      const json = (await res.json()) as AnalyticsPayload;
-      if (!res.ok || !json.ok) {
-        throw new Error(json.error || `HTTP ${res.status}`);
+      const started = (await start.json()) as { ok?: boolean; job_id?: string; error?: string };
+      if (!start.ok || !started.ok || !started.job_id) {
+        throw new Error(started.error || `HTTP ${start.status}`);
       }
-      setData(json);
+
+      for (;;) {
+        await new Promise((r) => setTimeout(r, ANALYTICS_POLL_MS));
+        const res = await fetch(
+          `/api/analytics/aggregate-status?job_id=${encodeURIComponent(started.job_id)}`,
+          { credentials: "same-origin", cache: "no-store" },
+        );
+        if (res.status === 401) {
+          window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+          return;
+        }
+        const st = (await res.json()) as AnalyticsJobStatus;
+        if (!res.ok || !st.ok) throw new Error(st.error || `HTTP ${res.status}`);
+        if (st.state === "running") {
+          setProgress({ done: st.done ?? 0, total: st.total ?? 0, current: st.current ?? "" });
+          continue;
+        }
+        if (st.state === "error") throw new Error(st.error || "analysis failed");
+        const json = st.payload;
+        if (!json || !json.ok) throw new Error(json?.error || "analysis returned no data");
+        setData(json);
+        return;
+      }
     } catch (e) {
       setData(null);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   }, [logDir, bodyRows]);
 
@@ -625,11 +676,11 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
       <>
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
         <Text kind="body/regular/md" style={{ display: "block", marginBottom: 12, color: "var(--text-color-secondary)" }}>
-          Runs{" "}
+          Reads every relevant log once with{" "}
           <Box component="span" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>
-            parser.sh --json
+            nvis_logscan
           </Box>{" "}
-          on many logs — can take several minutes on large fleets. Uses the current log directory
+          and reports progress per file. Uses the current log directory
           {logDir ? ` (${logDir})` : " (server default)"} and the latest rack status rows you have loaded.
           The server keeps the last successful aggregate under{" "}
           <Box component="span" sx={{ fontFamily: "monospace", fontSize: "0.85em" }}>
@@ -645,10 +696,46 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
             No rack rows loaded yet — open Single Rack so status loads, then return here.
           </Text>
         )}
+        {/* Determinate once the server has enumerated the corpus; a spinner only for the gap
+            before the first tick, when the total is genuinely not known yet. */}
         {loading && (
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 2 }}>
-            <CircularProgress size={22} />
-            <Text kind="body/regular/md">Parsing logs…</Text>
+          <Box sx={{ mt: 2 }}>
+            {progress && progress.total > 0 ? (
+              <>
+                <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.5 }}>
+                  <Text kind="body/regular/md">
+                    Scanning logs — {progress.done} of {progress.total}
+                  </Text>
+                  <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                    {Math.round((progress.done / progress.total) * 100)}%
+                  </Text>
+                </Box>
+                <ProgressBar
+                  value={Math.round((progress.done / progress.total) * 100)}
+                  aria-label="Analytics log scan progress"
+                />
+                {progress.current && (
+                  <Text
+                    kind="mono/sm"
+                    style={{
+                      display: "block",
+                      marginTop: 6,
+                      color: "var(--text-color-secondary)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {progress.current}
+                  </Text>
+                )}
+              </>
+            ) : (
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <CircularProgress size={22} />
+                <Text kind="body/regular/md">Finding logs…</Text>
+              </Box>
+            )}
           </Box>
         )}
       </Paper>

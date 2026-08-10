@@ -30,6 +30,7 @@ import os
 import shlex
 import subprocess
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 # A command is either a shell string or an argv list.
@@ -89,6 +90,28 @@ class Process:
         out, err = self._proc.communicate(timeout=timeout)
         self.returncode = self._proc.returncode
         return (out or ""), (err or "")
+
+    def iter_stdout(self) -> Iterator[str]:
+        """Yield stdout a line at a time as the process produces it.
+
+        ``communicate()`` holds the entire output until exit, which is fine for a short command
+        and wrong for one that reports progress: a batch log scan emits a record per file over
+        tens of seconds, and buffering them all means the caller learns everything at the end.
+        Consumes the pipe to completion, then sets ``returncode``.
+        """
+        stdout = self._proc.stdout
+        if stdout is None:
+            return
+        try:
+            for line in stdout:
+                yield line.rstrip("\n")
+        finally:
+            try:
+                stdout.close()
+            except OSError:
+                pass
+            self._proc.wait()
+            self.returncode = self._proc.returncode
 
     def kill(self) -> None:
         try:
