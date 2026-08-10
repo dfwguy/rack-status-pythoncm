@@ -3898,19 +3898,30 @@ def _logscan_batch(
         return out
     script = str(Path(SCRIPTS_DIR) / "nvis_logscan.py")
     total = len(paths)
+
+    # The list goes in a file on the host, not on the command line and not down stdin:
+    # popen_on_host does not open a stdin pipe, and 1020 paths is a ~150 KB argv.
+    listing = f"/tmp/nvis-logscan-{uuid.uuid4().hex}.txt"
+    err = host_exec.write_bytes(listing, ("\n".join(paths) + "\n").encode("utf-8"))
+    if err:
+        _logger.warning("nvis_logscan batch could not stage its path list: %s", err)
+        return out
+
     try:
         proc = host_exec.popen_on_host(
-            f"python3 {shlex.quote(script)} --ndjson --no-inventory --paths-from -"
+            f"python3 {shlex.quote(script)} --ndjson --no-inventory "
+            f"--paths-from {shlex.quote(listing)}"
         )
     except (OSError, ValueError) as e:
         _logger.warning("nvis_logscan batch could not start: %s", e)
         return out
 
+    # Publish the denominator before the first record: the operator should see "0 of 1020"
+    # immediately rather than a spinner until the first file happens to finish.
+    if on_progress:
+        on_progress(0, total, "")
+
     try:
-        stdin = getattr(proc, "_proc", None)
-        if stdin is not None and stdin.stdin is not None:
-            stdin.stdin.write("\n".join(paths) + "\n")
-            stdin.stdin.close()
         done = 0
         for line in proc.iter_stdout():
             line = line.strip()
@@ -3937,6 +3948,10 @@ def _logscan_batch(
             proc.kill()
         except Exception:  # noqa: BLE001 - already finished is the normal case
             pass
+        try:
+            host_exec.run_on_host(["rm", "-f", listing], timeout=30)
+        except Exception:  # noqa: BLE001 - a stray temp file is not worth failing the run
+            _logger.debug("could not remove %s", listing)
     return out
 
 
