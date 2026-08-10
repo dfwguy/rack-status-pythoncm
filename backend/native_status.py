@@ -28,6 +28,7 @@ import re
 import shlex
 import subprocess
 import threading
+import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
@@ -1267,6 +1268,8 @@ class NativeRackTableState:
         "log_thread",
         "per_path_probe",
         "racks",
+        "racks_refresh_lock",
+        "racks_refreshed_monotonic",
         "sinfo_counts",
         "sinfo_done",
         "sinfo_thread",
@@ -1277,6 +1280,8 @@ class NativeRackTableState:
         self.log_dir = _host_resolve(log_dir)
         self.lock = threading.RLock()
         self.racks: list[str] = []
+        self.racks_refresh_lock = threading.Lock()
+        self.racks_refreshed_monotonic = 0.0
         self.ct_by_rack: dict[str, str] = {}
         self.sinfo_counts: dict[tuple[str, str], int] = {}
         self.per_path_probe: dict[str, dict[str, Any]] = {}
@@ -1294,9 +1299,25 @@ class NativeRackTableState:
         self.last_errors: list[str] = []
 
     def refresh_racks_blocking(self) -> None:
-        racks = _cmsh_rack_list()
-        with self.lock:
-            self.racks = racks
+        """Refresh slow-changing BCM inventory at most once per configured TTL.
+
+        Device state still refreshes on the normal status cadence. Keeping the
+        last good rack inventory on a transient cmsh failure prevents an empty
+        table and avoids multiplying CMDaemon work across concurrent readers.
+        Set RACK_NATIVE_RACK_LIST_TTL_SEC=0 only for diagnostics.
+        """
+        ttl = max(0, _env_int("RACK_NATIVE_RACK_LIST_TTL_SEC", 900))
+        with self.racks_refresh_lock:
+            now = time.monotonic()
+            with self.lock:
+                if self.racks and ttl > 0 and now - self.racks_refreshed_monotonic < ttl:
+                    return
+            racks = _cmsh_rack_list()
+            if not racks:
+                return
+            with self.lock:
+                self.racks = racks
+                self.racks_refreshed_monotonic = now
 
     def _worker_ds(self) -> None:
         try:
