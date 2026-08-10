@@ -367,7 +367,10 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
                   the table above already carries each node's verdict and reason. */}
               <Collapsible
                 slotTrigger={
-                  <Button asChild kind="tertiary" color="neutral" size="small">
+                  // Secondary (bordered, neutral text) rather than tertiary: this dialog is a
+                  // wall of tables and log text, and a borderless blue toggle reads as a label
+                  // rather than a control. The border is the affordance.
+                  <Button asChild kind="secondary" color="neutral" size="small">
                     <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                       {`Per-node checks (${rows.length} node${rows.length === 1 ? "" : "s"})`}
                       <AnimatedChevron />
@@ -454,10 +457,21 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
               )}
               <Box sx={{ display: "flex", flexDirection: "column", gap: 1, alignItems: "flex-start" }}>
                 {status?.stdout ? (
-                  <CollapsibleLog text={status.stdout} label="preflight output" maxHeight={420} />
+                  <CollapsibleLog
+                    text={status.stdout}
+                    label="preflight output"
+                    maxHeight={420}
+                    triggerKind="secondary"
+                  />
                 ) : null}
                 {status?.stderr ? (
-                  <CollapsibleLog text={status.stderr} label="stderr" tone="error" maxHeight={240} />
+                  <CollapsibleLog
+                    text={status.stderr}
+                    label="stderr"
+                    tone="error"
+                    maxHeight={240}
+                    triggerKind="secondary"
+                  />
                 ) : null}
               </Box>
             </Card>

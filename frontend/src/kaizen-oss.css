@@ -2,6 +2,20 @@
  * Kaizen UI OSS Component Styles
  * These provide the visual definitions for class names output by @nvidia/foundations-react-core.
  * Based on the Kaizen UI Foundations design system CSS variables and typography scale.
+ *
+ * SHRINKING ON PURPOSE — do not add to this file.
+ * It was hand-written when KUI's real CSS was only reachable from the webassets CDN. Since the
+ * authentic stylesheets were vendored into src/styles/kaizen/, everything here is a duplicate
+ * that *overrides* them: main.tsx imports this file last, and these plain single-class selectors
+ * beat KUI's deliberately zero-specificity `:where()` rules. That is how `kind="tertiary"` came
+ * to render blue (a local --accent-blue guess) instead of KUI's --text-color-primary.
+ *
+ * What remains is being retired block by block, verified against the class names the installed
+ * package actually emits. Blocks for components KUI has since renamed (Banner, Divider,
+ * TextInput, ThemeProvider) were removed as dead code, along with variants KUI no longer has
+ * (Badge outline/blue, StatusIndicator red/purple/teal/medium). Text and Badge are the remaining
+ * live overrides; dropping them re-scales app-wide typography and the tag palette, so they need
+ * a visual pass rather than a delete.
  */
 
 /* ============================================================================
@@ -116,86 +130,9 @@
 /* Underline */
 .nv-text--underline { text-decoration: underline; }
 
-/* ============================================================================
-   BUTTON COMPONENT
-   ============================================================================ */
-
-.nv-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border-radius: 4px;
-  font-weight: 600;
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: background-color 150ms, border-color 150ms, color 150ms;
-  white-space: nowrap;
-}
-
-.nv-button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.nv-button--size-tiny { padding: 4px 8px; font-size: 11px; }
-.nv-button--size-small { padding: 6px 12px; font-size: 12px; }
-.nv-button--size-medium { padding: 8px 16px; font-size: 14px; }
-.nv-button--size-large { padding: 12px 24px; font-size: 16px; }
-
-.nv-button--kind-primary {
-  background: var(--color-brand);
-  color: #000;
-  border-color: var(--color-brand);
-}
-.nv-button--kind-primary:hover:not(:disabled) {
-  background: var(--color-brand-hover);
-  border-color: var(--color-brand-hover);
-}
-
-.nv-button--kind-secondary {
-  background: transparent;
-  color: var(--text-primary);
-  border-color: var(--border-base);
-}
-.nv-button--kind-secondary:hover:not(:disabled) {
-  background: var(--bg-muted);
-}
-
-.nv-button--kind-tertiary {
-  background: transparent;
-  color: var(--accent-blue);
-  border-color: transparent;
-  padding-left: 4px;
-  padding-right: 4px;
-}
-.nv-button--kind-tertiary:hover:not(:disabled) {
-  background: var(--bg-muted);
-}
-
-.nv-button--color-brand {
-  background: var(--color-brand);
-  color: #000;
-  border-color: var(--color-brand);
-}
-.nv-button--color-brand:hover:not(:disabled) {
-  background: var(--color-brand-hover);
-}
-
-.nv-button--color-danger {
-  background: #e52020;
-  color: #fff;
-  border-color: #e52020;
-}
-.nv-button--color-danger:hover:not(:disabled) {
-  background: #c21e1e;
-}
-
-.nv-button--color-neutral {
-  /* default button styling applies */
-}
+/* BUTTON — removed. src/styles/kaizen/components.css styles every .nv-button--* class the
+   package emits, and honours the `color` prop (brand/neutral/danger), which the rules here
+   silently defeated. */
 
 /* ============================================================================
    BADGE COMPONENT
@@ -214,20 +151,10 @@
   border: 1px solid transparent;
 }
 
-/* Outline (default) */
-.nv-badge--kind-outline { background: transparent; }
-.nv-badge--kind-outline.nv-badge--color-green { color: #86efac; border-color: #22c55e40; }
-.nv-badge--kind-outline.nv-badge--color-red { color: #fca5a5; border-color: #ef444440; }
-.nv-badge--kind-outline.nv-badge--color-yellow { color: #fde047; border-color: #eab30840; }
-.nv-badge--kind-outline.nv-badge--color-blue { color: #7dd3fc; border-color: #38bdf840; }
-.nv-badge--kind-outline.nv-badge--color-purple { color: #d8b4fe; border-color: #a855f740; }
-.nv-badge--kind-outline.nv-badge--color-teal { color: #5eead4; border-color: #14b8a640; }
-
-/* Solid */
+/* Solid. Badge in KUI 1.0.0 has no outline kind and no blue, so those rules were dead. */
 .nv-badge--kind-solid.nv-badge--color-green { background: #14532d; color: #86efac; }
 .nv-badge--kind-solid.nv-badge--color-red { background: #450a0a; color: #fca5a5; }
 .nv-badge--kind-solid.nv-badge--color-yellow { background: #422006; color: #fde047; }
-.nv-badge--kind-solid.nv-badge--color-blue { background: #0c4a6e; color: #7dd3fc; }
 .nv-badge--kind-solid.nv-badge--color-purple { background: #3b0764; color: #d8b4fe; }
 .nv-badge--kind-solid.nv-badge--color-teal { background: #042f2e; color: #5eead4; }
 
@@ -235,11 +162,6 @@
 [data-theme="light"] .nv-badge--kind-solid.nv-badge--color-green { background: #dcfce7; color: #14532d; }
 [data-theme="light"] .nv-badge--kind-solid.nv-badge--color-red { background: #fee2e2; color: #991b1b; }
 [data-theme="light"] .nv-badge--kind-solid.nv-badge--color-yellow { background: #fef9c3; color: #854d0e; }
-[data-theme="light"] .nv-badge--kind-solid.nv-badge--color-blue { background: #e0f2fe; color: #0c4a6e; }
-[data-theme="light"] .nv-badge--kind-outline.nv-badge--color-green { color: #15803d; border-color: #22c55e60; }
-[data-theme="light"] .nv-badge--kind-outline.nv-badge--color-red { color: #dc2626; border-color: #ef444460; }
-[data-theme="light"] .nv-badge--kind-outline.nv-badge--color-yellow { color: #a16207; border-color: #eab30860; }
-[data-theme="light"] .nv-badge--kind-outline.nv-badge--color-blue { color: #0369a1; border-color: #38bdf860; }
 
 /* ============================================================================
    STATUS INDICATOR
@@ -251,87 +173,18 @@
   flex-shrink: 0;
 }
 
+/* KUI 1.0.0 offers small/large/xlarge/xxlarge and blue/green/yellow only; the medium, red,
+   purple and teal rules that used to sit here matched nothing. */
 .nv-status-indicator--size-small { width: 8px; height: 8px; }
-.nv-status-indicator--size-medium { width: 10px; height: 10px; }
 .nv-status-indicator--size-large { width: 14px; height: 14px; }
 
-.nv-status-indicator--color-red { background: #ef4444; }
 .nv-status-indicator--color-green { background: #22c55e; }
 .nv-status-indicator--color-yellow { background: #eab308; }
 .nv-status-indicator--color-blue { background: #3b82f6; }
-.nv-status-indicator--color-purple { background: #a855f7; }
-.nv-status-indicator--color-teal { background: #14b8a6; }
 
-/* ============================================================================
-   TEXT INPUT
-   ============================================================================ */
-
-.nv-text-input {
-  display: flex;
-  align-items: center;
-  border: 1px solid var(--border-base);
-  border-radius: 4px;
-  background: var(--bg-primary);
-  transition: border-color 150ms;
-}
-
-.nv-text-input:focus-within {
-  border-color: var(--accent-blue);
-}
-
-.nv-text-input input,
-.nv-text-input-element {
-  width: 100%;
-  padding: 8px 12px;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--text-primary);
-  background: transparent;
-  border: none;
-  outline: none;
-}
-
-.nv-text-input input::placeholder {
-  color: var(--text-muted);
-}
-
-/* ============================================================================
-   BANNER
-   ============================================================================ */
-
-.nv-banner {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-radius: 6px;
-  font-size: 14px;
-  border: 1px solid;
-}
-
-.nv-banner--status-error {
-  background: var(--status-danger-bg);
-  color: var(--status-danger-fg);
-  border-color: #7f1d1d;
-}
-
-.nv-banner--status-warning {
-  background: var(--status-warning-bg);
-  color: var(--status-warning-fg);
-  border-color: #854d0e40;
-}
-
-.nv-banner--status-info {
-  background: var(--status-info-bg);
-  color: var(--status-info-fg);
-  border-color: #0c4a6e40;
-}
-
-.nv-banner--status-success {
-  background: var(--status-success-bg);
-  color: var(--status-success-fg);
-  border-color: #14532d;
-}
+/* TEXT INPUT and BANNER — removed. KUI 1.0.0 renamed these to .nv-text-input-root and
+   .nv-banner-root / .nv-banner-content, so the old flat class names styled nothing; both
+   components have been rendering from the vendored KUI CSS for some time. */
 
 /* ============================================================================
    SKELETON
@@ -348,15 +201,7 @@
   50% { opacity: 0.4; }
 }
 
-/* ============================================================================
-   DIVIDER
-   ============================================================================ */
-
-.nv-divider {
-  border: none;
-  border-top: 1px solid var(--border-base);
-  margin: 0;
-}
+/* DIVIDER — removed; KUI 1.0.0 renamed it to .nv-divider-root / .nv-divider-element. */
 
 /* ============================================================================
    TABS
@@ -405,14 +250,5 @@
   z-index: 9999;
 }
 
-/* ============================================================================
-   THEME PROVIDER
-   ============================================================================ */
-
-.nv-theme--dark {
-  color-scheme: dark;
-}
-
-.nv-theme--light {
-  color-scheme: light;
-}
+/* THEME PROVIDER — removed. The package never emits .nv-theme--dark/--light; KUI's own
+   ThemeProvider sets color-scheme itself. */
