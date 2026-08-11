@@ -219,6 +219,28 @@ def test_scan_record_is_shaped_like_parser_json(app_module, tmp_path):
     assert nccl["sweep_running"] is False
 
 
+def test_the_batch_lookup_path_actually_runs(app_module, tmp_path):
+    """Exercise _parser_json_for_log_path THROUGH the batch, not just the shaping helper.
+
+    Testing the shaper alone missed a real break: the surrounding lookup called a module-level
+    naming function as if it were a method, so every batch hit raised and the whole aggregate
+    failed at 100% with 'NvisNaming object has no attribute job_id_from_log_basename'.
+    """
+    p = tmp_path / "cmods-NEMO-1Rack-p05-r01-18N-4242.txt"
+    p.write_text(_steps(30), encoding="utf-8")
+    rec = logscan.scan(str(p), inventory=False)
+
+    app_module._analytics_scan_ctx.batch = {str(app_module._rpath(p)): rec}
+    try:
+        parsed, err = app_module._parser_json_for_log_path(tmp_path, p)
+    finally:
+        app_module._analytics_scan_ctx.batch = None
+
+    assert err is None
+    assert parsed and parsed.get("from_logscan") is True
+    assert parsed["nemotron_5h_56b_train_window"][0]["job_id"] == "4242"
+
+
 def test_missing_measurements_shape_as_dashes(app_module, tmp_path):
     """parser.sh renders "no result" as ---; the pickers and the UI both expect that."""
     p = tmp_path / "empty.txt"

@@ -11606,7 +11606,7 @@ def _parser_json_for_log_path(log_dir: Path, log_path: Path) -> tuple[dict | Non
             # Best-effort only: both pick helpers fall back to rows[0], and a batch payload
             # carries exactly one row, so a multirack basename with no single rack id is fine.
             rack = _rack_id_from_log_basename(base) or ""
-            jid = _nvis_naming().job_id_from_log_basename(base) or "?"
+            jid = _jobid_from_nemo_log_basename(base) or "?"
             parsed = _parser_json_from_scan(rec, rack, jid)
             try:
                 if _parser_json_has_usable_rows(parsed):
