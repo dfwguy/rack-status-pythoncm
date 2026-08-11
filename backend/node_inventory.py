@@ -54,9 +54,19 @@ DEVIATION_IB_MAC = (
 )
 
 
-#: Concurrent SSH hops for the sweep. The default stays modest so a fleet sweep does not trip a
-#: gateway's MaxStartups; at ~2 s per node, 32 workers put a 2000-node fleet at about 2 minutes.
-DEFAULT_MAX_WORKERS = 32
+#: Concurrent SSH hops for the sweep, bounded by the head's sshd, not by our patience.
+#:
+#: Every hop is a session channel multiplexed over one ControlMaster connection to the head, so
+#: the real ceiling is that host's ``MaxSessions`` — unset on Nscale TX, therefore the OpenSSH
+#: default of 10. Running 32 workers was three times over it: sessions past the limit came back
+#: "Session open refused by peer", and because the whole fleet was queued behind the same master
+#: the two built-in retries could not drain fast enough. A sweep silently lost 655 of 2013 nodes
+#: that way, and the earlier run that lost only 4 was luck, not correctness.
+#:
+#: 8 leaves headroom for the app's other traffic on the same master. It costs time — roughly
+#: 8 minutes for 2000 nodes at ~2 s each — which is the right trade for a customer deliverable
+#: that now reports its own progress. Raise it only alongside the head's MaxSessions.
+DEFAULT_MAX_WORKERS = 8
 
 
 def collect_fleet(

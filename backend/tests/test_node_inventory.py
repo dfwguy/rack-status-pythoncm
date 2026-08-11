@@ -216,6 +216,37 @@ class TestBuildInventory:
         assert [n["hostname"] for n in inv["nodes"]] == ["ink50-dh01-d01-18", "ink50-dh01-d01-99"]
 
 
+class TestSweepConcurrency:
+    def test_the_default_stays_under_a_stock_sshd_max_sessions(self):
+        """Every hop is a channel on one ControlMaster, so the head's MaxSessions is the ceiling.
+
+        OpenSSH defaults MaxSessions to 10 and Nscale TX does not override it. A default above
+        that silently drops nodes with "Session open refused by peer" — a real sweep lost 655
+        of 2013 that way — and the loss is invisible in the report unless someone reads the
+        deviation line.
+        """
+        assert node_inventory.DEFAULT_MAX_WORKERS <= 10
+
+    def test_the_worker_count_is_overridable_for_a_head_tuned_higher(self, monkeypatch):
+        monkeypatch.setenv("NVIS_INVENTORY_WORKERS", "24")
+        seen = {}
+
+        def _fake_fanout(_base, nodes, _cmd, **kw):
+            seen.update(kw)
+            return []
+
+        import sys
+        import types
+
+        monkeypatch.setitem(sys.modules, "transport",
+                            types.SimpleNamespace(fanout=_fake_fanout))
+        monkeypatch.setitem(sys.modules, "host_exec",
+                            types.SimpleNamespace(role_root=lambda _r: "/s",
+                                                  connection=lambda _p: object()))
+        node_inventory.collect_fleet(["n1"])
+        assert seen["max_workers"] == 24
+
+
 class TestAgainstTheRealSchema:
     """The point of all of this: the block must satisfy the contract we ship against."""
 
