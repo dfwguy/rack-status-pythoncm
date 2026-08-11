@@ -3,6 +3,8 @@
 > **RESOLVED 2026-08-05 — 115 nodes remediated by AIC + Dell** via `ClearOOBSetPoint` +
 > `PATCH PowerLimitWatts`, unlocked by the **Dell iDRAC Datacenter License** (the missing license was
 > why every Redfish write previously returned HTTP 500). The tag lists below are historical.
+> Operator runbook for the license gate:
+> [`DELL_IDRAC_DATACENTER_LICENSE_HGX.md`](DELL_IDRAC_DATACENTER_LICENSE_HGX.md).
 >
 > **6 trays still capped** as of 2026-08-05 22:45 UTC, verified in band and over Redfish:
 >

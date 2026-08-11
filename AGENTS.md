@@ -19,6 +19,7 @@ Read these before doing any work — they apply to every task:
 - @.cursor/rules/dcgm-mndiag-mnubergemm.mdc — DCGM `mndiag` / `mnubergemm` gotchas
 - @.cursor/rules/bcm-prolog-rogueprocess.mdc — BCM Slurm "Prolog error" drain root cause
 - @.cursor/rules/multirack-nccl-hcoll-nvls.mdc — multi-rack NCCL/MPI: HCOLL abort + NVLS cliqueId hang
+- @.cursor/rules/dell-idrac-datacenter-license-hgx.mdc — Dell HGX iDRAC Datacenter license gates GPU OOB power APIs
 
 ## Read when relevant (task-scoped)
 

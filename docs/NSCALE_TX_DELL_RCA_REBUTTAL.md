@@ -5,6 +5,7 @@ Full investigation: `NSCALE_TX_GB300_SLOT0_POWER_CAP.md`
 
 > **RESOLVED 2026-08-05 — do not send this rebuttal as-is.** AIC + Dell fixed 115 nodes using
 > `ClearOOBSetPoint` + `PATCH PowerLimitWatts` after applying the **Dell iDRAC Datacenter License**.
+> See also [`DELL_IDRAC_DATACENTER_LICENSE_HGX.md`](DELL_IDRAC_DATACENTER_LICENSE_HGX.md).
 > The HTTP 500 documented at length below was **the license gate**, not a broken request handler —
 > iDRAC returned `InternalError` where it should have returned a 402/403 license error. The
 > conformance argument is still valid as a *defect report about the error code*, but the endpoints

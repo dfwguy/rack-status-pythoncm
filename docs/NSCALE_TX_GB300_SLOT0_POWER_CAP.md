@@ -4,6 +4,10 @@
 
 ## *** RESOLVED 2026-08-05 — the blocker was a missing Dell iDRAC Datacenter License ***
 
+> **Canonical operator/agent runbook (reuse on any Dell HGX site):**
+> [`DELL_IDRAC_DATACENTER_LICENSE_HGX.md`](DELL_IDRAC_DATACENTER_LICENSE_HGX.md)
+> · agent rule: [`.cursor/rules/dell-idrac-datacenter-license-hgx.mdc`](../.cursor/rules/dell-idrac-datacenter-license-hgx.mdc)
+
 **AIC + Dell remediated 115 nodes.** The fix was exactly the route this document identified —
 `ClearOOBSetPoint` + `PATCH PowerLimitWatts` — and the reason every one of our attempts returned
 **HTTP 500** was that **those Redfish endpoints require the Dell iDRAC Datacenter License**, which
@@ -17,6 +21,13 @@ broken; it was **unlicensed**. iDRAC reported a licensing failure as
 message**, which is what sent us down the wrong path. Everything below about DSP0266 conformance
 still stands as a defect report — returning 500 for "feature not licensed" is wrong and should be
 filed — but it was never a functional dead end.
+
+**Design note (HGX vs DGX):** this license gate is a **Dell iDRAC SKU decision on HGX trays**.
+NVIDIA DGX appliances with the same GB300 silicon do not put OOB GPU power clear/set behind a
+third-party BMC Datacenter entitlement. Treat missing Datacenter + Redfish 500 as a known
+product behavior first — not as “Redfish is broken” — then install the tag-bound license and
+retry. The 699 W setpoint itself was a separate provisioning write; Datacenter only unlocks the
+APIs that clear it.
 
 Corollary: **check licensing before concluding a Redfish endpoint is defective.** On Dell, the
 Datacenter (not Enterprise) license gates GPU/HGX power management. Verify with

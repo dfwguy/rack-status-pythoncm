@@ -5,6 +5,8 @@
 > the reason every write in this document returned HTTP 500. 6 trays remain capped and the
 > provisioning writer is still unidentified. Current status in
 > [`NSCALE_TX_GB300_SLOT0_POWER_CAP.md`](NSCALE_TX_GB300_SLOT0_POWER_CAP.md).
+> Reusable checklist (any Dell HGX site):
+> [`DELL_IDRAC_DATACENTER_LICENSE_HGX.md`](DELL_IDRAC_DATACENTER_LICENSE_HGX.md).
 
 **Date:** 2026-07-31 · **Cluster:** Nscale TX / `ink50-dh01` · **Node:** `ink50-dh01-i05-30`
 (service tag `9TBHKK4`, BMC `10.40.149.12`) · **GPU asked about:** PCI `00000009:06:00.0` = `GPU_1`

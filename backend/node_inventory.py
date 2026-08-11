@@ -204,6 +204,7 @@ _BASELINE_READERS: dict[tuple[str, str], Callable[[dict[str, Any]], Any]] = {
     ("nic", "model"): lambda r: r["nic"].get("model"),
     ("nic", "firmware"): lambda r: _first_nic(r, "firmware"),
     ("nic", "ofed_version"): lambda r: r["nic"].get("ofed_version"),
+    ("bmc", "firmware"): lambda r: (r.get("bmc") or {}).get("firmware"),
     ("software", "os"): lambda r: r["host"].get("os"),
     ("software", "kernel"): lambda r: r["host"].get("kernel"),
     ("software", "dcgm_version"): lambda r: r["software"].get("dcgm_version"),
@@ -354,7 +355,10 @@ def build_inventory(
         "host": {"bios_version": (baseline.get("host") or {}).get("bios_version") or TBD},
         "bmc": {
             "model": (fabric or {}).get("bmc_model") or TBD,
-            "firmware": (fabric or {}).get("bmc_firmware") or TBD,
+            # The fleet's modal controller firmware, measured per node by ipmitool. Nodes that
+            # disagree with it surface individually in their firmware_overrides.
+            "firmware": (baseline.get("bmc") or {}).get("firmware")
+            or (fabric or {}).get("bmc_firmware") or TBD,
         },
         "nic": {
             "model": (baseline.get("nic") or {}).get("model") or TBD,
