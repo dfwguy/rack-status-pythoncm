@@ -116,6 +116,61 @@ class TestTestResults:
         assert net["acceptance_criteria"]["thresholds"]["node_pass_rate_min_pct"] == 50.0
         assert node_report.validate(relaxed) == []
 
+    def test_per_node_names_every_node_so_a_reader_can_act_on_a_failure(self, report):
+        """The aggregate says "1 failed"; only per_node says which one.
+
+        The schema names per_node[] in its own description of measurements, and a report that
+        withholds it forces the reader back to the cluster to find out what broke.
+        """
+        net = next(t for t in report["test_results"] if t["test_id"] == "NET-01")
+        per_node = net["measurements"]["per_node"]
+        assert [e["node"] for e in per_node] == [
+            "ink50-dh01-h01-11", "ink50-dh01-h01-12", "ink50-dh01-h02-11",
+        ]
+        assert len(per_node) == net["measurements"]["nodes_total"]
+
+    def test_a_failing_node_carries_its_reason_and_a_passing_one_does_not(self, report):
+        by_node = {e["node"]: e
+                   for e in next(t for t in report["test_results"]
+                                 if t["test_id"] == "NET-01")["measurements"]["per_node"]}
+        assert by_node["ink50-dh01-h01-12"]["status"] == "FAIL"
+        assert by_node["ink50-dh01-h01-12"]["reason"] == "below floor"
+        assert "reason" not in by_node["ink50-dh01-h01-11"]
+
+    def test_per_node_carries_the_measurement_where_one_exists(self, report):
+        by_node = {e["node"]: e
+                   for e in next(t for t in report["test_results"]
+                                 if t["test_id"] == "NET-01")["measurements"]["per_node"]}
+        assert by_node["ink50-dh01-h01-11"]["metric"] == 688.68
+        assert "metric" not in by_node["ink50-dh01-h02-11"]  # NOT_RUN measured nothing
+
+    def test_the_default_gate_is_a_percentage_not_perfection(self):
+        """A fleet at 94% must not report FAIL on every test.
+
+        The default was 100, which at 2013 nodes meant one degraded tray failed a whole test:
+        a real Nscale TX report read FAIL on all ten tests while measuring 94-99% pass rates.
+        """
+        nodes = [_node(f"n{i:04d}") for i in range(94)]
+        nodes += [_node(f"n{i:04d}", allreduce="FAIL", metric="2.0") for i in range(94, 100)]
+        built = node_report.build_report(_fleet(nodes), platform=PLATFORM)
+        net = next(t for t in built["test_results"] if t["test_id"] == "NET-01")
+        assert net["measurements"]["pass_rate_pct"] == 94.0
+        assert net["status"] == "PASS"
+        assert net["acceptance_criteria"]["thresholds"]["node_pass_rate_min_pct"] == 93.0
+
+    def test_a_fleet_below_the_gate_still_fails(self):
+        nodes = [_node(f"n{i:04d}") for i in range(90)]
+        nodes += [_node(f"n{i:04d}", allreduce="FAIL", metric="2.0") for i in range(90, 100)]
+        built = node_report.build_report(_fleet(nodes), platform=PLATFORM)
+        net = next(t for t in built["test_results"] if t["test_id"] == "NET-01")
+        assert net["measurements"]["pass_rate_pct"] == 90.0
+        assert net["status"] == "FAIL"
+
+    def test_a_report_carrying_per_node_still_validates(self):
+        built = node_report.build_report(FLEET, platform=PLATFORM)
+        assert built["test_results"][0]["measurements"]["per_node"]
+        assert node_report.validate(built) == []
+
     def test_a_column_nobody_ran_is_not_a_pass(self):
         none_run = _fleet([_node("n1", allreduce="NOT_RUN", metric=None)])
         for job in none_run["nodes"][0]["jobs"]:

@@ -124,11 +124,12 @@ ASSUMPTIONS: dict[str, Any] = {
     },
     # Non-measured hardware identity. Integers must be >= 1 per the schema, so they carry
     # plausible platform defaults rather than zeros; strings carry TBD.
-    # A column's rolled-up verdict. 100 means "every node that ran must pass", which is the
-    # strict reading and the safe default; a site running acceptance against a percentage (the
-    # schema's own example uses 93) can relax it. Whatever is set here is published in the
-    # report's acceptance_criteria.thresholds, so the gate is never implicit.
-    "node_pass_rate_min_pct": 100.0,
+    # A column's rolled-up verdict, published in acceptance_criteria.thresholds so the gate is
+    # never implicit. 93 matches the schema's own example. It was 100, which is defensible for a
+    # single rack and wrong for a fleet: at 2013 nodes one degraded tray failed an entire test,
+    # so a Nscale TX report read FAIL on all ten tests while measuring 94-99% node pass rates.
+    # A site with a different contractual gate overrides this rather than editing the module.
+    "node_pass_rate_min_pct": 93.0,
     "cpu": {"cores_per_socket": 72, "sockets_per_node": 1},
     "memory": {"system_memory_gb": 960, "memory_type": None},
     "firmware": {
@@ -266,6 +267,10 @@ def _job_measurements(cells: list[dict[str, Any]], label: str | None) -> dict[st
 
     ``measurements`` is a free-form object in the schema, so the keys mirror the vocabulary its
     own examples use (``nodes_total``/``pass_rate_pct``) and name the metric with its unit.
+
+    ``per_node`` carries every node's own verdict. The aggregate alone says "18 failed" without
+    saying which 18, which is the first thing a reader needs and the reason this column existed;
+    the schema names ``per_node[]`` in its own description of ``measurements``.
     """
     total = len(cells)
     passed = sum(1 for c in cells if c["status"] == "PASS")
@@ -290,6 +295,18 @@ def _job_measurements(cells: list[dict[str, Any]], label: str | None) -> dict[st
                 "nodes_measured": len(values),
             }
         )
+
+    per_node = []
+    for cell in sorted(cells, key=lambda c: str(c.get("node") or "")):
+        entry: dict[str, Any] = {"node": cell.get("node", ""), "status": cell["status"]}
+        if cell.get("metric") is not None:
+            entry["metric"] = cell["metric"]
+        # A reason is only meaningful on a node that did not pass, and only when bring-up
+        # recorded one; carrying an empty key on 2000 passing nodes is pure weight.
+        if cell["status"] != "PASS" and cell.get("reason"):
+            entry["reason"] = cell["reason"]
+        per_node.append(entry)
+    out["per_node"] = per_node
     return out
 
 
@@ -335,6 +352,9 @@ def build_report(
                     "node": node.get("node", ""),
                     "status": STATUS_BY_VERDICT.get(str(job.get("status") or "").upper(), DEFAULT_STATUS),
                     "metric": _num(job.get("metric")),
+                    # Captured here rather than looked up later: per_node needs it for every
+                    # cell, and re-scanning the fleet per column is quadratic at 2000 nodes.
+                    "reason": str(job.get("reason") or "").strip(),
                 }
             )
 
