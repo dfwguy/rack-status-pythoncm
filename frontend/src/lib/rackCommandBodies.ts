@@ -116,6 +116,12 @@ export interface LaunchOptions {
    * reaches the "done" label.
    */
   maxSteps?: number;
+  /** Llama 3.1 405B Exemplar precision. */
+  llamaDtype?: "fp8" | "nvfp4";
+  /** Container/NCCL profile for the Exemplar Llama run. */
+  llamaImageProfile?: "nccl2.30.7" | "stock";
+  /** Keep NCCL-only A/B clean or enable the additional GB300 communication/norm tuning. */
+  llamaTuning?: "baseline" | "gb300";
 }
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -154,6 +160,9 @@ export function attachLaunchOptions(body: Record<string, unknown>, opts?: Launch
   if (typeof steps === "number" && Number.isFinite(steps) && steps >= 1) {
     body.max_steps = Math.round(steps);
   }
+  if (opts?.llamaDtype) body.dtype = opts.llamaDtype;
+  if (opts?.llamaImageProfile) body.image_profile = opts.llamaImageProfile;
+  if (opts?.llamaTuning) body.tuning = opts.llamaTuning;
   return body;
 }
 

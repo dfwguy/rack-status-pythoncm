@@ -45,6 +45,19 @@ const NEMO_STEP_CHOICES = [
 ] as const;
 const DEFAULT_MAX_STEPS = 50;
 
+const LLAMA_DTYPE_CHOICES = [
+  { value: "nvfp4", children: "NVFP4" },
+  { value: "fp8", children: "FP8" },
+] as const;
+const LLAMA_IMAGE_CHOICES = [
+  { value: "nccl2.30.7", children: "NeMo 26.04.01 + NCCL 2.30.7 (default)" },
+  { value: "stock", children: "NeMo 26.04.01 stock NCCL 2.29 (control)" },
+] as const;
+const LLAMA_TUNING_CHOICES = [
+  { value: "baseline", children: "NCCL A/B baseline" },
+  { value: "gb300", children: "GB300 tuned (QPS=4 + cuDNN norms)" },
+] as const;
+
 // NCCL sweep rounds: Stage-1 acceptance runs the all_reduce sweep 5× (all must pass).
 const ITERS_MIN = 1;
 const ITERS_MAX = 50;
@@ -70,6 +83,8 @@ interface LaunchOptionsDialogProps {
   showIters?: boolean;
   /** Show the NEMO training-steps selector. NEMO launches only. */
   showMaxSteps?: boolean;
+  /** Show the Llama 3.1 405B Exemplar precision/image/tuning controls. */
+  showLlamaExemplar?: boolean;
 }
 
 /**
@@ -88,11 +103,15 @@ export function LaunchOptionsDialog({
   showNcclVersion = false,
   showIters = false,
   showMaxSteps = false,
+  showLlamaExemplar = false,
 }: LaunchOptionsDialogProps) {
   const [ncclDebug, setNcclDebug] = useState("off");
   const [ncclVersion, setNcclVersion] = useState(DEFAULT_NCCL_VERSION);
   const [iters, setIters] = useState(DEFAULT_ITERS);
   const [maxSteps, setMaxSteps] = useState(DEFAULT_MAX_STEPS);
+  const [llamaDtype, setLlamaDtype] = useState<"fp8" | "nvfp4">("nvfp4");
+  const [llamaImageProfile, setLlamaImageProfile] = useState<"nccl2.30.7" | "stock">("nccl2.30.7");
+  const [llamaTuning, setLlamaTuning] = useState<"baseline" | "gb300">("baseline");
   const [envText, setEnvText] = useState("");
   const itersInputRef = useRef<HTMLInputElement>(null);
 
@@ -118,6 +137,9 @@ export function LaunchOptionsDialog({
       setNcclVersion(DEFAULT_NCCL_VERSION);
       setIters(DEFAULT_ITERS);
       setMaxSteps(DEFAULT_MAX_STEPS);
+      setLlamaDtype("nvfp4");
+      setLlamaImageProfile("nccl2.30.7");
+      setLlamaTuning("baseline");
       setEnvText("");
     }
   }, [open]);
@@ -237,6 +259,54 @@ export function LaunchOptionsDialog({
               </FormHelperText>
             </div>
           ) : null}
+          {showLlamaExemplar ? (
+            <>
+              <div>
+                <KuiText kind="body/bold/sm" style={{ display: "block", marginBottom: 6 }}>
+                  Llama precision
+                </KuiText>
+                <KuiSelect
+                  items={[...LLAMA_DTYPE_CHOICES]}
+                  value={llamaDtype}
+                  onValueChange={(v) => setLlamaDtype(v === "fp8" ? "fp8" : "nvfp4")}
+                  size="small"
+                  aria-label="Llama Exemplar precision"
+                />
+              </div>
+              <div>
+                <KuiText kind="body/bold/sm" style={{ display: "block", marginBottom: 6 }}>
+                  Container NCCL
+                </KuiText>
+                <KuiSelect
+                  items={[...LLAMA_IMAGE_CHOICES]}
+                  value={llamaImageProfile}
+                  onValueChange={(v) => setLlamaImageProfile(v === "stock" ? "stock" : "nccl2.30.7")}
+                  size="small"
+                  aria-label="Llama Exemplar NCCL image"
+                />
+                <FormHelperText sx={{ mt: 0.5 }}>
+                  NCCL is baked into the Llama container so PyTorch and the runtime load the same library.
+                </FormHelperText>
+              </div>
+              <div>
+                <KuiText kind="body/bold/sm" style={{ display: "block", marginBottom: 6 }}>
+                  Tuning profile
+                </KuiText>
+                <KuiSelect
+                  items={[...LLAMA_TUNING_CHOICES]}
+                  value={llamaTuning}
+                  onValueChange={(v) => setLlamaTuning(v === "gb300" ? "gb300" : "baseline")}
+                  size="small"
+                  aria-label="Llama Exemplar tuning profile"
+                />
+                <FormHelperText sx={{ mt: 0.5 }}>
+                  Baseline isolates the NCCL image change. GB300 tuned additionally sets four IB QPs per connection
+                  and enables cuDNN Transformer Engine norms. NVLS stays disabled in both profiles because rack
+                  CliqueIds are not unique.
+                </FormHelperText>
+              </div>
+            </>
+          ) : null}
           <FormControl fullWidth size="small">
             <InputLabel id="launch-nccl-debug-label">NCCL debug</InputLabel>
             <Select
@@ -286,6 +356,7 @@ export function LaunchOptionsDialog({
               ...(showNcclVersion ? { ncclVersion } : {}),
               ...(showIters ? { iters } : {}),
               ...(showMaxSteps ? { maxSteps } : {}),
+              ...(showLlamaExemplar ? { llamaDtype, llamaImageProfile, llamaTuning } : {}),
             })
           }
           variant="contained"

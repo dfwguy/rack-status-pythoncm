@@ -16,7 +16,7 @@ function rack(id: string, nemo: string, opts: Partial<RackRow> = {}): RackRow {
     rack: id,
     nemo,
     last_job: "-",
-    // Eligibility wants all-idle sinfo and no DN trays; overridden per case below.
+    // Eligibility accepts idle or yieldable allocated sinfo and no DN trays; overridden below.
     sinfo: "idle=18",
     ct_down_unk: "-",
     ...opts,
@@ -29,7 +29,9 @@ function makeData(): RackStatusResponse {
     ok: true,
     rows: [
       rack("ink50-dh01-d01", "done"),
-      rack("ink50-dh01-d02", "done"),
+      // Bring-up diagnostics may still own trays; the launch-side preflight verifies
+      // that allocated jobs are exclusively yieldable bringup-* jobs.
+      rack("ink50-dh01-d02", "done", { sinfo: "alloc=15,idle=1" }),
       rack("ink50-dh01-d03", "pending"),
       rack("ink50-dh01-e01", "done"),
       rack("ink50-dh01-e02", "fail"),

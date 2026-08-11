@@ -4672,6 +4672,14 @@ def _run_llama_script_path() -> Path:
     return _rpath(Path(p))
 
 
+def _run_exemplar_llama_script_path() -> Path:
+    p = _eget(
+        "RACK_EXEMPLAR_LLAMA_SCRIPT",
+        str(SCRIPTS_DIR / "run-exemplar-llama.sh"),
+    ) or str(SCRIPTS_DIR / "run-exemplar-llama.sh")
+    return _rpath(Path(p))
+
+
 def _job_env_effective_values() -> dict[str, str]:
     """Resolved values for Settings → job environment (same as runtime after overrides)."""
     ex = _extra_script_args()
@@ -4718,6 +4726,11 @@ def _job_env_effective_values() -> dict[str, str]:
         "RACK_NEMO_XRACK_TIMEOUT": str(max(300, _job_env_int("RACK_NEMO_XRACK_TIMEOUT", 7200))),
         "RACK_LLAMA_SCRIPT": str(_run_llama_script_path()),
         "RACK_LLAMA_TIMEOUT": str(max(120, _job_env_int("RACK_LLAMA_TIMEOUT", 7200))),
+        "RACK_EXEMPLAR_LLAMA_SCRIPT": str(_run_exemplar_llama_script_path()),
+        "RACK_EXEMPLAR_LLAMA_TIMEOUT": str(max(120, _job_env_int("RACK_EXEMPLAR_LLAMA_TIMEOUT", 900))),
+        "RACK_EXEMPLAR_LLAMA_CT_RANGE": (
+            _eget("RACK_EXEMPLAR_LLAMA_CT_RANGE", "11-18,28-35") or "11-18,28-35"
+        ).strip(),
         "RACK_MNUBERGEMM_STRESS_SCRIPT": str(_mnubergemm_stress_script_path()),
         "RACK_MNUBERGEMM_CUDA_MAJOR": (_eget("RACK_MNUBERGEMM_CUDA_MAJOR") or _eget("RACK_NVLOOM_CUDA_MAJOR") or "13").strip(),
         "RACK_NVLOOM_SINGLERACK_SCRIPT": str(_nvloom_singlerack_script_path()),
@@ -13963,6 +13976,176 @@ def _prepare_run_llama(body: dict) -> tuple[dict | None, tuple[object, int] | No
     )
 
 
+def _prepare_run_exemplar_llama(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
+    """Build the exact 512-GPU GB300 Llama 3.1 405B Exemplar launch.
+
+    Each selected NVL72 rack contributes 16 tray hosts (64 GPUs), so an accepted
+    request is exactly eight racks / 128 hosts / 512 GPUs. The wrapper repeats the
+    node-count and Slurm-state checks immediately before ``llmb-run submit``.
+    """
+    if _truthy_env("RACK_EXEMPLAR_LLAMA_DISABLED"):
+        return None, (
+            jsonify({"ok": False, "error": "Exemplar Llama launch disabled (RACK_EXEMPLAR_LLAMA_DISABLED)"}),
+            403,
+        )
+
+    racks_raw = body.get("racks")
+    if not isinstance(racks_raw, list):
+        return None, (jsonify({"ok": False, "error": "racks must be an array of eight rack ids"}), 400)
+    racks: list[str] = []
+    seen: set[str] = set()
+    try:
+        for item in racks_raw:
+            rack = _normalize_rack_id(str(item).strip())
+            if rack not in seen:
+                seen.add(rack)
+                racks.append(rack)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    if len(racks) != 8:
+        return None, (
+            jsonify({"ok": False, "error": f"the 512-GPU Exemplar gate requires exactly 8 racks; got {len(racks)}"}),
+            400,
+        )
+
+    dtype = str(body.get("dtype") or "nvfp4").strip().lower()
+    if dtype not in ("fp8", "nvfp4"):
+        return None, (jsonify({"ok": False, "error": "dtype must be fp8 or nvfp4"}), 400)
+    image_profile = str(body.get("image_profile") or "nccl2.30.7").strip().lower()
+    if image_profile not in ("nccl2.30.7", "stock"):
+        return None, (
+            jsonify({"ok": False, "error": "image_profile must be nccl2.30.7 or stock"}),
+            400,
+        )
+    tuning = str(body.get("tuning") or "baseline").strip().lower()
+    if tuning not in ("baseline", "gb300"):
+        return None, (jsonify({"ok": False, "error": "tuning must be baseline or gb300"}), 400)
+
+    inner = (_eget("RACK_EXEMPLAR_LLAMA_CT_RANGE", "11-18,28-35") or "11-18,28-35").strip()
+    if not re.fullmatch(r"\d{1,3}(?:-\d{1,3})?(?:,\d{1,3}(?:-\d{1,3})?)*", inner):
+        return None, (
+            jsonify({"ok": False, "error": f"invalid RACK_EXEMPLAR_LLAMA_CT_RANGE: {inner!r}"}),
+            500,
+        )
+    naming = _nvis_naming()
+    nodelist = ",".join(naming.ct_blob(rack, inner) for rack in sorted(racks))
+
+    script = _run_exemplar_llama_script_path()
+    if not _script_exists(script):
+        return None, (
+            jsonify({"ok": False, "error": f"run-exemplar-llama script not found: {script}"}),
+            500,
+        )
+    dry_run = bool(body.get("dry_run"))
+    cmd = [
+        "bash",
+        str(script),
+        "--dtype",
+        dtype,
+        "--nodelist",
+        nodelist,
+        "--image",
+        image_profile,
+        "--tuning",
+        tuning,
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+    display_cmd = shlex.join(cmd)
+    llmb_install = (_eget("RACK_LLMB_INSTALL", "/home/cmods/workspace/llmb") or "/home/cmods/workspace/llmb").strip()
+    log_dir = f"{llmb_install.rstrip('/')}/workloads/pretrain_llama3.1/experiments"
+    timeout = max(120, _job_env_int("RACK_EXEMPLAR_LLAMA_TIMEOUT", 900))
+    return (
+        {
+            "cmd": cmd,
+            "display_cmd": display_cmd,
+            "timeout": timeout,
+            "cwd": llmb_install,
+            "log_dir": log_dir,
+            "racks": sorted(racks),
+            "nodelist": nodelist,
+            "dtype": dtype,
+            "image_profile": image_profile,
+            "tuning": tuning,
+            "dry_run": dry_run,
+        },
+        None,
+    )
+
+
+@app.route("/api/run-exemplar-llama-async", methods=["POST"])
+def api_run_exemplar_llama_async():
+    """Submit Llama 3.1 405B Exemplar pretraining across eight selected racks."""
+    body = request.get_json(silent=True) or {}
+    prep, err = _prepare_run_exemplar_llama(body)
+    if err is not None:
+        return err[0], err[1]
+    assert prep is not None
+    racks = [str(r) for r in prep["racks"]]
+    job_id = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat()
+    operator = _operator_from_request()
+    display_cmd = str(prep["display_cmd"])
+    log_dir = str(prep["log_dir"])
+    dry_run = bool(prep["dry_run"])
+    _record_validation_activity(
+        "llama-exemplar",
+        stage="stage2",
+        scope="multirack",
+        rack=racks[0],
+        racks=racks,
+        log_dir=log_dir,
+        command_display=display_cmd,
+        activity_id=job_id,
+        operator=operator,
+        dry_run=dry_run,
+    )
+    with _stress_jobs_lock:
+        _stress_jobs[job_id] = {
+            "job_id": job_id,
+            "kind": "llama-exemplar",
+            "operator": operator,
+            "rack": "8 racks",
+            "racks": racks,
+            "nodelist": prep["nodelist"],
+            "gpu_count": 512,
+            "dtype": prep["dtype"],
+            "image_profile": prep["image_profile"],
+            "tuning": prep["tuning"],
+            "dry_run": dry_run,
+            "log_dir": log_dir,
+            "phase": "starting",
+            "command_display": display_cmd,
+            "created_at": created,
+        }
+    env_updates = {"NVIS_ACTIVITY_ID": job_id}
+    threading.Thread(
+        target=_stress_worker,
+        args=(job_id, prep["cmd"], str(prep["cwd"]), int(prep["timeout"]), display_cmd),
+        kwargs={
+            "error_label": "run-exemplar-llama script",
+            "profile": "script",
+            "persist": True,
+            "env_updates": env_updates,
+        },
+        daemon=True,
+    ).start()
+    return jsonify(
+        {
+            "ok": True,
+            "job_id": job_id,
+            "racks": racks,
+            "nodelist": prep["nodelist"],
+            "gpu_count": 512,
+            "dtype": prep["dtype"],
+            "image_profile": prep["image_profile"],
+            "tuning": prep["tuning"],
+            "dry_run": dry_run,
+            "command_display": display_cmd,
+        }
+    )
+
+
 @app.route("/api/run-llama-async", methods=["POST"])
 def api_run_llama_async():
     """Start ``run-llama.sh`` in the background; poll ``/api/run-llama-status``."""
@@ -18052,6 +18235,7 @@ _WORKFLOW_TOOL_KEYS = {
     "RACK_VALIDATION_SCRIPT": ("Singlerack validation", "Validation"),
     "RACK_NEMO_XRACK_SCRIPT": ("Multinode NEMO", "Validation"),
     "RACK_LLAMA_SCRIPT": ("Llama run", "Validation"),
+    "RACK_EXEMPLAR_LLAMA_SCRIPT": ("Llama 3.1 405B Exemplar", "Validation"),
     "RACK_MNUBERGEMM_STRESS_SCRIPT": ("MNU Bergemm stress", "Validation"),
     "RACK_NVLOOM_SINGLERACK_SCRIPT": ("NVLoom singlerack", "Validation"),
     "RACK_CLUSTERKIT_SCRIPT": ("ClusterKit singlerack", "Validation"),

@@ -109,7 +109,7 @@ export interface ValidationActivitiesResponse {
 export interface MultirackJob {
   job_id: string;
   activity_id?: string;
-  /** "nemo" (cross-rack NEMO validation) or "llmb" (NCCL microbenchmark). */
+  /** Cross-rack NEMO, NCCL microbenchmark, or Llama Exemplar launch kind. */
   kind: string;
   tool?: string;
   stage?: string;

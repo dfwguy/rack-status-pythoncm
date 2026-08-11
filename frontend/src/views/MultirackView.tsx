@@ -19,7 +19,7 @@ import { Card, Text, Tag, Button, Banner, Flex } from "@nvidia/foundations-react
 import { attachLaunchOptions, type LaunchOptions } from "../lib/rackCommandBodies";
 import { LaunchOptionsDialog } from "../components/rack/LaunchOptionsDialog";
 import { MultiSelectCombobox } from "../components/MultiSelectCombobox";
-import { Layers, LineChart, Gauge, Search } from "lucide-react";
+import { Layers, LineChart, Gauge, Search, Cpu } from "lucide-react";
 import Tooltip from "@mui/material/Tooltip";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
@@ -48,7 +48,9 @@ function isRackEligible(row: RackRow): { eligible: boolean; reason: string } {
   if (row.nemo !== "done") return { eligible: false, reason: "need validation done" };
   const sinfoStates = row.sinfo.split(",").map((s) => s.trim().split("=")[0].toLowerCase()).filter(Boolean);
   if (sinfoStates.length === 0) return { eligible: false, reason: "no sinfo data" };
-  if (sinfoStates.some((s) => s !== "idle")) return { eligible: false, reason: `sinfo ${row.sinfo}` };
+  if (sinfoStates.some((s) => s !== "idle" && s !== "alloc" && s !== "allocated")) {
+    return { eligible: false, reason: `sinfo ${row.sinfo}` };
+  }
   if (row.ct_down_unk.includes("DN:")) return { eligible: false, reason: "has DN nodes" };
   return { eligible: true, reason: "" };
 }
@@ -99,11 +101,18 @@ function logBasenameForParser(logFile: string): string {
   return i >= 0 ? s.slice(i + 1) : s;
 }
 
-type MultirackLaunchKind = "nemo" | "llmb";
+type MultirackLaunchKind = "nemo" | "llmb" | "llama_exemplar";
+
+const LLAMA_EXEMPLAR_RACK_COUNT = 8;
+const LLAMA_EXEMPLAR_GPUS_PER_RACK = 64;
 
 const LAUNCH_META: Record<MultirackLaunchKind, { label: string; asyncUrl: string }> = {
   nemo: { label: "Multirack NEMO validation", asyncUrl: "/api/run-nemo-xrack-async" },
   llmb: { label: "NCCL Microbenchmark (direct)", asyncUrl: "/api/run-llmb-nccl-async" },
+  llama_exemplar: {
+    label: "Llama 3.1 405B Exemplar",
+    asyncUrl: "/api/run-exemplar-llama-async",
+  },
 };
 
 const TERMINAL_PHASES = new Set(["done", "error", "timeout"]);
@@ -111,6 +120,7 @@ const TERMINAL_PHASES = new Set(["done", "error", "timeout"]);
 const LAUNCH_TITLE: Record<MultirackLaunchKind, string> = {
   nemo: "Launch Multirack NEMO Validation",
   llmb: "Launch NCCL Microbenchmark",
+  llama_exemplar: "Launch Llama 3.1 405B Exemplar",
 };
 
 const EMPTY_RACK_ROWS: RackRow[] = [];
@@ -365,7 +375,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     setLaunchingKind(kind);
     try {
       const body: Record<string, unknown> = { racks, log_dir: logDir };
-      if (kind === "llmb") body.dry_run = dryRun;
+      if (kind === "llmb" || kind === "llama_exemplar") body.dry_run = dryRun;
       attachLaunchOptions(body, opts);
       const res = await fetch(meta.asyncUrl, {
         method: "POST",
@@ -421,7 +431,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
       <PageHeader
         contentId="multirack"
         title="Multirack Validation"
-        description="Cross-rack NEMO validation runs spanning multiple racks. Select the available racks below, then launch a run."
+        description="Cross-rack NEMO, NCCL, and Llama 3.1 405B Exemplar runs spanning multiple racks."
       />
 
       {/* Inline rack selection + launch */}
@@ -539,7 +549,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           </MuiButton>
           <FormControlLabel
             control={<Checkbox checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} size="small" />}
-            label="Dry run (NCCL only — print command, don't submit)"
+            label="Dry run (NCCL/Llama — print plan, don't submit)"
           />
           <Flex gap="2" align="center" wrap="wrap" style={{ marginLeft: "auto" }}>
             <Button
@@ -560,12 +570,39 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
               <Gauge size={16} style={{ marginRight: 6 }} />
               {launchingKind === "llmb" ? "Launching…" : `Launch NCCL Microbenchmark (${selected.size})`}
             </Button>
+            <Button
+              kind="secondary"
+              size="small"
+              onClick={() => setPendingKind("llama_exemplar")}
+              disabled={
+                noRacks ||
+                selected.size !== LLAMA_EXEMPLAR_RACK_COUNT ||
+                launchingKind !== null
+              }
+            >
+              <Cpu size={16} style={{ marginRight: 6 }} />
+              {launchingKind === "llama_exemplar"
+                ? "Launching…"
+                : `Launch Llama 405B Exemplar (${selected.size})`}
+            </Button>
           </Flex>
         </Flex>
 
+        {selected.size > 0 && selected.size !== LLAMA_EXEMPLAR_RACK_COUNT && (
+          <div style={{ marginBottom: 12 }}>
+            <Banner status="info">
+              Llama 3.1 405B Exemplar requires exactly {LLAMA_EXEMPLAR_RACK_COUNT} racks × 16 trays × 4 GB300 GPUs
+              = 512 GPUs. Select {LLAMA_EXEMPLAR_RACK_COUNT - selected.size > 0
+                ? `${LLAMA_EXEMPLAR_RACK_COUNT - selected.size} more`
+                : `${selected.size - LLAMA_EXEMPLAR_RACK_COUNT} fewer`} rack(s) to enable it.
+            </Banner>
+          </div>
+        )}
+
         <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 12, display: "block" }}>
-          Eligible racks have validation done, Slurm sinfo showing only idle, and no DN trays. NCCL GPU scale = 72 × racks on
-          GB300 NVL72.
+          Eligible racks have validation done, no drained/down trays, and Slurm showing idle or allocated. Launch-side
+          preflight permits allocated trays only when every running job is a yieldable bringup-* diagnostic. NCCL uses all
+          72 GPUs per rack; the 512-GPU Llama Exemplar gate uses 64 GPUs per rack across exactly eight racks.
         </Text>
 
         {noRacks ? (
@@ -798,11 +835,16 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
         onClose={() => setPendingKind(null)}
         onConfirm={confirmLaunch}
         title={pendingKind ? LAUNCH_TITLE[pendingKind] : "Launch options"}
-        subtitle={`${selected.size} rack(s) selected${pendingKind === "llmb" && dryRun ? " — dry run" : ""}`}
+        subtitle={`${selected.size} rack(s) selected${
+          pendingKind === "llama_exemplar"
+            ? ` — ${selected.size * LLAMA_EXEMPLAR_GPUS_PER_RACK} GB300 GPUs`
+            : ""
+        }${(pendingKind === "llmb" || pendingKind === "llama_exemplar") && dryRun ? " — dry run" : ""}`}
         confirmLabel="Launch"
         showNcclVersion={pendingKind === "llmb"}
         showIters={pendingKind === "llmb"}
         showMaxSteps={pendingKind === "nemo"}
+        showLlamaExemplar={pendingKind === "llama_exemplar"}
       />
 
       <ParserResultsDialog

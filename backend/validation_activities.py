@@ -87,6 +87,7 @@ TOOLS = frozenset({
     "llmb-nccl",
     "nemo-xrack",
     "llama",
+    "llama-exemplar",
     "mnubergemm",
     "nvloom",
     "clusterkit",
@@ -1058,7 +1059,7 @@ def _task_stage_kind(rec: dict[str, Any], task: dict[str, Any]) -> str | None:
     tool = str(rec.get("tool") or "").strip().lower()
     if tool in ("llmb-nccl", "nccl-fullrack"):
         return "nccl"
-    if tool in ("singlerack", "llmb-nemo-combined", "nemo-xrack", "llama"):
+    if tool in ("singlerack", "llmb-nemo-combined", "nemo-xrack", "llama", "llama-exemplar"):
         return "nemo"
     return None
 
