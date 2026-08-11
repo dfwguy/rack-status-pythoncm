@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -175,11 +176,18 @@ class TestScriptAlwaysAnswersJson:
         secret = tmp_path / "cacert.pem"
         secret.write_text("x")
         secret.chmod(0o000)
-        if secret.stat().st_mode & 0o400:  # running as root: the check cannot fire
-            pytest.skip("unreadable-file semantics do not apply to root")
+        # Ask whether *this* user can read it, not what the mode bits say: CI runs as root,
+        # which bypasses the permission entirely and makes the case untestable there.
+        if os.access(secret, os.R_OK):
+            pytest.skip("running as a user that bypasses file permissions (root)")
+        # Give it readable cert/key so the CA is the only thing that can be reported. Otherwise
+        # the default ~/.cm paths are missing in CI and get named instead.
+        cert, key = tmp_path / "cert.pem", tmp_path / "cert.key"
+        cert.write_text("x")
+        key.write_text("x")
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--query", "nodes", "--module-path", str(tmp_path),
-             "--ca", str(secret)],
+             "--cert", str(cert), "--key", str(key), "--ca", str(secret)],
             capture_output=True, text=True, timeout=60,
         )
         body = json.loads(proc.stdout)
