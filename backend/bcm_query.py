@@ -43,9 +43,11 @@ DEFAULT_TIMEOUT = 120
 
 
 def _script_path() -> str:
+    # role_root("scripts") already points at the scripts directory on the target host; joining
+    # "bin/scripts" onto it again yields .../bin/scripts/bin/scripts and a confusing ENOENT.
     base = host_exec.role_root("scripts") or ""
     if base:
-        return str(Path(base) / "bin" / "scripts" / "nvis_bcm_query.py")
+        return str(Path(base) / "nvis_bcm_query.py")
     import app  # late: app imports this module's siblings, and only the path is needed
 
     return str(Path(app.SCRIPTS_DIR) / "nvis_bcm_query.py")

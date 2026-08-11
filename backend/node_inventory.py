@@ -39,6 +39,20 @@ TBD = "TBD"
 
 _BDF_RE = re.compile(r"^([0-9a-fA-F]+):([0-9a-fA-F]{2}):([0-9a-fA-F]{2})\.([0-9a-fA-F])$")
 
+#: Deviation notices. Deliberately value-free: the same reshape applies to every GPU on every
+#: node, so a per-value message would put thousands of near-identical lines in a customer
+#: report. The report says what was reshaped and why, once.
+DEVIATION_BDF_NARROWED = (
+    "GPU pcie_bdf values were narrowed to a 4-hex-digit PCI domain to satisfy the schema's "
+    "pcieBdf pattern; GB300 GPUs enumerate in a wide domain (e.g. 00000008:06:00.0 -> "
+    "0008:06:00.0). The high half is zero, so no device is misidentified."
+)
+DEVIATION_IB_MAC = (
+    "nics[].mac carries the EUI-48 recovered from each InfiniBand port GUID. The schema's "
+    "macAddress requires 6 octets and has no field for the 64-bit GUID that actually identifies "
+    "an IB port; the rails' IPoIB link address is 20 bytes and would not validate."
+)
+
 
 #: Concurrent SSH hops for the sweep. The default stays modest so a fleet sweep does not trip a
 #: gateway's MaxStartups; at ~2 s per node, 32 workers put a 2000-node fleet at about 2 minutes.
@@ -63,8 +77,9 @@ def collect_fleet(
     if not nodes:
         return [], []
 
-    base_dir = host_exec.role_root("scripts") or ""
-    script = f"{base_dir}/bin/scripts/node_inventory.sh" if base_dir else "node_inventory.sh"
+    # role_root("scripts") is already the scripts directory, not the deployment root.
+    base_dir = (host_exec.role_root("scripts") or "").rstrip("/")
+    script = f"{base_dir}/node_inventory.sh" if base_dir else "node_inventory.sh"
 
     def _tick(result: Any, done: int, total: int) -> None:
         if progress:
@@ -141,11 +156,7 @@ def normalize_pcie_bdf(bdf: str) -> tuple[str, str | None]:
     high, low = domain[:-4], domain[-4:]
     if high.strip("0"):
         return raw, f"PCIe domain {domain} exceeds the schema's 4-hex-digit field and cannot be narrowed"
-    reason = (
-        f"PCIe BDF {raw} narrowed to {low}:{bus}:{dev}.{func} (schema allows a 4-digit domain; "
-        f"GB300 enumerates in a wide domain)"
-    )
-    return f"{low}:{bus}:{dev}.{func}", reason
+    return f"{low}:{bus}:{dev}.{func}", DEVIATION_BDF_NARROWED
 
 
 def mac_from_port_guid(guid: str) -> str | None:
@@ -276,10 +287,7 @@ def build_node_entry(
             deviations.add(dev)
         mac = mac_from_port_guid(n.get("port_guid", ""))
         if mac:
-            deviations.add(
-                "nics[].mac carries the EUI-48 recovered from the InfiniBand port GUID; the "
-                "schema has no field for the 64-bit GUID that actually identifies an IB port"
-            )
+            deviations.add(DEVIATION_IB_MAC)
         entry = {
             "device": n.get("device") or TBD,
             "port": int(n.get("port") or 1),
