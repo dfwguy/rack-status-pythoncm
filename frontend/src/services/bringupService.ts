@@ -88,6 +88,68 @@ export async function getBringupFleet(nodes?: string[]): Promise<BringupFleet> {
  * shaping — it saves exactly what was validated. Errors are surfaced rather than saving a
  * response body that is actually a JSON error payload.
  */
+/** Live position of a running report job: one tick per node swept. */
+export interface NodeReportProgress {
+  state?: "running" | "done" | "collected" | "error";
+  phase?: string;
+  done?: number;
+  total?: number;
+  current?: string;
+  error?: string;
+  ready?: boolean;
+  report_id?: string;
+  nodes?: number;
+}
+
+/**
+ * Generate the node report as a background job, reporting progress as it goes.
+ *
+ * Building it sweeps every node over SSH — minutes on a large fleet — so a blocking request
+ * would sit behind a spinner long enough for a proxy to give up. `onProgress` is called with
+ * the server's own count so the caller can show how far through the fleet the sweep is.
+ *
+ * Starting the same run twice returns the same job: the backend joins the press to the run
+ * already in flight rather than sweeping the cluster a second time.
+ */
+export async function generateNodeReport(
+  onProgress?: (p: NodeReportProgress) => void,
+  pollMs = 1000,
+): Promise<string> {
+  const started = await apiFetch("/api/node-report/start", jsonPost({ inventory: true }));
+  const startBody = (await started.json()) as { ok?: boolean; job_id?: string; error?: string };
+  if (!started.ok || !startBody.job_id) {
+    throw new Error(startBody?.error || `HTTP ${started.status}`);
+  }
+  const jobId = startBody.job_id;
+
+  for (;;) {
+    await new Promise((r) => setTimeout(r, pollMs));
+    const res = await apiFetch(`/api/node-report/status?job_id=${encodeURIComponent(jobId)}`);
+    const status = (await res.json()) as NodeReportProgress & { ok?: boolean };
+    if (!res.ok) throw new Error(status?.error || `HTTP ${res.status}`);
+    onProgress?.(status);
+    if (status.state === "error") throw new Error(status.error || "report generation failed");
+    if (status.ready) break;
+  }
+  return downloadNodeReportResult(jobId);
+}
+
+async function downloadNodeReportResult(jobId: string): Promise<string> {
+  const res = await apiFetch(
+    `/api/node-report/result?job_id=${encodeURIComponent(jobId)}&download=1`,
+  );
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      detail = ((await res.json()) as { error?: string })?.error || detail;
+    } catch {
+      // Non-JSON error body (a proxy page, say); the status line is the best we have.
+    }
+    throw new Error(detail);
+  }
+  return saveJsonResponse(res);
+}
+
 export async function downloadNodeReport(nodes?: string[]): Promise<string> {
   const res = await apiFetch("/api/node-report", jsonPost({ nodes: nodes ?? [], download: true }));
   if (!res.ok) {
@@ -100,6 +162,11 @@ export async function downloadNodeReport(nodes?: string[]): Promise<string> {
     }
     throw new Error(detail);
   }
+  return saveJsonResponse(res);
+}
+
+/** Save a validated JSON response to disk under the filename the server chose. */
+async function saveJsonResponse(res: Response): Promise<string> {
   const blob = await res.blob();
   const filename =
     /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "")?.[1] ||

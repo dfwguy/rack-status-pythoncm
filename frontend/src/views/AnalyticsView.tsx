@@ -31,7 +31,8 @@ import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { NodeHeatmap } from "../components/analytics/NodeHeatmap";
 import { type NodeInfo } from "../components/rack/NodeSelector";
 import { parseNodesFromRack } from "../lib/parseNodesFromRack";
-import { downloadNodeReport, getBringupFleet } from "../services/bringupService";
+import { generateNodeReport, getBringupFleet } from "../services/bringupService";
+import type { NodeReportProgress } from "../services/bringupService";
 import { useActiveCluster } from "../context/ActiveClusterContext";
 import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
@@ -223,6 +224,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
   const [fleetLoading, setFleetLoading] = useState(false);
   const [fleetError, setFleetError] = useState<string | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
+  const [reportProgress, setReportProgress] = useState<NodeReportProgress | null>(null);
   const [reportError, setReportError] = useState("");
 
   // Node inventory with live up/down state, derived exactly as the Nodes view does so both
@@ -276,14 +278,18 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
   const downloadReport = useCallback(async () => {
     setReportBusy(true);
     setReportError("");
+    setReportProgress(null);
     try {
-      await downloadNodeReport(heatmapNodes.map((n) => n.id));
+      // Generating sweeps every node for its hardware identity, so this reports how far
+      // through the fleet it is rather than leaving the operator on a spinner for minutes.
+      await generateNodeReport(setReportProgress);
     } catch (e) {
       setReportError(e instanceof Error ? e.message : String(e));
     } finally {
       setReportBusy(false);
+      setReportProgress(null);
     }
-  }, [heatmapNodes]);
+  }, []);
 
   const bodyRows = useMemo(
     () => rows.map((r) => ({ rack: r.rack, nemo: r.nemo })),
@@ -644,6 +650,38 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
               <Text kind="body/regular/sm" style={{ color: "#d32f2f" }}>
                 {reportError}
               </Text>
+            )}
+            {reportBusy && reportProgress && (
+              <Box sx={{ minWidth: 260 }}>
+                <Text kind="body/regular/sm" style={{ display: "block", marginBottom: 2 }}>
+                  {reportProgress.total
+                    ? `Swept ${reportProgress.done ?? 0} of ${reportProgress.total} nodes`
+                    : reportProgress.phase || "Starting…"}
+                </Text>
+                <ProgressBar
+                  value={
+                    reportProgress.total
+                      ? Math.round(((reportProgress.done ?? 0) / reportProgress.total) * 100)
+                      : 0
+                  }
+                  aria-label="Node report generation progress"
+                />
+                {reportProgress.current && (
+                  <Text
+                    kind="mono/sm"
+                    style={{
+                      display: "block",
+                      marginTop: 2,
+                      color: "var(--text-color-secondary)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {reportProgress.current}
+                  </Text>
+                )}
+              </Box>
             )}
             <Button
               kind="secondary"

@@ -10935,7 +10935,7 @@ def _arg_or_body(name: str):
     return request.args.get(name)
 
 
-def _collect_node_inventory(fleet: dict) -> tuple[dict | None, list[str]]:
+def _collect_node_inventory(fleet: dict, progress=None) -> tuple[dict | None, list[str]]:
     """Sweep the fleet for hardware identity, folding in BCM's rack/BMC view when reachable.
 
     Returns ``(inventory, deviations)``; ``(None, [])`` when nothing could be collected, so the
@@ -10951,7 +10951,7 @@ def _collect_node_inventory(fleet: dict) -> tuple[dict | None, list[str]]:
     if not hosts:
         return None, []
 
-    records, errors = node_inventory.collect_fleet(hosts)
+    records, errors = node_inventory.collect_fleet(hosts, progress=progress)
     if errors:
         _logger.warning("node inventory: %d/%d node(s) did not answer", len(errors), len(hosts))
     if not records:
@@ -12429,6 +12429,140 @@ def api_analytics_aggregate_status():
             row["state"] = "collected"
     out["ok"] = True
     return jsonify(out)
+
+
+_node_report_jobs: dict[str, dict] = {}
+_node_report_jobs_lock = threading.Lock()
+#: Small on purpose: each finished job pins a multi-MB document until it is collected.
+_NODE_REPORT_JOBS_MAX = 4
+#: How long a "running" job stays eligible for idempotent reuse. Comfortably longer than a
+#: full sweep (~4 minutes at 2000 nodes) and short enough that a dead worker frees its key.
+_NODE_REPORT_JOB_TTL = 30 * 60
+
+
+@app.route("/api/node-report/start", methods=["POST"])
+def api_node_report_start():
+    """Start report generation on a worker; poll ``/api/node-report/status?job_id=…``.
+
+    Idempotent by request shape: asking again while an identical run is in flight returns the
+    same ``job_id`` instead of launching a second fleet-wide sweep. Pressing the button twice
+    is the normal way to find out whether the first press worked, and at ~2000 nodes the second
+    sweep would cost four minutes of SSH against the whole cluster.
+    """
+    if _node_report is None:
+        return jsonify({"ok": False, "error": "report generator unavailable"}), 503
+    body = request.get_json(silent=True) or {}
+    with_inventory = _truthy_arg(body.get("inventory", True))
+    key = f"inventory={int(with_inventory)}"
+
+    with _node_report_jobs_lock:
+        for existing, row in _node_report_jobs.items():
+            # Bounded by age: a worker that died without recording an error would otherwise
+            # leave its key pinned as "running" forever, and every later press would join a
+            # job that is never going to finish.
+            fresh = (time.time() - float(row.get("started") or 0)) < _NODE_REPORT_JOB_TTL
+            if row.get("key") == key and row.get("state") == "running" and fresh:
+                return jsonify({"ok": True, "job_id": existing, "reused": True})
+        if len(_node_report_jobs) >= _NODE_REPORT_JOBS_MAX:
+            for stale in sorted(_node_report_jobs,
+                                key=lambda k: _node_report_jobs[k].get("started", 0))[:2]:
+                _node_report_jobs.pop(stale, None)
+        job_id = uuid.uuid4().hex
+        _node_report_jobs[job_id] = {
+            "state": "running", "phase": "starting", "key": key,
+            "done": 0, "total": 0, "current": "", "started": time.time(),
+        }
+
+    def _set(**fields) -> None:
+        with _node_report_jobs_lock:
+            row = _node_report_jobs.get(job_id)
+            if row is not None:
+                row.update(**fields)
+
+    def _progress(done: int, total: int, current: str) -> None:
+        _set(done=done, total=total, current=current or "")
+
+    def _worker() -> None:
+        try:
+            _set(phase="reading bring-up results")
+            fleet = _bringup.fleet_summary() if _bringup else {"nodes": [], "columns": []}
+            inventory = deviations = None
+            if with_inventory:
+                _set(phase="sweeping nodes for hardware inventory",
+                     total=len(fleet.get("nodes") or []))
+                inventory, deviations = _collect_node_inventory(fleet, progress=_progress)
+            _set(phase="assembling the report", current="")
+
+            project = cluster = platform = None
+            try:
+                project, cluster, platform = catalog_context.resolve()
+            except Exception:  # a missing catalog must not block the report
+                _logger.debug("node-report: catalog context unavailable", exc_info=True)
+
+            def _as_dict(obj):
+                return obj.to_dict() if hasattr(obj, "to_dict") else (obj or {})
+
+            report = _node_report.build_report(
+                fleet, platform=_as_dict(platform), cluster=_as_dict(cluster),
+                project=_as_dict(project), inventory=inventory,
+            )
+            for entry in report.get("test_results") or []:
+                entry.setdefault("deviations", []).extend(deviations or [])
+
+            _set(phase="validating against the schema")
+            errors = _node_report.validate(report)
+            _set(state="done", phase="complete", report=report, errors=errors[:20],
+                 nodes=len(report.get("firmware_inventory", {}).get("nodes") or []),
+                 report_id=report.get("report_metadata", {}).get("report_id", ""))
+        except Exception as e:  # a worker crash must reach the operator, not just a log
+            _logger.exception("node-report job failed")
+            _set(state="error", error=str(e))
+
+    threading.Thread(target=_worker, name=f"node-report-{job_id[:8]}", daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id})
+
+
+@app.route("/api/node-report/status", methods=["GET"])
+def api_node_report_status():
+    """Progress for a job started by ``/api/node-report/start``.
+
+    The document itself is *not* returned here — at 2000 nodes it is several MB and polling
+    would ship it repeatedly. ``/api/node-report/result`` collects it once it is ready.
+    """
+    job_id = (request.args.get("job_id") or "").strip()
+    with _node_report_jobs_lock:
+        row = _node_report_jobs.get(job_id)
+        if row is None:
+            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
+        out = {k: v for k, v in row.items() if k != "report"}
+    out["ok"] = True
+    out["ready"] = out.get("state") == "done"
+    return jsonify(out)
+
+
+@app.route("/api/node-report/result", methods=["GET"])
+def api_node_report_result():
+    """Collect the finished document, optionally as a download."""
+    job_id = (request.args.get("job_id") or "").strip()
+    with _node_report_jobs_lock:
+        row = _node_report_jobs.get(job_id)
+        if row is None:
+            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
+        if row.get("state") == "error":
+            return jsonify({"ok": False, "error": row.get("error") or "job failed"}), 500
+        if row.get("state") != "done":
+            return jsonify({"ok": False, "error": "not ready", "phase": row.get("phase")}), 409
+        report = row.get("report")
+        # Freed on collection so an abandoned tab cannot pin a multi-MB document.
+        row.pop("report", None)
+        row["state"] = "collected"
+
+    body = json.dumps(report, indent=2)
+    if _truthy_arg(request.args.get("download")):
+        name = f"{report['report_metadata']['report_id']}.json"
+        return Response(body, mimetype="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    return Response(body, mimetype="application/json")
 
 
 def _analytics_aggregate_guard():
