@@ -118,8 +118,8 @@ terminal); `native_status.py` (primary rack/device status collector — merges `
 `ds`, `sinfo`, log-dir probes into in-memory state); `host_exec.py` + `transport/` (local-vs-SSH
 routing, env-forwarding, sudo escalation, SSH ControlMaster multiplexing, jump-host hop, fanout);
 `platforms/` (bcm.py / maas.py / base.py); `schedulers/` (slurm/local + runai/slinky/maas stubs);
-`workflow_engine.py`; `validation_activities.py` (durable validation-family launch registry;
-`multirack_jobs.py` is a thin compat shim); `rack_locks.py` (fcntl advisory locks); `catalog/`
+`workflow_engine.py`; `validation_activities.py` (durable validation-family launch registry; it
+migrates the legacy `multirack_jobs.json` on first read); `rack_locks.py` (fcntl advisory locks); `catalog/`
 (TinyDB tool/platform/project catalog blueprint); `ai_chat.py`; `token_vault.py`;
 `nvftp_cache_sync.py`; `rack_web/pam_*` (PAM login); `nvis_id_templates.py` (configurable
 rack/CT/NVSwitch naming templates); and `bin/scripts/` (bundled operational + benchmark bash).

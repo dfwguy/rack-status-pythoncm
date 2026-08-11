@@ -1913,7 +1913,7 @@ def _stress_worker(
     """Run a stress-style bash driver (mnubergemm, nvloom, …) in a background thread; update _stress_jobs[job_id].
 
     When *persist* is set, phase transitions are also mirrored into the durable
-    ``multirack_jobs`` store so the launch survives restarts / other sessions.
+    ``validation_activities`` store so the launch survives restarts / other sessions.
     """
 
     def _patch(**kwargs: object) -> None:
@@ -1998,7 +1998,7 @@ def _xrack_worker(
 ) -> None:
     """Run run-nemo-xrack.sh in a background thread; update _xrack_jobs[job_id].
 
-    Phase transitions are mirrored into the durable ``multirack_jobs`` store so the launch
+    Phase transitions are mirrored into the durable ``validation_activities`` store so the launch
     is visible across sessions / restarts. ``env_updates`` carries per-launch env knobs
     (NCCL debug + custom vars) from the launch modal, merged into the subprocess env.
     """
@@ -3942,12 +3942,12 @@ def _logscan_batch(
     finally:
         try:
             proc.kill()
-        except Exception:  # noqa: BLE001 - already finished is the normal case
-            pass
+        except Exception:  # already finished is the normal case
+            _logger.debug("nvis_logscan batch already exited", exc_info=True)
         try:
             host_exec.run_on_host(["rm", "-f", listing], timeout=30)
-        except Exception:  # noqa: BLE001 - a stray temp file is not worth failing the run
-            _logger.debug("could not remove %s", listing)
+        except Exception:  # a stray temp file is not worth failing the run
+            _logger.debug("could not remove %s", listing, exc_info=True)
     return out
 
 
@@ -12339,7 +12339,7 @@ def api_analytics_aggregate_async():
                 row = _analytics_jobs.get(job_id)
                 if row is not None:
                     row.update(state="done", payload=payload, current="")
-        except Exception as e:  # noqa: BLE001 - a worker crash must reach the operator, not a log
+        except Exception as e:  # a worker crash must reach the operator, not just a log
             _logger.exception("analytics aggregate job failed")
             with _analytics_jobs_lock:
                 row = _analytics_jobs.get(job_id)
@@ -12485,7 +12485,7 @@ def _analytics_aggregate_compute(log_dir, rows_in, body, progress=None):
             if sp not in _seen_paths:
                 _seen_paths.add(sp)
                 prescan_paths.append(sp)
-    except Exception:  # noqa: BLE001 - enumeration is best effort; the loops re-derive anyway
+    except Exception:  # enumeration is best effort; the loops below re-derive what they need
         _logger.debug("analytics prescan enumeration failed", exc_info=True)
 
     _analytics_scan_ctx.batch = _logscan_batch(prescan_paths, on_progress=progress) if prescan_paths else {}
