@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
@@ -60,6 +61,7 @@ def fanout(
     sudo: bool = False,
     env_extra: dict[str, str] | None = None,
     retries: int = 2,
+    on_result: Callable[[NodeResult, int, int], None] | None = None,
 ) -> list[NodeResult]:
     """Run *cmd* on each node via ``base.hop(node)`` concurrently; return per-node results.
 
@@ -67,6 +69,11 @@ def fanout(
     MaxSessions; combined with the base connection's ControlMaster (multiplexing),
     the concurrent hops reuse a single app->head connection. Transient handshake
     failures are retried (``retries``) with a short backoff.
+
+    ``on_result`` is called as ``(result, done, total)`` the moment each node finishes, so a
+    caller can publish progress during a long sweep instead of waiting for the whole fleet.
+    A fleet-wide inventory is thousands of nodes and minutes long; without this the only
+    honest progress a UI could show is "started".
     """
     nodes = [n for n in nodes if n]
     if not nodes:
@@ -105,7 +112,14 @@ def fanout(
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_one, n): n for n in nodes}
         for fut in as_completed(futs):
-            results.append(fut.result())
+            result = fut.result()
+            results.append(result)
+            if on_result is not None:
+                try:
+                    on_result(result, len(results), len(nodes))
+                except Exception:
+                    # Progress reporting must never take the sweep down with it.
+                    _logger.debug("fanout: on_result callback failed", exc_info=True)
     # stable order by node name for deterministic output
     results.sort(key=lambda r: r.node)
     return results

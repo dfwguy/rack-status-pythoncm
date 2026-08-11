@@ -300,6 +300,7 @@ def build_report(
     cluster: dict[str, Any] | None = None,
     project: dict[str, Any] | None = None,
     overrides: dict[str, Any] | None = None,
+    inventory: dict[str, Any] | None = None,
     now: datetime | None = None,
     seq: int = 1,
 ) -> dict[str, Any]:
@@ -307,6 +308,10 @@ def build_report(
 
     ``overrides`` is merged over :data:`ASSUMPTIONS`, so a deployment can supply its real
     operator, test plan and firmware baseline without touching this module.
+
+    ``inventory`` is a measured :func:`node_inventory.build_inventory` block. Without it the
+    firmware section falls back to the placeholders this module shipped with, which is why an
+    unedited report used to carry all-zero MACs and ``TBD`` firmware for every node.
     """
     when = now or _now()
     assumptions = _deep_merge(ASSUMPTIONS, overrides or {})
@@ -428,15 +433,47 @@ def build_report(
             },
             "compute_model": _compute_model(platform, assumptions),
         },
-        "firmware_inventory": {
-            "captured_at": _iso(when),
-            "shared_baseline": _shared_baseline(platform, assumptions),
-            "nodes": _placeholder_nodes(nodes, platform, cluster),
-        },
+        "firmware_inventory": _firmware_inventory(
+            inventory, nodes, platform, cluster, assumptions, when
+        ),
         "summary": summary,
         "test_results": test_results,
     }
     return _prune(report)
+
+
+def _firmware_inventory(
+    inventory: dict[str, Any] | None,
+    nodes: list[dict[str, Any]],
+    platform: dict[str, Any],
+    cluster: dict[str, Any],
+    assumptions: dict[str, Any],
+    when: datetime,
+) -> dict[str, Any]:
+    """Measured inventory when a sweep supplied one, placeholders otherwise.
+
+    A measured block is merged *over* the assumed baseline rather than replacing it, so a field
+    the probe could not reach (the fabric switch firmware, which lives in UFM and not on any
+    node) keeps whatever the deployment configured instead of regressing to ``TBD``.
+    """
+    baseline = _shared_baseline(platform, assumptions)
+    if not inventory or not inventory.get("nodes"):
+        return {
+            "captured_at": _iso(when),
+            "shared_baseline": baseline,
+            "nodes": _placeholder_nodes(nodes, platform, cluster),
+        }
+
+    measured = inventory.get("shared_baseline") or {}
+    merged = _deep_merge(baseline, {
+        section: {k: v for k, v in fields.items() if v not in (None, "", TBD)}
+        for section, fields in measured.items()
+    })
+    return {
+        "captured_at": inventory.get("captured_at") or _iso(when),
+        "shared_baseline": merged,
+        "nodes": inventory["nodes"],
+    }
 
 
 def _placeholder_nodes(

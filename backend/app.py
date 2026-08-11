@@ -10928,6 +10928,53 @@ def api_bringup_fleet():
     return jsonify({"ok": True, "data": data})
 
 
+def _arg_or_body(name: str):
+    payload = request.get_json(silent=True)
+    if isinstance(payload, dict) and payload.get(name) is not None:
+        return payload.get(name)
+    return request.args.get(name)
+
+
+def _collect_node_inventory(fleet: dict) -> tuple[dict | None, list[str]]:
+    """Sweep the fleet for hardware identity, folding in BCM's rack/BMC view when reachable.
+
+    Returns ``(inventory, deviations)``; ``(None, [])`` when nothing could be collected, so the
+    report falls back to placeholders rather than failing.
+    """
+    try:
+        import node_inventory
+    except ImportError:
+        _logger.warning("node_inventory unavailable", exc_info=True)
+        return None, []
+
+    hosts = [str(n.get("node")) for n in (fleet.get("nodes") or []) if n.get("node")]
+    if not hosts:
+        return None, []
+
+    records, errors = node_inventory.collect_fleet(hosts)
+    if errors:
+        _logger.warning("node inventory: %d/%d node(s) did not answer", len(errors), len(hosts))
+    if not records:
+        return None, []
+
+    bcm_by_host: dict = {}
+    try:
+        import bcm_query
+
+        bcm_by_host = bcm_query.index_by_hostname(bcm_query.nodes())
+    except Exception:  # BCM identity is an enrichment, not a prerequisite
+        _logger.debug("node inventory: BCM lookup unavailable", exc_info=True)
+
+    inventory, deviations = node_inventory.build_inventory(records, bcm_by_host=bcm_by_host)
+    inventory["captured_at"] = _node_report._iso(_node_report._now())
+    if errors:
+        deviations.append(
+            f"{len(errors)} of {len(hosts)} nodes did not answer the inventory probe; "
+            f"the baseline is drawn from the {len(records)} that did"
+        )
+    return inventory, deviations
+
+
 @app.route("/api/node-report", methods=["GET", "POST"])
 def api_node_report():
     """Daily node-validation report as schema-validated JSON.
@@ -10970,12 +11017,25 @@ def api_node_report():
     def _as_dict(obj):
         return obj.to_dict() if hasattr(obj, "to_dict") else (obj or {})
 
+    # A measured inventory costs a fleet-wide SSH sweep (~2 min at 2000 nodes), so it is opt-in
+    # rather than the cost of every report render. Without it the firmware block falls back to
+    # placeholders, which is what this report shipped with before the sweep existed.
+    inventory = deviations = None
+    if _truthy_arg(_arg_or_body("inventory")):
+        inventory, deviations = _collect_node_inventory(fleet)
+
     report = _node_report.build_report(
         fleet,
         platform=_as_dict(platform),
         cluster=_as_dict(cluster),
         project=_as_dict(project),
+        inventory=inventory,
     )
+    if deviations:
+        # Published per test result: the schema has no document-level place for them, and a
+        # reshaped value that is not disclosed is worse than one that was never measured.
+        for entry in report.get("test_results") or []:
+            entry.setdefault("deviations", []).extend(deviations)
     errors = _node_report.validate(report)
     if errors:
         # Surface it rather than shipping an invalid document to a customer-facing report.
