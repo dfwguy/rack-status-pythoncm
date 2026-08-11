@@ -3934,10 +3934,6 @@ def _logscan_batch(
             p = str(rec.get("path") or "")
             if p:
                 out[p] = rec
-                # Share the single-file cache: once the batch has read a log, every later
-                # question about it (success probe, run geometry, universal overlay) is a dict
-                # lookup instead of another process.
-                _logscan_cache_put(p, rec)
             done += 1
             if on_progress:
                 on_progress(done, total, p)
@@ -4023,6 +4019,16 @@ def _logscan_record(path, *, timeout: int = 300) -> dict | None:
     Cached per path+mtime: the analytics aggregate asks for the same log from several places.
     """
     lp = str(_rpath(path))
+
+    # The batch this thread is working through, keyed by path and needing no stat. Checked first
+    # because the stat-validated key below costs an SSH round trip per lookup: doing that once
+    # per record turned a 40 s batch into roughly 30 s PER FILE on the real corpus.
+    batch = getattr(_analytics_scan_ctx, "batch", None)
+    if batch:
+        hit = batch.get(lp)
+        if hit is not None:
+            return hit
+
     key = _logscan_cache_key(lp)
     if key in _LOGSCAN_CACHE:
         return _LOGSCAN_CACHE[key]
