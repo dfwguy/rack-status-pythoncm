@@ -43,7 +43,7 @@ LLMB_INSTALL="${LLMB_INSTALL%/}"
 LLMB_REPO="${LLMB_REPO:-}"
 LLMB_REPO="${LLMB_REPO%/}"
 LLMB_RUN="${LLMB_RUN:-}"
-JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-}}"
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 
 LLMB_WORKLOAD="${NVIS_LLMB_NEMO_WORKLOAD:-pretrain_nemotron-h}"
 LLMB_MODEL_SIZE="${NVIS_LLMB_NEMO_MODEL_SIZE:-56b}"
@@ -58,6 +58,8 @@ RACK_ID=""
 POSITIONAL=()
 
 die() { echo "run_llmb_nemo: $*" >&2; exit 2; }
+
+mkdir -p "${JOB_LOG_DIR}" || die "cannot create log directory: ${JOB_LOG_DIR}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

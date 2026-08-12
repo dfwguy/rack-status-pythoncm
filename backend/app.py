@@ -151,6 +151,7 @@ import nvlink_preflight
 import rack_locks
 import token_vault
 import validation_activities
+import validation_presets
 import workflow_engine
 from platforms import get_platform as _get_platform
 
@@ -13276,6 +13277,106 @@ def api_multirack_status():
     return jsonify(payload)
 
 
+def _multirack_campaign_manifest() -> dict[str, object]:
+    """Load the configured exact-node campaign manifest from the scripts host."""
+    campaign_id = (_eget("RACK_MULTIRACK_CAMPAIGN_ID") or "").strip()
+    raw_path = (_eget("RACK_MULTIRACK_CAMPAIGN_MANIFEST") or "").strip()
+    if not campaign_id or not raw_path:
+        return {"ok": True, "active": False, "id": campaign_id, "rack_nodes": {}}
+    if raw_path.startswith("local:"):
+        path = Path(raw_path[6:])
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(f"cannot read campaign manifest {path}: {exc}") from exc
+    else:
+        text, meta = host_exec.read_text(raw_path, whole_bytes=4 * 1024 * 1024, role="scripts")
+        if not bool(meta.get("ok", True)):
+            raise RuntimeError(f"cannot read campaign manifest {raw_path}: {meta.get('error') or 'read failed'}")
+    nodes = [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if not nodes:
+        raise RuntimeError("campaign manifest is empty")
+    if len({node.casefold() for node in nodes}) != len(nodes):
+        raise RuntimeError("campaign manifest contains duplicate nodes")
+    rack_nodes: dict[str, list[str]] = {}
+    for node in nodes:
+        parsed = _nvis_naming().sinfo_rack_from_host(node)
+        if parsed is None or parsed[1] is None:
+            raise RuntimeError(f"campaign manifest contains an invalid compute node: {node}")
+        rack = _normalize_rack_id(parsed[0])
+        rack_nodes.setdefault(rack, []).append(node)
+    expected = max(1, _eget_int("RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK", 16))
+    wrong = {rack: len(hosts) for rack, hosts in rack_nodes.items() if len(hosts) != expected}
+    if wrong:
+        details = ", ".join(f"{rack}={count}" for rack, count in sorted(wrong.items()))
+        raise RuntimeError(f"campaign manifest requires exactly {expected} nodes per rack; got {details}")
+    return {
+        "ok": True,
+        "active": True,
+        "id": campaign_id,
+        "manifest": raw_path,
+        "nodes_per_rack": expected,
+        "rack_nodes": rack_nodes,
+    }
+
+
+def _multirack_campaign_snapshot() -> dict[str, object]:
+    manifest = _multirack_campaign_manifest()
+    if not manifest.get("active"):
+        return manifest
+    rack_nodes = manifest["rack_nodes"]
+    assert isinstance(rack_nodes, dict)
+    proc = host_exec.run_slurm_on_host(
+        _get_platform().sinfo_cmd('-N -h -o "%N|%T"'),
+        timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "sinfo failed").strip())
+    states: dict[str, str] = {}
+    for line in (proc.stdout or "").splitlines():
+        node, sep, state = line.partition("|")
+        if sep and node.strip():
+            states[node.strip().casefold()] = state.strip().lower().rstrip("*")
+    allowed = {"idle", "alloc", "allocated"}
+    rows: list[dict[str, object]] = []
+    for rack, raw_nodes in sorted(rack_nodes.items()):
+        hosts = list(raw_nodes) if isinstance(raw_nodes, list) else []
+        unavailable = []
+        for node in hosts:
+            state = states.get(node.casefold(), "missing")
+            if state not in allowed:
+                unavailable.append({"node": node, "state": state})
+        eligible = not unavailable
+        reason = "" if eligible else "exact manifest nodes unavailable (" + ", ".join(
+            f"{state}={sum(1 for row in unavailable if row['state'] == state)}"
+            for state in sorted({str(row["state"]) for row in unavailable})
+        ) + ")"
+        rows.append({
+            "rack": rack,
+            "nodes": hosts,
+            "node_count": len(hosts),
+            "eligible": eligible,
+            "reason": reason,
+            "unavailable_nodes": unavailable,
+        })
+    return {
+        **{key: value for key, value in manifest.items() if key != "rack_nodes"},
+        "rack_count": len(rows),
+        "node_count": sum(int(row["node_count"]) for row in rows),
+        "eligible_count": sum(1 for row in rows if row["eligible"]),
+        "racks": rows,
+    }
+
+
+@app.route("/api/multirack-campaign")
+def api_multirack_campaign():
+    try:
+        return jsonify(_multirack_campaign_snapshot())
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        app.logger.exception("multirack campaign snapshot failed")
+        return jsonify({"ok": False, "active": False, "error": str(exc)}), 503
+
+
 _EXPORT_RACK_RE = re.compile(r"^(p\d+-r)(\d+)$", re.IGNORECASE)
 
 
@@ -14867,6 +14968,31 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
     if not rack_ids:
         return None, (jsonify({"ok": False, "error": "no valid rack ids"}), 400)
 
+    # When an exact-node campaign is configured it is authoritative: excluded or
+    # unhealthy trays must never be silently reintroduced by rack-name expansion.
+    try:
+        campaign_snapshot = _multirack_campaign_snapshot()
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        return None, (jsonify({"ok": False, "error": f"exact-node campaign unavailable: {exc}"}), 503)
+    campaign_id = str(campaign_snapshot.get("id") or "")
+    requested_campaign = str(body.get("campaign") or "").strip()
+    if requested_campaign and requested_campaign != campaign_id:
+        return None, (jsonify({"ok": False, "error": "stale or unknown exact-node campaign id"}), 409)
+    exact_nodes: list[str] = []
+    if campaign_snapshot.get("active"):
+        indexed = {
+            str(row.get("rack") or ""): row
+            for row in campaign_snapshot.get("racks", [])
+            if isinstance(row, dict)
+        }
+        for rack in rack_ids:
+            row = indexed.get(rack)
+            if row is None:
+                return None, (jsonify({"ok": False, "error": f"rack {rack} is outside exact-node campaign {campaign_id}"}), 409)
+            if not row.get("eligible"):
+                return None, (jsonify({"ok": False, "error": f"rack {rack}: {row.get('reason') or 'not eligible'}"}), 409)
+            exact_nodes.extend(str(node) for node in row.get("nodes", []) if str(node).strip())
+
     # Multi-rack NCCL now runs the DIRECT path (run_nccl_mpi.sh → nccl_allreduce.sbatch:
     # host nccl-tests + mpirun, NCCL over the IB rails). This replaces the llmb-run
     # pyxis/enroot container, whose UCX could not see the RDMA verbs devices inside the
@@ -14904,7 +15030,10 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
     rounds = _nccl_rounds_from_body(body, None) if not use_container else None
     if rounds:
         cmd += ["--rounds", str(rounds)]
-    cmd += rack_ids
+    if exact_nodes:
+        cmd += ["--nodelist", ",".join(exact_nodes)]
+    else:
+        cmd += rack_ids
 
     display_cmd = "./" + script.name + (
         (" --reservation " + shlex.quote(reservation)) if reservation else ""
@@ -14914,12 +15043,16 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
         (" --nccl-version " + shlex.quote(nccl_version)) if nccl_version else ""
     ) + (
         (" --rounds " + str(rounds)) if rounds else ""
-    ) + " " + " ".join(shlex.quote(r) for r in rack_ids)
+    ) + ((" --nodelist " + shlex.quote(",".join(exact_nodes))) if exact_nodes else (
+        " " + " ".join(shlex.quote(r) for r in rack_ids)
+    ))
     timeout = max(120, _job_env_int("RACK_LLMB_NCCL_TIMEOUT", 14400))
     return (
         {
             "log_dir": log_dir,
             "racks": rack_ids,
+            "campaign": campaign_id if exact_nodes else "",
+            "nodes": exact_nodes,
             "cmd": cmd,
             "display_cmd": display_cmd,
             "timeout": timeout,
@@ -14928,6 +15061,279 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
         },
         None,
     )
+
+
+def _validation_node_eligibility(nodes: list[str]) -> tuple[dict[str, str], list[str]]:
+    """Return live Slurm states and fail-closed reasons for an exact target set."""
+    spec = ",".join(nodes)
+    proc = _run_bash_slurm_prefix(
+        f"sinfo -N -h --nodes={shlex.quote(spec)} -o '%N|%T'",
+        timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "unable to query exact node states").strip())
+    states: dict[str, str] = {}
+    for line in (proc.stdout or "").splitlines():
+        node, sep, state = line.partition("|")
+        if sep and node.strip():
+            states[node.strip().casefold()] = state.strip().lower().rstrip("*")
+    excluded = {
+        token.strip().casefold()
+        for token in (_eget("RACK_VALIDATION_EXCLUDED_NODES") or "").split(",")
+        if token.strip()
+    }
+    reasons: list[str] = []
+    for node in nodes:
+        state = states.get(node.casefold(), "missing")
+        if node.casefold() in excluded:
+            reasons.append(f"{node}=known-bad")
+        elif state != "idle":
+            reasons.append(f"{node}={state}")
+    return ({node: states.get(node.casefold(), "missing") for node in nodes}, reasons)
+
+
+def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
+    """Resolve an allowlisted preset into an exact-node, shell-free launch plan."""
+    try:
+        preset = validation_presets.resolve_preset(body.get("preset_id", body.get("validation")))
+        options = validation_presets.normalize_options(body, preset)
+        log_raw = body.get("log_dir")
+        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
+    except ValueError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 400)
+
+    scope = str(options["scope"])
+    racks_raw = body.get("racks")
+    if racks_raw is None and body.get("rack"):
+        racks_raw = [body.get("rack")]
+    if racks_raw is not None and not isinstance(racks_raw, list):
+        return None, (jsonify({"ok": False, "error": "racks must be an array"}), 400)
+    racks: list[str] = []
+    try:
+        for raw in racks_raw or []:
+            rack = _normalize_rack_id(str(raw).strip())
+            if rack not in racks:
+                racks.append(rack)
+    except ValueError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 400)
+
+    nodes_raw = body.get("nodes")
+    if nodes_raw is not None and (not isinstance(nodes_raw, list) or not nodes_raw):
+        return None, (jsonify({"ok": False, "error": "nodes must be a non-empty array"}), 400)
+    nodes: list[str] = []
+    if isinstance(nodes_raw, list):
+        for raw in nodes_raw:
+            node = str(raw).strip()
+            if not node or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", node):
+                return None, (jsonify({"ok": False, "error": f"invalid node name: {raw!r}"}), 400)
+            if node.casefold() not in {item.casefold() for item in nodes}:
+                nodes.append(node)
+    target = body.get("target")
+    if not nodes and isinstance(target, str) and target.strip():
+        nodes = _scontrol_hostnames_preserving_case(target)
+        if not nodes:
+            return None, (jsonify({"ok": False, "error": "target did not resolve to any Slurm nodes"}), 400)
+
+    campaign_id = ""
+    if not nodes and racks:
+        try:
+            campaign = _multirack_campaign_snapshot()
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            return None, (jsonify({"ok": False, "error": f"exact-node campaign unavailable: {exc}"}), 503)
+        campaign_id = str(campaign.get("id") or "")
+        requested_campaign = str(body.get("campaign") or "").strip()
+        if requested_campaign and requested_campaign != campaign_id:
+            return None, (jsonify({"ok": False, "error": "stale or unknown exact-node campaign id"}), 409)
+        if campaign.get("active"):
+            indexed = {str(row.get("rack") or ""): row for row in campaign.get("racks", []) if isinstance(row, dict)}
+            for rack in racks:
+                row = indexed.get(rack)
+                if row is None:
+                    return None, (jsonify({"ok": False, "error": f"rack {rack} is outside exact-node campaign {campaign_id}"}), 409)
+                if not row.get("eligible"):
+                    return None, (jsonify({"ok": False, "error": f"rack {rack}: {row.get('reason') or 'not eligible'}"}), 409)
+                nodes.extend(str(node) for node in row.get("nodes", []) if str(node).strip())
+        else:
+            for rack in racks:
+                resolved = _rack_node_hostnames_from_inventory(rack)
+                if not resolved:
+                    return None, (jsonify({"ok": False, "error": f"no Slurm inventory nodes found for rack {rack}"}), 409)
+                nodes.extend(resolved)
+
+    nodes = _dedupe_hostnames_preserve_spelling(nodes)
+    if not nodes:
+        return None, (jsonify({"ok": False, "error": "explicit nodes, target, or racks are required"}), 400)
+    inventory = _all_slurm_nodenames()
+    if inventory:
+        known = {node.casefold() for node in inventory}
+        unknown = [node for node in nodes if node.casefold() not in known]
+        if unknown:
+            return None, (jsonify({"ok": False, "error": f"nodes not in current Slurm inventory: {', '.join(unknown)}"}), 409)
+    if scope == "rack" and len(racks) != 1:
+        return None, (jsonify({"ok": False, "error": "rack scope requires exactly one rack"}), 400)
+    if scope == "multirack" and len(racks) < 2 and not isinstance(nodes_raw, list):
+        return None, (jsonify({"ok": False, "error": "multirack scope requires at least two racks or an explicit node list"}), 400)
+    if preset.max_nodes is not None and len(nodes) > preset.max_nodes:
+        return None, (jsonify({"ok": False, "error": f"{preset.id} supports at most {preset.max_nodes} node(s); resolved {len(nodes)}"}), 400)
+    if preset.exact_nodes is not None and len(nodes) != preset.exact_nodes:
+        return None, (jsonify({"ok": False, "error": f"{preset.id} requires exactly {preset.exact_nodes} nodes/1024 GPUs; resolved {len(nodes)}"}), 409)
+    try:
+        node_states, ineligible = _validation_node_eligibility(nodes)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        return None, (jsonify({"ok": False, "error": f"unable to verify exact-node scheduler eligibility: {exc}"}), 503)
+    if ineligible:
+        shown = ", ".join(ineligible[:12])
+        suffix = f" (+{len(ineligible) - 12} more)" if len(ineligible) > 12 else ""
+        return None, (jsonify({"ok": False, "error": f"exact target is not idle/eligible: {shown}{suffix}"}), 409)
+
+    script = Path(_scripts_dir()) / "run-validation-preset.sh"
+    if not _script_exists(script):
+        return None, (jsonify({"ok": False, "error": f"validation preset launcher not found: {script}"}), 500)
+    node_spec = ",".join(nodes)
+    cmd = ["bash", str(script), "--preset", preset.id, "--nodelist", node_spec,
+           "--storage", str(options["storage"]), "--local-container-dir",
+           str(options["local_container_dir"]), "--log-dir", str(log_dir)]
+    if options["rsync_to_local"]:
+        cmd.append("--rsync")
+    display_cmd = " ".join(shlex.quote(part) for part in cmd)
+    image_path = preset.local_image if options["storage"] == "local" else preset.shared_image
+    checks = ["exact Slurm node identity", "scheduler eligibility at allocation time"]
+    if preset.shared_image:
+        checks += ["allowlisted image byte size", "allowlisted image SHA256"]
+    if preset.requires_infiniband:
+        checks += ["/dev/infiniband and /sys/class/infiniband visibility"]
+    if preset.id == "nccl-2.31.2":
+        checks += ["selected CUDA runtime >= 13.3", "ncclGetVersion == 23102"]
+    if preset.id == "exemplar-system-info":
+        checks += ["DGXC v26.06.01 summary present", "nonfatal findings and warnings classified per node"]
+    summary = f"{preset.label}: {len(nodes)} exact node(s), storage={options['storage']}, rsync={str(options['rsync_to_local']).lower()}"
+    plan = {
+        "preset_id": preset.id,
+        "validation": preset.kind,
+        "summary": summary,
+        "scope": scope,
+        "nodes": nodes,
+        "racks": racks,
+        "target": node_spec,
+        "node_count": len(nodes),
+        "campaign": campaign_id,
+        "storage": options["storage"],
+        "rsync_to_local": options["rsync_to_local"],
+        "local_container_dir": options["local_container_dir"],
+        "container_profile": options["container_profile"],
+        "cuda_version": options["cuda_version"],
+        "nccl_version": options["nccl_version"],
+        "max_steps": options["max_steps"],
+        "requires_infiniband": options["requires_infiniband"],
+        "artifact": ({"path": image_path, "source": preset.shared_image, "size": preset.image_size,
+                      "sha256": preset.image_sha256} if preset.shared_image else None),
+        "checks": checks,
+        "node_states": node_states,
+        "command_display": display_cmd,
+        "cmd": cmd,
+        "log_dir": str(log_dir),
+        "timeout": max(120, _job_env_int("RACK_VALIDATION_PRESET_TIMEOUT", 28800)),
+        "env_updates": {"NVIS_PREPARED_NODE_COUNT": str(len(nodes)),
+                        "NVIS_PRESET_SCOPE_MULTIRACK": "1" if scope == "multirack" else "0"},
+        "image_override_note": ("DGXC recipe v26.06.01 with audited NeMo 26.04.01 image override" if preset.id == "exemplar-system-info" else None),
+    }
+    hash_fields = {key: plan[key] for key in (
+        "preset_id", "scope", "nodes", "racks", "campaign", "storage", "rsync_to_local",
+        "local_container_dir", "container_profile", "cuda_version", "nccl_version", "max_steps", "artifact", "log_dir",
+    )}
+    plan["plan_hash"] = hashlib.sha256(
+        json.dumps(hash_fields, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return plan, None
+
+
+@app.route("/api/validation-presets", methods=["GET"])
+def api_validation_presets():
+    return jsonify({"ok": True, "presets": validation_presets.catalogue()})
+
+
+@app.route("/api/validation-presets/prepare", methods=["POST"])
+def api_prepare_validation_preset():
+    body = request.get_json(silent=True) or {}
+    plan, err = _prepare_validation_preset(body)
+    if err is not None:
+        return err
+    assert plan is not None
+    public_plan = {key: value for key, value in plan.items() if key not in ("cmd", "env_updates", "timeout", "log_dir")}
+    return jsonify({"ok": True, "plan": public_plan})
+
+
+def _run_validation_preset_async(body: dict):
+    plan, err = _prepare_validation_preset(body)
+    if err is not None:
+        return err
+    assert plan is not None
+    supplied_hash = str(body.get("plan_hash") or "").strip()
+    if not supplied_hash:
+        return jsonify({"ok": False, "error": "plan_hash from /api/validation-presets/prepare is required"}), 409
+    if not secrets.compare_digest(supplied_hash, str(plan["plan_hash"])):
+        return jsonify({"ok": False, "error": "validation plan changed; prepare and review it again", "plan_hash": plan["plan_hash"]}), 409
+    job_id = str(uuid.uuid4())
+    operator = _operator_from_request()
+    tool = {
+        "nccl-2.31.2": "nccl-fullrack", "llama31-405b-fp8": "llama-exemplar",
+        "gpt-oss-cpu": "external", "exemplar-system-info": "external",
+        "nemo-26.04.01": "nemo-xrack", "mnubergemm-26.03-v1.17": "mnubergemm",
+    }[str(plan["preset_id"])]
+    racks = [str(rack) for rack in plan["racks"]]
+    _record_validation_activity(tool, stage="other", scope=str(plan["scope"]),
+        rack=racks[0] if racks else "", racks=racks, log_dir=str(plan["log_dir"]),
+        command_display=str(plan["command_display"]), activity_id=job_id, operator=operator)
+    with _stress_jobs_lock:
+        _stress_jobs[job_id] = {
+            "job_id": job_id, "kind": "validation-preset", "preset_id": plan["preset_id"],
+            "operator": operator, "racks": racks, "nodes": plan["nodes"], "node_count": plan["node_count"],
+            "log_dir": plan["log_dir"], "phase": "starting", "command_display": plan["command_display"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    threading.Thread(target=_stress_worker,
+        args=(job_id, plan["cmd"], plan["log_dir"], plan["timeout"], plan["command_display"]),
+        kwargs={"error_label": "validation preset launcher", "env_updates": plan["env_updates"],
+                "profile": "script", "persist": True}, daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id, "preset_id": plan["preset_id"],
+                    "nodes": plan["nodes"], "node_count": plan["node_count"],
+                    "command_display": plan["command_display"], "timeout_sec": plan["timeout"]})
+
+
+@app.route("/api/run-validation-preset-async", methods=["POST"])
+def api_run_validation_preset_async():
+    return _run_validation_preset_async(request.get_json(silent=True) or {})
+
+
+@app.route("/api/run-exemplar-sysinfo-async", methods=["POST"])
+def api_run_exemplar_sysinfo_async():
+    body = request.get_json(silent=True) or {}
+    body["preset_id"] = "exemplar-system-info"
+    return _run_validation_preset_async(body)
+
+
+def _validation_preset_status_payload(job_id: str):
+    if not job_id:
+        return jsonify({"ok": False, "error": "job_id is required"}), 400
+    with _stress_jobs_lock:
+        row = _stress_jobs.get(job_id)
+        payload = dict(row) if row is not None else None
+    if payload is None:
+        payload = validation_activities.get_activity(job_id)
+    if payload is None:
+        return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
+    payload["ok"] = True
+    return jsonify(payload)
+
+
+@app.route("/api/run-validation-preset-status", methods=["GET"])
+def api_run_validation_preset_status():
+    return _validation_preset_status_payload((request.args.get("job_id") or "").strip())
+
+
+@app.route("/api/run-exemplar-sysinfo-status", methods=["GET"])
+def api_run_exemplar_sysinfo_status():
+    return _validation_preset_status_payload((request.args.get("job_id") or "").strip())
 
 
 @app.route("/api/run-mnubergemm-stress-async", methods=["POST"])

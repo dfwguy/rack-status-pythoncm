@@ -258,6 +258,113 @@ describe("MultirackView rack filters", () => {
     expect(screen.getByText("2 selected")).toBeTruthy();
   });
 
+  it("offers DGXC system_info fanout for selected racks and keeps GPT-OSS single-node only", async () => {
+    renderView();
+    await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeTruthy());
+    fireEvent.click(screen.getByText("Select all eligible (4)"));
+
+    const sysinfoButton = screen.getByRole("button", { name: "DGXC system_info" });
+    expect(sysinfoButton).toBeEnabled();
+    expect(screen.getByText("GPT-OSS CPU overhead: single-node view only")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Legacy Llama|512-GPU/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Llama 405B FP8 — 1024 GPUs / 50 steps" })).toBeDisabled();
+    fireEvent.click(sysinfoButton);
+
+    expect(await screen.findByRole("dialog", { name: "NVIDIA DGXC v26.06.01 system_info" })).toBeInTheDocument();
+    expect(screen.getByText(/fans out to every selected node/i)).toBeInTheDocument();
+  });
+
+  it("enables fixed Llama 1024 only when the exact-node campaign resolves 256 nodes", async () => {
+    const campaignRacks = Array.from({ length: 16 }, (_, index) => `rack-${String(index + 1).padStart(2, "0")}`);
+    const emptyBody = { ok: true, rows: [], jobs: [] };
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      if (String(input) === "/api/multirack-campaign") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            ok: true,
+            active: true,
+            id: "exemplar-16",
+            nodes_per_rack: 16,
+            rack_count: 16,
+            eligible_count: 16,
+            racks: campaignRacks.map((rackId, rackIndex) => ({
+              rack: rackId,
+              eligible: true,
+              reason: "",
+              node_count: 16,
+              nodes: Array.from({ length: 16 }, (_, nodeIndex) => `${rackId}-n${rackIndex}-${nodeIndex}`),
+            })),
+          }),
+          json: async () => ({
+            ok: true,
+            active: true,
+            id: "exemplar-16",
+            nodes_per_rack: 16,
+            rack_count: 16,
+            eligible_count: 16,
+            racks: campaignRacks.map((rackId, rackIndex) => ({
+              rack: rackId,
+              eligible: true,
+              reason: "",
+              node_count: 16,
+              nodes: Array.from({ length: 16 }, (_, nodeIndex) => `${rackId}-n${rackIndex}-${nodeIndex}`),
+            })),
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(emptyBody),
+        json: async () => emptyBody,
+      } as Response);
+    });
+    const rows = campaignRacks.map((id) => rack(id, "done"));
+    render(<MultirackView data={{ ...makeData(), rows, hierarchy: undefined } as RackStatusResponse} logDir="/logs" />);
+
+    await waitFor(() => expect(screen.getByText("Select all eligible (16)")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("Select all eligible (16)"));
+    expect(screen.getByRole("button", { name: "Llama 405B FP8 — 1024 GPUs / 50 steps" })).toBeEnabled();
+    expect(screen.getByText(/16 selected nodes per rack/i)).toBeInTheDocument();
+  });
+
+  it("does not infer 256 exact nodes from rack count times campaign geometry", async () => {
+    const campaignRacks = Array.from({ length: 16 }, (_, index) => `rack-${String(index + 1).padStart(2, "0")}`);
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      const body = String(input) === "/api/multirack-campaign"
+        ? {
+            ok: true,
+            active: true,
+            id: "exemplar-16",
+            nodes_per_rack: 16,
+            racks: campaignRacks.map((rackId) => ({ rack: rackId, eligible: true, reason: "", node_count: 15 })),
+          }
+        : { ok: true, rows: [], jobs: [] };
+      return Promise.resolve(new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    render(
+      <MultirackView
+        data={{ ...makeData(), rows: campaignRacks.map((id) => rack(id, "done")), hierarchy: undefined } as RackStatusResponse}
+        logDir="/logs"
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("Select all eligible (16)")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("Select all eligible (16)"));
+    expect(screen.getByRole("button", { name: "Llama 405B FP8 — 1024 GPUs / 50 steps" })).toBeDisabled();
+    expect(screen.getByText(/240 manifest nodes are selected/i)).toBeInTheDocument();
+  });
+
+  it("gives every rack selection checkbox an accessible name", async () => {
+    renderView();
+    expect(await screen.findByRole("checkbox", { name: "Select rack ink50-dh01-d01" })).toBeInTheDocument();
+  });
+
   it("warns when a selected rack is hidden by the filter", async () => {
     renderView();
     await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeTruthy());

@@ -12,7 +12,7 @@
 # prolog/cgroup drift are detected and cancelled so a tier can't hang.
 #
 # Usage:  nohup ./nccl_campaign.sh > /dev/null 2>&1 &
-# Output: /home/nvis/nvis_campaign/<ts>/{results.tsv,driver.log}
+# Output: <rack-status-log-root>/nccl_campaign/<ts>/{results.tsv,driver.log}
 set -uo pipefail
 
 export LLMB_INSTALL="${LLMB_INSTALL:-/home/nvis/dgxc-benchmarking}"
@@ -46,7 +46,8 @@ command -v sinfo >/dev/null 2>&1 || { echo "FATAL: sinfo not on PATH"; exit 1; }
 [ -f "${VENV}/bin/activate" ] && source "${VENV}/bin/activate"
 
 TS="$(date +%Y%m%d-%H%M%S)"
-OUT="/home/nvis/nvis_campaign/${TS}"
+LOG_ROOT="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+OUT="${NVIS_NCCL_CAMPAIGN_OUT:-${LOG_ROOT%/}/nccl_campaign/${TS}}"
 mkdir -p "${OUT}"
 RES="${OUT}/results.tsv"
 LOG="${OUT}/driver.log"

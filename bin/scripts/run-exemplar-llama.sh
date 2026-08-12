@@ -5,6 +5,10 @@
 # inference validation, while this wrapper launches the 512-GPU training workload.
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+job_log_dir="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+mkdir -p "$job_log_dir" || { echo "ERROR: cannot create log directory: $job_log_dir" >&2; exit 2; }
+
 usage() {
   cat <<'EOF'
 Usage: run-exemplar-llama.sh --dtype fp8|nvfp4 --nodelist HOSTLIST
@@ -117,6 +121,15 @@ llmb_run="${NVIS_LLMB_RUN:-/home/cmods/workspace/llmb_venv/bin/llmb-run}"
 }
 export LLMB_INSTALL="$llmb_install"
 
+# llmb-run owns the inner sbatch call. Reuse the production shim so the outer
+# Slurm stdout cannot fall back to the LLMB workspace during a manual launch.
+# shellcheck disable=SC1091
+source "$script_dir/lib/sbatch_pin.inc.sh"
+if ((!dry_run)); then
+  nvis_sbatch_pin_install "$nodelist" "${job_log_dir%/}/exemplar-llama-${dtype}-512GPU_%j.out"
+  trap nvis_sbatch_pin_cleanup EXIT
+fi
+
 cmd=(
   "$llmb_run" submit
   --workload pretrain_llama3.1
@@ -126,6 +139,11 @@ cmd=(
   --nodelist "$nodelist"
   --dump-env
   --env "RUN_CONF_IMAGE=$run_image"
+  # The v26.06.01 recipe consumes MAX_STEPS and appends --max_steps=$MAX_STEPS.
+  # Keep this immutable: a 13-step "quick" interpretation is not validation.
+  --env MAX_STEPS=50
+  --env RUN_CONF_MOUNTS=/dev/infiniband
+  --env MELLANOX_VISIBLE_DEVICES=all
   # Required on this cluster until NVLink-domain CliqueIds are unique.
   --env NCCL_NVLS_ENABLE=0
 )
@@ -148,4 +166,9 @@ printf 'Command:'
 printf ' %q' "${cmd[@]}"
 printf '\n'
 
-exec "${cmd[@]}"
+cd "$job_log_dir"
+submit_log="${job_log_dir%/}/exemplar-llama-${dtype}-submit-$(date -u +%Y%m%dT%H%M%SZ).log"
+set +e
+"${cmd[@]}" 2>&1 | tee "$submit_log"
+rc=${PIPESTATUS[0]}
+exit "$rc"

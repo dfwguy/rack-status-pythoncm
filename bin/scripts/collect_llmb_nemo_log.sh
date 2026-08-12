@@ -25,10 +25,12 @@ JID="${1:-}"
 RACK="${2:-}"
 [[ -n "${JID}" ]] || { echo "usage: $0 <jobid> [rack]" >&2; exit 2; }
 
-LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/home/cmods/benchmark/harish}}"
+LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 LLMB_INSTALL="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
 EXP_DIR="${LLMB_INSTALL%/}/workloads/pretrain_nemotron-h/experiments"
 MARKER="### NVIS: llmb inner log for job ${JID} appended below ###"
+
+mkdir -p "${LOG_DIR}" || { echo "collect_llmb_nemo: cannot create log directory: ${LOG_DIR}" >&2; exit 2; }
 
 inner="$(find "${EXP_DIR}" -name "log-default-default*_${JID}_*.out" 2>/dev/null | head -1)"
 if [[ -z "${inner}" || ! -f "${inner}" ]]; then

@@ -15,8 +15,8 @@
 #   e.g. nccl_fullrack_rounds.sh "$(paste -sd, b05_hosts.txt)" 5 1G 16G
 #
 # Dashboard integration (so the NVIS Rack Status app discovers + parses the result):
-#   NVIS_DASH_LOGDIR : directory to drop the app-discoverable Slurm-style log (default: $PWD, which
-#                      the backend sets to the app log_dir). File name:
+#   NVIS_DASH_LOGDIR : directory to drop the app-discoverable Slurm-style log (default: shared
+#                      rack-status log root). File name:
 #                        ${USER}-NCCL-1Rack-${NVIS_RACK}-${NNODES}N-<epoch>.txt
 #   NVIS_RACK        : rack id used in that filename (the backend passes the canonical rack id).
 set -uo pipefail
@@ -30,6 +30,7 @@ ROUNDS="${2:-5}"; BEG="${3:-1K}"; END="${4:-16G}"
 # $5 (rack id) is passed positionally by the app because env (NVIS_RACK) is not forwarded over SSH.
 RACK_ARG="${5:-}"
 GPN="${GPUS_PER_NODE:-4}"
+LOG_ROOT="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 
 # Normalize <hosts> into a "host:GPN,host:GPN,..." CSV. Three cases:
 #   (a) already node:gpus CSV (contains ':')            -> use as-is
@@ -57,7 +58,7 @@ fi
 NP=$(printf '%s' "$HOSTS" | tr ',' '\n' | awk -F: '{s+=($2==""?1:$2)} END{print s}')
 NNODES=$(printf '%s' "$HOSTS" | tr ',' '\n' | grep -c .)
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-OUTDIR="$NCCL/rounds_${STAMP}"
+OUTDIR="${LOG_ROOT%/}/nccl-rounds/rounds_${STAMP}"
 mkdir -p "$OUTDIR"
 SUM="$OUTDIR/summary.tsv"
 printf 'round\tstatus\tmax_wrong\tpeak_busbw_GB/s\n' > "$SUM"
@@ -65,7 +66,7 @@ printf 'round\tstatus\tmax_wrong\tpeak_busbw_GB/s\n' > "$SUM"
 # App-discoverable log: NCCL-1Rack-<rack> so the single-rack dashboard row + "View Parser Results"
 # pick it up (distinct from NEMO). Numeric <epoch> suffix satisfies the app's "…N-<digits>.txt".
 RACK="${RACK_ARG:-${NVIS_RACK:-$(printf '%s' "$HOSTS" | cut -d, -f1 | cut -d: -f1)}}"
-DASH_DIR="${NVIS_DASH_LOGDIR:-$PWD}"
+DASH_DIR="${NVIS_DASH_LOGDIR:-${LOG_ROOT}}"
 mkdir -p "$DASH_DIR" 2>/dev/null || true
 DLOG="${DASH_DIR}/${USER:-root}-NCCL-1Rack-${RACK}-${NNODES}N-$(date +%s).txt"
 {

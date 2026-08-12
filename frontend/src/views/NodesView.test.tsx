@@ -71,7 +71,7 @@ function renderNodes(
 }
 
 function rack(id: string) {
-  // 8 trays per rack via parseNodesFromRack default fill: ct01..ct02 UP, rest unknown.
+  // ct01..ct02 are UP; the active catalog geometry fills the remaining trays as unknown.
   return { rack: id, nemo: "done", last_job: "1", sinfo: "idle=8", ct_down_unk: `UP:${id}-ct[01-02]` };
 }
 
@@ -113,10 +113,10 @@ describe("NodesView", () => {
   }
 
   it("renders the page and falls back to 18 rows when no catalog geometry is active", () => {
-    // 3 racks x 8 trays = 24 nodes; page size 18 => 18 visible, count says 24.
+    // 3 racks x 18 trays = 54 nodes; page size 18 keeps exactly one rack visible.
     renderNodes(status(["p5-r01", "p5-r02", "p5-r03"]));
     expect(screen.getByText("Nodes")).toBeInTheDocument();
-    expect(screen.getByText("24 of 24 nodes")).toBeInTheDocument();
+    expect(screen.getByText("54 of 54 nodes")).toBeInTheDocument();
     expect(visibleRowCount()).toBe(18);
   });
 
@@ -148,7 +148,7 @@ describe("NodesView", () => {
       renderNodes(status(["p5-r01", "p5-r02"]), {
         route: "/compute/nodes?node=p5-r02-ct01",
       });
-      expect(screen.getByText("1 of 16 nodes")).toBeInTheDocument();
+      expect(screen.getByText("1 of 36 nodes")).toBeInTheDocument();
     });
 
     it("behaves normally when no node is linked", () => {
@@ -167,11 +167,11 @@ describe("NodesView", () => {
 
   it("filters nodes by name", () => {
     renderNodes(status(["p5-r01", "p5-r02"]));
-    expect(screen.getByText("16 of 16 nodes")).toBeInTheDocument();
+    expect(screen.getByText("36 of 36 nodes")).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("Filter by node name…"), {
       target: { value: "r01-ct01" },
     });
-    expect(screen.getByText("1 of 16 nodes")).toBeInTheDocument();
+    expect(screen.getByText("1 of 36 nodes")).toBeInTheDocument();
     expect(screen.getByText("p5-r01-ct01")).toBeInTheDocument();
   });
 

@@ -35,9 +35,9 @@
 #   NCCL_IB_HCA / NCCL_SOCKET_IFNAME / UCX_* / OMPI_MCA_*  — override fabric auto-detect
 set -uo pipefail
 
-# NVIS Rack Status launches us with cwd = the dashboard log directory so batch stdout can be
-# tailed from the web UI. Capture it BEFORE we cd into LLMB_INSTALL. Override with RACK_JOB_LOG_DIR.
-JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-$PWD}"
+# Keep dashboard and manual launches on the shared cluster log root. RACK_JOB_LOG_DIR
+# remains the per-launch override; RACK_STATUS_LOG_DIR remains the deployment override.
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 
 LLMB_VENV="${LLMB_VENV:-/home/nvis/llmb_venv}"
 LLMB_INSTALL="${LLMB_INSTALL:-/home/nvis/dgxc-benchmarking}"
@@ -57,6 +57,8 @@ SCALE_OVERRIDE=""
 RACKS=()
 
 die() { echo "run_llmb_nccl: $*" >&2; exit 2; }
+
+mkdir -p "${JOB_LOG_DIR}" || die "cannot create log directory: ${JOB_LOG_DIR}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

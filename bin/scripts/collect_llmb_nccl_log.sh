@@ -12,16 +12,17 @@
 #   stdout files under the expected name and the existing parser reads them as-is.
 #
 # Usage:  collect_llmb_nccl_log.sh [JOBID]      (default: newest experiment dir)
-# Env:    LLMB_INSTALL, RACK_JOB_LOG_DIR (output dir; default $PWD)
+# Env:    LLMB_INSTALL, RACK_JOB_LOG_DIR / RACK_STATUS_LOG_DIR
 set -uo pipefail
 
 LLMB_INSTALL="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
-OUT_DIR="${RACK_JOB_LOG_DIR:-$PWD}"
+OUT_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 EXP_ROOT="${LLMB_INSTALL%/}/workloads/microbenchmark_nccl/experiments"
 JOBID="${1:-}"
 
 die() { echo "collect_llmb_nccl_log: $*" >&2; exit 2; }
 
+mkdir -p "${OUT_DIR}" || die "cannot create output directory: ${OUT_DIR}"
 [[ -d "${EXP_ROOT}" ]] || die "no experiments dir: ${EXP_ROOT}"
 
 if [[ -n "${JOBID}" ]]; then

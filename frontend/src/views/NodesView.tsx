@@ -130,7 +130,7 @@ export function NodesView({ data, logDir }: NodesViewProps) {
     const rows: RackRow[] = data?.rows ?? [];
     const out: NodeTableRow[] = [];
     for (const r of rows) {
-      const nodes = parseNodesFromRack(r.rack, r.ct_down_unk, physicalRf0, 8, naming);
+      const nodes = parseNodesFromRack(r.rack, r.ct_down_unk, physicalRf0, traysPerRack, naming);
       for (const n of nodes) {
         out.push({
           id: n.id,
@@ -143,7 +143,7 @@ export function NodesView({ data, logDir }: NodesViewProps) {
       }
     }
     return out;
-  }, [data, physicalRf0, naming, rackRowMap]);
+  }, [data, physicalRf0, naming, rackRowMap, traysPerRack]);
 
   const rowOptions = useMemo(() => {
     const set = new Set<string>();
@@ -426,6 +426,7 @@ export function NodesView({ data, logDir }: NodesViewProps) {
                 naming={naming}
                 selectedNodes={selectedNodeSet}
                 disabled={disabled}
+                validationScope="nodes"
                 onSelectPowerResetTargets={() => setSelectedId(selectedNode.id)}
               />
             )}

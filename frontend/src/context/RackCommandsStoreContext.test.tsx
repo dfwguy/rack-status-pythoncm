@@ -47,6 +47,22 @@ function Trigger({ rack, onDone }: { rack: string; onDone?: () => void }) {
   return null;
 }
 
+function AsyncValidationTrigger({ onAccepted }: { onAccepted: (jobId: string) => void }) {
+  const { launchAsyncValidationFamily } = useRackCommandsStore();
+  useEffect(() => {
+    void launchAsyncValidationFamily(
+      "p5-r99",
+      "Preset validation",
+      "validation",
+      "/api/run-validation-preset-async",
+      (jobId) => `/api/run-validation-preset-status?job_id=${jobId}`,
+      { preset_id: "nccl-2.31.2" },
+    ).then(onAccepted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return null;
+}
+
 describe("RackCommandsStoreProvider interceptor", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -114,5 +130,29 @@ describe("RackCommandsStoreProvider interceptor", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(screen.queryByText(/rack busy/i)).not.toBeInTheDocument();
+  });
+
+  it("returns after async submission and treats a server timeout as terminal", async () => {
+    const accepted = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.startsWith("/api/run-validation-preset-status")
+        ? { ok: false, phase: "timeout", error: "validation preset launcher timed out" }
+        : { ok: true, job_id: "preset-job-1" };
+      return Promise.resolve(new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+
+    render(
+      <RackCommandsStoreProvider>
+        <AsyncValidationTrigger onAccepted={accepted} />
+      </RackCommandsStoreProvider>,
+    );
+
+    await waitFor(() => expect(accepted).toHaveBeenCalledWith("preset-job-1"));
+    expect(await screen.findByRole("dialog", { name: "Preset validation — finished" })).toBeInTheDocument();
+    expect(screen.getByText(/validation preset launcher timed out/i)).toBeInTheDocument();
   });
 });

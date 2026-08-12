@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # nvloom single-rack Slurm job: expands a Slurm hostlist (same convention as validation / run_mnubergemm_stress.sh),
-# writes Slurm stdout under log_dir/nvloom/. Cwd must be the log directory (Flask sets cwd=log_dir).
+# writes Slurm stdout under log_dir/nvloom/. Manual runs use the shared cluster log root.
 #
 # Usage: ./run_nvloom_singlerack.sh <pNN-rMM-ct[range]>
 #
@@ -20,6 +20,7 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 # shellcheck disable=SC1091
 . "${_SCRIPT_DIR}/workspace-dir-common.sh"
 # shellcheck disable=SC1091
@@ -43,7 +44,8 @@ if ! _slurm_expand_to_wlist "${target}"; then
   exit 1
 fi
 
-mkdir -p nvloom
+mkdir -p "${JOB_LOG_DIR}/nvloom" || { echo "run_nvloom_singlerack: cannot create log directory: ${JOB_LOG_DIR}/nvloom" >&2; exit 2; }
+cd "${JOB_LOG_DIR}" || exit 2
 
 mapfile -t _cancel_ids < <(squeue -h -o '%i %j' 2>/dev/null | awk '$2 ~ /^nvloom/ {print $1}' || true)
 if [[ ${#_cancel_ids[@]} -gt 0 ]]; then
@@ -66,5 +68,5 @@ sbatch \
   -w "${_slurm_wlist}" \
   --requeue \
   --dependency=singleton \
-  --output="nvloom/${USER}-NVLOOM-${rack}-%j.txt" \
+  --output="${JOB_LOG_DIR%/}/nvloom/${USER}-NVLOOM-${rack}-%j.txt" \
   "${_SCRIPT_DIR}/nvloom_singlerack.sbatch"

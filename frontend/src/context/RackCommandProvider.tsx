@@ -40,6 +40,12 @@ export function RackCommandProvider({
     [store, rack]
   );
 
+  const launchAsyncValidationFamily = useCallback(
+    (label: string, cmdKind: NodeCmdKind, postUrl: string, statusUrl: (jobId: string) => string, body: Record<string, unknown>) =>
+      store.launchAsyncValidationFamily(rack, label, cmdKind, postUrl, statusUrl, body),
+    [store, rack]
+  );
+
   const openTailLogNemo = useCallback(() => store.openTailLogNemo(rack, ld, jid), [store, rack, ld, jid]);
 
   const value = useMemo<RackCommandContextValue>(
@@ -54,6 +60,7 @@ export function RackCommandProvider({
       runSyncJson,
       runAsyncReset,
       runAsyncValidationFamily,
+      launchAsyncValidationFamily,
       openTailLogNemo,
     }),
     [
@@ -67,6 +74,7 @@ export function RackCommandProvider({
       runSyncJson,
       runAsyncReset,
       runAsyncValidationFamily,
+      launchAsyncValidationFamily,
       openTailLogNemo,
     ]
   );

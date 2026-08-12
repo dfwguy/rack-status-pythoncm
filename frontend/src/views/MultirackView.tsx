@@ -19,12 +19,13 @@ import { Card, Text, Tag, Button, Banner, Flex } from "@nvidia/foundations-react
 import { attachLaunchOptions, type LaunchOptions } from "../lib/rackCommandBodies";
 import { LaunchOptionsDialog } from "../components/rack/LaunchOptionsDialog";
 import { MultiSelectCombobox } from "../components/MultiSelectCombobox";
-import { Layers, LineChart, Gauge, Search, Cpu } from "lucide-react";
+import { Layers, LineChart, Gauge, Search } from "lucide-react";
 import Tooltip from "@mui/material/Tooltip";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { ParserResultsDialog } from "../components/ParserResultsDialog";
 import { ValidationActivitiesTable } from "../components/rack/ValidationActivitiesTable";
+import { ValidationPresetDialog } from "../components/rack/ValidationPresetDialog";
 import { TailLogDialog } from "../components/TailLogDialog";
 import {
   buildMultirackTailBody,
@@ -38,6 +39,11 @@ import { buildRackRowMap } from "../lib/rackTopology";
 import type { MultirackJob, RackRow, RackStatusResponse } from "../types/api";
 import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
+import {
+  VALIDATION_PRESET_LABELS,
+  type ValidationPresetId,
+  type ValidationPresetRequest,
+} from "../lib/validationPresets";
 
 interface MultirackViewProps {
   data: RackStatusResponse | null;
@@ -93,6 +99,25 @@ interface MultirackStatusRow {
   nemo_hint?: string;
 }
 
+interface MultirackCampaignRack {
+  rack: string;
+  eligible: boolean;
+  reason: string;
+  nodes?: string[];
+  node_count?: number;
+}
+
+interface MultirackCampaignResponse {
+  ok: boolean;
+  active: boolean;
+  id?: string;
+  error?: string;
+  racks?: MultirackCampaignRack[];
+  eligible_count?: number;
+  rack_count?: number;
+  nodes_per_rack?: number;
+}
+
 /** log_file from API is usually a basename; strip any path for parser ?log_file= */
 function logBasenameForParser(logFile: string): string {
   const s = logFile.replace(/\\/g, "/").trim();
@@ -101,18 +126,11 @@ function logBasenameForParser(logFile: string): string {
   return i >= 0 ? s.slice(i + 1) : s;
 }
 
-type MultirackLaunchKind = "nemo" | "llmb" | "llama_exemplar";
-
-const LLAMA_EXEMPLAR_RACK_COUNT = 8;
-const LLAMA_EXEMPLAR_GPUS_PER_RACK = 64;
+type MultirackLaunchKind = "nemo" | "llmb";
 
 const LAUNCH_META: Record<MultirackLaunchKind, { label: string; asyncUrl: string }> = {
   nemo: { label: "Multirack NEMO validation", asyncUrl: "/api/run-nemo-xrack-async" },
   llmb: { label: "NCCL Microbenchmark (direct)", asyncUrl: "/api/run-llmb-nccl-async" },
-  llama_exemplar: {
-    label: "Llama 3.1 405B Exemplar",
-    asyncUrl: "/api/run-exemplar-llama-async",
-  },
 };
 
 const TERMINAL_PHASES = new Set(["done", "error", "timeout"]);
@@ -120,7 +138,6 @@ const TERMINAL_PHASES = new Set(["done", "error", "timeout"]);
 const LAUNCH_TITLE: Record<MultirackLaunchKind, string> = {
   nemo: "Launch Multirack NEMO Validation",
   llmb: "Launch NCCL Microbenchmark",
-  llama_exemplar: "Launch Llama 3.1 405B Exemplar",
 };
 
 const EMPTY_RACK_ROWS: RackRow[] = [];
@@ -128,7 +145,10 @@ const EMPTY_RACK_ROWS: RackRow[] = [];
 export function MultirackView({ data, logDir }: MultirackViewProps) {
   const [dryRun, setDryRun] = useState(false);
   const [pendingKind, setPendingKind] = useState<MultirackLaunchKind | null>(null);
+  const [pendingPreset, setPendingPreset] = useState<ValidationPresetId | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [campaign, setCampaign] = useState<MultirackCampaignResponse | null>(null);
+  const [campaignError, setCampaignError] = useState("");
 
   // Rack picker filters. 112 racks over 5 pages is unusable for "launch on row H" without them.
   const [query, setQuery] = useState("");
@@ -136,6 +156,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   const [validationFilters, setValidationFilters] = useState<string[]>([]);
   const [eligibleOnly, setEligibleOnly] = useState(false);
   const [launchingKind, setLaunchingKind] = useState<MultirackLaunchKind | null>(null);
+  const [launchingPreset, setLaunchingPreset] = useState<ValidationPresetId | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: "success" | "error" | "info" }>({
     open: false, message: "", severity: "info",
   });
@@ -250,11 +271,28 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
 
   const eligibilityMap = useMemo(() => {
     const map = new Map<string, { eligible: boolean; reason: string }>();
+    if (campaign?.active && (!campaign.ok || !Array.isArray(campaign.racks))) {
+      for (const row of rows) map.set(row.rack, { eligible: false, reason: "exact-node campaign unavailable" });
+      return map;
+    }
+    if (campaign?.active && Array.isArray(campaign.racks)) {
+      const campaignRows = new Map(campaign.racks.map((row) => [row.rack, row]));
+      for (const row of rows) {
+        const found = campaignRows.get(row.rack);
+        map.set(
+          row.rack,
+          found
+            ? { eligible: found.eligible, reason: found.reason }
+            : { eligible: false, reason: "not in active exact-node campaign" },
+        );
+      }
+      return map;
+    }
     for (const row of rows) {
       map.set(row.rack, isRackEligible(row));
     }
     return map;
-  }, [rows]);
+  }, [rows, campaign]);
 
   const eligibleCount = useMemo(() => {
     let count = 0;
@@ -368,14 +406,47 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     }
   }, [logDir]);
 
+  const fetchCampaign = useCallback(async () => {
+    try {
+      const response = await fetch("/api/multirack-campaign");
+      const body = (await response.json()) as MultirackCampaignResponse;
+      if (body.ok) {
+        setCampaign(body);
+        setCampaignError("");
+        // A selection can be made against stock eligibility before the live exact-node
+        // campaign arrives. Prune it at the snapshot boundary so no effect has to mirror
+        // derived state and a stale target cannot reach the launch dialog.
+        if (body.active && Array.isArray(body.racks)) {
+          const eligible = new Set(body.racks.filter((row) => row.eligible).map((row) => row.rack));
+          setSelected((previous) => {
+            const next = new Set([...previous].filter((rack) => eligible.has(rack)));
+            return next.size === previous.size ? previous : next;
+          });
+        }
+      } else {
+        setCampaign(body.active ? body : null);
+        setCampaignError(body.error || "Exact-node campaign eligibility is unavailable");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Exact-node campaign eligibility is unavailable";
+      setCampaign((previous) => previous?.active ? { ...previous, ok: false, error: message } : null);
+      setCampaignError(message);
+    }
+  }, []);
+
   const handleLaunch = async (kind: MultirackLaunchKind, opts: LaunchOptions) => {
     if (selected.size === 0 || launchingKind) return;
+    if (campaign?.active && !campaign.ok) {
+      setSnackbar({ open: true, message: "Exact-node campaign eligibility is unavailable; launch blocked.", severity: "error" });
+      return;
+    }
     const meta = LAUNCH_META[kind];
     const racks = [...selected].sort();
     setLaunchingKind(kind);
     try {
       const body: Record<string, unknown> = { racks, log_dir: logDir };
-      if (kind === "llmb" || kind === "llama_exemplar") body.dry_run = dryRun;
+      if (kind === "llmb") body.dry_run = dryRun;
+      if (kind === "llmb" && campaign?.active && campaign.id) body.campaign = campaign.id;
       attachLaunchOptions(body, opts);
       const res = await fetch(meta.asyncUrl, {
         method: "POST",
@@ -403,18 +474,47 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     if (kind) void handleLaunch(kind, opts);
   };
 
+  const launchPreset = async (request: ValidationPresetRequest) => {
+    const presetId = request.preset_id;
+    setLaunchingPreset(presetId);
+    try {
+      const response = await fetch("/api/run-validation-preset-async", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      const body = (await response.json()) as { ok?: boolean; error?: string };
+      if (!response.ok || !body.ok) {
+        throw new Error(body.error || `Launch failed (HTTP ${response.status})`);
+      }
+      setSnackbar({
+        open: true,
+        message: `${VALIDATION_PRESET_LABELS[presetId]} launched on ${request.racks?.length ?? 0} racks`,
+        severity: "success",
+      });
+      setSelected(new Set());
+      void fetchJobs();
+    } finally {
+      setLaunchingPreset(null);
+    }
+  };
+
   // Poll launched jobs; refresh on-disk results whenever a job newly reaches a terminal phase.
   useEffect(() => {
     fetchJobs();
     fetchMultirackStatus();
-    pollRef.current = setInterval(fetchJobs, 6000);
+    fetchCampaign();
+    pollRef.current = setInterval(() => {
+      void fetchJobs();
+      void fetchCampaign();
+    }, 6000);
     return () => {
       if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
       }
     };
-  }, [fetchJobs, fetchMultirackStatus]);
+  }, [fetchJobs, fetchMultirackStatus, fetchCampaign]);
 
   useEffect(() => {
     const terminal = jobs.filter((j) => TERMINAL_PHASES.has(j.phase)).length;
@@ -425,13 +525,32 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   }, [jobs, fetchMultirackStatus]);
 
   const noRacks = !data || rows.length === 0;
+  const selectedCampaignRows = useMemo(() => {
+    if (!campaign?.active || !campaign.ok || !Array.isArray(campaign.racks)) return [];
+    const byRack = new Map(campaign.racks.map((row) => [row.rack, row]));
+    return [...selected].map((rack) => byRack.get(rack)).filter((row): row is MultirackCampaignRack => Boolean(row));
+  }, [campaign, selected]);
+  const selectedCampaignIsExact =
+    selected.size > 0 &&
+    selectedCampaignRows.length === selected.size &&
+    selectedCampaignRows.every((row) =>
+      row.eligible &&
+      ((typeof row.node_count === "number" && row.node_count > 0) || (Array.isArray(row.nodes) && row.nodes.length > 0)),
+    );
+  const selectedCampaignNodeCount = selectedCampaignIsExact
+    ? selectedCampaignRows.reduce(
+        (total, row) => total + (typeof row.node_count === "number" ? row.node_count : row.nodes?.length ?? 0),
+        0,
+      )
+    : 0;
+  const llama1024Ready = selectedCampaignIsExact && selectedCampaignNodeCount === 256;
 
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader
         contentId="multirack"
         title="Multirack Validation"
-        description="Cross-rack NEMO, NCCL, and Llama 3.1 405B Exemplar runs spanning multiple racks."
+        description="Cross-rack NEMO, NCCL, DGXC system_info, and fixed 256-node / 1024-GPU, 50-step Llama 3.1 405B FP8 validation. GPT-OSS CPU overhead remains single-node only."
       />
 
       {/* Inline rack selection + launch */}
@@ -449,6 +568,21 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
             </Tag>
           )}
         </Flex>
+
+        {campaign?.active && campaign.ok ? (
+          <div style={{ marginBottom: 12 }}>
+            <Banner status="info">
+              Exact-node campaign active: {campaign.eligible_count ?? 0} of {campaign.rack_count ?? 0} racks eligible, {campaign.nodes_per_rack ?? 16} selected nodes per rack. NCCL launches use these manifest nodes only.
+            </Banner>
+          </div>
+        ) : null}
+        {campaignError ? (
+          <div style={{ marginBottom: 12 }}>
+            <Banner status="warning">
+              Exact-node campaign unavailable: {campaignError}. {campaign?.active ? "Campaign launch is blocked." : "Stock eligibility is shown."}
+            </Banner>
+          </div>
+        ) : null}
 
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
           <Flex gap="4" wrap="wrap" align="end">
@@ -570,40 +704,41 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
               <Gauge size={16} style={{ marginRight: 6 }} />
               {launchingKind === "llmb" ? "Launching…" : `Launch NCCL Microbenchmark (${selected.size})`}
             </Button>
-            <Button
-              kind="secondary"
-              size="small"
-              onClick={() => setPendingKind("llama_exemplar")}
-              disabled={
-                noRacks ||
-                selected.size !== LLAMA_EXEMPLAR_RACK_COUNT ||
-                launchingKind !== null
-              }
-            >
-              <Cpu size={16} style={{ marginRight: 6 }} />
-              {launchingKind === "llama_exemplar"
-                ? "Launching…"
-                : `Launch Llama 405B Exemplar (${selected.size})`}
-            </Button>
           </Flex>
         </Flex>
 
-        {selected.size > 0 && selected.size !== LLAMA_EXEMPLAR_RACK_COUNT && (
-          <div style={{ marginBottom: 12 }}>
-            <Banner status="info">
-              Llama 3.1 405B Exemplar requires exactly {LLAMA_EXEMPLAR_RACK_COUNT} racks × 16 trays × 4 GB300 GPUs
-              = 512 GPUs. Select {LLAMA_EXEMPLAR_RACK_COUNT - selected.size > 0
-                ? `${LLAMA_EXEMPLAR_RACK_COUNT - selected.size} more`
-                : `${selected.size - LLAMA_EXEMPLAR_RACK_COUNT} fewer`} rack(s) to enable it.
-            </Banner>
-          </div>
-        )}
-
         <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 12, display: "block" }}>
-          Eligible racks have validation done, no drained/down trays, and Slurm showing idle or allocated. Launch-side
-          preflight permits allocated trays only when every running job is a yieldable bringup-* diagnostic. NCCL uses all
-          72 GPUs per rack; the 512-GPU Llama Exemplar gate uses 64 GPUs per rack across exactly eight racks.
+          {campaign?.active && campaign.ok
+            ? `Campaign eligibility is computed from the exact ${campaign.nodes_per_rack ?? 16} manifest nodes per rack; excluded trays do not disqualify the rack. NCCL receives that exact nodelist.`
+            : "Eligible racks have validation done, no drained/down trays, and Slurm showing idle or allocated. Launch-side preflight permits allocated trays only when every running job is a yieldable bringup-* diagnostic. NCCL uses all 72 GPUs per rack."}
         </Text>
+
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Flex gap="2" align="center" wrap="wrap" style={{ marginBottom: 8 }}>
+            <Text kind="body/bold/md" style={{ marginRight: "auto" }}>Pinned validation recipes</Text>
+            <Tag color="green" kind="outline" readOnly density="compact">prepare → review → launch</Tag>
+          </Flex>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginBottom: 12 }}>
+            Server-validated versions and image inventory. Container-backed recipes support NFS or node-local storage and optional rsync to /tmp/containers; direct-host NCCL does not stage a container. NVIDIA DGXC system_info fans out to every node in every selected rack.
+          </Text>
+          <Flex gap="2" wrap="wrap">
+            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nccl-2.31.2")}>NCCL 2.31.2 / CUDA 13.3+</Button>
+            <Button kind="secondary" size="small" disabled={!llama1024Ready || launchingPreset !== null} onClick={() => setPendingPreset("llama31-405b-fp8")}>Llama 405B FP8 — 1024 GPUs / 50 steps</Button>
+            <Tag color="gray" kind="outline" readOnly density="compact">GPT-OSS CPU overhead: single-node view only</Tag>
+            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("exemplar-system-info")}>DGXC system_info</Button>
+            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nemo-26.04.01")}>NeMo 26.04.01</Button>
+            <Tag color="gray" kind="outline" readOnly density="compact">MNUberGEMM 26.03-v1.17: node/rack view only</Tag>
+          </Flex>
+          {selected.size > 0 && !llama1024Ready ? (
+            <div style={{ marginTop: 12 }}>
+              <Banner status="info">
+                The fixed Llama preset requires exactly 256 manifest nodes / 1024 GB300 GPUs. {campaign?.active && campaign.ok
+                  ? `${selectedCampaignNodeCount} manifest nodes are selected; adjust the rack selection before preparing.`
+                  : "An active exact-node campaign is required to prove the selected node count."}
+              </Banner>
+            </div>
+          ) : null}
+        </Paper>
 
         {noRacks ? (
           <Card style={{ padding: 32, textAlign: "center" }}>
@@ -651,6 +786,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
                         <Checkbox
                           checked={selected.has(row.rack)}
                           disabled={!eligible}
+                          slotProps={{ input: { "aria-label": `Select rack ${row.rack}` } }}
                           onClick={(e) => e.stopPropagation()}
                           onChange={() => handleToggle(row.rack)}
                         />
@@ -835,17 +971,25 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
         onClose={() => setPendingKind(null)}
         onConfirm={confirmLaunch}
         title={pendingKind ? LAUNCH_TITLE[pendingKind] : "Launch options"}
-        subtitle={`${selected.size} rack(s) selected${
-          pendingKind === "llama_exemplar"
-            ? ` — ${selected.size * LLAMA_EXEMPLAR_GPUS_PER_RACK} GB300 GPUs`
-            : ""
-        }${(pendingKind === "llmb" || pendingKind === "llama_exemplar") && dryRun ? " — dry run" : ""}`}
+        subtitle={`${selected.size} rack(s) selected${pendingKind === "llmb" && dryRun ? " — dry run" : ""}`}
         confirmLabel="Launch"
         showNcclVersion={pendingKind === "llmb"}
         showIters={pendingKind === "llmb"}
         showMaxSteps={pendingKind === "nemo"}
-        showLlamaExemplar={pendingKind === "llama_exemplar"}
       />
+
+      {pendingPreset ? (
+        <ValidationPresetDialog
+          open
+          onClose={() => setPendingPreset(null)}
+          presetId={pendingPreset}
+          scope="multirack"
+          racks={selected}
+          logDir={logDir}
+          campaignId={campaign?.id}
+          onLaunch={launchPreset}
+        />
+      ) : null}
 
       <ParserResultsDialog
         open={parserOpen}

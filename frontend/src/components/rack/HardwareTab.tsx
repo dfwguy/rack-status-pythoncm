@@ -4,9 +4,11 @@ import { Card, Flex, Text, Button as KuiButton } from "@nvidia/foundations-react
 import { ActionCard } from "./ActionCard";
 import { MacChangeDialog } from "./MacChangeDialog";
 import { HwCheckRunDialog } from "./HwCheckRunDialog";
-import { Power, Cpu, ScanSearch, Bug, RotateCcw, CircleCheck, Zap, Network } from "lucide-react";
+import { Power, Cpu, ScanSearch, Bug, RotateCcw, CircleCheck, Zap, Network, ClipboardCheck } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
 import { attachLogDir, bmcRecoveryBody, specsCommandBody, hwCheckOptionsBody } from "../../lib/rackCommandBodies";
+import { ValidationPresetDialog } from "./ValidationPresetDialog";
+import type { ValidationPresetRequest, ValidationScope } from "../../lib/validationPresets";
 import type { NvisNamingSchema } from "../../types/naming";
 
 interface HardwareTabProps {
@@ -15,15 +17,17 @@ interface HardwareTabProps {
   naming?: NvisNamingSchema;
   selectedNodes: Set<string>;
   disabled: boolean;
+  validationScope?: ValidationScope;
   /** Pre-select down trays before Power On confirm (legacy power dialog defaults). */
   onSelectPowerResetTargets: () => void;
 }
 
-export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, onSelectPowerResetTargets }: HardwareTabProps) {
-  const { runAsyncReset } = useRackCommands();
+export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, validationScope = "rack", onSelectPowerResetTargets }: HardwareTabProps) {
+  const { runAsyncReset, launchAsyncValidationFamily } = useRackCommands();
   const nodeCount = selectedNodes.size;
   const [macDialogOpen, setMacDialogOpen] = useState(false);
   const [hwCheckDialogOpen, setHwCheckDialogOpen] = useState(false);
+  const [sysinfoDialogOpen, setSysinfoDialogOpen] = useState(false);
 
   const specsBody = () => specsCommandBody(rack, logDir, selectedNodes, naming);
   const imexBody = () => attachLogDir({ rack }, logDir);
@@ -96,6 +100,32 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, onS
             ...hwCheckOptionsBody(opts),
           });
         }}
+      />
+      <ActionCard
+        title="Exemplar System Info Validation"
+        description={`Run NVIDIA DGXC v26.06.01 system_info on every one of the ${nodeCount} selected node(s), then validate each result against the Exemplar recipe.`}
+        icon={<ClipboardCheck size={20} />}
+        buttonLabel="Plan Sysinfo"
+        disabled={disabled || nodeCount === 0}
+        onRun={() => setSysinfoDialogOpen(true)}
+      />
+      <ValidationPresetDialog
+        open={sysinfoDialogOpen}
+        onClose={() => setSysinfoDialogOpen(false)}
+        presetId="exemplar-system-info"
+        scope={validationScope}
+        nodes={selectedNodes}
+        racks={[rack]}
+        logDir={logDir}
+        onLaunch={(request: ValidationPresetRequest) =>
+          launchAsyncValidationFamily(
+            "NVIDIA DGXC Exemplar system_info",
+            "hw",
+            "/api/run-validation-preset-async",
+            (jid) => `/api/run-validation-preset-status?job_id=${encodeURIComponent(jid)}`,
+            request,
+          )
+        }
       />
       <ActionCard
         title="Bug Report"

@@ -88,6 +88,44 @@ source "${HPCX_DIR}/hpcx-init.sh"; hpcx_load
 set -u
 export LD_LIBRARY_PATH="${NCCL_LIB}:${CUDA_LIB}:${LD_LIBRARY_PATH:-}"
 
+# Optional fail-closed runtime gate used by the CUDA 13.3+/NCCL 2.31.2 preset.
+# Inspect the actual linked library and selected CUDA runtime on every allocated
+# node before MPI starts; setting version-looking env vars is not evidence.
+if [ "${NVIS_NCCL_RUNTIME_PREFLIGHT:-0}" = "1" ]; then
+  export NCCL_LIB CUDA_LIB NVIS_NCCL_VERSION
+  if ! srun --kill-on-bad-exit=1 --nodes="${SLURM_JOB_NUM_NODES}" \
+    --ntasks="${SLURM_JOB_NUM_NODES}" --ntasks-per-node=1 bash -euo pipefail -c '
+      min_cuda="${NVIS_NCCL_MIN_CUDA_VERSION:-13.3}"
+      cuda="$(printf "%s" "$CUDA_LIB" | sed -n "s#.*cuda-\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\).*#\1#p")"
+      if [[ -z "$cuda" && -r "$CUDA_LIB/libcudart.so" ]]; then
+        cuda="$(strings "$CUDA_LIB/libcudart.so" | sed -n "s/.*CUDA Runtime [vV]\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p" | head -1)"
+      fi
+      [[ -n "$cuda" ]] || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): selected CUDA_LIB version unavailable: $CUDA_LIB" >&2; exit 10; }
+      awk -v got="$cuda" -v want="$min_cuda" "BEGIN {split(got,g,\".\"); split(want,w,\".\"); exit !((g[1]>w[1]) || (g[1]==w[1] && g[2]>=w[2]))}" || {
+        echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): CUDA=$cuda requires>=$min_cuda" >&2; exit 11;
+      }
+      version="$(LD_LIBRARY_PATH="$NCCL_LIB:$CUDA_LIB:${LD_LIBRARY_PATH:-}" python3 - <<"PY"
+import ctypes
+v = ctypes.c_int()
+lib = ctypes.CDLL("libnccl.so.2")
+assert lib.ncclGetVersion(ctypes.byref(v)) == 0
+print(v.value)
+PY
+)"
+      [[ "$version" == 23102 ]] || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): ncclGetVersion=$version requires=23102" >&2; exit 12; }
+      test -d /sys/class/infiniband || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): no InfiniBand sysfs" >&2; exit 13; }
+      test -e /dev/infiniband/rdma_cm || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): no rdma_cm" >&2; exit 13; }
+      uverbs="$(find /dev/infiniband -maxdepth 1 -name "uverbs*" -type c 2>/dev/null | wc -l)"
+      (( uverbs > 0 )) || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): no uverbs character devices" >&2; exit 13; }
+      active="$(grep -l "4: ACTIVE" /sys/class/infiniband/*/ports/*/state 2>/dev/null | wc -l)"
+      (( active > 0 )) || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): no ACTIVE InfiniBand port" >&2; exit 14; }
+      echo "NCCL_RUNTIME_PREFLIGHT_READY $(hostname): CUDA=$cuda NCCL=2.31.2 active_ib_ports=$active"
+    '; then
+    echo "NCCL_RUNTIME_PREFLIGHT_FAIL: one or more allocated nodes rejected the CUDA/NCCL/IB runtime" >&2
+    exit 15
+  fi
+fi
+
 # --- Fabric: NCCL on the IB rails, bootstrap on the routable NS iface -----------
 # shellcheck disable=SC1091
 source "${_D}/lib/fabric.inc.sh"

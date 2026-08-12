@@ -25,6 +25,15 @@ export interface RackCommandsStoreValue {
     statusUrl: (jobId: string) => string,
     body: Record<string, unknown>,
   ) => Promise<void>;
+  /** Submit a validation and return once the server accepts it; completion polling continues in the store. */
+  launchAsyncValidationFamily: (
+    rack: string,
+    label: string,
+    cmdKind: NodeCmdKind,
+    postUrl: string,
+    statusUrl: (jobId: string) => string,
+    body: Record<string, unknown>,
+  ) => Promise<string>;
   openTailLogNemo: (rack: string, logDir: string, jobId?: string) => void;
 }
 
