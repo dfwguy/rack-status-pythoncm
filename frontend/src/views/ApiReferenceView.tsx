@@ -8,7 +8,7 @@
 // unpacked with 21-34 transitive dependencies, and they earn that weight by rendering rich
 // request/response schemas — which this spec deliberately does not have (bodies are free-form
 // objects, because inventing per-endpoint schemas would be a contract we do not honour). What is
-// left to render is 201 operations with summaries, parameters and status codes: a grouped,
+// left to render is a couple of hundred operations with summaries, parameters and status codes: a grouped,
 // searchable list. Doing it natively also keeps the page inside the authenticated shell and
 // air-gap safe by construction, with no CDN and no vendored blob to keep in lockstep.
 //
@@ -18,8 +18,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Banner, Button, Card, Tag, Text, TextInput } from "@nvidia/foundations-react-core";
 import Box from "@mui/material/Box";
+import Paper from "@mui/material/Paper";
 import { ChevronDown, ChevronRight, Download, RefreshCw } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
+import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { NVIS_RACK_STATUS_DOC_URL } from "../components/Sidebar";
 import { apiFetch } from "../lib/apiFetch";
 
@@ -149,7 +151,10 @@ export function ApiReferenceView() {
   }, []);
 
   return (
-    <Box>
+    // Same page frame as every other view: capped width, centred, padded. Without it the page ran
+    // edge to edge on a wide monitor, which is not just inconsistent — a single line of prose
+    // stretched the full viewport is genuinely hard to read.
+    <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.comfortable, mx: "auto", p: 4 }}>
       <PageHeader
         title="API reference"
         description={
@@ -181,34 +186,47 @@ export function ApiReferenceView() {
         </Banner>
       )}
 
-      <Text kind="body/regular/sm" style={{ display: "block", marginTop: 12, color: "var(--text-color-secondary)" }}>
-        Generated from this deployment&apos;s own route table, so it describes exactly what this
-        build serves. Query parameters are the ones each handler actually reads. Request bodies are
-        free-form JSON by design — the description carries the contract, not a schema. Authenticate
-        with <code>POST /api/login</code> before calling anything else.{" "}
-        <a href={NVIS_RACK_STATUS_DOC_URL} target="_blank" rel="noopener noreferrer">
-          Source repository
-        </a>
-        .
-      </Text>
-
-      <Box sx={{ mt: 2, maxWidth: 460 }}>
-        <TextInput
-          value={query}
-          onChange={(e) => setQuery((e.target as HTMLInputElement).value)}
-          placeholder="Filter by path, verb, group or summary…"
-          size="small"
-          aria-label="Filter API operations"
-        />
-      </Box>
-
-      {!loading && !error && (
-        <Text kind="body/regular/sm" style={{ display: "block", marginTop: 8 }}>
-          {filtered.length === operations.length
-            ? `${operations.length} operations`
-            : `${filtered.length} of ${operations.length} operations`}
+      {/* The orientation text and the filter belong together in one panel: the first tells you
+          what you are looking at, the second is how you narrow it. */}
+      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+        <Text
+          kind="body/regular/sm"
+          style={{
+            display: "block",
+            // Capped in characters rather than pixels so the measure holds at any panel width.
+            maxWidth: "88ch",
+            color: "var(--text-color-secondary)",
+          }}
+        >
+          Generated from this deployment&apos;s own route table, so it describes exactly what this
+          build serves. Query parameters are the ones each handler actually reads. Request bodies are
+          free-form JSON by design — the description carries the contract, not a schema. Authenticate
+          with <code>POST /api/login</code> before calling anything else.{" "}
+          <a href={NVIS_RACK_STATUS_DOC_URL} target="_blank" rel="noopener noreferrer">
+            Source repository
+          </a>
+          .
         </Text>
-      )}
+
+        <Box sx={{ mt: 2, display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap" }}>
+          <Box sx={{ width: 460, maxWidth: "100%" }}>
+            <TextInput
+              value={query}
+              onChange={(e) => setQuery((e.target as HTMLInputElement).value)}
+              placeholder="Filter by path, verb, group or summary…"
+              size="small"
+              aria-label="Filter API operations"
+            />
+          </Box>
+          {!loading && !error && (
+            <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+              {filtered.length === operations.length
+                ? `${operations.length} operations`
+                : `${filtered.length} of ${operations.length} operations`}
+            </Text>
+          )}
+        </Box>
+      </Paper>
 
       {grouped.map(([tag, ops]) => (
         <Box key={tag} sx={{ mt: 3 }}>
@@ -251,17 +269,24 @@ export function ApiReferenceView() {
                   <Tag color={METHOD_COLOR[o.method] ?? "gray"} kind="solid" readOnly density="compact">
                     {o.method.toUpperCase()}
                   </Tag>
-                  <Text kind="mono/sm" style={{ fontWeight: 600 }}>
+                  {/* The path is the identity of the row, so it never truncates. */}
+                  <Text kind="mono/sm" style={{ fontWeight: 600, flexShrink: 0 }}>
                     {o.path}
                   </Text>
                   <Text
                     kind="body/regular/sm"
                     style={{
                       color: "var(--text-color-secondary)",
+                      // minWidth: 0 is what makes the ellipsis work at all: a flex child will not
+                      // shrink below its content width without it, so long summaries were
+                      // overflowing the card instead of truncating.
+                      flex: 1,
+                      minWidth: 0,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
                     }}
+                    title={o.op.summary}
                   >
                     {o.op.summary}
                   </Text>
