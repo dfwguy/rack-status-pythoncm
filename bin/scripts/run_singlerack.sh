@@ -71,8 +71,11 @@ a=(
 
 export single_rack=1
 
-# Same directory as parser.sh / rack_status.sh (Flask cwd for validation is log_dir, not here).
+# Same directory as parser.sh / rack_status.sh. Manual runs use the same shared default.
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+mkdir -p "${JOB_LOG_DIR}" || { echo "run_singlerack: cannot create log directory: ${JOB_LOG_DIR}" >&2; exit 2; }
+cd "${JOB_LOG_DIR}" || exit 2
 
 ## Per rack test
 for r in ${a[*]}
@@ -115,7 +118,7 @@ sbatch \
  -w $(echo "${hosts[*]}"|tr ' ' ',') \
  -t 03:00:00 \
  --job-name=NEMO-1R \
- --output=${USER}-NEMO-1Rack-${rack}-${n}N-%j.txt \
+ --output="${JOB_LOG_DIR%/}/${USER}-NEMO-1Rack-${rack}-${n}N-%j.txt" \
  --export=ALL,single_rack,NVIS_SCRIPTS_DIR=${_SCRIPT_DIR},NVIS_NEMO_CONT=/raid/data/${_sqsh_b},NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-} \
  "$_SCRIPT_DIR/nemo-nemotron5h_56b-mbridge-fp8.sh"
 

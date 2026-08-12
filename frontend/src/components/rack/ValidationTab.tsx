@@ -5,9 +5,11 @@ import { ActionCard } from "./ActionCard";
 import { NvlinkPreflightPanel } from "./NvlinkPreflightPanel";
 import { LaunchOptionsDialog } from "./LaunchOptionsDialog";
 import { ValidationActivitiesTable } from "./ValidationActivitiesTable";
-import { Play, Flame, Zap, Boxes, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine, Network, Gauge, Activity } from "lucide-react";
+import { Play, Flame, Zap, Boxes, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine, Network, Gauge, Activity, Cpu, Database } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
-import { llamaNodesBody, slurmTargetBody, validationFamilyBody, type LaunchOptions } from "../../lib/rackCommandBodies";
+import { slurmTargetBody, validationFamilyBody, type LaunchOptions } from "../../lib/rackCommandBodies";
+import { ValidationPresetDialog } from "./ValidationPresetDialog";
+import { VALIDATION_PRESET_LABELS, type ValidationPresetId, type ValidationPresetRequest } from "../../lib/validationPresets";
 import type { NvisNamingSchema } from "../../types/naming";
 
 interface ValidationTabProps {
@@ -38,9 +40,10 @@ interface PendingLaunch {
 }
 
 export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, jobId, onViewResults }: ValidationTabProps) {
-  const { runAsyncValidationFamily, runSyncJson, openText } = useRackCommands();
+  const { runAsyncValidationFamily, launchAsyncValidationFamily, runSyncJson, openText } = useRackCommands();
   const nodeCount = selectedNodes.size;
   const [pendingLaunch, setPendingLaunch] = useState<PendingLaunch | null>(null);
+  const [presetDialog, setPresetDialog] = useState<ValidationPresetId | null>(null);
 
   const validationBody = () => validationFamilyBody(rack, logDir, selectedNodes, naming);
 
@@ -77,6 +80,15 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)" }}>
         Validation Stages
       </Text>
+
+      <ActionCard
+        title="NCCL 2.31.2 Validation"
+        description={`Run the pinned NCCL-only acceptance recipe on ${nodeCount} selected node(s). Requires CUDA 13.3+, mounts /dev/infiniband, and verifies NCCL 2.31.2 before testing.`}
+        icon={<Gauge size={20} />}
+        buttonLabel="Plan NCCL"
+        disabled={disabled}
+        onRun={() => setPresetDialog("nccl-2.31.2")}
+      />
 
       <ActionCard
         title="Stage 1 — NCCL Benchmark"
@@ -133,21 +145,35 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       </Text>
 
       <ActionCard
-        title="Run Llama"
-        description={`Launch Llama inference benchmark on ${nodeCount} selected node(s) in ${rack}. Submits a Slurm job using the Llama validation script.`}
+        title="Llama 3.1 405B FP8 — 1024 GPUs / 50 Steps"
+        description="The proven Llama 3.1 405B FP8 recipe is a 256-node / 1024-GPU multirack validation pinned to TP4 PP8 CP1 VP4, 50 steps, NeMo 26.04.01, NCCL 2.30.7, and NVLS disabled. Launch it from Multirack Validation."
         icon={<Flame size={20} />}
-        buttonLabel="Run Llama"
+        buttonLabel="Multirack Only"
+        disabled
+      />
+      <ActionCard
+        title="GPT-OSS CPU Overhead Microbenchmark — Single Node"
+        description="Run only the GPT-OSS CPU overhead microbenchmark on exactly one selected node. No GPU training workload or rack fanout is included."
+        icon={<Cpu size={20} />}
+        buttonLabel="Plan GPT-OSS"
+        disabled={disabled || nodeCount !== 1}
+        onRun={() => setPresetDialog("gpt-oss-cpu")}
+      />
+      <ActionCard
+        title="NeMo 26.04.01 Validation"
+        description={`Run only the pinned NeMo 26.04.01 validation recipe on ${nodeCount} selected node(s), with NFS or node-local container staging.`}
+        icon={<Database size={20} />}
+        buttonLabel="Plan NeMo"
         disabled={disabled}
-        selectedNodes={selectedNodes}
-        onRun={() =>
-          runAsyncValidationFamily(
-            "Llama",
-            "validation",
-            "/api/run-llama-async",
-            (jid) => `/api/run-llama-status?job_id=${encodeURIComponent(jid)}`,
-            llamaNodesBody(rack, logDir, selectedNodes, naming),
-          )
-        }
+        onRun={() => setPresetDialog("nemo-26.04.01")}
+      />
+      <ActionCard
+        title="MNUberGEMM 26.03-v1.17 Validation"
+        description={`Run only the available MNUberGEMM 26.03-v1.17 image on ${nodeCount} selected node(s), with optional rsync staging to /tmp/containers.`}
+        icon={<Zap size={20} />}
+        buttonLabel="Plan MNUberGEMM"
+        disabled={disabled}
+        onRun={() => setPresetDialog("mnubergemm-26.03-v1.17")}
       />
       <ActionCard
         title="Run Stress"
@@ -279,6 +305,27 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         showNcclVersion={pendingLaunch?.showNcclVersion ?? false}
         showIters={pendingLaunch?.showIters ?? false}
       />
+
+      {presetDialog ? (
+        <ValidationPresetDialog
+          open
+          onClose={() => setPresetDialog(null)}
+          presetId={presetDialog}
+          scope={presetDialog === "nemo-26.04.01" ? "rack" : nodeCount === 1 ? "nodes" : "rack"}
+          nodes={selectedNodes}
+          racks={[rack]}
+          logDir={logDir}
+          onLaunch={(request: ValidationPresetRequest) =>
+            launchAsyncValidationFamily(
+              VALIDATION_PRESET_LABELS[presetDialog],
+              presetDialog === "mnubergemm-26.03-v1.17" ? "stress" : "validation",
+              "/api/run-validation-preset-async",
+              (jid) => `/api/run-validation-preset-status?job_id=${encodeURIComponent(jid)}`,
+              request,
+            )
+          }
+        />
+      ) : null}
     </Box>
   );
 }

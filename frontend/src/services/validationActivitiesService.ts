@@ -14,7 +14,9 @@ export async function fetchValidationActivities(params: {
   if (params.limit != null) qs.set("limit", String(params.limit));
   const res = await fetch(`/api/validation-activities?${qs}`);
   const json = (await res.json()) as ValidationActivitiesResponse;
-  if (!json.ok || !Array.isArray(json.activities)) return [];
+  if (!res.ok || !json.ok || !Array.isArray(json.activities)) {
+    throw new Error(json.error || `Validation activities failed (HTTP ${res.status})`);
+  }
   return json.activities;
 }
 

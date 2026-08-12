@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Single-rack ClusterKit Slurm driver: same hostlist convention as run_nvloom_singlerack.sh / run_mnubergemm_stress.sh.
 # Slurm stdout: log_dir/clusterkit/${USER}-CK-<rack>-%j.txt ; per-job artifacts under log_dir/clusterkit/<rack>/.
-# Cwd must be the rack log directory (Flask sets cwd=log_dir when used from the dashboard).
+# Manual and dashboard launches share the same cluster log root.
 #
 # Usage: ./bin/scripts/run_clusterkit.sh <Slurm hostlist; e.g. pNN-rMM-ct[range] or CBR… prefix[trays]>
 #
@@ -27,6 +27,7 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 # shellcheck disable=SC1091
 . "${_SCRIPT_DIR}/workspace-dir-common.sh"
 # shellcheck disable=SC1091
@@ -51,7 +52,8 @@ if ! _slurm_expand_to_wlist "${target}"; then
   exit 1
 fi
 
-mkdir -p clusterkit
+mkdir -p "${JOB_LOG_DIR}/clusterkit" || { echo "run_clusterkit: cannot create log directory: ${JOB_LOG_DIR}/clusterkit" >&2; exit 2; }
+cd "${JOB_LOG_DIR}" || exit 2
 
 mapfile -t _cancel_ids < <(squeue -h -o '%i %j' 2>/dev/null | awk '$2 ~ /^CLUSTERKIT/ {print $1}' || true)
 if [[ ${#_cancel_ids[@]} -gt 0 ]]; then
@@ -80,5 +82,5 @@ sbatch \
   --requeue \
   --dependency=singleton \
   --job-name="CLUSTERKIT-${rack}" \
-  --output="clusterkit/${USER}-CK-${rack}-%j.txt" \
+  --output="${JOB_LOG_DIR%/}/clusterkit/${USER}-CK-${rack}-%j.txt" \
   "${_SCRIPT_DIR}/clusterkit.sbatch"

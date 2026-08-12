@@ -1,7 +1,7 @@
 #!/bin/bash
 # Multinode NEMO launch. Pass rack targets as one comma-separated spec or multiple arguments, e.g.
 #   p5-r[13-14]-ct[01-18],p5-r[15-16]-ct[01-18]
-# Cwd should be the log dir (nvis-rack-status) so relative sbatch --output lands there.
+# Dashboard and manual launches use the same shared cluster log root.
 #
 # Slurm stdout basename (example):
 #   root-NEMO-p5-r[13-14]-ct[01-18],p5-r[15-16]-ct[01-18]-72N-22403.txt
@@ -13,6 +13,8 @@ export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/
 export PDSH_RCMD_TYPE=ssh
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+mkdir -p "${JOB_LOG_DIR}" || { echo "run-nemo-xrack: cannot create log directory: ${JOB_LOG_DIR}" >&2; exit 2; }
 
 # Which NeMo batch script to submit. Default = the Stage-2 soak / Stage-3 LLM engine
 # (nemo-nemotron5h_56b-mbridge-fp8.sh, now parametrized by NVIS_NEMO_DTYPE/MAX_STEPS/GBS/MODEL_SIZE).
@@ -271,13 +273,15 @@ if (( ${#_racktag} > 120 )); then
   echo "run-nemo-xrack: compacted long rack tag to ${_racktag}"
 fi
 _out_stem="root-NEMO-${_racktag}-${n}N"
+_out_path="${JOB_LOG_DIR%/}/${_out_stem}-%j.txt"
 
 # Export the real scripts dir to the job so the batch script can find lib/fabric.inc.sh
 # (Slurm spools only the batch script, not lib/). Without it the fabric classifier no-ops
 # and NCCL falls back to a naive mlx5_0..3 set that mixes IB + RoCE and fails.
 export NVIS_SCRIPTS_DIR="${SCRIPT_DIR}"
+cd "${JOB_LOG_DIR}" || exit 2
 if [[ "${NVIS_NEMO_SUBMIT_DRY_RUN:-0}" == "1" ]]; then
-  echo "run-nemo-xrack: submit-dry-run output=${_out_stem}-%j.txt nodes=${n}; no Slurm job submitted"
+  echo "run-nemo-xrack: submit-dry-run output=${_out_path} nodes=${n}; no Slurm job submitted"
   exit 0
 fi
 sbatch -N "${n}" \
@@ -285,5 +289,5 @@ sbatch -N "${n}" \
   -t "${NVIS_NEMO_WALLTIME:-03:00:00}" \
   --job-name="NEMO-${n}N" \
   --export="ALL,NVIS_SCRIPTS_DIR=${SCRIPT_DIR},NVIS_NEMO_CONT=${NVIS_NEMO_CONT},NVIS_NEMO_XRACK=${NVIS_NEMO_XRACK},NVIS_NCCL_PRELOAD_DISABLE=${NVIS_NCCL_PRELOAD_DISABLE:-0},NVIS_NCCL_IGNORE_COLLNET_MISMATCH=${NVIS_NCCL_IGNORE_COLLNET_MISMATCH:-1},NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-},NVIS_NEMO_MAX_STEPS=${NVIS_NEMO_MAX_STEPS:-},NVIS_NEMO_DTYPE=${NVIS_NEMO_DTYPE:-},NVIS_NEMO_MODEL_SIZE=${NVIS_NEMO_MODEL_SIZE:-},NVIS_NEMO_GBS=${NVIS_NEMO_GBS:-},NVIS_NEMO_UB_SKIPMC=${NVIS_NEMO_UB_SKIPMC:-},NVIS_NEMO_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-},NVIS_NEMO_RECIPE_DEFAULT=${NVIS_NEMO_RECIPE_DEFAULT:-},NVIS_NCCL_PRELOAD_SRC=${NVIS_NCCL_PRELOAD_SRC:-},NVIS_NCCL_NET_PLUGIN=${NVIS_NCCL_NET_PLUGIN:-},NVIS_NEMO_CLI=${NVIS_NEMO_CLI:-},NVIS_NEMO_GPU=${NVIS_NEMO_GPU:-},NVIS_NEMO_FORCE_BF16_ALIAS=${NVIS_NEMO_FORCE_BF16_ALIAS:-},NVIS_NEMO_RECIPE_NAME=${NVIS_NEMO_RECIPE_NAME:-},NVIS_NEMO_HF_HOME=${NVIS_NEMO_HF_HOME:-},NVIS_HF_HOME_CONT=${NVIS_HF_HOME_CONT:-}" \
-  --output="${_out_stem}-%j.txt" \
+  --output="${_out_path}" \
   "$SCRIPT_DIR/${NVIS_NEMO_BATCH_SCRIPT}"

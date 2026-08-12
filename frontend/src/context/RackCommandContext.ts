@@ -29,6 +29,13 @@ export interface RackCommandContextValue {
     statusUrl: (jobId: string) => string,
     body: Record<string, unknown>,
   ) => Promise<void>;
+  launchAsyncValidationFamily: (
+    label: string,
+    cmdKind: NodeCmdKind,
+    postUrl: string,
+    statusUrl: (jobId: string) => string,
+    body: Record<string, unknown>,
+  ) => Promise<string>;
   openTailLogNemo: () => void;
 }
 

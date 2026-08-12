@@ -212,7 +212,7 @@ function absDeltaExceeds(v: unknown, maxAbsPct: number): boolean {
 }
 
 export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
-  const { activeCluster } = useActiveCluster();
+  const { activeCluster, activePlatform } = useActiveCluster();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState<AnalyticsPayload | null>(null);
@@ -226,6 +226,8 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
   const [reportBusy, setReportBusy] = useState(false);
   const [reportProgress, setReportProgress] = useState<NodeReportProgress | null>(null);
   const [reportError, setReportError] = useState("");
+  const traysPerRack =
+    activeCluster?.geometry?.trays_per_rack || activePlatform?.geometry?.trays_per_rack || 18;
 
   // Node inventory with live up/down state, derived exactly as the Nodes view does so both
   // pages agree on what a node is called and whether it is up.
@@ -234,22 +236,22 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
     const naming = status?.naming;
     const out: NodeInfo[] = [];
     for (const r of rows) {
-      out.push(...parseNodesFromRack(r.rack, r.ct_down_unk, rf0, 8, naming));
+      out.push(...parseNodesFromRack(r.rack, r.ct_down_unk, rf0, traysPerRack, naming));
     }
     return out;
-  }, [rows, status]);
+  }, [rows, status, traysPerRack]);
 
   const rackByNode = useMemo(() => {
     const map = new Map<string, string>();
     const rf0 = status?.physical_rf0 ?? {};
     const naming = status?.naming;
     for (const r of rows) {
-      for (const n of parseNodesFromRack(r.rack, r.ct_down_unk, rf0, 8, naming)) {
+      for (const n of parseNodesFromRack(r.rack, r.ct_down_unk, rf0, traysPerRack, naming)) {
         map.set(n.id, r.rack);
       }
     }
     return map;
-  }, [rows, status]);
+  }, [rows, status, traysPerRack]);
 
   const rackOf = useCallback(
     (nodeId: string) => {

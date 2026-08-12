@@ -19,6 +19,7 @@ import { RackCommandProvider } from "../context/RackCommandProvider";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { VisuallyHidden } from "../components/a11y/VisuallyHidden";
 import { getContent } from "../content";
+import { useActiveCluster } from "../context/ActiveClusterContext";
 import type { RackRow } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 
@@ -39,11 +40,14 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
   const [parserOpen, setParserOpen] = useState(false);
   const [terminalNode, setTerminalNode] = useState("");
+  const { activeCluster, activePlatform } = useActiveCluster();
+  const traysPerRack =
+    activeCluster?.geometry?.trays_per_rack || activePlatform?.geometry?.trays_per_rack || 18;
 
   const nodes = useMemo(() => {
     if (!row) return [];
-    return parseNodesFromRack(rack, row.ct_down_unk, physicalRf0, 8, naming);
-  }, [rack, row, physicalRf0, naming]);
+    return parseNodesFromRack(rack, row.ct_down_unk, physicalRf0, traysPerRack, naming);
+  }, [rack, row, physicalRf0, naming, traysPerRack]);
 
   /** Default selection = all trays; re-seed when rack or the tray id set changes (not on every row poll with same ids). */
   const selectionSeedRef = useRef<string>("");

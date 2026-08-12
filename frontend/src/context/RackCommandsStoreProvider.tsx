@@ -48,7 +48,7 @@ async function pollJobUntilTerminal(statusUrl: string): Promise<Record<string, u
     if (!res.ok) throw new Error(String(data.error || `HTTP ${res.status}`));
     last = data;
     const ph = String(data.phase || "").toLowerCase();
-    if (ph === "done" || ph === "error") return data;
+    if (ph === "done" || ph === "error" || ph === "timeout") return data;
     await new Promise((r) => setTimeout(r, POLL_MS));
   }
   throw new Error(
@@ -58,7 +58,7 @@ async function pollJobUntilTerminal(statusUrl: string): Promise<Record<string, u
 
 function jobFinishedOk(st: Record<string, unknown>): boolean {
   const ph = String(st.phase || "").toLowerCase();
-  if (ph === "error") return false;
+  if (ph === "error" || ph === "timeout") return false;
   if (ph === "done") return st.ok !== false;
   return false;
 }
@@ -300,6 +300,57 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
     [pushPending, popPending, openText, setRackOutput, promptIfLocked]
   );
 
+  const launchAsyncValidationFamily = useCallback(
+    async (
+      rack: string,
+      label: string,
+      cmdKind: NodeCmdKind,
+      postUrl: string,
+      statusUrl: (jobId: string) => string,
+      body: Record<string, unknown>,
+    ): Promise<string> => {
+      const proceed = await promptIfLocked([rack]);
+      if (!proceed) throw new Error("Launch cancelled; no validation job was submitted.");
+
+      let jobId = "";
+      try {
+        const res = await apiFetch(postUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = (await res.json()) as { ok?: boolean; job_id?: string; error?: string };
+        if (!res.ok || !data.ok || !data.job_id) {
+          throw new Error(data.error || "failed to start job");
+        }
+        jobId = data.job_id;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setRackOutput(rack, cmdKind, message, true, `${label} — launch error`);
+        throw error;
+      }
+
+      const pid = pushPending(rack, label);
+      void (async () => {
+        try {
+          const status = await pollJobUntilTerminal(statusUrl(jobId));
+          const ok = jobFinishedOk(status);
+          const output = formatJobStatusText(status);
+          openText(`${label} — finished`, output, !ok);
+          setRackOutput(rack, cmdKind, output, !ok, `${label} — finished`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          openText(`${label} — error`, message, true);
+          setRackOutput(rack, cmdKind, message, true, `${label} — error`);
+        } finally {
+          popPending(pid);
+        }
+      })();
+      return jobId;
+    },
+    [openText, popPending, promptIfLocked, pushPending, setRackOutput],
+  );
+
   const openTailLogNemo = useCallback((rack: string, logDir: string, jobId?: string) => {
     const ld = logDir.trim();
     const jid = jobId && jobId !== "-" ? jobId : undefined;
@@ -321,6 +372,7 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
       runSyncJson,
       runAsyncReset,
       runAsyncValidationFamily,
+      launchAsyncValidationFamily,
       openTailLogNemo,
     }),
     [
@@ -332,6 +384,7 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
       runSyncJson,
       runAsyncReset,
       runAsyncValidationFamily,
+      launchAsyncValidationFamily,
       openTailLogNemo,
     ]
   );

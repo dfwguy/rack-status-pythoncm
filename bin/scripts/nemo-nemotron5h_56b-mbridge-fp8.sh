@@ -50,13 +50,13 @@ echo
 
 s_time=$(date +%s)
 echo "INFO: cleaning work begin"
-export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -o CheckHostIP=no -o PreferredAuthentications=publickey"
-pdsh -f 100 -R ssh -w ${SLURM_JOB_NODELIST} <<- 'EOF'|dshbak -c
-pkill -9 python &>/dev/null || true
-ps -ef|grep python|grep -E 'torch|nemo'|grep -v grep || true
-enroot list -f|grep pyxis && enroot remove -f $(enroot list -f|grep pyxis) || true
-rm -f /var/lib/systemd/coredump/* &>/dev/null || true
-EOF
+srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 \
+  --kill-on-bad-exit=1 --label bash -euo pipefail -c '
+    pkill -9 python &>/dev/null || true
+    ps -ef | grep python | grep -E "torch|nemo" | grep -v grep || true
+    enroot list -f | grep pyxis && enroot remove -f $(enroot list -f | grep pyxis) || true
+    rm -f /var/lib/systemd/coredump/* &>/dev/null || true
+  '
 echo "INFO: cleaning work done"
 
 echo "INFO: checking hardware status"
@@ -418,6 +418,7 @@ else
 fi
 echo "INFO: LLM params model=nemotronh size=${NVIS_NEMO_MODEL_SIZE} dtype=${NVIS_NEMO_DTYPE} gbs=${NVIS_NEMO_GBS} max_steps=${MAX_STEPS} recipe_default=${NVIS_NEMO_RECIPE_DEFAULT:-0} cli=${NVIS_NEMO_CLI:-v2} gpu=${NVIS_NEMO_GPU_TYPE}"
 echo "INFO: model_args=[${NVIS_NEMO_MODEL_ARGS}] extra_args=[${NVIS_NEMO_EXTRA_ARGS}]"
+train_rc=0
 srun --export=${EXPORT_ARG} --cpu-bind=none --mpi=pmix \
 --container-name=nemo \
 --container-writable \
@@ -506,6 +507,7 @@ python /opt/Megatron-Bridge/scripts/performance/run_script.py \
   --max_steps ${MAX_STEPS} \
   train.manual_gc=true train.manual_gc_interval=100
 __END__
+train_rc=$?
 
 srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/null
 set +x
@@ -514,9 +516,20 @@ e_time=$(date +%s)
 echo "INFO: timelimit=$[(SLURM_JOB_END_TIME-SLURM_JOB_START_TIME)](s), real_took=$[e_time-s_time](s)"
 
 if [ -n "${HC_CHECKER_SCRIPT:-}" ] && [ -x "$HC_CHECKER_SCRIPT" ]; then
-pdsh -f 100 -R ssh -w ${SLURM_JOB_NODELIST} <<- EOF|dshbak -c
-bash $HC_CHECKER_SCRIPT -e 1 -d
-EOF
+postcheck_rc=0
+srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 \
+  --kill-on-bad-exit=1 --label bash "$HC_CHECKER_SCRIPT" -e 1 -d || postcheck_rc=$?
 else
   echo "INFO: HC_CHECKER_SCRIPT not set or not executable; skipping post-run checker"
+  postcheck_rc=0
 fi
+
+if (( train_rc != 0 )); then
+  echo "ERROR: NeMo training srun failed rc=${train_rc}" >&2
+  exit "$train_rc"
+fi
+if (( postcheck_rc != 0 )); then
+  echo "ERROR: NeMo post-run checker failed rc=${postcheck_rc}" >&2
+  exit "$postcheck_rc"
+fi
+echo "NEMO_VALIDATION_PASS max_steps=${MAX_STEPS} nodes=${SLURM_NNODES}"

@@ -24,10 +24,10 @@
 #      NVIS_HPCX_DIR / NVIS_NCCL_TESTS_BIN / NVIS_NCCL_LIB /
 #      NVIS_CUDA_LIB (host toolchain, auto-discovered on the node when unset),
 #      NVIS_NCCL_VERSION (which vetted libnccl to load: 2.30.7 default | system | <X.Y.Z>),
-#      NCCL_SIZE_MIN / NCCL_SIZE_MAX, RACK_JOB_LOG_DIR (defaults to cwd).
+#      NCCL_SIZE_MIN / NCCL_SIZE_MAX, RACK_JOB_LOG_DIR / RACK_STATUS_LOG_DIR.
 set -uo pipefail
 
-JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-$PWD}"
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 # GPUS_PER_NODE resolved after node resolution (env > Slurm GRES > nvidia-smi > 4).
 GPUS_PER_NODE="${GPUS_PER_NODE:-}"
 DRY_RUN=0
@@ -40,6 +40,8 @@ APP_LOG_RACK=""
 RACKS=()
 
 die() { echo "run_nccl_mpi: $*" >&2; exit 2; }
+
+mkdir -p "${JOB_LOG_DIR}" || die "cannot create log directory: ${JOB_LOG_DIR}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -119,8 +121,12 @@ export NVIS_SCRIPTS_DIR="${_D}"
 _export="ALL,NVIS_SCRIPTS_DIR=${_D},GPUS_PER_NODE=${GPUS_PER_NODE}"
 [[ -n "${NVIS_NCCL_VERSION:-}" ]] && _export="${_export},NVIS_NCCL_VERSION=${NVIS_NCCL_VERSION}"
 [[ -n "${NVIS_NCCL_ROUNDS:-}" ]] && _export="${_export},NVIS_NCCL_ROUNDS=${NVIS_NCCL_ROUNDS}"
+[[ -n "${NVIS_NCCL_RUNTIME_PREFLIGHT:-}" ]] && _export="${_export},NVIS_NCCL_RUNTIME_PREFLIGHT=${NVIS_NCCL_RUNTIME_PREFLIGHT}"
+[[ -n "${NVIS_NCCL_MIN_CUDA_VERSION:-}" ]] && _export="${_export},NVIS_NCCL_MIN_CUDA_VERSION=${NVIS_NCCL_MIN_CUDA_VERSION}"
+[[ -n "${NVIS_CUDA_LIB:-}" ]] && _export="${_export},NVIS_CUDA_LIB=${NVIS_CUDA_LIB}"
 cmd=( sbatch -N "${NVIS_NNODES}" --nodelist="${NVIS_NODELIST}" --ntasks-per-node="${GPUS_PER_NODE}"
       --export="${_export}" )
+[[ "${NVIS_NCCL_SBATCH_WAIT:-0}" == 1 ]] && cmd+=( --wait --no-requeue )
 [[ -n "${OUTPUT}" ]] && cmd+=( --output="${OUTPUT}" )
 [[ -n "${RESERVATION}" ]] && cmd+=( --reservation="${RESERVATION}" )
 [[ -n "${SIZE_MAX_OVERRIDE}" ]] && export NCCL_SIZE_MAX="${SIZE_MAX_OVERRIDE}"

@@ -5,6 +5,7 @@ import { SlidersHorizontal } from "lucide-react";
 import { ScopeTree } from "./ScopeTree";
 import { allAvailableHostIds, selectionSummary, type ScopeCluster, type ScopeNode, type ScopeRack } from "./mockData";
 import { useRackStatus } from "../../hooks/useRackStatus";
+import { useActiveCluster } from "../../context/ActiveClusterContext";
 import { parseNodesFromRack } from "../../lib/parseNodesFromRack";
 import type { RackStatusResponse } from "../../types/api";
 
@@ -56,7 +57,7 @@ function trayLabel(rackId: string, hostId: string): string {
  * ``physical_rf0`` through ``parseNodesFromRack`` — the exact same helper the
  * Rack Detail view uses, so there is one tray-state parser in the SPA.
  */
-function buildScopeCluster(status: RackStatusResponse | null, clusterName?: string): ScopeCluster {
+function buildScopeCluster(status: RackStatusResponse | null, clusterName?: string, traysPerRack = 18): ScopeCluster {
   const clusterLabel = clusterName || clusterLabelFromNaming(status);
   const rows = status?.rows ?? [];
   if (rows.length === 0 && !status?.hierarchy) {
@@ -92,7 +93,7 @@ function buildScopeCluster(status: RackStatusResponse | null, clusterName?: stri
 
   const racks: ScopeRack[] = ordered.map(({ id, label }) => {
     const row = byRack.get(id);
-    const nodes: ScopeNode[] = parseNodesFromRack(id, row?.ct_down_unk ?? "", physicalRf0, 8, naming).map((n) => ({
+    const nodes: ScopeNode[] = parseNodesFromRack(id, row?.ct_down_unk ?? "", physicalRf0, traysPerRack, naming).map((n) => ({
       id: n.id,
       label: trayLabel(id, n.id),
       // Only trays Slurm/BCM report as UP are selectable. Down / unknown / installing
@@ -125,7 +126,13 @@ export interface LiveScopeTopology {
  */
 function useLiveScopeTopology(logDir = "", clusterLabel?: string): LiveScopeTopology {
   const { data, loading, error, reachable } = useRackStatus(logDir, SCOPE_POLL_MS);
-  const topology = useMemo(() => buildScopeCluster(data, clusterLabel), [data, clusterLabel]);
+  const { activeCluster, activePlatform } = useActiveCluster();
+  const traysPerRack =
+    activeCluster?.geometry?.trays_per_rack || activePlatform?.geometry?.trays_per_rack || 18;
+  const topology = useMemo(
+    () => buildScopeCluster(data, clusterLabel, traysPerRack),
+    [data, clusterLabel, traysPerRack],
+  );
   return { topology, loading, error, reachable, updatedAt: data?.updated_at ?? "" };
 }
 

@@ -53,7 +53,7 @@ export NCCL_SOCKET_IFNAME=bond0
 export NCCL_NVLS_ENABLE=0
 
 hosts=($(scontrol show hostnames $SLURM_JOB_NODELIST))
-ssh ${hosts[0]} nvidia-imex-ctl -N
+srun --nodes=1 --ntasks=1 --nodelist="${hosts[0]}" nvidia-imex-ctl -N
 
 export NCCL_MNNVL_ENABLE=0
 [[ ${#hosts[@]} -gt 1 ]] && { export NCCL_MNNVL_ENABLE=1; }
@@ -73,7 +73,7 @@ export FREQQ="--freq 400 --duty 0.9 --dual_mode --dual_freq 0.0013888889 --dual_
 #executing the application
 # NSCALETX [6/6]: --container-workdir added. The MOP invokes the binary as a RELATIVE path
 # ("./mnubergemm"), which only works if the container CWD holds it. pyxis inherits the host
-# CWD, but the submit dir (/home/cmods/benchmark/harish) does not exist inside the container,
+# CWD, but the rack-status submit dir does not exist inside the container,
 # so slurmd falls back to /tmp and "./mnubergemm" is not found. In this image the binary is
 # at /opt/mnubergemm/mnubergemm, so pin the workdir there and keep the MOP's ./mnubergemm.
 srun --cpu-bind=none --mpi=pmix --container-image="$CONT" \

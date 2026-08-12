@@ -34,7 +34,7 @@
 set -uo pipefail
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="${RACK_STATUS_LOG_DIR:-/home/cmods/benchmark/harish}"
+LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 
 TAG="${RACK_MNUBERGEMM_TAG:-tensorrt-26.03-v1.17-arm}"
 IMAGE_DIR="${RACK_MNUBERGEMM_IMAGE_DIR:-/home/cmods/bringup/containers}"
@@ -67,6 +67,8 @@ _ts()  { date -Is; }
 log()  { printf '[%s] %s\n' "$(_ts)" "$*"; }
 err()  { printf '[%s] ERROR: %s\n' "$(_ts)" "$*" >&2; }
 die()  { err "$*"; exit 1; }
+
+mkdir -p "${LOG_DIR}" || die "cannot create log directory: ${LOG_DIR}"
 
 log "===================== MNUBERGEMM (sbatch runner) ====================="
 log "user=$(id -un) host=$(hostname -s) log_dir=${LOG_DIR}"
@@ -233,6 +235,21 @@ esac
 # 11 minutes into a 30-minute soak (CANCELLED, ExitCode 0:15/SIGTERM). Multi-rack soaks are a
 # normal thing to want; one rack's run must never terminate another's.
 _JOB_NAME="MNUBERGEMM-${_tag}"
+SBATCH_FILE="${_SCRIPT_DIR}/mnubergemm.sbatch"
+[[ -r "${SBATCH_FILE}" ]] || die "sbatch file not found: ${SBATCH_FILE}"
+
+extra=()
+[[ -n "${RACK_MNUBERGEMM_PARTITION:-}" ]] && extra+=(-p "${RACK_MNUBERGEMM_PARTITION}")
+[[ -n "${WALLTIME}" ]] && extra+=(-t "${WALLTIME}")
+
+# A staging-only validation must never mutate the queue. Keep this before the
+# same-rack cancel block so RACK_MNUBERGEMM_NO_SUBMIT=1 is genuinely read-only.
+if [[ "${RACK_MNUBERGEMM_NO_SUBMIT:-0}" == "1" ]]; then
+  log "RACK_MNUBERGEMM_NO_SUBMIT=1 — staging validated, not submitting."
+  log "Would run: sbatch ${extra[*]} -N ${NNODES} -w ${WLIST} ${SBATCH_FILE}"
+  exit 0
+fi
+
 mapfile -t _old < <(squeue -h -o '%i %j' 2>/dev/null | awk -v n="${_JOB_NAME}" '$2 == n {print $1}' || true)
 if (( ${#_old[@]} > 0 )); then
   log "cancelling ${#_old[@]} previous ${_JOB_NAME} job(s) on this rack: ${_old[*]}"
@@ -241,9 +258,6 @@ else
   log "no previous ${_JOB_NAME} job to cancel (other racks' runs are left alone)"
 fi
 
-SBATCH_FILE="${_SCRIPT_DIR}/mnubergemm.sbatch"
-[[ -r "${SBATCH_FILE}" ]] || die "sbatch file not found: ${SBATCH_FILE}"
-
 # MOP §7.2 is just `sbatch -N <n> mnubergemm.sbatch`. The only flags added here are the ones
 # Rack Status structurally needs: -w (target a specific rack), --output (land logs in the
 # configured log dir), --job-name (so the cancel-previous step above can find them).
@@ -251,16 +265,6 @@ SBATCH_FILE="${_SCRIPT_DIR}/mnubergemm.sbatch"
 # --no-requeue IS added: this site runs JobRequeue=1, so a tray dying mid-soak would silently
 # requeue and re-run — destroying the evidence for the MOP success criterion "No unexpected
 # node failures or reboots". A stress test must fail visibly, not restart.
-extra=()
-[[ -n "${RACK_MNUBERGEMM_PARTITION:-}" ]] && extra+=(-p "${RACK_MNUBERGEMM_PARTITION}")
-[[ -n "${WALLTIME}" ]] && extra+=(-t "${WALLTIME}")
-
-if [[ "${RACK_MNUBERGEMM_NO_SUBMIT:-0}" == "1" ]]; then
-  log "RACK_MNUBERGEMM_NO_SUBMIT=1 — staging validated, not submitting."
-  log "Would run: sbatch ${extra[*]} -N ${NNODES} -w ${WLIST} ${SBATCH_FILE}"
-  exit 0
-fi
-
 export NVIS_MNUBERGEMM_CONT="${CONT}"
 export MNUBERGEMM_TIME_TO_RUN="${TIME_TO_RUN}"
 
