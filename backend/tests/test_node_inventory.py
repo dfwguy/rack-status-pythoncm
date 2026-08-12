@@ -247,6 +247,162 @@ class TestSweepConcurrency:
         assert seen["max_workers"] == 24
 
 
+class TestSrunSweep:
+    """SSH cannot reach a node we hold no allocation on, so the sweep goes through Slurm."""
+
+    def test_the_command_asks_for_one_task_per_node_and_survives_a_bad_tray(self):
+        cmd = node_inventory.build_srun_command(["n1", "n2"], "/s/node_inventory.sh")
+        assert "--ntasks-per-node=1" in cmd
+        assert "--nodes=2" in cmd
+        assert "--nodelist=n1,n2" in cmd
+        # One unresponsive tray must not kill the step and lose the other 2000 nodes.
+        assert "--no-kill" in cmd
+        # Without --label the tasks' output interleaves and no record can be reassembled.
+        assert "--label" in cmd
+
+    def test_it_yields_to_a_busy_cluster_instead_of_queueing(self):
+        """Inventory must never sit in front of another team's validation run.
+
+        Without --immediate the step queues, which both delays whoever else needs those nodes
+        and strands report generation behind a queue it cannot show progress for.
+        """
+        cmd = node_inventory.build_srun_command(["n1"], "/s/x.sh")
+        assert "--immediate=" in cmd
+        assert "--nice=" in cmd
+
+    def test_a_busy_cluster_stops_the_sweep_rather_than_hammering_the_queue(self, monkeypatch):
+        import sys
+        import types
+
+        calls = []
+
+        class _Empty:
+            stdout = ""
+            stderr = "srun: error: Unable to allocate resources: Requested nodes are busy"
+            returncode = 1
+
+        def _run(cmd, **kw):
+            calls.append(cmd)
+            return _Empty()
+
+        monkeypatch.setitem(sys.modules, "host_exec",
+                            types.SimpleNamespace(role_root=lambda _r: "/s",
+                                                  run_slurm_on_host=_run))
+        records, errors = node_inventory.collect_via_srun([f"n{i}" for i in range(500)], chunk=64)
+        assert records == []
+        # One attempt, not eight: later chunks meet the same queue.
+        assert len(calls) == 1
+        assert len(errors) == 500
+        assert "no Slurm allocation was free" in errors[0]
+
+    def test_the_fleet_is_requested_in_small_chunks_not_one_huge_allocation(self, monkeypatch):
+        import sys
+        import types
+
+        sizes = []
+
+        def _run(cmd, **kw):
+            sizes.append(int(cmd.split("--nodes=")[1].split()[0]))
+            idx = len(sizes) - 1
+            body = "\n".join(f"{i}: host.hostname\tn{idx * 64 + i}" for i in range(64))
+            return types.SimpleNamespace(stdout=body, stderr="", returncode=0)
+
+        monkeypatch.setitem(sys.modules, "host_exec",
+                            types.SimpleNamespace(role_root=lambda _r: "/s",
+                                                  run_slurm_on_host=_run))
+        node_inventory.collect_via_srun([f"n{i}" for i in range(128)], chunk=64)
+        assert sizes == [64, 64]
+
+    def test_interleaved_task_output_is_reassembled_per_node(self):
+        # srun emits lines as tasks produce them, so two nodes' fields arrive shuffled.
+        raw = "\n".join([
+            "0: host.hostname\tn1",
+            "1: host.hostname\tn2",
+            "0: host.serial\tAAA",
+            "1: host.serial\tBBB",
+            "0: gpu.count\t4",
+        ])
+        blobs = node_inventory.parse_srun_labeled(raw)
+        recs = [node_inventory.parse_record(b) for b in blobs]
+        assert [r["host"]["hostname"] for r in recs] == ["n1", "n2"]
+        assert recs[0]["host"]["serial"] == "AAA"
+        assert recs[1]["host"]["serial"] == "BBB"
+
+    def test_unlabelled_noise_is_ignored_rather_than_parsed_as_a_node(self):
+        raw = "srun: job 12345 queued\nsrun: Nodes n1 are ready\n0: host.hostname\tn1"
+        assert node_inventory.parse_srun_labeled(raw) == ["host.hostname\tn1"]
+
+
+class TestCacheAndCarryForward:
+    def test_a_node_missing_this_run_keeps_its_previous_measurement(self, record, tmp_path):
+        cache_file = tmp_path / "inv.json"
+        node_inventory.save_cache([record], captured_at="2026-08-10T00:00:00Z", path=cache_file)
+
+        # A later sweep reaches a different node; Slurm would not admit us to the first.
+        other = node_inventory.parse_record(REAL_GB300.replace("d01-18", "d01-99"))
+        merged, carried = node_inventory.merge_with_cache(
+            [other], node_inventory.load_cache(cache_file)
+        )
+        assert sorted((r["host"]["hostname"]) for r in merged) == [
+            "ink50-dh01-d01-18", "ink50-dh01-d01-99",
+        ]
+        assert carried == {"ink50-dh01-d01-18": "2026-08-10T00:00:00Z"}
+
+    def test_a_freshly_measured_node_is_never_overwritten_by_the_cache(self, record, tmp_path):
+        cache_file = tmp_path / "inv.json"
+        stale = node_inventory.parse_record(REAL_GB300.replace("1.0.3", "0.9.0-old"))
+        node_inventory.save_cache([stale], captured_at="2026-08-01T00:00:00Z", path=cache_file)
+        merged, carried = node_inventory.merge_with_cache(
+            [record], node_inventory.load_cache(cache_file)
+        )
+        assert len(merged) == 1
+        assert merged[0]["host"]["bios_version"] == "1.0.3"
+        assert carried == {}
+
+    def test_the_cache_accumulates_rather_than_replacing(self, record, tmp_path):
+        cache_file = tmp_path / "inv.json"
+        node_inventory.save_cache([record], captured_at="2026-08-10T00:00:00Z", path=cache_file)
+        other = node_inventory.parse_record(REAL_GB300.replace("d01-18", "d01-99"))
+        merged = node_inventory.save_cache(
+            [other], captured_at="2026-08-11T00:00:00Z", path=cache_file
+        )
+        # Overwriting would discard every node that happened to be busy this sweep.
+        assert set(merged) == {"ink50-dh01-d01-18", "ink50-dh01-d01-99"}
+
+    def test_carried_nodes_are_marked_in_the_report_and_summarised(self, record):
+        inv, deviations = node_inventory.build_inventory(
+            [record], carried={"ink50-dh01-d01-18": "2026-08-10T00:00:00Z"}
+        )
+        overrides = inv["nodes"][0]["firmware_overrides"]
+        assert overrides[node_inventory.CARRY_FORWARD_KEY] == "2026-08-10T00:00:00Z"
+        assert any("carry data from an earlier one" in d for d in deviations)
+
+    def test_a_fresh_node_carries_no_marker(self, record):
+        inv, _ = node_inventory.build_inventory([record])
+        assert node_inventory.CARRY_FORWARD_KEY not in inv["nodes"][0]["firmware_overrides"]
+
+    def test_a_marked_report_still_satisfies_the_schema(self, record):
+        jsonschema = pytest.importorskip("jsonschema")
+        import json as _json
+
+        import node_report
+
+        schema = _json.loads(node_report.SCHEMA_PATH.read_text(encoding="utf-8"))
+        inv, _ = node_inventory.build_inventory(
+            [record], carried={"ink50-dh01-d01-18": "2026-08-10T00:00:00Z"}
+        )
+        inv["captured_at"] = "2026-08-11T00:00:00Z"
+        sub = {"$schema": schema["$schema"], "$defs": schema["$defs"],
+               **schema["properties"]["firmware_inventory"]}
+        jsonschema.validate(instance=inv, schema=sub)
+
+    def test_a_missing_or_corrupt_cache_is_simply_empty(self, tmp_path):
+        assert node_inventory.load_cache(tmp_path / "absent.json") == {}
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json")
+        assert node_inventory.load_cache(bad) == {}
+
+
 class TestFailureReasons:
     def test_a_pam_refusal_on_stdout_is_reported_verbatim(self, monkeypatch):
         """pam_slurm_adopt writes its refusal to stdout and leaves stderr empty.

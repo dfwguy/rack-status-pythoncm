@@ -24,12 +24,17 @@ tell a measured value from a reshaped one.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+import shlex
 from collections import Counter
 from collections.abc import Callable, Iterable
+from pathlib import Path
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _log = logging.getLogger(__name__)
 
@@ -120,6 +125,192 @@ def collect_fleet(
                 or "no inventory output"
             )
             errors.append(f"{result.node}: {detail[:200]}")
+    return records, errors
+
+
+#: Where measured records persist between runs. Inventory changes only when hardware or
+#: firmware does, so yesterday's measurement of a node that is busy today is still the truth —
+#: it just has to be labelled as carried forward rather than passed off as fresh.
+CACHE_PATH = Path(os.environ.get("NVIS_INVENTORY_CACHE")
+                  or REPO_ROOT / "var" / "cache" / "node_inventory.json")
+
+#: Marker written into a node's ``firmware_overrides`` when its data came from the cache. The
+#: schema fixes every other per-node field, but ``firmware_overrides`` is an open string map,
+#: so this is the one place a provenance note fits without inventing a key the contract forbids.
+CARRY_FORWARD_KEY = "* carried forward from"
+
+
+def load_cache(path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Previously measured records, keyed by hostname. Missing or corrupt cache -> empty."""
+    target = Path(path or CACHE_PATH)
+    try:
+        blob = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    nodes = blob.get("nodes") if isinstance(blob, dict) else None
+    return nodes if isinstance(nodes, dict) else {}
+
+
+def save_cache(records: list[dict[str, Any]], *, captured_at: str,
+               path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Merge *records* into the cache and persist it; returns the merged map.
+
+    Merged rather than replaced: a sweep only ever reaches the nodes Slurm currently lets us
+    into, so overwriting would throw away every node that happened to be busy this time.
+    """
+    target = Path(path or CACHE_PATH)
+    merged = load_cache(target)
+    for record in records:
+        hostname = (record.get("host") or {}).get("hostname")
+        if hostname:
+            merged[str(hostname)] = {**record, "_captured_at": captured_at}
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"nodes": merged}), encoding="utf-8")
+        tmp.replace(target)
+    except OSError:
+        _log.warning("could not persist the inventory cache at %s", target, exc_info=True)
+    return merged
+
+
+def merge_with_cache(
+    records: list[dict[str, Any]],
+    cache: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Fresh records, plus cached ones for nodes this run could not reach.
+
+    Returns ``(records, carried)`` where *carried* maps hostname to the timestamp its data was
+    measured, so the caller can mark those entries instead of presenting them as current.
+    """
+    fresh = {(r.get("host") or {}).get("hostname"): r for r in records}
+    fresh.pop(None, None)
+    out = list(records)
+    carried: dict[str, str] = {}
+    for hostname, cached in cache.items():
+        if hostname in fresh:
+            continue
+        when = str(cached.get("_captured_at") or "")
+        record = {k: v for k, v in cached.items() if k != "_captured_at"}
+        out.append(record)
+        carried[hostname] = when
+    out.sort(key=lambda r: str((r.get("host") or {}).get("hostname") or ""))
+    return out, carried
+
+
+def parse_srun_labeled(text: str) -> list[str]:
+    """Split ``srun --label`` output back into one blob per task.
+
+    Tasks write concurrently and srun interleaves them line by line, so the ``N: `` prefix is
+    the only reliable way to reassemble each node's record. Without ``--label`` the fields of
+    two thousand nodes arrive shuffled into each other and nothing can be parsed.
+    """
+    by_task: dict[str, list[str]] = {}
+    for line in (text or "").splitlines():
+        task, sep, rest = line.partition(": ")
+        if not sep or not task.strip().isdigit():
+            continue
+        by_task.setdefault(task.strip(), []).append(rest)
+    return ["\n".join(lines) for _, lines in sorted(by_task.items(), key=lambda kv: int(kv[0]))]
+
+
+#: Nodes per allocation. Small bites on purpose: a shared cluster running other teams' work
+#: should never see a two-thousand-node request for an inventory sweep, and a small chunk can
+#: slot into whatever happens to be free instead of waiting for a big contiguous window.
+SRUN_CHUNK = 64
+
+#: Seconds ``srun`` may wait for resources before giving up. Inventory is never worth queueing
+#: for: a request that waits is a request sitting in front of somebody's validation run, and it
+#: would also strand report generation behind a queue with no way to show progress.
+SRUN_IMMEDIATE_SECONDS = 20
+
+#: Positive nice = lower priority. Whatever else is in the queue should win.
+SRUN_NICE = 10000
+
+
+def build_srun_command(
+    nodes: list[str],
+    script: str,
+    *,
+    minutes: int = 5,
+    immediate: int = SRUN_IMMEDIATE_SECONDS,
+    nice: int = SRUN_NICE,
+) -> str:
+    """The ``srun`` line that sweeps *nodes*, one task each.
+
+    SSH to a compute node is refused by ``pam_slurm_adopt`` unless the user already holds an
+    allocation there — "Login not allowed: no running jobs and no WLM allocations" — so a
+    fan-out only reaches whatever the queue happens to be running for us. Going through Slurm
+    asks for access the supported way and can reach idle nodes too.
+
+    The flags matter more than the mechanism on a shared cluster:
+
+    * ``--immediate`` makes this yield instead of queue. Inventory must never sit in front of
+      another team's validation run, and a queued step would also hang report generation.
+    * ``--nice`` puts it below everything else competing for the same nodes.
+    * ``--no-kill`` keeps one unresponsive tray from taking the step down and losing the rest.
+    * ``--label`` is what makes the interleaved per-task output separable again.
+    """
+    joined = ",".join(nodes)
+    return (
+        "srun --job-name=nvis-inventory --ntasks-per-node=1 "
+        f"--nodes={len(nodes)} --nodelist={shlex.quote(joined)} "
+        f"--time=00:{minutes:02d}:00 --immediate={immediate} --nice={nice} "
+        f"--label --no-kill --overlap bash {shlex.quote(script)}"
+    )
+
+
+def collect_via_srun(
+    nodes: list[str],
+    *,
+    timeout: int = 300,
+    minutes: int = 5,
+    chunk: int | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Sweep *nodes* through Slurm in small chunks; returns ``(records, errors)``.
+
+    Stops as soon as a chunk cannot get resources. On a busy cluster that is the correct
+    behaviour: take whatever is free right now, leave the rest for the cache to carry, and do
+    not keep asking a queue that is already full of other people's work.
+    """
+    import host_exec
+
+    if not nodes:
+        return [], []
+    base_dir = (host_exec.role_root("scripts") or "").rstrip("/")
+    script = f"{base_dir}/node_inventory.sh" if base_dir else "node_inventory.sh"
+    size = max(1, int(chunk or os.environ.get("NVIS_INVENTORY_SRUN_CHUNK", SRUN_CHUNK)))
+
+    records: list[dict[str, Any]] = []
+    for start in range(0, len(nodes), size):
+        batch = nodes[start:start + size]
+        try:
+            proc = host_exec.run_slurm_on_host(
+                build_srun_command(batch, script, minutes=minutes), timeout=timeout
+            )
+        except Exception as exc:  # noqa: BLE001 - a busy cluster is an expected outcome here
+            _log.info("srun inventory stopped after %d node(s): %s", len(records), exc)
+            break
+
+        before = len(records)
+        for blob in parse_srun_labeled(getattr(proc, "stdout", "") or ""):
+            if "\t" in blob:
+                records.append(parse_record(blob))
+        if progress:
+            progress(len(records), len(nodes), batch[0])
+
+        if len(records) == before:
+            # Nothing came back: almost always --immediate declining because the nodes are
+            # busy. Later chunks will meet the same queue, so stop rather than hammer it.
+            stderr = (getattr(proc, "stderr", "") or "").strip()
+            _log.info("srun inventory yielded to a busy cluster after %d node(s): %s",
+                      len(records), stderr[:200])
+            break
+
+    seen = {(r.get("host") or {}).get("hostname") for r in records}
+    errors = [f"{n}: not reachable by SSH and no Slurm allocation was free" for n in nodes
+              if n not in seen]
     return records, errors
 
 
@@ -357,17 +548,34 @@ def build_inventory(
     records: list[dict[str, Any]],
     bcm_by_host: dict[str, dict[str, Any]] | None = None,
     fabric: dict[str, Any] | None = None,
+    carried: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Assemble ``firmware_inventory`` (minus ``captured_at``) plus the deviations to publish."""
+    """Assemble ``firmware_inventory`` (minus ``captured_at``) plus the deviations to publish.
+
+    *carried* names nodes whose data came from a previous run because Slurm would not admit us
+    this time; each is marked in place and summarised in the deviations, so a reader can tell a
+    measurement taken today from one taken last week.
+    """
     bcm_by_host = bcm_by_host or {}
+    carried = carried or {}
     baseline = derive_baseline(records)
     deviations: set[str] = set()
 
     nodes = []
     for record in records:
         hostname = (record.get("host") or {}).get("hostname") or ""
-        nodes.append(build_node_entry(record, bcm_by_host.get(hostname), baseline, deviations))
+        entry = build_node_entry(record, bcm_by_host.get(hostname), baseline, deviations)
+        if hostname in carried:
+            entry["firmware_overrides"][CARRY_FORWARD_KEY] = carried[hostname] or "an earlier run"
+        nodes.append(entry)
     nodes.sort(key=lambda n: n["hostname"])
+    if carried:
+        deviations.add(
+            f"{len(carried)} node(s) could not be measured in this run and carry data from an "
+            f"earlier one; each is marked '{CARRY_FORWARD_KEY} <timestamp>' in its "
+            f"firmware_overrides. Slurm refuses login to a node we hold no allocation on, so "
+            f"coverage depends on what the queue was running at the time."
+        )
 
     shared = {
         "host": {"bios_version": (baseline.get("host") or {}).get("bios_version") or TBD},

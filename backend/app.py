@@ -10935,7 +10935,7 @@ def _arg_or_body(name: str):
     return request.args.get(name)
 
 
-def _collect_node_inventory(fleet: dict, progress=None) -> tuple[dict | None, list[str]]:
+def _collect_node_inventory(fleet: dict, progress=None, phase=None) -> tuple[dict | None, list[str]]:
     """Sweep the fleet for hardware identity, folding in BCM's rack/BMC view when reachable.
 
     Returns ``(inventory, deviations)``; ``(None, [])`` when nothing could be collected, so the
@@ -10951,9 +10951,34 @@ def _collect_node_inventory(fleet: dict, progress=None) -> tuple[dict | None, li
     if not hosts:
         return None, []
 
+    # SSH first: it reaches every node we already hold an allocation on, and it can report
+    # per-node progress as it goes. Slurm refuses the rest ("no running jobs and no WLM
+    # allocations"), so those are swept through srun afterwards — one blocking step, hence the
+    # phase note rather than a tick. Doing it the other way round would leave the progress bar
+    # at zero for the whole run.
     records, errors = node_inventory.collect_fleet(hosts, progress=progress)
     if errors:
-        _logger.warning("node inventory: %d/%d node(s) did not answer", len(errors), len(hosts))
+        _logger.warning("node inventory: %d/%d node(s) did not answer over SSH",
+                        len(errors), len(hosts))
+    reached = {(r.get("host") or {}).get("hostname") for r in records}
+    missing = [h for h in hosts if h not in reached]
+    # Off by default: allocating nodes to inventory them competes with whatever else the site
+    # is running, and on a cluster being readied for hand-over that is somebody's validation
+    # run. Nodes we cannot reach carry their previous measurement from the cache instead, which
+    # is the honest answer for hardware identity that only changes when the hardware does.
+    # Set NVIS_INVENTORY_VIA_SRUN=1 for a deliberate full sweep during a quiet window.
+    if missing and _truthy_arg(os.environ.get("NVIS_INVENTORY_VIA_SRUN"), default=False):
+        if phase:
+            phase(f"requesting a Slurm allocation for {len(missing)} unreachable node(s)")
+        extra, srun_errors = node_inventory.collect_via_srun(missing)
+        _logger.info("node inventory: srun added %d of %d unreachable node(s)",
+                     len(extra), len(missing))
+        records.extend(extra)
+        errors = srun_errors
+
+    captured_at = _node_report._iso(_node_report._now())
+    cache = node_inventory.save_cache(records, captured_at=captured_at)
+    records, carried = node_inventory.merge_with_cache(records, cache)
     if not records:
         return None, []
 
@@ -10965,12 +10990,15 @@ def _collect_node_inventory(fleet: dict, progress=None) -> tuple[dict | None, li
     except Exception:  # BCM identity is an enrichment, not a prerequisite
         _logger.debug("node inventory: BCM lookup unavailable", exc_info=True)
 
-    inventory, deviations = node_inventory.build_inventory(records, bcm_by_host=bcm_by_host)
-    inventory["captured_at"] = _node_report._iso(_node_report._now())
+    inventory, deviations = node_inventory.build_inventory(
+        records, bcm_by_host=bcm_by_host, carried=carried
+    )
+    inventory["captured_at"] = captured_at
+    measured = len(records) - len(carried)
     if errors:
         deviations.append(
-            f"{len(errors)} of {len(hosts)} nodes did not answer the inventory probe; "
-            f"the baseline is drawn from the {len(records)} that did"
+            f"{len(errors)} of {len(hosts)} nodes answered neither the SSH nor the Slurm probe; "
+            f"{measured} were measured in this run and {len(carried)} carry earlier data"
         )
     return inventory, deviations
 
@@ -12490,7 +12518,9 @@ def api_node_report_start():
             if with_inventory:
                 _set(phase="sweeping nodes for hardware inventory",
                      total=len(fleet.get("nodes") or []))
-                inventory, deviations = _collect_node_inventory(fleet, progress=_progress)
+                inventory, deviations = _collect_node_inventory(
+                    fleet, progress=_progress, phase=lambda p: _set(phase=p)
+                )
             _set(phase="assembling the report", current="")
 
             project = cluster = platform = None

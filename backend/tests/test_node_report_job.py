@@ -73,7 +73,7 @@ def fake_generation(monkeypatch):
 
     seen: list[tuple[int, int]] = []
 
-    def _collect(_fleet, progress=None):
+    def _collect(_fleet, progress=None, phase=None):
         for i in range(1, 4):
             if progress:
                 progress(i, 3, f"n{i}")
@@ -150,7 +150,7 @@ class TestIdempotency:
 
         started: list[int] = []
 
-        def _slow(_fleet, progress=None):
+        def _slow(_fleet, progress=None, phase=None):
             started.append(1)
             time.sleep(0.4)
             return ({"shared_baseline": {}, "nodes": [{"hostname": "n0"}]}, [])
