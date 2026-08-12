@@ -404,29 +404,43 @@ class TestCacheAndCarryForward:
 
 
 class TestFailureReasons:
-    def test_a_pam_refusal_on_stdout_is_reported_verbatim(self, monkeypatch):
-        """pam_slurm_adopt writes its refusal to stdout and leaves stderr empty.
-
-        Reporting only stderr turned the most common failure on this cluster — 119 of 121 in a
-        fleet sample — into "no inventory output", which tells an operator nothing.
-        """
+    def _sweep(self, monkeypatch, result):
         import sys
         import types
 
-        class _R:
-            node = "n1"
-            stdout = "Login not allowed: no running jobs and no WLM allocations\n"
-            stderr = ""
-            returncode = 254
-
         monkeypatch.setitem(sys.modules, "transport",
-                            types.SimpleNamespace(fanout=lambda *a, **k: [_R()]))
+                            types.SimpleNamespace(fanout=lambda *a, **k: [result]))
         monkeypatch.setitem(sys.modules, "host_exec",
                             types.SimpleNamespace(role_root=lambda _r: "/s",
                                                   connection=lambda _p: object()))
-        records, errors = node_inventory.collect_fleet(["n1"])
+        return node_inventory.collect_fleet(["n1"])
+
+    def test_a_reported_refusal_is_passed_through_verbatim(self, monkeypatch):
+        class _R:
+            node = "n1"
+            stdout = ""
+            stderr = "Login not allowed: no running jobs and no WLM allocations"
+            returncode = 255
+
+        records, errors = self._sweep(monkeypatch, _R())
         assert records == []
         assert "Login not allowed" in errors[0]
+
+    def test_a_silent_hop_still_names_the_likely_cause(self, monkeypatch):
+        """The hop returns rc=255 with both streams empty for an unallocated node.
+
+        A bare "no inventory output" is what made a policy gate look like flaky SSH and sent
+        me tuning sshd MaxSessions instead, so the message has to carry the usual explanation.
+        """
+        class _R:
+            node = "n1"
+            stdout = ""
+            stderr = ""
+            returncode = 255
+
+        _, errors = self._sweep(monkeypatch, _R())
+        assert "rc=255" in errors[0]
+        assert "pam_slurm_adopt" in errors[0]
 
 
 class TestAgainstTheRealSchema:

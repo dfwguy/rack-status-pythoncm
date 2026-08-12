@@ -115,15 +115,18 @@ def collect_fleet(
             record.setdefault("host", {}).setdefault("hostname", result.node)
             records.append(record)
         else:
-            # Fall back to stdout before giving up on a reason. pam_slurm_adopt refuses the
-            # login with "Login not allowed: no running jobs and no WLM allocations" on
-            # *stdout* and leaves stderr empty, so reporting only stderr turned the single
-            # most common failure on this cluster into a contentless "no inventory output".
-            detail = (
-                (getattr(result, "stderr", "") or "").strip()
-                or text.strip()
-                or "no inventory output"
-            )
+            # Say something useful even when the hop reports nothing. A direct ssh to a node we
+            # hold no allocation on fails with rc=255 and "Login not allowed: no running jobs
+            # and no WLM allocations" on stderr, but through the hop both streams arrive empty,
+            # so the bare rc is all we get. Naming the usual cause beats "no inventory output",
+            # which is what sent me chasing sshd MaxSessions for an afternoon.
+            rc = getattr(result, "returncode", 1)
+            detail = (getattr(result, "stderr", "") or "").strip() or text.strip()
+            if not detail:
+                detail = (
+                    f"unreachable (rc={rc}, no diagnostic returned). On this cluster that is "
+                    f"usually pam_slurm_adopt refusing a node we hold no Slurm allocation on."
+                )
             errors.append(f"{result.node}: {detail[:200]}")
     return records, errors
 
