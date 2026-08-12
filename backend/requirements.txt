@@ -10,3 +10,8 @@ flask-compress>=1.14,<2
 brotli>=1.1,<2
 gunicorn>=22.0,<24
 jsonschema>=4.23,<5
+# PDF rendering for the Rack Status report. Its own chart primitives (VerticalBarChart /
+# HorizontalLineChart) cover the rack-level graphs, which is why this is here instead of
+# matplotlib + numpy — a fraction of the image size for the charts we actually draw.
+# Pulls in pillow transitively; reportlab imports PIL unconditionally.
+reportlab>=5.0,<6

@@ -92,6 +92,10 @@ if command -v ibstat >/dev/null 2>&1; then
     # The IB port GUID is the real identity of an IB port. The report schema has no field for
     # it and asks for a 6-octet MAC instead, so it is carried here and the caller decides.
     emit "nic.$i.port_guid" "$(ibstat "$dev" 2>/dev/null | awk -F': ' '/Port GUID/{print $2; exit}')"
+    # InfiniBand vs Ethernet is the RoCE question, and it is a per-port property: a cluster can
+    # run IB on the compute rails and Ethernet on the management bond. Read it rather than
+    # inferring from device names.
+    emit "nic.$i.link_layer" "$(cat "/sys/class/infiniband/$dev/ports/1/link_layer" 2>/dev/null)"
     bdf="$(basename "$(readlink -f "/sys/class/infiniband/$dev/device" 2>/dev/null)" 2>/dev/null)"
     emit "nic.$i.pcie_bdf" "$bdf"
     nd="$(ls "/sys/class/infiniband/$dev/device/net" 2>/dev/null | head -1)"
