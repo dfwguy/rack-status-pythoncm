@@ -120,12 +120,28 @@ def _fabric_summary(inventory: dict[str, Any]) -> str:
     return ", ".join(sorted(names.get(x, x) for x in layers))
 
 
+def _primary_ip(bcm_entry: dict[str, Any] | None) -> str:
+    """The node's own network address, as opposed to its controller's.
+
+    The report wants both: ``bmc_ip`` reaches the BMC out of band, ``ip`` is the host itself.
+    Only BCM knows the second — the customer schema has no field for it, so it never reaches
+    the inventory entry, and the column sat empty until this read it from the device record.
+    """
+    for iface in ((bcm_entry or {}).get("interfaces") or []):
+        ip = str(iface.get("ip") or "")
+        kind = str(iface.get("kind") or "").lower()
+        if ip and ip != "0.0.0.0" and "bmc" not in kind:
+            return ip
+    return ""
+
+
 def build_dataset(
     *,
     fleet: dict[str, Any] | None = None,
     inventory: dict[str, Any] | None = None,
     facts: dict[str, Any] | None = None,
     analytics: dict[str, Any] | None = None,
+    bcm: dict[str, dict[str, Any]] | None = None,
     cluster: dict[str, Any] | None = None,
     project: dict[str, Any] | None = None,
     platform: dict[str, Any] | None = None,
@@ -135,6 +151,7 @@ def build_dataset(
     inventory = inventory or {}
     facts = facts or {}
     analytics = analytics or {}
+    bcm = bcm or {}
     baseline = (inventory.get("shared_baseline") or {})
 
     columns = [str(c) for c in (fleet.get("columns") or [])]
@@ -161,7 +178,7 @@ def build_dataset(
             "rack": inv.get("rack_id") or "",
             "rack_unit": inv.get("rack_unit") or "",
             "serial": inv.get("serial") or "",
-            "ip": node.get("ip") or "",
+            "ip": node.get("ip") or _primary_ip(bcm.get(name)),
             "bmc_ip": (inv.get("bmc") or {}).get("ip") or "",
             "gpu_count": len(gpus),
             # Every GPU's UUID, so a failing accelerator is traceable to a part.
@@ -266,6 +283,22 @@ def _rack_section(analytics: dict[str, Any]) -> dict[str, Any]:
         "nemotron": single.get("nemotron") or [],
         "nemotron_scaling": multi.get("nemotron_scaling") or [],
     }
+
+
+def to_pdf(dataset: dict[str, Any]) -> bytes:
+    """Executive view of the same dataset. Delegated so the reportlab import stays optional."""
+    import cluster_report_pdf
+
+    return cluster_report_pdf.to_pdf(dataset)
+
+
+def pdf_available() -> bool:
+    """Whether this deployment can render PDF, so a caller can offer only what it can produce."""
+    try:
+        import cluster_report_pdf
+    except ImportError:
+        return False
+    return cluster_report_pdf.available()
 
 
 def to_json(dataset: dict[str, Any]) -> str:
