@@ -38,6 +38,7 @@ const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ de
 const ProjectsView = lazy(() => import("./views/ProjectsView").then((m) => ({ default: m.ProjectsView })));
 const PlatformCatalogView = lazy(() => import("./views/PlatformCatalogView").then((m) => ({ default: m.PlatformCatalogView })));
 const ToolRegistryView = lazy(() => import("./views/ToolRegistryView").then((m) => ({ default: m.ToolRegistryView })));
+const ApiReferenceView = lazy(() => import("./views/ApiReferenceView").then((m) => ({ default: m.ApiReferenceView })));
 import { ActiveClusterProvider } from "./context/ActiveClusterProvider";
 import { LoginPage } from "./pages/LoginPage";
 const TerminalView = lazy(() => import("./views/TerminalView"));
@@ -72,6 +73,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   projects: "Projects & Clusters",
   platformCatalog: "Platform Catalog",
   toolRegistry: "Tool Registry",
+  apiReference: "API Reference",
   settings: "Settings",
 };
 
@@ -348,6 +350,7 @@ function AppContent() {
           <Route path="/platform/projects" element={<ProjectsView />} />
           <Route path="/platform/catalog" element={<PlatformCatalogView />} />
           <Route path="/platform/tools" element={<ToolRegistryView />} />
+          <Route path="/platform/api" element={<ApiReferenceView />} />
           <Route
             path="/settings"
             element={

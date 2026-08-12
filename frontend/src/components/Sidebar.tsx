@@ -39,6 +39,7 @@ import {
   Boxes,
   FolderKanban,
   CircuitBoard,
+  Code2,
 } from "lucide-react";
 
 export type ViewId =
@@ -61,6 +62,7 @@ export type ViewId =
   | "projects"
   | "platformCatalog"
   | "toolRegistry"
+  | "apiReference"
   | "settings";
 
 export const DRAWER_WIDTH_OPEN = 248;
@@ -164,6 +166,7 @@ const navEntries: NavEntry[] = [
       { id: "projects", label: "Projects & Clusters", icon: <FolderKanban size={ICON_SIZE} /> },
       { id: "platformCatalog", label: "Platform Catalog", icon: <CircuitBoard size={ICON_SIZE} /> },
       { id: "toolRegistry", label: "Tool Registry", icon: <Wrench size={ICON_SIZE} /> },
+      { id: "apiReference", label: "API Reference", icon: <Code2 size={ICON_SIZE} /> },
     ],
   },
 ];
@@ -269,11 +272,21 @@ function ExpandedNav({
       ),
     },
     {
+      // Points at the in-app, browsable API reference rather than the git repo. A link to a
+      // repository is not documentation an operator can use: it needs a clone, a checkout and
+      // a reader. The generated reference is the same information, current for *this*
+      // deployment, and the repo is still one click away from inside that page.
       id: "documentation",
       slotIcon: <BookOpen size={ICON_SIZE} />,
       asChild: true,
       children: (
-        <a href={NVIS_RACK_STATUS_DOC_URL} target="_blank" rel="noopener noreferrer">
+        <a
+          href="#/platform/api"
+          onClick={(e) => {
+            e.preventDefault();
+            onNavigate("apiReference");
+          }}
+        >
           Documentation
         </a>
       ),
@@ -401,12 +414,10 @@ function CollapsedRail({
           </Tooltip>
         </ListItem>
         <ListItem disablePadding sx={{ display: "block" }}>
-          <Tooltip title="Documentation (opens in new tab)" placement="right" arrow>
+          <Tooltip title="Documentation — API reference" placement="right" arrow>
             <ListItemButton
-              component="a"
-              href={NVIS_RACK_STATUS_DOC_URL}
-              target="_blank"
-              rel="noopener noreferrer"
+              onClick={() => onNavigate("apiReference")}
+              aria-label="Open the API reference"
               sx={{ minHeight: 44, px: 0, justifyContent: "center", "&:hover": { bgcolor: "action.hover" } }}
             >
               <ListItemIcon sx={{ minWidth: 0, justifyContent: "center", color: "text.secondary" }}>

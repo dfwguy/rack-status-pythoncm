@@ -147,4 +147,28 @@ export const platformContent: HelpContent[] = [
     aiContext:
       "Help is a right-hand slide-out panel (KUI SidePanel) generated from the knowledge registry; every page/component has an entry with description, features, how-to steps, and FAQs. Open it from the page header help icon or the sidebar.",
   },
+  {
+    id: "apiReference",
+    kind: "view",
+    title: "API Reference",
+    domain: "Platform",
+    routePath: "/platform/api",
+    summary: "Browsable reference for this deployment's REST API, generated from its own routes.",
+    description:
+      "API Reference renders the OpenAPI 3.1 document served at /api/openapi.json, which the backend generates from its own Flask route table on each request. Because it is generated rather than maintained, it cannot describe an endpoint this build does not serve, and a new endpoint appears without anyone editing a file. Operations are grouped by endpoint family, searchable by path, verb, group or summary, and each one shows its parameters, request body and the status codes its handler actually returns.",
+    features: [
+      "Every /api/* operation with its verb, path, summary and full description from the handler's docstring.",
+      "Query parameters are the ones each handler actually reads, so the page cannot claim a parameter the code ignores.",
+      "Download the raw document as JSON (or /api/openapi.yaml) to generate a client or import into other tooling.",
+    ],
+    howTo: [
+      { task: "Find an endpoint", steps: ["Open API Reference.", "Type a path, verb or keyword in the filter.", "Click an operation to expand its parameters and responses."] },
+      { task: "Integrate another system", steps: ["Open API Reference.", "Click 'openapi.json' to download the document.", "Point your client generator at it; authenticate first via POST /api/login."] },
+    ],
+    related: ["toolRegistry", "settings"],
+    keywords: ["api", "openapi", "swagger", "rest", "endpoint", "integration", "client", "spec", "schema", "json", "yaml"],
+    aria: { label: "API reference page", description: "Browsable reference for the REST API, generated from the application's own route table." },
+    aiContext:
+      "API Reference renders /api/openapi.json, an OpenAPI 3.1 document generated from the Flask route table (about 177 paths / 201 operations). Query parameters are derived from what each handler reads; request bodies are free-form JSON by design rather than schema'd. The raw document is available at /api/openapi.json and /api/openapi.yaml, behind the normal auth gate.",
+  },
 ];
