@@ -12460,6 +12460,66 @@ def api_analytics_aggregate_status():
     return jsonify(out)
 
 
+#: Report kind -> the formats it can render, first entry being the default.
+#:
+#: The Nscale report answers a customer's JSON Schema, so JSON is the only honest format for it —
+#: a CSV of that document would not validate against the contract it exists to satisfy. The Rack
+#: Status report is ours and carries the same dataset in whichever shape the reader needs.
+_REPORT_KINDS: dict[str, tuple[str, ...]] = {
+    "nscale": ("json",),
+    "rack-status": ("csv", "json", "pdf"),
+}
+
+#: Filename extension and MIME type per format.
+_FORMAT_MEDIA: dict[str, tuple[str, str]] = {
+    "csv": ("csv", "text/csv"),
+    "json": ("json", "application/json"),
+    "pdf": ("pdf", "application/pdf"),
+}
+
+
+def _cluster_facts() -> dict:
+    """Cluster-wide software versions, from ``cluster_facts.sh`` on the head.
+
+    One call, not one per node: BCM, Slurm, NCCL and HPC-X are properties of the shared software
+    tree. Failure degrades to an empty dict — the report then shows those rows blank rather than
+    refusing to generate, which is the right trade for a field that is nice to have.
+    """
+    try:
+        import cluster_report
+
+        base = (host_exec.role_root("scripts") or "").rstrip("/")
+        script = f"{base}/cluster_facts.sh" if base else "cluster_facts.sh"
+        log_dir = _default_log_dir()
+        proc = host_exec.run_on_host(["bash", script, str(log_dir)], timeout=120)
+        return cluster_report.parse_facts(getattr(proc, "stdout", "") or "")
+    except Exception:  # a missing fact is not a reason to fail the report
+        _logger.debug("cluster facts probe unavailable", exc_info=True)
+        return {}
+
+
+def _analytics_last_cached() -> dict:
+    """The most recent analytics aggregate, for the PDF's rack-level charts.
+
+    Read from the on-disk cache rather than recomputed: the aggregate is minutes of log scanning,
+    and a report should not silently trigger it. When absent the PDF says so and omits the charts.
+    """
+    try:
+        hit = _analytics_aggregate_cache_get(str(_rpath(_default_log_dir())))
+        return hit if isinstance(hit, dict) else {}
+    except Exception:  # charts are optional; the tables carry the same numbers
+        _logger.debug("analytics cache unavailable for the report", exc_info=True)
+        return {}
+
+
+def _cluster_report_pdf_available() -> bool:
+    try:
+        import cluster_report
+    except ImportError:
+        return False
+    return cluster_report.pdf_available()
+
+
 _node_report_jobs: dict[str, dict] = {}
 _node_report_jobs_lock = threading.Lock()
 #: Small on purpose: each finished job pins a multi-MB document until it is collected.
@@ -12467,6 +12527,33 @@ _NODE_REPORT_JOBS_MAX = 4
 #: How long a "running" job stays eligible for idempotent reuse. Comfortably longer than a
 #: full sweep (~4 minutes at 2000 nodes) and short enough that a dead worker frees its key.
 _NODE_REPORT_JOB_TTL = 30 * 60
+
+
+@app.route("/api/node-report/kinds", methods=["GET"])
+def api_node_report_kinds():
+    """Which reports this deployment can produce, and in which formats.
+
+    Discovered rather than hardcoded in the SPA: PDF depends on reportlab being present in the
+    image, so a build without it must not offer a button that returns 503.
+    """
+    pdf_ok = _cluster_report_pdf_available()
+    kinds = []
+    for kind, formats in _REPORT_KINDS.items():
+        available = [f for f in formats if f != "pdf" or pdf_ok]
+        kinds.append({
+            "id": kind,
+            "label": "Rack Status standard report" if kind == "rack-status"
+            else "Nscale TX JSON schema report",
+            "description": (
+                "Cluster details plus a row per node — the same data as CSV, JSON or an "
+                "executive PDF with rack-level charts."
+                if kind == "rack-status" else
+                "The customer's Consolidated Test Plan schema, validated before download."
+            ),
+            "formats": available,
+            "default_format": available[0] if available else None,
+        })
+    return jsonify({"ok": True, "kinds": kinds, "pdf_available": pdf_ok})
 
 
 @app.route("/api/node-report/start", methods=["POST"])
@@ -12482,7 +12569,24 @@ def api_node_report_start():
         return jsonify({"ok": False, "error": "report generator unavailable"}), 503
     body = request.get_json(silent=True) or {}
     with_inventory = _truthy_arg(body.get("inventory", True))
-    key = f"inventory={int(with_inventory)}"
+
+    # Both reports are renderings of the same fleet sweep, so they share one job rather than
+    # each getting its own launch path — the sweep is the expensive part (~4 min at 2000 nodes)
+    # and duplicating it per report type would double the cost of a handover pack.
+    report_kind = str(body.get("report") or "nscale").strip().lower()
+    if report_kind not in _REPORT_KINDS:
+        return jsonify({"ok": False, "error": f"unknown report: {report_kind}",
+                        "supported": sorted(_REPORT_KINDS)}), 400
+    fmt = str(body.get("format") or _REPORT_KINDS[report_kind][0]).strip().lower()
+    if fmt not in _REPORT_KINDS[report_kind]:
+        return jsonify({
+            "ok": False,
+            "error": f"{report_kind} does not support format {fmt!r}",
+            "supported": list(_REPORT_KINDS[report_kind]),
+        }), 400
+    if fmt == "pdf" and not _cluster_report_pdf_available():
+        return jsonify({"ok": False, "error": "PDF rendering unavailable (reportlab missing)"}), 503
+    key = f"inventory={int(with_inventory)}&report={report_kind}&format={fmt}"
 
     with _node_report_jobs_lock:
         for existing, row in _node_report_jobs.items():
@@ -12499,6 +12603,7 @@ def api_node_report_start():
         job_id = uuid.uuid4().hex
         _node_report_jobs[job_id] = {
             "state": "running", "phase": "starting", "key": key,
+            "report": report_kind, "format": fmt,
             "done": 0, "total": 0, "current": "", "started": time.time(),
         }
 
@@ -12533,18 +12638,47 @@ def api_node_report_start():
             def _as_dict(obj):
                 return obj.to_dict() if hasattr(obj, "to_dict") else (obj or {})
 
-            report = _node_report.build_report(
-                fleet, platform=_as_dict(platform), cluster=_as_dict(cluster),
-                project=_as_dict(project), inventory=inventory,
-            )
-            for entry in report.get("test_results") or []:
-                entry.setdefault("deviations", []).extend(deviations or [])
+            if report_kind == "rack-status":
+                import cluster_report
 
-            _set(phase="validating against the schema")
-            errors = _node_report.validate(report)
-            _set(state="done", phase="complete", report=report, errors=errors[:20],
-                 nodes=len(report.get("firmware_inventory", {}).get("nodes") or []),
-                 report_id=report.get("report_metadata", {}).get("report_id", ""))
+                facts = _cluster_facts()
+                bcm_index = {}
+                try:
+                    import bcm_query
+
+                    bcm_index = bcm_query.index_by_hostname(bcm_query.nodes())
+                except Exception:  # BCM identity is an enrichment, not a prerequisite
+                    _logger.debug("rack-status report: BCM lookup unavailable", exc_info=True)
+
+                dataset = cluster_report.build_dataset(
+                    fleet=fleet, inventory=inventory, facts=facts,
+                    analytics=_analytics_last_cached(), bcm=bcm_index,
+                    cluster=_as_dict(cluster), project=_as_dict(project),
+                    platform=_as_dict(platform),
+                )
+                _set(phase=f"rendering {fmt.upper()}")
+                if fmt == "csv":
+                    body_bytes = cluster_report.to_csv(dataset).encode("utf-8")
+                elif fmt == "pdf":
+                    body_bytes = cluster_report.to_pdf(dataset)
+                else:
+                    body_bytes = cluster_report.to_json(dataset).encode("utf-8")
+                name = f"rack-status-{(dataset['meta'].get('cluster') or 'cluster')}-{dataset['meta']['generated_at'][:10]}"
+                _set(state="done", phase="complete", document=body_bytes, errors=[],
+                     nodes=len(dataset.get("nodes") or []), report_id=name)
+            else:
+                report = _node_report.build_report(
+                    fleet, platform=_as_dict(platform), cluster=_as_dict(cluster),
+                    project=_as_dict(project), inventory=inventory,
+                )
+                for entry in report.get("test_results") or []:
+                    entry.setdefault("deviations", []).extend(deviations or [])
+
+                _set(phase="validating against the schema")
+                errors = _node_report.validate(report)
+                _set(state="done", phase="complete", report=report, errors=errors[:20],
+                     nodes=len(report.get("firmware_inventory", {}).get("nodes") or []),
+                     report_id=report.get("report_metadata", {}).get("report_id", ""))
         except Exception as e:  # a worker crash must reach the operator, not just a log
             _logger.exception("node-report job failed")
             _set(state="error", error=str(e))
@@ -12565,7 +12699,10 @@ def api_node_report_status():
         row = _node_report_jobs.get(job_id)
         if row is None:
             return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        out = {k: v for k, v in row.items() if k != "report"}
+        # Both payload keys are excluded by name: "document" holds rendered bytes, which are not
+        # JSON-serialisable at all, so leaking it here fails the poll outright rather than merely
+        # making it large.
+        out = {k: v for k, v in row.items() if k not in ("report", "document")}
     out["ok"] = True
     out["ready"] = out.get("state") == "done"
     return jsonify(out)
@@ -12584,16 +12721,28 @@ def api_node_report_result():
         if row.get("state") != "done":
             return jsonify({"ok": False, "error": "not ready", "phase": row.get("phase")}), 409
         report = row.get("report")
+        document = row.get("document")
+        fmt = str(row.get("format") or "json")
+        stem = str(row.get("report_id") or "report")
         # Freed on collection so an abandoned tab cannot pin a multi-MB document.
         row.pop("report", None)
+        row.pop("document", None)
         row["state"] = "collected"
 
-    body = json.dumps(report, indent=2)
+    # A pre-rendered document (Rack Status CSV/JSON/PDF) is served as-is; the customer-schema
+    # report is JSON built here so it stays byte-identical to what was schema-validated.
+    if document is not None:
+        body: bytes | str = document
+    else:
+        body = json.dumps(report, indent=2)
+        fmt = "json"
+
+    ext, mimetype = _FORMAT_MEDIA.get(fmt, ("json", "application/json"))
     if _truthy_arg(request.args.get("download")):
-        name = f"{report['report_metadata']['report_id']}.json"
-        return Response(body, mimetype="application/json",
-                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
-    return Response(body, mimetype="application/json")
+        return Response(body, mimetype=mimetype, headers={
+            "Content-Disposition": f'attachment; filename="{stem}.{ext}"',
+        })
+    return Response(body, mimetype=mimetype)
 
 
 def _analytics_aggregate_guard():

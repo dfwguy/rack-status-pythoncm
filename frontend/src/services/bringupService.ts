@@ -114,8 +114,12 @@ export interface NodeReportProgress {
 export async function generateNodeReport(
   onProgress?: (p: NodeReportProgress) => void,
   pollMs = 1000,
+  options?: { report?: string; format?: string },
 ): Promise<string> {
-  const started = await apiFetch("/api/node-report/start", jsonPost({ inventory: true }));
+  const started = await apiFetch(
+    "/api/node-report/start",
+    jsonPost({ inventory: true, ...(options ?? {}) }),
+  );
   const startBody = (await started.json()) as { ok?: boolean; job_id?: string; error?: string };
   if (!started.ok || !startBody.job_id) {
     throw new Error(startBody?.error || `HTTP ${started.status}`);

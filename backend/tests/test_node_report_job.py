@@ -195,3 +195,122 @@ class TestFailureIsVisible:
         job_id = client.post("/api/node-report/start", json={}).get_json()["job_id"]
         body = _wait(client, job_id, want="error")
         assert "bring-up tree unreachable" in body["error"]
+
+
+@pytest.fixture
+def offline_facts(monkeypatch):
+    """The Rack Status report enriches from the head node and BCM; neither exists in a test.
+
+    Both are deliberately optional in the worker — a report that refused to render because a
+    version probe was unreachable would be useless in exactly the degraded conditions where an
+    operator most wants one — so these stubs also assert that optionality holds.
+    """
+    import app as A
+
+    monkeypatch.setattr(A, "_cluster_facts", lambda: {"slurm": {"version": "23.11.6"}})
+    monkeypatch.setattr(A, "_analytics_last_cached", dict)
+
+
+class TestReportKinds:
+    def test_both_reports_are_advertised_with_their_formats(self, client):
+        body = client.get("/api/node-report/kinds").get_json()
+        by_id = {k["id"]: k for k in body["kinds"]}
+        assert set(by_id) == {"rack-status", "nscale"}
+        # The customer schema is a JSON contract; offering it as CSV would produce a file that
+        # cannot validate against the thing it exists to satisfy.
+        assert by_id["nscale"]["formats"] == ["json"]
+        assert "csv" in by_id["rack-status"]["formats"]
+
+    def test_pdf_is_only_offered_when_it_can_actually_be_rendered(self, client, monkeypatch):
+        import app as A
+
+        monkeypatch.setattr(A, "_cluster_report_pdf_available", lambda: False)
+        body = client.get("/api/node-report/kinds").get_json()
+        rack = next(k for k in body["kinds"] if k["id"] == "rack-status")
+        assert "pdf" not in rack["formats"]
+        assert body["pdf_available"] is False
+
+    def test_a_default_format_is_always_named(self, client):
+        for kind in client.get("/api/node-report/kinds").get_json()["kinds"]:
+            assert kind["default_format"] in kind["formats"]
+
+
+class TestRequestValidation:
+    def test_an_unknown_report_is_refused_with_the_supported_list(self, client):
+        res = client.post("/api/node-report/start", json={"report": "quarterly"})
+        assert res.status_code == 400
+        assert "rack-status" in res.get_json()["supported"]
+
+    def test_a_format_the_report_cannot_produce_is_refused(self, client):
+        res = client.post("/api/node-report/start", json={"report": "nscale", "format": "pdf"})
+        assert res.status_code == 400
+        assert res.get_json()["supported"] == ["json"]
+
+    def test_pdf_is_refused_rather_than_crashing_when_unrenderable(self, client, monkeypatch):
+        import app as A
+
+        monkeypatch.setattr(A, "_cluster_report_pdf_available", lambda: False)
+        res = client.post("/api/node-report/start",
+                          json={"report": "rack-status", "format": "pdf"})
+        assert res.status_code == 503
+
+
+class TestFormatRouting:
+    """Each format must come back as its own media type, not JSON wearing a new extension."""
+
+    def _generate(self, client, **body):
+        job_id = client.post("/api/node-report/start", json=body).get_json()["job_id"]
+        _wait(client, job_id, want="done")
+        return client.get("/api/node-report/result",
+                          query_string={"job_id": job_id, "download": "1"})
+
+    def test_csv_comes_back_as_csv_named_csv(self, client, fake_generation, offline_facts):
+        res = self._generate(client, report="rack-status", format="csv")
+        assert res.status_code == 200
+        assert res.mimetype == "text/csv"
+        assert res.headers["Content-Disposition"].endswith('.csv"')
+        assert b"," in res.data
+
+    def test_json_comes_back_as_json(self, client, fake_generation, offline_facts):
+        import json as _json
+
+        res = self._generate(client, report="rack-status", format="json")
+        assert res.mimetype == "application/json"
+        assert res.headers["Content-Disposition"].endswith('.json"')
+        assert isinstance(_json.loads(res.data), dict)
+
+    def test_pdf_comes_back_as_a_real_pdf(self, client, fake_generation, offline_facts):
+        import app as A
+
+        if not A._cluster_report_pdf_available():
+            pytest.skip("reportlab not installed")
+        res = self._generate(client, report="rack-status", format="pdf")
+        assert res.mimetype == "application/pdf"
+        assert res.data[:5] == b"%PDF-"  # a renderer that silently emitted JSON would fail here
+
+    def test_the_customer_schema_report_is_still_the_default(self, client, fake_generation):
+        """Omitting `report` must not change behaviour for the existing caller."""
+        res = self._generate(client)
+        assert res.mimetype == "application/json"
+
+    def test_two_formats_of_one_report_do_not_share_a_job(self, client, fake_generation,
+                                                          offline_facts):
+        """Reuse is keyed on request shape, and the format is part of that shape.
+
+        Without the format in the key, asking for the PDF while the CSV was in flight would
+        join the CSV's job and hand back a CSV named .pdf.
+        """
+        a = client.post("/api/node-report/start",
+                        json={"report": "rack-status", "format": "csv"}).get_json()
+        b = client.post("/api/node-report/start",
+                        json={"report": "rack-status", "format": "json"}).get_json()
+        assert a["job_id"] != b["job_id"]
+        assert not b.get("reused")
+
+    def test_an_identical_request_still_joins_the_running_sweep(self, client, fake_generation,
+                                                               offline_facts):
+        first = client.post("/api/node-report/start",
+                           json={"report": "rack-status", "format": "csv"}).get_json()
+        second = client.post("/api/node-report/start",
+                            json={"report": "rack-status", "format": "csv"}).get_json()
+        assert second["job_id"] == first["job_id"]

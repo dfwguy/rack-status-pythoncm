@@ -9,7 +9,6 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import CircularProgress from "@mui/material/CircularProgress";
 import { Text, Button, Banner, Tabs, Tag, ProgressBar } from "@nvidia/foundations-react-core";
-import { Download } from "lucide-react";
 import Slider from "@mui/material/Slider";
 import MuiTooltip from "@mui/material/Tooltip";
 import { alpha } from "@mui/material/styles";
@@ -26,13 +25,13 @@ import {
   Legend,
 } from "chart.js";
 import { Line, Bar } from "react-chartjs-2";
+import { ReportGenerator } from "../components/analytics/ReportGenerator";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { NodeHeatmap } from "../components/analytics/NodeHeatmap";
 import { type NodeInfo } from "../components/rack/NodeSelector";
 import { parseNodesFromRack } from "../lib/parseNodesFromRack";
-import { generateNodeReport, getBringupFleet } from "../services/bringupService";
-import type { NodeReportProgress } from "../services/bringupService";
+import { getBringupFleet } from "../services/bringupService";
 import { useActiveCluster } from "../context/ActiveClusterContext";
 import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
@@ -223,9 +222,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
   const [fleet, setFleet] = useState<BringupFleet | null>(null);
   const [fleetLoading, setFleetLoading] = useState(false);
   const [fleetError, setFleetError] = useState<string | null>(null);
-  const [reportBusy, setReportBusy] = useState(false);
-  const [reportProgress, setReportProgress] = useState<NodeReportProgress | null>(null);
-  const [reportError, setReportError] = useState("");
+  const [reportError] = useState("");
   const traysPerRack =
     activeCluster?.geometry?.trays_per_rack || activePlatform?.geometry?.trays_per_rack || 18;
 
@@ -277,21 +274,6 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
     }
   }, [heatmapNodes]);
 
-  const downloadReport = useCallback(async () => {
-    setReportBusy(true);
-    setReportError("");
-    setReportProgress(null);
-    try {
-      // Generating sweeps every node for its hardware identity, so this reports how far
-      // through the fleet it is rather than leaving the operator on a spinner for minutes.
-      await generateNodeReport(setReportProgress);
-    } catch (e) {
-      setReportError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setReportBusy(false);
-      setReportProgress(null);
-    }
-  }, []);
 
   const bodyRows = useMemo(
     () => rows.map((r) => ({ rack: r.rack, nemo: r.nemo })),
@@ -653,47 +635,6 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
                 {reportError}
               </Text>
             )}
-            {reportBusy && reportProgress && (
-              <Box sx={{ minWidth: 260 }}>
-                <Text kind="body/regular/sm" style={{ display: "block", marginBottom: 2 }}>
-                  {reportProgress.total
-                    ? `Swept ${reportProgress.done ?? 0} of ${reportProgress.total} nodes`
-                    : reportProgress.phase || "Starting…"}
-                </Text>
-                <ProgressBar
-                  value={
-                    reportProgress.total
-                      ? Math.round(((reportProgress.done ?? 0) / reportProgress.total) * 100)
-                      : 0
-                  }
-                  aria-label="Node report generation progress"
-                />
-                {reportProgress.current && (
-                  <Text
-                    kind="mono/sm"
-                    style={{
-                      display: "block",
-                      marginTop: 2,
-                      color: "var(--text-color-secondary)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {reportProgress.current}
-                  </Text>
-                )}
-              </Box>
-            )}
-            <Button
-              kind="secondary"
-              size="small"
-              onClick={() => void downloadReport()}
-              disabled={reportBusy}
-            >
-              <Download size={14} style={{ marginRight: 6 }} />
-              {reportBusy ? "Generating…" : "Download report"}
-            </Button>
           </Box>
         }
       />
@@ -714,6 +655,9 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
 
       {tab === RACK_TAB && (
       <>
+      {/* Reports describe the cluster and its racks, so the control belongs with that content
+          rather than in the page header above both tabs. */}
+      <ReportGenerator />
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
         <Text kind="body/regular/md" style={{ display: "block", marginBottom: 12, color: "var(--text-color-secondary)" }}>
           Reads every relevant log once with{" "}

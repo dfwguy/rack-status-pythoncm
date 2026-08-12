@@ -1,6 +1,6 @@
 {
   "generated_by": "frontend/scripts/gen-help-content.mjs",
-  "count": 76,
+  "count": 77,
   "entries": [
     {
       "id": "dashboard",
@@ -2457,8 +2457,8 @@
       "title": "Analytics",
       "domain": "Analytics & Benchmarks",
       "routePath": "/analytics/overview",
-      "summary": "Rack-level and node-level analytics, plus the downloadable daily report.",
-      "description": "The Analytics page has two tabs. Rack Level aggregates rack and benchmark data into cluster-wide charts and tables — validation pass rates, NCCL/NEMO benchmark trends, and comparisons across racks. Node Level shows a heatmap with one square per node, coloured by a selectable data view (node up/down, test completion, or any bring-up benchmark that produces a metric such as NCCL busbw), with each node's up/down state always drawn as the square's border. The Compact layout tiles racks eight across as blocks of trays so a whole floor fits on one screen; Linear gives each rack its own row and shows a load gauge per node. The heatmap can be downloaded as a PNG or JPEG image, and a Download report button on either tab produces the daily node-validation report as schema-validated JSON.",
+      "summary": "Rack-level and node-level analytics, plus the cluster and customer-schema reports.",
+      "description": "The Analytics page has two tabs. Rack Level aggregates rack and benchmark data into cluster-wide charts and tables — validation pass rates, NCCL/NEMO benchmark trends, and comparisons across racks. Node Level shows a heatmap with one square per node, coloured by a selectable data view (node up/down, test completion, or any bring-up benchmark that produces a metric such as NCCL busbw), with each node's up/down state always drawn as the square's border. The Compact layout tiles racks eight across as blocks of trays so a whole floor fits on one screen; Linear gives each rack its own row and shows a load gauge per node. The heatmap can be downloaded as a PNG or JPEG image. The Rack Level tab carries a report generator offering two reports: the Rack Status standard report (cluster details plus a row per node, as CSV, JSON, or a PDF with rack-level charts) and the Nscale TX JSON schema report (the customer's Consolidated Test Plan contract, schema-validated before download).",
       "features": [
         "Rack Level: cluster-wide aggregate charts, benchmark trends, cross-rack comparisons.",
         "Node Level: per-node heatmap grouped by rack, with a data-view selector.",
@@ -2467,7 +2467,7 @@
         "Up/down state shown as each cell's border on every view.",
         "Metric views scale against the fleet's observed range, stated in the legend.",
         "Download image: the heatmap as a report-ready PNG or JPEG with title, legend and timestamp.",
-        "Download report: daily node-validation JSON, validated against the report schema."
+        "Report generator (Rack Level tab): the Rack Status report as CSV/JSON/PDF, or the Nscale TX schema report as validated JSON. Both sweep every node for hardware and firmware identity, with a progress bar."
       ],
       "howTo": [
         {
@@ -2507,11 +2507,12 @@
           ]
         },
         {
-          "task": "Produce the daily report",
+          "task": "Produce a report",
           "steps": [
             "Open Analytics & Benchmarks > Analytics.",
-            "Click Download report.",
-            "Edit the TBD firmware and test-plan fields before sending it on."
+            "Stay on the Rack Level tab and find Generate a report.",
+            "Pick the report, then the format (CSV, JSON or PDF; the Nscale schema report is JSON only).",
+            "Click Generate & download and watch the per-node sweep progress."
           ]
         }
       ],
@@ -2530,8 +2531,11 @@
         "charts",
         "heatmap",
         "node level",
-        "daily report",
+        "report",
+        "csv report",
+        "pdf report",
         "json report",
+        "nscale schema",
         "test completion",
         "download image",
         "png",
@@ -2540,9 +2544,9 @@
       ],
       "aria": {
         "label": "Analytics page",
-        "description": "Rack-level and node-level analytics with a downloadable daily report."
+        "description": "Rack-level and node-level analytics with downloadable cluster reports."
       },
-      "aiContext": "The Analytics page has a Rack Level tab (cluster-wide aggregate charts: validation pass rates, NCCL/NEMO trends, cross-rack comparisons) and a Node Level tab (per-node heatmap grouped by rack; the fill is a selectable view — node up/down, test completion, or a bring-up metric like NCCL busbw — and the border always shows up/down). Test completion counts a test as done once it has a verdict, pass or fail, so it answers 'has this node been tested' rather than 'did it pass'. Two layouts: Compact tiles racks eight across as tray blocks with a per-rack good/warn/bad tally (the whole floor on one screen), Linear gives each rack a row and each node a load gauge. Metric views auto-scale to the fleet's observed range. Download image renders the heatmap to a light-background PNG/JPEG with title, legend, cluster and timestamp baked in, drawn on a canvas so it does not depend on the UI theme. A Download report button on either tab returns the daily node-validation report as JSON validated against the vendored report schema; fields bring-up cannot measure (firmware versions, test plan reference) are marked TBD for the operator to edit."
+      "aiContext": "The Analytics page has a Rack Level tab (cluster-wide aggregate charts: validation pass rates, NCCL/NEMO trends, cross-rack comparisons) and a Node Level tab (per-node heatmap grouped by rack; the fill is a selectable view — node up/down, test completion, or a bring-up metric like NCCL busbw — and the border always shows up/down). Test completion counts a test as done once it has a verdict, pass or fail, so it answers 'has this node been tested' rather than 'did it pass'. Two layouts: Compact tiles racks eight across as tray blocks with a per-rack good/warn/bad tally (the whole floor on one screen), Linear gives each rack a row and each node a load gauge. Metric views auto-scale to the fleet's observed range. Download image renders the heatmap to a light-background PNG/JPEG with title, legend, cluster and timestamp baked in, drawn on a canvas so it does not depend on the UI theme. The Rack Level tab carries a report generator with two reports. The Rack Status standard report renders one dataset as CSV, JSON, or a PDF with an executive summary and rack-level charts. The Nscale TX JSON schema report answers the customer's Consolidated Test Plan contract and is validated against the vendored schema before download, so it is JSON only; fields bring-up cannot measure are marked TBD for the operator to edit. Both reports share one fleet sweep of per-node hardware and firmware identity — asking twice while a sweep runs joins the running job rather than starting a second one — and report progress per node. PDF is only offered when the image can render it."
     },
     {
       "id": "reports",
@@ -2879,6 +2883,60 @@
         "description": "Searchable in-app help panel grouped by domain that slides in from the right."
       },
       "aiContext": "Help is a right-hand slide-out panel (KUI SidePanel) generated from the knowledge registry; every page/component has an entry with description, features, how-to steps, and FAQs. Open it from the page header help icon or the sidebar."
+    },
+    {
+      "id": "apiReference",
+      "kind": "view",
+      "title": "API Reference",
+      "domain": "Platform",
+      "routePath": "/platform/api",
+      "summary": "Browsable reference for this deployment's REST API, generated from its own routes.",
+      "description": "API Reference renders the OpenAPI 3.1 document served at /api/openapi.json, which the backend generates from its own Flask route table on each request. Because it is generated rather than maintained, it cannot describe an endpoint this build does not serve, and a new endpoint appears without anyone editing a file. Operations are grouped by endpoint family, searchable by path, verb, group or summary, and each one shows its parameters, request body and the status codes its handler actually returns.",
+      "features": [
+        "Every /api/* operation with its verb, path, summary and full description from the handler's docstring.",
+        "Query parameters are the ones each handler actually reads, so the page cannot claim a parameter the code ignores.",
+        "Download the raw document as JSON (or /api/openapi.yaml) to generate a client or import into other tooling."
+      ],
+      "howTo": [
+        {
+          "task": "Find an endpoint",
+          "steps": [
+            "Open API Reference.",
+            "Type a path, verb or keyword in the filter.",
+            "Click an operation to expand its parameters and responses."
+          ]
+        },
+        {
+          "task": "Integrate another system",
+          "steps": [
+            "Open API Reference.",
+            "Click 'openapi.json' to download the document.",
+            "Point your client generator at it; authenticate first via POST /api/login."
+          ]
+        }
+      ],
+      "related": [
+        "toolRegistry",
+        "settings"
+      ],
+      "keywords": [
+        "api",
+        "openapi",
+        "swagger",
+        "rest",
+        "endpoint",
+        "integration",
+        "client",
+        "spec",
+        "schema",
+        "json",
+        "yaml"
+      ],
+      "aria": {
+        "label": "API reference page",
+        "description": "Browsable reference for the REST API, generated from the application's own route table."
+      },
+      "aiContext": "API Reference renders /api/openapi.json, an OpenAPI 3.1 document generated from the Flask route table (about 177 paths / 201 operations). Query parameters are derived from what each handler reads; request bodies are free-form JSON by design rather than schema'd. The raw document is available at /api/openapi.json and /api/openapi.yaml, behind the normal auth gate."
     },
     {
       "id": "appLayout",
