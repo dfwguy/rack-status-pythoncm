@@ -102,8 +102,16 @@ def test_map_cmsh_rack_list_token_rk_to_svr_cn():
 def test_extract_rack_ids_from_cmsh_text_cbr_rk_lines(monkeypatch):
     monkeypatch.setenv("NVIS_RACK_ID", nid.CBR_NVIS_RACK_ID)
     monkeypatch.setenv("NVIS_CT_ID", nid.CBR_NVIS_CT_ID)
-    nid.clear_nvis_naming_cache()
     import native_status
+
+    # Clear the cache the function under test actually reads, not just the naming one.
+    # extract_rack_ids_from_cmsh_text resolves NVIS_RACK_ID through native_status's own
+    # mtime-keyed `_je_subset`, which overrides the environment; clear_nvis_naming_cache() drops
+    # the lru_cache but leaves that subset warm. So an earlier test that populated it with a
+    # different NVIS_RACK_ID made this test read the wrong templates and fail — intermittently,
+    # depending on suite order. invalidate_job_env_file_cache() clears the subset *and* the
+    # naming cache, which is why it is the module's documented reset hook.
+    native_status.invalidate_job_env_file_cache()
 
     text = (
         "CBR01-DH01-RK0102    DataHall     1              1              42\n"
