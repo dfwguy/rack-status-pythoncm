@@ -19,12 +19,24 @@ if _truthy_env("RACK_STATUS_DEMO"):
 
 ## Async Job Pattern
 
-Long-running operations (validation, llama, stress, xrack, power, GPU reset, etc.):
+**New long-running work should use the workflow state machine, not this pattern.** See
+`core-designs.mdc` §1: `workflow_engine.start_workflow_run()` already gives a uuid, a durable
+run that survives a restart, per-step output and bounded-concurrency fan-out, with the HTTP
+surface (`/api/workflows/<id>/run`, `/api/workflow-runs/<run_id>`) built. Repeating the pattern
+below is how this repo acquired four independent job tables, none of which survive a deploy.
+
+The pattern is documented here because a lot of existing code uses it and you will read it:
+
 1. `POST /api/<action>-async` — starts background thread, returns `{ ok, job_id }`
 2. `GET /api/<action>-status?job_id=...` — poll for progress, returns `{ ok, phase, stdout, stderr, ... }`
 3. Worker uses `host_exec.popen_on_host()` and updates an in-memory dict
 4. Phases: `starting` -> `running` -> `done` | `error` | `timeout`
 5. Jobs purge from memory after ~15 minutes
+
+If you do extend it (touching an existing route, say), two things that were learned the hard way:
+a job table must be **bounded** and evict oldest-first, and a document produced by the job should
+be **collected separately** rather than riding along on every poll — at fleet scale it is several
+MB per poll.
 
 ### Durable validation activities (validation-family only)
 

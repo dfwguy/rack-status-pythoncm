@@ -12,6 +12,11 @@ duplicate rule content here** — edit the `.mdc` files instead.
 
 Read these before doing any work — they apply to every task:
 
+- @.cursor/rules/core-designs.mdc — **read this before adding any new mechanism.** The product's
+ **first-class citizens** — connection/transport, catalog/Tools, Project/Cluster, the workflow
+ state machine, configuration resolution, platform/scheduler providers, the results pipeline, the
+ durable run registry and locks, naming templates, artifacts/reports, auth, frontend contexts —
+ which you build *on*, not beside. Also the deployment invariants that have each caused an outage
 - @.cursor/rules/nvis-rack-status.mdc — architecture, key files, UI framework (KUI-first)
 - @.cursor/rules/local-dev.mdc — build/run (`start.sh`), SSH mode, Docker, `deploy-scripts.sh`
 - @.cursor/rules/cluster-deployments.mdc — Mayo / Firmus / Boston map; **DO NOT mix clusters**

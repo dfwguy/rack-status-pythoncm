@@ -118,11 +118,42 @@ terminal); `native_status.py` (primary rack/device status collector — merges `
 `ds`, `sinfo`, log-dir probes into in-memory state); `host_exec.py` + `transport/` (local-vs-SSH
 routing, env-forwarding, sudo escalation, SSH ControlMaster multiplexing, jump-host hop, fanout);
 `platforms/` (bcm.py / maas.py / base.py); `schedulers/` (slurm/local + runai/slinky/maas stubs);
-`workflow_engine.py`; `validation_activities.py` (durable validation-family launch registry; it
+`workflow_engine.py` (workflow state machine **and** the general long-job runner — see Reusable
+components below); `validation_activities.py` (durable validation-family launch registry; it
 migrates the legacy `multirack_jobs.json` on first read); `rack_locks.py` (fcntl advisory locks); `catalog/`
 (TinyDB tool/platform/project catalog blueprint); `ai_chat.py`; `token_vault.py`;
 `nvftp_cache_sync.py`; `rack_web/pam_*` (PAM login); `nvis_id_templates.py` (configurable
 rack/CT/NVSwitch naming templates); and `bin/scripts/` (bundled operational + benchmark bash).
+
+### First-class citizens — the parts built to scale
+
+Rack Status is not a collection of scripts behind a web page. A small number of components own a
+concern for the whole product and are meant to be built **on**, not beside. Each has been
+reimplemented at least once by someone who read the file inventory above and could not tell that
+the component *was* the intended mechanism — so they are named explicitly here, with the
+prescriptive version in `.cursor/rules/core-designs.mdc`.
+
+A genuinely new capability that no citizen covers may need a new structure; that is how each of
+these began. When it happens, it gets documented as a citizen so the next person inherits it.
+
+| Concern | Citizen that owns it | Instead of |
+|---|---|---|
+| Running anything on a host | **connection/transport** — `host_exec.run_on_host()` / `popen_on_host()` / `connection()`, `transport.fanout()` for per-node work | a direct `ssh` call, which gets none of the env forwarding, hop chain, retry or ControlMaster behaviour |
+| What the product can run | **catalog/Tools** — a Tool document; pins, images and step counts as `tool_param_defaults` on the Platform | constants in a new module, which no operator can edit and which ship one site's paths everywhere |
+| Which site, which nodes | **Project/Cluster** record, resolved by `catalog/context.py` as the high overlay — including acceptance **campaigns** (pinned, versioned node rosters with an id) | env vars pointing at a file on one host |
+| Long-running work | **workflow state machine** — uuid, run persisted under `var/` so it survives a restart, per-step output, bounded-concurrency fan-out, HTTP surface already built | another in-memory `_*_jobs` dict, which loses everything on deploy |
+| Where a knob comes from | **configuration resolution** — settings registry + `_eget`/`_subprocess_env` + catalog overlays, with defined precedence | a bare `os.environ.get()`, which opts out of per-cluster overlays |
+| Which cluster manager / queue | **platform + scheduler providers** (`platforms/`, `schedulers/`) | an `if` branch in a caller |
+| Raw output → metrics | **results pipeline** — `nvis_logscan.py` single pass, `universal_parser.py`, tiered `nvis_nccl_ingest.py` | a multi-pass shell scan or a head/tail sample, which silently misses results mid-file |
+| What ran, and who owns a rack | **durable run registry + locks** — `validation_activities.py`, `rack_locks.py` | in-process state that dies with the worker |
+| Node and rack identity | **naming templates** — `nvis_id_templates.py` | deriving hostnames from a rack id, which yields targets that do not resolve |
+| Reports and exports | **one dataset, many renderers** — `cluster_report.build_dataset()` → CSV / JSON / PDF | one generator per format, which drift on the first added column |
+| Access | **auth** — PAM/token vault + `_require_dashboard_auth` and its bypass list | a second check invented per route |
+| Shared frontend state | **contexts** — `ActiveClusterContext`, `RackCommandsStoreContext`, `ThemeContext` | local state that duplicates them, so two panes disagree |
+
+**Planned:** *terminals integrated with AI* — the WebSocket PTY and `ai_chat.py` exist separately
+today; the intent is one operator console where the terminal, the AI context and the product's
+knowledge of the cluster are the same surface.
 
 **Persistence — file-based only, NO external database.** All runtime state lives under `/app/var`,
 persisted via the compose named volume `rack-data`. TinyDB at `var/store/catalog.json`

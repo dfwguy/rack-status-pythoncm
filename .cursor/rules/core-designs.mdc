@@ -1,0 +1,190 @@
+---
+description: First-class citizens of Rack Status — the load-bearing components you build ON, not beside
+alwaysApply: true
+---
+
+# First-class citizens of Rack Status
+
+Rack Status is not a collection of scripts behind a web page. It has a small number of
+**first-class citizens**: load-bearing abstractions that own a concern for the whole product.
+Everything else is built on them.
+
+**The rule.** If your feature needs something one of these citizens owns, extend that citizen.
+Do not add a parallel structure beside it. A second structure doing the same job always drifts
+from the first, and the drift is discovered by a customer, not by us.
+
+**The exception, and it is a real one.** A genuinely new capability that no citizen covers should
+get a new structure — that is how each of these came to exist. Two obligations come with it:
+say in the commit message why no existing citizen fits, and if the thing turns out to be
+reusable, **add it to this file** so the next person inherits it instead of rediscovering it.
+
+**Why this file exists.** The other rules described the architecture accurately but never said
+what to build on, so faithful readers built beside it. `backend-api.mdc` went further and
+prescribed an in-memory job dict for long-running work, which is why the repo now has four of
+them — two of which I added myself this week before being told the state machine existed. This
+file is the prescriptive half of the architecture.
+
+---
+
+## The citizens
+
+### 1. Connection / transport — how anything runs on a host
+
+`backend/host_exec.py` + `backend/transport/`. Every command that leaves this process goes
+through it: `run_on_host()`, `popen_on_host()`, `connection(profile)` for a composed chain,
+`.hop()` to reach a node through the head, `transport.fanout()` for per-node work with bounded
+concurrency, retries on transient SSH failures, and per-node progress via `on_result`.
+
+**Own it, don't bypass it.** A direct `ssh` call gets none of the env forwarding, the local/ssh
+executor split, the multi-hop chain, the sudo escalation or the ControlMaster semantics — and
+multiplexing is load-bearing, not an optimisation (`docs/EXECUTION_ARCHITECTURE.md` §6.1).
+
+Concurrency ceilings come from the target, not from impatience: the head's `sshd MaxSessions`
+(unset = OpenSSH default 10) bounds a fan-out, and exceeding it fails nodes silently with
+"Session open refused by peer".
+
+### 2. Catalog / Tools — what the product can run
+
+`backend/catalog/` (`models.py`, `store.py`, `context.py`, `api.py`). A `Tool` document is how a
+`bin/scripts` script becomes launchable: `script`, `env_key`, `compatible` (all / by capability /
+by platform id), `surfaces`, `execution`. A `Platform` carries the hardware SKU plus
+`tool_param_defaults`.
+
+**New tests, tools and presets are catalog documents.** Container images, version pins, step
+counts and thresholds are `tool_param_defaults` — not constants in a new module. A frozen list of
+presets in Python is precisely the hard-wired `RACK_*_SCRIPT` registry the catalog replaced: no
+operator can edit it, it ships one site's absolute paths to every other site, and adding a test
+needs a code change and a deploy.
+
+### 3. Project / Cluster — which site, which nodes
+
+`models.Project` / `models.Cluster`, resolved by `catalog/context.py` into a **high overlay**
+(cluster identity, naming, connection — beats `job_env_overrides` and the environment) and a
+**low overlay** (platform defaults). One running instance serves several projects and clusters.
+
+**Anything answering "which cluster, which nodes, which customer" belongs on that record.** That
+includes an acceptance **campaign**: a pinned, versioned roster of exact nodes with an id, so
+expanding a rack name can never silently reintroduce an excluded tray, and a stale browser cannot
+launch against last week's roster. A roster passed as an env var pointing at a file on one host is
+not portable, is invisible to the cluster switcher, and cannot be edited from the UI.
+
+### 4. Workflow / state machine — how long work runs
+
+`backend/workflow_engine.py`. `start_workflow_run()` mints a uuid4, runs on a background thread
+and returns immediately. `get_run_state()` polls. Runs persist under `var/` and survive a
+container restart. Steps keep their own output. `_execute_fanout_step` fans out across N nodes
+with bounded concurrency over the multi-hop chain. The HTTP surface exists:
+`POST /api/workflows/<id>/run`, `GET /api/workflow-runs/<run_id>`, `.../output/<step_id>`,
+`.../cancel`.
+
+**This is the runner for any long-running job, not just the workflow editor's engine.** Do not
+add another in-memory job dict. An in-memory job loses its state on every deploy, and a
+2000-node sweep whose progress nobody can see is indistinguishable from a hang. If the engine
+lacks something — numeric progress, an artifact slot for a produced document, an idempotency key
+so a second button press joins the run in flight — **add it to the engine**. All three are
+cheaper than a fifth job table.
+
+### 5. Configuration resolution — where a knob comes from
+
+The settings registry in `app.py` plus `_eget` / `_eget_int` / `_subprocess_env`, layered with
+the catalog overlays and `var/cache/job_env_overrides.json`. Precedence is defined: cluster high
+overlay → job env overrides → process env → platform low overlay.
+
+**Add knobs to the registry; read them through the accessors.** A bare `os.environ.get()` in new
+code silently opts out of per-cluster overlays, which is how a setting works on one cluster and
+not on another. `host_exec._FORWARD_ENV_NAMES` is what carries non-prefixed knobs over SSH.
+
+### 6. Platform and scheduler providers — which cluster manager, which queue
+
+`backend/platforms/` (`base.py`, `bcm.py`, `maas.py`) and `backend/schedulers/` (slurm/local,
+plus runai/slinky/maas stubs).
+
+**A new cluster manager or scheduler is a provider, not an `if` branch.** These exist so that
+BCM-specific `cmsh` behaviour and Slurm-specific command shapes stay behind an interface; adding
+a conditional in a caller puts site knowledge where the abstraction was meant to hide it.
+
+### 7. Results pipeline — how raw output becomes metrics
+
+`bin/scripts/nvis_logscan.py` (single pass, bounded memory, `--paths-from`, NDJSON),
+`backend/universal_parser.py`, and the tiered `nvis_nccl_ingest.py` (structured JSON → experiment
+directory → scrape, each able to decline). `docs/PARSING_RESULTS_ARCHITECTURE.md` has the detail.
+
+**A new test's output flows through the pipeline.** Do not add a multi-pass shell scan or a
+head/tail sample: validation logs reach hundreds of MB, the sampling approach silently missed
+results in the middle of files, and the single-pass scanner replaced ~16 full-file passes. Any
+probe that might not find its answer needs a read cap (`head -c`) so a file without the answer
+costs no more than one with it. Prefer structured output from the tool over scraping its text.
+
+### 8. Durable run registry and locks — the system of record
+
+`backend/validation_activities.py` (`activity_id`, tasks, phases, adopted external logs) and
+`backend/rack_locks.py` (advisory rack claims with TTL and heartbeat release).
+
+**Every launch registers; every exclusive operation claims.** The registry is the audit trail
+that answers "what ran on this rack, when, and what came of it" after the process that started it
+is gone — which is the question every handover asks. The locks are what stop two operators, or
+two agents, from running on the same rack at once.
+
+### 9. Naming — rack id is not a hostname
+
+`backend/nvis_id_templates.py`. Rack/dashboard ids (`cmsh rack list`) and real compute hostnames
+(Slurm/DNS) are different namespaces; see `cluster-naming-conventions.mdc`.
+
+**Never derive node names ad hoc.** A naive `<rack>-[01-NN]` produces targets that do not
+resolve, and the failure looks like a network problem.
+
+### 10. Artifacts and reports — one dataset, many renderers
+
+`backend/cluster_report.py` (+ `cluster_report_pdf.py`) and `backend/node_report.py`. The dataset
+is built once; CSV, JSON and PDF are renderings of it.
+
+**Add a renderer, never a second generator.** Parallel generators drift on the first added
+column, and a report that contradicts itself is worse than a missing one. Where a format cannot
+represent the truth — a schema with no field for an InfiniBand port GUID, a page that cannot
+hold 25 columns — reshape it in the renderer and **publish the deviation**, never silently.
+
+### 11. Auth — one gate
+
+`rack_web/pam_*`, `token_vault.py`, `_require_dashboard_auth`, and the auth bypass list.
+
+**New routes inherit the gate.** Do not invent a second check or add a bypass without saying why;
+`api_login` is in the bypass list for a reason and it is the only kind of entry that belongs there.
+
+### 12. Frontend contexts — shared state has an owner
+
+`ActiveClusterContext` (active project/cluster + switcher), `RackCommandsStoreContext`
+(centralised async command tracking across views), `ThemeContext` + `ThemeBridge` (KUI outer,
+MUI synced).
+
+**A new view uses the contexts.** Local state that duplicates command tracking or active-cluster
+resolution is how two panes come to disagree about what is running. KUI first for new UI
+(`kui-components.mdc`); MUI only where an existing complex widget has no KUI equivalent.
+
+---
+
+## Planned citizens
+
+- **Terminals integrated with AI.** The WebSocket PTY (`flask-sock`, xterm.js) and `ai_chat.py`
+  exist separately today. The intent is one first-class citizen: an operator console where the
+  terminal, the AI context (`catalog/context.build_ai_context_block()`) and the product's own
+  knowledge of the cluster are the same surface. Build toward that rather than adding another
+  one-off chat or shell path.
+
+---
+
+## Deployment invariants
+
+Not citizens — operational truths. Each of these has caused an outage in this repo.
+
+- **A new `backend/*.py` module needs a bind mount** in the deployment's
+  `docker-compose.override.yml` or it does not exist in the container. `app.py` is mounted, so
+  importing an unmounted module is an instant crash loop.
+- **A new mount needs `docker compose up -d` (recreate), not `docker restart`** — restart reuses
+  the old container's mount set.
+- **The SPA's `index.html` and its `assets/` must come from the same build.** Vite content-hashes
+  every chunk; a pinned `index.html` from another build 404s all of them and renders a black
+  screen that reads as "slow".
+- **A deploy is not verified by `GET /login` returning 200.** Fetch the page and confirm the
+  assets it references resolve.
+- **Run `bin/prod-drift.sh` before deploying.** People fix things in place, in the deployment tree
+  and in the head's `bin/scripts`. A deploy overwrites both. Harvest first.
