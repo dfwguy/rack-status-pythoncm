@@ -26,6 +26,7 @@ nvis_sbatch_pin_install() {
   [[ -n "${real_sbatch}" ]] || { echo "nvis_sbatch_pin: sbatch not on PATH; cannot pin" >&2; return 0; }
 
   NVIS_SHIM_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nvis_sbatch_shim.XXXXXX")"
+  export NVIS_SHIM_DIR
   cat > "${NVIS_SHIM_DIR}/sbatch" <<'SHIM'
 #!/usr/bin/env bash
 # NVIS sbatch shim — pins the wrapped tool's batch job to the provisioned racks
@@ -87,6 +88,71 @@ if [[ -n "${_pairs}" ]]; then
   filtered=( ${_out[@]+"${_out[@]}"} )
   [[ "${_merged}" -eq 0 ]] && pre+=( "--export=ALL${_pairs}" )
   echo "nvis_sbatch_shim: forcing into job env:${_pairs//,/ } (merged_into_llmb_export=${_merged})" >&2
+fi
+# 4) Optional audited LLMB NCCL transformation.  The upstream Comms-Perf-Suite
+# generates the proven 24-test batch dynamically, so the only safe interception
+# point is the exact script handed to sbatch.  Transform a private copy, verify
+# every required invariant, and never mutate the installed LLMB recipe.
+if [[ "${NVIS_LLMB_AUDITED_CONTAINER:-0}" == 1 ]]; then
+  _script=""; _script_index=-1
+  for (( _i=${#filtered[@]}-1; _i>=0; _i-- )); do
+    [[ -f "${filtered[$_i]}" ]] || continue
+    _script="${filtered[$_i]}"; _script_index=$_i; break
+  done
+  [[ -n "$_script" ]] || { echo "nvis_sbatch_shim: audited LLMB batch script not found" >&2; exit 41; }
+  _patched="${NVIS_SHIM_DIR}/audited-llmb-nccl-${RANDOM}.sbatch"
+  {
+    head -n 1 "$_script"
+    cat <<'AUDIT_GATE'
+set -o pipefail
+export PMIX_MCA_gds=hash
+export MELLANOX_VISIBLE_DEVICES=all
+_nvis_llmb_nccl_result_gate() {
+  _prior=$?
+  trap - EXIT
+  if (( _prior != 0 )); then
+    echo "LLMB_NCCL_24TEST_FAIL batch_rc=${_prior}" >&2
+    exit "$_prior"
+  fi
+  _count=0; _failed=0
+  if [[ -n "${LOG_DIR:-}" && -d "$LOG_DIR" ]]; then
+    _count=$(find "$LOG_DIR" -mindepth 2 -maxdepth 2 -name result.txt -type f | wc -l)
+    _failed=$(find "$LOG_DIR" -mindepth 2 -maxdepth 2 -name result.txt -type f -exec grep -L '^ret_code="0"$' {} + | wc -l)
+  fi
+  if (( _count != 24 || _failed != 0 )); then
+    echo "LLMB_NCCL_24TEST_FAIL completed=${_count} failed=${_failed} expected=24" >&2
+    exit 42
+  fi
+  echo "LLMB_NCCL_24TEST_PASS completed=24 failed=0 nodes=${SLURM_JOB_NUM_NODES} ranks_per_node=4"
+}
+trap _nvis_llmb_nccl_result_gate EXIT
+AUDIT_GATE
+    tail -n +2 "$_script" | sed -E \
+      -e 's/--mpi=(pmi2|none)/--mpi=pmix/g' \
+      -e 's/--container-env=[^[:space:]]+[[:space:]]*//g' \
+      -e 's#--container-mounts=#--container-mounts=/dev/infiniband:/dev/infiniband,#g' \
+      -e 's#srun --ntasks=#srun --mpi=pmix --ntasks=#g' \
+      -e 's#srun -N \$\{SLURM_JOB_NUM_NODES\}#srun -N ${SLURM_JOB_NUM_NODES} --ntasks-per-node=4#g' \
+      -e 's#--container-image=([^[:space:]]+)#--container-image=\1 --container-env=PMIX_MCA_gds,MELLANOX_VISIBLE_DEVICES#g'
+  } >"$_patched"
+  chmod 700 "$_patched"
+  _markers=$(grep -Ec 'Running test [0-9]+/24' "$_patched")
+  _tests=$(grep -Ec '^[[:space:]]*srun -N .*--ntasks-per-node=4 .*--mpi=pmix .*--container-image=' "$_patched")
+  _mounts=$(grep -Ec '^[[:space:]]*srun .*--container-mounts=/dev/infiniband:/dev/infiniband,' "$_patched")
+  _envs=$(grep -Ec '^[[:space:]]*srun .*--container-env=PMIX_MCA_gds,MELLANOX_VISIBLE_DEVICES' "$_patched")
+  _mpi=$(grep -Ec '^[[:space:]]*srun .*--mpi=pmix' "$_patched")
+  _args=$(grep -Ec 'run_test .* -t1 -g1 -f2 -n20 -w5 -b8 -e16G -d(float|uint8) -R0 -c1 -G(None|2|4)' "$_patched")
+  [[ "$_markers" == 24 && "$_tests" == 24 && "$_mounts" -ge 26 && "$_envs" -ge 26 && "$_mpi" -ge 26 && "$_args" == 24 ]] || {
+    echo "nvis_sbatch_shim: audited recipe gate failed markers=$_markers tests=$_tests mounts=$_mounts envs=$_envs mpi=$_mpi args=$_args" >&2; exit 42;
+  }
+  for _spec in all_reduce_perf:6 all_gather_perf:3 reduce_scatter_perf:3 alltoall_perf:6 sendrecv_perf:6; do
+    _name=${_spec%:*}; _want=${_spec#*:}
+    _got=$(grep -Ec "^[[:space:]]*srun .*${_name}" "$_patched")
+    [[ "$_got" == "$_want" ]] || { echo "nvis_sbatch_shim: ${_name} count=$_got expected=$_want" >&2; exit 43; }
+  done
+  filtered[$_script_index]="$_patched"
+  pre+=( --parsable --wait --no-requeue --ntasks-per-node=4 --gpus-per-node=4 )
+  echo "nvis_sbatch_shim: audited LLMB NCCL recipe ready contract=job147392-shape markers=24 tests=24 image=${RUN_CONF_IMAGE:-unset}" >&2
 fi
 # Log llmb-run's own sbatch argv verbatim. Without this, "did llmb pass its own --export?" is
 # unanswerable from the outside and the question gets guessed at instead of read.

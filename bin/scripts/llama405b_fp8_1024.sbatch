@@ -84,12 +84,18 @@ srun --nodes=256 --ntasks=256 --ntasks-per-node=1 --kill-on-bad-exit=1 --label \
   bash -euo pipefail -c '
     [[ "$(nvidia-smi -L | grep -c "^GPU")" == 4 ]]; test -e /dev/infiniband/uverbs0
     python3 - <<"PY"
+import ctypes
 import torch
+
 assert torch.cuda.device_count() == 4
-version = torch.cuda.nccl.version()
-parts = (version // 10000, (version % 10000) // 100, version % 100) if isinstance(version, int) else tuple(version)
-assert parts[:3] == (2, 30, 7), version
-print("CONTAINER_PREFLIGHT_READY gpus=4 nccl=2.30.7 ib=visible")
+lib = ctypes.CDLL("libnccl.so.2")
+version = ctypes.c_int()
+rc = lib.ncclGetVersion(ctypes.byref(version))
+assert rc == 0, rc
+code = version.value
+parts = (code // 10000, (code % 10000) // 100, code % 100)
+assert parts == (2, 30, 7), code
+print("CONTAINER_PREFLIGHT_READY gpus=4 runtime_nccl=2.30.7 ib=visible")
 PY
   '
 

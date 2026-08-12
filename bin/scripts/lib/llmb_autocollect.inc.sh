@@ -17,7 +17,7 @@
 # watcher invokes them as `bash "$collect"`, which never needs the execute bit.
 #
 # Public:
-#   llmb_jobid_from_output FILE   -> first jobid=<n> in llmb-run output, else ""
+#   llmb_jobid_from_output FILE   -> first jobid=<n> or bare sbatch --parsable id, else ""
 #   llmb_arm_autocollect TAG COLLECTOR OUT_FILE JOB_LOG_DIR LLMB_INSTALL WATCHER_LOG_BASE \
 #                        [COLLECTOR_ARG...]
 #       Returns 0 when armed, 1 when skipped (always after an explicit warning). Callers keep
@@ -35,7 +35,15 @@
 llmb_jobid_from_output() {
   local f="${1:-}"
   [[ -n "$f" && -r "$f" ]] || return 0
-  grep -oE 'jobid=[0-9]+' "$f" 2>/dev/null | head -1 | cut -d= -f2
+  local jid
+  jid="$(grep -oE 'jobid=[0-9]+' "$f" 2>/dev/null | head -1 | cut -d= -f2)"
+  if [[ -z "$jid" ]]; then
+    # Hardened launchers use real `sbatch --parsable --wait`; Slurm emits either
+    # `12345` or `12345;cluster`.  Keep this deliberately line-anchored so a
+    # node count, scale, timestamp, or result metric can never become a job id.
+    jid="$(sed -n -E 's/^[[:space:]]*([0-9]+)(;[^[:space:]]+)?[[:space:]]*$/\1/p' "$f" | head -1)"
+  fi
+  printf '%s\n' "$jid"
 }
 
 llmb_arm_autocollect() {

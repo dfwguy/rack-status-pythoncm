@@ -14922,6 +14922,126 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
     )
 
 
+def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
+    """Prepare the audited containerized LLMB 24-test NCCL workflow."""
+    try:
+        log_raw = body.get("log_dir")
+        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
+    except ValueError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 400)
+    storage = str(body.get("storage") or "local").strip().lower()
+    if storage not in ("local", "nfs"):
+        return None, (jsonify({"ok": False, "error": "storage must be local or nfs"}), 400)
+    rsync = body.get("rsync_to_local", body.get("rsync", storage == "local")) is True
+    if rsync and storage != "local":
+        return None, (jsonify({"ok": False, "error": "rsync requires storage=local"}), 400)
+    local_dir = str(body.get("local_container_dir") or "/tmp/containers").rstrip("/")
+    if local_dir != "/tmp/containers":
+        return None, (jsonify({"ok": False, "error": "local_container_dir is fixed to /tmp/containers"}), 400)
+
+    nodes_raw = body.get("nodes")
+    racks_raw = body.get("racks")
+    if racks_raw is None and body.get("rack"):
+        racks_raw = [body.get("rack")]
+    if nodes_raw is not None and (not isinstance(nodes_raw, list) or not nodes_raw):
+        return None, (jsonify({"ok": False, "error": "nodes must be a non-empty array"}), 400)
+    if racks_raw is not None and (not isinstance(racks_raw, list) or not racks_raw):
+        return None, (jsonify({"ok": False, "error": "racks must be a non-empty array"}), 400)
+
+    racks: list[str] = []
+    nodes: list[str] = []
+    try:
+        for raw in racks_raw or []:
+            rack = _normalize_rack_id(str(raw).strip())
+            if rack not in racks:
+                racks.append(rack)
+    except ValueError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 400)
+    if isinstance(nodes_raw, list):
+        for raw in nodes_raw:
+            node = str(raw).strip()
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", node):
+                return None, (jsonify({"ok": False, "error": f"invalid node name: {raw!r}"}), 400)
+            nodes.append(node)
+    target = body.get("target")
+    if not nodes and isinstance(target, str) and target.strip():
+        nodes = _scontrol_hostnames_preserving_case(target)
+        if not nodes:
+            return None, (jsonify({"ok": False, "error": "target did not resolve to any Slurm nodes"}), 400)
+
+    campaign_id = ""
+    if not nodes and racks:
+        try:
+            campaign = _multirack_campaign_snapshot()
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            return None, (jsonify({"ok": False, "error": f"exact-node campaign unavailable: {exc}"}), 503)
+        campaign_id = str(campaign.get("id") or "")
+        requested = str(body.get("campaign") or "").strip()
+        if requested and requested != campaign_id:
+            return None, (jsonify({"ok": False, "error": "stale or unknown exact-node campaign id"}), 409)
+        indexed = {str(row.get("rack") or ""): row for row in campaign.get("racks", []) if isinstance(row, dict)}
+        for rack in racks:
+            if campaign.get("active"):
+                row = indexed.get(rack)
+                if row is None or not row.get("eligible"):
+                    reason = row.get("reason") if row else "outside exact-node campaign"
+                    return None, (jsonify({"ok": False, "error": f"rack {rack}: {reason}"}), 409)
+                nodes.extend(str(node) for node in row.get("nodes", []) if str(node).strip())
+            else:
+                resolved = _rack_node_hostnames_from_inventory(rack)
+                if not resolved:
+                    return None, (jsonify({"ok": False, "error": f"no Slurm inventory nodes found for rack {rack}"}), 409)
+                nodes.extend(resolved)
+    nodes = _dedupe_hostnames_preserve_spelling(nodes)
+    if not nodes:
+        return None, (jsonify({"ok": False, "error": "nodes, target, rack, or racks is required"}), 400)
+    inventory = _all_slurm_nodenames()
+    if inventory:
+        known = {node.casefold() for node in inventory}
+        unknown = [node for node in nodes if node.casefold() not in known]
+        if unknown:
+            return None, (jsonify({"ok": False, "error": f"nodes not in current Slurm inventory: {', '.join(unknown)}"}), 409)
+    try:
+        states, ineligible = _validation_node_eligibility(nodes)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        return None, (jsonify({"ok": False, "error": f"unable to verify exact-node scheduler eligibility: {exc}"}), 503)
+    if ineligible:
+        return None, (jsonify({"ok": False, "error": f"exact target is not idle/eligible: {', '.join(ineligible[:12])}"}), 409)
+
+    script = Path(_scripts_dir()) / "run-llmb-nccl-container.sh"
+    if not _script_exists(script):
+        return None, (jsonify({"ok": False, "error": f"container LLMB NCCL launcher not found: {script}"}), 500)
+    cmd = ["bash", str(script), "--nodelist", ",".join(nodes), "--storage", storage,
+           "--local-container-dir", local_dir, "--log-dir", str(log_dir)]
+    cmd.append("--rsync" if rsync else "--no-rsync")
+    dry_run = bool(body.get("dry_run"))
+    if dry_run:
+        cmd.append("--dry-run")
+    scope = "node" if not racks else ("rack" if len(racks) == 1 else "multirack")
+    return ({
+        "workflow": "llmb-container-24test", "log_dir": log_dir, "racks": racks,
+        "nodes": nodes, "node_states": states, "target": ",".join(nodes), "scope": scope,
+        "storage": storage, "rsync_to_local": rsync, "cmd": cmd,
+        "container_runtime": {"nccl": "2.29.3", "cuda": "13.1"},
+        "recipe_contract": "job147392-shape (24 tests, 4 ranks/GPUs per node, PMIx)",
+        "image_provenance": {
+            "source": "/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh",
+            "size": 42245001216,
+            "sha256": "55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc",
+            "status": (
+                "fleet-staged squashfs differs from the original job 147392 image digest; "
+                "embedded NCCL 2.29.3 matches the proven runtime"
+            ),
+        },
+        "pmix_gds": {"value": "hash", "status": "requested scale workaround; not a proven result claim"},
+        "display_cmd": " ".join(shlex.quote(part) for part in cmd),
+        "timeout": max(120, _job_env_int("RACK_LLMB_NCCL_CONTAINER_TIMEOUT", 43200)),
+        "dry_run": dry_run,
+        "env_updates": {**_launch_env_from_body(body), "NVIS_PREPARED_NODE_COUNT": str(len(nodes))},
+        "campaign": campaign_id,
+    }, None)
+
+
 def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
     """Shared parse for the LLMB NCCL microbenchmark (MOP §7.3).
 
@@ -14935,6 +15055,9 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
             jsonify({"ok": False, "error": "NCCL Microbenchmark (LLMB) disabled (RACK_LLMB_NCCL_DISABLED)"}),
             403,
         )
+    workflow = str(body.get("workflow") or "").strip().lower()
+    if body.get("containerized") is True or workflow in ("container", "llmb-container", "llmb-container-24test"):
+        return _prepare_run_llmb_nccl_container(body)
     log_raw = body.get("log_dir")
     try:
         log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
@@ -15672,14 +15795,16 @@ def api_run_llmb_nccl_async():
     display_cmd = str(prep["display_cmd"])
     timeout = int(prep["timeout"])
     dry_run = bool(prep["dry_run"])
+    workflow = str(prep.get("workflow") or "direct-host")
+    nodes = [str(node) for node in prep.get("nodes", [])]
     _eu = prep.get("env_updates")
     env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) and _eu else None
-    rack_label = racks[0] if len(racks) == 1 else f"{len(racks)} racks"
+    rack_label = racks[0] if len(racks) == 1 else (f"{len(racks)} racks" if racks else f"{len(nodes)} nodes")
     cwd = _host_job_cwd(log_dir)
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
-    scope = "multirack" if len(racks) > 1 else "rack"
+    scope = str(prep.get("scope") or ("multirack" if len(racks) > 1 else "rack"))
     _record_validation_activity(
         "llmb-nccl",
         stage="stage1",
@@ -15702,6 +15827,8 @@ def api_run_llmb_nccl_async():
             "operator": operator,
             "rack": rack_label,
             "racks": racks,
+            "nodes": nodes,
+            "workflow": workflow,
             "dry_run": dry_run,
             "log_dir": str(log_dir),
             "phase": "starting",
@@ -15726,6 +15853,8 @@ def api_run_llmb_nccl_async():
             "job_id": job_id,
             "rack": rack_label,
             "racks": racks,
+            "nodes": nodes,
+            "workflow": workflow,
             "command_display": display_cmd,
             "timeout_sec": timeout,
             "client_poll_deadline_ms": client_poll_deadline_ms,
@@ -15741,9 +15870,11 @@ def api_run_llmb_nccl_status():
         return jsonify({"ok": False, "error": "job_id is required"}), 400
     with _stress_jobs_lock:
         row = _stress_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
+        payload = dict(row) if row is not None else None
+    if payload is None:
+        payload = validation_activities.get_activity(job_id)
+    if payload is None:
+        return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
     payload["ok"] = True
     return jsonify(payload)
 

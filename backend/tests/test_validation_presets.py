@@ -109,7 +109,10 @@ def test_scripts_encode_runtime_and_result_gates():
     assert "sleep 20" in llama
     assert "sudo systemd-run --wait --pipe --quiet --collect" in llama_preflight
     assert "max_memory < 1024" in llama_preflight and "process_count == 0" in llama_preflight
-    assert "tuple(torch.cuda.nccl.version())" not in llama
+    assert "torch.cuda.nccl.version()" not in llama
+    assert 'ctypes.CDLL("libnccl.so.2")' in llama
+    assert "lib.ncclGetVersion(ctypes.byref(version))" in llama
+    assert "runtime_nccl=2.30.7" in llama
     assert "ncclGetVersion" in nccl and "requires=23102" in nccl
     assert "if ! srun --kill-on-bad-exit=1" in nccl and "exit 15" in nccl
     assert "/dev/infiniband/rdma_cm" in nccl and "-type c" in nccl

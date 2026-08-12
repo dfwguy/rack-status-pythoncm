@@ -12,6 +12,9 @@ set -euo pipefail
 : "${NVIS_STAGE_DEST:?NVIS_STAGE_DEST is required}"
 : "${NVIS_STAGE_RSYNC:=0}"
 : "${NVIS_STAGE_CONTAINER_PREFLIGHT:=0}"
+: "${NVIS_STAGE_EXPECTED_GPUS:=0}"
+: "${NVIS_STAGE_EXPECTED_NCCL:=0}"
+: "${NVIS_STAGE_EXPECTED_CUDA:=}"
 : "${NVIS_STAGE_EXPECTED_SIZE:?NVIS_STAGE_EXPECTED_SIZE is required}"
 : "${NVIS_STAGE_EXPECTED_SHA256:?NVIS_STAGE_EXPECTED_SHA256 is required}"
 : "${NVIS_SCRIPTS_DIR:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -21,6 +24,7 @@ nodes="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | grep -c .)"
 
 export NVIS_STAGE_SOURCE NVIS_STAGE_DEST NVIS_STAGE_RSYNC
 export NVIS_STAGE_EXPECTED_SIZE NVIS_STAGE_EXPECTED_SHA256
+export NVIS_STAGE_EXPECTED_GPUS NVIS_STAGE_EXPECTED_NCCL NVIS_STAGE_EXPECTED_CUDA
 srun --kill-on-bad-exit=1 --nodes="${nodes}" --ntasks="${nodes}" --ntasks-per-node=1 \
   bash -euo pipefail -c '
     source_path="$NVIS_STAGE_SOURCE"
@@ -68,14 +72,39 @@ if [[ "${NVIS_STAGE_CONTAINER_PREFLIGHT}" == 1 ]]; then
   srun --kill-on-bad-exit=1 --nodes="${nodes}" --ntasks="${nodes}" --ntasks-per-node=1 \
     --container-image="${NVIS_STAGE_DEST}" --container-writable --no-container-mount-home \
     --container-mounts=/dev/infiniband:/dev/infiniband \
-    --container-env=MELLANOX_VISIBLE_DEVICES,NVIS_STAGE_DEST \
+    --container-env=MELLANOX_VISIBLE_DEVICES,NVIS_STAGE_DEST,NVIS_STAGE_EXPECTED_GPUS,NVIS_STAGE_EXPECTED_NCCL,NVIS_STAGE_EXPECTED_CUDA \
     bash -euo pipefail -c '
       test -d /dev/infiniband
       test -e /dev/infiniband/rdma_cm
       test -d /sys/class/infiniband
       count=$(find /dev/infiniband -maxdepth 1 -name "uverbs*" -type c 2>/dev/null | wc -l)
       (( count > 0 ))
-      echo "CONTAINER_IB_READY $(hostname): uverbs=$count image=$NVIS_STAGE_DEST"
+      gpus=$(nvidia-smi -L 2>/dev/null | grep -c "^GPU")
+      if (( NVIS_STAGE_EXPECTED_GPUS > 0 )); then
+        [[ "$gpus" == "$NVIS_STAGE_EXPECTED_GPUS" ]] || {
+          echo "CONTAINER_PREFLIGHT_FAIL $(hostname): gpus=$gpus expected=$NVIS_STAGE_EXPECTED_GPUS" >&2; exit 15;
+        }
+      fi
+      if (( NVIS_STAGE_EXPECTED_NCCL > 0 )); then
+        nccl=$(python3 - <<"PY"
+import ctypes
+version = ctypes.c_int()
+lib = ctypes.CDLL("libnccl.so.2")
+assert lib.ncclGetVersion(ctypes.byref(version)) == 0
+print(version.value)
+PY
+)
+        [[ "$nccl" == "$NVIS_STAGE_EXPECTED_NCCL" ]] || {
+          echo "CONTAINER_PREFLIGHT_FAIL $(hostname): nccl=$nccl expected=$NVIS_STAGE_EXPECTED_NCCL" >&2; exit 16;
+        }
+      else nccl=unchecked; fi
+      if [[ -n "$NVIS_STAGE_EXPECTED_CUDA" ]]; then
+        cuda=$(nvcc --version | sed -n "s/.*release \([0-9][0-9.]*\).*/\1/p" | head -1)
+        [[ "$cuda" == "$NVIS_STAGE_EXPECTED_CUDA" ]] || {
+          echo "CONTAINER_PREFLIGHT_FAIL $(hostname): cuda=$cuda expected=$NVIS_STAGE_EXPECTED_CUDA" >&2; exit 17;
+        }
+      else cuda=unchecked; fi
+      echo "CONTAINER_IB_READY $(hostname): uverbs=$count gpus=$gpus nccl=$nccl cuda=$cuda image=$NVIS_STAGE_DEST"
     '
 fi
 
