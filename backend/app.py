@@ -18340,6 +18340,42 @@ def api_auth_check():
     return jsonify({"authenticated": False}), 401
 
 
+@app.route("/api/openapi.json", methods=["GET"])
+def api_openapi_json():
+    """OpenAPI 3.1 description of this deployment's `/api/*` surface.
+
+    Generated from the app's own route table on each request, so it describes exactly what this
+    build serves and cannot drift from the code. Cheap enough to generate per call (introspection
+    over ~163 rules) and always correct, which a cached copy would not be after a hot reload.
+
+    Behind the normal auth gate: it enumerates the whole surface of a tool that operates a
+    customer cluster, and any system integrating with it authenticates anyway.
+    """
+    try:
+        import openapi as _openapi
+    except ImportError:
+        return jsonify({"ok": False, "error": "openapi generator unavailable"}), 503
+    spec = _openapi.build_spec(app, version=_app_version())
+    return Response(json.dumps(spec, indent=2), mimetype="application/json")
+
+
+@app.route("/api/openapi.yaml", methods=["GET"])
+def api_openapi_yaml():
+    """The same document as YAML, for tooling that prefers it."""
+    try:
+        import openapi as _openapi
+    except ImportError:
+        return jsonify({"ok": False, "error": "openapi generator unavailable"}), 503
+    spec = _openapi.build_spec(app, version=_app_version())
+    try:
+        import yaml
+
+        body = yaml.safe_dump(spec, sort_keys=False, width=100)
+    except ImportError:
+        return jsonify({"ok": False, "error": "pyyaml unavailable; use /api/openapi.json"}), 503
+    return Response(body, mimetype="application/yaml")
+
+
 @app.route("/api/login", methods=["POST"])
 def api_login():
     """JSON login endpoint for the React SPA. Accepts {"password": "..."}."""
