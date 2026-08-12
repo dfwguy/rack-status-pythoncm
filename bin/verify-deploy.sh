@@ -25,7 +25,7 @@
 #   NVIS_DEPLOY_SSH    ssh alias/user@host holding the deployment (omit for local)
 #   NVIS_DEPLOY_PATH   deployment tree path       (default /opt/observability/nvis-rack-status-v3)
 #   NVIS_CONTAINER     container name             (default nvis-rack-status-v3)
-#   NVIS_VERIFY_PORT   port the app listens on    (default 5056 remote, 5050 local)
+#   NVIS_VERIFY_PORT   port the app listens on    (default: read from the container's published port)
 #   NVIS_VERIFY_PATH   page whose assets to check (default /login)
 #
 # Exit status is 0 only when every check passes, so it can gate a deploy.
@@ -34,8 +34,26 @@ set -uo pipefail
 DEPLOY_SSH="${NVIS_DEPLOY_SSH:-}"
 DEPLOY_PATH="${NVIS_DEPLOY_PATH:-/opt/observability/nvis-rack-status-v3}"
 CONTAINER="${NVIS_CONTAINER:-nvis-rack-status-v3}"
-PORT="${NVIS_VERIFY_PORT:-$([ -n "$DEPLOY_SSH" ] && echo 5056 || echo 5050)}"
 PAGE="${NVIS_VERIFY_PATH:-/login}"
+
+# Ask the container which port it publishes rather than guessing from where we are running.
+# A guessed port makes the gate cry wolf: probing 5050 against a container serving 5056 reports
+# "the SPA is not built" and a 404 on /login, which is indistinguishable from a real broken
+# deploy and trains the reader to ignore the gate. Explicit override still wins.
+PORT="${NVIS_VERIFY_PORT:-}"
+if [ -z "$PORT" ]; then
+  _inspect='docker inspect -f "{{range \$p, \$c := .NetworkSettings.Ports}}{{if \$c}}{{(index \$c 0).HostPort}} {{end}}{{end}}"'
+  if [ -n "$DEPLOY_SSH" ]; then
+    PORT=$(ssh -o BatchMode=yes "$DEPLOY_SSH" "$_inspect $CONTAINER" 2>/dev/null | awk '{print $1}')
+  else
+    PORT=$(eval "$_inspect $CONTAINER" 2>/dev/null | awk '{print $1}')
+  fi
+fi
+if [ -z "$PORT" ]; then
+  echo "verify-deploy: cannot determine the published port for '$CONTAINER'." >&2
+  echo "  Is it running? Otherwise set NVIS_VERIFY_PORT explicitly." >&2
+  exit 2
+fi
 
 # The body runs on whichever host owns the container, so the same checks serve local and remote.
 read -r -d '' BODY <<'CHECKS'
