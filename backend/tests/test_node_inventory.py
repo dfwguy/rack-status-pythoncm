@@ -247,6 +247,32 @@ class TestSweepConcurrency:
         assert seen["max_workers"] == 24
 
 
+class TestFailureReasons:
+    def test_a_pam_refusal_on_stdout_is_reported_verbatim(self, monkeypatch):
+        """pam_slurm_adopt writes its refusal to stdout and leaves stderr empty.
+
+        Reporting only stderr turned the most common failure on this cluster — 119 of 121 in a
+        fleet sample — into "no inventory output", which tells an operator nothing.
+        """
+        import sys
+        import types
+
+        class _R:
+            node = "n1"
+            stdout = "Login not allowed: no running jobs and no WLM allocations\n"
+            stderr = ""
+            returncode = 254
+
+        monkeypatch.setitem(sys.modules, "transport",
+                            types.SimpleNamespace(fanout=lambda *a, **k: [_R()]))
+        monkeypatch.setitem(sys.modules, "host_exec",
+                            types.SimpleNamespace(role_root=lambda _r: "/s",
+                                                  connection=lambda _p: object()))
+        records, errors = node_inventory.collect_fleet(["n1"])
+        assert records == []
+        assert "Login not allowed" in errors[0]
+
+
 class TestAgainstTheRealSchema:
     """The point of all of this: the block must satisfy the contract we ship against."""
 
