@@ -69,6 +69,28 @@ BUILD_FRONTEND=0 \
 
 `BUILD_FRONTEND=0` skips the frontend rebuild when only testing backend/cluster changes.
 
+## Deploying to a container deployment (OVA) — use `bin/deploy-app.sh`, never a bare rsync
+
+```bash
+bin/deploy-app.sh nscale-tx-ova            # sync, restart if backend changed, verify
+bin/deploy-app.sh --dry-run nscale-tx-ova  # preview
+```
+
+It refuses to deploy an incoherent tree (missing `index.html`, or one referencing a bundle that
+is not in `static/spa/assets`), restarts only when a backend `.py` actually changed, and ends by
+running the gate below.
+
+**`index.html` and the backend `.py` files must be synced with `rsync --inplace`.** Compose
+bind-mounts them as **single files**, which binds the container to that file's *inode*. A default
+`rsync` writes a temp file and renames it over the target, replacing the inode — so the host
+shows the new file while the container reads the old, now-unlinked one **indefinitely**, and only
+a `docker restart` re-resolves the mount. `assets/` is a directory mount and is immune, which is
+what makes the failure so confusing: the new bundles are all present and the page still asks for
+the old one. This produced the black screen on 2026-08-12 and again on the API-reference deploy
+the same afternoon, in both cases with `GET /login` returning 200. Note `--inplace` cannot repair
+it after the fact — once the inode is replaced, only a restart will do. `deploy-app.sh` exists so
+this is not something anyone has to remember.
+
 ## Verifying a deployment
 
 `./build-docker.sh` runs **`bin/verify-deploy.sh`** after starting a container, and it exits
