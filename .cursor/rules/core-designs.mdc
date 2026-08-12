@@ -184,7 +184,25 @@ Not citizens — operational truths. Each of these has caused an outage in this 
 - **The SPA's `index.html` and its `assets/` must come from the same build.** Vite content-hashes
   every chunk; a pinned `index.html` from another build 404s all of them and renders a black
   screen that reads as "slow".
-- **A deploy is not verified by `GET /login` returning 200.** Fetch the page and confirm the
-  assets it references resolve.
+- **A deploy is not verified by `GET /login` returning 200.** Run **`bin/verify-deploy.sh`**; it
+  exits non-zero unless every check passes, so it can gate the deploy. `build-docker.sh` runs it
+  automatically after starting a container. For a remote deployment:
+  `NVIS_DEPLOY_SSH=host bin/verify-deploy.sh`.
 - **Run `bin/prod-drift.sh` before deploying.** People fix things in place, in the deployment tree
   and in the head's `bin/scripts`. A deploy overwrites both. Harvest first.
+
+### The deploy sequence
+
+Each step exists because skipping it broke something:
+
+1. **`bin/prod-drift.sh`** — clean, or harvest what it finds. A `git reset --hard` over someone
+   else's uncommitted work destroys it silently.
+2. **Reset the tree to a committed ref**, never to a working copy.
+3. **Mount any new `backend/*.py`** in `docker-compose.override.yml`.
+4. **Rebuild the image** when the frontend changed or a dependency was added.
+5. **`docker compose up -d`** — a recreate. `docker restart` reuses the old mount set, so a
+   module added in step 3 will not exist and `app.py` will crash-loop importing it.
+6. **`bin/verify-deploy.sh`** — and read it. "Up" is not "working".
+
+Tell open sessions to hard-reload afterwards: a rebuild changes every Vite content hash, so a tab
+loaded before the deploy asks for chunks that no longer exist.

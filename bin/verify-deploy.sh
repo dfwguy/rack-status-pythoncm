@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# verify-deploy.sh — prove a deployment actually works, not merely that it started.
+# Author: Rafael M. Koike & Cursor Agent ("Ada")
+#
+# Why this exists
+#   "Container up and /login returns 200" passes with a completely broken product. On 2026-08-12
+#   the dashboard served a black screen for about an hour while every one of those checks was
+#   green: the SPA's index.html referenced a build whose chunks were no longer there, so all 164
+#   asset requests 404'd. The page itself was fine. Everything inside it was missing.
+#
+#   Every check below is here because its absence caused a real outage:
+#     * assets            — the black screen above.
+#     * module imports    — a new backend module without a bind mount is an instant crash loop,
+#                           because app.py is mounted and imports it.
+#     * stale modules     — a bind mount that was declared but never activated (a `restart`
+#                           instead of a `compose up -d`) silently runs the image's old copy.
+#     * restarting state  — `docker ps` says "Up" for a container in a crash loop; it says
+#                           "Restarting" only if you look.
+#
+# Usage
+#   bin/verify-deploy.sh                       # local container (default port 5050)
+#   NVIS_DEPLOY_SSH=host bin/verify-deploy.sh  # a remote deployment
+#
+# Env
+#   NVIS_DEPLOY_SSH    ssh alias/user@host holding the deployment (omit for local)
+#   NVIS_DEPLOY_PATH   deployment tree path       (default /opt/observability/nvis-rack-status-v3)
+#   NVIS_CONTAINER     container name             (default nvis-rack-status-v3)
+#   NVIS_VERIFY_PORT   port the app listens on    (default 5056 remote, 5050 local)
+#   NVIS_VERIFY_PATH   page whose assets to check (default /login)
+#
+# Exit status is 0 only when every check passes, so it can gate a deploy.
+set -uo pipefail
+
+DEPLOY_SSH="${NVIS_DEPLOY_SSH:-}"
+DEPLOY_PATH="${NVIS_DEPLOY_PATH:-/opt/observability/nvis-rack-status-v3}"
+CONTAINER="${NVIS_CONTAINER:-nvis-rack-status-v3}"
+PORT="${NVIS_VERIFY_PORT:-$([ -n "$DEPLOY_SSH" ] && echo 5056 || echo 5050)}"
+PAGE="${NVIS_VERIFY_PATH:-/login}"
+
+# The body runs on whichever host owns the container, so the same checks serve local and remote.
+read -r -d '' BODY <<'CHECKS'
+set -uo pipefail
+CONTAINER="__CONTAINER__"; PORT="__PORT__"; PAGE="__PAGE__"; T="__PATH__"
+BASE="http://127.0.0.1:${PORT}"
+fail=0
+ok()   { printf "  \033[32mPASS\033[0m  %s\n" "$1"; }
+bad()  { printf "  \033[31mFAIL\033[0m  %s\n" "$1"; fail=$((fail+1)); }
+note() { printf "        %s\n" "$1"; }
+
+# 1. The container is running, and not merely "Up" while looping.
+state=$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo missing)
+restarts=$(docker inspect -f '{{.RestartCount}}' "$CONTAINER" 2>/dev/null || echo 0)
+if [ "$state" = "running" ]; then ok "container running (restarts: $restarts)"
+else bad "container state is '$state'"; fi
+
+# 2. Every backend module imports. app.py is bind-mounted, so an unmounted module it imports
+#    takes the whole app down; this catches that before a user does.
+if [ "$state" = "running" ]; then
+  out=$(docker exec -w /app/backend "$CONTAINER" python3 -c "
+import importlib, pathlib
+bad=[]
+for f in sorted(pathlib.Path('/app/backend').glob('*.py')):
+    if f.stem in ('app','conftest'): continue
+    try: importlib.import_module(f.stem)
+    except Exception as e: bad.append(f'{f.stem} ({type(e).__name__})')
+print(','.join(bad))" 2>/dev/null)
+  [ -z "$out" ] && ok "every backend module imports" || { bad "modules failing to import"; note "$out"; }
+fi
+
+# 3. No module in the container is older than the tree. A declared-but-inactive bind mount
+#    (from `docker restart` instead of `compose up -d`) shows up here and nowhere else.
+if [ "$state" = "running" ] && [ -d "$T/backend" ]; then
+  stale=""
+  for f in $(docker exec "$CONTAINER" sh -c 'ls /app/backend/*.py' 2>/dev/null); do
+    b=$(basename "$f"); [ -f "$T/backend/$b" ] || continue
+    docker exec "$CONTAINER" cat "$f" 2>/dev/null | diff -q - "$T/backend/$b" >/dev/null 2>&1 || stale="$stale $b"
+  done
+  [ -z "$stale" ] && ok "no stale modules (container matches tree)" || { bad "stale modules — mount not active?"; note "$stale"; }
+fi
+
+# 4. THE check. Fetch the page and confirm every asset it references resolves. A hashed bundle
+#    that has moved on leaves the HTML perfectly serveable and the product blank.
+html=$(curl -s --max-time 15 "${BASE}${PAGE}")
+assets=$(printf '%s' "$html" | grep -oE 'assets/[A-Za-z0-9_.-]+\.(js|css)' | sed 's|assets/||' | sort -u)
+if [ -z "$assets" ]; then
+  bad "page ${PAGE} references no assets — is the SPA built?"
+else
+  miss=0; total=0
+  for a in $assets; do
+    total=$((total+1))
+    code=$(curl -s -o /dev/null --max-time 10 -w "%{http_code}" "${BASE}/assets/$a")
+    [ "$code" = "200" ] || { miss=$((miss+1)); [ "$miss" -le 3 ] && note "$code /assets/$a"; }
+  done
+  [ "$miss" -eq 0 ] && ok "SPA assets resolve ($total checked)" || bad "$miss of $total SPA assets missing"
+fi
+
+# 5. The app answers.
+code=$(curl -s -o /dev/null --max-time 10 -w "%{http_code}" "${BASE}${PAGE}")
+[ "$code" = "200" ] || [ "$code" = "302" ] && ok "GET ${PAGE} -> $code" || bad "GET ${PAGE} -> $code"
+
+# 6. Nothing exploded on the way up.
+errs=$(docker logs --since 5m "$CONTAINER" 2>&1 | grep -icE "ModuleNotFoundError|Worker failed to boot|ImportError" || true)
+[ "$errs" -eq 0 ] && ok "no import errors in recent logs" || { bad "$errs import/boot errors in the last 5m"; note "$(docker logs --since 5m "$CONTAINER" 2>&1 | grep -iE 'ModuleNotFoundError|Worker failed to boot' | tail -2)"; }
+
+echo
+if [ "$fail" -eq 0 ]; then echo "deployment verified."; else echo "VERIFICATION FAILED: $fail check(s)."; fi
+exit "$fail"
+CHECKS
+
+BODY="${BODY//__CONTAINER__/$CONTAINER}"
+BODY="${BODY//__PORT__/$PORT}"
+BODY="${BODY//__PAGE__/$PAGE}"
+BODY="${BODY//__PATH__/$DEPLOY_PATH}"
+
+if [ -n "$DEPLOY_SSH" ]; then
+  echo "verify-deploy — $DEPLOY_SSH:$CONTAINER on port $PORT"
+  printf '%s' "$BODY" | ssh "$DEPLOY_SSH" 'cat > /tmp/nvis-verify.sh && bash /tmp/nvis-verify.sh'
+else
+  echo "verify-deploy — local $CONTAINER on port $PORT"
+  printf '%s' "$BODY" | bash
+fi

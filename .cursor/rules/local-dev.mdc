@@ -69,6 +69,20 @@ BUILD_FRONTEND=0 \
 
 `BUILD_FRONTEND=0` skips the frontend rebuild when only testing backend/cluster changes.
 
+## Verifying a deployment
+
+`./build-docker.sh` runs **`bin/verify-deploy.sh`** after starting a container, and it exits
+non-zero unless every check passes. Run it by hand against a remote deployment with
+`NVIS_DEPLOY_SSH=<host> bin/verify-deploy.sh`.
+
+It checks the things a smoke test misses: that the container is running rather than crash-looping,
+that every backend module imports (an unmounted module that `app.py` imports is an instant crash
+loop), that no module in the container is staler than the tree (a mount declared but never
+activated by a `restart`), and — the one that matters most — that **every asset the served page
+references actually resolves**. A hashed bundle that has moved on leaves the HTML perfectly
+serveable and the product blank; that is exactly how the dashboard showed a black screen for an
+hour on 2026-08-12 while `GET /login` returned 200 throughout.
+
 ## Docker Build & Run
 
 Use `./build-docker.sh` for Docker workflows:

@@ -146,14 +146,34 @@ wait_ready() {
   echo "==> Waiting for Flask …"
   for _ in $(seq 1 15); do
     if curl -sf "http://localhost:${port}/api/status" >/dev/null 2>&1; then
-      echo "==> Ready: http://localhost:${port}/spa/"
-      return 0
+      echo "==> Responding: http://localhost:${port}/spa/"
+      verify_deploy "$port"
+      return $?
     fi
     sleep 1
   done
   echo "==> Container may still be starting. Logs:"
   docker logs --tail 30 "$CONTAINER"
   return 1
+}
+
+# A responding /api/status is NOT a working deployment. On 2026-08-12 the dashboard served a
+# black screen for an hour with that check green: index.html referenced a bundle whose chunks
+# were gone, so all 164 asset requests 404'd while the HTML served perfectly. bin/verify-deploy.sh
+# checks what that missed — asset resolution, module imports, stale mounts, crash loops.
+verify_deploy() {
+  local port="$1"
+  local script="$(dirname "$0")/bin/verify-deploy.sh"
+  if [ ! -x "$script" ]; then
+    echo "==> WARNING: $script missing; deployment is unverified."
+    return 0
+  fi
+  echo "==> Verifying the deployment …"
+  NVIS_CONTAINER="$CONTAINER" NVIS_VERIFY_PORT="$port" NVIS_DEPLOY_PATH="$(cd "$(dirname "$0")" && pwd)" \
+    "$script" || {
+      echo "==> Deployment did NOT verify. It is running but something above is broken."
+      return 1
+    }
 }
 
 run_dev() {
