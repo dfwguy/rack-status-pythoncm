@@ -1418,6 +1418,29 @@ class NativeRackTableState:
                 )
                 self.log_thread.start()
 
+    def wait_for_scheduled_workers(self, timeout_sec: float) -> list[str]:
+        """Wait for the worker generation currently feeding a canonical snapshot.
+
+        A state object is process-local while the canonical table is persisted in SQLite. If a
+        cold web worker schedules the probes and immediately returns, it can therefore replace a
+        good shared snapshot with placeholder rows (most visibly, every NCCL/NeMo stage becomes
+        ``pending``). Joining the exact thread objects captured here avoids both that race and a
+        second probe pass. The caller treats a timeout as a failed refresh, preserving any last
+        known-good snapshot.
+        """
+        with self.lock:
+            workers = (
+                ("ds", self.ds_thread),
+                ("sinfo", self.sinfo_thread),
+                ("logs", self.log_thread),
+            )
+        deadline = time.monotonic() + max(0.0, float(timeout_sec))
+        for _worker_id, thread in workers:
+            if thread is None:
+                continue
+            thread.join(max(0.0, deadline - time.monotonic()))
+        return [worker_id for worker_id, thread in workers if thread is not None and thread.is_alive()]
+
     def build_table_rows(self) -> tuple[list[dict[str, str]], dict[str, Any], list[str], str]:
         running, job_times = load_squeue_jobs_map()
         # Open validation activities carry the live scheduler ref for a just-launched stage,
@@ -1787,11 +1810,21 @@ def build_native_rack_status(
     log_dir: Path,
     include_raw: bool,
     probe_fn: Callable[[Path], dict[str, object] | None],
+    *,
+    wait_for_workers: bool = False,
+    worker_timeout_sec: float = 300,
 ) -> dict[str, Any]:
     key = str(_host_resolve(log_dir))
     st = _get_state(key, log_dir)
     st.refresh_racks_blocking()
     st.schedule_async_workers(probe_fn)
+    if wait_for_workers:
+        unfinished = st.wait_for_scheduled_workers(worker_timeout_sec)
+        if unfinished:
+            names = ", ".join(unfinished)
+            raise TimeoutError(
+                f"Native rack-status workers did not finish within {worker_timeout_sec:g}s: {names}"
+            )
     rows, summary, footnotes, legend = st.build_table_rows()
     out: dict[str, Any] = {
         "ok": True,

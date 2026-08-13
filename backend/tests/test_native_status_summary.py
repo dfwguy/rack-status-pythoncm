@@ -1,5 +1,6 @@
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
 """Rack-status summary excludes non-GB200 (0-node) racks from validation stats."""
+import threading
 from pathlib import Path
 
 import native_status
@@ -123,6 +124,57 @@ def test_logs_without_a_stage_marker_keep_the_single_log_verdict(monkeypatch):
     _rows, summary, _f, _l = st.build_table_rows()
     assert summary["done"] == 1
     assert summary["pending"] == 0
+
+
+def test_canonical_build_waits_for_completed_stage_log_scan(monkeypatch, tmp_path):
+    """A cold native state must not publish an all-pending canonical snapshot."""
+    nccl = tmp_path / "cmods-NCCL-1Rack-r01-18N-101.txt"
+    nemo = tmp_path / "cmods-NEMO-1Rack-r01-18N-102.txt"
+    entries = [(nccl, 1_000_000_000, 10), (nemo, 2_000_000_000, 10)]
+
+    monkeypatch.setattr(native_status, "_cmsh_rack_list", lambda: ["r01"])
+    monkeypatch.setattr(native_status, "_cmsh_ds_text", lambda: "")
+    monkeypatch.setattr(native_status, "parse_cmsh_ds_to_ct_column_by_rack", lambda _text: {})
+    monkeypatch.setattr(native_status, "collect_sinfo_counts", lambda: {("r01", "idle"): 18})
+    monkeypatch.setattr(native_status, "_glob_one_rack_logs", lambda _log_dir: entries)
+    monkeypatch.setattr(native_status, "_rack_from_1rack_log", lambda _name: "r01")
+    monkeypatch.setattr(native_status, "_load_log_cache", lambda _path: {})
+    monkeypatch.setattr(native_status, "_save_log_cache", lambda *_args: None)
+    monkeypatch.setattr(native_status, "load_squeue_jobs_map", lambda: (set(), {}))
+    monkeypatch.setattr("validation_activities.live_stage_jobs_by_rack", dict)
+
+    probe_started = threading.Event()
+    release_probe = threading.Event()
+
+    def probe(path):
+        probe_started.set()
+        assert release_probe.wait(2)
+        if "NCCL" in path.name:
+            return {"nemo_state": "done", "nccl_ok": True, "llm_ok": False, "jid": 101}
+        return {"nemo_state": "done", "nccl_ok": False, "llm_ok": True, "jid": 102}
+
+    holder = []
+
+    def build():
+        holder.append(
+            native_status.build_native_rack_status(
+                tmp_path,
+                False,
+                probe,
+                wait_for_workers=True,
+                worker_timeout_sec=2,
+            )
+        )
+
+    thread = threading.Thread(target=build)
+    thread.start()
+    assert probe_started.wait(1)
+    assert thread.is_alive(), "canonical build returned before its log worker finished"
+    release_probe.set()
+    thread.join(2)
+    assert not thread.is_alive()
+    assert holder[0]["summary"]["done"] == 1
+    assert holder[0]["summary"]["pending"] == 0
 
 
 def test_zero_node_racks_counted_until_sinfo_ready(monkeypatch):
