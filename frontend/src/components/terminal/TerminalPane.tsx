@@ -142,24 +142,28 @@ export function TerminalPane({ spec, onClose, onSession }: TerminalPaneProps) {
         </Tooltip>
       </Box>
 
-      {/* The terminal body; xterm mounts inside it. `minHeight: 0` lets it shrink in the flex column.
-          Padding here does survive into the shell's own sizing, though not because FitAddon handles
-          it: FitAddon measures this element's computed height and subtracts the padding of the
-          `.xterm` element, which has none. It works because a computed `height` resolves to the
-          CONTENT box, so the value it reads already excludes this padding and it lays out rows
-          inside the inset. Bottom is largest as it also swallows the partial row left over when the
-          height is not an exact multiple of the line height — that last line is the prompt. */}
+      {/* Two boxes on purpose: the inset lives on the outer one, and the terminal mounts in an
+          inner box that carries NO padding.
+          
+          FitAddon sizes the shell from `term.element.parentElement` — the element xterm was opened
+          on. Padding that element does not shrink what FitAddon measures, so it computed rows for
+          the full height and the content was then displaced downwards by padding-top and clipped at
+          the bottom: every pixel of padding added made the last line, the prompt, worse rather than
+          better. Insetting from the outside instead reduces the inner box's height before it is
+          measured, which is what actually gives the shell room to breathe. */}
       <Box
-        ref={containerRef}
         sx={{
           flex: 1,
           minHeight: 0,
           minWidth: 0,
           overflow: "hidden",
-          padding: "10px 12px 18px 12px",
+          padding: "10px 12px 14px 12px",
           boxSizing: "border-box",
+          display: "flex",
         }}
-      />
+      >
+        <Box ref={containerRef} sx={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }} />
+      </Box>
     </Box>
   );
 }

@@ -74,10 +74,11 @@ export default function WebTerminalDialog({
         </Tooltip>
       </DialogTitle>
       <DialogContent sx={{ p: 0, overflow: "hidden", bgcolor: "#0d1117", flex: 1, display: "flex" }}>
-        <Box
-          ref={containerRef}
-          sx={{ width: "100%", flex: 1, minHeight: 0, p: 0.5 }}
-        />
+        {/* Inset on the outer box, terminal mounted in an unpadded child — padding the element
+            xterm opens on does not shrink what FitAddon measures, so it clips the last line. */}
+        <Box sx={{ width: "100%", flex: 1, minHeight: 0, p: 0.5, display: "flex" }}>
+          <Box ref={containerRef} sx={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }} />
+        </Box>
       </DialogContent>
       <DialogActions>
         <MuiButton variant="outlined" onClick={onClose}>Disconnect</MuiButton>

@@ -95,19 +95,27 @@ export default function TerminalView() {
         </Tooltip>
       </div>
 
-      {/* Terminal container — border absorbs scrollbar layout shifts */}
+      {/* Terminal container. The inset is on this outer box and the terminal mounts in an unpadded
+          child: FitAddon sizes the shell from the element xterm was opened on, so padding *that*
+          element leaves the row count computed for the full height and displaces the content down
+          by padding-top, clipping the last line. Inset from outside instead. */}
       <div
-        ref={containerRef}
         style={{
           flex: 1,
           width: "100%",
           minHeight: 0,
           minWidth: 0,
           overflow: "hidden",
-          padding: "4px 4px 4px 8px",
+          padding: "4px 4px 8px 8px",
           boxSizing: "border-box",
+          display: "flex",
         }}
-      />
+      >
+        <div
+          ref={containerRef}
+          style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}
+        />
+      </div>
     </div>
   );
 }
