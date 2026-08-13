@@ -15,7 +15,7 @@ import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import Box from "@mui/material/Box";
 import { ExternalLink, GripVertical, X } from "lucide-react";
-import { useTerminal } from "../../hooks/useTerminal";
+import { TERMINAL_BACKGROUND, useTerminal } from "../../hooks/useTerminal";
 
 /** Class the grid uses as its drag handle; only elements carrying it start a drag. */
 export const PANE_DRAG_HANDLE = "nvis-pane-drag";
@@ -92,7 +92,7 @@ export function TerminalPane({ spec, onClose, onSession }: TerminalPaneProps) {
         overflow: "hidden",
         border: "1px solid #30363d",
         borderRadius: 1,
-        background: "#0d1117",
+        background: TERMINAL_BACKGROUND,
       }}
     >
       <Box

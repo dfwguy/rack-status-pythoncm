@@ -6,6 +6,14 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 
+/**
+ * Terminal background, shared by the xterm theme and every surface that hosts one.
+ *
+ * Exported so a pane, the standalone tab and the dialog cannot drift from the shell they contain —
+ * a mismatch of even one shade shows up as a visible band around the content.
+ */
+export const TERMINAL_BACKGROUND = "#0d1117";
+
 export interface UseTerminalOptions {
   /** Ref to the container element where xterm.js will attach. */
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -85,7 +93,7 @@ export function useTerminal({
         fontSize: 14,
         fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Menlo', monospace",
         theme: {
-          background: "#0d1117",
+          background: TERMINAL_BACKGROUND,
           foreground: "#e6edf3",
           cursor: "#76b900",
           selectionBackground: "#264f78",
@@ -105,9 +113,17 @@ export function useTerminal({
       if (xtermEl) { xtermEl.style.width = "100%"; xtermEl.style.height = "100%"; }
       const screenEl = el.querySelector(".xterm-screen") as HTMLElement | null;
       if (screenEl) { screenEl.style.width = "100%"; }
-      // Force scrollbar always visible so FitAddon accounts for its width
+      // Force scrollbar always visible so FitAddon accounts for its width.
+      // The background is set explicitly because xterm.css hardcodes `.xterm-viewport` to #000,
+      // which the theme's background does not override — so any part of the viewport the rendered
+      // rows do not cover (the leftover below the last line, and the scrollbar track) shows as a
+      // pure-black band against the panel.
       const viewport = el.querySelector(".xterm-viewport") as HTMLElement | null;
-      if (viewport) { viewport.style.overflowY = "scroll"; viewport.style.width = "100%"; }
+      if (viewport) {
+        viewport.style.overflowY = "scroll";
+        viewport.style.width = "100%";
+        viewport.style.backgroundColor = TERMINAL_BACKGROUND;
+      }
       try {
         term.loadAddon(new WebglAddon());
       } catch {

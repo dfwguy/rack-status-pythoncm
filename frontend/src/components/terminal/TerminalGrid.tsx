@@ -15,6 +15,7 @@ import Box from "@mui/material/Box";
 import { Text } from "@nvidia/foundations-react-core";
 import { TerminalPane, PANE_DRAG_HANDLE, type TerminalPaneSpec } from "./TerminalPane";
 import type { TerminalGridState } from "./gridState";
+import { TERMINAL_BACKGROUND } from "../../hooks/useTerminal";
 import {
   GRID_COLS,
   GRID_MARGIN,
@@ -75,7 +76,7 @@ export function TerminalGrid({ panes, layout, width, onChange, onSession }: Term
           borderRadius: 1,
           p: 6,
           textAlign: "center",
-          background: "#0d1117",
+          background: TERMINAL_BACKGROUND,
         }}
       >
         <Text kind="body/regular/md" style={{ color: "#7d8590" }}>

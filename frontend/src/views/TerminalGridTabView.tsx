@@ -13,6 +13,7 @@ import { Terminal as TerminalIcon } from "lucide-react";
 import { TerminalGrid } from "../components/terminal/TerminalGrid";
 import { EMPTY_GRID, withSession, type TerminalGridState } from "../components/terminal/gridState";
 import { decodeGrid } from "../components/terminal/detachState";
+import { TERMINAL_BACKGROUND } from "../hooks/useTerminal";
 import { useContainerWidth } from "react-grid-layout";
 
 export default function TerminalGridTabView() {
@@ -38,7 +39,7 @@ export default function TerminalGridTabView() {
       el.style.padding = "0";
       el.style.height = "100%";
     }
-    document.body.style.background = "#0d1117";
+    document.body.style.background = TERMINAL_BACKGROUND;
     const root = document.getElementById("root");
     if (root) root.style.height = "100%";
   }, [state.panes.length]);
@@ -53,7 +54,7 @@ export default function TerminalGridTabView() {
     <div
       style={{
         minHeight: "100vh",
-        background: "#0d1117",
+        background: TERMINAL_BACKGROUND,
         display: "flex",
         flexDirection: "column",
       }}

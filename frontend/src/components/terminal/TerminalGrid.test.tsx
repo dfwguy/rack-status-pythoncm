@@ -15,7 +15,12 @@ import type { TerminalPaneSpec } from "./TerminalPane";
 // xterm needs a real canvas and a WebSocket, neither of which jsdom provides. The hook itself is
 // exercised by the existing standalone terminal; here it only has to report a stable shape.
 const { useTerminalMock } = vi.hoisted(() => ({ useTerminalMock: vi.fn() }));
-vi.mock("../../hooks/useTerminal", () => ({ useTerminal: useTerminalMock }));
+// Spread the real module so its other exports (TERMINAL_BACKGROUND) survive the mock; listing
+// only useTerminal makes every consumer of a sibling export fail to import.
+vi.mock("../../hooks/useTerminal", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../hooks/useTerminal")>()),
+  useTerminal: useTerminalMock,
+}));
 
 beforeEach(() => {
   useTerminalMock.mockReset();

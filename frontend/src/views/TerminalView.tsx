@@ -3,7 +3,7 @@ import { Tag, Text } from "@nvidia/foundations-react-core";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import { Terminal as TerminalIcon, X } from "lucide-react";
-import { useTerminal } from "../hooks/useTerminal";
+import { TERMINAL_BACKGROUND, useTerminal } from "../hooks/useTerminal";
 
 const MIN_WIDTH = 640;
 const MIN_HEIGHT = 400;
@@ -29,7 +29,7 @@ export default function TerminalView() {
     b.padding = "0";
     b.height = "100%";
     b.overflow = "hidden";
-    b.background = "#0d1117";
+    b.background = TERMINAL_BACKGROUND;
     const root = document.getElementById("root");
     if (root) {
       root.style.height = "100%";
@@ -55,7 +55,7 @@ export default function TerminalView() {
         height: "100vh",
         minWidth: MIN_WIDTH,
         minHeight: MIN_HEIGHT,
-        background: "#0d1117",
+        background: TERMINAL_BACKGROUND,
         overflow: "hidden",
         position: "absolute",
         inset: 0,

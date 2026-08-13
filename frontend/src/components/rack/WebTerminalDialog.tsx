@@ -9,7 +9,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Box from "@mui/material/Box";
 import { Text, Tag } from "@nvidia/foundations-react-core";
 import { Terminal as TerminalIcon, ExternalLink } from "lucide-react";
-import { useTerminal } from "../../hooks/useTerminal";
+import { TERMINAL_BACKGROUND, useTerminal } from "../../hooks/useTerminal";
 
 export interface WebTerminalDialogProps {
   open: boolean;
@@ -73,7 +73,7 @@ export default function WebTerminalDialog({
           </IconButton>
         </Tooltip>
       </DialogTitle>
-      <DialogContent sx={{ p: 0, overflow: "hidden", bgcolor: "#0d1117", flex: 1, display: "flex" }}>
+      <DialogContent sx={{ p: 0, overflow: "hidden", bgcolor: TERMINAL_BACKGROUND, flex: 1, display: "flex" }}>
         {/* Inset on the outer box, terminal mounted in an unpadded child — padding the element
             xterm opens on does not shrink what FitAddon measures, so it clips the last line. */}
         <Box sx={{ width: "100%", flex: 1, minHeight: 0, p: 0.5, display: "flex" }}>
