@@ -18,9 +18,11 @@ import WebTerminalDialog from "../components/rack/WebTerminalDialog";
 import { RackCommandProvider } from "../context/RackCommandProvider";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { VisuallyHidden } from "../components/a11y/VisuallyHidden";
+import { NodeIssueHistoryDialog } from "../components/rack/NodeIssueHistoryDialog";
 import { getContent } from "../content";
 import { useActiveCluster } from "../context/ActiveClusterContext";
-import type { RackRow } from "../types/api";
+import { fetchPostRunNodeReport } from "../services/nodeIssuesService";
+import type { NodeIssue, NodeIssueRollup, NodeIssuesResponse, RackRow } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 
 const RACK_DETAIL_HELP = getContent("rackDetail");
@@ -40,6 +42,8 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
   const [parserOpen, setParserOpen] = useState(false);
   const [terminalNode, setTerminalNode] = useState("");
+  const [issueNode, setIssueNode] = useState("");
+  const [issueData, setIssueData] = useState<NodeIssuesResponse | null>(null);
   const { activeCluster, activePlatform } = useActiveCluster();
   const traysPerRack =
     activeCluster?.geometry?.trays_per_rack || activePlatform?.geometry?.trays_per_rack || 18;
@@ -58,6 +62,75 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
     selectionSeedRef.current = seed;
     setSelectedNodes(new Set(nodes.map((n) => n.id)));
   }, [rack, nodes]);
+
+  useEffect(() => {
+    let alive = true;
+    const loadIssues = async (refresh = false) => {
+      try {
+        const report = await fetchPostRunNodeReport({ rack, refresh });
+        const issues: NodeIssue[] = [];
+        const rollups: Record<string, NodeIssueRollup> = {};
+        for (const node of report.nodes) {
+          const synthetic: NodeIssue[] = node.runs.filter((run) => run.attributed_failure).map((run) => ({
+            issue_id: `run-${run.activity_id}-${run.job_id}-${node.node}`,
+            node: node.node,
+            rack: node.rack,
+            category: run.category || "validation",
+            code: "validation_failure",
+            reason: run.reason || `${run.tool} job ${run.job_id} ended ${run.state}`,
+            severity: "failure",
+            source: run.tool,
+            validation_run_id: run.activity_id,
+            scheduler_ref: run.job_id,
+            evidence: "",
+            drained: false,
+            slurm_reason: node.slurm_reason,
+            drain_result: "participation finding",
+            operator: "validation ledger",
+            created_at: run.started_at,
+          }));
+          const combined = [...node.findings, ...synthetic];
+          issues.push(...combined);
+          const latest = combined.sort((a, b) => b.created_at.localeCompare(a.created_at))[0] || null;
+          rollups[node.node] = {
+            node: node.node,
+            rack: node.rack,
+            issue_count: node.failure_count,
+            imported_count: 0,
+            local_count: combined.length,
+            drained: node.slurm_state.toLowerCase().startsWith("drain"),
+            nccl: combined.some((issue) => issue.category === "network" || issue.reason.toLowerCase().includes("nccl")),
+            maintenance: combined.some((issue) => issue.category === "maintenance"),
+            latest,
+          };
+        }
+        if (alive) setIssueData({
+          ok: true,
+          updated_at: report.generated_at,
+          punchcard_synced_at: "",
+          summary: {
+            nodes_tracked: report.summary.nodes,
+            nodes_with_issues: report.nodes.filter((node) => node.failure_count > 0).length,
+            currently_flagged_drained: report.summary.drained_nodes,
+            repeat_nodes: report.summary.flagged_nodes,
+            local_findings: issues.length,
+            hardware_findings: issues.filter((issue) => issue.category === "hardware").length,
+            network_findings: issues.filter((issue) => issue.category === "network").length,
+          },
+          nodes: rollups,
+          issues,
+        });
+      } catch {
+        // Node actions remain usable if the optional history source is offline.
+      }
+    };
+    void loadIssues(false);
+    const timer = window.setInterval(() => void loadIssues(false), 60_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [rack]);
 
   const selectDownTraysForPowerReset = useCallback(
     (nodeList: NodeInfo[]) => {
@@ -106,6 +179,8 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
             selected={selectedNodes}
             onSelectionChange={setSelectedNodes}
             onOpenTerminal={(nodeId) => setTerminalNode(nodeId)}
+            issueNodes={issueData?.nodes}
+            onOpenIssues={(nodeId) => setIssueNode(nodeId)}
           />
         </Box>
 
@@ -154,6 +229,7 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
             <NetworkingTab
               rack={rack}
               logDir={logDir}
+              naming={naming}
               selectedNodes={selectedNodes}
               disabled={selectedNodes.size === 0}
             />
@@ -183,6 +259,15 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
         onClose={() => setTerminalNode("")}
         target={terminalNode}
         mode="node"
+      />
+
+      <NodeIssueHistoryDialog
+        open={!!issueNode}
+        node={issueNode}
+        rollup={issueData?.nodes?.[issueNode]}
+        issues={issueData?.issues ?? []}
+        punchcardSyncedAt={issueData?.punchcard_synced_at}
+        onClose={() => setIssueNode("")}
       />
     </RackCommandProvider>
   );

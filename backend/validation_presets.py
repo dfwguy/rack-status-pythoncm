@@ -92,7 +92,7 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         "gpt-oss-cpu",
         "GPT-OSS CPU microbenchmark",
-        "Single-node GPT-OSS CPU-overhead validation (kernel-launch latency and tokenizer path); no training workload.",
+        "GPT-OSS CPU-overhead validation (kernel-launch latency and tokenizer path), submitted as one independently attributable job per selected node; no training workload.",
         "gpt_oss",
         ("node", "rack", "multirack"),
         container_profile="tensorrt-llm-1.1.0rc5",
@@ -100,7 +100,7 @@ PRESETS: tuple[Preset, ...] = (
         local_image=f"{LOCAL_CONTAINER_DIR}/tensorrt-llm+release+1.1.0rc5.sqsh",
         image_size=30284881920,
         image_sha256="80de1820829418a3789a4ff5ce0c661f669ffb07c013552ac648822b9c1f9e72",
-        max_nodes=1,
+        max_nodes=256,
     ),
     Preset(
         "exemplar-system-info",

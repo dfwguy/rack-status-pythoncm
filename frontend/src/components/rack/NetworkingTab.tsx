@@ -3,15 +3,18 @@ import { ActionCard } from "./ActionCard";
 import { Network, RotateCcw, ShieldCheck, ScanSearch, Map, Radio } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
 import { attachLogDir } from "../../lib/rackCommandBodies";
+import { DeepAuditCard } from "./DeepAuditCard";
+import type { NvisNamingSchema } from "../../types/naming";
 
 interface NetworkingTabProps {
   rack: string;
   logDir?: string;
   selectedNodes: Set<string>;
   disabled: boolean;
+  naming?: NvisNamingSchema;
 }
 
-export function NetworkingTab({ rack, logDir, selectedNodes, disabled }: NetworkingTabProps) {
+export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }: NetworkingTabProps) {
   const { runAsyncReset, openStream, openText } = useRackCommands();
 
   const rackLogBody = () => attachLogDir({ rack }, logDir);
@@ -38,6 +41,16 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled }: Network
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <DeepAuditCard
+        rack={rack}
+        selectedNodes={selectedNodes}
+        naming={naming}
+        disabled={disabled}
+        kind="network"
+        title="NVLink / Network Deep Audit"
+        description={`Deep NVLink fabric and forced GPU data-path test plus IMEX, IB rail/rate/error counters and mlx5 bond checks on ${selectedNodes.size} selected node(s). Confirmed failures are commented and drained in Slurm automatically.`}
+        icon={ShieldCheck}
+      />
       <ActionCard
         title="NVSwitch Fix"
         description={`Run NVSwitch recovery (NMXC cycle) for ${rack}.`}

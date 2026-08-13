@@ -550,7 +550,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
       <PageHeader
         contentId="multirack"
         title="Multirack Validation"
-        description="Cross-rack NEMO, NCCL, DGXC system_info, and fixed 256-node / 1024-GPU, 50-step Llama 3.1 405B FP8 validation. GPT-OSS CPU overhead remains single-node only."
+        description="Cross-rack NEMO, NCCL, DGXC system_info, GPT-OSS per-node fan-out, and fixed 256-node / 1024-GPU, 50-step Llama 3.1 405B FP8 validation."
       />
 
       {/* Inline rack selection + launch */}
@@ -724,7 +724,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           <Flex gap="2" wrap="wrap">
             <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nccl-2.31.2")}>NCCL 2.31.2 / CUDA 13.3+</Button>
             <Button kind="secondary" size="small" disabled={!llama1024Ready || launchingPreset !== null} onClick={() => setPendingPreset("llama31-405b-fp8")}>Llama 405B FP8 — 1024 GPUs / 50 steps</Button>
-            <Tag color="gray" kind="outline" readOnly density="compact">GPT-OSS CPU overhead: single-node view only</Tag>
+            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("gpt-oss-cpu")}>GPT-OSS CPU — per-node fan-out</Button>
             <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("exemplar-system-info")}>DGXC system_info</Button>
             <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nemo-26.04.01")}>NeMo 26.04.01</Button>
             <Tag color="gray" kind="outline" readOnly density="compact">MNUberGEMM 26.03-v1.17: node/rack view only</Tag>

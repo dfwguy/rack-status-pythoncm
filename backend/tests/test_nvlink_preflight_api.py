@@ -34,10 +34,18 @@ n02: RESULT n02: FAIL (do not use until drained/reset)
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # These tests verify the async action contract, not the optional external
+    # Parquet sink.  A missing lake endpoint can otherwise consume most of the
+    # ten-second polling deadline in Flask's synchronous after_request hook.
+    monkeypatch.setenv("RACK_LAKE_DISABLED", "1")
+    with app_module._reset_jobs_lock:
+        app_module._reset_jobs.clear()
     app_module.app.config.update(TESTING=True)
     with app_module.app.test_client() as c:
         yield c
+    with app_module._reset_jobs_lock:
+        app_module._reset_jobs.clear()
 
 
 @pytest.fixture

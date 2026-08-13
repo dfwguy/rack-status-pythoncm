@@ -1,10 +1,36 @@
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import app as app_module
 import pytest
 import validation_presets
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+def test_live_eligibility_resolves_sinfo_through_platform(monkeypatch):
+    node = "ink50-dh01-j21-11"
+    captured = {}
+
+    def run(cmd, **_kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, f"{node}|idle\n", "")
+
+    monkeypatch.setattr(
+        app_module,
+        "_get_platform",
+        lambda: SimpleNamespace(
+            slurm_prefix=lambda command: command.replace(
+                "sinfo ", "/site/slurm/bin/sinfo ", 1
+            )
+        ),
+    )
+    monkeypatch.setattr(app_module.host_exec, "run_slurm_on_host", run)
+    states, reasons = app_module._validation_node_eligibility([node])
+    assert captured["cmd"].startswith("/site/slurm/bin/sinfo ")
+    assert states == {node: "idle"}
+    assert reasons == []
 
 
 def test_catalogue_is_honest_and_version_pins_are_immutable():
@@ -24,7 +50,7 @@ def test_catalogue_is_honest_and_version_pins_are_immutable():
         validation_presets.normalize_options({"scope": "multirack", "max_steps": 13}, llama)
 
 
-def test_prepare_resolves_exact_nodes_and_enforces_single_node_gpt(monkeypatch, tmp_path):
+def test_prepare_resolves_exact_nodes_for_gpt_fanout(monkeypatch, tmp_path):
     nodes = ["ink50-dh01-d01-11", "ink50-dh01-d01-12"]
     monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
     monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
@@ -35,10 +61,12 @@ def test_prepare_resolves_exact_nodes_and_enforces_single_node_gpt(monkeypatch, 
             "preset_id": "gpt-oss-cpu", "scope": "node", "nodes": nodes,
             "storage": "nfs",
         })
-    assert plan is None
-    assert err is not None
-    assert err[1] == 400
-    assert "at most 1" in err[0].get_json()["error"]
+    assert err is None
+    assert plan is not None
+    assert plan["nodes"] == nodes
+    assert plan["node_count"] == 2
+    assert plan["preset_id"] == "gpt-oss-cpu"
+    assert plan["env_updates"]["NVIS_PREPARED_NODE_COUNT"] == "2"
 
 
 def test_llama_prepare_is_exact_1024_gpu_contract(monkeypatch, tmp_path):
@@ -119,7 +147,7 @@ def test_scripts_encode_runtime_and_result_gates():
     assert "NVIS_NCCL_RUNTIME_PREFLIGHT" in nccl_launcher
     assert "NVIS_NCCL_SBATCH_WAIT" in nccl_launcher
     assert "--append-verify" in stage and "flock -x" in stage and "sha256sum" in stage
-    assert "GPU_TYPE must be b300" in gpt and '[[ "$lines" == "$3" ]]' in gpt
+    assert "GPU_TYPE must be gb300" in gpt and '[[ "$lines" == "$3" ]]' in gpt
     assert "/cluster/llmb/workloads:/cluster/llmb/workloads:ro" in gpt
     assert "System Info Collection Summary" in sysinfo
     assert "Failed non-fatal steps: [1-9][0-9]*" in sysinfo

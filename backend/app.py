@@ -148,6 +148,7 @@ import help_content
 import host_exec
 import nvftp_cache_sync
 import nvlink_preflight
+import post_run_report
 import rack_locks
 import token_vault
 import validation_activities
@@ -5687,9 +5688,8 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
         log_dir,
         include_raw,
         _probe_log_json_via_rack_status,
-        # Canonical results are persisted and shared across web workers. Never commit the
-        # placeholder table produced before a cold worker's log scan has recovered completed
-        # NCCL/NeMo evidence. ``raw=1`` remains the explicitly non-blocking diagnostic path.
+        # Never persist the placeholder table produced before a cold worker's
+        # log scan has recovered completed NCCL/NeMo evidence.
         wait_for_workers=not include_raw,
         worker_timeout_sec=max(1, _env_int("RACK_STATUS_TIMEOUT", 300)),
     )
@@ -19402,6 +19402,174 @@ def api_help_content_entry(content_id: str):
 # ---------------------------------------------------------------------------
 
 
+_DEEP_AUDIT_WORKFLOWS = frozenset({"hardware-deep-audit", "nvlink-network-deep-audit"})
+_post_run_report_lock = threading.Lock()
+_post_run_report_cache: tuple[float, dict] = (0.0, {})
+
+
+def _post_run_accounting(activities: list[dict]) -> list[dict]:
+    """One Slurm accounting query for all tracked validation task ids."""
+    job_ids: list[str] = []
+    seen: set[str] = set()
+    for activity in activities:
+        for task in activity.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            jid = str(task.get("scheduler_ref") or "").strip().split(".")[0]
+            if _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid) and jid not in seen:
+                seen.add(jid)
+                job_ids.append(jid)
+    if not job_ids:
+        return []
+    # The activity store is capped at 500 entries. Keep the newest 400 Slurm
+    # allocations in the live reconciliation; older exact memberships remain in
+    # post_run_nodes.json after their first snapshot.
+    selected = job_ids[:400]
+    cmd = (
+        "sacct -X -n -P -j " + shlex.quote(",".join(selected))
+        + " -o JobIDRaw,State,NodeList,Start,End,ExitCode,JobName"
+    )
+    proc = _run_bash_slurm_prefix(
+        cmd,
+        timeout=max(30, _env_int("RACK_POST_RUN_SACCT_TIMEOUT", 120)),
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "sacct failed").strip())
+    wanted = set(selected)
+    rows: list[dict] = []
+    found: set[str] = set()
+    for line in (proc.stdout or "").splitlines():
+        cols = line.split("|")
+        if len(cols) < 7:
+            continue
+        raw_id = cols[0].strip()
+        jid = raw_id.split(".")[0]
+        if jid not in wanted or jid in found or raw_id != jid:
+            continue
+        found.add(jid)
+        rows.append({
+            "job_id": jid,
+            "state": cols[1].strip(),
+            "nodelist": cols[2].strip(),
+            "started_at": cols[3].strip(),
+            "ended_at": cols[4].strip(),
+            "exit_code": cols[5].strip(),
+            "job_name": cols[6].strip(),
+        })
+    return rows
+
+
+def _post_run_inventory() -> list[dict]:
+    proc = _run_bash_slurm_prefix(
+        'sinfo -N -h -o "%N|%T|%E"',
+        timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "sinfo failed").strip())
+    by_node: dict[str, dict] = {}
+    for line in (proc.stdout or "").splitlines():
+        cols = line.split("|", 2)
+        if len(cols) < 2 or not cols[0].strip():
+            continue
+        node = cols[0].strip()
+        state = cols[1].strip().lower().rstrip("*")
+        reason = cols[2].strip() if len(cols) > 2 else ""
+        if reason in {"none", "(null)", "N/A", "n/a"}:
+            reason = ""
+        by_node[node.casefold()] = {
+            "node": node,
+            "rack": post_run_report.rack_for_node(node),
+            "state": state,
+            "reason": reason,
+        }
+    return list(by_node.values())
+
+
+def _post_run_audits() -> list[dict]:
+    """Latest structured hardware/network result rows from durable workflows."""
+    out: list[dict] = []
+    for summary in workflow_engine.list_runs():
+        if summary.get("workflow_id") not in _DEEP_AUDIT_WORKFLOWS:
+            continue
+        run = workflow_engine.get_run_state(str(summary.get("run_id") or "")) or summary
+        if run.get("invalidated_at"):
+            continue
+        rack = str((run.get("params") or {}).get("rack") or "")
+        for audit in (run.get("audits") or {}).values():
+            if not isinstance(audit, dict):
+                continue
+            kind = str(audit.get("kind") or "")
+            for node_result in audit.get("nodes") or []:
+                if not isinstance(node_result, dict):
+                    continue
+                out.append({
+                    **node_result,
+                    "kind": kind,
+                    "rack": rack or post_run_report.rack_for_node(
+                        str(node_result.get("node") or "")
+                    ),
+                    "run_id": str(run.get("run_id") or ""),
+                    "started_at": str(run.get("started_at") or ""),
+                    "updated_at": str(run.get("updated_at") or ""),
+                })
+    return out
+
+
+def _build_post_run_report(*, rack: str = "", node: str = "", force: bool = False) -> dict:
+    global _post_run_report_cache
+    now = time.monotonic()
+    ttl = max(5, _env_int("RACK_POST_RUN_REPORT_TTL_SEC", 30))
+    cached_at, cached = _post_run_report_cache
+    if cached and not force and not rack and not node and (now - cached_at) < ttl:
+        return cached
+    with _post_run_report_lock:
+        cached_at, cached = _post_run_report_cache
+        if cached and not force and not rack and not node and (now - cached_at) < ttl:
+            return cached
+        activities = validation_activities.list_activities(limit=500)
+        accounting_error = ""
+        try:
+            accounting = _post_run_accounting(activities)
+            fresh_events = post_run_report.events_from_accounting(activities, accounting)
+            merge = post_run_report.merge_events(fresh_events)
+        except Exception as exc:  # noqa: BLE001 - preserve durable history on Slurm failure
+            accounting_error = str(exc)
+            _logger.warning("post-run accounting refresh failed: %s", exc)
+            merge = {"merged": 0, "error": accounting_error}
+        inventory_error = ""
+        try:
+            inventory = _post_run_inventory()
+        except Exception as exc:  # noqa: BLE001 - report cached events when inventory is unavailable
+            inventory_error = str(exc)
+            inventory = []
+            _logger.warning("post-run inventory refresh failed: %s", exc)
+        import node_issues
+
+        issue_store = node_issues.load()
+        # Only Rack Status' structured findings are used. Google punchcard cells
+        # are intentionally excluded from this first-class report.
+        findings = [
+            row for row in issue_store.get("issues", []) if isinstance(row, dict)
+        ]
+        payload = post_run_report.build_report(
+            events=post_run_report.load_events(),
+            inventory=inventory,
+            findings=findings,
+            audit_results=_post_run_audits(),
+            rack=rack,
+            node=node,
+        )
+        payload["refresh"] = {
+            "activities": len(activities),
+            "merge": merge,
+            "accounting_error": accounting_error,
+            "inventory_error": inventory_error,
+        }
+        if not rack and not node:
+            _post_run_report_cache = (time.monotonic(), payload)
+        return payload
+
+
 @app.route("/api/workflows", methods=["GET"])
 def api_workflows_list():
     """List available workflow templates."""
@@ -19497,6 +19665,202 @@ def api_workflow_run_output(run_id: str, step_id: str):
     if output is None:
         return jsonify({"ok": False, "error": "Output not found"}), 404
     return jsonify({"ok": True, "output": output, "step_id": step_id, "run_id": run_id})
+
+
+@app.route("/api/deep-audits", methods=["GET"])
+def api_deep_audits_list():
+    """Recent Hardware and NVLink/Network deep-audit runs, optionally for one rack."""
+    rack = (request.args.get("rack") or "").strip()
+    kind = (request.args.get("kind") or "").strip().lower()
+    workflow_id = {
+        "hardware": "hardware-deep-audit",
+        "network": "nvlink-network-deep-audit",
+        "nvlink": "nvlink-network-deep-audit",
+    }.get(kind, "")
+    try:
+        limit = max(1, min(100, int(request.args.get("limit") or "30")))
+    except ValueError:
+        return jsonify({"ok": False, "error": "limit must be an integer"}), 400
+    out = []
+    for row in workflow_engine.list_runs():
+        if row.get("workflow_id") not in _DEEP_AUDIT_WORKFLOWS:
+            continue
+        if workflow_id and row.get("workflow_id") != workflow_id:
+            continue
+        full = workflow_engine.get_run_state(str(row.get("run_id") or "")) or row
+        if full.get("invalidated_at"):
+            continue
+        if rack and str((full.get("params") or {}).get("rack") or "") != rack:
+            continue
+        out.append({
+            "run_id": full.get("run_id"),
+            "workflow_id": full.get("workflow_id"),
+            "workflow_name": full.get("workflow_name"),
+            "state": full.get("state"),
+            "rack": str((full.get("params") or {}).get("rack") or ""),
+            "target": str((full.get("params") or {}).get("target") or ""),
+            "started_at": full.get("started_at"),
+            "updated_at": full.get("updated_at"),
+            "audits": full.get("audits") or {},
+            "error": full.get("error") or "",
+        })
+        if len(out) >= limit:
+            break
+    return jsonify({"ok": True, "runs": out})
+
+
+@app.route("/api/deep-audits/<run_id>", methods=["GET"])
+def api_deep_audit_get(run_id: str):
+    """One deep-audit run with per-node results and automatic Slurm actions."""
+    run = workflow_engine.get_run_state((run_id or "").strip())
+    if (
+        not run
+        or run.get("workflow_id") not in _DEEP_AUDIT_WORKFLOWS
+        or run.get("invalidated_at")
+    ):
+        return jsonify({"ok": False, "error": "deep audit run not found"}), 404
+    return jsonify({"ok": True, "run": run})
+
+
+@app.route("/api/node-issues", methods=["GET"])
+def api_node_issues():
+    """Node issue punchcard rollups and full in-SPA issue history."""
+    import node_issues
+
+    rack = (request.args.get("rack") or "").strip()
+    node = (request.args.get("node") or "").strip()
+    sync_error = ""
+    if rack and _truthy_arg(request.args.get("sync")):
+        try:
+            node_issues.sync_punchcard(rack)
+        except Exception as exc:  # noqa: BLE001 - stale local history remains useful offline
+            sync_error = str(exc)
+            _logger.warning("punchcard sync failed: %s", exc)
+    payload = node_issues.query(rack=rack, node=node)
+    return jsonify({
+        "ok": True,
+        **payload,
+        **({"sync_error": sync_error} if sync_error else {}),
+    })
+
+
+@app.route("/api/node-issues/sync-punchcard", methods=["POST"])
+def api_node_issues_sync_punchcard():
+    """Force-refresh the server-side Google punchcard baseline for this cluster."""
+    import node_issues
+
+    body = request.get_json(silent=True) or {}
+    rack = str(body.get("rack") or "").strip()
+    if not rack:
+        return jsonify({"ok": False, "error": "rack is required"}), 400
+    try:
+        result = node_issues.sync_punchcard(rack, force=True)
+    except Exception as exc:  # noqa: BLE001 - external Sheets API boundary
+        _logger.warning("forced punchcard sync failed: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 502
+    return jsonify(result)
+
+
+@app.route("/api/post-run-node-report", methods=["GET"])
+def api_post_run_node_report():
+    """Participation, attributed failure trends, audits and current Slurm state."""
+    rack = (request.args.get("rack") or "").strip()
+    node = (request.args.get("node") or "").strip()
+    if rack and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{1,127}", rack):
+        return jsonify({"ok": False, "error": "invalid rack"}), 400
+    if node and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{1,127}", node):
+        return jsonify({"ok": False, "error": "invalid node"}), 400
+    try:
+        payload = _build_post_run_report(
+            rack=rack,
+            node=node,
+            force=_truthy_arg(request.args.get("refresh")),
+        )
+    except Exception as exc:
+        _logger.exception("post-run node report failed")
+        return jsonify({"ok": False, "error": str(exc)}), 503
+    return jsonify({"ok": True, **payload})
+
+
+@app.route("/api/post-run-node-report/mark", methods=["POST"])
+def api_post_run_node_mark():
+    """Record an operator finding and optionally drain the exact node."""
+    import node_issues
+
+    body = request.get_json(silent=True) or {}
+    node = str(body.get("node") or "").strip()
+    reason = str(body.get("reason") or "").strip()
+    category = str(body.get("category") or "validation").strip().lower()
+    scheduler_ref = str(
+        body.get("job_id") or body.get("scheduler_ref") or ""
+    ).strip()
+    drain = body.get("drain") is True
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{1,127}", node):
+        return jsonify({"ok": False, "error": "a valid exact node is required"}), 400
+    if node.casefold() not in {name.casefold() for name in _all_slurm_nodenames()}:
+        return jsonify({"ok": False, "error": "node is not in current Slurm inventory"}), 409
+    if category not in {
+        "hardware", "network", "gpu", "thermal", "storage", "control_plane",
+        "validation", "maintenance",
+    }:
+        return jsonify({"ok": False, "error": "unsupported category"}), 400
+    if not reason or len(reason) > 1000:
+        return jsonify({
+            "ok": False,
+            "error": "reason is required (maximum 1000 characters)",
+        }), 400
+    rack = post_run_report.rack_for_node(node)
+    slurm_reason = ""
+    drain_result = "local annotation only; scheduler state unchanged"
+    drained = False
+    if drain:
+        raw_reason = (
+            f"Drained for {category} issue - for Job {scheduler_ref or 'operator-mark'} "
+            f"due to {reason}"
+        )
+        slurm_reason = re.sub(
+            r"[^A-Za-z0-9 _.,:/()\-]", " ", raw_reason
+        )[:256].strip()
+        result = _run_scontrol_node_update(
+            node, ["state=drain", f"reason={slurm_reason}"]
+        )
+        drained = bool(result.get("ok"))
+        drain_result = str(
+            result.get("stdout")
+            or result.get("stderr")
+            or f"returncode={result.get('returncode')}"
+        )[:2000]
+        if not drained:
+            return jsonify({
+                "ok": False,
+                "error": "Slurm drain failed",
+                "slurm": result,
+            }), 502
+    operator = _operator_from_request() or "rack-status-operator"
+    entry = node_issues.record_issue(
+        node=node,
+        rack=rack,
+        category=category,
+        code="operator_mark",
+        reason=reason,
+        severity="failure",
+        source="post-run-node-report",
+        validation_run_id=str(body.get("validation_run_id") or ""),
+        scheduler_ref=scheduler_ref,
+        evidence=str(body.get("evidence") or "")[:8000],
+        drained=drained,
+        slurm_reason=slurm_reason,
+        drain_result=drain_result,
+        operator=operator,
+    )
+    global _post_run_report_cache
+    _post_run_report_cache = (0.0, {})
+    return jsonify({
+        "ok": True,
+        "finding": entry,
+        "drained": drained,
+        "slurm_reason": slurm_reason,
+    })
 
 
 @app.route("/api/workflows/generate-mermaid", methods=["POST"])

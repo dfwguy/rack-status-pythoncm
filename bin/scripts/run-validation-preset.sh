@@ -125,7 +125,7 @@ case "$preset" in
     ;;
 
   gpt-oss-cpu)
-    (( node_count == 1 )) || { echo "ERROR: GPT-OSS CPU microbenchmark is single-node; got ${node_count}" >&2; exit 2; }
+    (( node_count >= 1 && node_count <= 256 )) || { echo "ERROR: GPT-OSS CPU fan-out requires 1-256 exact nodes; got ${node_count}" >&2; exit 2; }
     source_image="/cluster/llmb/images/tensorrt-llm+release+1.1.0rc5.sqsh"
     local_image="${local_container_dir}/tensorrt-llm+release+1.1.0rc5.sqsh"
     if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
@@ -135,9 +135,38 @@ case "$preset" in
     model="${llmb_install}/workloads/microbenchmark_cpu_overhead/gpt-oss-120b/metal/model.bin"
     [[ -r "$model" || "$dry_run" == 1 ]] || { echo "ERROR: GPT-OSS model is missing/unreadable: $model" >&2; exit 2; }
     gpt_batch="${script_dir}/gpt-oss-cpu-strict.sbatch"
-    export_set="ALL,LLMB_INSTALL=${llmb_install},LLMB_REPO=${llmb_repo},RUN_CONF_IMAGE=${image},GPU_TYPE=b300,NUM_PROMPTS=100000,LLMB_EXPERIMENTS_ROOT=${log_dir}"
-    run_cmd sbatch --wait --no-requeue "${STAGE_DEPENDENCY[@]}" --nodelist="$nodelist" --nodes=1 --gpus-per-node=4 \
-      --output="${log_dir%/}/gpt-oss-cpu-%j.out" --export="$export_set" "$gpt_batch"
+    export_set="ALL,LLMB_INSTALL=${llmb_install},LLMB_REPO=${llmb_repo},RUN_CONF_IMAGE=${image},GPU_TYPE=gb300,NUM_PROMPTS=100000,LLMB_EXPERIMENTS_ROOT=${log_dir}"
+    # Keep the validated recipe single-node, but submit one independently
+    # attributable job for every exact selected node. Submit the full fan-out
+    # before waiting so a rack does not serialize eighteen CPU microbenchmarks.
+    gpt_job_ids=()
+    for node in "${nodes[@]}"; do
+      gpt_cmd=(sbatch --parsable --no-requeue "${STAGE_DEPENDENCY[@]}" --nodelist="$node" --nodes=1 --gpus-per-node=4
+        --job-name="gpt-oss-${node}" --output="${log_dir%/}/gpt-oss-cpu-${node}-%j.out"
+        --export="$export_set" "$gpt_batch")
+      print_cmd "${gpt_cmd[@]}"
+      if (( ! dry_run )); then
+        submitted="$("${gpt_cmd[@]}")"
+        gpt_id="${submitted%%;*}"
+        [[ "$gpt_id" =~ ^[0-9]+$ ]] || { echo "ERROR: unable to parse GPT-OSS job id: $submitted" >&2; exit 2; }
+        gpt_job_ids+=("$gpt_id")
+        echo "SUBMITTED: gpt-oss node=${node} jobid=${gpt_id}"
+      fi
+    done
+    if (( ! dry_run )); then
+      gpt_csv=$(IFS=,; printf '%s' "${gpt_job_ids[*]}")
+      while squeue -h -j "$gpt_csv" 2>/dev/null | grep -q .; do sleep 5; done
+      gpt_failed=0
+      gpt_seen=0
+      while IFS='|' read -r gpt_id gpt_state gpt_exit _rest; do
+        [[ "$gpt_id" =~ ^[0-9]+$ ]] || continue
+        gpt_seen=$((gpt_seen + 1))
+        printf 'COMPLETE: gpt-oss jobid=%s state=%s exit=%s\n' "$gpt_id" "$gpt_state" "$gpt_exit"
+        [[ "$gpt_state" == COMPLETED && "$gpt_exit" == 0:0 ]] || gpt_failed=1
+      done < <(sacct -X -n -P -j "$gpt_csv" -o JobIDRaw,State,ExitCode)
+      (( gpt_seen == ${#gpt_job_ids[@]} )) || gpt_failed=1
+      (( gpt_failed == 0 )) || { echo "ERROR: one or more GPT-OSS node jobs failed" >&2; exit 2; }
+    fi
     ;;
 
   exemplar-system-info)

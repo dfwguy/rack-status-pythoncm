@@ -37,6 +37,7 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { useThemeMode } from "../context/ThemeContext";
 import { apiFetch } from "../lib/apiFetch";
+import { compareMetricsRacks, metricsRackMoniker } from "../lib/metricsRack";
 
 ChartJS.register(
   CategoryScale,
@@ -66,6 +67,7 @@ interface ChartPayload {
   ok: boolean;
   error?: string;
   title?: string;
+  split_by?: string;
   labels?: string[];
   datasets?: { label: string; data: (number | null)[] }[];
 }
@@ -140,7 +142,7 @@ function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardProps) {
     () => ({
       labels: (payload?.labels ?? []).map((l) => (chart.range ? timeLabel(l) : l)),
       datasets: (payload?.datasets ?? []).map((d, i) => ({
-        label: d.label,
+        label: payload?.split_by === "rack" ? metricsRackMoniker(d.label) : d.label,
         data: d.data,
         borderColor: SERIES_COLORS[i % SERIES_COLORS.length],
         backgroundColor:
@@ -199,7 +201,7 @@ function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardProps) {
         <Text kind="body/bold/sm">{payload?.title || chart.title}</Text>
         <Text kind="body/regular/xs" color="secondary">
           {chart.unit}
-          {rack ? ` · ${rack}` : ""}
+          {rack ? ` · ${metricsRackMoniker(rack)}` : ""}
         </Text>
       </Flex>
 
@@ -279,7 +281,7 @@ export function MetricsView() {
         const names: string[] = (r.result ?? [])
           .map((s: { metric?: Record<string, string> }) => s.metric?.rack)
           .filter((n: string | undefined): n is string => Boolean(n));
-        setRacks(names.sort());
+        setRacks([...new Set(names)].sort(compareMetricsRacks));
       } catch {
         /* the filter is optional — leave it empty on failure */
       }
@@ -328,7 +330,7 @@ export function MetricsView() {
           <MenuItem value="">All racks</MenuItem>
           {racks.map((r) => (
             <MenuItem key={r} value={r}>
-              {r}
+              {metricsRackMoniker(r)}
             </MenuItem>
           ))}
         </TextField>

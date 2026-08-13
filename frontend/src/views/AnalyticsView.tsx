@@ -29,6 +29,7 @@ import { ReportGenerator } from "../components/analytics/ReportGenerator";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { NodeHeatmap } from "../components/analytics/NodeHeatmap";
+import { IssueHealthOverview } from "../components/analytics/IssueHealthOverview";
 import { type NodeInfo } from "../components/rack/NodeSelector";
 import { parseNodesFromRack } from "../lib/parseNodesFromRack";
 import { getBringupFleet } from "../services/bringupService";
@@ -655,6 +656,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
 
       {tab === RACK_TAB && (
       <>
+      <IssueHealthOverview />
       {/* Reports describe the cluster and its racks, so the control belongs with that content
           rather than in the page header above both tabs. */}
       <ReportGenerator />

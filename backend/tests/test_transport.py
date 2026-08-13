@@ -583,6 +583,20 @@ class TestFanout:
         assert "ok" in group_outputs(results)
         assert next(r.returncode for r in results if r.node == "bad") == 255
 
+    def test_retries_silent_ssh_255_until_command_starts(self):
+        class _Silent255ThenOk(_FakeExecutor):
+            def run(self, cmd, **k):
+                self.calls.append(cmd)
+                if len(self.calls) < 3:
+                    return subprocess.CompletedProcess(cmd, 255, "", "")
+                return subprocess.CompletedProcess(cmd, 0, "ready\n", "")
+
+        base = _FakeBase(executor=_Silent255ThenOk())
+        results = fanout(base, ["n1"], "audit", retries=3)
+        assert len(base.calls) == 3
+        assert results[0].returncode == 0
+        assert results[0].stdout == "ready\n"
+
     def test_empty_nodes(self):
         assert fanout(_FakeBase(), [], "x") == []
 

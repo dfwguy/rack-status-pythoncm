@@ -258,14 +258,14 @@ describe("MultirackView rack filters", () => {
     expect(screen.getByText("2 selected")).toBeTruthy();
   });
 
-  it("offers DGXC system_info fanout for selected racks and keeps GPT-OSS single-node only", async () => {
+  it("offers DGXC system_info and GPT-OSS per-node fanout for selected racks", async () => {
     renderView();
     await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeTruthy());
     fireEvent.click(screen.getByText("Select all eligible (4)"));
 
     const sysinfoButton = screen.getByRole("button", { name: "DGXC system_info" });
     expect(sysinfoButton).toBeEnabled();
-    expect(screen.getByText("GPT-OSS CPU overhead: single-node view only")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "GPT-OSS CPU — per-node fan-out" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: /Legacy Llama|512-GPU/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Llama 405B FP8 — 1024 GPUs / 50 steps" })).toBeDisabled();
     fireEvent.click(sysinfoButton);

@@ -101,7 +101,14 @@ def fanout(
     def _one(node: str) -> NodeResult:
         r = _attempt(node)
         for i in range(max(0, retries)):
-            if r.returncode == 0 or not any(t in r.stderr for t in _TRANSIENT):
+            # OpenSSH can return 255 with no stderr when a multiplexed session is
+            # refused/closed before the remote command starts.  Treat that exact
+            # silent transport shape as transient too; command failures normally
+            # have a non-255 status or node-produced stderr.
+            transient = any(t in r.stderr for t in _TRANSIENT) or (
+                r.returncode == 255 and not r.stderr.strip() and not r.stdout.strip()
+            )
+            if r.returncode == 0 or not transient:
                 break
             time.sleep(0.4 * (i + 1))  # brief backoff so the gateway can drain
             r = _attempt(node)

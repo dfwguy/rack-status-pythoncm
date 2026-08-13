@@ -1419,14 +1419,11 @@ class NativeRackTableState:
                 self.log_thread.start()
 
     def wait_for_scheduled_workers(self, timeout_sec: float) -> list[str]:
-        """Wait for the worker generation currently feeding a canonical snapshot.
+        """Wait for the worker generation feeding a canonical snapshot.
 
-        A state object is process-local while the canonical table is persisted in SQLite. If a
-        cold web worker schedules the probes and immediately returns, it can therefore replace a
-        good shared snapshot with placeholder rows (most visibly, every NCCL/NeMo stage becomes
-        ``pending``). Joining the exact thread objects captured here avoids both that race and a
-        second probe pass. The caller treats a timeout as a failed refresh, preserving any last
-        known-good snapshot.
+        A cold web worker must not replace the shared SQLite snapshot with
+        placeholder rows before its Slurm and log probes have recovered the
+        completed NCCL/NeMo evidence.
         """
         with self.lock:
             workers = (
@@ -1439,7 +1436,11 @@ class NativeRackTableState:
             if thread is None:
                 continue
             thread.join(max(0.0, deadline - time.monotonic()))
-        return [worker_id for worker_id, thread in workers if thread is not None and thread.is_alive()]
+        return [
+            worker_id
+            for worker_id, thread in workers
+            if thread is not None and thread.is_alive()
+        ]
 
     def build_table_rows(self) -> tuple[list[dict[str, str]], dict[str, Any], list[str], str]:
         running, job_times = load_squeue_jobs_map()
@@ -1823,7 +1824,8 @@ def build_native_rack_status(
         if unfinished:
             names = ", ".join(unfinished)
             raise TimeoutError(
-                f"Native rack-status workers did not finish within {worker_timeout_sec:g}s: {names}"
+                f"Native rack-status workers did not finish within "
+                f"{worker_timeout_sec:g}s: {names}"
             )
     rows, summary, footnotes, legend = st.build_table_rows()
     out: dict[str, Any] = {
