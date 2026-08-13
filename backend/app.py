@@ -5687,6 +5687,11 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
         log_dir,
         include_raw,
         _probe_log_json_via_rack_status,
+        # Canonical results are persisted and shared across web workers. Never commit the
+        # placeholder table produced before a cold worker's log scan has recovered completed
+        # NCCL/NeMo evidence. ``raw=1`` remains the explicitly non-blocking diagnostic path.
+        wait_for_workers=not include_raw,
+        worker_timeout_sec=max(1, _env_int("RACK_STATUS_TIMEOUT", 300)),
     )
     summ = out.get("summary")
     if not isinstance(summ, dict):
