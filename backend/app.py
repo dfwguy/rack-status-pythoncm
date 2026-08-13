@@ -19771,6 +19771,19 @@ class _WebSocketTerminalMiddleware:
                         break
                     if chunk is None:
                         _logger.info("WebSocket terminal: PTY EOF for %s", sess.target)
+                        # Say WHY the session ended, on the terminal itself. ssh's own message goes
+                        # to the PTY and is usually enough, but not always: a hop killed by a
+                        # keepalive timeout, or a shell that dies during login, closes the PTY with
+                        # nothing printed, and the operator is left with a blank pane and the
+                        # frontend's bare "Connection closed." The exit status is the one piece of
+                        # evidence available in every case (255 = ssh could not establish or lost
+                        # the connection, which for a compute node means the second hop).
+                        rc = sess.proc.poll()
+                        if rc is not None and rc != 0:
+                            hint = " — ssh could not reach it, or the connection dropped" if rc == 255 else ""
+                            ws.send(
+                                f"\r\n\x1b[1;31m[{sess.target}: session ended, exit {rc}{hint}]\x1b[0m\r\n"
+                            )
                         return
                     ws.send(chunk)
 

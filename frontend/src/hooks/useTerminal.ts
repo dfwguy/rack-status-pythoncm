@@ -14,6 +14,9 @@ import "@xterm/xterm/css/xterm.css";
  */
 export const TERMINAL_BACKGROUND = "#0d1117";
 
+/** How long a connected-but-silent shell waits before it explains itself. */
+const SILENCE_HINT_MS = 12_000;
+
 export interface UseTerminalOptions {
   /** Ref to the container element where xterm.js will attach. */
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -52,10 +55,13 @@ export function useTerminal({
   const [connected, setConnected] = useState(false);
 
   const roRef = useRef<ResizeObserver | null>(null);
+  const silenceTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const resizeHandlerRef = useRef<(() => void) | null>(null);
   const focusHandlerRef = useRef<(() => void) | null>(null);
 
   const cleanup = useCallback(() => {
+    for (const t of silenceTimersRef.current) clearTimeout(t);
+    silenceTimersRef.current = [];
     if (roRef.current) {
       roRef.current.disconnect();
       roRef.current = null;
@@ -159,6 +165,28 @@ export function useTerminal({
         ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
       };
 
+      // A shell that connects and then says nothing is indistinguishable from a broken UI. It is a
+      // real state on a cluster — an unreachable tray, or a login stalled on an NFS home — and
+      // silence is the worst possible way to present it. Name the usual causes rather than leaving
+      // an empty pane. Cleared the moment any byte arrives, so a healthy shell never shows it.
+      let sawOutput = false;
+      const silenceTimer = setTimeout(() => {
+        if (!sawOutput) {
+          term.writeln(
+            `\x1b[1;33mNo output yet from ${displayName}.\x1b[0m Still waiting on the remote — a` +
+            ` node that is down, or a login stalled on a shared filesystem, both look like this.`,
+          );
+        }
+      }, SILENCE_HINT_MS);
+      silenceTimersRef.current.push(silenceTimer);
+
+      /** Terminal bytes only. The session/error control frames arrive at once and are not output. */
+      const noteOutput = () => {
+        if (sawOutput) return;
+        sawOutput = true;
+        clearTimeout(silenceTimer);
+      };
+
       ws.onmessage = (evt) => {
         if (typeof evt.data === "string" && !receivedSession) {
           try {
@@ -176,6 +204,7 @@ export function useTerminal({
             // not JSON, treat as terminal data
           }
         }
+        noteOutput();
         if (evt.data instanceof ArrayBuffer) {
           term.write(new Uint8Array(evt.data));
         } else {
@@ -185,6 +214,7 @@ export function useTerminal({
 
       ws.onclose = () => {
         setConnected(false);
+        clearTimeout(silenceTimer);
         term.writeln("\r\n\x1b[1;31mConnection closed.\x1b[0m");
       };
 
