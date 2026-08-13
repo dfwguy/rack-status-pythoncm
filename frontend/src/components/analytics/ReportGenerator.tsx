@@ -192,6 +192,13 @@ export function ReportGenerator() {
         </Box>
       )}
 
+      {busy && (
+        <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+          You can leave this page — the report is saved when it finishes and will be waiting under
+          Analytics &rsaquo; Reports.
+        </Text>
+      )}
+
       {error && (
         <Banner status="error" kind="inline">
           {error}
@@ -199,7 +206,7 @@ export function ReportGenerator() {
       )}
       {done && !busy && (
         <Banner status="success" kind="inline">
-          Downloaded {done}
+          Downloaded {done} — also saved under Analytics &rsaquo; Reports.
         </Banner>
       )}
     </Box>

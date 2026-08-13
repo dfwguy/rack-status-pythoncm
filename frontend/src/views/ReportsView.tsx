@@ -13,6 +13,7 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
+import { GeneratedReports } from "../components/reports/GeneratedReports";
 
 type BugReportItem = { host: string; name: string };
 
@@ -146,8 +147,16 @@ export function ReportsView() {
       <PageHeader
         contentId="reports"
         title="Reports"
-        description="Browse NVIDIA bug report archives and NVLMapper outputs on this dashboard host (same as legacy Download Reports)."
+        description="Generated cluster reports, plus NVIDIA bug report archives and NVLMapper outputs on this dashboard host."
       />
+
+      {/* Generated reports come first: they are what an operator returns to this page for after
+          starting a sweep from Analytics. The node-collected archives below are a separate concern. */}
+      <GeneratedReports />
+
+      <Text kind="title/lg" style={{ display: "block", marginBottom: 8 }}>
+        Bug reports and NVLMapper outputs
+      </Text>
 
       <Paper variant="outlined" sx={{ p: 3, mb: 2 }}>
         <Text kind="body/regular/md" style={{ display: "block", marginBottom: 12, lineHeight: 1.6, color: "var(--text-color-secondary)" }}>

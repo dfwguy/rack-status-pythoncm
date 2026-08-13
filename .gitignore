@@ -26,6 +26,9 @@ var/store/
 # Durable run/metric history (SQLite + WAL; created on boot by results_history.py)
 var/history/
 
+# Generated reports kept for later download (report_store.py); operator artifacts, not source
+var/reports/
+
 # ---- Token vault (NEVER commit — encrypted NVFTP tokens + master key material) ----
 var/secrets/
 **/*.vault.json

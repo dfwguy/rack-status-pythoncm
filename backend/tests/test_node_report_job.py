@@ -211,6 +211,111 @@ def offline_facts(monkeypatch):
     monkeypatch.setattr(A, "_analytics_last_cached", dict)
 
 
+class TestReportsAreKeptWhoeverIsWatching:
+    """The whole point of the store: a finished report must not depend on someone waiting.
+
+    A sweep is minutes of SSH across the fleet. Before this, the document lived in the job table
+    and was freed when collected, so navigating away from Analytics mid-run discarded all of it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def isolated_store(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NVIS_REPORTS_DIR", str(tmp_path / "reports"))
+
+    @staticmethod
+    def _only(client, *, kind=None, fmt=None):
+        """The saved report matching kind/format.
+
+        Selected rather than indexed: earlier tests deliberately start a job without waiting for
+        it, and that worker can finish during this test and archive its own report. Picking by
+        shape keeps these assertions about the report the test actually generated.
+        """
+        reports = client.get("/api/reports/generated").get_json()["reports"]
+        picked = [r for r in reports
+                  if (kind is None or r["kind"] == kind) and (fmt is None or r["format"] == fmt)]
+        assert len(picked) == 1, f"expected one {kind}/{fmt} report, got {reports}"
+        return picked[0]
+
+    def test_a_report_is_saved_without_anyone_collecting_it(self, client, fake_generation,
+                                                            offline_facts):
+        job_id = client.post("/api/node-report/start",
+                             json={"report": "rack-status", "format": "csv"}).get_json()["job_id"]
+        _wait(client, job_id, want="done")
+        # Deliberately never call /result — this is the operator closing the tab.
+        saved = self._only(client, kind="rack-status", fmt="csv")
+        assert saved["size"] > 0
+        assert saved["nodes"] == 3
+
+    def test_the_saved_copy_downloads_after_the_live_one_was_consumed(self, client,
+                                                                     fake_generation,
+                                                                     offline_facts):
+        job_id = client.post("/api/node-report/start",
+                             json={"report": "rack-status", "format": "csv"}).get_json()["job_id"]
+        _wait(client, job_id, want="done")
+        client.get("/api/node-report/result", query_string={"job_id": job_id})
+        # The in-memory document is freed on collection; the archived one must still be there.
+        saved = self._only(client, kind="rack-status", fmt="csv")
+        res = client.get(f"/api/reports/generated/{saved['id']}")
+        assert res.status_code == 200
+        assert res.mimetype == "text/csv"
+        assert res.headers["Content-Disposition"].endswith('.csv"')
+
+    def test_the_customer_schema_report_is_archived_as_the_document_not_its_metadata(
+        self, client, fake_generation
+    ):
+        job_id = client.post("/api/node-report/start", json={}).get_json()["job_id"]
+        _wait(client, job_id, want="done")
+        saved = self._only(client, kind="nscale")
+        body = client.get(f"/api/reports/generated/{saved['id']}").get_json()
+        # A sidecar/payload path collision would hand back the metadata instead of the report.
+        assert "report_metadata" in body
+        assert "test_results" in body
+
+    def test_the_job_reports_the_id_it_archived_under(self, client, fake_generation,
+                                                      offline_facts):
+        job_id = client.post("/api/node-report/start",
+                             json={"report": "rack-status", "format": "json"}).get_json()["job_id"]
+        done = _wait(client, job_id, want="done")
+        assert done.get("saved_id")
+        assert client.get(f"/api/reports/generated/{done['saved_id']}").status_code == 200
+
+    def test_a_download_for_an_unknown_id_is_a_404_not_a_crash(self, client):
+        assert client.get("/api/reports/generated/" + "0" * 32).status_code == 404
+
+    def test_a_traversal_attempt_in_the_id_is_refused(self, client):
+        # Flask's own routing rejects a slash here; the store rejects the shape as well.
+        assert client.get("/api/reports/generated/..%2F..%2Fetc%2Fpasswd").status_code in (404, 308)
+
+    def test_a_saved_report_can_be_deleted(self, client, fake_generation, offline_facts):
+        job_id = client.post("/api/node-report/start",
+                             json={"report": "rack-status", "format": "csv"}).get_json()["job_id"]
+        _wait(client, job_id, want="done")
+        saved = self._only(client, kind="rack-status", fmt="csv")
+
+        assert client.delete(f"/api/reports/generated/{saved['id']}").status_code == 200
+        remaining = client.get("/api/reports/generated").get_json()["reports"]
+        assert saved["id"] not in [r["id"] for r in remaining]
+        assert client.delete(f"/api/reports/generated/{saved['id']}").status_code == 404
+
+    def test_a_failing_store_does_not_fail_the_report(self, client, fake_generation,
+                                                      offline_facts, monkeypatch):
+        """A full disk should cost the archive copy, not the run the operator waited for."""
+        import report_store
+
+        monkeypatch.setattr(report_store, "save",
+                            lambda **_kw: (_ for _ in ()).throw(OSError("no space left")))
+        job_id = client.post("/api/node-report/start",
+                             json={"report": "rack-status", "format": "csv"}).get_json()["job_id"]
+        done = _wait(client, job_id, want="done")
+        assert done["state"] == "done"
+        assert not done.get("saved_id")
+        assert not [r for r in client.get("/api/reports/generated").get_json()["reports"]
+                    if r["format"] == "csv"]
+        # And the live download still works.
+        assert client.get("/api/node-report/result",
+                          query_string={"job_id": job_id}).status_code == 200
+
+
 class TestReportKinds:
     def test_both_reports_are_advertised_with_their_formats(self, client):
         body = client.get("/api/node-report/kinds").get_json()

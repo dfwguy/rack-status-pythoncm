@@ -42,14 +42,37 @@ export const analyticsContent: HelpContent[] = [
     title: "Reports",
     domain: "Analytics & Benchmarks",
     routePath: "/analytics/reports",
-    summary: "Generate and export validation/benchmark reports.",
+    summary: "Download saved cluster reports, plus bug report and NVLMapper archives.",
     description:
-      "The Reports page produces shareable validation and benchmark reports summarising a rack or campaign's results for handoff to customers or stakeholders.",
-    features: ["Generate validation/benchmark reports.", "Export for sharing/handoff."],
-    howTo: [{ task: "Generate a report", steps: ["Open Analytics & Benchmarks > Reports.", "Choose the scope/report type.", "Generate and export."] }],
+      "The Reports page holds two separate things. Generated reports are the cluster and customer-schema documents produced from Analytics > Rack Level; each is saved when it finishes, so you can start a report, leave the page, and download it here later — a fleet sweep takes minutes and is no longer lost by navigating away. Rows show the report type, format, when it was generated, the node count it covers, and any schema errors, and can be downloaded or deleted. Below that, the bug report section lists NVIDIA bug report archives, NVLMapper outputs and Excel exports already present in the reports directory on this dashboard host.",
+    features: [
+      "Generated Rack Status (CSV/JSON/PDF) and Nscale TX schema (JSON) reports, saved automatically when they finish.",
+      "Reports survive leaving the page and a container restart; the most recent are kept and older ones pruned.",
+      "Schema errors are shown on the row, so a report that failed validation is visible without regenerating it.",
+      "Separate listing of nvidia-bug-report archives, NVLMapper CSV/XLS and parser Excel exports from the reports directory.",
+    ],
+    howTo: [
+      {
+        task: "Get a report you generated earlier",
+        steps: [
+          "Open Analytics & Benchmarks > Reports.",
+          "Find the row under Generated reports — newest first.",
+          "Click Download.",
+        ],
+      },
+      {
+        task: "Generate a new report",
+        steps: [
+          "Go to Analytics & Benchmarks > Analytics, Rack Level tab.",
+          "Use Generate a report, pick the report and format, and start it.",
+          "You can leave the page; it appears here when the sweep finishes.",
+        ],
+      },
+    ],
     related: ["analytics", "dashboard"],
-    keywords: ["reports", "report", "export", "summary", "handoff", "validation", "benchmark"],
-    aria: { label: "Reports page", description: "Generate and export validation and benchmark reports." },
-    aiContext: "The Reports page generates and exports shareable validation/benchmark reports for a rack or campaign.",
+    keywords: ["reports", "report", "export", "summary", "handoff", "validation", "benchmark", "saved reports", "pdf", "csv", "bug report", "nvlmapper", "download"],
+    aria: { label: "Reports page", description: "Download saved cluster reports and node bug report archives." },
+    aiContext:
+      "Analytics > Reports lists (1) generated reports from report_store.py, served by GET /api/reports/generated with download and DELETE at /api/reports/generated/<id>, kept under var/reports on the rack-data volume so they survive restarts, and (2) bug report / NVLMapper files from the reports directory via /api/bug-report-inventory. Reports are archived by the node-report worker when it completes, not when downloaded, so closing the tab mid-sweep no longer loses the run. Generation itself happens on Analytics > Analytics, Rack Level tab.",
   },
 ];
