@@ -1,0 +1,1221 @@
+[
+ {
+  "rule": "/",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/<path:path>",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/ai/chat",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/ai/settings",
+  "methods": [
+   "GET",
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/ai/test",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/analytics/aggregate",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/analytics/aggregate-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/analytics/aggregate-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/analytics/history",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/analytics/last",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/app-stats",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/auth-check",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/bmc-recovery-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/bringup/config",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/bringup/fleet",
+  "methods": [
+   "GET",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/bringup/node",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/bug-report-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/bug-report-bundle",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/bug-report-file",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/bug-report-inventory",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/catalog/active",
+  "methods": [
+   "GET",
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/catalog/npi-tools",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/catalog/npi-tools/<doc_id>",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/catalog/npi-tools/import",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/catalog/overview",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/catalog/platforms",
+  "methods": [
+   "GET",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/catalog/platforms/<doc_id>",
+  "methods": [
+   "DELETE",
+   "GET",
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/catalog/projects",
+  "methods": [
+   "GET",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/catalog/projects/<doc_id>",
+  "methods": [
+   "DELETE",
+   "GET",
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/catalog/tools",
+  "methods": [
+   "GET",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/catalog/tools/<doc_id>",
+  "methods": [
+   "DELETE",
+   "GET",
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/catalog/topology",
+  "methods": [
+   "GET",
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/catalog/vocab",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/cluster-dashboard-metadata",
+  "methods": [
+   "GET",
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/cluster-health",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/cluster-health/reconnect",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/cluster-overview",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/cluster-overview/live",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/clusterkit-results",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/comments",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/comments/<rack_id>",
+  "methods": [
+   "DELETE",
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/deep-audits",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/deep-audits/<run_id>",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/ds-diag",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/export-logs-zip",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/fabric-probe",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/gpu-reset",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/gpu-reset-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/grafana/deeplinks",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/help/content",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/help/content/<content_id>",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/history/capture-job",
+  "methods": [
+   "GET",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/history/metric-series",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/history/metrics",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/history/runs",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/history/runs/<path:run_id>",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/history/summary",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/hw-check-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/hw-check-help",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/hw-check-presets",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/imex-check-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/imex-reset-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/lake/health",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/login",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/logout",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/mac-change-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/metrics/catalog",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/metrics/chart/<chart_id>",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/metrics/health",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/metrics/query",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/metrics/query_range",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/multirack-campaign",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/multirack-jobs",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/multirack-jobs/<job_id>",
+  "methods": [
+   "DELETE"
+  ]
+ },
+ {
+  "rule": "/api/multirack-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/node-issues",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/node-issues/sync-punchcard",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/node-report",
+  "methods": [
+   "GET",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/node-report/kinds",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/node-report/result",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/node-report/start",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/node-report/status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/nvftp-sync/run",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/nvftp-sync/status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/nvftp-sync/test",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/nvlink-preflight-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/nvlmapper-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/nvlmapper-zip",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/nvloom-heatmaps-log",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/nvswitch-check-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/nvswitch-fix-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/nvswitch-hosts",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/nvswitch-sdn-reset-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/nvswitch-system-reset-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/observability/dashboards",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/observability/dashboards/<path:view>",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/observability/health",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/openapi.json",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/openapi.yaml",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/parser-export-csv",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/parser-export-excel",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/parser-results",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/post-run-node-report",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/post-run-node-report/mark",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/power-on",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/power-on-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/precheck-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/rack-grafana-live-charts",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/rack-locks",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/rack-locks/<rack>",
+  "methods": [
+   "DELETE",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/rack-log-content",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/rack-log-download",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/rack-uptime",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/reports/generated",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/reports/generated/<report_id>",
+  "methods": [
+   "DELETE",
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/reset-job-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/run-clusterkit-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-clusterkit-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/run-exemplar-llama-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-exemplar-sysinfo-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-exemplar-sysinfo-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/run-llama-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-llama-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/run-llmb-nccl-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-llmb-nccl-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/run-mnubergemm-stress-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-mnubergemm-stress-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/run-nccl-fullrack-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-nccl-fullrack-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/run-nemo-xrack-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-nemo-xrack-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/run-nvloom-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-nvloom-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/run-nvswitch-audit-stream",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-sysinfo",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-sysinfo-stream",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-validation",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-validation-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-validation-preset-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/run-validation-preset-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/run-validation-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/services-restart",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/services-restart-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/settings/job-environment",
+  "methods": [
+   "GET",
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/slurm-drain",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/slurm-job-log-path",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/slurm-job-stdout-content",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/slurm-job-stdout-download",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/slurm-sacct-recent",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/slurm-scancel",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/slurm-scontrol-show-job",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/slurm-sinfo-r",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/slurm-squeue",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/slurm-undrain",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/sn-llama-logs",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/tail-job-stdout-stream",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tail-log-stream",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/available",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/tools/download-containers",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/download-containers-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/tools/download-containers-stream",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/install-cuda-nccl-workspace",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/install-cuda-nccl-workspace-stream",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/install-dcgm-workspace",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/install-dcgm-workspace-stream",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/install-dgxc-benchmarking-workspace",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/install-dgxc-benchmarking-workspace-stream",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/install-hpcx-workspace",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/install-hpcx-workspace-stream",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/install-nvloom-workspace",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/install-nvloom-workspace-stream",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/launch-grafana-bright-prometheus",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/launch-grafana-bright-prometheus-stream",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/tools/workspace-toolchain-status",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/universal/inventory",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/universal/parse",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/universal/scan",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/validation-activities",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/validation-activities/<activity_id>",
+  "methods": [
+   "DELETE",
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/validation-activities/<activity_id>/corrective-actions",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/validation-activities/adopt",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/validation-activities/ledger",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/validation-presets",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/validation-presets/prepare",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/vault/nvftp-token",
+  "methods": [
+   "DELETE",
+   "GET",
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/workflow-runs",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/workflow-runs/<run_id>",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/workflow-runs/<run_id>/advance",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/workflow-runs/<run_id>/cancel",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/workflow-runs/<run_id>/output/<step_id>",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/workflows",
+  "methods": [
+   "GET",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/workflows/<workflow_id>",
+  "methods": [
+   "DELETE",
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/workflows/<workflow_id>/run",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/workflows/generate-mermaid",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/login",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/logout",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/spa/",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/spa/<path:path>",
+  "methods": [
+   "GET"
+  ]
+ }
+]
