@@ -96,6 +96,29 @@ if [ "$state" = "running" ] && [ -d "$T/backend" ]; then
   [ -z "$stale" ] && ok "no stale modules (container matches tree)" || { bad "stale modules — mount not active?"; note "$stale"; }
 fi
 
+# 3b. Every module in the tree exists in the container.
+#
+#     Check 3 compares only files the container already has, so a module the tree has and the
+#     container does not is invisible to it -- it reports "container matches tree" while the code
+#     is simply absent. This deployment mounts backend modules one file at a time, so a NEW module
+#     is missing until its mount is added, and the image predates it. When the importer is a lazy
+#     `import x` inside a try/except (the usual shape for an optional feature) the result is not a
+#     crash but silence: report_store.py went missing on 2026-08-12 and reports just did not save.
+if [ "$state" = "running" ] && [ -d "$T/backend" ]; then
+  present=$(docker exec "$CONTAINER" sh -c 'ls /app/backend/*.py 2>/dev/null | xargs -n1 basename' 2>/dev/null)
+  missing=""
+  for f in "$T"/backend/*.py; do
+    b=$(basename "$f")
+    printf '%s\n' "$present" | grep -qx "$b" || missing="$missing $b"
+  done
+  if [ -z "$missing" ]; then
+    ok "no missing modules (every tree module is in the container)"
+  else
+    bad "modules in the tree but NOT in the container — add a bind mount or rebuild the image"
+    note "$missing"
+  fi
+fi
+
 # 4. THE check. Fetch the page and confirm every asset it references resolves. A hashed bundle
 #    that has moved on leaves the HTML perfectly serveable and the product blank.
 html=$(curl -s --max-time 15 "${BASE}${PAGE}")
