@@ -92,7 +92,16 @@ export function TerminalGrid({ panes, layout, width, onChange, onSession }: Term
       className="nvis-terminal-grid"
       layout={effectiveLayout}
       width={width}
-      gridConfig={{ cols: GRID_COLS, rowHeight: ROW_HEIGHT, margin: [GRID_MARGIN, GRID_MARGIN] }}
+      // containerPadding defaults to `margin`, which inset the whole grid by 8px and left the
+      // first pane sitting right of the page's own content edge — visibly out of line with the
+      // heading and the toolbar above it. The gap *between* panes still comes from `margin`; this
+      // only removes the outer inset, so column 0 starts where the rest of the page starts.
+      gridConfig={{
+        cols: GRID_COLS,
+        rowHeight: ROW_HEIGHT,
+        margin: [GRID_MARGIN, GRID_MARGIN],
+        containerPadding: [0, 0],
+      }}
       dragConfig={{
         enabled: true,
         // Only the pane header drags. Without this the whole terminal is a drag surface and
