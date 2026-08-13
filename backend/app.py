@@ -19586,15 +19586,45 @@ class _TerminalSession:
                 self.subscribers.remove(q)
             self.ws_count -= 1
 
+    def _mark_dead(self, note: str) -> None:
+        """Flip to dead and tell every viewer why, exactly once."""
+        if not self.alive:
+            return
+        self.alive = False
+        _logger.info("WebSocket terminal: %s (%s): %s", self.target, self.session_id, note)
+        payload = f"\r\n\x1b[1;31m[{note}]\x1b[0m\r\n".encode()
+        with self.lock:
+            for q in self.subscribers:
+                q.put(payload)
+                q.put(None)
+
     def write(self, data: bytes) -> None:
-        if self.alive:
+        """Forward keystrokes to the shell. Never raises.
+
+        ``alive`` is flipped by the reader thread, so checking it is inherently racy: the child can
+        exit between the check and the write, and writing to a pty master whose child is gone raises
+        EIO. Unguarded, that exception escaped the websocket handler and closed the socket
+        abnormally -- the browser reported a bare "WebSocket error", so an operator who typed into a
+        shell that had already ended was told nothing about what happened. Reported as an ended
+        session instead, which is what it is.
+        """
+        if not self.alive:
+            return
+        try:
             os.write(self.master_fd, data)
+        except OSError as exc:
+            self._mark_dead(f"session ended: {exc.strerror or exc}")
 
     def resize(self, cols: int, rows: int) -> None:
-        if self.alive:
+        """Apply a new window size. Never raises — xterm resizes on every pane drag."""
+        if not self.alive:
+            return
+        try:
             winsize = struct.pack("HHHH", rows, cols, 0, 0)
             fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, winsize)
             os.kill(self.proc.pid, signal.SIGWINCH)
+        except (OSError, ProcessLookupError) as exc:
+            self._mark_dead(f"session ended: {exc.strerror or exc}")
 
     def force_redraw(self) -> None:
         """Send SIGWINCH to the process group to trigger a full screen redraw."""
