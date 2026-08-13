@@ -142,10 +142,11 @@ export function TerminalPane({ spec, onClose, onSession }: TerminalPaneProps) {
         </Tooltip>
       </Box>
 
-      {/* The terminal body. `minHeight: 0` lets it shrink inside the flex column, and the extra
-          bottom padding absorbs the partial row FitAddon leaves when the available height is not
-          an exact multiple of the line height — without it the last line, which is the prompt,
-          renders clipped against the pane border. */}
+      {/* The terminal body. `minHeight: 0` lets it shrink inside the flex column.
+          The bottom padding is deliberately the largest: it has to exceed the partial row FitAddon
+          leaves when the available height is not an exact multiple of the line height, or the last
+          line — which is the prompt, the line you are actually looking at — sits flush against the
+          pane border with no clearance. */}
       <Box
         ref={containerRef}
         sx={{
@@ -153,7 +154,7 @@ export function TerminalPane({ spec, onClose, onSession }: TerminalPaneProps) {
           minHeight: 0,
           minWidth: 0,
           overflow: "hidden",
-          padding: "4px 4px 8px 8px",
+          padding: "6px 6px 14px 8px",
           boxSizing: "border-box",
         }}
       />
