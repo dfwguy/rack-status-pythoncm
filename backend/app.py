@@ -4926,9 +4926,15 @@ def _tools_destination_dir_for_status_probe(raw: str) -> Path:
     p = _rpath(s)
     is_dir = host_exec.is_dir(p)
     is_file = host_exec.is_file(p)
-    if is_file and p.suffix.lower() != ".sqsh":
+    # ``host_exec.is_file`` is the historical existence predicate, so a symlink
+    # to a directory makes both it and ``is_dir`` true. Treat that as the
+    # directory it resolves to instead of rejecting a perfectly valid shared-NFS
+    # container path.
+    if is_file and not is_dir and p.suffix.lower() != ".sqsh":
         raise ValueError("destination must be a directory or a NEMO .sqsh file path")
-    if (is_file and p.suffix.lower() == ".sqsh") or (not is_dir and p.suffix.lower() == ".sqsh"):
+    if (is_file and not is_dir and p.suffix.lower() == ".sqsh") or (
+        not is_dir and p.suffix.lower() == ".sqsh"
+    ):
         dest_dir = p.parent
     else:
         dest_dir = p
@@ -4937,9 +4943,10 @@ def _tools_destination_dir_for_status_probe(raw: str) -> Path:
 
 
 def _tools_sqsh_nonempty(path: Path) -> bool:
+    """Return ``test -s`` from the execution host, following shared-NFS symlinks."""
     try:
-        return path.is_file() and path.stat().st_size > 0
-    except OSError:
+        return host_exec.run_on_host(["test", "-s", str(path)], timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
@@ -16803,20 +16810,45 @@ def api_tools_download_containers_status():
 
 
 def _workspace_toolchain_status_payload(ws: Path, cuda_major: str) -> dict[str, object]:
-    """Probe CUDA toolkit, HPC-X unpack, NCCL binaries, and nvloom in-tree build under *ws*."""
+    """Probe CUDA, HPC-X, NCCL, and NVLoom files on the host that owns *ws*.
+
+    ``_resolve_tools_destination`` returns a textual ``PurePosixPath`` in SSH mode.
+    Never call ``Path.is_file`` on it: that either raises (``PurePosixPath``) or
+    inspects the container instead of the execution host. One bounded
+    ``host_exec.stat_dir`` call keeps this endpoint transport-correct and avoids a
+    separate SSH round trip for every candidate file.
+    """
     maj = cuda_major.strip() if cuda_major else "13"
-    cuda_nvcc = (ws / "cuda" / "bin" / "nvcc").is_file() or (ws / f"cuda{maj}" / "bin" / "nvcc").is_file()
     if maj == "12":
         hpcx_unpack = "hpcx-v2.22.1-gcc-doca_ofed-ubuntu24.04-cuda12-aarch64"
     else:
         hpcx_unpack = "hpcx-v2.25.1-gcc-doca_ofed-ubuntu24.04-cuda13-aarch64"
-    _hpx = ws / hpcx_unpack
-    hpcx_init = (_hpx / "hpcx-init.sh").is_file() or (_hpx / "hpcx-mt-init-ompi.sh").is_file()
-    nccl_perf = (ws / "nccl" / "bins" / "all_reduce_perf").is_file()
+
+    candidates = {
+        "cuda_nvcc": (ws / "cuda" / "bin" / "nvcc", ws / f"cuda{maj}" / "bin" / "nvcc"),
+        "hpcx_init": (
+            ws / hpcx_unpack / "hpcx-init.sh",
+            ws / hpcx_unpack / "hpcx-mt-init-ompi.sh",
+        ),
+        "nccl_all_reduce_perf": (ws / "nccl" / "bins" / "all_reduce_perf",),
+        "nvloom_cli": (ws / "nvloom" / "nvloom_cli",),
+        "cmake_nvloom_bundle": (ws / "cmake-3.28.1-linux-aarch64" / "bin" / "cmake",),
+    }
+    basenames = tuple(sorted({path.name for paths in candidates.values() for path in paths}))
+    found = {
+        os.path.normpath(path)
+        for path in host_exec.stat_dir(ws, patterns=basenames, maxdepth=5)
+    }
+
+    def present(key: str) -> bool:
+        return any(os.path.normpath(str(path)) in found for path in candidates[key])
+
+    cuda_nvcc = present("cuda_nvcc")
+    hpcx_init = present("hpcx_init")
+    nccl_perf = present("nccl_all_reduce_perf")
     all_ready = bool(cuda_nvcc and hpcx_init and nccl_perf)
-    _nvloom_dir = ws / "nvloom"
-    nvloom_cli = (_nvloom_dir / "nvloom_cli").is_file()
-    cmake_nvloom_bundle = (ws / "cmake-3.28.1-linux-aarch64" / "bin" / "cmake").is_file()
+    nvloom_cli = present("nvloom_cli")
+    cmake_nvloom_bundle = present("cmake_nvloom_bundle")
     return {
         "cuda_nvcc": cuda_nvcc,
         "hpcx_init": hpcx_init,
