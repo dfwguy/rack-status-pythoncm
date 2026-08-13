@@ -33,7 +33,6 @@ const MetricsView = lazy(() => import("./views/MetricsView").then((m) => ({ defa
 const LogsView = lazy(() => import("./views/LogsView").then((m) => ({ default: m.LogsView })));
 const EventsView = lazy(() => import("./views/EventsView").then((m) => ({ default: m.EventsView })));
 const InfrastructureView = lazy(() => import("./views/InfrastructureView").then((m) => ({ default: m.InfrastructureView })));
-const TerminalPlaceholderView = lazy(() => import("./views/TerminalPlaceholderView").then((m) => ({ default: m.TerminalPlaceholderView })));
 const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ default: m.SettingsView })));
 const ProjectsView = lazy(() => import("./views/ProjectsView").then((m) => ({ default: m.ProjectsView })));
 const PlatformCatalogView = lazy(() => import("./views/PlatformCatalogView").then((m) => ({ default: m.PlatformCatalogView })));
@@ -42,6 +41,8 @@ const ApiReferenceView = lazy(() => import("./views/ApiReferenceView").then((m) 
 import { ActiveClusterProvider } from "./context/ActiveClusterProvider";
 import { LoginPage } from "./pages/LoginPage";
 const TerminalView = lazy(() => import("./views/TerminalView"));
+const TerminalGridTabView = lazy(() => import("./views/TerminalGridTabView"));
+const TerminalWorkspaceView = lazy(() => import("./views/TerminalWorkspaceView"));
 import { useRackStatus } from "./hooks/useRackStatus";
 import type { RackStatusResponse } from "./types/api";
 import { RackCommandsStoreProvider } from "./context/RackCommandsStoreProvider";
@@ -344,7 +345,7 @@ function AppContent() {
           <Route path="/observability/events" element={<EventsView />} />
           <Route path="/tools/operations" element={<ToolsView logDir={logDir} />} />
           <Route path="/tools/workflows" element={<WorkflowsView rackData={data} />} />
-          <Route path="/tools/terminal" element={<TerminalPlaceholderView />} />
+          <Route path="/tools/terminal" element={<TerminalWorkspaceView logDir={logDir} />} />
           <Route path="/analytics/overview" element={<AnalyticsView logDir={logDir} rows={data?.rows ?? []} status={data} />} />
           <Route path="/analytics/reports" element={<ReportsView />} />
           <Route path="/platform/projects" element={<ProjectsView />} />
@@ -400,10 +401,22 @@ function AuthGate() {
 }
 
 export default function App() {
+  // Detached terminal tabs render outside the router and the app chrome: they own the whole
+  // viewport and take their state from the query string, so there is no shell to draw around them.
   if (window.location.pathname === "/terminal") {
     return (
       <ThemeProvider>
         <TerminalView />
+      </ThemeProvider>
+    );
+  }
+
+  if (window.location.pathname === "/terminal-grid") {
+    return (
+      <ThemeProvider>
+        <Suspense fallback={<ViewSuspenseFallback />}>
+          <TerminalGridTabView />
+        </Suspense>
       </ThemeProvider>
     );
   }
