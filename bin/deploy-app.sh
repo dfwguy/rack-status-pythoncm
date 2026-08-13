@@ -23,6 +23,7 @@
 # Usage:
 #   bin/deploy-app.sh <ssh-host> [deploy-path]
 #   bin/deploy-app.sh --dry-run nscale-tx-ova
+#   bin/deploy-app.sh --force nscale-tx-ova    # proceed despite a changed deployment
 #
 # Env:
 #   NVIS_DEPLOY_PATH   deployment tree on the remote  (default /opt/observability/nvis-rack-status-v3)
@@ -31,7 +32,14 @@
 set -uo pipefail
 
 DRY=""
-if [ "${1:-}" = "--dry-run" ]; then DRY="--dry-run"; shift; fi
+FORCE=""
+while true; do
+  case "${1:-}" in
+    --dry-run) DRY="--dry-run"; shift ;;
+    --force)   FORCE=1; shift ;;
+    *) break ;;
+  esac
+done
 
 SSH_HOST="${1:-}"
 DEPLOY_PATH="${2:-${NVIS_DEPLOY_PATH:-/opt/observability/nvis-rack-status-v3}}"
@@ -55,6 +63,59 @@ ref=$(grep -o 'index-[A-Za-z0-9_-]*\.js' "$HERE/static/spa/index.html" | head -1
 [ -n "$ref" ] || die "index.html references no bundle — the build did not finish."
 [ -f "$HERE/static/spa/assets/$ref" ] || die "index.html wants assets/$ref, which is not in this tree. Rebuild."
 say "local build is coherent (index.html -> $ref)"
+
+# ---------------------------------------------------------------------------
+# Has anyone changed the deployment since we last deployed to it?
+#
+# prod-drift.sh cannot answer this for the frontend: static/spa is gitignored, so a rebuilt bundle
+# is invisible to a tool that diffs tracked files against a git ref. It also exits non-zero on
+# untracked extras, of which this deployment permanently has thousands (a Node toolchain, .prebak
+# files), so it cannot serve as a hard gate either.
+#
+# So we record what we shipped, and compare against it. On 2026-08-13 the deployment's own stale
+# checkout was rebuilt in place at 12:50, reverting the frontend to a build predating the terminal
+# work: the UI showed a deleted placeholder screen and a route fell through to the dashboard. Every
+# consistency check passed, because host, container and served bundle all agreed with each other --
+# consistently wrong. This is the check that notices.
+MANIFEST=".nvis-deploy-manifest"
+remote_state=$(ssh -o BatchMode=yes "$SSH_HOST" "
+  cd $DEPLOY_PATH 2>/dev/null || exit 0
+  printf 'live=%s\n' \"\$(grep -o 'index-[A-Za-z0-9_-]*\.js' static/spa/index.html 2>/dev/null | head -1)\"
+  cat $MANIFEST 2>/dev/null
+" 2>/dev/null)
+
+live_ref=$(printf '%s' "$remote_state" | sed -n 's/^live=//p' | head -1)
+last_ref=$(printf '%s' "$remote_state" | sed -n 's/^bundle=//p' | head -1)
+last_when=$(printf '%s' "$remote_state" | sed -n 's/^deployed_at=//p' | head -1)
+
+if [ -n "$last_ref" ] && [ -n "$live_ref" ] && [ "$last_ref" != "$live_ref" ]; then
+  printf '\033[31mdeploy-app: the deployment changed since our last deploy.\033[0m\n' >&2
+  printf '  we last shipped : %s  (%s)\n' "$last_ref" "${last_when:-unknown}" >&2
+  printf '  now serving     : %s\n' "$live_ref" >&2
+  printf '  Someone rebuilt or redeployed it. Deploying now overwrites their change without ever\n' >&2
+  printf '  showing you what it was. Investigate first:\n' >&2
+  printf '    ssh %s "cd %s && git log --oneline -3 && git status --short | head"\n' "$SSH_HOST" "$DEPLOY_PATH" >&2
+  printf '  Re-run with --force once you know.\n' >&2
+  [ -n "$FORCE" ] || exit 1
+  say "forced past the manifest mismatch"
+elif [ -n "$last_ref" ]; then
+  say "deployment unchanged since our last deploy ($last_ref)"
+else
+  say "no deploy manifest yet - recording one after this deploy"
+fi
+
+# Advisory only: tracked-file drift. Reported, never gating, for the reason above.
+if [ -x "$HERE/bin/prod-drift.sh" ] && [ -z "$DRY" ]; then
+  changed=$(NVIS_DEPLOY_SSH="$SSH_HOST" NVIS_DEPLOY_PATH="$DEPLOY_PATH" \
+            "$HERE/bin/prod-drift.sh" 2>/dev/null \
+            | sed -n '/CHANGED on the deployment/,/present only on the deployment/p' \
+            | grep -vE 'CHANGED on the deployment|present only on the deployment' || true)
+  if [ -n "$changed" ]; then
+    printf '\033[33m  tracked files edited ON the deployment (this deploy overwrites them):\033[0m\n'
+    printf '%s\n' "$changed"
+    printf '  Harvest them first if they matter: bin/prod-drift.sh --fetch <dir>\n'
+  fi
+fi
 
 # Assets first, so the bundle exists before any page can reference it. A directory mount, so a
 # plain rsync is fine here; --delete keeps old hashes from accumulating forever.
@@ -93,6 +154,23 @@ if [ "$backend_changed" = 1 ]; then
   sleep 18
 else
   say "no restart needed (frontend-only deploy)"
+fi
+
+# Written only after a successful sync: a failed deploy must not claim to have shipped a bundle.
+if ssh -o BatchMode=yes "$SSH_HOST" "cat > $DEPLOY_PATH/$MANIFEST" <<MANIFEST_EOF
+bundle=$ref
+commit=$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)
+deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+deployed_by=${USER:-unknown}@$(hostname -s 2>/dev/null || echo unknown)
+MANIFEST_EOF
+then
+  say "recorded deploy manifest ($ref)"
+else
+  # Not fatal — the deploy itself succeeded. But say so, because a missing manifest silently
+  # disables the change-detection gate on the *next* deploy, which is the failure mode this whole
+  # mechanism exists to prevent.
+  printf '\033[33m  WARNING: could not write the deploy manifest; the next deploy cannot detect\n' >&2
+  printf '           changes made to this deployment in the meantime.\033[0m\n' >&2
 fi
 
 if [ "${NVIS_SKIP_VERIFY:-0}" = "1" ]; then

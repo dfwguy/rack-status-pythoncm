@@ -80,6 +80,25 @@ It refuses to deploy an incoherent tree (missing `index.html`, or one referencin
 is not in `static/spa/assets`), restarts only when a backend `.py` actually changed, and ends by
 running the gate below.
 
+**It also refuses when the deployment changed since our last deploy.** After each deploy it writes
+`.nvis-deploy-manifest` on the remote (bundle ref, commit, timestamp, who); before the next one it
+compares the live bundle against that record and stops if they differ, so you find out *before*
+overwriting somebody's change. `--force` proceeds anyway.
+
+Why this rather than `prod-drift.sh`: **`static/spa/` is gitignored**, so a rebuilt frontend is
+invisible to a tool that diffs tracked files against a git ref, and `prod-drift` also exits
+non-zero on untracked extras (this deployment permanently has a Node toolchain and `.prebak` files
+under it) so it cannot gate a deploy. On 2026-08-13 the OVA's own stale checkout was rebuilt in
+place, reverting the frontend to a build predating a whole feature: the UI showed a deleted
+placeholder screen and a route fell through to the dashboard. Every consistency check passed,
+because host, container and served bundle all agreed — consistently wrong. `deploy-app.sh` still
+reports tracked-file drift as a warning, since that part `prod-drift` does see.
+
+**The underlying hazard remains:** the deployment tree holds buildable source at an old commit, and
+we rsync built artifacts on top of it. Anything that runs a frontend build there (`start.sh`,
+`build-docker.sh`, a bare `npm run build`) regenerates `static/spa` from that old source and reverts
+the UI. The manifest detects it; advancing that checkout to the deployed commit would remove it.
+
 **`index.html` and the backend `.py` files must be synced with `rsync --inplace`.** Compose
 bind-mounts them as **single files**, which binds the container to that file's *inode*. A default
 `rsync` writes a temp file and renames it over the target, replacing the inode — so the host
