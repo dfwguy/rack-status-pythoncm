@@ -94,7 +94,7 @@ def test_confirmed_workflow_failure_comments_drains_and_records(tmp_path, monkey
     }
     result = NodeResult(
         "ink50-dh01-h08-29",
-        "NVIS_DEEP_AUDIT_JSON=" + json.dumps(payload) + "\n",
+        "NVIS_SLURM_JOB_ID=147892\nNVIS_DEEP_AUDIT_JSON=" + json.dumps(payload) + "\n",
         "",
         2,
     )
@@ -118,6 +118,8 @@ def test_confirmed_workflow_failure_comments_drains_and_records(tmp_path, monkey
     stored = node_issues.query(node="ink50-dh01-h08-29")
     assert stored["issues"][0]["code"] == "ib_counter"
     assert stored["issues"][0]["drained"] is True
+    assert stored["issues"][0]["scheduler_ref"] == "147892"
+    assert summary["nodes"][0]["scheduler_ref"] == "147892"
 
 
 def test_inconclusive_transport_error_never_mass_drains(tmp_path, monkeypatch):

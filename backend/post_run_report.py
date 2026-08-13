@@ -346,6 +346,37 @@ def build_report(
         if not isinstance(prior, dict) or str(audit.get("started_at") or "") > str(prior.get("started_at") or ""):
             rec[key] = dict(audit)
 
+        # Deep audits are first-class validation participations too.  They are
+        # launched by the workflow engine rather than validation_activities, so
+        # add their durable record here instead of leaving a successful Slurm
+        # allocation invisible in the node's run history.
+        run_id = str(audit.get("run_id") or "").strip()
+        if run_id and not any(
+            str(row.get("activity_id") or "") == run_id for row in rec["runs"]
+        ):
+            status = str(audit.get("status") or "inconclusive").lower()
+            run_state = str(audit.get("run_state") or status).upper()
+            attributed = status == "fail"
+            rec["runs"].append({
+                "node": rec["node"],
+                "rack": rec["rack"],
+                "job_id": str(audit.get("scheduler_ref") or ""),
+                "activity_id": run_id,
+                "tool": str(audit.get("workflow_id") or f"{kind}-deep-audit"),
+                "scope": "workflow",
+                "state": run_state,
+                "started_at": str(audit.get("started_at") or ""),
+                "ended_at": str(audit.get("updated_at") or ""),
+                "exit_code": "",
+                "failed_job": run_state in _TERMINAL_FAIL,
+                "attributed_failure": attributed,
+                "category": kind if attributed else "",
+                "reason": str(audit.get("reason") or "") if attributed else "",
+                "source": "deep-audit-workflow",
+                "output_run_id": run_id,
+                "output_step_id": "audit",
+            })
+
     rows: list[dict[str, Any]] = []
     for rec in by_node.values():
         runs = sorted(rec.pop("runs"), key=lambda row: str(row.get("started_at") or ""), reverse=True)

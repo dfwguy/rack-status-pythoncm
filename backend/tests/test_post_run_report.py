@@ -57,6 +57,35 @@ def test_repeat_flag_requires_three_distinct_runs():
     assert report["nodes"][0]["distinct_failure_runs"] == 3
 
 
+def test_deep_audit_is_visible_as_a_job_participation_with_output_linkage():
+    node = "ink50-dh01-d01-32"
+    report = post_run_report.build_report(
+        events=[],
+        inventory=[{"node": node, "state": "idle", "reason": ""}],
+        findings=[],
+        audit_results=[{
+            "node": node,
+            "rack": "ink50-dh01-d01",
+            "kind": "hardware",
+            "workflow_id": "hardware-deep-audit",
+            "run_id": "ae74eb2d-d38e-4a38-b6e3-0f1dfb474e1e",
+            "run_state": "completed",
+            "scheduler_ref": "147892",
+            "status": "pass",
+            "started_at": "2026-08-13T19:17:24Z",
+            "updated_at": "2026-08-13T19:17:27Z",
+        }],
+    )
+
+    row = report["nodes"][0]
+    assert row["participation_count"] == 1
+    assert row["hardware_status"]["scheduler_ref"] == "147892"
+    assert row["runs"][0]["job_id"] == "147892"
+    assert row["runs"][0]["activity_id"].startswith("ae74eb2d")
+    assert row["runs"][0]["output_run_id"].startswith("ae74eb2d")
+    assert row["runs"][0]["output_step_id"] == "audit"
+
+
 def test_merge_preserves_exact_participation_after_accounting_refresh(monkeypatch, tmp_path):
     monkeypatch.setattr(post_run_report, "HISTORY_FILE", tmp_path / "post_run.json")
     event = {

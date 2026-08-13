@@ -19508,6 +19508,8 @@ def _post_run_audits() -> list[dict]:
                 out.append({
                     **node_result,
                     "kind": kind,
+                    "workflow_id": str(run.get("workflow_id") or ""),
+                    "run_state": str(run.get("state") or ""),
                     "rack": rack or post_run_report.rack_for_node(
                         str(node_result.get("node") or "")
                     ),

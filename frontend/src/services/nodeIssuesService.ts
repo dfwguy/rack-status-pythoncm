@@ -46,6 +46,24 @@ export async function fetchDeepAudits(params: { rack: string; kind: "hardware" |
   return Array.isArray(data.runs) ? data.runs : [];
 }
 
+export async function fetchDeepAudit(runId: string): Promise<DeepAuditRun> {
+  const res = await fetch(`/api/deep-audits/${encodeURIComponent(runId)}`, {
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  const data = await jsonOrError<{ ok: boolean; run: DeepAuditRun }>(res);
+  return data.run;
+}
+
+export async function fetchDeepAuditOutput(runId: string, stepId = "audit"): Promise<string> {
+  const res = await fetch(
+    `/api/workflow-runs/${encodeURIComponent(runId)}/output/${encodeURIComponent(stepId)}`,
+    { credentials: "same-origin", cache: "no-store" },
+  );
+  const data = await jsonOrError<{ ok: boolean; output: string }>(res);
+  return typeof data.output === "string" ? data.output : "";
+}
+
 export async function fetchPostRunNodeReport(params: { rack?: string; node?: string; refresh?: boolean } = {}): Promise<PostRunNodeReportResponse> {
   const query = new URLSearchParams();
   if (params.rack) query.set("rack", params.rack);

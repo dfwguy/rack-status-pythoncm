@@ -246,8 +246,10 @@ class TestMermaidGeneration:
 def test_slurm_fanout_maps_labeled_results_back_to_exact_nodes(monkeypatch):
     captured = {}
     output = (
+        "0: __NVIS_JOB__ink50-dh01-j21-11|147892\n"
         '0: __NVIS_NODE__ink50-dh01-j21-11|NVIS_DEEP_AUDIT_JSON={"status":"pass"}\n'
         "0: __NVIS_RC__ink50-dh01-j21-11|0\n"
+        "1: __NVIS_JOB__ink50-dh01-j21-12|147892\n"
         '1: __NVIS_NODE__ink50-dh01-j21-12|NVIS_DEEP_AUDIT_JSON={"status":"fail"}\n'
         "1: __NVIS_RC__ink50-dh01-j21-12|2\n"
     )
@@ -276,6 +278,8 @@ def test_slurm_fanout_maps_labeled_results_back_to_exact_nodes(monkeypatch):
         ("ink50-dh01-j21-12", 2),
     ]
     assert "status\":\"fail" in rows[1].stdout
+    assert rows[0].stdout.startswith("NVIS_SLURM_JOB_ID=147892\n")
+    assert workflow_engine._audit_scheduler_ref(rows[1].stdout) == "147892"
     assert "--kill-on-bad-exit=0" in captured["cmd"]
     assert "--immediate=60" in captured["cmd"]
     assert "--gpus-per-node=4" in captured["cmd"]
@@ -305,6 +309,7 @@ def test_slurm_fanout_preflight_isolates_one_drained_node_from_healthy_peers(mon
             )
         captured["cmd"] = cmd
         output = (
+            "0: __NVIS_JOB__ink50-dh01-d01-12|147893\n"
             '0: __NVIS_NODE__ink50-dh01-d01-12|NVIS_DEEP_AUDIT_JSON={"status":"pass"}\n'
             "0: __NVIS_RC__ink50-dh01-d01-12|0\n"
         )
@@ -326,6 +331,7 @@ def test_slurm_fanout_preflight_isolates_one_drained_node_from_healthy_peers(mon
     assert blocked["codes"] == ["slurm_node_unavailable"]
     assert "drained" in blocked["reason"]
     assert rows[1].returncode == 0
+    assert workflow_engine._audit_scheduler_ref(rows[1].stdout) == "147893"
     assert "--nodes 1" in captured["cmd"]
     assert "--nodelist ink50-dh01-d01-12" in captured["cmd"]
     assert "ink50-dh01-d01-11" not in captured["cmd"]

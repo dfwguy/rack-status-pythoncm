@@ -31,6 +31,8 @@ import {
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import {
+  fetchDeepAudit,
+  fetchDeepAuditOutput,
   fetchPostRunNodeReport,
   markPostRunNode,
   startDeepAudit,
@@ -38,6 +40,9 @@ import {
 import type { PostRunAuditStatus, PostRunNode, PostRunNodeReportResponse } from "../types/api";
 
 type Section = "history" | "hardware" | "network";
+type ActiveAudit = { runId: string; kind: "hardware" | "network"; node: string };
+
+const TERMINAL_AUDIT_STATES = new Set(["completed", "failed", "cancelled"]);
 
 const CATEGORY_OPTIONS = [
   "validation",
@@ -78,15 +83,16 @@ function punchColor(node: PostRunNode): string {
   return "var(--surface-color-raised, rgba(127,127,127,.08))";
 }
 
-function AuditCell({ audit }: { audit: PostRunAuditStatus | null }) {
+function AuditCell({ audit, onOutput }: { audit: PostRunAuditStatus | null; onOutput?: (audit: PostRunAuditStatus) => void }) {
   if (!audit) return <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>Not run</Text>;
   return (
     <Flex direction="column" gap="1">
       <Tag color={stateColor(audit.status)} kind="solid" readOnly density="compact">{audit.status}</Tag>
       <Text kind="body/regular/sm">{audit.reason || audit.warnings?.join("; ") || "Healthy"}</Text>
       <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-        {audit.run_id.slice(0, 8)} · {formatWhen(audit.started_at)}
+        Job {audit.scheduler_ref || "—"} · {audit.run_id.slice(0, 8)} · {formatWhen(audit.started_at)}
       </Text>
+      {onOutput ? <Button kind="secondary" size="small" onClick={() => onOutput(audit)}>Full output</Button> : null}
     </Flex>
   );
 }
@@ -98,19 +104,27 @@ export function PostRunNodeReportView() {
   const [section, setSection] = useState<Section>("history");
   const [rack, setRack] = useState("all");
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<PostRunNode | null>(null);
+  const [selectedSnapshot, setSelected] = useState<PostRunNode | null>(null);
   const [category, setCategory] = useState("validation");
   const [reason, setReason] = useState("");
   const [drain, setDrain] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [activeAudit, setActiveAudit] = useState<ActiveAudit | null>(null);
+  const [outputTitle, setOutputTitle] = useState("");
+  const [outputText, setOutputText] = useState("");
+  const [outputOpen, setOutputOpen] = useState(false);
+  const [outputLoading, setOutputLoading] = useState(false);
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
     setError("");
     try {
-      setData(await fetchPostRunNodeReport({ refresh }));
+      const next = await fetchPostRunNodeReport({ refresh });
+      setData(next);
+      return next;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -120,7 +134,46 @@ export function PostRunNodeReportView() {
     void load(false);
   }, [load]);
 
+  useEffect(() => {
+    if (!activeAudit) return;
+    let cancelled = false;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const run = await fetchDeepAudit(activeAudit.runId);
+        if (cancelled) return;
+        if (TERMINAL_AUDIT_STATES.has(run.state)) {
+          const report = await load(true);
+          if (cancelled) return;
+          const exactRunVisible = report?.nodes.some((row) =>
+            row.node === activeAudit.node && (
+              row.hardware_status?.run_id === activeAudit.runId
+              || row.network_status?.run_id === activeAudit.runId
+              || row.runs.some((item) => item.activity_id === activeAudit.runId)
+            ),
+          );
+          if (exactRunVisible) {
+            setActiveAudit(null);
+            return;
+          }
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      }
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 1000);
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeAudit, load]);
+
   const racks = useMemo(() => (data?.racks || []).map((row) => row.rack), [data]);
+  const selected = useMemo(() => {
+    if (!selectedSnapshot) return null;
+    return data?.nodes.find((row) => row.node === selectedSnapshot.node) || selectedSnapshot;
+  }, [data, selectedSnapshot]);
   const filteredRacks = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return (data?.racks || [])
@@ -145,18 +198,37 @@ export function PostRunNodeReportView() {
     if (!window.confirm(`Run the ${label} deep audit on ${selected.node}? Confirmed failures are automatically drained with the exact finding.`)) return;
     setSaving(true);
     try {
-      await startDeepAudit({
+      const runId = await startDeepAudit({
         workflowId: kind === "hardware" ? "hardware-deep-audit" : "nvlink-network-deep-audit",
         rack: selected.rack,
         target: selected.node,
       });
-      await load(true);
+      setActiveAudit({ runId, kind, node: selected.node });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
   };
+
+  const openWorkflowOutput = async (runId: string, title: string, stepId = "audit") => {
+    setOutputTitle(title);
+    setOutputText("");
+    setOutputOpen(true);
+    setOutputLoading(true);
+    try {
+      setOutputText(await fetchDeepAuditOutput(runId, stepId));
+    } catch (e) {
+      setOutputText(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOutputLoading(false);
+    }
+  };
+
+  const openAuditOutput = (audit: PostRunAuditStatus) => openWorkflowOutput(
+    audit.run_id,
+    `${audit.kind} audit ${audit.run_id.slice(0, 8)} · Job ${audit.scheduler_ref || "—"}`,
+  );
 
   const saveMark = async () => {
     if (!selected || !reason.trim()) return;
@@ -311,7 +383,7 @@ export function PostRunNodeReportView() {
         </TableContainer>
       )}
 
-      <Dialog open={Boolean(selected)} onClose={() => !saving && setSelected(null)} maxWidth="xl" fullWidth>
+      <Dialog open={Boolean(selected) && !outputOpen} onClose={() => !saving && setSelected(null)} maxWidth="xl" fullWidth>
         {selected ? (
           <>
             <DialogTitle>
@@ -339,14 +411,20 @@ export function PostRunNodeReportView() {
                   </Button>
                 </Flex>
 
+                {activeAudit?.node === selected.node ? (
+                  <Banner status="info" kind="inline">
+                    Running {activeAudit.kind} audit {activeAudit.runId.slice(0, 8)}. This view will refresh automatically when the Slurm job finishes.
+                  </Banner>
+                ) : null}
+
                 <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
                   <Paper variant="outlined" sx={{ p: 2 }}>
                     <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 8 }}>Latest hardware report</Text>
-                    <AuditCell audit={selected.hardware_status} />
+                    <AuditCell audit={selected.hardware_status} onOutput={(audit) => void openAuditOutput(audit)} />
                   </Paper>
                   <Paper variant="outlined" sx={{ p: 2 }}>
                     <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 8 }}>Latest network report</Text>
-                    <AuditCell audit={selected.network_status} />
+                    <AuditCell audit={selected.network_status} onOutput={(audit) => void openAuditOutput(audit)} />
                   </Paper>
                 </Box>
 
@@ -356,7 +434,7 @@ export function PostRunNodeReportView() {
                   </Text>
                   <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 340 }}>
                     <Table size="small" stickyHeader>
-                      <TableHead><TableRow><TableCell>Job ID</TableCell><TableCell>Validation</TableCell><TableCell>State</TableCell><TableCell>Attribution</TableCell><TableCell>When</TableCell></TableRow></TableHead>
+                      <TableHead><TableRow><TableCell>Job ID</TableCell><TableCell>Validation</TableCell><TableCell>State</TableCell><TableCell>Attribution</TableCell><TableCell>When</TableCell><TableCell>Output</TableCell></TableRow></TableHead>
                       <TableBody>
                         {selected.runs.map((run) => (
                           <TableRow key={`${run.job_id}-${run.activity_id}`} hover>
@@ -369,6 +447,21 @@ export function PostRunNodeReportView() {
                               ) : run.failed_job ? "Job failed; node not implicated" : "No node finding"}
                             </TableCell>
                             <TableCell>{formatWhen(run.started_at)}</TableCell>
+                            <TableCell>
+                              {run.output_run_id ? (
+                                <Button
+                                  kind="secondary"
+                                  size="small"
+                                  onClick={() => void openWorkflowOutput(
+                                    run.output_run_id || "",
+                                    `${run.tool} ${run.activity_id.slice(0, 8)} · Job ${run.job_id || "—"}`,
+                                    run.output_step_id || "audit",
+                                  )}
+                                >
+                                  Full output
+                                </Button>
+                              ) : "—"}
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -412,6 +505,18 @@ export function PostRunNodeReportView() {
             <DialogActions><Button kind="secondary" onClick={() => setSelected(null)} disabled={saving}>Close</Button></DialogActions>
           </>
         ) : null}
+      </Dialog>
+      <Dialog open={outputOpen} onClose={() => setOutputOpen(false)} maxWidth="xl" fullWidth>
+        <DialogTitle>{outputTitle || "Deep audit output"}</DialogTitle>
+        <DialogContent dividers>
+          <Box
+            component="pre"
+            sx={{ m: 0, p: 2, bgcolor: "#101010", color: "#f2f2f2", overflow: "auto", maxHeight: "70vh", whiteSpace: "pre-wrap" }}
+          >
+            {outputLoading ? "Loading full output…" : outputText || "No output was recorded."}
+          </Box>
+        </DialogContent>
+        <DialogActions><Button kind="secondary" onClick={() => setOutputOpen(false)}>Close</Button></DialogActions>
       </Dialog>
     </Box>
   );

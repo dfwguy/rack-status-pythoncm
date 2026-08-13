@@ -900,6 +900,7 @@ def _execute_slurm_fanout(
     runner = f"""
 node=$(hostname -s)
 set +e
+printf '__NVIS_JOB__%s|%s\\n' "$node" "${{SLURM_JOB_ID:-}}"
 output=$({execute} 2>&1)
 rc=$?
 while IFS= read -r line; do
@@ -940,7 +941,12 @@ exit 0
         timeout=max(timeout + 120, 180),
     )
     by_node: dict[str, dict[str, Any]] = {
-        node.casefold(): {"node": node, "stdout": [], "rc": None}
+        node.casefold(): {
+            "node": node,
+            "stdout": [],
+            "rc": None,
+            "scheduler_ref": "",
+        }
         for node in eligible
     }
     for raw_line in (proc.stdout or "").splitlines():
@@ -960,6 +966,14 @@ exit 0
                     record["rc"] = int(value.strip())
                 except ValueError:
                     record["rc"] = 255
+        elif line.startswith("__NVIS_JOB__"):
+            tagged = line[len("__NVIS_JOB__"):]
+            host, separator, value = tagged.partition("|")
+            record = by_node.get(host.strip().casefold())
+            if separator and record is not None:
+                scheduler_ref = value.strip().split(".", 1)[0]
+                if scheduler_ref.isdigit():
+                    record["scheduler_ref"] = scheduler_ref
     global_error = (proc.stderr or "").strip()
     if proc.returncode and not global_error:
         global_error = (
@@ -970,6 +984,9 @@ exit 0
         record = by_node[node.casefold()]
         rc = record["rc"] if isinstance(record.get("rc"), int) else 255
         stdout = "\n".join(record["stdout"])
+        scheduler_ref = str(record.get("scheduler_ref") or "")
+        if scheduler_ref:
+            stdout = f"NVIS_SLURM_JOB_ID={scheduler_ref}\n" + stdout
         if stdout:
             stdout += "\n"
         stderr = global_error if rc == 255 and not stdout else ""
@@ -1106,6 +1123,7 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
 
 
 _DEEP_AUDIT_PREFIX = "NVIS_DEEP_AUDIT_JSON="
+_SLURM_JOB_PREFIX = "NVIS_SLURM_JOB_ID="
 
 
 def _audit_payload(stdout: str) -> dict[str, Any] | None:
@@ -1119,6 +1137,17 @@ def _audit_payload(stdout: str) -> dict[str, Any] | None:
             return None
         return payload if isinstance(payload, dict) else None
     return None
+
+
+def _audit_scheduler_ref(stdout: str) -> str:
+    """Return the Slurm allocation id emitted by a scheduler fan-out runner."""
+    for line in (stdout or "").splitlines():
+        if not line.startswith(_SLURM_JOB_PREFIX):
+            continue
+        value = line[len(_SLURM_JOB_PREFIX):].strip().split(".", 1)[0]
+        if value.isdigit():
+            return value
+    return ""
 
 
 def _confirmed_scheduler_failure_payload(node: str, stderr: str) -> dict[str, Any] | None:
@@ -1184,6 +1213,7 @@ def _apply_node_issue_policy(
         node = str(getattr(result, "node", "") or "").strip()
         stdout = str(getattr(result, "stdout", "") or "")
         stderr = str(getattr(result, "stderr", "") or "")
+        scheduler_ref = _audit_scheduler_ref(stdout)
         payload = _audit_payload(stdout)
         if payload is None:
             payload = _confirmed_scheduler_failure_payload(node, stderr)
@@ -1193,6 +1223,7 @@ def _apply_node_issue_policy(
                 "node": node,
                 "status": "inconclusive",
                 "reason": (stderr or "structured audit result missing")[:1000],
+                "scheduler_ref": scheduler_ref,
                 "drained": False,
             }
             summary["nodes"].append(row)
@@ -1234,6 +1265,7 @@ def _apply_node_issue_policy(
                 if isinstance(payload.get("metrics"), dict)
                 else {}
             ),
+            "scheduler_ref": scheduler_ref,
             "drained": False,
             "slurm_reason": "",
             "drain_result": "",
@@ -1278,6 +1310,7 @@ def _apply_node_issue_policy(
                     severity="failure",
                     source=str(run.get("workflow_id") or "deep-audit"),
                     validation_run_id=run_id,
+                    scheduler_ref=scheduler_ref,
                     evidence=json.dumps(payload, ensure_ascii=False, sort_keys=True),
                     drained=drain_ok,
                     slurm_reason=slurm_reason,
