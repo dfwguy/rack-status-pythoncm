@@ -142,11 +142,13 @@ export function TerminalPane({ spec, onClose, onSession }: TerminalPaneProps) {
         </Tooltip>
       </Box>
 
-      {/* The terminal body. `minHeight: 0` lets it shrink inside the flex column.
-          The bottom padding is deliberately the largest: it has to exceed the partial row FitAddon
-          leaves when the available height is not an exact multiple of the line height, or the last
-          line — which is the prompt, the line you are actually looking at — sits flush against the
-          pane border with no clearance. */}
+      {/* The terminal body; xterm mounts inside it. `minHeight: 0` lets it shrink in the flex column.
+          Padding here does survive into the shell's own sizing, though not because FitAddon handles
+          it: FitAddon measures this element's computed height and subtracts the padding of the
+          `.xterm` element, which has none. It works because a computed `height` resolves to the
+          CONTENT box, so the value it reads already excludes this padding and it lays out rows
+          inside the inset. Bottom is largest as it also swallows the partial row left over when the
+          height is not an exact multiple of the line height — that last line is the prompt. */}
       <Box
         ref={containerRef}
         sx={{
@@ -154,7 +156,7 @@ export function TerminalPane({ spec, onClose, onSession }: TerminalPaneProps) {
           minHeight: 0,
           minWidth: 0,
           overflow: "hidden",
-          padding: "6px 6px 14px 8px",
+          padding: "10px 12px 18px 12px",
           boxSizing: "border-box",
         }}
       />
