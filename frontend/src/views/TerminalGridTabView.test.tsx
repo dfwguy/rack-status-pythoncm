@@ -10,7 +10,10 @@ import TerminalGridTabView from "./TerminalGridTabView";
 import { encodeGrid } from "../components/terminal/detachState";
 
 const { useTerminalMock } = vi.hoisted(() => ({ useTerminalMock: vi.fn() }));
-vi.mock("../hooks/useTerminal", () => ({ useTerminal: useTerminalMock }));
+vi.mock("../hooks/useTerminal", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../hooks/useTerminal")>()),
+  useTerminal: useTerminalMock,
+}));
 
 const grid = {
   panes: [
