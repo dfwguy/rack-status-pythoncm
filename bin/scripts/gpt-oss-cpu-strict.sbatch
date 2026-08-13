@@ -13,7 +13,7 @@ set -euo pipefail
 : "${RUN_CONF_IMAGE:?}"
 : "${LLMB_EXPERIMENTS_ROOT:?}"
 : "${GPU_TYPE:?}"
-[[ "${GPU_TYPE,,}" == b300 ]] || { echo "GPT_OSS_FAIL GPU_TYPE must be b300" >&2; exit 2; }
+[[ "${GPU_TYPE,,}" == gb300 ]] || { echo "GPT_OSS_FAIL GPU_TYPE must be gb300" >&2; exit 2; }
 readonly NUM_PROMPTS="${NUM_PROMPTS:-100000}"
 readonly WORKLOAD="${LLMB_INSTALL}/workloads/microbenchmark_cpu_overhead"
 readonly MODEL="${WORKLOAD}/gpt-oss-120b"

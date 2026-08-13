@@ -655,6 +655,23 @@ def popen_on_host(
 # Interactive SSH argv  –  build argv for a PTY session to head node / a node
 # ---------------------------------------------------------------------------
 
+#: Timeouts applied to every hop of an interactive terminal session.
+#:
+#: An interactive shell has no deadline of its own, so without these a hop that never answers hangs
+#: forever with a blank terminal and no diagnosis — which is exactly how an unreachable compute tray
+#: presented on Nscale TX. `ConnectTimeout` bounds the TCP/auth phase; the keepalives detect a peer
+#: that accepted the connection and then stopped responding, so the session ends with ssh's own
+#: error on the PTY instead of silence.
+#:
+#: Deliberately not `BatchMode=yes`: a terminal is the one place where being prompted for a password
+#: is legitimate, and disabling that would break a valid way to reach a node.
+_INTERACTIVE_TIMEOUT_OPTS: tuple[str, ...] = (
+    "-o", "ConnectTimeout=15",
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=3",
+)
+
+
 def ssh_to_headnode_argv() -> list[str]:
     """Return an argv list to open an interactive SSH session to the head node.
 
@@ -684,6 +701,7 @@ def ssh_to_node_argv(node: str) -> list[str]:
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "LogLevel=ERROR",
+            *_INTERACTIVE_TIMEOUT_OPTS,
             "-p", ctrl.port or "22",
         ]
         if ctrl.key and os.path.isfile(ctrl.key):
@@ -694,6 +712,10 @@ def ssh_to_node_argv(node: str) -> list[str]:
             "ssh", "-tt",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
+            # The second hop needs its own timeouts. Without them an unreachable or wedged tray
+            # leaves the operator staring at an empty terminal indefinitely: the outer hop is
+            # healthy, so nothing times out and nothing is ever printed.
+            *_INTERACTIVE_TIMEOUT_OPTS,
             node,
         ])
         return argv
@@ -702,5 +724,6 @@ def ssh_to_node_argv(node: str) -> list[str]:
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "LogLevel=ERROR",
+        *_INTERACTIVE_TIMEOUT_OPTS,
         f"{ssh_user}@{node}",
     ]

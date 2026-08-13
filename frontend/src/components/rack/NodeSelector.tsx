@@ -11,7 +11,8 @@ import Link from "@mui/material/Link";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import { Tag, Text, Button } from "@nvidia/foundations-react-core";
-import { Terminal } from "lucide-react";
+import { Terminal, TrendingUp } from "lucide-react";
+import type { NodeIssueRollup } from "../../types/api";
 
 /** Build https URL for BMC / RedFish UI; bracket bare IPv6 literals only. */
 function redfishHttpsHref(host: string): string | null {
@@ -34,6 +35,8 @@ interface NodeSelectorProps {
   selected: Set<string>;
   onSelectionChange: (selected: Set<string>) => void;
   onOpenTerminal?: (nodeId: string) => void;
+  issueNodes?: Record<string, NodeIssueRollup>;
+  onOpenIssues?: (nodeId: string) => void;
 }
 
 function statusLabel(status: NodeInfo["status"]) {
@@ -75,7 +78,7 @@ function RedfishIpCell({ ip }: { ip?: string }) {
   );
 }
 
-export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTerminal }: NodeSelectorProps) {
+export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTerminal, issueNodes, onOpenIssues }: NodeSelectorProps) {
   const allSelected = nodes.length > 0 && selected.size === nodes.length;
   const someSelected = selected.size > 0 && selected.size < nodes.length;
 
@@ -135,6 +138,7 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
               </TableCell>
               <TableCell>Node</TableCell>
               <TableCell>Status</TableCell>
+              {(issueNodes || onOpenIssues) && <TableCell>Issue trend</TableCell>}
               <TableCell>RedFish IP</TableCell>
               {onOpenTerminal && <TableCell align="center">Actions</TableCell>}
             </TableRow>
@@ -165,6 +169,24 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
                     {statusLabel(node.status)}
                   </Tag>
                 </TableCell>
+                {(issueNodes || onOpenIssues) && (
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    {issueNodes?.[node.id] && (
+                      <Button
+                        kind="secondary"
+                        size="small"
+                        onClick={() => onOpenIssues?.(node.id)}
+                        title={`Open all issue history for ${node.id}`}
+                      >
+                        <TrendingUp size={14} />
+                        ▲{issueNodes[node.id].issue_count}
+                        {issueNodes[node.id].drained ? " ✖" : ""}
+                        {issueNodes[node.id].nccl ? " ⚑" : ""}
+                        {issueNodes[node.id].maintenance ? " ▦" : ""}
+                      </Button>
+                    )}
+                  </TableCell>
+                )}
                 <TableCell onClick={(e) => e.stopPropagation()}>
                   <RedfishIpCell ip={node.ip} />
                 </TableCell>
@@ -187,6 +209,4 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
     </Box>
   );
 }
-
-
 

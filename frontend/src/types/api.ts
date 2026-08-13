@@ -105,6 +105,159 @@ export interface ValidationActivitiesResponse {
   error?: string;
 }
 
+export interface NodeIssue {
+  issue_id: string;
+  node: string;
+  rack: string;
+  category: "hardware" | "network" | string;
+  code: string;
+  reason: string;
+  severity: string;
+  source: string;
+  validation_run_id: string;
+  scheduler_ref: string;
+  evidence: string;
+  drained: boolean;
+  slurm_reason: string;
+  drain_result: string;
+  operator: string;
+  created_at: string;
+}
+
+export interface NodeIssueRollup {
+  node: string;
+  rack: string;
+  issue_count: number;
+  imported_count: number;
+  local_count: number;
+  drained: boolean;
+  nccl: boolean;
+  maintenance: boolean;
+  latest: NodeIssue | null;
+}
+
+export interface NodeIssuesResponse {
+  ok: boolean;
+  error?: string;
+  sync_error?: string;
+  updated_at: string;
+  punchcard_synced_at: string;
+  summary: {
+    nodes_tracked: number;
+    nodes_with_issues: number;
+    currently_flagged_drained: number;
+    repeat_nodes: number;
+    local_findings: number;
+    hardware_findings: number;
+    network_findings: number;
+  };
+  nodes: Record<string, NodeIssueRollup>;
+  issues: NodeIssue[];
+}
+
+export interface DeepAuditNodeResult {
+  node: string;
+  status: "pass" | "warning" | "fail" | "inconclusive";
+  codes?: string[];
+  reason?: string;
+  warnings?: string[];
+  metrics?: Record<string, unknown>;
+  drained: boolean;
+  slurm_reason?: string;
+  drain_result?: string;
+}
+
+export interface DeepAuditSummary {
+  kind: string;
+  total: number;
+  passed: number;
+  warning: number;
+  failed: number;
+  inconclusive: number;
+  drained: number;
+  drain_failed: number;
+  nodes: DeepAuditNodeResult[];
+}
+
+export interface DeepAuditRun {
+  run_id: string;
+  workflow_id: string;
+  workflow_name: string;
+  state: string;
+  rack: string;
+  target: string;
+  started_at: string;
+  updated_at: string;
+  audits: Record<string, DeepAuditSummary>;
+  error?: string;
+}
+
+export interface PostRunEvent {
+  node: string;
+  rack: string;
+  job_id: string;
+  activity_id: string;
+  tool: string;
+  scope: string;
+  state: string;
+  started_at: string;
+  ended_at: string;
+  exit_code: string;
+  failed_job: boolean;
+  attributed_failure: boolean;
+  category: string;
+  reason: string;
+  source: string;
+}
+
+export interface PostRunAuditStatus extends DeepAuditNodeResult {
+  kind: "hardware" | "network" | string;
+  rack: string;
+  run_id: string;
+  started_at: string;
+  updated_at: string;
+}
+
+export interface PostRunNode {
+  node: string;
+  rack: string;
+  slurm_state: string;
+  slurm_reason: string;
+  participation_count: number;
+  failed_job_participations: number;
+  failure_count: number;
+  distinct_failure_runs: number;
+  flagged: boolean;
+  trend: "up" | "down" | "flat" | "new";
+  last_run_at: string;
+  last_failure_at: string;
+  runs: PostRunEvent[];
+  findings: NodeIssue[];
+  hardware_status: PostRunAuditStatus | null;
+  network_status: PostRunAuditStatus | null;
+}
+
+export interface PostRunNodeReportResponse {
+  ok: boolean;
+  generated_at: string;
+  history_path: string;
+  summary: {
+    nodes: number;
+    participations: number;
+    attributed_failures: number;
+    flagged_nodes: number;
+    drained_nodes: number;
+  };
+  racks: Array<{ rack: string; nodes: PostRunNode[] }>;
+  nodes: PostRunNode[];
+  refresh: {
+    activities: number;
+    merge: Record<string, unknown>;
+    accounting_error: string;
+    inventory_error: string;
+  };
+}
+
 /** A launched multi-rack job from the durable state table (GET /api/multirack-jobs). */
 export interface MultirackJob {
   job_id: string;

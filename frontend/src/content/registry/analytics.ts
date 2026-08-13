@@ -37,6 +37,35 @@ export const analyticsContent: HelpContent[] = [
       "The Analytics page has a Rack Level tab (cluster-wide aggregate charts: validation pass rates, NCCL/NEMO trends, cross-rack comparisons) and a Node Level tab (per-node heatmap grouped by rack; the fill is a selectable view — node up/down, test completion, or a bring-up metric like NCCL busbw — and the border always shows up/down). Test completion counts a test as done once it has a verdict, pass or fail, so it answers 'has this node been tested' rather than 'did it pass'. Two layouts: Compact tiles racks eight across as tray blocks with a per-rack good/warn/bad tally (the whole floor on one screen), Linear gives each rack a row and each node a load gauge. Metric views auto-scale to the fleet's observed range. Download image renders the heatmap to a light-background PNG/JPEG with title, legend, cluster and timestamp baked in, drawn on a canvas so it does not depend on the UI theme. A Download report button on either tab returns the daily node-validation report as JSON validated against the vendored report schema; fields bring-up cannot measure (firmware versions, test plan reference) are marked TBD for the operator to edit.",
   },
   {
+    id: "postRunNodeReport",
+    kind: "view",
+    title: "Post Run Node Report",
+    domain: "Analytics & Benchmarks",
+    routePath: "/analytics/post-run-nodes",
+    summary: "Floor-style node validation participation, failure trends, deep audits, and Slurm status.",
+    description:
+      "The Post Run Node Report is built from Rack Status validation activities joined to exact Slurm allocations. It counts every validation a node participated in, attributes failures only when evidence names that node, flags repeat failures across distinct runs, and preserves the snapshot after Slurm accounting ages out. Hardware and NVLink/network reports are available as persistent sections. Selecting a node shows Job IDs, categories, findings, current Slurm reason, and controls for immediate deep audits or an explicit operator mark/drain.",
+    features: [
+      "Punchcard-style floor view grouped by rack, with run and attributed-failure counts per node.",
+      "Increasing, decreasing, flat, and new failure trends; a repeat flag requires at least three findings across three distinct runs.",
+      "Node drill-down with every validation participation, Job ID, scheduler state, evidence category, and finding.",
+      "Current Slurm state and reason shown beside validation history.",
+      "Persistent Node hardware status and Node network status report sections.",
+      "One-node hardware or NVLink/network deep audits can be launched from the investigation dialog.",
+      "Operator findings can be recorded locally or explicitly attached to a Slurm drain after confirmation.",
+    ],
+    howTo: [
+      { task: "Investigate a repeat offender", steps: ["Open Analytics & Benchmarks > Post Run Node Report.", "Look for a red flag or increasing trend arrow.", "Select the node.", "Review the Job IDs, attributed failures, and current Slurm comment.", "Launch the relevant hardware or NVLink/network audit and watch its report section refresh."] },
+      { task: "Record and drain a confirmed node issue", steps: ["Open the node from the floor view.", "Choose an evidence category and enter the exact reason.", "Enable the Slurm drain option.", "Confirm the exact node; Rack Status records the finding and applies the generated Slurm reason."] },
+    ],
+    tips: ["A failed multi-node job is visible as participation but does not count against every tray. A node failure requires explicit evidence, a single-node job, or a structured audit/operator finding."],
+    related: ["analytics", "reports", "nodes", "singleRack"],
+    keywords: ["post run", "node history", "punchcard", "trend", "repeat failure", "slurm reason", "hardware audit", "network audit", "nvlink", "nccl", "job id"],
+    aria: { label: "Post Run Node Report page", description: "Floor-style validation participation and evidence-attributed node failure history with deep audit reports." },
+    aiContext:
+      "This page is the first-class post-run node history, not a Google punchcard import. It joins durable validation activities to exact Slurm allocations, snapshots node membership, counts attributed failures only with node-specific evidence, flags repeat offenders across distinct runs, and shows current Slurm state/reason. It has persistent hardware and NVLink/network report sections. A selected node can launch either deep audit or receive an operator mark; draining requires an explicit confirmation.",
+  },
+  {
     id: "reports",
     kind: "view",
     title: "Reports",

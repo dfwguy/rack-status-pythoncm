@@ -29,6 +29,7 @@ import { Line, Bar } from "react-chartjs-2";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { NodeHeatmap } from "../components/analytics/NodeHeatmap";
+import { IssueHealthOverview } from "../components/analytics/IssueHealthOverview";
 import { type NodeInfo } from "../components/rack/NodeSelector";
 import { parseNodesFromRack } from "../lib/parseNodesFromRack";
 import { generateNodeReport, getBringupFleet } from "../services/bringupService";
@@ -714,6 +715,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
 
       {tab === RACK_TAB && (
       <>
+      <IssueHealthOverview />
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
         <Text kind="body/regular/md" style={{ display: "block", marginBottom: 12, color: "var(--text-color-secondary)" }}>
           Reads every relevant log once with{" "}

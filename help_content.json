@@ -1,6 +1,6 @@
 {
   "generated_by": "frontend/scripts/gen-help-content.mjs",
-  "count": 76,
+  "count": 77,
   "entries": [
     {
       "id": "dashboard",
@@ -1941,18 +1941,29 @@
       "title": "Terminal",
       "domain": "Tools",
       "routePath": "/tools/terminal",
-      "summary": "Web terminal preview that links to the full terminal page.",
-      "description": "The Terminal page is a preview that links to the standalone full-page web terminal (served at /terminal). Use it to open an interactive shell session to the head node or a selected node.",
+      "summary": "A grid of live head-node and compute shells, side by side in one workspace.",
+      "description": "The Terminal page is a workspace of live shells. Add terminal opens a searchable picker of every compute node in the active cluster plus the head node; each one you add becomes a pane in a grid that grows from one full-width shell to two side by side, then two by two, and on from there. Panes are dragged by their header (the terminal body stays selectable) and resized from their corner, and the shell reflows to whatever size you give it. A single pane detaches to its own browser tab, or Detach grid moves the whole arrangement to a new tab at once. Detaching hands over the running session rather than dialling a second one, so it is a move, not a duplicate. Your panes and their arrangement are remembered per cluster; the sessions themselves end with the page.",
       "features": [
-        "Preview/link to the full web terminal.",
-        "Interactive shell session."
+        "Searchable picker over every compute node in the active cluster, plus the head node.",
+        "Grid grows 1x1 to 2x1 to 2x2 as you add shells; drag by the header, resize from the corner.",
+        "Detach one pane, or the whole grid, into a browser tab — carrying the live session.",
+        "Pane list and layout are remembered per cluster across reloads."
       ],
       "howTo": [
         {
-          "task": "Open the web terminal",
+          "task": "Open shells on several nodes at once",
           "steps": [
             "Open Tools > Terminal.",
-            "Follow the link to open the full /terminal page."
+            "Click Add terminal and pick the head node, or search for a compute node by name or rack.",
+            "Repeat to add more; each new shell is placed beside or below the last.",
+            "Drag a pane by its header to rearrange, or its corner to resize."
+          ]
+        },
+        {
+          "task": "Move the terminals into their own window",
+          "steps": [
+            "Use Detach grid to move every open shell to a new browser tab.",
+            "Or use the detach icon on a single pane's header to move just that one."
           ]
         }
       ],
@@ -1965,13 +1976,18 @@
         "shell",
         "ssh",
         "console",
-        "preview"
+        "grid",
+        "multiple terminals",
+        "detach",
+        "head node",
+        "pdsh",
+        "cmsh"
       ],
       "aria": {
         "label": "Terminal page",
-        "description": "Preview that links to the standalone full-page web terminal."
+        "description": "A resizable grid of live head-node and compute shells."
       },
-      "aiContext": "The Terminal page is a preview/link to the standalone full-page web terminal (/terminal) for an interactive shell session."
+      "aiContext": "Tools > Terminal is a react-grid-layout workspace of live xterm.js shells over the dashboard's SSH path. Add terminal opens a picker listing compute nodes (derived from rack rows by parseNodesFromRack) plus the head node (target 'headnode', mode 'headnode'). Panes auto-place 1x1 -> 2x1 -> 2x2 and are draggable by header only so terminal text stays selectable. A pane detaches to /terminal?session=<id> and the whole grid to /terminal-grid?g=<base64url>, both carrying live session ids so shells are adopted rather than reopened. Layout persists per cluster in localStorage; sessions do not survive a reload."
     },
     {
       "id": "toolsLiveOutputDialog",
@@ -2457,8 +2473,8 @@
       "title": "Analytics",
       "domain": "Analytics & Benchmarks",
       "routePath": "/analytics/overview",
-      "summary": "Rack-level and node-level analytics, plus the downloadable daily report.",
-      "description": "The Analytics page has two tabs. Rack Level aggregates rack and benchmark data into cluster-wide charts and tables — validation pass rates, NCCL/NEMO benchmark trends, and comparisons across racks. Node Level shows a heatmap with one square per node, coloured by a selectable data view (node up/down, test completion, or any bring-up benchmark that produces a metric such as NCCL busbw), with each node's up/down state always drawn as the square's border. The Compact layout tiles racks eight across as blocks of trays so a whole floor fits on one screen; Linear gives each rack its own row and shows a load gauge per node. The heatmap can be downloaded as a PNG or JPEG image, and a Download report button on either tab produces the daily node-validation report as schema-validated JSON.",
+      "summary": "Rack-level and node-level analytics, plus the cluster and customer-schema reports.",
+      "description": "The Analytics page has two tabs. Rack Level aggregates rack and benchmark data into cluster-wide charts and tables — validation pass rates, NCCL/NEMO benchmark trends, and comparisons across racks. Node Level shows a heatmap with one square per node, coloured by a selectable data view (node up/down, test completion, or any bring-up benchmark that produces a metric such as NCCL busbw), with each node's up/down state always drawn as the square's border. The Compact layout tiles racks eight across as blocks of trays so a whole floor fits on one screen; Linear gives each rack its own row and shows a load gauge per node. The heatmap can be downloaded as a PNG or JPEG image. The Rack Level tab carries a report generator offering two reports: the Rack Status standard report (cluster details plus a row per node, as CSV, JSON, or a PDF with rack-level charts) and the Nscale TX JSON schema report (the customer's Consolidated Test Plan contract, schema-validated before download).",
       "features": [
         "Rack Level: cluster-wide aggregate charts, benchmark trends, cross-rack comparisons.",
         "Node Level: per-node heatmap grouped by rack, with a data-view selector.",
@@ -2467,7 +2483,7 @@
         "Up/down state shown as each cell's border on every view.",
         "Metric views scale against the fleet's observed range, stated in the legend.",
         "Download image: the heatmap as a report-ready PNG or JPEG with title, legend and timestamp.",
-        "Download report: daily node-validation JSON, validated against the report schema."
+        "Report generator (Rack Level tab): the Rack Status report as CSV/JSON/PDF, or the Nscale TX schema report as validated JSON. Both sweep every node for hardware and firmware identity, with a progress bar."
       ],
       "howTo": [
         {
@@ -2507,11 +2523,12 @@
           ]
         },
         {
-          "task": "Produce the daily report",
+          "task": "Produce a report",
           "steps": [
             "Open Analytics & Benchmarks > Analytics.",
-            "Click Download report.",
-            "Edit the TBD firmware and test-plan fields before sending it on."
+            "Stay on the Rack Level tab and find Generate a report.",
+            "Pick the report, then the format (CSV, JSON or PDF; the Nscale schema report is JSON only).",
+            "Click Generate & download and watch the per-node sweep progress."
           ]
         }
       ],
@@ -2530,8 +2547,11 @@
         "charts",
         "heatmap",
         "node level",
-        "daily report",
+        "report",
+        "csv report",
+        "pdf report",
         "json report",
+        "nscale schema",
         "test completion",
         "download image",
         "png",
@@ -2540,9 +2560,9 @@
       ],
       "aria": {
         "label": "Analytics page",
-        "description": "Rack-level and node-level analytics with a downloadable daily report."
+        "description": "Rack-level and node-level analytics with downloadable cluster reports."
       },
-      "aiContext": "The Analytics page has a Rack Level tab (cluster-wide aggregate charts: validation pass rates, NCCL/NEMO trends, cross-rack comparisons) and a Node Level tab (per-node heatmap grouped by rack; the fill is a selectable view — node up/down, test completion, or a bring-up metric like NCCL busbw — and the border always shows up/down). Test completion counts a test as done once it has a verdict, pass or fail, so it answers 'has this node been tested' rather than 'did it pass'. Two layouts: Compact tiles racks eight across as tray blocks with a per-rack good/warn/bad tally (the whole floor on one screen), Linear gives each rack a row and each node a load gauge. Metric views auto-scale to the fleet's observed range. Download image renders the heatmap to a light-background PNG/JPEG with title, legend, cluster and timestamp baked in, drawn on a canvas so it does not depend on the UI theme. A Download report button on either tab returns the daily node-validation report as JSON validated against the vendored report schema; fields bring-up cannot measure (firmware versions, test plan reference) are marked TBD for the operator to edit."
+      "aiContext": "The Analytics page has a Rack Level tab (cluster-wide aggregate charts: validation pass rates, NCCL/NEMO trends, cross-rack comparisons) and a Node Level tab (per-node heatmap grouped by rack; the fill is a selectable view — node up/down, test completion, or a bring-up metric like NCCL busbw — and the border always shows up/down). Test completion counts a test as done once it has a verdict, pass or fail, so it answers 'has this node been tested' rather than 'did it pass'. Two layouts: Compact tiles racks eight across as tray blocks with a per-rack good/warn/bad tally (the whole floor on one screen), Linear gives each rack a row and each node a load gauge. Metric views auto-scale to the fleet's observed range. Download image renders the heatmap to a light-background PNG/JPEG with title, legend, cluster and timestamp baked in, drawn on a canvas so it does not depend on the UI theme. The Rack Level tab carries a report generator with two reports. The Rack Status standard report renders one dataset as CSV, JSON, or a PDF with an executive summary and rack-level charts. The Nscale TX JSON schema report answers the customer's Consolidated Test Plan contract and is validated against the vendored schema before download, so it is JSON only; fields bring-up cannot measure are marked TBD for the operator to edit. Both reports share one fleet sweep of per-node hardware and firmware identity — asking twice while a sweep runs joins the running job rather than starting a second one — and report progress per node. PDF is only offered when the image can render it."
     },
     {
       "id": "reports",
@@ -2550,19 +2570,29 @@
       "title": "Reports",
       "domain": "Analytics & Benchmarks",
       "routePath": "/analytics/reports",
-      "summary": "Generate and export validation/benchmark reports.",
-      "description": "The Reports page produces shareable validation and benchmark reports summarising a rack or campaign's results for handoff to customers or stakeholders.",
+      "summary": "Download saved cluster reports, plus bug report and NVLMapper archives.",
+      "description": "The Reports page holds two separate things. Generated reports are the cluster and customer-schema documents produced from Analytics > Rack Level; each is saved when it finishes, so you can start a report, leave the page, and download it here later — a fleet sweep takes minutes and is no longer lost by navigating away. Rows show the report type, format, when it was generated, the node count it covers, and any schema errors, and can be downloaded or deleted. Below that, the bug report section lists NVIDIA bug report archives, NVLMapper outputs and Excel exports already present in the reports directory on this dashboard host.",
       "features": [
-        "Generate validation/benchmark reports.",
-        "Export for sharing/handoff."
+        "Generated Rack Status (CSV/JSON/PDF) and Nscale TX schema (JSON) reports, saved automatically when they finish.",
+        "Reports survive leaving the page and a container restart; the most recent are kept and older ones pruned.",
+        "Schema errors are shown on the row, so a report that failed validation is visible without regenerating it.",
+        "Separate listing of nvidia-bug-report archives, NVLMapper CSV/XLS and parser Excel exports from the reports directory."
       ],
       "howTo": [
         {
-          "task": "Generate a report",
+          "task": "Get a report you generated earlier",
           "steps": [
             "Open Analytics & Benchmarks > Reports.",
-            "Choose the scope/report type.",
-            "Generate and export."
+            "Find the row under Generated reports — newest first.",
+            "Click Download."
+          ]
+        },
+        {
+          "task": "Generate a new report",
+          "steps": [
+            "Go to Analytics & Benchmarks > Analytics, Rack Level tab.",
+            "Use Generate a report, pick the report and format, and start it.",
+            "You can leave the page; it appears here when the sweep finishes."
           ]
         }
       ],
@@ -2577,13 +2607,19 @@
         "summary",
         "handoff",
         "validation",
-        "benchmark"
+        "benchmark",
+        "saved reports",
+        "pdf",
+        "csv",
+        "bug report",
+        "nvlmapper",
+        "download"
       ],
       "aria": {
         "label": "Reports page",
-        "description": "Generate and export validation and benchmark reports."
+        "description": "Download saved cluster reports and node bug report archives."
       },
-      "aiContext": "The Reports page generates and exports shareable validation/benchmark reports for a rack or campaign."
+      "aiContext": "Analytics > Reports lists (1) generated reports from report_store.py, served by GET /api/reports/generated with download and DELETE at /api/reports/generated/<id>, kept under var/reports on the rack-data volume so they survive restarts, and (2) bug report / NVLMapper files from the reports directory via /api/bug-report-inventory. Reports are archived by the node-report worker when it completes, not when downloaded, so closing the tab mid-sweep no longer loses the run. Generation itself happens on Analytics > Analytics, Rack Level tab."
     },
     {
       "id": "projects",
@@ -2879,6 +2915,60 @@
         "description": "Searchable in-app help panel grouped by domain that slides in from the right."
       },
       "aiContext": "Help is a right-hand slide-out panel (KUI SidePanel) generated from the knowledge registry; every page/component has an entry with description, features, how-to steps, and FAQs. Open it from the page header help icon or the sidebar."
+    },
+    {
+      "id": "apiReference",
+      "kind": "view",
+      "title": "API Reference",
+      "domain": "Platform",
+      "routePath": "/platform/api",
+      "summary": "Browsable reference for this deployment's REST API, generated from its own routes.",
+      "description": "API Reference renders the OpenAPI 3.1 document served at /api/openapi.json, which the backend generates from its own Flask route table on each request. Because it is generated rather than maintained, it cannot describe an endpoint this build does not serve, and a new endpoint appears without anyone editing a file. Operations are grouped by endpoint family, searchable by path, verb, group or summary, and each one shows its parameters, request body and the status codes its handler actually returns.",
+      "features": [
+        "Every /api/* operation with its verb, path, summary and full description from the handler's docstring.",
+        "Query parameters are the ones each handler actually reads, so the page cannot claim a parameter the code ignores.",
+        "Download the raw document as JSON (or /api/openapi.yaml) to generate a client or import into other tooling."
+      ],
+      "howTo": [
+        {
+          "task": "Find an endpoint",
+          "steps": [
+            "Open API Reference.",
+            "Type a path, verb or keyword in the filter.",
+            "Click an operation to expand its parameters and responses."
+          ]
+        },
+        {
+          "task": "Integrate another system",
+          "steps": [
+            "Open API Reference.",
+            "Click 'openapi.json' to download the document.",
+            "Point your client generator at it; authenticate first via POST /api/login."
+          ]
+        }
+      ],
+      "related": [
+        "toolRegistry",
+        "settings"
+      ],
+      "keywords": [
+        "api",
+        "openapi",
+        "swagger",
+        "rest",
+        "endpoint",
+        "integration",
+        "client",
+        "spec",
+        "schema",
+        "json",
+        "yaml"
+      ],
+      "aria": {
+        "label": "API reference page",
+        "description": "Browsable reference for the REST API, generated from the application's own route table."
+      },
+      "aiContext": "API Reference renders /api/openapi.json, an OpenAPI 3.1 document generated from the Flask route table (about 177 paths / 201 operations). Query parameters are derived from what each handler reads; request bodies are free-form JSON by design rather than schema'd. The raw document is available at /api/openapi.json and /api/openapi.yaml, behind the normal auth gate."
     },
     {
       "id": "appLayout",

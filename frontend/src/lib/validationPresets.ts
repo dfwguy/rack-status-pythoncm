@@ -72,7 +72,7 @@ export interface ValidationPresetPrepareResponse {
 export const VALIDATION_PRESET_LABELS: Record<ValidationPresetId, string> = {
   "nccl-2.31.2": "NCCL 2.31.2 / CUDA 13.3+",
   "llama31-405b-fp8": "Llama 3.1 405B FP8 — 1024 GPUs / 50 steps",
-  "gpt-oss-cpu": "GPT-OSS CPU overhead microbenchmark — single node",
+  "gpt-oss-cpu": "GPT-OSS CPU overhead microbenchmark — one independent job per selected node",
   "exemplar-system-info": "NVIDIA DGXC v26.06.01 system_info",
   "nemo-26.04.01": "NeMo 26.04.01",
   "mnubergemm-26.03-v1.17": "MNUberGEMM 26.03-v1.17",

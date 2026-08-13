@@ -1,5 +1,6 @@
 """Tests for workflow_engine.py module."""
 import os
+import subprocess
 import time
 from unittest.mock import MagicMock, patch
 
@@ -9,8 +10,8 @@ os.environ["RACK_STATUS_DEMO"] = "1"
 os.environ["RACK_WEB_AUTH_DISABLED"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
-import workflow_engine
 import rack_locks
+import workflow_engine
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +38,7 @@ class TestWorkflowCRUD:
         assert wfs[0]["step_count"] == 1
 
     def test_get_workflow(self):
-        wf = workflow_engine.save_workflow({"id": "test-get", "name": "Get Test"})
+        workflow_engine.save_workflow({"id": "test-get", "name": "Get Test"})
         loaded = workflow_engine.get_workflow("test-get")
         assert loaded is not None
         assert loaded["name"] == "Get Test"
@@ -84,6 +85,24 @@ class TestWorkflowExecution:
         assert run is not None
         assert run["workflow_id"] == "delay-wf"
 
+    def test_invalidated_terminal_run_is_hidden_but_retained(self):
+        run = {
+            "run_id": "invalid-run",
+            "workflow_id": "hardware-deep-audit",
+            "workflow_name": "Hardware Deep Audit",
+            "state": "failed",
+            "current_step_id": None,
+            "started_at": "2026-08-13T00:00:00Z",
+            "updated_at": "2026-08-13T00:01:00Z",
+        }
+        workflow_engine._save_run(run)
+        invalidated = workflow_engine.invalidate_run(
+            "invalid-run", reason="validator defect", operator="qa"
+        )
+        assert invalidated["invalidated_at"]
+        assert workflow_engine.get_run_state("invalid-run")["invalidation_reason"] == "validator defect"
+        assert all(row["run_id"] != "invalid-run" for row in workflow_engine.list_runs())
+
     def test_delay_step_execution(self):
         self._create_delay_workflow()
         result = workflow_engine.start_workflow_run("delay-wf")
@@ -113,7 +132,6 @@ class TestWorkflowExecution:
 
 class TestStepOutput:
     def test_save_and_get_output(self, tmp_dirs):
-        _, runs_dir = tmp_dirs
         path = workflow_engine._save_step_output("run-123", "step-1", "Hello output")
         assert path == "run-123/step-1.log"
         content = workflow_engine.get_step_output("run-123", "step-1")
@@ -221,3 +239,29 @@ class TestMermaidGeneration:
         mermaid = workflow_engine.generate_mermaid_from_steps(steps)
         assert '"Yes"' in mermaid
         assert '"No"' in mermaid
+
+
+def test_slurm_fanout_maps_labeled_results_back_to_exact_nodes(monkeypatch):
+    output = (
+        '0: __NVIS_NODE__ink50-dh01-j21-11|NVIS_DEEP_AUDIT_JSON={"status":"pass"}\n'
+        "0: __NVIS_RC__ink50-dh01-j21-11|0\n"
+        '1: __NVIS_NODE__ink50-dh01-j21-12|NVIS_DEEP_AUDIT_JSON={"status":"fail"}\n'
+        "1: __NVIS_RC__ink50-dh01-j21-12|2\n"
+    )
+    monkeypatch.setattr(
+        workflow_engine.host_exec,
+        "run_slurm_on_host",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess("srun", 0, output, ""),
+    )
+    rows = workflow_engine._execute_slurm_fanout(
+        ["ink50-dh01-j21-11", "ink50-dh01-j21-12"],
+        "bash /scripts/audit.sh",
+        timeout=90,
+        sudo=True,
+        job_name="audit",
+    )
+    assert [(row.node, row.returncode) for row in rows] == [
+        ("ink50-dh01-j21-11", 0),
+        ("ink50-dh01-j21-12", 2),
+    ]
+    assert "status\":\"fail" in rows[1].stdout

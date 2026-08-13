@@ -8,6 +8,7 @@ import { Power, Cpu, ScanSearch, Bug, RotateCcw, CircleCheck, Zap, Network, Clip
 import { useRackCommands } from "../../context/RackCommandContext";
 import { attachLogDir, bmcRecoveryBody, specsCommandBody, hwCheckOptionsBody } from "../../lib/rackCommandBodies";
 import { ValidationPresetDialog } from "./ValidationPresetDialog";
+import { DeepAuditCard } from "./DeepAuditCard";
 import type { ValidationPresetRequest, ValidationScope } from "../../lib/validationPresets";
 import type { NvisNamingSchema } from "../../types/naming";
 
@@ -47,6 +48,16 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <DeepAuditCard
+        rack={rack}
+        selectedNodes={selectedNodes}
+        naming={naming}
+        disabled={disabled}
+        kind="hardware"
+        title="Hardware Deep Audit"
+        description={`Deep GPU/thermal/ECC/recovery, Xid/PCIe/EDAC, service/IMEX and storage audit on ${nodeCount} selected node(s). Confirmed failures are commented and drained in Slurm automatically.`}
+        icon={ScanSearch}
+      />
       <ActionCard
         title="Power On"
         description={`Power on ${nodeCount} selected node(s) in ${rack} via cmsh device power cycle.`}

@@ -357,6 +357,35 @@ SEED_TOOLS: list[dict[str, Any]] = [
         description="pdsh hardware sanity check across rack nodes.",
     ),
     _tool(
+        "hardware-deep-audit", "Hardware Deep Audit", "hardware",
+        "hardware_deep_audit.sh", "RACK_HARDWARE_DEEP_AUDIT_SCRIPT",
+        ["rackDetail.hardware", "analytics"], "async", "rack",
+        capabilities=["nvlink"],
+        description=(
+            "Repeatable GB300 node audit for GPU inventory/temperature/ECC/recovery, "
+            "kernel Xid/PCIe/EDAC faults, IMEX/slurmd/CMDaemon and RAID readiness."
+        ),
+        ai_context=(
+            "The hardware deep audit emits one structured result per node. Confirmed failures "
+            "are recorded in node issue history and immediately drained in Slurm with the "
+            "workflow id and exact reason; warnings and unsupported probes are inconclusive."
+        ),
+    ),
+    _tool(
+        "nvlink-network-deep-audit", "NVLink / Network Deep Audit", "networking",
+        "nvlink_network_deep_audit.sh", "RACK_NVLINK_NETWORK_DEEP_AUDIT_SCRIPT",
+        ["rackDetail.networking", "analytics"], "async", "rack",
+        capabilities=["nvlink"],
+        description=(
+            "Repeatable GB300 NVLink fabric, forced GPU data-path, IMEX, IB rail/rate/error "
+            "counter and mlx5 bond audit."
+        ),
+        ai_context=(
+            "The network deep audit distinguishes a missing data-path runtime from a pass. "
+            "Confirmed NVLink/IB/bond failures are recorded and immediately drained in Slurm."
+        ),
+    ),
+    _tool(
         "fabric-probe", "Fabric Probe (NIC classifier)", "networking",
         "fabric_probe.sh", "RACK_FABRIC_PROBE_SCRIPT", ["infraIbNvlink"], "sync", "node",
         description=(

@@ -180,7 +180,6 @@ export function ValidationPresetDialog({
   const requirements = formatPresetRequirements(preset.requirements);
   const targetCount = nodeList.length || rackList.length;
   const targetNoun = nodeList.length > 0 ? "node" : "rack";
-  const invalidGptOssTarget = presetId === "gpt-oss-cpu" && (scope !== "nodes" || nodeList.length !== 1);
   const directHostPreset = presetId === "nccl-2.31.2";
   const supportedScopes =
     preset.requirements && !Array.isArray(preset.requirements) && Array.isArray(preset.requirements.scopes)
@@ -208,8 +207,10 @@ export function ValidationPresetDialog({
               NVIDIA DGXC v26.06.01 system_info fans out to every selected node and validates each result against the Exemplar recipe.
             </Banner>
           ) : null}
-          {invalidGptOssTarget ? (
-            <Banner status="error">GPT-OSS measures CPU overhead on exactly one node. Open Node Level view and select one node.</Banner>
+          {presetId === "gpt-oss-cpu" && nodeList.length > 1 ? (
+            <Banner status="info">
+              GPT-OSS stays a single-node recipe. Rack Status will submit one independent job for each of the {nodeList.length} exact selected nodes.
+            </Banner>
           ) : null}
           {unsupportedScope ? (
             <Banner status="error">
@@ -345,7 +346,7 @@ export function ValidationPresetDialog({
       </DialogContent>
       <DialogActions sx={{ px: 3, py: 2 }}>
         <MuiButton onClick={onClose} color="inherit" disabled={launching}>Cancel</MuiButton>
-        <Button kind="secondary" size="small" onClick={() => void prepare()} disabled={invalidGptOssTarget || unsupportedScope || catalogLoading || preparing || launching}>
+        <Button kind="secondary" size="small" onClick={() => void prepare()} disabled={unsupportedScope || catalogLoading || preparing || launching}>
           {catalogLoading ? "Loading recipe…" : preparing ? "Preparing…" : plan ? "Refresh dry run" : "Review dry run"}
         </Button>
         <Button kind="primary" color="brand" size="small" onClick={() => void launch()} disabled={!plan || launching}>

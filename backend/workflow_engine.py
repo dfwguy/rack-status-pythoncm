@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import threading
 import time
 import uuid
@@ -250,11 +251,30 @@ def get_run_state(run_id: str) -> dict | None:
     return _load_run(run_id)
 
 
+def invalidate_run(run_id: str, *, reason: str, operator: str = "rack-status") -> dict:
+    """Hide an invalid QA run while retaining its state and output as evidence."""
+    run = _load_run(run_id)
+    if not run:
+        raise ValueError(f"workflow run '{run_id}' not found")
+    if str(run.get("state") or "") not in TERMINAL_STATES:
+        raise ValueError(f"workflow run '{run_id}' is not terminal")
+    run["invalidated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    run["invalidation_reason"] = str(reason).strip()[:2000]
+    run["invalidated_by"] = str(operator).strip()[:128] or "rack-status"
+    _save_run(run)
+    with _runs_lock:
+        if run_id in _active_runs:
+            _active_runs[run_id] = dict(run)
+    return dict(run)
+
+
 def list_runs() -> list[dict]:
     _ensure_dirs()
     results = []
     with _runs_lock:
         for run in _active_runs.values():
+            if run.get("invalidated_at"):
+                continue
             results.append({
                 "run_id": run["run_id"],
                 "workflow_id": run["workflow_id"],
@@ -277,6 +297,8 @@ def list_runs() -> list[dict]:
             try:
                 with open(state_file, "r", encoding="utf-8") as fh:
                     data = json.load(fh)
+                if data.get("invalidated_at"):
+                    continue
                 results.append({
                     "run_id": data["run_id"],
                     "workflow_id": data["workflow_id"],
@@ -297,6 +319,8 @@ def list_runs() -> list[dict]:
         try:
             with open(f, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
+            if data.get("invalidated_at"):
+                continue
             results.append({
                 "run_id": data["run_id"],
                 "workflow_id": data["workflow_id"],
@@ -806,6 +830,87 @@ def _execute_resolve_step(run: dict, step: dict) -> tuple[bool, str]:
     return True, out
 
 
+def _execute_slurm_fanout(
+    nodes: list[str], cmd: str, *, timeout: int, sudo: bool, job_name: str
+) -> list[Any]:
+    """Run one task per exact node in a scheduler-visible Slurm allocation."""
+    from platforms import get_platform
+    from transport import NodeResult
+
+    execute = cmd
+    if sudo:
+        execute = "sudo -n -E bash -c " + shlex.quote(cmd)
+    runner = f"""
+node=$(hostname -s)
+set +e
+output=$({execute} 2>&1)
+rc=$?
+while IFS= read -r line; do
+  printf '__NVIS_NODE__%s|%s\\n' "$node" "$line"
+done <<< "$output"
+printf '__NVIS_RC__%s|%s\\n' "$node" "$rc"
+exit 0
+""".strip()
+    safe_name = re.sub(
+        r"[^A-Za-z0-9_.-]", "-", job_name or "nvis-deep-audit"
+    )[:96]
+    args = [
+        "--nodes", str(len(nodes)),
+        "--nodelist", ",".join(nodes),
+        "--ntasks", str(len(nodes)),
+        "--ntasks-per-node", "1",
+        "--distribution", "block:block",
+        "--kill-on-bad-exit", "0",
+        "--immediate", "60",
+        "--job-name", safe_name,
+        "--label",
+        "bash", "-c", runner,
+    ]
+    srun_args = " ".join(shlex.quote(part) for part in args)
+    proc = host_exec.run_slurm_on_host(
+        get_platform().srun_cmd(srun_args),
+        timeout=max(timeout + 120, 180),
+    )
+    by_node: dict[str, dict[str, Any]] = {
+        node.casefold(): {"node": node, "stdout": [], "rc": None}
+        for node in nodes
+    }
+    for raw_line in (proc.stdout or "").splitlines():
+        line = re.sub(r"^\s*\d+:\s*", "", raw_line, count=1)
+        if line.startswith("__NVIS_NODE__"):
+            tagged = line[len("__NVIS_NODE__"):]
+            host, separator, payload = tagged.partition("|")
+            record = by_node.get(host.strip().casefold())
+            if separator and record is not None:
+                record["stdout"].append(payload)
+        elif line.startswith("__NVIS_RC__"):
+            tagged = line[len("__NVIS_RC__"):]
+            host, separator, value = tagged.partition("|")
+            record = by_node.get(host.strip().casefold())
+            if separator and record is not None:
+                try:
+                    record["rc"] = int(value.strip())
+                except ValueError:
+                    record["rc"] = 255
+    global_error = (proc.stderr or "").strip()
+    if proc.returncode and not global_error:
+        global_error = (
+            f"srun exited {proc.returncode} before all node results were collected"
+        )
+    results: list[NodeResult] = []
+    for node in nodes:
+        record = by_node[node.casefold()]
+        rc = record["rc"] if isinstance(record.get("rc"), int) else 255
+        stdout = "\n".join(record["stdout"])
+        if stdout:
+            stdout += "\n"
+        stderr = global_error if rc == 255 and not stdout else ""
+        results.append(
+            NodeResult(node=node, stdout=stdout, stderr=stderr, returncode=rc)
+        )
+    return results
+
+
 def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
     """Execute a step's ``fanout`` block: run ``run`` across N nodes over the
     Connection chain, coalesce output, and evaluate.
@@ -875,24 +980,40 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
 
     # Base connection: declared hop chain, else the app's active control connection.
     try:
-        hops = block.get("hops")
-        if hops:
-            base = build_chain([sub_hop(h) for h in hops])
-        else:
-            base = host_exec.connection("control")
-        node_spec = HopSpec.from_dict(sub_hop(block.get("node") or {"kind": "ssh"}))
-        timeout = int(step.get("timeout", block.get("timeout", 300)))
-        default_workers = int(os.environ.get("RACK_FANOUT_MAX_WORKERS", "8") or "8")
-        results = fanout(
-            base, nodes, cmd,
-            timeout=timeout,
-            max_workers=int(block.get("max_workers", default_workers)),
-            user=node_spec.user or None,
-            key=node_spec.key,
-            extra_opts=node_spec.extra_opts,
-            connect_timeout=node_spec.connect_timeout,
-            sudo=node_spec.sudo,
+        node_spec = HopSpec.from_dict(
+            sub_hop(block.get("node") or {"kind": "ssh"})
         )
+        timeout = int(step.get("timeout", block.get("timeout", 300)))
+        if str(block.get("scheduler") or "").strip().lower() == "slurm":
+            results = _execute_slurm_fanout(
+                nodes,
+                cmd,
+                timeout=timeout,
+                sudo=node_spec.sudo,
+                job_name=f"nvis-{run.get('workflow_id') or step_id}",
+            )
+        else:
+            hops = block.get("hops")
+            if hops:
+                base = build_chain([sub_hop(h) for h in hops])
+            else:
+                base = host_exec.connection("control")
+            default_workers = int(
+                os.environ.get("RACK_FANOUT_MAX_WORKERS", "8") or "8"
+            )
+            results = fanout(
+                base,
+                nodes,
+                cmd,
+                timeout=timeout,
+                max_workers=int(block.get("max_workers", default_workers)),
+                user=node_spec.user or None,
+                key=node_spec.key,
+                extra_opts=node_spec.extra_opts,
+                connect_timeout=node_spec.connect_timeout,
+                sudo=node_spec.sudo,
+                retries=int(block.get("retries", 2)),
+            )
     except Exception as exc:
         out = f"[Fanout error] {exc}"
         _save_step_output(run_id, step_id, out)
@@ -903,10 +1024,182 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
     errs = fanout_errors(results)
     output = grouped + (("\n--- errors ---\n" + errs) if errs else "")
     output += f"\n--- fanout: {len(nodes)} node(s), {sum(1 for r in results if r.returncode == 0)} ok ---\n"
+    if step.get("issue_policy"):
+        audit_summary, audit_output = _apply_node_issue_policy(run, step, results)
+        run.setdefault("audits", {})[step_id] = audit_summary
+        output += "\n--- node issue policy ---\n" + audit_output
     rc = 0 if (results and all(r.returncode == 0 for r in results)) else 1
     success, output = _apply_evaluation(run, step, rc, grouped, errs, output)
     _save_step_output(run_id, step_id, output)
     return success, output
+
+
+_DEEP_AUDIT_PREFIX = "NVIS_DEEP_AUDIT_JSON="
+
+
+def _audit_payload(stdout: str) -> dict[str, Any] | None:
+    """Return the final structured audit record in a node's stdout."""
+    for line in reversed((stdout or "").splitlines()):
+        if not line.startswith(_DEEP_AUDIT_PREFIX):
+            continue
+        try:
+            payload = json.loads(line[len(_DEEP_AUDIT_PREFIX):])
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
+def _slurm_audit_reason(category: str, run_id: str, reason: str) -> str:
+    """Specific, Slurm-safe comment for an automatically drained audit failure."""
+    raw = (
+        f"Drained for {category} deep audit - for validation {run_id[:8]} "
+        f"due to {reason or 'confirmed node failure'}"
+    )
+    return re.sub(r"[^A-Za-z0-9 _.,:/()\-]", " ", raw)[:256].strip()
+
+
+def _apply_node_issue_policy(
+    run: dict, step: dict, results: list[Any]
+) -> tuple[dict[str, Any], str]:
+    """Record and drain only node-emitted, structured audit failures."""
+    policy = step.get("issue_policy") or {}
+    category = str(policy.get("category") or "hardware").strip().lower()
+    drain_confirmed = bool(policy.get("drain_confirmed", True))
+    rack = str((run.get("params") or {}).get("rack") or "").strip()
+    run_id = str(run.get("run_id") or "")
+    summary: dict[str, Any] = {
+        "kind": category,
+        "total": len(results),
+        "passed": 0,
+        "warning": 0,
+        "failed": 0,
+        "inconclusive": 0,
+        "drained": 0,
+        "drain_failed": 0,
+        "nodes": [],
+    }
+    lines: list[str] = []
+
+    for result in results:
+        node = str(getattr(result, "node", "") or "").strip()
+        stdout = str(getattr(result, "stdout", "") or "")
+        stderr = str(getattr(result, "stderr", "") or "")
+        payload = _audit_payload(stdout)
+        if payload is None:
+            summary["inconclusive"] += 1
+            row = {
+                "node": node,
+                "status": "inconclusive",
+                "reason": (stderr or "structured audit result missing")[:1000],
+                "drained": False,
+            }
+            summary["nodes"].append(row)
+            lines.append(f"{node}: INCONCLUSIVE - {row['reason']}")
+            continue
+
+        status = str(payload.get("status") or "inconclusive").strip().lower()
+        if status == "pass":
+            summary["passed"] += 1
+        elif status == "warning":
+            summary["warning"] += 1
+        elif status == "fail":
+            summary["failed"] += 1
+        else:
+            status = "inconclusive"
+            summary["inconclusive"] += 1
+
+        codes = [
+            str(code).strip()
+            for code in (payload.get("codes") or [])
+            if str(code).strip()
+        ]
+        reason = str(payload.get("reason") or "").strip()
+        warnings = [
+            str(warning).strip()
+            for warning in (payload.get("warnings") or [])
+            if str(warning).strip()
+        ]
+        row: dict[str, Any] = {
+            "node": node,
+            "status": status,
+            "codes": codes,
+            "reason": reason,
+            "warnings": warnings,
+            "metrics": (
+                payload.get("metrics")
+                if isinstance(payload.get("metrics"), dict)
+                else {}
+            ),
+            "drained": False,
+            "slurm_reason": "",
+            "drain_result": "",
+        }
+
+        if status == "fail":
+            slurm_reason = _slurm_audit_reason(category, run_id, reason)
+            row["slurm_reason"] = slurm_reason
+            drain_ok = False
+            drain_text = "automatic drain disabled"
+            if drain_confirmed and node:
+                try:
+                    import app as _app
+
+                    result_obj = _app._run_scontrol_node_update(
+                        node, ["state=drain", f"reason={slurm_reason}"]
+                    )
+                    drain_ok = bool(result_obj.get("ok"))
+                    drain_text = str(
+                        result_obj.get("stdout")
+                        or result_obj.get("stderr")
+                        or f"returncode={result_obj.get('returncode')}"
+                    )[:2000]
+                except Exception as exc:  # noqa: BLE001 - corrective action is recorded below
+                    drain_text = f"{type(exc).__name__}: {exc}"[:2000]
+            row["drained"] = drain_ok
+            row["drain_result"] = drain_text
+            if drain_ok:
+                summary["drained"] += 1
+            elif drain_confirmed:
+                summary["drain_failed"] += 1
+
+            try:
+                import node_issues
+
+                node_issues.record_issue(
+                    node=node,
+                    rack=rack or (node.rsplit("-", 1)[0] if "-" in node else node),
+                    category=category,
+                    code=",".join(codes) or "validation_failure",
+                    reason=reason or "confirmed node validation failure",
+                    severity="failure",
+                    source=str(run.get("workflow_id") or "deep-audit"),
+                    validation_run_id=run_id,
+                    evidence=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                    drained=drain_ok,
+                    slurm_reason=slurm_reason,
+                    drain_result=drain_text,
+                    operator=f"workflow:{run_id[:8]}",
+                )
+            except Exception:
+                _logger.exception(
+                    "Workflow %s could not persist issue for %s", run_id, node
+                )
+
+        summary["nodes"].append(row)
+        detail = reason or "; ".join(warnings) or "healthy"
+        suffix = " - Slurm drained" if row["drained"] else ""
+        if status == "fail" and drain_confirmed and not row["drained"]:
+            suffix = f" - DRAIN FAILED: {row['drain_result']}"
+        lines.append(f"{node}: {status.upper()} - {detail}{suffix}")
+
+    lines.append(
+        "summary: "
+        f"pass={summary['passed']} warning={summary['warning']} "
+        f"fail={summary['failed']} inconclusive={summary['inconclusive']} "
+        f"drained={summary['drained']} drain_failed={summary['drain_failed']}"
+    )
+    return summary, "\n".join(lines) + "\n"
 
 
 def _execute_inline_run(run: dict, step: dict, params: dict, script_text: str) -> tuple[bool, str]:

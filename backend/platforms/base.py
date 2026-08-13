@@ -75,6 +75,14 @@ class PlatformProvider(ABC):
             cmd = f"{cmd} {extra_args}"
         return self.slurm_prefix(cmd)
 
+    def srun_cmd(self, extra_args: str = "") -> str:
+        """``srun`` invocation through the same platform Slurm environment."""
+        srun = (os.environ.get("RACK_SLURM_SRUN") or "srun").strip() or "srun"
+        cmd = shlex.quote(srun)
+        if extra_args:
+            cmd = f"{cmd} {extra_args}"
+        return self.slurm_prefix(cmd)
+
     def sacct_cmd(self, extra_args: str = "") -> str:
         sacct = (os.environ.get("RACK_SLURM_SACCT") or "sacct").strip() or "sacct"
         cmd = shlex.quote(sacct)
