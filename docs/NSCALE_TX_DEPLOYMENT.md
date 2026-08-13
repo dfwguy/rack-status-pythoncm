@@ -369,7 +369,7 @@ Key properties:
 | # | Symptom | Cause | Fix |
 |---|---|---|---|
 | F1 | Web terminal shows "WebSocket error" | Middleware only checked `werkzeug.socket`; gunicorn provides `gunicorn.socket`, so the upgrade fell through to auth and 401'd | Accept either key |
-| F2 | Scheduler view: `sacct: command not found` | `sacct` was the one Slurm CLI with no env override, and it is not on a non-login PATH | Added `RACK_SLURM_SACCT` |
+| F2 | Scheduler or Post-run view: `sacct: command not found` / `sinfo: command not found` | Some routes bypassed the platform provider and assumed Slurm was on a non-login PATH | Every backend call now uses the platform provider; Nscale pins all seven clients under `/cm/local/apps/slurm/25.05/bin` via `RACK_SLURM_{SBATCH,SRUN,SINFO,SQUEUE,SACCT,SCONTROL,SCANCEL}` and shell launchers use `RACK_SLURM_BIN` |
 | F3 | Cannot open logs outside the log dir | `RACK_STATUS_ALLOWED_PREFIXES` unset | Set it to all four readable roots |
 | F4 | `AttributeError: 'PurePosixPath' object has no attribute 'stat'` | Endpoints called `Path.stat()/read_bytes()` on a **remote** path | Route through `host_exec.stat/read_text/is_file`; stream downloads as base64 |
 | F5 | Log viewer stuck on "Connecting…" forever | The analytics-lake `after_request` hook called `response.get_data()`, which **consumed the `tail -f` generator**. Its guard only skipped `direct_passthrough`, which is `False` for a generator-backed `Response` | Also skip `response.is_streamed`. Affected every streaming endpoint; only surfaced here because this is the first site with the lake enabled |
@@ -383,6 +383,7 @@ Key properties:
 | F13 | Dashboard is a **white screen**; the app's JS 404s | Someone ran `compose up`; the recreate discarded the writable layer holding the `docker cp`'d bundle, while the host-mounted `index.html` kept requesting it | Bind-mount `static/spa/assets`. See §3 landmine 2 |
 | F14 | Console: `Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of "text/html"` | Two bugs at once: `rsync`'s rename detached the `index.html` single-file mount so the container served the pre-deploy copy, and `--delete` had removed the bundle that copy asks for. The SPA catch-all then answered the missing `.js` with `index.html` — HTML at status 200 | `cat >` + restart for `index.html`; drop `--delete`; `_serve_spa_asset` now 404s a missing `assets/*` instead of serving HTML |
 | F15 | GPU OOB power clear/set over Redfish returns HTTP **500** / `SYS494` / `InternalError`; trays stuck at half TGP (e.g. 699 W slot-0) and look “unfixable” | Dell **iDRAC Datacenter** license gates HGX GPU power APIs on PowerEdge HGX (Enterprise ≠ enough). Unlicensed calls are mis-reported as InternalError instead of 402/403. **DGX does not have this BMC license ladder.** Separate issue: a bad OOB `SetPoint` may still exist; Datacenter only unlocks clear/set | Check `racadm license view` / `LicenseService` **first**; install tag-bound Datacenter XML; then `ClearOOBSetPoint` + `PATCH PowerLimitWatts`. Runbook: [`DELL_IDRAC_DATACENTER_LICENSE_HGX.md`](DELL_IDRAC_DATACENTER_LICENSE_HGX.md); incident: [`NSCALE_TX_GB300_SLOT0_POWER_CAP.md`](NSCALE_TX_GB300_SLOT0_POWER_CAP.md) |
+| F16 | Hardware Deep Audit ends `inconclusive` with `execve(): 0`, or falsely says a healthy GB300 has zero GPUs | GNU getopt does not bind a space-separated value to Slurm's optional long arguments, so `0` became the executable; after that fix, a GPU-less allocation let the device cgroup hide all GPUs | Render `--kill-on-bad-exit=0 --immediate=60`; declare `fanout.gpus_per_node: 4` so the Slurm allocation carries `gres/gpu=4`. Live proof: hardware job 147865 and network job 147866 both passed on j21-11 with four allocated GPUs |
 
 ---
 
@@ -400,7 +401,7 @@ special-casing.
 | **Adaptive log viewing** | [`JobLogContentDialog.tsx`](../frontend/src/components/JobLogContentDialog.tsx) + `TailLogDialog` | Whole file for a finished job, live `tail -f` only when the job is actually `RUNNING` — decided from status, not guessed |
 | **`MultiSelectCombobox`** | [`frontend/src/components/MultiSelectCombobox.tsx`](../frontend/src/components/MultiSelectCombobox.tsx) | One wrapper so every multi-select filter behaves identically and cannot overflow |
 | **Streaming-response guard** | `_lake_capture_request` | Any `after_request` hook must skip `is_streamed`, not just `direct_passthrough` |
-| **`RACK_SLURM_SACCT`** | [`backend/platforms/base.py`](../backend/platforms/base.py) | Every external CLI gets an env override |
+| **Platform-routed Slurm commands** | [`backend/platforms/base.py`](../backend/platforms/base.py) | Every Slurm CLI gets an env override; callers never rediscover a binary or versioned BCM path |
 
 Design principles this engagement reinforced:
 

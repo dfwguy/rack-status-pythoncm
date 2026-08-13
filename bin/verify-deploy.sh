@@ -119,6 +119,52 @@ if [ "$state" = "running" ] && [ -d "$T/backend" ]; then
   fi
 fi
 
+# 3c. Durable feature routes must still be registered.  A previous partial restore left the
+#     frontend and history files in place while app.py silently lost these registrations, so the
+#     Post-run Node Report rendered only "API error".  Treat that as a failed deployment.
+if [ "$state" = "running" ]; then
+  missing_routes=$(docker exec -w /app/backend "$CONTAINER" python3 -c '
+import app
+required = {
+    "/api/deep-audits",
+    "/api/deep-audits/<run_id>",
+    "/api/node-issues",
+    "/api/node-issues/sync-punchcard",
+    "/api/post-run-node-report",
+    "/api/post-run-node-report/mark",
+}
+actual = {str(rule) for rule in app.app.url_map.iter_rules()}
+print(",".join(sorted(required - actual)))
+' 2>/dev/null)
+  if [ -z "$missing_routes" ]; then
+    ok "post-run, node-issue, and deep-audit routes registered"
+  else
+    bad "durable feature routes missing from app.py"
+    note "$missing_routes"
+  fi
+fi
+
+# 3d. The production override bind-mounts host SPA assets over the files baked into the image.
+#     Merely proving that the mounted index and mounted assets agree with each other can therefore
+#     bless a completely stale UI. Require every file baked into the deployed image (including
+#     lazy route chunks) to exist byte-for-byte in the mounted tree; unrelated older hashed chunks
+#     are harmless and intentionally ignored.
+if [ "$state" = "running" ]; then
+  image=$(docker inspect -f '{{.Image}}' "$CONTAINER" 2>/dev/null)
+  manifest_cmd='cd /app/static/spa && { sha256sum index.html; find assets -maxdepth 1 -type f -exec sha256sum {} \;; } | sort'
+  image_manifest=$(docker run --rm --entrypoint sh "$image" -c "$manifest_cmd" 2>/dev/null)
+  live_manifest=$(docker exec "$CONTAINER" sh -c "$manifest_cmd" 2>/dev/null)
+  stale_spa=$(comm -23 \
+    <(printf '%s\n' "$image_manifest") \
+    <(printf '%s\n' "$live_manifest"))
+  if [ -n "$image_manifest" ] && [ -z "$stale_spa" ]; then
+    ok "mounted SPA contains every file baked into the deployed image"
+  else
+    bad "mounted SPA is stale or incomplete relative to the deployed image"
+    [ -n "$stale_spa" ] && note "$(printf '%s\n' "$stale_spa" | head -3)"
+  fi
+fi
+
 # 4. THE check. Fetch the page and confirm every asset it references resolves. A hashed bundle
 #    that has moved on leaves the HTML perfectly serveable and the product blank.
 html=$(curl -s --max-time 15 "${BASE}${PAGE}")

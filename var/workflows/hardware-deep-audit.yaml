@@ -1,0 +1,40 @@
+id: hardware-deep-audit
+name: Hardware Deep Audit
+description: >-
+  Repeatable per-node GB300 audit for GPU inventory, temperatures, ECC/recovery,
+  Xid/PCIe/EDAC, services, IMEX and RAID readiness. Confirmed node failures are
+  recorded and drained in Slurm with this workflow run id and the exact finding.
+version: 1
+target:
+  mode: rack
+  racks: []
+  nodes: []
+mermaid: |
+  flowchart LR
+    resolve["Resolve selected racks"] --> audit["Fan out hardware audit"]
+    audit --> record["Record findings"]
+    record -->|confirmed failure| drain["Comment + drain in Slurm"]
+    record -->|pass / inconclusive| done["Results"]
+    drain --> done
+steps:
+  - id: resolve
+    type: automated
+    name: Resolve Selected Rack Nodes
+    resolve:
+      racks: "${rack}"
+      into: nodelist
+  - id: audit
+    type: automated
+    name: Hardware Deep Audit
+    fanout:
+      nodes: "${nodelist}"
+      node: {kind: ssh, sudo: true}
+      # Execute under Slurm so pam_slurm_adopt nodes accept the probe and every
+      # tray is covered by a scheduler-visible allocation.
+      scheduler: slurm
+      gpus_per_node: 4
+    run: "bash ${scripts_dir}/hardware_deep_audit.sh"
+    timeout: 600
+    issue_policy:
+      category: hardware
+      drain_confirmed: true

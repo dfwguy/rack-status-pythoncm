@@ -2,7 +2,7 @@ import type { DeepAuditRun, NodeIssuesResponse, PostRunNodeReportResponse } from
 
 async function jsonOrError<T>(res: Response): Promise<T> {
   const text = await res.text();
-  let payload: Record<string, unknown> = {};
+  let payload: Record<string, unknown>;
   try {
     payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
   } catch {

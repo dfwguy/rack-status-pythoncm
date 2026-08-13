@@ -44,7 +44,7 @@ def test_expand_pdsh_w_slurm_nodenames_uses_scontrol(monkeypatch, slurm_out, exp
 
         return P()
 
-    with mock.patch("app._run_bash_slurm_prefix", side_effect=fake_run):
+    with mock.patch("app.host_exec.run_slurm_on_host", side_effect=fake_run):
         assert _expand_pdsh_w_slurm_nodenames("anything[01]") == expected
 
 
@@ -59,7 +59,7 @@ def test_expand_pdsh_w_slurm_nodenames_fallback_on_scontrol_fail():
         return P()
 
     raw = "unknown-nodeset[01,02]"
-    with mock.patch("app._run_bash_slurm_prefix", side_effect=fail):
+    with mock.patch("app.host_exec.run_slurm_on_host", side_effect=fail):
         assert _expand_pdsh_w_slurm_nodenames(raw) == raw
 
 

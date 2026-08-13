@@ -1,0 +1,38 @@
+id: nvlink-network-deep-audit
+name: NVLink / Network Deep Audit
+description: >-
+  Repeatable per-node GB300 NVLink fabric, forced GPU data-path, IMEX, IB rail,
+  line-rate/counter and bond audit. Confirmed node failures are recorded and
+  drained in Slurm with this workflow run id and the exact finding.
+version: 1
+target:
+  mode: rack
+  racks: []
+  nodes: []
+mermaid: |
+  flowchart LR
+    resolve["Resolve selected racks"] --> audit["Fan out NVLink/network audit"]
+    audit --> record["Record findings"]
+    record -->|confirmed failure| drain["Comment + drain in Slurm"]
+    record -->|pass / inconclusive| done["Results"]
+    drain --> done
+steps:
+  - id: resolve
+    type: automated
+    name: Resolve Selected Rack Nodes
+    resolve:
+      racks: "${rack}"
+      into: nodelist
+  - id: audit
+    type: automated
+    name: NVLink / Network Deep Audit
+    fanout:
+      nodes: "${nodelist}"
+      node: {kind: ssh, sudo: true}
+      scheduler: slurm
+      gpus_per_node: 4
+    run: "bash ${scripts_dir}/nvlink_network_deep_audit.sh"
+    timeout: 900
+    issue_policy:
+      category: network
+      drain_confirmed: true

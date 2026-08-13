@@ -805,7 +805,11 @@ def _execute_resolve_step(run: dict, step: dict) -> tuple[bool, str]:
         racks = [r for r in re.split(r"[,\s]+", racks_raw) if r]
         if racks:
             for rk in racks:
-                nl = _app.validation_target_for_rack(rk, None) or ""
+                # A single-rack launch may carry the operator's exact selected-node
+                # override. Preserve it. A multi-rack launch cannot safely apply one
+                # rack's override to every rack, so resolve each full rack instead.
+                override = target if len(racks) == 1 and target else None
+                nl = _app.validation_target_for_rack(rk, override) or ""
                 all_nodes += [n for n in re.split(r"[,\s]+", nl) if n]
         elif target:
             # explicit hostlist/target override (no rack) — resolve/trust as-is
@@ -831,7 +835,8 @@ def _execute_resolve_step(run: dict, step: dict) -> tuple[bool, str]:
 
 
 def _execute_slurm_fanout(
-    nodes: list[str], cmd: str, *, timeout: int, sudo: bool, job_name: str
+    nodes: list[str], cmd: str, *, timeout: int, sudo: bool, job_name: str,
+    gpus_per_node: int = 0,
 ) -> list[Any]:
     """Run one task per exact node in a scheduler-visible Slurm allocation."""
     from platforms import get_platform
@@ -860,12 +865,23 @@ exit 0
         "--ntasks", str(len(nodes)),
         "--ntasks-per-node", "1",
         "--distribution", "block:block",
-        "--kill-on-bad-exit", "0",
-        "--immediate", "60",
+        # Both Slurm options take optional arguments.  GNU getopt only binds an
+        # optional long-option argument in ``--option=value`` form; with a
+        # space, srun treats the standalone value (notably ``0``) as the task
+        # executable and fails with ``execve(): 0: No such file or directory``.
+        "--kill-on-bad-exit=0",
+        "--immediate=60",
+    ]
+    if gpus_per_node > 0:
+        # Slurm's device cgroup otherwise hides every GPU from the audit and a
+        # healthy node is misclassified as gpu_count=0.  Keep this workflow
+        # configurable because non-GPU fanout steps use the same engine path.
+        args.append(f"--gpus-per-node={gpus_per_node}")
+    args.extend([
         "--job-name", safe_name,
         "--label",
         "bash", "-c", runner,
-    ]
+    ])
     srun_args = " ".join(shlex.quote(part) for part in args)
     proc = host_exec.run_slurm_on_host(
         get_platform().srun_cmd(srun_args),
@@ -991,6 +1007,7 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
                 timeout=timeout,
                 sudo=node_spec.sudo,
                 job_name=f"nvis-{run.get('workflow_id') or step_id}",
+                gpus_per_node=int(sub(block.get("gpus_per_node") or 0)),
             )
         else:
             hops = block.get("hops")

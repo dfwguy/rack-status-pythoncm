@@ -25,6 +25,8 @@ var/workflows/runs/
 var/store/
 # Durable run/metric history (SQLite + WAL; created on boot by results_history.py)
 var/history/
+# Generated report archive (durable runtime data, never source).
+var/reports/
 
 # Generated reports kept for later download (report_store.py); operator artifacts, not source
 var/reports/
@@ -60,6 +62,8 @@ static/spa/
 # ---- Manual snapshots taken before edits (foo.py.bak.<tag>) ----
 *.bak
 *.bak.*
+*.bak-*
+*.prebak.*
 
 # ---- Deployment overrides and key material (plaintext credentials: keep local) ----
 # docker-compose.override.yml carries RACK_WEB_AUTH_TOKEN / RACK_GRAFANA_PASSWORD
@@ -69,6 +73,7 @@ deploy-secrets/
 
 # ---- OS / editor ----
 .DS_Store
+._*
 *.zip
 Thumbs.db
 .idea/

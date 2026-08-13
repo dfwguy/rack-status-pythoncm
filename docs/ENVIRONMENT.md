@@ -214,7 +214,8 @@ Legacy name **`RACK_APP_GRAFANA_URL`** → use **`RACK_WEB_GRAFANA_URI`**.
 |----------|---------|--------|
 | **`RACK_SLURM_MODULE`** | `slurm` | `module load` name. |
 | **`RACK_SLURM_SKIP_MODULE_LOAD`** | *(unset)* | Truthy → skip `module load`. |
-| **`RACK_SLURM_SCONTROL`**, **`RACK_SLURM_SCANCEL`**, **`RACK_SLURM_SQUEUE`**, **`RACK_SLURM_SINFO`**, **`RACK_SLURM_SACCT`** | binary names | Override Slurm CLI paths. Required with `RACK_SLURM_SKIP_MODULE_LOAD=1` when the binaries are not on the non-login shell's `PATH`. |
+| **`RACK_SLURM_BIN`** | *(unset)* | Slurm `bin/` directory prepended by shell launchers. An explicit value wins over an older Slurm already on `PATH`. |
+| **`RACK_SLURM_SBATCH`**, **`RACK_SLURM_SRUN`**, **`RACK_SLURM_SCONTROL`**, **`RACK_SLURM_SCANCEL`**, **`RACK_SLURM_SQUEUE`**, **`RACK_SLURM_SINFO`**, **`RACK_SLURM_SACCT`** | binary names | Override Slurm CLI paths used by the backend platform layer. Required with `RACK_SLURM_SKIP_MODULE_LOAD=1` when the binaries are not on the non-login shell's `PATH`. |
 | **`RACK_SLURM_SCONTROL_TIMEOUT`** | `120` | Slurm CLI timeouts. |
 | **`RACK_SLURM_DRAIN_REASON`** | `admin` | Default drain reason. |
 | **`RACK_SLURM_NODES_STATE_DISABLED`** | *(unset)* | Truthy → disable drain/undrain. |
@@ -472,9 +473,11 @@ RACK_SERVICES_RESTART_DISABLED
 RACK_SERVICES_RESTART_DRY_RUN
 RACK_SERVICES_RESTART_TIMEOUT
 RACK_SLURM_DRAIN_REASON
+RACK_SLURM_BIN
 RACK_SLURM_MODULE
 RACK_SLURM_NODES_STATE_DISABLED
 RACK_SLURM_NODES_STATE_DRY_RUN
+RACK_SLURM_SBATCH
 RACK_SLURM_SCONTROL
 RACK_SLURM_SCONTROL_SHOW_JOB_DISABLED
 RACK_SLURM_SCONTROL_TIMEOUT
@@ -484,6 +487,7 @@ RACK_SLURM_SCANCEL_DISABLED
 RACK_SLURM_SINFO
 RACK_SLURM_SINFO_R_DISABLED
 RACK_SLURM_SKIP_MODULE_LOAD
+RACK_SLURM_SRUN
 RACK_SLURM_SQUEUE
 RACK_SLURM_SQUEUE_DISABLED
 RACK_SACCT_TIMEOUT
@@ -615,4 +619,3 @@ query param) is used for the heartbeat check above.
 Templates use literal text plus `[\d+]` (default, cmsh spelling) or `[01-99]` (fixed two-digit) slots. Configure in the SPA **Settings → Job environment** or via `NVIS_JOB_ENV_OVERRIDES_FILE`. Legacy `RACK_CMSH_DS_NODE_*` regex vars are superseded when NVIS templates are set.
 
 See `backend/nvis_id_templates.py` and `backend/tests/test_nvis_id_templates.py`.
-

@@ -5,6 +5,9 @@ describe("metricsRackMoniker", () => {
   it("turns BCM warehouse rack labels into the short operator moniker", () => {
     expect(metricsRackMoniker("WH1D1")).toBe("d01");
     expect(metricsRackMoniker("WH1E1")).toBe("e01");
+    expect(metricsRackMoniker("WH1F1")).toBe("f01");
+    expect(metricsRackMoniker("WH1G1")).toBe("g01");
+    expect(metricsRackMoniker("WH1G3")).toBe("g03");
     expect(metricsRackMoniker("WH1H1")).toBe("h01");
     expect(metricsRackMoniker("WH1J21")).toBe("j21");
   });

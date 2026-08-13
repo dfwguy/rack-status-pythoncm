@@ -16,7 +16,7 @@ os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
-import app as app_module  # noqa: E402
+import app as app_module
 
 READY = """\
 n01: ### nvlink_preflight n01 (quick=0) ###
@@ -41,6 +41,26 @@ def client(monkeypatch):
     monkeypatch.setenv("RACK_LAKE_DISABLED", "1")
     with app_module._reset_jobs_lock:
         app_module._reset_jobs.clear()
+
+    class _InlineThread:
+        """Run this route's worker inline so the full suite cannot starve it.
+
+        The application deliberately has many async-action tests. Their 15-minute
+        daemon reapers can leave hundreds of sleeping threads alive in one pytest
+        process, making a ten-second scheduler-based assertion nondeterministic.
+        Thread creation itself is not the contract under test here.
+        """
+
+        def __init__(self, *, target, args=(), kwargs=None, daemon=None):
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
+
+        def start(self):
+            self.target(*self.args, **self.kwargs)
+
+    monkeypatch.setattr(app_module, "threading", SimpleNamespace(Thread=_InlineThread))
+    monkeypatch.setattr(app_module, "_reset_job_purge_later", lambda *_args, **_kwargs: None)
     app_module.app.config.update(TESTING=True)
     with app_module.app.test_client() as c:
         yield c

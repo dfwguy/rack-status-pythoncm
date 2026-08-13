@@ -1,5 +1,6 @@
 """Tests for workflow_engine.py module."""
 import os
+import shlex
 import subprocess
 import time
 from unittest.mock import MagicMock, patch
@@ -242,16 +243,22 @@ class TestMermaidGeneration:
 
 
 def test_slurm_fanout_maps_labeled_results_back_to_exact_nodes(monkeypatch):
+    captured = {}
     output = (
         '0: __NVIS_NODE__ink50-dh01-j21-11|NVIS_DEEP_AUDIT_JSON={"status":"pass"}\n'
         "0: __NVIS_RC__ink50-dh01-j21-11|0\n"
         '1: __NVIS_NODE__ink50-dh01-j21-12|NVIS_DEEP_AUDIT_JSON={"status":"fail"}\n'
         "1: __NVIS_RC__ink50-dh01-j21-12|2\n"
     )
+
+    def run_slurm(cmd, **_kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess("srun", 0, output, "")
+
     monkeypatch.setattr(
         workflow_engine.host_exec,
         "run_slurm_on_host",
-        lambda *_args, **_kwargs: subprocess.CompletedProcess("srun", 0, output, ""),
+        run_slurm,
     )
     rows = workflow_engine._execute_slurm_fanout(
         ["ink50-dh01-j21-11", "ink50-dh01-j21-12"],
@@ -259,9 +266,23 @@ def test_slurm_fanout_maps_labeled_results_back_to_exact_nodes(monkeypatch):
         timeout=90,
         sudo=True,
         job_name="audit",
+        gpus_per_node=4,
     )
     assert [(row.node, row.returncode) for row in rows] == [
         ("ink50-dh01-j21-11", 0),
         ("ink50-dh01-j21-12", 2),
     ]
     assert "status\":\"fail" in rows[1].stdout
+    assert "--kill-on-bad-exit=0" in captured["cmd"]
+    assert "--immediate=60" in captured["cmd"]
+    assert "--gpus-per-node=4" in captured["cmd"]
+    assert "--kill-on-bad-exit 0" not in captured["cmd"]
+    assert "--immediate 60" not in captured["cmd"]
+    generated = shlex.split(captured["cmd"])
+    srun_index = next(
+        index for index, arg in enumerate(generated)
+        if arg == "srun" or arg.endswith("/srun")
+    )
+    srun_argv = generated[srun_index:]
+    assert "0" not in srun_argv[:-1]
+    assert srun_argv[-3:-1] == ["bash", "-c"]

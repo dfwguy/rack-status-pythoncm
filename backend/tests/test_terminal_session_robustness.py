@@ -45,6 +45,18 @@ def _session(argv: list[str]) -> A._TerminalSession:
     return A._TerminalSession("test-session", master_fd, proc, "ct07-01", "node")
 
 
+def _settle(sess, timeout: float = 3.0) -> None:
+    """Wait for the reader thread to finish owning ``alive``.
+
+    ``proc.wait()`` only waits for the child. The reader thread flips ``alive`` in its own
+    ``finally``, so a test that sets ``alive = True`` immediately after the child exits can have it
+    flipped back underneath, making ``write()`` return early and report nothing.
+    """
+    deadline = time.monotonic() + timeout
+    while sess.alive and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
 def _drain(q: queue.Queue) -> tuple[list[bytes], bool]:
     """Everything queued so far, and whether the stream was terminated with None."""
     out: list[bytes] = []
@@ -78,7 +90,7 @@ class TestWriteAfterTheShellExits:
         """The exact race: the flag still says alive, but the pty is gone."""
         sess = _session(["true"])
         q = sess.subscribe()
-        sess.proc.wait()
+        _settle(sess)
         # Force the race rather than waiting for it: pretend the reader has not caught up.
         sess.alive = True
         os.close(sess.master_fd)
@@ -93,7 +105,7 @@ class TestWriteAfterTheShellExits:
     def test_the_reason_is_only_announced_once(self):
         sess = _session(["true"])
         q = sess.subscribe()
-        sess.proc.wait()
+        _settle(sess)
         sess.alive = True
         os.close(sess.master_fd)
 
@@ -107,7 +119,7 @@ class TestWriteAfterTheShellExits:
         """xterm resizes on every pane drag, so this fires constantly in the grid."""
         sess = _session(["true"])
         sess.subscribe()
-        sess.proc.wait()
+        _settle(sess)
         sess.alive = True
         os.close(sess.master_fd)
 

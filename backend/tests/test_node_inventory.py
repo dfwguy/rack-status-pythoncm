@@ -270,6 +270,19 @@ class TestSrunSweep:
         assert "--immediate=" in cmd
         assert "--nice=" in cmd
 
+    def test_the_command_uses_the_platform_srun_binary(self, monkeypatch):
+        class _Platform:
+            @staticmethod
+            def srun_cmd(args):
+                return f"/configured/slurm/srun {args}"
+
+        import platforms
+
+        monkeypatch.setattr(platforms, "get_platform", lambda: _Platform())
+        cmd = node_inventory.build_srun_command(["n1"], "/s/x.sh")
+        assert cmd.startswith("/configured/slurm/srun ")
+        assert not cmd.startswith("srun ")
+
     def test_a_busy_cluster_stops_the_sweep_rather_than_hammering_the_queue(self, monkeypatch):
         import sys
         import types
