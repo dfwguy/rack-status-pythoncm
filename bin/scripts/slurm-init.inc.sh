@@ -40,7 +40,11 @@ done
 
 command -v module >/dev/null 2>&1 && module load slurm 2>/dev/null || true
 
-if ! command -v sbatch >/dev/null 2>&1; then
+# An explicit site pin wins even when an older Slurm happens to be on PATH. This
+# keeps launcher scripts on the same client version as the Python platform layer.
+if [ -n "${RACK_SLURM_BIN:-}" ] && [ -x "${RACK_SLURM_BIN}/sbatch" ]; then
+  export PATH="${RACK_SLURM_BIN}:$PATH"
+elif ! command -v sbatch >/dev/null 2>&1; then
   for _d in "${RACK_SLURM_BIN:-}" /cm/local/apps/slurm/current/bin /cm/local/apps/slurm/*/bin; do
     [ -n "$_d" ] && [ -x "$_d/sbatch" ] && { export PATH="$_d:$PATH"; break; }
   done

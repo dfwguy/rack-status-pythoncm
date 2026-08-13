@@ -21,9 +21,7 @@ def test_live_eligibility_resolves_sinfo_through_platform(monkeypatch):
         app_module,
         "_get_platform",
         lambda: SimpleNamespace(
-            slurm_prefix=lambda command: command.replace(
-                "sinfo ", "/site/slurm/bin/sinfo ", 1
-            )
+            sinfo_cmd=lambda args: f"/site/slurm/bin/sinfo {args}"
         ),
     )
     monkeypatch.setattr(app_module.host_exec, "run_slurm_on_host", run)

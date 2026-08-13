@@ -60,49 +60,42 @@ class PlatformProvider(ABC):
             f"module load {shlex.quote(mod)} 2>/dev/null; {cmd}"
         )
 
-    def sinfo_cmd(self, extra_args: str = "") -> str:
-        """``sinfo`` invocation (with optional extra arguments)."""
-        sinfo = (os.environ.get("RACK_SLURM_SINFO") or "sinfo").strip() or "sinfo"
-        cmd = shlex.quote(sinfo)
+    def _slurm_cli_cmd(self, name: str, extra_args: str = "") -> str:
+        """Build one Slurm CLI invocation using its configured executable.
+
+        Keeping the executable lookup here is intentional: callers must never have to
+        rediscover Slurm's non-login-shell PATH or guess a versioned BCM install path.
+        """
+        env_key = f"RACK_SLURM_{name.upper()}"
+        executable = (os.environ.get(env_key) or name).strip() or name
+        cmd = shlex.quote(executable)
         if extra_args:
             cmd = f"{cmd} {extra_args}"
         return self.slurm_prefix(cmd)
 
+    def sbatch_cmd(self, extra_args: str = "") -> str:
+        """``sbatch`` invocation through the configured platform environment."""
+        return self._slurm_cli_cmd("sbatch", extra_args)
+
+    def sinfo_cmd(self, extra_args: str = "") -> str:
+        """``sinfo`` invocation (with optional extra arguments)."""
+        return self._slurm_cli_cmd("sinfo", extra_args)
+
     def squeue_cmd(self, extra_args: str = "") -> str:
-        squeue = (os.environ.get("RACK_SLURM_SQUEUE") or "squeue").strip() or "squeue"
-        cmd = shlex.quote(squeue)
-        if extra_args:
-            cmd = f"{cmd} {extra_args}"
-        return self.slurm_prefix(cmd)
+        return self._slurm_cli_cmd("squeue", extra_args)
 
     def srun_cmd(self, extra_args: str = "") -> str:
         """``srun`` invocation through the same platform Slurm environment."""
-        srun = (os.environ.get("RACK_SLURM_SRUN") or "srun").strip() or "srun"
-        cmd = shlex.quote(srun)
-        if extra_args:
-            cmd = f"{cmd} {extra_args}"
-        return self.slurm_prefix(cmd)
+        return self._slurm_cli_cmd("srun", extra_args)
 
     def sacct_cmd(self, extra_args: str = "") -> str:
-        sacct = (os.environ.get("RACK_SLURM_SACCT") or "sacct").strip() or "sacct"
-        cmd = shlex.quote(sacct)
-        if extra_args:
-            cmd = f"{cmd} {extra_args}"
-        return self.slurm_prefix(cmd)
+        return self._slurm_cli_cmd("sacct", extra_args)
 
     def scontrol_cmd(self, extra_args: str = "") -> str:
-        scontrol = (os.environ.get("RACK_SLURM_SCONTROL") or "scontrol").strip() or "scontrol"
-        cmd = shlex.quote(scontrol)
-        if extra_args:
-            cmd = f"{cmd} {extra_args}"
-        return self.slurm_prefix(cmd)
+        return self._slurm_cli_cmd("scontrol", extra_args)
 
     def scancel_cmd(self, extra_args: str = "") -> str:
-        scancel = (os.environ.get("RACK_SLURM_SCANCEL") or "scancel").strip() or "scancel"
-        cmd = shlex.quote(scancel)
-        if extra_args:
-            cmd = f"{cmd} {extra_args}"
-        return self.slurm_prefix(cmd)
+        return self._slurm_cli_cmd("scancel", extra_args)
 
     def scontrol_hostnames_cmd(self, nodespec: str) -> str:
         return self.scontrol_cmd(f"show hostnames {shlex.quote(nodespec)}")

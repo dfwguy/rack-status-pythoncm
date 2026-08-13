@@ -258,6 +258,27 @@ export interface PostRunNodeReportResponse {
   };
 }
 
+/** One durable fleet report saved as soon as background generation completes. */
+export interface GeneratedReport {
+  id: string;
+  kind: string;
+  format: "csv" | "json" | "pdf";
+  filename: string;
+  size: number;
+  /** Unix epoch seconds. */
+  created: number;
+  cluster?: string;
+  nodes?: number;
+  schema_errors?: number;
+}
+
+export interface GeneratedReportsResponse {
+  ok: boolean;
+  reports: GeneratedReport[];
+  max_kept: number;
+  error?: string;
+}
+
 /** A launched multi-rack job from the durable state table (GET /api/multirack-jobs). */
 export interface MultirackJob {
   job_id: string;

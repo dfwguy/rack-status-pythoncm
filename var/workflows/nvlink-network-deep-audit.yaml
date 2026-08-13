@@ -11,18 +11,26 @@ target:
   nodes: []
 mermaid: |
   flowchart LR
-    audit["Fan out NVLink/network audit"] --> record["Record findings"]
+    resolve["Resolve selected racks"] --> audit["Fan out NVLink/network audit"]
+    audit --> record["Record findings"]
     record -->|confirmed failure| drain["Comment + drain in Slurm"]
     record -->|pass / inconclusive| done["Results"]
     drain --> done
 steps:
+  - id: resolve
+    type: automated
+    name: Resolve Selected Rack Nodes
+    resolve:
+      racks: "${rack}"
+      into: nodelist
   - id: audit
     type: automated
     name: NVLink / Network Deep Audit
     fanout:
-      nodes: "${target}"
+      nodes: "${nodelist}"
       node: {kind: ssh, sudo: true}
       scheduler: slurm
+      gpus_per_node: 4
     run: "bash ${scripts_dir}/nvlink_network_deep_audit.sh"
     timeout: 900
     issue_policy:

@@ -13,6 +13,12 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
+import {
+  deleteGeneratedReport,
+  downloadGeneratedReport,
+  fetchGeneratedReports,
+} from "../services/generatedReportsService";
+import type { GeneratedReport } from "../types/api";
 
 type BugReportItem = { host: string; name: string };
 
@@ -54,7 +60,26 @@ function normalizeItems(raw: unknown[] | undefined): BugReportItem[] {
   return out;
 }
 
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "—";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`;
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
+  return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+}
+
+function formatCreated(epochSeconds: number): string {
+  const date = new Date(epochSeconds * 1000);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+}
+
 export function ReportsView() {
+  const [generatedLoading, setGeneratedLoading] = useState(false);
+  const [generatedError, setGeneratedError] = useState("");
+  const [generatedMaxKept, setGeneratedMaxKept] = useState(0);
+  const [generatedReports, setGeneratedReports] = useState<GeneratedReport[]>([]);
+  const [generatedActionKey, setGeneratedActionKey] = useState<string | null>(null);
+  const generatedPage = usePagedRows(generatedReports, 10);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [baseDir, setBaseDir] = useState("");
@@ -63,6 +88,22 @@ export function ReportsView() {
   // One row per report file per node; a fleet-wide bug-report sweep runs to thousands.
   const reportsPage = usePagedRows(items);
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
+
+  const loadGenerated = useCallback(async () => {
+    setGeneratedLoading(true);
+    setGeneratedError("");
+    try {
+      const data = await fetchGeneratedReports();
+      setGeneratedReports(data.reports);
+      setGeneratedMaxKept(data.max_kept);
+    } catch (e) {
+      setGeneratedReports([]);
+      setGeneratedMaxKept(0);
+      setGeneratedError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGeneratedLoading(false);
+    }
+  }, []);
 
   const loadInventory = useCallback(async () => {
     setLoading(true);
@@ -99,8 +140,40 @@ export function ReportsView() {
   }, []);
 
   useEffect(() => {
-    void loadInventory();
-  }, [loadInventory]);
+    const timer = window.setTimeout(() => {
+      void loadInventory();
+      void loadGenerated();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadGenerated, loadInventory]);
+
+  const downloadGenerated = useCallback(async (report: GeneratedReport) => {
+    const key = `download:${report.id}`;
+    setGeneratedActionKey(key);
+    setGeneratedError("");
+    try {
+      await downloadGeneratedReport(report);
+    } catch (e) {
+      setGeneratedError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGeneratedActionKey(null);
+    }
+  }, []);
+
+  const removeGenerated = useCallback(async (report: GeneratedReport) => {
+    if (!window.confirm(`Delete saved report ${report.filename}? This cannot be undone.`)) return;
+    const key = `delete:${report.id}`;
+    setGeneratedActionKey(key);
+    setGeneratedError("");
+    try {
+      await deleteGeneratedReport(report.id);
+      await loadGenerated();
+    } catch (e) {
+      setGeneratedError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGeneratedActionKey(null);
+    }
+  }, [loadGenerated]);
 
   const downloadFile = useCallback(async (host: string, name: string) => {
     const key = `${host}\0${name}`;
@@ -146,8 +219,101 @@ export function ReportsView() {
       <PageHeader
         contentId="reports"
         title="Reports"
-        description="Browse NVIDIA bug report archives and NVLMapper outputs on this dashboard host (same as legacy Download Reports)."
+        description="Download durable generated fleet reports, NVIDIA bug report archives, and NVLMapper outputs."
       />
+
+      <Paper variant="outlined" sx={{ p: 3, mb: 3 }}>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 1, flexWrap: "wrap" }}>
+          <Box>
+            <Text kind="body/bold/md" style={{ display: "block" }}>Generated fleet reports</Text>
+            <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+              Saved automatically when a fleet report completes, so leaving the page or restarting the dashboard does not lose the result.
+              {generatedMaxKept > 0 ? ` The newest ${generatedMaxKept} reports are retained.` : ""}
+            </Text>
+          </Box>
+          <Button kind="secondary" onClick={() => void loadGenerated()} disabled={generatedLoading}>
+            Refresh generated reports
+          </Button>
+        </Box>
+
+        {generatedLoading && <LinearProgress sx={{ mb: 2 }} />}
+        {generatedError && (
+          <Banner status="error" kind="inline" style={{ marginBottom: 16 }}>
+            {generatedError}
+          </Banner>
+        )}
+
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small" aria-label="Generated reports">
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 700 }}>Created</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Report</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Scope</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Size</TableCell>
+                <TableCell sx={{ fontWeight: 700, width: 210 }}>Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {!generatedLoading && generatedReports.length === 0 && !generatedError ? (
+                <TableRow>
+                  <TableCell colSpan={5}>
+                    <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                      No generated reports have been saved yet. Generate one from Analytics; it will appear here as soon as it completes.
+                    </Text>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                generatedPage.visible.map((report) => {
+                  const downloading = generatedActionKey === `download:${report.id}`;
+                  const deleting = generatedActionKey === `delete:${report.id}`;
+                  return (
+                    <TableRow key={report.id} hover>
+                      <TableCell>{formatCreated(report.created)}</TableCell>
+                      <TableCell>
+                        <Text kind="body/bold/sm" style={{ display: "block" }}>{report.filename}</Text>
+                        <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                          {report.kind} · {report.format.toUpperCase()}
+                        </Text>
+                      </TableCell>
+                      <TableCell>
+                        {[report.cluster, typeof report.nodes === "number" ? `${report.nodes} nodes` : ""]
+                          .filter(Boolean)
+                          .join(" · ") || "—"}
+                        {typeof report.schema_errors === "number" && report.schema_errors > 0
+                          ? ` · ${report.schema_errors} schema errors`
+                          : ""}
+                      </TableCell>
+                      <TableCell>{formatBytes(report.size)}</TableCell>
+                      <TableCell>
+                        <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                          <Button
+                            size="small"
+                            kind="secondary"
+                            disabled={generatedActionKey !== null || generatedLoading}
+                            onClick={() => void downloadGenerated(report)}
+                          >
+                            {downloading ? "…" : "Download"}
+                          </Button>
+                          <Button
+                            size="small"
+                            kind="secondary"
+                            disabled={generatedActionKey !== null || generatedLoading}
+                            onClick={() => void removeGenerated(report)}
+                          >
+                            {deleting ? "…" : "Delete"}
+                          </Button>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+        <TablePager {...generatedPage} noun="generated reports" />
+      </Paper>
 
       <Paper variant="outlined" sx={{ p: 3, mb: 2 }}>
         <Text kind="body/regular/md" style={{ display: "block", marginBottom: 12, lineHeight: 1.6, color: "var(--text-color-secondary)" }}>

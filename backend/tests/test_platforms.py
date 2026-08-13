@@ -3,9 +3,7 @@ import os
 from unittest import mock
 
 import pytest
-
 from platforms import get_platform
-from platforms.base import PlatformProvider
 from platforms.bcm import BCMProvider
 from platforms.maas import MAASProvider
 
@@ -13,7 +11,6 @@ from platforms.maas import MAASProvider
 class TestPlatformRegistry:
     def test_default_is_bcm(self):
         with mock.patch.dict(os.environ, {"RACK_PLATFORM": "bcm"}, clear=False):
-            from platforms import _instance
             import platforms
             platforms._instance = None
             plat = get_platform()
@@ -112,3 +109,25 @@ class TestSlurmPrefix:
             cmd = plat.scontrol_hostnames_cmd("node[01-04]")
             assert "scontrol" in cmd
             assert "hostnames" in cmd
+
+    @pytest.mark.parametrize(
+        ("name", "method"),
+        [
+            ("SBATCH", "sbatch_cmd"),
+            ("SRUN", "srun_cmd"),
+            ("SINFO", "sinfo_cmd"),
+            ("SQUEUE", "squeue_cmd"),
+            ("SACCT", "sacct_cmd"),
+            ("SCONTROL", "scontrol_cmd"),
+            ("SCANCEL", "scancel_cmd"),
+        ],
+    )
+    def test_every_slurm_cli_honours_its_configured_binary(self, name, method):
+        binary = f"/configured/slurm/{name.lower()}"
+        with mock.patch.dict(
+            os.environ,
+            {"RACK_SLURM_SKIP_MODULE_LOAD": "1", f"RACK_SLURM_{name}": binary},
+            clear=False,
+        ):
+            cmd = getattr(BCMProvider(), method)("--version")
+        assert cmd == f"{binary} --version"

@@ -1,6 +1,6 @@
 #!/bin/bash
 # One sbatch per host under the shared rack-status log root's sn-llama/ directory.
-# Usage: after ``module load slurm``, pass the same Slurm nodelist style as run_singlerack.sh / validation, e.g.
+# Usage: pass the same Slurm nodelist style as run_singlerack.sh / validation, e.g.
 #   ./run-llama.sh 'p6-r06-ct[01-03,15]'
 # Multiple arguments are joined with commas (same merged hostlist as the UI).
 #
@@ -13,6 +13,9 @@ export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/
 export PDSH_RCMD_TYPE=ssh
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Non-login control-plane shells do not have a reliable Slurm PATH. Use the same
+# pinned site version and config source as every other rack-status launcher.
+source "${SCRIPT_DIR}/slurm-init.inc.sh"
 JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 LLAMA_LOG_DIR="${JOB_LOG_DIR%/}/sn-llama"
 mkdir -p "${LLAMA_LOG_DIR}" || { echo "run-llama: cannot create log directory: ${LLAMA_LOG_DIR}" >&2; exit 2; }

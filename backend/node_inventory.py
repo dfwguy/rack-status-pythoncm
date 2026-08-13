@@ -255,12 +255,15 @@ def build_srun_command(
     * ``--label`` is what makes the interleaved per-task output separable again.
     """
     joined = ",".join(nodes)
-    return (
-        "srun --job-name=nvis-inventory --ntasks-per-node=1 "
+    args = (
+        "--job-name=nvis-inventory --ntasks-per-node=1 "
         f"--nodes={len(nodes)} --nodelist={shlex.quote(joined)} "
         f"--time=00:{minutes:02d}:00 --immediate={immediate} --nice={nice} "
         f"--label --no-kill --overlap bash {shlex.quote(script)}"
     )
+    from platforms import get_platform
+
+    return get_platform().srun_cmd(args)
 
 
 def collect_via_srun(

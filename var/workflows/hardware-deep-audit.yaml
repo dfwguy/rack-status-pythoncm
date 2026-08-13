@@ -11,20 +11,28 @@ target:
   nodes: []
 mermaid: |
   flowchart LR
-    audit["Fan out hardware audit"] --> record["Record findings"]
+    resolve["Resolve selected racks"] --> audit["Fan out hardware audit"]
+    audit --> record["Record findings"]
     record -->|confirmed failure| drain["Comment + drain in Slurm"]
     record -->|pass / inconclusive| done["Results"]
     drain --> done
 steps:
+  - id: resolve
+    type: automated
+    name: Resolve Selected Rack Nodes
+    resolve:
+      racks: "${rack}"
+      into: nodelist
   - id: audit
     type: automated
     name: Hardware Deep Audit
     fanout:
-      nodes: "${target}"
+      nodes: "${nodelist}"
       node: {kind: ssh, sudo: true}
       # Execute under Slurm so pam_slurm_adopt nodes accept the probe and every
       # tray is covered by a scheduler-visible allocation.
       scheduler: slurm
+      gpus_per_node: 4
     run: "bash ${scripts_dir}/hardware_deep_audit.sh"
     timeout: 600
     issue_policy:

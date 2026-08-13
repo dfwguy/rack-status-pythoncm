@@ -36,11 +36,9 @@ CANDIDATES=(
 )
 
 # --- Slurm + venv on PATH (non-login shell) ------------------------------------
-if ! command -v sinfo >/dev/null 2>&1; then
-  # shellcheck disable=SC1091
-  [ -f /etc/profile.d/modules.sh ] && source /etc/profile.d/modules.sh
-  module load slurm >/dev/null 2>&1 || true
-fi
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=slurm-init.inc.sh
+source "${_SCRIPT_DIR}/slurm-init.inc.sh"
 command -v sinfo >/dev/null 2>&1 || { echo "FATAL: sinfo not on PATH"; exit 1; }
 # shellcheck disable=SC1091
 [ -f "${VENV}/bin/activate" ] && source "${VENV}/bin/activate"

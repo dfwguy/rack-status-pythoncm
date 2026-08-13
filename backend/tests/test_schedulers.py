@@ -3,7 +3,6 @@ import subprocess
 from unittest import mock
 
 import pytest
-
 from schedulers import (
     JobSpec,
     LocalScheduler,
@@ -28,7 +27,42 @@ class FakeConn:
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
 
+class ConfiguredSlurmPlatform:
+    """Makes path bypasses visible in scheduler tests."""
+
+    @staticmethod
+    def _cmd(name, args=""):
+        return f"/configured/slurm/{name}" + (f" {args}" if args else "")
+
+    def sbatch_cmd(self, args=""):
+        return self._cmd("sbatch", args)
+
+    def sacct_cmd(self, args=""):
+        return self._cmd("sacct", args)
+
+    def scancel_cmd(self, args=""):
+        return self._cmd("scancel", args)
+
+    def scontrol_cmd(self, args=""):
+        return self._cmd("scontrol", args)
+
+
 class TestSlurmScheduler:
+    def test_all_scheduler_slurm_calls_use_platform_binaries(self):
+        from schedulers.base import JobHandle
+
+        conn = FakeConn({"/configured/slurm/sbatch": (0, "42\n", "")})
+        sched = SlurmScheduler(conn, ConfiguredSlurmPlatform())
+        handle = sched.submit(JobSpec(command="hostname"))
+        sched.status(handle)
+        sched.cancel(handle)
+        sched._read_output(JobHandle("42", "slurm"))
+
+        assert conn.calls[0].startswith("/configured/slurm/sbatch ")
+        assert conn.calls[1].startswith("/configured/slurm/sacct ")
+        assert conn.calls[2].startswith("/configured/slurm/scancel ")
+        assert conn.calls[3].startswith("/configured/slurm/scontrol ")
+
     def test_submit_builds_argv_and_parses_jobid(self):
         conn = FakeConn({"sbatch": (0, "12345\n", "")})
         sched = SlurmScheduler(conn)

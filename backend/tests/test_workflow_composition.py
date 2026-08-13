@@ -4,7 +4,6 @@ import os
 import tempfile
 
 import pytest
-
 import workflow_models
 
 
@@ -263,7 +262,7 @@ class TestSchedulerStep:
             }]}
             we.save_workflow(wf)
             os.environ["GPUS_PER_NODE"] = "4"
-            st, rid = self._run_to_terminal(we, "nccl", {"target": "n1,n2,n3"})
+            st, _rid = self._run_to_terminal(we, "nccl", {"target": "n1,n2,n3"})
             spec = captured["spec"]
             assert spec.nodelist == "n1,n2,n3" and spec.nodes == 3 and spec.ntasks_per_node == 4
             assert spec.script.endswith("nccl_allreduce.sbatch")
@@ -413,7 +412,7 @@ class TestCapabilityResolution:
             monkeypatch.setattr(cs, "get_repo", lambda: self._FakeRepo(
                 [{"id": "t", "script": "t.sh",
                   "params": [{"key": "mode", "required": True, "default": "fast"}]}]))
-            cmd, params, problems = we._resolve_capability("t", {})
+            _cmd, params, problems = we._resolve_capability("t", {})
             assert problems == [] and params.get("mode") == "fast"
 
 
@@ -645,7 +644,7 @@ class TestResolveStep:
                  "fanout": {"nodes": "${nodelist}"}, "run": "hostname"},
             ]}
             we.save_workflow(wf)
-            st, rid = self._run(we, "res", {"rack": "bos01-b05"})
+            st, _rid = self._run(we, "res", {"rack": "bos01-b05"})
             assert st["state"] == "completed"
             assert cap["nodes"] == ["n1", "n2", "n3"]
             assert st.get("outputs", {}).get("nodelist") == "n1,n2,n3"
@@ -663,6 +662,31 @@ class TestResolveStep:
             we.save_workflow(wf)
             st, _ = self._run(we, "resm", {})
             assert st.get("outputs", {}).get("nodelist") == "n1,n2,n3"  # deduped, order-preserving
+
+    def test_resolve_single_rack_preserves_exact_selected_nodes(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as tmp:
+            we = self._engine(tmp)
+            import app
+
+            calls = []
+
+            def resolve(rack, override=None):
+                calls.append((rack, override))
+                return override or "n1,n2,n3"
+
+            monkeypatch.setattr(app, "validation_target_for_rack", resolve)
+            wf = {"id": "ress", "name": "ress", "steps": [
+                {"id": "resolve", "type": "automated", "name": "resolve",
+                 "resolve": {"racks": "${rack}", "into": "nodelist"}},
+            ]}
+            we.save_workflow(wf)
+            st, _ = self._run(
+                we,
+                "ress",
+                {"rack": "a", "target": "n1,n3"},
+            )
+            assert calls == [("a", "n1,n3")]
+            assert st.get("outputs", {}).get("nodelist") == "n1,n3"
 
     def test_resolve_no_nodes_fails(self, monkeypatch):
         with tempfile.TemporaryDirectory() as tmp:
@@ -701,8 +725,9 @@ class TestBackwardCompat:
     """Existing + reference workflows validate and round-trip unchanged."""
 
     def _shipped_workflow(self, name):
-        import yaml
         from pathlib import Path
+
+        import yaml
         p = Path(__file__).resolve().parents[2] / "var" / "workflows" / name
         with open(p, encoding="utf-8") as f:
             return yaml.safe_load(f)

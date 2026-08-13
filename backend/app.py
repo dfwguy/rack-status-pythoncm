@@ -550,6 +550,18 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
             "bash-completion errors on the head node)."
         ),
     },
+    *[
+        {
+            "section": "native_cmsh",
+            "key": f"RACK_SLURM_{name.upper()}",
+            "label": f"{name} executable",
+            "description": (
+                f"Absolute {name} path used by every backend scheduler call. Set this when "
+                "Slurm is not on the non-login shell PATH."
+            ),
+        }
+        for name in ("sbatch", "srun", "sinfo", "squeue", "sacct", "scontrol", "scancel")
+    ],
     {
         "section": "native_cmsh",
         "key": "RACK_MODULES_INIT",
@@ -1485,15 +1497,10 @@ def _query_scheduler_state_and_stdout(job_id: str) -> tuple[str | None, str | No
             return state, stdout, "scontrol"
     # sacct retains history after MinJobAge; StdOut is not available from accounting.
     try:
-        conf = os.environ.get(
-            "RACK_SLURM_CONF",
-            "/cm/shared-ubuntu2404-x86_64/apps/slurm/etc/slurm/slurm.conf",
-        )
-        sa = host_exec.run_on_host(
-            f"export SLURM_CONF={shlex.quote(conf)}; "
-            f"$(ls -1 /cm/local/apps/slurm/*/bin/sacct /cm/local/apps/slurm/current/bin/sacct "
-            f"2>/dev/null | tail -1) "
-            f"-j {shlex.quote(jid)} -X -P -n -o JobID,State,ExitCode",
+        sa = host_exec.run_slurm_on_host(
+            _get_platform().sacct_cmd(
+                f"-j {shlex.quote(jid)} -X -P -n -o JobID,State,ExitCode"
+            ),
             timeout=max(10, _env_int("RACK_SACCT_TIMEOUT", 30)),
         )
         for line in (sa.stdout or "").strip().splitlines():
@@ -3516,22 +3523,13 @@ def _slurm_job_base_id(job_raw: str | None) -> str | None:
     return s if s.isdigit() else None
 
 
-def _run_bash_slurm_prefix(cmd: str, *, timeout: int = 120) -> subprocess.CompletedProcess[str]:
-    """Run Slurm CLI after optional ``module load`` (non-login shell; see ``host_exec.run_slurm_on_host``)."""
-    plat = _get_platform()
-    return host_exec.run_slurm_on_host(
-        plat.slurm_prefix(cmd),
-        timeout=timeout,
-    )
-
-
 def _scontrol_hostnames_preserving_case(nodespec: str) -> list[str]:
     """Hostnames from ``scontrol show hostnames``, one per line, preserving Slurm ``NodeName`` spelling."""
     nodespec = nodespec.strip()
     if not nodespec or nodespec.lower() in ("none", "null"):
         return []
-    proc = _run_bash_slurm_prefix(
-        "scontrol show hostnames " + shlex.quote(nodespec),
+    proc = host_exec.run_slurm_on_host(
+        _get_platform().scontrol_hostnames_cmd(nodespec),
         timeout=max(30, _env_int("RACK_SCONTROL_HOSTNAMES_TIMEOUT", 120)),
     )
     if proc.returncode != 0:
@@ -3577,8 +3575,8 @@ def _all_slurm_nodenames() -> list[str]:
         if cached and (time.monotonic() - ts) < ttl:
             return cached
         try:
-            proc = _run_bash_slurm_prefix(
-                'sinfo -N -h -o "%N"',
+            proc = host_exec.run_slurm_on_host(
+                _get_platform().sinfo_cmd('-N -h -o "%N"'),
                 timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -3671,8 +3669,8 @@ def _hostnames_for_slurm_job(job_raw: str | None) -> tuple[list[str], str]:
     bid = _slurm_job_base_id(job_raw)
     if not bid:
         return [], "no_job_id"
-    proc = _run_bash_slurm_prefix(
-        f"sacct -j {shlex.quote(bid)} -X -P -n -o NodeList%2000 --noheader",
+    proc = host_exec.run_slurm_on_host(
+        _get_platform().sacct_job_cmd(bid),
         timeout=max(20, _env_int("RACK_SACCT_TIMEOUT", 90)),
     )
     if proc.returncode != 0 or not (proc.stdout or "").strip():
@@ -15429,8 +15427,10 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
 def _validation_node_eligibility(nodes: list[str]) -> tuple[dict[str, str], list[str]]:
     """Return live Slurm states and fail-closed reasons for an exact target set."""
     spec = ",".join(nodes)
-    proc = _run_bash_slurm_prefix(
-        f"sinfo -N -h --nodes={shlex.quote(spec)} -o '%N|%T'",
+    proc = host_exec.run_slurm_on_host(
+        _get_platform().sinfo_cmd(
+            f"-N -h --nodes={shlex.quote(spec)} -o '%N|%T'"
+        ),
         timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
     )
     if proc.returncode != 0:
@@ -18893,7 +18893,10 @@ def api_fabric_probe():
     node = (request.args.get("node") or "").strip()
     try:
         if not node:
-            proc = _run_bash_slurm_prefix("sinfo -N -h -o '%N' | head -1", timeout=30)
+            proc = host_exec.run_slurm_on_host(
+                _get_platform().sinfo_cmd("-N -h -o '%N' | head -1"),
+                timeout=30,
+            )
             lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
             node = lines[0] if lines else ""
         if not node:
@@ -19425,11 +19428,11 @@ def _post_run_accounting(activities: list[dict]) -> list[dict]:
     # allocations in the live reconciliation; older exact memberships remain in
     # post_run_nodes.json after their first snapshot.
     selected = job_ids[:400]
-    cmd = (
-        "sacct -X -n -P -j " + shlex.quote(",".join(selected))
+    cmd = _get_platform().sacct_cmd(
+        "-X -n -P -j " + shlex.quote(",".join(selected))
         + " -o JobIDRaw,State,NodeList,Start,End,ExitCode,JobName"
     )
-    proc = _run_bash_slurm_prefix(
+    proc = host_exec.run_slurm_on_host(
         cmd,
         timeout=max(30, _env_int("RACK_POST_RUN_SACCT_TIMEOUT", 120)),
     )
@@ -19460,8 +19463,8 @@ def _post_run_accounting(activities: list[dict]) -> list[dict]:
 
 
 def _post_run_inventory() -> list[dict]:
-    proc = _run_bash_slurm_prefix(
-        'sinfo -N -h -o "%N|%T|%E"',
+    proc = host_exec.run_slurm_on_host(
+        _get_platform().sinfo_cmd('-N -h -o "%N|%T|%E"'),
         timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
     )
     if proc.returncode != 0:
@@ -20326,13 +20329,11 @@ def capture_job_attempt(job_id: str) -> dict:
         # hour later is simply GONE — which silently missed three completed MNUBERGEMM runs.
         # sacct reads the accounting DB and retains them, so fall back to it.
         try:
-            sa = host_exec.run_on_host(
-                # Explicit SLURM_CONF + absolute sacct: this runs in a NON-LOGIN ssh shell with
-                # no PATH and no SLURM_CONF, exactly like every other Slurm call in this file.
-                f"export SLURM_CONF={shlex.quote(os.environ.get('RACK_SLURM_CONF','/cm/shared-ubuntu2404-x86_64/apps/slurm/etc/slurm/slurm.conf'))}; "
-                f"$(ls -1 /cm/local/apps/slurm/*/bin/sacct /cm/local/apps/slurm/current/bin/sacct 2>/dev/null | tail -1) "
-                f"-j {shlex.quote(job_id)} -X -P -n "
-                "-o JobID,JobName,State,Elapsed,ExitCode,Start,End,NodeList,User"
+            sa = host_exec.run_slurm_on_host(
+                _get_platform().sacct_cmd(
+                    f"-j {shlex.quote(job_id)} -X -P -n "
+                    "-o JobID,JobName,State,Elapsed,ExitCode,Start,End,NodeList,User"
+                )
             )
             line = (sa.stdout or "").strip().splitlines()
             if line:
