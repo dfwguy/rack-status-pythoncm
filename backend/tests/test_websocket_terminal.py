@@ -10,12 +10,12 @@ os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
-import app as app_module
+import api.terminal as terminal_module  # the middleware moved out of app.py
 
 
 @pytest.fixture
 def terminal_middleware():
-    return app_module._WebSocketTerminalMiddleware(lambda environ, start_response: (
+    return terminal_module._WebSocketTerminalMiddleware(lambda environ, start_response: (
         start_response("404 Not Found", [("Content-Type", "text/plain")]),
         [b"fallback"],
     )[1])
@@ -29,7 +29,7 @@ def test_werkzeug_websocket_calls_start_response(terminal_middleware, monkeypatc
         called["handle"] += 1
 
     monkeypatch.setattr(terminal_middleware, "_handle_terminal", fake_handle)
-    monkeypatch.setattr(app_module, "_TERMINAL_ENABLED", True)
+    monkeypatch.setattr(terminal_module, "_TERMINAL_ENABLED", True)
 
     def start_response(status, headers, exc_info=None):
         called["status"] = status
@@ -49,7 +49,7 @@ def test_werkzeug_websocket_calls_start_response(terminal_middleware, monkeypatc
 
 
 def test_non_websocket_request_falls_through(terminal_middleware, monkeypatch):
-    monkeypatch.setattr(app_module, "_TERMINAL_ENABLED", True)
+    monkeypatch.setattr(terminal_module, "_TERMINAL_ENABLED", True)
     monkeypatch.setattr(
         terminal_middleware,
         "_handle_terminal",

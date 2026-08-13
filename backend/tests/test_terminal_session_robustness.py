@@ -22,6 +22,7 @@ import time
 import pytest
 
 import app as A
+import api.terminal as T
 
 # These exercise a real pty, because the bug is in pty semantics -- a mock would have to encode the
 # EIO behaviour under test and would prove nothing. Some restricted environments cannot allocate
@@ -36,13 +37,13 @@ else:
     os.close(_probe_slave)
 
 
-def _session(argv: list[str]) -> A._TerminalSession:
+def _session(argv: list[str]) -> T._TerminalSession:
     master_fd, slave_fd = pty.openpty()
     proc = subprocess.Popen(
         argv, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, start_new_session=True
     )
     os.close(slave_fd)
-    return A._TerminalSession("test-session", master_fd, proc, "ct07-01", "node")
+    return T._TerminalSession("test-session", master_fd, proc, "ct07-01", "node")
 
 
 def _settle(sess, timeout: float = 3.0) -> None:
