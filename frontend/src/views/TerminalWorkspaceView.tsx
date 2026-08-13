@@ -64,7 +64,8 @@ export default function TerminalWorkspaceView({ logDir }: TerminalWorkspaceViewP
   // The library's own measured-width hook: react-grid-layout needs an explicit pixel width
   // and cannot derive one. `mounted` distinguishes "not measured yet" from a genuine zero,
   // so the grid is not laid out against the placeholder width.
-  const { width, mounted, containerRef: gridRef } = useContainerWidth();
+  // initialWidth carries the first paint; the ResizeObserver corrects it and xterm refits.
+  const { width, containerRef: gridRef } = useContainerWidth({ initialWidth: 1280 });
 
   // Restore when the cluster changes, which also covers first mount.
   useEffect(() => {
@@ -105,41 +106,51 @@ export default function TerminalWorkspaceView({ logDir }: TerminalWorkspaceViewP
         description={
           count === 0
             ? "Interactive head-node and compute shells, side by side in one workspace."
-            : `${count} shell${count === 1 ? "" : "s"} open. Drag a pane by its header; drag a corner to resize.`
-        }
-        actions={
-          <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-            <Button kind="primary" size="small" onClick={() => setPickerOpen(true)}>
-              <Plus size={14} style={{ marginRight: 6 }} />
-              Add terminal
-            </Button>
-            <Tooltip content="Move every terminal into its own browser tab">
-              <Button kind="secondary" size="small" onClick={detachAll} disabled={count === 0}>
-                <ExternalLink size={14} style={{ marginRight: 6 }} />
-                Detach grid
-              </Button>
-            </Tooltip>
-            <Tooltip content="Disconnect and close every terminal">
-              <Button kind="tertiary" size="small" onClick={closeAll} disabled={count === 0}>
-                <Trash2 size={14} style={{ marginRight: 6 }} />
-                Close all
-              </Button>
-            </Tooltip>
-          </Box>
+            : `${count} shell${count === 1 ? "" : "s"} open. Drag a pane by its header to rearrange; drag its right or bottom edge to resize.`
         }
       />
 
+      {/* The page's own actions sit below the heading rather than in the header's action slot,
+          which is reserved for the app-wide Ask AI and Help controls. Crowding page actions in
+          beside them makes a destructive "Close all" a neighbour of "Help". */}
+      <Box sx={{ display: "flex", gap: 1, alignItems: "center", mt: 1, flexWrap: "wrap" }}>
+        <Button
+          kind="primary"
+          color="brand"
+          size="small"
+          onClick={() => setPickerOpen(true)}
+        >
+          <Plus size={14} style={{ marginRight: 6 }} />
+          Add terminal
+        </Button>
+        <Tooltip content="Move every terminal into its own browser tab">
+          <Button kind="secondary" size="small" onClick={detachAll} disabled={count === 0}>
+            <ExternalLink size={14} style={{ marginRight: 6 }} />
+            Detach grid
+          </Button>
+        </Tooltip>
+        <Tooltip content="Disconnect and close every terminal">
+          <Button
+            kind="secondary"
+            color="danger"
+            size="small"
+            onClick={closeAll}
+            disabled={count === 0}
+          >
+            <Trash2 size={14} style={{ marginRight: 6 }} />
+            Close all
+          </Button>
+        </Tooltip>
+      </Box>
+
       <Box ref={gridRef} sx={{ mt: 2 }}>
-        {/* Rendered only once the container has a real width; laying out at 0 collapses panes. */}
-        {mounted && width > 0 && (
-          <TerminalGrid
-            panes={state.panes}
-            layout={state.layout}
-            width={width}
-            onChange={setState}
-            onSession={onSession}
-          />
-        )}
+        <TerminalGrid
+          panes={state.panes}
+          layout={state.layout}
+          width={width}
+          onChange={setState}
+          onSession={onSession}
+        />
       </Box>
 
       {count > 0 && (

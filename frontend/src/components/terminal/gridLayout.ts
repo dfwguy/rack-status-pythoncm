@@ -19,6 +19,15 @@ export const MIN_PANE_ROWS = 6;
 export const MIN_PANE_COLS = 3;
 
 /**
+ * No maximum: a pane may be resized to the full grid width.
+ *
+ * Dragging a second pane below the first leaves the first row half empty, and the obvious response
+ * is to widen the remaining pane across it. Capping width at the auto-placement's half would make
+ * that impossible and strand the empty column.
+ */
+export const MAX_PANE_COLS = GRID_COLS;
+
+/**
  * Panes are laid out at most two across.
  *
  * Not an arbitrary cap: a shell is only useful at about 80 columns, and on a 1920px window three
@@ -28,8 +37,15 @@ export const MIN_PANE_COLS = 3;
  */
 export const MAX_AUTO_COLUMNS = 2;
 
-/** Default height in grid rows for an automatically placed pane. */
-export const DEFAULT_PANE_ROWS = 12;
+/**
+ * Default height in grid rows for an automatically placed pane.
+ *
+ * react-grid-layout sizes an item as ``h * ROW_HEIGHT + (h - 1) * marginY``, so 14 rows is
+ * 14*30 + 13*8 = 524px. Less the 32px header and padding that leaves close to 30 lines of
+ * terminal -- enough for `htop` or a `sinfo` listing without scrolling, and short enough that two
+ * stacked panes still fit a laptop screen. Panes are resizable, so this is only a starting size.
+ */
+export const DEFAULT_PANE_ROWS = 14;
 
 /**
  * Tile *count* panes: one full width, then two across with rows growing beneath.
@@ -41,7 +57,7 @@ export const DEFAULT_PANE_ROWS = 12;
 export function autoLayout(ids: string[], paneRows = DEFAULT_PANE_ROWS): LayoutItem[] {
   if (ids.length === 0) return [];
   if (ids.length === 1) {
-    return [{ i: ids[0], x: 0, y: 0, w: GRID_COLS, h: paneRows, minW: MIN_PANE_COLS, minH: MIN_PANE_ROWS }];
+    return [{ i: ids[0], x: 0, y: 0, w: GRID_COLS, h: paneRows, minW: MIN_PANE_COLS, maxW: MAX_PANE_COLS, minH: MIN_PANE_ROWS }];
   }
   const width = GRID_COLS / MAX_AUTO_COLUMNS;
   return ids.map((id, index) => ({
@@ -51,6 +67,7 @@ export function autoLayout(ids: string[], paneRows = DEFAULT_PANE_ROWS): LayoutI
     w: width,
     h: paneRows,
     minW: MIN_PANE_COLS,
+    maxW: MAX_PANE_COLS,
     minH: MIN_PANE_ROWS,
   }));
 }
@@ -74,7 +91,7 @@ export function appendToLayout(
     const half = GRID_COLS / MAX_AUTO_COLUMNS;
     return [
       { ...current[0], x: 0, y: 0, w: half },
-      { i: newId, x: half, y: 0, w: half, h: current[0].h, minW: MIN_PANE_COLS, minH: MIN_PANE_ROWS },
+      { i: newId, x: half, y: 0, w: half, h: current[0].h, minW: MIN_PANE_COLS, maxW: MAX_PANE_COLS, minH: MIN_PANE_ROWS },
     ];
   }
 
@@ -88,13 +105,13 @@ export function appendToLayout(
   if (usedWidth + half <= GRID_COLS) {
     return [
       ...current,
-      { i: newId, x: usedWidth, y: last.y, w: half, h: last.h, minW: MIN_PANE_COLS, minH: MIN_PANE_ROWS },
+      { i: newId, x: usedWidth, y: last.y, w: half, h: last.h, minW: MIN_PANE_COLS, maxW: MAX_PANE_COLS, minH: MIN_PANE_ROWS },
     ];
   }
   const nextY = Math.max(...current.map((l) => l.y + l.h));
   return [
     ...current,
-    { i: newId, x: 0, y: nextY, w: half, h: paneRows, minW: MIN_PANE_COLS, minH: MIN_PANE_ROWS },
+    { i: newId, x: 0, y: nextY, w: half, h: paneRows, minW: MIN_PANE_COLS, maxW: MAX_PANE_COLS, minH: MIN_PANE_ROWS },
   ];
 }
 

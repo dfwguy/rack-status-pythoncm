@@ -25,6 +25,8 @@ import {
 } from "./gridLayout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
+// Loaded after the library CSS so its handle styling wins.
+import "./terminalGrid.css";
 
 interface TerminalGridProps {
   panes: TerminalPaneSpec[];
@@ -99,6 +101,10 @@ export function TerminalGrid({ panes, layout, width, onChange, onSession }: Term
       }}
       // Resizing changes the container; useTerminal's ResizeObserver refits xterm to whatever it
       // becomes, so the shell reflows instead of being clipped.
+      //
+      // Handles on the bottom and right edges as well as the corner: widening a pane across the
+      // empty half of its row is the common case (drag one pane below another and the row is left
+      // half empty), and reaching for a single corner grip to do it is fiddly.
       resizeConfig={{ enabled: true, handles: ["se", "s", "e"] }}
       onLayoutChange={onLayoutChange}
     >

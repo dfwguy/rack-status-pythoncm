@@ -61,6 +61,22 @@ describe("autoLayout — the specified progression", () => {
     }
   });
 
+  it("lets any pane be widened to the whole row", () => {
+    // Dragging a second pane below the first leaves the top row half empty; widening the pane
+    // across it is the obvious fix, and a width cap at the placement default would forbid that.
+    for (const p of autoLayout(ids(4))) {
+      expect(p.maxW).toBe(GRID_COLS);
+    }
+    expect(appendToLayout(autoLayout(ids(1)), "p2")[1].maxW).toBe(GRID_COLS);
+  });
+
+  it("starts panes tall enough to be worth reading", () => {
+    // 14 rows is ~524px by react-grid-layout's sizing, close to 30 lines of terminal.
+    for (const p of autoLayout(ids(2))) {
+      expect(p.h).toBeGreaterThanOrEqual(12);
+    }
+  });
+
   it("never places a pane too small to be a usable shell", () => {
     for (const p of autoLayout(ids(6))) {
       expect(p.w).toBeGreaterThanOrEqual(MIN_PANE_COLS);

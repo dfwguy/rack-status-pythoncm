@@ -1,0 +1,63 @@
+/* Terminal grid — visible resize affordances on a dark pane.
+   Author: Rafael M. Koike & Cursor Agent ("Ada")
+
+   react-resizable draws its handle as a small light-on-transparent glyph in the bottom-right
+   corner. Against the terminal's near-black background it is effectively invisible, so the pane
+   looks fixed even though it resizes — and widening a pane across the empty half of its row is
+   the single most common thing to want here. These rules give each handle a real target. */
+
+.nvis-terminal-grid .react-resizable-handle {
+  /* Replace the default corner-only glyph; each axis gets its own affordance below. */
+  background-image: none;
+  opacity: 0;
+  transition: opacity 120ms ease-in-out;
+}
+
+/* Only shown on hover, so the grid is not permanently outlined in grab handles. */
+.nvis-terminal-grid .react-grid-item:hover > .react-resizable-handle {
+  opacity: 1;
+}
+
+/* Right edge — drag to widen across the row. */
+.nvis-terminal-grid .react-resizable-handle-e {
+  width: 8px;
+  right: 0;
+  top: 50%;
+  height: 44px;
+  margin-top: -22px;
+  border-right: 3px solid var(--nvidia-green, #76b900);
+  border-radius: 2px;
+  cursor: ew-resize;
+}
+
+/* Bottom edge — drag to make the shell taller. */
+.nvis-terminal-grid .react-resizable-handle-s {
+  height: 8px;
+  bottom: 0;
+  left: 50%;
+  width: 44px;
+  margin-left: -22px;
+  border-bottom: 3px solid var(--nvidia-green, #76b900);
+  border-radius: 2px;
+  cursor: ns-resize;
+}
+
+/* Corner — both at once. */
+.nvis-terminal-grid .react-resizable-handle-se {
+  width: 14px;
+  height: 14px;
+  right: 1px;
+  bottom: 1px;
+  border-right: 3px solid var(--nvidia-green, #76b900);
+  border-bottom: 3px solid var(--nvidia-green, #76b900);
+  border-radius: 0 0 3px 0;
+  cursor: nwse-resize;
+}
+
+/* The gap a dragged pane will drop into. The default is a faint red wash that reads as an error
+   on this surface; brand green matches the rest of the drag affordances. */
+.nvis-terminal-grid .react-grid-placeholder {
+  background: var(--nvidia-green, #76b900);
+  opacity: 0.18;
+  border-radius: 4px;
+}

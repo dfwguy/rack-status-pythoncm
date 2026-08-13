@@ -16,7 +16,8 @@ import { decodeGrid } from "../components/terminal/detachState";
 import { useContainerWidth } from "react-grid-layout";
 
 export default function TerminalGridTabView() {
-  const { width, mounted, containerRef: gridRef } = useContainerWidth();
+  // initialWidth carries the first paint; the ResizeObserver corrects it and xterm refits.
+  const { width, containerRef: gridRef } = useContainerWidth({ initialWidth: 1280 });
 
   const initial = useMemo<TerminalGridState | null>(() => {
     const raw = new URLSearchParams(window.location.search).get("g");
@@ -84,7 +85,7 @@ export default function TerminalGridTabView() {
             again from Tools &rsaquo; Terminal.
           </Banner>
         )}
-        {mounted && width > 0 && initial && (
+        {initial && (
           <TerminalGrid
             panes={state.panes}
             layout={state.layout}
