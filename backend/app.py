@@ -1155,10 +1155,24 @@ def _job_env_overrides_load() -> dict[str, str]:
         try:
             mtime = p.stat().st_mtime
         except OSError:
+            # No overrides file: a fresh install, or Settings never saved anything.
+            #
+            # Materialising re-enters this function -- it calls _apply_catalog_active_to_environ,
+            # which loads the overrides again -- and with no file there is no mtime to cache, so
+            # the early return below is never reached and the recursion does not terminate. Each
+            # level holds the flock handle opened above, so it climbs until the process runs out
+            # of file descriptors: "OSError: [Errno 24] Too many open files". Invisible wherever
+            # the file happens to exist, which is every deployment, and immediate on a clean
+            # checkout.
+            #
+            # So materialise only when this is news. Once the cache says "empty", a re-entrant
+            # call has nothing to do and unwinds.
             with _job_env_file_lock:
+                already_absent = _JOB_ENV_OVERRIDES_CACHE == {} and _JOB_ENV_OVERRIDES_MTIME is None
                 _JOB_ENV_OVERRIDES_CACHE = {}
                 _JOB_ENV_OVERRIDES_MTIME = None
-            _materialize_job_env_overrides_into_os_environ({})
+            if not already_absent:
+                _materialize_job_env_overrides_into_os_environ({})
             return {}
         with _job_env_file_lock:
             if _JOB_ENV_OVERRIDES_CACHE is not None and _JOB_ENV_OVERRIDES_MTIME == mtime:
