@@ -17,6 +17,11 @@ A module qualifies by exposing either of:
     Declare one explicitly when the URL cannot be spelled as a Python module name (``node-report``
     has a hyphen) or when the module owns several prefixes.
 
+    ``url_prefix=""`` means "my routes already carry their full paths". That is the mode modules
+    migrated out of ``app.py`` use: the decorators keep the exact strings they always had, so a
+    move cannot silently change a URL through prefix arithmetic. New modules should prefer the
+    filename convention instead.
+
 ``install(app)``
     An escape hatch for things Flask routing cannot express. The terminal needs it: ``/ws/terminal``
     is WSGI middleware wrapping ``app.wsgi_app``, below Flask's router entirely.

@@ -22,6 +22,7 @@ settings registry that deserve their own move.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import PurePosixPath
 
 import host_exec
@@ -67,3 +68,24 @@ def rpath(p: object) -> PurePosixPath:
     ``read_text``.
     """
     return PurePosixPath(host_exec.resolve(p))
+
+
+#: A Slurm job id as ``scancel``/``sacct`` will accept it, optionally an array task.
+#:
+#: Guards every place a job id reaches a command line. Shared because both the app and the
+#: history API validate ids before use, and two copies of a security-relevant pattern is one
+#: too many.
+SLURM_JOB_ID_RE = re.compile(r"^[1-9][0-9]*(_[0-9]+)?$")
+
+
+def history_enabled() -> bool:
+    """True when the SQLite run-history store is importable and not disabled by env.
+
+    Lives here rather than with the history API because ``app.py`` gates six separate code paths
+    on it -- an availability predicate is configuration, not an endpoint.
+    """
+    try:
+        import results_history
+    except ImportError:
+        return False
+    return results_history is not None and not truthy_env("RACK_RESULTS_HISTORY_DISABLED")

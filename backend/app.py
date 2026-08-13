@@ -140,16 +140,15 @@ def _nvis_naming() -> nvis_id_templates.NvisNaming:
     return nvis_id_templates.get_nvis_naming()
 import ai_chat
 import core
-import help_content
 import host_exec
 import nvftp_cache_sync
 import nvlink_preflight
 import post_run_report
 import rack_locks
-import token_vault
 import validation_activities
 import validation_presets
 import workflow_engine
+from api import _common as _api_common
 from platforms import get_platform as _get_platform
 
 # Catalog (platforms/tools/projects). Optional at import time so the app still boots if
@@ -168,10 +167,6 @@ except Exception as _catalog_exc:  # pragma: no cover - defensive
     catalog_store = None  # type: ignore[assignment]
     catalog_bp = None  # type: ignore[assignment]
     _CATALOG_AVAILABLE = False
-
-NVFTP_TOKENS_URL = (
-    "https://nvftp.nvidia.com/workspace/1099ff0b-621c-490f-a662-c69583ccabad/tokens"
-)
 
 _REMOTE_BASE = os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
 if _REMOTE_BASE:
@@ -1617,7 +1612,7 @@ def _ingest_new_activity_result(log_dir: str, results_path: str, rack_hint: str 
     exactly on the empty-path -> result-path transition to avoid adding recurring reads or
     SSH work to dashboard polling.
     """
-    if not results_path or not _universal_enabled() or not _history_enabled():
+    if not results_path or not _universal_enabled() or not core.history_enabled():
         return
     try:
         if results_history.latest_run_for_log(results_path) is not None:
@@ -8937,7 +8932,7 @@ def api_reset_job_status():
 
 _SLURM_DRAIN_REASON_RE = re.compile(r"^[A-Za-z0-9 _.,:/()\-]{1,256}$")
 # last_job / scancel: plain id or job array id (e.g. 12345_0)
-_SLURM_SCANCEL_JOB_ID_RE = re.compile(r"^[1-9][0-9]*(_[0-9]+)?$")
+_SLURM_SCANCEL_JOB_ID_RE = core.SLURM_JOB_ID_RE  # one definition, in core
 
 
 def _slurm_nodename_target_from_body(body: dict) -> tuple[str | None, str | None]:
@@ -9941,11 +9936,6 @@ def _universal_enabled() -> bool:
     return _uparse is not None and not _truthy_env("RACK_UNIVERSAL_PARSER_DISABLED")
 
 
-def _history_enabled() -> bool:
-    """True when the SQLite run-history store is importable and not disabled by env."""
-    return results_history is not None and not _truthy_env("RACK_RESULTS_HISTORY_DISABLED")
-
-
 # --- host-aware stat lookup ----------------------------------------------------------
 _HIST_STAT_TTL_SEC = 20.0
 _hist_stat_lock = threading.Lock()
@@ -10209,7 +10199,7 @@ def _history_ingest_universal(
     source: str = "universal_parser",
 ) -> str | None:
     """Persist one universal_parser result. Returns the run_id, or ``None`` on any problem."""
-    if not res or not _history_enabled():
+    if not res or not core.history_enabled():
         return None
     run_id: str | None = None
     try:
@@ -10439,7 +10429,7 @@ def _history_ingest_parser_json(
     source: str = "parser.sh",
 ) -> list[str]:
     """Persist a ``parser.sh --json`` payload. Returns run_ids (empty list on any problem)."""
-    if not isinstance(parsed, dict) or not _history_enabled():
+    if not isinstance(parsed, dict) or not core.history_enabled():
         return []
     try:
         mt, sz = _log_stat_for_path(log_dir, log_path_s)
@@ -10582,129 +10572,9 @@ def _universal_path_under_log_dir(log_dir: Path, raw: str) -> str | None:
 
 
 # --- history read routes -------------------------------------------------------------
-_HISTORY_FILTER_KEYS = (
-    "workload_kind", "kind", "rack", "job_id", "status", "run_id",
-    "since", "until", "search", "source_log_path", "has_metric",
-)
-
-
-def _history_filters_from_args() -> dict[str, object]:
-    """Query-string -> ``results_history`` filter mapping (repeatable params become lists)."""
-    out: dict[str, object] = {}
-    for key in _HISTORY_FILTER_KEYS:
-        vals = [v.strip() for v in request.args.getlist(key) if v and v.strip()]
-        if not vals:
-            continue
-        out[key] = vals[0] if len(vals) == 1 else vals
-    return out
-
-
-def _history_unavailable_response():
-    return jsonify(
-        {
-            "ok": False,
-            "error": "results history unavailable",
-            "detail": (
-                "backend/results_history.py is not importable — check the bind mount "
-                "in docker-compose.override.yml (or RACK_RESULTS_HISTORY_DISABLED)."
-            ),
-        }
-    ), 503
-
-
-@app.route("/api/history/runs")
-def api_history_runs():
-    """Paged run history. Filters: workload_kind, rack, job_id, status, since, until, search."""
-    if not _history_enabled():
-        return _history_unavailable_response()
-    try:
-        limit = max(1, min(int(request.args.get("limit") or 100), 1000))
-        offset = max(0, int(request.args.get("offset") or 0))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "limit/offset must be integers"}), 400
-    filters = _history_filters_from_args()
-    include_metrics = _truthy_arg(request.args.get("metrics"), default=True)
-    order = "asc" if str(request.args.get("order") or "").lower().startswith("a") else "desc"
-    try:
-        runs = results_history.list_runs(
-            filters, limit, offset, order=order, include_metrics=include_metrics
-        )
-        total = results_history.count_runs(filters)
-    except Exception as e:  # noqa: BLE001
-        _logger.warning("history runs query failed: %s", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify(
-        {"ok": True, "total": total, "limit": limit, "offset": offset,
-         "filters": filters, "runs": runs}
-    )
-
-
-@app.route("/api/history/runs/<path:run_id>")
-def api_history_run(run_id: str):
-    """One run with every metric row (series points included)."""
-    if not _history_enabled():
-        return _history_unavailable_response()
-    try:
-        run = results_history.get_run(run_id)
-    except Exception as e:  # noqa: BLE001
-        _logger.warning("history run lookup failed: %s", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
-    if not run:
-        return jsonify({"ok": False, "error": "run not found", "run_id": run_id}), 404
-    return jsonify({"ok": True, "run": run})
-
-
-@app.route("/api/history/metrics")
-def api_history_metrics():
-    """``?metric=<name>`` -> the trend series. Without ``metric`` -> the available names."""
-    if not _history_enabled():
-        return _history_unavailable_response()
-    name = (request.args.get("metric") or request.args.get("name") or "").strip()
-    filters = _history_filters_from_args()
-    try:
-        if not name:
-            return jsonify(
-                {"ok": True, "filters": filters, "metrics": results_history.metric_names(filters)}
-            )
-        include_series = _truthy_arg(request.args.get("series"), default=False)
-        limit = max(1, min(int(request.args.get("limit") or 5000), 200000))
-        points = results_history.metric_series(
-            name, filters, limit=limit, include_series_points=include_series
-        )
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "limit must be an integer"}), 400
-    except Exception as e:  # noqa: BLE001
-        _logger.warning("history metric series failed: %s", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify({"ok": True, "metric": name.lower(), "filters": filters,
-                    "count": len(points), "points": points})
 
 
 # Alias kept because TRACK-A's integration note documents this spelling.
-@app.route("/api/history/metric-series")
-def api_history_metric_series():
-    """Alias of ``/api/history/metrics`` that requires ``?metric=``."""
-    if not (request.args.get("metric") or request.args.get("name") or "").strip():
-        return jsonify({"ok": False, "error": "metric is required"}), 400
-    return api_history_metrics()
-
-
-@app.route("/api/history/summary")
-def api_history_summary():
-    """Fleet baseline (count / median / p05 / p95 / latest per metric) + store health."""
-    if not _history_enabled():
-        return _history_unavailable_response()
-    kind = (request.args.get("workload_kind") or request.args.get("kind") or "").strip() or None
-    filters = _history_filters_from_args()
-    filters.pop("workload_kind", None)
-    filters.pop("kind", None)
-    try:
-        summary = results_history.summary_stats(kind, filters or None)
-        stats = results_history.db_stats()
-    except Exception as e:  # noqa: BLE001
-        _logger.warning("history summary failed: %s", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify({"ok": True, "summary": summary, "db": stats})
 
 
 # --- universal ingest routes ---------------------------------------------------------
@@ -10851,7 +10721,7 @@ def api_universal_scan():
             "parsed": len(scanned),
             "skipped": skipped,
             "ingested": sum(1 for s in scanned if s.get("run_id")),
-            "history_enabled": _history_enabled(),
+            "history_enabled": core.history_enabled(),
             "elapsed_sec": round(time.monotonic() - started, 3),
             "results": scanned,
         }
@@ -12228,7 +12098,7 @@ def _analytics_history_block(since: str | None = None) -> dict[str, object]:
 
     Returned under a NEW top-level ``history`` key — no existing field is touched.
     """
-    if not _history_enabled():
+    if not core.history_enabled():
         return {
             "available": False,
             "reason": "results_history unavailable (check the bind mount in docker-compose.override.yml)",
@@ -12324,8 +12194,8 @@ def _analytics_history_block(since: str | None = None) -> dict[str, object]:
 @app.route("/api/analytics/history", methods=["GET"])
 def api_analytics_history():
     """Fleet baseline over the persisted run history (``?since=`` ISO-8601 or epoch)."""
-    if not _history_enabled():
-        return _history_unavailable_response()
+    if not core.history_enabled():
+        return _api_common.history_unavailable_response()
     since = (request.args.get("since") or "").strip() or None
     try:
         return jsonify({"ok": True, "history": _analytics_history_block(since)})
@@ -18559,37 +18429,6 @@ def api_nvftp_sync_test():
     return jsonify(out), code
 
 
-@app.route("/api/vault/nvftp-token", methods=["GET", "PUT", "DELETE"])
-def api_vault_nvftp_token():
-    """GET status (masked); PUT ``{token}`` to store encrypted; DELETE to clear."""
-    if request.method == "GET":
-        try:
-            st = token_vault.nvftp_token_status()
-        except RuntimeError as e:
-            return jsonify({"ok": False, "error": str(e)}), 503
-        return jsonify({"ok": True, "tokens_url": NVFTP_TOKENS_URL, **st})
-    if request.method == "DELETE":
-        try:
-            token_vault.clear_nvftp_token()
-        except OSError as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
-        return jsonify({"ok": True, "configured": False})
-    body = request.get_json(silent=True) or {}
-    raw = body.get("token")
-    if not isinstance(raw, str):
-        return jsonify({"ok": False, "error": 'expected JSON {"token": "…"}'}), 400
-    try:
-        st = token_vault.store_nvftp_token(raw)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    except RuntimeError as e:
-        return jsonify({"ok": False, "error": str(e)}), 503
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    nvftp_cache_sync.ensure_background_thread()
-    return jsonify({"ok": True, "tokens_url": NVFTP_TOKENS_URL, **st})
-
-
 @app.route("/api/cluster-dashboard-metadata", methods=["GET", "PUT"])
 def api_cluster_dashboard_metadata():
     """GET/PUT JSON ``product_line``, ``hw_vendor``, ``customer_name`` (saved under REPO_ROOT/var when unset)."""
@@ -19381,22 +19220,6 @@ def api_ai_test():
 # ---------------------------------------------------------------------------
 
 
-@app.route("/api/help/content", methods=["GET"])
-def api_help_content():
-    """Return the full app knowledge registry (mirror of the frontend content)."""
-    entries = help_content.get_help_content()
-    return jsonify({"ok": True, "count": len(entries), "entries": entries})
-
-
-@app.route("/api/help/content/<content_id>", methods=["GET"])
-def api_help_content_entry(content_id: str):
-    """Return a single help entry by id."""
-    entry = help_content.get_entry(content_id)
-    if not entry:
-        return jsonify({"ok": False, "error": "Help content not found"}), 404
-    return jsonify({"ok": True, "entry": entry})
-
-
 # ---------------------------------------------------------------------------
 # Workflow routes
 # ---------------------------------------------------------------------------
@@ -19875,73 +19698,14 @@ def api_workflow_generate_mermaid():
 
 
 
-# Per-domain API modules under backend/api/, discovered automatically. Drop a module in that
-# package and it registers itself; nothing here changes. See backend/api/__init__.py.
-import api as _api_package
 
-_api_package.register(app)
-
-# After all routes and middleware are registered (avoid circular import via nvftp_cache_sync._eget → app).
-_bootstrap_catalog_at_startup()
-_bootstrap_nvftp_sync_at_startup()
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG") == "1", threaded=True)
-
-# ---------------------------------------------------------------------------------------------
-# Job-attempt capture — a run that never produces a log MUST still be recorded.
-#
-# Job 63850 (MNUBERGEMM, h01) was CANCELLED in the Slurm prolog: RunTime 00:00:00, no stdout file
-# ever created. It therefore left NO trace in the log dir, in results_history, or in the lake — the
-# attempt was invisible even though it consumed an 18-node allocation and drained a tray. Capturing
-# only successful runs is the same blank-read-as-success failure this platform exists to catch.
-# ---------------------------------------------------------------------------------------------
-_SCONTROL_FIELDS = (
-    "JobId", "JobName", "UserId", "JobState", "Reason", "ExitCode", "DerivedExitCode",
-    "RunTime", "SubmitTime", "StartTime", "EndTime", "NodeList", "ReqNodeList",
-    "NumNodes", "NumCPUs", "Partition", "StdOut", "StdErr", "WorkDir", "Command",
-)
-
-
-def _parse_scontrol_job(text: str) -> dict:
-    """scontrol emits `Key=Value` pairs, space-separated, values may contain `/` and `:` but not ` `."""
-    out: dict[str, str] = {}
-    for m in re.finditer(r"([A-Za-z][A-Za-z0-9_]*)=(\S*)", text or ""):
-        k, v = m.group(1), m.group(2)
-        if k in _SCONTROL_FIELDS and k not in out:
-            out[k] = v
-    return out
-
-
-def _rack_and_nodes_from_nodelist(nodelist: str) -> tuple[str, list[str]]:
-    """Attribute a Slurm ``NodeList`` to ``(rack id, node hostnames)``.
-
-    Two things make this less trivial than it looks:
-      * Slurm reports a *compact* list (``<rack>-[01-18]``), so it has to be expanded before
-        the hostnames mean anything, and ``(null)`` / ``None assigned`` for a job that never
-        got an allocation.
-      * Rack attribution goes through the naming engine (``NVIS_RACK_ID`` / ``NVIS_CT_ID``),
-        so every site's convention works. This used to hardcode one cluster's ``ink50``
-        prefix, which silently produced an empty rack and no nodes everywhere else.
-    """
-    spec = (nodelist or "").strip()
-    if not spec or spec.lower() in ("(null)", "none assigned"):
-        return "", []
-    if _uparse is not None:
-        hosts = _uparse.expand_nodelist(spec)
-    else:  # no normaliser: bracket ranges stay unexpanded, but do not lose the plain names
-        hosts = [h for h in re.split(r"[,\s]+", spec) if h]
-    naming = _nvis_naming()
-    # Prefer recognised trays, but never drop everything: an unrecognised convention should
-    # still surface its nodes rather than report the job as having run nowhere.
-    nodes = [h for h in hosts if naming.is_tray_hostname(h)] or hosts
-    for h in nodes:
-        hit = naming.sinfo_rack_from_host(h)
-        if hit:
-            return (naming.canonical_rack_id(hit[0]) or hit[0]), nodes
-    return "", nodes
+@app.route("/api/history/capture-job", methods=["GET", "POST"])
+def api_capture_job_attempt():
+    """``?job_id=`` — record a Slurm attempt (even one that produced no log) to history + lake."""
+    jid = (request.args.get("job_id") or (request.get_json(silent=True) or {}).get("job_id") or "").strip()
+    if not jid or not core.SLURM_JOB_ID_RE.fullmatch(jid):
+        return jsonify({"ok": False, "error": "valid job_id required"}), 400
+    return jsonify(capture_job_attempt(jid))
 
 
 def capture_job_attempt(job_id: str) -> dict:
@@ -20061,11 +19825,75 @@ def capture_job_attempt(job_id: str) -> dict:
     res["ok"] = True
     return res
 
+# Per-domain API modules under backend/api/, discovered automatically. Drop a module in that
+# package and it registers itself; nothing here changes. See backend/api/__init__.py.
+import api as _api_package
 
-@app.route("/api/history/capture-job", methods=["GET", "POST"])
-def api_capture_job_attempt():
-    """``?job_id=`` — record a Slurm attempt (even one that produced no log) to history + lake."""
-    jid = (request.args.get("job_id") or (request.get_json(silent=True) or {}).get("job_id") or "").strip()
-    if not jid or not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
-        return jsonify({"ok": False, "error": "valid job_id required"}), 400
-    return jsonify(capture_job_attempt(jid))
+_api_package.register(app)
+
+# After all routes and middleware are registered (avoid circular import via nvftp_cache_sync._eget → app).
+_bootstrap_catalog_at_startup()
+_bootstrap_nvftp_sync_at_startup()
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG") == "1", threaded=True)
+
+# ---------------------------------------------------------------------------------------------
+# Job-attempt capture — a run that never produces a log MUST still be recorded.
+#
+# Job 63850 (MNUBERGEMM, h01) was CANCELLED in the Slurm prolog: RunTime 00:00:00, no stdout file
+# ever created. It therefore left NO trace in the log dir, in results_history, or in the lake — the
+# attempt was invisible even though it consumed an 18-node allocation and drained a tray. Capturing
+# only successful runs is the same blank-read-as-success failure this platform exists to catch.
+# ---------------------------------------------------------------------------------------------
+_SCONTROL_FIELDS = (
+    "JobId", "JobName", "UserId", "JobState", "Reason", "ExitCode", "DerivedExitCode",
+    "RunTime", "SubmitTime", "StartTime", "EndTime", "NodeList", "ReqNodeList",
+    "NumNodes", "NumCPUs", "Partition", "StdOut", "StdErr", "WorkDir", "Command",
+)
+
+
+def _parse_scontrol_job(text: str) -> dict:
+    """scontrol emits `Key=Value` pairs, space-separated, values may contain `/` and `:` but not ` `."""
+    out: dict[str, str] = {}
+    for m in re.finditer(r"([A-Za-z][A-Za-z0-9_]*)=(\S*)", text or ""):
+        k, v = m.group(1), m.group(2)
+        if k in _SCONTROL_FIELDS and k not in out:
+            out[k] = v
+    return out
+
+
+def _rack_and_nodes_from_nodelist(nodelist: str) -> tuple[str, list[str]]:
+    """Attribute a Slurm ``NodeList`` to ``(rack id, node hostnames)``.
+
+    Two things make this less trivial than it looks:
+      * Slurm reports a *compact* list (``<rack>-[01-18]``), so it has to be expanded before
+        the hostnames mean anything, and ``(null)`` / ``None assigned`` for a job that never
+        got an allocation.
+      * Rack attribution goes through the naming engine (``NVIS_RACK_ID`` / ``NVIS_CT_ID``),
+        so every site's convention works. This used to hardcode one cluster's ``ink50``
+        prefix, which silently produced an empty rack and no nodes everywhere else.
+    """
+    spec = (nodelist or "").strip()
+    if not spec or spec.lower() in ("(null)", "none assigned"):
+        return "", []
+    if _uparse is not None:
+        hosts = _uparse.expand_nodelist(spec)
+    else:  # no normaliser: bracket ranges stay unexpanded, but do not lose the plain names
+        hosts = [h for h in re.split(r"[,\s]+", spec) if h]
+    naming = _nvis_naming()
+    # Prefer recognised trays, but never drop everything: an unrecognised convention should
+    # still surface its nodes rather than report the job as having run nowhere.
+    nodes = [h for h in hosts if naming.is_tray_hostname(h)] or hosts
+    for h in nodes:
+        hit = naming.sinfo_rack_from_host(h)
+        if hit:
+            return (naming.canonical_rack_id(hit[0]) or hit[0]), nodes
+    return "", nodes
+
+
+
+
+
