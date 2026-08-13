@@ -6,6 +6,77 @@ alwaysApply: false
 
 # Backend API Conventions
 
+## Where new endpoints go — `backend/api/`, never `app.py`
+
+**Add a module. Do not edit `app.py`, and do not edit `backend/api/__init__.py` either.** The
+loader walks the package, so a new file registers itself.
+
+```python
+# backend/api/rack_locks.py  ->  serves /api/rack-locks/...
+from flask import Blueprint, jsonify
+
+bp = Blueprint("rack_locks", __name__)      # no url_prefix -> derived from the filename
+
+@bp.route("/claim", methods=["POST"])       # -> /api/rack-locks/claim
+def claim(): ...
+```
+
+`app.py` reached 20,000 lines and still holds 171 of the 199 routes, because every feature had to
+touch it. Two people working in parallel then collide by construction — which is how an entire
+feature ended up living uncommitted on a customer deployment for days. One file per domain is the fix; keeping the
+registry implicit is what stops the registry becoming the new bottleneck.
+
+### The rules the loader enforces
+
+| Rule | Why |
+|---|---|
+| Expose `bp`, **or** `install(app)` | `install` is for things Flask routing cannot express — `/ws/terminal` is WSGI middleware below the router. A module with neither raises at startup. |
+| Underscore-prefixed modules are skipped | `api/_common.py` holds Flask-dependent shared helpers. Endpoints only in named modules. |
+| Imports are **not** wrapped in `try` | A module that fails to import must take startup down and name itself. A swallowed import cost us an afternoon: the feature was simply absent, with no error anywhere. |
+| `url_prefix=None` → filename | `rack_locks.py` → `/api/rack-locks`. Underscores become hyphens, because a module cannot be named `rack-locks`. |
+| `url_prefix="/api/x"` → honoured | For URLs a module name cannot spell, or a module owning several prefixes. |
+| `url_prefix=""` → routes carry full paths | **Migration mode only.** Existing routes keep their exact decorator strings, so a move cannot change a URL through prefix arithmetic. New modules should not use it. |
+
+### Where shared code goes
+
+- **`backend/core.py`** — imports neither Flask nor `app`. Helpers, predicates, patterns. This is
+  what breaks the import cycle: `app.py → api/<domain>.py → core.py`, one direction only.
+- **`backend/api/_common.py`** — shared helpers that *do* need Flask (anything returning a
+  response). `app.py` may import it without a cycle, since `app` already imports the package and
+  nothing under `api/` imports `app`.
+- **Never** `from app import ...` inside an `api/` module. If you need something from `app.py`,
+  move it to `core.py` instead. `workflow_engine.py` and `bcm_query.py` still do `import app`
+  inside function bodies to dodge the cycle; that is debt, not a pattern to copy.
+
+### Migrating an existing domain out of `app.py`
+
+Still to do for 171 of the 199 routes. The recipe, in order:
+
+1. **Move the route functions and their private helpers.** Change `@app.route` to `@bp.route`,
+   keep the path strings byte-for-byte, and give the blueprint `url_prefix=""`.
+2. **`ruff check backend/api/<mod>.py --select F821`.** This is the workhorse: it lists exactly
+   what the new module cannot see. Do not skip it — a missing import here fails only when a route
+   is *called*, so `import app` reports fine while the endpoint is broken.
+3. **Place each missing name deliberately.** Used only by the moved routes → move it too. Used
+   elsewhere in `app.py` as well → `core.py` (or `api/_common.py` if it touches Flask).
+4. **Run `backend/tests/test_route_parity.py`.** It snapshots every URL and its verbs, and fails
+   by name if one disappears or changes methods. This is the safety net for the whole exercise:
+   the SPA calls these paths by hand, so a silent rename surfaces only as a broken page.
+   *Adding* a route needs no snapshot update — only changing or removing one does, which is
+   exactly the review signal we want. Regeneration instructions are in that file's docstring.
+5. **Leave coupled routes behind rather than dragging half of `app.py` with them.**
+   `/api/history/capture-job` stayed because it needs four Slurm helpers and is Slurm
+   introspection wearing a history URL. Migrating what is ready beats migrating what is adjacent.
+
+Domains sharing module-level job dicts (`_validation_jobs`, `_xrack_jobs`, …) must move as a unit
+with their state — the launch route and its status route are one module, not two.
+
+**Migrated so far:** `terminal` (via `install`), `help`, `vault`, `history`, `deep_audits`,
+`node_issues`.
+**Blocked on the configuration subsystem:** everything needing `_eget` (~120 call sites) or
+`_rpath` (~90). Moving `_eget` means moving the job-env override store with it — a file-locked
+cache plus the settings UI definitions. That is the next unlock and deserves its own commit.
+
 ## Demo Mode
 
 When `RACK_STATUS_DEMO=1`, endpoints should return synthetic data without calling cluster tools:

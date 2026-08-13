@@ -28,6 +28,42 @@ file is the prescriptive half of the architecture.
 
 ## The citizens
 
+### 0. API modules — where an endpoint lives
+
+`backend/api/`. A new endpoint is **a new file in that package**. Nothing else is edited: not
+`app.py`, not `backend/api/__init__.py`. The loader walks the directory at startup and registers
+whatever it finds.
+
+A module qualifies by exposing `bp` (a `Blueprint`) or `install(app)` — the latter for things
+Flask routing cannot express, such as the WebSocket terminal, which is WSGI middleware wrapping
+`app.wsgi_app` below the router. Exposing neither raises at startup. Underscore-prefixed modules
+are skipped, so `api/_common.py` can hold Flask-dependent shared helpers.
+
+Prefixes: omit `url_prefix` and it is derived from the filename (`rack_locks.py` →
+`/api/rack-locks`); declare one when the URL cannot be spelled as a Python module name;
+`url_prefix=""` means the routes carry full paths and is reserved for migrating existing routes,
+where prefix arithmetic would be a way to change a URL by accident.
+
+**Never `from app import ...` in an `api/` module.** That recreates the cycle the package exists
+to remove: the dependency runs `app.py → api/<domain>.py → core.py`, one direction only. If you
+need something from `app.py`, move it to `core.py` (Flask-free) or `api/_common.py` (if it builds
+a response). `workflow_engine.py` and `bcm_query.py` still `import app` inside function bodies to
+dodge this; that is debt to unwind, not a pattern to copy.
+
+**Two conventions that exist because of specific failures.** Imports are not wrapped in `try` — a
+module that cannot import must take startup down and name itself, because a swallowed import
+means the feature is simply absent with no error anywhere, which cost an afternoon. And
+`backend/tests/test_route_parity.py` snapshots all 199 URL paths: run it after every extraction,
+because moving routes between modules is exactly the change that silently renames one, and the
+SPA calls these paths by hand.
+
+`app.py` reached 20,000 lines and still holds 171 of the 199 routes, every feature touching it,
+so parallel work
+collided by construction — that is how a whole feature ended up uncommitted on a customer
+deployment. Migration is partial: `terminal`, `help`, `vault`, `history`, `deep_audits` and `node_issues`
+have moved. The bulk is
+blocked on configuration resolution (citizen 5) still living in `app.py`.
+
 ### 1. Connection / transport — how anything runs on a host
 
 `backend/host_exec.py` + `backend/transport/`. Every command that leaves this process goes
@@ -93,6 +129,13 @@ overlay → job env overrides → process env → platform low overlay.
 **Add knobs to the registry; read them through the accessors.** A bare `os.environ.get()` in new
 code silently opts out of per-cluster overlays, which is how a setting works on one cluster and
 not on another. `host_exec._FORWARD_ENV_NAMES` is what carries non-prefixed knobs over SSH.
+
+**This subsystem is what blocks the rest of the `app.py` split (citizen 0).** `_eget` has ~120 call
+sites and `_rpath` ~90, and an `api/` module cannot import them from `app` without recreating the
+cycle. Moving `_eget` means moving the job-env override store with it — a file-locked cache plus
+the settings UI definitions — so it is a deliberate step of its own, not something to do halfway.
+Note the store recurses if its file is absent unless the empty state is treated as terminal
+(`test_job_env_missing_file.py`); preserve that guard through any move.
 
 ### 6. Platform and scheduler providers — which cluster manager, which queue
 

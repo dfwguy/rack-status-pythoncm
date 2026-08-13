@@ -10239,7 +10239,6 @@ def _history_ingest_universal(
     return run_id
 
 
-
 # ---------------------------------------------------------------------------------------------
 # Universal action capture: EVERY API call lands in the Parquet lake.
 #
@@ -18929,8 +18928,6 @@ def api_status():
 _SPA_DIR = REPO_ROOT / "static" / "spa"
 
 
-
-
 # A client route ("/compute/nodes") must fall back to index.html, but a *build artifact*
 # must not: returning HTML for a missing .js makes the browser report a MIME-type error
 # ("Expected a JavaScript-or-Wasm module script … responded with text/html") and renders a
@@ -19101,7 +19098,6 @@ def api_rack_locks_release(rack: str):
     return jsonify({"ok": True, "removed": bool(removed)})
 
 
-
 @app.route("/spa/")
 @app.route("/spa/<path:path>")
 def serve_spa(path: str = "index.html"):
@@ -19239,7 +19235,6 @@ def api_ai_test():
 # ---------------------------------------------------------------------------
 
 
-_DEEP_AUDIT_WORKFLOWS = frozenset({"hardware-deep-audit", "nvlink-network-deep-audit"})
 _post_run_report_lock = threading.Lock()
 _post_run_report_cache: tuple[float, dict] = (0.0, {})
 
@@ -19326,7 +19321,7 @@ def _post_run_audits() -> list[dict]:
     """Latest structured hardware/network result rows from durable workflows."""
     out: list[dict] = []
     for summary in workflow_engine.list_runs():
-        if summary.get("workflow_id") not in _DEEP_AUDIT_WORKFLOWS:
+        if summary.get("workflow_id") not in core.DEEP_AUDIT_WORKFLOWS:
             continue
         run = workflow_engine.get_run_state(str(summary.get("run_id") or "")) or summary
         if run.get("invalidated_at"):
@@ -19504,100 +19499,6 @@ def api_workflow_run_output(run_id: str, step_id: str):
     return jsonify({"ok": True, "output": output, "step_id": step_id, "run_id": run_id})
 
 
-@app.route("/api/deep-audits", methods=["GET"])
-def api_deep_audits_list():
-    """Recent Hardware and NVLink/Network deep-audit runs, optionally for one rack."""
-    rack = (request.args.get("rack") or "").strip()
-    kind = (request.args.get("kind") or "").strip().lower()
-    workflow_id = {
-        "hardware": "hardware-deep-audit",
-        "network": "nvlink-network-deep-audit",
-        "nvlink": "nvlink-network-deep-audit",
-    }.get(kind, "")
-    try:
-        limit = max(1, min(100, int(request.args.get("limit") or "30")))
-    except ValueError:
-        return jsonify({"ok": False, "error": "limit must be an integer"}), 400
-    out = []
-    for row in workflow_engine.list_runs():
-        if row.get("workflow_id") not in _DEEP_AUDIT_WORKFLOWS:
-            continue
-        if workflow_id and row.get("workflow_id") != workflow_id:
-            continue
-        full = workflow_engine.get_run_state(str(row.get("run_id") or "")) or row
-        if full.get("invalidated_at"):
-            continue
-        if rack and str((full.get("params") or {}).get("rack") or "") != rack:
-            continue
-        out.append({
-            "run_id": full.get("run_id"),
-            "workflow_id": full.get("workflow_id"),
-            "workflow_name": full.get("workflow_name"),
-            "state": full.get("state"),
-            "rack": str((full.get("params") or {}).get("rack") or ""),
-            "target": str((full.get("params") or {}).get("target") or ""),
-            "started_at": full.get("started_at"),
-            "updated_at": full.get("updated_at"),
-            "audits": full.get("audits") or {},
-            "error": full.get("error") or "",
-        })
-        if len(out) >= limit:
-            break
-    return jsonify({"ok": True, "runs": out})
-
-
-@app.route("/api/deep-audits/<run_id>", methods=["GET"])
-def api_deep_audit_get(run_id: str):
-    """One deep-audit run with per-node results and automatic Slurm actions."""
-    run = workflow_engine.get_run_state((run_id or "").strip())
-    if (
-        not run
-        or run.get("workflow_id") not in _DEEP_AUDIT_WORKFLOWS
-        or run.get("invalidated_at")
-    ):
-        return jsonify({"ok": False, "error": "deep audit run not found"}), 404
-    return jsonify({"ok": True, "run": run})
-
-
-@app.route("/api/node-issues", methods=["GET"])
-def api_node_issues():
-    """Node issue punchcard rollups and full in-SPA issue history."""
-    import node_issues
-
-    rack = (request.args.get("rack") or "").strip()
-    node = (request.args.get("node") or "").strip()
-    sync_error = ""
-    if rack and _truthy_arg(request.args.get("sync")):
-        try:
-            node_issues.sync_punchcard(rack)
-        except Exception as exc:  # noqa: BLE001 - stale local history remains useful offline
-            sync_error = str(exc)
-            _logger.warning("punchcard sync failed: %s", exc)
-    payload = node_issues.query(rack=rack, node=node)
-    return jsonify({
-        "ok": True,
-        **payload,
-        **({"sync_error": sync_error} if sync_error else {}),
-    })
-
-
-@app.route("/api/node-issues/sync-punchcard", methods=["POST"])
-def api_node_issues_sync_punchcard():
-    """Force-refresh the server-side Google punchcard baseline for this cluster."""
-    import node_issues
-
-    body = request.get_json(silent=True) or {}
-    rack = str(body.get("rack") or "").strip()
-    if not rack:
-        return jsonify({"ok": False, "error": "rack is required"}), 400
-    try:
-        result = node_issues.sync_punchcard(rack, force=True)
-    except Exception as exc:  # noqa: BLE001 - external Sheets API boundary
-        _logger.warning("forced punchcard sync failed: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 502
-    return jsonify(result)
-
-
 @app.route("/api/post-run-node-report", methods=["GET"])
 def api_post_run_node_report():
     """Participation, attributed failure trends, audits and current Slurm state."""
@@ -19709,8 +19610,6 @@ def api_workflow_generate_mermaid():
         return jsonify({"ok": False, "error": "steps array is required"}), 400
     mermaid = workflow_engine.generate_mermaid_from_steps(steps)
     return jsonify({"ok": True, "mermaid": mermaid})
-
-
 
 
 @app.route("/api/history/capture-job", methods=["GET", "POST"])
@@ -19906,8 +19805,5 @@ def _rack_and_nodes_from_nodelist(nodelist: str) -> tuple[str, list[str]]:
         if hit:
             return (naming.canonical_rack_id(hit[0]) or hit[0]), nodes
     return "", nodes
-
-
-
 
 

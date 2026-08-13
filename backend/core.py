@@ -77,6 +77,12 @@ def rpath(p: object) -> PurePosixPath:
 #: too many.
 SLURM_JOB_ID_RE = re.compile(r"^[1-9][0-9]*(_[0-9]+)?$")
 
+#: Workflow ids whose runs are "deep audits" rather than ordinary workflow runs.
+#:
+#: Shared because the deep-audit endpoints and the post-run report both filter on it, and they
+#: now live in different modules. A second copy would drift the day a third audit is added.
+DEEP_AUDIT_WORKFLOWS = frozenset({"hardware-deep-audit", "nvlink-network-deep-audit"})
+
 
 def history_enabled() -> bool:
     """True when the SQLite run-history store is importable and not disabled by env.

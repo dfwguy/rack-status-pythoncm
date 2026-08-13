@@ -3,7 +3,7 @@
 Author: Rafael M. Koike & Cursor Agent ("Ada")
 
 Adding an endpoint should not mean editing a file someone else is editing. ``app.py`` had grown
-to twenty thousand lines and a hundred and eighty routes, and every new feature touched it, so
+to twenty thousand lines and still holds 171 of the app's 199 routes; every feature touched it, so
 two people working in parallel collided by construction -- which is exactly how a whole feature
 ended up living uncommitted on a customer deployment.
 
@@ -86,7 +86,9 @@ def register(app: Flask) -> list[str]:
                 app.register_blueprint(bp, url_prefix=default_prefix(name))
             else:
                 app.register_blueprint(bp)
-            registered.append(f"{name} -> {bp.url_prefix or default_prefix(name)}")
+            # "" is a real answer ("my routes carry full paths"), not a missing one.
+            where = default_prefix(name) if bp.url_prefix is None else (bp.url_prefix or "full paths")
+            registered.append(f"{name} -> {where}")
 
         if install is not None:
             install(app)

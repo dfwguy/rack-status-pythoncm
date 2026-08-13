@@ -82,7 +82,12 @@ prescriptive detail — and the cost of each wrong choice — in **`core-designs
 
 The Python backend lives under `backend/`; runtime assets (`bin/`, `static/`, `var/`, `help_content.json`) stay at the repo root. Backend modules resolve those via `REPO_ROOT = APP_DIR.parent` (parent of `backend/`); keep `APP_DIR` only for `sys.path` and the `rack_web/` helper. **`version.py` must stay at the repo root** — it is release metadata read by the ci-toolkit release jobs (`grep VERSION = version.py`) and the JFrog image build, not imported by the app (which uses `RACK_WEB_VERSION`).
 
-- `backend/app.py` — Flask backend, all `/api/*` routes (~11k lines)
+- `backend/api/` — **where new endpoints go.** One module per domain, auto-discovered: expose
+  `bp` (a Blueprint) or `install(app)` and it registers itself. Never edit `app.py` to add a
+  route, and never `from app import ...` here — see `core-designs.mdc` §0.
+- `backend/core.py` — helpers importing neither Flask nor `app`; this is what keeps the
+  dependency one-directional (`app.py → api/<domain>.py → core.py`)
+- `backend/app.py` — the Flask app, plus the routes not yet migrated out of it
 - `backend/catalog/` — multi-generation Platform/Tool/Project schemas: `store.py` (Repo + TinyDB), `models.py`, `seed.py`, `context.py` (active-context overlays + AI envelope), `api.py` (`/api/catalog`)
 - `frontend/src/context/ActiveClusterContext.tsx` — active project/cluster + switcher state
 - `frontend/src/services/catalogService.ts` + `frontend/src/types/catalog.ts` — catalog API client + types

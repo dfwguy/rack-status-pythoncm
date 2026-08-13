@@ -108,3 +108,20 @@ class TestRegistration:
         registered = api.register(app)
         assert registered
         assert any("terminal" in entry for entry in registered)
+
+    def test_a_module_carrying_full_paths_is_not_reported_under_a_derived_prefix(
+        self, monkeypatch
+    ):
+        """`url_prefix=""` is an answer, not a missing value.
+
+        Every module migrated out of app.py uses it, so reporting them under the filename-derived
+        prefix would make the startup log claim /api/help for routes that do not serve there.
+        """
+        module = types.SimpleNamespace(bp=Blueprint("help", __name__, url_prefix=""))
+        monkeypatch.setattr(api, "module_names", lambda: ["help"])
+        monkeypatch.setattr(api.importlib, "import_module", lambda _name: module)
+
+        (entry,) = api.register(Flask(__name__))
+
+        assert "/api/help" not in entry
+        assert "full paths" in entry

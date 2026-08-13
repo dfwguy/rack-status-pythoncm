@@ -113,8 +113,49 @@ popover, login).
   python3 + openssh-client). docker-compose with named volume `rack-data:/app/var` and the host SSH
   key bind-mounted read-only to `/run/secrets/ssh_key`.
 
-**Notable backend components:** `app.py` (~150 REST routes + settings registry + WebSocket
-terminal); `native_status.py` (primary rack/device status collector — merges `cmsh rack list` +
+### Where an endpoint lives: `backend/api/`
+
+**A new endpoint is a new file in `backend/api/`. Nothing else is edited — not `app.py`, not the
+package `__init__`.** The loader walks the directory at startup and registers what it finds.
+
+```
+backend/
+  core.py            # imports neither Flask nor app — this is what breaks the import cycle
+  api/
+    __init__.py      # the loader; you should never need to touch it
+    _common.py       # shared helpers that DO need Flask (underscore = skipped by the loader)
+    terminal.py      # exposes install(app): WSGI middleware, below Flask's router
+    help.py          # exposes bp: a normal Blueprint
+    history.py
+  app.py             # creates the app, calls api.register(app), holds what has not moved yet
+```
+
+A module qualifies by exposing `bp` (a Blueprint) or `install(app)`. Exposing neither raises at
+startup rather than being skipped, and imports are deliberately not wrapped in `try` — a module
+that cannot import must fail loudly, not vanish from the API.
+
+URL prefixes: omit `url_prefix` and it comes from the filename (`rack_locks.py` → `/api/rack-locks`,
+underscores becoming hyphens); declare one when the URL cannot be spelled as a module name;
+`url_prefix=""` means the routes carry full paths, which is the mode used when migrating existing
+routes so a move cannot change a URL by accident.
+
+**Why this exists.** `app.py` reached 20,000 lines and still holds 171 of the 199 routes, because
+every feature had to touch it. Parallel work collided by construction — which is how an entire feature (node issues, deep audits,
+the post-run report) ended up living uncommitted on a customer deployment, discovered only because
+something else broke. One file per domain removes the shared edit point; implicit registration
+stops the registry from becoming the next one.
+
+**Migration is in progress.** `terminal`, `help`, `vault`, `history`, `deep_audits` and `node_issues`
+have moved; 171 routes are still in `app.py`. The blocker for most of them is configuration resolution: `_eget`
+(~120 call sites) and `_rpath` (~90) live in `app.py`, and an `api/` module cannot import from `app`
+without recreating the cycle. Moving `_eget` means moving the job-env override store with it — a
+file-locked cache plus the settings UI definitions — and that is the next step that unlocks the
+bulk. `backend/tests/test_route_parity.py` snapshots all 199 URL paths and fails by name if a move
+changes one; run it after every extraction.
+
+**Notable backend components:** `app.py` (REST routes not yet migrated + settings registry);
+`backend/api/` (per-domain endpoint modules, auto-discovered); `core.py` (Flask-free shared
+helpers); `native_status.py` (primary rack/device status collector — merges `cmsh rack list` +
 `ds`, `sinfo`, log-dir probes into in-memory state); `host_exec.py` + `transport/` (local-vs-SSH
 routing, env-forwarding, sudo escalation, SSH ControlMaster multiplexing, jump-host hop, fanout);
 `platforms/` (bcm.py / maas.py / base.py); `schedulers/` (slurm/local + runai/slinky/maas stubs);
@@ -138,6 +179,7 @@ these began. When it happens, it gets documented as a citizen so the next person
 
 | Concern | Citizen that owns it | Instead of |
 |---|---|---|
+| Adding an endpoint | **`backend/api/<domain>.py`** — a module exposing `bp` (or `install(app)`), discovered automatically; shared helpers in `core.py` | adding a route to `app.py`, which is the shared edit point that made parallel work collide |
 | Running anything on a host | **connection/transport** — `host_exec.run_on_host()` / `popen_on_host()` / `connection()`, `transport.fanout()` for per-node work | a direct `ssh` call, which gets none of the env forwarding, hop chain, retry or ControlMaster behaviour |
 | What the product can run | **catalog/Tools** — a Tool document; pins, images and step counts as `tool_param_defaults` on the Platform | constants in a new module, which no operator can edit and which ship one site's paths everywhere |
 | Which site, which nodes | **Project/Cluster** record, resolved by `catalog/context.py` as the high overlay — including acceptance **campaigns** (pinned, versioned node rosters with an id) | env vars pointing at a file on one host |
