@@ -1,61 +1,72 @@
 /* Terminal grid — visible resize affordances on a dark pane.
    Author: Rafael M. Koike & Cursor Agent ("Ada")
 
-   react-resizable draws its handle as a small light-on-transparent glyph in the bottom-right
-   corner. Against the terminal's near-black background it is effectively invisible, so the pane
-   looks fixed even though it resizes — and widening a pane across the empty half of its row is
-   the single most common thing to want here. These rules give each handle a real target. */
+   Two libraries style these handles, and both must be beaten on specificity:
 
-.nvis-terminal-grid .react-resizable-handle {
-  /* Replace the default corner-only glyph; each axis gets its own affordance below. */
+     react-resizable  .react-resizable-handle-e                                    (0,1,0)
+     react-grid-layout  .react-grid-item > .react-resizable-handle.react-resizable-handle-e  (0,3,0)
+
+   So every rule here mirrors react-grid-layout's own selector shape with the grid's class in
+   front, giving (0,4,0). A simpler `.nvis-terminal-grid .react-resizable-handle-e` is only (0,2,0)
+   and loses -- which is exactly how these handles first shipped as diagonal green slashes across
+   the pane: both libraries ROTATE the handle (-e by 315deg, -s by 45deg) because their glyph is a
+   single corner triangle spun to point along each axis, and a straight bar inherits that rotation.
+
+   The hover reveal is react-grid-layout's own (opacity 0, 1 on item hover); it does the right
+   thing already, so it is left alone. */
+
+/* Drop both libraries' glyphs: react-resizable's background image and react-grid-layout's
+   ::after chevron, which is a dark mark that is invisible on a near-black terminal anyway. */
+.nvis-terminal-grid .react-grid-item > .react-resizable-handle {
   background-image: none;
-  opacity: 0;
-  transition: opacity 120ms ease-in-out;
+  transform: none;
 }
 
-/* Only shown on hover, so the grid is not permanently outlined in grab handles. */
-.nvis-terminal-grid .react-grid-item:hover > .react-resizable-handle {
-  opacity: 1;
+.nvis-terminal-grid .react-grid-item > .react-resizable-handle::after {
+  content: none;
 }
 
-/* Right edge — drag to widen across the row. */
-.nvis-terminal-grid .react-resizable-handle-e {
-  width: 8px;
-  right: 0;
+/* Right edge — drag to widen a pane across its row. */
+.nvis-terminal-grid .react-grid-item > .react-resizable-handle.react-resizable-handle-e {
   top: 50%;
-  height: 44px;
-  margin-top: -22px;
+  right: 0;
+  width: 10px;
+  height: 48px;
+  margin-top: -24px;
+  transform: none;
   border-right: 3px solid var(--nvidia-green, #76b900);
-  border-radius: 2px;
+  border-radius: 0 3px 3px 0;
   cursor: ew-resize;
 }
 
 /* Bottom edge — drag to make the shell taller. */
-.nvis-terminal-grid .react-resizable-handle-s {
-  height: 8px;
-  bottom: 0;
+.nvis-terminal-grid .react-grid-item > .react-resizable-handle.react-resizable-handle-s {
   left: 50%;
-  width: 44px;
-  margin-left: -22px;
+  bottom: 0;
+  height: 10px;
+  width: 48px;
+  margin-left: -24px;
+  transform: none;
   border-bottom: 3px solid var(--nvidia-green, #76b900);
-  border-radius: 2px;
+  border-radius: 0 0 3px 3px;
   cursor: ns-resize;
 }
 
-/* Corner — both at once. */
-.nvis-terminal-grid .react-resizable-handle-se {
-  width: 14px;
-  height: 14px;
-  right: 1px;
-  bottom: 1px;
+/* Corner — both axes at once. Not rotated by either library, but reset for good measure. */
+.nvis-terminal-grid .react-grid-item > .react-resizable-handle.react-resizable-handle-se {
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  transform: none;
   border-right: 3px solid var(--nvidia-green, #76b900);
   border-bottom: 3px solid var(--nvidia-green, #76b900);
-  border-radius: 0 0 3px 0;
+  border-radius: 0 0 4px 0;
   cursor: nwse-resize;
 }
 
-/* The gap a dragged pane will drop into. The default is a faint red wash that reads as an error
-   on this surface; brand green matches the rest of the drag affordances. */
+/* The gap a dragged pane will drop into. react-grid-layout's default is a red wash, which reads as
+   an error on this surface; brand green matches the drag affordances above. */
 .nvis-terminal-grid .react-grid-placeholder {
   background: var(--nvidia-green, #76b900);
   opacity: 0.18;
