@@ -10,6 +10,7 @@ os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
+import naming as naming_mod  # noqa: E402
 import nvis_id_templates as nid
 
 
@@ -30,8 +31,7 @@ def _campaign_env(monkeypatch, manifest: Path) -> None:
     monkeypatch.setattr(app_module, "_eget", lambda key, default=None: values.get(key, original_eget(key, default)))
     monkeypatch.setattr(app_module, "_eget_int", lambda key, default: int(values.get(key, default)))
     monkeypatch.setattr(app_module, "_nvis_naming", _naming)
-
-
+    monkeypatch.setattr(naming_mod, "_nvis_naming", _naming)
 def test_campaign_snapshot_uses_only_manifest_nodes(monkeypatch, tmp_path):
     manifest = tmp_path / "nodes.list"
     manifest.write_text(
@@ -78,6 +78,7 @@ def test_llmb_campaign_launch_passes_exact_nodelist(monkeypatch, tmp_path):
         },
     )
     monkeypatch.setattr(app_module, "_nvis_naming", _naming)
+    monkeypatch.setattr(naming_mod, "_nvis_naming", _naming)
     monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
     monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
     monkeypatch.setattr(app_module, "_truthy_env", lambda _name: True)
@@ -112,6 +113,7 @@ def test_llmb_campaign_launch_rejects_ineligible_rack(monkeypatch, tmp_path):
         },
     )
     monkeypatch.setattr(app_module, "_nvis_naming", _naming)
+    monkeypatch.setattr(naming_mod, "_nvis_naming", _naming)
     monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
 
     with app_module.app.app_context():

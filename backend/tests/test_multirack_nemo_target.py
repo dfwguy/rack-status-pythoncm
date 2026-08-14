@@ -22,6 +22,7 @@ os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module  # noqa: E402
+import naming as naming_mod  # noqa: E402
 import nvis_id_templates as nid  # noqa: E402
 
 BACKEND = Path(__file__).resolve().parent.parent
@@ -46,6 +47,7 @@ def prepare(monkeypatch, tmp_path):
     def _run(rack_tmpl: str, ct_tmpl: str, racks: list[str], ct_range: str = "01-18") -> str:
         naming = nid.get_nvis_naming(rack_tmpl, ct_tmpl)
         monkeypatch.setattr(app_module, "_nvis_naming", lambda: naming)
+        monkeypatch.setattr(naming_mod, "_nvis_naming", lambda: naming)
         monkeypatch.setattr(app_module, "_validation_ct_inner", lambda: ct_range)
         # The script lives on the exec host in SSH mode; here just let the path check pass.
         monkeypatch.setattr(app_module, "_script_exists", lambda _p: True)

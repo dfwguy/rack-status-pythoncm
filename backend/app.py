@@ -136,8 +136,6 @@ except Exception as _nr_exc:  # pragma: no cover - defensive
     logging.getLogger(__name__).warning("node_report unavailable: %s", _nr_exc, exc_info=True)
 
 
-def _nvis_naming() -> nvis_id_templates.NvisNaming:
-    return nvis_id_templates.get_nvis_naming()
 import ai_chat
 import app_version as _app_version_mod
 import core
@@ -169,42 +167,30 @@ except Exception as _catalog_exc:  # pragma: no cover - defensive
     catalog_bp = None  # type: ignore[assignment]
     _CATALOG_AVAILABLE = False
 
-_REMOTE_BASE = os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
-if _REMOTE_BASE:
-    SCRIPTS_DIR = Path(_REMOTE_BASE) / "bin" / "scripts"
-    DEFAULT_LOG_DIR = Path(_REMOTE_BASE) / "var" / "logs"
-else:
-    SCRIPTS_DIR = REPO_ROOT / "bin" / "scripts"
-    DEFAULT_LOG_DIR = REPO_ROOT / "var" / "logs"
+# ---- Host paths, naming and per-request identity now live in their own modules ------------
+# Imported under the existing names so the ~200 call sites below are untouched.
+# Request-scoped helpers need Flask, so they live with the API package, not in core.
+from api._common import (
+    client_id_from_request as _client_id_from_request,
+)
+from api._common import (
+    operator_from_request as _operator_from_request,
+)
+from naming import _normalize_rack_id, _nvis_naming
+from paths import (
+    _REMOTE_BASE,
+    DEFAULT_SCRIPT,
+    SCRIPTS_DIR,
+    _allowed_roots,
+    _default_log_dir,
+    _resolve_log_dir,
+    _script_exists,
+    _scripts_dir,
+)
 
-DEFAULT_SCRIPT = SCRIPTS_DIR / "rack_status.sh"
-
-
-def _scripts_dir() -> str:
-    """Directory holding ``bin/scripts`` on the host that actually runs them.
-
-    Prefers the ``scripts`` role's declared root, so a deployment can keep the
-    script tree on a different machine from the app (or from the logs). Falls back
-    to the module-level ``SCRIPTS_DIR``, which is the single-host answer derived
-    from ``RACK_REMOTE_BASE_PATH``.
-    """
-    return host_exec.role_root("scripts") or str(SCRIPTS_DIR)
-
-
-def _logs_dir_default() -> str:
-    """Default log root on the host that owns the ``logs`` role."""
-    return host_exec.role_root("logs") or str(DEFAULT_LOG_DIR)
 # Output basename for Tools → 05-download-containers.sh (must match script).
 _TOOLS_NEMO_CONTAINER_SQSH = "nemo-25.11.01.sqsh"
 
-
-def _script_exists(path: Path) -> bool:
-    """Check whether a script exists on the execution host.
-
-    Previously this returned True unconditionally for a remote target, because the
-    local check could only ever be wrong there. The connection can answer for both.
-    """
-    return host_exec.is_file(path)
 
 app = Flask(__name__, static_folder=str(REPO_ROOT / "static"), static_url_path="/static")
 _logger = logging.getLogger(__name__)
@@ -1658,30 +1644,6 @@ def _count_running_async_commands() -> int:
 # long-running sync / stream handlers in ``_reset_jobs`` so they show up in
 # the same advisory snapshot the SPA polls.
 # ---------------------------------------------------------------------------
-
-
-def _operator_from_request() -> str:
-    """Operator label from the ``X-Rack-Operator`` header. Advisory metadata only -- never
-    trusted for authorization. Empty when the SPA hasn't set a display name."""
-    try:
-        raw = request.headers.get("X-Rack-Operator", "")
-    except RuntimeError:
-        # Outside a request context (worker thread): fall back to empty label.
-        raw = ""
-    return rack_locks.sanitize_operator(raw)
-
-
-def _client_id_from_request() -> str:
-    """Stable browser id from the ``X-Rack-Client-Id`` header (also accepted as
-    ``?client_id=`` for backward compatibility with the existing useRackStatus poll)."""
-    try:
-        raw = request.headers.get("X-Rack-Client-Id", "") or request.args.get("client_id", "")
-    except RuntimeError:
-        return ""
-    if not isinstance(raw, str):
-        return ""
-    cid = raw.strip()[:80]
-    return cid if _APP_CLIENT_ID_RE.fullmatch(cid) else ""
 
 
 def _iter_active_jobs_for_locks() -> list[dict]:
@@ -3941,32 +3903,6 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
     )
 
 
-def _default_log_dir() -> PurePosixPath:
-    return _rpath(os.environ.get("RACK_STATUS_LOG_DIR", str(DEFAULT_LOG_DIR)))
-
-
-def _allowed_roots() -> list[PurePosixPath]:
-    raw = os.environ.get("RACK_STATUS_ALLOWED_PREFIXES", "")
-    if not raw.strip():
-        return []
-    return [_rpath(x.strip()) for x in raw.split(",") if x.strip()]
-
-
-def _resolve_log_dir(raw: str | None) -> PurePosixPath:
-    # No macOS firmlink fixup any more: that existed to undo a local .resolve()
-    # applied to a head-node path, and the connection never resolves a remote path
-    # against this filesystem in the first place.
-    log_dir = _rpath(raw or _default_log_dir())
-    roots = _allowed_roots()
-    if roots:
-        ok = any(str(log_dir).startswith(str(r) + os.sep) or log_dir == r for r in roots)
-        if not ok:
-            raise ValueError(f"log_dir must be under one of: {[str(r) for r in roots]}")
-    if not host_exec.is_dir(log_dir):
-        raise ValueError(f"not a directory: {log_dir}")
-    return log_dir
-
-
 def _host_job_cwd(log_dir: Path) -> str:
     """Working-directory string for a launched job's ``cd`` (popen_on_host).
 
@@ -4282,10 +4218,6 @@ def run_cmsh_power_reset(specs: list[str]) -> list[dict]:
 
 def _comments_file() -> Path:
     return Path(os.environ.get("RACK_COMMENTS_FILE", str(REPO_ROOT / "rack_comments.json"))).resolve()
-
-
-def _normalize_rack_id(rack: str) -> str:
-    return _nvis_naming().normalize_rack_id(rack)
 
 
 def _normalize_nvswitch_host_for_rack(rack: str, raw: object) -> str:

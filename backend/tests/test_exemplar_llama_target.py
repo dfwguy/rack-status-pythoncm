@@ -9,6 +9,7 @@ os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
+import naming as naming_mod  # noqa: E402
 import nvis_id_templates as nid
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "bin" / "scripts"
@@ -23,6 +24,7 @@ def _prepare(monkeypatch, body: dict):
         "ink50-dh01-[a-z][\\d+]-[\\d+]",
     )
     monkeypatch.setattr(app_module, "_nvis_naming", lambda: naming)
+    monkeypatch.setattr(naming_mod, "_nvis_naming", lambda: naming)
     monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
     original_eget = app_module._eget
 
