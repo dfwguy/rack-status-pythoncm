@@ -842,12 +842,65 @@ def _execute_slurm_fanout(
     from platforms import get_platform
     from transport import NodeResult
 
+    # Do not let one already-unschedulable node make srun reject the entire
+    # multi-node audit.  Convert only states that Slurm itself declares
+    # unavailable into exact-node structured failures; busy/allocated nodes are
+    # left for srun and remain transport-inconclusive if no slot opens.
+    plat = get_platform()
+    unavailable: dict[str, dict[str, Any]] = {}
+    try:
+        target = ",".join(nodes)
+        state_proc = host_exec.run_slurm_on_host(
+            plat.sinfo_cmd(
+                f"-N -h --nodes={shlex.quote(target)} -o '%N|%T|%E'"
+            ),
+            timeout=60,
+        )
+        if state_proc.returncode == 0:
+            for line in (state_proc.stdout or "").splitlines():
+                cols = line.split("|", 2)
+                if len(cols) < 2:
+                    continue
+                host = cols[0].strip()
+                state = cols[1].strip().lower().rstrip("*")
+                reason = cols[2].strip() if len(cols) > 2 else ""
+                if state.startswith(("down", "drain", "fail", "inval", "maint", "unknown")):
+                    unavailable[host.casefold()] = {
+                        "status": "fail",
+                        "category": "control_plane",
+                        "codes": ["slurm_node_unavailable"],
+                        "reason": (
+                            f"Slurm marks the node {state} before audit"
+                            + (f": {reason}" if reason and reason.lower() != "none" else "")
+                        )[:1000],
+                        "warnings": [],
+                        "metrics": {"slurm_state": state, "slurm_reason": reason},
+                    }
+    except Exception:
+        # A failed preflight is not proof that any node is bad. Let srun provide
+        # the normal inconclusive transport evidence instead.
+        _logger.debug("Slurm audit availability preflight failed", exc_info=True)
+
+    eligible = [node for node in nodes if node.casefold() not in unavailable]
+    preflight_results = {
+        node.casefold(): NodeResult(
+            node=node,
+            stdout=_DEEP_AUDIT_PREFIX + json.dumps(unavailable[node.casefold()]) + "\n",
+            stderr="",
+            returncode=2,
+        )
+        for node in nodes if node.casefold() in unavailable
+    }
+    if not eligible:
+        return [preflight_results[node.casefold()] for node in nodes]
+
     execute = cmd
     if sudo:
         execute = "sudo -n -E bash -c " + shlex.quote(cmd)
     runner = f"""
 node=$(hostname -s)
 set +e
+printf '__NVIS_JOB__%s|%s\\n' "$node" "${{SLURM_JOB_ID:-}}"
 output=$({execute} 2>&1)
 rc=$?
 while IFS= read -r line; do
@@ -860,9 +913,9 @@ exit 0
         r"[^A-Za-z0-9_.-]", "-", job_name or "nvis-deep-audit"
     )[:96]
     args = [
-        "--nodes", str(len(nodes)),
-        "--nodelist", ",".join(nodes),
-        "--ntasks", str(len(nodes)),
+        "--nodes", str(len(eligible)),
+        "--nodelist", ",".join(eligible),
+        "--ntasks", str(len(eligible)),
         "--ntasks-per-node", "1",
         "--distribution", "block:block",
         # Both Slurm options take optional arguments.  GNU getopt only binds an
@@ -884,12 +937,17 @@ exit 0
     ])
     srun_args = " ".join(shlex.quote(part) for part in args)
     proc = host_exec.run_slurm_on_host(
-        get_platform().srun_cmd(srun_args),
+        plat.srun_cmd(srun_args),
         timeout=max(timeout + 120, 180),
     )
     by_node: dict[str, dict[str, Any]] = {
-        node.casefold(): {"node": node, "stdout": [], "rc": None}
-        for node in nodes
+        node.casefold(): {
+            "node": node,
+            "stdout": [],
+            "rc": None,
+            "scheduler_ref": "",
+        }
+        for node in eligible
     }
     for raw_line in (proc.stdout or "").splitlines():
         line = re.sub(r"^\s*\d+:\s*", "", raw_line, count=1)
@@ -908,23 +966,36 @@ exit 0
                     record["rc"] = int(value.strip())
                 except ValueError:
                     record["rc"] = 255
+        elif line.startswith("__NVIS_JOB__"):
+            tagged = line[len("__NVIS_JOB__"):]
+            host, separator, value = tagged.partition("|")
+            record = by_node.get(host.strip().casefold())
+            if separator and record is not None:
+                scheduler_ref = value.strip().split(".", 1)[0]
+                if scheduler_ref.isdigit():
+                    record["scheduler_ref"] = scheduler_ref
     global_error = (proc.stderr or "").strip()
     if proc.returncode and not global_error:
         global_error = (
             f"srun exited {proc.returncode} before all node results were collected"
         )
     results: list[NodeResult] = []
-    for node in nodes:
+    for node in eligible:
         record = by_node[node.casefold()]
         rc = record["rc"] if isinstance(record.get("rc"), int) else 255
         stdout = "\n".join(record["stdout"])
+        scheduler_ref = str(record.get("scheduler_ref") or "")
+        if scheduler_ref:
+            stdout = f"NVIS_SLURM_JOB_ID={scheduler_ref}\n" + stdout
         if stdout:
             stdout += "\n"
         stderr = global_error if rc == 255 and not stdout else ""
         results.append(
             NodeResult(node=node, stdout=stdout, stderr=stderr, returncode=rc)
         )
-    return results
+    by_result = {row.node.casefold(): row for row in results}
+    by_result.update(preflight_results)
+    return [by_result[node.casefold()] for node in nodes]
 
 
 def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
@@ -1052,6 +1123,7 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
 
 
 _DEEP_AUDIT_PREFIX = "NVIS_DEEP_AUDIT_JSON="
+_SLURM_JOB_PREFIX = "NVIS_SLURM_JOB_ID="
 
 
 def _audit_payload(stdout: str) -> dict[str, Any] | None:
@@ -1065,6 +1137,45 @@ def _audit_payload(stdout: str) -> dict[str, Any] | None:
             return None
         return payload if isinstance(payload, dict) else None
     return None
+
+
+def _audit_scheduler_ref(stdout: str) -> str:
+    """Return the Slurm allocation id emitted by a scheduler fan-out runner."""
+    for line in (stdout or "").splitlines():
+        if not line.startswith(_SLURM_JOB_PREFIX):
+            continue
+        value = line[len(_SLURM_JOB_PREFIX):].strip().split(".", 1)[0]
+        if value.isdigit():
+            return value
+    return ""
+
+
+def _confirmed_scheduler_failure_payload(node: str, stderr: str) -> dict[str, Any] | None:
+    """Turn an exact-node Slurm prolog failure into a structured issue.
+
+    Most missing audit payloads are transport uncertainty and must remain
+    inconclusive.  A Slurm line that explicitly names this node as the source of
+    a prolog failure is different: the scheduler has confirmed that the node
+    could not enter the allocation.  Matching the exact hostname is the safety
+    boundary that prevents one failed prolog from draining every other requested
+    node when ``srun`` repeats global stderr for the whole allocation.
+    """
+    node = (node or "").strip()
+    detail = (stderr or "").strip()
+    if not node or not detail:
+        return None
+    pattern = rf"(?im)\bProlog failure on node\s+{re.escape(node)}(?=\s|$)"
+    if not re.search(pattern, detail):
+        return None
+    compact = re.sub(r"\s+", " ", detail)[:700]
+    return {
+        "status": "fail",
+        "category": "control_plane",
+        "codes": ["slurm_prolog_failure"],
+        "reason": f"Slurm prolog/boot failure prevented the audit: {compact}",
+        "warnings": [],
+        "metrics": {},
+    }
 
 
 def _slurm_audit_reason(category: str, run_id: str, reason: str) -> str:
@@ -1102,13 +1213,17 @@ def _apply_node_issue_policy(
         node = str(getattr(result, "node", "") or "").strip()
         stdout = str(getattr(result, "stdout", "") or "")
         stderr = str(getattr(result, "stderr", "") or "")
+        scheduler_ref = _audit_scheduler_ref(stdout)
         payload = _audit_payload(stdout)
+        if payload is None:
+            payload = _confirmed_scheduler_failure_payload(node, stderr)
         if payload is None:
             summary["inconclusive"] += 1
             row = {
                 "node": node,
                 "status": "inconclusive",
                 "reason": (stderr or "structured audit result missing")[:1000],
+                "scheduler_ref": scheduler_ref,
                 "drained": False,
             }
             summary["nodes"].append(row)
@@ -1132,6 +1247,7 @@ def _apply_node_issue_policy(
             if str(code).strip()
         ]
         reason = str(payload.get("reason") or "").strip()
+        issue_category = str(payload.get("category") or category).strip().lower()
         warnings = [
             str(warning).strip()
             for warning in (payload.get("warnings") or [])
@@ -1140,6 +1256,7 @@ def _apply_node_issue_policy(
         row: dict[str, Any] = {
             "node": node,
             "status": status,
+            "category": issue_category,
             "codes": codes,
             "reason": reason,
             "warnings": warnings,
@@ -1148,13 +1265,14 @@ def _apply_node_issue_policy(
                 if isinstance(payload.get("metrics"), dict)
                 else {}
             ),
+            "scheduler_ref": scheduler_ref,
             "drained": False,
             "slurm_reason": "",
             "drain_result": "",
         }
 
         if status == "fail":
-            slurm_reason = _slurm_audit_reason(category, run_id, reason)
+            slurm_reason = _slurm_audit_reason(issue_category, run_id, reason)
             row["slurm_reason"] = slurm_reason
             drain_ok = False
             drain_text = "automatic drain disabled"
@@ -1186,12 +1304,13 @@ def _apply_node_issue_policy(
                 node_issues.record_issue(
                     node=node,
                     rack=rack or (node.rsplit("-", 1)[0] if "-" in node else node),
-                    category=category,
+                    category=issue_category,
                     code=",".join(codes) or "validation_failure",
                     reason=reason or "confirmed node validation failure",
                     severity="failure",
                     source=str(run.get("workflow_id") or "deep-audit"),
                     validation_run_id=run_id,
+                    scheduler_ref=scheduler_ref,
                     evidence=json.dumps(payload, ensure_ascii=False, sort_keys=True),
                     drained=drain_ok,
                     slurm_reason=slurm_reason,

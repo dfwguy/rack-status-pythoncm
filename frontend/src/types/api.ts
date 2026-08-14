@@ -162,6 +162,7 @@ export interface DeepAuditNodeResult {
   reason?: string;
   warnings?: string[];
   metrics?: Record<string, unknown>;
+  scheduler_ref?: string;
   drained: boolean;
   slurm_reason?: string;
   drain_result?: string;
@@ -208,6 +209,8 @@ export interface PostRunEvent {
   category: string;
   reason: string;
   source: string;
+  output_run_id?: string;
+  output_step_id?: string;
 }
 
 export interface PostRunAuditStatus extends DeepAuditNodeResult {

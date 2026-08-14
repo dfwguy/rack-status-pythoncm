@@ -94,7 +94,7 @@ def test_confirmed_workflow_failure_comments_drains_and_records(tmp_path, monkey
     }
     result = NodeResult(
         "ink50-dh01-h08-29",
-        "NVIS_DEEP_AUDIT_JSON=" + json.dumps(payload) + "\n",
+        "NVIS_SLURM_JOB_ID=147892\nNVIS_DEEP_AUDIT_JSON=" + json.dumps(payload) + "\n",
         "",
         2,
     )
@@ -118,6 +118,8 @@ def test_confirmed_workflow_failure_comments_drains_and_records(tmp_path, monkey
     stored = node_issues.query(node="ink50-dh01-h08-29")
     assert stored["issues"][0]["code"] == "ib_counter"
     assert stored["issues"][0]["drained"] is True
+    assert stored["issues"][0]["scheduler_ref"] == "147892"
+    assert summary["nodes"][0]["scheduler_ref"] == "147892"
 
 
 def test_inconclusive_transport_error_never_mass_drains(tmp_path, monkeypatch):
@@ -129,3 +131,50 @@ def test_inconclusive_transport_error_never_mass_drains(tmp_path, monkeypatch):
     assert summary["inconclusive"] == 1
     assert summary["drained"] == 0
     assert node_issues.query()["issues"] == []
+
+
+def test_exact_node_slurm_prolog_failure_is_recorded_and_drained_without_mass_drain(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(node_issues, "ISSUES_FILE", tmp_path / "issues.json")
+    drain = MagicMock(return_value={"ok": True, "stdout": "updated"})
+    fake_app = SimpleNamespace(_run_scontrol_node_update=drain)
+    stderr = (
+        "srun: Prolog failure on node ink50-dh01-d01-11\n"
+        "srun: error: Nodes ink50-dh01-d01-11 are still not ready\n"
+        "srun: error: Something is wrong with the boot of the nodes."
+    )
+    results = [
+        NodeResult("ink50-dh01-d01-11", "", stderr, 255),
+        # srun exposes the same global stderr to every unstarted task. The exact
+        # hostname match must keep this peer inconclusive and out of Slurm updates.
+        NodeResult("ink50-dh01-d01-12", "", stderr, 255),
+    ]
+    run = {
+        "run_id": "4d64e837-b551-4def-a310-7d0138f9dda3",
+        "workflow_id": "hardware-deep-audit",
+        "params": {"rack": "ink50-dh01-d01"},
+    }
+    step = {"issue_policy": {"category": "hardware", "drain_confirmed": True}}
+
+    with patch.dict(sys.modules, {"app": fake_app}):
+        summary, output = workflow_engine._apply_node_issue_policy(run, step, results)
+
+    assert summary["failed"] == 1
+    assert summary["inconclusive"] == 1
+    assert summary["drained"] == 1
+    failed, peer = summary["nodes"]
+    assert failed["node"] == "ink50-dh01-d01-11"
+    assert failed["status"] == "fail"
+    assert failed["category"] == "control_plane"
+    assert failed["codes"] == ["slurm_prolog_failure"]
+    assert peer["node"] == "ink50-dh01-d01-12"
+    assert peer["status"] == "inconclusive"
+    drain.assert_called_once()
+    assert drain.call_args.args[0] == "ink50-dh01-d01-11"
+    assert "control_plane" in drain.call_args.args[1][1]
+    stored = node_issues.query(node="ink50-dh01-d01-11")["issues"]
+    assert len(stored) == 1
+    assert stored[0]["category"] == "control_plane"
+    assert stored[0]["code"] == "slurm_prolog_failure"
+    assert "INCONCLUSIVE" in output  # only the unaffected peer

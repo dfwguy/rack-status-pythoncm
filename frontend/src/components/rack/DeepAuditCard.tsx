@@ -13,7 +13,7 @@ import TableRow from "@mui/material/TableRow";
 import { Banner, Button, Card, Flex, Tag, Text } from "@nvidia/foundations-react-core";
 import { ClipboardList, Play, RefreshCw, type LucideIcon } from "lucide-react";
 import { validationTargetFromNodes } from "../../lib/validationTargetFromNodes";
-import { fetchDeepAudits, startDeepAudit } from "../../services/nodeIssuesService";
+import { fetchDeepAuditOutput, fetchDeepAudits, startDeepAudit } from "../../services/nodeIssuesService";
 import type { DeepAuditRun, DeepAuditSummary } from "../../types/api";
 import type { NvisNamingSchema } from "../../types/naming";
 
@@ -75,6 +75,9 @@ export function DeepAuditCard({
   const [error, setError] = useState("");
   const [resultsOpen, setResultsOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [outputOpen, setOutputOpen] = useState(false);
+  const [outputText, setOutputText] = useState("");
+  const [outputLoading, setOutputLoading] = useState(false);
 
   const latest = runs[0];
   const latestSummary = summaryOf(latest);
@@ -117,6 +120,19 @@ export function DeepAuditCard({
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openOutput = async (run: DeepAuditRun) => {
+    setOutputText("");
+    setOutputLoading(true);
+    setOutputOpen(true);
+    try {
+      setOutputText(await fetchDeepAuditOutput(run.run_id));
+    } catch (e) {
+      setOutputText(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOutputLoading(false);
     }
   };
 
@@ -185,7 +201,7 @@ export function DeepAuditCard({
         </DialogActions>
       </Dialog>
 
-      <Dialog open={resultsOpen} onClose={() => setResultsOpen(false)} maxWidth="xl" fullWidth>
+      <Dialog open={resultsOpen && !outputOpen} onClose={() => setResultsOpen(false)} maxWidth="xl" fullWidth>
         <DialogTitle>
           <Flex align="center" gap="2">
             <span style={{ flex: 1 }}>{title} results — {rack}</span>
@@ -205,6 +221,9 @@ export function DeepAuditCard({
               <Flex gap="2" wrap="wrap" style={{ marginBottom: 14 }}>
                 <Tag color={stateColor(latest.state)} kind="solid" readOnly>{latest.state}</Tag>
                 <Tag color="gray" kind="outline" readOnly>{latest.run_id.slice(0, 8)}</Tag>
+                <Tag color="gray" kind="outline" readOnly>
+                  Job {latestSummary?.nodes.map((node) => node.scheduler_ref).find(Boolean) || "—"}
+                </Tag>
                 <Text kind="body/regular/sm">Started {fmtWhen(latest.started_at)}</Text>
                 {latestSummary && (
                   <Text kind="body/regular/sm">
@@ -212,6 +231,7 @@ export function DeepAuditCard({
                     Inconclusive {latestSummary.inconclusive} · Drained {latestSummary.drained}
                   </Text>
                 )}
+                <Button kind="secondary" size="small" onClick={() => void openOutput(latest)}>Full output</Button>
               </Flex>
               {latestSummary?.drain_failed ? (
                 <Banner status="error" kind="inline" style={{ marginBottom: 12 }}>
@@ -224,6 +244,7 @@ export function DeepAuditCard({
                     <TableHead>
                       <TableRow>
                         <TableCell>Node</TableCell>
+                        <TableCell>Job ID</TableCell>
                         <TableCell>Result</TableCell>
                         <TableCell>Finding / warning</TableCell>
                         <TableCell>Slurm action</TableCell>
@@ -233,6 +254,7 @@ export function DeepAuditCard({
                       {latestSummary.nodes.map((node) => (
                         <TableRow key={node.node} hover>
                           <TableCell sx={{ fontFamily: "monospace" }}>{node.node}</TableCell>
+                          <TableCell sx={{ fontFamily: "monospace" }}>{node.scheduler_ref || "—"}</TableCell>
                           <TableCell>
                             <Tag color={resultColor(node.status)} kind="solid" readOnly density="compact">
                               {node.status}
@@ -274,6 +296,16 @@ export function DeepAuditCard({
         <DialogActions>
           <Button kind="secondary" onClick={() => setResultsOpen(false)}>Close</Button>
         </DialogActions>
+      </Dialog>
+
+      <Dialog open={outputOpen} onClose={() => setOutputOpen(false)} maxWidth="xl" fullWidth>
+        <DialogTitle>{title} full output — {latest?.run_id.slice(0, 8) || ""}</DialogTitle>
+        <DialogContent dividers>
+          <pre style={{ margin: 0, padding: 16, background: "#101010", color: "#f2f2f2", maxHeight: "70vh", overflow: "auto", whiteSpace: "pre-wrap" }}>
+            {outputLoading ? "Loading full output…" : outputText || "No output was recorded."}
+          </pre>
+        </DialogContent>
+        <DialogActions><Button kind="secondary" onClick={() => setOutputOpen(false)}>Close</Button></DialogActions>
       </Dialog>
     </>
   );

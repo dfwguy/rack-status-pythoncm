@@ -1,4 +1,5 @@
 """Tests for workflow_engine.py module."""
+import json
 import os
 import shlex
 import subprocess
@@ -245,13 +246,17 @@ class TestMermaidGeneration:
 def test_slurm_fanout_maps_labeled_results_back_to_exact_nodes(monkeypatch):
     captured = {}
     output = (
+        "0: __NVIS_JOB__ink50-dh01-j21-11|147892\n"
         '0: __NVIS_NODE__ink50-dh01-j21-11|NVIS_DEEP_AUDIT_JSON={"status":"pass"}\n'
         "0: __NVIS_RC__ink50-dh01-j21-11|0\n"
+        "1: __NVIS_JOB__ink50-dh01-j21-12|147892\n"
         '1: __NVIS_NODE__ink50-dh01-j21-12|NVIS_DEEP_AUDIT_JSON={"status":"fail"}\n'
         "1: __NVIS_RC__ink50-dh01-j21-12|2\n"
     )
 
     def run_slurm(cmd, **_kwargs):
+        if "sinfo" in cmd:
+            return subprocess.CompletedProcess("sinfo", 0, "", "")
         captured["cmd"] = cmd
         return subprocess.CompletedProcess("srun", 0, output, "")
 
@@ -273,6 +278,8 @@ def test_slurm_fanout_maps_labeled_results_back_to_exact_nodes(monkeypatch):
         ("ink50-dh01-j21-12", 2),
     ]
     assert "status\":\"fail" in rows[1].stdout
+    assert rows[0].stdout.startswith("NVIS_SLURM_JOB_ID=147892\n")
+    assert workflow_engine._audit_scheduler_ref(rows[1].stdout) == "147892"
     assert "--kill-on-bad-exit=0" in captured["cmd"]
     assert "--immediate=60" in captured["cmd"]
     assert "--gpus-per-node=4" in captured["cmd"]
@@ -286,3 +293,45 @@ def test_slurm_fanout_maps_labeled_results_back_to_exact_nodes(monkeypatch):
     srun_argv = generated[srun_index:]
     assert "0" not in srun_argv[:-1]
     assert srun_argv[-3:-1] == ["bash", "-c"]
+
+
+def test_slurm_fanout_preflight_isolates_one_drained_node_from_healthy_peers(monkeypatch):
+    captured = {}
+
+    def run_slurm(cmd, **_kwargs):
+        if "sinfo" in cmd:
+            return subprocess.CompletedProcess(
+                "sinfo",
+                0,
+                "ink50-dh01-d01-11|drained|Prolog error\n"
+                "ink50-dh01-d01-12|idle|none\n",
+                "",
+            )
+        captured["cmd"] = cmd
+        output = (
+            "0: __NVIS_JOB__ink50-dh01-d01-12|147893\n"
+            '0: __NVIS_NODE__ink50-dh01-d01-12|NVIS_DEEP_AUDIT_JSON={"status":"pass"}\n'
+            "0: __NVIS_RC__ink50-dh01-d01-12|0\n"
+        )
+        return subprocess.CompletedProcess("srun", 0, output, "")
+
+    monkeypatch.setattr(workflow_engine.host_exec, "run_slurm_on_host", run_slurm)
+    rows = workflow_engine._execute_slurm_fanout(
+        ["ink50-dh01-d01-11", "ink50-dh01-d01-12"],
+        "bash /scripts/audit.sh",
+        timeout=90,
+        sudo=True,
+        job_name="audit",
+        gpus_per_node=4,
+    )
+
+    blocked = json.loads(rows[0].stdout.split("=", 1)[1])
+    assert blocked["status"] == "fail"
+    assert blocked["category"] == "control_plane"
+    assert blocked["codes"] == ["slurm_node_unavailable"]
+    assert "drained" in blocked["reason"]
+    assert rows[1].returncode == 0
+    assert workflow_engine._audit_scheduler_ref(rows[1].stdout) == "147893"
+    assert "--nodes 1" in captured["cmd"]
+    assert "--nodelist ink50-dh01-d01-12" in captured["cmd"]
+    assert "ink50-dh01-d01-11" not in captured["cmd"]
