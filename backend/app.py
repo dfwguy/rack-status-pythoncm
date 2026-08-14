@@ -272,17 +272,27 @@ try:
 except Exception as _ge_exc:  # pragma: no cover - observability embeds are optional
     _logger.warning("grafana_embeds blueprint unavailable: %s", _ge_exc, exc_info=True)
 
-_validation_jobs_lock = threading.Lock()
-_validation_jobs: dict[str, dict[str, object]] = {}
-
-_stress_jobs_lock = threading.Lock()
-_stress_jobs: dict[str, dict[str, object]] = {}
-
-_xrack_jobs_lock = threading.Lock()
-_xrack_jobs: dict[str, dict[str, object]] = {}
-
-_llama_jobs_lock = threading.Lock()
-_llama_jobs: dict[str, dict[str, object]] = {}
+# ---- Async job registries live in job_registry.py ----------------------------------------
+# Imported under the existing names. These are shared objects: the dicts here ARE the dicts there,
+# so the existing mutate-under-lock call sites are unaffected. Never rebind one.
+from job_registry import (
+    _analytics_jobs,
+    _analytics_jobs_lock,
+    _llama_jobs,
+    _llama_jobs_lock,
+    _node_report_jobs,
+    _node_report_jobs_lock,
+    _reset_job_purge_later,
+    _reset_jobs,
+    _reset_jobs_lock,
+    _stress_jobs,
+    _stress_jobs_lock,
+    _track_sync_op,
+    _validation_jobs,
+    _validation_jobs_lock,
+    _xrack_jobs,
+    _xrack_jobs_lock,
+)
 
 _physical_rf0_lock = threading.Lock()
 _physical_rf0_map: dict[str, str] = {}
@@ -1328,19 +1338,6 @@ def _llama_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
     _llama_job_purge_later(job_id)
 
 
-_reset_jobs_lock = threading.Lock()
-_reset_jobs: dict[str, dict[str, object]] = {}
-
-
-def _reset_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
-    def _purge() -> None:
-        time.sleep(float(delay_sec))
-        with _reset_jobs_lock:
-            _reset_jobs.pop(job_id, None)
-
-    threading.Thread(target=_purge, daemon=True).start()
-
-
 def _power_reset_worker(job_id: str, specs: list[str]) -> None:
     """Run cmsh power cycle in a background thread."""
 
@@ -1724,53 +1721,6 @@ def _active_clients_snapshot() -> dict[str, float]:
     """Copy of the heartbeat map for ``rack_locks`` (offline-claim detection)."""
     with _app_clients_lock:
         return dict(_app_clients_last_seen)
-
-
-@contextmanager
-def _track_sync_op(rack: str | object, kind: str, operator: str = ""):
-    """Register a synthetic entry in ``_reset_jobs`` so long-running sync handlers and
-    write-y SSE streams show up in ``GET /api/rack-locks`` for their duration.
-
-    Accepts a single rack id or a list/tuple. ``ValueError`` from a bad rack id is logged
-    and swallowed -- the wrapped handler runs untracked rather than breaking the route."""
-    racks: list[str] = []
-    if isinstance(rack, (list, tuple)):
-        candidates = rack
-    else:
-        candidates = [rack] if rack else []
-    for raw_rack in candidates:
-        if not isinstance(raw_rack, str) or not raw_rack:
-            continue
-        try:
-            racks.append(rack_locks.normalize_rack_id(raw_rack))
-        except ValueError:
-            continue
-    if not racks:
-        # Nothing to lock against; still yield so the route runs.
-        yield None
-        return
-    job_id = "sync-" + uuid.uuid4().hex[:12]
-    entry = {
-        "job_id": job_id,
-        "rack": racks[0] if len(racks) == 1 else None,
-        "racks": racks,
-        "kind": str(kind or "operation"),
-        "operator": rack_locks.sanitize_operator(operator),
-        "phase": "running",
-        "sync": True,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }
-    with _reset_jobs_lock:
-        _reset_jobs[job_id] = entry
-    try:
-        yield job_id
-    finally:
-        with _reset_jobs_lock:
-            row = _reset_jobs.get(job_id)
-            if row is not None:
-                row["phase"] = "done"
-                row["finished_at"] = datetime.now(timezone.utc).isoformat()
-        _reset_job_purge_later(job_id, delay_sec=15)
 
 
 def _auth_enabled() -> bool:
@@ -11419,8 +11369,6 @@ def api_analytics_aggregate():
     return jsonify(_analytics_aggregate_compute(log_dir, done_racks, body))
 
 
-_analytics_jobs: dict[str, dict] = {}
-_analytics_jobs_lock = threading.Lock()
 _ANALYTICS_JOBS_MAX = 8
 
 
@@ -11635,8 +11583,6 @@ def _cluster_report_pdf_available() -> bool:
     return cluster_report.pdf_available()
 
 
-_node_report_jobs: dict[str, dict] = {}
-_node_report_jobs_lock = threading.Lock()
 #: Small on purpose: each finished job pins a multi-MB document until it is collected.
 _NODE_REPORT_JOBS_MAX = 4
 #: How long a "running" job stays eligible for idempotent reuse. Comfortably longer than a
