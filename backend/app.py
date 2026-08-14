@@ -136,7 +136,6 @@ except Exception as _nr_exc:  # pragma: no cover - defensive
     logging.getLogger(__name__).warning("node_report unavailable: %s", _nr_exc, exc_info=True)
 
 
-import ai_chat
 import app_version as _app_version_mod
 import core
 import host_exec
@@ -1592,6 +1591,9 @@ def _gpu_reset_worker(job_id: str, pdsh_w: str) -> None:
 # One implementation, in the module the API packages can also import. Aliased rather than
 # re-exported under a new name so the 38 call sites here stay untouched.
 _truthy_env = core.truthy_env
+_SLURM_STDOUT_RE = core.SLURM_STDOUT_RE
+_slurm_job_base_id = core.slurm_job_base_id
+from slurm_query import _run_squeue
 
 
 def _project_name() -> str:
@@ -2582,15 +2584,6 @@ def _parser_secondary_stages(stage_paths: dict[str, Path], primary: Path) -> lis
         seen.add(str(path))
         out.append((stage, path))
     return out
-
-
-def _slurm_job_base_id(job_raw: str | None) -> str | None:
-    s = (job_raw or "").strip()
-    if not s or s == "-":
-        return None
-    if "_" in s:
-        s = s.split("_", 1)[0]
-    return s if s.isdigit() else None
 
 
 def _scontrol_hostnames_preserving_case(nodespec: str) -> list[str]:
@@ -8209,136 +8202,8 @@ def _run_scancel(job_id: str) -> dict:
     }
 
 
-def _run_squeue() -> dict:
-    """Run ``squeue`` after optional ``module load`` (same env semantics as *scancel* / *scontrol*)."""
-    plat = _get_platform()
-    shell_cmd = plat.squeue_cmd()
-    cmd_display = shell_cmd
-    timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
-    try:
-        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
-    except FileNotFoundError:
-        raise OSError(
-            "squeue executable not found; set RACK_SLURM_SQUEUE to the full path "
-            "or ensure module load is available"
-        ) from None
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"timeout after {timeout}s",
-            "command_display": cmd_display,
-        }
-    ok = proc.returncode == 0
-    return {
-        "ok": ok,
-        "returncode": proc.returncode,
-        "stdout": (proc.stdout or "").strip(),
-        "stderr": (proc.stderr or "").strip(),
-        "command_display": cmd_display,
-    }
-
-
-@app.route("/api/slurm-squeue", methods=["GET"])
-def api_slurm_squeue():
-    """Run ``module load slurm && squeue`` (unless ``RACK_SLURM_SKIP_MODULE_LOAD``) for the dashboard host."""
-    if os.environ.get("RACK_SLURM_SQUEUE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
-        return jsonify({"ok": False, "error": "squeue disabled (RACK_SLURM_SQUEUE_DISABLED)"}), 403
-    try:
-        result = _run_squeue()
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify(result)
-
-
-_SACCT_FIELD_ORDER = (
-    "job_id", "name", "partition", "nnodes", "nodelist", "start", "end", "elapsed", "state", "exit_code",
-)
-_SLURM_STDOUT_RE = re.compile(r"StdOut=(\S+)")
 # Terminal (finished) job states — what the Scheduler "recent jobs" panel shows so a
 # job that has left squeue (success OR failure) is still visible with its log.
-_SACCT_TERMINAL_STATES = frozenset({
-    "COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "NODE_FAIL",
-    "OUT_OF_MEMORY", "PREEMPTED", "BOOT_FAIL", "DEADLINE",
-})
-
-
-def _run_sacct_recent(limit: int = 10, state: str = "COMPLETED") -> dict:
-    """Recent finished Slurm jobs from ``sacct`` — the accounting DB retains history
-    that ``squeue`` drops the instant a job ends (the "blink and you miss it" gap).
-
-    Allocation rows only (``-X``), pipe-parseable (``-P``), newest-first, capped to *limit*.
-    """
-    plat = _get_platform()
-    st = (state or "COMPLETED").strip().upper()
-    if not re.fullmatch(r"[A-Z_,]+", st):
-        st = "COMPLETED"
-    since = (_eget("RACK_SLURM_SACCT_SINCE") or "now-7days").strip() or "now-7days"
-    if not re.fullmatch(r"[A-Za-z0-9:_+\-]+", since):
-        since = "now-7days"
-    # NB: do NOT pass sacct --state=… : with only -S it returns nothing on this Slurm
-    # even though the same jobs report State=COMPLETED. Fetch all and filter in Python.
-    fmt = "JobID,JobName,Partition,NNodes,NodeList,Start,End,Elapsed,State,ExitCode"
-    args = f"-X -n -P -S {shlex.quote(since)} -o {shlex.quote(fmt)}"
-    shell_cmd = plat.sacct_cmd(args)
-    timeout = max(5, _env_int("RACK_SLURM_SACCT_TIMEOUT", 60))
-    try:
-        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
-    except FileNotFoundError:
-        raise OSError("sacct executable not found; ensure Slurm accounting (sacct) is available") from None
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False, "returncode": -1, "stdout": "", "stderr": f"timeout after {timeout}s",
-            "command_display": shell_cmd, "jobs": [],
-        }
-    if st == "ALL":
-        want_states: set[str] = set()
-    elif st in ("FINISHED", "TERMINAL"):
-        want_states = set(_SACCT_TERMINAL_STATES)
-    else:
-        want_states = {s for s in st.split(",") if s}
-    jobs: list[dict] = []
-    for line in (proc.stdout or "").splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("|")
-        if len(parts) < len(_SACCT_FIELD_ORDER):
-            continue
-        row = dict(zip(_SACCT_FIELD_ORDER, [p.strip() for p in parts]))
-        if not _slurm_job_base_id(row.get("job_id")):
-            continue
-        # State can carry a suffix, e.g. "CANCELLED by 12345"; match the leading token.
-        row_state = (row.get("state") or "").split()[0].upper() if (row.get("state") or "").strip() else ""
-        if want_states and row_state not in want_states:
-            continue
-        jobs.append(row)
-    # Newest first: End is ISO-ish (sorts lexically); tie-break on numeric job id.
-    jobs.sort(key=lambda r: (r.get("end") or "", int(_slurm_job_base_id(r.get("job_id")) or 0)), reverse=True)
-    jobs = jobs[: max(1, limit)]
-    return {
-        "ok": proc.returncode == 0, "returncode": proc.returncode,
-        "stdout": (proc.stdout or "").strip(), "stderr": (proc.stderr or "").strip(),
-        "command_display": shell_cmd, "jobs": jobs,
-    }
-
-
-@app.route("/api/slurm-sacct-recent", methods=["GET"])
-def api_slurm_sacct_recent():
-    """Recent finished Slurm jobs via ``sacct`` — query ``limit`` (1-50, default 10) and ``state`` (default COMPLETED)."""
-    if os.environ.get("RACK_SLURM_SACCT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
-        return jsonify({"ok": False, "error": "sacct disabled (RACK_SLURM_SACCT_DISABLED)", "jobs": []}), 403
-    try:
-        limit = int((request.args.get("limit") or "10").strip())
-    except (TypeError, ValueError):
-        limit = 10
-    limit = min(50, max(1, limit))
-    state = (request.args.get("state") or "COMPLETED").strip() or "COMPLETED"
-    try:
-        result = _run_sacct_recent(limit=limit, state=state)
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e), "jobs": []}), 500
-    return jsonify(result)
 
 
 def _slurm_job_log_path(job_id: str, log_dir: Path) -> tuple[str, str]:
@@ -8393,49 +8258,6 @@ def api_slurm_job_log_path():
             {"ok": False, "error": f"no stdout log found for job {job_id} (aged out of scontrol; no matching file under log_dir)"}
         ), 404
     return jsonify({"ok": True, "job_id": _slurm_job_base_id(job_id), "path": path, "source": source})
-
-
-def _run_sinfo_r() -> dict:
-    """Run ``sinfo -R --long`` after optional ``module load`` (same env semantics as *squeue* / *scontrol*)."""
-    plat = _get_platform()
-    shell_cmd = plat.sinfo_cmd("-R --long")
-    cmd_display = shell_cmd
-    timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
-    try:
-        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
-    except FileNotFoundError:
-        raise OSError(
-            "sinfo executable not found; set RACK_SLURM_SINFO to the full path "
-            "or ensure module load is available"
-        ) from None
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"timeout after {timeout}s",
-            "command_display": cmd_display,
-        }
-    ok = proc.returncode == 0
-    return {
-        "ok": ok,
-        "returncode": proc.returncode,
-        "stdout": (proc.stdout or "").strip(),
-        "stderr": (proc.stderr or "").strip(),
-        "command_display": cmd_display,
-    }
-
-
-@app.route("/api/slurm-sinfo-r", methods=["GET"])
-def api_slurm_sinfo_r():
-    """Run ``module load slurm && sinfo -R --long`` (unless ``RACK_SLURM_SKIP_MODULE_LOAD``) for the dashboard host."""
-    if os.environ.get("RACK_SLURM_SINFO_R_DISABLED", "").strip().lower() in ("1", "true", "yes"):
-        return jsonify({"ok": False, "error": "sinfo -R --long disabled (RACK_SLURM_SINFO_R_DISABLED)"}), 403
-    try:
-        result = _run_sinfo_r()
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify(result)
 
 
 @app.route("/api/slurm-scancel", methods=["POST"])
@@ -13671,27 +13493,6 @@ def _sn_llama_txt_paths_for_rack(log_dir: Path, rack: str, *, exclude: Path | No
     return list(reversed(out))
 
 
-@app.route("/api/sn-llama-logs", methods=["GET"])
-def api_sn_llama_logs():
-    """List ``*.txt`` under ``log_dir/sn-llama/`` (newest first), optional ``rack`` substring filter."""
-    try:
-        log_dir = _resolve_log_dir(request.args.get("log_dir"))
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    rack_f = (request.args.get("rack") or "").strip().lower()
-    d = _rpath(log_dir) / "sn-llama"
-    # Single listing through the connection: name + mtime is all this endpoint
-    # reports, and an absent directory comes back empty.
-    entries = host_exec.stat_dir(d, patterns=("*.txt",))
-    out: list[dict[str, object]] = []
-    for path_s in sorted(entries, key=lambda s: entries[s].mtime, reverse=True)[:200]:
-        name = PurePosixPath(path_s).name
-        if rack_f and rack_f not in name.lower():
-            continue
-        out.append({"name": name, "mtime": int(entries[path_s].mtime)})
-    return jsonify({"ok": True, "files": out})
-
-
 def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
     """Shared parse for async mnubergemm stress. Returns (prep, None) or (None, (jsonify(...), code))."""
     if os.environ.get("RACK_MNUBERGEMM_STRESS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -17964,69 +17765,6 @@ def api_tools_available():
 # ---------------------------------------------------------------------------
 # AI Chat routes
 # ---------------------------------------------------------------------------
-
-
-@app.route("/api/ai/chat", methods=["POST"])
-def api_ai_chat():
-    """POST SSE streaming chat. Body: {messages: [{role, content}], context: {page, rack?}}"""
-    if not ai_chat.is_ai_enabled() and not _truthy_env("RACK_STATUS_DEMO"):
-        return jsonify({"ok": False, "error": "AI is not configured. Set an API key in Settings."}), 503
-
-    body = request.get_json(silent=True) or {}
-    messages = body.get("messages")
-    if not messages or not isinstance(messages, list) or len(messages) == 0:
-        return jsonify({"ok": False, "error": "messages array is required"}), 400
-
-    context = body.get("context") or {}
-    settings = ai_chat.get_ai_settings()
-    system_prompt = ai_chat.build_system_prompt(context, settings.get("system_rules", ""))
-
-    full_messages = [{"role": "system", "content": system_prompt}]
-    for m in messages:
-        if isinstance(m, dict) and m.get("role") and m.get("content"):
-            full_messages.append({"role": m["role"], "content": m["content"]})
-
-    def generate():
-        try:
-            use_demo = _truthy_env("RACK_STATUS_DEMO") and not ai_chat.is_ai_enabled()
-            if use_demo:
-                stream = ai_chat.demo_stream_response(full_messages, context)
-            else:
-                stream = ai_chat.chat_completion_stream(full_messages)
-            for chunk in stream:
-                yield f"data: {json.dumps({'content': chunk})}\n\n"
-            yield "data: [DONE]\n\n"
-        except Exception as exc:
-            _logger.exception("AI chat stream error")
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-store",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@app.route("/api/ai/settings", methods=["GET", "PUT"])
-def api_ai_settings():
-    """GET returns masked settings; PUT updates endpoint/model/key."""
-    if request.method == "GET":
-        return jsonify({"ok": True, **ai_chat.get_ai_settings()})
-
-    body = request.get_json(silent=True) or {}
-    updated = ai_chat.update_ai_settings(body)
-    return jsonify({"ok": True, **updated})
-
-
-@app.route("/api/ai/test", methods=["POST"])
-def api_ai_test():
-    """Test the AI endpoint connectivity."""
-    result = ai_chat.test_connection()
-    status = 200 if result.get("ok") else 502
-    return jsonify(result), status
 
 
 # ---------------------------------------------------------------------------

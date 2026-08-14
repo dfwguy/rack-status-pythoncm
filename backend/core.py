@@ -70,6 +70,12 @@ def rpath(p: object) -> PurePosixPath:
     return PurePosixPath(host_exec.resolve(p))
 
 
+#: ``StdOut=`` in ``scontrol show job`` / ``sacct`` output -- where a job's log actually landed.
+#:
+#: Shared because both the scontrol parser and the recent-jobs view need it, and they now live in
+#: different modules.
+SLURM_STDOUT_RE = re.compile(r"StdOut=(\S+)")
+
 #: A Slurm job id as ``scancel``/``sacct`` will accept it, optionally an array task.
 #:
 #: Guards every place a job id reaches a command line. Shared because both the app and the
@@ -95,3 +101,17 @@ def history_enabled() -> bool:
     except ImportError:
         return False
     return results_history is not None and not truthy_env("RACK_RESULTS_HISTORY_DISABLED")
+
+
+def slurm_job_base_id(job_raw: str | None) -> str | None:
+    """The allocation id from a Slurm job id, dropping any array-task suffix.
+
+    ``None`` for anything that is not a plain number -- sacct prints "-" for rows that have no
+    job id, and a non-numeric id must never reach a command line.
+    """
+    s = (job_raw or "").strip()
+    if not s or s == "-":
+        return None
+    if "_" in s:
+        s = s.split("_", 1)[0]
+    return s if s.isdigit() else None
