@@ -40,3 +40,13 @@ single-node `dcgmi mndiag` = `MNUBERGEMM Test: Pass`.
 
 - **Compute nodes flaky to `developer.download.nvidia.com`** → download debs on the head,
   stage on shared `/home`, `apt-get install ./*.deb` per node.
+
+- **Multi-rack = one job PER RACK, never one job spanning racks.** `mnubergemm` is an
+  NVLink-domain test: the audited sbatch disables IB and enables MNNVL, so a single Slurm
+  allocation covering two physical racks joins two separate NVLink domains and **hangs**. The
+  `multirack` scope of the `mnubergemm-26.03-v1.17` preset therefore groups the selected nodes by
+  rack and fans out independent jobs (`--group-nodelist` per rack, see
+  `bin/scripts/run-validation-preset.sh`). The dispatcher fails closed if the groups are not a
+  clean partition of the reviewed target — a node in two groups, or outside the selection, is a
+  refusal, not a warning. The preset also carries a 60-minute allocation ceiling
+  (`max_runtime_minutes`), so a wedged run cannot hold a rack indefinitely.

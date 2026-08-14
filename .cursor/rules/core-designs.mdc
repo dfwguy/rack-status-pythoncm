@@ -77,7 +77,17 @@ multiplexing is load-bearing, not an optimisation (`docs/EXECUTION_ARCHITECTURE.
 
 Concurrency ceilings come from the target, not from impatience: the head's `sshd MaxSessions`
 (unset = OpenSSH default 10) bounds a fan-out, and exceeding it fails nodes silently with
-"Session open refused by peer".
+"Session open refused by peer". This is not theoretical — it is the "no more sessions" x215 and
+the fleet sweep that silently lost **655 of 2,013 nodes**.
+
+**On Nscale TX that ceiling is now escapable: `RACK_DIRECT_NODE_SSH=1`.** `.hop()` relays through
+the head because there was historically no direct app→node route; that stopped being true on
+2026-08-06 when the Align team wired the high-speed links, and the ObsVM now reaches every tray
+directly. Every relayed hop spends one of the head's 10 session slots, so a ~2,000-node sweep
+queues 2,000 channels through a 10-slot gate; a direct hop spends none and measured ~20% faster.
+Opt-in, with `RACK_NODE_SSH_KEY` / `RACK_NODE_SSH_USER`, and the relay stays the default for any
+target the app genuinely cannot reach itself. Before optimising a slow or lossy fan-out, check
+whether you are paying the relay tax needlessly — do not re-derive this from the symptoms.
 
 ### 2. Catalog / Tools — what the product can run
 
