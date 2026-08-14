@@ -68,6 +68,13 @@ def test_workspace_toolchain_endpoint_never_stats_the_container(monkeypatch):
 
 def test_container_status_accepts_a_remote_symlink_to_directory(monkeypatch):
     destination = PurePosixPath("/home/cmods/workspace/llmb/images")
+    # The path belongs to the EXECUTION host, so resolution is textual -- that is what a connection
+    # does, and the function under test documents it. Pinned here because the test suite runs with
+    # RACK_EXEC_MODE=local, where resolve() legitimately consults the local filesystem: on macOS
+    # /home is a firmlink to /System/Volumes/Data/home, so an unpatched resolve rewrote this path and
+    # failed the assertion for a reason that has nothing to do with symlink handling (and could not
+    # happen on the Linux host this models).
+    monkeypatch.setattr(app_module.host_exec, "resolve", lambda path, **_kw: str(path))
     monkeypatch.setattr(app_module.host_exec, "is_dir", lambda path: path == destination)
     monkeypatch.setattr(app_module.host_exec, "is_file", lambda path: path == destination)
 

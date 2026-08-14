@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 # Audited dispatcher for Rack Status validation presets.  The browser chooses only
 # a preset and exact targets; commands/images/version gates stay code-owned here.
+# Author: Rafael M. Koike & Cursor Agent ("Ada")
 set -euo pipefail
+
+# Needs bash 4 for `declare -A` (rack grouping) and `mapfile` (hostname expansion). Fine on the
+# head node; macOS ships bash 3.2 as /bin/bash, where those fail as `declare: -A: invalid option`
+# several hundred lines from the cause. Say it once, here.
+if ((BASH_VERSINFO[0] < 4)); then
+  printf 'run-validation-preset.sh: needs bash 4+ (found %s at %s).\n' \
+    "${BASH_VERSION}" "${BASH}" >&2
+  printf '  It uses associative arrays and mapfile. On macOS: brew install bash, then run it\n' >&2
+  printf '  with that bash — /bin/bash is 3.2 and cannot run this script.\n' >&2
+  exit 2
+fi
 
 usage() {
   cat <<'EOF'

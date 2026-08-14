@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +9,31 @@ import pytest
 import validation_presets
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+def _bash4() -> str:
+    """Path to a bash that can run the dispatcher, or skip.
+
+    ``run-validation-preset.sh`` needs bash 4 for ``declare -A`` and ``mapfile``, which is what the
+    head node has. macOS ships bash 3.2 as /bin/bash, so invoking a bare "bash" here failed with
+    ``declare: -A: invalid option`` on every developer Mac while passing in CI -- a red suite that
+    says nothing about the code. Prefer a real bash 4+ if one is installed, and skip with the reason
+    if not, so the failure cannot be mistaken for a defect.
+    """
+    for cand in ("bash", "/opt/homebrew/bin/bash", "/usr/local/bin/bash"):
+        exe = shutil.which(cand) if "/" not in cand else (cand if os.access(cand, os.X_OK) else None)
+        if not exe:
+            continue
+        try:
+            major = subprocess.run(
+                [exe, "-c", 'printf %s "${BASH_VERSINFO[0]}"'],
+                capture_output=True, text=True, timeout=10, check=False,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if major.isdigit() and int(major) >= 4:
+            return exe
+    pytest.skip("needs bash 4+ for declare -A / mapfile (macOS /bin/bash is 3.2; brew install bash)")
 
 
 def test_live_eligibility_resolves_sinfo_through_platform(monkeypatch):
@@ -182,7 +208,7 @@ def test_mnubergemm_dispatcher_dry_run_prints_bounded_slurm_command(tmp_path):
     }
     proc = subprocess.run(
         [
-            "bash", str(script),
+            _bash4(), str(script),
             "--preset", "mnubergemm-26.03-v1.17",
             "--nodelist", "ink50-dh01-d01-11,ink50-dh01-d02-11",
             "--storage", "nfs",
@@ -216,7 +242,7 @@ def test_mnubergemm_dispatcher_dry_run_prints_bounded_slurm_command(tmp_path):
 def test_mnubergemm_dispatcher_rejects_unsafe_multirack_groups(tmp_path, groups, message):
     script = REPO / "bin/scripts/run-validation-preset.sh"
     args = [
-        "bash", str(script),
+        _bash4(), str(script),
         "--preset", "mnubergemm-26.03-v1.17",
         "--nodelist", "ink50-dh01-d01-11,ink50-dh01-d02-11",
         "--storage", "nfs",
@@ -250,7 +276,7 @@ def test_mnubergemm_dispatcher_rejects_unsafe_multirack_groups(tmp_path, groups,
 def test_legacy_mnubergemm_driver_rejects_over_one_hour(env_update, message):
     script = REPO / "bin/scripts/run_mnubergemm_stress.sh"
     proc = subprocess.run(
-        ["bash", str(script), "ink50-dh01-d01"],
+        [_bash4(), str(script), "ink50-dh01-d01"],
         capture_output=True,
         text=True,
         env={**os.environ, **env_update},

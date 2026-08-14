@@ -15,6 +15,8 @@ is exactly where a first-run failure is most expensive.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 import app as A
@@ -22,7 +24,7 @@ import config_env as C
 
 
 @pytest.fixture
-def no_overrides_file(tmp_path, monkeypatch):
+def no_overrides_file(tmp_path, monkeypatch, request):
     """Point the override store at a directory that has no overrides file in it."""
     # The path is hardcoded to REPO_ROOT/var/cache, not read from the environment -- the env var
     # of that name is an OUTPUT of the loader, for forked workers. So patch the resolver.
@@ -34,6 +36,23 @@ def no_overrides_file(tmp_path, monkeypatch):
     monkeypatch.setattr(C, "_JOB_ENV_OVERRIDES_CACHE", None)
     monkeypatch.setattr(C, "_JOB_ENV_OVERRIDES_MTIME", None)
     monkeypatch.delenv("RACK_STATUS_DEMO", raising=False)  # demo mode skips the flock entirely
+
+    # Loading an overrides file MATERIALISES it into os.environ -- that is the point of the store,
+    # and it is process-global. Left unrestored it leaks into every later test that reads the key,
+    # which is exactly what happened: this suite wrote one Settings key with a recognisable value
+    # and later runs failed in test_platforms with cmd[0] == "from-the-file". The count varied from
+    # 1 to ~80 depending on how widely the leaked key is read, which made it look like flakiness
+    # under load rather than pollution. Snapshot every managed key and put them back.
+    before = {k: os.environ.get(k) for k in C._JOB_ENV_ALLOWED_KEYS}
+
+    def _restore() -> None:
+        for k, v in before.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    request.addfinalizer(_restore)
     return tmp_path
 
 
@@ -79,7 +98,9 @@ def test_a_file_appearing_later_is_picked_up(no_overrides_file):
     """The empty-state guard must not latch: writing the file must still take effect."""
     assert A._job_env_overrides_load() == {}
 
-    key = next(iter(A._JOB_ENV_ALLOWED_KEYS))
+    # sorted(), not next(iter(frozenset)): set order varies per process, so this test used to pick
+    # a different Settings key on every run -- unreproducible by construction.
+    key = sorted(C._JOB_ENV_ALLOWED_KEYS)[0]
     path = no_overrides_file / "job_env_overrides.json"
     path.write_text(f'{{"{key}": "from-the-file"}}', encoding="utf-8")
 
