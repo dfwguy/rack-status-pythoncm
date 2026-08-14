@@ -21,7 +21,7 @@ bp = Blueprint("rack_locks", __name__)      # no url_prefix -> derived from the 
 def claim(): ...
 ```
 
-`app.py` reached 20,000 lines and still holds 152 of the 199 routes, because every feature had to
+`app.py` reached 20,000 lines and still holds 135 of the 199 routes, because every feature had to
 touch it. Two people working in parallel then collide by construction — which is how an entire
 feature ended up living uncommitted on a customer deployment for days. One file per domain is the fix; keeping the
 registry implicit is what stops the registry becoming the new bottleneck.
@@ -39,18 +39,44 @@ registry implicit is what stops the registry becoming the new bottleneck.
 
 ### Where shared code goes
 
-- **`backend/core.py`** — imports neither Flask nor `app`. Helpers, predicates, patterns. This is
-  what breaks the import cycle: `app.py → api/<domain>.py → core.py`, one direction only.
-- **`backend/api/_common.py`** — shared helpers that *do* need Flask (anything returning a
-  response). `app.py` may import it without a cycle, since `app` already imports the package and
-  nothing under `api/` imports `app`.
-- **Never** `from app import ...` inside an `api/` module. If you need something from `app.py`,
-  move it to `core.py` instead. `workflow_engine.py` and `bcm_query.py` still do `import app`
-  inside function bodies to dodge the cycle; that is debt, not a pattern to copy.
+Pick by what the code *is*, not by what needs it:
+
+| Module | Holds | Never imports |
+|---|---|---|
+| `backend/core.py` | small pure helpers, predicates, shared regexes | Flask, `app` |
+| `backend/config_env.py` | the whole config ladder: `_eget`, `_env_int`, `_subprocess_env`, the Settings registry, the file-locked overrides store | Flask, `app` |
+| `backend/paths.py` | execution-host paths: `_scripts_dir`, `_script_exists`, `_resolve_log_dir` | Flask, `app` |
+| `backend/naming.py` | `_nvis_naming`, `_normalize_rack_id` | Flask, `app` |
+| `backend/job_registry.py` | the seven async job registries + their locks, `_track_sync_op` | Flask, `app` |
+| `backend/slurm_query.py` | `squeue` / `sinfo -R` / `sacct` command runners | Flask, `app` |
+| `backend/app_version.py` | the one answer to "what build is this?" | Flask, `app` |
+| `backend/api/_common.py` | shared helpers that *need* Flask: `operator_from_request`, `client_id_from_request` | `app` |
+
+**Never** `from app import ...` inside an `api/` module. If you need something from `app.py`, move
+it to one of the above. `workflow_engine.py` and `bcm_query.py` still do `import app` inside
+function bodies to dodge the cycle; that is debt, not a pattern to copy.
+
+Command runners are not endpoints. `slurm_query.py` exists because `app.py` *and* a route both
+needed `_run_squeue`; putting it in the route module would have made `app.py` import from `api/`,
+inverting the one direction this package exists to protect.
+
+### The aliasing trap — it has bitten twice
+
+`app.py` imports moved helpers under their original private names so call sites did not change.
+That works because a function or dict is shared by reference. But:
+
+- **Rebinding is not sharing.** `monkeypatch.setattr(app, "_nvis_naming", ...)` does *not* change
+  what `naming._normalize_rack_id` resolves, because that function reads `naming`'s own globals.
+  Nine tests failed with confusing assertion errors — not `AttributeError` — the first time this
+  was missed. **Patch the module that owns the name.**
+- Same for module state: `_reset_jobs = {}` in another module gives it a private dict while the
+  lock still guards the original. Mutate these, never rebind them.
+- A helper that is still *called from `app.py`* is unaffected, which is why only some patches
+  break. That asymmetry is what makes it confusing; check with a run, not by reasoning.
 
 ### Migrating an existing domain out of `app.py`
 
-Still to do for 152 of the 199 routes. The recipe, in order:
+Still to do for 135 of the 199 routes. The recipe, in order:
 
 1. **Move the route functions and their private helpers.** Change `@app.route` to `@bp.route`,
    keep the path strings byte-for-byte, and give the blueprint `url_prefix=""`.
@@ -71,11 +97,19 @@ Still to do for 152 of the 199 routes. The recipe, in order:
 Domains sharing module-level job dicts (`_validation_jobs`, `_xrack_jobs`, …) must move as a unit
 with their state — the launch route and its status route are one module, not two.
 
-**Migrated so far:** `terminal` (via `install`), `help`, `vault`, `history`, `deep_audits`,
-`node_issues`, `workflows`, `nvftp_sync`, `cluster_health`, `ds_diag`, `openapi_spec`.
-**Blocked on the configuration subsystem:** everything needing `_eget` (~120 call sites) or
-`_rpath` (~90). Moving `_eget` means moving the job-env override store with it — a file-locked
-cache plus the settings UI definitions. That is the next unlock and deserves its own commit.
+**Migrated so far:** `terminal` (via `install`), `help`, `vault`, `history`, `deep_audits`, `node_issues`,
+`workflows`, `nvftp_sync`, `cluster_health`, `ds_diag`, `openapi_spec`, `job_status`,
+`fabric_probe`, `ai`, `sn_llama_logs`, `slurm_queries`.
+**The configuration subsystem is no longer the blocker** — it moved to `config_env.py`, along
+with the job registries, host paths and naming. What remains is coupled to the *launch* side of
+the async tools: the `_prepare_*` builders and `_worker` threads, which reach
+`_record_validation_activity`, `_validation_node_eligibility`, `_rack_node_hostnames_from_inventory`
+and friends. Moving one drags a large connected component, so those want their own extraction
+(a `validation_launch.py` alongside `slurm_query.py`) before the routes can follow.
+
+A worked example of stopping: the six validation-preset routes look ready (their bodies need
+nothing from `app.py`), but the three helpers behind them need eight more private functions.
+That attempt was reverted rather than forced — which is the recipe's step 5 in practice.
 
 ## Demo Mode
 

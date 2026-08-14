@@ -139,19 +139,24 @@ underscores becoming hyphens); declare one when the URL cannot be spelled as a m
 `url_prefix=""` means the routes carry full paths, which is the mode used when migrating existing
 routes so a move cannot change a URL by accident.
 
-**Why this exists.** `app.py` reached 20,000 lines and still holds 152 of the 199 routes, because
+**Why this exists.** `app.py` reached 20,000 lines and still holds 135 of the 199 routes, because
 every feature had to touch it. Parallel work collided by construction — which is how an entire feature (node issues, deep audits,
 the post-run report) ended up living uncommitted on a customer deployment, discovered only because
 something else broke. One file per domain removes the shared edit point; implicit registration
 stops the registry from becoming the next one.
 
-**Migration is in progress.** `terminal`, `help`, `vault`, `history`, `deep_audits`, `node_issues`,
-`workflows`, `nvftp_sync`, `cluster_health`, `ds_diag` and `openapi_spec` have moved; 152 routes
-are still in `app.py`. The blocker for most of them is configuration resolution: `_eget`
-(~120 call sites) and `_rpath` (~90) live in `app.py`, and an `api/` module cannot import from `app`
-without recreating the cycle. Moving `_eget` means moving the job-env override store with it — a
-file-locked cache plus the settings UI definitions — and that is the next step that unlocks the
-bulk. `backend/tests/test_route_parity.py` snapshots all 199 URL paths and fails by name if a move
+**Migration is in progress.** `terminal` (via `install`), `help`, `vault`, `history`, `deep_audits`, `node_issues`,
+`workflows`, `nvftp_sync`, `cluster_health`, `ds_diag`, `openapi_spec`, `job_status`,
+`fabric_probe`, `ai`, `sn_llama_logs`, `slurm_queries`
+have moved; 135 routes are still in `app.py`. Configuration resolution is no longer the blocker: it now lives in
+`config_env.py`, with the job registries in `job_registry.py`, host paths in `paths.py`, rack naming
+in `naming.py`, the Slurm command runners in `slurm_query.py` and the build version in
+`app_version.py`. What is left is coupled to the *launch* side of the async tools — the `_prepare_*`
+builders and worker threads, which reach `_record_validation_activity`,
+`_validation_node_eligibility` and `_rack_node_hostnames_from_inventory` — so that connected
+component wants its own extraction next, the way `slurm_query.py` separated runners from routes.
+
+`backend/tests/test_route_parity.py` snapshots all 199 URL paths and fails by name if a move
 changes one; run it after every extraction.
 
 **Notable backend components:** `app.py` (REST routes not yet migrated + settings registry);

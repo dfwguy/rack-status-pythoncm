@@ -57,11 +57,12 @@ means the feature is simply absent with no error anywhere, which cost an afterno
 because moving routes between modules is exactly the change that silently renames one, and the
 SPA calls these paths by hand.
 
-`app.py` reached 20,000 lines and still holds 152 of the 199 routes, every feature touching it,
+`app.py` reached 20,000 lines and still holds 135 of the 199 routes, every feature touching it,
 so parallel work
 collided by construction — that is how a whole feature ended up uncommitted on a customer
-deployment. Migration is partial: `terminal`, `help`, `vault`, `history`, `deep_audits`, `node_issues`,
-`workflows`, `nvftp_sync`, `cluster_health`, `ds_diag` and `openapi_spec` have moved. The bulk is
+deployment. Migration is partial: `terminal` (via `install`), `help`, `vault`, `history`, `deep_audits`, `node_issues`,
+`workflows`, `nvftp_sync`, `cluster_health`, `ds_diag`, `openapi_spec`, `job_status`,
+`fabric_probe`, `ai`, `sn_llama_logs`, `slurm_queries` have moved. The bulk is
 blocked on configuration resolution (citizen 5) still living in `app.py`.
 
 ### 1. Connection / transport — how anything runs on a host
@@ -140,12 +141,17 @@ overlay → job env overrides → process env → platform low overlay.
 code silently opts out of per-cluster overlays, which is how a setting works on one cluster and
 not on another. `host_exec._FORWARD_ENV_NAMES` is what carries non-prefixed knobs over SSH.
 
-**This subsystem is what blocks the rest of the `app.py` split (citizen 0).** `_eget` has ~120 call
-sites and `_rpath` ~90, and an `api/` module cannot import them from `app` without recreating the
-cycle. Moving `_eget` means moving the job-env override store with it — a file-locked cache plus
-the settings UI definitions — so it is a deliberate step of its own, not something to do halfway.
-Note the store recurses if its file is absent unless the empty state is treated as terminal
-(`test_job_env_missing_file.py`); preserve that guard through any move.
+**This now lives in `backend/config_env.py`**, extracted reader-first: the readers (`_eget` and the
+overrides store) need nothing from `app`, while the writer stays behind because it invalidates the
+rack-status cache. The one remaining coupling is explicit —
+`config_env.set_materialize_hook(_apply_catalog_active_to_environ)`, registered by `app.py`,
+replacing a `globals()` lookup that only worked while both lived in one file.
+
+Two things to preserve through any further change. The store recurses if its file is absent unless
+the empty state is treated as terminal (`test_job_env_missing_file.py`). And the hook must stay
+registered: if it is dropped nothing raises, the overlay simply stops being re-applied — wrong
+values on some clusters, an error on none. `test_config_materialize_hook.py` exists only to assert
+that wire; `test_config_precedence.py` pins the ladder itself.
 
 ### 6. Platform and scheduler providers — which cluster manager, which queue
 

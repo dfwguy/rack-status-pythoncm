@@ -3,7 +3,7 @@
 Author: Rafael M. Koike & Cursor Agent ("Ada")
 
 Adding an endpoint should not mean editing a file someone else is editing. ``app.py`` had grown
-to twenty thousand lines and still holds 152 of the app's 199 routes; every feature touched it, so
+to twenty thousand lines and still holds 135 of the app's 199 routes; every feature touched it, so
 two people working in parallel collided by construction -- which is exactly how a whole feature
 ended up living uncommitted on a customer deployment.
 
