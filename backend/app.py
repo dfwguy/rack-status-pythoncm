@@ -7970,21 +7970,6 @@ def api_rack_uptime():
     return jsonify(result)
 
 
-@app.route("/api/reset-job-status", methods=["GET"])
-def api_reset_job_status():
-    """Poll async jobs: power, GPU reset, services restart, HW check, bug report, NMXC cycle, NVLink SDN reset, NVLink system reset, IMEX reset, NVLMAPPER, Precheck, NVSWICTH check, or IMEX check."""
-    job_id = (request.args.get("job_id") or "").strip()
-    if not job_id:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _reset_jobs_lock:
-        row = _reset_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
-    payload["ok"] = True
-    return jsonify(payload)
-
-
 _SLURM_DRAIN_REASON_RE = re.compile(r"^[A-Za-z0-9 _.,:/()\-]{1,256}$")
 # last_job / scancel: plain id or job array id (e.g. 12345_0)
 _SLURM_SCANCEL_JOB_ID_RE = core.SLURM_JOB_ID_RE  # one definition, in core
@@ -13273,21 +13258,6 @@ def api_run_validation_async():
     )
 
 
-@app.route("/api/run-validation-status", methods=["GET"])
-def api_run_validation_status():
-    """Return state for a job started via /api/run-validation-async (phase, stdout, …)."""
-    job_id = (request.args.get("job_id") or "").strip()
-    if not job_id:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _validation_jobs_lock:
-        row = _validation_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
-    payload["ok"] = True
-    return jsonify(payload)
-
-
 def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
     """Parse POST body for ``run-nemo-xrack.sh`` (comma-separated rack-ct[inner] specs)."""
     if os.environ.get("RACK_NEMO_XRACK_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -13402,20 +13372,6 @@ def api_run_nemo_xrack_async():
             "command_display": display_cmd,
         }
     )
-
-
-@app.route("/api/run-nemo-xrack-status", methods=["GET"])
-def api_run_nemo_xrack_status():
-    job_id = (request.args.get("job_id") or "").strip()
-    if not job_id:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _xrack_jobs_lock:
-        row = _xrack_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
-    payload["ok"] = True
-    return jsonify(payload)
 
 
 def _prepare_run_llama(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
@@ -13680,20 +13636,6 @@ def api_run_llama_async():
             "command_display": display_cmd,
         }
     )
-
-
-@app.route("/api/run-llama-status", methods=["GET"])
-def api_run_llama_status():
-    job_id = (request.args.get("job_id") or "").strip()
-    if not job_id:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _llama_jobs_lock:
-        row = _llama_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
-    payload["ok"] = True
-    return jsonify(payload)
 
 
 def _sn_llama_txt_paths_for_rack(log_dir: Path, rack: str, *, exclude: Path | None = None) -> list[Path]:
@@ -14720,21 +14662,6 @@ def api_run_mnubergemm_stress_async():
     )
 
 
-@app.route("/api/run-mnubergemm-stress-status", methods=["GET"])
-def api_run_mnubergemm_stress_status():
-    """Return state for a job started via /api/run-mnubergemm-stress-async."""
-    job_id = (request.args.get("job_id") or "").strip()
-    if not job_id:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _stress_jobs_lock:
-        row = _stress_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
-    payload["ok"] = True
-    return jsonify(payload)
-
-
 @app.route("/api/run-nccl-fullrack-async", methods=["POST"])
 def api_run_nccl_fullrack_async():
     """Start the standalone Stage-1 NCCL benchmark; poll GET /api/run-nccl-fullrack-status?job_id=…"""
@@ -14805,21 +14732,6 @@ def api_run_nccl_fullrack_async():
     )
 
 
-@app.route("/api/run-nccl-fullrack-status", methods=["GET"])
-def api_run_nccl_fullrack_status():
-    """Return state for a job started via /api/run-nccl-fullrack-async (shared stress job store)."""
-    job_id = (request.args.get("job_id") or "").strip()
-    if not job_id:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _stress_jobs_lock:
-        row = _stress_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
-    payload["ok"] = True
-    return jsonify(payload)
-
-
 @app.route("/api/run-nvloom-async", methods=["POST"])
 def api_run_nvloom_async():
     """Start nvloom singlerack Slurm driver (sbatch --wait); poll GET /api/run-nvloom-status?job_id=…"""
@@ -14882,21 +14794,6 @@ def api_run_nvloom_async():
     )
 
 
-@app.route("/api/run-nvloom-status", methods=["GET"])
-def api_run_nvloom_status():
-    """Return state for a job started via /api/run-nvloom-async (same store as mnubergemm stress)."""
-    job_id = (request.args.get("job_id") or "").strip()
-    if not job_id:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _stress_jobs_lock:
-        row = _stress_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
-    payload["ok"] = True
-    return jsonify(payload)
-
-
 @app.route("/api/run-clusterkit-async", methods=["POST"])
 def api_run_clusterkit_async():
     """Start ClusterKit singlerack Slurm driver; poll GET /api/run-clusterkit-status?job_id=…"""
@@ -14957,21 +14854,6 @@ def api_run_clusterkit_async():
             "client_poll_deadline_ms": client_poll_deadline_ms,
         }
     )
-
-
-@app.route("/api/run-clusterkit-status", methods=["GET"])
-def api_run_clusterkit_status():
-    """Return state for a job started via /api/run-clusterkit-async."""
-    job_id = (request.args.get("job_id") or "").strip()
-    if not job_id:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _stress_jobs_lock:
-        row = _stress_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
-    payload["ok"] = True
-    return jsonify(payload)
 
 
 @app.route("/api/run-llmb-nccl-async", methods=["POST"])
@@ -15059,23 +14941,6 @@ def api_run_llmb_nccl_async():
             "client_poll_deadline_ms": client_poll_deadline_ms,
         }
     )
-
-
-@app.route("/api/run-llmb-nccl-status", methods=["GET"])
-def api_run_llmb_nccl_status():
-    """Return state for a job started via /api/run-llmb-nccl-async."""
-    job_id = (request.args.get("job_id") or "").strip()
-    if not job_id:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _stress_jobs_lock:
-        row = _stress_jobs.get(job_id)
-        payload = dict(row) if row is not None else None
-    if payload is None:
-        payload = validation_activities.get_activity(job_id)
-    if payload is None:
-        return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-    payload["ok"] = True
-    return jsonify(payload)
 
 
 @app.route("/api/multirack-jobs", methods=["GET"])
@@ -17744,49 +17609,6 @@ def api_cluster_overview_live():
     except Exception as e:
         _logger.debug("api_cluster_overview_live: ignoring error", exc_info=True)
         return jsonify({"ok": False, "error": cluster_overview_live.safe_error(e)}), 500
-
-
-@app.route("/api/fabric-probe", methods=["GET"])
-def api_fabric_probe():
-    """Classify a compute node's RDMA fabric (compute rails vs storage/NS plane).
-
-    Runs ``bin/scripts/fabric_probe.sh`` against a representative compute node and
-    returns the detected plane (link tech, per-rail rate, compute rails, the NCCL
-    ``NCCL_IB_HCA`` / ``NCCL_SOCKET_IFNAME`` it would use) plus any detected-vs-expected
-    discrepancies. Expected values come from the active platform's fabric profile
-    (forwarded as ``NVIS_FABRIC_EXPECT_*``). ``?node=`` targets a specific host;
-    otherwise the first Slurm node is used (homogeneous cluster assumption).
-    """
-    node = (request.args.get("node") or "").strip()
-    try:
-        if not node:
-            proc = host_exec.run_slurm_on_host(
-                _get_platform().sinfo_cmd("-N -h -o '%N' | head -1"),
-                timeout=30,
-            )
-            lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
-            node = lines[0] if lines else ""
-        if not node:
-            return jsonify({"ok": False, "error": "no compute node found; pass ?node=<hostname>"}), 400
-        script = str(SCRIPTS_DIR / "fabric_probe.sh")
-        proc = host_exec.run_on_host(
-            ["bash", script, node],
-            timeout=max(30, _env_int("RACK_FABRIC_PROBE_TIMEOUT", 60)),
-        )
-        out = (proc.stdout or "").strip()
-        json_lines = [ln for ln in out.splitlines() if ln.lstrip().startswith("{")]
-        if not json_lines:
-            return jsonify({
-                "ok": False,
-                "error": "fabric probe returned no JSON",
-                "node": node,
-                "stderr": (proc.stderr or "")[-500:],
-            }), 502
-        data = json.loads(json_lines[-1])
-        return jsonify({"ok": True, "node": node, "fabric": data})
-    except Exception as e:
-        _logger.debug("api_fabric_probe: ignoring error", exc_info=True)
-        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/app-stats", methods=["GET"])
