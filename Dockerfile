@@ -41,9 +41,22 @@ COPY bin/ ./bin/
 COPY static/ ./static/
 COPY help_content.json ./
 COPY rack-config.env ./
+# Release metadata. The app parses this (never imports it) as the version fallback, so it has to
+# be in the image -- without it a container reports "unknown".
+COPY version.py ./
 
 RUN mkdir -p var/logs var/cache var/secrets var/workflows/runs
 COPY var/workflows/*.yaml ./var/workflows/
+
+# What build is this? version.py alone cannot answer: every image cut from a release commit
+# carries the same VERSION. BUILD_STAMP (UTC timestamp + short SHA) makes them distinguishable,
+# and writing it to a file rather than an ENV keeps one source of truth on disk. Deliberately
+# does not edit version.py -- the ci-toolkit release job owns that.
+ARG BUILD_STAMP=""
+RUN VERSION="$(sed -n 's/^ *VERSION *= *["'"'"']\([^"'"'"']*\)["'"'"'].*/\1/p' version.py | head -1)" \
+    && printf '{"version": "%s", "build": "%s"}\n' "${VERSION:-unknown}" "${BUILD_STAMP}" \
+       > var/build-info.json \
+    && cat var/build-info.json
 
 COPY --from=frontend-build /build/static/spa/ ./static/spa/
 

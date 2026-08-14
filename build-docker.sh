@@ -63,9 +63,23 @@ sha256_check() {
   fi
 }
 
+# Per-build identity, baked into var/build-info.json so the dashboard can report which image it
+# is running. version.py alone cannot distinguish two builds of the same release commit, and this
+# is the string an operator reads back to us when something is wrong on a customer cluster.
+get_build_stamp() {
+  local ts sha
+  ts="$(date -u +%Y%m%dT%H%M)"
+  sha="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
+  # A dirty tree is a different artifact from the commit it is based on; say so.
+  if ! git diff --quiet HEAD 2>/dev/null; then sha="${sha}-dirty"; fi
+  echo "${ts}.${sha}"
+}
+
 build_image() {
-  echo "==> Building image ${IMAGE} …"
-  docker build -t "$IMAGE" .
+  local stamp
+  stamp="$(get_build_stamp)"
+  echo "==> Building image ${IMAGE} (build ${stamp}) …"
+  docker build --build-arg "BUILD_STAMP=${stamp}" -t "$IMAGE" .
   echo "==> Build complete."
 }
 
@@ -80,8 +94,10 @@ save_image() {
   out_dir="${RACK_IMAGE_OUT_DIR:-dist}"
   compress="${RACK_IMAGE_COMPRESS:-1}"
 
-  echo "==> Building image ${image_ref} (+ ${latest_ref}) …"
-  docker build -t "$image_ref" -t "$latest_ref" .
+  local stamp
+  stamp="$(get_build_stamp)"
+  echo "==> Building image ${image_ref} (+ ${latest_ref}, build ${stamp}) …"
+  docker build --build-arg "BUILD_STAMP=${stamp}" -t "$image_ref" -t "$latest_ref" .
 
   mkdir -p "$out_dir"
   tar_path="${out_dir}/nvis-rack-status-${tag}.tar"

@@ -139,6 +139,7 @@ except Exception as _nr_exc:  # pragma: no cover - defensive
 def _nvis_naming() -> nvis_id_templates.NvisNaming:
     return nvis_id_templates.get_nvis_naming()
 import ai_chat
+import app_version as _app_version_mod
 import core
 import host_exec
 import nvftp_cache_sync
@@ -18460,7 +18461,7 @@ def build_cluster_overview(
         "status_updated_at": cached.get("updated_at") if cached is not None else None,
         "snapshot": current.metadata(),
         "probes": probes,
-        "app_version": core.app_version(),
+        "app_version": _app_version_mod.app_version(),
         "squeue": squeue_block,
         "cluster_dashboard_metadata": dash_meta,
         "cluster_unreachable_detail": "",
@@ -18764,7 +18765,7 @@ def api_app_stats():
         {
             "ok": True,
             "connected_users": connected_users,
-            "app_version": core.app_version(),
+            "app_version": _app_version_mod.app_version(),
             "async_running": _count_running_async_commands(),
             "active_client_ttl_sec": _app_client_ttl_sec(),
         }

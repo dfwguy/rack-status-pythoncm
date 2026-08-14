@@ -80,7 +80,9 @@ prescriptive detail — and the cost of each wrong choice — in **`core-designs
 
 ## Key Files
 
-The Python backend lives under `backend/`; runtime assets (`bin/`, `static/`, `var/`, `help_content.json`) stay at the repo root. Backend modules resolve those via `REPO_ROOT = APP_DIR.parent` (parent of `backend/`); keep `APP_DIR` only for `sys.path` and the `rack_web/` helper. **`version.py` must stay at the repo root** — it is release metadata read by the ci-toolkit release jobs (`grep VERSION = version.py`) and the JFrog image build, not imported by the app (which uses `RACK_WEB_VERSION`).
+The Python backend lives under `backend/`; runtime assets (`bin/`, `static/`, `var/`, `help_content.json`) stay at the repo root. Backend modules resolve those via `REPO_ROOT = APP_DIR.parent` (parent of `backend/`); keep `APP_DIR` only for `sys.path` and the `rack_web/` helper. **`version.py` must stay at the repo root** — it is release metadata owned by the ci-toolkit release jobs (`grep VERSION = version.py`) and the JFrog image build. Never bump it by hand or from another CI job; the release job owns it.
+
+**"What build is this?" has exactly one answer: `backend/app_version.py`.** It reads `var/build-info.json` (written into the image by the `Dockerfile` from `ARG BUILD_STAMP`, so two images cut from the same release commit are distinguishable), falling back to *parsing* — never importing — root `version.py` as `<version>-dev`, then `"unknown"`. It reads **no environment variable**: the previous implementation used only `RACK_WEB_VERSION`, which is set nowhere in this repo, so every deployment reported `dev` while `version.py` said 0.1.5. `Dockerfile` must keep `COPY version.py ./` or a container reports `unknown`; `build-docker.sh` and the two Kaniko CI jobs pass `BUILD_STAMP` (UTC timestamp + short SHA, `-dirty` when the tree is dirty).
 
 - `backend/api/` — **where new endpoints go.** One module per domain, auto-discovered: expose
   `bp` (a Blueprint) or `install(app)` and it registers itself. Never edit `app.py` to add a

@@ -70,16 +70,6 @@ def rpath(p: object) -> PurePosixPath:
     return PurePosixPath(host_exec.resolve(p))
 
 
-def app_version() -> str:
-    """The build's version string, as reported by the container image.
-
-    Shared because both the app-stats payloads and the OpenAPI document stamp it, and those now
-    live in different modules. Deliberately not read from ``version.py`` -- that file is release
-    metadata for CI, and the running app is told its version by ``RACK_WEB_VERSION``.
-    """
-    return (os.environ.get("RACK_WEB_VERSION") or "dev").strip() or "dev"
-
-
 #: A Slurm job id as ``scancel``/``sacct`` will accept it, optionally an array task.
 #:
 #: Guards every place a job id reaches a command line. Shared because both the app and the

@@ -21,6 +21,9 @@ build/*
 # ---- App runtime (regenerated; cluster-specific) ----
 var/cache/
 var/workflows/runs/
+# Build identity, written into the image by the Dockerfile (app_version.py reads it). Committing
+# one would pin every later checkout to a stale build string.
+var/build-info.json
 # Catalog store (platforms/tools/projects; seeded on boot, cluster-specific)
 var/store/
 # Durable run/metric history (SQLite + WAL; created on boot by results_history.py)

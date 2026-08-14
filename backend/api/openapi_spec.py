@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-import core
+import app_version
 from flask import Blueprint, Response, current_app, jsonify
 
 # Empty prefix: these routes carry the paths they had in app.py, so the move cannot change a URL.
@@ -23,7 +23,7 @@ def _spec() -> dict:
     """
     import openapi as _openapi
 
-    return _openapi.build_spec(current_app._get_current_object(), version=core.app_version())
+    return _openapi.build_spec(current_app._get_current_object(), version=app_version.app_version())
 
 
 @bp.route("/api/openapi.json", methods=["GET"])

@@ -798,7 +798,7 @@ export function ClusterDashboardView({
               <InfoTile label="BCM version" value={bcmVersion} mono hint='RACK_CLUSTER_BCM_VERSION, else cmsh versioninfo' />
               <InfoTile label="Slurm version" value={slurmVersion} mono hint="RACK_CLUSTER_SLURM_VERSION, else Slurm on head" />
               <InfoTile label="NEMO container" value={data.nemo_container} mono hint="RACK_CLUSTER_NEMO_* or NEMO_SQSH_SRC" />
-              <InfoTile label="Dashboard build" value={data.app_version} mono hint="RACK_WEB_VERSION" />
+              <InfoTile label="Dashboard build" value={data.app_version} mono hint="var/build-info.json from the image build, else version.py" />
             </Box>
           </Box>
 
