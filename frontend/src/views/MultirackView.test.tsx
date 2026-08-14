@@ -274,6 +274,67 @@ describe("MultirackView rack filters", () => {
     expect(screen.getByText(/fans out to every selected node/i)).toBeInTheDocument();
   });
 
+  it("offers MNUberGEMM for a multirack selection and prepares the exact request", async () => {
+    const emptyBody = { ok: true, rows: [], jobs: [] };
+    vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/api/validation-presets") {
+        return Promise.resolve(new Response(JSON.stringify({
+          ok: true,
+          presets: [{
+            id: "mnubergemm-26.03-v1.17",
+            label: "MNUberGEMM 26.03 v1.17",
+            description: "Multi-rack MNUberGEMM validation.",
+            kind: "mnubergemm",
+            defaults: { storage: "local", rsync: true },
+            requirements: { scopes: ["node", "rack", "multirack"] },
+          }],
+        }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      if (url === "/api/validation-presets/prepare") {
+        const request = JSON.parse(String(init?.body));
+        return Promise.resolve(new Response(JSON.stringify({
+          ok: true,
+          plan: {
+            ...request,
+            summary: "MNUberGEMM as two independent rack jobs",
+            node_count: 36,
+            plan_hash: "reviewed-mnubergemm-plan",
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      return Promise.resolve(new Response(JSON.stringify(emptyBody), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    renderView();
+    await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select rack ink50-dh01-d01" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select rack ink50-dh01-d02" }));
+
+    const button = screen.getByRole("button", { name: "MNUberGEMM 26.03-v1.17" });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    expect(await screen.findByRole("dialog", { name: "MNUberGEMM 26.03 v1.17" })).toBeInTheDocument();
+    expect(screen.getByText(/one independent, rack-scoped MNUberGEMM job per selected rack/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Review dry run" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Review dry run" }));
+    await waitFor(() => expect(screen.getByText("MNUberGEMM as two independent rack jobs")).toBeInTheDocument());
+
+    const prepareCall = vi.mocked(globalThis.fetch).mock.calls.find(([url]) => String(url) === "/api/validation-presets/prepare");
+    expect(prepareCall).toBeDefined();
+    expect(JSON.parse(String(prepareCall?.[1]?.body))).toEqual({
+      preset_id: "mnubergemm-26.03-v1.17",
+      scope: "multirack",
+      racks: ["ink50-dh01-d01", "ink50-dh01-d02"],
+      log_dir: "/logs",
+      storage: "local",
+      rsync_to_local: true,
+      local_container_dir: "/tmp/containers",
+    });
+  });
+
   it("enables fixed Llama 1024 only when the exact-node campaign resolves 256 nodes", async () => {
     const campaignRacks = Array.from({ length: 16 }, (_, index) => `rack-${String(index + 1).padStart(2, "0")}`);
     const emptyBody = { ok: true, rows: [], jobs: [] };

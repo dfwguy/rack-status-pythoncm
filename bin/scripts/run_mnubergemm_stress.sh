@@ -28,10 +28,34 @@
 #   RACK_MNUBERGEMM_TAG         image tag        (default tensorrt-26.03-v1.17-arm)
 #   RACK_MNUBERGEMM_IMAGE_DIR   staging dir      (default /home/cmods/bringup/containers)
 #   RACK_MNUBERGEMM_PARTITION   optional sbatch -p
-#   RACK_MNUBERGEMM_TIME        optional walltime (default 02:30:00)
+#   RACK_MNUBERGEMM_TIME        optional shorter walltime (hard maximum 01:00:00)
 #   NVIS_SLURM_HOSTLIST         explicit comma-separated NodeName list (skips expansion)
 #   RACK_MNUBERGEMM_NO_SUBMIT=1 stage + validate only, do not sbatch (dry run)
 set -uo pipefail
+
+_ts()  { date -Is; }
+log()  { printf '[%s] %s\n' "$(_ts)" "$*"; }
+err()  { printf '[%s] ERROR: %s\n' "$(_ts)" "$*" >&2; }
+die()  { err "$*"; exit 1; }
+
+duration_seconds() {
+  local days=0 hours=0 minutes=0 seconds=0 rest="$1"
+  if [[ "$rest" == *-* ]]; then
+    days="${rest%%-*}"; rest="${rest#*-}"
+    [[ "$days" =~ ^[0-9]+$ ]] || return 1
+  fi
+  if [[ "$rest" =~ ^([0-9]+):([0-9]{2}):([0-9]{2})$ ]]; then
+    hours="${BASH_REMATCH[1]}"; minutes="${BASH_REMATCH[2]}"; seconds="${BASH_REMATCH[3]}"
+  elif [[ "$rest" =~ ^([0-9]+):([0-9]{2})$ ]]; then
+    minutes="${BASH_REMATCH[1]}"; seconds="${BASH_REMATCH[2]}"
+  elif [[ "$rest" =~ ^[0-9]+$ ]]; then
+    minutes="$rest"
+  else
+    return 1
+  fi
+  (( minutes < 60 && seconds < 60 )) || return 1
+  printf '%d\n' "$(( days * 86400 + hours * 3600 + minutes * 60 + seconds ))"
+}
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
@@ -41,32 +65,23 @@ IMAGE_DIR="${RACK_MNUBERGEMM_IMAGE_DIR:-/home/cmods/bringup/containers}"
 # MOP/AAT naming: the 'tensorrt-' prefix is dropped in the .sqsh filename, i.e.
 #   tag tensorrt-26.03-v1.17-arm  ->  mnubergemm-26.03-v1.17-arm.sqsh
 CONT="${RACK_MNUBERGEMM_CONT:-${IMAGE_DIR}/mnubergemm-${TAG#tensorrt-}.sqsh}"
-# MNUBERGEMM runs for exactly --time_to_run seconds then exits. It is a SOAK, not a sweep:
-# there is no natural "done". MOP §7.2 uses 86400 (24h), matching the 24-72h burn-in in
-# ai_factory_testing_plan.md. Set RACK_MNUBERGEMM_TIME_TO_RUN for a short smoke run.
-# >>> SOAK LENGTH — the one line to change for a real burn-in <<<
-#   1800  = 30 min smoke run
-#   86400 = 24 h, the MOP §7.2 / ai_factory burn-in value  (CURRENT DEFAULT)
-# Changed to the MOP value 2026-07-31: single-rack NCCL+NEMO validation is complete across
-# the H row, so the racks are no longer mid-bring-up and holding them --exclusive for a day
-# is now the right move. At >= 86400 no `-t` is passed, so the job takes the partition
-# default (defq: MaxTime=UNLIMITED) rather than being capped.
-# Override with RACK_MNUBERGEMM_TIME_TO_RUN=1800 for a short smoke run.
-TIME_TO_RUN="${RACK_MNUBERGEMM_TIME_TO_RUN:-86400}"
+# Rack Status qualifications are capped at one hour. Longer factory burn-ins use a
+# separately reviewed workflow; this operator-facing launcher never inherits an unlimited
+# partition default. The payload gets five minutes of teardown margin inside that ceiling.
+MAX_WALLTIME_SECONDS=3600
+MAX_PAYLOAD_SECONDS=3300
+TIME_TO_RUN="${RACK_MNUBERGEMM_TIME_TO_RUN:-3300}"
 case "${TIME_TO_RUN}" in ''|*[!0-9]*) die "RACK_MNUBERGEMM_TIME_TO_RUN must be seconds (got '${TIME_TO_RUN}')" ;; esac
+(( TIME_TO_RUN > 0 && TIME_TO_RUN <= MAX_PAYLOAD_SECONDS )) || \
+  die "RACK_MNUBERGEMM_TIME_TO_RUN must be 1-${MAX_PAYLOAD_SECONDS}s (got '${TIME_TO_RUN}')"
 
-# Walltime: MOP passes none (partition default). If a short soak was requested, bound the
-# allocation to it + 10 min so a smoke run cannot sit holding the rack exclusively.
-WALLTIME="${RACK_MNUBERGEMM_TIME:-}"
-if [[ -z "${WALLTIME}" && "${TIME_TO_RUN}" -lt 86400 ]]; then
-  _wt=$(( TIME_TO_RUN + 600 ))
-  WALLTIME="$(printf '%02d:%02d:%02d' $(( _wt/3600 )) $(( (_wt%3600)/60 )) $(( _wt%60 )))"
-fi
-
-_ts()  { date -Is; }
-log()  { printf '[%s] %s\n' "$(_ts)" "$*"; }
-err()  { printf '[%s] ERROR: %s\n' "$(_ts)" "$*" >&2; }
-die()  { err "$*"; exit 1; }
+# Slurm walltime is always explicit. An optional shorter limit is accepted only when it is
+# parseable and no longer than the product's one-hour ceiling.
+WALLTIME="${RACK_MNUBERGEMM_TIME:-01:00:00}"
+WALLTIME_SECONDS="$(duration_seconds "$WALLTIME")" || \
+  die "RACK_MNUBERGEMM_TIME must be a Slurm duration no longer than 01:00:00 (got '${WALLTIME}')"
+(( WALLTIME_SECONDS > 0 && WALLTIME_SECONDS <= MAX_WALLTIME_SECONDS )) || \
+  die "RACK_MNUBERGEMM_TIME exceeds the 01:00:00 hard maximum (got '${WALLTIME}')"
 
 mkdir -p "${LOG_DIR}" || die "cannot create log directory: ${LOG_DIR}"
 
@@ -238,9 +253,8 @@ _JOB_NAME="MNUBERGEMM-${_tag}"
 SBATCH_FILE="${_SCRIPT_DIR}/mnubergemm.sbatch"
 [[ -r "${SBATCH_FILE}" ]] || die "sbatch file not found: ${SBATCH_FILE}"
 
-extra=()
+extra=(-t "${WALLTIME}")
 [[ -n "${RACK_MNUBERGEMM_PARTITION:-}" ]] && extra+=(-p "${RACK_MNUBERGEMM_PARTITION}")
-[[ -n "${WALLTIME}" ]] && extra+=(-t "${WALLTIME}")
 
 # A staging-only validation must never mutate the queue. Keep this before the
 # same-rack cancel block so RACK_MNUBERGEMM_NO_SUBMIT=1 is genuinely read-only.
@@ -270,12 +284,8 @@ export MNUBERGEMM_TIME_TO_RUN="${TIME_TO_RUN}"
 
 log "--- submitting ---"
 log "sbatch ${extra[*]} -N ${NNODES} -w ${WLIST} ${SBATCH_FILE}"
-if (( TIME_TO_RUN >= 86400 )); then
-  log "soak length: ${TIME_TO_RUN}s ($(( TIME_TO_RUN/3600 ))h) — MOP §7.2 burn-in. The rack is held --exclusive for the whole run."
-else
-  log "soak length: ${TIME_TO_RUN}s ($(( TIME_TO_RUN/60 ))m) — SHORT run (MOP default is 86400s/24h)."
-fi
-log "walltime: ${WALLTIME:-<partition default, per MOP>}"
+log "soak length: ${TIME_TO_RUN}s ($(( TIME_TO_RUN/60 ))m) — Rack Status qualification (hard maximum 60m)."
+log "walltime: ${WALLTIME} (explicit; never inherits an unlimited partition default)"
 
 cd "${LOG_DIR}" 2>/dev/null || true
 

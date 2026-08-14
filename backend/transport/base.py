@@ -416,7 +416,38 @@ class Connection:
         Chainable to N levels: ``self.hop(a).hop(b)``. ``sudo=True`` runs the payload
         under passwordless sudo on *host*.
         """
+        # DIRECT-TO-TRAY. This method exists because there was historically "no
+        # direct app->node route" -- true until 2026-08-06, when the Align team
+        # wired the high-speed links. The ObsVM now reaches every tray directly
+        # (verified root@tray with the BCM key), so relaying through the head is
+        # pure legacy, and an expensive one: EVERY tray hop is a session channel
+        # multiplexed over one ControlMaster to the head, whose MaxSessions is
+        # unset and therefore the OpenSSH default of 10. A fleet sweep is ~2,000
+        # channels through a 10-slot ceiling -- the documented "no more sessions"
+        # x215, and the sweep that silently lost 655 of 2,013 nodes. Direct hops
+        # consume none of the head's slots and measured ~20% faster per hop.
+        #
+        # Opt-in via RACK_DIRECT_NODE_SSH so the relay stays available for any
+        # target the app genuinely cannot reach itself; set the key with
+        # RACK_NODE_SSH_KEY (default: the BCM key) and user with
+        # RACK_NODE_SSH_USER.
+        import os as _os
+        import re as _re
+
         from transport.hop import HopExecutor
+
+        if (_os.environ.get("RACK_DIRECT_NODE_SSH", "").lower()
+                not in ("", "0", "false", "no")
+                and _re.match(r"^ink50-dh01-[a-z]\d+-\d+$", host or "")):
+            from transport.ssh import SSHConfig, SSHExecutor
+
+            return Connection(SSHExecutor(SSHConfig(
+                host=host,
+                user=_os.environ.get("RACK_NODE_SSH_USER", "root"),
+                key=(key or _os.environ.get("RACK_NODE_SSH_KEY",
+                                            "/home/nvis/.ssh/id_bcm")),
+                port="22",
+            )))
 
         return Connection(
             HopExecutor(

@@ -31,6 +31,7 @@ class Preset:
     cuda_version: str | None = None
     nccl_version: str | None = None
     max_steps: int | None = None
+    max_runtime_minutes: int | None = None
     requires_infiniband: bool = False
     max_nodes: int | None = None
     exact_nodes: int | None = None
@@ -45,6 +46,7 @@ class Preset:
             "cuda_version": self.cuda_version,
             "nccl_version": self.nccl_version,
             "max_steps": self.max_steps,
+            "max_runtime_minutes": self.max_runtime_minutes,
         }
         row["requirements"] = {
             "scopes": list(self.scopes),
@@ -56,7 +58,7 @@ class Preset:
         }
         for key in (
             "scopes", "shared_image", "local_image", "image_size", "image_sha256", "cuda_version", "nccl_version",
-            "max_steps", "requires_infiniband", "max_nodes", "exact_nodes", "container_profile",
+            "max_steps", "max_runtime_minutes", "requires_infiniband", "max_nodes", "exact_nodes", "container_profile",
         ):
             row.pop(key, None)
         return row
@@ -132,14 +134,15 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         "mnubergemm-26.03-v1.17",
         "MNUberGEMM 26.03 v1.17",
-        "MNUberGEMM validation using the container actually staged on the fleet; no nonexistent 26.04.1 image is claimed.",
+        "MNUberGEMM node, rack, or multi-rack validation using the container actually staged on the fleet, with a fail-closed 60-minute allocation ceiling.",
         "mnubergemm",
-        ("node", "rack"),
+        ("node", "rack", "multirack"),
         container_profile="mnubergemm-26.03-v1.17-arm",
         shared_image="/cluster/containers/mnubergemm-26.03-v1.17-arm.sqsh",
         local_image=f"{LOCAL_CONTAINER_DIR}/mnubergemm-26.03-v1.17-arm.sqsh",
         image_size=13949554688,
         image_sha256="9832dda6e80c8719e74f81ce617cac3abb77399e48d5385a38e86a040cad93e6",
+        max_runtime_minutes=60,
         requires_infiniband=False,
     ),
 )
@@ -203,6 +206,17 @@ def normalize_options(body: dict[str, Any], preset: Preset) -> dict[str, Any]:
         if different:
             raise ValueError(f"{preset.id} is fixed at max_steps={preset.max_steps}")
 
+    supplied_runtime = body.get("max_runtime_minutes")
+    if supplied_runtime is not None and preset.max_runtime_minutes is not None:
+        try:
+            different = int(supplied_runtime) != preset.max_runtime_minutes or isinstance(supplied_runtime, bool)
+        except (TypeError, ValueError):
+            different = True
+        if different:
+            raise ValueError(
+                f"{preset.id} is capped at max_runtime_minutes={preset.max_runtime_minutes}"
+            )
+
     cuda = str(body.get("cuda_version") or preset.cuda_version or "").strip()
     nccl = str(body.get("nccl_version") or preset.nccl_version or "").strip()
     if preset.id == "nccl-2.31.2":
@@ -231,6 +245,7 @@ def normalize_options(body: dict[str, Any], preset: Preset) -> dict[str, Any]:
         "cuda_version": cuda or None,
         "nccl_version": nccl or None,
         "max_steps": preset.max_steps,
+        "max_runtime_minutes": preset.max_runtime_minutes,
         "requires_infiniband": preset.requires_infiniband,
         "shared_image": preset.shared_image,
         "local_image": preset.local_image,

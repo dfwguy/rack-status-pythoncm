@@ -15385,6 +15385,7 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
             return None, (jsonify({"ok": False, "error": "target did not resolve to any Slurm nodes"}), 400)
 
     campaign_id = ""
+    rack_node_groups: list[dict[str, object]] = []
     if not nodes and racks:
         try:
             campaign = _multirack_campaign_snapshot()
@@ -15402,12 +15403,15 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
                     return None, (jsonify({"ok": False, "error": f"rack {rack} is outside exact-node campaign {campaign_id}"}), 409)
                 if not row.get("eligible"):
                     return None, (jsonify({"ok": False, "error": f"rack {rack}: {row.get('reason') or 'not eligible'}"}), 409)
-                nodes.extend(str(node) for node in row.get("nodes", []) if str(node).strip())
+                group_nodes = [str(node) for node in row.get("nodes", []) if str(node).strip()]
+                rack_node_groups.append({"rack": rack, "nodes": group_nodes})
+                nodes.extend(group_nodes)
         else:
             for rack in racks:
                 resolved = _rack_node_hostnames_from_inventory(rack)
                 if not resolved:
                     return None, (jsonify({"ok": False, "error": f"no Slurm inventory nodes found for rack {rack}"}), 409)
+                rack_node_groups.append({"rack": rack, "nodes": list(resolved)})
                 nodes.extend(resolved)
 
     nodes = _dedupe_hostnames_preserve_spelling(nodes)
@@ -15423,6 +15427,36 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         return None, (jsonify({"ok": False, "error": "rack scope requires exactly one rack"}), 400)
     if scope == "multirack" and len(racks) < 2 and not isinstance(nodes_raw, list):
         return None, (jsonify({"ok": False, "error": "multirack scope requires at least two racks or an explicit node list"}), 400)
+    if preset.id == "mnubergemm-26.03-v1.17" and scope == "multirack":
+        # MNUberGEMM is an NVLink-domain test: its audited sbatch disables IB and
+        # enables MNNVL. A single Slurm job spanning physical racks would combine
+        # separate NVLink domains and can hang. Preserve one exact target group per
+        # operator-selected rack so the dispatcher fans out independent jobs.
+        if not rack_node_groups and racks:
+            selected = {node.casefold(): node for node in nodes}
+            for rack in racks:
+                inventory_nodes = _rack_node_hostnames_from_inventory(rack)
+                group_nodes = [selected[node.casefold()] for node in inventory_nodes if node.casefold() in selected]
+                if group_nodes:
+                    rack_node_groups.append({"rack": rack, "nodes": group_nodes})
+        grouped_nodes = [
+            str(node)
+            for group in rack_node_groups
+            for node in (group.get("nodes") or [])
+            if str(node).strip()
+        ]
+        if len(rack_node_groups) != len(racks) or len(rack_node_groups) < 2:
+            return None, (jsonify({
+                "ok": False,
+                "error": "MNUberGEMM multirack requires one resolvable exact-node group per selected rack",
+            }), 409)
+        if len({node.casefold() for node in grouped_nodes}) != len(grouped_nodes):
+            return None, (jsonify({"ok": False, "error": "MNUberGEMM rack node groups overlap"}), 409)
+        if {node.casefold() for node in grouped_nodes} != {node.casefold() for node in nodes}:
+            return None, (jsonify({
+                "ok": False,
+                "error": "MNUberGEMM rack groups do not exactly cover the reviewed node target",
+            }), 409)
     if preset.max_nodes is not None and len(nodes) > preset.max_nodes:
         return None, (jsonify({"ok": False, "error": f"{preset.id} supports at most {preset.max_nodes} node(s); resolved {len(nodes)}"}), 400)
     if preset.exact_nodes is not None and len(nodes) != preset.exact_nodes:
@@ -15445,6 +15479,9 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
            str(options["local_container_dir"]), "--log-dir", str(log_dir)]
     if options["rsync_to_local"]:
         cmd.append("--rsync")
+    if preset.id == "mnubergemm-26.03-v1.17" and scope == "multirack":
+        for group in rack_node_groups:
+            cmd += ["--group-nodelist", ",".join(str(node) for node in group["nodes"])]
     display_cmd = " ".join(shlex.quote(part) for part in cmd)
     image_path = preset.local_image if options["storage"] == "local" else preset.shared_image
     checks = ["exact Slurm node identity", "scheduler eligibility at allocation time"]
@@ -15456,6 +15493,8 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         checks += ["selected CUDA runtime >= 13.3", "ncclGetVersion == 23102"]
     if preset.id == "exemplar-system-info":
         checks += ["DGXC v26.06.01 summary present", "nonfatal findings and warnings classified per node"]
+    if preset.id == "mnubergemm-26.03-v1.17":
+        checks += ["MNUberGEMM payload duration=3300 seconds", "Slurm TimeLimit=01:00:00"]
     summary = f"{preset.label}: {len(nodes)} exact node(s), storage={options['storage']}, rsync={str(options['rsync_to_local']).lower()}"
     plan = {
         "preset_id": preset.id,
@@ -15466,6 +15505,7 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         "racks": racks,
         "target": node_spec,
         "node_count": len(nodes),
+        "node_groups": rack_node_groups,
         "campaign": campaign_id,
         "storage": options["storage"],
         "rsync_to_local": options["rsync_to_local"],
@@ -15474,6 +15514,7 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         "cuda_version": options["cuda_version"],
         "nccl_version": options["nccl_version"],
         "max_steps": options["max_steps"],
+        "max_runtime_minutes": options["max_runtime_minutes"],
         "requires_infiniband": options["requires_infiniband"],
         "artifact": ({"path": image_path, "source": preset.shared_image, "size": preset.image_size,
                       "sha256": preset.image_sha256} if preset.shared_image else None),
@@ -15488,8 +15529,9 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         "image_override_note": ("DGXC recipe v26.06.01 with audited NeMo 26.04.01 image override" if preset.id == "exemplar-system-info" else None),
     }
     hash_fields = {key: plan[key] for key in (
-        "preset_id", "scope", "nodes", "racks", "campaign", "storage", "rsync_to_local",
-        "local_container_dir", "container_profile", "cuda_version", "nccl_version", "max_steps", "artifact", "log_dir",
+        "preset_id", "scope", "nodes", "node_groups", "racks", "campaign", "storage", "rsync_to_local",
+        "local_container_dir", "container_profile", "cuda_version", "nccl_version", "max_steps",
+        "max_runtime_minutes", "artifact", "log_dir",
     )}
     plan["plan_hash"] = hashlib.sha256(
         json.dumps(hash_fields, sort_keys=True, separators=(",", ":")).encode("utf-8")

@@ -212,6 +212,11 @@ export function ValidationPresetDialog({
               GPT-OSS stays a single-node recipe. Rack Status will submit one independent job for each of the {nodeList.length} exact selected nodes.
             </Banner>
           ) : null}
+          {presetId === "mnubergemm-26.03-v1.17" && rackList.length > 1 ? (
+            <Banner status="info">
+              Rack Status submits one independent, rack-scoped MNUberGEMM job per selected rack. It never combines physical racks into one MNNVL domain.
+            </Banner>
+          ) : null}
           {unsupportedScope ? (
             <Banner status="error">
               This recipe supports {supportedScopes.join(", ")} scope, not {serverScope}. Choose it from a supported target view.

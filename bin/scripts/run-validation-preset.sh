@@ -7,12 +7,13 @@ usage() {
   cat <<'EOF'
 Usage: run-validation-preset.sh --preset ID --nodelist HOSTLIST
        [--storage nfs|local] [--rsync] [--local-container-dir /tmp/containers]
-       [--log-dir PATH] [--dry-run]
+       [--log-dir PATH] [--group-nodelist HOSTLIST ...] [--dry-run]
 EOF
 }
 
 preset=""; nodelist=""; storage="nfs"; rsync_enabled=0
 local_container_dir="/tmp/containers"; log_dir="${RACK_STATUS_LOG_DIR:-$PWD}"; dry_run=0
+group_nodelists=()
 while (($#)); do
   case "$1" in
     --preset) preset="${2:?missing --preset value}"; shift 2 ;;
@@ -26,6 +27,8 @@ while (($#)); do
     --local-container-dir=*) local_container_dir="${1#*=}"; shift ;;
     --log-dir) log_dir="${2:?missing --log-dir value}"; shift 2 ;;
     --log-dir=*) log_dir="${1#*=}"; shift ;;
+    --group-nodelist) group_nodelists+=("${2:?missing --group-nodelist value}"); shift 2 ;;
+    --group-nodelist=*) group_nodelists+=("${1#*=}"); shift ;;
     --dry-run) dry_run=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -54,6 +57,46 @@ else
   node_count="$NVIS_NNODES"
   mapfile -t nodes < <(scontrol show hostnames "$nodelist")
   mkdir -p "$log_dir"
+fi
+
+validate_exact_groups() {
+  (( ${#group_nodelists[@]} >= 2 )) || {
+    echo "ERROR: multirack MNUberGEMM requires at least two exact --group-nodelist values" >&2
+    exit 2
+  }
+  local node group member
+  declare -A selected=() grouped=()
+  for node in "${nodes[@]}"; do
+    [[ -n "$node" ]] && selected["$node"]=1
+  done
+  for group in "${group_nodelists[@]}"; do
+    [[ -n "$group" ]] || { echo "ERROR: empty MNUberGEMM node group" >&2; exit 2; }
+    IFS=, read -r -a _group_members <<<"$group"
+    (( ${#_group_members[@]} > 0 )) || { echo "ERROR: empty MNUberGEMM node group" >&2; exit 2; }
+    for member in "${_group_members[@]}"; do
+      [[ "$member" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+        echo "ERROR: MNUberGEMM group contains a non-explicit node name: $member" >&2; exit 2;
+      }
+      [[ -n "${selected[$member]:-}" ]] || {
+        echo "ERROR: MNUberGEMM group node is outside the reviewed target: $member" >&2; exit 2;
+      }
+      [[ -z "${grouped[$member]:-}" ]] || {
+        echo "ERROR: MNUberGEMM node appears in more than one rack group: $member" >&2; exit 2;
+      }
+      grouped["$member"]=1
+    done
+  done
+  (( ${#grouped[@]} == node_count )) || {
+    echo "ERROR: MNUberGEMM rack groups cover ${#grouped[@]} nodes, reviewed target has ${node_count}" >&2
+    exit 2
+  }
+}
+
+if [[ "$preset" == mnubergemm-26.03-v1.17 && "${NVIS_PRESET_SCOPE_MULTIRACK:-0}" == 1 ]]; then
+  validate_exact_groups
+elif (( ${#group_nodelists[@]} > 0 )); then
+  echo "ERROR: --group-nodelist is only valid for multirack MNUberGEMM" >&2
+  exit 2
 fi
 
 print_cmd() { printf 'PLAN:'; printf ' %q' "$@"; printf '\n'; }
@@ -200,13 +243,63 @@ case "$preset" in
     ;;
 
   mnubergemm-26.03-v1.17)
+    # This validation is a bounded qualification, not the separate 24-hour MOP
+    # burn-in. Keep both limits in the generated Slurm command so no caller can
+    # accidentally inherit an unlimited partition default.
+    # Leave five minutes inside the one-hour allocation for Slurm prolog,
+    # container startup, and clean teardown; equal payload/wall clocks would
+    # deterministically turn an otherwise healthy run into TIMEOUT.
+    mnubergemm_runtime_seconds=3300
+    mnubergemm_slurm_time_limit=01:00:00
     source_image="/cluster/containers/mnubergemm-26.03-v1.17-arm.sqsh"
     local_image="${local_container_dir}/mnubergemm-26.03-v1.17-arm.sqsh"
     if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
     stage_image "$source_image" "$local_image" 13949554688 9832dda6e80c8719e74f81ce617cac3abb77399e48d5385a38e86a040cad93e6 0
-    export_set="ALL,NVIS_MNUBERGEMM_CONT=${image},NVIS_BIN_SCRIPTS=${script_dir},MNUBERGEMM_TIME_TO_RUN=300"
-    run_cmd sbatch --wait --no-requeue "${STAGE_DEPENDENCY[@]}" --nodes="$node_count" --nodelist="$nodelist" --ntasks-per-node=4 --gpus-per-node=4 --cpus-per-task=36 \
-      --chdir="$script_dir" --output="${log_dir%/}/mnubergemm-26.03-v1.17-%j.out" --export="$export_set" "${script_dir}/mnubergemm.sbatch"
+    export_set="ALL,NVIS_MNUBERGEMM_CONT=${image},NVIS_BIN_SCRIPTS=${script_dir},MNUBERGEMM_TIME_TO_RUN=${mnubergemm_runtime_seconds}"
+    if (( ${#group_nodelists[@]} == 0 )); then
+      group_nodelists=("$nodelist")
+    fi
+    mnubergemm_job_ids=()
+    group_index=0
+    for group in "${group_nodelists[@]}"; do
+      group_index=$((group_index + 1))
+      IFS=, read -r -a _group_members <<<"$group"
+      group_count="${#_group_members[@]}"
+      group_label="$(printf '%03d' "$group_index")"
+      mnubergemm_cmd=(sbatch --parsable --no-requeue "${STAGE_DEPENDENCY[@]}"
+        --time="$mnubergemm_slurm_time_limit" --nodes="$group_count" --nodelist="$group"
+        --ntasks-per-node=4 --gpus-per-node=4 --cpus-per-task=36
+        --job-name="mnubergemm-${group_label}" --chdir="$script_dir"
+        --output="${log_dir%/}/mnubergemm-26.03-v1.17-g${group_label}-%j.out"
+        --export="$export_set" "${script_dir}/mnubergemm.sbatch")
+      print_cmd "${mnubergemm_cmd[@]}"
+      if (( ! dry_run )); then
+        submitted="$("${mnubergemm_cmd[@]}")"
+        mnubergemm_id="${submitted%%;*}"
+        [[ "$mnubergemm_id" =~ ^[0-9]+$ ]] || {
+          echo "ERROR: unable to parse MNUberGEMM job id: $submitted" >&2; exit 2;
+        }
+        mnubergemm_job_ids+=("$mnubergemm_id")
+        echo "SUBMITTED: mnubergemm group=${group_label} nodes=${group_count} jobid=${mnubergemm_id}"
+      fi
+    done
+    if (( ! dry_run )); then
+      mnubergemm_csv="$(IFS=,; printf '%s' "${mnubergemm_job_ids[*]}")"
+      while squeue -h -j "$mnubergemm_csv" 2>/dev/null | grep -q .; do sleep 5; done
+      mnubergemm_failed=0
+      mnubergemm_seen=0
+      while IFS='|' read -r mnubergemm_id mnubergemm_state mnubergemm_exit _rest; do
+        [[ "$mnubergemm_id" =~ ^[0-9]+$ ]] || continue
+        mnubergemm_seen=$((mnubergemm_seen + 1))
+        printf 'COMPLETE: mnubergemm jobid=%s state=%s exit=%s\n' \
+          "$mnubergemm_id" "$mnubergemm_state" "$mnubergemm_exit"
+        [[ "$mnubergemm_state" == COMPLETED && "$mnubergemm_exit" == 0:0 ]] || mnubergemm_failed=1
+      done < <(sacct -X -n -P -j "$mnubergemm_csv" -o JobIDRaw,State,ExitCode)
+      (( mnubergemm_seen == ${#mnubergemm_job_ids[@]} )) || mnubergemm_failed=1
+      (( mnubergemm_failed == 0 )) || {
+        echo "ERROR: one or more MNUberGEMM rack jobs failed" >&2; exit 2;
+      }
+    fi
     ;;
 
   *) echo "ERROR: unsupported preset: $preset" >&2; exit 2 ;;

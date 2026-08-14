@@ -727,7 +727,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
             <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("gpt-oss-cpu")}>GPT-OSS CPU — per-node fan-out</Button>
             <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("exemplar-system-info")}>DGXC system_info</Button>
             <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nemo-26.04.01")}>NeMo 26.04.01</Button>
-            <Tag color="gray" kind="outline" readOnly density="compact">MNUberGEMM 26.03-v1.17: node/rack view only</Tag>
+            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("mnubergemm-26.03-v1.17")}>MNUberGEMM 26.03-v1.17</Button>
           </Flex>
           {selected.size > 0 && !llama1024Ready ? (
             <div style={{ marginTop: 12 }}>
