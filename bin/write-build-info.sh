@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # write-build-info.sh — stamp this tree with the build identity the dashboard reports.
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
 #
@@ -20,9 +20,12 @@
 #
 # Usage:
 #   bin/write-build-info.sh [--stamp STAMP]      # default stamp: <UTC>.<short-sha>[-dirty]
-set -uo pipefail
+#
+# POSIX sh, not bash, on purpose: the Kaniko :debug image CI builds with is busybox and has no bash,
+# where a bash shebang fails as "not found" (exit 127) and takes the image build with it.
+set -u
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$HERE/backend/build-info.json"
 
 STAMP=""
