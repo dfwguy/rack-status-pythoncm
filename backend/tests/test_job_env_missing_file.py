@@ -18,6 +18,7 @@ from __future__ import annotations
 import pytest
 
 import app as A
+import config_env as C
 
 
 @pytest.fixture
@@ -25,10 +26,13 @@ def no_overrides_file(tmp_path, monkeypatch):
     """Point the override store at a directory that has no overrides file in it."""
     # The path is hardcoded to REPO_ROOT/var/cache, not read from the environment -- the env var
     # of that name is an OUTPUT of the loader, for forked workers. So patch the resolver.
-    monkeypatch.setattr(A, "_job_env_overrides_path", lambda: tmp_path / "job_env_overrides.json")
-    monkeypatch.setattr(A, "_job_env_flock_path", lambda: tmp_path / "job_env_overrides.flock")
-    monkeypatch.setattr(A, "_JOB_ENV_OVERRIDES_CACHE", None)
-    monkeypatch.setattr(A, "_JOB_ENV_OVERRIDES_MTIME", None)
+    #
+    # On config_env, which owns the store; app.py holds imported aliases, and rebinding an alias
+    # would not change what the function's own module-global lookup finds.
+    monkeypatch.setattr(C, "_job_env_overrides_path", lambda: tmp_path / "job_env_overrides.json")
+    monkeypatch.setattr(C, "_job_env_flock_path", lambda: tmp_path / "job_env_overrides.flock")
+    monkeypatch.setattr(C, "_JOB_ENV_OVERRIDES_CACHE", None)
+    monkeypatch.setattr(C, "_JOB_ENV_OVERRIDES_MTIME", None)
     monkeypatch.delenv("RACK_STATUS_DEMO", raising=False)  # demo mode skips the flock entirely
     return tmp_path
 
@@ -67,8 +71,8 @@ def test_repeated_loads_stay_consistent(no_overrides_file):
     """Nothing accumulates in the cache either."""
     for _ in range(3):
         assert A._job_env_overrides_load() == {}
-    assert A._JOB_ENV_OVERRIDES_CACHE == {}
-    assert A._JOB_ENV_OVERRIDES_MTIME is None
+    assert C._JOB_ENV_OVERRIDES_CACHE == {}
+    assert C._JOB_ENV_OVERRIDES_MTIME is None
 
 
 def test_a_file_appearing_later_is_picked_up(no_overrides_file):

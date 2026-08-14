@@ -18,7 +18,8 @@ import json
 
 import pytest
 
-import app as A
+import app as A  # noqa: F401 - imported so the readers are exercised exactly as the app has them
+import config_env as C
 
 KEY = "RACK_VALIDATION_CT_RANGE"  # a real Settings-managed key, so allow-list filtering applies
 
@@ -29,12 +30,17 @@ def store(tmp_path, monkeypatch):
 
     The overrides path is hardcoded to REPO_ROOT/var/cache, so it is patched rather than set via
     the environment -- the env var of that name is an *output* of the loader.
+
+    Patched on ``config_env``, not ``app``: that is where these live now, and ``app`` only holds
+    imported aliases. Rebinding an alias would not change what the function's own module-global
+    lookup resolves to, so patching ``app`` would silently do nothing. The assertions below are
+    unchanged from when this suite ran against the in-``app.py`` implementation.
     """
     path = tmp_path / "job_env_overrides.json"
-    monkeypatch.setattr(A, "_job_env_overrides_path", lambda: path)
-    monkeypatch.setattr(A, "_job_env_flock_path", lambda: tmp_path / "job_env_overrides.flock")
-    monkeypatch.setattr(A, "_JOB_ENV_OVERRIDES_CACHE", None)
-    monkeypatch.setattr(A, "_JOB_ENV_OVERRIDES_MTIME", None)
+    monkeypatch.setattr(C, "_job_env_overrides_path", lambda: path)
+    monkeypatch.setattr(C, "_job_env_flock_path", lambda: tmp_path / "job_env_overrides.flock")
+    monkeypatch.setattr(C, "_JOB_ENV_OVERRIDES_CACHE", None)
+    monkeypatch.setattr(C, "_JOB_ENV_OVERRIDES_MTIME", None)
     monkeypatch.delenv("RACK_STATUS_DEMO", raising=False)  # demo mode skips the flock
 
     overlays = {"high": {}, "low": {}}
@@ -44,11 +50,11 @@ def store(tmp_path, monkeypatch):
         def overlays_for_active():
             return dict(overlays["high"]), dict(overlays["low"])
 
-    monkeypatch.setattr(A, "_CATALOG_AVAILABLE", True)
-    monkeypatch.setattr(A, "catalog_context", _Ctx)
+    monkeypatch.setattr(C, "_CATALOG_AVAILABLE", True)
+    monkeypatch.setattr(C, "catalog_context", _Ctx)
     # Materialization writes into os.environ and re-enters the loader; not what these tests are
     # about, and it would leak between them.
-    monkeypatch.setattr(A, "_materialize_job_env_overrides_into_os_environ", lambda ov: None)
+    monkeypatch.setattr(C, "_materialize_job_env_overrides_into_os_environ", lambda ov: None)
 
     def write_overrides(data: dict[str, str]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,7 +237,7 @@ class TestOverridesStore:
 class TestCatalogUnavailable:
     def test_eget_still_works_without_a_catalog(self, store, monkeypatch):
         """The catalog is optional; without it the ladder is just overrides > env > default."""
-        monkeypatch.setattr(A, "_CATALOG_AVAILABLE", False)
+        monkeypatch.setattr(C, "_CATALOG_AVAILABLE", False)
         monkeypatch.setenv(KEY, "from-env")
         assert A._eget(KEY) == "from-env"
         store.write_overrides({KEY: "from-settings"})
@@ -244,7 +250,7 @@ class TestCatalogUnavailable:
             def overlays_for_active():
                 raise RuntimeError("catalog on fire")
 
-        monkeypatch.setattr(A, "catalog_context", _Boom)
+        monkeypatch.setattr(C, "catalog_context", _Boom)
         monkeypatch.setenv(KEY, "from-env")
         assert A._eget(KEY) == "from-env"
         assert A._subprocess_env()[KEY] == "from-env"
