@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 # NVIS Rack Status — orchestrator: clone (01) and CMake download (00) on localhost only; nvloom build (02) on compute via pdsh.
 # CMake tarball is always fetched/extracted on the dashboard host (shared TOPDIR). 02 only uses the unpacked tree + CUDA env.
 # pdsh runs ``bash -c 'export …; exec bash 02 …'`` with explicit exports (CMAKE_CUDA_ARCHITECTURES=native, CMAKE_ROOT, CUDA_HOME, PATH, LD_LIBRARY_PATH, TOPDIR, CUDA_MAJ) so the target node does not rely on inherited empty env.

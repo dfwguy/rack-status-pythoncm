@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 # nvis-rack-status: stage checker.sh on nodes (pdcp) and run it via pdsh as root.
 # Remote runs with RACK_WEB_HW_CHECK=1 so checker.sh never calls scontrol drain/undrain.
 set -uo pipefail

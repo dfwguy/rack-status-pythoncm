@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 # NVIS Rack Status — part 2 of CUDA/NCCL workspace install: run on a **compute node** (same TOPDIR on shared $HOME).
 # Expects NVIS_INSTALL_CUDA_TOOLKIT / NVIS_BUILD_NCCL from the environment. Optional .run must already exist in TOPDIR
 # if installing CUDA toolkit (download via 01-download-cuda-nccl-workspace.sh on the dashboard host).

@@ -1,4 +1,13 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 # Multinode NEMO launch. Pass rack targets as one comma-separated spec or multiple arguments, e.g.
 #   p5-r[13-14]-ct[01-18],p5-r[15-16]-ct[01-18]
 # Dashboard and manual launches use the same shared cluster log root.

@@ -1,4 +1,13 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 # NVL72 stress variant of mnubergemm.sbatch: heavier CE, higher duty, ASCII --MM_force_cublas_algo.
 # Uses WORKSPACE_DIR (NVIS workspace install): HPC-X from workspace-cuda-major-common UNPACK, CUDA cuda${CUDA_MAJ},
 # NCCL from nccl/build when present. Set NVIS_BIN_SCRIPTS (run_mnubergemm_stress.sh or Flask).

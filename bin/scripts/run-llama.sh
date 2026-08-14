@@ -1,4 +1,13 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 # One sbatch per host under the shared rack-status log root's sn-llama/ directory.
 # Usage: pass the same Slurm nodelist style as run_singlerack.sh / validation, e.g.
 #   ./run-llama.sh 'p6-r06-ct[01-03,15]'

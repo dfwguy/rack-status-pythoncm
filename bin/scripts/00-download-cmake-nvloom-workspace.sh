@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 # NVIS Rack Status — download and extract Kitware CMake (linux-aarch64) into TOPDIR.
 # Run on the dashboard / Flask host (localhost) only — install-nvloom-workspace.sh invokes this before pdsh.
 # The tarball targets aarch64 compute nodes; this host may be x86_64 (download + extract still succeed).

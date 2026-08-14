@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 # VALIDATION_TEST: comma-separated suite for rack "done" (nccl_ok ∧ llm_ok in tmp_status).
 # Default: nccl_all_reduce,nccl_alltoall,nccl_allgather,llm
 # Tokens (case-insensitive): nccl_all_reduce|all_reduce|allreduce,

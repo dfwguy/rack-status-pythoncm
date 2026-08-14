@@ -1,4 +1,13 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 # Rack status table: NEMO log-derived done/fail/ongoing + cmsh rack/ds + sinfo node states.
 # RACK_CMSH_RACK_LIST_FILE: readable file of one pNN-rMM rack id per line (skips ``cmsh -c "rack; list"``).
 # When unset, defaults to ../../var/cache/cmsh_rack_list.txt under this script’s nvis-rack-status root if that file exists.

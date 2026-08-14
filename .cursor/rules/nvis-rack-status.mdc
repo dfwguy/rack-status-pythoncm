@@ -5,6 +5,34 @@ alwaysApply: true
 
 # NVIS Rack Status
 
+## Licensing: every source file starts with the NVIDIA SPDX header
+
+Applied across the tree for the v3 → main merge. **A new source file must carry it**, before any
+other comment and before the module docstring:
+
+```python
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+```
+
+- `#` form for `.py` / `.sh` / `.sbatch` / `Dockerfile`; the `/* … */` form for
+  `.ts` / `.tsx` / `.js` / `.jsx` / `.css`.
+- **A shebang stays on line 1** — the header goes immediately after it, or the script stops being
+  executable.
+- The author line (`Author: Rafael M. Koike & Cursor Agent ("Ada")`) sits *after* the header.
+- **Excluded, deliberately:** `frontend/src/styles/kaizen/` is vendored from the NVIDIA CDN and is
+  re-vendored wholesale on every bump, so an edit there is lost by design. Config and docs
+  (`.yaml`, `.json`, `.md`, `.toml`) carry no header today.
+- `version.py` has one too. If the ci-toolkit release job ever regenerates that file rather than
+  editing the `VERSION` line, check the header survived.
+
 Flask backend + React 19 SPA (Vite + NVIDIA Kaizen UI + MUI), Dockerized with SSH-back host execution for BCM/MAAS clusters.
 
 ## UI Framework

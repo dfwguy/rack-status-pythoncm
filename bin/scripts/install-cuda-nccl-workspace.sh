@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 # NVIS Rack Status — orchestrator: download CUDA .run on **localhost** (01), then install on **compute** via pdsh (02).
 # Environment (set by Flask from the dashboard JSON):
 #   NVIS_INSTALL_CUDA_TOOLKIT=1|0   NVIS_BUILD_NCCL=1|0

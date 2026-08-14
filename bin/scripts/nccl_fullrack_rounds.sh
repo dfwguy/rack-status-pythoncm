@@ -1,4 +1,13 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 # nccl_fullrack_rounds.sh — Stage-1 NCCL acceptance test for GB200/GB300 NVL72 rack validation:
 # run N rounds of an all_reduce_perf message-size sweep (default 1K..16G, factor 2) across a
 # FULL rack, and report per-round peak busbw + correctness. Wraps the sync-proof portable launcher
