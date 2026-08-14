@@ -84,6 +84,22 @@ The Python backend lives under `backend/`; runtime assets (`bin/`, `static/`, `v
 
 **"What build is this?" has exactly one answer: `backend/app_version.py`.** It reads `var/build-info.json` (written into the image by the `Dockerfile` from `ARG BUILD_STAMP`, so two images cut from the same release commit are distinguishable), falling back to *parsing* — never importing — root `version.py` as `<version>-dev`, then `"unknown"`. It reads **no environment variable**: the previous implementation used only `RACK_WEB_VERSION`, which is set nowhere in this repo, so every deployment reported `dev` while `version.py` said 0.1.5. `Dockerfile` must keep `COPY version.py ./` or a container reports `unknown`; `build-docker.sh` and the two Kaniko CI jobs pass `BUILD_STAMP` (UTC timestamp + short SHA, `-dirty` when the tree is dirty).
 
+**Compose builds a different image than `build-docker.sh`.** `build-docker.sh` tags
+`nvis-rack-status:local`; the OVA container runs `nvis-rack-status-v3-rack-status:latest`, which
+Compose builds from `build: .` (project + service name). Running `build-docker.sh build` and then
+restarting the container therefore deploys nothing — the restart reuses the old image and
+`build-docker.sh`'s output is never referenced. On the OVA, rebuild with `docker compose build` and
+replace the container with `docker compose up -d`; `docker restart` cannot adopt a new image.
+Compose cannot run a shell, so the stamp has to be handed to it:
+
+```bash
+BUILD_STAMP="$(date -u +%Y%m%dT%H%M).$(git rev-parse --short HEAD)" docker compose build
+docker compose up -d
+```
+
+Without that, `build-info.json` gets an empty `build` and the dashboard reports the bare release
+version.
+
 - `backend/api/` — **where new endpoints go.** One module per domain, auto-discovered: expose
   `bp` (a Blueprint) or `install(app)` and it registers itself. Never edit `app.py` to add a
   route, and never `from app import ...` here — see `core-designs.mdc` §0.

@@ -1,6 +1,14 @@
 services:
   rack-status:
-    build: .
+    build:
+      context: .
+      args:
+        # Per-build identity, baked into var/build-info.json and reported as the dashboard build.
+        # Compose cannot run a shell, so pass it in:
+        #   BUILD_STAMP="$(date -u +%Y%m%dT%H%M).$(git rev-parse --short HEAD)" docker compose build
+        # Left empty when unset, which app_version.py reports as the bare release version rather
+        # than a broken "0.1.5+".
+        BUILD_STAMP: ${BUILD_STAMP:-}
     ports:
       - "${RACK_WEB_PORT:-5000}:5000"
     env_file: rack-config.env

@@ -69,7 +69,38 @@ BUILD_FRONTEND=0 \
 
 `BUILD_FRONTEND=0` skips the frontend rebuild when only testing backend/cluster changes.
 
-## Deploying to a container deployment (OVA) — use `bin/deploy-app.sh`, never a bare rsync
+## Deploying to a container deployment (OVA)
+
+**A NEW backend module needs an image rebuild, not `deploy-app.sh`.** The OVA's
+`docker-compose.override.yml` bind-mounts backend files **one file at a time** (~54 mounts), and its
+own comment says it: a `.py` that is not listed is invisible to the container. `deploy-app.sh` also
+rsyncs only `backend/*.py` as a flat glob, so it never copies a new *package* like `backend/api/`.
+Deploying today's refactor that way put the new `app.py` in front of a container with no
+`app_version.py`, and gunicorn crash-looped on `ModuleNotFoundError` with the dashboard down.
+
+So, when the change adds or moves modules:
+
+```bash
+cd /opt/observability/nvis-rack-status-v3
+git merge <branch>                     # tree first, so the build has the new files
+BUILD_STAMP="$(date -u +%Y%m%dT%H%M).$(git rev-parse --short HEAD)" docker compose build
+docker compose up -d                   # NOT docker restart -- that reuses the old image
+NVIS_CONTAINER=nvis-rack-status-v3 bash bin/verify-deploy.sh
+```
+
+`build-docker.sh` builds `nvis-rack-status:local`, which this container does not use — see
+`nvis-rack-status.mdc`. And the host's `static/spa` is mounted over the image's, so an image built
+from newer source still serves the older mounted bundle; `verify-deploy.sh` catches exactly that.
+To realign without a Node toolchain on the box, copy the SPA out of the image:
+
+```bash
+id=$(docker create nvis-rack-status-v3-rack-status:latest)
+docker cp "$id:/app/static/spa/." static/spa/ && docker rm "$id"
+docker restart nvis-rack-status-v3     # index.html is a single-file mount; its inode changed
+```
+
+For a backend-only change to modules **already mounted**, `bin/deploy-app.sh` is still the fast
+path — never a bare rsync:
 
 ```bash
 bin/deploy-app.sh nscale-tx-ova            # sync, restart if backend changed, verify
