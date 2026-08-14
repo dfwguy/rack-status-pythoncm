@@ -108,7 +108,9 @@ prescriptive detail — and the cost of each wrong choice — in **`core-designs
 
 ## Key Files
 
-The Python backend lives under `backend/`; runtime assets (`bin/`, `static/`, `var/`, `help_content.json`) stay at the repo root. Backend modules resolve those via `REPO_ROOT = APP_DIR.parent` (parent of `backend/`); keep `APP_DIR` only for `sys.path` and the `rack_web/` helper. **`version.py` must stay at the repo root** — it is release metadata owned by the ci-toolkit release jobs (`grep VERSION = version.py`) and the JFrog image build. Never bump it by hand or from another CI job; the release job owns it.
+The Python backend lives under `backend/`; runtime assets (`bin/`, `static/`, `var/`, `help_content.json`) stay at the repo root. Backend modules resolve those via `REPO_ROOT = APP_DIR.parent` (parent of `backend/`); keep `APP_DIR` only for `sys.path` and the `rack_web/` helper. **`version.py` must stay at the repo root** — it is release metadata read by the ci-toolkit release jobs (`grep VERSION = version.py`) and the JFrog image build, and it is the only place the version actually lives (everything else derives from it).
+
+Routine bumps belong to the ci-toolkit release job, which derives the next version from conventional commits and regenerates `CHANGELOG.md`. **Do not hand-edit `CHANGELOG.md`** — it is generated, and the entries carry MR links the job produces. A deliberate re-alignment of `VERSION` is a human decision and is fine (0.1.5 → 0.3.0 for the v3 → main merge), but expect the automation to have its own opinion of what comes next: `origin/release` already carries a computed `release 0.2.0`, so a hand-set version can be recomputed or overwritten on the next release run. If a jump needs to stick, make the release job agree with it rather than only editing the file.
 
 **"What build is this?" has exactly one answer: `backend/app_version.py`.** It reads
 `backend/build-info.json`, falling back to *parsing* — never importing — root `version.py` as
