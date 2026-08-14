@@ -139,14 +139,14 @@ underscores becoming hyphens); declare one when the URL cannot be spelled as a m
 `url_prefix=""` means the routes carry full paths, which is the mode used when migrating existing
 routes so a move cannot change a URL by accident.
 
-**Why this exists.** `app.py` reached 20,000 lines and still holds 171 of the 199 routes, because
+**Why this exists.** `app.py` reached 20,000 lines and still holds 160 of the 199 routes, because
 every feature had to touch it. Parallel work collided by construction — which is how an entire feature (node issues, deep audits,
 the post-run report) ended up living uncommitted on a customer deployment, discovered only because
 something else broke. One file per domain removes the shared edit point; implicit registration
 stops the registry from becoming the next one.
 
-**Migration is in progress.** `terminal`, `help`, `vault`, `history`, `deep_audits` and `node_issues`
-have moved; 171 routes are still in `app.py`. The blocker for most of them is configuration resolution: `_eget`
+**Migration is in progress.** `terminal`, `help`, `vault`, `history`, `deep_audits`, `node_issues` and
+`workflows` have moved; 160 routes are still in `app.py`. The blocker for most of them is configuration resolution: `_eget`
 (~120 call sites) and `_rpath` (~90) live in `app.py`, and an `api/` module cannot import from `app`
 without recreating the cycle. Moving `_eget` means moving the job-env override store with it — a
 file-locked cache plus the settings UI definitions — and that is the next step that unlocks the

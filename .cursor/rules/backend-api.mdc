@@ -21,7 +21,7 @@ bp = Blueprint("rack_locks", __name__)      # no url_prefix -> derived from the 
 def claim(): ...
 ```
 
-`app.py` reached 20,000 lines and still holds 171 of the 199 routes, because every feature had to
+`app.py` reached 20,000 lines and still holds 160 of the 199 routes, because every feature had to
 touch it. Two people working in parallel then collide by construction — which is how an entire
 feature ended up living uncommitted on a customer deployment for days. One file per domain is the fix; keeping the
 registry implicit is what stops the registry becoming the new bottleneck.
@@ -50,7 +50,7 @@ registry implicit is what stops the registry becoming the new bottleneck.
 
 ### Migrating an existing domain out of `app.py`
 
-Still to do for 171 of the 199 routes. The recipe, in order:
+Still to do for 160 of the 199 routes. The recipe, in order:
 
 1. **Move the route functions and their private helpers.** Change `@app.route` to `@bp.route`,
    keep the path strings byte-for-byte, and give the blueprint `url_prefix=""`.
@@ -72,7 +72,7 @@ Domains sharing module-level job dicts (`_validation_jobs`, `_xrack_jobs`, …) 
 with their state — the launch route and its status route are one module, not two.
 
 **Migrated so far:** `terminal` (via `install`), `help`, `vault`, `history`, `deep_audits`,
-`node_issues`.
+`node_issues`, `workflows`.
 **Blocked on the configuration subsystem:** everything needing `_eget` (~120 call sites) or
 `_rpath` (~90). Moving `_eget` means moving the job-env override store with it — a file-locked
 cache plus the settings UI definitions. That is the next unlock and deserves its own commit.
