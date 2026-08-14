@@ -1,0 +1,289 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# NVIS Rack Status v3 — ObsVM deploy override (auto-merged by `docker compose`)
+#
+# LIVE SSH mode (was: LOCAL, OFFLINE) for NscaleTX-GB300 (281 GB300 nodes, all DOWN =
+# true cluster bring-up state). No network / SSH / credentials are used.
+#
+# The app builds its rack model from `cmsh` on PATH (RACK_EXEC_MODE=local runs it
+# directly inside the container). We mount our own `cmsh` SHIM at /usr/local/bin/cmsh
+# that prints the real inventory in the exact format native_status.py / app.py parse:
+#   - `cmsh -c "rack; list"`   -> 16 canonical rack ids (p1-r01 .. p4-r04; pod = SU)
+#   - `cmsh -c ds`             -> 281 host lines, each with a [DOWN] status bracket
+#   - `cmsh -c "device; foreach -t physicalnode (... use rf0; get ip)"` -> rf0 map
+#     (hostname + BMC IPv4) so /api/cluster-overview reports 281 tray hosts.
+# The shim is generated deterministically from
+#   /opt/observability/.audit2/rack_inventory.json  (regenerate: /tmp/gen_shim.py).
+#
+# Naming uses the app's DEFAULT Bright templates (p[\d+]-r[\d+] / -ct[\d+]) so the
+# 4 SUs surface as pods p1..p4, each with 4 racks. Do NOT set legacy
+# RACK_CMSH_DS_NODE_PATTERN (it would break the free-text rack-list scan).
+#
+# Top overview label = RACK_CLUSTER_NAME.
+#
+# To switch to REAL live cluster data later: set RACK_EXEC_MODE=ssh + RACK_SSH_HOST
+# + RACK_WEB_AUTH_TOKEN + a real RACK_SSH_KEY_PATH, remove the cmsh shim mount and
+# RACK_WEB_AUTH_DISABLED.
+# ──────────────────────────────────────────────────────────────────────────────
+services:
+  rack-status:
+    container_name: nvis-rack-status-v3
+    environment:
+      # Real-data (synthetic demo disabled), local exec, offline cmsh shim.
+      - RACK_STATUS_DEMO=0
+      - RACK_EXEC_MODE=ssh
+      - RACK_PLATFORM=bcm
+      - RACK_REMOTE_BASE_PATH=/home/cmods/nvis-rack-status
+      - RACK_SSH_HOST=192.168.10.2
+      - RACK_SSH_USER=cmods
+      - RACK_SSH_PORT=22
+      - RACK_SSH_KEY=/home/nvis/.ssh/id_bcm
+      - RACK_CMSH=/cm/local/apps/cmd/bin/cmsh
+      # Rack objects change rarely. Keep live device/Slurm state at the normal
+      # cadence while avoiding a full BCM rack inventory command every 30s.
+      - RACK_NATIVE_RACK_LIST_TTL_SEC=900
+      - NVIS_RACK_ID=ink50-dh01-[a-z][\d+]
+      - NVIS_CT_ID=ink50-dh01-[a-z][\d+]-[\d+]
+      - NVIS_NVSW_ID=ink50-dh01-[a-z][\d+]-[\d+]-nv
+      # Tray numbering on this site is NON-CONTIGUOUS: 8 trays 11-18 plus 10 trays 28-37
+      # = 18 per NVL72 rack. The built-in default is 01-18, which targets ten nodes that do
+      # not exist and misses ten that do. This only bites when an operator launches a rack
+      # action WITHOUT an explicit node selection (an explicit selection bypasses
+      # validation_target_for_rack), which is why the h03 Stage-1 run was unaffected.
+      # Verified: with this value validation_target_for_rack() == the live sinfo node list.
+      - RACK_VALIDATION_CT_RANGE=11-18,28-37
+      # Hardware-fault exclusions from the active Nscale TX tracker. Exact-node
+      # validation prepare fails closed if an operator selects any of these trays.
+      - RACK_VALIDATION_EXCLUDED_NODES=ink50-dh01-g01-33,ink50-dh01-f08-29,ink50-dh01-f19-15,ink50-dh01-f22-36
+      # NeMo acceptance bar. The check is "reached the LAST configured iteration, and at
+      # least this many were configured" (cur >= tot && tot >= NEMO_TARGET_STEPS).
+      # The stock default is 2010, which is the full convergence run; the per-rack runs on
+      # this site are 50-step performance characterisation runs, so every one of them read
+      # as a failure. 50 accepts a run that completed all of its configured steps.
+      # It does NOT create a false pass: a 2010-step run that dies at iteration 64 still
+      # has cur(64) < tot(2010) and still fails.
+      - NEMO_TARGET_STEPS=50
+      # Nscale TX validated image. Override the portable rack-config.env example so
+      # both the existing NeMo paths and validation presets use the current NFS asset.
+      - NEMO_SQSH_SRC=/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh
+      # NCCL side of the same acceptance: judge stage 1 on the all_reduce busbw line.
+      # Unset means validation_test_env.sh applies its strictest suite
+      # (all_reduce + alltoall + allgather + llm) to a SINGLE log, which no log can satisfy
+      # now that NCCL and NeMo run as separate jobs writing separate logs.
+      - VALIDATION_TEST=nccl_all_reduce,llm
+      # BCM rack objects are WH1H<N>; tray hostnames are ink50-dh01-h<NN>-<slot>.
+      - RACK_SLURM_SKIP_MODULE_LOAD=1
+      - RACK_SLURM_CONF=/cm/shared-ubuntu2404-x86_64/apps/slurm/etc/slurm/slurm.conf
+      - RACK_SLURM_BIN=/cm/local/apps/slurm/25.05/bin
+      - RACK_SLURM_SQUEUE=/cm/local/apps/slurm/25.05/bin/squeue
+      - RACK_SLURM_SBATCH=/cm/local/apps/slurm/25.05/bin/sbatch
+      - RACK_SLURM_SRUN=/cm/local/apps/slurm/25.05/bin/srun
+      - RACK_SLURM_SINFO=/cm/local/apps/slurm/25.05/bin/sinfo
+      - RACK_SLURM_SCONTROL=/cm/local/apps/slurm/25.05/bin/scontrol
+      - RACK_SLURM_SCANCEL=/cm/local/apps/slurm/25.05/bin/scancel
+      - RACK_SLURM_SACCT=/cm/local/apps/slurm/25.05/bin/sacct
+      - RACK_WEB_AUTH_TOKEN=nvis1234!
+      # SSH mode: keep validation output on the cluster NFS exported by 10.40.112.3,
+      # not on the head node's local /home filesystem.
+      - RACK_STATUS_LOG_DIR=/cluster/benchmark/harish/rack_status/logs
+      # Browser sessions and durable activity rows may still carry the pre-move root.
+      # Canonicalise it before remote `find`, because GNU find does not traverse a root
+      # that is itself a compatibility symlink unless explicitly told to follow links.
+      - RACK_STATUS_LOG_DIR_ALIASES=/home/cmods/benchmark/harish=/cluster/benchmark/harish/rack_status/logs
+      # Refresh old scheduler evidence progressively; never make the 500-row activity
+      # ledger wait minutes on serial SSH scontrol/sacct calls.
+      - RACK_VALIDATION_ACTIVITIES_REFRESH_BUDGET_SEC=3
+      # Read allowlist for log_dir and Slurm StdOut tail/open-log. Operators submit
+      # jobs whose StdOut lands outside RACK_STATUS_LOG_DIR (e.g. bringup/results);
+      # without these roots the Scheduler view refuses to open those logs.
+      # NB: once set, this list is the ONLY gate — every readable root must appear.
+      - RACK_STATUS_ALLOWED_PREFIXES=/cluster/benchmark/harish/rack_status,/home/cmods/benchmark/harish,/home/cmods/bringup/results,/home/cmods/reports,/home/cmods/workspace
+      # Reports/artifact staging. Both default to /home/cmsupport/reports, which cmods
+      # cannot write. MUST stay separate from RACK_STATUS_LOG_DIR: the parser now accepts
+      # ANY basename in the log dir, so staging zips/csv/bug-reports there would pollute
+      # the rack status table and the Parquet ingest with non-validation files.
+      - RACK_NVLMAPPER_REPORTS_BASE=/cluster/benchmark/harish/rack_status/reports
+      - RACK_BUG_REPORT_REMOTE_DIR=/cluster/benchmark/harish/rack_status/reports
+      # HPC-X / CUDA / NCCL / nvloom tree. Default is /home/cmsupport/workspace,
+      # which cmods cannot read. /home is NFS-shared to the trays.
+      # trays run DCGM plugins for cuda13; default resolution produced cuda12
+      - RACK_MNUBERGEMM_CUDA_MAJOR=13
+      - RACK_NVLOOM_CUDA_MAJOR=13
+      # Exemplar handover campaign: the NCCL action must run NVIDIA's full
+      # microbenchmark_nccl suite (AllReduce/AllGather/ReduceScatter/AllToAll/SendRecv),
+      # not the host-only nccl_allreduce fallback.
+      - RACK_LLMB_NCCL_USE_CONTAINER=1
+      # Exemplar handover campaign: make the picker and NCCL launch use the exact
+      # prevalidated 16-node/rack manifest. The local: scheme is intentionally
+      # explicit; ordinary deployments with this setting absent retain stock
+      # full-rack eligibility and rack-id resolution.
+      - RACK_MULTIRACK_CAMPAIGN_ID=exemplar-handover-16
+      - RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK=16
+      - RACK_MULTIRACK_CAMPAIGN_MANIFEST=local:/app/deploy-secrets/exemplar-handover-selected-nodes.list
+      - RACK_WORKSPACE_DIR=/home/cmods/workspace
+      - NVIS_WORKSPACE_DIR=/home/cmods/workspace
+      # Big overview label (build_cluster_overview -> cluster_name).
+      # ── NVIS Grafana deep-links (docs/GRAFANA_PROMETHEUS_INTEGRATION.md §3).
+      # Replaces the built-in stock NMC dashboard catalog with OUR 61-dashboard NVIS folder.
+      # Deep-links open a full dashboard in a new tab -> no iframe, no ALLOW_EMBEDDING,
+      # no CSP/X-Frame change. Grafana is fed by VictoriaMetrics (:8429), Prometheus-compatible.
+      - RACK_WEB_GRAFANA_URI=http://localhost:3001
+      - RACK_WEB_GRAFANA_VAR_RACK=rack
+      - RACK_WEB_GRAFANA_VAR_HOST=node
+      - 'RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS=[{"id":"gpu","label":"GPU Health","uid":"gpu-health","slug":"gpu-health","scope":"host"},{"id":"pwrcap","label":"GPU Power Cap (699W)","uid":"nvis-gpu-power-cap","slug":"gpu-power-cap","scope":"host"},{"id":"nvlink","label":"GPU Error & NVLink","uid":"gpu-nvlink-health","slug":"gpu-nvlink-health","scope":"host"},{"id":"node","label":"Node Deep Dive","uid":"nvis-node-deep-dive","slug":"node-deep-dive","scope":"host"},{"id":"dcgm","label":"DCGM Diagnostics","uid":"nvis-dcgm-diag","slug":"dcgm-diagnostics","scope":"host"},{"id":"nvswitch","label":"NVSwitch Fleet","uid":"nvis-nvswitch-fleet","slug":"nvswitch-fleet","scope":"rack"},{"id":"bmc","label":"BMC Thermal / Power","uid":"nvis-bmc-thermal","slug":"bmc-thermal","scope":"rack"},{"id":"bms","label":"BMS Coolant / CDU","uid":"nvis-bms-facility","slug":"bms-facility","scope":"rack"},{"id":"home","label":"NVIS Home","uid":"nvis-home","slug":"nvis-home","scope":"cluster"},{"id":"overview","label":"Cluster Overview","uid":"nscaletx-cluster-overview","slug":"cluster-overview","scope":"cluster"},{"id":"nccl","label":"NCCL Validation","uid":"nscaletx-nccl-validation","slug":"nccl-validation","scope":"cluster"},{"id":"jobhealth","label":"Job Health","uid":"nscaletx-job-health","slug":"job-health","scope":"cluster"},{"id":"jobstats","label":"Single Job Stats","uid":"nscaletx-single-job-stats","slug":"single-job-stats","scope":"cluster"},{"id":"exec","label":"Executive Overview","uid":"nvis-executive","slug":"executive","scope":"cluster"},{"id":"ib","label":"InfiniBand Fabric","uid":"nvis-ib-overview","slug":"ib-overview","scope":"cluster"},{"id":"eth","label":"Ethernet Fabric","uid":"nvis-eth-fabric-overview","slug":"eth-fabric-overview","scope":"cluster"}]'
+      - RACK_CLUSTER_NAME=NscaleTX-GB300
+      - RACK_CLUSTER_CUSTOMER_NAME=NscaleTX
+      - RACK_CLUSTER_PRODUCT_LINE=GB300 NVL72
+      - RACK_CLUSTER_HW_VENDOR=NVIDIA
+      # Web concurrency headroom. Keep one Gunicorn worker because workflow,
+      # terminal, and native-status coordination still includes process-local
+      # state; scale the existing gthread worker instead of splitting that state.
+      - GUNICORN_THREADS=48
+      # ── Observability integration (2026-07-28) ──────────────────────────────
+      # Grafana panel-embed API (backend/grafana_embeds.py, /api/observability/*).
+      # `localhost:3001` is NOT reachable from inside this container — rack-status is
+      # on network nvis-rack-status-v3_default while Grafana is on network `nvis`.
+      # The Docker host gateway IS reachable (Grafana publishes 0.0.0.0:3001), and
+      # `host.docker.internal` (see extra_hosts below) survives a network re-create,
+      # unlike a hardcoded 172.x.0.1. Verified: HTTP 200 from /api/health.
+      - RACK_GRAFANA_BASE_URL=http://host.docker.internal:3001
+      # Browser-facing origin. Left UNSET on purpose: the SPA then builds the iframe
+      # origin from window.location (`${protocol}//${hostname}:3001`), which is what a
+      # Teleport/SSH tunnel needs. Set it to a full origin to pin it explicitly.
+      - RACK_GRAFANA_PUBLIC_URL=http://localhost:3001
+      - RACK_GRAFANA_PUBLIC_PORT=3001
+      - RACK_GRAFANA_THEME=dark
+      - RACK_GRAFANA_EMBED_MAP=/app/deploy-secrets/grafana_embed_map.json
+      # Health-probe credentials ONLY (GET /api/observability/health -> dashboard count).
+      # They are never emitted in an embed URL; iframes rely on the operator's own
+      # Grafana session cookie (or GF_AUTH_ANONYMOUS_ENABLED).
+      - RACK_GRAFANA_USER=nvis
+      - RACK_GRAFANA_PASSWORD=nvis1234!
+      # Durable run/metric history (backend/results_history.py). /app/var is the named
+      # volume `rack-data`, so the DB survives restarts AND image rebuilds.
+      # Parquet data lake — every parsed run is mirrored here for provenance.
+      - RACK_LAKE_URL=http://host.docker.internal:9410
+      - RACK_LAKE_CLUSTER=NscaleTX
+      # Universal action capture -> Parquet. actions = every mutating call + action GETs
+      # (default). all = every API call incl. polls (chatty). off = disabled.
+      - RACK_LAKE_CAPTURE=actions
+      - RACK_RESULTS_DB=/app/var/history/results.db
+      - RACK_RESULTS_DB_BUSY_MS=5000
+      # Node issue history + read-only Google punchcard import.  The credential is
+      # consumed only by backend/node_issues.py and is never sent to the SPA.
+      - RACK_PUNCHCARD_TOKEN_FILE=/run/secrets/gsheets-token
+      - RACK_PUNCHCARD_SPREADSHEET_ID=1NSs3c7v6r5mf5h-GKNZHNekVU9XsAAgJp3KyeeJK-PA
+      - RACK_PUNCHCARD_RANGE=Sheet2!A1:Z1000
+    # Gives the container a stable name for the Docker host, so RACK_GRAFANA_BASE_URL
+    # above does not have to hardcode a bridge-subnet IP.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ulimits:
+      # The base image soft limit (1024) is too low for many browser sessions,
+      # WebSocket terminals, and concurrent API polls even when CPU/RAM are idle.
+      nofile:
+        soft: 8192
+        hard: 65536
+    volumes:
+      - /home/nvis/.ssh/id_bcm:/home/nvis/.ssh/id_bcm:ro
+      # Offline cmsh shim -> mounted onto PATH inside the container.
+      # NscaleTX: mount patched backend + checker so validation presets
+      # (dcgm_diag / nvbandwidth / bom_inventory / mop_preflight) are live.
+      # Whole backend directory, replacing the 37 individual file mounts this used to
+      # carry. The tree is a superset of the image's backend (the Dockerfile generates
+      # nothing there; .dockerignore only strips tests and __pycache__), so nothing the
+      # image needs can be hidden -- and a NEW module or package is picked up without
+      # editing this file, which is what crash-looped the container on 2026-08-14.
+      # Read-only: all 37 mounts it replaces were :ro, and Python only loses .pyc caching.
+      - /opt/observability/nvis-rack-status-v3/backend:/app/backend:ro
+      # node_report + its vendored schema: the daily report validates against the schema
+      # before being served, so BOTH must be present or validation silently degrades.
+      # host_exec: exposes the transport layer's existing env_extra so the launch dialog's
+      # "Extra environment variables" field reaches remote ranks (it is dropped otherwise).
+      # transport/ MUST be mounted alongside host_exec.py -- they are one unit. The 2026-07-28
+      # transport refactor added DEFAULT_HEAD_BYTES (and dropped is_remote()); mounting only
+      # host_exec.py left it importing that symbol from the image's stale 55-line transport:
+      #   ImportError: cannot import name 'DEFAULT_HEAD_BYTES' from 'transport'
+      # The running container survived on modules loaded before the change, but ANY restart
+      # would have failed to boot. Keep these two mounts in lockstep.
+      # catalog/ joins that lockstep: the cluster document now carries the connection
+      # topology (endpoints + roles) that host_exec resolves. The image's older
+      # models.py has no endpoints/roles fields, so it would silently drop them on
+      # every write and the deployment would fall back to the flat single-host config.
+      - /opt/observability/nvis-rack-status-v3/bin/scripts/checker.sh:/app/bin/scripts/checker.sh:ro
+      # Saved report archive (backend/report_store.py). Reports are written to var/reports
+      # when generated so leaving the page does not discard the sweep.
+      # Widened auxiliary_single_rack_log_basename() so ANY validation result in the log dir
+      # (MNUBERGEMM, nvbandwidth, nvloom, HPL, dcgm, bringup, …) is picked up by the dashboard
+      # table, Open Log, parser-results and exports — not just NEMO/NCCL/ClusterKit.
+      # NVLink preflight gate (per-node NVLS readiness) — parsing module for the
+      # /api/nvlink-preflight-async route in app.py. Without this mount app.py's
+      # `import nvlink_preflight` fails and the container will not boot.
+      # ── NEW backend modules (2026-07-28). A backend .py that is NOT listed here is
+      # INVISIBLE to the container — app.py imports each one defensively and degrades
+      # to the previous behaviour if the mount is missing.
+      #   results_history.py  durable SQLite run/metric history  -> /api/history/*
+      #   universal_parser.py tool-agnostic log normaliser        -> /api/universal/*
+      #   grafana_embeds.py   Grafana panel-embed blueprint       -> /api/observability/*
+      # Durable validation-activity tracking (backend/validation_activities.py). Declared so a
+      # recreate keeps it: the module is absent from the image, and app.py imports it at module
+      # scope, so without this the container crash-loops on ModuleNotFoundError.
+      - /home/nvis/.gsheets-token:/run/secrets/gsheets-token:ro
+      # Built-in deep-audit workflows live inside the durable workflow namespace.
+      # Bind the definitions so a fresh rack-data volume receives the same audited recipes.
+      - /opt/observability/nvis-rack-status-v3/var/workflows/hardware-deep-audit.yaml:/app/var/workflows/hardware-deep-audit.yaml:ro
+      - /opt/observability/nvis-rack-status-v3/var/workflows/nvlink-network-deep-audit.yaml:/app/var/workflows/nvlink-network-deep-audit.yaml:ro
+      # Data file for grafana_embeds.py (6 views / 25 sections / 92 verified panels).
+      # /app/deploy-secrets does not exist in the image; Docker creates it for this mount.
+      - /opt/observability/nvis-rack-status-v3/deploy-secrets/grafana_embed_map.json:/app/deploy-secrets/grafana_embed_map.json:ro
+      - /home/nvis/exemplar_handover_campaign/selected_nodes_ready.list:/app/deploy-secrets/exemplar-handover-selected-nodes.list:ro
+      # The image bakes a SPA build into /app/static/spa/assets, but every deploy
+      # replaces it via `docker cp` -- into the writable layer, which a `compose up`
+      # recreate throws away. index.html (mounted below) survives on the host and
+      # keeps requesting the deployed bundle hash, so the dashboard 404s its own JS
+      # and renders blank. Mounting the assets tree from the host makes the deployed
+      # bundle survive recreates; keep it in lockstep with index.html.
+      # Kaizen CSS was mounted here until it was vendored into the bundle itself.
+      - /opt/observability/nvis-rack-status-v3/static/spa/assets:/app/static/spa/assets:ro
+      # index.html MUST come from the same build as the assets beside it. It used to be a
+      # hand-copied pin under deploy-secrets, which drifted the moment a rebuild produced
+      # new Vite content hashes: the page then asked for index-<old>.js, every one of 164
+      # chunks 404'd, and the UI rendered a black screen that read as 'slow'. Mounting it
+      # from the same tree as the assets makes the two impossible to separate.
+      - /opt/observability/nvis-rack-status-v3/static/spa/index.html:/app/static/spa/index.html:ro
+      # ── Operator documentation, downloadable from the dashboard ─────────────
+      # Served by the SPA catch-all (`@app.route("/<path:path>")` -> _serve_spa_asset),
+      # which returns any REAL file under /app/static/spa/ and only falls back to
+      # index.html when the path does not exist. So these land at:
+      #   http://<host>:5056/docs/OVA-VALIDATION-MOP.md
+      #   http://<host>:5056/docs/RACKSTATUS_USER_GUIDE.md
+      # Both sit behind the normal dashboard auth gate (_require_dashboard_auth
+      # redirects an unauthenticated non-/api path to /login) — same login as the UI.
+      # Mounted as FILES, not a directory, and pointed at the canonical copies in
+      # /opt/observability so there is ONE source of truth: regenerating either
+      # document updates what the dashboard serves, with no copy step to forget.
+      - /opt/observability/OVA-VALIDATION-MOP.md:/app/static/spa/docs/OVA-VALIDATION-MOP.md:ro
+      - /opt/observability/RACKSTATUS_USER_GUIDE.md:/app/static/spa/docs/RACKSTATUS_USER_GUIDE.md:ro
+      # Exemplar/NVIDIA Llama 3.1 405B review package: combined system report,
+      # bounded Nsight Systems trace, CPU-overhead evidence, and checksums.
+      # Directory index and direct downloads are available under
+      #   http://<host>:5056/static/spa/docs/exemplar/
+      - /opt/observability/exemplar-share:/app/static/spa/docs/exemplar:ro
+      # Both of the above in one gzip, for operators who want a single download.
+      # NB: unlike the two .md mounts, this one is a BUILT artefact — regenerating
+      # either document does NOT refresh it. Rebuild with:
+      #   cd /opt/observability && tar -czf nvis-ova-docs.tar.gz \
+      #     OVA-VALIDATION-MOP.md RACKSTATUS_USER_GUIDE.md
+      - /opt/observability/nvis-ova-docs.tar.gz:/app/static/spa/docs/nvis-ova-docs.tar.gz:ro
+      # Progress tracker workbook, downloadable at
+      #   http://<host>:5056/docs/NVIS-Progress-Tracker.xlsx
+      # Mounted under a URL-safe name: the canonical file name contains spaces and a
+      # double dash, which survive neither a plain URL nor a copy-pasted curl command.
+      # Same live-mount rule as the .md files above -- rewriting the workbook in
+      # /opt/observability updates what the dashboard serves, no copy step.
+      - "/opt/observability/Nscale -- WC TX NVIS progress Tracker.xlsx:/app/static/spa/docs/NVIS-Progress-Tracker.xlsx:ro"
+      # Dell/Nscale/Microsoft daily deployment tracker, downloadable at
+      #   http://<host>:5056/docs/NScale-TX-Deployment-Tracker.xlsx
+      # Same URL-safe-name and live-mount rules as the workbook above: rewriting
+      # the .xlsx in /opt/observability updates what the dashboard serves.
+      - "/opt/observability/NScale TX Deployment Tracker.xlsx:/app/static/spa/docs/NScale-TX-Deployment-Tracker.xlsx:ro"
+    restart: unless-stopped

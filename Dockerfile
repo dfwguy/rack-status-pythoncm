@@ -48,15 +48,13 @@ COPY version.py ./
 RUN mkdir -p var/logs var/cache var/secrets var/workflows/runs
 COPY var/workflows/*.yaml ./var/workflows/
 
-# What build is this? version.py alone cannot answer: every image cut from a release commit
-# carries the same VERSION. BUILD_STAMP (UTC timestamp + short SHA) makes them distinguishable,
-# and writing it to a file rather than an ENV keeps one source of truth on disk. Deliberately
-# does not edit version.py -- the ci-toolkit release job owns that.
-ARG BUILD_STAMP=""
-RUN VERSION="$(sed -n 's/^ *VERSION *= *["'"'"']\([^"'"'"']*\)["'"'"'].*/\1/p' version.py | head -1)" \
-    && printf '{"version": "%s", "build": "%s"}\n' "${VERSION:-unknown}" "${BUILD_STAMP}" \
-       > var/build-info.json \
-    && cat var/build-info.json
+# What build is this? backend/build-info.json answers, and it arrives via the COPY above rather
+# than being generated here -- see bin/write-build-info.sh for why. In short: deployments bind-mount
+# the backend directory over the image's, so anything generated under it at build time is hidden at
+# runtime, and /app/var is masked by a named volume. Run bin/write-build-info.sh before building.
+# Absent, the app parses version.py and reports "<version>-dev", which is true of an unstamped tree.
+RUN cat backend/build-info.json 2>/dev/null \
+    || echo "note: backend/build-info.json absent - this image reports <version>-dev"
 
 COPY --from=frontend-build /build/static/spa/ ./static/spa/
 

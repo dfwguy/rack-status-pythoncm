@@ -134,10 +134,10 @@ docker-build:
     name: gcr.io/kaniko-project/executor:debug
     entrypoint: [""]
   script:
+    - bin/write-build-info.sh --stamp "$(date -u +%Y%m%dT%H%M).${CI_COMMIT_SHORT_SHA}"
     - /kaniko/executor
       --context "${CI_PROJECT_DIR}"
       --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
-      --build-arg "BUILD_STAMP=$(date -u +%Y%m%dT%H%M).${CI_COMMIT_SHORT_SHA}"
       --no-push
   rules:
     # The release image build (docker-save) + JFrog push cover the release commit
@@ -173,11 +173,11 @@ docker-save:
     # Stamped into var/build-info.json, which is what the dashboard reports as its build. Two
     # images from the same release commit are otherwise indistinguishable to an operator.
     - export BUILD_STAMP="$(date -u +%Y%m%dT%H%M).${CI_COMMIT_SHORT_SHA}"
+    - bin/write-build-info.sh --stamp "${BUILD_STAMP}"
     - echo "Building air-gapped bundle ${IMAGE_TAR} (tag ${BUNDLE_TAG}, build ${BUILD_STAMP})"
     - /kaniko/executor
       --context "${CI_PROJECT_DIR}"
       --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
-      --build-arg "BUILD_STAMP=${BUILD_STAMP}"
       --no-push
       --destination "${IMAGE_NAME}:${BUNDLE_TAG}"
       --destination "${IMAGE_NAME}:latest"

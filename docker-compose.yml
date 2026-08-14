@@ -1,14 +1,34 @@
+# HOW THIS DEPLOYMENT RESOLVES FILES — two layers, and the mount always wins.
+#
+#   1. The image. `docker build` COPYs the tree in, so an unmounted path runs the code as it was at
+#      build time. Changing it needs a rebuild.
+#   2. Bind mounts. A mounted path shadows the image's copy entirely, and the host's file is what
+#      runs. This is deliberate: it is what lets a live deployment be updated without a rebuild
+#      (see bin/deploy-app.sh), which on a customer cluster is the difference between a one-minute
+#      fix and a full build.
+#
+# Three consequences follow, and each has already cost us an outage or a wrong answer:
+#
+#   * A file generated DURING the build, under a mounted path, is invisible at runtime — the mount
+#     covers it. That is why bin/write-build-info.sh stamps backend/build-info.json into the TREE
+#     and lets COPY carry it into the image, rather than the Dockerfile generating it.
+#   * /app/var is a named volume (rack-data), which is stricter still: Docker seeds a named volume
+#     from the image only while the volume is EMPTY. On any deployment that has run once, a file
+#     written to var/ at build time can never be read.
+#   * A NEW module under a per-file mount list is invisible until it is listed. The Nscale TX
+#     override bind-mounts backend files individually, so adding a module or a package without
+#     updating that list boots the new app.py against missing imports. Prefer mounting the
+#     directory (`./backend:/app/backend:ro`) so new files are picked up automatically.
+#
+# The rule of thumb: whatever path is mounted, the TREE is the source of truth for it, and an image
+# rebuild alone will not change its behaviour.
 services:
   rack-status:
-    build:
-      context: .
-      args:
-        # Per-build identity, baked into var/build-info.json and reported as the dashboard build.
-        # Compose cannot run a shell, so pass it in:
-        #   BUILD_STAMP="$(date -u +%Y%m%dT%H%M).$(git rev-parse --short HEAD)" docker compose build
-        # Left empty when unset, which app_version.py reports as the bare release version rather
-        # than a broken "0.1.5+".
-        BUILD_STAMP: ${BUILD_STAMP:-}
+    # Build identity comes from backend/build-info.json, which bin/write-build-info.sh writes into
+    # the tree; COPY backend/ carries it into the image. Not a build arg, because a deployment that
+    # bind-mounts backend/ over the image's would hide anything generated during the build:
+    #   bin/write-build-info.sh && docker compose build && docker compose up -d
+    build: .
     ports:
       - "${RACK_WEB_PORT:-5000}:5000"
     env_file: rack-config.env

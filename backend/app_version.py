@@ -4,10 +4,17 @@ Author: Rafael M. Koike & Cursor Agent ("Ada")
 
 Two files can answer, and they answer different questions:
 
-``var/build-info.json``
-    Written when the image is built. Authoritative, because it describes *this artifact*: the
-    release version plus a per-build stamp, so two images cut from the same release commit are
-    still distinguishable. Absent in a working tree.
+``backend/build-info.json``
+    Written by ``bin/write-build-info.sh`` just before an image is built. Authoritative, because it
+    describes *this artifact*: the release version plus a per-build stamp, so two images cut from
+    the same release commit are still distinguishable. Absent in a plain working tree.
+
+    It lives beside the code, under ``backend/``, on purpose. A deployment that bind-mounts the
+    backend directory over the image's would *hide* a copy baked in anywhere under that path, and
+    ``/app/var`` is worse still -- it is masked by a named volume, which Docker only seeds from the
+    image when the volume is empty, so a file written there is invisible on any deployment that has
+    ever run. Writing it into the tree and letting ``COPY backend/`` carry it into the image means
+    the mounted and the image-only cases read the same file.
 
 ``version.py`` (repo root)
     The release version, owned by the ci-toolkit release job. Parsed, never imported -- importing
@@ -41,7 +48,7 @@ def reset_cache() -> None:
 
 
 def _from_build_info() -> str | None:
-    path = REPO_ROOT / "var" / "build-info.json"
+    path = APP_DIR / "build-info.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):

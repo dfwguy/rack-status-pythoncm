@@ -78,8 +78,11 @@ get_build_stamp() {
 build_image() {
   local stamp
   stamp="$(get_build_stamp)"
+  # Stamp the TREE, not the image: the Dockerfile's COPY carries backend/build-info.json in, and a
+  # deployment that bind-mounts backend/ over the image would hide a copy generated at build time.
+  "$(dirname "${BASH_SOURCE[0]}")/bin/write-build-info.sh" --stamp "$stamp" >/dev/null
   echo "==> Building image ${IMAGE} (build ${stamp}) …"
-  docker build --build-arg "BUILD_STAMP=${stamp}" -t "$IMAGE" .
+  docker build -t "$IMAGE" .
   echo "==> Build complete."
 }
 
@@ -96,8 +99,9 @@ save_image() {
 
   local stamp
   stamp="$(get_build_stamp)"
+  "$(dirname "${BASH_SOURCE[0]}")/bin/write-build-info.sh" --stamp "$stamp" >/dev/null
   echo "==> Building image ${image_ref} (+ ${latest_ref}, build ${stamp}) …"
-  docker build --build-arg "BUILD_STAMP=${stamp}" -t "$image_ref" -t "$latest_ref" .
+  docker build -t "$image_ref" -t "$latest_ref" .
 
   mkdir -p "$out_dir"
   tar_path="${out_dir}/nvis-rack-status-${tag}.tar"

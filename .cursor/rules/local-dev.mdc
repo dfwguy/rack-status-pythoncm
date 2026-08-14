@@ -69,6 +69,34 @@ BUILD_FRONTEND=0 \
 
 `BUILD_FRONTEND=0` skips the frontend rebuild when only testing backend/cluster changes.
 
+## How a deployment resolves files — two layers, and the mount always wins
+
+Every "why is my change not live?" and "why is my change live when I didn't rebuild?" question in
+this project comes back to one model:
+
+| Layer | Applies to | Changing it |
+|---|---|---|
+| **Image** | any path *not* bind-mounted | needs a rebuild (`docker compose build`) |
+| **Bind mount** | the mounted path, which shadows the image's copy | edit the host file; restart only if Python |
+| **Named volume** (`rack-data:/app/var`) | `/app/var` | seeded from the image **only while empty**; after that the volume wins forever |
+
+The mount layer is deliberate — it is what makes a live update possible without a rebuild, which on
+a customer cluster is a one-minute fix instead of a ten-minute build. `bin/deploy-app.sh` exists to
+drive exactly that path. **The corollary is that for any mounted path, the tree is the source of
+truth and an image rebuild alone changes nothing.**
+
+Three consequences, each of which has already cost real time:
+
+- **A file generated during the build, under a mounted path, is invisible.** The mount covers it.
+  So `bin/write-build-info.sh` stamps `backend/build-info.json` into the *tree* and lets
+  `COPY backend/` carry it into the image; the Dockerfile does not generate it.
+- **`/app/var` is stricter than a bind mount.** The first version of the build stamp was written to
+  `var/build-info.json` and could never have been read on that OVA, because `rack-data` has existed
+  for days and Docker only seeds an *empty* named volume.
+- **A new module under a per-file mount list is invisible until listed.** This is what crash-looped
+  the OVA: the new `app.py` arrived through its own mount while `app_version.py` had none, in an
+  image that predated it. Mounting the *directory* removes the whole class.
+
 ## Deploying to a container deployment (OVA)
 
 **A NEW backend module needs an image rebuild, not `deploy-app.sh`.** The OVA's
@@ -83,10 +111,21 @@ So, when the change adds or moves modules:
 ```bash
 cd /opt/observability/nvis-rack-status-v3
 git merge <branch>                     # tree first, so the build has the new files
-BUILD_STAMP="$(date -u +%Y%m%dT%H%M).$(git rev-parse --short HEAD)" docker compose build
+bin/write-build-info.sh                # stamps backend/build-info.json; COPY carries it in
+docker compose build
 docker compose up -d                   # NOT docker restart -- that reuses the old image
 NVIS_CONTAINER=nvis-rack-status-v3 bash bin/verify-deploy.sh
 ```
+
+**The OVA's `docker-compose.override.yml` is not in git.** It holds ~50 bind mounts (37 of them
+under `backend/`, all `:ro`) and is the single most failure-prone piece of the deployment with no
+version history, no CI and no review — which is why the mount gap above was invisible until the
+container crash-looped. There are a dozen `.bak.*` copies beside it from past hand edits. Collapsing
+the 37 into one `- .../backend:/app/backend:ro` is safe (the tree is a superset of the image's
+backend: the Dockerfile generates nothing there, and `.dockerignore` only strips tests and
+`__pycache__`) and makes a new module visible automatically. It also makes the tree the sole
+authority for backend code, so an image rebuild alone stops changing behaviour — which is already
+true of `app.py` today.
 
 `build-docker.sh` builds `nvis-rack-status:local`, which this container does not use — see
 `nvis-rack-status.mdc`. And the host's `static/spa` is mounted over the image's, so an image built

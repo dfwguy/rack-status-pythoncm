@@ -21,17 +21,21 @@ import app_version  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
-    """Point the module at a scratch repo root and drop its cache between tests."""
+    """Point the module at a scratch tree and drop its cache between tests.
+
+    Both roots are patched: build-info.json is read from APP_DIR (it sits beside the code, under
+    backend/, so a bind-mounted backend directory cannot hide it) while version.py is read from
+    REPO_ROOT.
+    """
     monkeypatch.setattr(app_version, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(app_version, "APP_DIR", tmp_path)
     app_version.reset_cache()
     yield
     app_version.reset_cache()
 
 
 def _write_build_info(root: Path, **payload) -> None:
-    p = root / "var"
-    p.mkdir(parents=True, exist_ok=True)
-    (p / "build-info.json").write_text(json.dumps(payload), encoding="utf-8")
+    (root / "build-info.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _write_version_py(root: Path, raw: str) -> None:
@@ -76,8 +80,7 @@ class TestUnknown:
         assert app_version.app_version() == "unknown"
 
     def test_corrupt_build_info_falls_through_to_version_py(self, tmp_path):
-        (tmp_path / "var").mkdir()
-        (tmp_path / "var" / "build-info.json").write_text("{not json", encoding="utf-8")
+        (tmp_path / "build-info.json").write_text("{not json", encoding="utf-8")
         _write_version_py(tmp_path, 'VERSION = "0.4.0"\n')
         assert app_version.app_version() == "0.4.0-dev"
 
@@ -86,7 +89,7 @@ class TestUnknown:
         assert app_version.app_version() == "unknown"
 
     def test_a_directory_where_build_info_should_be_is_survived(self, tmp_path):
-        (tmp_path / "var" / "build-info.json").mkdir(parents=True)
+        (tmp_path / "build-info.json").mkdir(parents=True)
         _write_version_py(tmp_path, 'VERSION = "0.5.0"\n')
         assert app_version.app_version() == "0.5.0-dev"
 
