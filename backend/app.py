@@ -2477,10 +2477,6 @@ def _app_client_ttl_sec() -> int:
     return max(30, _env_int("RACK_WEB_ACTIVE_CLIENT_TTL_SEC", 120))
 
 
-def _app_version() -> str:
-    return (os.environ.get("RACK_WEB_VERSION") or "dev").strip() or "dev"
-
-
 def _touch_app_client(client_id: str, now_ts: float | None = None) -> int:
     """Track active dashboard clients and return currently-active count."""
     cid = (client_id or "").strip()
@@ -18464,7 +18460,7 @@ def build_cluster_overview(
         "status_updated_at": cached.get("updated_at") if cached is not None else None,
         "snapshot": current.metadata(),
         "probes": probes,
-        "app_version": _app_version(),
+        "app_version": core.app_version(),
         "squeue": squeue_block,
         "cluster_dashboard_metadata": dash_meta,
         "cluster_unreachable_detail": "",
@@ -18479,41 +18475,6 @@ def build_cluster_overview(
             "" if reachable else (reach_detail or "head node not reachable over SSH")
         )
     return out
-
-
-@app.route("/api/nvftp-sync/status", methods=["GET"])
-def api_nvftp_sync_status():
-    """NVFTP var/cache sync status (no secrets)."""
-    nvftp_cache_sync.ensure_background_thread()
-    return jsonify({"ok": True, **nvftp_cache_sync.sync_status()})
-
-
-@app.route("/api/nvftp-sync/run", methods=["POST"])
-def api_nvftp_sync_run():
-    """Trigger an immediate var/cache upload. JSON body ``{\"force\": true}`` re-uploads every file."""
-    body = request.get_json(silent=True) or {}
-    force = body.get("force") in (True, 1, "1", "true", "yes")
-    out = nvftp_cache_sync.run_sync(force=force)
-    code = 200 if out.get("ok") else 502
-    return jsonify(out), code
-
-
-@app.route("/api/nvftp-sync/test", methods=["POST"])
-def api_nvftp_sync_test():
-    """POST ``{project_token, sftp_user?, token?}`` — SFTP probe file under ``{remote_base}/{project_token}/``."""
-    body = request.get_json(silent=True) or {}
-    project = (body.get("project_token") or body.get("RACK_PROJECT_TOKEN") or "").strip()
-    if not project:
-        return jsonify({"ok": False, "error": "project_token (RACK_PROJECT_TOKEN) is required"}), 400
-    sftp_user = (body.get("sftp_user") or body.get("RACK_NVFTP_SFTP_USER") or "").strip() or None
-    token = (body.get("token") or "").strip() or None
-    out = nvftp_cache_sync.test_project_directory(
-        project_token=project,
-        sftp_user=sftp_user,
-        token=token,
-    )
-    code = 200 if out.get("ok") else 502
-    return jsonify(out), code
 
 
 @app.route("/api/cluster-dashboard-metadata", methods=["GET", "PUT"])
@@ -18687,30 +18648,6 @@ def api_settings_job_environment():
     return jsonify(payload)
 
 
-@app.route("/api/ds-diag", methods=["GET"])
-def api_ds_diag():
-    """Diagnostic: what did `cmsh -c ds` actually return on the last worker pass?"""
-    import native_status as _ns
-    states = {}
-    try:
-        reg = getattr(_ns, "_states", None) or {}
-        for k, st in list(reg.items()):
-            with st.lock:
-                states[str(k)] = {
-                    "racks": len(st.racks),
-                    "rack_sample": list(st.racks)[:3],
-                    "ct_by_rack_len": len(st.ct_by_rack),
-                    "ct_keys_sample": list(st.ct_by_rack)[:3],
-                    "ds_done": st.ds_done,
-                    "errors": list(st.last_errors)[-3:],
-                }
-    except Exception as e:
-        _logger.debug("api_ds_diag: ignoring error", exc_info=True)
-        states["_error"] = str(e)
-    return jsonify({"ok": True, "diag": dict(getattr(_ns, "DS_LAST_DIAG", {}) or {}),
-                    "states": states})
-
-
 @app.route("/api/cluster-overview", methods=["GET"])
 def api_cluster_overview():
     """Cluster-wide facts whose inventory fields use the canonical shared snapshot."""
@@ -18775,33 +18712,6 @@ def api_cluster_overview_live():
         return jsonify({"ok": False, "error": cluster_overview_live.safe_error(e)}), 500
 
 
-@app.route("/api/cluster-health", methods=["GET"])
-def api_cluster_health():
-    """Cheap, cached cluster-link reachability for the SPA connection banner.
-
-    ``?force=1`` re-probes immediately (used by the "Reconnect now" action).
-    """
-    force = (request.args.get("force") or "").strip().lower() in ("1", "true", "yes")
-    try:
-        info = host_exec.reachability_info(force=force)
-        return jsonify({"ok": True, **info})
-    except Exception as e:
-        _logger.debug("api_cluster_health: ignoring error", exc_info=True)
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/cluster-health/reconnect", methods=["POST"])
-def api_cluster_health_reconnect():
-    """Force an immediate reachability re-probe (drops the cached result first)."""
-    try:
-        host_exec.invalidate_reachability()
-        info = host_exec.reachability_info(force=True)
-        return jsonify({"ok": True, **info})
-    except Exception as e:
-        _logger.debug("api_cluster_health_reconnect: ignoring error", exc_info=True)
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
 @app.route("/api/fabric-probe", methods=["GET"])
 def api_fabric_probe():
     """Classify a compute node's RDMA fabric (compute rails vs storage/NS plane).
@@ -18854,7 +18764,7 @@ def api_app_stats():
         {
             "ok": True,
             "connected_users": connected_users,
-            "app_version": _app_version(),
+            "app_version": core.app_version(),
             "async_running": _count_running_async_commands(),
             "active_client_ttl_sec": _app_client_ttl_sec(),
         }
@@ -19039,42 +18949,6 @@ def api_auth_check():
     if _session_ok():
         return jsonify({"authenticated": True, "user": _auth_user()})
     return jsonify({"authenticated": False}), 401
-
-
-@app.route("/api/openapi.json", methods=["GET"])
-def api_openapi_json():
-    """OpenAPI 3.1 description of this deployment's `/api/*` surface.
-
-    Generated from the app's own route table on each request, so it describes exactly what this
-    build serves and cannot drift from the code. Cheap enough to generate per call (introspection
-    over ~163 rules) and always correct, which a cached copy would not be after a hot reload.
-
-    Behind the normal auth gate: it enumerates the whole surface of a tool that operates a
-    customer cluster, and any system integrating with it authenticates anyway.
-    """
-    try:
-        import openapi as _openapi
-    except ImportError:
-        return jsonify({"ok": False, "error": "openapi generator unavailable"}), 503
-    spec = _openapi.build_spec(app, version=_app_version())
-    return Response(json.dumps(spec, indent=2), mimetype="application/json")
-
-
-@app.route("/api/openapi.yaml", methods=["GET"])
-def api_openapi_yaml():
-    """The same document as YAML, for tooling that prefers it."""
-    try:
-        import openapi as _openapi
-    except ImportError:
-        return jsonify({"ok": False, "error": "openapi generator unavailable"}), 503
-    spec = _openapi.build_spec(app, version=_app_version())
-    try:
-        import yaml
-
-        body = yaml.safe_dump(spec, sort_keys=False, width=100)
-    except ImportError:
-        return jsonify({"ok": False, "error": "pyyaml unavailable; use /api/openapi.json"}), 503
-    return Response(body, mimetype="application/yaml")
 
 
 @app.route("/api/login", methods=["POST"])

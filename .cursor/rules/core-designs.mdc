@@ -57,11 +57,11 @@ means the feature is simply absent with no error anywhere, which cost an afterno
 because moving routes between modules is exactly the change that silently renames one, and the
 SPA calls these paths by hand.
 
-`app.py` reached 20,000 lines and still holds 160 of the 199 routes, every feature touching it,
+`app.py` reached 20,000 lines and still holds 152 of the 199 routes, every feature touching it,
 so parallel work
 collided by construction — that is how a whole feature ended up uncommitted on a customer
-deployment. Migration is partial: `terminal`, `help`, `vault`, `history`, `deep_audits`, `node_issues` and
-`workflows` have moved. The bulk is
+deployment. Migration is partial: `terminal`, `help`, `vault`, `history`, `deep_audits`, `node_issues`,
+`workflows`, `nvftp_sync`, `cluster_health`, `ds_diag` and `openapi_spec` have moved. The bulk is
 blocked on configuration resolution (citizen 5) still living in `app.py`.
 
 ### 1. Connection / transport — how anything runs on a host
