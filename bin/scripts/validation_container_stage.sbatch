@@ -61,7 +61,14 @@ srun --kill-on-bad-exit=1 --nodes="${nodes}" --ntasks="${nodes}" --ntasks-per-no
       exit 3
     fi
     partial="${destination}.partial"
-    rsync -a --partial --append-verify -- "$source_path" "$partial"
+    if [[ -s "$partial" ]]; then
+      # Preserve useful work after an interrupted stage and verify the overlap.
+      rsync -a --partial --append-verify -- "$source_path" "$partial"
+    else
+      # Squashfs is already compressed. A fresh whole-file transfer avoids the
+      # delta algorithm extra source/destination reads and CPU cost.
+      rsync -a --whole-file --partial -- "$source_path" "$partial"
+    fi
     partial_size="$(stat -c %s "$partial" 2>/dev/null || true)"
     if [[ "$partial_size" != "$NVIS_STAGE_EXPECTED_SIZE" ]]; then
       echo "IMAGE_STAGE_FAIL $(hostname): partial expected=$NVIS_STAGE_EXPECTED_SIZE actual=${partial_size:-missing}" >&2

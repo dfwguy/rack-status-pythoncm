@@ -116,6 +116,10 @@ if [[ "${NVIS_LLMB_AUDITED_CONTAINER:-0}" == 1 ]]; then
 set -o pipefail
 export PMIX_MCA_gds=hash
 export MELLANOX_VISIBLE_DEVICES=all
+# UCX/UCC is only the MPI bootstrap for these NCCL collectives.  Auto-selection
+# can choose the container-visible mlx5_bond_0 DC transport and hang every rank
+# in ibv_create_ah.  Keep NCCL on all visible HCAs, but bootstrap over TCP.
+export UCX_TLS=tcp,self
 _nvis_llmb_nccl_result_gate() {
   _prior=$?
   trap - EXIT
@@ -140,19 +144,30 @@ AUDIT_GATE
       -e 's/--mpi=(pmi2|none)/--mpi=pmix/g' \
       -e 's/--container-env=[^[:space:]]+[[:space:]]*//g' \
       -e 's#--container-mounts=#--container-mounts=/dev/infiniband:/dev/infiniband,#g' \
+      -e 's#--container-mounts=/dev/infiniband:/dev/infiniband,"/dev/infiniband:/dev/infiniband,#--container-mounts="/dev/infiniband:/dev/infiniband,#g' \
       -e 's#srun --ntasks=#srun --mpi=pmix --ntasks=#g' \
+      -e 's#srun --mpi=pmix --ntasks=\$SLURM_JOB_NUM_NODES --ntasks-per-node=1#srun --mpi=pmix --ntasks=$SLURM_JOB_NUM_NODES --ntasks-per-node=1 --gpus-per-node=4#g' \
+      -e 's#srun --mpi=pmix --ntasks=1 --nodes=1#srun --mpi=pmix --ntasks=1 --nodes=1 --gpus-per-node=4#g' \
       -e 's#srun -N \$\{SLURM_JOB_NUM_NODES\}#srun -N ${SLURM_JOB_NUM_NODES} --ntasks-per-node=4#g' \
-      -e 's#--container-image=([^[:space:]]+)#--container-image=\1 --container-env=PMIX_MCA_gds,MELLANOX_VISIBLE_DEVICES#g'
+      -e 's#--container-image=([^[:space:]]+)#--container-image=\1 --container-env=PMIX_MCA_gds,MELLANOX_VISIBLE_DEVICES,UCX_TLS#g'
   } >"$_patched"
   chmod 700 "$_patched"
   _markers=$(grep -Ec 'Running test [0-9]+/24' "$_patched")
   _tests=$(grep -Ec '^[[:space:]]*srun -N .*--ntasks-per-node=4 .*--mpi=pmix .*--container-image=' "$_patched")
-  _mounts=$(grep -Ec '^[[:space:]]*srun .*--container-mounts=/dev/infiniband:/dev/infiniband,' "$_patched")
-  _envs=$(grep -Ec '^[[:space:]]*srun .*--container-env=PMIX_MCA_gds,MELLANOX_VISIBLE_DEVICES' "$_patched")
+  _mounts=$(grep -Ec '^[[:space:]]*srun .*--container-mounts="?/dev/infiniband:/dev/infiniband,' "$_patched")
+  _envs=$(grep -Ec '^[[:space:]]*srun .*--container-env=PMIX_MCA_gds,MELLANOX_VISIBLE_DEVICES,UCX_TLS' "$_patched")
   _mpi=$(grep -Ec '^[[:space:]]*srun .*--mpi=pmix' "$_patched")
-  _args=$(grep -Ec 'run_test .* -t1 -g1 -f2 -n20 -w5 -b8 -e16G -d(float|uint8) -R0 -c1 -G(None|2|4)' "$_patched")
-  [[ "$_markers" == 24 && "$_tests" == 24 && "$_mounts" -ge 26 && "$_envs" -ge 26 && "$_mpi" -ge 26 && "$_args" == 24 ]] || {
-    echo "nvis_sbatch_shim: audited recipe gate failed markers=$_markers tests=$_tests mounts=$_mounts envs=$_envs mpi=$_mpi args=$_args" >&2; exit 42;
+  # Count only executable srun lines. Upstream also embeds each command in a
+  # TEST_CMD metadata assignment, so an unanchored grep doubles 24 to 48 and
+  # can make a valid generated recipe fail its gate.
+  _args=$(grep -Ec '^[[:space:]]*srun .*run_test .* -t1 -g1 -f2 -n20 -w5 -b8 -e16G -d(float|uint8) -R0 -c1 -G(None|2|4)' "$_patched")
+  # Each NCCL rank selects its GPU from SLURM_LOCALID, so all four local GPUs
+  # must remain visible inside every rank.  Per-task GRES masks each container
+  # to a single remapped GPU and makes local ranks 1-3 fail cudaSetDevice().
+  _gpu_steps=$(grep -Ec '^[[:space:]]*srun -N .*--ntasks-per-node=4 .*run_test ' "$_patched")
+  _gpu_metadata=$(grep -Ec '^[[:space:]]*srun .*--gpus-per-node=4 .*--container-image=' "$_patched")
+  [[ "$_markers" == 24 && "$_tests" == 24 && "$_mounts" -ge 26 && "$_envs" -ge 26 && "$_mpi" -ge 26 && "$_args" == 24 && "$_gpu_steps" == 24 && "$_gpu_metadata" -ge 2 ]] || {
+    echo "nvis_sbatch_shim: audited recipe gate failed markers=$_markers tests=$_tests mounts=$_mounts envs=$_envs mpi=$_mpi args=$_args gpu_steps=$_gpu_steps gpu_metadata=$_gpu_metadata" >&2; exit 42;
   }
   for _spec in all_reduce_perf:6 all_gather_perf:3 reduce_scatter_perf:3 alltoall_perf:6 sendrecv_perf:6; do
     _name=${_spec%:*}; _want=${_spec#*:}
