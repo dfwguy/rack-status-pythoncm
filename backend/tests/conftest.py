@@ -42,6 +42,10 @@ os.environ["RACK_MULTIRACK_LEDGER_EXPORT_STATUS_FILE"] = os.path.join(
     _ledger_test_root, "parquet-status.json"
 )
 os.environ["RACK_MULTIRACK_LEDGER_LAKE_DISABLED"] = "1"
+os.environ["RACK_VALIDATION_ACTIVITIES_ARCHIVE_DB"] = os.path.join(
+    tempfile.mkdtemp(prefix="nvis-validation-activity-history-test-"),
+    "validation_activities.sqlite3",
+)
 
 # Isolate AI settings so tests exercise the deterministic demo/registry path and do
 # not inherit a developer's locally-configured API key (which would enable live AI).

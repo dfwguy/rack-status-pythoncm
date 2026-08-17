@@ -945,7 +945,7 @@ def _update_validation_activity(activity_id: str, **kwargs: object) -> None:
 
 def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
     """Best-effort evidence-ladder refresh for tasks that still need hydration."""
-    if os.environ.get("RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED", "").strip().lower() in (
+    if (_eget("RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED") or "").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -964,6 +964,143 @@ def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
                 )
             continue
         _hydrate_activity_task_logs(aid, rec)
+
+
+_validation_activities_refresh_thread: threading.Thread | None = None
+_validation_activities_refresh_thread_lock = threading.Lock()
+
+
+def _validation_activities_refresh_disabled() -> bool:
+    return (_eget("RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _validation_activities_refresh_number(name: str, default: float, minimum: float) -> float:
+    try:
+        value = float((_eget(name) or "").strip() or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+def _refresh_validation_activities_cycle() -> int:
+    """Reconcile the whole live activity working set within a time budget.
+
+    Browser-filtered GETs still refresh immediately, but they are no longer the
+    only reconciliation mechanism.  A sidecar flock/cursor gives all gunicorn
+    workers one fair, restart-safe round robin over open scheduler tasks.
+    """
+    if _validation_activities_refresh_disabled():
+        return 0
+    rows = validation_activities.list_activities(limit=0)
+    candidates = [
+        rec
+        for rec in rows
+        if isinstance(rec, dict)
+        and any(
+            _task_needs_slurm_hydration(task)
+            for task in (rec.get("tasks") or [])
+            if isinstance(task, dict)
+        )
+    ]
+    if not candidates:
+        return 0
+
+    lock_raw = (_eget("RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE") or "").strip()
+    lock_path = (
+        Path(lock_raw).expanduser()
+        if lock_raw
+        else validation_activities.ACTIVITIES_FILE.with_name(
+            ".validation_activities_refresh.lock"
+        )
+    )
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lease = open(lock_path, "a+", encoding="utf-8")  # noqa: SIM115
+    except OSError as exc:
+        _logger.warning("validation activity refresh lease unavailable %s: %s", lock_path, exc)
+        return 0
+
+    refreshed = 0
+    with lease:
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            return 0
+        lease.seek(0)
+        cursor = lease.read().strip()
+        ids = [str(rec.get("activity_id") or rec.get("job_id") or "") for rec in candidates]
+        if cursor in ids:
+            pivot = ids.index(cursor) + 1
+            candidates = candidates[pivot:] + candidates[:pivot]
+        deadline = time.monotonic() + _validation_activities_refresh_number(
+            "RACK_VALIDATION_ACTIVITIES_REFRESH_BUDGET_SEC", 3.0, 0.1
+        )
+        last_attempted = cursor
+        for rec in candidates:
+            if refreshed and time.monotonic() >= deadline:
+                break
+            aid = str(rec.get("activity_id") or rec.get("job_id") or "").strip()
+            if not aid:
+                continue
+            last_attempted = aid
+            try:
+                _hydrate_activity_task_logs(aid, rec)
+            except Exception:  # one unreachable job must not stop the sweep
+                _logger.warning(
+                    "background validation activity refresh failed for %s", aid, exc_info=True
+                )
+            refreshed += 1
+        if last_attempted:
+            lease.seek(0)
+            lease.truncate()
+            lease.write(last_attempted + "\n")
+            lease.flush()
+            try:
+                os.fsync(lease.fileno())
+            except OSError:
+                pass
+        try:
+            fcntl.flock(lease, fcntl.LOCK_UN)
+        except OSError:
+            pass
+    return refreshed
+
+
+def _validation_activities_refresh_loop() -> None:
+    while not _validation_activities_refresh_disabled():
+        try:
+            _refresh_validation_activities_cycle()
+        except Exception:  # daemon must survive transient store/transport errors
+            _logger.exception("validation activity background refresh cycle failed")
+        time.sleep(
+            _validation_activities_refresh_number(
+                "RACK_VALIDATION_ACTIVITIES_REFRESH_INTERVAL_SEC", 30.0, 5.0
+            )
+        )
+
+
+def _bootstrap_validation_activities_refresh_at_startup() -> None:
+    """Start one daemon per process; the file lease elects one active worker."""
+    global _validation_activities_refresh_thread
+    if _validation_activities_refresh_disabled():
+        return
+    if os.environ.get("RACK_STATUS_DEMO", "").strip().lower() in ("1", "true", "yes"):
+        return
+    with _validation_activities_refresh_thread_lock:
+        thread = _validation_activities_refresh_thread
+        if thread is not None and thread.is_alive():
+            return
+        thread = threading.Thread(
+            target=_validation_activities_refresh_loop,
+            name="validation-activities-refresh",
+            daemon=True,
+        )
+        _validation_activities_refresh_thread = thread
+        thread.start()
 
 
 def _maybe_adopt_validation_log(log_path: Path, log_dir: Path, rack: str) -> None:
@@ -14897,7 +15034,13 @@ def api_validation_activities():
         limit=limit,
     )
     _refresh_validation_activities_lazy(rows)
-    return jsonify({"ok": True, "activities": rows})
+    completion = validation_activities.completion_rollup(
+        log_dir=log_dir_filter,
+        rack=rack,
+        tool=tool,
+        scope=scope,
+    )
+    return jsonify({"ok": True, "activities": rows, "completion_rollup": completion})
 
 
 @app.route("/api/validation-activities/ledger", methods=["GET"])
@@ -18275,6 +18418,7 @@ _api_package.register(app)
 # After all routes and middleware are registered (avoid circular import via nvftp_cache_sync._eget → app).
 _bootstrap_catalog_at_startup()
 _bootstrap_nvftp_sync_at_startup()
+_bootstrap_validation_activities_refresh_at_startup()
 
 
 if __name__ == "__main__":
@@ -18333,5 +18477,3 @@ def _rack_and_nodes_from_nodelist(nodelist: str) -> tuple[str, list[str]]:
         if hit:
             return (naming.canonical_rack_id(hit[0]) or hit[0]), nodes
     return "", nodes
-
-

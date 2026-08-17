@@ -31,8 +31,11 @@ def isolated_validation_activities(tmp_path, monkeypatch):
     """Redirect validation activity store for API tests."""
     activities = tmp_path / "validation_activities.json"
     legacy = tmp_path / "multirack_jobs.json"
+    archive = tmp_path / "validation_activities.sqlite3"
     monkeypatch.setattr(validation_activities, "ACTIVITIES_FILE", activities)
     monkeypatch.setattr(validation_activities, "LEGACY_JOBS_FILE", legacy)
+    monkeypatch.setattr(validation_activities, "ACTIVITY_ARCHIVE_DB", archive)
+    monkeypatch.setattr(validation_activities, "_archive_sync_signature", None)
     yield activities
 
 
@@ -1024,6 +1027,42 @@ class TestValidationActivitySlurmHydration:
         assert tasks[0]["scheduler_state"] == "COMPLETED"
         # Intermediate llmb StdOut without aggregated results → collecting
         assert tasks[0]["work_phase"] == "collecting"
+
+    def test_background_cycle_refreshes_all_racks_without_browser_filters(
+        self, isolated_validation_activities, monkeypatch
+    ):
+        activity_ids = []
+        for ordinal, rack in enumerate(("r01", "r02", "r03"), start=1):
+            aid = validation_activities.record_activity(
+                "llmb-nemo-combined", rack=rack, log_dir="/logs"
+            )
+            validation_activities.add_or_update_task(
+                aid,
+                ordinal=1,
+                label="nemo",
+                scheduler_ref=str(200 + ordinal),
+                scheduler_state="RUNNING",
+                work_phase="running",
+            )
+            activity_ids.append(aid)
+
+        refreshed = []
+        monkeypatch.setattr(
+            app_module,
+            "_hydrate_activity_task_logs",
+            lambda aid, _rec=None: refreshed.append(aid),
+        )
+        monkeypatch.setenv("RACK_VALIDATION_ACTIVITIES_REFRESH_BUDGET_SEC", "60")
+        monkeypatch.setenv(
+            "RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE",
+            str(isolated_validation_activities.with_suffix(".refresh.lock")),
+        )
+        assert app_module._refresh_validation_activities_cycle() == 3
+        # The module-level refresh daemon may concurrently hydrate another
+        # activity while this test's monkeypatch is installed.  What matters is
+        # that a whole-store cycle reaches every intended rack without browser
+        # filters; unrelated concurrent refreshes are allowed.
+        assert set(activity_ids).issubset(refreshed)
 
     def _stub_slurm(self, monkeypatch, state="COMPLETED", stdout_tpl="/logs/llmb-nccl_nodes_{jid}.out"):
         monkeypatch.setattr(app_module.native_status, "load_squeue_jobs_map", lambda: (set(), {}))

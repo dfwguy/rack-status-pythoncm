@@ -84,6 +84,24 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "dashboard",
+        "key": "RACK_VALIDATION_ACTIVITIES_REFRESH_INTERVAL_SEC",
+        "label": "Validation activity refresh (seconds)",
+        "description": "How often the server reconciles unseen open validation tasks against Slurm and their result logs (min 5).",
+    },
+    {
+        "section": "dashboard",
+        "key": "RACK_VALIDATION_ACTIVITIES_REFRESH_BUDGET_SEC",
+        "label": "Validation refresh budget (seconds)",
+        "description": "Maximum wall-clock budget per whole-store validation activity refresh cycle (default 3).",
+    },
+    {
+        "section": "dashboard",
+        "key": "RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED",
+        "label": "Disable validation activity refresh",
+        "description": "Set to 1 only for maintenance/testing; open activities otherwise reconcile in the background even when no browser views their rack.",
+    },
+    {
+        "section": "dashboard",
         "key": "RACK_WEB_PROJECT_NAME",
         "label": "Page title suffix",
         "description": "Optional short label appended to HTML titles (shell PROJECT_NAME is still read if this is unset).",

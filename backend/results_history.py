@@ -74,6 +74,7 @@ __all__ = [
     "ingest_runs",
     "init_db",
     "latest_run_for_log",
+    "latest_successful_runs_by_rack",
     "list_runs",
     "make_run_id",
     "metric_names",
@@ -984,6 +985,43 @@ def latest_run_for_log(source_log_path: str) -> dict[str, Any] | None:
             (src,),
         ).fetchone()
     return _row_to_run(row) if row else None
+
+
+def latest_successful_runs_by_rack(
+    workload_kinds: Sequence[str] = ("nccl", "nemo"),
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Return durable completion evidence, grouped by workload kind and rack.
+
+    A later retry can fail without erasing the fact that a rack already passed
+    its acceptance run.  This deliberately selects the newest *successful*
+    run, rather than the newest attempt.  Attempts remain available through
+    :func:`list_runs`; this query is the completion/acceptance rollup used by
+    RackStatus after an ephemeral parser cache is replaced or rebuilt.
+    """
+    kinds: list[str] = []
+    for raw in workload_kinds or ():
+        kind = _norm_kind(raw)
+        if kind and kind not in kinds:
+            kinds.append(kind)
+    if not kinds:
+        return {}
+
+    placeholders = ",".join("?" for _ in kinds)
+    sql = (
+        "SELECT * FROM runs "
+        "WHERE status = 'pass' AND rack IS NOT NULL AND TRIM(rack) <> '' "
+        f"AND workload_kind IN ({placeholders}) "
+        "ORDER BY started_at DESC, updated_at DESC, run_id DESC"
+    )
+    grouped: dict[str, dict[str, dict[str, Any]]] = {kind: {} for kind in kinds}
+    with _connect() as conn:
+        for row in conn.execute(sql, kinds):
+            kind = str(row["workload_kind"] or "")
+            rack = str(row["rack"] or "").strip()
+            if not rack or kind not in grouped or rack in grouped[kind]:
+                continue
+            grouped[kind][rack] = _row_to_run(row)
+    return grouped
 
 
 def delete_run(run_id: str) -> bool:

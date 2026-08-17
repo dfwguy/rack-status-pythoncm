@@ -28,8 +28,11 @@ def isolated_activities_store(tmp_path, monkeypatch):
     """Point activity + legacy job files at tmp paths for each test."""
     activities = tmp_path / "validation_activities.json"
     legacy = tmp_path / "multirack_jobs.json"
+    archive = tmp_path / "validation_activities.sqlite3"
     monkeypatch.setattr(va, "ACTIVITIES_FILE", activities)
     monkeypatch.setattr(va, "LEGACY_JOBS_FILE", legacy)
+    monkeypatch.setattr(va, "ACTIVITY_ARCHIVE_DB", archive)
+    monkeypatch.setattr(va, "_archive_sync_signature", None)
     yield activities, legacy
 
 
@@ -99,6 +102,106 @@ class TestRecordAndList:
         va.record_activity("llama", scope="rack", rack="p5-r01", log_dir="/logs")
         assert len(va.list_activities(scope="multirack")) == 1
         assert len(va.list_activities(tool="llama")) == 1
+
+    def test_completed_rollup_survives_prune_restart_and_cache_replacement(
+        self, isolated_activities_store, monkeypatch
+    ):
+        activities_file, _legacy = isolated_activities_store
+        monkeypatch.setattr(va, "MAX_ACTIVITIES", 2)
+
+        # More completed racks than the live JSON cap.  Every record must still
+        # remain available to the append-preserving acceptance rollup.
+        for ordinal, rack in enumerate(("r01", "r02", "r03"), start=1):
+            aid = va.record_activity(
+                "mnubergemm",
+                rack=rack,
+                racks=[rack],
+                log_dir="/logs",
+                tasks=[
+                    {
+                        "task_id": f"task-{ordinal}",
+                        "ordinal": 1,
+                        "label": "mnubergemm",
+                        "scheduler_ref": str(100 + ordinal),
+                        "scheduler_state": "COMPLETED",
+                        "work_phase": "done",
+                    }
+                ],
+            )
+            va.update_activity(aid, phase="done", returncode=0, work_phase="done")
+
+        assert len(json.loads(activities_file.read_text(encoding="utf-8"))) == 2
+        rollup = va.completion_rollup(tool="mnubergemm")
+        assert rollup["by_tool"]["mnubergemm"]["completed_racks"] == ["r01", "r02", "r03"]
+
+        # Simulate a replacement/restart with a brand-new empty live cache.
+        activities_file.write_text("{}\n", encoding="utf-8")
+        monkeypatch.setattr(va, "_archive_sync_signature", None)
+        assert va.list_activities(limit=0) == []
+        after_restart = va.completion_rollup(tool="mnubergemm")
+        assert after_restart["by_tool"]["mnubergemm"]["completed_rack_count"] == 3
+
+    def test_completed_rollup_merges_fingerprinted_results_history(self, monkeypatch):
+        """Pre-registry NCCL/NeMo passes remain visible without synthetic activity rows."""
+        monkeypatch.setattr(
+            va.results_history,
+            "latest_successful_runs_by_rack",
+            lambda _kinds: {
+                "nccl": {
+                    "r01": {
+                        "run_id": "nccl-r01",
+                        "source_log_path": "/logs/cmods-NCCL-1Rack-r01-18N-1.txt",
+                        "started_at": "2026-08-17T01:00:00+00:00",
+                    }
+                },
+                "nemo": {
+                    "r01": {
+                        "run_id": "nemo-r01",
+                        "source_log_path": "/logs/cmods-NEMO-1Rack-r01-18N-2.txt",
+                        "started_at": "2026-08-17T02:00:00+00:00",
+                    }
+                },
+            },
+        )
+
+        rollup = va.completion_rollup(log_dir="/logs")
+
+        assert rollup["by_tool"]["nccl-fullrack"]["completed_rack_count"] == 1
+        assert rollup["by_tool"]["llmb-nemo-combined"]["completed_rack_count"] == 1
+        assert rollup["by_tool"]["nccl-fullrack"]["evidence_by_rack"]["r01"]["source"] == "results_history"
+
+    def test_open_activity_is_not_pruned_before_background_refresh(
+        self, isolated_activities_store, monkeypatch
+    ):
+        monkeypatch.setattr(va, "MAX_ACTIVITIES", 1)
+        open_id = va.record_activity(
+            "llmb-nemo-combined",
+            rack="r01",
+            tasks=[
+                {
+                    "task_id": "live",
+                    "ordinal": 1,
+                    "label": "nemo",
+                    "scheduler_ref": "99",
+                    "work_phase": "running",
+                }
+            ],
+        )
+        done_id = va.record_activity(
+            "mnubergemm",
+            rack="r02",
+            tasks=[
+                {
+                    "task_id": "done",
+                    "ordinal": 1,
+                    "label": "mnubergemm",
+                    "scheduler_ref": "100",
+                    "work_phase": "done",
+                }
+            ],
+        )
+        va.update_activity(done_id, phase="done", work_phase="done", returncode=0)
+        assert va.get_activity(open_id) is not None
 
 
 class TestTasks:
