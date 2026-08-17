@@ -5,7 +5,7 @@
 - Docker Engine 20.10+ (or Docker Desktop)
 - An SSH key pair that can reach your head node (BCM or MAAS)
 - The head node must be running `sshd` and have Slurm, cmsh/maas-cli, and pdsh available
-- The nvis-rack-status scripts must be deployed on the head node (see [Deploying Scripts](#deploying-scripts))
+- The nvis-rack-status scripts must be deployed on the head node (see [Deploying Scripts](#deploying-scripts-to-the-head-node))
 
 ## Quick Start (Demo Mode)
 
