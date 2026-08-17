@@ -101,6 +101,46 @@ class TestBuildSystemPrompt:
         prompt = ai_chat.build_system_prompt({}, custom_rules="Always answer in French")
         assert "Always answer in French" in prompt
 
+    def test_live_inventory_injected(self):
+        block = "Live cluster inventory: - Compute racks: 8 - Compute nodes: 144 - GPUs: 576"
+        prompt = ai_chat.build_system_prompt(
+            {"page": "singleRack", "rack": "bos01-b08", "live_inventory": block}
+        )
+        assert block in prompt
+
+    def test_live_inventory_absent_when_not_provided(self):
+        previous = ai_chat._live_inventory_provider
+        ai_chat.set_live_inventory_provider(None)
+        try:
+            prompt = ai_chat.build_system_prompt({"page": "dashboard"})
+            assert "Live cluster inventory" not in prompt
+        finally:
+            ai_chat.set_live_inventory_provider(previous)
+
+    def test_live_inventory_from_registered_provider(self):
+        """app.py registers the builder; the prompt must pick it up without the route passing it.
+
+        This is the wire that makes cluster-size questions answerable at all: with it dropped,
+        nothing raises -- the assistant just silently loses the deployed counts again.
+        """
+        previous = ai_chat._live_inventory_provider
+        ai_chat.set_live_inventory_provider(lambda: "Live cluster inventory: 5 racks, 90 nodes")
+        try:
+            prompt = ai_chat.build_system_prompt({"page": "dashboard"})
+            assert "5 racks, 90 nodes" in prompt
+        finally:
+            ai_chat.set_live_inventory_provider(previous)
+
+    def test_explicit_live_inventory_wins_over_provider(self):
+        previous = ai_chat._live_inventory_provider
+        ai_chat.set_live_inventory_provider(lambda: "from-provider")
+        try:
+            prompt = ai_chat.build_system_prompt({"live_inventory": "from-caller"})
+            assert "from-caller" in prompt
+            assert "from-provider" not in prompt
+        finally:
+            ai_chat.set_live_inventory_provider(previous)
+
 
 class TestDemoStreamResponse:
     def test_gpu_topic(self):

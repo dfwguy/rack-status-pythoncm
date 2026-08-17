@@ -145,6 +145,7 @@ except Exception as _nr_exc:  # pragma: no cover - defensive
     logging.getLogger(__name__).warning("node_report unavailable: %s", _nr_exc, exc_info=True)
 
 
+import ai_chat
 import app_version as _app_version_mod
 import core
 import host_exec
@@ -4922,6 +4923,88 @@ def _cached_rack_status_copy(log_dir: Path) -> dict | None:
         repository.configuration_generation(),
     )
     return dict(snapshot.payload) if snapshot is not None and snapshot.payload is not None else None
+
+
+def _ai_live_inventory_block() -> str:
+    """Compact live cluster-size facts for the AI prompt (cached snapshot only, no SSH).
+
+    The catalog deployment envelope only carries per-rack platform *geometry* (e.g. 72 GPUs/rack);
+    it cannot know how many racks are actually deployed. Here we derive the DEPLOYED size — compute
+    racks, Slurm nodes, GPUs — from the same cached ``/api/status`` snapshot the dashboard uses, by
+    summing each rack's ``sinfo`` cell (e.g. ``idle=17,drain=1`` -> 18). Returns "" when the snapshot
+    is empty or sinfo hasn't populated yet, so we never feed the model misleading zeros.
+    """
+    try:
+        base = _cached_rack_status_copy(_default_log_dir())
+    except Exception:
+        _logger.debug("_ai_live_inventory_block: ignoring error", exc_info=True)
+        base = None
+    if not isinstance(base, dict):
+        return ""
+    rows = [r for r in (base.get("rows") or []) if isinstance(r, dict)]
+    if not rows:
+        return ""
+
+    def _nodes_from_sinfo(cell: str) -> int:
+        cell = (cell or "").strip()
+        if not cell or cell in ("?", "-"):
+            return 0
+        total = 0
+        for part in cell.split(","):
+            if "=" in part:
+                try:
+                    total += int(part.split("=", 1)[1])
+                except ValueError:
+                    _logger.debug("_ai_live_inventory_block: unparsable sinfo part %r", part)
+        return total
+
+    compute_racks = 0
+    total_nodes = 0
+    for r in rows:
+        n = _nodes_from_sinfo(str(r.get("sinfo") or ""))
+        if n > 0:
+            compute_racks += 1
+            total_nodes += n
+    if total_nodes <= 0:
+        return ""  # sinfo not populated yet — avoid a misleading "0 nodes"
+
+    all_racks = len({str(r.get("rack") or "").strip() for r in rows if r.get("rack")})
+    gpus_per_node = _eget_int("GPUS_PER_NODE", 0) or _eget_int("RACK_CLUSTER_GPU_PER_TRAY", 0)
+    total_gpus = total_nodes * gpus_per_node if gpus_per_node else 0
+    summary = base.get("summary") if isinstance(base.get("summary"), dict) else {}
+    updated = base.get("updated_at")
+
+    lines = [
+        (
+            "Live cluster inventory (from the current rack-status snapshot — authoritative for "
+            "DEPLOYED size; sinfo-derived, not the naming-pattern capacity):"
+        )
+    ]
+    rack_line = f"- Compute racks (with Slurm nodes): {compute_racks}"
+    if all_racks and all_racks != compute_racks:
+        rack_line += f" ({all_racks} racks shown in the table, incl. non-compute switch/mgmt racks)"
+    lines.append(rack_line)
+    lines.append(f"- Compute nodes (Slurm): {total_nodes}")
+    if total_gpus:
+        lines.append(f"- GPUs: {total_gpus} ({total_nodes} nodes x {gpus_per_node} GPUs/node)")
+    if isinstance(summary, dict) and any(k in summary for k in ("done", "fail", "ongoing", "pending")):
+        lines.append(
+            f"- Validation progress (compute racks): done {int(summary.get('done', 0) or 0)}, "
+            f"fail {int(summary.get('fail', 0) or 0)}, ongoing {int(summary.get('ongoing', 0) or 0)}, "
+            f"pending {int(summary.get('pending', 0) or 0)}"
+        )
+    if updated:
+        lines.append(f"- Snapshot updated: {updated}")
+    lines.append(
+        "Use these deployed counts for cluster-size questions; do NOT infer the size from the "
+        "rack naming pattern (that is only naming capacity)."
+    )
+    return "\n".join(lines)
+
+
+# The snapshot cache lives here, so app.py is what can build the block; ai_chat only needs to be
+# able to call it. Registered once at import so every prompt builder gets it, not just /api/ai/chat.
+ai_chat.set_live_inventory_provider(_ai_live_inventory_block)
 
 
 def _ensure_rack_status_background_thread() -> None:

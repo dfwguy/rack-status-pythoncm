@@ -30,6 +30,8 @@ var/store/
 var/history/
 # Generated report archive (durable runtime data, never source).
 var/reports/
+# Runtime logs, including the agent tool-call audit trail (agent/audit.py)
+var/logs/
 
 # Generated reports kept for later download (report_store.py); operator artifacts, not source
 var/reports/

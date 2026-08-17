@@ -15,3 +15,6 @@ jsonschema>=4.23,<5
 # matplotlib + numpy — a fraction of the image size for the charts we actually draw.
 # Pulls in pillow transitively; reportlab imports PIL unconditionally.
 reportlab>=5.0,<6
+# Optional: MCP server facade (agent/mcp_server.py) for external agents (Cursor/Claude).
+# Only needed to run `python -m agent.mcp_server`; the in-app agent loop does not require it.
+mcp>=1.2,<2

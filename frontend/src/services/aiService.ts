@@ -31,83 +31,117 @@ export interface AISettings {
   system_rules: string;
 }
 
-export async function streamChat(
+/** A tool-loop event emitted by the agentic backend over SSE. */
+export interface ToolEvent {
+  type: "tool_call" | "tool_result" | "approval_required";
+  tool: string;
+  category?: string;
+  args?: Record<string, unknown>;
+  ok?: boolean;
+  summary?: string;
+  run_id?: string;
+  call_id?: string;
+}
+
+export interface StreamHandlers {
+  onChunk: (content: string) => void;
+  onEvent?: (ev: ToolEvent) => void;
+  onDone: () => void;
+  onError: (error: string) => void;
+}
+
+const TOOL_EVENT_TYPES = new Set(["tool_call", "tool_result", "approval_required"]);
+
+async function consumeSSE(response: Response, handlers: StreamHandlers): Promise<void> {
+  if (!response.ok) {
+    const text = await response.text();
+    try {
+      const json = JSON.parse(text);
+      handlers.onError(json.error || `HTTP ${response.status}`);
+    } catch {
+      handlers.onError(text || `HTTP ${response.status}`);
+    }
+    return;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) {
+    handlers.onError("No response body");
+    return;
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith("data: ")) continue;
+      const data = trimmed.slice(6);
+      if (data === "[DONE]") {
+        handlers.onDone();
+        return;
+      }
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.error) {
+          handlers.onError(parsed.error);
+          return;
+        }
+        if (typeof parsed.type === "string" && TOOL_EVENT_TYPES.has(parsed.type)) {
+          handlers.onEvent?.(parsed as ToolEvent);
+        } else if (parsed.content) {
+          handlers.onChunk(parsed.content);
+        }
+      } catch {
+        // skip malformed chunks
+      }
+    }
+  }
+  handlers.onDone();
+}
+
+export function streamChat(
   messages: ChatMessagePayload[],
   context: PageContext,
-  onChunk: (content: string) => void,
-  onDone: () => void,
-  onError: (error: string) => void,
-): Promise<AbortController> {
+  handlers: StreamHandlers,
+): AbortController {
   const controller = new AbortController();
-
   apiFetch("/api/ai/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages, context }),
     signal: controller.signal,
   })
-    .then(async (response) => {
-      if (!response.ok) {
-        const text = await response.text();
-        try {
-          const json = JSON.parse(text);
-          onError(json.error || `HTTP ${response.status}`);
-        } catch {
-          onError(text || `HTTP ${response.status}`);
-        }
-        return;
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) {
-        onError("No response body");
-        return;
-      }
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data: ")) continue;
-
-          const data = trimmed.slice(6);
-          if (data === "[DONE]") {
-            onDone();
-            return;
-          }
-
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.error) {
-              onError(parsed.error);
-              return;
-            }
-            if (parsed.content) {
-              onChunk(parsed.content);
-            }
-          } catch {
-            // skip malformed chunks
-          }
-        }
-      }
-
-      onDone();
-    })
+    .then((response) => consumeSSE(response, handlers))
     .catch((err) => {
-      if (err.name !== "AbortError") {
-        onError(err.message || "Stream failed");
-      }
+      if (err.name !== "AbortError") handlers.onError(err.message || "Stream failed");
     });
+  return controller;
+}
 
+export interface ResumeRequest {
+  run_id: string;
+  call_id: string;
+  decision: "approve" | "deny";
+  edited_args?: Record<string, unknown>;
+}
+
+/** Resume a paused agent turn after the user approves/denies a mutating action. */
+export function resumeChat(req: ResumeRequest, handlers: StreamHandlers): AbortController {
+  const controller = new AbortController();
+  apiFetch("/api/ai/chat/resume", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+    signal: controller.signal,
+  })
+    .then((response) => consumeSSE(response, handlers))
+    .catch((err) => {
+      if (err.name !== "AbortError") handlers.onError(err.message || "Stream failed");
+    });
   return controller;
 }
 

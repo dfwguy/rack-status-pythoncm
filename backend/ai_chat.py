@@ -21,7 +21,8 @@ import os
 import re
 import threading
 import time
-from collections.abc import Generator
+import uuid
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 import requests
@@ -181,6 +182,35 @@ def _deployment_envelope(context: dict) -> str:
         return ""
 
 
+_live_inventory_provider: Callable[[], str] | None = None
+
+
+def set_live_inventory_provider(fn: Callable[[], str] | None) -> None:
+    """Register the callable that returns the live cluster-inventory block.
+
+    A hook rather than an import: ``app`` imports this module, so reaching back for the
+    rack-status snapshot it owns would be a cycle. Registering it means every caller of
+    :func:`build_system_prompt` gets the deployed counts — the chat route, the agent loop and
+    workflow generation alike — instead of each one having to remember to pass them.
+    """
+    global _live_inventory_provider
+    _live_inventory_provider = fn
+
+
+def _live_inventory(context: dict) -> str:
+    """Live DEPLOYED cluster size (racks/nodes/GPUs), caller-supplied or from the provider."""
+    explicit = (context.get("live_inventory") or "").strip()
+    if explicit:
+        return explicit
+    if _live_inventory_provider is None:
+        return ""
+    try:
+        return (_live_inventory_provider() or "").strip()
+    except Exception:
+        _logger.debug("_live_inventory: ignoring error", exc_info=True)
+        return ""
+
+
 def build_system_prompt(context: dict, custom_rules: str = "") -> str:
     parts = [_SYSTEM_PROMPT_BASE]
 
@@ -192,6 +222,13 @@ def build_system_prompt(context: dict, custom_rules: str = "") -> str:
     envelope = _deployment_envelope(context)
     if envelope:
         parts.append(f"\n{envelope}")
+
+    # The envelope above carries per-rack platform GEOMETRY (e.g. 72 GPUs/rack) and cannot know
+    # how many racks are actually deployed. This block carries the real inventory, so cluster-size
+    # questions are answered from the snapshot instead of guessed from the naming pattern.
+    live_inventory = _live_inventory(context)
+    if live_inventory:
+        parts.append(f"\n{live_inventory}")
 
     # Page-aware context. The frontend normally pushes a rich, registry-derived
     # `additional_context`; when present it takes precedence. Otherwise fall back
@@ -405,6 +442,171 @@ def chat_completion(
     if last_error:
         raise last_error
     raise RuntimeError("Unknown error in chat_completion")
+
+
+# ---------------------------------------------------------------------------
+# Tool calling (for the agentic loop in agent/loop.py)
+# ---------------------------------------------------------------------------
+
+# Cache of endpoint::model -> supports native OpenAI tools. Avoids re-failing a
+# native call on every turn once we learn a model doesn't support it.
+_TOOLS_CAP: dict[str, bool] = {}
+
+_JSON_TOOL_INSTRUCTION = (
+    "You can call tools. To call a tool, reply with ONLY a single JSON object on its own "
+    'line: {"tool": "<name>", "args": { ... }}. Do not add prose around it. After you receive '
+    "a [tool_result:...] message you may call another tool or give your final answer as normal "
+    "prose (no JSON). Only call one tool at a time."
+)
+
+
+def _tools_mode() -> str:
+    m = (os.environ.get("RACK_AI_TOOLS_MODE") or "auto").strip().lower()
+    return m if m in ("auto", "native", "json", "off") else "auto"
+
+
+def _post_chat(config: dict, payload: dict) -> requests.Response:
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {config['api_key']}"}
+    return requests.post(config["endpoint"], json=payload, headers=headers, timeout=_LLM_TIMEOUT_S)
+
+
+def _parse_json_tool_directive(text: str) -> dict | None:
+    """Find the first ``{... "tool": ...}`` object in free text (JSON-fallback mode)."""
+    dec = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch != "{":
+            continue
+        try:
+            obj, _end = dec.raw_decode(text[i:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and obj.get("tool"):
+            args = obj.get("args")
+            return {
+                "id": f"call_{uuid.uuid4().hex[:8]}",
+                "name": str(obj["tool"]),
+                "args": args if isinstance(args, dict) else {},
+            }
+    return None
+
+
+def _native_tool_call(config: dict, messages: list[dict], tool_schemas: list[dict]) -> dict:
+    payload = {
+        "model": config["model"],
+        "messages": messages,
+        "temperature": _LLM_TEMPERATURE,
+        "max_tokens": _LLM_MAX_TOKENS,
+        "tools": tool_schemas,
+        "tool_choice": "auto",
+    }
+    resp = _post_chat(config, payload)
+    if resp.status_code != 200:
+        raise RuntimeError(f"LLM API returned {resp.status_code}: {resp.text[:300]}")
+    data = resp.json()
+    msg = (data.get("choices") or [{}])[0].get("message") or {}
+    raw_calls = msg.get("tool_calls") or []
+    tool_calls = []
+    for tc in raw_calls:
+        fn = tc.get("function") or {}
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        tool_calls.append({
+            "id": tc.get("id") or f"call_{uuid.uuid4().hex[:8]}",
+            "name": fn.get("name") or "",
+            "args": args if isinstance(args, dict) else {},
+        })
+    assistant_message: dict = {"role": "assistant", "content": msg.get("content") or ""}
+    if raw_calls:
+        assistant_message["tool_calls"] = raw_calls
+    content = _strip_think_blocks(msg.get("content") or "") if msg.get("content") else ""
+    return {
+        "content": content,
+        "tool_calls": tool_calls,
+        "assistant_message": assistant_message,
+        "mode": "native",
+    }
+
+
+def _json_tool_call(config: dict, messages: list[dict], tool_catalog_text: str) -> dict:
+    aug_sys = {
+        "role": "system",
+        "content": f"{_JSON_TOOL_INSTRUCTION}\n\nAvailable tools:\n{tool_catalog_text}",
+    }
+    if messages and messages[0].get("role") == "system":
+        aug = [messages[0], aug_sys, *messages[1:]]
+    else:
+        aug = [aug_sys, *messages]
+    payload = {
+        "model": config["model"],
+        "messages": aug,
+        "temperature": _LLM_TEMPERATURE,
+        "max_tokens": _LLM_MAX_TOKENS,
+    }
+    resp = _post_chat(config, payload)
+    if resp.status_code != 200:
+        raise RuntimeError(f"LLM API returned {resp.status_code}: {resp.text[:300]}")
+    data = resp.json()
+    text = _strip_think_blocks(
+        (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+    )
+    directive = _parse_json_tool_directive(text)
+    if directive:
+        return {
+            "content": "",
+            "tool_calls": [directive],
+            "assistant_message": {"role": "assistant", "content": text},
+            "mode": "json",
+        }
+    return {
+        "content": text,
+        "tool_calls": [],
+        "assistant_message": {"role": "assistant", "content": text},
+        "mode": "json",
+    }
+
+
+def chat_with_tools(messages: list[dict], tool_schemas: list[dict], tool_catalog_text: str) -> dict:
+    """One tool-aware LLM turn (non-streaming).
+
+    Returns ``{content, tool_calls[{id,name,args}], assistant_message, mode}``. Tries native
+    OpenAI tool-calling; falls back to a constrained JSON protocol for models/endpoints that
+    do not support ``tools`` (vLLM/Ollama variants, older NIM models).
+    """
+    config = _get_effective_config()
+    mode = _tools_mode()
+    if mode == "off":
+        text = chat_completion(messages)
+        return {
+            "content": text,
+            "tool_calls": [],
+            "assistant_message": {"role": "assistant", "content": text},
+            "mode": "off",
+        }
+
+    key = f"{config['endpoint']}::{config['model']}"
+    if mode in ("auto", "native") and _TOOLS_CAP.get(key, True):
+        try:
+            return _native_tool_call(config, messages, tool_schemas)
+        except RuntimeError as exc:
+            if mode == "native":
+                raise
+            se = str(exc).lower()
+            if any(tok in se for tok in ("400", "422", "tool", "function", "not support", "unsupported")):
+                _TOOLS_CAP[key] = False  # remember: this model can't do native tools
+            # fall through to JSON mode
+    return _json_tool_call(config, messages, tool_catalog_text)
+
+
+def tool_result_message(mode: str, call_id: str, name: str, result: dict) -> dict:
+    """Build the message that feeds a tool result back to the model (mode-appropriate)."""
+    payload = json.dumps(result, default=str)
+    if len(payload) > 6000:
+        payload = payload[:6000] + '…"}'
+    if mode == "native":
+        return {"role": "tool", "tool_call_id": call_id, "content": payload}
+    return {"role": "user", "content": f"[tool_result:{name}] {payload}"}
 
 
 # ---------------------------------------------------------------------------

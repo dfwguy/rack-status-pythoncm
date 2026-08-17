@@ -18,12 +18,34 @@
 import { createContext, useContext } from "react";
 import type { PageContext } from "../services/aiService";
 
+/** One tool the agent called during a turn, and how it resolved. */
+export interface ToolActivity {
+  tool: string;
+  category?: string;
+  args?: Record<string, unknown>;
+  ok?: boolean;
+  summary?: string;
+  status: "running" | "done";
+}
+
+/** A mutating action the agent wants to take, waiting on the operator's decision. */
+export interface PendingApproval {
+  run_id: string;
+  call_id: string;
+  tool: string;
+  category?: string;
+  args: Record<string, unknown>;
+  summary: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
   streaming?: boolean;
+  tools?: ToolActivity[];
+  approval?: PendingApproval | null;
 }
 
 export interface AIChatState {
@@ -38,6 +60,7 @@ export interface AIChatActions {
   sendMessage: (content: string) => void;
   clearHistory: () => void;
   stopStreaming: () => void;
+  resolveApproval: (messageId: string, decision: "approve" | "deny") => void;
   setOpen: (open: boolean) => void;
   setMinimized: (minimized: boolean) => void;
   setPageContext: (ctx: PageContext) => void;

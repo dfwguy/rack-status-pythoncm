@@ -88,23 +88,25 @@ export default function WorkflowAIGenerator({ open, onClose, onGenerated }: Work
     let accumulated = "";
 
     try {
-      const controller = await streamChat(
+      const controller = streamChat(
         [
           { role: "assistant", content: SYSTEM_INSTRUCTION },
           { role: "user", content: `Generate a Mermaid flowchart for the following workflow. Output ONLY the mermaid code starting with "graph TD", nothing else:\n\n${description.trim()}` },
         ],
         { page: "workflows" },
-        (chunk) => {
-          accumulated += chunk;
-          setPreview(extractMermaid(accumulated));
-        },
-        () => {
-          setGenerating(false);
-          setPreview(extractMermaid(accumulated));
-        },
-        (err) => {
-          setError(err);
-          setGenerating(false);
+        {
+          onChunk: (chunk: string) => {
+            accumulated += chunk;
+            setPreview(extractMermaid(accumulated));
+          },
+          onDone: () => {
+            setGenerating(false);
+            setPreview(extractMermaid(accumulated));
+          },
+          onError: (err: string) => {
+            setError(err);
+            setGenerating(false);
+          },
         },
       );
 
