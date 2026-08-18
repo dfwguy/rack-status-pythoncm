@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 import app as app_module
+from api import validation_runs
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "bin" / "scripts"
@@ -21,16 +22,16 @@ SCRIPTS = REPO / "bin" / "scripts"
 
 def test_container_workflow_prepares_exact_nodes(monkeypatch, tmp_path):
     nodes = ["ink50-dh01-d01-11", "ink50-dh01-d01-12"]
-    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
-    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
-    monkeypatch.setattr(app_module, "_all_slurm_nodenames", lambda: nodes)
+    monkeypatch.setattr(validation_runs, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(validation_runs, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(validation_runs, "_all_slurm_nodenames", lambda: nodes)
     monkeypatch.setattr(
-        app_module,
+        validation_runs,
         "_validation_node_eligibility",
         lambda raw: ({node: "idle" for node in raw}, []),
     )
     with app_module.app.app_context():
-        prep, err = app_module._prepare_run_llmb_nccl({
+        prep, err = validation_runs._prepare_run_llmb_nccl({
             "workflow": "llmb-container-24test",
             "nodes": nodes,
             "log_dir": str(tmp_path),
@@ -56,16 +57,16 @@ def test_container_workflow_prepares_exact_nodes(monkeypatch, tmp_path):
 
 def test_container_workflow_rejects_non_idle_exact_target(monkeypatch, tmp_path):
     node = "ink50-dh01-d01-11"
-    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
-    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
-    monkeypatch.setattr(app_module, "_all_slurm_nodenames", lambda: [node])
+    monkeypatch.setattr(validation_runs, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(validation_runs, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(validation_runs, "_all_slurm_nodenames", lambda: [node])
     monkeypatch.setattr(
-        app_module,
+        validation_runs,
         "_validation_node_eligibility",
         lambda _raw: ({node: "drained"}, [f"{node}=drained"]),
     )
     with app_module.app.app_context():
-        prep, err = app_module._prepare_run_llmb_nccl({
+        prep, err = validation_runs._prepare_run_llmb_nccl({
             "workflow": "container", "nodes": [node], "log_dir": str(tmp_path),
         })
     assert prep is None

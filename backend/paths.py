@@ -199,3 +199,66 @@ def _bug_report_remote_dir() -> str:
 
 def _bug_report_local_base_path() -> Path:
     return _rpath(Path(_bug_report_remote_dir()))
+
+
+# The validation-tool scripts. Same shape as the resolvers above and grouped with them so a site that
+# relocates one script finds every resolver in one file. The settings page lists all of these, which is
+# why they were shared with app.py's settings route rather than private to the launcher.
+
+
+def _validation_script_path() -> Path:
+    p = _eget("RACK_VALIDATION_SCRIPT", str(SCRIPTS_DIR / "run_singlerack.sh")) or str(
+        SCRIPTS_DIR / "run_singlerack.sh"
+    )
+    return _rpath(Path(p))
+
+
+def _mnubergemm_stress_script_path() -> Path:
+    p = _eget("RACK_MNUBERGEMM_STRESS_SCRIPT", str(SCRIPTS_DIR / "run_mnubergemm_stress.sh")) or str(
+        SCRIPTS_DIR / "run_mnubergemm_stress.sh"
+    )
+    return _rpath(Path(p))
+
+
+def _nvloom_singlerack_script_path() -> Path:
+    p = _eget("RACK_NVLOOM_SINGLERACK_SCRIPT", str(SCRIPTS_DIR / "run_nvloom_singlerack.sh")) or str(
+        SCRIPTS_DIR / "run_nvloom_singlerack.sh"
+    )
+    return _rpath(Path(p))
+
+
+def _clusterkit_script_path() -> Path:
+    p = _eget("RACK_CLUSTERKIT_SCRIPT", str(SCRIPTS_DIR / "run_clusterkit.sh")) or str(SCRIPTS_DIR / "run_clusterkit.sh")
+    return _rpath(Path(p))
+
+
+def _run_llmb_nccl_script_path() -> Path:
+    p = _eget("RACK_LLMB_NCCL_SCRIPT", str(SCRIPTS_DIR / "run_llmb_nccl.sh")) or str(SCRIPTS_DIR / "run_llmb_nccl.sh")
+    return _rpath(Path(p))
+
+
+def _run_nccl_mpi_script_path() -> Path:
+    """Direct-NCCL launcher: resolves racks → nodes → submits nccl_allreduce.sbatch
+    (host nccl-tests + mpirun over IB; no llmb-run/container/UCX-verbs guesswork)."""
+    p = _eget("RACK_NCCL_MPI_SCRIPT", str(SCRIPTS_DIR / "run_nccl_mpi.sh")) or str(SCRIPTS_DIR / "run_nccl_mpi.sh")
+    return _rpath(Path(p))
+
+
+def _nemo_xrack_script_path() -> Path:
+    p = _eget("RACK_NEMO_XRACK_SCRIPT", str(SCRIPTS_DIR / "run-nemo-xrack.sh")) or str(
+        SCRIPTS_DIR / "run-nemo-xrack.sh"
+    )
+    return _rpath(Path(p))
+
+
+def _run_llama_script_path() -> Path:
+    p = _eget("RACK_LLAMA_SCRIPT", str(SCRIPTS_DIR / "run-llama.sh")) or str(SCRIPTS_DIR / "run-llama.sh")
+    return _rpath(Path(p))
+
+
+def _run_exemplar_llama_script_path() -> Path:
+    p = _eget(
+        "RACK_EXEMPLAR_LLAMA_SCRIPT",
+        str(SCRIPTS_DIR / "run-exemplar-llama.sh"),
+    ) or str(SCRIPTS_DIR / "run-exemplar-llama.sh")
+    return _rpath(Path(p))

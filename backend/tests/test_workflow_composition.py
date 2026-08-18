@@ -586,8 +586,8 @@ class TestFanoutStep:
         with tempfile.TemporaryDirectory() as tmp:
             we = self._engine(tmp)
             cap = self._patch_fanout(monkeypatch, "OK\n")
-            import app
-            monkeypatch.setattr(app, "validation_target_for_rack",
+            import workflow_engine as _we
+            monkeypatch.setattr(_we, "validation_target_for_rack",
                                 lambda rack, override=None: "bos01-b05-11,bos01-b05-12")
             wf = {"id": "forack", "name": "forack", "steps": [{
                 "id": "s", "type": "automated", "name": "s",
@@ -643,8 +643,8 @@ class TestResolveStep:
                 return [transport.NodeResult(n, "OK\n", "", 0) for n in nodes]
 
             monkeypatch.setattr(transport, "fanout", fake_fanout)
-            import app
-            monkeypatch.setattr(app, "validation_target_for_rack",
+            import workflow_engine as _we
+            monkeypatch.setattr(_we, "validation_target_for_rack",
                                 lambda rack, override=None: "n1,n2,n3" if rack else "")
             wf = {"id": "res", "name": "res", "continue_on_failure": True, "steps": [
                 {"id": "resolve", "type": "automated", "name": "resolve",
@@ -661,8 +661,8 @@ class TestResolveStep:
     def test_resolve_multi_rack_concats_dedup(self, monkeypatch):
         with tempfile.TemporaryDirectory() as tmp:
             we = self._engine(tmp)
-            import app
-            monkeypatch.setattr(app, "validation_target_for_rack",
+            import workflow_engine as _we
+            monkeypatch.setattr(_we, "validation_target_for_rack",
                                 lambda rack, override=None: {"a": "n1,n2", "b": "n2,n3"}.get(rack, ""))
             wf = {"id": "resm", "name": "resm", "steps": [
                 {"id": "resolve", "type": "automated", "name": "resolve",
@@ -675,7 +675,7 @@ class TestResolveStep:
     def test_resolve_single_rack_preserves_exact_selected_nodes(self, monkeypatch):
         with tempfile.TemporaryDirectory() as tmp:
             we = self._engine(tmp)
-            import app
+            import workflow_engine as _we
 
             calls = []
 
@@ -683,7 +683,7 @@ class TestResolveStep:
                 calls.append((rack, override))
                 return override or "n1,n2,n3"
 
-            monkeypatch.setattr(app, "validation_target_for_rack", resolve)
+            monkeypatch.setattr(_we, "validation_target_for_rack", resolve)
             wf = {"id": "ress", "name": "ress", "steps": [
                 {"id": "resolve", "type": "automated", "name": "resolve",
                  "resolve": {"racks": "${rack}", "into": "nodelist"}},
@@ -700,8 +700,8 @@ class TestResolveStep:
     def test_resolve_no_nodes_fails(self, monkeypatch):
         with tempfile.TemporaryDirectory() as tmp:
             we = self._engine(tmp)
-            import app
-            monkeypatch.setattr(app, "validation_target_for_rack", lambda rack, override=None: "")
+            import workflow_engine as _we
+            monkeypatch.setattr(_we, "validation_target_for_rack", lambda rack, override=None: "")
             wf = {"id": "resn", "name": "resn", "steps": [
                 {"id": "resolve", "type": "automated", "name": "resolve", "resolve": {"racks": "${rack}"}},
             ]}

@@ -27,6 +27,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+import job_registry
 import workflow_engine
 
 from .tools import AgentTool, register
@@ -300,12 +301,15 @@ def register_all() -> None:
             jid = str(a.get("job_id", "")).strip()
             if not jid:
                 return {"ok": False, "error": "job_id is required"}
+            # Straight from job_registry, not through _app: these are shared objects that module owns,
+            # and reaching them via app only worked while app happened to re-export them. It stopped
+            # working the moment the launch routes moved and the unused imports went with them.
             registries = [
-                (_app._reset_jobs_lock, _app._reset_jobs),
-                (_app._validation_jobs_lock, _app._validation_jobs),
-                (_app._stress_jobs_lock, _app._stress_jobs),
-                (_app._xrack_jobs_lock, _app._xrack_jobs),
-                (_app._llama_jobs_lock, _app._llama_jobs),
+                (job_registry._reset_jobs_lock, job_registry._reset_jobs),
+                (job_registry._validation_jobs_lock, job_registry._validation_jobs),
+                (job_registry._stress_jobs_lock, job_registry._stress_jobs),
+                (job_registry._xrack_jobs_lock, job_registry._xrack_jobs),
+                (job_registry._llama_jobs_lock, job_registry._llama_jobs),
             ]
             for lock, jobs in registries:
                 with lock:

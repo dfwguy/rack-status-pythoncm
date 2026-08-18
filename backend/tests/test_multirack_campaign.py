@@ -20,6 +20,7 @@ os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 # The launch component moved to validation_launch.py; patch/call the owning module.
 import app as app_module
+from api import validation_runs
 import validation_launch
 import naming as naming_mod  # noqa: E402
 import nvis_id_templates as nid
@@ -38,7 +39,7 @@ def _campaign_env(monkeypatch, manifest: Path) -> None:
         "RACK_MULTIRACK_CAMPAIGN_MANIFEST": f"local:{manifest}",
         "RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK": "2",
     }
-    original_eget = app_module._eget
+    original_eget = validation_runs._eget
     monkeypatch.setattr(validation_launch, "_eget", lambda key, default=None: values.get(key, original_eget(key, default)))
     monkeypatch.setattr(validation_launch, "_eget_int", lambda key, default: int(values.get(key, default)))
     monkeypatch.setattr(validation_launch, "_nvis_naming", _naming)
@@ -57,7 +58,7 @@ ink50-dh01-d01-99|drained
 ink50-dh01-d02-11|idle
 ink50-dh01-d02-12|drained*"""
     monkeypatch.setattr(
-        app_module.host_exec,
+        validation_runs.host_exec,
         "run_slurm_on_host",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, sinfo, ""),
     )
@@ -79,7 +80,7 @@ ink50-dh01-d02-12|drained*"""
 def test_llmb_campaign_launch_passes_exact_nodelist(monkeypatch, tmp_path):
     exact = ["ink50-dh01-d01-11", "ink50-dh01-d01-12"]
     monkeypatch.setattr(
-        app_module,
+        validation_runs,
         "_multirack_campaign_snapshot",
         lambda: {
             "ok": True,
@@ -90,12 +91,12 @@ def test_llmb_campaign_launch_passes_exact_nodelist(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(validation_launch, "_nvis_naming", _naming)
     monkeypatch.setattr(naming_mod, "_nvis_naming", _naming)
-    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
-    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
-    monkeypatch.setattr(app_module, "_truthy_env", lambda _name: True)
+    monkeypatch.setattr(validation_runs, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(validation_runs, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(validation_runs, "_truthy_env", lambda _name: True)
 
     with app_module.app.app_context():
-        prepared, err = app_module._prepare_run_llmb_nccl(
+        prepared, err = validation_runs._prepare_run_llmb_nccl(
             {"racks": ["ink50-dh01-d01"], "campaign": "test-campaign", "dry_run": True}
         )
 
@@ -109,7 +110,7 @@ def test_llmb_campaign_launch_passes_exact_nodelist(monkeypatch, tmp_path):
 
 def test_llmb_campaign_launch_rejects_ineligible_rack(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        app_module,
+        validation_runs,
         "_multirack_campaign_snapshot",
         lambda: {
             "ok": True,
@@ -125,10 +126,10 @@ def test_llmb_campaign_launch_rejects_ineligible_rack(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(validation_launch, "_nvis_naming", _naming)
     monkeypatch.setattr(naming_mod, "_nvis_naming", _naming)
-    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(validation_runs, "_resolve_log_dir", lambda _raw=None: tmp_path)
 
     with app_module.app.app_context():
-        prepared, err = app_module._prepare_run_llmb_nccl({"racks": ["ink50-dh01-d01"]})
+        prepared, err = validation_runs._prepare_run_llmb_nccl({"racks": ["ink50-dh01-d01"]})
 
     assert prepared is None
     assert err is not None

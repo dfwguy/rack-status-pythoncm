@@ -31,6 +31,7 @@ os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module  # noqa: E402
+from api import validation_runs  # noqa: E402
 import naming as naming_mod  # noqa: E402
 import nvis_id_templates as nid  # noqa: E402
 
@@ -55,12 +56,12 @@ def prepare(monkeypatch, tmp_path):
 
     def _run(rack_tmpl: str, ct_tmpl: str, racks: list[str], ct_range: str = "01-18") -> str:
         naming = nid.get_nvis_naming(rack_tmpl, ct_tmpl)
-        monkeypatch.setattr(app_module, "_nvis_naming", lambda: naming)
+        monkeypatch.setattr(validation_runs, "_nvis_naming", lambda: naming)
         monkeypatch.setattr(naming_mod, "_nvis_naming", lambda: naming)
-        monkeypatch.setattr(app_module, "_validation_ct_inner", lambda: ct_range)
+        monkeypatch.setattr(validation_runs, "_validation_ct_inner", lambda: ct_range)
         # The script lives on the exec host in SSH mode; here just let the path check pass.
-        monkeypatch.setattr(app_module, "_script_exists", lambda _p: True)
-        prepared, err = app_module._prepare_run_nemo_xrack(
+        monkeypatch.setattr(validation_runs, "_script_exists", lambda _p: True)
+        prepared, err = validation_runs._prepare_run_nemo_xrack(
             {"racks": racks, "log_dir": str(tmp_path)}
         )
         assert err is None, f"prepare returned an error: {err}"
@@ -120,11 +121,14 @@ def test_the_spec_agrees_with_ct_blob(prepare):
 
 
 def test_prepare_does_not_hardcode_the_ct_joiner():
-    body = (BACKEND / "app.py").read_text(encoding="utf-8")
-    m = re.search(r"def _prepare_run_nemo_xrack\(.*?\n(?=^def )", body, re.S | re.M)
-    assert m, "_prepare_run_nemo_xrack not found"
+    # Read the source through inspect rather than a named file: this guard used to grep app.py, which
+    # meant moving the function to api/validation_runs.py made a structural check silently stop
+    # checking anything. inspect follows the function wherever it lives next.
+    import inspect
+
+    source = inspect.getsource(validation_runs._prepare_run_nemo_xrack)
     # Only executable lines: the docstring and comments legitimately mention the broken -ct form.
-    code = [ln for ln in m.group(0).splitlines() if not ln.lstrip().startswith("#")]
+    code = [ln for ln in source.splitlines() if not ln.lstrip().startswith("#")]
     for ln in code:
         assert not re.search(r'["\']\{?\w*\}?-ct\[', ln), f"the -ct literal is back: {ln.strip()}"
     assert "ct_blob" in "\n".join(code), "the spec must come from the naming helper"

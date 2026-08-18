@@ -30,6 +30,8 @@ import host_exec
 import rack_locks
 import workflow_models
 import yaml
+from node_targets import validation_target_for_rack
+from slurm_admin import _run_scontrol_node_update
 
 _logger = logging.getLogger(__name__)
 
@@ -810,7 +812,6 @@ def _execute_resolve_step(run: dict, step: dict) -> tuple[bool, str]:
 
     all_nodes: list[str] = []
     try:
-        import app as _app
         racks = [r for r in re.split(r"[,\s]+", racks_raw) if r]
         if racks:
             for rk in racks:
@@ -818,11 +819,11 @@ def _execute_resolve_step(run: dict, step: dict) -> tuple[bool, str]:
                 # override. Preserve it. A multi-rack launch cannot safely apply one
                 # rack's override to every rack, so resolve each full rack instead.
                 override = target if len(racks) == 1 and target else None
-                nl = _app.validation_target_for_rack(rk, override) or ""
+                nl = validation_target_for_rack(rk, override) or ""
                 all_nodes += [n for n in re.split(r"[,\s]+", nl) if n]
         elif target:
             # explicit hostlist/target override (no rack) — resolve/trust as-is
-            nl = _app.validation_target_for_rack("", target) or target
+            nl = validation_target_for_rack("", target) or target
             all_nodes += [n for n in re.split(r"[,\s]+", nl) if n]
     except Exception as exc:
         _logger.debug("_execute_resolve_step: ignoring error", exc_info=True)
@@ -1054,8 +1055,7 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
         nodes_raw = params.get("nodelist") or ""
     if not nodes_raw and (params.get("rack") or params.get("target")):
         try:
-            import app as _app
-            nodes_raw = _app.validation_target_for_rack(
+            nodes_raw = validation_target_for_rack(
                 params.get("rack") or "", params.get("target") or None,
             ) or ""
         except Exception:
@@ -1287,9 +1287,8 @@ def _apply_node_issue_policy(
             drain_text = "automatic drain disabled"
             if drain_confirmed and node:
                 try:
-                    import app as _app
 
-                    result_obj = _app._run_scontrol_node_update(
+                    result_obj = _run_scontrol_node_update(
                         node, ["state=drain", f"reason={slurm_reason}"]
                     )
                     drain_ok = bool(result_obj.get("ok"))
@@ -1426,9 +1425,8 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
     params.setdefault("scripts_dir", _scripts_dir())
     if params.get("rack") and not params.get("nodelist"):
         try:
-            import app as _app
 
-            _nl = _app.validation_target_for_rack(params["rack"], params.get("target") or None)
+            _nl = validation_target_for_rack(params["rack"], params.get("target") or None)
             if _nl:
                 params["nodelist"] = _nl
                 params.setdefault("target", _nl)
@@ -1565,12 +1563,11 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
             # (e.g. bos01-b05-11-s1-dgx-05-c01) instead of the -ct[NN] naming template
             # (bos01-b05-ct01), which is not a real hostname on every site.
             try:
-                import app as _app
 
                 # Only honor a *plain* host-list override; a range template (…-ct[NN])
                 # is the buggy default and must not defeat inventory resolution.
                 override = target if (target and "[" not in target) else None
-                target = _app.validation_target_for_rack(rack_for_target, override)
+                target = validation_target_for_rack(rack_for_target, override)
             except Exception as exc:
                 _logger.warning(
                     "Workflow %s step %s: node-target resolution failed (%s); using CT template",

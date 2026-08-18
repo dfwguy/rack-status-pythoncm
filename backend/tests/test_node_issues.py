@@ -8,9 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 import json
-import sys
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import node_issues
 import workflow_engine
@@ -91,7 +89,6 @@ def test_invalidated_validator_run_is_retained_but_excluded(tmp_path, monkeypatc
 def test_confirmed_workflow_failure_comments_drains_and_records(tmp_path, monkeypatch):
     monkeypatch.setattr(node_issues, "ISSUES_FILE", tmp_path / "issues.json")
     drain = MagicMock(return_value={"ok": True, "stdout": "updated"})
-    fake_app = SimpleNamespace(_run_scontrol_node_update=drain)
     payload = {
         "schema": 1,
         "kind": "network",
@@ -113,8 +110,8 @@ def test_confirmed_workflow_failure_comments_drains_and_records(tmp_path, monkey
         "params": {"rack": "ink50-dh01-h08"},
     }
     step = {"issue_policy": {"category": "network", "drain_confirmed": True}}
-    with patch.dict(sys.modules, {"app": fake_app}):
-        summary, output = workflow_engine._apply_node_issue_policy(run, step, [result])
+    monkeypatch.setattr(workflow_engine, "_run_scontrol_node_update", drain)
+    summary, output = workflow_engine._apply_node_issue_policy(run, step, [result])
 
     assert summary["failed"] == 1
     assert summary["drained"] == 1
@@ -147,7 +144,6 @@ def test_exact_node_slurm_prolog_failure_is_recorded_and_drained_without_mass_dr
 ):
     monkeypatch.setattr(node_issues, "ISSUES_FILE", tmp_path / "issues.json")
     drain = MagicMock(return_value={"ok": True, "stdout": "updated"})
-    fake_app = SimpleNamespace(_run_scontrol_node_update=drain)
     stderr = (
         "srun: Prolog failure on node ink50-dh01-d01-11\n"
         "srun: error: Nodes ink50-dh01-d01-11 are still not ready\n"
@@ -166,8 +162,8 @@ def test_exact_node_slurm_prolog_failure_is_recorded_and_drained_without_mass_dr
     }
     step = {"issue_policy": {"category": "hardware", "drain_confirmed": True}}
 
-    with patch.dict(sys.modules, {"app": fake_app}):
-        summary, output = workflow_engine._apply_node_issue_policy(run, step, results)
+    monkeypatch.setattr(workflow_engine, "_run_scontrol_node_update", drain)
+    summary, output = workflow_engine._apply_node_issue_policy(run, step, results)
 
     assert summary["failed"] == 1
     assert summary["inconclusive"] == 1

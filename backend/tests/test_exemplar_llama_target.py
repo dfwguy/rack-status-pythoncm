@@ -18,6 +18,7 @@ os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
+from api import validation_runs
 import naming as naming_mod  # noqa: E402
 import nvis_id_templates as nid
 
@@ -32,10 +33,10 @@ def _prepare(monkeypatch, body: dict):
         "ink50-dh01-[a-z][\\d+]",
         "ink50-dh01-[a-z][\\d+]-[\\d+]",
     )
-    monkeypatch.setattr(app_module, "_nvis_naming", lambda: naming)
+    monkeypatch.setattr(validation_runs, "_nvis_naming", lambda: naming)
     monkeypatch.setattr(naming_mod, "_nvis_naming", lambda: naming)
-    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
-    original_eget = app_module._eget
+    monkeypatch.setattr(validation_runs, "_script_exists", lambda _path: True)
+    original_eget = validation_runs._eget
 
     def fake_eget(key: str, default: str | None = None):
         if key == "RACK_EXEMPLAR_LLAMA_CT_RANGE":
@@ -44,9 +45,9 @@ def _prepare(monkeypatch, body: dict):
             return "/home/cmods/workspace/llmb"
         return original_eget(key, default)
 
-    monkeypatch.setattr(app_module, "_eget", fake_eget)
+    monkeypatch.setattr(validation_runs, "_eget", fake_eget)
     with app_module.app.app_context():
-        return app_module._prepare_run_exemplar_llama(body)
+        return validation_runs._prepare_run_exemplar_llama(body)
 
 
 def test_exact_eight_rack_target_is_512_gpu_subset(monkeypatch):

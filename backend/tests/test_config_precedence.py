@@ -27,7 +27,7 @@ import json
 
 import pytest
 
-import app as A  # noqa: F401 - imported so the readers are exercised exactly as the app has them
+import app as A  # noqa: F401 - imported so the app's own overlay materialisation has run
 import config_env as C
 
 KEY = "RACK_VALIDATION_CT_RANGE"  # a real Settings-managed key, so allow-list filtering applies
@@ -189,34 +189,34 @@ class TestSubprocessEnv:
     def test_layer_order_low_env_overrides_high_updates(self, store, monkeypatch):
         monkeypatch.setenv(KEY, "env")
         store.low[KEY] = "low"
-        out = A._subprocess_env()
+        out = C._subprocess_env()
         assert out[KEY] == "env"
         store.write_overrides({KEY: "ov"})
-        assert A._subprocess_env()[KEY] == "ov"
+        assert C._subprocess_env()[KEY] == "ov"
         store.high[KEY] = "high"
-        assert A._subprocess_env()[KEY] == "high"
-        assert A._subprocess_env({KEY: "call"})[KEY] == "call"
+        assert C._subprocess_env()[KEY] == "high"
+        assert C._subprocess_env({KEY: "call"})[KEY] == "call"
 
     def test_process_env_is_carried_through(self, store, monkeypatch):
         monkeypatch.setenv("SOME_UNMANAGED_VAR", "kept")
-        assert A._subprocess_env()["SOME_UNMANAGED_VAR"] == "kept"
+        assert C._subprocess_env()["SOME_UNMANAGED_VAR"] == "kept"
 
     def test_validation_test_defaults_when_unset(self, store, monkeypatch):
         monkeypatch.delenv("VALIDATION_TEST", raising=False)
-        assert A._subprocess_env()["VALIDATION_TEST"] == "nccl_all_reduce,llm"
+        assert C._subprocess_env()["VALIDATION_TEST"] == "nccl_all_reduce,llm"
 
     def test_validation_test_default_is_overridable_by_the_caller(self, store, monkeypatch):
         monkeypatch.delenv("VALIDATION_TEST", raising=False)
-        out = A._subprocess_env(validation_test_if_unset="nccl_all_reduce")
+        out = C._subprocess_env(validation_test_if_unset="nccl_all_reduce")
         assert out["VALIDATION_TEST"] == "nccl_all_reduce"
 
     def test_an_explicit_validation_test_is_not_replaced(self, store, monkeypatch):
         monkeypatch.setenv("VALIDATION_TEST", "chosen")
-        assert A._subprocess_env()["VALIDATION_TEST"] == "chosen"
+        assert C._subprocess_env()["VALIDATION_TEST"] == "chosen"
 
     def test_a_blank_validation_test_is_treated_as_unset(self, store, monkeypatch):
         monkeypatch.setenv("VALIDATION_TEST", "   ")
-        assert A._subprocess_env()["VALIDATION_TEST"] == "nccl_all_reduce,llm"
+        assert C._subprocess_env()["VALIDATION_TEST"] == "nccl_all_reduce,llm"
 
 
 class TestOverridesStore:
@@ -262,4 +262,4 @@ class TestCatalogUnavailable:
         monkeypatch.setattr(C, "catalog_context", _Boom)
         monkeypatch.setenv(KEY, "from-env")
         assert A._eget(KEY) == "from-env"
-        assert A._subprocess_env()[KEY] == "from-env"
+        assert C._subprocess_env()[KEY] == "from-env"

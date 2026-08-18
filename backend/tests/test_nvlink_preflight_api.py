@@ -26,6 +26,7 @@ os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
+from api import fabric_ops
 
 READY = """\
 n01: ### nvlink_preflight n01 (quick=0) ###
@@ -90,7 +91,7 @@ def stub_pdsh(monkeypatch):
         )
 
     monkeypatch.setattr(app_module.host_exec, "run_on_host", _run)
-    monkeypatch.setattr(app_module, "_script_exists", lambda _p: True)
+    monkeypatch.setattr(fabric_ops, "_script_exists", lambda _p: True)
     # Keep the target deterministic regardless of the active naming/geometry.
     monkeypatch.setattr(app_module, "_expand_pdsh_w_slurm_nodenames", lambda w: w)
     return seen
