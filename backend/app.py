@@ -196,7 +196,6 @@ from paths import (
     _REMOTE_BASE,
     DEFAULT_SCRIPT,
     SCRIPTS_DIR,
-    _allowed_roots,
     _default_log_dir,
     _resolve_log_dir,
     _script_exists,
@@ -1660,11 +1659,20 @@ _truthy_env = core.truthy_env
 _SLURM_STDOUT_RE = core.SLURM_STDOUT_RE
 _slurm_job_base_id = core.slurm_job_base_id
 from app_clients import _app_client_ttl_sec, _touch_app_client
-from slurm_admin import _run_scancel, _run_scontrol_node_update
+from node_targets import (
+    _CT_RANGE_INNER_RE,
+    _expand_pdsh_w_slurm_nodenames,
+    _scontrol_hostnames_preserving_case,
+    _validation_ct_inner,
+    validation_target_for_rack,
+)
+from slurm_admin import _run_scontrol_node_update
 from slurm_query import (
     _all_slurm_nodenames,
     _dedupe_hostnames_preserve_spelling,
     _rack_node_hostnames_from_inventory,
+    _resolve_slurm_job_stdout_path,
+    _run_scontrol_show_job,
     _run_squeue,
 )
 from stream_exec import _merged_stdout_stream_generator, _translate_cwd_for_remote
@@ -2501,68 +2509,10 @@ def _parser_secondary_stages(stage_paths: dict[str, Path], primary: Path) -> lis
     return out
 
 
-def _scontrol_hostnames_preserving_case(nodespec: str) -> list[str]:
-    """Hostnames from ``scontrol show hostnames``, one per line, preserving Slurm ``NodeName`` spelling."""
-    nodespec = nodespec.strip()
-    if not nodespec or nodespec.lower() in ("none", "null"):
-        return []
-    proc = host_exec.run_slurm_on_host(
-        _get_platform().scontrol_hostnames_cmd(nodespec),
-        timeout=max(30, _env_int("RACK_SCONTROL_HOSTNAMES_TIMEOUT", 120)),
-    )
-    if proc.returncode != 0:
-        return []
-    return [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
 
 
-def _split_pdsh_w_top_level_commas(w: str) -> list[str]:
-    """Split a pdsh ``-w`` comma list without splitting commas inside ``[…]`` host ranges."""
-    w = (w or "").strip()
-    if not w:
-        return []
-    out: list[str] = []
-    depth = 0
-    cur: list[str] = []
-    for ch in w:
-        if ch == "[":
-            depth += 1
-            cur.append(ch)
-        elif ch == "]":
-            depth = max(0, depth - 1)
-            cur.append(ch)
-        elif ch == "," and depth == 0:
-            s = "".join(cur).strip()
-            if s:
-                out.append(s)
-            cur = []
-        else:
-            cur.append(ch)
-    tail = "".join(cur).strip()
-    if tail:
-        out.append(tail)
-    return out
 
 
-def _expand_pdsh_w_slurm_nodenames(w: str) -> str:
-    """Expand each Slurm nodeset fragment via ``scontrol show hostnames`` so pdsh uses NodeName casing.
-
-    pdsh bracket expansion can lower-case host tokens, which breaks ssh/DNS on some sites. When Slurm
-    expansion fails for a fragment, the original fragment is kept. Set ``RACK_PDSH_W_SKIP_SLURM_EXPAND``
-    to skip this step entirely.
-    """
-    w = (w or "").strip()
-    if not w:
-        return w
-    if os.environ.get("RACK_PDSH_W_SKIP_SLURM_EXPAND", "").strip().lower() in ("1", "true", "yes"):
-        return w
-    parts_out: list[str] = []
-    for seg in _split_pdsh_w_top_level_commas(w):
-        hosts = _scontrol_hostnames_preserving_case(seg)
-        if hosts:
-            parts_out.extend(hosts)
-        else:
-            parts_out.append(seg)
-    return ",".join(parts_out)
 
 
 def _hostnames_for_slurm_job(job_raw: str | None) -> tuple[list[str], str]:
@@ -3300,14 +3250,8 @@ def _grafana_live_5m_embed_context(
     }
 
 
-_CT_RANGE_INNER_RE = re.compile(r"^[0-9,\-]+$")
 
 
-def _validation_ct_inner() -> str:
-    s = (_eget("RACK_VALIDATION_CT_RANGE", "01-18") or "").strip()
-    if not s or not _CT_RANGE_INNER_RE.match(s):
-        return "01-18"
-    return s
 
 
 # The single path resolver, shared with paths.py and the api/ modules rather than redeclared:
@@ -3545,53 +3489,6 @@ def _normalize_llama_nodes_spec(raw: object) -> str:
     return t
 
 
-def validation_target_for_rack(rack: str, override: str | None) -> str:
-    """Build the node target for run_singlerack.sh / sysinfo / pdsh.
-
-    Override precedence:
-
-    1. An override that is a **plain comma-list of real node hostnames** (no ``[`` range
-       syntax) is honored as an explicit node selection — e.g. the UI sends the selected
-       trays directly when the site's hostnames don't fold into ``<rack><joiner>[NN]``
-       (Boston: ``bos01-b07-11-s1-dgx-07-c01``). The list is intersected with live Slurm
-       inventory for the rack when available (drops typos / foreign hosts); if inventory
-       is unavailable the tokens are trusted as-is.
-    2. An override in ``<rack><joiner>[ranges]`` template form is validated/normalized by
-       the naming schema.
-    3. With no override, the target is the **full rack** from live Slurm inventory (real
-       ``NodeName`` values), falling back to the ``NVIS_*`` template when inventory is
-       unavailable. Set ``RACK_TARGET_FROM_INVENTORY=0`` to force the template path.
-    """
-    ov = (override or "").strip()
-    inventory_on = (
-        os.environ.get("RACK_TARGET_FROM_INVENTORY", "1").strip().lower()
-        not in ("0", "false", "no", "off")
-    )
-    if ov and "[" not in ov:
-        # Plain (non-range) override → treat as an explicit hostname selection.
-        tokens = [t.strip() for t in ov.split(",") if t.strip()]
-        if tokens:
-            inv = _rack_node_hostnames_from_inventory(rack) if inventory_on else []
-            if inv:
-                inv_cf = {h.casefold(): h for h in inv}
-                chosen = [inv_cf[t.casefold()] for t in tokens if t.casefold() in inv_cf]
-                if chosen:
-                    # de-dup, preserve request order
-                    seen: set[str] = set()
-                    out = [h for h in chosen if not (h in seen or seen.add(h))]
-                    return ",".join(out)
-                # None matched inventory: fall through to template validation so a bad
-                # override surfaces as an error instead of silently targeting the rack.
-            else:
-                # Inventory unavailable — trust the explicit hostname tokens.
-                return ",".join(tokens)
-    if not ov and inventory_on:
-        hosts = _rack_node_hostnames_from_inventory(rack)
-        if hosts:
-            return ",".join(hosts)
-    return _nvis_naming().build_validation_target(
-        rack, _validation_ct_inner(), override
-    )
 
 
 def _host_job_cwd(log_dir: Path) -> str:
@@ -7638,442 +7535,34 @@ def api_rack_uptime():
     return jsonify(result)
 
 
-_SLURM_DRAIN_REASON_RE = re.compile(r"^[A-Za-z0-9 _.,:/()\-]{1,256}$")
 # last_job / scancel: plain id or job array id (e.g. 12345_0)
 _SLURM_SCANCEL_JOB_ID_RE = core.SLURM_JOB_ID_RE  # one definition, in core
 
 
-def _slurm_nodename_target_from_body(body: dict) -> tuple[str | None, str | None]:
-    """Parse rack (+ optional target) into Slurm nodename=… value; (None, err) on error."""
-    rack = (body.get("rack") or "").strip()
-    if not rack:
-        return None, "rack is required"
-    tgt_ov = body.get("target")
-    if tgt_ov is not None and not isinstance(tgt_ov, str):
-        return None, "target must be a string"
-    try:
-        target = validation_target_for_rack(rack, tgt_ov if isinstance(tgt_ov, str) else None)
-    except ValueError as e:
-        return None, str(e)
-    return target, None
 
 
-@app.route("/api/slurm-drain", methods=["POST"])
-def api_slurm_drain():
-    """POST JSON {\"rack\": \"p34-r07\"} — ``module load`` then scontrol update nodename=… drain."""
-    if os.environ.get("RACK_SLURM_NODES_STATE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
-        return jsonify({"ok": False, "error": "Slurm drain/undrain disabled (RACK_SLURM_NODES_STATE_DISABLED)"}), 403
-    body = request.get_json(silent=True) or {}
-    target, err = _slurm_nodename_target_from_body(body)
-    if err:
-        return jsonify({"ok": False, "error": err}), 400
-    raw_reason = body.get("reason")
-    if raw_reason is not None and not isinstance(raw_reason, str):
-        return jsonify({"ok": False, "error": "reason must be a string"}), 400
-    r = (raw_reason if isinstance(raw_reason, str) else "").strip()
-    if not r:
-        r = (_eget("RACK_SLURM_DRAIN_REASON") or "admin").strip() or "admin"
-    if not _SLURM_DRAIN_REASON_RE.fullmatch(r):
-        return jsonify(
-            {
-                "ok": False,
-                "error": "invalid reason (1–256 chars: letters, digits, space, _.,:/()- only)",
-            }
-        ), 400
-    rk_for_lock = (body.get("rack") or "").strip()
-    try:
-        with _track_sync_op(rk_for_lock, "slurm_drain", _operator_from_request()):
-            result = _run_scontrol_node_update(target, ["state=drain", f"reason={r}"])
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    ok = bool(result.get("ok"))
-    payload: dict = {"ok": ok, "rack": _normalize_rack_id((body.get("rack") or "").strip()), "target": target, **result}
-    if ok:
-        payload["message"] = f"Undrain (state=resume) applied to {len(target.split(','))} node(s)."
-    else:
-        err = f"{result.get('stderr') or ''} {result.get('stdout') or ''}".strip()
-        # Say WHAT went wrong, not just "see stdout/stderr" — the operator cannot act on that.
-        if "Invalid node state" in err:
-            payload["error"] = (
-                "scontrol rejected the state change — usually because none of these nodes are "
-                "drained or down, so there is nothing to undrain. Check Slurm state first "
-                "(sinfo -R). No change was made.")
-        elif "Invalid node name" in err:
-            payload["error"] = "scontrol did not recognise one or more node names. No change was made."
-        elif "Access/permission denied" in err or "Invalid user" in err:
-            payload["error"] = "scontrol denied the update — the service account lacks Slurm operator rights."
-        else:
-            payload["error"] = f"scontrol update failed: {err[:300] or 'no output'}"
-    return jsonify(payload), (200 if ok else 502)
 
 
-@app.route("/api/slurm-undrain", methods=["POST"])
-def api_slurm_undrain():
-    """POST JSON {\"rack\": \"p34-r07\"} — ``module load`` then scontrol update nodename=… state=idle."""
-    if os.environ.get("RACK_SLURM_NODES_STATE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
-        return jsonify({"ok": False, "error": "Slurm drain/undrain disabled (RACK_SLURM_NODES_STATE_DISABLED)"}), 403
-    body = request.get_json(silent=True) or {}
-    target, err = _slurm_nodename_target_from_body(body)
-    if err:
-        return jsonify({"ok": False, "error": err}), 400
-    rk_for_lock = (body.get("rack") or "").strip()
-    rk_norm = _normalize_rack_id((body.get("rack") or "").strip())
-
-    # Ask Slurm WHICH of these nodes is actually drained/down before touching anything.
-    # Slurm rejects BOTH `state=idle` and `state=resume` with "Invalid node state specified" when
-    # the target set contains no drained/down node — an operator clicking Undrain on a healthy rack
-    # got a red "scontrol update failed" that looked like a broken cluster. Nothing was ever wrong.
-    drained: list[str] = []
-    state_err = ""
-    try:
-        # Resolve `sinfo` through the platform layer, exactly as _run_sinfo_r() does. A
-        # bare `sinfo` is not enough: a site may set RACK_SLURM_SKIP_MODULE_LOAD=1 and pin
-        # RACK_SLURM_SINFO to an absolute path, leaving nothing to put it on PATH. The
-        # probe then died with "sinfo: command not found" and its empty stdout read as
-        # "no drained nodes", so Undrain returned a green 200 having done nothing.
-        plat = _get_platform()
-        probe = host_exec.run_slurm_on_host(
-            plat.sinfo_cmd(f"-h -N -o '%N %t' -n {shlex.quote(target)}"),
-            timeout=max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120)),
-        )
-        # A probe that FAILED is not evidence that every node is healthy. Treat a
-        # non-zero return as unknown and fall through to the update below, rather than
-        # reporting "nothing to undrain" -- a check that cannot read its input must
-        # never report a healthy state.
-        if probe.returncode != 0:
-            state_err = (
-                f"sinfo probe failed (rc={probe.returncode}): "
-                f"{(probe.stderr or '').strip()[:200]}"
-            )
-        for line in (probe.stdout or "").splitlines():
-            parts = line.split()
-            if len(parts) >= 2 and any(
-                k in parts[1].lower() for k in ("drain", "down", "fail", "inval")
-            ):
-                drained.append(parts[0])
-    except Exception as e:  # noqa: BLE001 - fall through to the plain update
-        state_err = str(e)
-
-    if not drained and not state_err:
-        # Nothing to do, and saying so is the honest answer — not an error.
-        return jsonify({
-            "ok": True, "rack": rk_norm, "target": target, "changed": 0,
-            "message": (
-                f"Nothing to undrain — all {len(target.split(','))} node(s) are already "
-                "schedulable (no drain/down state). No change was made."
-            ),
-        }), 200
-
-    apply_to = ",".join(drained) if drained else target
-    try:
-        with _track_sync_op(rk_for_lock, "slurm_undrain", _operator_from_request()):
-            # `state=resume` is the canonical verb for returning a DOWN/DRAINED node to service.
-            result = _run_scontrol_node_update(apply_to, ["state=resume"])
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-    ok = bool(result.get("ok"))
-    payload: dict = {"ok": ok, "rack": rk_norm, "target": apply_to,
-                     "changed": len(drained), **result}
-    if ok:
-        payload["message"] = (
-            f"Undrained {len(drained) or 'all targeted'} node(s): {apply_to[:200]}")
-    else:
-        err = f"{result.get('stderr') or ''} {result.get('stdout') or ''}".strip()
-        if "Invalid node state" in err:
-            payload["error"] = ("Slurm rejected the state change — none of these nodes are "
-                                "drained or down. No change was made.")
-        elif "Invalid node name" in err:
-            payload["error"] = "Slurm did not recognise one or more node names. No change was made."
-        elif "denied" in err.lower():
-            payload["error"] = "Slurm denied the update — the service account lacks operator rights."
-        else:
-            payload["error"] = f"scontrol update failed: {err[:300] or 'no output'}"
-    return jsonify(payload), (200 if ok else 502)
 
 
 # Terminal (finished) job states — what the Scheduler "recent jobs" panel shows so a
 # job that has left squeue (success OR failure) is still visible with its log.
 
 
-def _slurm_job_log_path(job_id: str, log_dir: Path) -> tuple[str, str]:
-    """Resolve a finished job's stdout path: ``scontrol`` ``StdOut=`` (jobs still within
-    MinJobAge), else glob the dashboard log dir for the launcher's ``*_<jid>.out`` /
-    ``*-<jid>.txt`` (for jobs that have aged out of the controller)."""
-    jid = _slurm_job_base_id(job_id) or ""
-    if not jid:
-        return "", "invalid"
-    try:
-        r = _run_scontrol_show_job(jid)
-        if r.get("ok"):
-            m = _SLURM_STDOUT_RE.search(str(r.get("stdout") or ""))
-            if m:
-                p = m.group(1).strip()
-                if p and p.lower() not in ("(null)", "/dev/null", "none", "(none)"):
-                    return p, "scontrol"
-    except (ValueError, OSError):
-        pass
-    d = str(log_dir).rstrip("/")
-    if d:
-        listing = (
-            f"ls -1t {shlex.quote(d)}/*[_-]{jid}.out {shlex.quote(d)}/*[_-]{jid}.txt "
-            f"{shlex.quote(d)}/*-{jid}.out {shlex.quote(d)}/slurm-{jid}.out 2>/dev/null | head -1"
-        )
-        try:
-            proc = host_exec.run_on_host(listing, timeout=max(5, _env_int("RACK_SLURM_LOGFIND_TIMEOUT", 20)))
-            lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
-            if lines:
-                return lines[0], "logdir"
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    return "", "not_found"
 
 
-@app.route("/api/slurm-job-log-path", methods=["GET"])
-def api_slurm_job_log_path():
-    """Resolve a finished job's stdout log path (for the Recent-jobs 'open log' action)."""
-    job_id = (request.args.get("job_id") or "").strip()
-    if not _slurm_job_base_id(job_id):
-        return jsonify({"ok": False, "error": "job_id must be a Slurm job id"}), 400
-    try:
-        log_dir = _resolve_log_dir((request.args.get("log_dir") or "").strip() or None)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    try:
-        path, source = _slurm_job_log_path(job_id, log_dir)
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    if not path:
-        return jsonify(
-            {"ok": False, "error": f"no stdout log found for job {job_id} (aged out of scontrol; no matching file under log_dir)"}
-        ), 404
-    return jsonify({"ok": True, "job_id": _slurm_job_base_id(job_id), "path": path, "source": source})
 
 
-@app.route("/api/slurm-scancel", methods=["POST"])
-def api_slurm_scancel():
-    """POST JSON ``{\"job_id\": \"…\"}`` — ``module load`` then ``scancel`` (optional ``rack`` for context only)."""
-    if os.environ.get("RACK_SLURM_SCANCEL_DISABLED", "").strip().lower() in ("1", "true", "yes"):
-        return jsonify({"ok": False, "error": "scancel disabled (RACK_SLURM_SCANCEL_DISABLED)"}), 403
-    body = request.get_json(silent=True) or {}
-    raw_jid = body.get("job_id")
-    if isinstance(raw_jid, int):
-        jid = str(raw_jid).strip()
-    elif isinstance(raw_jid, str):
-        jid = raw_jid.strip()
-    else:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    if not jid:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
-        return jsonify(
-            {
-                "ok": False,
-                "error": "job_id must be a Slurm job id (digits, optional _TASK for arrays)",
-            }
-        ), 400
-    rack_raw = (body.get("rack") or "").strip()
-    rack_norm = None
-    if rack_raw:
-        try:
-            rack_norm = _normalize_rack_id(rack_raw)
-        except ValueError:
-            rack_norm = rack_raw
-    try:
-        with _track_sync_op(rack_raw, "slurm_scancel", _operator_from_request()):
-            result = _run_scancel(jid)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    ok = bool(result.get("ok"))
-    payload: dict = {"ok": ok, "job_id": jid, **result}
-    if rack_norm:
-        payload["rack"] = rack_norm
-    if not ok:
-        payload["error"] = "scancel failed (see stdout/stderr)"
-    return jsonify(payload), (200 if ok else 502)
 
 
-def _run_scontrol_show_job(job_id: str) -> dict:
-    """Run ``scontrol show job JOBID`` after optional ``module load`` (same env as *scancel*)."""
-    jid = (job_id or "").strip()
-    if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
-        raise ValueError("job_id must be a Slurm job id (digits, optional _TASK for arrays)")
-    plat = _get_platform()
-    tail = " ".join(shlex.quote(a) for a in ["show", "job", jid])
-    shell_cmd = plat.scontrol_cmd(tail)
-    cmd_display = shell_cmd
-    timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
-    try:
-        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
-    except FileNotFoundError:
-        raise OSError(
-            "scontrol executable not found; set RACK_SLURM_SCONTROL to the full path "
-            "or ensure module load is available"
-        ) from None
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"timeout after {timeout}s",
-            "command_display": cmd_display,
-        }
-    ok = proc.returncode == 0
-    return {
-        "ok": ok,
-        "returncode": proc.returncode,
-        "stdout": (proc.stdout or "").strip(),
-        "stderr": (proc.stderr or "").strip(),
-        "command_display": cmd_display,
-    }
 
 
-def _resolve_slurm_job_stdout_path(path_raw: str, log_dir_raw: str | None) -> Path:
-    """Resolve Slurm ``StdOut=`` path for read APIs; must be a file under allowed roots or dashboard log_dir."""
-    raw = (path_raw or "").strip()
-    if not raw or ".." in raw or "://" in raw:
-        raise ValueError("invalid path")
-    p = _rpath(Path(raw))
-    # Asked of the execution host, which is where the file lives. Checking locally
-    # was the bug behind "path does not exist" on Scheduler → open log.
-    if not host_exec.is_file(p):
-        raise ValueError("path does not exist")
-    roots = _allowed_roots()
-    if roots:
-        ok = any(str(p).startswith(str(r) + os.sep) or p == r for r in roots)
-        if not ok:
-            raise ValueError("job stdout path must be under RACK_STATUS_ALLOWED_PREFIXES")
-        return p
-    # NB: do NOT call .resolve() on the roots here. _resolve_log_dir / _default_log_dir
-    # already return correctly-formed paths per mode (resolved locally, left as-is on the
-    # remote host in SSH mode), and `p` came through _resolve_path with the same policy.
-    # Re-resolving in SSH mode rewrites a remote "/home/cmods/..." path into the local
-    # macOS firmlink "/System/Volumes/Data/home/cmods/...", so the prefix check fails even
-    # when the stdout file genuinely lives under log_dir.
-    if log_dir_raw and str(log_dir_raw).strip():
-        try:
-            log_root = _resolve_log_dir(str(log_dir_raw).strip())
-            p.relative_to(log_root)
-            return p
-        except ValueError:
-            pass
-    try:
-        p.relative_to(_default_log_dir())
-        return p
-    except ValueError as e:
-        raise ValueError(
-            "job stdout path must be under the dashboard log directory (log_dir) or "
-            "RACK_STATUS_DEFAULT_LOG_DIR, or configure RACK_STATUS_ALLOWED_PREFIXES"
-        ) from e
 
 
-@app.route("/api/slurm-scontrol-show-job", methods=["GET"])
-def api_slurm_scontrol_show_job():
-    """``GET ?job_id=`` — ``module load`` then ``scontrol show job JOBID`` (dashboard host)."""
-    if os.environ.get("RACK_SLURM_SCONTROL_SHOW_JOB_DISABLED", "").strip().lower() in ("1", "true", "yes"):
-        return jsonify({"ok": False, "error": "disabled (RACK_SLURM_SCONTROL_SHOW_JOB_DISABLED)"}), 403
-    jid = (request.args.get("job_id") or "").strip()
-    if not jid:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
-        return jsonify(
-            {
-                "ok": False,
-                "error": "job_id must be a Slurm job id (digits, optional _TASK for arrays)",
-            }
-        ), 400
-    try:
-        result = _run_scontrol_show_job(jid)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    ok = bool(result.get("ok"))
-    payload: dict = {"ok": ok, "job_id": jid, **result}
-    if not ok:
-        payload["error"] = "scontrol show job failed (see stdout/stderr)"
-    return jsonify(payload), (200 if ok else 502)
 
 
-@app.route("/api/slurm-job-stdout-content", methods=["GET"])
-def api_slurm_job_stdout_content():
-    """``GET ?path=&log_dir=`` — read job stdout file if path is allowed (from ``scontrol show job``)."""
-    path_raw = (request.args.get("path") or "").strip()
-    if not path_raw:
-        return jsonify({"ok": False, "error": "path is required"}), 400
-    try:
-        lp = _resolve_slurm_job_stdout_path(path_raw, request.args.get("log_dir"))
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    max_inline = max(0, _env_int("RACK_LOG_INLINE_MAX_BYTES", 10 * 1024 * 1024))
-    # The stdout file lives on the execution host, so size and content must be asked
-    # of the connection. Calling Path.stat()/read_bytes() here read the container's
-    # own filesystem and raised AttributeError on the remote PurePosixPath.
-    st = host_exec.stat(lp)
-    if st is None:
-        return jsonify({"ok": False, "error": "path does not exist"}), 404
-    sz = int(st.size)
-    if sz > max_inline:
-        return jsonify(
-            {
-                "ok": True,
-                "too_large": True,
-                "size_bytes": sz,
-                "filename": lp.name,
-                "max_inline_bytes": max_inline,
-                "download_hint": "Use GET /api/slurm-job-stdout-download with the same query parameters.",
-            }
-        )
-    text, _meta = host_exec.read_text(lp, whole_bytes=max_inline)
-    return jsonify(
-        {
-            "ok": True,
-            "too_large": False,
-            "size_bytes": sz,
-            "filename": lp.name,
-            "path": str(lp),
-            "content": text,
-        }
-    )
 
 
-@app.route("/api/slurm-job-stdout-download", methods=["GET"])
-def api_slurm_job_stdout_download():
-    """Download job stdout file (same path rules as ``/api/slurm-job-stdout-content``)."""
-    path_raw = (request.args.get("path") or "").strip()
-    if not path_raw:
-        return jsonify({"ok": False, "error": "path is required"}), 400
-    try:
-        lp = _resolve_slurm_job_stdout_path(path_raw, request.args.get("log_dir"))
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    if not host_exec.is_file(lp):
-        return jsonify({"ok": False, "error": "not a file"}), 404
-    if not isinstance(lp, Path):
-        # Remote (ssh mode): the file is on the execution host, so send_file() cannot
-        # reach it. Same transfer as api_rack_log_download().
-        cp = host_exec.run_on_host(f"base64 -w0 {shlex.quote(str(lp))}")
-        if cp.returncode != 0 or not (cp.stdout or "").strip():
-            return jsonify(
-                {"ok": False, "error": f"cannot read remote log: {lp} {(cp.stderr or '').strip()}"}
-            ), 404
-        try:
-            blob = base64.b64decode((cp.stdout or "").strip())
-        except ValueError as e:  # binascii.Error subclasses ValueError
-            return jsonify({"ok": False, "error": f"decode failed: {e}"}), 500
-        resp = app.response_class(blob, mimetype="text/plain; charset=utf-8")
-        resp.headers["Content-Disposition"] = f'attachment; filename="{lp.name}"'
-        resp.headers["Cache-Control"] = "no-store"
-        return resp
-    return send_file(
-        str(lp),
-        as_attachment=True,
-        download_name=lp.name,
-        mimetype="text/plain; charset=utf-8",
-        max_age=0,
-    )
 
 
 def _rack_log_resolve(

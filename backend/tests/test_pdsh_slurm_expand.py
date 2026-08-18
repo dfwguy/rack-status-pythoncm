@@ -17,7 +17,8 @@ import pytest
 
 
 def test_split_pdsh_w_top_level_commas():
-    from app import _split_pdsh_w_top_level_commas
+    # Lives in node_targets.py since the rack-id -> node-target logic moved out of app.py.
+    from node_targets import _split_pdsh_w_top_level_commas
 
     assert _split_pdsh_w_top_level_commas("") == []
     assert _split_pdsh_w_top_level_commas("  ") == []
@@ -29,7 +30,7 @@ def test_split_pdsh_w_top_level_commas():
 
 
 def test_expand_pdsh_w_slurm_nodenames_skip_env():
-    from app import _expand_pdsh_w_slurm_nodenames
+    from node_targets import _expand_pdsh_w_slurm_nodenames
 
     raw = "CBR01-DH01-SVR-CN0102[01],rack[02]"
     with mock.patch.dict(os.environ, {"RACK_PDSH_W_SKIP_SLURM_EXPAND": "1"}, clear=False):
@@ -44,7 +45,7 @@ def test_expand_pdsh_w_slurm_nodenames_skip_env():
     ],
 )
 def test_expand_pdsh_w_slurm_nodenames_uses_scontrol(monkeypatch, slurm_out, expected):
-    from app import _expand_pdsh_w_slurm_nodenames
+    from node_targets import _expand_pdsh_w_slurm_nodenames
 
     def fake_run(cmd: str, *, timeout: int = 120):
         class P:
@@ -58,7 +59,7 @@ def test_expand_pdsh_w_slurm_nodenames_uses_scontrol(monkeypatch, slurm_out, exp
 
 
 def test_expand_pdsh_w_slurm_nodenames_fallback_on_scontrol_fail():
-    from app import _expand_pdsh_w_slurm_nodenames
+    from node_targets import _expand_pdsh_w_slurm_nodenames
 
     def fail(_cmd: str, *, timeout: int = 120):
         class P:

@@ -21,15 +21,21 @@ reportable condition the UI shows, not a 500. A timeout reports the budget it sp
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 import host_exec
 from config_env import _eget, _env_int
+from core import SLURM_JOB_ID_RE, SLURM_STDOUT_RE
+from core import rpath as _rpath
 from core import slurm_job_base_id as _slurm_job_base_id
+from core import slurm_job_base_id as core_slurm_job_base_id
+from paths import _allowed_roots, _default_log_dir, _resolve_log_dir
 from platforms import get_platform as _get_platform
 
 _SACCT_FIELD_ORDER = (
@@ -243,3 +249,111 @@ def _run_sacct_recent(limit: int = 10, state: str = "COMPLETED") -> dict:
         "stdout": (proc.stdout or "").strip(), "stderr": (proc.stderr or "").strip(),
         "command_display": shell_cmd, "jobs": jobs,
     }
+
+
+# --- job stdout resolution (reads; the write side is slurm_admin.py) ---------------
+def _slurm_job_log_path(job_id: str, log_dir: Path) -> tuple[str, str]:
+    """Resolve a finished job's stdout path: ``scontrol`` ``StdOut=`` (jobs still within
+    MinJobAge), else glob the dashboard log dir for the launcher's ``*_<jid>.out`` /
+    ``*-<jid>.txt`` (for jobs that have aged out of the controller)."""
+    jid = core_slurm_job_base_id(job_id) or ""
+    if not jid:
+        return "", "invalid"
+    try:
+        r = _run_scontrol_show_job(jid)
+        if r.get("ok"):
+            m = SLURM_STDOUT_RE.search(str(r.get("stdout") or ""))
+            if m:
+                p = m.group(1).strip()
+                if p and p.lower() not in ("(null)", "/dev/null", "none", "(none)"):
+                    return p, "scontrol"
+    except (ValueError, OSError):
+        pass
+    d = str(log_dir).rstrip("/")
+    if d:
+        listing = (
+            f"ls -1t {shlex.quote(d)}/*[_-]{jid}.out {shlex.quote(d)}/*[_-]{jid}.txt "
+            f"{shlex.quote(d)}/*-{jid}.out {shlex.quote(d)}/slurm-{jid}.out 2>/dev/null | head -1"
+        )
+        try:
+            proc = host_exec.run_on_host(listing, timeout=max(5, _env_int("RACK_SLURM_LOGFIND_TIMEOUT", 20)))
+            lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+            if lines:
+                return lines[0], "logdir"
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return "", "not_found"
+
+
+def _run_scontrol_show_job(job_id: str) -> dict:
+    """Run ``scontrol show job JOBID`` after optional ``module load`` (same env as *scancel*)."""
+    jid = (job_id or "").strip()
+    if not SLURM_JOB_ID_RE.fullmatch(jid):
+        raise ValueError("job_id must be a Slurm job id (digits, optional _TASK for arrays)")
+    plat = _get_platform()
+    tail = " ".join(shlex.quote(a) for a in ["show", "job", jid])
+    shell_cmd = plat.scontrol_cmd(tail)
+    cmd_display = shell_cmd
+    timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
+    try:
+        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
+    except FileNotFoundError:
+        raise OSError(
+            "scontrol executable not found; set RACK_SLURM_SCONTROL to the full path "
+            "or ensure module load is available"
+        ) from None
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": f"timeout after {timeout}s",
+            "command_display": cmd_display,
+        }
+    ok = proc.returncode == 0
+    return {
+        "ok": ok,
+        "returncode": proc.returncode,
+        "stdout": (proc.stdout or "").strip(),
+        "stderr": (proc.stderr or "").strip(),
+        "command_display": cmd_display,
+    }
+
+
+def _resolve_slurm_job_stdout_path(path_raw: str, log_dir_raw: str | None) -> Path:
+    """Resolve Slurm ``StdOut=`` path for read APIs; must be a file under allowed roots or dashboard log_dir."""
+    raw = (path_raw or "").strip()
+    if not raw or ".." in raw or "://" in raw:
+        raise ValueError("invalid path")
+    p = _rpath(Path(raw))
+    # Asked of the execution host, which is where the file lives. Checking locally
+    # was the bug behind "path does not exist" on Scheduler → open log.
+    if not host_exec.is_file(p):
+        raise ValueError("path does not exist")
+    roots = _allowed_roots()
+    if roots:
+        ok = any(str(p).startswith(str(r) + os.sep) or p == r for r in roots)
+        if not ok:
+            raise ValueError("job stdout path must be under RACK_STATUS_ALLOWED_PREFIXES")
+        return p
+    # NB: do NOT call .resolve() on the roots here. _resolve_log_dir / _default_log_dir
+    # already return correctly-formed paths per mode (resolved locally, left as-is on the
+    # remote host in SSH mode), and `p` came through _resolve_path with the same policy.
+    # Re-resolving in SSH mode rewrites a remote "/home/cmods/..." path into the local
+    # macOS firmlink "/System/Volumes/Data/home/cmods/...", so the prefix check fails even
+    # when the stdout file genuinely lives under log_dir.
+    if log_dir_raw and str(log_dir_raw).strip():
+        try:
+            log_root = _resolve_log_dir(str(log_dir_raw).strip())
+            p.relative_to(log_root)
+            return p
+        except ValueError:
+            pass
+    try:
+        p.relative_to(_default_log_dir())
+        return p
+    except ValueError as e:
+        raise ValueError(
+            "job stdout path must be under the dashboard log directory (log_dir) or "
+            "RACK_STATUS_DEFAULT_LOG_DIR, or configure RACK_STATUS_ALLOWED_PREFIXES"
+        ) from e
