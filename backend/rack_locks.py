@@ -40,6 +40,8 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
+import config_env
+
 _logger = logging.getLogger(__name__)
 
 APP_DIR = Path(__file__).resolve().parent
@@ -66,10 +68,11 @@ RACK_ID_RE = re.compile(r"^p[0-9]+-r[0-9]+$", re.IGNORECASE)
 
 
 def _env_int(key: str, default: int) -> int:
-    try:
-        return int(str(os.environ.get(key, "")).strip())
-    except (TypeError, ValueError):
-        return default
+    """No validity rule: the one caller floors the result itself (``max(60, ...)``).
+
+    One implementation, in ``config_env``.
+    """
+    return config_env.env_int(key, default)
 
 
 def rack_lock_max_age_sec() -> int:

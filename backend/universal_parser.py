@@ -93,6 +93,8 @@ from collections import OrderedDict
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+import config_env
+
 _logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -135,11 +137,13 @@ STATUSES = ("pass", "fail", "timeout", "running", "unknown")
 # tunables (env-overridable so the container can be retuned without an image rebuild)
 # --------------------------------------------------------------------------------------
 def _env_int(name: str, default: int) -> int:
-    try:
-        v = int(str(os.environ.get(name, "")).strip())
-    except (TypeError, ValueError):
-        return default
-    return v if v > 0 else default
+    """Read sizes and caps: zero is as meaningless as negative here, so both fall back.
+
+    One implementation, in ``config_env``. This module's call sites are bare -- no outer ``max()`` --
+    so the rule is load-bearing: ``NVIS_UP_HEAD_BYTES=0`` must read the normal 2 MB rather than
+    nothing at all.
+    """
+    return config_env.env_int(name, default, min_valid=1)
 
 
 DEFAULT_HEAD_BYTES = _env_int("NVIS_UP_HEAD_BYTES", 2 * 1024 * 1024)

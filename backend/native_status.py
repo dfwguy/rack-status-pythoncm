@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import config_env
 import host_exec
 import nvis_id_templates as _nvis_ids
 import results_history
@@ -320,11 +321,13 @@ def _condense_tray_tokens(nums_s: str) -> str:
 _MULTIRACK_LOG_JSON = _REPO_ROOT / "var" / "cache" / "native_multirack_log_analysis.json"
 
 def _env_int(name: str, default: int) -> int:
-    try:
-        v = int((os.environ.get(name) or "").strip())
-        return v if v >= 0 else default
-    except ValueError:
-        return default
+    """Timeouts and byte budgets: a negative value is operator error, so fall back to the default.
+
+    One implementation, in ``config_env``; this states the policy this module wants. Every call site
+    here also floors the result (``max(30, _env_int(..., 120))``), so the rule only decides what a
+    negative setting means -- the documented default rather than the floor.
+    """
+    return config_env.env_int(name, default, min_valid=0)
 
 
 # Log-basename classification lives in nvis_id_templates so this module, app.py and the shell

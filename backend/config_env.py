@@ -960,14 +960,41 @@ def _subprocess_env(
         d = (validation_test_if_unset or "nccl_all_reduce,llm").strip() or "nccl_all_reduce,llm"
         out["VALIDATION_TEST"] = d
     return out
-def _env_int(name: str, default: int) -> int:
+def env_int(name: str, default: int, *, min_valid: int | None = None) -> int:
+    """One integer knob from the process environment, with the caller's validity rule.
+
+    Reads ``os.environ`` directly and does NOT consult the catalog overlays -- for a knob that should
+    follow the active cluster, use :func:`_eget_int`.
+
+    ``min_valid`` is the parameter that replaced four near-identical copies of this function. They had
+    three different policies (accept anything / reject negatives / reject zero and negatives), so the
+    same knob validated differently depending on which module read it. Stating the rule at the call
+    site makes it reviewable:
+
+    * ``min_valid=None`` -- any integer is honoured. For knobs whose callers clamp themselves, which
+      most do (``max(30, env_int("...", 120))``).
+    * ``min_valid=0`` -- a negative value is operator error, not an instruction.
+    * ``min_valid=1`` -- zero is meaningless too, e.g. a read size of 0 bytes.
+
+    Below ``min_valid`` the value is treated as UNSET and *default* is returned -- deliberately not
+    clamped to the bound. ``NVIS_UP_HEAD_BYTES=-1`` should read the normal 2 MB, not 0 bytes; clamping
+    would silently turn a typo into a different, still-wrong setting.
+    """
     raw = os.environ.get(name)
     if raw is None or not str(raw).strip():
         return default
     try:
-        return int(str(raw).strip(), 10)
+        value = int(str(raw).strip(), 10)
     except ValueError:
         return default
+    if min_valid is not None and value < min_valid:
+        return default
+    return value
+
+
+def _env_int(name: str, default: int) -> int:
+    """``env_int`` with no validity rule. Kept as the name ~80 existing call sites already use."""
+    return env_int(name, default)
 
 
 def _job_env_int(name: str, default: int) -> int:
