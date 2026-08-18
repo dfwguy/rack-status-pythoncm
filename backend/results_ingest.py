@@ -35,7 +35,7 @@ import host_exec
 import lake_sink
 import results_history
 from core import truthy_env as _truthy_env
-from logscan_cache import _logscan_record
+from logscan_cache import _log_stat_for_path, _logscan_record
 
 try:
     import universal_parser as _uparse
@@ -324,3 +324,28 @@ def _lake_push_universal(
             _logger.warning("lake push failed for %s: %s", source_log_path, out.get("error"))
     except Exception as e:  # noqa: BLE001 - never let provenance break a run
         _logger.warning("lake push raised for %s: %s", source_log_path, e)
+
+
+def _universal_fallback_for_log(
+    log_dir: Path,
+    log_path_s: str,
+    *,
+    rack_hint: str | None = None,
+    ingest: bool = True,
+) -> dict[str, object] | None:
+    """Universal parse + optional history ingest for one log. ``None`` when unavailable."""
+    res = _universal_parse_log(log_dir, log_path_s)
+    if res is None:
+        return None
+    if ingest:
+        mt, sz = _log_stat_for_path(log_dir, log_path_s)
+        rid = _history_ingest_universal(
+            res,
+            source_log_path=log_path_s,
+            log_mtime=mt,
+            log_size=sz,
+            rack_hint=rack_hint,
+        )
+        if rid:
+            res = {**res, "history_run_id": rid}
+    return res

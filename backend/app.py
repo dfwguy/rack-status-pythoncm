@@ -1652,10 +1652,9 @@ from node_targets import (
     validation_target_for_rack,
 )
 from results_ingest import (
-    _history_ingest_universal,
     _lake_push_job,
     _universal_enabled,
-    _universal_parse_log,
+    _universal_fallback_for_log,
 )
 from slurm_query import (
     _all_slurm_nodenames,
@@ -7764,9 +7763,6 @@ def _demo_parser_results():
 # Head+tail caps mirror universal_parser's own DEFAULT_HEAD_BYTES / DEFAULT_TAIL_BYTES so a
 # remote read produces the same text the module would have produced locally.
 # Extra extensions the legacy discovery path (*.txt / *.out only) can never see.
-_UNIVERSAL_INVENTORY_MAX_FILES = 4000
-_UNIVERSAL_SCAN_DEFAULT_FILES = 25
-_UNIVERSAL_SCAN_MAX_FILES = 400
 
 # Intermediate artefacts that are SUPERSEDED by an aggregated result log and must not be
 # ingested as runs of their own.
@@ -7780,19 +7776,6 @@ _UNIVERSAL_SCAN_MAX_FILES = 400
 #
 # Override with RACK_UNIVERSAL_SCAN_IGNORE_RE (a full-match regex over the basename); set it to
 # something that matches nothing (e.g. ``$^``) to restore the previous behaviour.
-_UNIVERSAL_SCAN_IGNORE_RE = re.compile(
-    os.environ.get("RACK_UNIVERSAL_SCAN_IGNORE_RE")
-    # These are llmb's INTERMEDIATE files, not results. Each has a real aggregated
-    # counterpart (<user>-NCCL-1Rack-… / <user>-NEMO-1Rack-…) that the collectors write;
-    # ingesting the intermediates too produces duplicate or empty rows.
-    #   llmb-nccl_<label>_<jid>.out   sbatch stdout. <label> was `nodes` until 2026-07-31,
-    #                                 when it became the rack id — so match ANY label, or
-    #                                 rack-labelled files silently start being ingested.
-    #   llmb-autocollect_<jid>.log    NCCL collector watcher log
-    #   llmb-nemo-autocollect_<jid>.log  NEMO collector watcher log
-    or r"llmb-nccl_.+_\d+\.out|llmb(-nemo)?-?autocollect_\d+\.log",
-    re.IGNORECASE,
-)
 
 
 _truthy_arg = core.truthy_arg
@@ -8008,126 +7991,11 @@ def _history_ingest_parser_json(
         return []
 
 
-def _universal_fallback_for_log(
-    log_dir: Path,
-    log_path_s: str,
-    *,
-    rack_hint: str | None = None,
-    ingest: bool = True,
-) -> dict[str, object] | None:
-    """Universal parse + optional history ingest for one log. ``None`` when unavailable."""
-    res = _universal_parse_log(log_dir, log_path_s)
-    if res is None:
-        return None
-    if ingest:
-        mt, sz = _log_stat_for_path(log_dir, log_path_s)
-        rid = _history_ingest_universal(
-            res,
-            source_log_path=log_path_s,
-            log_mtime=mt,
-            log_size=sz,
-            rack_hint=rack_hint,
-        )
-        if rid:
-            res = {**res, "history_run_id": rid}
-    return res
 
 
 # --- whole-directory inventory (every extension, every depth) ------------------------
-def _universal_inventory(log_dir: Path, *, maxdepth: int = 2, limit: int | None = None) -> dict[str, object]:
-    """List EVERY file under the log dir on the exec host — not just ``*.txt`` / ``*.out``.
-
-    ``native_status._host_log_entries`` (the only directory listing the rest of the app has)
-    is hardcoded to ``-maxdepth 1 -type f ( -name '*.txt' -o -name '*.out' )``, so a ``*.log``,
-    ``*.json``, ``*.csv``, extension-less or sub-directory result is invisible to every legacy
-    endpoint. This is deliberately a SEPARATE listing so that behaviour is untouched.
-
-    Each entry reports the legacy eligibility gates too, so an operator can see exactly WHY a
-    file does or does not appear in the rack table.
-    """
-    base = str(native_status._host_resolve(log_dir)).rstrip("/") or str(log_dir)
-    depth = max(1, min(int(maxdepth or 1), 6))
-    cap = max(1, min(int(limit or _UNIVERSAL_INVENTORY_MAX_FILES), _UNIVERSAL_INVENTORY_MAX_FILES))
-    err: str | None = None
-    entries: list[tuple[str, int, float]] = [
-        (path, st.size, st.mtime)
-        for path, st in host_exec.stat_dir(base, maxdepth=depth).items()
-    ]
-    if not entries and not host_exec.is_dir(base):
-        return {"ok": False, "log_dir": base, "error": f"not a directory: {base}", "files": []}
-
-    entries.sort(key=lambda t: t[2], reverse=True)
-    truncated = len(entries) > cap
-    entries = entries[:cap]
-
-    naming = _nvis_naming()
-    files: list[dict[str, object]] = []
-    kind_counts: dict[str, int] = {}
-    for path, size, mtime in entries:
-        name = os.path.basename(path)
-        kind = "unknown"
-        if _uparse is not None:
-            try:
-                # No content read here: sniff_kind falls back to the filename when head_text
-                # is empty, which is exactly the cheap listing behaviour we want.
-                kind = _uparse.sniff_kind(path, None)
-            except Exception:  # noqa: BLE001
-                kind = "unknown"
-        kind_counts[kind] = kind_counts.get(kind, 0) + 1
-        try:
-            legacy_rack = naming.rack_id_from_log_basename(name)
-        except Exception:  # noqa: BLE001
-            legacy_rack = None
-        try:
-            legacy_listed = name.endswith((".txt", ".out")) and os.path.dirname(path).rstrip("/") == base
-            legacy_eligible = bool(legacy_listed and _nemo_single_rack_log_basename(name) and legacy_rack)
-        except Exception:  # noqa: BLE001
-            legacy_listed, legacy_eligible = False, False
-        files.append(
-            {
-                "path": path,
-                "basename": name,
-                "dir": os.path.dirname(path),
-                "size_bytes": size,
-                "mtime_epoch": mtime,
-                "mtime_iso": datetime.fromtimestamp(mtime, timezone.utc).isoformat(),
-                "kind_guess": kind,
-                "rack": legacy_rack,
-                # Why the legacy path does / does not show this file:
-                "legacy_listed": legacy_listed,       # survives the *.txt/*.out + maxdepth-1 find
-                "legacy_eligible": legacy_eligible,   # …and the basename + one-rack-id gates
-            }
-        )
-    return {
-        "ok": True,
-        "log_dir": base,
-        "maxdepth": depth,
-        "file_count": len(files),
-        "truncated": truncated,
-        "kind_counts": kind_counts,
-        "legacy_visible_count": sum(1 for f in files if f["legacy_eligible"]),
-        "error": err,
-        "files": files,
-    }
 
 
-def _universal_path_under_log_dir(log_dir: Path, raw: str) -> str | None:
-    """Resolve a caller-supplied path/basename to an absolute path INSIDE the log dir.
-
-    Anything with ``..`` or outside the log-dir prefix is rejected — the value is fed to a
-    remote shell, so a traversal here would be a real read-anything primitive.
-    """
-    s = (raw or "").strip()
-    if not s or "\x00" in s:
-        return None
-    base = str(native_status._host_resolve(log_dir)).rstrip("/") or str(log_dir)
-    cand = s if s.startswith("/") else f"{base}/{s}"
-    cand = PurePosixPath(cand).as_posix()
-    if ".." in PurePosixPath(cand).parts:
-        return None
-    if cand != base and not cand.startswith(base.rstrip("/") + "/"):
-        return None
-    return cand
 
 
 # --- history read routes -------------------------------------------------------------
@@ -8137,154 +8005,10 @@ def _universal_path_under_log_dir(log_dir: Path, raw: str) -> str | None:
 
 
 # --- universal ingest routes ---------------------------------------------------------
-@app.route("/api/universal/inventory")
-def api_universal_inventory():
-    """Every file in the log dir on the exec host — all extensions, sub-dirs included."""
-    if not _universal_enabled():
-        return jsonify(
-            {"ok": False, "error": "universal_parser unavailable",
-             "detail": "check the backend/universal_parser.py bind mount in docker-compose.override.yml"}
-        ), 503
-    try:
-        log_dir = _resolve_log_dir(request.args.get("log_dir"))
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    try:
-        depth = int(request.args.get("maxdepth") or 2)
-    except (TypeError, ValueError):
-        depth = 2
-    try:
-        out = _universal_inventory(log_dir, maxdepth=depth)
-    except Exception as e:  # noqa: BLE001
-        _logger.warning("universal inventory failed: %s", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify(out)
 
 
-@app.route("/api/universal/parse")
-def api_universal_parse():
-    """Normalise ONE log of any kind. ``?path=`` (abs or relative to the log dir) or ``?log_file=``."""
-    if not _universal_enabled():
-        return jsonify(
-            {"ok": False, "error": "universal_parser unavailable",
-             "detail": "check the backend/universal_parser.py bind mount in docker-compose.override.yml"}
-        ), 503
-    try:
-        log_dir = _resolve_log_dir(request.args.get("log_dir"))
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    raw = (request.args.get("path") or request.args.get("log_file") or "").strip()
-    target = _universal_path_under_log_dir(log_dir, raw)
-    if not target:
-        return jsonify(
-            {"ok": False, "error": "path is required and must resolve inside the log directory"}
-        ), 400
-    rack_hint = (request.args.get("rack") or "").strip() or None
-    ingest = _truthy_arg(request.args.get("ingest"), default=True)
-    res = _universal_fallback_for_log(log_dir, target, rack_hint=rack_hint, ingest=ingest)
-    if res is None:
-        return jsonify({"ok": False, "error": "universal parse failed", "path": target}), 500
-    return jsonify({"ok": True, "log_dir": str(log_dir), "path": target, "result": res})
 
 
-@app.route("/api/universal/scan", methods=["POST"])
-def api_universal_scan():
-    """Parse + persist a batch of logs from the log dir (newest first). Backfills history.
-
-    Body/query: ``log_dir``, ``maxdepth`` (default 2), ``max_files`` (default 25, max 400),
-    ``budget_sec`` (default 120), ``kind``/``search`` filters, ``ingest`` (default true).
-    Safe to re-run: ingest is idempotent per (path, mtime, size) snapshot.
-    """
-    if not _universal_enabled():
-        return jsonify(
-            {"ok": False, "error": "universal_parser unavailable",
-             "detail": "check the backend/universal_parser.py bind mount in docker-compose.override.yml"}
-        ), 503
-    body = request.get_json(silent=True) or {}
-
-    def _arg(name, default=None):
-        v = body.get(name)
-        if v is None:
-            v = request.args.get(name)
-        return default if v is None or str(v).strip() == "" else v
-
-    try:
-        log_dir = _resolve_log_dir(str(_arg("log_dir")) if _arg("log_dir") else None)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    try:
-        depth = max(1, min(int(_arg("maxdepth", 2)), 6))
-        max_files = max(1, min(int(_arg("max_files", _UNIVERSAL_SCAN_DEFAULT_FILES)),
-                               _UNIVERSAL_SCAN_MAX_FILES))
-        budget = max(10, min(int(_arg("budget_sec", 120)), 900))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "maxdepth/max_files/budget_sec must be integers"}), 400
-    want_kind = (str(_arg("kind", "")) or "").strip().lower()
-    want_search = (str(_arg("search", "")) or "").strip().lower()
-    ingest = _truthy_arg(_arg("ingest"), default=True)
-
-    inv = _universal_inventory(log_dir, maxdepth=depth)
-    if not inv.get("ok"):
-        return jsonify(inv), 502
-    started = time.monotonic()
-    scanned: list[dict[str, object]] = []
-    skipped = 0
-    for f in inv.get("files") or []:
-        if len(scanned) >= max_files:
-            break
-        if (time.monotonic() - started) > budget:
-            break
-        name = str(f.get("basename") or "")
-        # Never ingest an intermediate artefact that an aggregated log supersedes.
-        if _UNIVERSAL_SCAN_IGNORE_RE.fullmatch(name):
-            skipped += 1
-            continue
-        if want_search and want_search not in name.lower():
-            skipped += 1
-            continue
-        if want_kind and str(f.get("kind_guess") or "") != want_kind:
-            skipped += 1
-            continue
-        path = str(f.get("path") or "")
-        res = _universal_parse_log(log_dir, path)
-        if res is None:
-            skipped += 1
-            continue
-        run_id = None
-        if ingest:
-            run_id = _history_ingest_universal(
-                res,
-                source_log_path=path,
-                log_mtime=f.get("mtime_epoch"),
-                log_size=f.get("size_bytes"),
-                rack_hint=f.get("rack"),
-            )
-        scanned.append(
-            {
-                "path": path,
-                "basename": name,
-                "kind": res.get("kind"),
-                "status": res.get("status"),
-                "rack": res.get("rack"),
-                "job_id": res.get("job_id"),
-                "metric_count": len(res.get("metrics") or []),
-                "headline": res.get("headline"),
-                "run_id": run_id,
-            }
-        )
-    return jsonify(
-        {
-            "ok": True,
-            "log_dir": inv.get("log_dir"),
-            "file_count": inv.get("file_count"),
-            "parsed": len(scanned),
-            "skipped": skipped,
-            "ingested": sum(1 for s in scanned if s.get("run_id")),
-            "history_enabled": core.history_enabled(),
-            "elapsed_sec": round(time.monotonic() - started, 3),
-            "results": scanned,
-        }
-    )
 
 
 
