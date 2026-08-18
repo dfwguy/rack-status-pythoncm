@@ -18,7 +18,9 @@ os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
+# The launch component moved to validation_launch.py; patch/call the owning module.
 import app as app_module
+import validation_launch
 import naming as naming_mod  # noqa: E402
 import nvis_id_templates as nid
 
@@ -37,9 +39,9 @@ def _campaign_env(monkeypatch, manifest: Path) -> None:
         "RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK": "2",
     }
     original_eget = app_module._eget
-    monkeypatch.setattr(app_module, "_eget", lambda key, default=None: values.get(key, original_eget(key, default)))
-    monkeypatch.setattr(app_module, "_eget_int", lambda key, default: int(values.get(key, default)))
-    monkeypatch.setattr(app_module, "_nvis_naming", _naming)
+    monkeypatch.setattr(validation_launch, "_eget", lambda key, default=None: values.get(key, original_eget(key, default)))
+    monkeypatch.setattr(validation_launch, "_eget_int", lambda key, default: int(values.get(key, default)))
+    monkeypatch.setattr(validation_launch, "_nvis_naming", _naming)
     monkeypatch.setattr(naming_mod, "_nvis_naming", _naming)
 def test_campaign_snapshot_uses_only_manifest_nodes(monkeypatch, tmp_path):
     manifest = tmp_path / "nodes.list"
@@ -60,7 +62,7 @@ ink50-dh01-d02-12|drained*"""
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, sinfo, ""),
     )
 
-    snapshot = app_module._multirack_campaign_snapshot()
+    snapshot = validation_launch._multirack_campaign_snapshot()
 
     assert snapshot["ok"] is True
     assert snapshot["rack_count"] == 2
@@ -86,7 +88,7 @@ def test_llmb_campaign_launch_passes_exact_nodelist(monkeypatch, tmp_path):
             "racks": [{"rack": "ink50-dh01-d01", "eligible": True, "reason": "", "nodes": exact}],
         },
     )
-    monkeypatch.setattr(app_module, "_nvis_naming", _naming)
+    monkeypatch.setattr(validation_launch, "_nvis_naming", _naming)
     monkeypatch.setattr(naming_mod, "_nvis_naming", _naming)
     monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
     monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
@@ -121,7 +123,7 @@ def test_llmb_campaign_launch_rejects_ineligible_rack(monkeypatch, tmp_path):
             }],
         },
     )
-    monkeypatch.setattr(app_module, "_nvis_naming", _naming)
+    monkeypatch.setattr(validation_launch, "_nvis_naming", _naming)
     monkeypatch.setattr(naming_mod, "_nvis_naming", _naming)
     monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
 

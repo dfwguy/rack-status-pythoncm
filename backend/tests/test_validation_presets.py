@@ -13,7 +13,9 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+# The launch component moved to validation_launch.py; patch/call the owning module.
 import app as app_module
+import validation_launch
 import pytest
 import validation_presets
 
@@ -54,14 +56,14 @@ def test_live_eligibility_resolves_sinfo_through_platform(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, f"{node}|idle\n", "")
 
     monkeypatch.setattr(
-        app_module,
+        validation_launch,
         "_get_platform",
         lambda: SimpleNamespace(
             sinfo_cmd=lambda args: f"/site/slurm/bin/sinfo {args}"
         ),
     )
-    monkeypatch.setattr(app_module.host_exec, "run_slurm_on_host", run)
-    states, reasons = app_module._validation_node_eligibility([node])
+    monkeypatch.setattr(validation_launch.host_exec, "run_slurm_on_host", run)
+    states, reasons = validation_launch._validation_node_eligibility([node])
     assert captured["cmd"].startswith("/site/slurm/bin/sinfo ")
     assert states == {node: "idle"}
     assert reasons == []
@@ -93,12 +95,12 @@ def test_catalogue_is_honest_and_version_pins_are_immutable():
 
 def test_prepare_resolves_exact_nodes_for_gpt_fanout(monkeypatch, tmp_path):
     nodes = ["ink50-dh01-d01-11", "ink50-dh01-d01-12"]
-    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
-    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
-    monkeypatch.setattr(app_module, "_all_slurm_nodenames", lambda: nodes)
-    monkeypatch.setattr(app_module, "_validation_node_eligibility", lambda raw: ({node: "idle" for node in raw}, []))
+    monkeypatch.setattr(validation_launch, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(validation_launch, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(validation_launch, "_all_slurm_nodenames", lambda: nodes)
+    monkeypatch.setattr(validation_launch, "_validation_node_eligibility", lambda raw: ({node: "idle" for node in raw}, []))
     with app_module.app.app_context():
-        plan, err = app_module._prepare_validation_preset({
+        plan, err = validation_launch._prepare_validation_preset({
             "preset_id": "gpt-oss-cpu", "scope": "node", "nodes": nodes,
             "storage": "nfs",
         })
@@ -112,12 +114,12 @@ def test_prepare_resolves_exact_nodes_for_gpt_fanout(monkeypatch, tmp_path):
 
 def test_llama_prepare_is_exact_1024_gpu_contract(monkeypatch, tmp_path):
     nodes = [f"ink50-dh01-d{i // 16 + 1:02d}-{i % 16 + 1}" for i in range(256)]
-    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
-    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
-    monkeypatch.setattr(app_module, "_all_slurm_nodenames", lambda: nodes)
-    monkeypatch.setattr(app_module, "_validation_node_eligibility", lambda raw: ({node: "idle" for node in raw}, []))
+    monkeypatch.setattr(validation_launch, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(validation_launch, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(validation_launch, "_all_slurm_nodenames", lambda: nodes)
+    monkeypatch.setattr(validation_launch, "_validation_node_eligibility", lambda raw: ({node: "idle" for node in raw}, []))
     with app_module.app.app_context():
-        plan, err = app_module._prepare_validation_preset({
+        plan, err = validation_launch._prepare_validation_preset({
             "preset_id": "llama31-405b-fp8", "scope": "multirack", "nodes": nodes,
             "storage": "local", "rsync": True, "max_steps": 50,
         })
@@ -133,10 +135,10 @@ def test_llama_prepare_is_exact_1024_gpu_contract(monkeypatch, tmp_path):
 
 def test_backend_routes_publish_prepare_contract(monkeypatch, tmp_path):
     node = "ink50-dh01-d01-11"
-    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
-    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
-    monkeypatch.setattr(app_module, "_all_slurm_nodenames", lambda: [node])
-    monkeypatch.setattr(app_module, "_validation_node_eligibility", lambda raw: ({item: "idle" for item in raw}, []))
+    monkeypatch.setattr(validation_launch, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(validation_launch, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(validation_launch, "_all_slurm_nodenames", lambda: [node])
+    monkeypatch.setattr(validation_launch, "_validation_node_eligibility", lambda raw: ({item: "idle" for item in raw}, []))
     client = app_module.app.test_client()
     response = client.get("/api/validation-presets")
     assert response.status_code == 200
@@ -163,19 +165,19 @@ def test_mnubergemm_multirack_plan_is_exact_and_time_capped(monkeypatch, tmp_pat
         "ink50-dh01-d01": [nodes[0]],
         "ink50-dh01-d02": [nodes[1]],
     }
-    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
-    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
-    monkeypatch.setattr(app_module, "_all_slurm_nodenames", lambda: nodes)
-    monkeypatch.setattr(app_module, "_normalize_rack_id", lambda rack: rack)
-    monkeypatch.setattr(app_module, "_multirack_campaign_snapshot", lambda: {"active": False})
-    monkeypatch.setattr(app_module, "_rack_node_hostnames_from_inventory", lambda rack: rack_nodes[rack])
+    monkeypatch.setattr(validation_launch, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(validation_launch, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(validation_launch, "_all_slurm_nodenames", lambda: nodes)
+    monkeypatch.setattr(validation_launch, "_normalize_rack_id", lambda rack: rack)
+    monkeypatch.setattr(validation_launch, "_multirack_campaign_snapshot", lambda: {"active": False})
+    monkeypatch.setattr(validation_launch, "_rack_node_hostnames_from_inventory", lambda rack: rack_nodes[rack])
     monkeypatch.setattr(
-        app_module,
+        validation_launch,
         "_validation_node_eligibility",
         lambda raw: ({node: "idle" for node in raw}, []),
     )
     with app_module.app.app_context():
-        plan, err = app_module._prepare_validation_preset({
+        plan, err = validation_launch._prepare_validation_preset({
             "preset_id": "mnubergemm-26.03-v1.17",
             "scope": "multirack",
             "racks": list(rack_nodes),
@@ -196,7 +198,7 @@ def test_mnubergemm_multirack_plan_is_exact_and_time_capped(monkeypatch, tmp_pat
     assert nodes[0] in plan["command_display"] and nodes[1] in plan["command_display"]
 
     with app_module.app.app_context():
-        unsafe_plan, unsafe_err = app_module._prepare_validation_preset({
+        unsafe_plan, unsafe_err = validation_launch._prepare_validation_preset({
             "preset_id": "mnubergemm-26.03-v1.17",
             "scope": "multirack",
             "nodes": nodes,
