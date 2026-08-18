@@ -145,12 +145,9 @@ def _sync_remote_root(project: str) -> str:
     return _posix_join(_project_remote_dir(project), _REMOTE_CACHE_DIR)
 
 
-def _comments_file() -> Path:
-    """Path to rack comments JSON (``RACK_COMMENTS_FILE`` or ``REPO_ROOT/rack_comments.json``)."""
-    raw = _eget("RACK_COMMENTS_FILE", "")
-    if raw:
-        return Path(os.path.expanduser(raw)).resolve()
-    return (REPO_ROOT / "rack_comments.json").resolve()
+# One definition, in comments_store: this module had a second one that resolved the same
+# RACK_COMMENTS_FILE setting differently, so the two could point at different files.
+from comments_store import _comments_file
 
 
 def _is_syncable_cache_file(name: str) -> bool:

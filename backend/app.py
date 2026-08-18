@@ -336,6 +336,9 @@ JOB_ENV_SECTION_ORDER: tuple[tuple[str, str], ...] = (
 # call sites below are untouched by the move. The writer (_job_env_overrides_write) stays in this
 # file: it invalidates the rack-status cache, which config_env has no business knowing about.
 import config_env
+from comments_store import (
+    read_comments,
+)
 from config_env import (
     _JOB_ENV_ALLOWED_KEYS,
     _STATUS_ROW_ENV_KEYS,
@@ -3651,8 +3654,6 @@ def run_cmsh_power_reset(specs: list[str]) -> list[dict]:
     return results
 
 
-def _comments_file() -> Path:
-    return Path(os.environ.get("RACK_COMMENTS_FILE", str(REPO_ROOT / "rack_comments.json"))).resolve()
 
 
 
@@ -3714,180 +3715,18 @@ def _normalize_comments_map(raw: object) -> dict[str, str]:
     return out
 
 
-def _normalize_multirack_comment_basename(raw: object) -> str | None:
-    """Basename of a NEMO/NCCL multirack log file; used as storage suffix under ``mr:<basename>``."""
-    if not isinstance(raw, str):
-        return None
-    bn = raw.strip()
-    if not bn or bn != Path(bn).name or ".." in bn or "/" in bn or "\\" in bn:
-        return None
-    if len(bn) > 512:
-        return None
-    low = bn.lower()
-    if "nemo" not in low and "nccl" not in low:
-        return None
-    return bn
 
 
-def _multirack_comment_storage_key(basename: str) -> str | None:
-    bn = _normalize_multirack_comment_basename(basename)
-    return f"mr:{bn.lower()}" if bn else None
 
 
-def _split_stored_comments(raw: object) -> tuple[dict[str, str], dict[str, str]]:
-    """Split JSON object into rack comments (``pN-rMM``) and multirack log comments (``mr:<basename>``)."""
-    racks: dict[str, str] = {}
-    multirack: dict[str, str] = {}
-    if not isinstance(raw, dict):
-        return racks, multirack
-    for k, v in raw.items():
-        if not isinstance(k, str) or not isinstance(v, str):
-            continue
-        t = v.strip()
-        if not t:
-            continue
-        lk = k.strip()
-        if lk.lower().startswith("mr:"):
-            sk = _multirack_comment_storage_key(lk[3:])
-            if sk:
-                multirack[sk] = t
-            continue
-        try:
-            rk = _normalize_rack_id(lk)
-        except ValueError:
-            continue
-        racks[rk] = t
-    return racks, multirack
 
 
-def read_comments() -> dict[str, str]:
-    p = _comments_file()
-    if not p.is_file():
-        return {}
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            locked = False
-            try:
-                fcntl.flock(f, fcntl.LOCK_SH)
-                locked = True
-            except OSError:
-                pass
-            try:
-                try:
-                    raw = json.load(f)
-                except json.JSONDecodeError:
-                    raw = {}
-            finally:
-                if locked:
-                    try:
-                        fcntl.flock(f, fcntl.LOCK_UN)
-                    except OSError:
-                        pass
-        racks, mr = _split_stored_comments(raw)
-        return {**racks, **mr}
-    except (OSError, UnicodeDecodeError, TypeError, ValueError, json.JSONDecodeError):
-        return {}
 
 
-def _load_comment_maps_locked(f) -> tuple[dict[str, str], dict[str, str]]:
-    blob = f.read()
-    try:
-        raw = json.loads(blob) if blob.strip() else {}
-    except json.JSONDecodeError:
-        raw = {}
-    if not isinstance(raw, dict):
-        raw = {}
-    return _split_stored_comments(raw)
 
 
-def set_comment_for_rack(rack: str, comment: str | None) -> dict[str, str]:
-    """Set or clear comment for rack. Returns full comments map after update (preserves multirack keys)."""
-    rack_key = _normalize_rack_id(rack)
-    max_len = _env_int("RACK_COMMENT_MAX_LEN", 4000)
-    if max_len < 1:
-        max_len = 4000
-    p = _comments_file()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    if not p.exists():
-        p.write_text("{}\n", encoding="utf-8")
-    with open(p, "r+", encoding="utf-8") as f:
-        locked = False
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            locked = True
-        except OSError:
-            pass
-        try:
-            f.seek(0)
-            racks, mr = _load_comment_maps_locked(f)
-            text = (comment or "").strip()
-            if not text:
-                racks.pop(rack_key, None)
-            else:
-                racks[rack_key] = text[:max_len]
-            merged = {**racks, **mr}
-            new_blob = json.dumps(merged, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-            f.seek(0)
-            f.truncate()
-            f.write(new_blob)
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError:
-                pass
-            return merged
-        finally:
-            if locked:
-                try:
-                    fcntl.flock(f, fcntl.LOCK_UN)
-                except OSError:
-                    pass
 
 
-def set_comment_for_multirack_log(basename: str, comment: str | None) -> dict[str, str]:
-    """Set or clear comment for a multirack log basename (``root-NEMO-…``.txt). Key on disk: ``mr:<basename>``."""
-    sk = _multirack_comment_storage_key(basename)
-    if not sk:
-        raise ValueError("invalid multirack log basename for comment (expected .txt with nemo or nccl in name)")
-    max_len = _env_int("RACK_COMMENT_MAX_LEN", 4000)
-    if max_len < 1:
-        max_len = 4000
-    p = _comments_file()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    if not p.exists():
-        p.write_text("{}\n", encoding="utf-8")
-    with open(p, "r+", encoding="utf-8") as f:
-        locked = False
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            locked = True
-        except OSError:
-            pass
-        try:
-            f.seek(0)
-            racks, mr = _load_comment_maps_locked(f)
-            text = (comment or "").strip()
-            if not text:
-                mr.pop(sk, None)
-            else:
-                mr[sk] = text[:max_len]
-            merged = {**racks, **mr}
-            new_blob = json.dumps(merged, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-            f.seek(0)
-            f.truncate()
-            f.write(new_blob)
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError:
-                pass
-            return merged
-        finally:
-            if locked:
-                try:
-                    fcntl.flock(f, fcntl.LOCK_UN)
-                except OSError:
-                    pass
 
 
 def _merge_fresh_comments_into_status_payload(out: dict) -> None:
@@ -4518,68 +4357,8 @@ def _nemo_done_rack_ids_from_rack_status(log_dir: Path) -> frozenset[str] | None
     return frozenset(out)
 
 
-@app.route("/api/comments", methods=["GET"])
-def api_comments_list():
-    return jsonify({"ok": True, "comments": read_comments()})
 
 
-@app.route("/api/comments/<rack_id>", methods=["PUT", "DELETE"])
-def api_comment_put(rack_id: str):
-    """PUT JSON {\"comment\": \"...\"} sets text; empty string clears. DELETE clears.
-
-    *rack_id* is either a rack id (``pN-rMM``) or a multirack log key: ``mr:<basename>`` or
-    ``<basename>`` for a ``*.txt`` log name containing ``nemo`` or ``nccl``.
-    """
-    raw_id = (rack_id or "").strip()
-    if request.method == "DELETE":
-        payload = ""
-    else:
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return jsonify({"ok": False, "error": "expected JSON object with \"comment\" string"}), 400
-        c = body.get("comment", "")
-        if c is not None and not isinstance(c, str):
-            return jsonify({"ok": False, "error": "\"comment\" must be a string"}), 400
-        payload = c if isinstance(c, str) else ""
-
-    is_multirack = False
-    storage_key = ""
-    multirack_bn = ""
-    try:
-        storage_key = _normalize_rack_id(raw_id)
-    except ValueError:
-        multirack_bn = raw_id[3:].strip() if raw_id.lower().startswith("mr:") else raw_id.strip()
-        sk = _multirack_comment_storage_key(multirack_bn)
-        if sk is None:
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": "invalid rack id or multirack log basename (use pN-rMM or mr:<log>.txt)",
-                    }
-                ),
-                400,
-            )
-        is_multirack = True
-        storage_key = sk
-
-    try:
-        if is_multirack:
-            all_comments = set_comment_for_multirack_log(multirack_bn, payload)
-        else:
-            all_comments = set_comment_for_rack(raw_id, payload)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    except OSError as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify(
-        {
-            "ok": True,
-            "rack": storage_key,
-            "comment": all_comments.get(storage_key, ""),
-            "comments": all_comments,
-        }
-    )
 
 
 def _prepare_power_reset(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
