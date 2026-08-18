@@ -19,6 +19,8 @@ os.environ["RACK_STATUS_DEMO"] = "1"
 os.environ["RACK_WEB_AUTH_DISABLED"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
+# Activity hydration moved out of app.py; patch the module that owns these names.
+import activity_hydration
 import app as app_module
 from app import app
 
@@ -956,7 +958,7 @@ class TestValidationActivitiesAPI:
                 ),
             }
 
-        monkeypatch.setattr(app_module, "_run_scontrol_show_job", _fake_scontrol)
+        monkeypatch.setattr(activity_hydration, "_run_scontrol_show_job", _fake_scontrol)
         monkeypatch.setattr(app_module.native_status, "load_squeue_jobs_map", lambda: (set(), {}))
         monkeypatch.setattr(
             app_module.native_status, "augment_running_set_for_job_ids", lambda *a, **k: None
@@ -983,7 +985,7 @@ class TestValidationActivitiesAPI:
 
 class TestValidationActivitySlurmHydration:
     def test_task_needs_hydration_when_stdout_missing(self):
-        assert app_module._task_needs_slurm_hydration({"scheduler_ref": "123"}) is True
+        assert activity_hydration._task_needs_slurm_hydration({"scheduler_ref": "123"}) is True
 
     def test_task_needs_hydration_when_slurm_still_running(self):
         task = {
@@ -992,7 +994,7 @@ class TestValidationActivitySlurmHydration:
             "scheduler_state": "RUNNING",
             "work_phase": "running",
         }
-        assert app_module._task_needs_slurm_hydration(task) is True
+        assert activity_hydration._task_needs_slurm_hydration(task) is True
 
     def test_task_skips_hydration_when_work_terminal(self):
         task = {
@@ -1002,7 +1004,7 @@ class TestValidationActivitySlurmHydration:
             "scheduler_state": "COMPLETED",
             "work_phase": "done",
         }
-        assert app_module._task_needs_slurm_hydration(task) is False
+        assert activity_hydration._task_needs_slurm_hydration(task) is False
 
     def test_hydrate_activity_task_logs(self, isolated_validation_activities, monkeypatch):
         aid = validation_activities.record_activity("llmb-nccl", rack="p5-r01", log_dir="/logs")
@@ -1014,14 +1016,14 @@ class TestValidationActivitySlurmHydration:
             app_module.native_status, "augment_running_set_for_job_ids", lambda *a, **k: None
         )
         monkeypatch.setattr(
-            app_module,
+            activity_hydration,
             "_run_scontrol_show_job",
             lambda jid: {
                 "ok": True,
                 "stdout": f"JobId={jid} JobState=COMPLETED StdOut=/logs/llmb-nccl_nodes_{jid}.out",
             },
         )
-        app_module._hydrate_activity_task_logs(aid)
+        activity_hydration._hydrate_activity_task_logs(aid)
         tasks = validation_activities.get_activity(aid).get("tasks") or []
         assert tasks[0]["stdout_path"] == "/logs/llmb-nccl_nodes_999.out"
         assert tasks[0]["scheduler_state"] == "COMPLETED"
@@ -1047,11 +1049,12 @@ class TestValidationActivitySlurmHydration:
             activity_ids.append(aid)
 
         refreshed = []
-        monkeypatch.setattr(
-            app_module,
-            "_hydrate_activity_task_logs",
-            lambda aid, _rec=None: refreshed.append(aid),
-        )
+        # The cycle under test lives in app.py and calls the name IMPORTED there, so app's binding is
+        # the one that has to be replaced. activity_hydration's own is patched too, for any call the
+        # module makes internally -- patching one of the two silently exercises the real hydration.
+        stub = lambda aid, _rec=None: refreshed.append(aid)  # noqa: E731
+        monkeypatch.setattr(app_module, "_hydrate_activity_task_logs", stub)
+        monkeypatch.setattr(activity_hydration, "_hydrate_activity_task_logs", stub)
         monkeypatch.setenv("RACK_VALIDATION_ACTIVITIES_REFRESH_BUDGET_SEC", "60")
         monkeypatch.setenv(
             "RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE",
@@ -1070,7 +1073,7 @@ class TestValidationActivitySlurmHydration:
             app_module.native_status, "augment_running_set_for_job_ids", lambda *a, **k: None
         )
         monkeypatch.setattr(
-            app_module,
+            activity_hydration,
             "_run_scontrol_show_job",
             lambda jid: {
                 "ok": True,
@@ -1113,7 +1116,7 @@ class TestValidationActivitySlurmHydration:
             "stat_dir",
             lambda base, **kw: {agg: object(), f"{base}/llmb-nccl_x_127326.out": object()},
         )
-        app_module._hydrate_activity_task_logs(aid)
+        activity_hydration._hydrate_activity_task_logs(aid)
         task = validation_activities.get_activity(aid)["tasks"][0]
         assert task["results_log_path"] == agg
         assert task["work_phase"] == "done"
@@ -1127,14 +1130,14 @@ class TestValidationActivitySlurmHydration:
         self._stub_slurm(monkeypatch)
         monkeypatch.setattr(app_module.host_exec, "stat_dir", lambda base, **kw: {})
 
-        app_module._hydrate_activity_task_logs(aid)
+        activity_hydration._hydrate_activity_task_logs(aid)
         task = validation_activities.get_activity(aid)["tasks"][0]
         assert task["work_phase"] == "collecting"
         assert task["collecting_since"], "entering collecting must stamp the clock"
 
         # Backdate the stamp past the grace period: the collector never delivered.
         self._backdate_collecting(aid)
-        app_module._hydrate_activity_task_logs(aid)
+        activity_hydration._hydrate_activity_task_logs(aid)
         task = validation_activities.get_activity(aid)["tasks"][0]
         assert task["work_phase"] == "done"  # Slurm said COMPLETED
         assert task["phase"] == "done"
@@ -1147,10 +1150,10 @@ class TestValidationActivitySlurmHydration:
         validation_activities.sync_tasks_from_stdout(aid, "jobid=998\n")
         self._stub_slurm(monkeypatch, state="TIMEOUT")
         monkeypatch.setattr(app_module.host_exec, "stat_dir", lambda base, **kw: {})
-        app_module._hydrate_activity_task_logs(aid)
+        activity_hydration._hydrate_activity_task_logs(aid)
         assert validation_activities.get_activity(aid)["tasks"][0]["work_phase"] == "collecting"
         self._backdate_collecting(aid)
-        app_module._hydrate_activity_task_logs(aid)
+        activity_hydration._hydrate_activity_task_logs(aid)
         task = validation_activities.get_activity(aid)["tasks"][0]
         assert task["work_phase"] == "failed"
 
@@ -1162,19 +1165,19 @@ class TestValidationActivitySlurmHydration:
             "work_phase": "done",
             "collecting_since": "2020-01-01T00:00:00+00:00",
         }
-        assert app_module._task_needs_slurm_hydration(task) is False
+        assert activity_hydration._task_needs_slurm_hydration(task) is False
         # Still inside the grace period → keep polling for the collector.
         fresh = dict(task, work_phase="collecting", collecting_since=None)
-        assert app_module._task_needs_slurm_hydration(fresh) is True
+        assert activity_hydration._task_needs_slurm_hydration(fresh) is True
 
     def test_collecting_grace_expired_helper(self, monkeypatch):
-        assert app_module._collecting_grace_expired(None) is False
-        assert app_module._collecting_grace_expired("not-a-timestamp") is False
-        assert app_module._collecting_grace_expired("2020-01-01T00:00:00+00:00") is True
+        assert activity_hydration._collecting_grace_expired(None) is False
+        assert activity_hydration._collecting_grace_expired("not-a-timestamp") is False
+        assert activity_hydration._collecting_grace_expired("2020-01-01T00:00:00+00:00") is True
         # Naive timestamps are treated as UTC rather than crashing.
-        assert app_module._collecting_grace_expired("2020-01-01T00:00:00") is True
+        assert activity_hydration._collecting_grace_expired("2020-01-01T00:00:00") is True
         monkeypatch.setenv("RACK_VALIDATION_COLLECT_GRACE_SEC", "999999999")
-        assert app_module._collecting_grace_expired("2020-01-01T00:00:00+00:00") is False
+        assert activity_hydration._collecting_grace_expired("2020-01-01T00:00:00+00:00") is False
 
     def test_hydrate_fail_closed_when_scontrol_and_sacct_missing(
         self, isolated_validation_activities, monkeypatch
@@ -1192,11 +1195,11 @@ class TestValidationActivitySlurmHydration:
             app_module, "_run_scontrol_show_job", lambda jid: {"ok": False, "stdout": ""}
         )
         monkeypatch.setattr(
-            app_module,
+            activity_hydration,
             "_query_scheduler_state_and_stdout",
             lambda jid: (None, None, "missing"),
         )
-        app_module._hydrate_activity_task_logs(aid)
+        activity_hydration._hydrate_activity_task_logs(aid)
         task = validation_activities.get_activity(aid)["tasks"][0]
         assert task["scheduler_state"] == "UNKNOWN"
         assert task["work_phase"] == "unknown"
@@ -1214,11 +1217,11 @@ class TestValidationActivitySlurmHydration:
             app_module.native_status, "augment_running_set_for_job_ids", lambda *a, **k: None
         )
         monkeypatch.setattr(
-            app_module,
+            activity_hydration,
             "_query_scheduler_state_and_stdout",
             lambda jid: ("COMPLETED", f"/tmp/llmb-nccl_nodes_{jid}.out", "sacct"),
         )
-        app_module._hydrate_activity_task_logs(aid)
+        activity_hydration._hydrate_activity_task_logs(aid)
         task = validation_activities.get_activity(aid)["tasks"][0]
         assert task["results_log_path"] == str(results)
         assert task["work_phase"] == "done"
