@@ -60,13 +60,49 @@ _node_report_jobs: dict[str, dict] = {}
 _node_report_jobs_lock = threading.Lock()
 
 
-def _reset_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
+def _job_purge_later(
+    jobs: dict[str, dict[str, object]],
+    lock: threading.Lock,
+    job_id: str,
+    delay_sec: int = 900,
+) -> None:
+    """Drop finished job metadata after a delay, so a registry cannot grow without bound.
+
+    One function for every registry. There were five identical copies of this -- four in app.py plus
+    one here -- differing only in which dict they popped from, which is how a bounded registry quietly
+    becomes an unbounded one: fix the eviction in the copy you are looking at and the other four keep
+    leaking.
+
+    The dict and lock are passed in rather than named, so the caller cannot accidentally pair one
+    registry's dict with another's lock.
+    """
+
     def _purge() -> None:
         time.sleep(float(delay_sec))
-        with _reset_jobs_lock:
-            _reset_jobs.pop(job_id, None)
+        with lock:
+            jobs.pop(job_id, None)
 
     threading.Thread(target=_purge, daemon=True).start()
+
+
+def _reset_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
+    _job_purge_later(_reset_jobs, _reset_jobs_lock, job_id, delay_sec)
+
+
+def _validation_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
+    _job_purge_later(_validation_jobs, _validation_jobs_lock, job_id, delay_sec)
+
+
+def _stress_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
+    _job_purge_later(_stress_jobs, _stress_jobs_lock, job_id, delay_sec)
+
+
+def _xrack_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
+    _job_purge_later(_xrack_jobs, _xrack_jobs_lock, job_id, delay_sec)
+
+
+def _llama_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
+    _job_purge_later(_llama_jobs, _llama_jobs_lock, job_id, delay_sec)
 
 
 @contextmanager

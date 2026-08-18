@@ -23,15 +23,16 @@ it today with ``import app`` *inside* function bodies, which defers the problem 
 rather than solving it. Anything they need should migrate here instead.
 
 Scope: small, dependency-light utilities with no request context and no application state.
-Configuration resolution (``_eget`` and the job-env override store) is a larger subsystem and
-still lives in ``app.py``; it belongs here eventually, but it carries a file-locked cache and a
-settings registry that deserve their own move.
+Configuration resolution (``_eget`` and the job-env override store) is a larger subsystem with a
+file-locked cache and a settings registry, so it has its own module: ``config_env.py``. Read knobs
+through that, never with a bare ``os.environ.get`` -- see ``core-designs.mdc`` §5.
 """
 
 from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
 import host_exec
@@ -110,6 +111,29 @@ def history_enabled() -> bool:
     except ImportError:
         return False
     return results_history is not None and not truthy_env("RACK_RESULTS_HISTORY_DISABLED")
+
+
+def utc_now_iso() -> str:
+    """Now, as ``2026-08-18T15:04:05.123456+00:00``.
+
+    One of TWO timestamp conventions in this codebase, and this is the one most modules use --
+    ``datetime.now(timezone.utc).isoformat()``, with microseconds and a numeric offset. Four modules
+    each carried a byte-identical copy of it (node_issues, post_run_report, rack_locks,
+    validation_activities).
+
+    The other convention is ``strftime("%Y-%m-%dT%H:%M:%SZ")``: second precision, literal Z. It is
+    NOT interchangeable -- ``node_report`` documents that the customer schema's ``isoDateTime``
+    pattern requires the Z form -- so those callers are deliberately left alone rather than folded
+    in here. Anything parsing both formats has to accept both.
+    """
+    return datetime.now(timezone.utc).isoformat()
+
+
+def utc_iso_from_epoch(timestamp: float | None) -> str | None:
+    """Epoch seconds -> the same ``+00:00`` ISO form; ``None`` passes through."""
+    if timestamp is None:
+        return None
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
 
 
 #: A browser-supplied dashboard client id, as sent in ``X-Rack-Client-Id``.

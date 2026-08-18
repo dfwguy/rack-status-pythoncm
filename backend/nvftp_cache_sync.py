@@ -38,6 +38,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+import config_env
 import token_vault
 
 _logger = logging.getLogger(__name__)
@@ -62,44 +63,18 @@ _bg_thread: threading.Thread | None = None
 _bg_thread_lock = threading.Lock()
 
 
-def _job_env_override_from_file(name: str) -> str:
-    """Read a single key from ``var/cache/job_env_overrides.json`` without importing ``app``."""
-    path = CACHE_DIR / "job_env_overrides.json"
-    try:
-        if path.is_file():
-            with open(path, encoding="utf-8") as f:
-                doc = json.load(f)
-            if isinstance(doc, dict):
-                raw = doc.get(name)
-                if isinstance(raw, str) and raw.strip():
-                    return raw.strip()
-    except (OSError, json.JSONDecodeError, TypeError):
-        pass
-    return ""
-
-
 def _eget(name: str, default: str = "") -> str:
-    """Read env (process env, job-env JSON, then ``app._eget`` when the app module is fully loaded)."""
-    raw = (os.environ.get(name) or "").strip()
-    if raw:
-        return raw
-    raw = _job_env_override_from_file(name)
-    if raw:
-        return raw
-    try:
-        import sys
+    """Config read through the one ladder in ``config_env``.
 
-        app_mod = sys.modules.get("app")
-        if app_mod is None:
-            return (default or "").strip()
-        eget = getattr(app_mod, "_eget", None)
-        if eget is None:
-            return (default or "").strip()
-        v = eget(name, default)  # type: ignore[misc]
-        return (v or default).strip() if v is not None else (default or "").strip()
-    except Exception:
-        _logger.debug("_eget: ignoring error", exc_info=True)
-        return (default or "").strip()
+    This module used to re-implement the ladder: process env, then a hand-rolled read of
+    ``job_env_overrides.json``, then ``app._eget`` fetched out of ``sys.modules``. That predated
+    ``config_env.py`` and got the PRECEDENCE wrong -- it let the process environment beat an
+    operator's Settings override, while every other reader has the override win. The same knob
+    therefore resolved differently depending on which module asked, which is the failure
+    ``core-designs.mdc`` §5 exists to prevent.
+    """
+    v = config_env._eget(name, default)
+    return (v or default or "").strip()
 
 
 def _truthy(name: str) -> bool:

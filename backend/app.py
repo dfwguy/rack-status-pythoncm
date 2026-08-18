@@ -272,16 +272,20 @@ except Exception as _ge_exc:  # pragma: no cover - observability embeds are opti
 from job_registry import (
     _analytics_jobs,
     _analytics_jobs_lock,
+    _llama_job_purge_later,
     _llama_jobs,
     _llama_jobs_lock,
     _reset_job_purge_later,
     _reset_jobs,
     _reset_jobs_lock,
+    _stress_job_purge_later,
     _stress_jobs,
     _stress_jobs_lock,
     _track_sync_op,
+    _validation_job_purge_later,
     _validation_jobs,
     _validation_jobs_lock,
+    _xrack_job_purge_later,
     _xrack_jobs,
     _xrack_jobs_lock,
 )
@@ -1033,15 +1037,6 @@ def _maybe_adopt_validation_log(log_path: Path, log_dir: Path, rack: str) -> Non
         _logger.debug("validation log adopt skipped for %s: %s", log_path, e, exc_info=True)
 
 
-def _validation_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
-    """Drop finished job metadata after a delay (avoids unbounded memory)."""
-
-    def _purge() -> None:
-        time.sleep(float(delay_sec))
-        with _validation_jobs_lock:
-            _validation_jobs.pop(job_id, None)
-
-    threading.Thread(target=_purge, daemon=True).start()
 
 
 def _validation_worker(
@@ -1128,13 +1123,6 @@ def _validation_worker(
     _validation_job_purge_later(job_id)
 
 
-def _stress_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
-    def _purge() -> None:
-        time.sleep(float(delay_sec))
-        with _stress_jobs_lock:
-            _stress_jobs.pop(job_id, None)
-
-    threading.Thread(target=_purge, daemon=True).start()
 
 
 def _stress_worker(
@@ -1217,13 +1205,6 @@ def _stress_worker(
     _stress_job_purge_later(job_id)
 
 
-def _xrack_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
-    def _purge() -> None:
-        time.sleep(float(delay_sec))
-        with _xrack_jobs_lock:
-            _xrack_jobs.pop(job_id, None)
-
-    threading.Thread(target=_purge, daemon=True).start()
 
 
 def _xrack_worker(
@@ -1306,13 +1287,6 @@ def _xrack_worker(
     _xrack_job_purge_later(job_id)
 
 
-def _llama_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
-    def _purge() -> None:
-        time.sleep(float(delay_sec))
-        with _llama_jobs_lock:
-            _llama_jobs.pop(job_id, None)
-
-    threading.Thread(target=_purge, daemon=True).start()
 
 
 def _llama_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_cmd: str) -> None:
