@@ -3749,20 +3749,12 @@ def _validation_ct_inner() -> str:
     return s
 
 
-def _rpath(p: object) -> PurePosixPath:
-    """The single path resolver: canonicalise *p* against the execution host.
-
-    Returns a :class:`PurePosixPath` deliberately. The path names a file on the
-    execution host, which is not necessarily this machine, so local filesystem
-    calls on it are a category error — and an inert path type makes that a loud
-    ``AttributeError`` at the call site instead of a silently wrong answer.
-    Ask the connection instead: ``host_exec.is_file`` / ``stat`` / ``read_text``.
-
-    Replaces the three overlapping resolvers this module used to carry
-    (``_resolve_path``, ``_lp_resolve``, and the inline
-    ``str(x) if is_remote() else str(x.resolve())`` idiom).
-    """
-    return PurePosixPath(host_exec.resolve(p))
+# The single path resolver, shared with paths.py and the api/ modules rather than redeclared:
+# this module carried a byte-identical copy of core.rpath. It replaced the three overlapping
+# resolvers app.py used to have (``_resolve_path``, ``_lp_resolve``, and the inline
+# ``str(x) if is_remote() else str(x.resolve())`` idiom); keeping a second definition of the
+# replacement would have reintroduced exactly the drift that consolidation removed.
+_rpath = core.rpath
 
 
 def _validation_script_path() -> Path:
