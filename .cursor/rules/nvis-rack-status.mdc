@@ -145,12 +145,33 @@ restarting the container therefore deploys nothing — the restart reuses the ol
 `build-docker.sh`'s output is never referenced. On the OVA, rebuild with `docker compose build` and
 replace the container with `docker compose up -d`; `docker restart` cannot adopt a new image.
 
-- `backend/api/` — **where new endpoints go.** One module per domain, auto-discovered: expose
-  `bp` (a Blueprint) or `install(app)` and it registers itself. Never edit `app.py` to add a
+- `backend/api/` — **where every endpoint lives.** 38 modules, one per domain, auto-discovered:
+  expose `bp` (a Blueprint) or `install(app)` and it registers itself. Never edit `app.py` to add a
   route, and never `from app import ...` here — see `core-designs.mdc` §0.
 - `backend/core.py` — helpers importing neither Flask nor `app`; this is what keeps the
   dependency one-directional (`app.py → api/<domain>.py → core.py`)
-- `backend/app.py` — the Flask app, plus the routes not yet migrated out of it
+- `backend/app.py` — **the composition root, ~2,000 lines.** The Flask object, the startup
+  bootstraps, the auth gate, the middleware pairs and the SPA catch-alls. All 199 routes have moved
+  out. Editing this file to add an endpoint means something has gone wrong.
+
+The mechanism modules the routes were built on, in dependency order — extend the one that owns your
+concern rather than adding a helper beside a route:
+
+- `paths.py` — every per-tool script path (19 of them) and log-dir resolution
+- `grafana_embed.py` + `log_time_window.py` — panel/dashboard/host/timezone mechanics, and deriving
+  a run's real time window from its log (NOT from the Slurm allocation)
+- `rack_status_engine.py` — the canonical fleet dataset: cross-process snapshot lease, per-log-dir
+  cache, cmsh rack list, physical RF0 map. `/api/status`, `/api/cluster-overview` and the exports
+  are three renderings of it
+- `results_ingest.py` — `parser.sh` invocation plus the predicates that decide whether its output is
+  a real measurement
+- `validation_launch.py` + `activity_hydration.py` — building/vetting a launch, and reconciling a
+  stored activity against Slurm and its result log
+- `job_registry.py` — the in-process registries, their locks, and `reset_job_progress`, the phase
+  state machine every background worker shares
+- `node_targets.py` + `naming.py` — rack id → real hostnames, and log-basename classification
+- `stream_exec.py`, `slurm_query.py`, `slurm_admin.py`, `comments_store.py`, `cluster_metadata.py`,
+  `analytics_cache.py`, `logscan_cache.py`, `app_clients.py`, `web_auth.py`
 - `backend/catalog/` — multi-generation Platform/Tool/Project schemas: `store.py` (Repo + TinyDB), `models.py`, `seed.py`, `context.py` (active-context overlays + AI envelope), `api.py` (`/api/catalog`)
 - `frontend/src/context/ActiveClusterContext.tsx` — active project/cluster + switcher state
 - `frontend/src/services/catalogService.ts` + `frontend/src/types/catalog.ts` — catalog API client + types

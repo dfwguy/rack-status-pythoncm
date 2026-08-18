@@ -21,10 +21,14 @@ bp = Blueprint("rack_locks", __name__)      # no url_prefix -> derived from the 
 def claim(): ...
 ```
 
-`app.py` reached 20,000 lines and still holds 135 of the 199 routes, because every feature had to
-touch it. Two people working in parallel then collide by construction — which is how an entire
-feature ended up living uncommitted on a customer deployment for days. One file per domain is the fix; keeping the
+`app.py` reached 20,000 lines holding 135 of the 199 routes, because every feature had to touch it.
+Two people working in parallel then collide by construction — which is how an entire feature ended up
+living uncommitted on a customer deployment for days. One file per domain is the fix; keeping the
 registry implicit is what stops the registry becoming the new bottleneck.
+
+**That migration is finished.** All 199 routes live in 38 modules under `api/`; `app.py` is ~2,000
+lines and keeps only the Flask object, the startup bootstraps, the auth gate, the middleware pairs and
+the SPA catch-alls. There is no longer a reason to edit it to add an endpoint.
 
 ### The rules the loader enforces
 
@@ -60,7 +64,7 @@ Command runners are not endpoints. `slurm_query.py` exists because `app.py` *and
 needed `_run_squeue`; putting it in the route module would have made `app.py` import from `api/`,
 inverting the one direction this package exists to protect.
 
-### The aliasing trap — it has bitten twice
+### The aliasing trap — the single most expensive thing in this migration
 
 `app.py` imports moved helpers under their original private names so call sites did not change.
 That works because a function or dict is shared by reference. But:
@@ -73,10 +77,37 @@ That works because a function or dict is shared by reference. But:
   lock still guards the original. Mutate these, never rebind them.
 - A helper that is still *called from `app.py`* is unaffected, which is why only some patches
   break. That asymmetry is what makes it confusing; check with a run, not by reasoning.
+- **A silently-ignored stub is worse than a missing one.** When the patch target is wrong, the real
+  function runs: one test failed as `assert 'fresh' == 'failed'`, which reads like a behaviour
+  regression, and the truth was that the actual fleet scan had executed. If a "logic" failure appears
+  in the same commit as a move, suspect the patch target before the logic.
+- **Two more shapes of the same trap, both of which broke real code paths here.** A test that
+  hand-lists its patch targets (`naming`, `app`, `validation_launch`, …) needs a new entry on every
+  extraction — discover the binders instead, as `test_pdsh_slurm_expand` and `test_job_registry` now
+  do. And a structural guard that greps a *named file* for a forbidden pattern silently stops checking
+  anything once the code moves; read the source through `inspect.getsource` so it follows the function.
 
-### Migrating an existing domain out of `app.py`
+### A name read off `app` at call time is a live grenade
 
-Still to do for 135 of the 199 routes. The recipe, in order:
+`import app` inside a function body, then `app.<name>`, defers the lookup to runtime — so the name is
+never checked until that path runs. During this migration it broke three modules the same way: a name
+became legitimately unused in `app.py`, ruff removed the import, and nothing complained until the code
+executed. `workflow_engine` lost `validation_target_for_rack` (5 sites) and `_run_scontrol_node_update`;
+`agent/registrations` lost the five job registries and `_validation_ct_inner`; `bcm_query` lost
+`SCRIPTS_DIR`, which had always lived in `paths.py`.
+
+`test_no_deferred_app_lookups.py` bans the pattern. Import from the module that **owns** the name.
+The one allowed exception is `agent/registrations.py`, which looks up Flask *view* functions and so
+genuinely needs the app object.
+
+### Splitting a module that has outgrown itself
+
+Nothing is left to migrate out of `app.py`, but the same recipe applies when an `api/` module grows too
+large or a helper turns out to be shared. **Measure the helper-sharing first, then cut where it is
+zero** — that is how rack actions became `rack_power` / `fabric_ops` / `diagnostics`, and why the split
+needed no test changes. A cut through shared helpers is what forces the ugly compromises.
+
+The recipe, in order:
 
 1. **Move the route functions and their private helpers.** Change `@app.route` to `@bp.route`,
    keep the path strings byte-for-byte, and give the blueprint `url_prefix=""`.

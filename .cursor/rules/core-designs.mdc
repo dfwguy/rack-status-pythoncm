@@ -57,13 +57,28 @@ means the feature is simply absent with no error anywhere, which cost an afterno
 because moving routes between modules is exactly the change that silently renames one, and the
 SPA calls these paths by hand.
 
-`app.py` reached 20,000 lines and still holds 135 of the 199 routes, every feature touching it,
-so parallel work
-collided by construction — that is how a whole feature ended up uncommitted on a customer
-deployment. Migration is partial: `terminal` (via `install`), `help`, `vault`, `history`, `deep_audits`, `node_issues`,
-`workflows`, `nvftp_sync`, `cluster_health`, `ds_diag`, `openapi_spec`, `job_status`,
-`fabric_probe`, `ai`, `sn_llama_logs`, `slurm_queries` have moved. The bulk is
-blocked on configuration resolution (citizen 5) still living in `app.py`.
+**The migration is done.** `app.py` reached 20,000 lines holding 135 of the 199 routes, every feature
+touching it, so parallel work collided by construction — that is how a whole feature ended up
+uncommitted on a customer deployment. It is now **~2,000 lines and 3 routes**: the Flask object, the
+startup bootstraps, the auth gate, the two middleware pairs, and the SPA catch-alls. A composition
+root. **Add a route by adding a file to `backend/api/`; there is no longer a reason to edit `app.py`.**
+
+The 38 modules under `api/` are one domain each. Where a domain was too big for one file it was split
+on measured helper-sharing rather than by taste — rack actions became `rack_power` / `fabric_ops` /
+`diagnostics` because those three share *zero* helpers with each other.
+
+Three lessons from doing it, all of which cost real time:
+
+- **Extract the substrate before the routes.** Every domain that looked expensive was really a
+  consumer of shared machinery: exports shared 41 helpers with `api_status` until
+  `rack_status_engine` came out, and analytics could not move until the `parser.sh` helpers went to
+  `results_ingest`. Once the substrate landed, several domains needed no test changes at all.
+- **Patch the module that owns the call site.** `from x import f` binds at import time, so patching
+  `x.f` leaves an importer calling the real `f`. A stub silently ignored is worse than a missing one:
+  one test looked like a behaviour regression (`assert 'fresh' == 'failed'`) when the truth was that
+  the real fleet scan had run.
+- **A name read off `app` at call time is a live grenade.** See `test_no_deferred_app_lookups.py`;
+  it broke three modules during this migration and is now banned outright.
 
 ### 1. Connection / transport — how anything runs on a host
 
