@@ -24,6 +24,8 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+import threading
+import time
 
 import host_exec
 from config_env import _eget, _env_int
@@ -39,6 +41,87 @@ _SACCT_TERMINAL_STATES = frozenset({
     "COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "NODE_FAIL",
     "OUT_OF_MEMORY", "PREEMPTED", "BOOT_FAIL", "DEADLINE",
 })
+
+
+def _dedupe_hostnames_preserve_spelling(hosts: list[str]) -> list[str]:
+    """Drop duplicate hosts case-insensitively; keep the first spelling seen (prefer Slurm output order)."""
+    out_map: dict[str, str] = {}
+    for h in hosts:
+        t = (h or "").strip()
+        if not t:
+            continue
+        k = t.casefold()
+        if k not in out_map:
+            out_map[k] = t
+    return sorted(out_map.values(), key=str.casefold)
+
+
+# --- Live inventory (Slurm NodeNames) -------------------------------------------------
+# The authoritative list of *real* node hostnames for node-targeting tools (sysinfo,
+# pdsh, validation). Using inventory instead of a generated ``<rack>-<ctNN>`` template
+# makes targets correct on any site naming scheme (e.g. Boston's
+# ``bos01-a07-13-s1-dgx-03-c03`` under rack ``bos01-a07``). Short TTL cache so repeated
+# target builds in one request don't re-run ``sinfo``.
+#
+# Shared object, not a value: mutate/reassign only through _all_slurm_nodenames below, which holds
+# the lock. Rebinding _slurm_nodenames_cache in an importing module would give it a private cache.
+_slurm_nodenames_cache: tuple[float, list[str]] = (0.0, [])
+_slurm_nodenames_lock = threading.Lock()
+
+
+def _all_slurm_nodenames() -> list[str]:
+    """All real Slurm ``NodeName`` values (``sinfo -N``), deduped; short TTL cache.
+
+    Returns the last cached value (possibly empty) when Slurm is unavailable.
+    """
+    global _slurm_nodenames_cache
+    ttl = max(0, _env_int("RACK_INVENTORY_NODENAMES_TTL_SEC", 60))
+    ts, cached = _slurm_nodenames_cache
+    if cached and (time.monotonic() - ts) < ttl:
+        return cached
+    with _slurm_nodenames_lock:
+        ts, cached = _slurm_nodenames_cache
+        if cached and (time.monotonic() - ts) < ttl:
+            return cached
+        try:
+            proc = host_exec.run_slurm_on_host(
+                _get_platform().sinfo_cmd('-N -h -o "%N"'),
+                timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return cached
+        if proc.returncode != 0:
+            return cached
+        hosts = _dedupe_hostnames_preserve_spelling(
+            [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+        )
+        if hosts:
+            _slurm_nodenames_cache = (time.monotonic(), hosts)
+            return hosts
+        return cached
+
+
+def _rack_node_hostnames_from_inventory(rack: str) -> list[str]:
+    """Real node hostnames belonging to *rack*, derived from live Slurm inventory.
+
+    Nodes are matched to the rack id by prefix (rack id followed by a separator), so
+    this is **template-free** and works where the hostname is not ``<rack>-<ctNN>``.
+    Returns ``[]`` when inventory is unavailable or nothing matches.
+    """
+    rid = (rack or "").strip()
+    if not rid:
+        return []
+    hosts = _all_slurm_nodenames()
+    if not hosts:
+        return []
+    rid_cf = rid.casefold()
+    seps = ("-", "_", ".", ":", "/")
+    matched: list[str] = []
+    for h in hosts:
+        hcf = h.casefold()
+        if hcf == rid_cf or (hcf.startswith(rid_cf) and len(h) > len(rid) and h[len(rid)] in seps):
+            matched.append(h)
+    return matched
 
 
 def _run_squeue() -> dict:
