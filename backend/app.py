@@ -58,7 +58,6 @@ when logs are wall-clock local but the server env was UTC).
 """
 from __future__ import annotations
 
-import base64
 import fcntl
 import hashlib
 import io
@@ -66,7 +65,6 @@ import json
 import logging
 import math
 import os
-import queue
 import re
 import secrets
 import shlex
@@ -180,6 +178,11 @@ from api._common import (
 from api._common import (
     serve_spa_asset as _serve_spa_asset,
 )
+from log_discovery import (
+    _resolve_nemo_log_basename_in_dir,
+    find_log_paths_for_rack,
+    pick_logs_for_rack,
+)
 from logscan_cache import (
     _analytics_scan_ctx,
     _log_stat_for_path,
@@ -190,9 +193,10 @@ from naming import (
     _ct_power_single_ct_re,
     _ct_power_token_re,
     _ct_power_tray_full_re,
+    _full_rack_expected_nodes,
     _is_multirack_log_basename,
     _jobid_from_nemo_log_basename,
-    _multirack_node_count_suffix,
+    _multirack_site_prefix,
     _nemo_nccl_in_log_basename,
     _nemo_single_rack_log_basename,
     _normalize_nvswitch_host_for_rack,
@@ -201,6 +205,7 @@ from naming import (
     _nvswitch_host_sort_key,
     _rack_id_from_log_basename,
     _rack_id_from_nemo_1rack_filename,
+    multirack_display_rack_from_basename,
 )
 from paths import (
     _REMOTE_BASE,
@@ -1670,7 +1675,7 @@ from slurm_query import (
     _run_squeue,
     _slurm_job_state_base,
 )
-from stream_exec import _merged_stdout_stream_generator, _translate_cwd_for_remote
+from stream_exec import _merged_stdout_stream_generator
 from web_auth import _auth_enabled, _safe_next, _session_lifetime, _session_ok
 
 
@@ -1987,12 +1992,6 @@ def _parser_export_glob() -> str:
 
 
 
-def _multirack_site_prefix() -> str:
-    """Pod id for ``r[01-04]``-style names without ``pN-`` (e.g. ``p5``). See RACK_MULTIRACK_SITE_PREFIX (defaults to p5)."""
-    raw = _eget("RACK_MULTIRACK_SITE_PREFIX")
-    if raw is None or not str(raw).strip():
-        return "p5"
-    return str(raw).strip().lower()
 
 
 def _expand_r_inner_to_rack_nums(inner: str) -> list[int]:
@@ -2020,29 +2019,6 @@ def _expand_r_inner_to_rack_nums(inner: str) -> list[int]:
 
 
 
-def multirack_display_rack_from_basename(name: str) -> str:
-    """Human label like ``p5-r01+p5-r02 (36N)`` for multirack log filenames."""
-    suffix = _multirack_node_count_suffix(name)
-    naming = _nvis_naming()
-    racks = sorted(naming.find_rack_ids_in_string(name))
-    if len(racks) >= 2:
-        return "+".join(racks) + suffix
-    pod_re = naming.multirack_pod_r_bracket_re()
-    if pod_re:
-        m = pod_re.search(name)
-        if m:
-            expanded = naming.expand_pod_r_inner(m.group(1), m.group(2))
-            if expanded:
-                return "+".join(expanded) + suffix
-    bare_re = naming.multirack_bare_r_bracket_re()
-    if bare_re:
-        m2 = bare_re.search(name)
-        if m2:
-            expanded = naming.expand_site_r_inner(_multirack_site_prefix(), m2.group(1))
-            if expanded:
-                return "+".join(expanded) + suffix
-    stem = Path(name).stem
-    return (stem[:120] if stem else name) + suffix
 
 
 def _multirack_physical_rack_ids(name: str) -> list[str]:
@@ -2068,26 +2044,6 @@ def _multirack_physical_rack_ids(name: str) -> list[str]:
     return []
 
 
-def _resolve_nemo_log_basename_in_dir(log_dir: Path, basename: str) -> Path | None:
-    """Return path to ``basename`` under log_dir root or failed/; None if missing or unsafe."""
-    bn = Path(basename).name
-    if bn != basename.strip() or ".." in bn or "/" in bn or "\\" in bn:
-        return None
-    if not _nemo_nccl_in_log_basename(bn):
-        return None
-    # The log dir belongs to the execution host, so existence is asked of the
-    # connection. Doing it locally used to make every lookup on a remote target
-    # return "log file not found" for files that plainly existed.
-    root = _rpath(log_dir)
-    for sub in (root, root / "failed", root / "sn-llama"):
-        cand = _rpath(sub / bn)
-        try:
-            cand.relative_to(root)
-        except ValueError:
-            continue
-        if host_exec.is_file(cand):
-            return cand
-    return None
 
 
 
@@ -2215,37 +2171,6 @@ def list_log_txt_paths_for_export(
     return out
 
 
-def find_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
-    """Paths to single-rack validation logs for *rack* under ``log_dir`` and ``failed/`` (newest first).
-
-    Scans ``*.txt`` and keeps files whose basename maps to exactly this rack via
-    ``rack_id_from_log_basename`` (agnostic to pod/rack zero-padding in filenames, e.g. ``p5-r01``
-    vs dashboard ``p05-r01``). Excludes multirack and Llama Slurm stdout basenames.
-    """
-    rk = _normalize_rack_id(rack)
-    naming = _nvis_naming()
-    # Route log discovery through host_exec (SSH when remote, local when on-node) so parser-results
-    # works whether the app runs on a laptop (SSH) or on the head node — same abstraction as scripts.
-    base_root = str(native_status._host_resolve(log_dir)).rstrip("/")
-    seen: set[str] = set()
-    scored: list[tuple[float, Path]] = []
-    for base in (base_root, base_root + "/failed"):
-        for path, mtime_ns, _size in native_status._host_log_entries(base):
-            name = os.path.basename(path)
-            if not _nemo_single_rack_log_basename(name):
-                continue
-            if naming.is_llama_slurm_stdout_basename(name):
-                continue
-            if _is_multirack_log_basename(name):
-                continue
-            if naming.rack_id_from_log_basename(name) != rk:
-                continue
-            if path in seen:
-                continue
-            seen.add(path)
-            scored.append((mtime_ns / 1_000_000_000, native_status._host_path(path)))
-    scored.sort(key=lambda t: t[0], reverse=True)
-    return [p for _m, p in scored]
 
 
 def find_nvloom_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
@@ -2268,121 +2193,14 @@ def find_nvloom_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
 _NVLOOM_HEATMAPS_LOG_MAX_BYTES = 40 * 1024 * 1024
 
 
-_FULL_RACK_NODES_RE = re.compile(r"-(\d+)N-", re.IGNORECASE)
 
 
-def _node_count_from_log_basename(name: str) -> int | None:
-    """Slurm node count from ``…-<N>N-<jobid>.txt`` (e.g. ``18`` from ``…-18N-75270.txt``)."""
-    m = _FULL_RACK_NODES_RE.search(name or "")
-    if not m:
-        return None
-    try:
-        return int(m.group(1), 10)
-    except ValueError:
-        return None
 
 
-def _full_rack_expected_nodes() -> int:
-    """Expected full-rack Slurm node count for parser ``full_rack`` filtering (default 18 / NVL72)."""
-    raw = (_eget("RACK_FULL_RACK_NODES") or "").strip()
-    if raw.isdigit():
-        n = int(raw, 10)
-        if n > 0:
-            return n
-    return 18
 
 
-def pick_log_for_rack(
-    log_dir: Path,
-    rack: str,
-    job_id: str | None,
-    *,
-    full_rack: bool = False,
-    full_rack_nodes: int | None = None,
-) -> Path | None:
-    """Pick a single-rack validation log for *rack*.
-
-    Default: newest matching log (by mtime); if *job_id* is set, prefer that job's file.
-
-    When *full_rack* is true, only consider logs whose basename encodes the full-rack
-    node count (``-18N-`` by default / ``RACK_FULL_RACK_NODES``). A row job_id that
-    points at a partial run (e.g. ``-1N-``) is ignored so the dialog can still surface
-    the latest full-rack acceptance log.
-    """
-    cands = find_log_paths_for_rack(log_dir, rack)
-    if not cands:
-        return None
-    if full_rack:
-        need = int(full_rack_nodes) if full_rack_nodes and full_rack_nodes > 0 else _full_rack_expected_nodes()
-        cands = [p for p in cands if _node_count_from_log_basename(p.name) == need]
-        if not cands:
-            return None
-    j = (job_id or "").strip()
-    if j.isdigit():
-        suf = f"N-{j}.txt"
-        for p in cands:
-            if p.name.endswith(suf):
-                return p
-        # full_rack: job_id may be a partial (1N) sweep — fall through to newest full-rack log
-        if not full_rack:
-            return cands[0]
-    return cands[0]
 
 
-def pick_logs_for_rack(
-    log_dir: Path,
-    rack: str,
-    job_id: str | None,
-    *,
-    full_rack: bool = False,
-    full_rack_nodes: int | None = None,
-) -> dict[str, Path]:
-    """One log per validation stage for *rack*: ``{"nccl": path, "nemo": path}``.
-
-    Since the move to llmb-run, stage 1 (NCCL) and stage 2 (NeMo) are separate Slurm jobs
-    writing separate logs, so a single job id can only ever address ONE of them. Picking one
-    file for the whole dialog therefore guaranteed that one stage's tab was built from the
-    other stage's log — which is how a NeMo log came to be charted as an NCCL result.
-
-    An *job_id* pins the stage whose log carries it; the other stage still resolves to its own
-    newest log. On the older combined format (one job, both stages in one file) both keys
-    resolve to the SAME path, and the caller is expected to parse it once — see
-    ``_parser_stage_sources``.
-
-    Stages are identified by ``native_status._stage_kind_of_log_bn`` so this and the dashboard
-    can never disagree about which file speaks for which stage.
-    """
-    cands = find_log_paths_for_rack(log_dir, rack)
-    if not cands:
-        return {}
-    if full_rack:
-        need = int(full_rack_nodes) if full_rack_nodes and full_rack_nodes > 0 else _full_rack_expected_nodes()
-        cands = [p for p in cands if _node_count_from_log_basename(p.name) == need]
-        if not cands:
-            return {}
-
-    j = (job_id or "").strip()
-    suf = f"N-{j}.txt" if j.isdigit() else None
-    out: dict[str, Path] = {}
-    # cands is newest-first, so the first hit per stage is that stage's newest log.
-    for p in cands:
-        kind = native_status._stage_kind_of_log_bn(p.name)
-        if kind and kind not in out:
-            out[kind] = p
-    # An explicit job_id outranks "newest" for its own stage only.
-    if suf:
-        for p in cands:
-            if p.name.endswith(suf):
-                kind = native_status._stage_kind_of_log_bn(p.name)
-                if kind:
-                    out[kind] = p
-                break
-    if out:
-        return out
-    # Nothing carried a stage marker in its name (foreign or legacy naming). Fall back to the
-    # single-log behaviour so those callers keep working exactly as before.
-    one = pick_log_for_rack(log_dir, rack, job_id, full_rack=full_rack, full_rack_nodes=full_rack_nodes)
-    return {"nemo": one} if one else {}
 
 
 # Which parser.sh table each stage is the authority for. A stage's rows are taken from that
@@ -7285,188 +7103,10 @@ _SLURM_SCANCEL_JOB_ID_RE = core.SLURM_JOB_ID_RE  # one definition, in core
 
 
 
-def _rack_log_resolve(
-    log_dir_raw: str | None,
-    rack: str,
-    job_id_raw: str | None,
-    log_file_raw: str | None = None,
-) -> tuple[Path, Path, str] | tuple[Response, int]:
-    """Resolve rack log path for API handlers. Returns (log_dir, log_path, rack_key) or (jsonify, status)."""
-    try:
-        log_dir = _resolve_log_dir(log_dir_raw)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    lf = (log_file_raw or "").strip()
-    if lf:
-        lp = _resolve_nemo_log_basename_in_dir(log_dir, lf)
-        if lp is None:
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": (
-                            f"log file not found or basename must contain NEMO/NCCL: {Path(lf).name!r}"
-                        ),
-                    }
-                ),
-                404,
-            )
-        rk = multirack_display_rack_from_basename(lp.name)
-        return log_dir, lp, rk
-    rack_s = (rack or "").strip()
-    try:
-        rk = _normalize_rack_id(rack_s)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    job_raw = (job_id_raw or "").strip()
-    job_id = job_raw if job_raw and job_raw != "-" else None
-    log_path = pick_log_for_rack(log_dir, rack_s, job_id)
-    if log_path is None:
-        return (
-            jsonify(
-                {
-                    "ok": False,
-                    "error": (
-                        f"no matching *.txt for rack {rk!r} under {log_dir} or {log_dir / 'failed'} "
-                        f"(NEMO/NCCL basename, or ClusterKit root-CK-/clusterkit with one rack id)"
-                    ),
-                }
-            ),
-            404,
-        )
-    # In ssh mode these are REMOTE paths (PurePosixPath): .resolve()/.is_file() touch the local
-    # filesystem and raise AttributeError, which Flask turns into a 500 -> an HTML error page ->
-    # "Unexpected token '<'" in the SPA. Only do filesystem checks for genuinely local paths.
-    if isinstance(log_dir, Path) and isinstance(log_path, Path):
-        root = _rpath(log_dir)
-        lp = _rpath(log_path)
-        try:
-            lp.relative_to(root)
-        except ValueError:
-            return jsonify({"ok": False, "error": "invalid log path"}), 400
-        if not lp.is_file():
-            return jsonify({"ok": False, "error": "log file not found"}), 404
-    else:
-        # PurePath.relative_to does not collapse "..", so normalise textually before the
-        # containment check or "<dir>/../../etc/passwd" would pass it.
-        root = PurePosixPath(os.path.normpath(str(log_dir)))
-        lp = PurePosixPath(os.path.normpath(str(log_path)))
-        try:
-            lp.relative_to(root)
-        except ValueError:
-            return jsonify({"ok": False, "error": "invalid log path"}), 400
-        # Existence is not checkable from here; a missing remote file surfaces as a read error.
-    return log_dir, lp, rk
 
 
-@app.route("/api/rack-log-download")
-def api_rack_log_download():
-    """Download the full NEMO rack log file (same pick as parser / tail-log)."""
-    out = _rack_log_resolve(
-        request.args.get("log_dir"),
-        request.args.get("rack") or "",
-        request.args.get("job_id"),
-        request.args.get("log_file"),
-    )
-    # Arity, not isinstance -- see the note in api_rack_log_content(); log_dir is a PurePosixPath
-    # in ssh mode and would otherwise be returned to Flask as if it were an error tuple.
-    if len(out) != 3:
-        return out
-    _log_dir, lp, _rk = out
-    if not isinstance(lp, Path):
-        # Remote (ssh mode): the file is on the head node, so send_file() cannot reach it.
-        # Stream it over the same transport that produced the path.
-        q = shlex.quote(str(lp))
-        cp = host_exec.run_on_host(f"base64 -w0 {q}")
-        if cp.returncode != 0 or not (cp.stdout or "").strip():
-            return jsonify(
-                {"ok": False, "error": f"cannot read remote log: {lp} {(cp.stderr or '').strip()}"}
-            ), 404
-        try:
-            blob = base64.b64decode((cp.stdout or "").strip())
-        except ValueError as e:  # binascii.Error subclasses ValueError
-            return jsonify({"ok": False, "error": f"decode failed: {e}"}), 500
-        resp = app.response_class(blob, mimetype="text/plain; charset=utf-8")
-        resp.headers["Content-Disposition"] = f'attachment; filename="{lp.name}"'
-        resp.headers["Cache-Control"] = "no-store"
-        return resp
-    return send_file(
-        str(lp),
-        as_attachment=True,
-        download_name=lp.name,
-        mimetype="text/plain; charset=utf-8",
-        max_age=0,
-    )
 
 
-@app.route("/api/rack-log-content")
-def api_rack_log_content():
-    """Return full log text as JSON if under size limit; otherwise too_large + metadata."""
-    max_inline = max(0, _env_int("RACK_LOG_INLINE_MAX_BYTES", 10 * 1024 * 1024))
-    out = _rack_log_resolve(
-        request.args.get("log_dir"),
-        request.args.get("rack") or "",
-        request.args.get("job_id"),
-        request.args.get("log_file"),
-    )
-    # _rack_log_resolve returns (jsonify, code) on error and (log_dir, lp, rk) on success.
-    # Do NOT discriminate with isinstance(out[0], Path): in ssh mode log_dir is a PurePosixPath,
-    # which is NOT a Path subclass, so every successful remote resolve was mistaken for an error
-    # and returned raw to Flask ->
-    #   TypeError: The view function did not return a valid response ... it was a PurePosixPath
-    # i.e. a 500 on EVERY log view in ssh mode. Discriminate on arity instead.
-    if len(out) != 3:
-        return out
-    _log_dir, lp, _rk = out
-    # The log lives on the head node in ssh mode, so lp is a PurePosixPath and .stat()/.read_bytes()
-    # raise AttributeError -> 500 -> an HTML error page -> "Unexpected token '<'" in the SPA.
-    # Read it over the same transport that produced the path.
-    remote = not isinstance(lp, Path)
-    if remote:
-        q = shlex.quote(str(lp))
-        cp = host_exec.run_on_host(f"stat -c %s {q} 2>/dev/null || echo -1")
-        rc, so, se = cp.returncode, (cp.stdout or ""), (cp.stderr or "")
-        try:
-            sz = int(so.strip().splitlines()[-1])
-        except (ValueError, IndexError):
-            sz = -1
-        if rc != 0 or sz < 0:
-            return jsonify({"ok": False, "error": f"log file not found: {lp} {(se or '').strip()}"}), 404
-    else:
-        try:
-            sz = lp.stat().st_size
-        except OSError as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
-    if sz > max_inline:
-        return jsonify(
-            {
-                "ok": True,
-                "too_large": True,
-                "size_bytes": sz,
-                "filename": lp.name,
-                "max_inline_bytes": max_inline,
-            }
-        )
-    if remote:
-        cp = host_exec.run_on_host(f"cat {shlex.quote(str(lp))}")
-        if cp.returncode != 0:
-            return jsonify({"ok": False, "error": (cp.stderr or "remote read failed").strip()}), 500
-        text = cp.stdout or ""
-    else:
-        try:
-            raw = lp.read_bytes()
-        except OSError as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
-        text = raw.decode("utf-8", errors="replace")
-    return jsonify(
-        {
-            "ok": True,
-            "too_large": False,
-            "size_bytes": sz,
-            "filename": lp.name,
-            "content": text,
-        }
-    )
 
 
 def _demo_parser_results():
@@ -12764,231 +12404,14 @@ def api_run_nvswitch_audit_stream():
     )
 
 
-def _parse_tail_log_request(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
-    """Validate tail-log POST body; prep has log_path, log_dir, display_cmd, rack."""
-    if os.environ.get("RACK_TAIL_LOG_DISABLED", "").strip().lower() in ("1", "true", "yes"):
-        return None, (jsonify({"ok": False, "error": "tail-log disabled (RACK_TAIL_LOG_DISABLED)"}), 403)
-    log_raw = body.get("log_dir")
-    try:
-        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
-    except ValueError as e:
-        return None, (jsonify({"ok": False, "error": str(e)}), 400)
-    lf_raw = body.get("log_basename") or body.get("log_file")
-    lf = str(lf_raw).strip() if lf_raw else ""
-    if lf:
-        log_path = _resolve_nemo_log_basename_in_dir(log_dir, lf)
-        if log_path is None:
-            return None, (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": (
-                            f"log file not found or basename must contain NEMO/NCCL: {Path(lf).name!r}"
-                        ),
-                    }
-                ),
-                404,
-            )
-        rk = multirack_display_rack_from_basename(log_path.name)
-    else:
-        rack = (body.get("rack") or "").strip()
-        try:
-            rk = _normalize_rack_id(rack)
-        except ValueError as e:
-            return None, (jsonify({"ok": False, "error": str(e)}), 400)
-        job_raw = (body.get("job_id") or "").strip()
-        job_id = job_raw if job_raw and job_raw != "-" else None
-        log_path = pick_log_for_rack(log_dir, rack, job_id)
-        if log_path is None:
-            return None, (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": (
-                            f"no matching *.txt for rack {rk!r} under {log_dir} or {log_dir / 'failed'} "
-                        f"(NEMO/NCCL basename, or ClusterKit root-CK-/clusterkit with one rack id)"
-                        ),
-                    }
-                ),
-                404,
-            )
-    # ssh mode: the log lives on the head node, so these are PurePosixPath and .resolve() raises
-    # AttributeError -> 500 -> an HTML error page -> "Unexpected token '<'" / "500 Internal Server
-    # Error" in the SPA. Fifth site of this same bug class in this file; branch on EXEC MODE, not
-    # on the object type (_resolve_log_dir always returns a local Path object either way).
-    root = _rpath(log_dir)
-    lp = _rpath(log_path)
-    try:
-        lp.relative_to(root)
-    except ValueError:
-        return None, (jsonify({"ok": False, "error": "invalid log path"}), 400)
-    rel = str(lp.relative_to(root))
-    n0 = max(0, _env_int("RACK_TAIL_INITIAL_LINES", 400))
-    display_cmd = f"tail -n {n0} -f {shlex.quote(rel)}"
-    return (
-        {
-            "log_dir": log_dir,
-            "log_path": lp,
-            "rack": rk,
-            "rel_path": rel,
-            "display_cmd": display_cmd,
-        },
-        None,
-    )
 
 
-def _tail_log_stream_generator(prep: dict) -> object:
-    """Stream bytes from `tail -n N -f logfile` until client disconnects or error."""
-    lp = prep["log_path"]
-    n_init = max(0, _env_int("RACK_TAIL_INITIAL_LINES", 400))
-    cmd = ["tail", "-n", str(n_init), "-f", str(lp)]
-    # SSH mode: the log lives on the cluster head — tail must run there, not in this
-    # container. Wrap via host_exec (ssh 'cd <log_dir> && tail …'); local stdbuf and
-    # local cwd only apply to local execution. Mirrors _merged_stdout_stream_generator.
-    # See _merged_stdout_stream_generator: hand-built streaming Popen, so the
-    # mechanism matters here in a way it does not for ordinary callers.
-    remote = host_exec.exec_kind() == "ssh"
-    if (_eget("RACK_TAIL_LINEBUFFER", "1") or "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    ):
-        # `tail -f` writing to a pipe (no TTY) is block-buffered, so a slow live log
-        # never fills the buffer and the viewer hangs on "connecting". Resolve stdbuf
-        # on the *execution* host — the local path may not exist there.
-        stdbuf = host_exec.which("stdbuf")
-        if stdbuf:
-            cmd = [stdbuf, "-oL", "-eL", *cmd]
-    cwd_local = str(prep["log_dir"])
-    remote_cwd = _translate_cwd_for_remote(cwd_local) if remote else None
-    cmd = host_exec.wrap_for_host(cmd, cwd=remote_cwd)
-    proc = subprocess.Popen(
-        cmd,
-        cwd=None if remote else cwd_local,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=None if remote else _subprocess_env(),
-        bufsize=0,
-    )
-    outq: queue.Queue[bytes | None] = queue.Queue()
-
-    def feeder() -> None:
-        try:
-            stdout = proc.stdout
-            if stdout is None:
-                return
-            while True:
-                block = stdout.read(8192)
-                if not block:
-                    break
-                outq.put(block)
-        finally:
-            try:
-                if proc.stdout is not None:
-                    proc.stdout.close()
-            except OSError:
-                pass
-            outq.put(None)
-
-    threading.Thread(target=feeder, daemon=True).start()
-    header = (
-        f"# {prep['display_cmd']}\n# cwd: {prep['log_dir']}\n# file: {lp}\n\n"
-    )
-    yield header.encode("utf-8")
-    try:
-        while True:
-            try:
-                chunk = outq.get(timeout=0.5)
-            except queue.Empty:
-                if proc.poll() is not None:
-                    break
-                continue
-            if chunk is None:
-                break
-            yield chunk
-        rc = proc.poll()
-        if rc is not None and rc != 0:
-            yield f"\n--- tail exited {rc} ---\n".encode()
-    finally:
-        if proc.poll() is None:
-            try:
-                proc.kill()
-            except OSError:
-                pass
-            try:
-                proc.wait(timeout=15)
-            except (subprocess.TimeoutExpired, OSError):
-                pass
 
 
-def _parse_tail_job_stdout_stream_request(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
-    """POST JSON ``{log_dir, path}`` — resolve Slurm ``StdOut`` path and tail it (same generator as NEMO tail)."""
-    if os.environ.get("RACK_TAIL_LOG_DISABLED", "").strip().lower() in ("1", "true", "yes"):
-        return None, (jsonify({"ok": False, "error": "tail-log disabled (RACK_TAIL_LOG_DISABLED)"}), 403)
-    log_raw = body.get("log_dir")
-    try:
-        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
-    except ValueError as e:
-        return None, (jsonify({"ok": False, "error": str(e)}), 400)
-    path_raw = body.get("path")
-    if not isinstance(path_raw, str) or not path_raw.strip():
-        return None, (jsonify({"ok": False, "error": "path is required"}), 400)
-    try:
-        lp = _resolve_slurm_job_stdout_path(path_raw.strip(), str(log_dir))
-    except ValueError as e:
-        return None, (jsonify({"ok": False, "error": str(e)}), 400)
-    n0 = max(0, _env_int("RACK_TAIL_INITIAL_LINES", 400))
-    display_cmd = f"tail -n {n0} -f {shlex.quote(str(lp))}"
-    return (
-        {
-            "log_dir": log_dir,
-            "log_path": lp,
-            "rack": "",
-            "rel_path": lp.name,
-            "display_cmd": display_cmd,
-        },
-        None,
-    )
 
 
-@app.route("/api/tail-job-stdout-stream", methods=["POST"])
-def api_tail_job_stdout_stream():
-    """Stream ``tail -f`` for a Slurm job stdout file (``path`` from ``scontrol show job`` ``StdOut=``)."""
-    body = request.get_json(silent=True) or {}
-    prep, err = _parse_tail_job_stdout_stream_request(body)
-    if err is not None:
-        return err[0], err[1]
-    assert prep is not None
-    return Response(
-        stream_with_context(_tail_log_stream_generator(prep)),
-        mimetype="text/plain; charset=utf-8",
-        headers={
-            "Cache-Control": "no-store",
-            "Pragma": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
 
 
-@app.route("/api/tail-log-stream", methods=["POST"])
-def api_tail_log_stream():
-    """Stream live `tail -f` of the NEMO rack log (same file pick as parser)."""
-    body = request.get_json(silent=True) or {}
-    prep, err = _parse_tail_log_request(body)
-    if err is not None:
-        return err[0], err[1]
-    assert prep is not None
-
-    return Response(
-        stream_with_context(_tail_log_stream_generator(prep)),
-        mimetype="text/plain; charset=utf-8",
-        headers={
-            "Cache-Control": "no-store",
-            "Pragma": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
 
 
 @app.route("/")

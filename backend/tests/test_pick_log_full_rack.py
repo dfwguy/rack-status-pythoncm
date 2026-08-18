@@ -20,13 +20,17 @@ os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
+# Log discovery moved out of app.py. Patch and call the module that OWNS these names --
+# patching app's view would reach only the callers inside app.py (see backend-api.mdc).
+import log_discovery
+import naming
 
 
 def test_node_count_from_log_basename():
-    assert app_module._node_count_from_log_basename("cmods-NCCL-1Rack-ink50-dh01-h02-1N-75761.txt") == 1
-    assert app_module._node_count_from_log_basename("cmods-NCCL-1Rack-ink50-dh01-h02-18N-75270.txt") == 18
-    assert app_module._node_count_from_log_basename("root-NEMO-1Rack-bos01-b05-18N-294.txt") == 18
-    assert app_module._node_count_from_log_basename("no-node-count.txt") is None
+    assert naming._node_count_from_log_basename("cmods-NCCL-1Rack-ink50-dh01-h02-1N-75761.txt") == 1
+    assert naming._node_count_from_log_basename("cmods-NCCL-1Rack-ink50-dh01-h02-18N-75270.txt") == 18
+    assert naming._node_count_from_log_basename("root-NEMO-1Rack-bos01-b05-18N-294.txt") == 18
+    assert naming._node_count_from_log_basename("no-node-count.txt") is None
 
 
 def test_pick_log_full_rack_ignores_newer_1n_and_mismatched_job(monkeypatch, tmp_path):
@@ -37,17 +41,17 @@ def test_pick_log_full_rack_ignores_newer_1n_and_mismatched_job(monkeypatch, tmp
     full = PurePosixPath(str(log_dir / "cmods-NCCL-1Rack-ink50-dh01-h02-18N-75270.txt"))
     # Newest-first order (as find_log_paths_for_rack returns)
     monkeypatch.setattr(
-        app_module,
+        log_discovery,
         "find_log_paths_for_rack",
         lambda *_a, **_k: [partial, full],
     )
 
     # Default: job_id wins → 1N file
-    got = app_module.pick_log_for_rack(log_dir, "ink50-dh01-h02", "75761")
+    got = log_discovery.pick_log_for_rack(log_dir, "ink50-dh01-h02", "75761")
     assert got is not None and got.name.endswith("-1N-75761.txt")
 
     # full_rack: ignore 1N job_id, take newest 18N
-    got_fr = app_module.pick_log_for_rack(
+    got_fr = log_discovery.pick_log_for_rack(
         log_dir, "ink50-dh01-h02", "75761", full_rack=True, full_rack_nodes=18
     )
     assert got_fr is not None and got_fr.name.endswith("-18N-75270.txt")
@@ -58,11 +62,11 @@ def test_pick_log_full_rack_empty_when_no_18n(monkeypatch, tmp_path):
     log_dir.mkdir()
     partial = PurePosixPath(str(log_dir / "cmods-NCCL-1Rack-r01-1N-99.txt"))
     monkeypatch.setattr(
-        app_module,
+        log_discovery,
         "find_log_paths_for_rack",
         lambda *_a, **_k: [partial],
     )
-    assert app_module.pick_log_for_rack(log_dir, "r01", None, full_rack=True) is None
+    assert log_discovery.pick_log_for_rack(log_dir, "r01", None, full_rack=True) is None
 
 
 def test_pick_log_full_rack_prefers_matching_18n_job(monkeypatch, tmp_path):
@@ -71,11 +75,11 @@ def test_pick_log_full_rack_prefers_matching_18n_job(monkeypatch, tmp_path):
     older = PurePosixPath(str(log_dir / "cmods-NCCL-1Rack-r01-18N-100.txt"))
     newer = PurePosixPath(str(log_dir / "cmods-NCCL-1Rack-r01-18N-200.txt"))
     monkeypatch.setattr(
-        app_module,
+        log_discovery,
         "find_log_paths_for_rack",
         lambda *_a, **_k: [newer, older],
     )
-    got = app_module.pick_log_for_rack(log_dir, "r01", "100", full_rack=True)
+    got = log_discovery.pick_log_for_rack(log_dir, "r01", "100", full_rack=True)
     assert got is not None and got.name.endswith("-18N-100.txt")
 
 
@@ -85,7 +89,7 @@ def test_pick_log_full_rack_prefers_matching_18n_job(monkeypatch, tmp_path):
 def _stage_logs(monkeypatch, log_dir, *basenames):
     """Wire find_log_paths_for_rack to return these basenames, newest first."""
     paths = [PurePosixPath(str(log_dir / b)) for b in basenames]
-    monkeypatch.setattr(app_module, "find_log_paths_for_rack", lambda *_a, **_k: paths)
+    monkeypatch.setattr(log_discovery, "find_log_paths_for_rack", lambda *_a, **_k: paths)
     return paths
 
 
@@ -99,7 +103,7 @@ def test_pick_logs_resolves_one_log_per_stage(monkeypatch, tmp_path):
         "cmods-NEMO-1Rack-r01-18N-114257.txt",  # newest
         "cmods-NCCL-1Rack-r01-18N-114256.txt",
     )
-    got = app_module.pick_logs_for_rack(log_dir, "r01", None)
+    got = log_discovery.pick_logs_for_rack(log_dir, "r01", None)
     assert got["nccl"].name.endswith("-NCCL-1Rack-r01-18N-114256.txt")
     assert got["nemo"].name.endswith("-NEMO-1Rack-r01-18N-114257.txt")
 
@@ -115,7 +119,7 @@ def test_pick_logs_takes_the_newest_of_each_stage(monkeypatch, tmp_path):
         "cmods-NEMO-1Rack-r01-18N-100.txt",
         "cmods-NCCL-1Rack-r01-18N-99.txt",
     )
-    got = app_module.pick_logs_for_rack(log_dir, "r01", None)
+    got = log_discovery.pick_logs_for_rack(log_dir, "r01", None)
     assert got["nemo"].name.endswith("-300.txt")
     assert got["nccl"].name.endswith("-299.txt")
 
@@ -131,7 +135,7 @@ def test_pick_logs_job_id_pins_only_its_own_stage(monkeypatch, tmp_path):
         "cmods-NCCL-1Rack-r01-18N-299.txt",
         "cmods-NEMO-1Rack-r01-18N-100.txt",
     )
-    got = app_module.pick_logs_for_rack(log_dir, "r01", "100")
+    got = log_discovery.pick_logs_for_rack(log_dir, "r01", "100")
     assert got["nemo"].name.endswith("-100.txt"), "job_id must win for its own stage"
     assert got["nccl"].name.endswith("-299.txt"), "the other stage keeps its newest log"
 
@@ -141,7 +145,7 @@ def test_pick_logs_combined_log_resolves_to_one_file(monkeypatch, tmp_path):
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
     paths = _stage_logs(monkeypatch, log_dir, "root-NEMO-1Rack-bos01-b05-18N-294.txt")
-    got = app_module.pick_logs_for_rack(log_dir, "bos01-b05", None)
+    got = log_discovery.pick_logs_for_rack(log_dir, "bos01-b05", None)
     primary = app_module._primary_stage_log(got, None)
     assert primary is not None and primary.name == paths[0].name
     assert app_module._parser_secondary_stages(got, primary) == []
@@ -152,7 +156,7 @@ def test_pick_logs_falls_back_when_no_stage_marker(monkeypatch, tmp_path):
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
     _stage_logs(monkeypatch, log_dir, "root-CK-clusterkit-r01-18N-42.txt")
-    got = app_module.pick_logs_for_rack(log_dir, "r01", None)
+    got = log_discovery.pick_logs_for_rack(log_dir, "r01", None)
     assert app_module._primary_stage_log(got, None) is not None
 
 
@@ -166,7 +170,7 @@ def test_pick_logs_honours_full_rack_filter(monkeypatch, tmp_path):
         "cmods-NCCL-1Rack-r01-18N-499.txt",
         "cmods-NEMO-1Rack-r01-18N-498.txt",
     )
-    got = app_module.pick_logs_for_rack(log_dir, "r01", None, full_rack=True, full_rack_nodes=18)
+    got = log_discovery.pick_logs_for_rack(log_dir, "r01", None, full_rack=True, full_rack_nodes=18)
     assert got["nccl"].name.endswith("-18N-499.txt")
     assert got["nemo"].name.endswith("-18N-498.txt")
 
@@ -180,7 +184,7 @@ def test_secondary_stages_lists_only_distinct_files(monkeypatch, tmp_path):
         "cmods-NEMO-1Rack-r01-18N-2.txt",
         "cmods-NCCL-1Rack-r01-18N-1.txt",
     )
-    got = app_module.pick_logs_for_rack(log_dir, "r01", None)
+    got = log_discovery.pick_logs_for_rack(log_dir, "r01", None)
     primary = app_module._primary_stage_log(got, None)
     secondary = app_module._parser_secondary_stages(got, primary)
     assert [s for s, _ in secondary] == ["nccl"], "NeMo is primary, so only NCCL needs a parse"

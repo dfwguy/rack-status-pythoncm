@@ -23,8 +23,10 @@ cluster changes, so always go through ``_nvis_naming()`` rather than holding ont
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import nvis_id_templates
+from config_env import _eget
 
 
 def _nvis_naming() -> nvis_id_templates.NvisNaming:
@@ -104,3 +106,66 @@ def _nvswitch_host_sort_key(hostname: str) -> tuple[int, str]:
     if m:
         return (int(m.group(1)), hostname.lower())
     return (0, hostname.lower())
+
+
+# --- Multirack identity and expected node counts ----------------------------------------------
+# A multirack log's basename carries the site prefix, the racks it spanned and the node count. The
+# display label and the "was this a full rack?" question are both read straight off the name, so they
+# belong with the other basename readers rather than with whoever happens to need them.
+
+
+def _multirack_site_prefix() -> str:
+    """Pod id for ``r[01-04]``-style names without ``pN-`` (e.g. ``p5``). See RACK_MULTIRACK_SITE_PREFIX (defaults to p5)."""
+    raw = _eget("RACK_MULTIRACK_SITE_PREFIX")
+    if raw is None or not str(raw).strip():
+        return "p5"
+    return str(raw).strip().lower()
+
+
+def multirack_display_rack_from_basename(name: str) -> str:
+    """Human label like ``p5-r01+p5-r02 (36N)`` for multirack log filenames."""
+    suffix = _multirack_node_count_suffix(name)
+    naming = _nvis_naming()
+    racks = sorted(naming.find_rack_ids_in_string(name))
+    if len(racks) >= 2:
+        return "+".join(racks) + suffix
+    pod_re = naming.multirack_pod_r_bracket_re()
+    if pod_re:
+        m = pod_re.search(name)
+        if m:
+            expanded = naming.expand_pod_r_inner(m.group(1), m.group(2))
+            if expanded:
+                return "+".join(expanded) + suffix
+    bare_re = naming.multirack_bare_r_bracket_re()
+    if bare_re:
+        m2 = bare_re.search(name)
+        if m2:
+            expanded = naming.expand_site_r_inner(_multirack_site_prefix(), m2.group(1))
+            if expanded:
+                return "+".join(expanded) + suffix
+    stem = Path(name).stem
+    return (stem[:120] if stem else name) + suffix
+
+
+_FULL_RACK_NODES_RE = re.compile(r"-(\d+)N-", re.IGNORECASE)
+
+
+def _node_count_from_log_basename(name: str) -> int | None:
+    """Slurm node count from ``…-<N>N-<jobid>.txt`` (e.g. ``18`` from ``…-18N-75270.txt``)."""
+    m = _FULL_RACK_NODES_RE.search(name or "")
+    if not m:
+        return None
+    try:
+        return int(m.group(1), 10)
+    except ValueError:
+        return None
+
+
+def _full_rack_expected_nodes() -> int:
+    """Expected full-rack Slurm node count for parser ``full_rack`` filtering (default 18 / NVL72)."""
+    raw = (_eget("RACK_FULL_RACK_NODES") or "").strip()
+    if raw.isdigit():
+        n = int(raw, 10)
+        if n > 0:
+            return n
+    return 18

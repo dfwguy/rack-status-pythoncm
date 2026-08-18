@@ -34,6 +34,7 @@ os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
+import naming
 import native_status
 import nvis_id_templates as nid
 import validation_activities
@@ -99,7 +100,7 @@ def test_job_id_agrees_across_all_three_modules(name):
 @pytest.mark.parametrize("name", CORPUS)
 def test_node_count_suffix_agrees(name):
     want = nid.node_count_suffix_from_basename(name)
-    assert app_module._multirack_node_count_suffix(name) == want
+    assert naming._multirack_node_count_suffix(name) == want
     assert native_status._multirack_node_count_suffix_from_basename(name) == want
 
 
