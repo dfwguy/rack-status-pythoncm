@@ -191,3 +191,25 @@ def _multirack_physical_rack_ids(name: str) -> list[str]:
             if expanded:
                 return expanded
     return []
+
+def _expand_r_inner_to_rack_nums(inner: str) -> list[int]:
+    """Expand ``13-14,16`` or ``01-04`` inside ``r[…]`` brackets to rack number ints."""
+    out: list[int] = []
+    for part in inner.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            try:
+                lo, hi = int(a, 10), int(b, 10)
+            except ValueError:
+                continue
+            if lo <= hi:
+                out.extend(range(lo, hi + 1))
+        else:
+            try:
+                out.append(int(part, 10))
+            except ValueError:
+                continue
+    return sorted(set(out))

@@ -56,7 +56,7 @@ import cluster_snapshot
 import host_exec
 import native_status
 from comments_store import read_comments
-from config_env import _eget, _env_int, _job_env_int, _subprocess_env
+from config_env import _eget, _eget_int, _env_int, _job_env_int, _subprocess_env
 from core import rpath as _rpath
 from core import truthy_env as _truthy_env
 from naming import (
@@ -68,6 +68,7 @@ from naming import (
 )
 from paths import (
     REPO_ROOT,
+    _default_log_dir,
     _rack_status_script_path,
     _script_exists,
 )
@@ -787,3 +788,102 @@ def _rack_status_cache_clear_all() -> None:
     _cluster_snapshot_repository().bump_configuration_generation()
     with _rack_status_cache_lock:
         _rack_status_cache.clear()
+
+# Readers over this module's own cache. _ai_live_inventory_block is the AI assistant's live view of
+# the fleet, derived from the cached snapshot rather than collected again -- app.py keeps only the
+# one-line registration that hands it to ai_chat.
+
+
+def _rack_sort_key_for_cmsh_list(rid: str) -> tuple[int, int, str]:
+    m = re.match(r"^p(\d+)-r(\d+)$", rid.strip().lower())
+    if not m:
+        return (10**9, 10**9, rid)
+    return (int(m.group(1)), int(m.group(2)), rid)
+
+
+def _cached_rack_status_copy(log_dir: Path) -> dict | None:
+    """Compatibility reader backed by SQLite, including background-disabled mode."""
+    repository = _cluster_snapshot_repository()
+    snapshot = repository.get(
+        _cluster_snapshot_identity(),
+        _rack_status_cache_key(log_dir),
+        repository.configuration_generation(),
+    )
+    return dict(snapshot.payload) if snapshot is not None and snapshot.payload is not None else None
+
+
+def _ai_live_inventory_block() -> str:
+    """Compact live cluster-size facts for the AI prompt (cached snapshot only, no SSH).
+
+    The catalog deployment envelope only carries per-rack platform *geometry* (e.g. 72 GPUs/rack);
+    it cannot know how many racks are actually deployed. Here we derive the DEPLOYED size — compute
+    racks, Slurm nodes, GPUs — from the same cached ``/api/status`` snapshot the dashboard uses, by
+    summing each rack's ``sinfo`` cell (e.g. ``idle=17,drain=1`` -> 18). Returns "" when the snapshot
+    is empty or sinfo hasn't populated yet, so we never feed the model misleading zeros.
+    """
+    try:
+        base = _cached_rack_status_copy(_default_log_dir())
+    except Exception:
+        _logger.debug("_ai_live_inventory_block: ignoring error", exc_info=True)
+        base = None
+    if not isinstance(base, dict):
+        return ""
+    rows = [r for r in (base.get("rows") or []) if isinstance(r, dict)]
+    if not rows:
+        return ""
+
+    def _nodes_from_sinfo(cell: str) -> int:
+        cell = (cell or "").strip()
+        if not cell or cell in ("?", "-"):
+            return 0
+        total = 0
+        for part in cell.split(","):
+            if "=" in part:
+                try:
+                    total += int(part.split("=", 1)[1])
+                except ValueError:
+                    _logger.debug("_ai_live_inventory_block: unparsable sinfo part %r", part)
+        return total
+
+    compute_racks = 0
+    total_nodes = 0
+    for r in rows:
+        n = _nodes_from_sinfo(str(r.get("sinfo") or ""))
+        if n > 0:
+            compute_racks += 1
+            total_nodes += n
+    if total_nodes <= 0:
+        return ""  # sinfo not populated yet — avoid a misleading "0 nodes"
+
+    all_racks = len({str(r.get("rack") or "").strip() for r in rows if r.get("rack")})
+    gpus_per_node = _eget_int("GPUS_PER_NODE", 0) or _eget_int("RACK_CLUSTER_GPU_PER_TRAY", 0)
+    total_gpus = total_nodes * gpus_per_node if gpus_per_node else 0
+    summary = base.get("summary") if isinstance(base.get("summary"), dict) else {}
+    updated = base.get("updated_at")
+
+    lines = [
+        (
+            "Live cluster inventory (from the current rack-status snapshot — authoritative for "
+            "DEPLOYED size; sinfo-derived, not the naming-pattern capacity):"
+        )
+    ]
+    rack_line = f"- Compute racks (with Slurm nodes): {compute_racks}"
+    if all_racks and all_racks != compute_racks:
+        rack_line += f" ({all_racks} racks shown in the table, incl. non-compute switch/mgmt racks)"
+    lines.append(rack_line)
+    lines.append(f"- Compute nodes (Slurm): {total_nodes}")
+    if total_gpus:
+        lines.append(f"- GPUs: {total_gpus} ({total_nodes} nodes x {gpus_per_node} GPUs/node)")
+    if isinstance(summary, dict) and any(k in summary for k in ("done", "fail", "ongoing", "pending")):
+        lines.append(
+            f"- Validation progress (compute racks): done {int(summary.get('done', 0) or 0)}, "
+            f"fail {int(summary.get('fail', 0) or 0)}, ongoing {int(summary.get('ongoing', 0) or 0)}, "
+            f"pending {int(summary.get('pending', 0) or 0)}"
+        )
+    if updated:
+        lines.append(f"- Snapshot updated: {updated}")
+    lines.append(
+        "Use these deployed counts for cluster-size questions; do NOT infer the size from the "
+        "rack naming pattern (that is only naming capacity)."
+    )
+    return "\n".join(lines)

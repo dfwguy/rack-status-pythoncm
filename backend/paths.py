@@ -262,3 +262,9 @@ def _run_exemplar_llama_script_path() -> Path:
         str(SCRIPTS_DIR / "run-exemplar-llama.sh"),
     ) or str(SCRIPTS_DIR / "run-exemplar-llama.sh")
     return _rpath(Path(p))
+
+def _nccl_fullrack_script_path() -> Path:
+    p = _eget("RACK_NCCL_FULLRACK_SCRIPT", str(SCRIPTS_DIR / "nccl_fullrack_rounds.sh")) or str(
+        SCRIPTS_DIR / "nccl_fullrack_rounds.sh"
+    )
+    return _rpath(Path(p))

@@ -182,3 +182,6 @@ def _compute_llm_time_window_unix(
         return None
     lo, hi, note = fb
     return lo - pad, hi + pad, note
+
+def _log_ts_zone() -> tzinfo:
+    return _zoneinfo_for_log_parsing(None)

@@ -222,3 +222,24 @@ def set_comment_for_multirack_log(basename: str, comment: str | None) -> dict[st
                     fcntl.flock(f, fcntl.LOCK_UN)
                 except OSError:
                     pass
+
+# Normalising a stored comments map is this module's business: it is the shape read_comments
+# returns, and app.py only ever had it because everything used to live there.
+
+
+def _normalize_comments_map(raw: object) -> dict[str, str]:
+    """Legacy rack-only normalization (``pN-rMM`` keys). Prefer :func:`_split_stored_comments`."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            continue
+        try:
+            rk = _normalize_rack_id(k)
+        except ValueError:
+            continue
+        t = v.strip()
+        if t:
+            out[rk] = t
+    return out
