@@ -1192,7 +1192,7 @@ class TestValidationActivitySlurmHydration:
             app_module.native_status, "augment_running_set_for_job_ids", lambda *a, **k: None
         )
         monkeypatch.setattr(
-            app_module, "_run_scontrol_show_job", lambda jid: {"ok": False, "stdout": ""}
+            activity_hydration, "_run_scontrol_show_job", lambda jid: {"ok": False, "stdout": ""}
         )
         monkeypatch.setattr(
             activity_hydration,

@@ -17,7 +17,7 @@ customer — which is precisely what the lake exists to prevent.
 """
 import pytest
 
-import app as app_mod
+from api import parser_results as app_mod
 import lake_sink
 import nvis_id_templates as nid
 

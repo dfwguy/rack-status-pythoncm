@@ -20,6 +20,7 @@ os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
+from api import parser_results
 # Log discovery moved out of app.py. Patch and call the module that OWNS these names --
 # patching app's view would reach only the callers inside app.py (see backend-api.mdc).
 import log_discovery
@@ -146,9 +147,9 @@ def test_pick_logs_combined_log_resolves_to_one_file(monkeypatch, tmp_path):
     log_dir.mkdir()
     paths = _stage_logs(monkeypatch, log_dir, "root-NEMO-1Rack-bos01-b05-18N-294.txt")
     got = log_discovery.pick_logs_for_rack(log_dir, "bos01-b05", None)
-    primary = app_module._primary_stage_log(got, None)
+    primary = parser_results._primary_stage_log(got, None)
     assert primary is not None and primary.name == paths[0].name
-    assert app_module._parser_secondary_stages(got, primary) == []
+    assert parser_results._parser_secondary_stages(got, primary) == []
 
 
 def test_pick_logs_falls_back_when_no_stage_marker(monkeypatch, tmp_path):
@@ -157,7 +158,7 @@ def test_pick_logs_falls_back_when_no_stage_marker(monkeypatch, tmp_path):
     log_dir.mkdir()
     _stage_logs(monkeypatch, log_dir, "root-CK-clusterkit-r01-18N-42.txt")
     got = log_discovery.pick_logs_for_rack(log_dir, "r01", None)
-    assert app_module._primary_stage_log(got, None) is not None
+    assert parser_results._primary_stage_log(got, None) is not None
 
 
 def test_pick_logs_honours_full_rack_filter(monkeypatch, tmp_path):
@@ -185,8 +186,8 @@ def test_secondary_stages_lists_only_distinct_files(monkeypatch, tmp_path):
         "cmods-NCCL-1Rack-r01-18N-1.txt",
     )
     got = log_discovery.pick_logs_for_rack(log_dir, "r01", None)
-    primary = app_module._primary_stage_log(got, None)
-    secondary = app_module._parser_secondary_stages(got, primary)
+    primary = parser_results._primary_stage_log(got, None)
+    secondary = parser_results._parser_secondary_stages(got, primary)
     assert [s for s, _ in secondary] == ["nccl"], "NeMo is primary, so only NCCL needs a parse"
 
 
