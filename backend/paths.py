@@ -158,3 +158,7 @@ def _nvlmapper_reports_base() -> Path:
     # process's home and filesystem, which is not where the reports are written.
     raw = (_eget("RACK_NVLMAPPER_REPORTS_BASE") or "/home/cmsupport/reports").strip()
     return _rpath(raw or "/home/cmsupport/reports")
+
+def _parser_path() -> Path:
+    p = _eget("RACK_PARSER_SCRIPT", str(SCRIPTS_DIR / "parser.sh")) or str(SCRIPTS_DIR / "parser.sh")
+    return _rpath(Path(p))

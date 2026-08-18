@@ -169,3 +169,25 @@ def _full_rack_expected_nodes() -> int:
         if n > 0:
             return n
     return 18
+
+def _multirack_physical_rack_ids(name: str) -> list[str]:
+    """Rack ids for Slurm sinfo aggregation; mirrors ``multirack_display_rack_from_basename`` cases."""
+    naming = _nvis_naming()
+    racks = sorted(naming.find_rack_ids_in_string(name))
+    if len(racks) >= 2:
+        return list(racks)
+    pod_re = naming.multirack_pod_r_bracket_re()
+    if pod_re:
+        m = pod_re.search(name)
+        if m:
+            expanded = naming.expand_pod_r_inner(m.group(1), m.group(2))
+            if expanded:
+                return expanded
+    bare_re = naming.multirack_bare_r_bracket_re()
+    if bare_re:
+        m2 = bare_re.search(name)
+        if m2:
+            expanded = naming.expand_site_r_inner(_multirack_site_prefix(), m2.group(1))
+            if expanded:
+                return expanded
+    return []

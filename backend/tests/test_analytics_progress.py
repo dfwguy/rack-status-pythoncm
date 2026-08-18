@@ -125,6 +125,18 @@ def app_module():
 
 
 @pytest.fixture()
+def analytics_module(app_module):
+    """The module that now owns the analytics helpers.
+
+    Depends on ``app_module`` only so ``backend/`` is on ``sys.path`` first; the helpers themselves no
+    longer live in ``app``.
+    """
+    from api import analytics
+
+    return analytics
+
+
+@pytest.fixture()
 def client(app_module):
     app_module.app.config["TESTING"] = True
     with app_module.app.test_client() as c:
@@ -197,7 +209,7 @@ def test_the_blocking_route_still_works(client, app_module):
 # --- shaping a scanner record like parser.sh --------------------------------------------------
 
 
-def test_scan_record_is_shaped_like_parser_json(app_module, tmp_path):
+def test_scan_record_is_shaped_like_parser_json(analytics_module, tmp_path):
     """Downstream pickers read parser.sh's field names; the batch payload must match them."""
     p = tmp_path / "cmods-NCCL-1Rack-p05-r01-18N-4242.txt"
     hdr = (
@@ -215,7 +227,7 @@ def test_scan_record_is_shaped_like_parser_json(app_module, tmp_path):
         encoding="utf-8",
     )
     rec = logscan.scan(str(p), inventory=False)
-    shaped = app_module._parser_json_from_scan(rec, "p05-r01", "4242")
+    shaped = analytics_module._parser_json_from_scan(rec, "p05-r01", "4242")
 
     nccl = shaped["nccl_peak_out_of_place_busbw_gbps"][0]
     nemo = shaped["nemotron_5h_56b_train_window"][0]
@@ -228,7 +240,7 @@ def test_scan_record_is_shaped_like_parser_json(app_module, tmp_path):
     assert nccl["sweep_running"] is False
 
 
-def test_the_batch_lookup_path_actually_runs(app_module, tmp_path):
+def test_the_batch_lookup_path_actually_runs(analytics_module, tmp_path):
     """Exercise _parser_json_for_log_path THROUGH the batch, not just the shaping helper.
 
     Testing the shaper alone missed a real break: the surrounding lookup called a module-level
@@ -239,22 +251,25 @@ def test_the_batch_lookup_path_actually_runs(app_module, tmp_path):
     p.write_text(_steps(30), encoding="utf-8")
     rec = logscan.scan(str(p), inventory=False)
 
-    app_module._analytics_scan_ctx.batch = {str(app_module._rpath(p)): rec}
+    import core
+    import logscan_cache
+
+    logscan_cache._analytics_scan_ctx.batch = {str(core.rpath(p)): rec}
     try:
-        parsed, err = app_module._parser_json_for_log_path(tmp_path, p)
+        parsed, err = analytics_module._parser_json_for_log_path(tmp_path, p)
     finally:
-        app_module._analytics_scan_ctx.batch = None
+        logscan_cache._analytics_scan_ctx.batch = None
 
     assert err is None
     assert parsed and parsed.get("from_logscan") is True
     assert parsed["nemotron_5h_56b_train_window"][0]["job_id"] == "4242"
 
 
-def test_missing_measurements_shape_as_dashes(app_module, tmp_path):
+def test_missing_measurements_shape_as_dashes(analytics_module, tmp_path):
     """parser.sh renders "no result" as ---; the pickers and the UI both expect that."""
     p = tmp_path / "empty.txt"
     p.write_text("nothing interesting here\n", encoding="utf-8")
-    shaped = app_module._parser_json_from_scan(logscan.scan(str(p), inventory=False), "r", "1")
+    shaped = analytics_module._parser_json_from_scan(logscan.scan(str(p), inventory=False), "r", "1")
     nccl = shaped["nccl_peak_out_of_place_busbw_gbps"][0]
     assert nccl["all_reduce_gbps"] == "---"
     assert nccl["alltoall_gbps"] == "---"

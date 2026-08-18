@@ -31,6 +31,7 @@ os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module  # noqa: E402
 import native_status  # noqa: E402
+from api import analytics as analytics_module  # noqa: E402
 
 FOUR_RACK_LOG = "root-NEMO-p05-r01+p05-r02+p05-r03+p05-r04-72N-131805.txt"
 
@@ -53,16 +54,21 @@ def stub_analytics(monkeypatch, tmp_path):
     """Point the endpoint at one fake multirack log and control what the parser reports."""
     monkeypatch.setenv("RACK_STATUS_DEMO", "0")
     monkeypatch.setenv("RACK_ANALYTICS_DISABLED", "0")
-    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda *_a, **_k: tmp_path)
+    # Patched on api.analytics, not app: the route and its helpers now live there, and a name is
+    # resolved from the globals of the module that CALLS it. Patching app would leave the real
+    # helpers running and the stub unused.
+    monkeypatch.setattr(analytics_module, "_resolve_log_dir", lambda *_a, **_k: tmp_path)
     # No single-rack discovery: this test is about the multirack path only.
     monkeypatch.setattr(native_status, "_host_log_entries", lambda *_a, **_k: [])
-    monkeypatch.setattr(app_module, "_multirack_done_log_paths", lambda *_a, **_k: [Path(tmp_path / FOUR_RACK_LOG)])
-    monkeypatch.setattr(app_module, "_parser_json_for_log_path", lambda *_a, **_k: ({}, None))
-    monkeypatch.setattr(app_module, "_pick_nccl_row", lambda *_a, **_k: NCCL_SWEEP)
-    monkeypatch.setattr(app_module, "_read_log_text_chunk", lambda *_a, **_k: "")
-    monkeypatch.setattr(app_module, "_multirack_rack_count_from_basename", lambda *_a, **_k: 4)
+    monkeypatch.setattr(
+        analytics_module, "_multirack_done_log_paths", lambda *_a, **_k: [Path(tmp_path / FOUR_RACK_LOG)]
+    )
+    monkeypatch.setattr(analytics_module, "_parser_json_for_log_path", lambda *_a, **_k: ({}, None))
+    monkeypatch.setattr(analytics_module, "_pick_nccl_row", lambda *_a, **_k: NCCL_SWEEP)
+    monkeypatch.setattr(analytics_module, "_read_log_text_chunk", lambda *_a, **_k: "")
+    monkeypatch.setattr(analytics_module, "_multirack_rack_count_from_basename", lambda *_a, **_k: 4)
     # Never touch the real cache file from a test.
-    monkeypatch.setattr(app_module, "_analytics_aggregate_cache_put", lambda *_a, **_k: None)
+    monkeypatch.setattr(analytics_module, "_analytics_aggregate_cache_put", lambda *_a, **_k: None)
 
 
 def _aggregate(client) -> dict:
@@ -72,7 +78,7 @@ def _aggregate(client) -> dict:
 
 
 def test_a_metricless_run_is_reported_not_dropped(client, stub_analytics, monkeypatch):
-    monkeypatch.setattr(app_module, "_pick_nemotron_row", lambda *_a, **_k: METRICLESS_NEMOTRON)
+    monkeypatch.setattr(analytics_module, "_pick_nemotron_row", lambda *_a, **_k: METRICLESS_NEMOTRON)
     mr = _aggregate(client)["multirack"]
 
     assert len(mr["nccl_series_by_log"]) == 1, "the NCCL sweep still feeds the chart"
@@ -89,7 +95,7 @@ def test_a_metricless_run_is_reported_not_dropped(client, stub_analytics, monkey
 
 
 def test_the_throughput_table_reports_it_too(client, stub_analytics, monkeypatch):
-    monkeypatch.setattr(app_module, "_pick_nemotron_row", lambda *_a, **_k: METRICLESS_NEMOTRON)
+    monkeypatch.setattr(analytics_module, "_pick_nemotron_row", lambda *_a, **_k: METRICLESS_NEMOTRON)
     rows = _aggregate(client)["multirack"]["nemotron_throughput_scaling"]
     assert len(rows) == 1
     assert rows[0]["n_logs_no_metrics"] == 1
@@ -99,7 +105,7 @@ def test_the_throughput_table_reports_it_too(client, stub_analytics, monkeypatch
 
 def test_a_measured_run_still_reports_means(client, stub_analytics, monkeypatch):
     """The reporting path must not disturb a run that does have numbers."""
-    monkeypatch.setattr(app_module, "_pick_nemotron_row", lambda *_a, **_k: MEASURED_NEMOTRON)
+    monkeypatch.setattr(analytics_module, "_pick_nemotron_row", lambda *_a, **_k: MEASURED_NEMOTRON)
     row = _aggregate(client)["multirack"]["nemotron_scaling"][0]
     assert row["n_logs"] == 1
     assert row["n_logs_no_metrics"] == 0

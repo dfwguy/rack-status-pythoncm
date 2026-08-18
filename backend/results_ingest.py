@@ -27,13 +27,18 @@ does. The caps are the fallback path for when the scanner is unavailable; prefer
 from __future__ import annotations
 
 import logging
+import math
 import os
+import shlex
+import subprocess
 from pathlib import Path
 
 import core
 import host_exec
 import lake_sink
 import results_history
+from config_env import _eget, _env_int, _job_env_int
+from core import rpath as _rpath
 from core import truthy_env as _truthy_env
 from logscan_cache import _log_stat_for_path, _logscan_record
 
@@ -349,3 +354,178 @@ def _universal_fallback_for_log(
         if rid:
             res = {**res, "history_run_id": rid}
     return res
+
+# --- parser.sh: invoking it, and deciding whether its output means anything ----------------------
+# Shared by analytics, parser-results, the exports and settings. It lives here because turning raw
+# tool output into metrics is this module's concern (core-designs.mdc citizen 7); before this it sat
+# in app.py, which is why analytics could not be separated from parser-results at all.
+#
+# _parser_json_has_usable_rows is the load-bearing one: parser.sh runs every extractor on every input
+# unconditionally, so a non-empty table is NOT evidence that anything was parsed. That predicate is
+# what decides whether the universal fallback runs.
+#
+# _host_read_text and _read_log_text_capped above are deliberately NOT the same function, so resist
+# collapsing them: this one caps the HEAD only and answers None on error, while the universal parser's
+# needs head AND tail (a run's verdict is at the end) and always returns text plus meta.
+
+
+def _parser_extra_args() -> list[str]:
+    extra = _eget("RACK_PARSER_EXTRA_ARGS", "") or ""
+    if not extra.strip():
+        return []
+    return shlex.split(extra)
+
+
+def _parser_export_glob() -> str:
+    """Basename-only glob under log_dir root for exports (default *.txt)."""
+    raw = (_eget("RACK_PARSER_EXPORT_GLOB") or "*.txt").strip()
+    if not raw or "/" in raw or "\\" in raw or ".." in raw:
+        return "*.txt"
+    return raw
+
+
+def _nemo_log_file_looks_successful(path: Path) -> bool:
+    """Match parser.sh llm_label: exclude Slurm hard-fail; require a completed-run marker (OK path).
+
+    Accepts either a NEMO training run (``train_step_timing`` / ``MODEL_TFLOP/s/GPU``) or a completed
+    NCCL sweep (``Avg bus bandwidth`` is printed by ``all_reduce_perf`` only after every message size
+    finishes) so multi-rack NCCL logs (``nccl-mpi_*.out`` / ``llmb-nccl_*.out``) surface in the
+    Multirack analytics. An aborted NCCL run never reaches the ``Avg bus bandwidth`` line, so it's
+    still excluded.
+
+    Host-aware: runs ``grep`` through ``host_exec`` so it works whether the log is on the local fs
+    (app on the head node) or on a remote head (app on a laptop over SSH). A remote path is passed
+    verbatim (no local ``.resolve()``, which would break on a ``PurePosixPath``).
+    """
+    lp = str(_rpath(path))
+    timeout = max(30, _env_int("RACK_EXPORT_SUCCESS_GREP_TIMEOUT", 180))
+    # One whole-file pass already answered both questions; the two greps below are the fallback.
+    rec = _logscan_record(path, timeout=timeout)
+    if rec:
+        if rec["failures"]["slurm_hard_fail"]:
+            return False
+        n, c = rec["nemo"], rec["nccl"]
+        return bool(n["samples"] or n["finished"] or c["avg_bus_bandwidth"])
+    try:
+        fail = host_exec.run_on_host(
+            ["grep", "-E", "-q", r"srun:.*error:.*Exited|error:.*SIGNAL", lp], timeout=timeout
+        )
+        if getattr(fail, "returncode", 1) == 0:
+            return False
+        ok = host_exec.run_on_host(
+            [
+                "grep", "-E", "-q",
+                r"train_step_timing.*consumed_samples|Step Time.*MODEL_TFLOP/s/GPU|Avg bus bandwidth",
+                lp,
+            ],
+            timeout=timeout,
+        )
+        return getattr(ok, "returncode", 1) == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _host_read_text(path: Path, *, max_bytes: int = 0) -> str | None:
+    """Read a file's text from the execution host. ``None`` on error.
+
+    ``max_bytes>0`` caps the read at the head of the file (the historical
+    ``head -c`` semantics); 0 means "no cap", expressed as a very large head.
+    """
+    cap = max_bytes if max_bytes > 0 else (1 << 62)
+    text, meta = host_exec.read_text(
+        path,
+        head_bytes=cap,
+        tail_bytes=0,
+        whole_bytes=cap,
+        timeout=max(30, _job_env_int("RACK_HOST_READ_TIMEOUT", 90)),
+    )
+    if meta.get("read_error"):
+        return None
+    return text
+
+
+_PARSER_PLACEHOLDER_TOKENS = {"", "-", "--", "---", "?", "n/a", "na", "none", "null", "unk"}
+
+
+def _parser_scalar_is_real(v: object) -> bool:
+    """True when a parser.sh table cell holds a genuine number (not ``-`` / ``---`` / ``?``)."""
+    if v is None or isinstance(v, bool):
+        return False
+    if isinstance(v, (int, float)):
+        return math.isfinite(float(v))
+    s = str(v).strip().replace(",", "")
+    if s.lower() in _PARSER_PLACEHOLDER_TOKENS:
+        return False
+    try:
+        return math.isfinite(float(s))
+    except (TypeError, ValueError):
+        return False
+
+
+def _parser_json_has_usable_rows(parsed: object) -> bool:
+    """True when a ``parser.sh --json`` object carries at least one real measurement.
+
+    parser.sh runs every extractor on every input file unconditionally, so it emits a
+    fully-formed placeholder row (``'---'`` / ``'?'`` / status ``FAIL``) even for a log the
+    extractor did not apply to. "The tables are non-empty" is therefore NOT evidence that
+    anything was parsed — this predicate is what decides whether the universal fallback runs.
+    """
+    if not isinstance(parsed, dict):
+        return False
+    tables = (
+        ("nccl_peak_out_of_place_busbw_gbps",
+         ("all_reduce_gbps", "all_gather_gbps", "alltoall_gbps"),
+         ("all_reduce_busbw_series",)),
+        ("nemotron_5h_56b_train_window",
+         ("step_s", "median_step_time", "tflops_per_gpu", "step_time_std", "perf_std", "mfu_percent"),
+         ("step_series",)),
+        ("mnubergemm_stress",
+         ("gflops_max", "gflops_median", "nodes", "ranks"),
+         ()),
+        ("sn_llama_nemotron",
+         ("step_s", "median_step_time", "tflops_per_gpu"),
+         ("step_series",)),
+    )
+    for key, scalars, series_keys in tables:
+        rows = parsed.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if any(_parser_scalar_is_real(row.get(f)) for f in scalars):
+                return True
+            for sk in series_keys:
+                ser = row.get(sk)
+                if isinstance(ser, list) and ser:
+                    return True
+    return False
+
+
+def _history_ingest_parser_json(
+    parsed: object,
+    log_dir: Path,
+    log_path_s: str,
+    *,
+    rack_hint: str | None = None,
+    source: str = "parser.sh",
+) -> list[str]:
+    """Persist a ``parser.sh --json`` payload. Returns run_ids (empty list on any problem)."""
+    if not isinstance(parsed, dict) or not core.history_enabled():
+        return []
+    try:
+        mt, sz = _log_stat_for_path(log_dir, log_path_s)
+        return list(
+            results_history.ingest_parser_json(
+                parsed,
+                source_log_path=str(log_path_s),
+                log_mtime=mt,
+                log_size=sz,
+                rack_hint=rack_hint,
+                source=source,
+            )
+            or []
+        )
+    except Exception as e:  # noqa: BLE001 - history is best-effort
+        _logger.warning("results_history parser ingest failed for %s: %s", log_path_s, e)
+        return []

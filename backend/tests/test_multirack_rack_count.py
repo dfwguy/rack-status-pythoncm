@@ -71,9 +71,9 @@ def test_the_compacted_form_is_not_mistaken_for_a_rack_id_count():
 
 def test_app_buckets_the_compacted_run_by_its_declared_count():
     """End to end through the function the analytics scaling table buckets on."""
-    import app as app_module
+    from api import analytics
 
-    assert app_module._multirack_rack_count_from_basename(COMPACT_32) == 32
+    assert analytics._multirack_rack_count_from_basename(COMPACT_32) == 32
 
 
 @pytest.mark.parametrize("name", [TWO_RACK, FOUR_RACK, EIGHT_RACK])
@@ -83,11 +83,12 @@ def test_names_that_declare_nothing_still_fall_back_to_counting_ids(name):
     Asserted against the id extractor rather than a literal, because how many ids are recognised
     depends on the active naming templates and those are cluster configuration, not a constant.
     """
-    import app as app_module
+    import naming
+    from api import analytics
 
     assert nid.multirack_rack_count(name) is None, "no declared count in this form"
-    expected = len(app_module._multirack_physical_rack_ids(name))
-    assert app_module._multirack_rack_count_from_basename(name) == expected
+    expected = len(naming._multirack_physical_rack_ids(name))
+    assert analytics._multirack_rack_count_from_basename(name) == expected
 
 
 def test_a_hostname_with_an_r_segment_is_not_read_as_a_count():
