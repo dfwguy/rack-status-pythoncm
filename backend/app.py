@@ -82,7 +82,7 @@ import warnings
 import zipfile
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import datetime, timezone, tzinfo
 from pathlib import Path, PurePosixPath
 
 from flask import (
@@ -93,7 +93,6 @@ from flask import (
     redirect,
     request,
     send_file,
-    session,
     stream_with_context,
     url_for,
 )
@@ -187,6 +186,9 @@ from api._common import (
 )
 from api._common import (
     requested_nodes as _requested_nodes,
+)
+from api._common import (
+    serve_spa_asset as _serve_spa_asset,
 )
 from logscan_cache import (
     _analytics_scan_ctx,
@@ -1756,6 +1758,7 @@ from slurm_query import (
     _rack_node_hostnames_from_inventory,
     _run_squeue,
 )
+from web_auth import _auth_enabled, _safe_next, _session_lifetime, _session_ok
 
 
 def _project_name() -> str:
@@ -1847,42 +1850,6 @@ def _active_clients_snapshot() -> dict[str, float]:
     """Copy of the heartbeat map for ``rack_locks`` (offline-claim detection)."""
     with _app_clients_lock:
         return dict(_app_clients_last_seen)
-
-
-def _auth_enabled() -> bool:
-    """Dashboard login via PAM or token unless RACK_WEB_AUTH_DISABLED is set."""
-    return not _truthy_env("RACK_WEB_AUTH_DISABLED")
-
-
-def _auth_mode() -> str:
-    """Return ``pam`` or ``token``.  Defaults to ``token`` when inside a container (SSH mode)."""
-    explicit = (os.environ.get("RACK_WEB_AUTH_MODE") or "").strip().lower()
-    if explicit in ("pam", "token"):
-        return explicit
-    # PAM authenticates against *this* machine's accounts, so it is only meaningful
-    # when the app runs on the target host; a remote target has no such mapping.
-    return "pam" if host_exec.exec_kind() == "local" else "token"
-
-
-def _auth_token() -> str | None:
-    """Token string when RACK_WEB_AUTH_MODE=token."""
-    t = (os.environ.get("RACK_WEB_AUTH_TOKEN") or "").strip()
-    return t or None
-
-
-def _auth_user() -> str:
-    return (os.environ.get("RACK_WEB_AUTH_USER") or "root").strip() or "root"
-
-
-def _pam_service() -> str:
-    return (os.environ.get("RACK_WEB_PAM_SERVICE") or "login").strip() or "login"
-
-
-def _session_lifetime() -> timedelta:
-    h = _env_int("RACK_WEB_SESSION_HOURS", 8)
-    h = max(h, 1)
-    h = min(h, 24 * 30)
-    return timedelta(hours=h)
 
 
 _RACK_WEB_SECRET_FILE = (REPO_ROOT / "var" / "secrets" / ".rack_web_secret_key").resolve()
@@ -2062,87 +2029,6 @@ def _bootstrap_nvftp_sync_at_startup() -> None:
     nvftp_cache_sync.ensure_background_thread()
 
 
-def _session_ok() -> bool:
-    return session.get("rack_web_auth") == "1"
-
-
-def _safe_next(raw: str | None) -> str:
-    s = (raw or "").strip().split("#", 1)[0]
-    if not s.startswith("/") or s.startswith("//"):
-        return ""
-    return s
-
-
-def _pam_helper_python_exe() -> str:
-    return (os.environ.get("RACK_WEB_PAM_HELPER_PYTHON") or "/usr/bin/python3").strip() or "/usr/bin/python3"
-
-
-def _pam_verify_subprocess(username: str, password: str, service: str) -> bool:
-    """Authenticate via pam_helper.py under a Python that can load ctypes (e.g. /usr/bin/python3)."""
-    exe = _pam_helper_python_exe()
-    helper = APP_DIR / "rack_web" / "pam_helper.py"
-    if not helper.is_file():
-        raise RuntimeError(f"Internal error: missing {helper}")
-    payload = json.dumps({"user": username, "password": password, "service": service})
-    try:
-        proc = subprocess.run(
-            [exe, str(helper)],
-            input=payload.encode("utf-8"),
-            capture_output=True,
-            timeout=90,
-            env=_subprocess_env(),
-            check=False,
-        )
-    except FileNotFoundError:
-        raise RuntimeError(
-            f"PAM helper interpreter not found: {exe!r}. Set RACK_WEB_PAM_HELPER_PYTHON to a "
-            "Python whose ctypes module works (often /usr/bin/python3), or recreate the venv with "
-            "that interpreter instead of a mismatched module-loaded Python."
-        ) from None
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError("PAM authentication subprocess timed out") from e
-    out = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
-    err_tail = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"PAM helper process failed (exit {proc.returncode}). "
-            f"Try RACK_WEB_PAM_HELPER_PYTHON=/usr/bin/python3. Stderr: {err_tail[-1200:]}"
-        )
-    if not out:
-        raise RuntimeError(
-            "PAM helper produced no output. "
-            f"Try RACK_WEB_PAM_HELPER_PYTHON=/usr/bin/python3. Stderr: {err_tail[-1200:]}"
-        )
-    line = out.splitlines()[-1].strip()
-    try:
-        data = json.loads(line)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"PAM helper returned invalid JSON ({line[:200]!r}): {e}") from e
-    if data.get("error"):
-        raise RuntimeError(str(data["error"]))
-    return bool(data.get("ok"))
-
-
-def _token_verify(password: str) -> bool:
-    """Verify password against RACK_WEB_AUTH_TOKEN (simple shared-secret)."""
-    token = _auth_token()
-    if not token:
-        return False
-    return secrets.compare_digest(password, token)
-
-
-def _pam_verify(username: str, password: str, service: str) -> bool:
-    if password is None:
-        return False
-    if _auth_mode() == "token":
-        return _token_verify(password)
-    try:
-        from rack_web.pam_ctypes import authenticate as pam_authenticate
-    except (ImportError, OSError):
-        return _pam_verify_subprocess(username, password, service)
-    return bool(pam_authenticate(username, password, service=service))
-
-
 def _is_public_spa_static_path() -> bool:
     """Vite build assets and icons must be served without a session.
 
@@ -2163,9 +2049,10 @@ def _is_public_spa_static_path() -> bool:
 #: require the session you are trying to obtain, locking every operator out with the suite still
 #: green. ``test_web_auth_gate.py`` asserts each name resolves to a real endpoint.
 #:
-#: ``login`` is belt-and-braces: ``_is_public_spa_static_path`` already allows ``/login`` by path.
-#: ``api_login`` and ``api_auth_check`` have no such second layer and are the load-bearing entries.
-_AUTH_BYPASS_ENDPOINTS = ("login", "api_login", "api_auth_check", "static")
+#: ``auth.login`` is belt-and-braces: ``_is_public_spa_static_path`` already allows ``/login`` by
+#: path. ``auth.api_login`` and ``auth.api_auth_check`` have no such second layer and are the
+#: load-bearing entries. The ``auth.`` prefix is the blueprint name in ``api/auth.py``.
+_AUTH_BYPASS_ENDPOINTS = ("auth.login", "auth.api_login", "auth.api_auth_check", "static")
 
 
 @app.before_request
@@ -2193,8 +2080,8 @@ def _require_dashboard_auth():
         )
     nxt = _safe_next(request.full_path)
     if nxt:
-        return redirect(url_for("login", next=nxt))
-    return redirect(url_for("login"))
+        return redirect(url_for("auth.login", next=nxt))
+    return redirect(url_for("auth.login"))
 
 
 @app.after_request
@@ -16604,20 +16491,6 @@ def api_tail_log_stream():
     )
 
 
-@app.route("/login", methods=["GET"])
-def login():
-    """Redirect to SPA — the React LoginPage handles authentication."""
-    if not _auth_enabled() or _session_ok():
-        return redirect("/")
-    return _serve_spa_asset("index.html")
-
-
-@app.route("/logout", methods=["POST"])
-def logout():
-    session.clear()
-    return redirect("/")
-
-
 @app.route("/")
 def index():
     """Serve the React SPA."""
@@ -17384,83 +17257,6 @@ def api_status():
     _merge_naming_into_status_payload(out)
     _merge_cluster_reachable_into_status_payload(out, reachable, reach_detail)
     return jsonify(out)
-
-
-_SPA_DIR = REPO_ROOT / "static" / "spa"
-
-
-# A client route ("/compute/nodes") must fall back to index.html, but a *build artifact*
-# must not: returning HTML for a missing .js makes the browser report a MIME-type error
-# ("Expected a JavaScript-or-Wasm module script … responded with text/html") and renders a
-# blank page, pointing at the SPA instead of at the deploy that dropped the file. These are
-# requests for a hashed filename nobody types, so a miss is always a broken deploy.
-# Both the `/<path>` and `/spa/<path>` routes arrive here with a leading "assets/".
-_SPA_ARTIFACT_PREFIX = "assets/"
-# An /api/ path that reached the catch-all has no route: the endpoint does not exist in THIS
-# build. Answering it with index.html gives the caller HTML at status 200, so a half-deployed
-# backend looks like a feature returning no data instead of a missing endpoint. Verified
-# 2026-08-03: the Validation activities panel read "0 tracked" for exactly this reason, with
-# the frontend deployed and its backend not.
-_SPA_API_PREFIX = "api/"
-
-
-def _serve_spa_asset(path: str = "index.html"):
-    """Serve a built SPA asset; fall back to index.html for client routes only."""
-    spa_file = _SPA_DIR / path
-    if spa_file.is_file():
-        return send_file(spa_file)
-    if path.startswith(_SPA_ARTIFACT_PREFIX):
-        _logger.error("SPA artifact missing: %s — index.html and assets/ are out of sync", path)
-        return jsonify({"ok": False, "error": f"SPA asset not found: {path}"}), 404
-    if path.startswith(_SPA_API_PREFIX):
-        _logger.error("no such API endpoint: /%s — frontend and backend are out of step", path)
-        return jsonify({"ok": False, "error": f"no such API endpoint: /{path}"}), 404
-    return send_file(_SPA_DIR / "index.html")
-
-
-@app.route("/api/auth-check")
-def api_auth_check():
-    """Check if the current session is authenticated. Returns 401 if not."""
-    if not _auth_enabled():
-        return jsonify({"authenticated": True, "user": _auth_user(), "auth_disabled": True})
-    if _session_ok():
-        return jsonify({"authenticated": True, "user": _auth_user()})
-    return jsonify({"authenticated": False}), 401
-
-
-@app.route("/api/login", methods=["POST"])
-def api_login():
-    """JSON login endpoint for the React SPA. Accepts {"password": "..."}."""
-    if not _auth_enabled():
-        return jsonify({"ok": True, "user": _auth_user(), "auth_disabled": True})
-    data = request.get_json(silent=True) or {}
-    pw = str(data.get("password") or "")
-    au = _auth_user()
-    psvc = _pam_service()
-    try:
-        ok = _pam_verify(au, pw, psvc)
-    except RuntimeError as e:
-        return jsonify({"ok": False, "error": f"PAM error: {e}"}), 500
-    if ok:
-        session.clear()
-        session.permanent = True
-        session["rack_web_auth"] = "1"
-        return jsonify({"ok": True, "user": au})
-    return jsonify({"ok": False, "error": "Invalid password"}), 401
-
-
-@app.route("/api/logout", methods=["POST"])
-def api_logout():
-    """JSON logout endpoint for the React SPA."""
-    session.clear()
-    return jsonify({"ok": True})
-
-
-# ---------------------------------------------------------------------------
-# Rack locks (advisory multi-operator coordination). The SPA polls this snapshot
-# every 5 s via ``useRackLocks`` and shows a confirmation dialog before POSTing
-# operations against a rack held by another operator. Server is never blocking.
-# ---------------------------------------------------------------------------
 
 
 @app.route("/api/rack-locks", methods=["GET"])

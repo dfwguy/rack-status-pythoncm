@@ -20,10 +20,49 @@ nothing under ``api`` imports ``app``.
 
 from __future__ import annotations
 
+import logging
 import re
 
 import rack_locks
-from flask import jsonify, request
+from flask import jsonify, request, send_file
+from paths import REPO_ROOT
+
+_logger = logging.getLogger(__name__)
+
+_SPA_DIR = REPO_ROOT / "static" / "spa"
+
+# A client route ("/compute/nodes") must fall back to index.html, but a *build artifact*
+# must not: returning HTML for a missing .js makes the browser report a MIME-type error
+# ("Expected a JavaScript-or-Wasm module script … responded with text/html") and renders a
+# blank page, pointing at the SPA instead of at the deploy that dropped the file. These are
+# requests for a hashed filename nobody types, so a miss is always a broken deploy.
+# Both the `/<path>` and `/spa/<path>` routes arrive here with a leading "assets/".
+_SPA_ARTIFACT_PREFIX = "assets/"
+# An /api/ path that reached the catch-all has no route: the endpoint does not exist in THIS
+# build. Answering it with index.html gives the caller HTML at status 200, so a half-deployed
+# backend looks like a feature returning no data instead of a missing endpoint. Verified
+# 2026-08-03: the Validation activities panel read "0 tracked" for exactly this reason, with
+# the frontend deployed and its backend not.
+_SPA_API_PREFIX = "api/"
+
+
+def serve_spa_asset(path: str = "index.html"):
+    """Serve a built SPA asset; fall back to index.html for client routes only.
+
+    Shared rather than owned by the catch-all routes because the login route serves the same shell:
+    the login screen *is* the React app, so /login and / must return byte-identical HTML or the two
+    disagree about which bundle to load.
+    """
+    spa_file = _SPA_DIR / path
+    if spa_file.is_file():
+        return send_file(spa_file)
+    if path.startswith(_SPA_ARTIFACT_PREFIX):
+        _logger.error("SPA artifact missing: %s — index.html and assets/ are out of sync", path)
+        return jsonify({"ok": False, "error": f"SPA asset not found: {path}"}), 404
+    if path.startswith(_SPA_API_PREFIX):
+        _logger.error("no such API endpoint: /%s — frontend and backend are out of step", path)
+        return jsonify({"ok": False, "error": f"no such API endpoint: /{path}"}), 404
+    return send_file(_SPA_DIR / "index.html")
 
 
 def history_unavailable_response():
