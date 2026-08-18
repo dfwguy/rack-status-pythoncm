@@ -162,3 +162,12 @@ def _nvlmapper_reports_base() -> Path:
 def _parser_path() -> Path:
     p = _eget("RACK_PARSER_SCRIPT", str(SCRIPTS_DIR / "parser.sh")) or str(SCRIPTS_DIR / "parser.sh")
     return _rpath(Path(p))
+
+
+def _rack_status_script_path() -> Path:
+    p = _eget("RACK_STATUS_SCRIPT", str(DEFAULT_SCRIPT)) or str(DEFAULT_SCRIPT)
+    return _rpath(Path(p))
+
+# Kept as the old spelling for a moment? No: renamed on the move. `_script_path` said nothing about
+# WHICH script, which is fine in a 20k-line module where there was only one, and useless in a shared
+# one next to nine siblings that all spell it `_<tool>_script_path`.

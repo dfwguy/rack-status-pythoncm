@@ -33,7 +33,6 @@ os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
-import app as app_module
 import naming
 import native_status
 import nvis_id_templates as nid
@@ -71,28 +70,28 @@ CORPUS = [
 @pytest.mark.parametrize("name", CORPUS)
 def test_nemo_nccl_membership_agrees(name):
     want = nid.nemo_nccl_in_log_basename(name)
-    assert app_module._nemo_nccl_in_log_basename(name) == want
+    assert naming._nemo_nccl_in_log_basename(name) == want
     assert native_status._nemo_nccl_bn(name) == want
 
 
 @pytest.mark.parametrize("name", CORPUS)
 def test_single_rack_membership_agrees(name):
     want = nid.nemo_single_rack_log_basename(name)
-    assert app_module._nemo_single_rack_log_basename(name) == want
+    assert naming._nemo_single_rack_log_basename(name) == want
     assert native_status._nemo_single_rack_bn(name) == want
 
 
 @pytest.mark.parametrize("name", CORPUS)
 def test_multirack_classification_agrees(name):
     want = nid.is_multirack_log_basename(name)
-    assert app_module._is_multirack_log_basename(name) == want
+    assert naming._is_multirack_log_basename(name) == want
     assert native_status._is_multirack_bn(name) == want
 
 
 @pytest.mark.parametrize("name", CORPUS)
 def test_job_id_agrees_across_all_three_modules(name):
     want = nid.job_id_from_log_basename(name)
-    assert app_module._jobid_from_nemo_log_basename(name) == want
+    assert naming._jobid_from_nemo_log_basename(name) == want
     assert native_status._jobid_from_log_name(name) == want
     assert validation_activities.job_id_from_log_basename(name) == want
 

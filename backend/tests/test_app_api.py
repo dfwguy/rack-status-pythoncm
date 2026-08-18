@@ -22,6 +22,7 @@ os.environ["RACK_EXEC_MODE"] = "local"
 # Activity hydration moved out of app.py; patch the module that owns these names.
 import activity_hydration
 import app as app_module
+import rack_status_engine
 from app import app
 
 import rack_locks
@@ -167,7 +168,7 @@ class TestSharedClusterSnapshotAPI:
             calls += 1
             return self.inventory()
 
-        monkeypatch.setattr(app_module, "run_rack_status", collect)
+        monkeypatch.setattr(rack_status_engine, "run_rack_status", collect)
         # Kick refresh on the first route, then poll both until fresh so async
         # wait=False responses still share one snapshot id / inventory counts.
         client.get(f"{first_route}?log_dir=/logs")
@@ -190,7 +191,7 @@ class TestSharedClusterSnapshotAPI:
         self, client, monkeypatch
     ):
         monkeypatch.setattr(
-            app_module,
+            rack_status_engine,
             "run_rack_status",
             lambda *_args, **_kwargs: {
                 "ok": False,
@@ -218,7 +219,7 @@ class TestSharedClusterSnapshotAPI:
             physical_rf0={},
             summary={"done": 0, "fail": 0, "ongoing": 0, "pending": 0},
         )
-        monkeypatch.setattr(app_module, "run_rack_status", lambda *_args, **_kwargs: empty)
+        monkeypatch.setattr(rack_status_engine, "run_rack_status", lambda *_args, **_kwargs: empty)
 
         client.get("/api/cluster-overview?log_dir=/logs")
         overview = self._poll_json(client, "/api/cluster-overview", want_state="fresh")
@@ -235,7 +236,7 @@ class TestSharedClusterSnapshotAPI:
             return self.inventory()
 
         monkeypatch.delenv("RACK_CLUSTER_OVERVIEW_DISABLE_PROBES", raising=False)
-        monkeypatch.setattr(app_module, "run_rack_status", slow_collect)
+        monkeypatch.setattr(rack_status_engine, "run_rack_status", slow_collect)
 
         def count_slurm():
             probe_calls["slurm"] += 1
@@ -277,7 +278,7 @@ class TestSharedClusterSnapshotAPI:
             assert gate.wait(10)
             return self.inventory()
 
-        monkeypatch.setattr(app_module, "run_rack_status", slow_collect)
+        monkeypatch.setattr(rack_status_engine, "run_rack_status", slow_collect)
         try:
             t0 = time.monotonic()
             res = client.get("/api/status?log_dir=/logs")
@@ -302,9 +303,9 @@ class TestSharedClusterSnapshotAPI:
             nonlocal merge_calls
             merge_calls += 1
 
-        monkeypatch.setattr(app_module, "run_rack_status", collect)
+        monkeypatch.setattr(rack_status_engine, "run_rack_status", collect)
         monkeypatch.setattr(app_module, "_merge_live_native_workers_into_status", merge)
-        payload = app_module._collect_canonical_rack_status(Path("/logs"))
+        payload = rack_status_engine._collect_canonical_rack_status(Path("/logs"))
         assert payload["ok"] is True
         assert merge_calls == 0
 
@@ -313,7 +314,7 @@ class TestSharedClusterSnapshotAPI:
         probe_calls = {"bcm": 0, "slurm": 0, "queue": 0}
         reach_probe_calls = {"n": 0}
         monkeypatch.setattr(
-            app_module, "run_rack_status", lambda *_a, **_k: self.inventory()
+            rack_status_engine, "run_rack_status", lambda *_a, **_k: self.inventory()
         )
 
         # Seed a fresh shared snapshot while probes are still fixture-disabled.
