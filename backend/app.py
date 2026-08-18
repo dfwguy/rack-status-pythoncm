@@ -2155,6 +2155,19 @@ def _is_public_spa_static_path() -> bool:
     return bool(p.startswith(("/assets/", "/spa/")))
 
 
+#: Endpoints reachable WITHOUT a session. Every other request needs one.
+#:
+#: A constant rather than a literal inside the gate so it can be reviewed and asserted on: these are
+#: Flask *endpoint* names, so moving a route into a blueprint renames it (``login`` ->
+#: ``auth.login``) and a stale entry here does not fail loudly -- it makes ``/api/login`` itself
+#: require the session you are trying to obtain, locking every operator out with the suite still
+#: green. ``test_web_auth_gate.py`` asserts each name resolves to a real endpoint.
+#:
+#: ``login`` is belt-and-braces: ``_is_public_spa_static_path`` already allows ``/login`` by path.
+#: ``api_login`` and ``api_auth_check`` have no such second layer and are the load-bearing entries.
+_AUTH_BYPASS_ENDPOINTS = ("login", "api_login", "api_auth_check", "static")
+
+
 @app.before_request
 def _require_dashboard_auth():
     global _JOB_ENV_BOOTSTRAP_DONE
@@ -2167,7 +2180,7 @@ def _require_dashboard_auth():
             _JOB_ENV_BOOTSTRAP_DONE = True
     if not _auth_enabled():
         return None
-    if request.endpoint in ("login", "api_login", "api_auth_check", "static"):
+    if request.endpoint in _AUTH_BYPASS_ENDPOINTS:
         return None
     if _is_public_spa_static_path():
         return None
