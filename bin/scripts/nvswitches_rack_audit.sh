@@ -36,9 +36,13 @@ set +e
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-NEW_PASSWORD='WelcomeDell1!'
+# shellcheck source=lib/nvswitch_creds.inc.sh
+. "$HERE/lib/nvswitch_creds.inc.sh"
+nvsw_require_admin_password
+nvsw_require_bmc_password
+NEW_PASSWORD="$NVSW_BMC_PASSWORD"
 ACCOUNT_PATH='/redfish/v1/AccountService/Accounts/root'
-SSH_PASS='WelcomeDell1!'
+SSH_PASS="$NVSW_ADMIN_PASSWORD"
 
 PRINT_HEADER=1
 USE_COLOR=1

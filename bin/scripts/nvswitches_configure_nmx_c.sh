@@ -10,11 +10,14 @@
 # its affiliates is strictly prohibited.
 #
 
-sshpassword='WelcomeDell1!'
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib/nvswitch_creds.inc.sh
+. "$HERE/lib/nvswitch_creds.inc.sh"
+nvsw_require_admin_password
 
 function is_nmx_c_ok
 {
-sshpass -p "$sshpassword" ssh admin@$ip_os \
+sshpass -p "$NVSW_ADMIN_PASSWORD" ssh admin@$ip_os \
 	"nv show cluster apps nmx-controller |grep 'status            ok'" \
 	&& echo "$ip_os: NMX C is OK" \
 	|| echo "$ip_os: NMX C is KO"
@@ -34,7 +37,7 @@ function configure_nmx_c
      
     is_nmx_c_ok |grep OK && exit 0
     echo "configuring NMX C"
-    sshpass -p "$sshpassword" ssh admin@$ip_os \
+    sshpass -p "$NVSW_ADMIN_PASSWORD" ssh admin@$ip_os \
     "sudo rm /host/cluster_infra/app_config/nmx-controller/fm_config/nmx-controller_fm_config*  
 	nv action generate sdn config app nmx-controller type fm_config
 sudo sed -i 's/^MNNVL_TOPOLOGY=.*/MNNVL_TOPOLOGY=gb200_nvl72r1_c2g4_topology/' /host/cluster_infra/app_config/nmx-controller/fm_config/nmx-controller_fm_config*

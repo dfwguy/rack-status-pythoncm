@@ -207,6 +207,18 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "description": "Default 1: keep the forwarded platform/site env across the sudo boundary (sudo -E). Set to 0 only if the sudoers policy rejects -E (env_reset without SETENV), in which case tools receive a clean root environment.",
     },
     {
+        "section": "jobs_cluster",
+        "key": "RACK_NVSW_ADMIN_PASSWORD",
+        "label": "NVSwitch NVOS admin password",
+        "description": "Password for the switch 'admin' (NVOS) account, used by the NVSwitch audit and its NMX-C / UPHY fix helpers. Required by those scripts — they exit 78 rather than attempt an empty password, which would lock the account out. Previously a literal in bin/scripts; stored in server overrides like other settings, so restrict file permissions on var/cache/job_env_overrides.json.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NVSW_BMC_PASSWORD",
+        "label": "NVSwitch BMC root password (optional)",
+        "description": "Target password for the switch BMC 'root' account via Redfish. Leave empty to reuse the NVOS admin password above. Vendor default passwords used to reach a factory-state BMC are not secrets and stay in the script.",
+    },
+    {
         "section": "external",
         "key": "RACK_WEB_GRAFANA_URI",
         "label": "Grafana base URL",

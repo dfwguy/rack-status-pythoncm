@@ -9,17 +9,15 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-# For each NV switch in the nodeset, use Redfish to set the BMC root password
-# to WelcomeDell1! when the account reports PasswordChangeRequired (or the
+# For each NV switch in the nodeset, use Redfish to set the BMC root password to
+# $RACK_NVSW_BMC_PASSWORD when the account reports PasswordChangeRequired (or the
 # property is missing on older BMCs).
 #
-# Authentication order for GET/PATCH:
-#   1) 0penBmc
-#   2) 0penBmcTempPass!
-# If both fail, a GET with the target password (WelcomeDell1!) is tried: if that
-# succeeds, the BMC is treated as already compliant (password already applied).
+# Authentication order for GET/PATCH uses the two vendor default passwords below.
+# If both fail, a GET with the target password is tried: if that succeeds, the BMC
+# is treated as already compliant (password already applied).
 #
-# Usage: nvswitches_set_bmc_passwd.sh <nodeset>
+# Usage: RACK_NVSW_BMC_PASSWORD=... nvswitches_set_bmc_passwd.sh <nodeset>
 #
 # Optional: FORCE_PATCH=1  -> PATCH after successful default-password auth even
 # when PasswordChangeRequired is false (use if your BMC mis-reports the flag).
@@ -30,7 +28,11 @@ set -euo pipefail
 # it at /cm/local/apps/cmd/bin/cmsh). RACK_CMSH is the same knob the backend uses.
 CMSH=${RACK_CMSH:-cmsh}
 
-NEW_PASSWORD='WelcomeDell1!'
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib/nvswitch_creds.inc.sh
+. "$HERE/lib/nvswitch_creds.inc.sh"
+nvsw_require_bmc_password
+NEW_PASSWORD="$NVSW_BMC_PASSWORD"
 PASS_OPENBMC='0penBmc'
 PASS_TEMP='0penBmcTempPass!'
 ACCOUNT_PATH='/redfish/v1/AccountService/Accounts/root'

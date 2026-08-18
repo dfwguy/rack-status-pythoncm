@@ -10,7 +10,11 @@
 # its affiliates is strictly prohibited.
 #
 
-export SSHPASS='WelcomeDell1!'
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib/nvswitch_creds.inc.sh
+. "$HERE/lib/nvswitch_creds.inc.sh"
+nvsw_require_admin_password
+export SSHPASS="$NVSW_ADMIN_PASSWORD"
 
 sshpass -e pdsh -w $1 -R ssh "nv set fae int acp1-144 link phy-recovery serdes-eq-mode enabled;
                               nv config apply -y;
