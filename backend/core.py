@@ -112,6 +112,14 @@ def history_enabled() -> bool:
     return results_history is not None and not truthy_env("RACK_RESULTS_HISTORY_DISABLED")
 
 
+#: A browser-supplied dashboard client id, as sent in ``X-Rack-Client-Id``.
+#:
+#: Shared because two modules validate it -- ``api/_common.py`` when reading the header and
+#: ``app_clients.py`` before recording a heartbeat -- and a client id that one accepts and the other
+#: rejects would silently drop that browser out of the connected-user count.
+APP_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{8,80}$")
+
+
 def slurm_job_base_id(job_raw: str | None) -> str | None:
     """The allocation id from a Slurm job id, dropping any array-task suffix.
 

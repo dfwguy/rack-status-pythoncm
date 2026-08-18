@@ -151,7 +151,6 @@ import host_exec
 import nvftp_cache_sync
 import nvlink_preflight
 import post_run_report
-import rack_locks
 import validation_activities
 import validation_presets
 import workflow_engine
@@ -178,9 +177,6 @@ except Exception as _catalog_exc:  # pragma: no cover - defensive
 # ---- Host paths, naming and per-request identity now live in their own modules ------------
 # Imported under the existing names so the ~200 call sites below are untouched.
 # Request-scoped helpers need Flask, so they live with the API package, not in core.
-from api._common import (
-    client_id_from_request as _client_id_from_request,
-)
 from api._common import (
     operator_from_request as _operator_from_request,
 )
@@ -303,8 +299,6 @@ from job_registry import (
 _physical_rf0_lock = threading.Lock()
 _physical_rf0_map: dict[str, str] = {}
 _physical_rf0_loaded = False
-_app_clients_lock = threading.Lock()
-_app_clients_last_seen: dict[str, float] = {}
 
 _rack_status_cache_lock = threading.Lock()
 _rack_status_exec_lock = threading.Lock()
@@ -1751,6 +1745,7 @@ def _gpu_reset_worker(job_id: str, pdsh_w: str) -> None:
 _truthy_env = core.truthy_env
 _SLURM_STDOUT_RE = core.SLURM_STDOUT_RE
 _slurm_job_base_id = core.slurm_job_base_id
+from app_clients import _app_client_ttl_sec, _touch_app_client
 from slurm_admin import _run_scancel, _run_scontrol_node_update
 from slurm_query import (
     _all_slurm_nodenames,
@@ -1770,24 +1765,6 @@ def _project_name() -> str:
     if v:
         return v.replace("\n", " ").replace("\r", " ").strip()
     return ""
-
-
-def _app_client_ttl_sec() -> int:
-    return max(30, _env_int("RACK_WEB_ACTIVE_CLIENT_TTL_SEC", 120))
-
-
-def _touch_app_client(client_id: str, now_ts: float | None = None) -> int:
-    """Track active dashboard clients and return currently-active count."""
-    cid = (client_id or "").strip()
-    now = time.time() if now_ts is None else float(now_ts)
-    cutoff = now - float(_app_client_ttl_sec())
-    with _app_clients_lock:
-        stale = [k for k, ts in _app_clients_last_seen.items() if float(ts) < cutoff]
-        for k in stale:
-            _app_clients_last_seen.pop(k, None)
-        if _APP_CLIENT_ID_RE.fullmatch(cid):
-            _app_clients_last_seen[cid] = now
-        return len(_app_clients_last_seen)
 
 
 def _count_running_async_commands() -> int:
@@ -1811,45 +1788,6 @@ def _count_running_async_commands() -> int:
 # long-running sync / stream handlers in ``_reset_jobs`` so they show up in
 # the same advisory snapshot the SPA polls.
 # ---------------------------------------------------------------------------
-
-
-def _iter_active_jobs_for_locks() -> list[dict]:
-    """Flatten the five in-memory job dicts into the shape ``rack_locks`` expects:
-    ``{job_id, rack | racks, kind, operator, phase, started_at, sync}``.
-
-    Called by ``GET /api/rack-locks`` only; cheap (≤ tens of entries in practice)."""
-    rows: list[dict] = []
-    for src_lock, src_dict, default_kind in (
-        (_reset_jobs_lock, _reset_jobs, "reset"),
-        (_validation_jobs_lock, _validation_jobs, "validation"),
-        (_stress_jobs_lock, _stress_jobs, "stress"),
-        (_xrack_jobs_lock, _xrack_jobs, "xrack"),
-        (_llama_jobs_lock, _llama_jobs, "llama"),
-    ):
-        with src_lock:
-            snapshot = list(src_dict.items())
-        for jid, row in snapshot:
-            if not isinstance(row, dict):
-                continue
-            rows.append(
-                {
-                    "job_id": str(jid),
-                    "rack": row.get("rack"),
-                    "racks": row.get("racks"),
-                    "kind": str(row.get("kind") or default_kind),
-                    "operator": str(row.get("operator") or ""),
-                    "phase": str(row.get("phase") or ""),
-                    "started_at": str(row.get("started_at") or row.get("created_at") or ""),
-                    "sync": bool(row.get("sync")),
-                }
-            )
-    return rows
-
-
-def _active_clients_snapshot() -> dict[str, float]:
-    """Copy of the heartbeat map for ``rack_locks`` (offline-claim detection)."""
-    with _app_clients_lock:
-        return dict(_app_clients_last_seen)
 
 
 _RACK_WEB_SECRET_FILE = (REPO_ROOT / "var" / "secrets" / ".rack_web_secret_key").resolve()
@@ -17257,66 +17195,6 @@ def api_status():
     _merge_naming_into_status_payload(out)
     _merge_cluster_reachable_into_status_payload(out, reachable, reach_detail)
     return jsonify(out)
-
-
-@app.route("/api/rack-locks", methods=["GET"])
-def api_rack_locks_get():
-    """Snapshot of in-flight operations + explicit claims, grouped by rack."""
-    snapshot = rack_locks.build_lock_snapshot(
-        _operator_from_request(),
-        _iter_active_jobs_for_locks(),
-        _active_clients_snapshot(),
-    )
-    return jsonify(snapshot)
-
-
-@app.route("/api/rack-locks/<rack>", methods=["POST"])
-def api_rack_locks_claim(rack: str):
-    """Create or refresh a manual claim. Requires ``X-Rack-Operator`` header (advisory)."""
-    operator = _operator_from_request()
-    if not operator:
-        return jsonify(
-            {"ok": False, "error": "X-Rack-Operator header is required to claim a rack"}
-        ), 400
-    body = request.get_json(silent=True) or {}
-    note = str(body.get("note") or "") if isinstance(body.get("note"), str) else ""
-    ttl_raw = body.get("ttl_sec")
-    ttl_sec = None
-    if isinstance(ttl_raw, (int, float)) and not isinstance(ttl_raw, bool):
-        try:
-            ttl_sec = int(ttl_raw)
-        except (TypeError, ValueError):
-            ttl_sec = None
-    client_id = _client_id_from_request()
-    force = bool(body.get("force")) if isinstance(body, dict) else False
-    try:
-        claim = rack_locks.upsert_claim(
-            rack,
-            operator,
-            client_id=client_id or None,
-            note=note,
-            ttl_sec=ttl_sec,
-            force=force,
-        )
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    except PermissionError as e:
-        return jsonify({"ok": False, "error": str(e)}), 409
-    return jsonify({"ok": True, "claim": claim})
-
-
-@app.route("/api/rack-locks/<rack>", methods=["DELETE"])
-def api_rack_locks_release(rack: str):
-    """Release a manual claim. Only the recorded owner may release a live claim; expired
-    entries can be cleared by anyone."""
-    operator = _operator_from_request()
-    try:
-        removed = rack_locks.release_claim(rack, operator)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-    except PermissionError as e:
-        return jsonify({"ok": False, "error": str(e)}), 403
-    return jsonify({"ok": True, "removed": bool(removed)})
 
 
 @app.route("/spa/")
