@@ -772,3 +772,18 @@ def _maybe_build_tmp_status_from_log_cache(log_dir: Path) -> Path | None:
             pass
         return None
     return tpath
+
+
+# The per-log-dir status cache and its blanket invalidation. Here rather than beside the status route
+# because the things that INVALIDATE it are not routes: writing a settings override and switching the
+# active cluster both have to bust it, and neither should have to reach into a route module to do so.
+
+
+_rack_status_cache: dict[str, dict] = {}
+
+
+def _rack_status_cache_clear_all() -> None:
+    """Shared invalidation entry point for status-affecting configuration changes."""
+    _cluster_snapshot_repository().bump_configuration_generation()
+    with _rack_status_cache_lock:
+        _rack_status_cache.clear()

@@ -26,6 +26,7 @@ os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
+import job_registry
 from api import fabric_ops
 
 READY = """\
@@ -49,8 +50,8 @@ def client(monkeypatch):
     # Parquet sink.  A missing lake endpoint can otherwise consume most of the
     # ten-second polling deadline in Flask's synchronous after_request hook.
     monkeypatch.setenv("RACK_LAKE_DISABLED", "1")
-    with app_module._reset_jobs_lock:
-        app_module._reset_jobs.clear()
+    with job_registry._reset_jobs_lock:
+        job_registry._reset_jobs.clear()
 
     class _InlineThread:
         """Run this route's worker inline so the full suite cannot starve it.
@@ -70,12 +71,12 @@ def client(monkeypatch):
             self.target(*self.args, **self.kwargs)
 
     monkeypatch.setattr(app_module, "threading", SimpleNamespace(Thread=_InlineThread))
-    monkeypatch.setattr(app_module, "_reset_job_purge_later", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(job_registry, "_reset_job_purge_later", lambda *_args, **_kwargs: None)
     app_module.app.config.update(TESTING=True)
     with app_module.app.test_client() as c:
         yield c
-    with app_module._reset_jobs_lock:
-        app_module._reset_jobs.clear()
+    with job_registry._reset_jobs_lock:
+        job_registry._reset_jobs.clear()
 
 
 @pytest.fixture
@@ -93,7 +94,7 @@ def stub_pdsh(monkeypatch):
     monkeypatch.setattr(app_module.host_exec, "run_on_host", _run)
     monkeypatch.setattr(fabric_ops, "_script_exists", lambda _p: True)
     # Keep the target deterministic regardless of the active naming/geometry.
-    monkeypatch.setattr(app_module, "_expand_pdsh_w_slurm_nodenames", lambda w: w)
+    monkeypatch.setattr(fabric_ops, "_expand_pdsh_w_slurm_nodenames", lambda w: w)
     return seen
 
 

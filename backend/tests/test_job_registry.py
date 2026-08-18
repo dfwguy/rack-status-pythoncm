@@ -78,9 +78,14 @@ def test_a_mutation_is_visible_through_either_name():
     try:
         with J._reset_jobs_lock:
             J._reset_jobs[key] = {"phase": "running"}
-        assert app._reset_jobs.get(key) == {"phase": "running"}
-        with app._reset_jobs_lock:
-            app._reset_jobs[key]["phase"] = "done"
+        # Any importer will do, and it is DISCOVERED rather than named: app.py itself stopped
+        # importing these once the launch routes moved, and hardcoding it made this test fail for a
+        # reason that had nothing to do with the invariant it guards.
+        other = next(iter(_importers("_reset_jobs").values()))
+        other_lock = next(iter(_importers("_reset_jobs_lock").values()))
+        assert other.get(key) == {"phase": "running"}
+        with other_lock:
+            other[key]["phase"] = "done"
         assert J._reset_jobs[key]["phase"] == "done"
     finally:
         with J._reset_jobs_lock:
@@ -101,8 +106,9 @@ def test_track_sync_op_registers_and_finishes_a_synthetic_entry():
         assert row["phase"] == "running"
         assert row["sync"] is True
         assert row["racks"] == [rack]
-        # Same entry seen through app's alias, which is the point of the shared object.
-        assert app._reset_jobs[job_id] is row
+        # Same entry seen through another module's alias, which is the point of the shared object.
+        other = next(iter(_importers("_reset_jobs").values()))
+        assert other[job_id] is row
     with J._reset_jobs_lock:
         row = J._reset_jobs.get(job_id)
     assert row is None or row["phase"] == "done"

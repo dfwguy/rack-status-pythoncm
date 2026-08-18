@@ -29,6 +29,7 @@ from typing import Any
 
 import job_registry
 import workflow_engine
+from node_targets import _validation_ct_inner
 
 from .tools import AgentTool, register
 
@@ -401,7 +402,7 @@ def register_all() -> None:
             rk = str(a.get("rack", "")).strip()
             specs = a.get("specs")
             if not specs and rk:
-                inner = _app._validation_ct_inner()
+                inner = _validation_ct_inner()
                 specs = [f"{rk}-ct[{inner}]"]
             body = {"specs": specs or [], "rack": rk}
             return _invoke_view(_app.api_gpu_reset_async, method="POST", json_body=body, operator=a.get("_operator", ""))

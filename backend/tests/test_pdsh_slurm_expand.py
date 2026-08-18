@@ -101,7 +101,7 @@ def test_expand_pdsh_w_slurm_nodenames_fallback_on_scontrol_fail():
 
 def test_merge_ct_individuals_preserves_rack_token_casing_for_pdsh():
     """Tray specs must keep rack literal casing when Slurm/pdsh need it (regex is IGNORECASE; do not lower the token)."""
-    from app import merge_ct_individuals_for_power
+    from validation_launch import merge_ct_individuals_for_power
 
     n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
     with naming_forced_to(n):
@@ -196,7 +196,7 @@ def test_grafana_bright_hostname_promql_regex_includes_verbatim_when_mixed_case(
 
 
 def test_merge_ct_individuals_bright_tray_is_last_capture_group():
-    from app import merge_ct_individuals_for_power
+    from validation_launch import merge_ct_individuals_for_power
 
     n = nid.NvisNaming.from_templates(nid.DEFAULT_NVIS_RACK_ID, nid.DEFAULT_NVIS_CT_ID)
     with naming_forced_to(n):

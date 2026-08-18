@@ -23,6 +23,7 @@ os.environ["RACK_EXEC_MODE"] = "local"
 import activity_hydration
 import app as app_module
 import rack_status_engine
+from api import dashboard
 from app import app
 
 import rack_locks
@@ -107,11 +108,9 @@ class TestSharedClusterSnapshotAPI:
         # Exercise real-cluster non-blocking wait=False (module default is DEMO=1).
         monkeypatch.setenv("RACK_STATUS_DEMO", "0")
         monkeypatch.setattr(app_module.nvftp_cache_sync, "ensure_background_thread", lambda: None)
-        monkeypatch.setattr(app_module, "_start_cmsh_rack_list_warm_thread", lambda: None)
-        monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw: Path("/logs"))
-        monkeypatch.setattr(
-            app_module,
-            "_cluster_squeue_overview_block",
+        monkeypatch.setattr(dashboard, "_start_cmsh_rack_list_warm_thread", lambda: None)
+        monkeypatch.setattr(dashboard, "_resolve_log_dir", lambda _raw: Path("/logs"))
+        monkeypatch.setattr(dashboard, "_cluster_squeue_overview_block",
             lambda: {"ok": True, "stdout": ""},
         )
         # Avoid ~1.5s filesystem reads on every _eget during API shell assembly.
@@ -250,9 +249,9 @@ class TestSharedClusterSnapshotAPI:
             probe_calls["squeue"] += 1
             return {"ok": True, "stdout": ""}
 
-        monkeypatch.setattr(app_module, "_cluster_probe_slurm_version", count_slurm)
-        monkeypatch.setattr(app_module, "_cluster_probe_bcm_cmsh_version", count_bcm)
-        monkeypatch.setattr(app_module, "_cluster_squeue_overview_block", count_squeue)
+        monkeypatch.setattr(dashboard, "_cluster_probe_slurm_version", count_slurm)
+        monkeypatch.setattr(dashboard, "_cluster_probe_bcm_cmsh_version", count_bcm)
+        monkeypatch.setattr(dashboard, "_cluster_squeue_overview_block", count_squeue)
 
         try:
             t0 = time.monotonic()
@@ -304,7 +303,7 @@ class TestSharedClusterSnapshotAPI:
             merge_calls += 1
 
         monkeypatch.setattr(rack_status_engine, "run_rack_status", collect)
-        monkeypatch.setattr(app_module, "_merge_live_native_workers_into_status", merge)
+        monkeypatch.setattr(dashboard, "_merge_live_native_workers_into_status", merge)
         payload = rack_status_engine._collect_canonical_rack_status(Path("/logs"))
         assert payload["ok"] is True
         assert merge_calls == 0
@@ -343,9 +342,9 @@ class TestSharedClusterSnapshotAPI:
             return False, "ssh reachability must not run from base overview"
 
         monkeypatch.delenv("RACK_CLUSTER_OVERVIEW_DISABLE_PROBES", raising=False)
-        monkeypatch.setattr(app_module, "_cluster_probe_bcm_cmsh_version", block_bcm)
-        monkeypatch.setattr(app_module, "_cluster_probe_slurm_version", block_slurm)
-        monkeypatch.setattr(app_module, "_cluster_squeue_overview_block", block_queue)
+        monkeypatch.setattr(dashboard, "_cluster_probe_bcm_cmsh_version", block_bcm)
+        monkeypatch.setattr(dashboard, "_cluster_probe_slurm_version", block_slurm)
+        monkeypatch.setattr(dashboard, "_cluster_squeue_overview_block", block_queue)
 
         he = app_module.host_exec
         # Nested context restores env + every setattr'd global on exit so later
@@ -428,8 +427,8 @@ class TestClusterOverviewLiveAPI:
         monkeypatch.setenv("RACK_STATUS_DEMO", "0")
         monkeypatch.delenv("RACK_CLUSTER_OVERVIEW_DISABLE_PROBES", raising=False)
         monkeypatch.setattr(app_module.nvftp_cache_sync, "ensure_background_thread", lambda: None)
-        monkeypatch.setattr(app_module, "_start_cmsh_rack_list_warm_thread", lambda: None)
-        monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw: Path("/logs"))
+        monkeypatch.setattr(dashboard, "_start_cmsh_rack_list_warm_thread", lambda: None)
+        monkeypatch.setattr(dashboard, "_resolve_log_dir", lambda _raw: Path("/logs"))
         monkeypatch.setattr(app_module.host_exec, "reachability_state", lambda: (True, ""))
         monkeypatch.setattr(app_module, "_job_env_overrides_load", lambda: {})
         # Force a fresh live-service singleton for this DB path.
@@ -479,9 +478,9 @@ class TestClusterOverviewLiveAPI:
             assert release.wait(5)
             return {"ok": True, "stdout": "JOBID NAME\n1 x", "stderr": "", "returncode": 0}
 
-        monkeypatch.setattr(app_module, "_cluster_probe_bcm_cmsh_version", collect_bcm)
-        monkeypatch.setattr(app_module, "_cluster_probe_slurm_version", collect_slurm)
-        monkeypatch.setattr(app_module, "_cluster_squeue_overview_block", collect_queue)
+        monkeypatch.setattr(dashboard, "_cluster_probe_bcm_cmsh_version", collect_bcm)
+        monkeypatch.setattr(dashboard, "_cluster_probe_slurm_version", collect_slurm)
+        monkeypatch.setattr(dashboard, "_cluster_squeue_overview_block", collect_queue)
 
         try:
             t0 = time.monotonic()
@@ -518,13 +517,10 @@ class TestClusterOverviewLiveAPI:
         def collect_bcm():
             return (values["bcm"], "")
 
-        monkeypatch.setattr(app_module, "_cluster_probe_bcm_cmsh_version", collect_bcm)
-        monkeypatch.setattr(
-            app_module, "_cluster_probe_slurm_version", lambda: ("slurm 1", "")
+        monkeypatch.setattr(dashboard, "_cluster_probe_bcm_cmsh_version", collect_bcm)
+        monkeypatch.setattr(dashboard, "_cluster_probe_slurm_version", lambda: ("slurm 1", "")
         )
-        monkeypatch.setattr(
-            app_module,
-            "_cluster_squeue_overview_block",
+        monkeypatch.setattr(dashboard, "_cluster_squeue_overview_block",
             lambda: {"ok": True, "stdout": "", "stderr": "", "returncode": 0},
         )
 
@@ -551,13 +547,10 @@ class TestClusterOverviewLiveAPI:
             calls["bcm"] += 1
             return ("BCM cached", "")
 
-        monkeypatch.setattr(app_module, "_cluster_probe_bcm_cmsh_version", collect_bcm)
-        monkeypatch.setattr(
-            app_module, "_cluster_probe_slurm_version", lambda: ("slurm 1", "")
+        monkeypatch.setattr(dashboard, "_cluster_probe_bcm_cmsh_version", collect_bcm)
+        monkeypatch.setattr(dashboard, "_cluster_probe_slurm_version", lambda: ("slurm 1", "")
         )
-        monkeypatch.setattr(
-            app_module,
-            "_cluster_squeue_overview_block",
+        monkeypatch.setattr(dashboard, "_cluster_squeue_overview_block",
             lambda: {"ok": True, "stdout": "", "stderr": "", "returncode": 0},
         )
 
@@ -584,13 +577,10 @@ class TestClusterOverviewLiveAPI:
         def boom_bcm():
             raise RuntimeError("probe failed password=supersecret token=leak123")
 
-        monkeypatch.setattr(app_module, "_cluster_probe_bcm_cmsh_version", boom_bcm)
-        monkeypatch.setattr(
-            app_module, "_cluster_probe_slurm_version", lambda: ("slurm 1", "")
+        monkeypatch.setattr(dashboard, "_cluster_probe_bcm_cmsh_version", boom_bcm)
+        monkeypatch.setattr(dashboard, "_cluster_probe_slurm_version", lambda: ("slurm 1", "")
         )
-        monkeypatch.setattr(
-            app_module,
-            "_cluster_squeue_overview_block",
+        monkeypatch.setattr(dashboard, "_cluster_squeue_overview_block",
             lambda: {"ok": True, "stdout": "", "stderr": "", "returncode": 0},
         )
 
@@ -627,17 +617,17 @@ class TestRackStatusBackgroundLoop:
             enabled_ticks["n"] += 1
             return enabled_ticks["n"] <= 2
 
-        monkeypatch.setattr(app_module, "_rack_status_background_enabled", enabled)
-        monkeypatch.setattr(app_module, "_rack_status_background_interval_sec", lambda: 5)
+        monkeypatch.setattr(dashboard, "_rack_status_background_enabled", enabled)
+        monkeypatch.setattr(dashboard, "_rack_status_background_interval_sec", lambda: 5)
         monkeypatch.setattr(app_module.time, "sleep", lambda _seconds: None)
         monkeypatch.setattr(app_module.host_exec, "cluster_reachable", lambda force=False: False)
         monkeypatch.setattr(
-            app_module,
+            dashboard,
             "get_cluster_snapshot",
             lambda *args, **kwargs: snapshot_calls.append((args, kwargs)),
         )
 
-        app_module._rack_status_background_loop()
+        dashboard._rack_status_background_loop()
 
         assert snapshot_calls == []
         assert enabled_ticks["n"] == 3
