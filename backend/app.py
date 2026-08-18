@@ -1749,6 +1749,7 @@ def _gpu_reset_worker(job_id: str, pdsh_w: str) -> None:
 _truthy_env = core.truthy_env
 _SLURM_STDOUT_RE = core.SLURM_STDOUT_RE
 _slurm_job_base_id = core.slurm_job_base_id
+from slurm_admin import _run_scancel, _run_scontrol_node_update
 from slurm_query import (
     _all_slurm_nodenames,
     _dedupe_hostnames_preserve_spelling,
@@ -8011,57 +8012,6 @@ def _slurm_nodename_target_from_body(body: dict) -> tuple[str | None, str | None
     return target, None
 
 
-def _run_scontrol_node_update(target: str, state_kv: list[str]) -> dict:
-    """Run scontrol update nodename=TARGET …; state_kv e.g. [\"state=drain\", \"reason=admin\"].
-
-    By default runs under ``bash -lc`` after ``module load <RACK_SLURM_MODULE>`` (default *slurm*),
-    matching cluster login environments where *scontrol* is not on PATH until modules load.
-    Set RACK_SLURM_SKIP_MODULE_LOAD=1 to invoke *scontrol* directly (e.g. full path already on PATH).
-    """
-    plat = _get_platform()
-    nodename_arg = f"nodename={target}"
-    tail = " ".join(shlex.quote(a) for a in ["update", nodename_arg, *state_kv])
-    shell_cmd = plat.scontrol_cmd(tail)
-    cmd_display = shell_cmd
-
-    dry = os.environ.get("RACK_SLURM_NODES_STATE_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
-    if dry:
-        return {
-            "ok": True,
-            "returncode": 0,
-            "stdout": "dry-run (RACK_SLURM_NODES_STATE_DRY_RUN)",
-            "stderr": "",
-            "command_display": cmd_display,
-        }
-    timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
-    try:
-        proc = host_exec.run_slurm_on_host(
-            shell_cmd,
-            timeout=timeout,
-        )
-    except FileNotFoundError:
-        raise OSError(
-            "scontrol executable not found; set RACK_SLURM_SCONTROL to the full path "
-            "or ensure module load is available"
-        ) from None
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"timeout after {timeout}s",
-            "command_display": cmd_display,
-        }
-    ok = proc.returncode == 0
-    return {
-        "ok": ok,
-        "returncode": proc.returncode,
-        "stdout": (proc.stdout or "").strip(),
-        "stderr": (proc.stderr or "").strip(),
-        "command_display": cmd_display,
-    }
-
-
 @app.route("/api/slurm-drain", methods=["POST"])
 def api_slurm_drain():
     """POST JSON {\"rack\": \"p34-r07\"} — ``module load`` then scontrol update nodename=… drain."""
@@ -8194,40 +8144,6 @@ def api_slurm_undrain():
         else:
             payload["error"] = f"scontrol update failed: {err[:300] or 'no output'}"
     return jsonify(payload), (200 if ok else 502)
-
-
-def _run_scancel(job_id: str) -> dict:
-    """Run ``scancel JOBID`` after optional ``module load`` (same env semantics as *scontrol*)."""
-    jid = (job_id or "").strip()
-    if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
-        raise ValueError("job_id must be a Slurm job id (digits, optional _TASK for arrays)")
-    plat = _get_platform()
-    shell_cmd = plat.scancel_cmd(shlex.quote(jid))
-    cmd_display = shell_cmd
-    timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
-    try:
-        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
-    except FileNotFoundError:
-        raise OSError(
-            "scancel executable not found; set RACK_SLURM_SCANCEL to the full path "
-            "or ensure module load is available"
-        ) from None
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"timeout after {timeout}s",
-            "command_display": cmd_display,
-        }
-    ok = proc.returncode == 0
-    return {
-        "ok": ok,
-        "returncode": proc.returncode,
-        "stdout": (proc.stdout or "").strip(),
-        "stderr": (proc.stderr or "").strip(),
-        "command_display": cmd_display,
-    }
 
 
 # Terminal (finished) job states — what the Scheduler "recent jobs" panel shows so a
@@ -8805,20 +8721,7 @@ _UNIVERSAL_SCAN_IGNORE_RE = re.compile(
 )
 
 
-def _truthy_arg(val: object, *, default: bool = False) -> bool:
-    """Query-string / JSON-body boolean. Absent or blank -> *default*."""
-    if val is None:
-        return default
-    if isinstance(val, bool):
-        return val
-    s = str(val).strip().lower()
-    if not s:
-        return default
-    if s in ("1", "true", "yes", "on"):
-        return True
-    if s in ("0", "false", "no", "off"):
-        return False
-    return default
+_truthy_arg = core.truthy_arg
 
 
 def _universal_enabled() -> bool:
