@@ -75,6 +75,11 @@ def set_materialize_hook(fn) -> None:
     _materialize_hook = fn
 
 
+def _nvis_workspace_dir_effective() -> str:
+    """Default workspace root for HPC-X / CUDA / nvloom install layout (same as bin/scripts/workspace-dir-common.sh)."""
+    return (_eget("NVIS_WORKSPACE_DIR") or _eget("RACK_WORKSPACE_DIR") or "").strip() or "/home/cmsupport/workspace"
+
+
 JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     {
         "section": "dashboard",

@@ -9,7 +9,10 @@
 # its affiliates is strictly prohibited.
 from pathlib import PurePosixPath
 
-import app as app_module
+import app as app_module  # noqa: F401 - imported for the Flask app/test client
+# The Tools helpers moved to api/tools.py; patch and call the module that OWNS them, not app's
+# view of them (see backend-api.mdc on the aliasing trap).
+from api import tools as tools_module
 
 
 def _remote_files(workspace: PurePosixPath) -> dict[str, object]:
@@ -33,7 +36,7 @@ def test_workspace_payload_probes_execution_host_for_pure_posix_path(monkeypatch
 
     monkeypatch.setattr(app_module.host_exec, "stat_dir", stat_dir)
 
-    payload = app_module._workspace_toolchain_status_payload(workspace, "13")
+    payload = tools_module._workspace_toolchain_status_payload(workspace, "13")
 
     assert payload["all_ready"] is True
     assert payload["nvloom_cli"] is True
@@ -57,7 +60,7 @@ def test_workspace_payload_probes_execution_host_for_pure_posix_path(monkeypatch
 
 def test_workspace_toolchain_endpoint_never_stats_the_container(monkeypatch):
     workspace = PurePosixPath("/home/cmods/workspace")
-    monkeypatch.setattr(app_module, "_resolve_tools_destination", lambda _raw: workspace)
+    monkeypatch.setattr(tools_module, "_resolve_tools_destination", lambda _raw: workspace)
     monkeypatch.setattr(
         app_module.host_exec,
         "stat_dir",
@@ -87,7 +90,7 @@ def test_container_status_accepts_a_remote_symlink_to_directory(monkeypatch):
     monkeypatch.setattr(app_module.host_exec, "is_dir", lambda path: path == destination)
     monkeypatch.setattr(app_module.host_exec, "is_file", lambda path: path == destination)
 
-    resolved = app_module._tools_destination_dir_for_status_probe(str(destination))
+    resolved = tools_module._tools_destination_dir_for_status_probe(str(destination))
 
     assert resolved == destination
 
@@ -105,5 +108,5 @@ def test_sqsh_nonempty_is_checked_on_execution_host(monkeypatch):
     monkeypatch.setattr(app_module.host_exec, "run_on_host", run_on_host)
     path = PurePosixPath("/cluster/llmb/images/nemo.sqsh")
 
-    assert app_module._tools_sqsh_nonempty(path) is True
+    assert tools_module._tools_sqsh_nonempty(path) is True
     assert calls == [(["test", "-s", str(path)], 30)]
