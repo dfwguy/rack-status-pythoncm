@@ -27,6 +27,8 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+import workflow_engine
+
 from .tools import AgentTool, register
 
 _logger = logging.getLogger(__name__)
@@ -269,11 +271,11 @@ def register_all() -> None:
             name="list_workflows",
             description="List available workflow templates (id, name, description) that can be run.",
             category="workflow",
-            handler=lambda a: {"ok": True, "workflows": _app.workflow_engine.list_workflows()},
+            handler=lambda a: {"ok": True, "workflows": workflow_engine.list_workflows()},
         ))
 
         def _get_workflow_run(a: dict) -> dict:
-            run = _app.workflow_engine.get_run_state(str(a.get("run_id", "")))
+            run = workflow_engine.get_run_state(str(a.get("run_id", "")))
             if not run:
                 return {"ok": False, "error": "run not found"}
             return {"ok": True, "run": run}
@@ -313,7 +315,7 @@ def register_all() -> None:
                         out["stdout_tail"] = (row.get("stdout") or "")[-4000:]
                         out["stderr_tail"] = (row.get("stderr") or "")[-2000:]
                         return {"ok": True, **out}
-            run = _app.workflow_engine.get_run_state(jid)
+            run = workflow_engine.get_run_state(jid)
             if run:
                 return {"ok": True, "kind": "workflow", "run": run}
             return {"ok": False, "error": "unknown or expired job_id/run_id"}

@@ -38,7 +38,7 @@ def _isolate_jobs():
     That is the behaviour we want in production — pressing the button twice joins the first
     run — but across tests it means one case silently adopts the previous case's job.
     """
-    import app as A
+    from api import reports as A
 
     with A._node_report_jobs_lock:
         A._node_report_jobs.clear()
@@ -63,7 +63,7 @@ def _wait(client, job_id, *, want, timeout=5.0):
 @pytest.fixture
 def fake_generation(monkeypatch):
     """Stand in for the fleet sweep so the lifecycle is testable without a cluster."""
-    import app as A
+    from api import reports as A
 
     fleet = {"columns": ["allreduce"],
              "nodes": [{"node": f"n{i}", "jobs": [{"name": "allreduce", "status": "DONE"}]}
@@ -127,7 +127,7 @@ class TestJobLifecycle:
     def test_asking_for_the_result_early_says_not_ready_with_the_current_phase(
         self, client, monkeypatch
     ):
-        import app as A
+        from api import reports as A
 
         monkeypatch.setattr(A, "_bringup", None)
 
@@ -155,7 +155,7 @@ class TestIdempotency:
         self, client, monkeypatch
     ):
         """The second press must join the first run, not start four more minutes of SSH."""
-        import app as A
+        from api import reports as A
 
         started: list[int] = []
 
@@ -193,7 +193,7 @@ class TestFailureIsVisible:
         assert resp.status_code == 404
 
     def test_a_worker_crash_surfaces_as_an_error_state(self, client, monkeypatch):
-        import app as A
+        from api import reports as A
 
         class _Bringup:
             @staticmethod
@@ -214,7 +214,7 @@ def offline_facts(monkeypatch):
     version probe was unreachable would be useless in exactly the degraded conditions where an
     operator most wants one — so these stubs also assert that optionality holds.
     """
-    import app as A
+    from api import reports as A
 
     monkeypatch.setattr(A, "_cluster_facts", lambda: {"slurm": {"version": "23.11.6"}})
     monkeypatch.setattr(A, "_analytics_last_cached", dict)
@@ -336,7 +336,7 @@ class TestReportKinds:
         assert "csv" in by_id["rack-status"]["formats"]
 
     def test_pdf_is_only_offered_when_it_can_actually_be_rendered(self, client, monkeypatch):
-        import app as A
+        from api import reports as A
 
         monkeypatch.setattr(A, "_cluster_report_pdf_available", lambda: False)
         body = client.get("/api/node-report/kinds").get_json()
@@ -361,7 +361,7 @@ class TestRequestValidation:
         assert res.get_json()["supported"] == ["json"]
 
     def test_pdf_is_refused_rather_than_crashing_when_unrenderable(self, client, monkeypatch):
-        import app as A
+        from api import reports as A
 
         monkeypatch.setattr(A, "_cluster_report_pdf_available", lambda: False)
         res = client.post("/api/node-report/start",
@@ -394,7 +394,7 @@ class TestFormatRouting:
         assert isinstance(_json.loads(res.data), dict)
 
     def test_pdf_comes_back_as_a_real_pdf(self, client, fake_generation, offline_facts):
-        import app as A
+        from api import reports as A
 
         if not A._cluster_report_pdf_available():
             pytest.skip("reportlab not installed")

@@ -10,20 +10,26 @@
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
 """The job registries must stay ONE object each, however many modules import them.
 
-``app.py`` imports these from ``job_registry`` under their original names so ~40 existing
+Consumers import these from ``job_registry`` under their original names so the ~40 existing
 mutate-under-lock call sites did not have to change. That works only because a dict is shared by
-reference: ``app._reset_jobs`` *is* ``job_registry._reset_jobs``.
+reference: ``api.rack_locks._reset_jobs`` *is* ``job_registry._reset_jobs``.
 
 The failure it guards against is silent. Rebinding in one module (``_reset_jobs = {}``) gives that
 module a private dict while the rest of the app keeps the old one -- and the lock still protects
 only the original, so it is a data race as well as a lost write. Nothing raises; jobs simply stop
 appearing in ``GET /api/rack-locks`` or the ``*-status`` endpoints.
+
+Importers are discovered rather than listed: as routes move out of ``app.py`` into ``backend/api/``,
+the module holding a given registry changes, and a hard-coded list would keep passing while checking
+the wrong thing.
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 
-import app
+import app  # noqa: F401 - imported so the api/ modules are loaded and can be inspected
 import job_registry as J
 
 REGISTRIES = [
@@ -37,15 +43,34 @@ REGISTRIES = [
 ]
 
 
-@pytest.mark.parametrize("name", REGISTRIES)
-def test_the_registry_is_the_same_object_in_both_modules(name):
-    assert getattr(app, name) is getattr(J, name)
+def _importers(name: str) -> dict[str, object]:
+    """Every loaded backend module exposing *name*, excluding job_registry itself."""
+    found = {}
+    for modname, mod in list(sys.modules.items()):
+        if mod is None or modname == "job_registry":
+            continue
+        path = getattr(mod, "__file__", "") or ""
+        if "/backend/" not in path:
+            continue
+        if hasattr(mod, name):
+            found[modname] = getattr(mod, name)
+    return found
 
 
 @pytest.mark.parametrize("name", REGISTRIES)
-def test_the_lock_is_the_same_object_in_both_modules(name):
+def test_the_registry_is_the_same_object_everywhere(name):
+    owner = getattr(J, name)
+    for modname, obj in _importers(name).items():
+        assert obj is owner, f"{modname}.{name} is a different object from job_registry.{name}"
+
+
+@pytest.mark.parametrize("name", REGISTRIES)
+def test_the_lock_is_the_same_object_everywhere(name):
     """A second lock would protect a different dict -- worse than no lock, because it looks safe."""
-    assert getattr(app, name + "_lock") is getattr(J, name + "_lock")
+    lock_name = name + "_lock"
+    owner = getattr(J, lock_name)
+    for modname, obj in _importers(lock_name).items():
+        assert obj is owner, f"{modname}.{lock_name} is a different lock from job_registry's"
 
 
 def test_a_mutation_is_visible_through_either_name():

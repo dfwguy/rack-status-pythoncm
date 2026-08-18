@@ -10,6 +10,7 @@
 import subprocess
 
 import app as app_module
+from api import reports as reports_module
 
 
 def test_post_run_report_route_returns_frontend_contract(monkeypatch):
@@ -33,7 +34,7 @@ def test_post_run_report_route_returns_frontend_contract(monkeypatch):
         },
     }
     monkeypatch.setattr(
-        app_module,
+        reports_module,
         "_build_post_run_report",
         lambda **_kwargs: report,
     )
@@ -88,13 +89,13 @@ def test_post_run_refresh_uses_configured_platform_slurm_commands(monkeypatch):
             raise AssertionError(f"unexpected command: {command}")
         return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr(app_module, "_get_platform", lambda: FakePlatform())
-    monkeypatch.setattr(app_module.host_exec, "run_slurm_on_host", fake_run)
+    monkeypatch.setattr(reports_module, "_get_platform", lambda: FakePlatform())
+    monkeypatch.setattr(reports_module.host_exec, "run_slurm_on_host", fake_run)
 
-    accounting = app_module._post_run_accounting([
+    accounting = reports_module._post_run_accounting([
         {"tasks": [{"scheduler_ref": "147857"}]},
     ])
-    inventory = app_module._post_run_inventory()
+    inventory = reports_module._post_run_inventory()
 
     assert accounting[0]["job_id"] == "147857"
     assert accounting[0]["nodelist"] == "ink50-dh01-j21-11"

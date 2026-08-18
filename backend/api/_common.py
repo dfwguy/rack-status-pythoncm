@@ -72,6 +72,19 @@ def history_unavailable_response():
         "error": "run history is unavailable (results_history not installed or disabled)",
     }), 503
 
+def arg_or_body(name: str):
+    """One parameter from either the JSON body or the query string, body first.
+
+    The same endpoint is called both ways: the SPA POSTs a body, and an operator debugging by hand
+    passes a query parameter. Body wins so an explicit POST is never silently overridden by a stale
+    query string on the same URL.
+    """
+    payload = request.get_json(silent=True)
+    if isinstance(payload, dict) and payload.get(name) is not None:
+        return payload.get(name)
+    return request.args.get(name)
+
+
 def requested_nodes() -> list[str]:
     """Node list from a JSON body (preferred) or a ``?nodes=`` query.
 
