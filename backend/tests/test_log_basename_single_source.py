@@ -16,8 +16,9 @@
 match order. These decide which table a log appears in, so a drifted copy shows a rack in
 one view and not the other.
 
-The logic now lives in ``nvis_id_templates``; the module-level names in ``app.py`` and
-``native_status.py`` are binding wrappers only. These tests pin the behaviour and guard the
+The logic now lives in ``nvis_id_templates``; the module-level names in ``naming.py`` (moved
+there from ``app.py`` so every domain shares one set) and ``native_status.py`` are binding
+wrappers only. These tests pin the behaviour and guard the
 structure, because a second copy is the only way the drift returns.
 """
 from __future__ import annotations
@@ -152,11 +153,11 @@ def test_module_does_not_redefine_the_multirack_regex(module):
 @pytest.mark.parametrize(
     "module,func",
     [
-        ("app.py", "_nemo_nccl_in_log_basename"),
-        ("app.py", "_nemo_single_rack_log_basename"),
-        ("app.py", "_is_multirack_log_basename"),
-        ("app.py", "_jobid_from_nemo_log_basename"),
-        ("app.py", "_multirack_node_count_suffix"),
+        ("naming.py", "_nemo_nccl_in_log_basename"),
+        ("naming.py", "_nemo_single_rack_log_basename"),
+        ("naming.py", "_is_multirack_log_basename"),
+        ("naming.py", "_jobid_from_nemo_log_basename"),
+        ("naming.py", "_multirack_node_count_suffix"),
         ("native_status.py", "_nemo_nccl_bn"),
         ("native_status.py", "_nemo_single_rack_bn"),
         ("native_status.py", "_is_multirack_bn"),

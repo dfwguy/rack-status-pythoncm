@@ -186,7 +186,22 @@ from logscan_cache import (
     _logscan_batch,
     _logscan_record,
 )
-from naming import _normalize_rack_id, _nvis_naming
+from naming import (
+    _ct_power_single_ct_re,
+    _ct_power_token_re,
+    _ct_power_tray_full_re,
+    _is_multirack_log_basename,
+    _jobid_from_nemo_log_basename,
+    _multirack_node_count_suffix,
+    _nemo_nccl_in_log_basename,
+    _nemo_single_rack_log_basename,
+    _normalize_nvswitch_host_for_rack,
+    _normalize_rack_id,
+    _nvis_naming,
+    _nvswitch_host_sort_key,
+    _rack_id_from_log_basename,
+    _rack_id_from_nemo_1rack_filename,
+)
 from paths import (
     _REMOTE_BASE,
     DEFAULT_SCRIPT,
@@ -538,8 +553,6 @@ _SLURM_RUNNING_JOB_STATES = frozenset(
 )
 
 
-def _slurm_job_state_base(state: str | None) -> str:
-    return str(state or "").strip().upper().split("+")[0]
 
 
 def _task_needs_slurm_hydration(task: dict) -> bool:
@@ -1647,10 +1660,13 @@ from results_ingest import (
 from slurm_query import (
     _all_slurm_nodenames,
     _dedupe_hostnames_preserve_spelling,
+    _infer_num_nodes_from_nodelist,
+    _parse_scontrol_job,
     _rack_node_hostnames_from_inventory,
     _resolve_slurm_job_stdout_path,
     _run_scontrol_show_job,
     _run_squeue,
+    _slurm_job_state_base,
 )
 from stream_exec import _merged_stdout_stream_generator, _translate_cwd_for_remote
 from web_auth import _auth_enabled, _safe_next, _session_lifetime, _session_ok
@@ -1961,20 +1977,12 @@ def _parser_export_glob() -> str:
 # only to bind the caller's NvisNaming instance; keep them free of logic.
 
 
-def _nemo_nccl_in_log_basename(name: str) -> bool:
-    return nvis_id_templates.nemo_nccl_in_log_basename(name, _nvis_naming())
 
 
-def _nemo_single_rack_log_basename(name: str) -> bool:
-    return nvis_id_templates.nemo_single_rack_log_basename(name, _nvis_naming())
 
 
-def _jobid_from_nemo_log_basename(name: str) -> str | None:
-    return nvis_id_templates.job_id_from_log_basename(name)
 
 
-def _is_multirack_log_basename(name: str) -> bool:
-    return nvis_id_templates.is_multirack_log_basename(name, _nvis_naming())
 
 
 def _multirack_site_prefix() -> str:
@@ -2008,8 +2016,6 @@ def _expand_r_inner_to_rack_nums(inner: str) -> list[int]:
     return sorted(set(out))
 
 
-def _multirack_node_count_suffix(name: str) -> str:
-    return nvis_id_templates.node_count_suffix_from_basename(name)
 
 
 def multirack_display_rack_from_basename(name: str) -> str:
@@ -2082,14 +2088,8 @@ def _resolve_nemo_log_basename_in_dir(log_dir: Path, basename: str) -> Path | No
     return None
 
 
-def _rack_id_from_nemo_1rack_filename(name: str) -> str | None:
-    """Return normalized rack id if basename looks like a NEMO 1Rack log, else None."""
-    return _nvis_naming().rack_id_from_nemo_1rack_filename(name)
 
 
-def _rack_id_from_log_basename(name: str) -> str | None:
-    """Rack id from single-rack NEMO validation basename (1Rack-, root-CK-, …); not Llama Slurm stdout."""
-    return _nvis_naming().rack_id_from_log_basename(name)
 
 
 def _nemo_log_file_looks_successful(path: Path) -> bool:
@@ -2866,14 +2866,6 @@ def _llm_wall_times_from_log(path: Path, tz_override: str | None = None) -> list
     return times
 
 
-def _median_float(values: list[float]) -> float | None:
-    if not values:
-        return None
-    s = sorted(values)
-    mid = len(s) // 2
-    if len(s) % 2:
-        return s[mid]
-    return (s[mid - 1] + s[mid]) / 2.0
 
 
 def _fallback_window_from_steps_and_mtime(
@@ -3091,13 +3083,6 @@ def _grafana_deeplink_dashboards() -> list[dict[str, str]]:
     return out or [dict(d) for d in _GRAFANA_DEEPLINK_DEFAULT]
 
 
-def _iso_utc_z(ts: float) -> str:
-    """RFC3339 UTC with Z suffix for Grafana ``from`` / ``to`` URL params."""
-    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-    s = dt.isoformat(timespec="milliseconds")
-    if s.endswith("+00:00"):
-        return s[:-6] + "Z"
-    return s
 
 
 def _grafana_url_timezone_param() -> str:
@@ -3237,6 +3222,10 @@ def _grafana_live_5m_embed_context(
 # ``str(x) if is_remote() else str(x.resolve())`` idiom); keeping a second definition of the
 # replacement would have reintroduced exactly the drift that consolidation removed.
 _rpath = core.rpath
+_iso_utc_z = core.utc_iso_z
+_mean_finite = core.mean_finite
+_median_float = core.median_float
+_last_regex_int = core.last_regex_int
 
 
 def _validation_script_path() -> Path:
@@ -3514,12 +3503,6 @@ def _extra_script_args() -> list[str]:
     return shlex.split(extra)
 
 
-def _ct_power_token_re() -> re.Pattern[str]:
-    """Tray blob tokens from ``ct_down_unk`` (pattern follows ``NVIS_*`` templates)."""
-    naming = _nvis_naming()
-    rack_part = nvis_id_templates._template_to_regex(naming.rack_template).replace("(?i)", "")
-    join = re.escape(naming.ct_joiner)
-    return re.compile(rf"({rack_part}{join}\[[^\]]+\])", re.IGNORECASE)
 
 
 def power_specs_from_ct_down_unk(raw: str | None) -> list[str]:
@@ -3553,15 +3536,8 @@ def power_specs_from_ct_down_unk(raw: str | None) -> list[str]:
     return out
 
 
-def _ct_power_tray_full_re() -> re.Pattern[str]:
-    return _nvis_naming().validation_target_re()
 
 
-def _ct_power_single_ct_re() -> re.Pattern[str]:
-    naming = _nvis_naming()
-    rack_part = nvis_id_templates._template_to_regex(naming.rack_template).replace("(?i)", "")
-    join = re.escape(naming.ct_joiner)
-    return re.compile(rf"^({rack_part}){join}\[(\d+)\]$", re.IGNORECASE)
 
 
 def merge_ct_individuals_for_power(nodes: list[str]) -> list[str]:
@@ -3680,19 +3656,8 @@ def _comments_file() -> Path:
     return Path(os.environ.get("RACK_COMMENTS_FILE", str(REPO_ROOT / "rack_comments.json"))).resolve()
 
 
-def _normalize_nvswitch_host_for_rack(rack: str, raw: object) -> str:
-    """Require a full NVSwitch hostname belonging to *rack* (``NVIS_NVSW_ID`` template)."""
-    rk = _normalize_rack_id(rack)
-    if not isinstance(raw, str) or not raw.strip():
-        raise ValueError("nvswitch_host is required")
-    return _nvis_naming().normalize_nvsw_host(rk, raw)
 
 
-def _nvswitch_host_sort_key(hostname: str) -> tuple[int, str]:
-    m = re.search(r"-nvsw-(\d+)$", hostname, flags=re.IGNORECASE)
-    if m:
-        return (int(m.group(1)), hostname.lower())
-    return (0, hostname.lower())
 
 
 def nvswitch_hosts_for_rack_list(rack: str) -> list[str]:
@@ -9124,23 +9089,8 @@ _RE_SEQ_LEN_CANDIDATES = (
 )
 
 
-def _last_regex_int(pat: re.Pattern[str], text: str) -> int | None:
-    last: int | None = None
-    for m in pat.finditer(text):
-        try:
-            last = int(m.group(1))
-        except (ValueError, IndexError):
-            continue
-    return last
 
 
-def _infer_num_nodes_from_nodelist(hosts: str) -> int | None:
-    h = hosts.strip()
-    if not h or re.search(r"[\[\]]", h):
-        return None
-    if "," in h:
-        return h.count(",") + 1
-    return 1
 
 
 def _nemotron_log_run_hw_tokens(
@@ -9200,11 +9150,6 @@ def _nemotron_log_run_hw_tokens(
     }
 
 
-def _mean_finite(vals: list[float | None]) -> float | None:
-    xs = [float(v) for v in vals if v is not None and isinstance(v, (int, float)) and math.isfinite(float(v))]
-    if not xs:
-        return None
-    return float(statistics.mean(xs))
 
 
 def _log_mtime_or_zero(path: Path) -> float:
@@ -14511,21 +14456,8 @@ if __name__ == "__main__":
 # attempt was invisible even though it consumed an 18-node allocation and drained a tray. Capturing
 # only successful runs is the same blank-read-as-success failure this platform exists to catch.
 # ---------------------------------------------------------------------------------------------
-_SCONTROL_FIELDS = (
-    "JobId", "JobName", "UserId", "JobState", "Reason", "ExitCode", "DerivedExitCode",
-    "RunTime", "SubmitTime", "StartTime", "EndTime", "NodeList", "ReqNodeList",
-    "NumNodes", "NumCPUs", "Partition", "StdOut", "StdErr", "WorkDir", "Command",
-)
 
 
-def _parse_scontrol_job(text: str) -> dict:
-    """scontrol emits `Key=Value` pairs, space-separated, values may contain `/` and `:` but not ` `."""
-    out: dict[str, str] = {}
-    for m in re.finditer(r"([A-Za-z][A-Za-z0-9_]*)=(\S*)", text or ""):
-        k, v = m.group(1), m.group(2)
-        if k in _SCONTROL_FIELDS and k not in out:
-            out[k] = v
-    return out
 
 
 def _rack_and_nodes_from_nodelist(nodelist: str) -> tuple[str, list[str]]:

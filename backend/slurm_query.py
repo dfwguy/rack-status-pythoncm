@@ -357,3 +357,36 @@ def _resolve_slurm_job_stdout_path(path_raw: str, log_dir_raw: str | None) -> Pa
             "job stdout path must be under the dashboard log directory (log_dir) or "
             "RACK_STATUS_DEFAULT_LOG_DIR, or configure RACK_STATUS_ALLOWED_PREFIXES"
         ) from e
+
+
+# --- scontrol output parsing --------------------------------------------------------------------
+
+
+def _slurm_job_state_base(state: str | None) -> str:
+    return str(state or "").strip().upper().split("+")[0]
+
+
+def _infer_num_nodes_from_nodelist(hosts: str) -> int | None:
+    h = hosts.strip()
+    if not h or re.search(r"[\[\]]", h):
+        return None
+    if "," in h:
+        return h.count(",") + 1
+    return 1
+
+
+_SCONTROL_FIELDS = (
+    "JobId", "JobName", "UserId", "JobState", "Reason", "ExitCode", "DerivedExitCode",
+    "RunTime", "SubmitTime", "StartTime", "EndTime", "NodeList", "ReqNodeList",
+    "NumNodes", "NumCPUs", "Partition", "StdOut", "StdErr", "WorkDir", "Command",
+)
+
+
+def _parse_scontrol_job(text: str) -> dict:
+    """scontrol emits `Key=Value` pairs, space-separated, values may contain `/` and `:` but not ` `."""
+    out: dict[str, str] = {}
+    for m in re.finditer(r"([A-Za-z][A-Za-z0-9_]*)=(\S*)", text or ""):
+        k, v = m.group(1), m.group(2)
+        if k in _SCONTROL_FIELDS and k not in out:
+            out[k] = v
+    return out

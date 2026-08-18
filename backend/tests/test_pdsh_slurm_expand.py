@@ -78,7 +78,8 @@ def test_merge_ct_individuals_preserves_rack_token_casing_for_pdsh():
     from app import merge_ct_individuals_for_power
 
     n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
-    with mock.patch("app._nvis_naming", return_value=n):
+    with mock.patch("naming._nvis_naming", return_value=n), \
+         mock.patch("app._nvis_naming", return_value=n):
         mixed = merge_ct_individuals_for_power(
             [
                 "CBR01-DH01-SVR-CN0102[01]",
@@ -92,7 +93,8 @@ def test_grafana_embed_host_regex_prefers_rack_prefix():
     from app import _grafana_embed_host_regex_and_mode
 
     n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
-    with mock.patch("app._nvis_naming", return_value=n):
+    with mock.patch("naming._nvis_naming", return_value=n), \
+         mock.patch("app._nvis_naming", return_value=n):
         r, mode = _grafana_embed_host_regex_and_mode(
             "cbr01-dh01-svr-cn0102",
             ["CBR01-DH01-SVR-CN010211", "CBR01-DH01-SVR-CN010212"],
@@ -105,7 +107,8 @@ def test_grafana_embed_rack_prefix_from_slurm_hosts_if_rack_param_invalid():
     from app import _grafana_embed_host_regex_and_mode
 
     n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
-    with mock.patch("app._nvis_naming", return_value=n):
+    with mock.patch("naming._nvis_naming", return_value=n), \
+         mock.patch("app._nvis_naming", return_value=n):
         r, mode = _grafana_embed_host_regex_and_mode(
             "unparsed-rack-label",
             ["CBR01-DH01-SVR-CN010211"],
@@ -120,7 +123,8 @@ def test_grafana_rack_embed_regex_fullmatches_full_hostname():
     from app import _grafana_embed_host_regex_and_mode
 
     n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
-    with mock.patch("app._nvis_naming", return_value=n):
+    with mock.patch("naming._nvis_naming", return_value=n), \
+         mock.patch("app._nvis_naming", return_value=n):
         r, _ = _grafana_embed_host_regex_and_mode("cbr01-dh01-svr-cn0102", [])
     assert re.fullmatch(r, "CBR01-DH01-SVR-CN010211")
 
@@ -129,7 +133,8 @@ def test_grafana_embed_rack_prefix_lower_env():
     from app import _grafana_embed_host_regex_and_mode
 
     n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
-    with mock.patch("app._nvis_naming", return_value=n):
+    with mock.patch("naming._nvis_naming", return_value=n), \
+         mock.patch("app._nvis_naming", return_value=n):
         with mock.patch.dict(os.environ, {"RACK_WEB_GRAFANA_EMBED_RACK_REGEX_LOWER": "1"}):
             r, mode = _grafana_embed_host_regex_and_mode("cbr01-dh01-svr-cn0102", [])
     assert mode == "rack_prefix"
@@ -140,7 +145,8 @@ def test_grafana_embed_rack_prefix_bright():
     from app import _grafana_embed_host_regex_and_mode
 
     n = nid.NvisNaming.from_templates(nid.DEFAULT_NVIS_RACK_ID, nid.DEFAULT_NVIS_CT_ID)
-    with mock.patch("app._nvis_naming", return_value=n):
+    with mock.patch("naming._nvis_naming", return_value=n), \
+         mock.patch("app._nvis_naming", return_value=n):
         r, mode = _grafana_embed_host_regex_and_mode("p5-r03", ["p5-r03-ct07"])
     assert mode == "rack_prefix"
     assert r == "p5-r03.*"
@@ -150,7 +156,8 @@ def test_grafana_embed_host_regex_per_host_env():
     from app import _grafana_embed_host_regex_and_mode
 
     n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
-    with mock.patch("app._nvis_naming", return_value=n):
+    with mock.patch("naming._nvis_naming", return_value=n), \
+         mock.patch("app._nvis_naming", return_value=n):
         with mock.patch.dict(os.environ, {"RACK_WEB_GRAFANA_HOST_REGEX_PER_HOST": "1"}):
             r, mode = _grafana_embed_host_regex_and_mode(
                 "cbr01-dh01-svr-cn0102",
@@ -173,6 +180,7 @@ def test_merge_ct_individuals_bright_tray_is_last_capture_group():
     from app import merge_ct_individuals_for_power
 
     n = nid.NvisNaming.from_templates(nid.DEFAULT_NVIS_RACK_ID, nid.DEFAULT_NVIS_CT_ID)
-    with mock.patch("app._nvis_naming", return_value=n):
+    with mock.patch("naming._nvis_naming", return_value=n), \
+         mock.patch("app._nvis_naming", return_value=n):
         out = merge_ct_individuals_for_power(["p5-r03-ct[1]", "p5-r03-ct[18]"])
         assert out == ["p5-r03-ct[1,18]"]

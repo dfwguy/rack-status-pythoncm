@@ -25,9 +25,10 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
+
+import core
 
 _log = logging.getLogger(__name__)
 
@@ -38,10 +39,8 @@ _SECRET_RE = re.compile(
 )
 
 
-def _iso(timestamp: float | None) -> str | None:
-    if timestamp is None:
-        return None
-    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+# One definition, in core: this module and cluster_overview_live carried identical copies.
+_iso = core.utc_iso_from_epoch
 
 
 def _safe_error(error: BaseException | str) -> str:

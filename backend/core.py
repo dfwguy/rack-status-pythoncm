@@ -30,8 +30,10 @@ through that, never with a bare ``os.environ.get`` -- see ``core-designs.mdc`` Â
 
 from __future__ import annotations
 
+import math
 import os
 import re
+import statistics
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
@@ -156,3 +158,45 @@ def slurm_job_base_id(job_raw: str | None) -> str | None:
     if "_" in s:
         s = s.split("_", 1)[0]
     return s if s.isdigit() else None
+
+
+# --- Small generic utilities ------------------------------------------------------------------
+# No domain meaning, no application state. utc_iso_z is the SECOND timestamp convention described
+# in utc_now_iso above: second precision with a literal Z, which the customer report schema's
+# isoDateTime pattern requires. Both exist on purpose; pick by what the consumer parses.
+
+
+def median_float(values: list[float]) -> float | None:
+    if not values:
+        return None
+    s = sorted(values)
+    mid = len(s) // 2
+    if len(s) % 2:
+        return s[mid]
+    return (s[mid - 1] + s[mid]) / 2.0
+
+
+def utc_iso_z(ts: float) -> str:
+    """RFC3339 UTC with Z suffix for Grafana ``from`` / ``to`` URL params."""
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    s = dt.isoformat(timespec="milliseconds")
+    if s.endswith("+00:00"):
+        return s[:-6] + "Z"
+    return s
+
+
+def last_regex_int(pat: re.Pattern[str], text: str) -> int | None:
+    last: int | None = None
+    for m in pat.finditer(text):
+        try:
+            last = int(m.group(1))
+        except (ValueError, IndexError):
+            continue
+    return last
+
+
+def mean_finite(vals: list[float | None]) -> float | None:
+    xs = [float(v) for v in vals if v is not None and isinstance(v, (int, float)) and math.isfinite(float(v))]
+    if not xs:
+        return None
+    return float(statistics.mean(xs))
