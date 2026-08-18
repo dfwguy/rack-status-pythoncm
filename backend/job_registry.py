@@ -29,6 +29,8 @@ the ``*-status`` endpoints, and are expected to be empty after a restart.
 
 from __future__ import annotations
 
+import logging
+import subprocess
 import threading
 import time
 import uuid
@@ -36,6 +38,9 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import rack_locks
+from core import utc_now_iso
+
+_logger = logging.getLogger(__name__)
 
 # Async job registries. One dict + lock per tool family, keyed by job id.
 
@@ -150,3 +155,113 @@ def _track_sync_op(rack: str | object, kind: str, operator: str = ""):
                 row["phase"] = "done"
                 row["finished_at"] = datetime.now(timezone.utc).isoformat()
         _reset_job_purge_later(job_id, delay_sec=15)
+
+
+# --- Reset-family job progress -------------------------------------------------------------------
+# Seven background workers (nvswitch check/fix/sdn-reset/system-reset, imex check/reset, precheck)
+# each carried its own copy of the code below: a _patch closure, the running -> done/error phase
+# transitions, the timeout and exception payloads, and the purge. 479 lines, in which the _patch
+# closure was byte-identical seven times over.
+#
+# What legitimately differed is NOT the bookkeeping but the transport and the timeout policy: the
+# reset family holds a HostProcess open and kills it on overrun, while the check family is a
+# fire-and-wait run_on_host with the timeout handled inside. That difference is real, so this owns
+# only the job-state half and leaves each worker to run its command its own way.
+
+
+class ResetJobProgress:
+    """The phase transitions of one reset-family job.
+
+    ``patch`` is the only writer of a ``_reset_jobs`` row. It snapshots inside the lock and pushes to
+    the results lake outside it, so a slow sink can never hold the mutex that ``GET /api/rack-locks``
+    and every ``*-status`` poll need.
+    """
+
+    def __init__(self, job_id: str, *, display_cmd: str, label: str, timeout_sec: int) -> None:
+        self.job_id = job_id
+        self.display_cmd = display_cmd
+        self.label = label
+        self.timeout_sec = timeout_sec
+
+    def patch(self, **kwargs: object) -> None:
+        finished = None
+        with _reset_jobs_lock:
+            row = _reset_jobs.get(self.job_id)
+            if row is not None:
+                row.update(kwargs)
+                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
+                if str(kwargs.get("phase") or "") in ("done", "error"):
+                    finished = dict(row)
+        if finished is not None:
+            # Imported here rather than at module scope: results_ingest reaches the transport and the
+            # history store, and this module is imported by nearly every api/ module.
+            from results_ingest import _lake_push_job
+
+            _lake_push_job(self.job_id, finished)
+
+    def finish(
+        self,
+        returncode: int | None,
+        stdout: str | None,
+        stderr: str | None,
+        *,
+        nonzero_error: str,
+    ) -> None:
+        """Record the terminal state. ``nonzero_error`` is shown only when the command failed."""
+        rc = -1 if returncode is None else returncode
+        ok = rc == 0
+        self.patch(
+            phase="done" if ok else "error",
+            ok=ok,
+            finished_at=utc_now_iso(),
+            returncode=rc,
+            stdout=(stdout or "").strip(),
+            stderr=(stderr or "").strip(),
+            command_display=self.display_cmd,
+            error=None if ok else nonzero_error,
+        )
+
+
+@contextmanager
+def reset_job_progress(job_id: str, *, display_cmd: str, label: str, timeout_sec: int):
+    """Drive a reset-family job's row from ``running`` to a terminal phase.
+
+    Marks the job running, yields a :class:`ResetJobProgress` for the body to ``finish``, and turns
+    either kind of failure into the error payload the dashboard expects. A worker that raises
+    ``subprocess.TimeoutExpired`` -- which ``host_exec.communicate_or_kill`` does after killing an
+    overrunning process -- gets the timeout wording; anything else is reported verbatim.
+
+    The purge is in a ``finally``, so a job cannot leak a row by failing in an unexpected way.
+    """
+    prog = ResetJobProgress(
+        job_id, display_cmd=display_cmd, label=label, timeout_sec=timeout_sec
+    )
+    try:
+        prog.patch(phase="running", started_running_at=utc_now_iso())
+        yield prog
+    except subprocess.TimeoutExpired:
+        prog.patch(
+            phase="error",
+            ok=False,
+            finished_at=utc_now_iso(),
+            returncode=-1,
+            stdout="",
+            stderr=f"timeout after {timeout_sec}s",
+            command_display=display_cmd,
+            error=f"{label} timed out after {timeout_sec}s",
+        )
+    except Exception as e:
+        # A worker thread has nobody to raise to, so the job row IS the error report.
+        _logger.debug("reset_job_progress(%s): reporting error on the job row", label, exc_info=True)
+        prog.patch(
+            phase="error",
+            ok=False,
+            finished_at=utc_now_iso(),
+            returncode=-1,
+            stdout="",
+            stderr="",
+            command_display=display_cmd,
+            error=str(e),
+        )
+    finally:
+        _reset_job_purge_later(job_id)

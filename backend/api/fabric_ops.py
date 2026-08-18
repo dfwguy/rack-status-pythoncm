@@ -49,6 +49,7 @@ from job_registry import (
     _reset_jobs,
     _reset_jobs_lock,
     _track_sync_op,
+    reset_job_progress,
 )
 from naming import (
     _normalize_nvswitch_host_for_rack,
@@ -151,71 +152,20 @@ def _prepare_nvswitch_fix_async(body: dict) -> tuple[dict[str, object] | None, t
 
 
 def _nvswitch_fix_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_cmd: str, rack: str) -> None:
-    """Run ``nvswitches_rack_audit.sh --fix`` in a background thread (cwd = log_dir)."""
-
-    def _patch(**kwargs: object) -> None:
-        finished = None
-        with _reset_jobs_lock:
-            row = _reset_jobs.get(job_id)
-            if row is not None:
-                row.update(kwargs)
-                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
-                if str(kwargs.get("phase") or "") in ("done", "error"):
-                    finished = dict(row)
-        if finished is not None:
-            _lake_push_job(job_id, finished)
-
+    """Run ``nvswitches_rack_audit.sh --fix`` in a background thread."""
     timeout_sec = max(60, _env_int("RACK_NVSWITCH_AUDIT_TIMEOUT", 7200))
-    try:
-        _patch(
-            phase="running",
-            started_running_at=datetime.now(timezone.utc).isoformat(),
-        )
-        # A cluster script with the log dir as cwd: both belong to the execution
-        # host, so this goes through the connection on the privileged route (see
-        # docs/EXECUTION_ARCHITECTURE.md 1.2) rather than a local subprocess.
+    with reset_job_progress(
+        job_id, display_cmd=display_cmd, label="nvswitch fix", timeout_sec=timeout_sec
+    ) as prog:
+        # A cluster script with the log dir as cwd: both belong to the execution host, so this goes
+        # through the connection on the privileged route (see docs/EXECUTION_ARCHITECTURE.md 1.2)
+        # rather than a local subprocess.
         proc = host_exec.run_on_host(
-            cmd,
-            cwd=str(log_dir),
-            env=_subprocess_env(),
-            timeout=timeout_sec,
-            role="script",
+            cmd, cwd=str(log_dir), env=_subprocess_env(), timeout=timeout_sec, role="script"
         )
-        ok = proc.returncode == 0
-        _patch(
-            phase="done" if ok else "error",
-            ok=ok,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=proc.returncode,
-            stdout=(proc.stdout or "").strip(),
-            stderr=(proc.stderr or "").strip(),
-            command_display=display_cmd,
-            error=None if ok else "nvswitches_rack_audit.sh --fix exited non-zero (see stdout/stderr)",
+        prog.finish(
+            proc.returncode, proc.stdout, proc.stderr, nonzero_error="nvswitches_rack_audit.sh --fix exited non-zero (see stdout/stderr)"
         )
-    except subprocess.TimeoutExpired:
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr=f"timeout after {timeout_sec}s",
-            command_display=display_cmd,
-            error=f"nvswitch fix timed out after {timeout_sec}s",
-        )
-    except Exception as e:
-        _logger.debug("_nvswitch_fix_async_worker: ignoring error", exc_info=True)
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr="",
-            command_display=display_cmd,
-            error=str(e),
-        )
-    _reset_job_purge_later(job_id)
 
 
 @bp.route("/api/nvswitch-fix-async", methods=["POST"])
@@ -280,75 +230,18 @@ def _prepare_nvswitch_sdn_reset_async(body: dict) -> tuple[dict[str, object] | N
 
 def _nvswitch_sdn_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_cmd: str, rack: str) -> None:
     """Run ``nvswitch_sdn_reset.sh RACK`` in a background thread."""
-
-    def _patch(**kwargs: object) -> None:
-        finished = None
-        with _reset_jobs_lock:
-            row = _reset_jobs.get(job_id)
-            if row is not None:
-                row.update(kwargs)
-                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
-                if str(kwargs.get("phase") or "") in ("done", "error"):
-                    finished = dict(row)
-        if finished is not None:
-            _lake_push_job(job_id, finished)
-
     timeout_sec = max(60, _env_int("RACK_NVSWITCH_SDN_RESET_TIMEOUT", 1800))
-    try:
-        _patch(
-            phase="running",
-            started_running_at=datetime.now(timezone.utc).isoformat(),
-        )
-        # profile="script" routes to the privileged node-operational SSH target
-        # (RACK_SCRIPT_SSH_*, root+nmxc) when configured, else falls back to control.
+    with reset_job_progress(
+        job_id, display_cmd=display_cmd, label="NVSwitch SDN reset", timeout_sec=timeout_sec
+    ) as prog:
+        # role="script" routes to the privileged node-operational SSH target (RACK_SCRIPT_SSH_*,
+        # root+nmxc) when configured, else falls back to control. Held open rather than fire-and-wait
+        # so an overrun is killed and reaped here instead of leaking an SSH channel.
         hp = host_exec.popen_on_host(
-            cmd, cwd=_host_job_cwd(log_dir), env=_subprocess_env(), profile="script"
+            cmd, cwd=_host_job_cwd(log_dir), env=_subprocess_env(), role="script"
         )
-        try:
-            out, err = hp.communicate(timeout=timeout_sec)
-        except subprocess.TimeoutExpired:
-            hp.kill()
-            try:
-                hp.communicate(timeout=15)
-            except (subprocess.TimeoutExpired, OSError):
-                pass
-            _patch(
-                phase="error",
-                ok=False,
-                finished_at=datetime.now(timezone.utc).isoformat(),
-                returncode=-1,
-                stdout="",
-                stderr=f"timeout after {timeout_sec}s",
-                command_display=display_cmd,
-                error=f"NVLink SDN reset timed out after {timeout_sec}s",
-            )
-            _reset_job_purge_later(job_id)
-            return
-        rc = hp.returncode if hp.returncode is not None else -1
-        ok = rc == 0
-        _patch(
-            phase="done" if ok else "error",
-            ok=ok,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=rc,
-            stdout=(out or "").strip(),
-            stderr=(err or "").strip(),
-            command_display=display_cmd,
-            error=None if ok else "nvswitch_sdn_reset.sh exited non-zero (see stdout/stderr)",
-        )
-    except Exception as e:
-        _logger.debug("_nvswitch_sdn_reset_async_worker: ignoring error", exc_info=True)
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr="",
-            command_display=display_cmd,
-            error=str(e),
-        )
-    _reset_job_purge_later(job_id)
+        out, err = host_exec.communicate_or_kill(hp, timeout_sec)
+        prog.finish(hp.returncode, out, err, nonzero_error="nvswitch_sdn_reset.sh exited non-zero (see stdout/stderr)")
 
 
 @bp.route("/api/nvswitch-sdn-reset-async", methods=["POST"])
@@ -414,76 +307,19 @@ def _prepare_nvswitch_system_reset_async(body: dict) -> tuple[dict[str, object] 
 
 
 def _nvswitch_system_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_cmd: str, rack: str) -> None:
-    """Run ``nvswitch_system_reset.sh RACK NVSWITCH_HOST`` in a background thread."""
-
-    def _patch(**kwargs: object) -> None:
-        finished = None
-        with _reset_jobs_lock:
-            row = _reset_jobs.get(job_id)
-            if row is not None:
-                row.update(kwargs)
-                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
-                if str(kwargs.get("phase") or "") in ("done", "error"):
-                    finished = dict(row)
-        if finished is not None:
-            _lake_push_job(job_id, finished)
-
+    """Run ``nvswitch_system_reset.sh RACK`` in a background thread."""
     timeout_sec = max(60, _env_int("RACK_NVSWITCH_SYSTEM_RESET_TIMEOUT", 1800))
-    try:
-        _patch(
-            phase="running",
-            started_running_at=datetime.now(timezone.utc).isoformat(),
-        )
-        # profile="script" routes to the privileged node-operational SSH target
-        # (RACK_SCRIPT_SSH_*, root+nmxc) when configured, else falls back to control.
+    with reset_job_progress(
+        job_id, display_cmd=display_cmd, label="NVSwitch system reset", timeout_sec=timeout_sec
+    ) as prog:
+        # role="script" routes to the privileged node-operational SSH target (RACK_SCRIPT_SSH_*,
+        # root+nmxc) when configured, else falls back to control. Held open rather than fire-and-wait
+        # so an overrun is killed and reaped here instead of leaking an SSH channel.
         hp = host_exec.popen_on_host(
-            cmd, cwd=_host_job_cwd(log_dir), env=_subprocess_env(), profile="script"
+            cmd, cwd=_host_job_cwd(log_dir), env=_subprocess_env(), role="script"
         )
-        try:
-            out, err = hp.communicate(timeout=timeout_sec)
-        except subprocess.TimeoutExpired:
-            hp.kill()
-            try:
-                hp.communicate(timeout=15)
-            except (subprocess.TimeoutExpired, OSError):
-                pass
-            _patch(
-                phase="error",
-                ok=False,
-                finished_at=datetime.now(timezone.utc).isoformat(),
-                returncode=-1,
-                stdout="",
-                stderr=f"timeout after {timeout_sec}s",
-                command_display=display_cmd,
-                error=f"NVLink system reset timed out after {timeout_sec}s",
-            )
-            _reset_job_purge_later(job_id)
-            return
-        rc = hp.returncode if hp.returncode is not None else -1
-        ok = rc == 0
-        _patch(
-            phase="done" if ok else "error",
-            ok=ok,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=rc,
-            stdout=(out or "").strip(),
-            stderr=(err or "").strip(),
-            command_display=display_cmd,
-            error=None if ok else "nvswitch_system_reset.sh exited non-zero (see stdout/stderr)",
-        )
-    except Exception as e:
-        _logger.debug("_nvswitch_system_reset_async_worker: ignoring error", exc_info=True)
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr="",
-            command_display=display_cmd,
-            error=str(e),
-        )
-    _reset_job_purge_later(job_id)
+        out, err = host_exec.communicate_or_kill(hp, timeout_sec)
+        prog.finish(hp.returncode, out, err, nonzero_error="nvswitch_system_reset.sh exited non-zero (see stdout/stderr)")
 
 
 @bp.route("/api/nvswitch-hosts", methods=["GET"])
@@ -566,75 +402,18 @@ def _prepare_imex_reset_async(body: dict) -> tuple[dict[str, object] | None, tup
 
 def _imex_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_cmd: str, rack: str) -> None:
     """Run ``imex_reset.sh RACK`` in a background thread."""
-
-    def _patch(**kwargs: object) -> None:
-        finished = None
-        with _reset_jobs_lock:
-            row = _reset_jobs.get(job_id)
-            if row is not None:
-                row.update(kwargs)
-                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
-                if str(kwargs.get("phase") or "") in ("done", "error"):
-                    finished = dict(row)
-        if finished is not None:
-            _lake_push_job(job_id, finished)
-
     timeout_sec = max(60, _env_int("RACK_IMEX_RESET_TIMEOUT", 1800))
-    try:
-        _patch(
-            phase="running",
-            started_running_at=datetime.now(timezone.utc).isoformat(),
-        )
-        # profile="script" routes to the privileged node-operational SSH target
-        # (RACK_SCRIPT_SSH_*, root+nmxc) when configured, else falls back to control.
+    with reset_job_progress(
+        job_id, display_cmd=display_cmd, label="IMEX reset", timeout_sec=timeout_sec
+    ) as prog:
+        # role="script" routes to the privileged node-operational SSH target (RACK_SCRIPT_SSH_*,
+        # root+nmxc) when configured, else falls back to control. Held open rather than fire-and-wait
+        # so an overrun is killed and reaped here instead of leaking an SSH channel.
         hp = host_exec.popen_on_host(
-            cmd, cwd=_host_job_cwd(log_dir), env=_subprocess_env(), profile="script"
+            cmd, cwd=_host_job_cwd(log_dir), env=_subprocess_env(), role="script"
         )
-        try:
-            out, err = hp.communicate(timeout=timeout_sec)
-        except subprocess.TimeoutExpired:
-            hp.kill()
-            try:
-                hp.communicate(timeout=15)
-            except (subprocess.TimeoutExpired, OSError):
-                pass
-            _patch(
-                phase="error",
-                ok=False,
-                finished_at=datetime.now(timezone.utc).isoformat(),
-                returncode=-1,
-                stdout="",
-                stderr=f"timeout after {timeout_sec}s",
-                command_display=display_cmd,
-                error=f"IMEX reset timed out after {timeout_sec}s",
-            )
-            _reset_job_purge_later(job_id)
-            return
-        rc = hp.returncode if hp.returncode is not None else -1
-        ok = rc == 0
-        _patch(
-            phase="done" if ok else "error",
-            ok=ok,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=rc,
-            stdout=(out or "").strip(),
-            stderr=(err or "").strip(),
-            command_display=display_cmd,
-            error=None if ok else "imex_reset.sh exited non-zero (see stdout/stderr)",
-        )
-    except Exception as e:
-        _logger.debug("_imex_reset_async_worker: ignoring error", exc_info=True)
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr="",
-            command_display=display_cmd,
-            error=str(e),
-        )
-    _reset_job_purge_later(job_id)
+        out, err = host_exec.communicate_or_kill(hp, timeout_sec)
+        prog.finish(hp.returncode, out, err, nonzero_error="imex_reset.sh exited non-zero (see stdout/stderr)")
 
 
 @bp.route("/api/imex-reset-async", methods=["POST"])
@@ -924,74 +703,21 @@ def _prepare_nvswitch_check_async(
     }, None
 
 
-def _nvswitch_check_async_worker(
-    job_id: str, log_dir: Path, cmd: list[str], display_cmd: str, rack: str
-) -> None:
-    """Run async nvswitch check (nvswitches_rack_audit.sh without --fix)."""
-
-    def _patch(**kwargs: object) -> None:
-        finished = None
-        with _reset_jobs_lock:
-            row = _reset_jobs.get(job_id)
-            if row is not None:
-                row.update(kwargs)
-                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
-                if str(kwargs.get("phase") or "") in ("done", "error"):
-                    finished = dict(row)
-        if finished is not None:
-            _lake_push_job(job_id, finished)
-
+def _nvswitch_check_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_cmd: str, rack: str) -> None:
+    """Run the NVSwitch audit in a background thread."""
     timeout_sec = max(60, _env_int("RACK_NVSWITCH_AUDIT_TIMEOUT", 7200))
-    try:
-        _patch(
-            phase="running",
-            started_running_at=datetime.now(timezone.utc).isoformat(),
-        )
-        # A cluster script with the log dir as cwd: both belong to the execution
-        # host, so this goes through the connection on the privileged route (see
-        # docs/EXECUTION_ARCHITECTURE.md 1.2) rather than a local subprocess.
+    with reset_job_progress(
+        job_id, display_cmd=display_cmd, label="NVSwitch check", timeout_sec=timeout_sec
+    ) as prog:
+        # A cluster script with the log dir as cwd: both belong to the execution host, so this goes
+        # through the connection on the privileged route (see docs/EXECUTION_ARCHITECTURE.md 1.2)
+        # rather than a local subprocess.
         proc = host_exec.run_on_host(
-            cmd,
-            cwd=str(log_dir),
-            env=_subprocess_env(),
-            timeout=timeout_sec,
-            role="script",
+            cmd, cwd=str(log_dir), env=_subprocess_env(), timeout=timeout_sec, role="script"
         )
-        ok = proc.returncode == 0
-        _patch(
-            phase="done" if ok else "error",
-            ok=ok,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=proc.returncode,
-            stdout=(proc.stdout or "").strip(),
-            stderr=(proc.stderr or "").strip(),
-            command_display=display_cmd,
-            error=None if ok else "nvswitch check exited non-zero (see stdout/stderr)",
+        prog.finish(
+            proc.returncode, proc.stdout, proc.stderr, nonzero_error="nvswitch check exited non-zero (see stdout/stderr)"
         )
-    except subprocess.TimeoutExpired:
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr=f"timeout after {timeout_sec}s",
-            command_display=display_cmd,
-            error=f"NVSWICTH check timed out after {timeout_sec}s",
-        )
-    except Exception as e:
-        _logger.debug("_nvswitch_check_async_worker: ignoring error", exc_info=True)
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr="",
-            command_display=display_cmd,
-            error=str(e),
-        )
-    _reset_job_purge_later(job_id)
 
 
 @bp.route("/api/nvswitch-check-async", methods=["POST"])
@@ -1048,70 +774,19 @@ def _prepare_imex_check_async(body: dict) -> tuple[dict[str, object] | None, tup
 
 def _imex_check_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_cmd: str, rack: str) -> None:
     """Run async IMEX check in a background thread."""
-
-    def _patch(**kwargs: object) -> None:
-        finished = None
-        with _reset_jobs_lock:
-            row = _reset_jobs.get(job_id)
-            if row is not None:
-                row.update(kwargs)
-                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
-                if str(kwargs.get("phase") or "") in ("done", "error"):
-                    finished = dict(row)
-        if finished is not None:
-            _lake_push_job(job_id, finished)
-
     timeout_sec = max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800))
-    try:
-        _patch(
-            phase="running",
-            started_running_at=datetime.now(timezone.utc).isoformat(),
-        )
-        # A cluster script with the log dir as cwd: both belong to the execution
-        # host, so this goes through the connection on the privileged route (see
-        # docs/EXECUTION_ARCHITECTURE.md 1.2) rather than a local subprocess.
+    with reset_job_progress(
+        job_id, display_cmd=display_cmd, label="IMEX check", timeout_sec=timeout_sec
+    ) as prog:
+        # A cluster script with the log dir as cwd: both belong to the execution host, so this goes
+        # through the connection on the privileged route (see docs/EXECUTION_ARCHITECTURE.md 1.2)
+        # rather than a local subprocess.
         proc = host_exec.run_on_host(
-            cmd,
-            cwd=str(log_dir),
-            env=_subprocess_env(),
-            timeout=timeout_sec,
-            role="script",
+            cmd, cwd=str(log_dir), env=_subprocess_env(), timeout=timeout_sec, role="script"
         )
-        ok = proc.returncode == 0
-        _patch(
-            phase="done" if ok else "error",
-            ok=ok,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=proc.returncode,
-            stdout=(proc.stdout or "").strip(),
-            stderr=(proc.stderr or "").strip(),
-            command_display=display_cmd,
-            error=None if ok else "imex_check.sh exited non-zero (see stdout/stderr)",
+        prog.finish(
+            proc.returncode, proc.stdout, proc.stderr, nonzero_error="imex_check.sh exited non-zero (see stdout/stderr)"
         )
-    except subprocess.TimeoutExpired:
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr=f"timeout after {timeout_sec}s",
-            command_display=display_cmd,
-            error=f"IMEX check timed out after {timeout_sec}s",
-        )
-    except Exception as e:
-        _logger.debug("_imex_check_async_worker: ignoring error", exc_info=True)
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr="",
-            command_display=display_cmd,
-            error=str(e),
-        )
-    _reset_job_purge_later(job_id)
 
 
 @bp.route("/api/imex-check-async", methods=["POST"])

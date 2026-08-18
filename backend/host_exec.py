@@ -660,6 +660,33 @@ def popen_on_host(
     return _conn().popen(cmd, cwd=cwd, env=env, profile=role or profile, env_extra=env_extra)
 
 
+def communicate_or_kill(
+    proc: HostProcess, timeout: int, *, grace: int = 15
+) -> tuple[str | None, str | None]:
+    """Wait for *proc*, killing and reaping it if it overruns *timeout*, then re-raising.
+
+    Callers that hold a process open (rather than using :func:`run_on_host`'s internal deadline) all
+    need the same three steps on overrun: kill it, reap it so the SSH channel closes, and report a
+    timeout. Skipping the reap leaves the channel open, and an SSH channel that is never closed is
+    how a ControlMaster session slot is lost -- the head's ``MaxSessions`` is 10, so leaking a few
+    silently shrinks every later fan-out.
+
+    Raises ``subprocess.TimeoutExpired`` after cleaning up, so a caller can treat overrun the same
+    way whether the deadline was enforced here or inside ``run_on_host``.
+    """
+    try:
+        return proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.communicate(timeout=grace)
+        except (subprocess.TimeoutExpired, OSError):
+            # Best effort: the kill is what matters, and there is nothing better to do if the
+            # already-killed process will not report back either.
+            _logger.debug("communicate_or_kill: reap after kill did not complete", exc_info=True)
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Interactive SSH argv  –  build argv for a PTY session to head node / a node
 # ---------------------------------------------------------------------------

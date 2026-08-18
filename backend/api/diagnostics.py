@@ -51,6 +51,7 @@ from job_registry import (
     _reset_jobs,
     _reset_jobs_lock,
     _track_sync_op,
+    reset_job_progress,
 )
 from naming import _normalize_rack_id
 from node_targets import _expand_pdsh_w_slurm_nodenames
@@ -438,70 +439,19 @@ def _prepare_precheck_async(body: dict) -> tuple[dict[str, object] | None, tuple
 
 def _precheck_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_cmd: str, rack: str) -> None:
     """Run async precheck via sysinfo.sh in a background thread."""
-
-    def _patch(**kwargs: object) -> None:
-        finished = None
-        with _reset_jobs_lock:
-            row = _reset_jobs.get(job_id)
-            if row is not None:
-                row.update(kwargs)
-                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
-                if str(kwargs.get("phase") or "") in ("done", "error"):
-                    finished = dict(row)
-        if finished is not None:
-            _lake_push_job(job_id, finished)
-
     timeout_sec = max(30, _job_env_int("RACK_SYSINFO_TIMEOUT", 1800))
-    try:
-        _patch(
-            phase="running",
-            started_running_at=datetime.now(timezone.utc).isoformat(),
-        )
-        # A cluster script with the log dir as cwd: both belong to the execution
-        # host, so this goes through the connection on the privileged route (see
-        # docs/EXECUTION_ARCHITECTURE.md 1.2) rather than a local subprocess.
+    with reset_job_progress(
+        job_id, display_cmd=display_cmd, label="Precheck", timeout_sec=timeout_sec
+    ) as prog:
+        # A cluster script with the log dir as cwd: both belong to the execution host, so this goes
+        # through the connection on the privileged route (see docs/EXECUTION_ARCHITECTURE.md 1.2)
+        # rather than a local subprocess.
         proc = host_exec.run_on_host(
-            cmd,
-            cwd=str(log_dir),
-            env=_subprocess_env(),
-            timeout=timeout_sec,
-            role="script",
+            cmd, cwd=str(log_dir), env=_subprocess_env(), timeout=timeout_sec, role="script"
         )
-        ok = proc.returncode == 0
-        _patch(
-            phase="done" if ok else "error",
-            ok=ok,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=proc.returncode,
-            stdout=(proc.stdout or "").strip(),
-            stderr=(proc.stderr or "").strip(),
-            command_display=display_cmd,
-            error=None if ok else "sysinfo.sh exited non-zero (see stdout/stderr)",
+        prog.finish(
+            proc.returncode, proc.stdout, proc.stderr, nonzero_error="sysinfo.sh exited non-zero (see stdout/stderr)"
         )
-    except subprocess.TimeoutExpired:
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr=f"timeout after {timeout_sec}s",
-            command_display=display_cmd,
-            error=f"Precheck timed out after {timeout_sec}s",
-        )
-    except Exception as e:
-        _logger.debug("_precheck_async_worker: ignoring error", exc_info=True)
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr="",
-            command_display=display_cmd,
-            error=str(e),
-        )
-    _reset_job_purge_later(job_id)
 
 
 @bp.route("/api/precheck-async", methods=["POST"])
