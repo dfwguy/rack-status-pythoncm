@@ -390,3 +390,7 @@ def _parse_scontrol_job(text: str) -> dict:
         if k in _SCONTROL_FIELDS and k not in out:
             out[k] = v
     return out
+
+
+# Host list for a finished job, from sacct rather than squeue: the parser and the Grafana embed both
+# ask about runs that have already ended, and squeue only knows about live ones.

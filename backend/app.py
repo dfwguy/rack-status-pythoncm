@@ -173,13 +173,27 @@ from api._common import (
 from api._common import (
     serve_spa_asset as _serve_spa_asset,
 )
+from grafana_embed import (
+    _effective_display_tz_for_embed,
+    _grafana_dash_slug,
+    _grafana_dash_uid,
+    _grafana_deeplink_dashboards,
+    _grafana_deeplinks_enabled,
+    _grafana_embed_host_regex_and_mode,
+    _grafana_live_5m_embed_context,
+    _grafana_url_timezone_param,
+    _grafana_var_host,
+    _grafana_var_rack,
+    _job_hosts_for_grafana,
+    _rack_web_grafana_port,
+    _rack_web_grafana_uri,
+    _sanitize_display_timezone_query,
+)
 from log_discovery import (
     _resolve_nemo_log_basename_in_dir,
     pick_logs_for_rack,
 )
-from logscan_cache import (
-    _logscan_record,
-)
+from log_time_window import _compute_llm_time_window_unix, _zoneinfo_for_log_parsing
 from naming import (
     _full_rack_expected_nodes,
     _is_multirack_log_basename,
@@ -746,7 +760,6 @@ from node_targets import (
 )
 from results_ingest import (
     _history_ingest_parser_json,
-    _host_read_text,
     _lake_push_job,
     _nemo_log_file_looks_successful,
     _parser_export_glob,
@@ -1337,197 +1350,20 @@ def _parser_secondary_stages(stage_paths: dict[str, Path], primary: Path) -> lis
 
 
 
-def _hostnames_for_slurm_job(job_raw: str | None) -> tuple[list[str], str]:
-    bid = _slurm_job_base_id(job_raw)
-    if not bid:
-        return [], "no_job_id"
-    proc = host_exec.run_slurm_on_host(
-        _get_platform().sacct_job_cmd(bid),
-        timeout=max(20, _env_int("RACK_SACCT_TIMEOUT", 90)),
-    )
-    if proc.returncode != 0 or not (proc.stdout or "").strip():
-        return [], "sacct_failed"
-    hosts_flat: list[str] = []
-    for line in (proc.stdout or "").splitlines():
-        seg = line.strip()
-        if not seg:
-            continue
-        for part in seg.split("+"):
-            part = part.strip()
-            if not part:
-                continue
-            hosts_flat.extend(_scontrol_hostnames_preserving_case(part))
-    hosts = _dedupe_hostnames_preserve_spelling(hosts_flat)
-    return hosts, ("sacct" if hosts else "sacct_empty")
 
 
-def _hostnames_for_rack_validation_expand(rack: str) -> tuple[list[str], str]:
-    try:
-        tgt = validation_target_for_rack(rack, None)
-    except ValueError:
-        return [], "target_error"
-    hs = _dedupe_hostnames_preserve_spelling(_scontrol_hostnames_preserving_case(tgt))
-    return hs, ("rack_ct_expand" if hs else "rack_ct_expand_failed")
 
 
-def _job_hosts_for_grafana(rack: str, job_raw: str | None) -> tuple[list[str], str]:
-    hosts, src = _hostnames_for_slurm_job(job_raw)
-    if hosts:
-        return hosts, src
-    hosts2, src2 = _hostnames_for_rack_validation_expand(rack)
-    if hosts2:
-        return hosts2, src2
-    return [], "none"
 
 
-def _grafana_bright_hostname_promql_regex(hosts: list[str]) -> str:
-    """Build ``hostname=~`` RHS for Bright ``gpu_*`` metrics (Prometheus matches the **whole** label).
-
-    Slurm ``NodeName`` casing may differ from Prometheus (Bright often lowercases ``uname -n``;
-    DCGM may keep Slurm-style ``CBR01-...``). We emit **lowercase and verbatim** alternates when
-    they differ so PromQL stays portable (no ``(?i)`` — VictoriaMetrics / some stacks reject it
-    in label matchers, which would blank **every** branch including ``.*``).
-
-    Per Slurm host we add: full name (with any domain), name before the first ``.``, a long final
-    hyphen segment (≥6 chars, e.g. ``cn010211``), and the last two hyphen segments when distinct
-    (e.g. ``svr-cn010211``). Each literal is escaped and followed by an optional FQDN suffix
-    (parenthesized dot + any chars, quantified with ``?``); we avoid ``(?:`` because Grafana
-    treats ``{`` in panel queries as template syntax and can break variables.
-
-    ``RACK_WEB_GRAFANA_HOST_REGEX_STRICT=1``: ``|``-joined ``re.escape`` of each Slurm name
-    (lowercase and verbatim when different; no short forms, no domain tail).
-    """
-    if not hosts:
-        return ".*"
-    if _truthy_env("RACK_WEB_GRAFANA_HOST_REGEX_STRICT"):
-        parts_s: list[str] = []
-        seen_s: set[str] = set()
-        for h in hosts:
-            raw = (h or "").strip()
-            if not raw:
-                continue
-            variants = (raw.lower(), raw) if raw != raw.lower() else (raw,)
-            for v in variants:
-                pat = re.escape(v)
-                if pat in seen_s:
-                    continue
-                seen_s.add(pat)
-                parts_s.append(pat)
-        return "|".join(parts_s) if parts_s else ".*"
-
-    parts: list[str] = []
-    seen_pat: set[str] = set()
-
-    def add_pat_for_string(lit: str) -> None:
-        raw = lit.strip()
-        if not raw:
-            return
-        variants = (raw.lower(), raw) if raw != raw.lower() else (raw.lower(),)
-        for v in variants:
-            pat = re.escape(v) + r"(\..*)?"
-            if pat in seen_pat:
-                continue
-            seen_pat.add(pat)
-            parts.append(pat)
-
-    for h in hosts:
-        t = (h or "").strip()
-        if not t:
-            continue
-        nodots = t.split(".", 1)[0].strip()
-        add_pat_for_string(t)
-        add_pat_for_string(nodots)
-        if "-" in nodots:
-            segs = nodots.split("-")
-            last = segs[-1]
-            if len(last) >= 6:
-                add_pat_for_string(last)
-            if len(segs) >= 2:
-                two = f"{segs[-2]}-{segs[-1]}"
-                if len(two) >= 6 and two.lower() != nodots.lower():
-                    add_pat_for_string(two)
-    if not parts:
-        return ".*"
-    return "|".join(parts)
 
 
-def _grafana_embed_rack_canonical_id(rack: str, hosts: list[str]) -> str | None:
-    """Resolve NVIS canonical rack id for Grafana ``<rack-id>.*`` embed filter."""
-    n = _nvis_naming()
-    rid = (rack or "").strip()
-    rid_main = rid.split("(", 1)[0].strip()
-    c = n.canonical_rack_id(rid_main)
-    if c:
-        return c
-    for seg in rid_main.split("+"):
-        seg = seg.strip()
-        if not seg:
-            continue
-        cc = n.canonical_rack_id(seg)
-        if cc:
-            return cc
-    for r2 in n.find_rack_ids_in_string(rid):
-        cc = n.canonical_rack_id(r2)
-        if cc:
-            return cc
-    fk = n.rack_id_from_nemo_1rack_filename(rid)
-    if fk:
-        return fk
-    for h in hosts or ():
-        hit = n.sinfo_rack_from_host(h)
-        if hit:
-            rr, _ = hit
-            return n.canonical_rack_id(rr) or rr
-    for h in hosts or ():
-        for r2 in n.find_rack_ids_in_string(h):
-            cc = n.canonical_rack_id(r2)
-            if cc:
-                return cc
-    return None
 
 
-def _grafana_rack_prefix_promql_regex(rack: str, hosts: list[str]) -> str | None:
-    """PromQL label regex for Grafana embed: ``<canonical-rack-id>.*`` only.
-
-    Matches full hostnames such as ``CBR01-DH01-SVR-CN010211``. This must match the form users
-    verify in Grafana (e.g. ``CBR01-DH01-SVR-CN0102.*``): **no** ``re.escape`` on ordinary rack
-    tokens (avoids ``\\-`` in URLs) and **no** ``|`` alternates — ``/d-solo/`` + text variables can
-    fail when the regex contains a pipe. Do not emit ``{`` anywhere (Grafana template parsing).
-
-    Set ``RACK_WEB_GRAFANA_EMBED_RACK_REGEX_LOWER=1`` to use lowercase ``<rack>.*`` when Prometheus
-    labels are only lowercased.
-    """
-    rk = _grafana_embed_rack_canonical_id(rack, hosts)
-    if not rk:
-        return None
-    if _truthy_env("RACK_WEB_GRAFANA_EMBED_RACK_REGEX_LOWER"):
-        body = rk.lower()
-    else:
-        body = rk
-    # Safe unescaped body: Prometheus RE2 treats ``-`` literally outside ``[]``.
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,191}", body):
-        return re.escape(body) + r".*"
-    return body + r".*"
 
 
-def _grafana_embed_host_regex_and_mode(rack: str, hosts: list[str]) -> tuple[str, str]:
-    """``(regex, mode)`` for Grafana ``var-job_host_regex``. See ``RACK_WEB_GRAFANA_HOST_REGEX_PER_HOST``."""
-    if _truthy_env("RACK_WEB_GRAFANA_HOST_REGEX_PER_HOST"):
-        if hosts:
-            return _grafana_bright_hostname_promql_regex(hosts), "hosts"
-        return ".*", "open"
-    pref = _grafana_rack_prefix_promql_regex(rack, hosts)
-    if pref:
-        return pref, "rack_prefix"
-    if hosts:
-        return _grafana_bright_hostname_promql_regex(hosts), "hosts"
-    return ".*", "open"
 
 
-_LLM_LINE_MARK_RE = re.compile(
-    r"(train_step_timing|Step\s+Time.*MODEL_TFLOP/s/GPU|consumed_samples|iteration\s+\d+/)",
-    re.IGNORECASE,
-)
 
 # --- whole-file scanner -----------------------------------------------------------------------
 # The scanner client and its caches live in logscan_cache.py, imported under these names above.
@@ -1535,161 +1371,28 @@ _LLM_LINE_MARK_RE = re.compile(
 
 
 
-_LOG_TS_SEARCH_RE = re.compile(r"(?P<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
-_DISPLAY_TZ_QUERY_RE = re.compile(r"^[A-Za-z0-9_\-]+(?:/[A-Za-z0-9_\-]+)*$")
 
 
-def _sanitize_display_timezone_query(raw: object) -> str | None:
-    """``display_timezone`` query for ``/api/parser-results`` (IANA). Reject junk / path tricks."""
-    s = (raw if isinstance(raw, str) else str(raw or "")).strip()
-    if not s or len(s) > 80 or ".." in s:
-        return None
-    if s.lower() == "browser":
-        return None
-    if not _DISPLAY_TZ_QUERY_RE.fullmatch(s):
-        return None
-    return s
 
 
-def _zoneinfo_for_log_parsing(override_name: str | None) -> tzinfo:
-    """Zone for *naive* wall-clock strings in NEMO logs (no offset in the line).
-
-    ``override_name`` comes from the browser ``display_timezone`` query (Charts TZ menu);
-    otherwise ``RACK_PROMETHEUS_LOG_TIMESTAMP_TZ`` (default UTC).
-    """
-    from zoneinfo import ZoneInfo
-
-    if override_name and str(override_name).strip():
-        on = str(override_name).strip()
-        if on.lower() in ("utc", "gmt", "z", "uct"):
-            return ZoneInfo("UTC")
-        try:
-            return ZoneInfo(on)
-        except Exception:
-            _logger.debug("_zoneinfo_for_log_parsing: ignoring error", exc_info=True)
-    raw = (_eget("RACK_PROMETHEUS_LOG_TIMESTAMP_TZ") or "UTC").strip() or "UTC"
-    if raw.upper() in ("UTC", "GMT", "Z", "UCT"):
-        return ZoneInfo("UTC")
-    try:
-        return ZoneInfo(raw)
-    except Exception:
-        _logger.debug("_zoneinfo_for_log_parsing: ignoring error", exc_info=True)
-        return timezone.utc
 
 
 def _log_ts_zone() -> tzinfo:
     return _zoneinfo_for_log_parsing(None)
 
 
-def _parse_ts_unix(raw_ts: str, tz: tzinfo) -> float | None:
-    s = raw_ts.strip().replace(" ", "T", 1)
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        try:
-            dt = dt.replace(tzinfo=tz)
-        except Exception:
-            _logger.debug("_parse_ts_unix: ignoring error", exc_info=True)
-            dt = dt.replace(tzinfo=timezone.utc)
-    return dt.timestamp()
 
 
 
 
-_LLM_WALL_MAX_BYTES = 64 * 1024 * 1024
-
-
-def _llm_wall_times_from_log(path: Path, tz_override: str | None = None) -> list[float]:
-    tz = _zoneinfo_for_log_parsing(tz_override)
-    times: list[float] = []
-
-    # Whole-file first and last training timestamps. The fallback below reads only the first
-    # 64 MB, so on a 973 MB log the "end" of the run was whatever happened 7% of the way in and
-    # the Grafana window closed hours early.
-    rec = _logscan_record(path)
-    if rec:
-        wall = rec.get("wall") or {}
-        for stamp in (wall.get("first"), wall.get("last")):
-            if stamp:
-                u = _parse_ts_unix(str(stamp), tz)
-                if u is not None:
-                    times.append(u)
-        if times:
-            return times
-
-    content = _host_read_text(path, max_bytes=_LLM_WALL_MAX_BYTES)
-    if content is None:
-        return []
-    for line in content.splitlines():
-        if not _LLM_LINE_MARK_RE.search(line):
-            continue
-        m = _LOG_TS_SEARCH_RE.search(line)
-        if not m:
-            continue
-        u = _parse_ts_unix(m.group("ts"), tz)
-        if u is not None:
-            times.append(u)
-    return times
 
 
 
 
-def _fallback_window_from_steps_and_mtime(
-    path: Path,
-    nemotron_row: dict | None,
-) -> tuple[float, float, str] | None:
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
-        return None
-    ser = nemotron_row.get("step_series") if isinstance(nemotron_row, dict) else None
-    if not isinstance(ser, list):
-        ser = []
-    steps: list[float] = []
-    iters: list[int] = []
-    for p in ser:
-        if not isinstance(p, dict):
-            continue
-        st = p.get("step_time")
-        if st is not None:
-            try:
-                sf = float(st)
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(sf) and sf > 0:
-                steps.append(sf)
-        it = p.get("iteration", p.get("step"))
-        if it is not None:
-            try:
-                iters.append(int(it))
-            except (TypeError, ValueError):
-                continue
-    med = _median_float(steps)
-    if med is None or not iters:
-        return mtime - 7200, mtime, "mtime_2h"
-    span = max(1, max(iters) - min(iters) + 1)
-    est = max(120.0, span * med * 1.15)
-    return mtime - est, mtime, "mtime_step_estimate"
 
 
-def _compute_llm_time_window_unix(
-    path: Path,
-    nemotron_row: dict | None,
-    log_tz_override: str | None = None,
-) -> tuple[float, float, str] | None:
-    pad = float(max(30, _env_int("RACK_WEB_GRAFANA_TIME_PAD_SEC", 120)))
-    times = _llm_wall_times_from_log(path, log_tz_override)
-    if times:
-        lo_raw = min(times)
-        hi_raw = max(times)
-        return lo_raw - pad, hi_raw + pad, "log_timestamps"
-    fb = _fallback_window_from_steps_and_mtime(path, nemotron_row)
-    if not fb:
-        return None
-    lo, hi, note = fb
-    return lo - pad, hi + pad, note
+
+
 
 
 def _nemotron_row_for_rack(
@@ -1718,23 +1421,12 @@ def _nemotron_row_for_rack(
     return None
 
 
-def _grafana_dash_uid() -> str:
-    return (_eget("RACK_WEB_GRAFANA_DASH_UID") or "bright-gpu-per-host").strip() or "bright-gpu-per-host"
 
 
-def _grafana_dash_slug() -> str:
-    s = (_eget("RACK_WEB_GRAFANA_DASH_SLUG") or "bright-gpu-thermal-and-power").strip()
-    return s or "bright-gpu-thermal-and-power"
 
 
-def _rack_web_grafana_uri() -> str:
-    u = (_eget("RACK_WEB_GRAFANA_URI") or "").strip()
-    return u.rstrip("/") if u else ""
 
 
-def _rack_web_grafana_port() -> str:
-    p = (_eget("RACK_WEB_GRAFANA_PORT") or "3000").strip() or "3000"
-    return p
 
 
 # --- Grafana deep-links (open full BCM/NMC dashboards in a new tab, scoped by rack/host) --------
@@ -1746,140 +1438,20 @@ def _rack_web_grafana_port() -> str:
 # The catalog below defaults to the stock NMC GB200 dashboards but is fully overridable via
 # ``RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS`` (JSON) so this is not hardwired to any one site.
 
-_GRAFANA_DEEPLINK_DEFAULT: list[dict[str, str]] = [
-    {
-        "id": "dcgm",
-        "label": "GPU / DCGM",
-        "uid": "f4f4474d-f3e1-4e73-a2dc-33c52cb07bd4",
-        "slug": "02-dgx-gb200-dcgm-dashboard",
-        "scope": "host",
-        "desc": "GPU util, temp, power, NVLink BW, XID errors, HBM (per node/GPU).",
-    },
-    {
-        "id": "power",
-        "label": "Rack power & thermal",
-        "uid": "2394651a-f07b-42d4-b0ff-affa31d0a254",
-        "slug": "05-dgx-gb200-rack-power-analysis",
-        "scope": "rack",
-        "desc": "Rack-level power draw and thermal analysis.",
-    },
-    {
-        "id": "nvlink",
-        "label": "NVLink",
-        "uid": "0f0286bc-b007-4a38-a359-8384ee11a90a",
-        "slug": "10-dgx-gb200-nvlink-dashboard",
-        "scope": "host",
-        "desc": "NVLink / NVSwitch fabric bandwidth and errors.",
-    },
-    {
-        "id": "health",
-        "label": "Health status",
-        "uid": "16a8973d-e9fd-4cdf-9649-b2041705a810",
-        "slug": "04-dgx-gb200-health-status",
-        "scope": "rack",
-        "desc": "GB200 node/GPU health status roll-up.",
-    },
-    {
-        "id": "slurm",
-        "label": "Slurm",
-        "uid": "006a04e0-fd06-4ba4-9d44-251394198796",
-        "slug": "06-slurm-dashboard",
-        "scope": "cluster",
-        "desc": "Slurm queue, allocation and node-state overview.",
-    },
-    {
-        "id": "overall",
-        "label": "SuperPOD overview",
-        "uid": "b0dfdff4-f570-47a9-949a-3ab535474c2b",
-        "slug": "01-superpod-overall-dashboard",
-        "scope": "cluster",
-        "desc": "Cluster-wide overview (all racks).",
-    },
-]
-
-
-def _grafana_var_rack() -> str:
-    return (_eget("RACK_WEB_GRAFANA_VAR_RACK") or "Rack").strip() or "Rack"
-
-
-def _grafana_var_host() -> str:
-    return (_eget("RACK_WEB_GRAFANA_VAR_HOST") or "hostname").strip() or "hostname"
-
-
-def _grafana_deeplinks_enabled() -> bool:
-    """Deep-links are enabled unless explicitly disabled; a base URL is required to be useful."""
-    return not _truthy_env("RACK_WEB_GRAFANA_DEEPLINK_DISABLED")
-
-
-def _grafana_deeplink_dashboards() -> list[dict[str, str]]:
-    """Parsed deep-link dashboard catalog.
-
-    Override with ``RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS`` = JSON list of objects, each with
-    ``uid`` (required), ``label``, ``slug``, ``scope`` (``host``|``rack``|``cluster``) and
-    ``desc``. Invalid JSON or a non-list falls back to the built-in NMC catalog.
-    """
-    raw = (_eget("RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS") or "").strip()
-    if not raw:
-        return [dict(d) for d in _GRAFANA_DEEPLINK_DEFAULT]
-    try:
-        parsed = json.loads(raw)
-    except (ValueError, TypeError):
-        _logger.warning("RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS is not valid JSON; using defaults")
-        return [dict(d) for d in _GRAFANA_DEEPLINK_DEFAULT]
-    if not isinstance(parsed, list):
-        return [dict(d) for d in _GRAFANA_DEEPLINK_DEFAULT]
-    out: list[dict[str, str]] = []
-    for i, item in enumerate(parsed):
-        if not isinstance(item, dict):
-            continue
-        uid = str(item.get("uid") or "").strip()
-        if not uid:
-            continue
-        scope = str(item.get("scope") or "rack").strip().lower()
-        if scope not in ("host", "rack", "cluster"):
-            scope = "rack"
-        out.append(
-            {
-                "id": str(item.get("id") or f"dash{i}").strip() or f"dash{i}",
-                "label": str(item.get("label") or uid).strip() or uid,
-                "uid": uid,
-                "slug": str(item.get("slug") or "d").strip() or "d",
-                "scope": scope,
-                "desc": str(item.get("desc") or "").strip(),
-            }
-        )
-    return out or [dict(d) for d in _GRAFANA_DEEPLINK_DEFAULT]
 
 
 
 
-def _grafana_url_timezone_param() -> str:
-    """Value for Grafana ``timezone`` query param and parser UI chart labels.
-
-    ``RACK_WEB_GRAFANA_TIMEZONE``: ``browser``, ``utc``, or an IANA zone (e.g. ``America/Los_Angeles``).
-    When unset, use the same zone as log timestamp parsing (``RACK_PROMETHEUS_LOG_TIMESTAMP_TZ``),
-    normalised to ``utc`` for UTC-like names so panel axes match server-derived ``from``/``to``.
-    """
-    g = (_eget("RACK_WEB_GRAFANA_TIMEZONE") or "").strip()
-    if g:
-        gl = g.lower()
-        if gl in ("browser", "utc"):
-            return gl
-        return g
-    logtz = (_eget("RACK_PROMETHEUS_LOG_TIMESTAMP_TZ") or "UTC").strip() or "UTC"
-    if logtz.upper() in ("UTC", "GMT", "Z", "UCT"):
-        return "utc"
-    return logtz
 
 
-def _effective_display_tz_for_embed(log_tz_query: str | None) -> str:
-    """Grafana ``timezone=`` and ``display_timezone`` when user passes ``display_timezone`` query."""
-    if log_tz_query and log_tz_query.strip():
-        q = log_tz_query.strip()
-        if q.lower() in ("utc", "gmt", "z", "uct"):
-            return "utc"
-        return q
-    return _grafana_url_timezone_param()
+
+
+
+
+
+
+
+
 
 
 def _grafana_parser_embed_context(
@@ -1936,48 +1508,6 @@ def _grafana_parser_embed_context(
     }
 
 
-def _grafana_live_5m_embed_context(
-    rack: str,
-    log_timestamp_tz: str | None = None,
-) -> dict[str, object]:
-    """Grafana solo embed for the last five minutes (wall clock), hosts = rack CT expand."""
-    dtz = _effective_display_tz_for_embed(log_timestamp_tz)
-    if _truthy_env("RACK_WEB_GRAFANA_EMBED_DISABLED"):
-        return {
-            "ok": False,
-            "iframe_ready": False,
-            "disabled": True,
-            "note": "Grafana embed disabled (RACK_WEB_GRAFANA_EMBED_DISABLED).",
-            "display_timezone": dtz,
-        }
-    now = time.time()
-    lo, hi = now - 300.0, now
-    if hi <= lo:
-        return {
-            "ok": False,
-            "iframe_ready": False,
-            "note": "Invalid time window (end <= start).",
-            "display_timezone": dtz,
-        }
-    hosts, hsrc = _hostnames_for_rack_validation_expand(rack)
-    host_regex, host_regex_mode = _grafana_embed_host_regex_and_mode(rack, hosts)
-    return {
-        "ok": True,
-        "iframe_ready": True,
-        "from_ms": int(lo * 1000),
-        "to_ms": int(hi * 1000),
-        "from_iso_utc": _iso_utc_z(lo),
-        "to_iso_utc": _iso_utc_z(hi),
-        "host_regex": host_regex,
-        "host_regex_mode": host_regex_mode,
-        "hosts": hosts,
-        "hosts_source": hsrc,
-        "time_source": "live_last_5m",
-        "dashboard_uid": _grafana_dash_uid(),
-        "dash_slug": _grafana_dash_slug(),
-        "panel_ids": [1, 2],
-        "display_timezone": dtz,
-    }
 
 
 

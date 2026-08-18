@@ -28,9 +28,11 @@ import re
 
 import host_exec
 from config_env import _eget, _env_int
+from core import slurm_job_base_id as _slurm_job_base_id
 from naming import _nvis_naming
 from platforms import get_platform as _get_platform
 from slurm_query import (
+    _dedupe_hostnames_preserve_spelling,
     _rack_node_hostnames_from_inventory,
 )
 
@@ -156,3 +158,32 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
     return _nvis_naming().build_validation_target(
         rack, _validation_ct_inner(), override
     )
+
+
+# Host list for a FINISHED job, from sacct rather than squeue: the parser and the Grafana embed both ask
+# about runs that have already ended, and squeue only knows about live ones. Here rather than in
+# slurm_query because it reuses this module's hostname expansion, and slurm_query cannot import back.
+
+
+def _hostnames_for_slurm_job(job_raw: str | None) -> tuple[list[str], str]:
+    bid = _slurm_job_base_id(job_raw)
+    if not bid:
+        return [], "no_job_id"
+    proc = host_exec.run_slurm_on_host(
+        _get_platform().sacct_job_cmd(bid),
+        timeout=max(20, _env_int("RACK_SACCT_TIMEOUT", 90)),
+    )
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        return [], "sacct_failed"
+    hosts_flat: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        seg = line.strip()
+        if not seg:
+            continue
+        for part in seg.split("+"):
+            part = part.strip()
+            if not part:
+                continue
+            hosts_flat.extend(_scontrol_hostnames_preserving_case(part))
+    hosts = _dedupe_hostnames_preserve_spelling(hosts_flat)
+    return hosts, ("sacct" if hosts else "sacct_empty")
