@@ -171,3 +171,31 @@ def _rack_status_script_path() -> Path:
 # Kept as the old spelling for a moment? No: renamed on the move. `_script_path` said nothing about
 # WHICH script, which is fine in a 20k-line module where there was only one, and useless in a shared
 # one next to nine siblings that all spell it `_<tool>_script_path`.
+
+
+# --- Bug-report directory -----------------------------------------------------------------------
+# Shared by the four bug-report routes and by the log-zip export, which is why it is here rather than
+# beside either of them.
+#
+# NOTE a live inconsistency with _nvlmapper_reports_base above, preserved rather than "fixed": that one
+# deliberately does NOT expanduser, because the path names a directory on the EXECUTION host and `~`
+# would resolve to this container's home. This one does expanduser. Harmless while the default stays
+# absolute (/home/cmsupport/reports), wrong the day somebody sets RACK_BUG_REPORT_REMOTE_DIR=~/reports.
+# It also reads os.environ directly instead of going through _eget, so it cannot be set from dashboard
+# settings. Both are behaviour changes, not refactors, so they are flagged here rather than made quietly.
+
+
+_DEFAULT_BUG_REPORT_REMOTE_DIR = "/home/cmsupport/reports"
+
+
+def _bug_report_remote_dir() -> str:
+    """Base dir on each node (pdsh) and on this host (inventory). Override with ``RACK_BUG_REPORT_REMOTE_DIR``."""
+    d = (os.environ.get("RACK_BUG_REPORT_REMOTE_DIR") or "").strip()
+    if not d:
+        d = _DEFAULT_BUG_REPORT_REMOTE_DIR
+    out = os.path.expanduser(d).strip()
+    return out or _DEFAULT_BUG_REPORT_REMOTE_DIR
+
+
+def _bug_report_local_base_path() -> Path:
+    return _rpath(Path(_bug_report_remote_dir()))
