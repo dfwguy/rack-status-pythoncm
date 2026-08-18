@@ -185,6 +185,9 @@ from api._common import (
 from api._common import (
     operator_from_request as _operator_from_request,
 )
+from api._common import (
+    requested_nodes as _requested_nodes,
+)
 from logscan_cache import (
     _analytics_scan_ctx,
     _log_stat_for_path,
@@ -9559,77 +9562,6 @@ def api_universal_scan():
             "results": scanned,
         }
     )
-
-
-@app.route("/api/bringup/config")
-def api_bringup_config():
-    """Discovery: whether Travis's bring-up automation tree is present, and where."""
-    if _truthy_env("RACK_STATUS_DEMO"):
-        return jsonify({"ok": True, "enabled": True, "present": True, "home": "/home/cmods/bringup"})
-    if _bringup is None:
-        return jsonify({"ok": True, "enabled": False, "present": False, "home": ""})
-    try:
-        return jsonify({"ok": True, **_bringup.config()})
-    except Exception as e:  # noqa: BLE001
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/bringup/node")
-def api_bringup_node():
-    """Per-node bring-up job summary (status+reason from status-check, metric from daily-report)."""
-    node = (request.args.get("node") or "").strip()
-    if not node or not re.match(r"^[A-Za-z0-9._-]+$", node):
-        return jsonify({"ok": False, "error": "a valid node name is required"}), 400
-    if _truthy_env("RACK_STATUS_DEMO"):
-        data = _bringup.demo_node_summary(node) if _bringup else {"node": node, "jobs": []}
-        return jsonify({"ok": True, "data": data})
-    if _bringup is None or not _bringup.is_enabled():
-        return jsonify({"ok": False, "error": "bring-up integration disabled or unavailable"}), 404
-    try:
-        data = _bringup.node_summary(node)
-    except subprocess.TimeoutExpired:
-        return jsonify({"ok": False, "error": "bring-up report timed out"}), 504
-    except Exception as e:  # noqa: BLE001
-        return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify({"ok": True, "data": data})
-
-
-def _requested_nodes() -> list[str]:
-    """Node list from a JSON body (preferred) or a ``?nodes=`` query.
-
-    The body is the real channel: a cluster-sized list does not fit in a URL — 591 node names is
-    a ~12 KB query and gunicorn rejects any request line over 4094 bytes with a bare 400. The
-    query form is kept for hand-run curl against a handful of nodes.
-    """
-    body = request.get_json(silent=True) or {}
-    raw = body.get("nodes") if isinstance(body, dict) else None
-    if isinstance(raw, list):
-        return [str(n).strip() for n in raw if str(n).strip()]
-    return [n.strip() for n in (request.args.get("nodes") or "").split(",") if n.strip()]
-
-
-@app.route("/api/bringup/fleet", methods=["GET", "POST"])
-def api_bringup_fleet():
-    """Bring-up state for every node — what a cluster heatmap and the daily report need.
-
-    One request instead of one per node: the underlying fleet scripts are cheap because they
-    share a verdict cache, so this is ~2 round trips for the whole cluster. POST so the node
-    list travels as a JSON body; GET still works for a whole-cluster query with no list.
-    """
-    if _truthy_env("RACK_STATUS_DEMO"):
-        # Seed the synthetic fleet from the demo rack inventory so node names line up with
-        # what the dashboard is already showing.
-        data = _bringup.demo_fleet_summary(_requested_nodes()) if _bringup else {"nodes": []}
-        return jsonify({"ok": True, "data": data})
-    if _bringup is None or not _bringup.is_enabled():
-        return jsonify({"ok": False, "error": "bring-up integration disabled or unavailable"}), 404
-    try:
-        data = _bringup.fleet_summary()
-    except subprocess.TimeoutExpired:
-        return jsonify({"ok": False, "error": "bring-up fleet report timed out"}), 504
-    except Exception as e:  # noqa: BLE001
-        return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify({"ok": True, "data": data})
 
 
 def _arg_or_body(name: str):

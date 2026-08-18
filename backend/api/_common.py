@@ -33,6 +33,20 @@ def history_unavailable_response():
         "error": "run history is unavailable (results_history not installed or disabled)",
     }), 503
 
+def requested_nodes() -> list[str]:
+    """Node list from a JSON body (preferred) or a ``?nodes=`` query.
+
+    The body is the real channel: a cluster-sized list does not fit in a URL -- 591 node names is
+    a ~12 KB query and gunicorn rejects any request line over 4094 bytes with a bare 400. The
+    query form is kept for hand-run curl against a handful of nodes.
+    """
+    body = request.get_json(silent=True) or {}
+    raw = body.get("nodes") if isinstance(body, dict) else None
+    if isinstance(raw, list):
+        return [str(n).strip() for n in raw if str(n).strip()]
+    return [n.strip() for n in (request.args.get("nodes") or "").split(",") if n.strip()]
+
+
 _APP_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{8,80}$")
 
 
