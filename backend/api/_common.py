@@ -21,11 +21,15 @@ nothing under ``api`` imports ``app``.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import shlex
 
 import rack_locks
 from flask import jsonify, request, send_file
-from paths import REPO_ROOT
+from naming import _normalize_rack_id
+from node_targets import validation_target_for_rack
+from paths import REPO_ROOT, _resolve_log_dir, _script_exists, _sysinfo_script_path
 
 _logger = logging.getLogger(__name__)
 
@@ -124,3 +128,41 @@ def client_id_from_request() -> str:
         return ""
     cid = raw.strip()[:80]
     return cid if _APP_CLIENT_ID_RE.fullmatch(cid) else ""
+
+
+def parse_sysinfo_request(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
+    """Validate sysinfo POST body. On success returns (prep, None); prep has log_dir, rack, target, display_cmd, cmd."""
+    if os.environ.get("RACK_SYSINFO_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return None, (jsonify({"ok": False, "error": "run-sysinfo disabled (RACK_SYSINFO_DISABLED)"}), 403)
+    log_raw = body.get("log_dir")
+    try:
+        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    rack = (body.get("rack") or "").strip()
+    try:
+        rk = _normalize_rack_id(rack)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    tgt_ov = body.get("target")
+    if tgt_ov is not None and not isinstance(tgt_ov, str):
+        return None, (jsonify({"ok": False, "error": "target must be a string"}), 400)
+    try:
+        target = validation_target_for_rack(rack, tgt_ov if isinstance(tgt_ov, str) else None)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    script = _sysinfo_script_path()
+    if not _script_exists(script):
+        return None, (jsonify({"ok": False, "error": f"sysinfo script not found: {script}"}), 500)
+    cmd = ["bash", str(script), target]
+    display_cmd = "./" + script.name + " " + shlex.quote(target)
+    return (
+        {
+            "log_dir": log_dir,
+            "rack": rk,
+            "target": target,
+            "display_cmd": display_cmd,
+            "cmd": cmd,
+        },
+        None,
+    )

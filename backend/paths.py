@@ -27,6 +27,7 @@ import os
 from pathlib import Path, PurePosixPath
 
 import host_exec
+from config_env import _eget
 from core import rpath as _rpath
 
 APP_DIR = Path(__file__).resolve().parent
@@ -93,3 +94,67 @@ def _resolve_log_dir(raw: str | None) -> PurePosixPath:
     if not host_exec.is_dir(log_dir):
         raise ValueError(f"not a directory: {log_dir}")
     return log_dir
+
+
+# --- Per-tool script paths on the execution host ------------------------------------------------
+# Each is "the env override, else the repo's copy under SCRIPTS_DIR", resolved against the EXECUTION
+# host. They live here rather than beside the routes that run them because several tools are invoked
+# from more than one place, and because a site that relocates one script should find every resolver in
+# one file.
+#
+# _rpath, not Path.resolve(): these name files on the head node, so resolving locally would answer with
+# this container's filesystem.
+
+
+def _sysinfo_script_path() -> Path:
+    p = _eget("RACK_SYSINFO_SCRIPT", str(SCRIPTS_DIR / "sysinfo.sh")) or str(SCRIPTS_DIR / "sysinfo.sh")
+    return _rpath(Path(p))
+
+
+def _nvswitches_rack_audit_script_path() -> Path:
+    p = _eget("RACK_NVSWITCH_AUDIT_SCRIPT", str(SCRIPTS_DIR / "nvswitches_rack_audit.sh")) or str(
+        SCRIPTS_DIR / "nvswitches_rack_audit.sh"
+    )
+    return _rpath(Path(p))
+
+
+def _nvswitch_sdn_reset_script_path() -> Path:
+    p = _eget("RACK_NVSWITCH_SDN_RESET_SCRIPT", str(SCRIPTS_DIR / "nvswitch_sdn_reset.sh")) or str(
+        SCRIPTS_DIR / "nvswitch_sdn_reset.sh"
+    )
+    return _rpath(Path(p))
+
+
+def _nvswitch_system_reset_script_path() -> Path:
+    p = _eget("RACK_NVSWITCH_SYSTEM_RESET_SCRIPT", str(SCRIPTS_DIR / "nvswitch_system_reset.sh")) or str(
+        SCRIPTS_DIR / "nvswitch_system_reset.sh"
+    )
+    return _rpath(Path(p))
+
+
+def _imex_reset_script_path() -> Path:
+    p = _eget("RACK_IMEX_RESET_SCRIPT", str(SCRIPTS_DIR / "imex_reset.sh")) or str(
+        SCRIPTS_DIR / "imex_reset.sh"
+    )
+    return _rpath(Path(p))
+
+
+def _imex_check_script_path() -> Path:
+    p = _eget("RACK_IMEX_CHECK_SCRIPT", str(SCRIPTS_DIR / "imex_check.sh")) or str(
+        SCRIPTS_DIR / "imex_check.sh"
+    )
+    return _rpath(Path(p))
+
+
+def _hw_check_pdsh_script_path() -> Path:
+    raw = (_eget("RACK_HW_CHECK_SCRIPT") or "").strip()
+    if raw:
+        return _rpath(Path(raw))
+    return _rpath(SCRIPTS_DIR / "hw_check_pdsh.sh")
+
+
+def _nvlmapper_reports_base() -> Path:
+    # An execution-host directory: expanduser/resolve would answer with this
+    # process's home and filesystem, which is not where the reports are written.
+    raw = (_eget("RACK_NVLMAPPER_REPORTS_BASE") or "/home/cmsupport/reports").strip()
+    return _rpath(raw or "/home/cmsupport/reports")
