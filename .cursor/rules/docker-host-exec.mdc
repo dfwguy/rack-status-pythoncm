@@ -90,7 +90,11 @@ When adding new cluster commands: add method to `PlatformProvider` (base.py), im
 
 ## Auth in Docker
 
-PAM does not work in containers. Token auth (`RACK_WEB_AUTH_MODE=token`) auto-selects when `RACK_EXEC_MODE=ssh`.
+PAM does not work in containers. Token auth auto-selects whenever the execution target is **not**
+local — `_auth_mode()` returns `token` unless `host_exec.exec_kind() == "local"`, because PAM
+authenticates against *this* machine's accounts and a remote target has no such mapping. It keys off
+the resolved executor, not the deprecated `RACK_EXEC_MODE` flag. Override with
+`RACK_WEB_AUTH_MODE=pam|token`.
 
 ## Path Resolution
 

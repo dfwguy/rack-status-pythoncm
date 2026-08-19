@@ -26,6 +26,40 @@ file is the prescriptive half of the architecture.
 
 ---
 
+## Adding a component: start here
+
+Find what you are adding. Do the thing in the middle column. The point of this table is that the
+default answer is almost never "a new module beside the others" — it is "extend the citizen that
+already owns this concern".
+
+| You are adding | Where it goes | Not this |
+|---|---|---|
+| An **endpoint** | A module in `backend/api/`: the existing domain module if it shares helpers with one, otherwise a new file | Editing `app.py`, or `api/__init__.py` |
+| A **helper used by one domain** | Beside its routes, private to that api module | A "utils" module |
+| A **helper a second domain now needs** | Move it to the module that owns the *concern* (`rack_status_engine`, `results_ingest`, `node_targets`, `naming`, `paths`, `job_registry`, `grafana_embed`, `slurm_query`) and import it from both | Importing one api module from another |
+| A **new tool, test or preset** | A `Tool` document in the catalog, with pins and step counts as `tool_param_defaults` on the `Platform` (citizen 2) | A constant, dict or frozen list in Python |
+| A **script path** | `paths.py`, named `_<tool>_script_path` like its nineteen siblings | A literal path at the call site |
+| Anything **cluster-, site- or customer-specific** | The `Project`/`Cluster` record (citizen 3) | An `if` on cluster name; a new env var |
+| A **long-running job** | `workflow_engine` — and if it lacks progress, artifacts or idempotency, add those *to the engine* (citizen 4) | A fifth in-memory job dict |
+| A **background worker's phase reporting** | `job_registry.reset_job_progress` | A hand-rolled `_patch` closure |
+| A **config knob** | The settings registry, read via `_eget` / `_eget_int` / `config_env` accessors (citizen 5) | `os.environ.get(...)` in new code |
+| A **cluster manager or scheduler** | A provider under `platforms/` or `schedulers/` (citizen 6) | A branch in a caller |
+| A **parser for new tool output** | The results pipeline: prefer structured output, then the single-pass scanner (citizen 7) | A multi-pass shell scan, or head/tail sampling |
+| An **export or report format** | A renderer over the existing dataset (citizen 10) | A second generator |
+| A **frontend view** | Consume the shared contexts; KUI components first (citizen 12) | Local state duplicating a context |
+
+Two obligations regardless of which row you land on. **Read a setting through the accessors**, because
+a bare `os.environ.get` opts out of the per-cluster overlay and produces a feature that works on one
+cluster and not another. And **never resolve a name off `app` at call time** — `import app` inside a
+function, then `app.<name>`, defers the check to runtime and breaks silently when that name moves;
+`test_no_deferred_app_lookups.py` fails the build if you do.
+
+If genuinely nothing above fits, you may be looking at a new citizen. That is allowed — every entry in
+this file started that way — but it comes with two duties: say in the commit message why no existing
+citizen fits, and **add it to this file** so the next person inherits it instead of rediscovering it.
+
+---
+
 ## The citizens
 
 ### 0. API modules — where an endpoint lives

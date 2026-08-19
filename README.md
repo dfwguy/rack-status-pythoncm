@@ -68,13 +68,20 @@ Operator browser
   └─ React 19 SPA (hash routes, KUI-first components, Chart.js, React Flow)
        └─ /api/* and WebSocket/SSE
             └─ Flask application
-                 ├─ catalog: projects, clusters, endpoints, roles, tools
-                 ├─ native status + parsers + analytics + reports
-                 ├─ workflow state machine + durable run registry
-                 ├─ validation preset prepare/launch gate
-                 ├─ platform and scheduler providers
-                 ├─ node issue and post-run attribution pipeline
-                 └─ host_exec / transport composition
+                 ├─ app.py — composition root only (~2k lines): startup, auth gate,
+                 │            middleware, SPA fallbacks. No domain logic, no endpoints.
+                 ├─ backend/api/*.py — every route, one module per domain, auto-discovered
+                 └─ mechanism modules the api layer is built on:
+                      ├─ catalog: projects, clusters, endpoints, roles, tools
+                      ├─ rack_status_engine: the canonical fleet dataset + its caches
+                      ├─ results_ingest / universal_parser / logscan: raw output -> metrics
+                      ├─ validation_launch + activity_hydration: launch, then reconcile
+                      ├─ workflow_engine: state machine + durable run registry
+                      ├─ job_registry: in-process registries and the job phase machine
+                      ├─ node_targets + naming: rack id -> real compute hostnames
+                      ├─ grafana_embed + log_time_window: panel wiring, run time windows
+                      ├─ platform and scheduler providers
+                      └─ host_exec / transport composition
                       ├─ local execution, or SSH to a head/login node
                       ├─ BCM cmsh or MAAS inventory
                       ├─ configured Slurm CLI binaries
@@ -95,15 +102,26 @@ Durable result path
 
 ### First-class boundaries
 
-Changes should extend these existing boundaries instead of adding parallel command or state mechanisms:
+Changes should extend these existing boundaries instead of adding parallel command or state mechanisms.
+`.cursor/rules/core-designs.mdc` is the authoritative version of this list, including a decision table
+for where a new component goes; the summary here exists so the shape is visible from the README.
 
+- **API surface:** `backend/api/` holds every endpoint, one module per domain, discovered at startup.
+  A new endpoint is a new file (or an existing domain module) — never an edit to `app.py`, and never
+  an `import app` from inside `api/`.
 - **Connection and transport:** `backend/host_exec.py` and `backend/transport/` decide where and how commands run.
 - **Catalog:** `backend/catalog/` owns projects, clusters, endpoint roles, platforms, and the tool registry.
 - **Platform and scheduler providers:** `backend/platforms/` and `backend/schedulers/` own command vocabulary and binary routing.
 - **Workflow engine:** `backend/workflow_engine.py`, `backend/workflow_models.py`, and `var/workflows/` own repeatable procedures and durable execution state.
-- **Configuration:** environment resolution and catalog connection settings remain the authoritative inputs; do not hard-code a customer endpoint into generic code.
-- **Naming:** `backend/nvis_id_templates.py` and frontend naming helpers distinguish display rack IDs, physical racks, and real compute hostnames.
+- **Configuration:** `backend/config_env.py` resolves every knob through one precedence ladder (cluster
+  overlay → job env overrides → process env → platform defaults). Read settings through its accessors,
+  not a bare `os.environ.get`, or the setting silently works on one cluster and not another. Do not
+  hard-code a customer endpoint into generic code.
+- **Naming:** `backend/nvis_id_templates.py`, `backend/naming.py` and `backend/node_targets.py` distinguish display rack IDs, physical racks, and real compute hostnames.
 - **Results pipeline:** log discovery, parsing, stage criteria, validation activities, results history, reports, and the optional lake sink each have separate responsibilities.
+- **Rack status:** `backend/rack_status_engine.py` produces the fleet dataset once, behind a
+  cross-process snapshot lease. `/api/status`, `/api/cluster-overview` and the exports are renderings
+  of it — none of them collects inventory itself.
 - **Durable state and locks:** files under `var/` are volume-backed, bounded where appropriate, and written with locking/atomic replacement.
 - **Frontend contexts:** authentication, active cluster, rack commands, locks, AI, theme, and help are shared contexts; page-local copies cause inconsistent behavior.
 
@@ -112,8 +130,12 @@ Changes should extend these existing boundaries instead of adding parallel comma
 | Mode | Use | Command location |
 |---|---|---|
 | `RACK_STATUS_DEMO=1` | UI development, demonstrations, CI smoke | Synthetic data; no cluster mutation. |
-| `RACK_EXEC_MODE=local` | App runs on a host with cluster tools and filesystem access | Commands execute on the app host. |
-| `RACK_EXEC_MODE=ssh` | Container/workstation reaches a cluster head node | `host_exec` connects to the configured endpoint, then platform/scheduler commands run there. |
+| default (no flag) | Container/workstation reaches a cluster head node | `host_exec` connects to the configured endpoint (`RACK_SSH_HOST` / `_USER` / `_KEY`), then platform/scheduler commands run there. |
+| `RACK_EXEC_MODE=local` | Only while the app runs *directly on* the target host | Commands execute on the app host. |
+
+`RACK_EXEC_MODE` is **deprecated** and logs a warning: execution is chosen by the connection's
+executor, not a global mode flag, and connections now default to SSH. Configure the target with the
+`RACK_SSH_*` variables instead. Set `local` only for an app running on the cluster host itself.
 
 Cluster identity is catalog-driven. Nscale TX is one deployment of this product, not a separate code path. Customer-specific names, credentials, manifests, exclusions, paths, and versions belong in the deployment configuration.
 

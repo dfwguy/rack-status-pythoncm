@@ -11,12 +11,28 @@
 
 Author: Rafael M. Koike & Cursor Agent ("Ada")
 
-Adding an endpoint should not mean editing a file someone else is editing. ``app.py`` had grown
-to twenty thousand lines and still holds 135 of the app's 199 routes; every feature touched it, so
-two people working in parallel collided by construction -- which is exactly how a whole feature
-ended up living uncommitted on a customer deployment.
+Adding an endpoint should not mean editing a file someone else is editing. ``app.py`` had grown to
+twenty thousand lines holding 134 of the app's routes; every feature touched it, so two people
+working in parallel collided by construction -- which is exactly how a whole feature ended up living
+uncommitted on a customer deployment.
 
-So: drop a module in this package. Nothing else is edited -- not ``app.py``, not this file.
+**That migration is complete.** Every route now lives in one of the modules beside this file;
+``app.py`` is a ~2,000-line composition root (Flask object, startup bootstraps, the auth gate, the
+middleware pairs, the SPA catch-alls) and keeps three routes, all of them SPA fallbacks.
+
+So: drop a module in this package. Nothing else is edited -- not ``app.py``, not this file. If you
+find yourself editing ``app.py`` to add an endpoint, something has gone wrong.
+
+One module per DOMAIN, not per route. A domain here is a set of routes that share helpers: if your
+new endpoint's helpers are already in ``analytics.py``, it belongs in ``analytics.py``. When a module
+outgrows itself, split it where the helper-sharing is zero -- measured, not guessed. That is how rack
+actions became ``rack_power`` / ``fabric_ops`` / ``diagnostics``, and why that split needed no test
+changes at all.
+
+Helpers that outlive one domain do not belong here. They go to the module that owns the concern
+(``rack_status_engine``, ``results_ingest``, ``grafana_embed``, ``node_targets``, ``job_registry``,
+``paths`` ...) so two api modules can share them without importing each other. See
+``core-designs.mdc`` for the full list and the rule for choosing.
 
 A module qualifies by exposing either of:
 
