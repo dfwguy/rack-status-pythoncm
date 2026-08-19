@@ -1,0 +1,97 @@
+{
+  "schema_version": "plc-workspace-profile/v2",
+  "profile_type": "repo",
+  "generated_at": "2026-08-17T20:05:00Z",
+  "repo": {
+    "repo_id": "nvis-rack-status",
+    "root": ".",
+    "scm": "git",
+    "remote": "ssh://gitlab-master.nvidia.com:12051/nvis/nvis-rack-status.git",
+    "branch": "main",
+    "revision": "fbf612ce1e0d4ec61f682906e82a98f5fd5cca4c"
+  },
+  "plc_project": {
+    "project_id": "nvis-rack-status",
+    "nspect_registration_id": "NSPECT-S57Q-EI19",
+    "workspace_id": null
+  },
+  "artifacts": {
+    "srd": {
+      "status": "missing",
+      "source_type": "unknown",
+      "pointer": null
+    },
+    "sadd": {
+      "status": "missing",
+      "source_type": "unknown",
+      "pointer": null
+    },
+    "sutp": {
+      "status": "missing",
+      "source_type": "unknown",
+      "pointer": null
+    },
+    "threat_model": {
+      "status": "available",
+      "source_type": "local",
+      "pointer": ".plc/security/threat-model-NVIS-RACK-STATUS.md"
+    }
+  },
+  "repo_layout": {
+    "source_roots": [
+      "backend",
+      "frontend/src",
+      "bin/scripts",
+      "bin/lib"
+    ],
+    "test_roots": [
+      "backend/tests",
+      "frontend/src"
+    ],
+    "docs_roots": [
+      "docs"
+    ],
+    "build_entrypoints": [
+      "backend/requirements.txt",
+      "frontend/package.json",
+      "Dockerfile",
+      "docker-compose.yml",
+      "build-docker.sh",
+      "start.sh",
+      "version.py"
+    ],
+    "test_entrypoints": [
+      "pytest",
+      "vitest"
+    ],
+    "plc_profile_path": ".plc/profile.json"
+  },
+  "orientation_hints": {
+    "repo_role": "application",
+    "parent_program": "NVIS OVA (Observability, Validation, Automation)",
+    "nspect_context": "NSPECT-S57Q-EI19 is the nSpect registration used for nvis-rack-status. This profile covers the nvis-rack-status repository only.",
+    "revision_note": "repo.revision is the main-branch snapshot this profile was aligned to, not a live always-HEAD pointer. repo.branch is the canonical product branch (main); the reconstruction work was authored on feat/agentic-plc-security.",
+    "scope_note": "Reconstruction scope for this pass was security only: local advisory scans plus a threat model. The SRD, SADD and SUTP were deliberately not reconstructed and are marked missing rather than unknown.",
+    "owned_components": [
+      "backend (Flask API + rack status builder)",
+      "frontend (React 19 SPA, Kaizen UI)",
+      "bin/scripts (head-node validation and audit tooling)",
+      "catalog (Platform / Tool / Project registry)",
+      "workflow_engine (durable long-job runner)"
+    ],
+    "integration_points": [
+      "BCM cluster manager (cmsh, pdsh)",
+      "MAAS cluster manager (maas-cli)",
+      "Slurm (sinfo, squeue, sacct, scontrol, sbatch)",
+      "SSH to cluster head node and compute trays (host_exec / transport)",
+      "Grafana dashboard embeds",
+      "Prometheus / DCGM telemetry",
+      "PAM and token-based dashboard auth",
+      "TinyDB catalog store (var/store)"
+    ],
+    "open_questions": [
+      "Is nvis-rack-status a standalone nSpect product under NSPECT-S57Q-EI19, or one component of a larger NVIS OVA program registration?",
+      "Should the two sibling deployments (nvis-mel01 worktree: Firmus MEL01, Boston BOS01) be covered by this same registration or their own?"
+    ]
+  }
+}
