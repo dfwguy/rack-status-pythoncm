@@ -27,14 +27,34 @@ from __future__ import annotations
 
 import os
 
-import pytest
-
 import app as app_module
+import pytest
+from paths import REPO_ROOT
 
 TOKEN = "test-token-not-a-real-secret"
 
 
 @pytest.fixture()
+def spa_index():
+    """Guarantee ``static/spa/index.html`` exists, creating a placeholder only if it is missing.
+
+    The backend test job does not build the frontend, so any test that exercises a route serving the
+    SPA has to supply the artifact itself rather than assume a developer's local build. A real bundle
+    is left untouched; a placeholder is removed again so a later frontend build is not confused by it.
+    """
+    index = REPO_ROOT / "static" / "spa" / "index.html"
+    if index.exists():
+        yield index
+        return
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text("<!doctype html><title>test placeholder</title>", encoding="utf-8")
+    try:
+        yield index
+    finally:
+        index.unlink(missing_ok=True)
+
+
+@pytest.fixture
 def auth_client(monkeypatch):
     """A test client with auth ON, in token mode, and a known token."""
     monkeypatch.delenv("RACK_WEB_AUTH_DISABLED", raising=False)
@@ -67,8 +87,14 @@ def test_every_bypass_endpoint_exists():
     )
 
 
-def test_login_page_is_reachable_unauthenticated(auth_client):
-    """The login screen must render, or the operator sees a redirect loop."""
+def test_login_page_is_reachable_unauthenticated(auth_client, spa_index):
+    """The login screen must be reachable unauthenticated, or the operator sees a redirect loop.
+
+    What is asserted is the GATE, not the frontend: ``/login`` serves the SPA bundle, so the
+    ``spa_index`` fixture guarantees the artifact exists. Without it this test passed on any machine
+    with a built frontend and returned 500 in CI, where ``python-test`` never runs a Vite build --
+    exactly the environment split that let it stay red while the suite looked green locally.
+    """
     resp = auth_client.get("/login")
     assert resp.status_code == 200
 
