@@ -93,8 +93,8 @@ When adding new cluster commands: add method to `PlatformProvider` (base.py), im
 PAM does not work in containers. Token auth auto-selects whenever the execution target is **not**
 local — `_auth_mode()` returns `token` unless `host_exec.exec_kind() == "local"`, because PAM
 authenticates against *this* machine's accounts and a remote target has no such mapping. It keys off
-the resolved executor, not the deprecated `RACK_EXEC_MODE` flag. Override with
-`RACK_WEB_AUTH_MODE=pam|token`.
+the **resolved executor**, so pointing the app at a remote endpoint is what switches it; there is no
+mode flag to set. Override explicitly with `RACK_WEB_AUTH_MODE=pam|token`.
 
 ## Path Resolution
 

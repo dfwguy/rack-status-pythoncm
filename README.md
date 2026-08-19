@@ -125,17 +125,20 @@ for where a new component goes; the summary here exists so the shape is visible 
 - **Durable state and locks:** files under `var/` are volume-backed, bounded where appropriate, and written with locking/atomic replacement.
 - **Frontend contexts:** authentication, active cluster, rack commands, locks, AI, theme, and help are shared contexts; page-local copies cause inconsistent behavior.
 
-### Execution modes
+### Where commands run
 
-| Mode | Use | Command location |
+There is no execution-mode switch. **Where a command runs is a property of the connection**, not a
+global flag: `host_exec` resolves the target from the configured endpoint and connects over SSH.
+
+| Configuration | Use | Command location |
 |---|---|---|
 | `RACK_STATUS_DEMO=1` | UI development, demonstrations, CI smoke | Synthetic data; no cluster mutation. |
-| default (no flag) | Container/workstation reaches a cluster head node | `host_exec` connects to the configured endpoint (`RACK_SSH_HOST` / `_USER` / `_KEY`), then platform/scheduler commands run there. |
-| `RACK_EXEC_MODE=local` | Only while the app runs *directly on* the target host | Commands execute on the app host. |
+| `RACK_SSH_HOST` / `RACK_SSH_USER` / `RACK_SSH_KEY` | Container or workstation reaching a cluster head node | `host_exec` connects to that endpoint, then platform and scheduler commands run there. |
+| Catalog `Cluster.connection` | Several clusters from one instance | The active cluster's endpoint wins over the environment, so switching clusters switches the target. |
 
-`RACK_EXEC_MODE` is **deprecated** and logs a warning: execution is chosen by the connection's
-executor, not a global mode flag, and connections now default to SSH. Configure the target with the
-`RACK_SSH_*` variables instead. Set `local` only for an app running on the cluster host itself.
+A deployment that runs *on* the cluster host still works — it is simply an endpoint that happens to be
+local, chosen by the connection rather than announced by a flag. Point the `RACK_SSH_*` variables (or the
+active cluster record) at the target and let the transport decide.
 
 Cluster identity is catalog-driven. Nscale TX is one deployment of this product, not a separate code path. Customer-specific names, credentials, manifests, exclusions, paths, and versions belong in the deployment configuration.
 
@@ -402,7 +405,6 @@ RACK_SSH_KEY=/secure/path/rack_status_key \
 RACK_REMOTE_BASE_PATH=/home/rackstatus/nvis-rack-status \
   bin/deploy-scripts.sh
 
-RACK_EXEC_MODE=ssh \
 RACK_PLATFORM=bcm \
 RACK_SSH_HOST=head.example \
 RACK_SSH_USER=rackstatus \
@@ -516,9 +518,8 @@ Use [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) as the exhaustive reference. The 
 | Variable | Typical/default | Purpose |
 |---|---|---|
 | `RACK_STATUS_DEMO` | `0` | Synthetic demo mode when `1`. |
-| `RACK_EXEC_MODE` | `local` | `local` or `ssh`. |
 | `RACK_PLATFORM` | `bcm` | Current platform provider, normally `bcm` or `maas`. |
-| `RACK_SSH_HOST`, `RACK_SSH_USER`, `RACK_SSH_PORT` | site-specific | Head/login endpoint used in SSH mode. |
+| `RACK_SSH_HOST`, `RACK_SSH_USER`, `RACK_SSH_PORT` | site-specific | Head/login endpoint. Setting these is what selects the execution target. |
 | `RACK_SSH_KEY` | `/run/secrets/ssh_key` in portable container deployments | Private key path; mount read-only. |
 | `RACK_REMOTE_BASE_PATH` | site-specific | Head-node root containing `bin/scripts` and related assets. |
 | `RACK_STATUS_LOG_DIR` | deployment-specific | Validation log directory. |
