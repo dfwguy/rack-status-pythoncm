@@ -135,3 +135,9 @@ plc-evidence.jsonl
 .agents/
 .claude/
 .codex/
+
+# Agent scratch space: intermediate command output, captured cluster inventories,
+# test fixtures pulled off a head node. Currently ~2,000 files, none of them a work
+# product. Untracked and unignored is the dangerous combination — one `git add .`
+# commits the lot — so it is named here explicitly.
+.scratch/
