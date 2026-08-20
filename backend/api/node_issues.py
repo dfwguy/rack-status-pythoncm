@@ -20,6 +20,7 @@ import logging
 
 import core
 import node_issues
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 
 _logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ def api_node_issues():
 
 
 @bp.route("/api/node-issues/sync-punchcard", methods=["POST"])
+@action("node.issues:sync")
 def api_node_issues_sync_punchcard():
     """Force-refresh the server-side Google punchcard baseline for this cluster."""
     body = request.get_json(silent=True) or {}

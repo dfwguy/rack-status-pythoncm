@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 import host_exec
+from audit.actions import action
 from config_env import _env_int, _job_env_int, _subprocess_env
 from core import rpath as _rpath
 from flask import Blueprint, Response, jsonify, request, stream_with_context
@@ -335,6 +336,7 @@ def _hw_check_worker(job_id: str, pdsh_w: str, preset: str, checker_argv: list[s
 
 
 @bp.route("/api/hw-check-async", methods=["POST"])
+@action("diag:hw_check", variant="async")
 def api_hw_check_async():
     """POST JSON {\"specs\": [...], \"preset\": \"…\", \"rack\": \"…\", \"checker_args\": \"…\"} — optional checker_args string (or JSON list) overrides preset."""
     body = request.get_json(silent=True) or {}
@@ -455,6 +457,7 @@ def _precheck_async_worker(job_id: str, log_dir: Path, cmd: list[str], display_c
 
 
 @bp.route("/api/precheck-async", methods=["POST"])
+@action("diag:precheck", variant="async")
 def api_precheck_async():
     """POST JSON ``{"rack": "pNN-rMM", "log_dir": "…"}`` for async Precheck (sysinfo.sh)."""
     body = request.get_json(silent=True) or {}
@@ -503,6 +506,7 @@ def _sysinfo_stream_generator(prep: dict):
 
 
 @bp.route("/api/run-sysinfo", methods=["POST"])
+@action("diag:sysinfo")
 def api_run_sysinfo():
     """Run sysinfo.sh with one NODELIST target, e.g. p22-r05-ct[01-18] (cwd = log_dir)."""
     body = request.get_json(silent=True) or {}
@@ -541,6 +545,7 @@ def api_run_sysinfo():
 
 
 @bp.route("/api/run-sysinfo-stream", methods=["POST"])
+@action("diag:sysinfo", variant="stream")
 def api_run_sysinfo_stream():
     """Stream merged stdout/stderr from sysinfo.sh as text/plain (UTF-8)."""
     body = request.get_json(silent=True) or {}

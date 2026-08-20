@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 
 import workflow_engine
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 
 _logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ def api_workflow_get(workflow_id: str):
 
 
 @bp.route("/api/workflows", methods=["POST"])
+@action("workflow:save")
 def api_workflow_save():
     """Create or update a workflow template."""
     body = request.get_json(silent=True) or {}
@@ -62,6 +64,7 @@ def api_workflow_save():
 
 
 @bp.route("/api/workflows/<workflow_id>", methods=["DELETE"])
+@action("workflow:delete")
 def api_workflow_delete(workflow_id: str):
     """Delete a workflow template."""
     deleted = workflow_engine.delete_workflow(workflow_id)
@@ -71,6 +74,7 @@ def api_workflow_delete(workflow_id: str):
 
 
 @bp.route("/api/workflows/<workflow_id>/run", methods=["POST"])
+@action("workflow:run")
 def api_workflow_run(workflow_id: str):
     """Start a workflow execution instance."""
     body = request.get_json(silent=True) or {}
@@ -83,6 +87,7 @@ def api_workflow_run(workflow_id: str):
 
 
 @bp.route("/api/workflows/generate-mermaid", methods=["POST"])
+@action("workflow:generate")
 def api_workflow_generate_mermaid():
     """Generate mermaid diagram from workflow steps."""
     body = request.get_json(silent=True) or {}
@@ -109,6 +114,7 @@ def api_workflow_run_state(run_id: str):
 
 
 @bp.route("/api/workflow-runs/<run_id>/advance", methods=["POST"])
+@action("workflow:advance")
 def api_workflow_run_advance(run_id: str):
     """Advance a workflow (for manual/decision steps)."""
     body = request.get_json(silent=True) or {}
@@ -120,6 +126,7 @@ def api_workflow_run_advance(run_id: str):
 
 
 @bp.route("/api/workflow-runs/<run_id>/cancel", methods=["POST"])
+@action("workflow:cancel")
 def api_workflow_run_cancel(run_id: str):
     """Cancel a running workflow."""
     try:

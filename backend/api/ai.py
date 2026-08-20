@@ -25,6 +25,7 @@ import json
 import logging
 
 import ai_chat
+from audit.actions import action
 from core import truthy_env as _truthy_env
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
@@ -37,6 +38,7 @@ bp = Blueprint("ai", __name__, url_prefix="")
 
 
 @bp.route("/api/ai/chat", methods=["POST"])
+@action("ai:chat")
 def api_ai_chat():
     """POST SSE streaming chat. Body: {messages: [{role, content}], context: {page, rack?}}"""
     if not ai_chat.is_ai_enabled() and not _truthy_env("RACK_STATUS_DEMO"):
@@ -113,6 +115,7 @@ def _agent_event_to_sse(ev: dict) -> str:
 
 
 @bp.route("/api/ai/chat/resume", methods=["POST"])
+@action("ai:chat_resume")
 def api_ai_chat_resume():
     """Resume a paused agent turn after the user approves/denies a mutating action.
 
@@ -163,6 +166,7 @@ def api_ai_tools():
 
 
 @bp.route("/api/ai/settings", methods=["GET", "PUT"])
+@action("ai:configure")
 def api_ai_settings():
     """GET returns masked settings; PUT updates endpoint/model/key."""
     if request.method == "GET":
@@ -174,6 +178,7 @@ def api_ai_settings():
 
 
 @bp.route("/api/ai/test", methods=["POST"])
+@action("ai:test")
 def api_ai_test():
     """Test the AI endpoint connectivity."""
     result = ai_chat.test_connection()

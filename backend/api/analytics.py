@@ -56,6 +56,7 @@ from analytics_cache import (
     _analytics_aggregate_cache_put,
     _analytics_rows_fingerprint,
 )
+from audit.actions import action
 from config_env import _job_env_int, _subprocess_env
 from core import last_regex_int as _last_regex_int
 from core import mean_finite as _mean_finite
@@ -739,6 +740,7 @@ def api_analytics_last():
 
 
 @bp.route("/api/analytics/aggregate", methods=["POST"])
+@action("analytics:aggregate")
 def api_analytics_aggregate():
     """POST JSON ``{log_dir, rows:[{rack,nemo},…]}`` — parser-based NCCL/Nemotron analytics.
 
@@ -761,6 +763,7 @@ _ANALYTICS_JOBS_MAX = 8
 
 
 @bp.route("/api/analytics/aggregate-async", methods=["POST"])
+@action("analytics:aggregate", variant="async")
 def api_analytics_aggregate_async():
     """Start the aggregate on a worker thread; poll GET /api/analytics/aggregate-status?job_id=…
 

@@ -48,6 +48,7 @@ import host_exec
 import lake_sink
 import results_history
 import validation_activities
+from audit.actions import action
 from config_env import _env_int, _job_env_int, _subprocess_env
 from core import rpath as _rpath
 from core import truthy_env as _truthy_env
@@ -1005,6 +1006,7 @@ def _sn_llama_txt_paths_for_rack(log_dir: Path, rack: str, *, exclude: Path | No
 
 
 @bp.route("/api/history/capture-job", methods=["GET", "POST"])
+@action("results:capture")
 def api_capture_job_attempt():
     """``?job_id=`` — record a Slurm attempt (even one that produced no log) to history + lake."""
     jid = (request.args.get("job_id") or (request.get_json(silent=True) or {}).get("job_id") or "").strip()

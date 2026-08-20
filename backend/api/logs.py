@@ -29,6 +29,7 @@ import threading
 from pathlib import Path, PurePosixPath
 
 import host_exec
+from audit.actions import action
 from config_env import _eget, _env_int, _subprocess_env
 from core import rpath as _rpath
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
@@ -420,6 +421,7 @@ def _parse_tail_job_stdout_stream_request(body: dict) -> tuple[dict | None, tupl
 
 
 @bp.route("/api/tail-job-stdout-stream", methods=["POST"])
+@action("logs:tail_job", variant="stream")
 def api_tail_job_stdout_stream():
     """Stream ``tail -f`` for a Slurm job stdout file (``path`` from ``scontrol show job`` ``StdOut=``)."""
     body = request.get_json(silent=True) or {}
@@ -439,6 +441,7 @@ def api_tail_job_stdout_stream():
 
 
 @bp.route("/api/tail-log-stream", methods=["POST"])
+@action("logs:tail", variant="stream")
 def api_tail_log_stream():
     """Stream live `tail -f` of the NEMO rack log (same file pick as parser)."""
     body = request.get_json(silent=True) or {}

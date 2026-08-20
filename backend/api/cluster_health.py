@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 
 import host_exec
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 
 _logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ def api_cluster_health():
 
 
 @bp.route("/api/cluster-health/reconnect", methods=["POST"])
+@action("cluster:reconnect")
 def api_cluster_health_reconnect():
     """Force an immediate reachability re-probe (drops the cached result first)."""
     try:

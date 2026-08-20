@@ -43,6 +43,7 @@ from activity_hydration import (
     _hydrate_activity_task_logs,
     _task_needs_slurm_hydration,
 )
+from audit.actions import action
 from config_env import _eget
 from flask import Blueprint, Response, jsonify, request
 from naming import (
@@ -142,6 +143,7 @@ def api_multirack_jobs():
 
 
 @bp.route("/api/multirack-jobs/<job_id>", methods=["DELETE"])
+@action("validation.activity:delete", variant="legacy")
 def api_multirack_job_delete(job_id: str):
     """Dismiss (remove) a launched multi-rack job from the durable state table."""
     if validation_activities.delete_activity(job_id):
@@ -214,6 +216,7 @@ def api_validation_activity_detail(activity_id: str):
     "/api/validation-activities/<activity_id>/corrective-actions",
     methods=["POST"],
 )
+@action("validation.activity:annotate")
 def api_validation_activity_corrective_action(activity_id: str):
     """Annotate an activity; corrective actions append and are never overwritten."""
     aid = (activity_id or "").strip()
@@ -243,6 +246,7 @@ def api_validation_activity_corrective_action(activity_id: str):
 
 
 @bp.route("/api/validation-activities/<activity_id>", methods=["DELETE"])
+@action("validation.activity:delete")
 def api_validation_activity_delete(activity_id: str):
     aid = (activity_id or "").strip()
     if validation_activities.delete_activity(aid):
@@ -251,6 +255,7 @@ def api_validation_activity_delete(activity_id: str):
 
 
 @bp.route("/api/validation-activities/adopt", methods=["POST"])
+@action("validation.activity:adopt")
 def api_validation_activities_adopt():
     """Register an external validation log under a new durable activity id."""
     body = request.get_json(silent=True) or {}

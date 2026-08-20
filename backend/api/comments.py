@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 
+from audit.actions import action
 from comments_store import (
     _multirack_comment_storage_key,
     read_comments,
@@ -38,6 +39,7 @@ def api_comments_list():
 
 
 @bp.route("/api/comments/<rack_id>", methods=["PUT", "DELETE"])
+@action(put="comments:update", delete="comments:delete")
 def api_comment_put(rack_id: str):
     """PUT JSON {\"comment\": \"...\"} sets text; empty string clears. DELETE clears.
 

@@ -24,7 +24,7 @@ request resolves to:
 | `resource` | request path / body | rack `bos01-a05`, node `bos01-a05-11-s1-dgx-01-c01`, workflow id |
 | `context` | request + active cluster | cluster `Boston Markley`, `src_ip`, time, campaign id |
 
-The 89 actions across 24 services are enumerable at startup, and `FR-14b` fails the build if a
+The 89 actions across 35 services (22 top-level roots) are enumerable at startup, and `FR-14b` fails the build if a
 mutating route lacks one. **That is the property that makes either engine viable** — a policy set can
 be checked for completeness against a known finite action list, rather than hoping every route was
 remembered.

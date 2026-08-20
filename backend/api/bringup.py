@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 import subprocess
 
+from audit.actions import action
 from core import truthy_env as _truthy_env
 from flask import Blueprint, jsonify, request
 
@@ -70,6 +71,7 @@ def api_bringup_node():
 
 
 @bp.route("/api/bringup/fleet", methods=["GET", "POST"])
+@action("bringup:run")
 def api_bringup_fleet():
     """Bring-up state for every node — what a cluster heatmap and the daily report need.
 

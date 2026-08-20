@@ -39,6 +39,7 @@ import post_run_report
 import validation_activities
 import workflow_engine
 from analytics_cache import _analytics_aggregate_cache_get
+from audit.actions import action
 from catalog import context as catalog_context
 from config_env import _env_int
 from core import SLURM_JOB_ID_RE as _SLURM_SCANCEL_JOB_ID_RE
@@ -141,6 +142,7 @@ def _collect_node_inventory(fleet: dict, progress=None, phase=None) -> tuple[dic
 
 
 @bp.route("/api/node-report", methods=["GET", "POST"])
+@action("report.node:generate")
 def api_node_report():
     """Daily node-validation report as schema-validated JSON.
 
@@ -329,6 +331,7 @@ def api_reports_generated_download(report_id: str):
 
 
 @bp.route("/api/reports/generated/<report_id>", methods=["DELETE"])
+@action("report:delete")
 def api_reports_generated_delete(report_id: str):
     """Delete a saved report."""
     try:
@@ -385,6 +388,7 @@ def api_node_report_kinds():
 
 
 @bp.route("/api/node-report/start", methods=["POST"])
+@action("report.node:generate", variant="async")
 def api_node_report_start():
     """Start report generation on a worker; poll ``/api/node-report/status?job_id=…``.
 
@@ -779,6 +783,7 @@ def api_post_run_node_report():
 
 
 @bp.route("/api/post-run-node-report/mark", methods=["POST"])
+@action("report.node:mark")
 def api_post_run_node_mark():
     """Record an operator finding and optionally drain the exact node."""
     import node_issues

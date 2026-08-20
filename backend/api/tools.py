@@ -34,6 +34,7 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 import host_exec
+from audit.actions import action
 from config_env import (
     JOB_ENV_UI_DEFINITIONS,
     _eget,
@@ -270,6 +271,7 @@ def _tools_find_existing_sqsh_for_skip(dest_dir: Path) -> tuple[Path | None, lis
 
 
 @bp.route("/api/tools/download-containers", methods=["POST"])
+@action("tools:download_containers")
 def api_tools_download_containers():
     """Run bin/scripts/05-download-containers.sh with a chosen destination (and optional arch).
 
@@ -356,6 +358,7 @@ def api_tools_download_containers():
 
 
 @bp.route("/api/tools/download-containers-stream", methods=["POST"])
+@action("tools:download_containers", variant="stream")
 def api_tools_download_containers_stream():
     """Stream ``05-download-containers.sh`` merged stdout/stderr (same POST JSON as ``/api/tools/download-containers``)."""
     if os.environ.get("RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -555,6 +558,7 @@ def _write_prometheus_rc_for_launch(user: str, password: str) -> Path:
 
 
 @bp.route("/api/tools/launch-grafana-bright-prometheus", methods=["POST"])
+@action("tools:launch_grafana")
 def api_tools_launch_grafana_bright_prometheus():
     """Run ``bin/scripts/launch-grafana-bright-prometheus.sh`` on the dashboard host (Docker Grafana + Prometheus DS).
 
@@ -636,6 +640,7 @@ def api_tools_launch_grafana_bright_prometheus():
 
 
 @bp.route("/api/tools/launch-grafana-bright-prometheus-stream", methods=["POST"])
+@action("tools:launch_grafana", variant="stream")
 def api_tools_launch_grafana_bright_prometheus_stream():
     """Stream ``launch-grafana-bright-prometheus.sh`` (same credentials rules as the JSON POST)."""
     if os.environ.get("RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED", "").strip().lower() in (
@@ -736,6 +741,7 @@ def _json_body_bool(body: dict, key: str, *, default: bool) -> bool:
 
 
 @bp.route("/api/tools/install-hpcx-workspace", methods=["POST"])
+@action("tools:install_hpcx")
 def api_tools_install_hpcx_workspace():
     """Run ``install-hpcx-workspace.sh``: Mellanox HPC-X tarball only (CUDA/NCCL: ``install-cuda-nccl-workspace.sh``)."""
     if os.environ.get("RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -799,6 +805,7 @@ def api_tools_install_hpcx_workspace():
 
 
 @bp.route("/api/tools/install-hpcx-workspace-stream", methods=["POST"])
+@action("tools:install_hpcx", variant="stream")
 def api_tools_install_hpcx_workspace_stream():
     """Stream ``install-hpcx-workspace.sh`` (POST JSON: ``workspace``, ``cuda_major``, ``arch``)."""
     if os.environ.get("RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -922,6 +929,7 @@ def _dcgm_display_cmd(parsed: dict) -> str:
 
 
 @bp.route("/api/tools/install-dcgm-workspace", methods=["POST"])
+@action("tools:install_dcgm")
 def api_tools_install_dcgm_workspace():
     """Run ``install-dcgm-workspace.sh``: download + extract DCGM 4.x into the shared workspace (head node)."""
     if os.environ.get("RACK_TOOLS_INSTALL_DCGM_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -972,6 +980,7 @@ def api_tools_install_dcgm_workspace():
 
 
 @bp.route("/api/tools/install-dcgm-workspace-stream", methods=["POST"])
+@action("tools:install_dcgm", variant="stream")
 def api_tools_install_dcgm_workspace_stream():
     """Stream ``install-dcgm-workspace.sh`` (POST JSON: ``workspace``, ``cuda_major``, ``arch``, ``distro``, ``version``)."""
     if os.environ.get("RACK_TOOLS_INSTALL_DCGM_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -1039,6 +1048,7 @@ def _validate_cuda_nccl_build_host(raw: object) -> tuple[str | None, str | None]
 
 
 @bp.route("/api/tools/install-cuda-nccl-workspace", methods=["POST"])
+@action("tools:install_cuda_nccl")
 def api_tools_install_cuda_nccl_workspace():
     """Run ``install-cuda-nccl-workspace.sh``: download on localhost, install on ``build_host`` via pdsh."""
     if os.environ.get("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -1123,6 +1133,7 @@ def api_tools_install_cuda_nccl_workspace():
 
 
 @bp.route("/api/tools/install-cuda-nccl-workspace-stream", methods=["POST"])
+@action("tools:install_cuda_nccl", variant="stream")
 def api_tools_install_cuda_nccl_workspace_stream():
     """Stream ``install-cuda-nccl-workspace.sh`` (same POST JSON as ``/api/tools/install-cuda-nccl-workspace``)."""
     if os.environ.get("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -1208,6 +1219,7 @@ def api_tools_install_cuda_nccl_workspace_stream():
 
 
 @bp.route("/api/tools/install-nvloom-workspace", methods=["POST"])
+@action("tools:install_nvloom")
 def api_tools_install_nvloom_workspace():
     """Run ``install-nvloom-workspace.sh``: git clone on localhost, build on ``build_host`` via pdsh."""
     if os.environ.get("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -1270,6 +1282,7 @@ def api_tools_install_nvloom_workspace():
 
 
 @bp.route("/api/tools/install-nvloom-workspace-stream", methods=["POST"])
+@action("tools:install_nvloom", variant="stream")
 def api_tools_install_nvloom_workspace_stream():
     """Stream ``install-nvloom-workspace.sh`` (POST JSON: ``workspace``, ``cuda_major``, ``build_host``)."""
     if os.environ.get("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -1419,6 +1432,7 @@ def _exemplar_display_cmd(meta: dict, ws: str) -> str:
 
 
 @bp.route("/api/tools/install-dgxc-benchmarking-workspace", methods=["POST"])
+@action("tools:install_dgxc_benchmarking")
 def api_tools_install_dgxc_benchmarking_workspace():
     """Run ``install-dgxc-benchmarking-workspace.sh``: clone + (record|install) Exemplar/llmb."""
     if os.environ.get("RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -1475,6 +1489,7 @@ def api_tools_install_dgxc_benchmarking_workspace():
 
 
 @bp.route("/api/tools/install-dgxc-benchmarking-workspace-stream", methods=["POST"])
+@action("tools:install_dgxc_benchmarking", variant="stream")
 def api_tools_install_dgxc_benchmarking_workspace_stream():
     """Stream ``install-dgxc-benchmarking-workspace.sh`` (POST JSON: ``workspace``, ``mode``, ``gpu_type``, …).
 

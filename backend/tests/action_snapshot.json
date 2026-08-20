@@ -1,0 +1,632 @@
+[
+ {
+  "endpoint": "activities.api_multirack_job_delete",
+  "method": "DELETE",
+  "action": "validation.activity:delete",
+  "variant": "legacy"
+ },
+ {
+  "endpoint": "activities.api_validation_activities_adopt",
+  "method": "POST",
+  "action": "validation.activity:adopt",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "activities.api_validation_activity_corrective_action",
+  "method": "POST",
+  "action": "validation.activity:annotate",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "activities.api_validation_activity_delete",
+  "method": "DELETE",
+  "action": "validation.activity:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "ai.api_ai_chat",
+  "method": "POST",
+  "action": "ai:chat",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "ai.api_ai_chat_resume",
+  "method": "POST",
+  "action": "ai:chat_resume",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "ai.api_ai_settings",
+  "method": "PUT",
+  "action": "ai:configure",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "ai.api_ai_test",
+  "method": "POST",
+  "action": "ai:test",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "analytics.api_analytics_aggregate",
+  "method": "POST",
+  "action": "analytics:aggregate",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "analytics.api_analytics_aggregate_async",
+  "method": "POST",
+  "action": "analytics:aggregate",
+  "variant": "async"
+ },
+ {
+  "endpoint": "auth.api_login",
+  "method": "POST",
+  "action": "auth:login",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "auth.api_logout",
+  "method": "POST",
+  "action": "auth:logout",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "auth.logout",
+  "method": "POST",
+  "action": "auth:logout",
+  "variant": "form"
+ },
+ {
+  "endpoint": "bringup.api_bringup_fleet",
+  "method": "POST",
+  "action": "bringup:run",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "bug_report.api_bug_report_async",
+  "method": "POST",
+  "action": "support:bug_report",
+  "variant": "async"
+ },
+ {
+  "endpoint": "catalog.create_platform",
+  "method": "POST",
+  "action": "catalog.platform:create",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.create_project",
+  "method": "POST",
+  "action": "catalog.project:create",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.create_tool",
+  "method": "POST",
+  "action": "catalog.tool:create",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.delete_platform",
+  "method": "DELETE",
+  "action": "catalog.platform:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.delete_project",
+  "method": "DELETE",
+  "action": "catalog.project:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.delete_tool",
+  "method": "DELETE",
+  "action": "catalog.tool:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.import_npi_tools",
+  "method": "POST",
+  "action": "catalog.tool:import",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.set_active",
+  "method": "PUT",
+  "action": "catalog:set_active",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.set_topology",
+  "method": "PUT",
+  "action": "catalog:set_topology",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.update_platform",
+  "method": "PUT",
+  "action": "catalog.platform:update",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.update_project",
+  "method": "PUT",
+  "action": "catalog.project:update",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.update_tool",
+  "method": "PUT",
+  "action": "catalog.tool:update",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "cluster_health.api_cluster_health_reconnect",
+  "method": "POST",
+  "action": "cluster:reconnect",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "comments.api_comment_put",
+  "method": "DELETE",
+  "action": "comments:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "comments.api_comment_put",
+  "method": "PUT",
+  "action": "comments:update",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "dashboard.api_cluster_dashboard_metadata",
+  "method": "PUT",
+  "action": "settings:update_dashboard",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "dashboard.api_settings_job_environment",
+  "method": "PUT",
+  "action": "settings:update_job_env",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "diagnostics.api_hw_check_async",
+  "method": "POST",
+  "action": "diag:hw_check",
+  "variant": "async"
+ },
+ {
+  "endpoint": "diagnostics.api_precheck_async",
+  "method": "POST",
+  "action": "diag:precheck",
+  "variant": "async"
+ },
+ {
+  "endpoint": "diagnostics.api_run_sysinfo",
+  "method": "POST",
+  "action": "diag:sysinfo",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "diagnostics.api_run_sysinfo_stream",
+  "method": "POST",
+  "action": "diag:sysinfo",
+  "variant": "stream"
+ },
+ {
+  "endpoint": "fabric_ops.api_imex_check_async",
+  "method": "POST",
+  "action": "fabric.imex:check",
+  "variant": "async"
+ },
+ {
+  "endpoint": "fabric_ops.api_imex_reset_async",
+  "method": "POST",
+  "action": "fabric.imex:reset",
+  "variant": "async"
+ },
+ {
+  "endpoint": "fabric_ops.api_nvlink_preflight_async",
+  "method": "POST",
+  "action": "fabric:preflight",
+  "variant": "async"
+ },
+ {
+  "endpoint": "fabric_ops.api_nvlmapper_async",
+  "method": "POST",
+  "action": "fabric:map",
+  "variant": "async"
+ },
+ {
+  "endpoint": "fabric_ops.api_nvswitch_check_async",
+  "method": "POST",
+  "action": "fabric.nvswitch:check",
+  "variant": "async"
+ },
+ {
+  "endpoint": "fabric_ops.api_nvswitch_fix_async",
+  "method": "POST",
+  "action": "fabric.nvswitch:fix",
+  "variant": "async"
+ },
+ {
+  "endpoint": "fabric_ops.api_nvswitch_sdn_reset_async",
+  "method": "POST",
+  "action": "fabric.nvswitch:reset_sdn",
+  "variant": "async"
+ },
+ {
+  "endpoint": "fabric_ops.api_nvswitch_system_reset_async",
+  "method": "POST",
+  "action": "fabric.nvswitch:reset_system",
+  "variant": "async"
+ },
+ {
+  "endpoint": "fabric_ops.api_run_nvswitch_audit_stream",
+  "method": "POST",
+  "action": "fabric.nvswitch:audit",
+  "variant": "stream"
+ },
+ {
+  "endpoint": "logs.api_tail_job_stdout_stream",
+  "method": "POST",
+  "action": "logs:tail_job",
+  "variant": "stream"
+ },
+ {
+  "endpoint": "logs.api_tail_log_stream",
+  "method": "POST",
+  "action": "logs:tail",
+  "variant": "stream"
+ },
+ {
+  "endpoint": "node_issues.api_node_issues_sync_punchcard",
+  "method": "POST",
+  "action": "node.issues:sync",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "nvftp_sync.api_nvftp_sync_run",
+  "method": "POST",
+  "action": "nvftp:sync",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "nvftp_sync.api_nvftp_sync_test",
+  "method": "POST",
+  "action": "nvftp:test",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "parser_results.api_capture_job_attempt",
+  "method": "POST",
+  "action": "results:capture",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "rack_locks_api.api_rack_locks_claim",
+  "method": "POST",
+  "action": "rack.lock:claim",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "rack_locks_api.api_rack_locks_release",
+  "method": "DELETE",
+  "action": "rack.lock:release",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "rack_power.api_bmc_recovery_async",
+  "method": "POST",
+  "action": "rack.bmc:recover",
+  "variant": "async"
+ },
+ {
+  "endpoint": "rack_power.api_gpu_reset",
+  "method": "POST",
+  "action": "rack.gpu:reset",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "rack_power.api_gpu_reset_async",
+  "method": "POST",
+  "action": "rack.gpu:reset",
+  "variant": "async"
+ },
+ {
+  "endpoint": "rack_power.api_mac_change_async",
+  "method": "POST",
+  "action": "rack.bmc:set_mac",
+  "variant": "async"
+ },
+ {
+  "endpoint": "rack_power.api_power_on",
+  "method": "POST",
+  "action": "rack.power:on",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "rack_power.api_power_on_async",
+  "method": "POST",
+  "action": "rack.power:on",
+  "variant": "async"
+ },
+ {
+  "endpoint": "rack_power.api_rack_uptime",
+  "method": "POST",
+  "action": "rack:uptime",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "rack_power.api_services_restart",
+  "method": "POST",
+  "action": "rack.services:restart",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "rack_power.api_services_restart_async",
+  "method": "POST",
+  "action": "rack.services:restart",
+  "variant": "async"
+ },
+ {
+  "endpoint": "reports.api_node_report",
+  "method": "POST",
+  "action": "report.node:generate",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "reports.api_node_report_start",
+  "method": "POST",
+  "action": "report.node:generate",
+  "variant": "async"
+ },
+ {
+  "endpoint": "reports.api_post_run_node_mark",
+  "method": "POST",
+  "action": "report.node:mark",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "reports.api_reports_generated_delete",
+  "method": "DELETE",
+  "action": "report:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "slurm_ops.api_slurm_drain",
+  "method": "POST",
+  "action": "slurm.node:drain",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "slurm_ops.api_slurm_scancel",
+  "method": "POST",
+  "action": "slurm.job:cancel",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "slurm_ops.api_slurm_undrain",
+  "method": "POST",
+  "action": "slurm.node:undrain",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "tools.api_tools_download_containers",
+  "method": "POST",
+  "action": "tools:download_containers",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "tools.api_tools_download_containers_stream",
+  "method": "POST",
+  "action": "tools:download_containers",
+  "variant": "stream"
+ },
+ {
+  "endpoint": "tools.api_tools_install_cuda_nccl_workspace",
+  "method": "POST",
+  "action": "tools:install_cuda_nccl",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "tools.api_tools_install_cuda_nccl_workspace_stream",
+  "method": "POST",
+  "action": "tools:install_cuda_nccl",
+  "variant": "stream"
+ },
+ {
+  "endpoint": "tools.api_tools_install_dcgm_workspace",
+  "method": "POST",
+  "action": "tools:install_dcgm",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "tools.api_tools_install_dcgm_workspace_stream",
+  "method": "POST",
+  "action": "tools:install_dcgm",
+  "variant": "stream"
+ },
+ {
+  "endpoint": "tools.api_tools_install_dgxc_benchmarking_workspace",
+  "method": "POST",
+  "action": "tools:install_dgxc_benchmarking",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "tools.api_tools_install_dgxc_benchmarking_workspace_stream",
+  "method": "POST",
+  "action": "tools:install_dgxc_benchmarking",
+  "variant": "stream"
+ },
+ {
+  "endpoint": "tools.api_tools_install_hpcx_workspace",
+  "method": "POST",
+  "action": "tools:install_hpcx",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "tools.api_tools_install_hpcx_workspace_stream",
+  "method": "POST",
+  "action": "tools:install_hpcx",
+  "variant": "stream"
+ },
+ {
+  "endpoint": "tools.api_tools_install_nvloom_workspace",
+  "method": "POST",
+  "action": "tools:install_nvloom",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "tools.api_tools_install_nvloom_workspace_stream",
+  "method": "POST",
+  "action": "tools:install_nvloom",
+  "variant": "stream"
+ },
+ {
+  "endpoint": "tools.api_tools_launch_grafana_bright_prometheus",
+  "method": "POST",
+  "action": "tools:launch_grafana",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "tools.api_tools_launch_grafana_bright_prometheus_stream",
+  "method": "POST",
+  "action": "tools:launch_grafana",
+  "variant": "stream"
+ },
+ {
+  "endpoint": "universal.api_universal_scan",
+  "method": "POST",
+  "action": "results:scan",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "validation_runs.api_prepare_validation_preset",
+  "method": "POST",
+  "action": "validation:prepare_preset",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "validation_runs.api_run_clusterkit_async",
+  "method": "POST",
+  "action": "validation:run_clusterkit",
+  "variant": "async"
+ },
+ {
+  "endpoint": "validation_runs.api_run_exemplar_llama_async",
+  "method": "POST",
+  "action": "validation:run_exemplar_llama",
+  "variant": "async"
+ },
+ {
+  "endpoint": "validation_runs.api_run_exemplar_sysinfo_async",
+  "method": "POST",
+  "action": "validation:run_exemplar_sysinfo",
+  "variant": "async"
+ },
+ {
+  "endpoint": "validation_runs.api_run_llama_async",
+  "method": "POST",
+  "action": "validation:run_llama",
+  "variant": "async"
+ },
+ {
+  "endpoint": "validation_runs.api_run_llmb_nccl_async",
+  "method": "POST",
+  "action": "validation:run_llmb_nccl",
+  "variant": "async"
+ },
+ {
+  "endpoint": "validation_runs.api_run_mnubergemm_stress_async",
+  "method": "POST",
+  "action": "validation:run_mnubergemm",
+  "variant": "async"
+ },
+ {
+  "endpoint": "validation_runs.api_run_nccl_fullrack_async",
+  "method": "POST",
+  "action": "validation:run_nccl",
+  "variant": "async"
+ },
+ {
+  "endpoint": "validation_runs.api_run_nemo_xrack_async",
+  "method": "POST",
+  "action": "validation:run_nemo",
+  "variant": "async"
+ },
+ {
+  "endpoint": "validation_runs.api_run_nvloom_async",
+  "method": "POST",
+  "action": "validation:run_nvloom",
+  "variant": "async"
+ },
+ {
+  "endpoint": "validation_runs.api_run_validation",
+  "method": "POST",
+  "action": "validation:run",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "validation_runs.api_run_validation_async",
+  "method": "POST",
+  "action": "validation:run",
+  "variant": "async"
+ },
+ {
+  "endpoint": "validation_runs.api_run_validation_preset_async",
+  "method": "POST",
+  "action": "validation:run_preset",
+  "variant": "async"
+ },
+ {
+  "endpoint": "vault.api_vault_nvftp_token",
+  "method": "DELETE",
+  "action": "vault:delete_token",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "vault.api_vault_nvftp_token",
+  "method": "PUT",
+  "action": "vault:set_token",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "workflows.api_workflow_delete",
+  "method": "DELETE",
+  "action": "workflow:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "workflows.api_workflow_generate_mermaid",
+  "method": "POST",
+  "action": "workflow:generate",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "workflows.api_workflow_run",
+  "method": "POST",
+  "action": "workflow:run",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "workflows.api_workflow_run_advance",
+  "method": "POST",
+  "action": "workflow:advance",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "workflows.api_workflow_run_cancel",
+  "method": "POST",
+  "action": "workflow:cancel",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "workflows.api_workflow_save",
+  "method": "POST",
+  "action": "workflow:save",
+  "variant": "sync"
+ }
+]

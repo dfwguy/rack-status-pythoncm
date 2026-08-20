@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 
 from . import context, models
@@ -112,6 +113,7 @@ def list_platforms():
 
 
 @catalog_bp.post("/platforms")
+@action("catalog.platform:create")
 def create_platform():
     return _crud_upsert(TABLE_PLATFORMS, models.Platform)
 
@@ -122,11 +124,13 @@ def get_platform(doc_id: str):
 
 
 @catalog_bp.put("/platforms/<doc_id>")
+@action("catalog.platform:update")
 def update_platform(doc_id: str):
     return _crud_upsert(TABLE_PLATFORMS, models.Platform, doc_id=doc_id)
 
 
 @catalog_bp.delete("/platforms/<doc_id>")
+@action("catalog.platform:delete")
 def delete_platform(doc_id: str):
     return _crud_delete(TABLE_PLATFORMS, doc_id)
 
@@ -147,6 +151,7 @@ def list_tools():
 
 
 @catalog_bp.post("/tools")
+@action("catalog.tool:create")
 def create_tool():
     return _crud_upsert(TABLE_TOOLS, models.Tool)
 
@@ -157,11 +162,13 @@ def get_tool(doc_id: str):
 
 
 @catalog_bp.put("/tools/<doc_id>")
+@action("catalog.tool:update")
 def update_tool(doc_id: str):
     return _crud_upsert(TABLE_TOOLS, models.Tool, doc_id=doc_id)
 
 
 @catalog_bp.delete("/tools/<doc_id>")
+@action("catalog.tool:delete")
 def delete_tool(doc_id: str):
     return _crud_delete(TABLE_TOOLS, doc_id)
 
@@ -177,6 +184,7 @@ def list_projects():
 
 
 @catalog_bp.post("/projects")
+@action("catalog.project:create")
 def create_project():
     return _crud_upsert(TABLE_PROJECTS, models.Project)
 
@@ -187,11 +195,13 @@ def get_project(doc_id: str):
 
 
 @catalog_bp.put("/projects/<doc_id>")
+@action("catalog.project:update")
 def update_project(doc_id: str):
     return _crud_upsert(TABLE_PROJECTS, models.Project, doc_id=doc_id)
 
 
 @catalog_bp.delete("/projects/<doc_id>")
+@action("catalog.project:delete")
 def delete_project(doc_id: str):
     return _crud_delete(TABLE_PROJECTS, doc_id)
 
@@ -236,6 +246,7 @@ def get_npi_tool(doc_id: str):
 
 
 @catalog_bp.post("/npi-tools/import")
+@action("catalog.tool:import")
 def import_npi_tools():
     """Re-sync the NPI reference catalog from the configured snapshot/source dir."""
     from .npi_import import import_npi_catalog
@@ -276,6 +287,7 @@ def get_active():
 
 
 @catalog_bp.put("/active")
+@action("catalog:set_active")
 def set_active():
     body = _body()
     project_id = (body.get("project") or "").strip()
@@ -332,6 +344,7 @@ def get_topology():
 
 
 @catalog_bp.put("/topology")
+@action("catalog:set_topology")
 def set_topology():
     """Replace the active cluster's ``endpoints``/``roles`` and rebuild the transport."""
     body = _body()

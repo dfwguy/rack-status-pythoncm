@@ -16,6 +16,7 @@ report. Credentials never appear in a response -- the status payload is delibera
 from __future__ import annotations
 
 import nvftp_cache_sync
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 
 # Empty prefix: these routes carry the paths they had in app.py, so the move cannot change a URL.
@@ -30,6 +31,7 @@ def api_nvftp_sync_status():
 
 
 @bp.route("/api/nvftp-sync/run", methods=["POST"])
+@action("nvftp:sync")
 def api_nvftp_sync_run():
     """Trigger an immediate var/cache upload. JSON body ``{\"force\": true}`` re-uploads every file."""
     body = request.get_json(silent=True) or {}
@@ -40,6 +42,7 @@ def api_nvftp_sync_run():
 
 
 @bp.route("/api/nvftp-sync/test", methods=["POST"])
+@action("nvftp:test")
 def api_nvftp_sync_test():
     """POST ``{project_token, sftp_user?, token?}`` — SFTP probe file under ``{remote_base}/{project_token}/``."""
     body = request.get_json(silent=True) or {}

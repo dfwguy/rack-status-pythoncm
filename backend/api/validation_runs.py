@@ -47,6 +47,7 @@ from pathlib import Path
 import host_exec
 import validation_presets
 from activity_hydration import _record_validation_activity
+from audit.actions import action
 from cluster_metadata import read_cluster_dashboard_metadata
 from config_env import (
     _eget,
@@ -323,6 +324,7 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
 
 
 @bp.route("/api/run-validation", methods=["POST"])
+@action("validation:run")
 def api_run_validation():
     """Run singlerack validation script with one target, e.g. p26-r05-ct[01-18] (cwd = log_dir)."""
     body = request.get_json(silent=True) or {}
@@ -367,6 +369,7 @@ def api_run_validation():
 
 
 @bp.route("/api/run-validation-async", methods=["POST"])
+@action("validation:run", variant="async")
 def api_run_validation_async():
     """Start validation in a background thread; poll GET /api/run-validation-status?job_id=…"""
     body = request.get_json(silent=True) or {}
@@ -483,6 +486,7 @@ def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int]
 
 
 @bp.route("/api/run-nemo-xrack-async", methods=["POST"])
+@action("validation:run_nemo", variant="async")
 def api_run_nemo_xrack_async():
     """Start ``run-nemo-xrack.sh`` in the background; poll ``/api/run-nemo-xrack-status``.
 
@@ -681,6 +685,7 @@ def _prepare_run_exemplar_llama(body: dict) -> tuple[dict | None, tuple[object, 
 
 
 @bp.route("/api/run-exemplar-llama-async", methods=["POST"])
+@action("validation:run_exemplar_llama", variant="async")
 def api_run_exemplar_llama_async():
     """Submit Llama 3.1 405B Exemplar pretraining across eight selected racks."""
     body = request.get_json(silent=True) or {}
@@ -754,6 +759,7 @@ def api_run_exemplar_llama_async():
 
 
 @bp.route("/api/run-llama-async", methods=["POST"])
+@action("validation:run_llama", variant="async")
 def api_run_llama_async():
     """Start ``run-llama.sh`` in the background; poll ``/api/run-llama-status``."""
     body = request.get_json(silent=True) or {}
@@ -1406,6 +1412,7 @@ def api_validation_presets():
 
 
 @bp.route("/api/validation-presets/prepare", methods=["POST"])
+@action("validation:prepare_preset")
 def api_prepare_validation_preset():
     body = request.get_json(silent=True) or {}
     plan, err = _prepare_validation_preset(body)
@@ -1454,11 +1461,13 @@ def _run_validation_preset_async(body: dict):
 
 
 @bp.route("/api/run-validation-preset-async", methods=["POST"])
+@action("validation:run_preset", variant="async")
 def api_run_validation_preset_async():
     return _run_validation_preset_async(request.get_json(silent=True) or {})
 
 
 @bp.route("/api/run-exemplar-sysinfo-async", methods=["POST"])
+@action("validation:run_exemplar_sysinfo", variant="async")
 def api_run_exemplar_sysinfo_async():
     body = request.get_json(silent=True) or {}
     body["preset_id"] = "exemplar-system-info"
@@ -1476,6 +1485,7 @@ def api_run_exemplar_sysinfo_status():
 
 
 @bp.route("/api/run-mnubergemm-stress-async", methods=["POST"])
+@action("validation:run_mnubergemm", variant="async")
 def api_run_mnubergemm_stress_async():
     """Start mnubergemm stress driver; poll GET /api/run-mnubergemm-stress-status?job_id=…"""
     body = request.get_json(silent=True) or {}
@@ -1538,6 +1548,7 @@ def api_run_mnubergemm_stress_async():
 
 
 @bp.route("/api/run-nccl-fullrack-async", methods=["POST"])
+@action("validation:run_nccl", variant="async")
 def api_run_nccl_fullrack_async():
     """Start the standalone Stage-1 NCCL benchmark; poll GET /api/run-nccl-fullrack-status?job_id=…"""
     body = request.get_json(silent=True) or {}
@@ -1608,6 +1619,7 @@ def api_run_nccl_fullrack_async():
 
 
 @bp.route("/api/run-nvloom-async", methods=["POST"])
+@action("validation:run_nvloom", variant="async")
 def api_run_nvloom_async():
     """Start nvloom singlerack Slurm driver (sbatch --wait); poll GET /api/run-nvloom-status?job_id=…"""
     body = request.get_json(silent=True) or {}
@@ -1670,6 +1682,7 @@ def api_run_nvloom_async():
 
 
 @bp.route("/api/run-clusterkit-async", methods=["POST"])
+@action("validation:run_clusterkit", variant="async")
 def api_run_clusterkit_async():
     """Start ClusterKit singlerack Slurm driver; poll GET /api/run-clusterkit-status?job_id=…"""
     body = request.get_json(silent=True) or {}
@@ -1732,6 +1745,7 @@ def api_run_clusterkit_async():
 
 
 @bp.route("/api/run-llmb-nccl-async", methods=["POST"])
+@action("validation:run_llmb_nccl", variant="async")
 def api_run_llmb_nccl_async():
     """Start the LLMB NCCL microbenchmark (single rack via ``rack`` or cross-rack via
     ``racks``); poll GET /api/run-llmb-nccl-status?job_id=…

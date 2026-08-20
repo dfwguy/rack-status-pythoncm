@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 import host_exec
+from audit.actions import action
 from config_env import _env_int
 from core import rpath as _rpath
 from flask import Blueprint, jsonify, request, send_file
@@ -373,6 +374,7 @@ def _bug_report_worker(job_id: str, pdsh_w: str) -> None:
 
 
 @bp.route("/api/bug-report-async", methods=["POST"])
+@action("support:bug_report", variant="async")
 def api_bug_report_async():
     """POST JSON like GPU reset: ``{"specs": ["pNN-rMM-ct[dd]", …], "rack": "pNN-rMM"}`` — pdsh nvidia-bug-report.sh."""
     body = request.get_json(silent=True) or {}

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import rack_locks
 from app_clients import _active_clients_snapshot
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 from job_registry import (
     _llama_jobs,
@@ -92,6 +93,7 @@ def api_rack_locks_get():
 
 
 @bp.route("/api/rack-locks/<rack>", methods=["POST"])
+@action("rack.lock:claim")
 def api_rack_locks_claim(rack: str):
     """Create or refresh a manual claim. Requires ``X-Rack-Operator`` header (advisory)."""
     operator = _operator_from_request()
@@ -127,6 +129,7 @@ def api_rack_locks_claim(rack: str):
 
 
 @bp.route("/api/rack-locks/<rack>", methods=["DELETE"])
+@action("rack.lock:release")
 def api_rack_locks_release(rack: str):
     """Release a manual claim. Only the recorded owner may release a live claim; expired
     entries can be cleared by anyone."""

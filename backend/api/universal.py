@@ -30,6 +30,7 @@ from pathlib import Path, PurePosixPath
 import core
 import host_exec
 import native_status
+from audit.actions import action
 from core import truthy_arg as _truthy_arg
 from flask import Blueprint, jsonify, request
 from naming import _nemo_single_rack_log_basename, _nvis_naming
@@ -223,6 +224,7 @@ def api_universal_parse():
 
 
 @bp.route("/api/universal/scan", methods=["POST"])
+@action("results:scan")
 def api_universal_scan():
     """Parse + persist a batch of logs from the log dir (newest first). Backfills history.
 

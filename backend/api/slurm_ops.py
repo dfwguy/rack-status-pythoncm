@@ -28,6 +28,7 @@ import shlex
 from pathlib import Path
 
 import host_exec
+from audit.actions import action
 from config_env import _eget, _env_int
 from core import SLURM_JOB_ID_RE as _SLURM_SCANCEL_JOB_ID_RE
 from core import slurm_job_base_id as _slurm_job_base_id
@@ -71,6 +72,7 @@ def _slurm_nodename_target_from_body(body: dict) -> tuple[str | None, str | None
 
 
 @bp.route("/api/slurm-drain", methods=["POST"])
+@action("slurm.node:drain")
 def api_slurm_drain():
     """POST JSON {\"rack\": \"p34-r07\"} — ``module load`` then scontrol update nodename=… drain."""
     if os.environ.get("RACK_SLURM_NODES_STATE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -120,6 +122,7 @@ def api_slurm_drain():
 
 
 @bp.route("/api/slurm-undrain", methods=["POST"])
+@action("slurm.node:undrain")
 def api_slurm_undrain():
     """POST JSON {\"rack\": \"p34-r07\"} — ``module load`` then scontrol update nodename=… state=idle."""
     if os.environ.get("RACK_SLURM_NODES_STATE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -226,6 +229,7 @@ def api_slurm_job_log_path():
 
 
 @bp.route("/api/slurm-scancel", methods=["POST"])
+@action("slurm.job:cancel")
 def api_slurm_scancel():
     """POST JSON ``{\"job_id\": \"…\"}`` — ``module load`` then ``scancel`` (optional ``rack`` for context only)."""
     if os.environ.get("RACK_SLURM_SCANCEL_DISABLED", "").strip().lower() in ("1", "true", "yes"):

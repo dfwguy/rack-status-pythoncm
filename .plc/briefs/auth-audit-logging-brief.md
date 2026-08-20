@@ -390,7 +390,7 @@ def api_tools_install_hpcx_workspace_stream(): ...
 `/api/multirack-jobs/<id>`, whose module is already documented as a shim), and `form` (the
 browser-form `POST /logout` beside `POST /api/logout`).
 
-### The vocabulary — 89 actions across 24 services
+### The vocabulary — 89 actions across 35 services (22 top-level roots)
 
 Grammar: `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?:[a-z][a-z0-9_]*$`. `service` is the text left of the
 colon, so the dotted sub-service (`rack.power`, `catalog.platform`) is part of the service and gives

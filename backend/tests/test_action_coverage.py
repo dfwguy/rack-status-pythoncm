@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Author: Rafael M. Koike & Cursor Agent ("Ada")
+"""TC-18: the coverage gate and the endpoint→action snapshot, against the real application.
+
+This is the build gate of FR-14b. Startup validation (test_audit_actions.py) catches an
+*ambiguous* vocabulary; this catches an *incomplete* one, which is the failure that matters for
+Phase 3: a mutating route with no declared action is invisible to policy, so a capability governed
+on one route would be silently ungoverned on another.
+
+Traces to AC-30, AC-30a, AC-30b.
+
+Regenerate the snapshot deliberately, never reflexively — the whole point is that a changed action
+string shows up as a reviewed diff:
+
+    NVIS_LOG_SINKS=file NVIS_LOG_FILE=/tmp/x.log python - <<'PY'
+    import os, sys, json; sys.path.insert(0, "backend")
+    os.environ.update({"RACK_STATUS_DEMO": "1", "RACK_WEB_AUTH_DISABLED": "1"})
+    import app; from audit import actions as A
+    rows = [{"endpoint": e.endpoint, "method": e.method, "action": e.action, "variant": e.variant}
+            for e in sorted(A.registry().entries, key=lambda e: (e.endpoint, e.method))]
+    open("backend/tests/action_snapshot.json", "w").write(json.dumps(rows, indent=1) + "\n")
+    PY
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from audit import actions as A
+
+SNAPSHOT = Path(__file__).parent / "action_snapshot.json"
+
+
+@pytest.fixture(scope="module")
+def registry():
+    """The real application's registry, built by ``app`` at import time."""
+    import app as app_module
+
+    return app_module.app, A.registry()
+
+
+def _snapshot() -> dict[tuple[str, str], tuple[str, str]]:
+    rows = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    return {(r["endpoint"], r["method"]): (r["action"], r["variant"]) for r in rows}
+
+
+def test_every_mutating_route_declares_an_action(registry):
+    """AC-30. A new mutating route without a declaration fails here, which is the gate."""
+    app, _ = registry
+    missing = A.undeclared_mutating_routes(app)
+    assert not missing, (
+        "these mutating routes have no @action declaration, so they would be invisible to "
+        "authorization policy:\n  " + "\n  ".join(f"{e} {m} {r}" for e, m, r in missing)
+    )
+
+
+def test_action_map_matches_snapshot(registry):
+    """AC-30a. A changed action string must be a reviewed diff, not a side effect.
+
+    ``test_route_parity.py`` pins URLs and methods; this pins the *audit identity* of each route,
+    which is the thing a rename would otherwise change silently.
+    """
+    _, reg = registry
+    live = {(e.endpoint, e.method): (e.action, e.variant) for e in reg.entries}
+    snap = _snapshot()
+
+    added = sorted(set(live) - set(snap))
+    removed = sorted(set(snap) - set(live))
+    changed = sorted(k for k in set(live) & set(snap) if live[k] != snap[k])
+
+    assert not added, f"routes not in the snapshot: {added}"
+    assert not removed, f"snapshot routes no longer present: {removed}"
+    assert not changed, (
+        "action strings changed for existing routes — regenerate the snapshot only if this is "
+        "intended:\n  " + "\n  ".join(f"{k}: {snap[k]} -> {live[k]}" for k in changed)
+    )
+
+
+def test_per_method_actions(registry):
+    """AC-30b, against the two endpoints that really serve more than one mutating method."""
+    _, reg = registry
+    for endpoint, put, delete in (
+        ("comments.api_comment_put", "comments:update", "comments:delete"),
+        ("vault.api_vault_nvftp_token", "vault:set_token", "vault:delete_token"),
+    ):
+        assert reg.resolve(endpoint, "PUT").action == put
+        assert reg.resolve(endpoint, "DELETE").action == delete
+
+
+def test_transport_twins_share_one_action_in_the_real_registry(registry):
+    """FR-14c where it counts: on the seven `tools` pairs, not on a synthetic fixture."""
+    _, reg = registry
+    inverted = reg.by_action()
+    for act in (
+        "tools:install_hpcx",
+        "tools:install_dcgm",
+        "tools:install_cuda_nccl",
+        "tools:install_nvloom",
+        "tools:install_dgxc_benchmarking",
+        "tools:download_containers",
+        "tools:launch_grafana",
+    ):
+        entries = inverted[act]
+        assert len(entries) == 2, f"{act} should be one action over two transports"
+        assert {e.variant for e in entries} == {A.VARIANT_SYNC, A.VARIANT_STREAM}
+
+
+def test_no_action_is_reachable_by_only_some_of_its_routes(registry):
+    """AC-29b on the real registry: the inverse loses nothing, so no leg is ungoverned."""
+    _, reg = registry
+    declared = {(e.endpoint, e.method) for e in reg.entries}
+    inverted = {(e.endpoint, e.method) for group in reg.by_action().values() for e in group}
+    assert inverted == declared
+
+
+def test_every_declared_action_parses(registry):
+    """Belt and braces: startup already refuses a malformed name, so this must be vacuous."""
+    _, reg = registry
+    bad = [a for a in reg.actions() if not A.ACTION_RE.match(a)]
+    assert not bad, f"malformed action names reached the registry: {bad}"

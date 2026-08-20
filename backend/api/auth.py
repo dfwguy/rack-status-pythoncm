@@ -26,6 +26,7 @@ so it must serve the same ``index.html`` as ``/`` or the two load different bund
 """
 from __future__ import annotations
 
+from audit.actions import action
 from flask import Blueprint, jsonify, redirect, request, session
 from web_auth import (
     _auth_enabled,
@@ -51,6 +52,7 @@ def login():
 
 
 @bp.route("/logout", methods=["POST"])
+@action("auth:logout", variant="form")
 def logout():
     session.clear()
     return redirect("/")
@@ -67,6 +69,7 @@ def api_auth_check():
 
 
 @bp.route("/api/login", methods=["POST"])
+@action("auth:login")
 def api_login():
     """JSON login endpoint for the React SPA. Accepts {"password": "..."}."""
     if not _auth_enabled():
@@ -88,6 +91,7 @@ def api_login():
 
 
 @bp.route("/api/logout", methods=["POST"])
+@action("auth:logout")
 def api_logout():
     """JSON logout endpoint for the React SPA."""
     session.clear()

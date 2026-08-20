@@ -41,6 +41,7 @@ from pathlib import Path, PurePosixPath
 
 import host_exec
 import nvlink_preflight
+from audit.actions import action
 from config_env import _eget, _env_int, _job_env_int, _subprocess_env
 from core import rpath as _rpath
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
@@ -169,6 +170,7 @@ def _nvswitch_fix_async_worker(job_id: str, log_dir: Path, cmd: list[str], displ
 
 
 @bp.route("/api/nvswitch-fix-async", methods=["POST"])
+@action("fabric.nvswitch:fix", variant="async")
 def api_nvswitch_fix_async():
     """POST JSON ``{\"rack\": \"pNN-rMM\", \"log_dir\": \"…\"}`` — rack-level ``--fix`` (NMXC cycle); poll ``/api/reset-job-status``."""
     body = request.get_json(silent=True) or {}
@@ -245,6 +247,7 @@ def _nvswitch_sdn_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str],
 
 
 @bp.route("/api/nvswitch-sdn-reset-async", methods=["POST"])
+@action("fabric.nvswitch:reset_sdn", variant="async")
 def api_nvswitch_sdn_reset_async():
     """POST JSON ``{"rack": "pNN-rMM", "log_dir": "…"}`` for async ``./nvswitch_sdn_reset.sh RACK``; poll ``/api/reset-job-status``."""
     body = request.get_json(silent=True) or {}
@@ -334,6 +337,7 @@ def api_nvswitch_hosts():
 
 
 @bp.route("/api/nvswitch-system-reset-async", methods=["POST"])
+@action("fabric.nvswitch:reset_system", variant="async")
 def api_nvswitch_system_reset_async():
     """POST JSON ``{"rack": "pNN-rMM", "nvswitch_host": "pNN-rMM-nvsw-01", "log_dir": "…"}`` — async system reset on one switch; poll ``/api/reset-job-status``."""
     body = request.get_json(silent=True) or {}
@@ -417,6 +421,7 @@ def _imex_reset_async_worker(job_id: str, log_dir: Path, cmd: list[str], display
 
 
 @bp.route("/api/imex-reset-async", methods=["POST"])
+@action("fabric.imex:reset", variant="async")
 def api_imex_reset_async():
     """POST JSON ``{"rack": "pNN-rMM", "log_dir": "…"}`` for async ``./imex_reset.sh RACK``; poll ``/api/reset-job-status``."""
     body = request.get_json(silent=True) or {}
@@ -620,6 +625,7 @@ def _nvlmapper_async_worker(job_id: str, rack: str) -> None:
 
 
 @bp.route("/api/nvlmapper-async", methods=["POST"])
+@action("fabric:map", variant="async")
 def api_nvlmapper_async():
     """POST JSON ``{"rack": "pNN-rMM"}`` — stage, ``./run_nvlmapper.sh``; outputs stay under ``reports/<rack>/`` (no zip). Poll ``/api/reset-job-status``."""
     body = request.get_json(silent=True) or {}
@@ -721,6 +727,7 @@ def _nvswitch_check_async_worker(job_id: str, log_dir: Path, cmd: list[str], dis
 
 
 @bp.route("/api/nvswitch-check-async", methods=["POST"])
+@action("fabric.nvswitch:check", variant="async")
 def api_nvswitch_check_async():
     """POST JSON ``{"rack": "pNN-rMM", "log_dir": "…"}`` for async nvswitch check."""
     body = request.get_json(silent=True) or {}
@@ -790,6 +797,7 @@ def _imex_check_async_worker(job_id: str, log_dir: Path, cmd: list[str], display
 
 
 @bp.route("/api/imex-check-async", methods=["POST"])
+@action("fabric.imex:check", variant="async")
 def api_imex_check_async():
     """POST JSON ``{"rack": "pNN-rMM", "log_dir": "…"}`` for async IMEX check."""
     body = request.get_json(silent=True) or {}
@@ -957,6 +965,7 @@ def _nvlink_preflight_error_text(summary: dict) -> str:
 
 
 @bp.route("/api/nvlink-preflight-async", methods=["POST"])
+@action("fabric:preflight", variant="async")
 def api_nvlink_preflight_async():
     """POST ``{"rack": …, "specs"|"target": …, "quick": bool}`` — NVLink/NVLS readiness gate.
 
@@ -1079,6 +1088,7 @@ def _nvswitch_audit_stream_generator(prep: dict):
 
 
 @bp.route("/api/run-nvswitch-audit-stream", methods=["POST"])
+@action("fabric.nvswitch:audit", variant="stream")
 def api_run_nvswitch_audit_stream():
     """Stream nvswitches_rack_audit.sh for one rack (optional body.fix true => --fix). cwd = log_dir."""
     body = request.get_json(silent=True) or {}

@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import host_exec
+from audit.actions import action
 from config_env import _eget, _env_int
 from core import rpath as _rpath
 from flask import Blueprint, jsonify, request
@@ -483,6 +484,7 @@ def _prepare_power_reset(body: dict) -> tuple[dict[str, object] | None, tuple[ob
 
 
 @bp.route("/api/power-on", methods=["POST"])
+@action("rack.power:on")
 def api_power_on():
     """POST JSON {\"specs\": [\"pNN-rMM-ct[id]\", …]} or {\"ct_down_unk\": \"…\"} — cmsh power off/sleep/on per tray."""
     body = request.get_json(silent=True) or {}
@@ -511,6 +513,7 @@ def api_power_on():
 
 
 @bp.route("/api/power-on-async", methods=["POST"])
+@action("rack.power:on", variant="async")
 def api_power_on_async():
     """Start power reset in a background thread; poll GET /api/reset-job-status?job_id=…"""
     body = request.get_json(silent=True) or {}
@@ -612,6 +615,7 @@ def _prepare_gpu_reset(body: dict) -> tuple[dict[str, object] | None, tuple[obje
 
 
 @bp.route("/api/gpu-reset", methods=["POST"])
+@action("rack.gpu:reset")
 def api_gpu_reset():
     """POST JSON {\"specs\": [\"pNN-rMM-ct[id]\", …]} — merged tray pattern(s) passed to gpu_reset.sh."""
     body = request.get_json(silent=True) or {}
@@ -634,6 +638,7 @@ def api_gpu_reset():
 
 
 @bp.route("/api/gpu-reset-async", methods=["POST"])
+@action("rack.gpu:reset", variant="async")
 def api_gpu_reset_async():
     """Start GPU reset in a background thread; poll GET /api/reset-job-status?job_id=…"""
     body = request.get_json(silent=True) or {}
@@ -834,6 +839,7 @@ def _bmc_recovery_worker(job_id: str, nodes: list[str], iface: str) -> None:
 
 
 @bp.route("/api/bmc-recovery-async", methods=["POST"])
+@action("rack.bmc:recover", variant="async")
 def api_bmc_recovery_async():
     """Start BMC recovery in a background thread; poll GET /api/reset-job-status?job_id=…"""
     body = request.get_json(silent=True) or {}
@@ -1033,6 +1039,7 @@ def _mac_change_worker(
 
 
 @bp.route("/api/mac-change-async", methods=["POST"])
+@action("rack.bmc:set_mac", variant="async")
 def api_mac_change_async():
     """Start a MAC change in a background thread; poll GET /api/reset-job-status?job_id=…"""
     body = request.get_json(silent=True) or {}
@@ -1094,6 +1101,7 @@ def _prepare_services_restart(body: dict) -> tuple[dict[str, object] | None, tup
 
 
 @bp.route("/api/services-restart", methods=["POST"])
+@action("rack.services:restart")
 def api_services_restart():
     """POST JSON {\"specs\": [\"pNN-rMM-ct[id]\", …]} — pdsh mount + systemd restarts on selected hosts."""
     body = request.get_json(silent=True) or {}
@@ -1116,6 +1124,7 @@ def api_services_restart():
 
 
 @bp.route("/api/services-restart-async", methods=["POST"])
+@action("rack.services:restart", variant="async")
 def api_services_restart_async():
     """Start services restart in a background thread; poll GET /api/reset-job-status?job_id=…"""
     body = request.get_json(silent=True) or {}
@@ -1148,6 +1157,7 @@ def api_services_restart_async():
 
 
 @bp.route("/api/rack-uptime", methods=["POST"])
+@action("rack:uptime")
 def api_rack_uptime():
     """POST JSON ``{"rack": "pNN-rMM"}`` — run ``pdsh -w pNN-rMM-ct[RANGE] uptime``; returns table rows + raw output."""
     if os.environ.get("RACK_UPTIME_DISABLED", "").strip().lower() in ("1", "true", "yes"):

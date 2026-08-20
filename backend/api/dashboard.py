@@ -53,6 +53,7 @@ import native_status
 import nvftp_cache_sync
 import nvis_id_templates
 from app_clients import _app_client_ttl_sec, _touch_app_client
+from audit.actions import action
 from cluster_metadata import (
     _CLUSTER_DM_KEYS,
     _cluster_dashboard_metadata_path,
@@ -821,6 +822,7 @@ def build_cluster_overview(
 
 
 @bp.route("/api/cluster-dashboard-metadata", methods=["GET", "PUT"])
+@action("settings:update_dashboard")
 def api_cluster_dashboard_metadata():
     """GET/PUT JSON ``product_line``, ``hw_vendor``, ``customer_name`` (saved under REPO_ROOT/var when unset)."""
     if request.method == "GET":
@@ -885,6 +887,7 @@ def _job_environment_settings_payload() -> dict[str, object]:
 
 
 @bp.route("/api/settings/job-environment", methods=["GET", "PUT"])
+@action("settings:update_job_env")
 def api_settings_job_environment():
     """GET effective job/validation env (with dashboard overrides); PUT merges ``overrides`` (empty value clears)."""
     if request.method == "GET":
