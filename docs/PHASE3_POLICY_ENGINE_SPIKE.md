@@ -56,7 +56,10 @@ that makes "the engine works" a testable claim rather than a demo.
 | 18 | group forbids `slurm.node:drain`; user-level permit | drain | **decide** | the mirror case, and the answer need not be symmetric — §6 Q6 |
 | 19 | group `a` contains group `b`; `b` permits `rack.power:on`; user in `a` | `rack.power:on` | **decide** | is membership transitive? §6 Q7 |
 | 20 | group `a` contains `b`, `b` contains `a` (cycle); either permits an action | that action | **DENY, and refuse the group set at load** | a membership cycle must fail closed and loudly, never spin |
-| 21 | user removed from a group that granted the action, membership cached | that action | **DENY** | a cached membership is a privilege boundary with a timer on it; removal must take effect at the next decision |
+| 21 | user removed from a group that granted the action, membership cached, no revocation issued | that action | ALLOW until the cache expires | honest: a grant removal cannot be made instant, see §5b |
+| 22 | same, but a revocation is issued for that principal | that action | **DENY within the revocation refresh interval** | the fast-path deny of §5b — grants may be stale, denials may not |
+| 23 | revocation issued at time T; a token or session minted **before** T | any action | **DENY** | revocation compares against issue time, so it needs no token registry |
+| 24 | revocation issued at T; principal re-authenticates after T | an action they still hold | ALLOW | a revocation is a cutoff, not a ban — otherwise it is indistinguishable from disabling the account |
 
 Rows 5 and 14 are genuinely undecided and are the two questions worth a human at the gate.
 
@@ -160,6 +163,65 @@ Note also that the prior implementation is pydantic **v1** (`validator`, `class 
 has pydantic 2.13 in tree, and v1→v2 differs precisely on the constructs that code leans on most
 (`field_validator`, `ConfigDict`).
 
+## 5b. Revocation: grants may be stale, denials may not
+
+**The problem is not solvable as stated, and pretending otherwise is the mistake.** Row 21 originally
+asserted that a group removal "must take effect at the next decision". That is unachievable with any
+cache, and the industry does not achieve it either. Kerberos carries group membership inside the
+ticket's PAC, so in Active Directory a group change does not take effect until a new TGT is issued —
+default ticket lifetime ten hours, renewable seven days. Microsoft's answer is not instant
+invalidation; it is shorter lifetimes plus a way to force re-authentication. Stateless JWTs have the
+identical property by construction: a signed token is valid until it expires, which is why revocation
+lists and introspection endpoints exist at all.
+
+**The design (feature-lead direction, 2026-08-20).** Split the decision into two tiers with different
+freshness guarantees, and make the asymmetry the invariant:
+
+| Tier | Contents | Cost | Cacheable? |
+|---|---|---|---|
+| Slow path — **grants** | policy documents, group membership, transitive resolution | expensive: several store reads plus hierarchy walk | yes, minutes |
+| Fast path — **revocations** | one small map of `principal → revoked_at` timestamp | tiny: a dict lookup against a short-TTL shared record | refreshed in seconds, never minutes |
+
+The evaluator consults the fast path **first** and denies before it does any grant work. So a grant
+that was removed lingers for the cache TTL, which is acceptable and honest; a revocation lands within
+the refresh interval, which is what an operator actually needs when something is going wrong on a rack.
+
+**Why a timestamp rather than a session or token list.** The revocation record is
+`principal → revoked_at`, and the check is `token.iat < revoked_at → DENY`. That needs no registry of
+issued tokens, no session table, and no cooperation from the token itself beyond the standard `iat`
+claim — which is what makes it work for stateless JWTs, the case Phase 2 would otherwise have no answer
+for. It is the same mechanism as AWS IAM's "revoke active sessions", which attaches an inline policy
+denying everything conditioned on `aws:TokenIssueTime` predating the revocation instant.
+
+Row 24 matters as much as row 22: a revocation is a **cutoff, not a ban**. A principal who
+re-authenticates after `revoked_at` gets a token with a later `iat` and resumes whatever they still
+hold. That keeps revocation distinct from disabling an account, which is a separate and more permanent
+act, and it makes revocation safe to use — an operator will not hesitate over a button that boots a
+session but does not delete a person.
+
+**Implementation constraints specific to this product, none of them optional:**
+
+- **The revocation record must be shared across processes.** Gunicorn runs several workers, each its
+  own process, so an in-process revocation cache would deny on one worker and allow on another — a
+  privileged action succeeding on a retry with probability 1/N. This is the single most likely way to
+  implement the feature and have it silently not work.
+- **Revoking is itself a privileged, audited action.** It belongs in the vocabulary
+  (`identity.user:revoke`), which means it is governed by policy like anything else, and it is one of
+  the actions whose own authorization matters most — alongside `policy:attach` and
+  `identity.group:add_member`.
+- **The refusals it causes must be audited, and the Phase 1 flood guard is what makes that bearable.**
+  A revoked client retrying in a loop produces one counted summary event rather than thousands
+  (FR-10a), so the revocation and its effect are both legible in the trail without the effect
+  evicting the cause.
+- **A failed fast-path read must deny, not skip.** If the shared revocation record is unreachable, the
+  evaluator has no basis for asserting the principal is *not* revoked. Failing open here would make
+  the security feature into a bypass with a network partition as its trigger.
+
+**Still open:** the refresh interval (a few seconds is the intent; the number is a security parameter
+and belongs in the threat model, not a performance note), and where the record lives — a small file
+with an mtime check is enough for a single-host deployment and is consistent with how this product
+already stores durable state, whereas a multi-host deployment would need something shared.
+
 ## 6. Open questions for the gate
 
 1. **Does a parent service grant imply its sub-services?** Row 5. `fabric:*` covering
@@ -197,7 +259,7 @@ has pydantic 2.13 in tree, and v1→v2 differs precisely on the constructs that 
    handful of operator teams); one level; or arbitrary depth with a cycle guard and a depth cap.
    Whatever is chosen, row 20 must hold — a cycle fails the policy set at load rather than at
    evaluation time.
-8. **How is membership resolved at decision time?** Row 21. Per-request resolution is correct and
-   costs a store read on the hot path; a cache is faster and means a group removal does not take
-   effect until it expires. If a cache is used, its TTL is a security parameter and belongs in the
-   threat model, not in a performance note.
+8. **How is membership resolved at decision time?** Rows 21–24. **Resolved 2026-08-20 (feature lead):
+   two tiers — see §5b.** Membership and grants may be cached; revocations may not. The remaining
+   open parameters are the revocation refresh interval and where the revocation record lives, both
+   in §5b.

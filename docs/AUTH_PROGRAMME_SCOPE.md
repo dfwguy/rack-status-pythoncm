@@ -29,9 +29,14 @@ Three properties Phase 2 has to settle, because Phase 3's evaluator depends on a
   evaluator needs a cycle guard.
 - **Precedence.** What wins when a user-level `forbid` meets a group-level `permit`, and vice versa?
   This is not answered by "explicit deny wins" — that rule is about statements, not principals.
-- **Membership at decision time.** Is membership resolved per request, or cached? A cached membership
-  means a removal from a group does not take effect until the cache expires, which is a privilege
-  boundary with a timer on it.
+- **Membership at decision time.** Cached, deliberately — and paired with a revocation fast path,
+  because instant grant invalidation is not achievable with a cache and no one achieves it (Kerberos
+  carries group membership in the ticket PAC and needs a new TGT; stateless JWTs are valid until they
+  expire). The invariant instead: **grants may be stale, denials may not.** A `principal → revoked_at`
+  record is checked before any grant work and refreshed in seconds, so a revocation lands promptly
+  while a removed grant lingers for the cache TTL. Design in
+  `docs/PHASE3_POLICY_ENGINE_SPIKE.md` §5b; `identity.user:revoke` is itself an audited, governed
+  action.
 
 The decision table in `docs/PHASE3_POLICY_ENGINE_SPIKE.md` §2 carries rows for these so they are
 answered by a test rather than by an implementation accident.
