@@ -160,6 +160,36 @@ def slurm_job_base_id(job_raw: str | None) -> str | None:
     return s if s.isdigit() else None
 
 
+#: One DNS label: alphanumeric at both ends, hyphens allowed inside, 63 characters max.
+_HOSTNAME_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+
+#: A plain RFC 1123 hostname (or bare IPv4 literal, which is a subset of it).
+#:
+#: Deliberately narrow: no ``@``, no ``:``, no ``/``, no whitespace, no shell metacharacter, and
+#: no leading hyphen. Shared because both the web terminal and node-target construction need the
+#: same answer, and a name one accepts while the other rejects is how a validated value reaches a
+#: command line by another route.
+NODE_HOSTNAME_RE = re.compile(rf"^{_HOSTNAME_LABEL}(?:\.{_HOSTNAME_LABEL})*$")
+
+
+def is_valid_node_hostname(name: str | None) -> bool:
+    """Whether *name* is safe to place as a bare argv element in an ssh command line.
+
+    ``host_exec.ssh_to_node_argv`` appends the node after ``ssh -tt <opts> user@head``, and
+    OpenSSH joins that trailing argv with spaces for the *remote* shell to interpret. So a ``;``
+    or a backtick in a node name is remote command injection on the head node, and a leading
+    ``-`` is an ssh option (``-oProxyCommand=...``) on the inner hop rather than a host at all.
+    Neither shape can match :data:`NODE_HOSTNAME_RE`.
+
+    Same reasoning as :func:`slurm_job_base_id`: a value that cannot be trusted on a command
+    line must be rejected at the edge, not escaped at the call site.
+    """
+    s = (name or "").strip()
+    if not s or len(s) > 253:
+        return False
+    return bool(NODE_HOSTNAME_RE.match(s))
+
+
 # --- Small generic utilities ------------------------------------------------------------------
 # No domain meaning, no application state. utc_iso_z is the SECOND timestamp convention described
 # in utc_now_iso above: second precision with a literal Z, which the customer report schema's

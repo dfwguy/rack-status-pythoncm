@@ -974,20 +974,23 @@ def api_nvlink_preflight_async():
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
 
-    # Prefer the operator's node selection; fall back to the whole rack.
-    pdsh_w = ""
+    # The operator's node selection is an OVERRIDE to the same builder every other launch uses,
+    # not a value handed to pdsh unexamined: validation_target_for_rack intersects a plain
+    # hostname list against live Slurm inventory and validates a range form against the naming
+    # schema. Assigning it directly made this the only pdsh caller in the product with no such
+    # check -- an inconsistency, and the same defect class as the terminal's `target`.
+    override = ""
     target_raw = body.get("target")
     if isinstance(target_raw, str) and target_raw.strip():
-        pdsh_w = target_raw.strip()
+        override = target_raw.strip()
     else:
         specs_raw = body.get("specs")
         if isinstance(specs_raw, list) and specs_raw:
-            pdsh_w = ",".join(str(x).strip() for x in specs_raw if str(x).strip())
-    if not pdsh_w:
-        try:
-            pdsh_w = validation_target_for_rack(rack, None)
-        except ValueError as e:
-            return jsonify({"ok": False, "error": str(e)}), 400
+            override = ",".join(str(x).strip() for x in specs_raw if str(x).strip())
+    try:
+        pdsh_w = validation_target_for_rack(rack, override or None)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
 
     quick = bool(body.get("quick", False))
     script = _nvlink_preflight_script_path()

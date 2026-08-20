@@ -84,6 +84,38 @@ def as_shell_str(cmd: str | list[str]) -> str:
     return cmd if isinstance(cmd, str) else shlex.join(cmd)
 
 
+#: Floor for an interactive session's connect timeout, in seconds.
+#:
+#: An interactive shell carries no deadline of its own, so an unbounded leg that accepts the
+#: connection and then never answers hangs forever behind a blank pane with no diagnosis --
+#: which is exactly how an unreachable compute tray presented on Nscale TX, indistinguishable
+#: from a broken UI. Higher than the batch default (10s) because a terminal is opened by a
+#: human who will wait, while a batch command is one of thousands.
+INTERACTIVE_CONNECT_TIMEOUT = 15
+
+
+def interactive_timeout_opts(connect_timeout: str | int | None = None) -> list[str]:
+    """``-o`` pairs bounding ONE leg of an interactive chain.
+
+    Every leg gets these, not just the first: the legs upstream of a wedged middle hop are
+    all healthy, so nothing upstream times out and nothing is ever printed.
+
+    Takes the larger of the configured timeout and
+    :data:`INTERACTIVE_CONNECT_TIMEOUT`, so a site that deliberately raised
+    ``RACK_SSH_CONNECT_TIMEOUT`` for a long path (Nscale TX uses 20 for three hops) keeps its
+    value, while a site on the batch default still gets a timeout suited to a human waiting.
+    """
+    try:
+        configured = int(str(connect_timeout or "").strip() or 0)
+    except ValueError:
+        configured = 0
+    return [
+        "-o", f"ConnectTimeout={max(configured, INTERACTIVE_CONNECT_TIMEOUT)}",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=3",
+    ]
+
+
 @dataclass
 class Process:
     """Uniform wrapper over a local ``Popen`` or an SSH-tunnelled process.
@@ -290,6 +322,30 @@ class Executor(ABC):
     def _test_flag(self, path: object, flag: str) -> bool:
         """Backend for ``test <flag> <path>`` style predicates."""
 
+    # -- interactive (PTY) sessions ------------------------------------------
+    #
+    # Separate from run/popen because the caller execs these against a pty master instead
+    # of running them to completion, so what it needs is an *argv*, not a result.
+    #
+    # The composition rule is the one ``HopExecutor._ssh_command`` already uses for
+    # non-interactive work: each hop renders the next hop's argv as ONE quoted shell word
+    # for its predecessor. An N-hop chain therefore nests N times with the quoting handled
+    # a single level at a time, and no code anywhere counts the hops. The web terminal used
+    # to hand-build "head, then node" instead, which is why a deployment with a bastion in
+    # front of the head had a working head-node shell and no compute shell at all.
+
+    def interactive_argv(self) -> list[str]:
+        """Local argv that opens an interactive login shell ON this target."""
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot open an interactive session"
+        )
+
+    def interactive_command_argv(self, cmd: str) -> list[str]:
+        """Local argv that runs the shell string *cmd* under a PTY on this target."""
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot open an interactive session"
+        )
+
     # -- introspection ------------------------------------------------------
 
     def describe(self) -> dict[str, object]:
@@ -355,6 +411,17 @@ class Connection:
         env_extra: dict[str, str] | None = None,
     ) -> list[str]:
         return self.executor.wrap_argv(cmd, cwd=cwd, env_extra=env_extra)
+
+    def interactive_argv(self) -> list[str]:
+        """Argv that opens an interactive shell on this connection's target.
+
+        Composed by the executor chain, so a connection reached through three hops yields a
+        three-deep nested argv without any caller knowing the depth.
+        """
+        return self.executor.interactive_argv()
+
+    def interactive_command_argv(self, cmd: str) -> list[str]:
+        return self.executor.interactive_command_argv(cmd)
 
     # -- filesystem ---------------------------------------------------------
 
@@ -424,39 +491,16 @@ class Connection:
         control target (e.g. the head), so the node leg uses the head's credentials.
         Chainable to N levels: ``self.hop(a).hop(b)``. ``sudo=True`` runs the payload
         under passwordless sudo on *host*.
+
+        Deliberately unconditional: this always relays through ``self``. Whether a site can
+        instead reach a node *directly* is a property of that deployment, so it is resolved
+        by ``host_exec.node_connection`` from the cluster's declared node access rather than
+        decided here. This method briefly carried an inline
+        ``re.match(r"^ink50-dh01-[a-z]\\d+-\\d+$", host)`` plus one site's key path, which put
+        a single customer's hostname scheme in the generic transport layer and silently did
+        nothing on every other cluster.
         """
-        # DIRECT-TO-TRAY. This method exists because there was historically "no
-        # direct app->node route" -- true until 2026-08-06, when the Align team
-        # wired the high-speed links. The ObsVM now reaches every tray directly
-        # (verified root@tray with the BCM key), so relaying through the head is
-        # pure legacy, and an expensive one: EVERY tray hop is a session channel
-        # multiplexed over one ControlMaster to the head, whose MaxSessions is
-        # unset and therefore the OpenSSH default of 10. A fleet sweep is ~2,000
-        # channels through a 10-slot ceiling -- the documented "no more sessions"
-        # x215, and the sweep that silently lost 655 of 2,013 nodes. Direct hops
-        # consume none of the head's slots and measured ~20% faster per hop.
-        #
-        # Opt-in via RACK_DIRECT_NODE_SSH so the relay stays available for any
-        # target the app genuinely cannot reach itself; set the key with
-        # RACK_NODE_SSH_KEY (default: the BCM key) and user with
-        # RACK_NODE_SSH_USER.
-        import os as _os
-        import re as _re
-
         from transport.hop import HopExecutor
-
-        if (_os.environ.get("RACK_DIRECT_NODE_SSH", "").lower()
-                not in ("", "0", "false", "no")
-                and _re.match(r"^ink50-dh01-[a-z]\d+-\d+$", host or "")):
-            from transport.ssh import SSHConfig, SSHExecutor
-
-            return Connection(SSHExecutor(SSHConfig(
-                host=host,
-                user=_os.environ.get("RACK_NODE_SSH_USER", "root"),
-                key=(key or _os.environ.get("RACK_NODE_SSH_KEY",
-                                            "/home/nvis/.ssh/id_bcm")),
-                port="22",
-            )))
 
         return Connection(
             HopExecutor(

@@ -116,7 +116,24 @@ export RACK_PLATFORM=bcm
 # in the backend.
 export RACK_CMSH=/cm/local/apps/cmd/bin/cmsh
 export RACK_STATUS_DEMO=0
-export RACK_WEB_AUTH_DISABLED=1              # local dev only; the OVA uses token auth
+# Local dev defaults to no login; the OVA uses token auth. Overridable (unlike RACK_STATUS_DEMO,
+# which is the whole point of this script) because the auth gate is the one thing a local run
+# CANNOT exercise with the default -- `_auth_enabled()` short-circuits, so the /ws/terminal check
+# and the Origin guard never run. Pass RACK_WEB_AUTH_DISABLED=0 to test them.
+export RACK_WEB_AUTH_DISABLED="${RACK_WEB_AUTH_DISABLED:-1}"
+if [[ "${RACK_WEB_AUTH_DISABLED}" != "1" ]]; then
+  # exec_kind() is "ssh" here, so _auth_mode() resolves to token and the password IS the token.
+  # Without one, _token_verify() returns False for every input and nobody can log in -- a blank
+  # login screen that rejects everything, which reads as a broken build rather than missing config.
+  export RACK_WEB_AUTH_MODE="${RACK_WEB_AUTH_MODE:-token}"
+  if [[ -z "${RACK_WEB_AUTH_TOKEN:-}" ]]; then
+    echo "STOP: auth is enabled (RACK_WEB_AUTH_DISABLED=0) but RACK_WEB_AUTH_TOKEN is unset." >&2
+    echo "      In token mode the password IS the token, so login would reject everything." >&2
+    echo "      Re-run with: RACK_WEB_AUTH_DISABLED=0 RACK_WEB_AUTH_TOKEN=<pick-one> $0" >&2
+    exit 1
+  fi
+  echo "[auth] ENABLED in ${RACK_WEB_AUTH_MODE} mode — log in with the token as the password"
+fi
 
 # --- Paths on the HEAD NODE (not this Mac) -------------------------------------------------------
 export RACK_REMOTE_BASE_PATH=/home/cmods/nvis-rack-status

@@ -28,6 +28,7 @@ import re
 
 import host_exec
 from config_env import _eget, _env_int
+from core import is_valid_node_hostname
 from core import slurm_job_base_id as _slurm_job_base_id
 from naming import _nvis_naming
 from platforms import get_platform as _get_platform
@@ -149,7 +150,16 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
                 # None matched inventory: fall through to template validation so a bad
                 # override surfaces as an error instead of silently targeting the rack.
             else:
-                # Inventory unavailable — trust the explicit hostname tokens.
+                # Inventory unavailable, so there is nothing to intersect against -- but the
+                # tokens are still operator-supplied and still reach ``pdsh -w``, ``scontrol
+                # update nodename=`` and script argv. This branch was the one path by which a
+                # string nobody had looked at became a node target, so it gets the charset check
+                # at minimum. Raises ValueError, which the routes already answer as 400.
+                bad = [t for t in tokens if not is_valid_node_hostname(t)]
+                if bad:
+                    raise ValueError(
+                        "invalid node hostname(s): " + ", ".join(repr(t) for t in bad[:5])
+                    )
                 return ",".join(tokens)
     if not ov and inventory_on:
         hosts = _rack_node_hostnames_from_inventory(rack)

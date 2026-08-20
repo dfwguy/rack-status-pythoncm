@@ -53,6 +53,9 @@ COPY rack-config.env ./
 # Release metadata. The app parses this (never imports it) as the version fallback, so it has to
 # be in the image -- without it a container reports "unknown".
 COPY version.py ./
+# Holds the ssl_context hook, which is the only way to set a minimum TLS version (gunicorn
+# exposes it as a config-file hook, not a flag). Harmless when TLS is off.
+COPY gunicorn.conf.py ./
 
 RUN mkdir -p var/logs var/cache var/secrets var/workflows/runs
 COPY var/workflows/*.yaml ./var/workflows/
@@ -81,4 +84,8 @@ ENV RACK_EXEC_MODE=local \
 # duplicate that state and the SSH work. Concurrency comes from gthread threads,
 # which preserves the single-process model the app assumes while still serving
 # the parallel UI polls + WebSocket terminals far better than the dev server.
-ENTRYPOINT ["sh", "-c", "exec gunicorn --workers 1 --threads ${GUNICORN_THREADS} --worker-class gthread --timeout ${GUNICORN_TIMEOUT} --graceful-timeout 30 --keep-alive 5 --access-logfile - --pythonpath /app/backend --bind 0.0.0.0:${PORT} app:app"]
+# TLS is opt-in: set RACK_WEB_TLS_CERT and RACK_WEB_TLS_KEY (bin/gen-tls-cert.py issues them)
+# and gunicorn serves HTTPS. Expanded here rather than in a config file so a deployment turns TLS
+# on with two environment variables and no rebuild. The certificate's SAN must include `localhost`
+# -- operators reach this through an ssh tunnel, so that is the name their browser validates.
+ENTRYPOINT ["sh", "-c", "exec gunicorn -c /app/gunicorn.conf.py --workers 1 --threads ${GUNICORN_THREADS} --worker-class gthread --timeout ${GUNICORN_TIMEOUT} --graceful-timeout 30 --keep-alive 5 --access-logfile - --pythonpath /app/backend --bind 0.0.0.0:${PORT} ${RACK_WEB_TLS_CERT:+--certfile ${RACK_WEB_TLS_CERT} --keyfile ${RACK_WEB_TLS_KEY}} app:app"]

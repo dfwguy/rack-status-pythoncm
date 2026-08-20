@@ -116,6 +116,18 @@ class ExecutorDecorator(Executor):
     def _test_flag(self, path: object, flag: str) -> bool:
         return self.inner._test_flag(path, flag)
 
+    # An interactive session passes straight through both decorators, and that is the
+    # intended behaviour rather than an omission. Env forwarding has nothing to add: a login
+    # shell sources the profile itself. And a terminal must NOT inherit a role's sudo -- the
+    # threat model's recommendation is to keep the terminal on the unprivileged route, so a
+    # sudo-wrapped role still hands the operator their own shell, not root's.
+
+    def interactive_argv(self) -> list[str]:
+        return self.inner.interactive_argv()
+
+    def interactive_command_argv(self, cmd: str) -> list[str]:
+        return self.inner.interactive_command_argv(cmd)
+
     def describe(self) -> dict[str, object]:
         return self.inner.describe()
 
@@ -250,3 +262,9 @@ class RoutingConnection(Connection):
 
     def wrap_argv(self, cmd, *, cwd=None, env_extra=None, profile: str = "control") -> list[str]:
         return self.select(profile).wrap_argv(cmd, cwd=cwd, env_extra=env_extra)
+
+    def interactive_argv(self, profile: str = "control") -> list[str]:
+        return self.select(profile).interactive_argv()
+
+    def interactive_command_argv(self, cmd: str, profile: str = "control") -> list[str]:
+        return self.select(profile).interactive_command_argv(cmd)

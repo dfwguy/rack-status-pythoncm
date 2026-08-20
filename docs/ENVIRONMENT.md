@@ -131,7 +131,13 @@ Requires `RACK_WEB_SECRET_KEY`, **Settings → `RACK_PROJECT_TOKEN`**, vault NVF
 | **`RACK_NVFTP_SYNC_DISABLED`** | `0` | `1` to disable background sync |
 | **`RACK_NVFTP_SYNC_FORCE`** | `0` | `1` to upload every cache file on each sync (not only changed files) |
 | **`RACK_WEB_SESSION_HOURS`** | `8` | Session lifetime. |
-| **`RACK_WEB_COOKIE_SECURE`** | *(unset)* | Truthy → `Secure` cookies. |
+| **`RACK_WEB_TLS_CERT`** | *(unset)* | PEM certificate (chain, if CA-issued). Set → the app serves **HTTPS**, via gunicorn `--certfile` in the container and `ssl_context` for the dev server. Issue one with `bin/gen-tls-cert.py`. **Its SAN must include `localhost`** — that is the name a browser validates through an SSH tunnel. |
+| **`RACK_WEB_TLS_KEY`** | *(unset)* | Matching private key (0600). Required whenever the cert is set; cert-without-key logs an error and stays on HTTP. |
+| **`RACK_WEB_TLS_MIN_VERSION`** | `1.2` | Minimum negotiable TLS version (`1.2` or `1.3`). Enforced explicitly on **both** servers by `backend/tls_server.py` — gunicorn 23 still defaults `ssl_version` to the permissive `PROTOCOL_TLS`, so the floor is not left to the server's or the Python build's default. An unrecognised value warns and keeps 1.2 rather than widening. Also disables TLS compression (CRIME) and client-initiated renegotiation. |
+| **`RACK_WEB_COOKIE_SECURE`** | *(auto)* | `Secure` cookies. **Automatic when `RACK_WEB_TLS_CERT` is set**; set it explicitly only when TLS terminates in a proxy this process cannot see. |
+| **`RACK_WEB_CSP_MODE`** | `enforce` | `enforce`, `report` (send `Content-Security-Policy-Report-Only` — logs violations, blocks nothing) or `off`. `report` lets a new deployment confirm the policy fits its Grafana setup first; `off` is the rollback. |
+| **`RACK_WEB_BIND_ADDR`** | `127.0.0.1` | *(compose)* Address the container's port is published on. Loopback by default so the dashboard is reachable only through an SSH tunnel; `0.0.0.0` exposes it on the host's network, which previously was the unintended default. |
+| **`RACK_WEB_ALLOWED_ORIGINS`** | *(unset)* | Comma-separated extra browser origins allowed to open `/ws/terminal`. Same-origin is always allowed, so this is only needed when the page and the WebSocket differ (a reverse proxy under another name, a separate dev host). Deploy-time env only — deliberately **not** settable from Settings, since widening it is a privilege change. |
 | **`RACK_WEB_ACTIVE_CLIENT_TTL_SEC`** | `120` | Client heartbeat TTL in `/api/app-stats`. |
 
 ---
@@ -349,7 +355,10 @@ them when present. See [`docs/EXECUTION_ARCHITECTURE.md`](EXECUTION_ARCHITECTURE
 | **`RACK_SSH_USER`** | `root` | SSH user. |
 | **`RACK_SSH_KEY`** | `/run/secrets/ssh_key` | Private key path. Passed as `-i` only when the file exists. |
 | **`RACK_SSH_PORT`** | `22` | SSH port. |
-| **`RACK_SSH_OPTS`** | *(unset)* | Extra `ssh` flags (space-separated). |
+| **`RACK_SSH_OPTS`** | *(unset)* | Extra `ssh` flags (space-separated), e.g. `-J bastion`. Applied to the leg that leaves this machine, in both batch and interactive (terminal) paths. |
+| **`RACK_DIRECT_NODE_SSH`** | *(unset)* | Truthy → the app opens its own ssh to a compute node instead of relaying through the control host. Faster, and it consumes none of the head's `MaxSessions` slots, but the app must hold a credential the node accepts. **No hostname pattern** — it applies to every node target on the deployment (it was previously gated on one site's tray regex and silently did nothing elsewhere). |
+| **`RACK_NODE_SSH_USER`** | *(unset)* | Account for the node leg. Unset → the leg inherits whoever runs it (the control host's ssh user on a relay); required in practice for `RACK_DIRECT_NODE_SSH`, which defaults to `root`. |
+| **`RACK_NODE_SSH_KEY`** | `RACK_SSH_KEY` | Key for a **direct** node leg. Ignored when relaying, since the control host supplies its own credentials. |
 | **`RACK_SSH_MULTIPLEX`** | `1` | ControlMaster multiplexing; `0` opts out (see §6 of the architecture doc). Load-bearing for fan-out — a **stale master** degrades every hop and logs `disabling multiplexing` without this ever changing; recovery in §6.1. |
 | **`RACK_SCRIPT_SSH_*`** | *(unset)* | Same fields for the privileged (`script`) route. Unset → both routes collapse to control. |
 | **`RACK_SCRIPT_SUDO`** | *(unset)* | Truthy → privileged route runs under `sudo -n -E`. |

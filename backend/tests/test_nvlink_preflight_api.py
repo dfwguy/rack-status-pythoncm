@@ -205,3 +205,28 @@ def test_disabled_by_env(client, stub_pdsh, monkeypatch):
     monkeypatch.setenv("RACK_NVLINK_PREFLIGHT_DISABLED", "1")
     r = client.post("/api/nvlink-preflight-async", json={"rack": "p5-r01", "target": "n01"})
     assert r.status_code == 403
+
+
+def test_a_target_with_shell_metacharacters_is_refused(client, stub_pdsh):
+    """The operator's selection is an override to ``validation_target_for_rack``, not a raw ``-w``.
+
+    This route used to assign ``body["target"]`` straight into the pdsh command, which made it the
+    only pdsh caller in the product with no validation -- the same defect class as the terminal's
+    ``target``. Routing it through the shared builder gets it the inventory intersection and
+    naming-schema check every other launch already had.
+    """
+    r = client.post(
+        "/api/nvlink-preflight-async",
+        json={"rack": "p5-r01", "target": "n01;id>/tmp/pwned"},
+    )
+    assert r.status_code == 400
+    assert "invalid node hostname" in (r.get_json().get("error") or "").lower()
+
+
+def test_specs_with_shell_metacharacters_are_refused(client, stub_pdsh):
+    """The ``specs`` list is joined into the same override, so it needs the same check."""
+    r = client.post(
+        "/api/nvlink-preflight-async",
+        json={"rack": "p5-r01", "specs": ["p5-r01-ct01", "p5-r01-ct02 && reboot"]},
+    )
+    assert r.status_code == 400

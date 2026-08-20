@@ -89,6 +89,16 @@ class LocalExecutor(Executor):
         # Local: return the command as-is (historical wrap_for_host behaviour).
         return list(cmd) if isinstance(cmd, list) else ["bash", "-lc", cmd]
 
+    # -- interactive --------------------------------------------------------
+    # The base of every chain. When the app already runs on the target there is no ssh at
+    # all, and when it does not, this is what the outermost hop nests into.
+
+    def interactive_argv(self) -> list[str]:
+        return [os.environ.get("SHELL") or "/bin/bash", "-l"]
+
+    def interactive_command_argv(self, cmd: str) -> list[str]:
+        return ["bash", "-lc", cmd]
+
     # -- filesystem ---------------------------------------------------------
 
     def resolve(self, path: object) -> str:

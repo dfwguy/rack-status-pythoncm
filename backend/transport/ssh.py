@@ -21,6 +21,7 @@ from transport.base import (
     Process,
     as_shell_str,
     env_export_prefix,
+    interactive_timeout_opts,
 )
 from transport.shellfs import ShellFilesystem
 
@@ -106,7 +107,16 @@ class SSHExecutor(ShellFilesystem, Executor):
         return argv
 
     def interactive_argv(self) -> list[str]:
-        """Argv for an interactive (PTY) session to this host."""
+        """Argv for an interactive (PTY) session to this host.
+
+        Ends at ``user@host``, so a hop can append its own command as one quoted word.
+
+        Callers must not rebuild this argv themselves. One did, and omitted
+        ``cfg.extra_opts`` -- which carries ``RACK_SSH_OPTS``, and therefore the ``-J`` that
+        makes the head node reachable at all from outside the cluster. On such a deployment
+        the head-node terminal worked while every compute terminal tried to reach the head's
+        own address directly and timed out.
+        """
         cfg = self.config
         argv = [
             "ssh", "-tt",
@@ -114,6 +124,7 @@ class SSHExecutor(ShellFilesystem, Executor):
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "LogLevel=ERROR",
             "-o", "SetEnv=TERM=xterm-256color",
+            *interactive_timeout_opts(cfg.connect_timeout),
             "-p", cfg.port or "22",
         ]
         if cfg.key and os.path.isfile(cfg.key):
@@ -121,6 +132,14 @@ class SSHExecutor(ShellFilesystem, Executor):
         argv.extend(cfg.extra_opts)
         argv.append(f"{cfg.user}@{cfg.host}")
         return argv
+
+    def interactive_command_argv(self, cmd: str) -> list[str]:
+        """Run *cmd* under a PTY on this host: ``ssh -tt … user@host <cmd>``.
+
+        *cmd* is appended as a single argv element, so the remote shell receives it whole
+        however it was quoted. That is what lets a hop nest into this one level at a time.
+        """
+        return [*self.interactive_argv(), cmd]
 
     def _remote_cmd(
         self,

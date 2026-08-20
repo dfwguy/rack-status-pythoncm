@@ -68,11 +68,22 @@ fi
 read -r -d '' BODY <<'CHECKS'
 set -uo pipefail
 CONTAINER="__CONTAINER__"; PORT="__PORT__"; PAGE="__PAGE__"; T="__PATH__"
-BASE="http://127.0.0.1:${PORT}"
 fail=0
 ok()   { printf "  \033[32mPASS\033[0m  %s\n" "$1"; }
 bad()  { printf "  \033[31mFAIL\033[0m  %s\n" "$1"; fail=$((fail+1)); }
 note() { printf "        %s\n" "$1"; }
+
+# 0. Which scheme is this deployment serving? Decided first, because every probe below is an
+#    HTTP request: pointing http:// at a TLS listener fails the handshake, and the gate would
+#    report "the SPA is not built" for a deployment that is entirely healthy -- the cry-wolf
+#    failure this script already avoids for the port.
+TLS_CERT=$(docker exec "$CONTAINER" printenv RACK_WEB_TLS_CERT 2>/dev/null | tr -d '\r')
+if [ -n "$TLS_CERT" ]; then
+  SCHEME="https"; CURL="curl -sk"   # -k: the chain is verified properly in check 7, not here
+else
+  SCHEME="http";  CURL="curl -s"
+fi
+BASE="${SCHEME}://127.0.0.1:${PORT}"
 
 # 1. The container is running, and not merely "Up" while looping.
 state=$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo missing)
@@ -176,7 +187,7 @@ fi
 
 # 4. THE check. Fetch the page and confirm every asset it references resolves. A hashed bundle
 #    that has moved on leaves the HTML perfectly serveable and the product blank.
-html=$(curl -s --max-time 15 "${BASE}${PAGE}")
+html=$($CURL --max-time 15 "${BASE}${PAGE}")
 assets=$(printf '%s' "$html" | grep -oE 'assets/[A-Za-z0-9_.-]+\.(js|css)' | sed 's|assets/||' | sort -u)
 if [ -z "$assets" ]; then
   bad "page ${PAGE} references no assets — is the SPA built?"
@@ -184,19 +195,71 @@ else
   miss=0; total=0
   for a in $assets; do
     total=$((total+1))
-    code=$(curl -s -o /dev/null --max-time 10 -w "%{http_code}" "${BASE}/assets/$a")
+    code=$($CURL -o /dev/null --max-time 10 -w "%{http_code}" "${BASE}/assets/$a")
     [ "$code" = "200" ] || { miss=$((miss+1)); [ "$miss" -le 3 ] && note "$code /assets/$a"; }
   done
   [ "$miss" -eq 0 ] && ok "SPA assets resolve ($total checked)" || bad "$miss of $total SPA assets missing"
 fi
 
 # 5. The app answers.
-code=$(curl -s -o /dev/null --max-time 10 -w "%{http_code}" "${BASE}${PAGE}")
+code=$($CURL -o /dev/null --max-time 10 -w "%{http_code}" "${BASE}${PAGE}")
 [ "$code" = "200" ] || [ "$code" = "302" ] && ok "GET ${PAGE} -> $code" || bad "GET ${PAGE} -> $code"
 
 # 6. Nothing exploded on the way up.
 errs=$(docker logs --since 5m "$CONTAINER" 2>&1 | grep -icE "ModuleNotFoundError|Worker failed to boot|ImportError" || true)
 [ "$errs" -eq 0 ] && ok "no import errors in recent logs" || { bad "$errs import/boot errors in the last 5m"; note "$(docker logs --since 5m "$CONTAINER" 2>&1 | grep -iE 'ModuleNotFoundError|Worker failed to boot' | tail -2)"; }
+
+# 7. TLS: verify the chain the way a browser will, and publish the fingerprint.
+#
+#    Verification is done against the served certificate file itself as the trust anchor, with
+#    server_hostname='localhost' -- which is not a formality. Operators reach these deployments
+#    through `ssh -L 5156:localhost:5056`, so `localhost` is the name their browser checks; a
+#    certificate whose SAN omits it warns on every single connection. Doing it this way proves
+#    the property instead of parsing the SAN and hoping. It also catches a CA-issued leaf served
+#    without its issuer, which fails to verify even where the CA is trusted.
+#
+#    The fingerprint is printed because a self-signed deployment is only as good as an operator's
+#    ability to compare it out of band. An unpublished fingerprint makes the warning a habit.
+if [ -n "$TLS_CERT" ] && [ "$state" = "running" ]; then
+  tls_out=$(docker exec -e NVIS_VERIFY_PORT="$PORT" "$CONTAINER" python3 -c '
+import os, socket, ssl, datetime
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+path = os.environ["RACK_WEB_TLS_CERT"]
+cert = x509.load_pem_x509_certificate(open(path, "rb").read())
+fp = ":".join("%02X" % b for b in cert.fingerprint(hashes.SHA256()))
+try:
+    expires = cert.not_valid_after_utc
+except AttributeError:
+    expires = cert.not_valid_after.replace(tzinfo=datetime.timezone.utc)
+days = (expires - datetime.datetime.now(datetime.timezone.utc)).days
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.load_verify_locations(cafile=path)
+try:
+    with socket.create_connection(("127.0.0.1", int(os.environ["NVIS_VERIFY_PORT"])), timeout=10) as raw:
+        with ctx.wrap_socket(raw, server_hostname="localhost") as tls:
+            print("OK", tls.version(), fp, days)
+except Exception as exc:
+    print("ERR", type(exc).__name__, str(exc)[:120].replace(chr(10), " "), fp, days)
+' 2>&1 | tail -1)
+  set -- $tls_out
+  if [ "${1:-}" = "OK" ]; then
+    ver="$2"; fp="$3"; days="$4"
+    case "$ver" in
+      TLSv1.3|TLSv1.2) ok "TLS verified as 'localhost' ($ver)" ;;
+      *)               bad "TLS negotiated $ver — below the TLS 1.2 floor" ;;
+    esac
+    note "sha256 $fp"
+    note "expires in ${days}d"
+    [ "$days" -lt 30 ] && bad "certificate expires in ${days}d — re-issue with bin/gen-tls-cert.py"
+  else
+    bad "TLS verification failed (${2:-unknown}) — SAN missing 'localhost', or an incomplete chain"
+    note "${3:-}"
+    [ -n "${4:-}" ] && note "sha256 ${4}"
+  fi
+elif [ -z "$TLS_CERT" ]; then
+  note "serving plain HTTP (no RACK_WEB_TLS_CERT) — fine behind an ssh tunnel, see ENVIRONMENT.md §4"
+fi
 
 echo
 if [ "$fail" -eq 0 ]; then echo "deployment verified."; else echo "VERIFICATION FAILED: $fail check(s)."; fi

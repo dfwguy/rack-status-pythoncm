@@ -31,6 +31,7 @@ from transport.base import (
     Process,
     as_shell_str,
     env_export_prefix,
+    interactive_timeout_opts,
 )
 from transport.shellfs import ShellFilesystem
 
@@ -81,6 +82,45 @@ class HopExecutor(ShellFilesystem, Executor):
         argv += self.extra_opts
         argv.append(f"{self.user}@{self.host}" if self.user else self.host)
         return argv
+
+    def _interactive_ssh_prefix(self) -> list[str]:
+        """Like :meth:`_ssh_prefix`, but for a PTY session on this hop's host.
+
+        Two differences, both deliberate. ``-tt`` forces a tty, since this leg is only ever
+        one link of an interactive chain. And ``BatchMode=yes`` is absent: a terminal is the
+        one place where being prompted for a password is legitimate, so forbidding it would
+        remove a working way to reach a node. Keepalives are set on *every* leg -- a middle
+        hop that accepts the connection and then goes silent otherwise leaves the operator
+        with a blank pane and no diagnosis, and the legs upstream of it are all healthy.
+        """
+        argv = [
+            "ssh", "-tt",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+            *interactive_timeout_opts(self.connect_timeout),
+        ]
+        if self.key:
+            argv += ["-i", self.key]
+        argv += self.extra_opts
+        argv.append(f"{self.user}@{self.host}" if self.user else self.host)
+        return argv
+
+    def interactive_argv(self) -> list[str]:
+        """Open a shell on this hop's host, through however many legs precede it."""
+        return self.base.interactive_command_argv(shlex.join(self._interactive_ssh_prefix()))
+
+    def interactive_command_argv(self, cmd: str) -> list[str]:
+        """Run *cmd* on this hop's host, through however many legs precede it.
+
+        ``shlex.join`` quotes *cmd* as one word for the predecessor's shell, so each added
+        leg deepens the quoting by exactly one level -- the same mechanism as
+        :meth:`_ssh_command`, which is what makes an arbitrary chain work without any code
+        knowing how long it is.
+        """
+        return self.base.interactive_command_argv(
+            shlex.join([*self._interactive_ssh_prefix(), cmd])
+        )
 
     def _ssh_command(self, cmd, cwd, env_extra) -> str:
         """The single shell string that runs *cmd* on ``host`` (to hand to ``base``)."""

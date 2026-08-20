@@ -31,16 +31,21 @@ builds a response.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import subprocess
+from collections.abc import Callable
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 import host_exec
 from config_env import _env_int, _subprocess_env
 from core import truthy_env as _truthy_env
 from flask import session
 from paths import APP_DIR
+
+_logger = logging.getLogger(__name__)
 
 
 def _auth_enabled() -> bool:
@@ -88,6 +93,104 @@ def _safe_next(raw: str | None) -> str:
     if not s.startswith("/") or s.startswith("//"):
         return ""
     return s
+
+
+# ---------------------------------------------------------------------------
+# Below the Flask router: the same gate, reachable from WSGI middleware.
+#
+# ``@app.before_request`` only runs for requests Flask routes. ``/ws/terminal`` is served by
+# middleware wrapping ``app.wsgi_app`` (``api/terminal.py``), so it never saw the gate at all --
+# the CRITICAL finding of the 2026-08 assessment, where anonymous WebSocket upgrades were
+# accepted while ``GET /api/status`` correctly returned 401 on the same server.
+#
+# Evaluating the credential needs the Flask app, to open a request context and unseal the signed
+# session cookie. But neither this module nor anything under ``api/`` may import ``app``, or the
+# import cycle that ``backend/api/`` exists to remove comes back. So ``app.py`` registers its
+# implementation here at import time, exactly as it registers
+# ``config_env.set_materialize_hook`` (``core-designs.mdc`` §5).
+# ---------------------------------------------------------------------------
+
+_wsgi_authenticator: Callable[[dict], bool] | None = None
+
+
+def set_wsgi_authenticator(fn: Callable[[dict], bool] | None) -> None:
+    """Register how a raw WSGI environ is checked for a dashboard credential."""
+    global _wsgi_authenticator
+    _wsgi_authenticator = fn
+
+
+def wsgi_environ_authenticated(environ: dict) -> bool:
+    """Whether a raw WSGI request carries a valid dashboard credential.
+
+    **Fails closed.** If no authenticator was registered, an enabled gate denies rather than
+    falls open: a missing wire is a deployment mistake, and the alternative is an endpoint that
+    reaches ``pty.openpty()`` and then ``ssh`` with the app's cluster key. ``test_wsgi_auth_hook``
+    asserts the wire exists so the closed default is never what production relies on.
+    """
+    if not _auth_enabled():
+        return True
+    fn = _wsgi_authenticator
+    if fn is None:
+        _logger.error("no WSGI authenticator registered; denying (app.py should register one)")
+        return False
+    try:
+        return bool(fn(environ))
+    except Exception:
+        _logger.warning("WSGI credential check failed; denying", exc_info=True)
+        return False
+
+
+def _allowed_origins() -> tuple[str, ...]:
+    """Extra browser origins permitted to open a WebSocket, from ``RACK_WEB_ALLOWED_ORIGINS``.
+
+    Comma-separated, e.g. ``https://nvis.example:8443,https://localhost:5156``.
+
+    Deliberately read from the **process environment only**, not through ``config_env._eget``.
+    That is the one exception to ``core-designs.mdc`` §5 in this module, and it is not an
+    oversight: ``_eget`` consults ``job_env_overrides.json``, which the dashboard's own Settings
+    API writes, so an authenticated operator could widen their own origin allowlist -- and until
+    the authorization work lands, every operator is equally privileged. The rule exists to stop a
+    feature working on one cluster and not another; an origin allowlist describes how a browser
+    reaches *this deployment* and is identical for every cluster the container serves, so the
+    rationale does not apply while the escalation risk does. Same treatment as
+    ``RACK_WEB_COOKIE_SECURE``, which is likewise deploy-time only.
+    """
+    raw = os.environ.get("RACK_WEB_ALLOWED_ORIGINS") or ""
+    return tuple(part.strip().rstrip("/") for part in raw.split(",") if part.strip())
+
+
+def wsgi_origin_allowed(environ: dict) -> bool:
+    """Cross-origin guard for a WebSocket handshake.
+
+    A browser cannot be made to forge ``Origin`` on a WebSocket upgrade, which is what makes this
+    the decisive control against a page the operator merely *visits* opening a terminal in their
+    name. It is load-bearing rather than belt-and-braces because **cookies are not port-scoped**:
+    anything else served from ``localhost`` -- another dev server, a compromised local tool --
+    shares the dashboard's cookie jar with ``localhost:5156``, and ``SameSite=Lax`` does not
+    separate them. TLS does not help there either.
+
+    Compared on host *and port*, not scheme. The port is the part that catches the same-host
+    attacker above, while comparing schemes would break the plain-HTTP-to-HTTPS transition and any
+    deployment where a proxy terminates TLS -- for no gain, since a same-host origin on a
+    different scheme is not a boundary cookies respect anyway.
+
+    No ``Origin`` header means a non-browser client (curl, a test, an operator's script). That is
+    not the threat this addresses, and such a caller still has to pass
+    :func:`wsgi_environ_authenticated`, so it is allowed through.
+    """
+    origin = (environ.get("HTTP_ORIGIN") or "").strip().rstrip("/")
+    if not origin:
+        return True
+    if origin in _allowed_origins():
+        return True
+    host = (environ.get("HTTP_HOST") or "").strip().lower()
+    if not host:
+        return False
+    try:
+        origin_host = urlsplit(origin).netloc.strip().lower()
+    except ValueError:
+        return False
+    return bool(origin_host) and origin_host == host
 
 
 def _pam_helper_python_exe() -> str:

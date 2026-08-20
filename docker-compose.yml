@@ -29,12 +29,22 @@ services:
     # bind-mounts backend/ over the image's would hide anything generated during the build:
     #   bin/write-build-info.sh && docker compose build && docker compose up -d
     build: .
+    # Published on LOOPBACK by default. Without a bind address Docker publishes on 0.0.0.0, which
+    # on the Nscale TX OVA made :5056 answer plaintext HTTP to anything routable on that segment --
+    # so during the window /ws/terminal was unauthenticated, the reachable population was everyone
+    # on the management network rather than everyone holding SSH access. Every documented access
+    # path here is an ssh tunnel, which terminates on the host and reaches loopback fine, so this
+    # costs nothing. Set RACK_WEB_BIND_ADDR=0.0.0.0 to expose it deliberately (and read
+    # docs/ENVIRONMENT.md §4 about TLS first).
     ports:
-      - "${RACK_WEB_PORT:-5000}:5000"
+      - "${RACK_WEB_BIND_ADDR:-127.0.0.1}:${RACK_WEB_PORT:-5000}:5000"
     env_file: rack-config.env
     environment:
       - RACK_SSH_HOST=${RACK_SSH_HOST}
       - RACK_WEB_AUTH_TOKEN=${RACK_WEB_AUTH_TOKEN:-}
+      # TLS: point these at bin/gen-tls-cert.py output to serve HTTPS. Unset = plain HTTP.
+      - RACK_WEB_TLS_CERT=${RACK_WEB_TLS_CERT:-}
+      - RACK_WEB_TLS_KEY=${RACK_WEB_TLS_KEY:-}
     volumes:
       - ${RACK_SSH_KEY_PATH:-~/.ssh/id_rsa}:/run/secrets/ssh_key:ro
       - rack-data:/app/var

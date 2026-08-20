@@ -15,9 +15,13 @@
 
 import Box from "@mui/material/Box";
 import Link from "@mui/material/Link";
-import { Text, Card } from "@nvidia/foundations-react-core";
+import { Text, Card, Banner } from "@nvidia/foundations-react-core";
 import { ExternalLink } from "lucide-react";
-import { buildGrafanaDeepLink } from "../lib/grafanaLinks";
+import {
+  buildGrafanaDeepLink,
+  grafanaEmbedBlockedReason,
+  resolveGrafanaBase,
+} from "../lib/grafanaLinks";
 import { useGrafanaDeeplinks } from "../lib/useGrafanaDeeplinks";
 
 export interface GrafanaEmbedPayload {
@@ -61,19 +65,9 @@ function soloUrl(ge: GrafanaEmbedPayload, base: string, panelId: number): string
   );
 }
 
-function resolveGrafanaBase(grafanaUri: string | undefined, grafanaPort: string | number | undefined): string {
-  const portStr =
-    grafanaPort != null && String(grafanaPort).trim() ? String(grafanaPort).trim() : "3000";
-  let base = (grafanaUri != null && String(grafanaUri).trim()) || "";
-  if (!base) {
-    if (typeof window !== "undefined") {
-      base = `${window.location.protocol}//${window.location.hostname}:${portStr}`;
-    } else {
-      base = `http://localhost:${portStr}`;
-    }
-  }
-  return trimSlash(base);
-}
+// resolveGrafanaBase lives in ../lib/grafanaLinks. This file had a byte-identical private copy;
+// two resolvers for one origin is how the embed and the deep-links come to disagree about where
+// Grafana is, and the backend derives the same origin again for CSP's frame-src.
 
 export interface ParserGrafanaEmbedsProps {
   grafanaEmbed: GrafanaEmbedPayload | null | undefined;
@@ -162,6 +156,17 @@ export function ParserGrafanaEmbeds({
   }
 
   const base = resolveGrafanaBase(grafanaUri, grafanaPort);
+  const blockedReason = grafanaEmbedBlockedReason(base);
+  if (blockedReason) {
+    // Say why rather than render an empty rectangle. The deep-links open in a new tab and are
+    // unaffected by mixed content, so they stay.
+    return (
+      <Box sx={{ mt: 2 }}>
+        <GrafanaJobDeepLinks rack={rack} ge={ge} />
+        <Banner status="warning">{blockedReason}</Banner>
+      </Box>
+    );
+  }
   const tzParam = (parserDisplayTimezone || ge.display_timezone || "utc").trim() || "utc";
   const thSrc = ge.time_source ? String(ge.time_source) : "?";
   const hnSrc = ge.hosts_source ? String(ge.hosts_source) : "?";

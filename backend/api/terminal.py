@@ -39,9 +39,11 @@ import termios
 import threading
 import time
 import uuid
+from urllib.parse import parse_qs
 
 import host_exec
-from core import truthy_env
+import web_auth
+from core import is_valid_node_hostname, truthy_env
 
 _logger = logging.getLogger("rack_web.api.terminal")
 
@@ -210,6 +212,32 @@ class _WebSocketTerminalMiddleware:
         self._sessions: dict[str, _TerminalSession] = {}
         self._sessions_lock = threading.Lock()
 
+    @staticmethod
+    def _refuse_reason(environ) -> str | None:
+        """Why this upgrade must not proceed, or ``None`` to allow it.
+
+        Everything privileged happens after this point: ``_get_or_create_session`` calls
+        ``pty.openpty()`` and then spawns ``ssh`` with the app's cluster key. Because this
+        middleware answers ``/ws/terminal`` above Flask's router, ``_require_dashboard_auth``
+        never runs for it -- so this is where the same gate has to be applied, and it is checked
+        *before* the path is claimed rather than inside the WebSocket handler, so a refused caller
+        gets a plain 403 and never a socket.
+        """
+        if not web_auth.wsgi_environ_authenticated(environ):
+            return "unauthenticated"
+        if not web_auth.wsgi_origin_allowed(environ):
+            return "cross-origin"
+        qs = parse_qs(environ.get("QUERY_STRING", ""))
+        # Only a NEW session carries a node name; a reconnect names an existing session id, and
+        # that value is used solely as a dict key. An empty target is left to the handler's
+        # "Missing target node" message -- a malformed request, not a hostile one.
+        if not (qs.get("session") or [""])[0].strip():
+            mode = (qs.get("mode") or ["node"])[0].strip()
+            target = (qs.get("target") or qs.get("node") or [""])[0].strip()
+            if mode != "headnode" and target and not is_valid_node_hostname(target):
+                return "invalid target"
+        return None
+
     def __call__(self, environ, start_response):  # type: ignore[no-untyped-def]
         path = environ.get("PATH_INFO", "")
         upgrade = (environ.get("HTTP_UPGRADE") or "").strip().lower()
@@ -219,6 +247,15 @@ class _WebSocketTerminalMiddleware:
         # response on the raw socket and never calls start_response; Werkzeug still
         # finalizes with write(b""), so we must call start_response before returning.
         if path == "/ws/terminal" and upgrade == "websocket" and has_socket and _TERMINAL_ENABLED:
+            refused = self._refuse_reason(environ)
+            if refused is not None:
+                _logger.warning(
+                    "WebSocket terminal: refused upgrade (%s) from %s",
+                    refused,
+                    environ.get("REMOTE_ADDR") or "unknown",
+                )
+                start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"forbidden\n"]
             try:
                 self._handle_terminal(environ)
             finally:
@@ -265,6 +302,12 @@ class _WebSocketTerminalMiddleware:
             argv = host_exec.ssh_to_headnode_argv()
             target = target or "headnode"
         else:
+            # Checked at the boundary too (``_refuse_reason``). Repeated here deliberately: this
+            # is the statement that hands an operator-supplied string to ssh, and the invariant
+            # should hold for any future caller of this method, not only for the WSGI path.
+            if not is_valid_node_hostname(target):
+                _logger.warning("WebSocket terminal: rejected target %r (not a plain hostname)", target)
+                return None
             argv = host_exec.ssh_to_node_argv(target)
 
         _logger.info("WebSocket terminal: new session for %s via %s", target, " ".join(argv))
@@ -295,8 +338,6 @@ class _WebSocketTerminalMiddleware:
         return sess
 
     def _handle_terminal(self, environ):  # type: ignore[no-untyped-def]
-        from urllib.parse import parse_qs
-
         from simple_websocket import ConnectionClosed as _WSClosed
         from simple_websocket import Server as _WSServer
 

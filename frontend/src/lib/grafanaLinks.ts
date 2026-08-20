@@ -60,7 +60,13 @@ function trimSlash(s: string): string {
   return s.replace(/\/+$/, "");
 }
 
-/** Resolve the Grafana origin: explicit base, else same host as the browser + port. */
+/** Resolve the Grafana origin: explicit base, else same host as the browser + port.
+ *
+ * The backend derives the same origin for CSP's `frame-src` (`security_headers.py`
+ * `grafana_frame_origin`). The two must agree or the iframe is blocked by policy — which looks
+ * identical to the mixed-content failure below, so a mismatch means debugging one blank panel
+ * twice for two unrelated reasons.
+ */
 export function resolveGrafanaBase(base: string | undefined, port: string | number | undefined): string {
   const explicit = (base != null && String(base).trim()) || "";
   if (explicit) return trimSlash(explicit);
@@ -69,6 +75,25 @@ export function resolveGrafanaBase(base: string | undefined, port: string | numb
     return trimSlash(`${window.location.protocol}//${window.location.hostname}:${portStr}`);
   }
   return `http://localhost:${portStr}`;
+}
+
+/**
+ * Why an embedded Grafana panel cannot load from this page, or `null` when it can.
+ *
+ * Exists because enabling HTTPS on the dashboard breaks these embeds, and it does so *silently*:
+ * the browser refuses an `http` iframe inside an `https` page as mixed content, with no request
+ * and no error a user can interpret — just an empty panel. Returning a reason lets the UI say so
+ * instead of rendering a blank rectangle.
+ */
+export function grafanaEmbedBlockedReason(base: string): string | null {
+  if (typeof window === "undefined") return null;
+  if (window.location.protocol !== "https:") return null;
+  if (!/^http:\/\//i.test(base.trim())) return null;
+  return (
+    `This dashboard is served over HTTPS, so the browser blocks the panel at ${base} as mixed ` +
+    `content. Serve Grafana over HTTPS too, or set the Grafana base URL (Settings → ` +
+    `RACK_WEB_GRAFANA_URI) to its https origin. The "Open in new tab" links below still work.`
+  );
 }
 
 export interface DeepLinkScopeArgs {

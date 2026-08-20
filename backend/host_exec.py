@@ -46,9 +46,11 @@ from collections.abc import Callable
 from transport import (
     DEFAULT_HEAD_BYTES,
     DEFAULT_TAIL_BYTES,
+    Connection,
     FileStat,
     Process,
     RoutingConnection,
+    SSHConfig,
     SSHExecutor,
     TransportConfig,
     build_connection,
@@ -688,78 +690,70 @@ def communicate_or_kill(
 
 
 # ---------------------------------------------------------------------------
-# Interactive SSH argv  –  build argv for a PTY session to head node / a node
+# Interactive SSH argv  –  a PTY session to the control host or to a compute node
+#
+# Both are rendered by the transport chain (``Executor.interactive_argv``), so the hop
+# count comes from the declared topology and nothing here counts hops. The per-leg
+# timeouts live in ``transport.base.interactive_timeout_opts``.
 # ---------------------------------------------------------------------------
-
-#: Timeouts applied to every hop of an interactive terminal session.
-#:
-#: An interactive shell has no deadline of its own, so without these a hop that never answers hangs
-#: forever with a blank terminal and no diagnosis — which is exactly how an unreachable compute tray
-#: presented on Nscale TX. `ConnectTimeout` bounds the TCP/auth phase; the keepalives detect a peer
-#: that accepted the connection and then stopped responding, so the session ends with ssh's own
-#: error on the PTY instead of silence.
-#:
-#: Deliberately not `BatchMode=yes`: a terminal is the one place where being prompted for a password
-#: is legitimate, and disabling that would break a valid way to reach a node.
-_INTERACTIVE_TIMEOUT_OPTS: tuple[str, ...] = (
-    "-o", "ConnectTimeout=15",
-    "-o", "ServerAliveInterval=15",
-    "-o", "ServerAliveCountMax=3",
-)
 
 
 def ssh_to_headnode_argv() -> list[str]:
-    """Return an argv list to open an interactive SSH session to the head node.
+    """Return an argv list to open an interactive SSH session to the control host.
 
-    With an SSH target this connects to the configured head node. With a local
-    target it opens a local shell (the app is already on the head node).
+    Composed by the transport chain, so this is one ssh when the head is directly
+    reachable, two when it sits behind a bastion, and a local login shell when the app
+    already runs on it -- none of which this function needs to know.
+    """
+    return _conn().select(DEFAULT_ROLE).interactive_argv()
+
+
+def node_connection(node: str) -> Connection:
+    """A connection to compute *node*, honouring how this deployment reaches nodes.
+
+    Two models, and the difference is a property of the deployment rather than of the code:
+
+    * **relay** (default) -- ``control.hop(node)``, so the node leg authenticates *from* the
+      control host with the control host's credentials. This is what works when only the
+      head node is trusted by the trays, which is the usual cluster arrangement.
+    * **direct** -- the app opens its own ssh to the node. Faster and it consumes none of
+      the head's ``MaxSessions`` slots (the ceiling behind the "no more sessions" failures
+      and a fleet sweep that silently lost 655 of 2,013 nodes), but it requires the app
+      itself to hold a credential the node accepts.
+
+    Selected by ``RACK_DIRECT_NODE_SSH``, with ``RACK_NODE_SSH_USER`` / ``RACK_NODE_SSH_KEY``
+    for the direct case. No hostname pattern: this used to be gated on one customer's tray
+    regex inside ``Connection.hop``, which meant the setting did nothing anywhere else.
     """
     _ensure_init()
-    if _CONTROL_SSH is not None:
-        return _CONTROL_SSH.interactive_argv()
-    return [os.environ.get("SHELL", "/bin/bash"), "-l"]
+    ctrl = _CONFIG.control if _CONFIG else None
+    timeout = (ctrl.connect_timeout if ctrl else "") or "15"
+    # Unset means "inherit whoever runs this leg" -- the control host's ssh user on a relay,
+    # the app's own account when the app is already on the head. Set it when the node expects
+    # a different account than the host launching the leg.
+    node_user = (os.environ.get("RACK_NODE_SSH_USER") or "").strip() or None
+    # Inline rather than core.truthy_env: core imports this module, so importing it back
+    # would close a cycle.
+    direct = (os.environ.get("RACK_DIRECT_NODE_SSH") or "").strip().lower() not in (
+        "", "0", "false", "no", "off",
+    )
+    if not direct:
+        return _conn().select(DEFAULT_ROLE).hop(node, user=node_user, connect_timeout=timeout)
+    return Connection(SSHExecutor(SSHConfig(
+        host=node,
+        # A direct leg has no predecessor to inherit from, so it needs a concrete account.
+        user=node_user or "root",
+        key=(os.environ.get("RACK_NODE_SSH_KEY") or (ctrl.key if ctrl else "") or "").strip(),
+        port=(ctrl.port if ctrl else "22") or "22",
+        connect_timeout=timeout,
+    )))
 
 
 def ssh_to_node_argv(node: str) -> list[str]:
     """Return an argv list to open an interactive SSH session to *node*.
 
-    With an SSH target the connection jumps through the head node:
-        ssh -J headnode user@node
-    With a local target the connection is direct:
-        ssh user@node
+    Shaped by the chain, with one nesting level per leg -- so the app on the head node gives
+    ``ssh <node>``, the container beside it gives ``ssh head 'ssh <node>'``, and a laptop
+    behind a bastion gives ``ssh -J bastion head 'ssh <node>'``. Nothing here counts legs.
     """
-    _ensure_init()
-    ctrl = _CONFIG.control if _CONFIG else None
-    ssh_user = (ctrl.user if ctrl else "root") or "root"
-    if _CONTROL_SSH is not None and ctrl:
-        argv = [
-            "ssh", "-tt",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "LogLevel=ERROR",
-            *_INTERACTIVE_TIMEOUT_OPTS,
-            "-p", ctrl.port or "22",
-        ]
-        if ctrl.key and os.path.isfile(ctrl.key):
-            argv.extend(["-i", ctrl.key])
-        argv.extend([
-            f"{ctrl.user}@{ctrl.host}",
-            "TERM=xterm-256color",
-            "ssh", "-tt",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            # The second hop needs its own timeouts. Without them an unreachable or wedged tray
-            # leaves the operator staring at an empty terminal indefinitely: the outer hop is
-            # healthy, so nothing times out and nothing is ever printed.
-            *_INTERACTIVE_TIMEOUT_OPTS,
-            node,
-        ])
-        return argv
-    return [
-        "ssh", "-tt",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", "LogLevel=ERROR",
-        *_INTERACTIVE_TIMEOUT_OPTS,
-        f"{ssh_user}@{node}",
-    ]
+    return node_connection(node).interactive_argv()

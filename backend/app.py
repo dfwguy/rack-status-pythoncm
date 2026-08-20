@@ -483,10 +483,13 @@ def _bootstrap_validation_activities_refresh_at_startup() -> None:
 _truthy_env = core.truthy_env
 _SLURM_STDOUT_RE = core.SLURM_STDOUT_RE
 _slurm_job_base_id = core.slurm_job_base_id
+import tls_server
+import web_auth
 from activity_hydration import (
     _hydrate_activity_task_logs,
     _task_needs_slurm_hydration,
 )
+from security_headers import grafana_frame_origin, security_headers
 from web_auth import _auth_enabled, _safe_next, _session_lifetime, _session_ok
 
 # ---------------------------------------------------------------------------
@@ -532,6 +535,17 @@ def _bootstrap_rack_web_secret_key() -> None:
     )
 
 
+def _tls_cert_configured() -> str:
+    """The configured TLS certificate path, or "" when this process serves plain HTTP.
+
+    Read straight from the environment rather than through the config ladder: it is consumed
+    before the app finishes booting (and by the entrypoint, outside Python entirely), and like
+    the origin allowlist it is a deploy-time property that no operator should be able to change
+    from the Settings page.
+    """
+    return (os.environ.get("RACK_WEB_TLS_CERT") or "").strip()
+
+
 def _configure_session(app: Flask) -> None:
     _bootstrap_rack_web_secret_key()
     key = (os.environ.get("RACK_WEB_SECRET_KEY") or "").strip()
@@ -539,7 +553,13 @@ def _configure_session(app: Flask) -> None:
     app.permanent_session_lifetime = _session_lifetime()
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-    app.config["SESSION_COOKIE_SECURE"] = _truthy_env("RACK_WEB_COOKIE_SECURE")
+    # Secure cookies follow TLS automatically: a deployment that configured a certificate
+    # should not also have to remember a second flag, and forgetting it is silent. The explicit
+    # env still forces it on for a deployment where TLS terminates in a proxy in front of us,
+    # which this process cannot see.
+    app.config["SESSION_COOKIE_SECURE"] = (
+        _truthy_env("RACK_WEB_COOKIE_SECURE") or bool(_tls_cert_configured())
+    )
 
 
 _configure_session(app)
@@ -729,12 +749,53 @@ def _require_dashboard_auth():
     return redirect(url_for("auth.login"))
 
 
+def _wsgi_environ_authenticated(environ) -> bool:
+    """The gate above, for a request Flask never routes.
+
+    ``/ws/terminal`` is served by WSGI middleware wrapping ``app.wsgi_app``, so
+    ``_require_dashboard_auth`` cannot see it. Opening a request context is what turns the signed
+    cookie carried in *environ* into ``session``, which is why this lives here -- it is the one
+    place that has the app -- and is handed to ``web_auth`` rather than reimplemented there.
+    """
+    with app.request_context(environ):
+        return _session_ok()
+
+
+web_auth.set_wsgi_authenticator(_wsgi_environ_authenticated)
+
+
 @app.after_request
 def _api_json_no_store(response):
     """Avoid stale dashboard JSON behind browsers or reverse proxies."""
     if request.path.startswith("/api/") and response.content_type and "application/json" in response.content_type:
         response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.after_request
+def _security_headers(response):
+    """CSP, HSTS and the always-on hardening headers. The app served none of these before.
+
+    Never overwrites a header a view set deliberately, so an endpoint that needs its own policy
+    (a future report-collector, say) stays in control. Policy lives in ``security_headers.py``;
+    this only supplies the request-derived inputs.
+    """
+    scheme = "https" if request.is_secure else "http"
+    hdrs = security_headers(
+        is_secure=request.is_secure,
+        page_scheme=scheme,
+        page_host=request.host or "",
+        grafana_origin=grafana_frame_origin(
+            explicit_uri=_eget("RACK_WEB_GRAFANA_URI", "") or "",
+            page_scheme=scheme,
+            page_host=request.host or "",
+            port=_eget("RACK_WEB_GRAFANA_PORT", "3000") or "3000",
+        ),
+        csp_mode=(os.environ.get("RACK_WEB_CSP_MODE") or "enforce"),
+    )
+    for name, value in hdrs.items():
+        response.headers.setdefault(name, value)
     return response
 
 
@@ -1999,7 +2060,30 @@ _bootstrap_validation_activities_refresh_at_startup()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG") == "1", threaded=True)
+    # TLS when a certificate is configured. The same two variables drive gunicorn's
+    # --certfile/--keyfile in the container entrypoint, so a deployment configures TLS in one
+    # place regardless of which server runs. Binding stays 0.0.0.0 here (a dev server the
+    # operator reaches from their own browser); the *container's* published port is what gets
+    # restricted to loopback, in compose.
+    _cert, _key = _tls_cert_configured(), (os.environ.get("RACK_WEB_TLS_KEY") or "").strip()
+    _ssl = None
+    if _cert and not _key:
+        _logger.error("RACK_WEB_TLS_CERT is set but RACK_WEB_TLS_KEY is not; serving plain HTTP")
+    elif _cert:
+        # An explicit hardened context, not the (cert, key) tuple: Werkzeug would build its own
+        # with whatever floor the Python build defaults to. tls_server is the same policy
+        # gunicorn.conf.py applies, so local and container runs cannot diverge.
+        _ssl = tls_server.build_ssl_context(_cert, _key)
+        _logger.info(
+            "serving HTTPS on :%s (cert %s, %s)", port, _cert, tls_server.describe(_ssl)
+        )
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=os.environ.get("FLASK_DEBUG") == "1",
+        threaded=True,
+        ssl_context=_ssl,
+    )
 
 # ---------------------------------------------------------------------------------------------
 # Job-attempt capture — a run that never produces a log MUST still be recorded.
