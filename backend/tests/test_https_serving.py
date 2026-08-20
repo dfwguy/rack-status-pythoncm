@@ -271,6 +271,25 @@ class TestThePolicyIsSharedWithGunicorn:
         assert "COPY gunicorn.conf.py" in dockerfile
         assert "-c /app/gunicorn.conf.py" in dockerfile
 
+    def test_local_tls_runs_under_gunicorn_not_the_dev_server(self):
+        """``start.sh`` must switch servers when a certificate is configured.
+
+        The Werkzeug development server answers with ``Connection: close`` on every response
+        while streaming chunked, brotli-compressed bodies. Over TLS that is a shutdown race:
+        Chrome sees a truncated chunked stream and retries until ERR_TOO_MANY_RETRIES, hitting
+        the largest asset first and then "fixing itself" on reload because the asset is cached --
+        which reads as a UI bug rather than a server one. Gunicorn answers ``keep-alive`` and
+        does not. Verified side by side on 2026-08-20.
+        """
+        script = (REPO_ROOT / "start.sh").read_text(encoding="utf-8")
+        assert 'if [[ -n "${RACK_WEB_TLS_CERT:-}" ]]' in script, (
+            "start.sh must branch on a configured certificate"
+        )
+        gunicorn_branch = script.split('if [[ -n "${RACK_WEB_TLS_CERT:-}" ]]', 1)[1]
+        assert "gunicorn" in gunicorn_branch
+        assert "-c gunicorn.conf.py" in gunicorn_branch, "the TLS floor comes from the hook"
+        assert "--certfile" in gunicorn_branch and "--keyfile" in gunicorn_branch
+
 
 def test_openssl_is_not_required_to_run_these(monkeypatch):
     """Documents a portability property: cert generation uses ``cryptography``, not the CLI.

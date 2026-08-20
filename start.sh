@@ -142,7 +142,34 @@ else
   echo "[start.sh] skipping frontend build (BUILD_FRONTEND=0)"
 fi
 
-echo "[start.sh] starting Flask on port ${PORT}"
 # Run from the repo root (cwd) so backend modules resolve repo-root assets
 # (bin/, static/spa, var/, help_content.json); app.py adds backend/ to sys.path itself.
+#
+# TLS runs under gunicorn, NOT the Werkzeug development server.
+#
+# The dev server closes the connection after every response (no keep-alive) while streaming
+# chunked, brotli-compressed bodies. Over TLS that is a shutdown race: when close_notify does not
+# land cleanly before the TCP FIN, Chrome sees a truncated chunked stream and retries until it
+# gives up with ERR_TOO_MANY_RETRIES. It hits the largest asset first -- the 331 KB CSS bundle --
+# and then "fixes itself" on reload because the asset comes from cache, which is what makes it
+# look like a UI bug rather than a server one. curl does not reproduce it; it tolerates the EOF
+# pattern Chrome rejects.
+#
+# Gunicorn is what the container runs, supports keep-alive, and does not do this. Same
+# gunicorn.conf.py, so the local run gets the same TLS floor as production.
+if [[ -n "${RACK_WEB_TLS_CERT:-}" ]]; then
+  if [[ -z "${RACK_WEB_TLS_KEY:-}" ]]; then
+    echo "[start.sh] STOP: RACK_WEB_TLS_CERT is set but RACK_WEB_TLS_KEY is not." >&2
+    exit 1
+  fi
+  echo "[start.sh] starting gunicorn with TLS on port ${PORT} (https://localhost:${PORT})"
+  exec python -m gunicorn -c gunicorn.conf.py \
+    --workers 1 --threads "${GUNICORN_THREADS:-24}" --worker-class gthread \
+    --timeout "${GUNICORN_TIMEOUT:-600}" --graceful-timeout 30 --keep-alive 5 \
+    --access-logfile - --pythonpath backend --bind "0.0.0.0:${PORT}" \
+    --certfile "${RACK_WEB_TLS_CERT}" --keyfile "${RACK_WEB_TLS_KEY}" \
+    app:app
+fi
+
+echo "[start.sh] starting Flask on port ${PORT}"
 exec python backend/app.py
