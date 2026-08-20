@@ -64,6 +64,16 @@ Two constraints that apply to all four, both from existing decisions rather than
   themselves anything, so `policy:attach` and `identity.group:add_member` are the two actions whose
   own authorization matters most. Threat-model them when Phase 3 is designed, not after.
 
+## Scale target, and the read/write plane split
+
+The identity model is sized for **up to 20 simultaneous operators**, and at that scale the binding
+constraint is not Rack Status but the head node's SSH session ceiling — which a shared service account
+already exceeds at 20 operators (`MaxSessions` 10 per connection, one shared ControlMaster). Per-user
+credentials raise it 20x; moving read traffic off SSH to `pythoncm` removes most of the demand. The two
+planes therefore want different identity models: a service credential for reads, per-user certificates
+for privileged writes and the terminal. Sizing, numbers and caveats:
+**[MULTI_USER_MULTI_CLUSTER_PLAN.md](MULTI_USER_MULTI_CLUSTER_PLAN.md)** — "What scale this supports".
+
 ## What this programme does not cover
 
 - Per-user cluster state and the removal of the `os.environ` materialisation. That is
