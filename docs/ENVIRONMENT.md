@@ -168,6 +168,49 @@ Requires `RACK_WEB_SECRET_KEY`, **Settings → `RACK_PROJECT_TOKEN`**, vault NVF
 | **`RACK_PHYSICAL_RF0_TIMEOUT`** | `180` | RF0 map timeout. |
 | **`RACK_PHYSICAL_RF0_LOOSE_HOSTNAMES`** | *(unset)* | Truthy → looser RF0 hostname match. |
 
+### Application logging (`NVIS_LOG_*`)
+
+Applied once at startup by `backend/logging_config.py`, so every module's `logging.getLogger`
+routes to the configured sinks with no change at the call site. Before this existed there was no
+logging configuration at all: with no handler on the root logger Python falls back to
+`logging.lastResort` at WARNING, so every INFO and DEBUG record was discarded silently.
+
+Read from the **process environment only**, never through the dashboard settings store — an
+authenticated operator must not be able to lower the level, redirect a sink, or empty the
+sensitive-key list at runtime.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| **`NVIS_LOG_LEVEL`** | `INFO` | Minimum level reaching any sink. |
+| **`NVIS_LOG_SINKS`** | `stdout,file` | Comma-separated from `stdout`, `file`, `syslog`. See the syslog note below. |
+| **`NVIS_LOG_FORMAT`** | `text` | `text` for humans, `json` for one-object-per-line SIEM ingest. |
+| **`NVIS_LOG_FILE`** | `var/logs/rack-status.log` | Application log. Relative paths resolve against the repo root, not the process CWD. |
+| **`NVIS_LOG_MAX_BYTES`** | `5242880` | Rotation size for the application log. Its budget is independent of the audit trail's, so a debug session cannot rotate away audit evidence. |
+| **`NVIS_LOG_BACKUPS`** | `3` | Rotation backup count. `3` keeps four files including the active one. |
+| **`NVIS_LOG_SYSLOG_HOST`** | `localhost` | Only consulted when `syslog` is selected. |
+| **`NVIS_LOG_SYSLOG_PORT`** | `514` | Only consulted when `syslog` is selected. |
+| **`NVIS_LOG_SENSITIVE_KEYS`** | *(unset)* | Extra environment variable names to redact, beyond the built-in name match on `PASSWORD`, `SECRET`, `TOKEN`, `API_KEY`, `CREDENTIAL`. |
+| **`NVIS_LOG_REDACT_PLACEHOLDER`** | `[REDACTED]` | Replaces a secret's value wherever it appears in a record. |
+
+**The `syslog` sink is best-effort and lossy.** It is UDP, so a dropped datagram cannot be
+distinguished from one that was never sent, and it is off by default. Selecting it as the *only*
+sink is not honoured: the `file` sink is added back and the substitution is reported at startup,
+because a configuration where the sole record of an operator action can vanish without trace is
+not a configuration anyone asked for. Durability comes from the file sink, an export API, or a
+future cloud target — never from syslog.
+
+The defaults require no network egress, no external service and no credential, so a first run on
+an air-gapped cluster works with nothing set.
+
+**On source addresses in the audit trail.** An audit event records the TCP peer address it
+actually sees. Operators normally reach this dashboard through an SSH tunnel, and in that case
+the peer is the **tunnel endpoint** — usually `127.0.0.1` — not the operator's workstation. The
+operator's real address exists only in the SSH server's own authentication log, which is outside
+this application's view. A forwarded address (`X-Forwarded-For`) is believed only when the peer is
+a configured trusted proxy; otherwise the header is recorded as claimed-but-untrusted and the peer
+address is what the event carries. An audit field that looks precise and is not would be worse
+than one that states its limit.
+
 ### Parser and export
 
 | Variable | Default | Effect |

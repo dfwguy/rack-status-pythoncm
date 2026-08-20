@@ -94,6 +94,15 @@ _app_dir_s = str(APP_DIR)
 if _app_dir_s not in sys.path:
     sys.path.insert(0, _app_dir_s)
 
+# Logging is configured before any other first-party import, because every one of them obtains a
+# module logger at import time and until this call the root logger has no handler at all — Python
+# falls back to ``logging.lastResort`` at WARNING, so INFO and DEBUG go nowhere. Configuring here
+# rather than inside an app factory means an import-time warning from a module below is captured
+# too. Idempotent and non-fatal by contract (FR-1, NFR-1).
+import logging_config
+
+logging_config.configure()
+
 import native_status
 import nvis_id_templates
 
