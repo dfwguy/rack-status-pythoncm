@@ -2061,6 +2061,19 @@ import api as _api_package
 
 _api_package.register(app)
 
+# The action vocabulary is resolved and validated here, after every blueprint is registered —
+# a declaration cannot know its own endpoint name at decoration time, because the function has
+# not been bound to a blueprint yet. A malformed name or two routes claiming the same
+# (action, variant) raises and takes startup down with it, on purpose: a collision found by
+# reading audit records is found after the evidence is already ambiguous (FR-14a).
+#
+# Coverage is not checked here. FR-14b makes a *missing* declaration fail the build, which is
+# test_audit_actions.py's job — enforcing it at startup would stop a half-migrated tree booting
+# at all, and the declarations span 38 modules.
+import audit.actions as _audit_actions
+
+_audit_actions.build_registry(app)
+
 # After all routes and middleware are registered (avoid circular import via nvftp_cache_sync._eget → app).
 _bootstrap_catalog_at_startup()
 _bootstrap_nvftp_sync_at_startup()
