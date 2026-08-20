@@ -18,6 +18,7 @@ request resolves to:
 | Field | Source | Example |
 |---|---|---|
 | `principal` | authenticated session (Phase 2) | `rkoike`, `svc-campaign` |
+| `principal groups` | group membership resolved from the identity store (Phase 2) | `boston-oncall`, `validation-leads` |
 | `action` | declared vocabulary (Phase 1) | `rack.power:on`, `fabric.nvswitch:reset_sdn` |
 | `variant` | declared alongside the action | `sync`, `async`, `stream`, `legacy`, `form` |
 | `resource` | request path / body | rack `bos01-a05`, node `bos01-a05-11-s1-dgx-01-c01`, workflow id |
@@ -50,6 +51,12 @@ that makes "the engine works" a testable claim rather than a demo.
 | 13 | permit `rack.power:on` in cluster `Firmus` | same action in cluster `Boston Markley` | **DENY** | one instance serves several clusters (`core-designs.mdc` §3) |
 | 14 | permit `workflow:run` | `workflow:run` on a workflow with a `host:` shell step | **decide** | arbitrary shell via workflow steps is a privileged capability; see §6 Q2 |
 | 15 | permit `catalog.tool:create` | `catalog.tool:create` | ALLOW, **and** audited as a policy-changing action | editing the catalog changes what is launchable |
+| 16 | group `boston-oncall` permits `slurm.node:drain`; user has no direct policy | drain, user in that group | ALLOW | group policies are inherited, or groups buy nothing |
+| 17 | group permits `slurm.node:drain`; user-level forbid `slurm.node:drain` | drain | **decide** | user-level forbid versus group permit — see §6 Q6 |
+| 18 | group forbids `slurm.node:drain`; user-level permit | drain | **decide** | the mirror case, and the answer need not be symmetric — §6 Q6 |
+| 19 | group `a` contains group `b`; `b` permits `rack.power:on`; user in `a` | `rack.power:on` | **decide** | is membership transitive? §6 Q7 |
+| 20 | group `a` contains `b`, `b` contains `a` (cycle); either permits an action | that action | **DENY, and refuse the group set at load** | a membership cycle must fail closed and loudly, never spin |
+| 21 | user removed from a group that granted the action, membership cached | that action | **DENY** | a cached membership is a privilege boundary with a timer on it; removal must take effect at the next decision |
 
 Rows 5 and 14 are genuinely undecided and are the two questions worth a human at the gate.
 
@@ -96,7 +103,10 @@ meet one pattern rather than two; policy documents become catalog records, which
 against the registry catches the most likely authoring mistake at load.
 
 **Against:** the evaluator is ours to get right. Precedence bugs are subtle and silent — a wrong
-answer looks like a working system. `pydantic-core` is a compiled wheel, so it is not literally
+answer looks like a working system. Group hierarchy sharpens this: Cedar models principal parentage
+natively, whereas a pydantic evaluator has to implement transitive membership, a cycle guard and a
+user-versus-group precedence rule itself (rows 16–21, §6 Q6–Q8). That is a real cost against Option A
+and it was not visible before groups were scoped. `pydantic-core` is a compiled wheel, so it is not literally
 dependency-free, though it is mainstream and already present.
 
 ## 4. Option B — Cedar via `cedarpy`
@@ -175,3 +185,19 @@ has pydantic 2.13 in tree, and v1→v2 differs precisely on the constructs that 
    resource wins; intersection of all matching conditions (safest, hardest to explain); or reject the
    policy set at load as ambiguous. Only the last one is order-independent *and* obvious to the
    author.
+6. **Does a user-level statement override a group-level one?** Rows 17–18. "Explicit deny wins" is a
+   rule about *statements*, not about *principals*, so it does not answer this. Two coherent models:
+   flatten — collect every statement from the user and all their groups into one set and apply
+   deny-wins across it, so a group forbid cannot be escaped by a user permit; or tier — user-level
+   statements shadow group-level ones, which is more intuitive to an administrator and is also how a
+   privilege escalation gets written by accident. Flattening is the safer default and is what row 18
+   assumes if nothing else is decided.
+7. **Is group membership transitive, and how deep?** Row 19. Nested groups are convenient and are
+   where cycle bugs and surprising grants live. Options: no nesting (simplest, and enough for a
+   handful of operator teams); one level; or arbitrary depth with a cycle guard and a depth cap.
+   Whatever is chosen, row 20 must hold — a cycle fails the policy set at load rather than at
+   evaluation time.
+8. **How is membership resolved at decision time?** Row 21. Per-request resolution is correct and
+   costs a store read on the hot path; a cache is faster and means a group removal does not take
+   effect until it expires. If a cache is used, its TTL is a security parameter and belongs in the
+   threat model, not in a performance note.

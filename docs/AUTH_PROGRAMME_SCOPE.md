@@ -1,0 +1,69 @@
+# Auth programme — phase scope
+
+The map of the authentication and authorization work: what each phase owns, and what is deliberately
+deferred to a later one. It exists because two constructs were **invisible rather than deferred** until
+2026-08-20 — principal **groups**, and the **admin UI** — and an unscoped construct is one nobody
+notices is missing until it is expensive.
+
+Per-phase requirements live in PLC feature briefs under `.plc/briefs/`. This file is the index and the
+scope record; it is not a spec and it does not carry acceptance criteria.
+
+| Phase | Owns | State |
+|---|---|---|
+| 0 | Defect fixes: the unauthenticated `/ws/terminal`, `target` command injection, `0.0.0.0` exposure | done |
+| 0.5 | HTTPS: self-signed by default, internal CA opt-in, TLS 1.2 floor, CSP/HSTS, Origin policy | done |
+| 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | requirements v0.7, design v0.6, test plan v0.1 — implementation not started |
+| 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | not started |
+| 3 | **Authorization**: policy engine, policy documents, attach-to-principal, enforcement before dispatch | not started; `docs/PHASE3_POLICY_ENGINE_SPIKE.md` is the decision-support draft |
+
+## Phase 2 — identity, and why groups belong here
+
+The identity store owns **users, groups, and membership**. Groups are not a Phase 3 concern despite
+being consumed by policy, for a scheduling reason: adding group membership to an SRP-backed user store
+*after* it holds real credentials is a migration with an authentication outage in it. The cost of
+deciding now is a schema field; the cost of deciding later is a migration.
+
+Three properties Phase 2 has to settle, because Phase 3's evaluator depends on all three:
+
+- **Nesting.** Can a group contain a group? If yes, membership resolution is transitive and the
+  evaluator needs a cycle guard.
+- **Precedence.** What wins when a user-level `forbid` meets a group-level `permit`, and vice versa?
+  This is not answered by "explicit deny wins" — that rule is about statements, not principals.
+- **Membership at decision time.** Is membership resolved per request, or cached? A cached membership
+  means a removal from a group does not take effect until the cache expires, which is a privilege
+  boundary with a timer on it.
+
+The decision table in `docs/PHASE3_POLICY_ENGINE_SPIKE.md` §2 carries rows for these so they are
+answered by a test rather than by an implementation accident.
+
+## The admin UI — named, so it stops being invisible
+
+Backend-only phases produced no UI, correctly. But the identity system the original request described
+needs CRUD surfaces, and they had no home in any phase until now. All of these are new KUI views
+consuming the existing frontend contexts (`core-designs.mdc` §12) — not local state duplicating them.
+
+| View | Owns | Phase | Notes |
+|---|---|---|---|
+| `UsersView` | User CRUD; disable/enable; credential reset | 2 | The only creation path is an authenticated request, per the original requirement. No self-registration |
+| `GroupsView` | Group CRUD; membership add/remove | 2 | Membership editing is the surface that makes groups worth having; without it they are a schema field |
+| `PoliciesView` | Policy document CRUD; attach/detach to a user or group | 3 | Meaningless before an engine exists — a UI that edits documents nothing evaluates invites false confidence |
+| Audit trail viewer | Reading the Phase 1 trail without shell access | 3+ | Already recorded as a Phase 1 non-goal: authentication alone is insufficient, because with no authorization model every operator could read every other operator's actions |
+
+Two constraints that apply to all four, both from existing decisions rather than new ones:
+
+- **Every mutating route these views call needs an `@action` declaration** (Phase 1, FR-14b) or the
+  build fails. So the vocabulary grows with the UI — `identity.user:create`, `identity.group:add_member`,
+  `policy:attach` — and those actions are themselves governed by policy. Editing who can do what is
+  itself a privileged action.
+- **Policy administration is a privilege-escalation surface.** Whoever can attach a policy can grant
+  themselves anything, so `policy:attach` and `identity.group:add_member` are the two actions whose
+  own authorization matters most. Threat-model them when Phase 3 is designed, not after.
+
+## What this programme does not cover
+
+- Per-user cluster state and the removal of the `os.environ` materialisation. That is
+  **[docs/MULTI_USER_MULTI_CLUSTER_PLAN.md](MULTI_USER_MULTI_CLUSTER_PLAN.md)**, whose step 1 is
+  blocked on Phase 2 here. The two efforts meet at "an operator is distinguishable".
+- Tamper evidence for the audit file (threat T-51, candidate NFR-12) — recorded as deferred in the
+  Phase 1 brief, not scheduled.
+- Secrets management beyond what `token_vault.py` already does.

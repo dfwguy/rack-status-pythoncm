@@ -70,8 +70,10 @@ catalog model and not the transport.
 
 Each step is useful on its own, and each is a prerequisite for the next.
 
-1. **Real per-user identity.** Part of the authentication/authorization work. Token mode gives none,
-   so nothing per-user can be stored until an operator is distinguishable. Blocks everything below.
+1. **Real per-user identity.** Part of the authentication/authorization work — Phase 2 of
+   **[AUTH_PROGRAMME_SCOPE.md](AUTH_PROGRAMME_SCOPE.md)**, which owns the user store, groups and
+   membership. Token mode gives none, so nothing per-user can be stored until an operator is
+   distinguishable. Blocks everything below.
 
 2. **Cluster in the session.** Store the operator's selected project/cluster in their session and stop
    using `set_active()` as the per-operator switch. `set_active` becomes the *default* for new
