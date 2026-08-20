@@ -201,10 +201,15 @@ session but does not delete a person.
 
 **Implementation constraints specific to this product, none of them optional:**
 
-- **The revocation record must be shared across processes.** Gunicorn runs several workers, each its
-  own process, so an in-process revocation cache would deny on one worker and allow on another — a
-  privileged action succeeding on a retry with probability 1/N. This is the single most likely way to
-  implement the feature and have it silently not work.
+- **An in-process revocation map is safe today, and that is a precondition rather than a property.**
+  The container runs `gunicorn --workers 1 --threads 24 --worker-class gthread`, deliberately: the
+  Dockerfile records that multiple workers would each duplicate the SSH work and the in-process state.
+  One process means one revocation map, so no sharing is needed. But the moment worker count rises
+  above one, an in-process map denies on one worker and allows on another — a privileged action
+  succeeding on retry with probability 1/N, with nothing in the logs looking wrong. Either keep
+  `--workers 1` as a documented constraint of this design, or put the record somewhere shared before
+  changing it. (An earlier draft of this section asserted the deployment already runs several workers.
+  It does not.)
 - **Revoking is itself a privileged, audited action.** It belongs in the vocabulary
   (`identity.user:revoke`), which means it is governed by policy like anything else, and it is one of
   the actions whose own authorization matters most — alongside `policy:attach` and
