@@ -13,7 +13,8 @@
   "plc_project": {
     "project_id": "nvis-rack-status",
     "nspect_registration_id": "NSPECT-S57Q-EI19",
-    "workspace_id": null
+    "workspace_id": null,
+    "jira_project_key": "NVRACKSTAT"
   },
   "artifacts": {
     "srd": {
@@ -71,7 +72,7 @@
     "parent_program": "NVIS OVA (Observability, Validation, Automation)",
     "nspect_context": "NSPECT-S57Q-EI19 is the nSpect registration used for nvis-rack-status. This profile covers the nvis-rack-status repository only.",
     "revision_note": "repo.revision is the main-branch snapshot this profile was aligned to, not a live always-HEAD pointer. repo.branch is the canonical product branch (main); the reconstruction work was authored on feat/agentic-plc-security.",
-    "scope_note": "Reconstruction scope for this pass was security only: local advisory scans plus a threat model. The SRD, SADD and SUTP were deliberately not reconstructed and are marked missing rather than unknown.",
+    "scope_note": "Reconstruction scope for this pass was security only: local advisory scans (SAST, dependency CVE, license, Pulse secret scan) plus a SecNemo Agent-TAVA threat model. The SRD, SADD and SUTP were deliberately not reconstructed and are marked missing rather than unknown.",
     "owned_components": [
       "backend (Flask API + rack status builder)",
       "frontend (React 19 SPA, Kaizen UI)",
