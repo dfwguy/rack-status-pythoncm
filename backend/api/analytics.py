@@ -32,6 +32,13 @@ an environment-level kill switch and is NOT settable from dashboard settings. Th
 before the move deliberately: routing it through ``_eget`` would widen its reach, which is a policy
 change and does not belong in a refactor.
 """
+
+# Notes that stayed in app.py when this module took the code, during the api/ migration. The
+# prose describes subjects that live here now; it is reunited with them rather than deleted.
+#
+# Metrics worth a fleet baseline, per workload kind. Names match what
+# ``results_history`` stores from parser.sh (records_from_parser_json) and from
+# ``universal_parser`` — both write the same lower-cased metric_name.
 from __future__ import annotations
 
 import json

@@ -19,6 +19,12 @@ Each returns a dict rather than raising on a non-zero exit: a busy or unreachabl
 reportable condition the UI shows, not a 500. A timeout reports the budget it spent.
 """
 
+# Notes that stayed in app.py when this module took the code, during the api/ migration. The
+# prose describes subjects that live here now; it is reunited with them rather than deleted.
+#
+# Terminal (finished) job states — what the Scheduler "recent jobs" panel shows so a
+# job that has left squeue (success OR failure) is still visible with its log.
+
 from __future__ import annotations
 
 import os

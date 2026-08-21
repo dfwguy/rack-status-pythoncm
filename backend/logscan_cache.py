@@ -35,6 +35,12 @@ These are shared **objects**: importing ``_LOGSCAN_CACHE`` elsewhere binds the s
 the app kept using this one, and the thread-local's batch hand-off would silently stop working.
 """
 
+# Notes that stayed in app.py when this module took the code, during the api/ migration. The
+# prose describes subjects that live here now; it is reunited with them rather than deleted.
+#
+# --- whole-file scanner -----------------------------------------------------------------------
+# The scanner client and its caches live in logscan_cache.py, imported under these names above.
+
 from __future__ import annotations
 
 import json

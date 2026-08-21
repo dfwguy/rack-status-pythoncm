@@ -21,6 +21,25 @@ operator works through the findings.
 Node-report jobs use the bounded registry pattern with a TTL and a max, so a fleet-sized sweep cannot
 grow the table without limit.
 """
+
+# Notes that stayed in app.py when this module took the code, during the api/ migration. The
+# prose describes subjects that live here now; it is reunited with them rather than deleted.
+#
+# NVLMAPPER output zips under reports/<rack>/ (staged + ./run_nvlmapper.sh from app.py).
+# Parser Excel copies (e.g. rack-parser-export-*.xlsx) and other workbooks under reports/.
+# Reserved inventory ``host`` for ``*.xlsx`` files sitting directly under the reports base dir (not in a subfolder).
+#
+#: Report kind -> the formats it can render, first entry being the default.
+#:
+#: The Nscale report answers a customer's JSON Schema, so JSON is the only honest format for it —
+#: a CSV of that document would not validate against the contract it exists to satisfy. The Rack
+#: Status report is ours and carries the same dataset in whichever shape the reader needs.
+#
+#: Filename extension and MIME type per format.
+#
+#: Small on purpose: each finished job pins a multi-MB document until it is collected.
+#: How long a "running" job stays eligible for idempotent reuse. Comfortably longer than a
+#: full sweep (~4 minutes at 2000 nodes) and short enough that a dead worker frees its key.
 from __future__ import annotations
 
 import json

@@ -18,6 +18,33 @@ Every route is bounded on purpose. A log directory on a live cluster holds thous
 hundreds of MB, so inventory and scan both cap the file count, and the parser itself caps head/tail
 bytes. An unbounded scan here would read the whole corpus over SSH.
 """
+
+# Notes that stayed in app.py when this module took the code, during the api/ migration. The
+# prose describes subjects that live here now; it is reunited with them rather than deleted.
+#
+# =====================================================================================
+# Universal log ingest + durable run history  (added 2026-07-28 — STRICTLY ADDITIVE)
+#
+# Nothing below changes an existing response shape.  Two new module surfaces are used,
+# both optional (``results_history`` / ``universal_parser`` are soft-imported at the top
+# of this file and may be ``None`` when their bind mount is missing):
+#
+#   * ``universal_parser``  normalises ANY log — including the *.log / *.json / no-extension
+#     files and the sub-directories that ``native_status._host_log_entries`` never lists —
+#     into one dict.  It is used as a FALLBACK: parser.sh stays authoritative whenever it
+#     actually produced a number.
+#   * ``results_history``   persists every parse as a run + metric rows in SQLite under
+#     ``/app/var/history`` (the ``rack-data`` named volume), giving the first real history.
+#
+# Every call site is wrapped: an exception here must degrade to the pre-2026-07-28
+# behaviour, never 500 a request that used to work.
+# =====================================================================================
+#
+# Head+tail caps mirror universal_parser's own DEFAULT_HEAD_BYTES / DEFAULT_TAIL_BYTES so a
+# remote read produces the same text the module would have produced locally.
+# Extra extensions the legacy discovery path (*.txt / *.out only) can never see.
+#
+# --- whole-directory inventory (every extension, every depth) ------------------------
 from __future__ import annotations
 
 import logging

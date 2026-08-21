@@ -739,32 +739,6 @@ def _security_headers(response):
     return response
 
 
-# Log-basename classification lives in nvis_id_templates so this module, native_status and
-# the shell probes cannot drift apart on which table a log belongs to. These wrappers exist
-# only to bind the caller's NvisNaming instance; keep them free of logic.
-
-
-# Which parser.sh table each stage is the authority for. A stage's rows are taken from that
-# stage's own log and nowhere else, so a NeMo log can never contribute NCCL numbers.
-
-# Scalar/series fields that carry an actual measurement, per stage table. A row holding none of
-# these is parser.sh's all-"---" placeholder rather than a result.
-
-
-# --- whole-file scanner -----------------------------------------------------------------------
-# The scanner client and its caches live in logscan_cache.py, imported under these names above.
-
-
-# --- Grafana deep-links (open full BCM/NMC dashboards in a new tab, scoped by rack/host) --------
-#
-# Unlike the /d-solo/ *embeds* (which need GF_SECURITY_ALLOW_EMBEDDING and a homegrown 2-panel
-# dashboard), deep-links open a full Grafana dashboard in a new tab. On a BCM 11 / Mission Control
-# (NMC) head node these dashboards already exist and are scoped by the ``$Rack`` / ``$hostname``
-# template variables — so we just build ``/d/<uid>/<slug>?var-<Rack>=..&var-<hostname>=..`` URLs.
-# The catalog below defaults to the stock NMC GB200 dashboards but is fully overridable via
-# ``RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS`` (JSON) so this is not hardwired to any one site.
-
-
 # The single path resolver, shared with paths.py and the api/ modules rather than redeclared:
 # this module carried a byte-identical copy of core.rpath. It replaced the three overlapping
 # resolvers app.py used to have (``_resolve_path``, ``_lp_resolve``, and the inline
@@ -785,51 +759,9 @@ _nvis_workspace_dir_effective = config_env._nvis_workspace_dir_effective
 ai_chat.set_live_inventory_provider(_ai_live_inventory_block)
 
 
-# ---------------------------------------------------------------------------
-# BMC recovery and MAC change
-#
-# Both target a single head node where BCM (cmsh / pythoncm) + ipmitool live.
-# Invocation always routes through host_exec so the same code path serves
-# local-on-head and dashboard-in-container deployments. Each call writes its
-# stdout/stderr/returncode into the shared _reset_jobs table; the frontend
-# polls /api/reset-job-status?job_id=… (no new polling endpoint needed).
-# ---------------------------------------------------------------------------
-
-
-# NVLMAPPER output zips under reports/<rack>/ (staged + ./run_nvlmapper.sh from app.py).
-# Parser Excel copies (e.g. rack-parser-export-*.xlsx) and other workbooks under reports/.
-# Reserved inventory ``host`` for ``*.xlsx`` files sitting directly under the reports base dir (not in a subfolder).
-
-
 # last_job / scancel: plain id or job array id (e.g. 12345_0)
 _SLURM_SCANCEL_JOB_ID_RE = core.SLURM_JOB_ID_RE  # one definition, in core
 
-
-# Terminal (finished) job states — what the Scheduler "recent jobs" panel shows so a
-# job that has left squeue (success OR failure) is still visible with its log.
-
-
-# =====================================================================================
-# Universal log ingest + durable run history  (added 2026-07-28 — STRICTLY ADDITIVE)
-#
-# Nothing below changes an existing response shape.  Two new module surfaces are used,
-# both optional (``results_history`` / ``universal_parser`` are soft-imported at the top
-# of this file and may be ``None`` when their bind mount is missing):
-#
-#   * ``universal_parser``  normalises ANY log — including the *.log / *.json / no-extension
-#     files and the sub-directories that ``native_status._host_log_entries`` never lists —
-#     into one dict.  It is used as a FALLBACK: parser.sh stays authoritative whenever it
-#     actually produced a number.
-#   * ``results_history``   persists every parse as a run + metric rows in SQLite under
-#     ``/app/var/history`` (the ``rack-data`` named volume), giving the first real history.
-#
-# Every call site is wrapped: an exception here must degrade to the pre-2026-07-28
-# behaviour, never 500 a request that used to work.
-# =====================================================================================
-
-# Head+tail caps mirror universal_parser's own DEFAULT_HEAD_BYTES / DEFAULT_TAIL_BYTES so a
-# remote read produces the same text the module would have produced locally.
-# Extra extensions the legacy discovery path (*.txt / *.out only) can never see.
 
 # Intermediate artefacts that are SUPERSEDED by an aggregated result log and must not be
 # ingested as runs of their own.
@@ -846,18 +778,6 @@ _SLURM_SCANCEL_JOB_ID_RE = core.SLURM_JOB_ID_RE  # one definition, in core
 
 
 _truthy_arg = core.truthy_arg
-
-
-# --- "did parser.sh actually parse anything?" ----------------------------------------
-
-
-# --- host-aware capped log read ------------------------------------------------------
-
-
-#: universal_parser metric name -> where the same number lives in an nvis_logscan record.
-
-
-# --- history ingest ------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------------------------
@@ -966,43 +886,6 @@ def _lake_capture_request(response):
     return response
 
 
-# --- whole-directory inventory (every extension, every depth) ------------------------
-
-
-# --- history read routes -------------------------------------------------------------
-
-
-# Alias kept because TRACK-A's integration note documents this spelling.
-
-
-# --- universal ingest routes ---------------------------------------------------------
-
-
-# Metrics worth a fleet baseline, per workload kind. Names match what
-# ``results_history`` stores from parser.sh (records_from_parser_json) and from
-# ``universal_parser`` — both write the same lower-cased metric_name.
-
-
-#: Report kind -> the formats it can render, first entry being the default.
-#:
-#: The Nscale report answers a customer's JSON Schema, so JSON is the only honest format for it —
-#: a CSV of that document would not validate against the contract it exists to satisfy. The Rack
-#: Status report is ours and carries the same dataset in whichever shape the reader needs.
-
-#: Filename extension and MIME type per format.
-
-
-#: Small on purpose: each finished job pins a multi-MB document until it is collected.
-#: How long a "running" job stays eligible for idempotent reuse. Comfortably longer than a
-#: full sweep (~4 minutes at 2000 nodes) and short enough that a dead worker frees its key.
-
-
-# Custom launch env vars (UI "Extra environment variables" field). A key must be a valid
-# POSIX-ish env name; values are single-line and length-capped; the count is bounded. These
-# guardrails keep a well-formed KEY=VALUE map without allowing injection of newlines / huge
-# payloads into the job environment. Forwarded as env_extra (bypasses the SSH allowlist) and
-# chained to the container via each launcher's --export=ALL.
-
 # Upper bound for the launch dialog's NEMO step selector. The UI offers 50 (perf) and 2010
 # (soak); the cap only rejects absurd hand-crafted payloads, it does not pin the choices.
 
@@ -1027,26 +910,6 @@ def serve_spa(path: str = "index.html"):
 def serve_root_spa(path: str):
     """Serve React SPA for all non-API routes (client-side routing)."""
     return _serve_spa_asset(path)
-
-
-# ---------------------------------------------------------------------------
-# Available tools/scripts for workflow automation
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# AI Chat routes
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Help / knowledge content routes
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Workflow routes
-# ---------------------------------------------------------------------------
 
 
 # Per-domain API modules under backend/api/, discovered automatically. Drop a module in that

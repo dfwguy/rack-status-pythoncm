@@ -15,6 +15,11 @@ Moved out of ``app.py``. The blueprint uses ``url_prefix=""`` so every route kee
 path it always had -- a migration must not change a URL, and the route snapshot proves it.
 """
 
+# Notes that stayed in app.py when this module took the code, during the api/ migration. The
+# prose describes subjects that live here now; it is reunited with them rather than deleted.
+#
+# Alias kept because TRACK-A's integration note documents this spelling.
+
 from __future__ import annotations
 
 import logging

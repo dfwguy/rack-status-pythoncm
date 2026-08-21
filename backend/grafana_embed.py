@@ -29,6 +29,18 @@ Timezone is deliberate too: a panel URL carries an explicit tz parameter rather 
 viewer's browser, so an operator in one timezone and one in another describe the same incident with the
 same numbers.
 """
+
+# Notes that stayed in app.py when this module took the code, during the api/ migration. The
+# prose describes subjects that live here now; it is reunited with them rather than deleted.
+#
+# --- Grafana deep-links (open full BCM/NMC dashboards in a new tab, scoped by rack/host) --------
+#
+# Unlike the /d-solo/ *embeds* (which need GF_SECURITY_ALLOW_EMBEDDING and a homegrown 2-panel
+# dashboard), deep-links open a full Grafana dashboard in a new tab. On a BCM 11 / Mission Control
+# (NMC) head node these dashboards already exist and are scoped by the ``$Rack`` / ``$hostname``
+# template variables — so we just build ``/d/<uid>/<slug>?var-<Rack>=..&var-<hostname>=..`` URLs.
+# The catalog below defaults to the stock NMC GB200 dashboards but is fully overridable via
+# ``RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS`` (JSON) so this is not hardwired to any one site.
 from __future__ import annotations
 
 import json

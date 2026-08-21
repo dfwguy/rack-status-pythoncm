@@ -27,6 +27,19 @@ Two constraints shaped this code and are easy to undo by accident:
 Long operations run in threads and report through the shared job registry, so ``GET /api/rack-locks``
 shows a rack as busy while a reset is in flight and a second operator is warned before starting another.
 """
+
+# Notes that stayed in app.py when this module took the code, during the api/ migration. The
+# prose describes subjects that live here now; it is reunited with them rather than deleted.
+#
+# ---------------------------------------------------------------------------
+# BMC recovery and MAC change
+#
+# Both target a single head node where BCM (cmsh / pythoncm) + ipmitool live.
+# Invocation always routes through host_exec so the same code path serves
+# local-on-head and dashboard-in-container deployments. Each call writes its
+# stdout/stderr/returncode into the shared _reset_jobs table; the frontend
+# polls /api/reset-job-status?job_id=… (no new polling endpoint needed).
+# ---------------------------------------------------------------------------
 from __future__ import annotations
 
 import logging

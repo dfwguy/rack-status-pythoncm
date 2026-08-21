@@ -24,6 +24,17 @@ Read caps are deliberate. ``_read_log_text_capped`` bounds head/tail reads becau
 reach hundreds of MB, and a probe that might not find its answer must not cost more than one that
 does. The caps are the fallback path for when the scanner is unavailable; prefer the scanner.
 """
+
+# Notes that stayed in app.py when this module took the code, during the api/ migration. The
+# prose describes subjects that live here now; it is reunited with them rather than deleted.
+#
+# Which parser.sh table each stage is the authority for. A stage's rows are taken from that
+# stage's own log and nowhere else, so a NeMo log can never contribute NCCL numbers.
+#
+# Scalar/series fields that carry an actual measurement, per stage table. A row holding none of
+# these is parser.sh's all-"---" placeholder rather than a result.
+#
+#: universal_parser metric name -> where the same number lives in an nvis_logscan record.
 from __future__ import annotations
 
 import logging

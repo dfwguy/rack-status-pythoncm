@@ -31,6 +31,15 @@ knobs where a plausible-looking value is expensive rather than invalid -- a step
 finishes holds a rack, and NCCL_DEBUG=TRACE on 90 nodes writes hundreds of MB of logs that the parser
 then has to read.
 """
+
+# Notes that stayed in app.py when this module took the code, during the api/ migration. The
+# prose describes subjects that live here now; it is reunited with them rather than deleted.
+#
+# Custom launch env vars (UI "Extra environment variables" field). A key must be a valid
+# POSIX-ish env name; values are single-line and length-capped; the count is bounded. These
+# guardrails keep a well-formed KEY=VALUE map without allowing injection of newlines / huge
+# payloads into the job environment. Forwarded as env_extra (bypasses the SSH allowlist) and
+# chained to the container via each launcher's --export=ALL.
 from __future__ import annotations
 
 import logging
