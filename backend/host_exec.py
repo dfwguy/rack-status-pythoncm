@@ -55,6 +55,8 @@ from transport import (
     TransportConfig,
     build_connection,
 )
+from transport.compose import make_env_resolver
+from transport.factory import FORWARD_ENV_NAMES, FORWARD_ENV_PREFIXES
 from transport.topology import (
     DEFAULT_ROLE,
     SSHDefaults,
@@ -152,9 +154,6 @@ def _legacy_role_roots() -> dict[str, str]:
 
 def _overlay_resolver():
     """The same env-forwarding policy the single-target factory applies."""
-    from transport.compose import make_env_resolver
-    from transport.factory import FORWARD_ENV_NAMES, FORWARD_ENV_PREFIXES
-
     return make_env_resolver(FORWARD_ENV_PREFIXES, FORWARD_ENV_NAMES, None)
 
 

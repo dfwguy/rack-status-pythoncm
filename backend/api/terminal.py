@@ -269,7 +269,6 @@ class _WebSocketTerminalMiddleware:
 
     def _cleanup_session(self, session_id: str) -> None:
         """Destroy a session after the grace period if no clients reconnected."""
-        import time
         time.sleep(_TERMINAL_GRACE_PERIOD)
         with self._sessions_lock:
             sess = self._sessions.get(session_id)

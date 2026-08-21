@@ -19,6 +19,7 @@ validation states that shift over time (simulating an active bring-up).
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 import time
 from datetime import datetime, timezone
@@ -187,7 +188,6 @@ def generate_demo_status(log_dir: Path, include_raw: bool = False) -> dict:
         },
     }
     if include_raw:
-        import json
         out["stdout"] = json.dumps({"racks": rows, "summary": summary}, indent=2)
     return out
 

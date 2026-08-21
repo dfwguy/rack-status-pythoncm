@@ -33,6 +33,7 @@ import math
 import re
 from datetime import datetime, timezone, tzinfo
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from config_env import _eget, _env_int
 from core import median_float as _median_float
@@ -57,7 +58,6 @@ def _zoneinfo_for_log_parsing(override_name: str | None) -> tzinfo:
     ``override_name`` comes from the browser ``display_timezone`` query (Charts TZ menu);
     otherwise ``RACK_PROMETHEUS_LOG_TIMESTAMP_TZ`` (default UTC).
     """
-    from zoneinfo import ZoneInfo
 
     if override_name and str(override_name).strip():
         on = str(override_name).strip()

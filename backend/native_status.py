@@ -849,8 +849,6 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
 
 
 def shlex_split_safe(s: str) -> list[str]:
-    import shlex
-
     try:
         return shlex.split(s, posix=True)
     except ValueError:

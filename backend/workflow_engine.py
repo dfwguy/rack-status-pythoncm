@@ -15,6 +15,7 @@ and step metadata. Execution state is persisted as JSON in var/workflows/runs/.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -1025,7 +1026,6 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
     the final ``node`` hop is expanded across ``nodes``. Gating is via the step's
     ``evaluation`` block on the grouped stdout (e.g. ``success_when: {stdout_empty: true}``).
     """
-    import host_exec
     from transport import HopSpec, build_chain, fanout, fanout_errors, group_outputs
 
     params = {**run.get("outputs", {}), **(step.get("parameters") or {}), **run.get("params", {})}
@@ -1355,7 +1355,6 @@ def _execute_inline_run(run: dict, step: dict, params: dict, script_text: str) -
     overrides it. This makes each step a self-contained "lego block" (e.g. one
     sysinfo check per step) with its own pass/fail.
     """
-    import base64
 
     run_id = run["run_id"]
     step_id = step.get("id", "unknown")
@@ -1521,10 +1520,8 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
 
     # Known tool env key (e.g. RACK_SYSINFO_SCRIPT) — resolve path and execute
     if command.startswith("RACK_") and command.endswith("_SCRIPT"):
-        import os as _os
-        from pathlib import Path as _Path
-        script_dir = _os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
-        default_scripts = (_Path(script_dir) / "bin" / "scripts") if script_dir else None
+        script_dir = os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
+        default_scripts = (Path(script_dir) / "bin" / "scripts") if script_dir else None
         _SCRIPT_DEFAULTS = {
             "RACK_SYSINFO_SCRIPT": "sysinfo.sh",
             "RACK_VALIDATION_SCRIPT": "run_singlerack.sh",
@@ -1547,7 +1544,7 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
                     _SCRIPT_DEFAULTS.setdefault(ek, sc)
         except Exception:
             _logger.debug("_execute_automated_step: ignoring error", exc_info=True)
-        resolved = _os.environ.get(command, "").strip()
+        resolved = os.environ.get(command, "").strip()
         if not resolved and default_scripts and command in _SCRIPT_DEFAULTS:
             resolved = str(default_scripts / _SCRIPT_DEFAULTS[command])
         if not resolved:
@@ -1575,7 +1572,7 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
                     exc_info=True,
                 )
                 if not target:
-                    ct_range = _os.environ.get("RACK_VALIDATION_CT_RANGE", "01-18").strip() or "01-18"
+                    ct_range = os.environ.get("RACK_VALIDATION_CT_RANGE", "01-18").strip() or "01-18"
                     target = f"{rack_for_target}-ct[{ct_range}]"
         if target:
             host_cmd += f" {target}"

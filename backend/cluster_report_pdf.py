@@ -23,6 +23,7 @@ makes it unreadable.
 """
 from __future__ import annotations
 
+import io
 import logging
 import math
 from typing import Any
@@ -77,8 +78,6 @@ def to_pdf(dataset: dict[str, Any]) -> bytes:
         )
     except ImportError as exc:  # pragma: no cover - exercised only without the dependency
         raise RuntimeError("reportlab is not installed; PDF rendering unavailable") from exc
-
-    import io
 
     meta = dataset.get("meta") or {}
     buf = io.BytesIO()

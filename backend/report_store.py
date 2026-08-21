@@ -64,13 +64,11 @@ _lock = threading.RLock()
 
 def reports_dir() -> Path:
     """Directory holding saved reports, created on first use."""
-    from pathlib import Path as _P
-
     base = os.environ.get("NVIS_REPORTS_DIR", "").strip()
     if base:
-        path = _P(base)
+        path = Path(base)
     else:
-        path = _P(__file__).resolve().parent.parent / "var" / "reports"
+        path = Path(__file__).resolve().parent.parent / "var" / "reports"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

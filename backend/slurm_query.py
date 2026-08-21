@@ -40,7 +40,6 @@ from config_env import _eget, _env_int
 from core import SLURM_JOB_ID_RE, SLURM_STDOUT_RE
 from core import rpath as _rpath
 from core import slurm_job_base_id as _slurm_job_base_id
-from core import slurm_job_base_id as core_slurm_job_base_id
 from paths import _allowed_roots, _default_log_dir, _resolve_log_dir
 from platforms import get_platform as _get_platform
 
@@ -262,7 +261,7 @@ def _slurm_job_log_path(job_id: str, log_dir: Path) -> tuple[str, str]:
     """Resolve a finished job's stdout path: ``scontrol`` ``StdOut=`` (jobs still within
     MinJobAge), else glob the dashboard log dir for the launcher's ``*_<jid>.out`` /
     ``*-<jid>.txt`` (for jobs that have aged out of the controller)."""
-    jid = core_slurm_job_base_id(job_id) or ""
+    jid = _slurm_job_base_id(job_id) or ""
     if not jid:
         return "", "invalid"
     try:

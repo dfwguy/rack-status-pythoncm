@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 
 from transport.base import (
@@ -46,7 +47,6 @@ class SSHConfig:
 
 def _mux_control_dir() -> str:
     """A writable dir for ControlMaster sockets (~/.ssh preferred, else temp)."""
-    import tempfile
 
     d = os.path.expanduser("~/.ssh")
     if os.path.isdir(d) and os.access(d, os.W_OK):

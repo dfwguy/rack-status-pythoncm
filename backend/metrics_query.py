@@ -43,6 +43,7 @@ import logging
 import math
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -298,7 +299,6 @@ def _instant(expr: str) -> list[dict[str, Any]]:
 
 
 def _range(expr: str, minutes: int, step: str) -> list[dict[str, Any]]:
-    import time
 
     now = int(time.time())
     params = {"query": expr, "start": str(now - minutes * 60), "end": str(now), "step": step}

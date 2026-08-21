@@ -9,14 +9,19 @@
 #                           immediately: it found a 28-line pdsh runner duplicated between
 #                           api/bug_report.py and api/rack_power.py.
 #
-# Two more were measured and deliberately deferred rather than quietly dropped:
+#   reimported (W0404)      the same object bound twice in one module. Found 8, all now fixed.
+#                           Safe to collapse because a re-import is never a second instance:
+#                           `import os` then `import os as _os` gives `os is _os` -> True, since
+#                           Python serves the cached sys.modules entry. So the 4 aliased cases
+#                           (_os, _Path, _P, and two names for core.slurm_job_base_id) were one
+#                           object under two names, and collapsing them is a rename, not a
+#                           behaviour change. Verified by identity check, not by reasoning.
 #
-#   reimported (W0404)      8 real findings. Only 4 are one-line removals (host_exec, shlex, math,
-#                           time already bound at module level). The other 4 are ALIASED reimports
-#                           -- `import os as _os`, `from pathlib import Path as _P` -- where the
-#                           alias is a live binding the function body uses, so "removing the
-#                           redundant import" means renaming every usage. Worth doing, not worth
-#                           doing blind inside a config commit.
+# Worth distinguishing from the superficially similar `import logging.config` that ruff removed from
+# logging_config.py: `logging`, `logging.config` and `logging.handlers` are THREE distinct module
+# objects, and importing handlers does not attach `.config` (hasattr is False). That was not a
+# duplicate binding at all -- it was an unused import of a different module, and had the file
+# actually called logging.config.dictConfig, removing it would have been an AttributeError.
 #
 # cyclic-import (R0401) was tried and deliberately left off. It reports 3 cycles here --
 # transport.base <-> transport.hop, the same through transport.shellfs, and cluster_report <->
@@ -50,6 +55,7 @@ disable = all
 
 enable =
     duplicate-code,
+    reimported,
 
 # Not enabled, and each for a stated reason rather than because it was noisy:
 #

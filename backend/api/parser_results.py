@@ -33,6 +33,7 @@ result appearing with no history behind it.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -321,11 +322,9 @@ def _grafana_parser_embed_context(
 
 def _demo_parser_results():
     """Return synthetic parser results for demo mode (no parser.sh needed)."""
-    import hashlib as _hl
-    import math
     rack = (request.args.get("rack") or "demo-rack").strip()
     job_id = (request.args.get("job_id") or "0").strip()
-    seed = int(_hl.md5(f"{rack}:{job_id}".encode()).hexdigest()[:8], 16)
+    seed = int(hashlib.md5(f"{rack}:{job_id}".encode()).hexdigest()[:8], 16)
     rng = __import__("random").Random(seed)
 
     sizes = [2**i for i in range(10, 31)]
