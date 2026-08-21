@@ -84,7 +84,9 @@ def module_names():
 
 
 failures = []
-names = list(module_names())
+# `app` is imported explicitly below, as the composition root. Skipping it here keeps a failure in
+# it from being reported twice, which is confusing in the one moment someone is reading this output.
+names = [n for n in module_names() if n != "app"]
 for name in names:
     try:
         importlib.import_module(name)
