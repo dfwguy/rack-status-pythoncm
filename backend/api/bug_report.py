@@ -64,60 +64,22 @@ bp = Blueprint("bug_report", __name__, url_prefix="")
 
 
 def run_bug_report_pdsh(pdsh_w: str) -> dict:
-    """Run nvidia-bug-report.sh on each host via pdsh (same -w pattern as GPU reset).
-
-    KNOWN DUPLICATION, recorded rather than hidden: the body below is ~28 lines identical to
-    ``api.rack_power.run_services_restart`` -- dry-run short-circuit, ``run_on_host``, the
-    FileNotFoundError/TimeoutExpired mapping and the result dict. Only the inner command, the
-    timeout key and the dry-run key differ, so it wants one helper taking a built argv.
-
-    Not extracted here on purpose: neither function has a single test (checked), and they fan out
-    pdsh across a rack to reset GPUs and restart munge/slurmd/imex. An untested refactor of that,
-    riding along in a commit that adds lint config, is the wrong order -- tests first, then the
-    extraction, then this suppression comes off.
-    """
+    """Run nvidia-bug-report.sh on each host via pdsh (same -w pattern as GPU reset)."""
     w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
-    remote = _bug_report_remote_dir()
-    rq = shlex.quote(remote)
+    rq = shlex.quote(_bug_report_remote_dir())
     inner = f"mkdir -p {rq}/$HOSTNAME && cd {rq}/$HOSTNAME && nvidia-bug-report.sh"
-    timeout = max(120, _env_int("RACK_BUG_REPORT_TIMEOUT", 10800))
-    dry = os.environ.get("RACK_BUG_REPORT_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
-    plat = _get_platform()
     fan = max(1, _env_int("RACK_BUG_REPORT_PDSH_FANOUT", 32))
-    cmd = plat.pdsh_cmd(w, inner, fanout=fan)
-    cmd_display = " ".join(shlex.quote(c) for c in cmd)
-    if dry:
-        return {
-            "returncode": 0,
-            "stdout": "dry-run (RACK_BUG_REPORT_DRY_RUN)\n" + cmd_display,
-            "stderr": "",
-            "command_display": cmd_display,
-            "pdsh_w": w,
-        }
-    try:
-        proc = host_exec.run_on_host(
-            cmd,
-            timeout=timeout,
-        )
-    except FileNotFoundError:
-        raise OSError("pdsh executable not found") from None
-    except subprocess.TimeoutExpired:
-        return {
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"timeout after {timeout}s",
-            "command_display": cmd_display,
-            "pdsh_w": w,
-        }
-    return {
-        "returncode": proc.returncode,
-        "stdout": (proc.stdout or "").strip(),
-        "stderr": (proc.stderr or "").strip(),
-        "command_display": cmd_display,
-        "pdsh_w": w,
-    }
+    return host_exec.run_pdsh_job(
+        _get_platform().pdsh_cmd(w, inner, fanout=fan),
+        pdsh_w=w,
+        # Hours, not minutes: nvidia-bug-report.sh is slow and runs on every node at once.
+        timeout=max(120, _env_int("RACK_BUG_REPORT_TIMEOUT", 10800)),
+        dry_run=os.environ.get("RACK_BUG_REPORT_DRY_RUN", "").strip().lower()
+        in ("1", "true", "yes"),
+        dry_run_label="RACK_BUG_REPORT_DRY_RUN",
+    )
 
 
 _BUG_REPORT_PDSH_PATH_RE = re.compile(

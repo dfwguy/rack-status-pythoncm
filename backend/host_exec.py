@@ -643,6 +643,64 @@ def run_on_host(
     )
 
 
+def run_pdsh_job(
+    cmd: list[str],
+    *,
+    pdsh_w: str,
+    timeout: int,
+    dry_run: bool = False,
+    dry_run_label: str = "",
+) -> dict:
+    """Run an already-built pdsh argv and shape the outcome the fan-out endpoints report.
+
+    The endpoints differ in what they ask pdsh to do -- collect nvidia-bug-report.sh, restart
+    munge/slurmd/nvidia-imex -- but not in what happens around it, which is the part worth having
+    once: render the argv for the operator, honour the dry run, and turn the two failures that are
+    not the command's fault into an answer rather than a traceback.
+
+    Takes a BUILT argv rather than a rack and an inner command, deliberately. Composing it here
+    would mean importing ``platforms`` into the transport layer, and ``platforms.bcm`` runs its
+    cmsh through this module -- so the convenience would buy an import cycle. The caller owns
+    ``plat.pdsh_cmd(...)``; this owns everything after it.
+
+    A non-zero return code is DATA, not an error: pdsh exits non-zero when any single node fails,
+    and a 71-of-72 result is something the operator needs to see rather than a 500.
+    """
+    cmd_display = " ".join(shlex.quote(c) for c in cmd)
+    if dry_run:
+        note = f"dry-run ({dry_run_label})" if dry_run_label else "dry-run"
+        return {
+            "returncode": 0,
+            "stdout": f"{note}\n{cmd_display}",
+            "stderr": "",
+            "command_display": cmd_display,
+            "pdsh_w": pdsh_w,
+        }
+    try:
+        proc = run_on_host(cmd, timeout=timeout)
+    except FileNotFoundError:
+        # `from None` on purpose: the caller wants "pdsh is not installed on the head node", not a
+        # chained ENOENT naming a path that means nothing to an operator.
+        raise OSError("pdsh executable not found") from None
+    except subprocess.TimeoutExpired:
+        # Deliberately not re-raised. A wedged fan-out still has to return the command text, or the
+        # UI shows a failure with no way to tell what was attempted.
+        return {
+            "returncode": -1,
+            "stdout": "",
+            "stderr": f"timeout after {timeout}s",
+            "command_display": cmd_display,
+            "pdsh_w": pdsh_w,
+        }
+    return {
+        "returncode": proc.returncode,
+        "stdout": (proc.stdout or "").strip(),
+        "stderr": (proc.stderr or "").strip(),
+        "command_display": cmd_display,
+        "pdsh_w": pdsh_w,
+    }
+
+
 def popen_on_host(
     cmd: str | list[str],
     *,

@@ -73,21 +73,26 @@ enable =
 
 [SIMILARITIES]
 # Pylint's default is 4 lines, which reports 134 blocks here -- mostly short, unavoidable shapes
-# like a 4-line dict literal or an except/return pair. Measured on this tree:
+# like a 4-line dict literal or an except/return pair. Measured on this tree, after extracting
+# host_exec.run_pdsh_job:
 #
-#   4 lines -> 134    8 -> 42    12 -> 17    20 -> 1    30 -> 0
+#   8 lines -> 40    12 -> 15    16 -> 6    20 -> 0    30 -> 0
 #
-# Set at 30, which gates on egregious copy-paste in NEW code and is green today. Not 20, and the
-# reason is specific rather than squeamish: at 20 the single finding is the api/bug_report <->
-# api/rack_power pdsh runner, and R0801 CANNOT be suppressed at the duplication site -- pylint
-# attributes the message to an arbitrary third module (schedulers/base.py here, whichever it
-# happens to process last), so an inline `# pylint: disable=duplicate-code` in either participant
-# does nothing. The only ways to green at 20 are to refactor those two functions -- which have zero
-# test coverage and fan pdsh across a rack to reset GPUs and restart munge/slurmd/imex -- or to
-# suppress in an unrelated file that would stop matching the moment file order changes.
+# Set at 20, which is green and gates on any real copy-paste. It was 30 for one commit only because
+# the pdsh runner duplicated between api/bug_report and api/rack_power sat at 28 lines, and R0801
+# CANNOT be suppressed at the duplication site -- pylint attributes the message to an arbitrary
+# third module (schedulers/base.py here, whichever it processes last), so an inline disable in
+# either participant does nothing. That one is now extracted behind 15 tests, so the threshold
+# tightens instead.
 #
-# So: tests for those two endpoints, then the extraction, then drop this to 12 and work the 17.
-min-similarity-lines = 30
+# Going below 20 is a DESIGN job, not a mechanical one, which is why it is not done here. The next
+# tier is a recognisable family rather than scattered accidents: 6 blocks at 16 lines, spanning
+# api.logs (twice), api._common, api.slurm_ops, api.validation_runs, slurm_admin, slurm_query,
+# stream_exec, comments_store, cluster_metadata, naming and nvis_id_templates. They share the
+# "resolve a target, run something on the host, honour a dry run, shape a result dict" skeleton --
+# the same shape run_pdsh_job just absorbed for two of them. Consolidating the rest means deciding
+# what that skeleton IS, which is a citizen-level decision (see core-designs.mdc), not a rename.
+min-similarity-lines = 20
 ignore-comments = yes
 ignore-docstrings = yes
 ignore-imports = yes

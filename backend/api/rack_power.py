@@ -133,40 +133,14 @@ def run_services_restart(pdsh_w: str) -> dict:
     if not w:
         raise ValueError("empty pdsh -w pattern")
     plat = _get_platform()
-    timeout = max(30, _env_int("RACK_SERVICES_RESTART_TIMEOUT", 1800))
-    dry = os.environ.get("RACK_SERVICES_RESTART_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
-    cmd = plat.pdsh_cmd(w, plat.services_restart_remote_cmd())
-    cmd_display = " ".join(shlex.quote(c) for c in cmd)
-    if dry:
-        return {
-            "returncode": 0,
-            "stdout": "dry-run (RACK_SERVICES_RESTART_DRY_RUN)",
-            "stderr": "",
-            "command_display": cmd_display,
-            "pdsh_w": w,
-        }
-    try:
-        proc = host_exec.run_on_host(
-            cmd,
-            timeout=timeout,
-        )
-    except FileNotFoundError:
-        raise OSError("pdsh executable not found") from None
-    except subprocess.TimeoutExpired:
-        return {
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"timeout after {timeout}s",
-            "command_display": cmd_display,
-            "pdsh_w": w,
-        }
-    return {
-        "returncode": proc.returncode,
-        "stdout": (proc.stdout or "").strip(),
-        "stderr": (proc.stderr or "").strip(),
-        "command_display": cmd_display,
-        "pdsh_w": w,
-    }
+    return host_exec.run_pdsh_job(
+        plat.pdsh_cmd(w, plat.services_restart_remote_cmd()),
+        pdsh_w=w,
+        timeout=max(30, _env_int("RACK_SERVICES_RESTART_TIMEOUT", 1800)),
+        dry_run=os.environ.get("RACK_SERVICES_RESTART_DRY_RUN", "").strip().lower()
+        in ("1", "true", "yes"),
+        dry_run_label="RACK_SERVICES_RESTART_DRY_RUN",
+    )
 
 
 _PDSH_HOST_LINE_RE = re.compile(r"^([^:]+):\s*(.*)$")
