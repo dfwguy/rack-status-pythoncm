@@ -35,11 +35,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import analytics_cache  # noqa: E402
-import comments_store  # noqa: E402
-import log_time_window as ltw  # noqa: E402
-import stream_exec  # noqa: E402
-
+import analytics_cache
+import comments_store
+import log_time_window as ltw
+import stream_exec
 
 # --------------------------------------------------------------------------------------------
 # log_time_window: zone resolution
