@@ -1,0 +1,34 @@
+# Coverage configuration for the Python backend.
+#
+# CI measures only two modules (`--cov=ai_chat --cov=workflow_engine` in .gitlab-ci.yml), which
+# reports a number for 2 files out of 134 and calls it the project's coverage. This config measures
+# the backend, so a local run answers the question people actually mean.
+#
+# Tests are omitted from measurement. Including them inflates the total towards meaninglessness:
+# test files are executed by definition, so they report near-100% and drown the code under test.
+
+[run]
+source = backend
+branch = True
+omit =
+    backend/tests/*
+    # Vendored PAM helpers: ctypes bindings that only execute on a host with PAM configured.
+    backend/rack_web/pam_*
+    # Generated or environment-stamped, not logic.
+    backend/build-info.json
+
+[report]
+# A file with no executable statements says nothing; hide it rather than pad the file list.
+skip_empty = True
+precision = 1
+exclude_also =
+    # Unreachable by construction under test, and each is a deliberate guard rather than logic.
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    def __repr__
+    @(abc\.)?abstractmethod
+
+[html]
+directory = htmlcov
+title = nvis-rack-status backend coverage

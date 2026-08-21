@@ -86,6 +86,8 @@ Thumbs.db
 *.swo
 *~
 .coverage
+.coverage.*
+htmlcov/
 frontend/coverage/
 
 # Third-party vendor manuals (Dell/NVIDIA PDFs etc). Keep them in Drive, not here: they are
