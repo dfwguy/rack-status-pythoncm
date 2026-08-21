@@ -39,20 +39,39 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/nvis-tracked-XXXXXX")"
 trap "rm -rf '$WORK'" EXIT
 
 echo "[tracked-tree] ref=$REF  python=$PYTHON"
-echo "[tracked-tree] export dir: $WORK"
 
-# Only the paths the backend needs to import. Deliberately NOT the whole tree: dot-directories are
-# irrelevant here and some sandboxes refuse to create them under a temp dir.
-git archive "$REF" backend version.py help_content.json | tar -x -C "$WORK"
+# Two ways to get a tree containing ONLY tracked files, and which one applies is decided by whether
+# git exists here rather than by a flag.
+#
+# GitLab's `python:3.12-slim` job image has no git binary -- the runner clones in a separate helper
+# container -- so `git archive` is simply unavailable in CI. That is fine, because a CI job starts
+# from a fresh clone: the checkout ALREADY is the tracked tree, and there is no working-tree drift
+# for the export to strip. Locally the opposite holds and the export is the entire point.
+if command -v git >/dev/null 2>&1; then
+    echo "[tracked-tree] mode: export (git available) -> $WORK"
+    # Only the paths the backend needs to import. Deliberately NOT the whole tree: dot-directories
+    # are irrelevant here and some sandboxes refuse to create them under a temp dir.
+    git archive "$REF" backend version.py help_content.json | tar -x -C "$WORK"
+    ROOT="$WORK"
+else
+    echo "[tracked-tree] mode: in-place (no git -- assuming a clean CI checkout)"
+    if [[ "$REF" != "HEAD" ]]; then
+        echo "[tracked-tree] FAIL: ref '$REF' was requested but git is not available here." >&2
+        echo "[tracked-tree]       Only the checked-out tree can be verified without git." >&2
+        exit 1
+    fi
+    ROOT="$REPO_ROOT"
+fi
 
-if [[ ! -f "$WORK/backend/app.py" ]]; then
-    echo "[tracked-tree] FAIL: backend/app.py is not tracked at $REF" >&2
+if [[ ! -f "$ROOT/backend/app.py" ]]; then
+    echo "[tracked-tree] FAIL: backend/app.py is not present at $REF" >&2
     exit 1
 fi
 
-# Import every tracked backend module, not just app.py. app.py alone would miss a module that is
-# tracked but whose own import is broken, since nothing imports it at startup.
-cd "$WORK"
+# Import every backend module, not just app.py. app.py alone would miss a module that is tracked but
+# whose own import is broken, since nothing imports it at startup -- which is the one thing this
+# adds over the test suite, and it holds in both modes above.
+cd "$ROOT"
 RACK_STATUS_DEMO=1 \
 RACK_WEB_AUTH_DISABLED=1 \
 NVIS_LOG_LEVEL=ERROR \
