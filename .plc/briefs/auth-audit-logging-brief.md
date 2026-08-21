@@ -482,7 +482,7 @@ changing the shape.
 | `NVIS_LOG_FILE` | `var/logs/rack-status.log` | application log, its own budget (FR-7d) |
 | `NVIS_AUDIT_ENABLED` | `1` | on by default (FR-11) |
 | `NVIS_AUDIT_FILE` | `var/logs/audit/audit.jsonl` | separate file from the application log |
-| `NVIS_AUDIT_MAX_BYTES` / `NVIS_AUDIT_BACKUPS` | `5242880` / `3` | 15 MB ≈ 31 days at 1000 events/day (FR-7b) |
+| `NVIS_AUDIT_MAX_BYTES` / `NVIS_AUDIT_BACKUPS` | `5242880` / `3` | 20 MiB ≈ 41.8 days at 1000 events/day (FR-7b) — `backupCount=3` keeps **four** files, the active one included |
 | `NVIS_AUDIT_READS` | `0` | |
 | `NVIS_AUDIT_LONG_RETENTION` | `0` | FR-7c |
 | `NVIS_AUDIT_FLOOD_WINDOW_SEC` / `_THRESHOLD` | `60` / `10` | FR-10a |

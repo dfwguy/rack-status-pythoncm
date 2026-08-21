@@ -156,3 +156,88 @@ class TestAppliedToRealResponses:
         """Guard against a new after_request displacing the existing one."""
         resp = client.get("/api/auth-check")
         assert "no-store" in (resp.headers.get("Cache-Control") or "")
+
+
+class TestTC37HookOrdering:
+    """TC-37 (FR-6): two `after_request` hooks now share the chain, and order is the risk.
+
+    Flask runs `after_request` handlers in REVERSE registration order, so the audit hook -- which
+    `app.py` installs before the header decorators are declared -- runs last and therefore sees the
+    fully decorated response. Nothing enforces that except the position of one call, and inverting
+    it would be silent: headers would still reach the browser, and only the audit hook's view of
+    the response would change. Hence a test rather than a comment.
+
+    The event assertion is confined to `result`, because the FR-5 field set has no header or status
+    field and TC-6 pins that key set exactly.
+    """
+
+    @pytest.fixture
+    def observed(self, monkeypatch):
+        """Snapshot the headers AT hook time, via the hook's own seam.
+
+        A copy, not the response. Every `after_request` handler receives and mutates the SAME
+        Response object, so keeping a reference and inspecting it after the chain finished showed
+        the final headers regardless of order -- the first version of this fixture did exactly that
+        and the test passed even with the registration order deliberately inverted. Copying the
+        header map at the moment the hook runs is what makes the assertion mean anything.
+        """
+        from audit import request_hook
+
+        seen: list[dict[str, str]] = []
+        original = request_hook._record
+
+        def _spy(response):
+            seen.append(dict(response.headers))
+            return original(response)
+
+        monkeypatch.setattr(request_hook, "_record", _spy, raising=True)
+        return seen
+
+    @pytest.fixture
+    def client(self):
+        app_module.app.config["TESTING"] = True
+        with app_module.app.test_client() as c:
+            yield c
+
+    @pytest.fixture
+    def gated_client(self, monkeypatch):
+        """Auth on, so the gate produces a real 401. `_auth_enabled` reads env per call."""
+        monkeypatch.delenv("RACK_WEB_AUTH_DISABLED", raising=False)
+        monkeypatch.setenv("RACK_WEB_AUTH_MODE", "token")
+        monkeypatch.setenv("RACK_WEB_AUTH_TOKEN", "tc37-token")
+        app_module.app.config["TESTING"] = True
+        with app_module.app.test_client() as c:
+            yield c
+
+    HARDENING = ("X-Content-Type-Options", "Referrer-Policy", "Content-Security-Policy")
+
+    def test_headers_present_with_audit_hook_registered(self, client, observed):
+        """The named TC-37 artifact: headers on the response, and on what the audit hook saw."""
+        resp = client.get("/api/auth-check")
+        assert resp.status_code < 500
+
+        for header in self.HARDENING:
+            assert resp.headers.get(header), f"{header} missing from the served response"
+
+        assert observed, "the audit hook did not run, so its view of the response is untested"
+        hook_view = observed[-1]
+        for header in self.HARDENING:
+            assert hook_view.get(header), (
+                f"the audit hook saw a response without {header}, so it is running BEFORE the "
+                "security-headers hook -- registration order has been inverted"
+            )
+
+    def test_a_gate_refused_401_is_also_decorated(self, gated_client, observed):
+        """A refusal is exactly the response an attacker sees, so it needs the headers too."""
+        resp = gated_client.get("/api/auth-check")
+        assert resp.status_code == 401, "auth should be enabled for this case"
+        for header in self.HARDENING:
+            assert resp.headers.get(header), f"{header} missing from the 401"
+        if observed:
+            assert observed[-1].get("Content-Security-Policy")
+
+    def test_the_no_store_and_header_hooks_both_still_apply(self, client):
+        """Three hooks share the chain now; none may displace another."""
+        resp = client.get("/api/auth-check")
+        assert "no-store" in (resp.headers.get("Cache-Control") or "")
+        assert resp.headers.get("X-Content-Type-Options") == "nosniff"
