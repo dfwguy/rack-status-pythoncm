@@ -41,9 +41,13 @@ import time
 import uuid
 from urllib.parse import parse_qs
 
+import audit
+import core
 import host_exec
 import web_auth
 from core import is_valid_node_hostname, truthy_env
+
+from api import _common
 
 _logger = logging.getLogger("rack_web.api.terminal")
 
@@ -254,6 +258,11 @@ class _WebSocketTerminalMiddleware:
                     refused,
                     environ.get("REMOTE_ADDR") or "unknown",
                 )
+                # FR-10b: the one deliberate second audit call site. This refusal happens above
+                # Flask's router, so the after_request chokepoint cannot see it -- and this is the
+                # single highest-privilege surface in the product, the one whose refusals matter
+                # most. The flood guard keeps a retry loop from evicting the trail it belongs in.
+                _audit_terminal_refusal(refused, environ)
                 start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"forbidden\n"]
             try:
@@ -456,3 +465,34 @@ def install(app) -> None:  # type: ignore[no-untyped-def]
         _logger.info("web terminal disabled (RACK_ENABLE_WEB_TERMINAL)")
         return
     app.wsgi_app = _WebSocketTerminalMiddleware(app.wsgi_app)
+
+
+def _audit_terminal_refusal(reason: str, environ) -> None:
+    """Record a refused terminal upgrade (FR-10b).
+
+    Deliberately standalone rather than a method: it runs inside WSGI middleware with no Flask
+    request context, so it cannot use the ``after_request`` chokepoint's helpers and must read the
+    environ directly. ``core.resolve_client_addr`` is the same resolver the chokepoint uses, so the
+    two call sites agree about provenance rather than each inventing an answer.
+    """
+    try:
+        src_ip, src_ip_trust = core.resolve_client_addr(
+            environ.get("REMOTE_ADDR"),
+            environ.get("HTTP_X_FORWARDED_FOR"),
+            _common.trusted_networks(),
+        )
+        audit.emit(
+            action="terminal:open",
+            variant="stream",
+            result=audit.Result.REFUSED,
+            reason=reason,
+            principal="anonymous",
+            auth_method="none",
+            resource="/ws/terminal",
+            src_ip=src_ip,
+            src_ip_trust=src_ip_trust,
+            user_agent=environ.get("HTTP_USER_AGENT", ""),
+            cluster="",
+        )
+    except Exception:
+        _logger.debug("_audit_terminal_refusal: ignoring error", exc_info=True)

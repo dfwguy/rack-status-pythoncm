@@ -235,6 +235,17 @@ So the first `NVIS_AUDIT_FLOOD_THRESHOLD` refusals for a given principal, action
 written individually — a lone refusal is always visible immediately — and further identical ones
 accumulate into a single summary carrying the count.
 
+**A source address is provenance, not authentication.** `src_ip` and its trust label exist to stop
+the *trivial* forgery — an operator setting `X-Forwarded-For` and having it recorded as fact — and
+to say honestly how the value was derived. They do not authenticate the peer, and no amount of
+proxy-list hygiene can: BGP hijacking, a TLS-intercepting proxy, or anyone on the path can forge or
+observe a connection. The only mechanism that genuinely binds an identity to a connection is
+**mutual TLS**, where both ends present a certificate from a trusted CA. Phase 0.5 already ships the
+CA, the certificate tooling and a TLS 1.2 floor, so client certificates are an increment rather than
+a new capability — and short-lived client certs compose with the revocation design in
+`PHASE3_POLICY_ENGINE_SPIKE.md` §5b. Until then, read `src_ip` as "where the connection appeared to
+come from", never as "who this was".
+
 **On source addresses in the audit trail.** An audit event records the TCP peer address it
 actually sees. Operators normally reach this dashboard through an SSH tunnel, and in that case
 the peer is the **tunnel endpoint** — usually `127.0.0.1` — not the operator's workstation. The
