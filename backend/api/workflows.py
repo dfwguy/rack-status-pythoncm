@@ -94,6 +94,11 @@ def api_workflow_generate_mermaid():
     steps = body.get("steps", [])
     if not steps:
         return jsonify({"ok": False, "error": "steps array is required"}), 400
+    # Truthiness alone let a non-list through: `{"steps": 1}` passed the check above and reached
+    # `for step in steps`, raising TypeError inside the generator and 500ing on a client's bad
+    # request. A wrong type is the caller's error, so it gets a 400 like the missing case.
+    if not isinstance(steps, list):
+        return jsonify({"ok": False, "error": "steps must be an array"}), 400
     mermaid = workflow_engine.generate_mermaid_from_steps(steps)
     return jsonify({"ok": True, "mermaid": mermaid})
 
