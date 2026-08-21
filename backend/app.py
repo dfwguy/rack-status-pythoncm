@@ -266,56 +266,7 @@ _JOB_ENV_BOOTSTRAP_DONE = False
 _JOB_ENV_BOOTSTRAP_DONE = False
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 _APP_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{8,80}$")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 _validation_activities_refresh_thread: threading.Thread | None = None
@@ -453,38 +404,6 @@ def _bootstrap_validation_activities_refresh_at_startup() -> None:
         )
         _validation_activities_refresh_thread = thread
         thread.start()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # One implementation, in the module the API packages can also import. Aliased rather than
@@ -773,6 +692,18 @@ def _wsgi_environ_authenticated(environ) -> bool:
 web_auth.set_wsgi_authenticator(_wsgi_environ_authenticated)
 
 
+# The audit chokepoint is installed HERE, deliberately, and not at the end of the file. Flask runs
+# ``after_request`` handlers in reverse registration order, so the first registered runs last —
+# which is what lets the audit hook observe the fully decorated response instead of one that has
+# not yet been through the security-headers hook below. Moving this call after those decorators
+# would silently invert that.
+import audit as _audit
+from audit import request_hook as _audit_request_hook
+
+_audit.configure()
+_audit_request_hook.install(app)
+
+
 @app.after_request
 def _api_json_no_store(response):
     """Avoid stale dashboard JSON behind browsers or reverse proxies."""
@@ -808,63 +739,9 @@ def _security_headers(response):
     return response
 
 
-
-
-
-
-
-
-
-
 # Log-basename classification lives in nvis_id_templates so this module, native_status and
 # the shell probes cannot drift apart on which table a log belongs to. These wrappers exist
 # only to bind the caller's NvisNaming instance; keep them free of logic.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # Which parser.sh table each stage is the authority for. A stage's rows are taken from that
@@ -874,71 +751,8 @@ def _security_headers(response):
 # these is parser.sh's all-"---" placeholder rather than a result.
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # --- whole-file scanner -----------------------------------------------------------------------
 # The scanner client and its caches live in logscan_cache.py, imported under these names above.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # --- Grafana deep-links (open full BCM/NMC dashboards in a new tab, scoped by rack/host) --------
@@ -949,29 +763,6 @@ def _security_headers(response):
 # template variables — so we just build ``/d/<uid>/<slug>?var-<Rack>=..&var-<hostname>=..`` URLs.
 # The catalog below defaults to the stock NMC GB200 dashboards but is fully overridable via
 # ``RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS`` (JSON) so this is not hardwired to any one site.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # The single path resolver, shared with paths.py and the api/ modules rather than redeclared:
@@ -986,186 +777,12 @@ _median_float = core.median_float
 _last_regex_int = core.last_regex_int
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 _nvis_workspace_dir_effective = config_env._nvis_workspace_dir_effective
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # The snapshot cache lives here, so app.py is what can build the block; ai_chat only needs to be
 # able to call it. Registered once at import so every prompt builder gets it, not just /api/ai/chat.
 ai_chat.set_live_inventory_provider(_ai_live_inventory_block)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -1179,210 +796,17 @@ ai_chat.set_live_inventory_provider(_ai_live_inventory_block)
 # ---------------------------------------------------------------------------
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # NVLMAPPER output zips under reports/<rack>/ (staged + ./run_nvlmapper.sh from app.py).
 # Parser Excel copies (e.g. rack-parser-export-*.xlsx) and other workbooks under reports/.
 # Reserved inventory ``host`` for ``*.xlsx`` files sitting directly under the reports base dir (not in a subfolder).
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # last_job / scancel: plain id or job array id (e.g. 12345_0)
 _SLURM_SCANCEL_JOB_ID_RE = core.SLURM_JOB_ID_RE  # one definition, in core
 
 
-
-
-
-
-
-
 # Terminal (finished) job states — what the Scheduler "recent jobs" panel shows so a
 # job that has left squeue (success OR failure) is still visible with its log.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # =====================================================================================
@@ -1424,28 +848,16 @@ _SLURM_SCANCEL_JOB_ID_RE = core.SLURM_JOB_ID_RE  # one definition, in core
 _truthy_arg = core.truthy_arg
 
 
-
-
 # --- "did parser.sh actually parse anything?" ----------------------------------------
-
-
-
-
 
 
 # --- host-aware capped log read ------------------------------------------------------
 
 
-
-
 #: universal_parser metric name -> where the same number lives in an nvis_logscan record.
 
 
-
-
 # --- history ingest ------------------------------------------------------------------
-
-
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1554,17 +966,7 @@ def _lake_capture_request(response):
     return response
 
 
-
-
-
-
-
-
-
-
 # --- whole-directory inventory (every extension, every depth) ------------------------
-
-
 
 
 # --- history read routes -------------------------------------------------------------
@@ -1576,93 +978,9 @@ def _lake_capture_request(response):
 # --- universal ingest routes ---------------------------------------------------------
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # Metrics worth a fleet baseline, per workload kind. Names match what
 # ``results_history`` stores from parser.sh (records_from_parser_json) and from
 # ``universal_parser`` — both write the same lower-cased metric_name.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 #: Report kind -> the formats it can render, first entry being the default.
@@ -1674,94 +992,9 @@ def _lake_capture_request(response):
 #: Filename extension and MIME type per format.
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #: Small on purpose: each finished job pins a multi-MB document until it is collected.
 #: How long a "running" job stays eligible for idempotent reuse. Comfortably longer than a
 #: full sweep (~4 minutes at 2000 nodes) and short enough that a dead worker frees its key.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # Custom launch env vars (UI "Extra environment variables" field). A key must be a valid
@@ -1774,237 +1007,13 @@ def _lake_capture_request(response):
 # (soak); the cap only rejects absurd hand-crafted payloads, it does not pin the choices.
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @app.route("/")
 def index():
     """Serve the React SPA."""
     return _serve_spa_asset("index.html")
 
 
-
-
 # Strip ``module load <mod> &&`` from command strings for cluster-dashboard display only.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @app.route("/spa/")
@@ -2025,9 +1034,6 @@ def serve_root_spa(path: str):
 # ---------------------------------------------------------------------------
 
 
-
-
-
 # ---------------------------------------------------------------------------
 # AI Chat routes
 # ---------------------------------------------------------------------------
@@ -2041,23 +1047,6 @@ def serve_root_spa(path: str):
 # ---------------------------------------------------------------------------
 # Workflow routes
 # ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # Per-domain API modules under backend/api/, discovered automatically. Drop a module in that
@@ -2121,7 +1110,4 @@ if __name__ == "__main__":
 # attempt was invisible even though it consumed an 18-node allocation and drained a tray. Capturing
 # only successful runs is the same blank-read-as-success failure this platform exists to catch.
 # ---------------------------------------------------------------------------------------------
-
-
-
 
