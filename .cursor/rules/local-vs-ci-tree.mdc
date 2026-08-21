@@ -1,0 +1,69 @@
+---
+description: Why "it passes locally" says nothing about CI — untracked files, missing tools, and the unbuilt frontend
+alwaysApply: true
+---
+
+# Your working tree is a superset of the commit, and of any CI checkout
+
+A local pass proves the code works **with whatever else is lying around your tree**. CI starts from
+a fresh clone of tracked files only, in a slim image. Three different versions of this gap turned
+the pipeline red on 2026-08-21 alone, each with a green local suite.
+
+## 1. The frontend is not built in CI — this is the one that bites tests
+
+`static/spa/` is a gitignored **build artifact**: present in every developer's tree, absent from
+every CI checkout. So four routes behave differently:
+
+| Route | Local (built) | CI (not built) |
+|---|---|---|
+| `/`, `/index.html`, `/spa/`, `/spa/index.html` | `200` | **`503`, `text/html`** |
+
+That 503 is deliberate, not a bug: `api/_common.serve_spa_asset` answers a missing bundle with a
+human-readable *HTML* page ("Frontend not built") because the audience is somebody in a browser,
+and 503 because an unbuilt frontend is unavailability rather than a server fault. Its contract is
+pinned by `test_app_api.py::test_missing_shell_503s_instead_of_raising`.
+
+**It is the only deliberate non-JSON 5xx in the product.** Every other error path returns JSON — a
+JSON body carrying status 500 is in fact the dominant convention here (100 sites against 14 using
+502). So a test that walks the URL map and asserts "any 5xx must be JSON" passes locally and fails
+in CI on exactly these four routes. That happened; eight tests.
+
+Any test that iterates `app.url_map` must tolerate both states — see `_assert_did_not_crash` in
+`backend/tests/test_endpoint_smoke.py`, which accepts a 503 whose body contains `Frontend not
+built`. `test_web_auth_gate.py`'s `spa_index` fixture exists for the same reason.
+
+Do **not** "fix" this by building the frontend in the python-test job. That hides the divergence
+instead of removing it, and the SPA-missing path is real behaviour on any backend-only deployment.
+
+## 2. A committed import can name an untracked module
+
+`app.py` did `from audit import request_hook` while `request_hook.py` had never been `git add`ed.
+Locally: 1686 tests green. In CI: `ImportError` and 34 collection errors. `git status` showed the
+untracked file next to twenty other lines nobody reads twice.
+
+## 3. The job image is not your shell — and it cuts both ways
+
+`python:3.12-slim` has **no `git`**: the runner clones in a separate helper container, so a script
+that shelled out to `git archive` died with `git: command not found`. Check `command -v <tool>`
+before depending on anything that is not Python or the stdlib.
+
+The reverse also happens. macOS ships **bash 3.2** as `/bin/bash`, while CI images carry bash 5, so
+`mapfile`, `declare -A` and `${var,,}` are all fine on a runner and fail on the workstation. For
+anything under `bin/` that a developer runs, prefer constructs both shells have — `tar --exclude`
+over building an array, for instance. `bin/scripts/*` is the deliberate exception: those execute on
+the cluster head node (Linux, bash 4+), which is why ~28 of them use `mapfile` and why
+`run-validation-preset.sh` guards with an explicit "brew install bash" message instead.
+
+## Before pushing anything that touches routes, imports, or scripts
+
+```bash
+bin/check-tracked-tree.sh              # tracked files only, imports all 134 modules (~3s)
+bin/check-tracked-tree.sh --with-tests # ...then the suite, in a tree with NO build artifacts
+```
+
+The export contains only tracked files, so it reproduces the runner's tree — including the absent
+`static/spa/` — without needing a runner. To reproduce just the frontend case by hand:
+
+```bash
+mv static/spa/index.html /tmp/ && python -m pytest backend/tests -q; mv /tmp/index.html static/spa/
+```

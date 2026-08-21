@@ -17,13 +17,28 @@
 # So this script asks the only question that actually settles it: extract ONLY what git tracks at a
 # given ref, into a directory with no relationship to this checkout, and import the app there.
 #
+# It also answers a second question, with --with-tests, and that one has now bitten three times in
+# one day. The export contains only tracked files, so it has no `static/spa/` -- a gitignored build
+# artifact that exists in every developer's tree and in no CI checkout. Tests that walk HTTP
+# routes therefore behave DIFFERENTLY here than locally: the four SPA shell routes answer 200 with
+# a built frontend and 503 without one. A local `pytest` cannot see that class of failure at all,
+# which is exactly how eight endpoint tests reached the pipeline green from this workstation.
+# Running the suite inside the export reproduces the runner's tree without needing the runner.
+#
 # Usage:
-#   bin/check-tracked-tree.sh            # check HEAD
-#   bin/check-tracked-tree.sh <ref>      # check any ref (e.g. origin/main, a tag, a SHA)
+#   bin/check-tracked-tree.sh                    # imports only, ~3s
+#   bin/check-tracked-tree.sh --with-tests       # imports, then the suite in a build-artifact-free tree
+#   bin/check-tracked-tree.sh <ref>              # any ref (origin/main, a tag, a SHA)
 #
 # Exits non-zero on failure, so it can gate a push or a CI job.
 
 set -euo pipefail
+
+WITH_TESTS=0
+if [[ "${1:-}" == "--with-tests" ]]; then
+    WITH_TESTS=1
+    shift
+fi
 
 REF="${1:-HEAD}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,9 +64,25 @@ echo "[tracked-tree] ref=$REF  python=$PYTHON"
 # for the export to strip. Locally the opposite holds and the export is the entire point.
 if command -v git >/dev/null 2>&1; then
     echo "[tracked-tree] mode: export (git available) -> $WORK"
-    # Only the paths the backend needs to import. Deliberately NOT the whole tree: dot-directories
-    # are irrelevant here and some sandboxes refuse to create them under a temp dir.
-    git archive "$REF" backend version.py help_content.json | tar -x -C "$WORK"
+    # Every tracked top-level entry except dot-entries and frontend/.
+    #
+    # Wider than it first needs to be, and each exclusion has a reason. The import check alone only
+    # needs `backend`, but --with-tests runs the suite, and two test modules read bin/scripts/ --
+    # exporting only backend made them fail with FileNotFoundError, which is a broken harness
+    # rather than the divergence being hunted. Dot-entries are dropped because some sandboxes
+    # refuse to create them under a temp dir and none of them affect a pytest run (there is no
+    # pytest ini in this repo). frontend/ is dropped because it is large and the Python suite never
+    # reads it -- and crucially, NOT exporting it is faithful: static/spa/ is gitignored, so a real
+    # CI checkout has no built frontend either. That absence is the whole point.
+    # Filtering happens at EXTRACTION, via tar, rather than by building an argument list.
+    #
+    # Two portability traps avoided. `mapfile` would read the path list into an array, but it is
+    # bash 4+ and macOS ships bash 3.2 as /bin/bash -- the divergence this whole file is about,
+    # cutting the other way. Word-splitting an unquoted variable of paths works today only because
+    # no tracked top-level name contains a space. `tar --exclude` needs neither: it is supported by
+    # both bsdtar (macOS) and GNU tar (Linux, and the CI image).
+    git archive "$REF" | tar -x -C "$WORK" \
+        --exclude='.*' --exclude='frontend' --exclude='frontend/*'
     ROOT="$WORK"
 else
     echo "[tracked-tree] mode: in-place (no git -- assuming a clean CI checkout)"
@@ -133,5 +164,21 @@ if failures:
 
 print(f"[tracked-tree] OK: {len(names)} modules imported, app exposes {routes} routes")
 PY
+
+if [[ "$WITH_TESTS" == "1" ]]; then
+    if [[ ! -d "$ROOT/backend/tests" ]]; then
+        echo "[tracked-tree] FAIL: backend/tests is not tracked, so --with-tests cannot run" >&2
+        exit 1
+    fi
+    # No static/spa/ here, by construction. That is the point: the SPA shell routes answer 503
+    # rather than 200, exactly as they do on a runner, so a route-walking test that only ever ran
+    # against a built frontend gets its first honest result.
+    echo "[tracked-tree] running the suite in a build-artifact-free tree..."
+    ( cd "$ROOT" && "$PYTHON" -m pytest backend/tests -q --no-header ) || {
+        echo "[tracked-tree] FAIL: the suite passes in your tree and fails without build artifacts." >&2
+        echo "[tracked-tree]       This is the local/CI gap -- see .cursor/rules/local-vs-ci-tree.mdc" >&2
+        exit 1
+    }
+fi
 
 echo "[tracked-tree] PASS: the committed tree stands on its own"

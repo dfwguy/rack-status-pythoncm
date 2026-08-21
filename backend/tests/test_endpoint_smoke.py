@@ -178,6 +178,14 @@ MUTATING = sorted(
 )
 
 
+#: The one deliberate non-JSON 5xx in the product. `api/_common.serve_spa_asset` answers a missing
+#: SPA bundle with a human-readable HTML page, because its audience is somebody looking at a browser
+#: rather than a script parsing a response -- and it is 503 because an unbuilt frontend is
+#: unavailability, not a server fault. Its contract is pinned by
+#: test_app_api.py::test_missing_shell_503s_instead_of_raising, so this only has to recognise it.
+_SHELL_NOT_BUILT = "Frontend not built"
+
+
 def _assert_did_not_crash(resp, what: str) -> None:
     """A crash is an exception or an HTML error page -- NOT any particular status code.
 
@@ -199,12 +207,21 @@ def _assert_did_not_crash(resp, what: str) -> None:
     braces, and it is what would catch the crash if TESTING were ever turned off.
     """
     assert resp.status_code < 600, f"{what} -> {resp.status_code}: not a response at all"
-    if resp.status_code >= 500:
-        assert resp.is_json, (
-            f"{what} -> {resp.status_code} with a {resp.content_type} body, which means an "
-            f"unhandled exception rather than a reported error:\n"
-            f"{resp.get_data(as_text=True)[:900]}"
-        )
+    if resp.status_code < 500:
+        return
+
+    body = resp.get_data(as_text=True)
+    # The SPA shell is the documented exception, and this is where CI and a developer's tree
+    # disagree: `static/spa/` is a build artifact and is gitignored, so the four shell routes
+    # answer 200 locally and 503-with-an-HTML-page on a runner that never ran `npm run build`.
+    # Local runs cannot see this class of failure at all, which is why it reached the pipeline.
+    if resp.status_code == 503 and _SHELL_NOT_BUILT in body:
+        return
+
+    assert resp.is_json, (
+        f"{what} -> {resp.status_code} with a {resp.content_type} body, which means an "
+        f"unhandled exception rather than a reported error:\n{body[:900]}"
+    )
 
 
 def test_the_url_map_is_worth_walking():
