@@ -267,7 +267,11 @@ class TestTC5DefaultsAndNoNetwork:
 
         assert set(resolved) == set(lc.SETTINGS), "resolve_settings must cover the registry"
         for name, value in resolved.items():
-            assert value is not None and value != "", f"{name} has no usable default"
+            # "Usable" is not the same as "non-empty". RACK_WEB_TRUSTED_PROXIES defaults to the
+            # empty string on purpose: an empty trust list means no forwarded header is ever
+            # believed, which is the secure default rather than a missing one (FR-8). Asserting
+            # non-emptiness here would push the wrong default onto a security setting.
+            assert value is not None, f"{name} has no usable default"
             assert isinstance(value, type(lc.SETTINGS[name].default)), (
                 f"{name} default type drifted"
             )

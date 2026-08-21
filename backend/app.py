@@ -1535,7 +1535,12 @@ def _lake_capture_request(response):
             "http_status": response.status_code,
             "duration_ms": round((time.time() - getattr(g, "_lake_t0", time.time())) * 1000, 1),
             "operator": _operator_from_request(),
-            "remote_addr": request.headers.get("X-Forwarded-For") or request.remote_addr,
+            # Was `request.headers.get("X-Forwarded-For") or request.remote_addr`, which believed
+            # an attacker-supplied header unconditionally — so any operator could attribute their
+            # actions to any address, in a record that reads as authoritative. Same resolver and
+            # same rule as the audit trail now: the header counts only when the peer is a
+            # configured trusted proxy, and the derivation is labelled either way (FR-8).
+            **dict(zip(("remote_addr", "remote_addr_trust"), _common.client_addr())),
             "rack": rack,
         }
         lake_sink.push_run(
@@ -2071,6 +2076,7 @@ _api_package.register(app)
 # test_audit_actions.py's job — enforcing it at startup would stop a half-migrated tree booting
 # at all, and the declarations span 38 modules.
 import audit.actions as _audit_actions
+from api import _common
 
 _audit_actions.build_registry(app)
 

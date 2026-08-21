@@ -25,6 +25,8 @@ import os
 import re
 import shlex
 
+import core
+import logging_config as lc
 import rack_locks
 from flask import jsonify, request, send_file
 from naming import _normalize_rack_id
@@ -185,3 +187,58 @@ def parse_sysinfo_request(body: dict) -> tuple[dict | None, tuple[object, int] |
         },
         None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Client address provenance (FR-8, NFR-14) -- the Flask half of core.resolve_client_addr
+# ---------------------------------------------------------------------------
+
+#: Deploy-time only, read straight from the process environment rather than through the settings
+#: ladder: widening a trust list is a privilege change, so an authenticated dashboard operator must
+#: not be able to do it at runtime (NFR-5). Same exception already taken for
+#: ``RACK_WEB_ALLOWED_ORIGINS`` and ``RACK_WEB_TLS_*``.
+TRUSTED_PROXIES = lc.register_setting(lc.Setting("RACK_WEB_TRUSTED_PROXIES", ""))
+
+_trusted_cache: tuple[str, tuple] | None = None
+_refusals_reported = False
+
+
+def trusted_networks() -> tuple:
+    """The accepted trusted-proxy networks, parsing once and reporting refusals once.
+
+    Empty by default, which is the safe default: with no trusted proxy configured, no forwarded
+    header is ever believed.
+    """
+    global _trusted_cache, _refusals_reported
+    raw = str(TRUSTED_PROXIES.resolve())
+    if _trusted_cache is not None and _trusted_cache[0] == raw:
+        return _trusted_cache[1]
+
+    accepted, refusals = core.parse_trusted_proxies(raw)
+    if refusals and not _refusals_reported:
+        _refusals_reported = True
+        for reason in refusals:
+            _logger.warning("RACK_WEB_TRUSTED_PROXIES: refusing %s", reason)
+    _trusted_cache = (raw, accepted)
+    return accepted
+
+
+def client_addr() -> tuple[str, str]:
+    """``(src_ip, src_ip_trust)`` for the request in flight.
+
+    Operators normally reach this dashboard through an SSH tunnel, so the peer is usually the
+    tunnel endpoint rather than the workstation. That is a real limit of the field and is
+    documented rather than papered over; what the label prevents is the *worse* outcome of
+    recording an attacker-supplied address as though it were verified.
+    """
+    return core.resolve_client_addr(
+        request.remote_addr,
+        request.headers.get("X-Forwarded-For"),
+        trusted_networks(),
+    )
+
+
+def reset_trusted_cache_for_tests() -> None:
+    global _trusted_cache, _refusals_reported
+    _trusted_cache = None
+    _refusals_reported = False

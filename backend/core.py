@@ -30,12 +30,14 @@ through that, never with a bare ``os.environ.get`` -- see ``core-designs.mdc`` Â
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import os
 import re
 import statistics
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
+from typing import Any
 
 import host_exec
 
@@ -230,3 +232,90 @@ def mean_finite(vals: list[float | None]) -> float | None:
     if not xs:
         return None
     return float(statistics.mean(xs))
+
+
+# ---------------------------------------------------------------------------
+# Client address provenance (FR-8, NFR-14)
+# ---------------------------------------------------------------------------
+
+#: How ``src_ip`` was arrived at. The label is the point: an audit field that looks precise and is
+#: not is worse than one that admits its limit.
+TRUST_PEER = "peer"                      # no forwarded header; the TCP peer is the whole truth
+TRUST_PROXY = "proxy"                    # resolved through a *configured* trusted proxy
+TRUST_CLAIMED_UNTRUSTED = "claimed-untrusted"  # a header was offered and deliberately not believed
+
+#: Narrowest prefix a trusted-proxy entry may declare. A proxy list is a statement about a handful
+#: of known hosts, so anything broader is a configuration mistake rather than a wide deployment --
+#: and ``0.0.0.0/0`` would make every forged ``X-Forwarded-For`` authoritative *and* relabel it
+#: ``proxy``, which is worse than not labelling it at all (threat T-54).
+MIN_TRUSTED_PREFIX_V4 = 24
+MIN_TRUSTED_PREFIX_V6 = 64
+
+
+def parse_trusted_proxies(raw: str | None) -> tuple[tuple[Any, ...], tuple[str, ...]]:
+    """Parse a comma-separated proxy list into networks, plus refusals to report (NFR-14).
+
+    Returns ``(accepted, refusals)``. Refusing loudly and continuing beats raising: an unusable
+    proxy entry must not stop the app serving, but it must not silently take effect either -- so
+    the entry is dropped and the reason is returned for the caller to log once at startup.
+    """
+    accepted: list[Any] = []
+    refusals: list[str] = []
+    for part in (raw or "").split(","):
+        entry = part.strip()
+        if not entry:
+            continue
+        try:
+            net = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            refusals.append(f"{entry!r} is not an IP address or CIDR network")
+            continue
+        floor = MIN_TRUSTED_PREFIX_V4 if net.version == 4 else MIN_TRUSTED_PREFIX_V6
+        if net.prefixlen < floor:
+            refusals.append(
+                f"{entry!r} is broader than /{floor}: a trusted-proxy entry names a few known "
+                f"hosts, and a wide one would make any forwarded header authoritative"
+            )
+            continue
+        accepted.append(net)
+    return tuple(accepted), tuple(refusals)
+
+
+def _is_trusted(addr: str, trusted: tuple[Any, ...]) -> bool:
+    try:
+        ip = ipaddress.ip_address(addr.strip())
+    except ValueError:
+        return False
+    return any(ip in net for net in trusted)
+
+
+def resolve_client_addr(
+    peer: str | None,
+    forwarded_for: str | None,
+    trusted: tuple[Any, ...] = (),
+) -> tuple[str, str]:
+    """Resolve ``(src_ip, src_ip_trust)`` from the TCP peer and any forwarded chain (FR-8).
+
+    The rule that matters: **a forwarded header is believed only when the peer is a configured
+    trusted proxy.** The leftmost entry of ``X-Forwarded-For`` is whatever the client typed, so
+    trusting it unconditionally means every operator can claim any source address -- and the
+    resulting audit record is worse than useless because it looks authoritative.
+
+    When the peer *is* trusted, the chain is walked right-to-left past further trusted hops, since
+    each proxy appends the address it saw. The first untrusted entry from the right is the real
+    client; everything left of it is unverifiable client-supplied text.
+    """
+    peer_s = (peer or "").strip()
+    chain_raw = (forwarded_for or "").strip()
+    if not chain_raw:
+        return peer_s, TRUST_PEER
+    if not peer_s or not _is_trusted(peer_s, trusted):
+        # A header was offered by someone we have no reason to believe. Record the peer and say so.
+        return peer_s, TRUST_CLAIMED_UNTRUSTED
+
+    hops = [h.strip() for h in chain_raw.split(",") if h.strip()]
+    for hop in reversed(hops):
+        if not _is_trusted(hop, trusted):
+            return hop, TRUST_PROXY
+    # Every hop is itself a trusted proxy: the leftmost is the closest thing to a client we have.
+    return (hops[0] if hops else peer_s), TRUST_PROXY

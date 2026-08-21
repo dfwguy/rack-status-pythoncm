@@ -220,6 +220,7 @@ that has to be switched on is one that is off.
 | **`NVIS_AUDIT_READS`** | `0` | Truthy audits read-only requests too. Off by default because `/api/status` polling would bury the signal. |
 | **`NVIS_AUDIT_FLOOD_WINDOW_SEC`** | `60` | Flood-guard window. |
 | **`NVIS_AUDIT_FLOOD_THRESHOLD`** | `10` | Refusals per window written individually before the rest collapse into one counted summary. |
+| **`RACK_WEB_TRUSTED_PROXIES`** | *(empty)* | Comma-separated hosts or CIDRs whose `X-Forwarded-For` is believed. Empty means **no** forwarded header is ever trusted. Entries broader than `/24` (IPv4) or `/64` (IPv6) are refused at startup and do not take effect — a wide entry would make every forged header authoritative *and* label it `proxy`, which is worse than leaving it unlabelled. |
 
 **Why the budget has two constraints.** A fixed byte budget silently encodes an operator count. At
 the measured ~502 bytes per event, 20 MiB is about 41 days at 1,000 events a day — but 1,000 a day
