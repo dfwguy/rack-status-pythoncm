@@ -240,14 +240,9 @@ try:
 except Exception as _ge_exc:  # pragma: no cover - observability embeds are optional
     _logger.warning("grafana_embeds blueprint unavailable: %s", _ge_exc, exc_info=True)
 
-# ---- Async job registries live in job_registry.py ----------------------------------------
-# Imported under the existing names. These are shared objects: the dicts here ARE the dicts there,
-# so the existing mutate-under-lock call sites are unaffected. Never rebind one.
-
 _rack_status_exec_lock = threading.Lock()
 
-# Dashboard Settings → job / validation env overrides (merged into subprocess env and ``_eget`` reads).
-# ``section`` groups rows in Settings (see ``JOB_ENV_SECTION_ORDER``).
+
 # ---- Configuration resolution lives in config_env.py -------------------------------------
 # Imported under the existing private names so the ~120 _eget / 95 _env_int / 35 _subprocess_env
 # call sites below are untouched by the move. The writer (_job_env_overrides_write) stays in this
@@ -261,8 +256,6 @@ from config_env import (
 
 # _JOB_ENV_BOOTSTRAP_DONE stays here: only the catalog bootstrap below touches it, and a `global`
 # statement cannot rebind another module's name.
-_JOB_ENV_BOOTSTRAP_DONE = False
-
 _JOB_ENV_BOOTSTRAP_DONE = False
 
 

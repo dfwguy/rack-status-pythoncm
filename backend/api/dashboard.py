@@ -155,6 +155,9 @@ _cluster_overview_live_service_cache: (
 ) = None
 
 
+# Dashboard Settings → job / validation env overrides (merged into subprocess env and ``_eget``
+# reads). ``section`` groups rows in Settings, in this order. Note left behind in app.py when the
+# constant moved here during the api/ migration.
 JOB_ENV_SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("dashboard", "Dashboard & charts"),
     ("external", "External connections"),
