@@ -111,6 +111,12 @@ python-test:
       - .pip-cache/
   script:
     - pip install -q -r backend/requirements.txt pytest pytest-cov
+    # BEFORE the suite, because it answers a different question and answers it clearly: does the
+    # COMMITTED tree import, using only files git tracks? On 2026-08-21 an import was committed one
+    # commit before the module it named, and the suite reported it as 34 collection errors whose
+    # shared cause was one missing file. This says so in one line, and it needs the deps installed
+    # above, which is why it lives here and not in the lint job.
+    - bash bin/check-tracked-tree.sh
     # Run from the repo root so backend modules resolve repo-root assets (var/, etc.);
     # pytest adds backend/ to sys.path via the backend/tests package.
     - python -m pytest backend/tests/ -v --tb=short --junitxml=report-python.xml --cov=ai_chat --cov=workflow_engine --cov-report=term-missing
