@@ -84,11 +84,17 @@ class TestARealHandshake:
 
         Asserted by verifying against the CA *only* -- if the chain were incomplete, requests
         would raise SSLError rather than return a response.
+
+        The assertion is deliberately that a response *arrived*, not what status it carried. An
+        earlier version required 200 or 302 from ``/login``, which quietly coupled a TLS test to
+        whether the frontend had been built: the backend CI job does not build it, so the route
+        served the SPA shell, could not find it, and returned 500. Any HTTP status proves the
+        handshake completed and the chain verified, which is the whole subject here.
         """
         resp = requests.get(
             f"{https_server}/login", verify=str(ca_certs / "ca.crt"), timeout=15
         )
-        assert resp.status_code in (200, 302)
+        assert resp.status_code, "a response over verified TLS is the assertion; its status is not"
 
     def test_verification_fails_against_an_unrelated_ca(self, https_server, tmp_path):
         """Guards the test above from passing for the wrong reason (e.g. verification skipped)."""

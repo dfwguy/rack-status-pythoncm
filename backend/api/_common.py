@@ -66,7 +66,26 @@ def serve_spa_asset(path: str = "index.html"):
     if path.startswith(_SPA_API_PREFIX):
         _logger.error("no such API endpoint: /%s — frontend and backend are out of step", path)
         return jsonify({"ok": False, "error": f"no such API endpoint: /{path}"}), 404
-    return send_file(_SPA_DIR / "index.html")
+
+    index = _SPA_DIR / "index.html"
+    if not index.is_file():
+        # Falling through to send_file here would hand off a file this function has already
+        # established is absent, so the operator gets a 500 and a stack trace for what is really
+        # a deployment that never had a frontend built into it. Say that instead: the backend is
+        # healthy and answering, the bundle is what is missing.
+        _logger.error("SPA shell missing: %s — the frontend was not built into this deployment",
+                      index)
+        body = (
+            "<!doctype html><title>Frontend not built</title>"
+            "<h1>Frontend not built</h1>"
+            "<p>The backend is running, but <code>static/spa/index.html</code> is missing from "
+            "this deployment, so there is no UI to serve.</p>"
+            "<p>Build it with <code>npm run build</code> in <code>frontend/</code>, or rebuild "
+            "the image so <code>static/spa/</code> is populated. "
+            "<code>bin/verify-deploy.sh</code> checks for exactly this.</p>"
+        )
+        return body, 503, {"Content-Type": "text/html; charset=utf-8"}
+    return send_file(index)
 
 
 def history_unavailable_response():

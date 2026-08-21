@@ -689,6 +689,23 @@ class TestSPAServing:
         assert resp.status_code == 200
         assert b"html" in resp.data.lower()
 
+    def test_missing_shell_503s_instead_of_raising(self, client, tmp_path, monkeypatch):
+        """A deployment with no frontend built into it must say so, not throw a 500.
+
+        The old code checked whether index.html existed and then, for a client route, fell through
+        to ``send_file(index.html)`` -- handing off the file it had just established was absent.
+        The operator got a stack trace for what is really "nobody built the UI". This is the
+        failure that broke the backend CI job, because that job does not build the frontend.
+        """
+        import api._common as common
+
+        monkeypatch.setattr(common, "_SPA_DIR", tmp_path / "empty-spa")
+        resp = client.get("/compute/nodes")
+        assert resp.status_code == 503, "a missing bundle is unavailability, not a server error"
+        body = resp.data.decode().lower()
+        assert "frontend not built" in body
+        assert "npm run build" in body, "the message has to say how to fix it"
+
     def test_missing_build_artifact_404s_instead_of_serving_html(self, client):
         """A stale index.html asking for a deleted bundle must fail honestly.
 
