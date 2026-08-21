@@ -48,10 +48,10 @@ from core import is_valid_node_hostname, truthy_env
 _logger = logging.getLogger("rack_web.api.terminal")
 
 
-
 _TERMINAL_ENABLED = os.environ.get("RACK_ENABLE_WEB_TERMINAL", "1").strip().lower() in (
     "1", "true", "yes", "on",
 )
+
 
 class _TerminalSession:
     """Holds state for a single PTY session that can outlive a WebSocket."""

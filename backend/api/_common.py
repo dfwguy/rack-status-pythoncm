@@ -97,6 +97,7 @@ def history_unavailable_response():
         "error": "run history is unavailable (results_history not installed or disabled)",
     }), 503
 
+
 def arg_or_body(name: str):
     """One parameter from either the JSON body or the query string, body first.
 

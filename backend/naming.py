@@ -170,6 +170,7 @@ def _full_rack_expected_nodes() -> int:
             return n
     return 18
 
+
 def _multirack_physical_rack_ids(name: str) -> list[str]:
     """Rack ids for Slurm sinfo aggregation; mirrors ``multirack_display_rack_from_basename`` cases."""
     naming = _nvis_naming()
@@ -191,6 +192,7 @@ def _multirack_physical_rack_ids(name: str) -> list[str]:
             if expanded:
                 return expanded
     return []
+
 
 def _expand_r_inner_to_rack_nums(inner: str) -> list[int]:
     """Expand ``13-14,16`` or ``01-04`` inside ``r[…]`` brackets to rack number ints."""

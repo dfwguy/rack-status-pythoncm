@@ -824,6 +824,8 @@ def _job_env_flock(shared: bool = True):
             f.close()
         except OSError:
             pass
+
+
 def _read_job_env_file_raw(p: Path) -> dict[str, str]:
     try:
         with open(p, "r", encoding="utf-8") as f:
@@ -888,6 +890,8 @@ def _job_env_overrides_invalidate_cache() -> None:
     with _job_env_file_lock:
         _JOB_ENV_OVERRIDES_CACHE = None
         _JOB_ENV_OVERRIDES_MTIME = None
+
+
 def _eget(name: str, default: str | None = None) -> str | None:
     """Environment getter with catalog + dashboard Settings overrides.
 
@@ -960,6 +964,8 @@ def _subprocess_env(
         d = (validation_test_if_unset or "nccl_all_reduce,llm").strip() or "nccl_all_reduce,llm"
         out["VALIDATION_TEST"] = d
     return out
+
+
 def env_int(name: str, default: int, *, min_valid: int | None = None) -> int:
     """One integer knob from the process environment, with the caller's validity rule.
 

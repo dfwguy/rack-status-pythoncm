@@ -56,7 +56,7 @@ def _generate_rows(now_ts: float) -> list[dict[str, str]]:
 
         if state == "ongoing":
             minutes = rng.randint(2, 45)
-            nemo = f"ongoing [{minutes}:{rng.randint(0,59):02d}]"
+            nemo = f"ongoing [{minutes}:{rng.randint(0, 59):02d}]"
         else:
             nemo = state
 

@@ -62,6 +62,7 @@ def _warn_exec_mode_deprecated(raw: str) -> None:
 def _truthy(v: str) -> bool:
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")
 
+
 # Historical forwarding allowlist (moved from host_exec so the transport layer
 # is self-contained). Vars matching a prefix, or named exactly, are exported to
 # the remote host so cluster jobs see the active generation/site environment.

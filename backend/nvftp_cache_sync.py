@@ -146,8 +146,10 @@ def _sync_remote_root(project: str) -> str:
 
 
 # One definition, in comments_store: this module had a second one that resolved the same
-# RACK_COMMENTS_FILE setting differently, so the two could point at different files.
-from comments_store import _comments_file
+# RACK_COMMENTS_FILE setting differently, so the two could point at different files. Kept here
+# rather than at the top of the file because comments_store imports this module's siblings; hoisting
+# it re-creates the cycle the split removed.
+from comments_store import _comments_file  # noqa: E402
 
 
 def _is_syncable_cache_file(name: str) -> bool:

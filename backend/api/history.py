@@ -40,7 +40,6 @@ _HISTORY_FILTER_KEYS = (
 )
 
 
-
 def _history_filters_from_args() -> dict[str, object]:
     """Query-string -> ``results_history`` filter mapping (repeatable params become lists)."""
     out: dict[str, object] = {}
@@ -50,7 +49,6 @@ def _history_filters_from_args() -> dict[str, object]:
             continue
         out[key] = vals[0] if len(vals) == 1 else vals
     return out
-
 
 
 @bp.route("/api/history/runs")

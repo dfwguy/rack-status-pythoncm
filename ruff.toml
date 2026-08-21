@@ -1,0 +1,50 @@
+# Ruff configuration for nvis-rack-status.
+#
+# Until now there was NO ruff config anywhere in this repo: the CI job's rule set was whatever
+# `ruff check` happened to default to for the pinned version. The pin in .gitlab-ci.yml stops that
+# changing under us, but pinning only makes the surprise reproducible -- it never wrote down what is
+# actually enforced. This file does, so "ruff clean" means something specific.
+#
+# Deliberately EXTENDING the defaults rather than declaring a `select` list. Ruff 0.16's defaults
+# are much broader than the documented E4/E7/E9/F -- verified empirically, they also carry B
+# (bugbear), S (bandit), BLE (blind-except), SIM and UP. Writing an explicit `select` would have
+# silently dropped whichever of those we forgot to name, weakening the gate while looking like an
+# improvement. `extend-select` cannot do that.
+
+line-length = 100
+target-version = "py312"
+
+# Required for the E1/E2/E3 whitespace and blank-line rules, which are the PEP 8 checks with actual
+# teeth for this codebase. Measured cost of turning it on: 21 findings, 20 of them auto-fixable.
+preview = true
+
+[lint]
+# Full pycodestyle on top of the defaults. E4 (imports), E7 (statements) and E9 (runtime) were
+# already on; this adds E1/E2/E3 (indentation, whitespace, blank lines) and the W warnings.
+extend-select = ["E", "W"]
+
+ignore = [
+    # The one deliberate PEP 8 exception, by decision rather than by omission: line length is not
+    # enforced. `line-length` above is kept as the formatter's target and as documentation of
+    # intent, but E501 does not gate. For reference, the codebase's natural width is ~100 columns
+    # (99th percentile 105), and enforcing ruff's default 88 would have meant 4,323 findings.
+    "E501",
+
+    # Both are PREVIEW rules that `preview = true` drags in as a side effect of wanting E1/E2/E3.
+    # Neither is a correctness issue and both are wide mechanical rewrites -- UP017 alone rewrites
+    # 111 call sites from `timezone.utc` to `datetime.UTC`. Worth adopting on purpose in its own
+    # commit, not as collateral damage of enabling PEP 8 checks. Revisit when they leave preview.
+    "UP017",    # datetime.UTC over timezone.utc
+    "FURB162",  # fromisoformat().replace("Z") simplification
+]
+
+[lint.per-file-ignores]
+# app.py must extend sys.path before importing any first-party module, so 23 of its imports are
+# legitimately not at the top of the file. The file already carries a comment explaining why; this
+# records the same fact where the linter can act on it, instead of 23 inline suppressions.
+"backend/app.py" = ["E402"]
+
+# Tests may assert freely and reach into private module surfaces on purpose. Note that CI does not
+# yet lint backend/tests at all (see .gitlab-ci.yml): they carry 99 findings today. These ignores
+# are what they will need when that gate is switched on, so the number to work down is the real one.
+"backend/tests/*" = ["S101", "SLF001"]

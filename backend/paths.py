@@ -159,6 +159,7 @@ def _nvlmapper_reports_base() -> Path:
     raw = (_eget("RACK_NVLMAPPER_REPORTS_BASE") or "/home/cmsupport/reports").strip()
     return _rpath(raw or "/home/cmsupport/reports")
 
+
 def _parser_path() -> Path:
     p = _eget("RACK_PARSER_SCRIPT", str(SCRIPTS_DIR / "parser.sh")) or str(SCRIPTS_DIR / "parser.sh")
     return _rpath(Path(p))
@@ -262,6 +263,7 @@ def _run_exemplar_llama_script_path() -> Path:
         str(SCRIPTS_DIR / "run-exemplar-llama.sh"),
     ) or str(SCRIPTS_DIR / "run-exemplar-llama.sh")
     return _rpath(Path(p))
+
 
 def _nccl_fullrack_script_path() -> Path:
     p = _eget("RACK_NCCL_FULLRACK_SCRIPT", str(SCRIPTS_DIR / "nccl_fullrack_rounds.sh")) or str(

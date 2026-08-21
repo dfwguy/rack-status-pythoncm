@@ -71,6 +71,7 @@ def _effective_env(env: dict[str, str] | None) -> dict[str, str]:
 # Platforms (hardware/system SKUs)
 # ---------------------------------------------------------------------------
 
+
 SEED_PLATFORMS: list[dict[str, Any]] = [
     {
         "id": "gb200-nvl72",

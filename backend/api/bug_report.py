@@ -64,7 +64,18 @@ bp = Blueprint("bug_report", __name__, url_prefix="")
 
 
 def run_bug_report_pdsh(pdsh_w: str) -> dict:
-    """Run nvidia-bug-report.sh on each host via pdsh (same -w pattern as GPU reset)."""
+    """Run nvidia-bug-report.sh on each host via pdsh (same -w pattern as GPU reset).
+
+    KNOWN DUPLICATION, recorded rather than hidden: the body below is ~28 lines identical to
+    ``api.rack_power.run_services_restart`` -- dry-run short-circuit, ``run_on_host``, the
+    FileNotFoundError/TimeoutExpired mapping and the result dict. Only the inner command, the
+    timeout key and the dry-run key differ, so it wants one helper taking a built argv.
+
+    Not extracted here on purpose: neither function has a single test (checked), and they fan out
+    pdsh across a rack to reset GPUs and restart munge/slurmd/imex. An untested refactor of that,
+    riding along in a commit that adds lint config, is the wrong order -- tests first, then the
+    extraction, then this suppression comes off.
+    """
     w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")

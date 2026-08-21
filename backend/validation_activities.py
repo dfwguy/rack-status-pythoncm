@@ -363,6 +363,7 @@ def _prune(rows: dict[str, dict]) -> dict[str, dict]:
     # Never prune an activity that still needs scheduler/log refresh.  The old
     # newest-500 policy could evict a long-running job and make it impossible
     # for the background reconciler to ever observe its terminal state.
+
     def _still_open(rec: dict[str, Any]) -> bool:
         explicit = str(rec.get("work_phase") or "").strip().lower()
         if explicit:

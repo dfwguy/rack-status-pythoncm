@@ -73,6 +73,7 @@ def _job_env_overrides_file() -> Path:
         return Path(raw).resolve()
     return _REPO_ROOT / "var" / "cache" / "job_env_overrides.json"
 
+
 # cmsh ``ds`` output: default one regex per line via ``finditer``; three capture groups (hostname, rack, tray).
 _DEFAULT_CMSH_DS_NODE_PATTERN = r"(?i)((p\d+-r\d+)-ct(\d+))"
 _NVIS_NAMING_ENV_KEYS = frozenset(
@@ -319,6 +320,7 @@ def _condense_tray_tokens(nums_s: str) -> str:
 
 
 _MULTIRACK_LOG_JSON = _REPO_ROOT / "var" / "cache" / "native_multirack_log_analysis.json"
+
 
 def _env_int(name: str, default: int) -> int:
     """Timeouts and byte budgets: a negative value is operator error, so fall back to the default.

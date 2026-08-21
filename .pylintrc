@@ -1,0 +1,91 @@
+# Pylint configuration for nvis-rack-status.
+#
+# Pylint runs ALONGSIDE ruff, not instead of it, and this file exists mostly to keep the two from
+# arguing. Ruff is fast, runs on every file, and already owns imports, unused names, blind excepts,
+# comprehensions and the pyupgrade/bugbear families. Pylint is here for the handful of things it can
+# see that ruff cannot, because they need the whole-program view astroid builds:
+#
+#   duplicate-code (R0801)  cross-module copy-paste. Requested explicitly, and it earned its place
+#                           immediately: it found a 28-line pdsh runner duplicated between
+#                           api/bug_report.py and api/rack_power.py.
+#
+# Two more were measured and deliberately deferred rather than quietly dropped:
+#
+#   reimported (W0404)      8 real findings. Only 4 are one-line removals (host_exec, shlex, math,
+#                           time already bound at module level). The other 4 are ALIASED reimports
+#                           -- `import os as _os`, `from pathlib import Path as _P` -- where the
+#                           alias is a live binding the function body uses, so "removing the
+#                           redundant import" means renaming every usage. Worth doing, not worth
+#                           doing blind inside a config commit.
+#
+# cyclic-import (R0401) was tried and deliberately left off. It reports 3 cycles here --
+# transport.base <-> transport.hop, the same through transport.shellfs, and cluster_report <->
+# cluster_report_pdf -- and all 3 are ALREADY broken correctly, by a function-level import at
+# transport/base.py:503 and cluster_report.py:299/307. Pylint reports the logical cycle whether or
+# not the edge is deferred, so on this codebase the check flags the accepted fix as the defect.
+# Enabling it would mean either 3 permanent suppressions or unpicking a working pattern.
+#
+# Worth knowing what this does NOT catch, so nobody assumes it: pylint --enable=all does not flag a
+# module-level constant assigned twice with nothing reading it in between. That is what
+# backend/tests/test_no_duplicate_module_assignments.py is for.
+
+[MAIN]
+# backend/ is a flat module namespace (modules import each other as top-level names, e.g.
+# `import config_env`), so astroid needs it on the path to resolve them.
+init-hook = 'import sys; sys.path.insert(0, "backend")'
+ignore = tests
+
+# Single-process ON PURPOSE. duplicate-code is the main reason this file exists, and it is computed
+# from a cross-module index that pylint does not share correctly between workers -- with jobs > 1 it
+# silently under-reports, which is the worst failure mode for a check whose whole job is to notice
+# something. Slower and honest beats fast and quiet: the full run takes ~30s.
+jobs = 1
+persistent = no
+
+[MESSAGES CONTROL]
+# Start from nothing and name what we want. The opposite order -- enable everything and subtract --
+# means every pylint upgrade silently adds checks, which is the same trap the un-pinned, un-declared
+# ruff config fell into.
+disable = all
+
+enable =
+    duplicate-code,
+
+# Not enabled, and each for a stated reason rather than because it was noisy:
+#
+#   line-too-long           deliberate project decision; see ruff.toml. 1,005 findings.
+#   broad-exception-caught  ruff BLE001 owns it, and the "degrade, never 500" paths are deliberate.
+#   missing-*-docstring     413 findings, all PEP 257. A real decision to make, not a silent one.
+#   invalid-name            conflicts with the established _eget / _JOB_ENV_* conventions.
+#   wrong-import-*          ruff I001 and E402 own import order and placement, with one opinion.
+#   import-outside-toplevel 106 findings, nearly all deliberate cycle-breaking.
+#   global-statement        used on purpose for the module-level bootstrap flags.
+#   protected-access        this codebase shares _-prefixed names across modules by design.
+#   too-many-*, too-few-*   size metrics, ~400 findings. Opinions about shape, not correctness.
+#   no-member (E1101)       astroid false positives on re.Pattern and reportlab's dynamic attrs.
+#   missing-kwoa (E1125)    false positive on **kwargs forwarding, e.g. audit.emit -> build_event.
+
+[SIMILARITIES]
+# Pylint's default is 4 lines, which reports 134 blocks here -- mostly short, unavoidable shapes
+# like a 4-line dict literal or an except/return pair. Measured on this tree:
+#
+#   4 lines -> 134    8 -> 42    12 -> 17    20 -> 1    30 -> 0
+#
+# Set at 30, which gates on egregious copy-paste in NEW code and is green today. Not 20, and the
+# reason is specific rather than squeamish: at 20 the single finding is the api/bug_report <->
+# api/rack_power pdsh runner, and R0801 CANNOT be suppressed at the duplication site -- pylint
+# attributes the message to an arbitrary third module (schedulers/base.py here, whichever it
+# happens to process last), so an inline `# pylint: disable=duplicate-code` in either participant
+# does nothing. The only ways to green at 20 are to refactor those two functions -- which have zero
+# test coverage and fan pdsh across a rack to reset GPUs and restart munge/slurmd/imex -- or to
+# suppress in an unrelated file that would stop matching the moment file order changes.
+#
+# So: tests for those two endpoints, then the extraction, then drop this to 12 and work the 17.
+min-similarity-lines = 30
+ignore-comments = yes
+ignore-docstrings = yes
+ignore-imports = yes
+ignore-signatures = yes
+
+[REPORTS]
+score = no
