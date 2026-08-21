@@ -29,14 +29,22 @@ DOC = Path(__file__).resolve().parents[2] / "docs" / "ENVIRONMENT.md"
 SECTION_HEADING = "### Application logging (`NVIS_LOG_*`)"
 
 
+#: Subsections that together document this feature. Scoped rather than searching the whole file,
+#: so a stray match in a 700-line reference cannot make these tests pass — but spanning both,
+#: because the settings and the caveats they need are split across the two.
+OUR_SUBSECTIONS = (SECTION_HEADING, "### The audit trail (`NVIS_AUDIT_*`)")
+
+
 @pytest.fixture(scope="module")
 def logging_section() -> str:
-    """The logging/audit section only, so a match elsewhere in a 700-line file cannot pass."""
+    """The logging and audit subsections, concatenated."""
     text = DOC.read_text(encoding="utf-8")
-    assert SECTION_HEADING in text, f"{DOC.name} has no {SECTION_HEADING!r} section"
-    after = text.split(SECTION_HEADING, 1)[1]
-    # Ends at the next sibling heading of the same depth.
-    return after.split("\n### ", 1)[0]
+    chunks = []
+    for heading in OUR_SUBSECTIONS:
+        assert heading in text, f"{DOC.name} has no {heading!r} section"
+        after = text.split(heading, 1)[1]
+        chunks.append(after.split("\n### ", 1)[0])
+    return "\n".join(chunks)
 
 
 def test_environment_doc_states_the_tunnel_limitation(logging_section):

@@ -202,6 +202,38 @@ future cloud target — never from syslog.
 The defaults require no network egress, no external service and no credential, so a first run on
 an air-gapped cluster works with nothing set.
 
+### The audit trail (`NVIS_AUDIT_*`)
+
+A separate, durable record of operator actions — one JSON object per line, written by
+`backend/audit/`. Its rotation budget is deliberately **independent** of the application log's, so
+a debug session cannot rotate away the evidence of what someone did. On by default: an audit trail
+that has to be switched on is one that is off.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| **`NVIS_AUDIT_ENABLED`** | `1` | Falsy disables the trail entirely. |
+| **`NVIS_AUDIT_FILE`** | `var/logs/audit/audit.jsonl` | The trail. Created `0600` inside a `0700` directory regardless of the process umask. |
+| **`NVIS_AUDIT_MAX_BYTES`** | `5242880` | Per-file size cap — one half of the budget. |
+| **`NVIS_AUDIT_BACKUPS`** | `3` | Rotation backups. `3` keeps **four** files including the active one, so the ceiling is 20 MiB, not 15. |
+| **`NVIS_AUDIT_RETENTION_DAYS`** | `30` | The other half: a retention target in days. The sink holds whichever of the two binds first and records which one it is. |
+| **`NVIS_AUDIT_LONG_RETENTION`** | `0` | Truthy multiplies the backup count, keeping history beyond the default budget. Deliberate, operator-accepted growth — still bounded. |
+| **`NVIS_AUDIT_READS`** | `0` | Truthy audits read-only requests too. Off by default because `/api/status` polling would bury the signal. |
+| **`NVIS_AUDIT_FLOOD_WINDOW_SEC`** | `60` | Flood-guard window. |
+| **`NVIS_AUDIT_FLOOD_THRESHOLD`** | `10` | Refusals per window written individually before the rest collapse into one counted summary. |
+
+**Why the budget has two constraints.** A fixed byte budget silently encodes an operator count. At
+the measured ~502 bytes per event, 20 MiB is about 41 days at 1,000 events a day — but 1,000 a day
+is roughly *two* operators working steadily, and twenty operators reduce the same budget to about
+4 days. So the byte budget is derived from the observed event rate against the retention target and
+capped by the ceiling, and the sink records which constraint is binding rather than leaving a
+30-day claim that quietly stopped being true.
+
+**Why refusals are counted rather than all written.** Recording refused actions is the point of an
+audit trail, but against a bounded budget a denial loop would evict the very history it belongs in.
+So the first `NVIS_AUDIT_FLOOD_THRESHOLD` refusals for a given principal, action and reason are
+written individually — a lone refusal is always visible immediately — and further identical ones
+accumulate into a single summary carrying the count.
+
 **On source addresses in the audit trail.** An audit event records the TCP peer address it
 actually sees. Operators normally reach this dashboard through an SSH tunnel, and in that case
 the peer is the **tunnel endpoint** — usually `127.0.0.1` — not the operator's workstation. The
