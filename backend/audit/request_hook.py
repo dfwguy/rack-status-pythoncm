@@ -100,12 +100,34 @@ def _resource(path: str) -> str:
     return path
 
 
+#: Cluster label, keyed on the catalog store's generation counter. See _cluster().
+_cluster_cache: dict[str, Any] = {"gen": -1, "label": ""}
+
+
 def _cluster() -> str:
+    """The active cluster's id, cached until the catalog changes.
+
+    Resolving this per request cost 4.74 ms of the chokepoint's 5.22 ms, because
+    ``catalog_context.resolve()`` reads the TinyDB store -- seven table reads and their JSON parses
+    -- and it was doing that on every audited request to attach a label that only changes when an
+    operator switches the active project. That alone blew NFR-2a's 5 ms budget, and TC-34 is what
+    surfaced it.
+
+    Keyed on ``store.current_generation()``, which exists for exactly this and is bumped on every
+    catalog write, so a project switch is picked up on the next request without a TTL to tune.
+    ``catalog.context.overlays_for_active`` already uses the same pattern.
+    """
     try:
         from catalog import context as catalog_context
+        from catalog.store import current_generation
 
+        gen = current_generation()
+        if _cluster_cache["gen"] == gen:
+            return str(_cluster_cache["label"])
         _project, cluster, _platform = catalog_context.resolve()
-        return str(getattr(cluster, "id", "") or getattr(cluster, "name", "") or "")
+        label = str(getattr(cluster, "id", "") or getattr(cluster, "name", "") or "")
+        _cluster_cache.update({"gen": gen, "label": label})
+        return label
     except Exception:  # noqa: BLE001 - the trail must not depend on the catalog being healthy
         return ""
 

@@ -278,3 +278,66 @@ class TestTC30TrustListsAreDeployTimeOnly:
         _common.reset_trusted_cache_for_tests()
         assert [str(n) for n in _common.trusted_networks()] == before
         assert "0.0.0.0/0" not in [str(n) for n in _common.trusted_networks()]
+
+
+class TestClusterLabelCache:
+    """The cluster label is cached; a project switch must still be reflected.
+
+    Introduced under TC-34: resolving the label per request cost 4.74 ms of the chokepoint's
+    5.22 ms, because `catalog.context.resolve()` reads the TinyDB store. Caching it fixed NFR-2a
+    (+8.66 ms -> +0.37 ms at p95) but created a staleness risk -- an audit trail that attributes
+    events to the cluster the operator switched AWAY from is worse than a slow one. These tests
+    are the reason that trade is safe to make.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self):
+        request_hook._cluster_cache.update({"gen": -1, "label": ""})
+        yield
+        request_hook._cluster_cache.update({"gen": -1, "label": ""})
+
+    def test_the_label_is_not_resolved_twice_for_one_generation(self, monkeypatch):
+        calls = {"n": 0}
+
+        def _resolve(*a, **k):
+            calls["n"] += 1
+            return None, type("C", (), {"id": "cluster-a"})(), None
+
+        monkeypatch.setattr("catalog.context.resolve", _resolve)
+        monkeypatch.setattr("catalog.store.current_generation", lambda: 7)
+
+        assert request_hook._cluster() == "cluster-a"
+        assert request_hook._cluster() == "cluster-a"
+        assert request_hook._cluster() == "cluster-a"
+        assert calls["n"] == 1, "the store was read again for an unchanged catalog"
+
+    def test_a_generation_bump_refreshes_the_label(self, monkeypatch):
+        """A project switch bumps the store generation, which is what must invalidate this."""
+        state = {"id": "cluster-a", "gen": 1}
+        monkeypatch.setattr(
+            "catalog.context.resolve",
+            lambda *a, **k: (None, type("C", (), {"id": state["id"]})(), None),
+        )
+        monkeypatch.setattr("catalog.store.current_generation", lambda: state["gen"])
+
+        assert request_hook._cluster() == "cluster-a"
+        state["id"] = "cluster-b"
+        assert request_hook._cluster() == "cluster-a", "same generation, so still cached"
+        state["gen"] = 2
+        assert request_hook._cluster() == "cluster-b", "a bump must be picked up"
+
+    def test_a_broken_catalog_yields_an_empty_label_not_an_exception(self, monkeypatch):
+        """NFR-1: the trail must not depend on the catalog being healthy."""
+        def _boom(*a, **k):
+            raise RuntimeError("catalog unavailable")
+
+        monkeypatch.setattr("catalog.store.current_generation", _boom)
+        assert request_hook._cluster() == ""
+
+    def test_the_real_catalog_produces_a_label(self, client, tmp_path):
+        """Guard against a cache that works perfectly and always returns the empty string."""
+        client.post(CANONICAL_ENDPOINT, json={"rack": "demo"})
+        audit.flush()
+        events = _events(tmp_path)
+        assert events, "no event written"
+        assert events[0]["cluster"], "the cluster field is empty, so the cache may be masking it"

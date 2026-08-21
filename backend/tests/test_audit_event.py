@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import stat
+import time
 
 import audit
 import logging_config as lc
@@ -411,3 +412,168 @@ class TestTC14FloodDoesNotEvictSuccesses:
             f"only {len(survived)}/20 successes survived; the guard is meant to stop a refusal "
             "loop evicting the history it should be recorded in"
         )
+
+
+# --------------------------------------------------------------------------- TC-38
+
+
+class TestRetentionBudget:
+    """TC-38 (FR-7b, AC-10c, AC-10g): the budget holds a month, and says which limit bound it.
+
+    Method is analysis, per the plan: a capacity claim asserted against the configured budget
+    rather than by writing a month of events. The event size is MEASURED here rather than taken
+    from ``NOMINAL_EVENT_BYTES``, because trusting the constant would make this test agree with
+    the sink by construction even if the field set grew.
+    """
+
+    #: The plan's stated reference rate for the retention arithmetic.
+    EVENTS_PER_DAY = 1000
+
+    def test_default_budget_retains_a_month(self, tmp_path):
+        audit.configure(force=True)
+        audit.emit(**_ok(resource="/api/rack-power", user_agent="Mozilla/5.0 (X11; Linux x86_64)"))
+        audit.flush()
+
+        rows = _lines(tmp_path)
+        assert rows, "need one real event to measure"
+        event_bytes = len(json.dumps(rows[0], separators=(",", ":")).encode("utf-8")) + 1
+
+        plan = sink.sizing(_audit_path(tmp_path))
+        retained_events = plan.total_bytes / event_bytes
+        retained_days = retained_events / self.EVENTS_PER_DAY
+
+        assert retained_days >= 30, (
+            f"budget holds {retained_days:.1f} days at {self.EVENTS_PER_DAY} events/day "
+            f"({plan.total_bytes} bytes / {event_bytes} B per event); FR-7b floor is 30"
+        )
+
+    def test_the_default_budget_is_four_files_not_three(self, tmp_path):
+        """AC-10g: ``backupCount=3`` keeps the active file too, so the budget is 20 MiB not 15.
+
+        The brief's sizing table originally said "15 MB (3 x 5 MB)". The error was conservative,
+        but a retention claim that disagrees with the code is the kind of thing an auditor finds.
+        """
+        audit.configure(force=True)
+        plan = sink.sizing(_audit_path(tmp_path))
+        assert plan.backups == 3
+        assert plan.total_bytes == plan.max_bytes * 4
+        assert plan.total_bytes == 20 * 1024 * 1024
+
+    def test_a_fresh_file_reports_the_ceiling_as_binding(self, tmp_path):
+        """With no history there is no observed rate, so implied_days is unknown, not zero.
+
+        Reporting 0 days would read as "retains nothing"; None is the honest answer and is why
+        the ceiling is the constraint that can actually be honoured on a fresh deployment.
+        """
+        audit.configure(force=True)
+        plan = sink.sizing(_audit_path(tmp_path))
+        assert plan.binding == sink.BIND_CEILING
+        assert plan.implied_days is None
+
+    def test_long_retention_lifts_the_ceiling_without_removing_it(self, tmp_path, monkeypatch):
+        """FR-7c is an opt-in for more history, not for unbounded growth."""
+        audit.configure(force=True)
+        base = sink.sizing(_audit_path(tmp_path))
+        monkeypatch.setenv("NVIS_AUDIT_LONG_RETENTION", "1")
+        lc.reset_for_tests()
+        lifted = sink.sizing(_audit_path(tmp_path))
+        assert lifted.total_bytes > base.total_bytes
+        assert lifted.backups == base.backups * sink.LONG_RETENTION_FACTOR
+        assert lifted.total_bytes < base.total_bytes * 1000, "still bounded"
+
+    def test_a_smaller_ceiling_reduces_the_budget(self, tmp_path, monkeypatch):
+        """Guard against a budget that ignores its own setting."""
+        monkeypatch.setenv("NVIS_AUDIT_MAX_BYTES", str(64 * 1024))
+        lc.reset_for_tests()
+        audit.configure(force=True)
+        plan = sink.sizing(_audit_path(tmp_path))
+        assert plan.max_bytes == 64 * 1024
+        assert plan.total_bytes == 64 * 1024 * (plan.backups + 1)
+
+
+# --------------------------------------------------------------------------- TC-34
+
+
+@pytest.mark.skipif(
+    bool(os.environ.get("CI")),
+    reason="TC-34 is a timing measurement; shared CI runners make p95 meaningless. Run locally.",
+)
+class TestLatencyBudget:
+    """TC-34 (NFR-2a, AC-17a): the audit path adds no more than 5 ms at p95.
+
+    Interleaved rather than run as two blocks, which the plan asks for and which matters: a
+    machine that gets busy halfway through would otherwise load the whole penalty onto whichever
+    arm ran second, and the result would look like an audit cost. ``Setting.resolve()`` reads the
+    environment on every call and the chokepoint checks it per request, so the flag can be flipped
+    between individual requests without reconfiguring anything.
+
+    The execution stub is what makes the delta meaningful. Without it each request would spend
+    milliseconds pretending to reach a head node, and the audit write would vanish into that noise.
+    """
+
+    WARMUP = 20
+    SAMPLES = 200
+    BUDGET_MS = 5.0
+
+    @staticmethod
+    def _p95(values: list[float]) -> float:
+        ordered = sorted(values)
+        return ordered[min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1))))]
+
+    @pytest.fixture
+    def client(self, tmp_path, monkeypatch):
+        """Imported here, not at module scope: the rest of this file tests the sink in isolation
+        and should not pay for the app's import-time bootstrap (catalog seed, threads)."""
+        import app as app_module
+        import host_exec
+
+        monkeypatch.setattr(
+            host_exec, "run_on_host",
+            lambda cmd, *a, **k: __import__("subprocess").CompletedProcess(cmd, 0, "", ""),
+            raising=True,
+        )
+        # A real dry run keeps the handler off the wire without changing the audited path.
+        monkeypatch.setenv("RACK_UPTIME_DRY_RUN", "1")
+        monkeypatch.setenv("NVIS_AUDIT_FILE", str(tmp_path / "audit" / "audit.jsonl"))
+        audit.configure(force=True)
+        app_module.app.config["TESTING"] = True
+        return app_module.app.test_client()
+
+    def _timed_post(self, client) -> float:
+        start = time.perf_counter()
+        client.post("/api/rack-uptime", json={"rack": "p5-r01"})
+        return (time.perf_counter() - start) * 1000.0
+
+    def test_latency_budget_p95(self, client, tmp_path, monkeypatch):
+        for _ in range(self.WARMUP):
+            self._timed_post(client)
+
+        on: list[float] = []
+        off: list[float] = []
+        for _ in range(self.SAMPLES):
+            monkeypatch.setenv("NVIS_AUDIT_ENABLED", "1")
+            on.append(self._timed_post(client))
+            monkeypatch.setenv("NVIS_AUDIT_ENABLED", "0")
+            off.append(self._timed_post(client))
+
+        added = self._p95(on) - self._p95(off)
+        assert added <= self.BUDGET_MS, (
+            f"audit added {added:.2f} ms at p95 (on={self._p95(on):.2f} ms, "
+            f"off={self._p95(off):.2f} ms) against a {self.BUDGET_MS} ms budget. The design's "
+            "recorded fallback is a bounded queue drained by one writer thread."
+        )
+
+    def test_the_measurement_actually_measured_an_audited_path(self, client, tmp_path, monkeypatch):
+        """Guard the guard: a budget met because nothing was audited proves nothing.
+
+        If the canonical endpoint stopped being audited -- renamed, un-decorated, excluded -- the
+        p95 delta would collapse to zero and TC-34 would pass for the wrong reason.
+        """
+        monkeypatch.setenv("NVIS_AUDIT_ENABLED", "1")
+        self._timed_post(client)
+        audit.flush()
+        rows = _lines(tmp_path)
+        assert rows, "no audit event was written, so the latency delta above measures nothing"
+        assert any(r.get("resource") == "/api/rack-uptime" for r in rows), [
+            r.get("resource") for r in rows
+        ]
