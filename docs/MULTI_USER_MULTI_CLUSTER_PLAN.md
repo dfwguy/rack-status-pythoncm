@@ -70,8 +70,10 @@ catalog model and not the transport.
 
 Each step is useful on its own, and each is a prerequisite for the next.
 
-1. **Real per-user identity.** Part of the authentication/authorization work. Token mode gives none,
-   so nothing per-user can be stored until an operator is distinguishable. Blocks everything below.
+1. **Real per-user identity.** Part of the authentication/authorization work — Phase 2 of
+   **[AUTH_PROGRAMME_SCOPE.md](AUTH_PROGRAMME_SCOPE.md)**, which owns the user store, groups and
+   membership. Token mode gives none, so nothing per-user can be stored until an operator is
+   distinguishable. Blocks everything below.
 
 2. **Cluster in the session.** Store the operator's selected project/cluster in their session and stop
    using `set_active()` as the per-operator switch. `set_active` becomes the *default* for new
@@ -94,6 +96,66 @@ Each step is useful on its own, and each is a prerequisite for the next.
    class-per-cluster idea, and it also fixes a real bug that exists today: a single request can
    straddle a cluster switch, so two `_eget` calls in one request can resolve against different
    clusters.
+
+## What scale this supports, and what breaks first
+
+Measured against the deployment as configured (`gunicorn --workers 1 --threads 24`, 22 overlay keys,
+four clusters), for a target of **up to 20 simultaneous operators**. The useful output is the
+*ordering* of the limits, not the numbers.
+
+**Nothing in the app scales with user count.** Per-request cluster context costs 24 threads x 22 keys
+of resolved state — 33 KB — whether 20 or 1,000 people are logged in, because it scales with
+*concurrency*, not with users. The per-user terms (session, revocation timestamp) are ~200 bytes each.
+At 20 users the whole multi-tenant machinery is under 40 KB. There is no memory argument against it.
+
+**The SSH session ceiling is what breaks first, and it is already broken.** `MaxSessions` defaults to
+10 *per connection*, and today every operator shares one ControlMaster to a given host. That is ten
+concurrent commands for the entire system — half a channel per operator at 20 users, and it is the
+documented `x215` / "Session open refused by peer" failure that never self-heals. **Multi-tenancy on a
+shared service account is over capacity at 20 operators regardless of the identity model chosen.**
+
+Per-user credentials change the ControlPath key (`%C` hashes localuser, host, port, remoteuser), so
+each operator gets their own master and their own ten channels: 200 concurrent commands instead of 10.
+The cost is 20 sshd connections on the head node — 20-60 MB of unique (PSS) memory, 100-200 MB RSS —
+against a ceiling of roughly 100-400 concurrent users at a 1-4 GB sshd allowance. Twenty operators
+sits 20-68x under. The one rough edge is `MaxStartups 10:30:100`, which refuses about 38% of
+connections if all 20 authenticate at once; steady state is fine because `ControlPersist` means one
+authentication per persist window, but `docker compose up -d` recreates the container and then
+everyone reconnects together. The transport already retries transient SSH failures, so it degrades
+rather than breaks.
+
+**Move reads off SSH: `cmsh` to `pythoncm`.** Most of that channel pressure is *read* traffic — status
+polling driving `cmsh rack list`, `sinfo` and log probes, each one a process spawn on the head node
+behind an SSH channel. Talking to CMDaemon through its API instead removes both the spawn and the
+channel, which relieves exactly the ceiling above, and returns structured data instead of CLI text to
+parse (the results-pipeline principle applied to the control plane). It belongs behind the existing
+`PlatformProvider` interface as a path inside `BCMProvider`, not as a branch in a caller
+(`core-designs.mdc` §6); `MAASProvider` is unaffected.
+
+That leaves a clean split, and the two halves want different identity models:
+
+| Plane | Transport | Identity | Volume |
+|---|---|---|---|
+| Reads — status, inventory, queue state | pythoncm to CMDaemon | one service certificate; no per-user attribution needed | high, continuous |
+| Writes — power, fabric, validation launch, terminal | SSH with a per-user certificate | per-operator, attributable on the cluster side | low, bursty |
+
+Three caveats on pythoncm, none fatal: CMDaemon authentication is a service credential, so it must not
+carry privileged writes where attribution matters; it is version-coupled to the BCM release; and the
+app has to reach CMDaemon directly, which Firmus does trivially with the container on the head node
+while Nscale TX sits behind three hops from an OVA and would need a tunnel or the SSH fallback.
+
+**The audit budget breaks before either of these.** A fixed byte budget encodes an operator count:
+20 MiB at 502 B/event is 41.8 days at the 1,000 events/day FR-7b originally assumed, which is about
+two operators — 4.4 days at 20. FR-7b is now expressed as a retention target in days plus a byte
+ceiling, deriving the budget from the observed rate, so it stays true as the operator count grows.
+
+**The boundary to know about: more than one backend instance.** Three things are in-process today and
+would each need replacing before Rack Status could run as several instances behind a load balancer —
+the revocation map (`PHASE3_POLICY_ENGINE_SPIKE.md` §5b, which is why `--workers 1` is a documented
+constraint rather than an accident), the job registries, and the ControlMaster sockets, which are
+per-instance and would multiply the head-node connection count by the instance count. At that point
+the shape changes: a shared session and revocation store, and probably a per-cluster agent rather than
+SSH from every instance. Worth knowing as a known edge, not worth building toward now.
 
 ## Two hazards to design against
 
