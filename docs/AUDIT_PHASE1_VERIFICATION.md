@@ -107,3 +107,20 @@ docker compose exec rack-status grep '<event_id>' /app/var/logs/audit/audit.json
 Passing this proves the `rack-data` named volume held the history rather than the container. That
 is the whole point of FR-11a: the documented deploy recreates the container and discards stdout, so
 an audit trail that lives only in stdout does not survive the deploy that produced it.
+
+---
+
+## Sign-off
+
+REQ-47 requires evidence that is not an automated test to carry a named approver. A committed record
+establishes that an inspection or demonstration happened; it does not establish that anyone other
+than its author accepted the result, and inspection is exactly the method where that distinction
+carries the weight. Authorised approvers: **Rafael M. Koike, Giovanni, or Felix**.
+
+| Case | Method | Result | Recorded by | Approved by | Date |
+| :---- | :---- | :---- | :---- | :---- | :---- |
+| TC-39 | Inspection | PASS | Cursor Agent ("Ada") | _pending_ | 2026-08-24 |
+| TC-40 | Demonstration | PASS (`ef3693ea312f` → `71f758789132`) | Cursor Agent ("Ada") | _pending_ | 2026-08-24 |
+
+Approvers: replace `_pending_` with your name to accept the recorded result. Leaving it pending is
+also information — it says the evidence exists but has not been reviewed.

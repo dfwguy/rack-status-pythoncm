@@ -18,19 +18,22 @@
   },
   "artifacts": {
     "srd": {
-      "status": "missing",
-      "source_type": "unknown",
-      "pointer": null
+      "status": "available",
+      "source_type": "local",
+      "pointer": ".plc/requirements/SWE-PLC-L1-002-BasicPLC-SRD-NVIS-RACK-STATUS.md",
+      "note": "Reconstructed draft, not an officially ratified SRD. Captures a snapshot for grooming."
     },
     "sadd": {
-      "status": "missing",
-      "source_type": "unknown",
-      "pointer": null
+      "status": "available",
+      "source_type": "local",
+      "pointer": ".plc/design/SWE-PLC-L1-003-BasicPLC-SADD-NVIS-RACK-STATUS.md",
+      "note": "Reconstructed draft, not an officially ratified SADD. Frontend is in scope."
     },
     "sutp": {
-      "status": "missing",
-      "source_type": "unknown",
-      "pointer": null
+      "status": "available",
+      "source_type": "local",
+      "pointer": ".plc/test/SWE-PLC-L1-003-BasicPLC-SUTP-NVIS-RACK-STATUS.md",
+      "note": "Reconstructed draft, not an officially ratified SUTP. Coverage figures are measured, not estimated."
     },
     "threat_model": {
       "status": "available",
@@ -72,7 +75,9 @@
     "parent_program": "NVIS OVA (Observability, Validation, Automation)",
     "nspect_context": "NSPECT-S57Q-EI19 is the nSpect registration used for nvis-rack-status. This profile covers the nvis-rack-status repository only.",
     "revision_note": "repo.revision is the main-branch snapshot this profile was aligned to, not a live always-HEAD pointer. repo.branch is the canonical product branch (main); the reconstruction work was authored on feat/agentic-plc-security.",
-    "scope_note": "Reconstruction scope for this pass was security only: local advisory scans (SAST, dependency CVE, license, Pulse secret scan) plus a SecNemo Agent-TAVA threat model. The SRD, SADD and SUTP were deliberately not reconstructed and are marked missing rather than unknown.",
+    "scope_note": "Security reconstruction (local advisory SAST, dependency CVE, license and Pulse secret scans plus a SecNemo Agent-TAVA threat model) was followed on 2026-08-24 by reconstruction of the SRD, SADD and SUTP, which are now drafts under .plc/ rather than missing. They are snapshots for grooming, not ratified PLC documents.",
+    "product_boundary": "Standalone product. Rack Status is a complete solution deployed at customer clusters so NVIS and partners can bring up NVIDIA clusters; NSPECT-S57Q-EI19 registers it as such, and the SRD/SADD/SUTP are product-level documents. Author decision, 2026-08-24.",
+    "development_model": "Collaborative and SA-driven. Periodic releases; NVIS Solutions Architects contribute by merge request; explicitly not a one-way door. No formal supported-version window or customer SLA.",
     "owned_components": [
       "backend (Flask API + rack status builder)",
       "frontend (React 19 SPA, Kaizen UI)",
@@ -91,8 +96,9 @@
       "TinyDB catalog store (var/store)"
     ],
     "open_questions": [
-      "Is nvis-rack-status a standalone nSpect product under NSPECT-S57Q-EI19, or one component of a larger NVIS OVA program registration?",
-      "Should the two sibling deployments (nvis-mel01 worktree: Firmus MEL01, Boston BOS01) be covered by this same registration or their own?"
+      "Should the two sibling deployments (nvis-mel01 worktree: Firmus MEL01, Boston BOS01) be covered by this same registration or their own?",
+      "Full names for the REQ-47 evidence approvers: Giovanni and Felix are recorded by first name only.",
+      "Whether to commit performance SLAs (page load, fleet-scan duration at 2000+ nodes, acceptable staleness of live state). None exist today beyond the audit path's 5 ms p95 budget, and none are planned yet."
     ]
   }
 }

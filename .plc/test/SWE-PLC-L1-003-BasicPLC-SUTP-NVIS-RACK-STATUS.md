@@ -20,7 +20,7 @@ Revision History
 
 | Date | Author | Summary of Change |
 | :---- | :---- | :---- |
-| Aug. 24, 2026 | Agentic PLC | Initial reconstruction from the shipped suite: 108 backend test files (2,270 tests), 52 frontend test files, measured coverage, and the `auth-audit-logging` test plan's 40 cases. Skill: plc-test-plan-reconstruction; Timestamp: 2026-08-24T16:00Z; Input ref: NSPECT-S57Q-EI19. Human decision: pending; Reviewed by: pending |
+| Aug. 24, 2026 | Agentic PLC | Initial reconstruction from the shipped suite: 108 backend test files (2,294 tests), 52 frontend test files, measured coverage, and the `auth-audit-logging` test plan's 40 cases. Skill: plc-test-plan-reconstruction; Timestamp: 2026-08-24T16:00Z; Input ref: NSPECT-S57Q-EI19. Human decision: pending; Reviewed by: pending |
 
 ---
 
@@ -62,6 +62,17 @@ were *found to be toothless* by this method and rewritten.
 and build artifacts CI never has; three separate CI failures came from that gap in one day. A
 dedicated gate exports only tracked files and runs the suite there.
 
+**Coverage is a gate, not a report (REQ-45).** Every file must reach 50% of statements and branches.
+Because the product predates the rule, the 13 files below that line when the gate was introduced are
+recorded as a named exception list which **may only shrink** — a file may be removed from it by being
+covered, never added. A new file therefore cannot be merged below 50%, which is the intent: every new
+feature carries its own tests. Enforced by `bin/check-coverage-floor.py` in the `python-test` job.
+
+**The frontend is in scope.** The SPA is part of the application (SADD, *Frontend Design*), so its
+tests gate merges alongside the backend's. Vitest with Testing Library covers views, components and
+contexts; 52 test files at the time of writing. The frontend has no equivalent per-file floor yet —
+see gap G-8.
+
 ## Test Environment
 
 | Environment | Purpose | Availability |
@@ -83,18 +94,23 @@ operators against real deployments, recorded as evidence rather than as automate
 
 | Metric | Value (Aug. 24, 2026) |
 | :---- | :---- |
-| Backend test files | 108 |
-| Backend tests | 2,270 passing, 17 skipped |
+| Backend test files | 109 |
+| Backend tests | 2,294 passing, 17 skipped |
 | Frontend test files | 52 |
-| Backend statement+branch coverage | 65.1% (26,042 statements, `.coveragerc` scope, tests excluded) |
-| Files below 50% coverage | 13 |
-| Suite runtime | ~110 s local, ~220 s in CI |
+| Backend statement+branch coverage | 65.3% (26,042 statements, `.coveragerc` scope, tests excluded) |
+| Files below 50% coverage | 13, all on the gate's exception list |
+| Coverage floor | 50% per file, enforced (REQ-45) by `bin/check-coverage-floor.py` |
+| Suite runtime | ~110 s local, ~200 s with coverage instrumentation, ~220 s in CI |
 | Static analysis | ruff and pylint clean on `backend/` excluding tests |
 
 Coverage is measured over `backend/` with the tests themselves omitted, because including them
-inflates the figure towards meaninglessness — test files execute by definition. Note that the CI
-job's own coverage badge measures only two modules (`ai_chat`, `workflow_engine`) and therefore does
-not describe the project; `.coveragerc` is the authoritative scope.
+inflates the figure towards meaninglessness — test files execute by definition. `.coveragerc` is the
+authoritative scope, and the CI job now uses it.
+
+Reconstructing this plan found that it did not: the `python-test` job passed
+`--cov=ai_chat --cov=workflow_engine`, so the reported figure described 2 modules out of 136 and the
+badge did not describe the project. Fixed in the same change that added the floor, because a gate
+reading a two-module report would have had almost nothing to check.
 
 ---
 
@@ -119,7 +135,7 @@ lives in `.plc/briefs/auth-audit-logging-test-plan.md` (40 cases, TC-1..TC-40).
 | REQ-12, REQ-13 parsing, absent-not-zero | `test_analytics_metricless_rows.py`, `test_parser_results*`, `test_nccl_ingest.py`, `test_nvis_logscan.py` | Unit | The metricless-rows case is the direct "absent is not a pass" guard |
 | REQ-14 report renderers | `test_cluster_report*.py`, `ReportsView.test.tsx` | Unit, Integration | |
 | REQ-15 attribution | `test_node_report_job.py`, `test_post_run_api.py` | Integration | A failed multi-node job does not implicate every node |
-| REQ-16, REQ-17 node-state and cancel guards | `test_slurm_command_routing.py`, `test_schedulers.py`, `test_reset_job_progress.py` | Unit | **Partial — see gap G-7.** Binary routing and scheduler behaviour are covered; the drain/resume/cancel *guards* in `slurm_admin.py` are not directly tested |
+| REQ-16, REQ-17 node-state and cancel guards | `test_slurm_command_routing.py`, `test_schedulers.py`, `test_reset_job_progress.py` | Unit | **Partial — see gap G-7.** Binary routing and scheduler behaviour are covered, and the smoke harness reaches `slurm_admin.py` (65.2%), but the drain/resume/cancel *guards* are not directly asserted |
 | REQ-18 observability | `test_metrics_query*.py`, `test_grafana*.py`, `test_nodelist_metrics_and_naming.py` | Unit | PromQL label allowlist refusal cases |
 | REQ-19, REQ-20 workflows, durable long work | `test_workflow_composition.py`, `test_workflow_engine.py`, `test_workflow_eval.py` | Unit, Integration | |
 | REQ-21, REQ-22 catalog, multi-cluster | `test_catalog_api.py`, `test_config_precedence.py` | Unit, Integration | |
@@ -138,6 +154,9 @@ lives in `.plc/briefs/auth-audit-logging-test-plan.md` (40 cases, TC-1..TC-40).
 | REQ-42 committed tree stands alone | `bin/check-tracked-tree.sh` (CI, `python-test`) | System | Verified by mutation against the pre-fix commit |
 | REQ-43 read-only posture | Configuration-level; **no automated case** | — | See gap G-3 |
 | REQ-44 design system | Frontend component tests | Unit | |
+| REQ-45 new code carries its own tests | `test_coverage_floor_gate.py`, `bin/check-coverage-floor.py` (CI, `python-test`) | Unit, System | 24 cases drive the gate's *refusal* paths — a gate that stops failing is silent |
+| REQ-46 contribution without code change | `test_catalog_*.py`, `test_action_coverage.py` | Unit | Catalog documents add tools/platforms/sites; the action gate proves a new endpoint is registered without editing a central list |
+| REQ-47 evidence is attributable | `docs/AUDIT_PHASE1_VERIFICATION.md` | Inspection | **Partial — see gap G-9.** The record exists; the named sign-off is not yet captured in it |
 
 ### Architectural invariant cases (no single requirement; they defend the SADD)
 
@@ -162,19 +181,38 @@ Latest gating run (commit `0bea87c`, CI pipeline on `feat/auth-audit-logging`):
 | `python-lint` (ruff + pylint + secret scan) | passing |
 | `check-tracked-tree` | 134 modules imported, 218 routes |
 
-Local full run: 2,270 passed, 17 skipped, ~110 s. The count differs between environments because
-the TC-34 latency case skips when `CI` is set — a p95 measurement on a shared runner is not a
-measurement — and the local tracked-tree export omits `frontend/`.
+Local full run: 2,294 passed, 17 skipped, ~200 s with coverage instrumentation. The count differs
+between environments because the TC-34 latency case skips when `CI` is set — a p95 measurement on a
+shared runner is not a measurement — and the local tracked-tree export omits `frontend/`.
+
+**Reproducing the gates locally.** Test tooling is pinned in `backend/requirements-dev.txt` so a
+contributor runs the same versions CI does; previously CI installed `pytest`/`pytest-cov` unpinned
+and tracked latest, which made "green locally" and "green in CI" different claims:
+
+```bash
+pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+python -m pytest backend/tests/ -q --cov --cov-config=.coveragerc --cov-report=json:coverage.json
+python bin/check-coverage-floor.py coverage.json     # REQ-45
+bash bin/check-tracked-tree.sh --with-tests          # the committed-tree gate
+```
 
 Verification evidence that is not a pytest case is recorded in
 `docs/AUDIT_PHASE1_VERIFICATION.md`: the `getLogger` diff inspection (TC-39) and the container
 recreate demonstration (TC-40, container `ef3693ea312f` → `71f758789132` with the audit event
 surviving).
 
+**Such evidence requires a named approver (REQ-47).** A committed record establishes that the
+inspection or demonstration happened, but not that anyone other than its author accepted the result,
+and inspection is precisely the method where that distinction matters. Sign-off is by one of
+**Rafael M. Koike, Giovanni, or Felix**, recorded in the evidence document itself alongside the
+result. Approver surnames remain to be filled in — see open question 3.
+
 ## Function List
 
 Coverage by area, and the honest gaps. Thirteen files remain below 50%; they are listed because a
-test plan that reports only the total is not a test plan.
+test plan that reports only the total is not a test plan. Those thirteen are also the *entire*
+exception list in `bin/check-coverage-floor.py` — the table below and the gate cannot drift apart,
+because the gate fails if a listed file no longer exists or has climbed above the floor.
 
 | Area | Coverage | Assessment |
 | :---- | :---- | :---- |
@@ -190,7 +228,7 @@ test plan that reports only the total is not a test plan.
 | `api/analytics.py`, `api/fabric_ops.py`, `api/diagnostics.py`, `api/bringup.py`, `metrics_query.py` | 45–50% | Within a few points of the line |
 | `api/rack_power.py` | 26.7% | **Gap G-1** — privileged: power, BMC recovery, MAC change |
 | `api/parser_results.py` | 19.3% | **Gap G-2** |
-| `rack_status_engine.py` | 25.7% | **Gap G-2** — needs a synthetic fleet fixture |
+| `rack_status_engine.py` | 25.9% | **Gap G-2** — needs a synthetic fleet fixture |
 | `api/exports.py` | 22.3% | **Gap G-2** |
 | `api/terminal.py` | 28.5% | **Gap G-4** — needs WebSocket upgrade simulation |
 | `api/bug_report.py`, `api/logs.py`, `agent/registrations.py` | 28–37% | **Gap G-2** |
@@ -205,7 +243,9 @@ test plan that reports only the total is not a test plan.
 | G-4 | `api/terminal.py` at 28.5%; the refusal paths are tested but the established-session paths are not. | Medium | WebSocket simulation |
 | G-5 | `backend/tests` is not linted by CI (99 findings, 63 auto-fixable), so a new test file's own quality is unchecked. | Low | Enable after working the backlog |
 | G-6 | Eight `subprocess` call sites in `api/tools.py` bypass the execution chokepoint, so test safety there rests on a second stub rather than on the architecture. | Medium | Move them behind `host_exec` |
-| G-7 | `slurm_admin.py` is at 21.7% and has no dedicated test module. It owns the mutating Slurm commands — drain, resume, cancel — so REQ-16 and REQ-17 rest on code whose guard paths are not directly asserted. Found while reconstructing this plan: the citation expected a `test_slurm_admin.py` that does not exist. | **High** | Add guard cases: refusal without an explicit node list, refusal when cancellation is disabled by configuration, and the reason string reaching `scontrol` |
+| G-7 | `slurm_admin.py` has no dedicated test module, so REQ-16 and REQ-17 rest on incidental coverage. It reaches 65.2% through the endpoint smoke harness and the routing tests, which is above the floor but exercises the *paths* rather than asserting the *guards*: refusal without an explicit node list, refusal when cancellation is disabled, and the reason string reaching `scontrol`. Coverage percentage is not the same as intent being pinned. | **Medium** | Add a `test_slurm_admin.py` with those three guard cases. Lowered from High after measurement: the earlier draft cited 21.7%, a stale figure predating the smoke harness |
+| G-9 | REQ-47 requires a named approver for evidence that is not an automated test, but `docs/AUDIT_PHASE1_VERIFICATION.md` records TC-39 and TC-40 without one. The requirement exists ahead of its own evidence. | **Medium** | Add an approver line (Rafael M. Koike, Giovanni, or Felix) to that document, and a template line to any future inspection or demonstration record |
+| G-8 | The frontend has no per-file coverage floor. The backend gate (REQ-45) covers `backend/` only; Vitest runs and must pass, but a new component can merge untested. Now a real gap rather than a scoping choice, since the frontend is in scope for this plan. | **Medium** | Extend `bin/check-coverage-floor.py`, or add a `vitest --coverage` threshold with the same shrinking-exception discipline |
 
 ---
 
@@ -214,20 +254,24 @@ test plan that reports only the total is not a test plan.
 Reconstructed from the shipped suite; every named test file exists. Coverage figures are from a real
 measured run, not estimated.
 
-**Open questions for the author:**
+**Resolved by the author, Aug. 24, 2026:**
 
-1. **Is there a coverage target to state as a requirement?** The auth work adopted "every file at
-   50% or above" as a working goal, which took the total from 53.5% to 65.1%. Should that be a
-   committed threshold enforced in CI, and at what level?
-2. **Frontend test strategy.** 52 test files exist but there is no stated policy on what must be
-   tested (component behaviour, view integration, accessibility). Should the SUTP prescribe one?
-3. **Who signs off on evidence that is not a pytest case?** TC-39 and TC-40 are inspection and
-   demonstration recorded in `docs/`. Is a named reviewer required for those, or is the committed
-   record sufficient for PLC purposes?
-4. **Release qualification.** `docs/RELEASE_QA_2026-08-13.md` exists as a point-in-time exercise.
+| # | Question | Answer |
+| :---- | :---- | :---- |
+| 1 | Coverage target as a requirement? | **Yes, an enforced gate at 50% per file** (REQ-45), implemented as `bin/check-coverage-floor.py` in the `python-test` job with a shrinking exception list. Measuring it also corrected two figures in this plan and downgraded gap G-7. |
+| 2 | Is the frontend in scope? | **Yes** — part of the application, so its tests gate merges. It has no per-file floor yet, now recorded as gap G-8 rather than left implicit. |
+| 3 | Sign-off for non-test evidence? | **A named approver is required**: Rafael M. Koike, Giovanni, or Felix (REQ-47). The committed record alone is not sufficient. |
+
+**Remaining open questions:**
+
+1. **Frontend test *policy*.** Scope is settled, but 52 test files exist without a stated rule on
+   what must be tested — component behaviour, view integration, accessibility. Should this plan
+   prescribe one, and should G-8's floor be statements or something view-aware?
+2. **Release qualification.** `docs/RELEASE_QA_2026-08-13.md` exists as a point-in-time exercise.
    Should a standing release-qualification checklist be part of this plan, distinct from the
-   per-commit gates?
-5. **Do the eight PLC test layers need explicit N/A statements?** This plan covers unit,
-   integration, performance, compatibility, regression and system. Layers such as
-   stress/soak/endurance and formal security testing are not represented; the product's own
-   validation recipes are arguably the stress layer, but that is a judgement I should not make.
+   per-commit gates? Relevant now that releases are periodic and contribution-driven.
+3. **Approver surnames** for the REQ-47 table — Giovanni and Felix are first-name only.
+4. **Do the eight PLC test layers need explicit N/A statements?** This plan covers unit,
+   integration, performance, compatibility, regression and system. Stress/soak/endurance and formal
+   security testing are not represented; the product's own validation recipes are arguably the
+   stress layer, but that is a judgement I should not make.

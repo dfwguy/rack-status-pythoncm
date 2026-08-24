@@ -32,7 +32,7 @@ Revision History
 
 | Date | Author | Summary of Change |
 | :---- | :---- | :---- |
-| Aug. 24, 2026 | Agentic PLC | Initial reconstruction from the shipped product: 14 `.cursor/rules` files (1,761 lines), 34 `docs/*.md` (11,195 lines), the `auth-audit-logging` feature brief (39 FR/NFR, 55 AC), the README release-candidate capability inventory, and the source tree (134 backend modules, 218 routes, 2,270 tests). Skill: plc-requirements-reconstruction; Timestamp: 2026-08-24T15:00Z; Input ref: NSPECT-S57Q-EI19. Human decision: pending; Reviewed by: pending |
+| Aug. 24, 2026 | Agentic PLC | Initial reconstruction from the shipped product: 14 `.cursor/rules` files (1,761 lines), 34 `docs/*.md` (11,195 lines), the `auth-audit-logging` feature brief (39 FR/NFR, 55 AC), the README release-candidate capability inventory, and the source tree (134 backend modules, 218 routes, 2,294 tests). Skill: plc-requirements-reconstruction; Timestamp: 2026-08-24T15:00Z; Input ref: NSPECT-S57Q-EI19. Human decision: pending; Reviewed by: pending |
 
 ---
 
@@ -90,6 +90,33 @@ Deployments in service at the time of writing: **Mayo Clinic**, **Nscale TX** (G
 NVIS OVA team, Rafael M. Koike as principal author, reporting to Bryan Reese; contributions from
 Harish Lakshminarayanan (Nscale TX 16K port). Agentic PLC skills and AI pair-development are used
 throughout, and their use is recorded per commit.
+
+## Product scope and PLC level
+
+**Rack Status is a standalone product**, not a component of a larger registration. It is a complete
+solution deployed at a customer cluster to enable NVIDIA NVIS and its partners to bring up NVIDIA
+clusters. This document is therefore a **product-level SRD** under NSPECT-S57Q-EI19, and the
+accompanying SADD and SUTP are product-level documents. (Author decision, Aug. 24, 2026; supersedes
+the open question carried in `.plc/profile.json`.)
+
+Scope includes the React single-page application. The frontend is part of the application rather
+than a separate client, so its design is in scope for the SADD and its tests are in scope for the
+SUTP.
+
+## Development and contribution model
+
+Rack Status is a **collaborative SA-driven project**, and that shapes its requirements rather than
+being merely process trivia. It originated with the Solutions Architects who operate it, and
+continues to be developed by them: NVIS SAs contribute through merge requests, and the product is
+explicitly not a one-way door handed over and frozen. New versions are released periodically.
+
+Consequences that are requirements rather than preferences: a contributor who is not the author
+must be able to add a tool, preset or site without changing code (REQ-21); the architecture must
+make the correct extension point obvious, because contributors arrive without context; and new
+contributions must carry their own tests (REQ-45).
+
+There is no formal supported-version window, upgrade/rollback commitment, or customer-facing SLA at
+this time. Release cadence is periodic but not contractually fixed.
 
 ## Assumptions
 
@@ -242,6 +269,9 @@ to shipped code, a shipped document, or a recorded decision.
 | REQ-42 | Committed tree stands alone | The committed tree shall import and pass its tests without build artifacts or untracked files present. | Test Automatability |
 | REQ-43 | Read-only operating posture | A deployment shall be configurable as an inventory and reporting surface only, with workload cancellation, privileged script execution and cluster-manager mutation disabled. | Security, Platform |
 | REQ-44 | Accessibility and design system | Operator surfaces shall be built on the NVIDIA Kaizen UI design system. | Non-Functional |
+| REQ-45 | New code carries its own tests | Every source file shall be covered by automated tests to at least 50% of its statements and branches, enforced in CI. Files below that threshold at the time the gate was introduced are recorded as a finite, named exception list that may only shrink. | Test Automatability |
+| REQ-46 | Contribution without code change | Adding a validation tool, preset, hardware platform or customer site shall be achievable by editing catalog data and configuration, without modifying application code. | Functional, Non-Functional |
+| REQ-47 | Verification evidence is attributable | Verification evidence that is not an automated test — inspection and demonstration results — shall be committed to the repository and signed off by a named approver from the authorised set. | Non-Functional |
 
 ---
 
@@ -270,7 +300,7 @@ isolated to temporary directories per session, and no test may read a developer'
 
 | Item | Status |
 | :---- | :---- |
-| Automated unit and integration tests exist and gate merges | Yes — 2,270 backend tests plus frontend Vitest, run in CI |
+| Automated unit and integration tests exist and gate merges | Yes — 2,294 backend tests plus frontend Vitest, run in CI |
 | The product can run without hardware | Yes — REQ-39 demonstration mode |
 | Execution is stubbable at one point | Yes — REQ-23 single chokepoint |
 | Test evidence is machine-readable | Yes — JUnit XML and coverage reports published per pipeline |
@@ -289,26 +319,26 @@ invented to fill a template section.
 cluster-manager provider and the Clush transport. Both are named in the source and both are
 explicitly not release-candidate execution paths.
 
-**Open questions for the author — these could not be inferred and are recorded rather than
-guessed:**
+**Resolved by the author, Aug. 24, 2026:**
 
-1. **Product boundary and nSpect scope.** Is `nvis-rack-status` a standalone nSpect product under
-   NSPECT-S57Q-EI19, or one component of a larger NVIS OVA registration? This determines whether
-   this SRD is the product SRD or a component SRD. (Carried forward from `.plc/profile.json`
-   `open_questions`.)
-2. **Release and support posture.** Is there a committed release cadence, a supported-version
-   window, or an upgrade/rollback commitment to customers? The repository has release tooling and a
-   generated changelog, but no stated support policy.
-3. **Formal availability or performance targets.** REQ-35 has a measured 5 ms audit budget because
-   the auth work set one. Are there equivalent committed numbers for page load, fleet-scan duration
-   at 2,000+ nodes, or acceptable staleness of live state? Today these are engineering judgements,
-   not requirements.
-4. **User scale as a requirement.** `docs/MULTI_USER_MULTI_CLUSTER_PLAN.md` sizes for 20
-   simultaneous operators. Should that be a stated requirement, and is the 16K-node Nscale
-   deployment expected to raise it?
-5. **Customer-facing accessibility or localisation obligations.** Kaizen UI is mandated
-   internally; is there an external accessibility standard (for example WCAG level) the operator
-   surfaces must meet?
-6. **Data-handling classification.** Validation logs and reports contain customer cluster topology
-   and hostnames. Is there a required classification, retention limit, or export restriction on
-   that data beyond the current bounded audit budget?
+| # | Question | Answer |
+| :---- | :---- | :---- |
+| 1 | Standalone product or component? | **Standalone product.** A complete solution deployed at customer clusters so NVIS and partners can bring up NVIDIA clusters. These are product-level documents. |
+| 2 | Is the frontend in scope? | **Yes** — the SPA is part of the application, not a separate client. Its design is a SADD section and its tests are in the SUTP. |
+| 3 | Release and support posture? | Periodic releases; **collaborative SA-driven development** with contributions by merge request; explicitly not a one-way door. No formal supported-version window or upgrade/rollback commitment. Recorded above under *Development and contribution model*. |
+| 4 | Committed performance targets? | **None beyond REQ-35's 5 ms audit budget.** No SLAs exist for page load, fleet-scan duration or live-state staleness, and none are planned yet; they may be added incrementally. Recorded as a deliberate absence rather than an oversight. |
+| 5 | Coverage threshold as a gate? | **Yes** — 50% per file, enforced in CI, so every new feature carries its own tests. Now REQ-45. |
+| 6 | Who signs off non-test evidence? | A named approver from **Rafael M. Koike, Giovanni, or Felix**. Now REQ-47. |
+
+**Remaining open questions — lower priority, still unanswered:**
+
+1. **User scale as a requirement.** `docs/MULTI_USER_MULTI_CLUSTER_PLAN.md` sizes for 20
+   simultaneous operators. Should that become a stated requirement, and does the 16K-node Nscale
+   deployment raise it?
+2. **External accessibility standard.** Kaizen UI is mandated internally; is there a WCAG level or
+   equivalent the operator surfaces must meet for customer delivery?
+3. **Data-handling classification.** Validation logs and reports contain customer cluster topology
+   and hostnames. Is there a required classification, retention limit or export restriction beyond
+   the current bounded audit budget?
+4. **Approver surnames.** Giovanni and Felix are identified by first name only; full names are
+   needed for the approver table.

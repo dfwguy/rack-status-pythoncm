@@ -27,10 +27,20 @@ Revision History
 
 ## Purpose and Scope
 
-This document describes the architecture and design of NVIS Rack Status as built. It covers the
-Flask backend, the React SPA, the execution transport, the catalog, the results pipeline, the
-durable registries and the audit subsystem. It does not cover the cluster software being exercised
+This document describes the architecture and design of NVIS Rack Status as built. Rack Status is a
+**standalone product** under NSPECT-S57Q-EI19 — a complete solution deployed at customer clusters so
+NVIDIA NVIS and its partners can bring up NVIDIA clusters — so this is a product-level SADD.
+
+It covers the Flask backend, the React single-page application, the execution transport, the
+catalog, the results pipeline, the durable registries and the audit subsystem. **The frontend is in
+scope**: it is part of the application rather than an external client, and has design of its own
+(see *Frontend Design* under Static Design). It does not cover the cluster software being exercised
 (BCM, Slurm, NeMo, DCGM) except at the interface.
+
+The product is developed collaboratively by NVIS Solutions Architects and accepts contributions by
+merge request. That has an architectural consequence rather than merely a procedural one: the
+correct extension point must be obvious to a contributor arriving without context, which is the
+reason the citizen model below is written down as a rule and enforced by tests.
 
 The design is organised around a small number of **first-class citizens** — abstractions that own a
 concern for the whole product. The governing rule is that a new capability extends the citizen that
@@ -173,6 +183,62 @@ rather than re-scanned per request.
 | 12. Frontend contexts | `ActiveClusterContext`, `RackCommandsStoreContext`, `ThemeContext` | Shared SPA state |
 | (new) Audit | `audit/` (`__init__`, `actions`, `sink`, `request_hook`) | The durable trail of who did what |
 
+### Frontend Design
+
+The SPA is React 19 + TypeScript, built by Vite, and is served as a hashed bundle from
+`static/spa/` by the same Flask process that serves the API — one origin, which is why no CORS
+headers are emitted anywhere. Inventory: 30 views, 121 components, 37 library modules, 13 service
+clients, 7 context pairs.
+
+**Shared state has an owner.** Each cross-view concern is a context, split deliberately into a
+`…Context.ts` (the contract) and a `…Provider.tsx` (the implementation) so a consumer imports the
+contract without pulling in the provider's dependencies:
+
+| Context | Owns |
+| :---- | :---- |
+| `ActiveClusterContext` | Active project/cluster and the switcher; the client-side mirror of catalog citizen 3 |
+| `RackCommandsStoreContext` | Centralised async command tracking across views |
+| `RackCommandContext` | The in-flight command for a single rack surface |
+| `RackLocksContext` | Advisory lock state, mirroring citizen 8 |
+| `AuthContext` | Session state and the gate's view of the operator |
+| `ThemeContext` | Dark/light mode, and the Kaizen↔MUI bridge |
+| `AIChatContext`, `HelpPanelContext` | Assistant and contextual help surfaces |
+
+The design rule is that a view consumes these rather than keeping local state that duplicates them.
+Local command tracking beside `RackCommandsStoreContext` is how two panes come to disagree about
+what is running, which is a bug class rather than a style preference.
+
+**Design system.** NVIDIA Kaizen UI (`@nvidia/foundations-react-core`) is the primary component
+library; MUI is retained only for complex existing widgets with no clean Kaizen equivalent (the rack
+table, the sidebar drawer, the app-bar shell). The two coexist through a bridge: the Kaizen
+`ThemeProvider` is the outer wrapper and the MUI theme is synchronised from it in
+`context/ThemeContext.tsx`, so one mode toggle drives both. Icons are Lucide React exclusively.
+
+**Kaizen assets are vendored, and that is an air-gap requirement, not a convenience.** The npm
+package does not ship the CSS, and the CDN is unreachable from a customer cluster behind an SSH
+tunnel, so `base.css`, `components.css` and 16 `woff2` fonts live in `src/styles/kaizen/` and are
+imported by `main.tsx` before the app's own styles. The `@font-face` rules are rewritten to
+relative paths on every version bump; missing that step leaves the CSS looking correct while fonts
+silently fall back.
+
+**The workflow designer keeps one source of truth.** Mermaid source text is authoritative; the
+React Flow canvas reads from it and writes back to it, via a parser that infers each node's type
+from the Mermaid shape (automated = rectangle, manual/event = stadium, decision = diamond). Two
+consequences are load-bearing: the inferred `stepType` must survive a save or nodes lose their
+appearance on reload, and deleting an edge must re-insert any node that was defined inline on that
+edge as a standalone declaration, or the node disappears with the edge.
+
+**Failure presentation.** The SPA renders absent data as absent. Where a dependency cannot be shown
+at all — a Grafana embed blocked by mixed content when the dashboard is HTTP and the SPA is HTTPS —
+it renders an explanatory banner rather than an empty frame, because a blank iframe is
+indistinguishable from a broken deployment.
+
+**Build coupling.** `static/spa/` is a gitignored build artifact. `index.html` and its hashed
+`assets/` must always come from the same build: a pinned `index.html` from another build 404s every
+chunk and renders a black screen that reads as "slow". This is why deployment verification checks
+that every asset the served page references actually resolves, and why the backend answers a missing
+bundle with an explicit 503 page rather than a 500.
+
 ### Configuration Data
 
 Configuration resolves through one accessor set (`_eget`, `_eget_int`, `_subprocess_env`) with a
@@ -311,7 +377,7 @@ Threat model: `.plc/security/threat-model-NVIS-RACK-STATUS.md` (T-1..T-64).
 
 ### Test Automation
 
-2,270 backend tests (pytest) plus frontend Vitest, gating merges in CI. The execution layer is
+2,294 backend tests (pytest) plus frontend Vitest, gating merges in CI. The execution layer is
 stubbable at one chokepoint, which is what makes route-level testing safe; `subprocess` is stubbed
 as a hard floor for the code paths that still bypass it. Demonstration mode serves synthetic data
 for out-of-process cases. Meta-tests enforce architectural invariants: route parity across the URL
@@ -325,18 +391,23 @@ inside a function, and full action-declaration coverage for mutating routes.
 Reconstructed from the shipped tree; every component named above exists in the source. Parked paths
 (PythonCM provider, Clush transport) are excluded deliberately, per the README capability inventory.
 
-**Open questions for the author:**
+**Resolved by the author, Aug. 24, 2026:**
 
-1. **Component boundary for nSpect.** Same question as the SRD: is this a product-level SADD or a
-   component SADD under a larger NVIS OVA registration?
-2. **Is the frontend in scope for this SADD?** This draft describes it only as a client. The SPA has
-   its own substantial design (contexts, the workflow designer's Mermaid-as-source-of-truth, the
-   Kaizen/MUI theme bridge). Should it be a section here, or its own document?
-3. **Identity design commitment.** Phases 2–3 are scoped in `docs/AUTH_PROGRAMME_SCOPE.md` but not
-   designed. Should this SADD describe the planned identity/policy architecture as design, or stay
-   strictly as-built and let the phase briefs carry it?
-4. **The two remaining `import app` cycles.** Recorded as debt in `core-designs.mdc`. Is unwinding
+| # | Question | Answer |
+| :---- | :---- | :---- |
+| 1 | Product or component SADD? | **Product-level.** Rack Status is a standalone product deployed at customer clusters. |
+| 2 | Is the frontend in scope? | **Yes.** Now a section under Static Design, covering the contexts, the Kaizen/MUI bridge, the vendored assets, the workflow designer's single source of truth and the build coupling. |
+
+**Remaining open questions:**
+
+1. **Identity design commitment.** Phases 2–3 are scoped in `docs/AUTH_PROGRAMME_SCOPE.md` but not
+   designed. Should this SADD describe the planned identity and policy architecture as design, or
+   stay strictly as-built and let the phase briefs carry it until they land?
+2. **The two remaining `import app` cycles.** Recorded as debt in `core-designs.mdc`. Is unwinding
    them a committed design intent to state here, or accepted permanently?
-5. **`pythoncm` migration.** `docs/MULTI_USER_MULTI_CLUSTER_PLAN.md` names moving read traffic from
+3. **`pythoncm` migration.** `docs/MULTI_USER_MULTI_CLUSTER_PLAN.md` names moving read traffic from
    `cmsh` to `pythoncm` to reduce head-node load, while the README lists PythonCM as parked. Which
    is current — is the migration intended, and if so is it a design commitment?
+4. **Frontend performance and accessibility design.** With the frontend now in scope, the absence of
+   committed page-load targets (SRD resolved question 4) and of an external accessibility standard
+   becomes a design gap rather than only a requirements gap.
