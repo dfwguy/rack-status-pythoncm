@@ -94,7 +94,7 @@ export function RackOverview({ row, comment }: RackOverviewProps) {
 
         <Divider orientation="vertical" />
 
-        <InfoItem label="Sinfo">
+        <InfoItem label="Node availability">
           <Text kind="body/regular/md">{row.sinfo}</Text>
         </InfoItem>
 

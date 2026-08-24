@@ -122,7 +122,7 @@ export function BringupResultsPanel({ node, logDir }: BringupResultsPanelProps) 
             Bring-up results
           </Text>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-            Live from the cluster automation (results + reports){data?.slurm_state ? ` \u00b7 Slurm ${data.slurm_state}` : ""}
+            Live from the cluster automation (results + reports){data?.slurm_state ? ` \u00b7 scheduler ${data.slurm_state}` : ""}
             {lastUpdated ? ` \u00b7 updated ${agoLabel(lastUpdated)}` : ""}
           </Text>
         </div>

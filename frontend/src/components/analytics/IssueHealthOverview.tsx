@@ -61,7 +61,7 @@ export function IssueHealthOverview() {
         </Button>
       </Flex>
       {error && <Banner status="error" kind="inline">{error}</Banner>}
-      {data?.refresh?.accounting_error && <Banner status="warning" kind="inline">Slurm accounting refresh failed; showing retained node participation: {data.refresh.accounting_error}</Banner>}
+      {data?.refresh?.accounting_error && <Banner status="warning" kind="inline">Scheduler history refresh failed; showing retained node participation: {data.refresh.accounting_error}</Banner>}
       {s && (
         <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 1.25 }}>
           {[

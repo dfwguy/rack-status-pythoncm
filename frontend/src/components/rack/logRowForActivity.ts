@@ -31,7 +31,7 @@ function activityJobIds(activity: ValidationActivity): string[] {
     if (ref && !out.includes(ref)) out.push(ref);
   }
   const own = String(activity.job_id ?? "").trim();
-  // job_id is a UUID for dashboard-launched activities and a Slurm id only for adopted ones.
+  // job_id is a UUID for dashboard-launched activities and a provider-native id for adopted ones.
   if (/^\d+$/.test(own) && !out.includes(own)) out.push(own);
   return out;
 }

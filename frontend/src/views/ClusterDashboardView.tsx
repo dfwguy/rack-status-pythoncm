@@ -807,7 +807,7 @@ export function ClusterDashboardView({
               <InfoTile label="Product line" value={data.product_line} hint="RACK_CLUSTER_PRODUCT_LINE" />
               <InfoTile label="HW vendor" value={data.hw_vendor} hint="RACK_CLUSTER_HW_VENDOR" />
               <InfoTile label="BCM version" value={bcmVersion} mono hint='RACK_CLUSTER_BCM_VERSION, else cmsh versioninfo' />
-              <InfoTile label="Slurm version" value={slurmVersion} mono hint="RACK_CLUSTER_SLURM_VERSION, else Slurm on head" />
+              <InfoTile label="Scheduler version" value={slurmVersion} mono hint="Active scheduler/provider version; legacy payload field is slurm_version" />
               <InfoTile label="NEMO container" value={data.nemo_container} mono hint="RACK_CLUSTER_NEMO_* or NEMO_SQSH_SRC" />
               <InfoTile label="Dashboard build" value={data.app_version} mono hint="var/build-info.json from the image build, else version.py" />
             </Box>

@@ -135,7 +135,7 @@ export function AddTerminalDialog({
 
         {/* The head node is offered explicitly rather than being buried in the search results: it
             is not a compute node, it connects by a different mode, and it is the most common
-            target for cmsh, sinfo and pdsh work. */}
+            target for PythonCM inventory and direct-execution work. */}
         <Box sx={{ mb: 2 }}>
           <Button
             kind="secondary"

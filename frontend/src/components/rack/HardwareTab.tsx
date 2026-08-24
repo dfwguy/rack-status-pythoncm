@@ -66,7 +66,7 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
         disabled={disabled}
         kind="hardware"
         title="Hardware Deep Audit"
-        description={`Deep GPU/thermal/ECC/recovery, Xid/PCIe/EDAC, service/IMEX and storage audit on ${nodeCount} selected node(s). Confirmed failures are commented and drained in Slurm automatically.`}
+        description={`Deep GPU/thermal/ECC/recovery, Xid/PCIe/EDAC, service/IMEX and storage audit on ${nodeCount} selected node(s). Confirmed failures are commented and drained through the active scheduler automatically.`}
         icon={ScanSearch}
       />
       <ActionCard
@@ -81,7 +81,7 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
       />
       <ActionCard
         title="GPU Reset"
-        description={`Reset GPUs on ${nodeCount} selected node(s). Stops slurmd, runs nvidia-smi -r, restarts services.`}
+        description={`Reset GPUs on ${nodeCount} selected node(s). Quiesces cluster services, runs nvidia-smi -r, then restores services.`}
         icon={<Cpu size={20} />}
         buttonLabel="Reset GPUs"
         disabled={disabled}

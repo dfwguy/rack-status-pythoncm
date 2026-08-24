@@ -47,7 +47,7 @@ export function ClusterSqueueOverview({
       >
         <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover" }}>
           <Text kind="body/bold/md" style={{ fontWeight: 700, color: NVIDIA_GREEN, display: "block" }}>
-            Slurm queue (squeue)
+            Active jobs
           </Text>
         </Box>
         <Box sx={{ p: 2 }}>
@@ -68,7 +68,7 @@ export function ClusterSqueueOverview({
       >
         <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover" }}>
           <Text kind="body/bold/md" style={{ fontWeight: 700, color: NVIDIA_GREEN, display: "block" }}>
-            Slurm queue (squeue)
+            Active jobs
           </Text>
           <Text kind="body/regular/md" style={{ display: "block", marginTop: 8, color: "var(--text-color-error, #f44336)" }}>
             {squeue?.error || "Queue details unavailable"}
@@ -91,7 +91,7 @@ export function ClusterSqueueOverview({
     >
       <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover" }}>
         <Text kind="body/bold/md" style={{ fontWeight: 700, color: NVIDIA_GREEN, display: "block" }}>
-          Slurm queue (squeue)
+          Active jobs
         </Text>
         {squeue.command_display && (
           <Text kind="body/regular/sm" style={{ display: "block", fontFamily: "monospace", marginTop: 4, wordBreak: "break-all", color: "var(--text-color-secondary)" }}>

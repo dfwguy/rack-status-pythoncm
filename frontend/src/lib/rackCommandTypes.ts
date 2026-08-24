@@ -11,6 +11,8 @@
  */
 export type NodeCmdKind =
   | "validation"
+  | "scheduler"
+  /** Persisted compatibility value from Slurm-era command history. */
   | "slurm"
   | "stress"
   | "power"

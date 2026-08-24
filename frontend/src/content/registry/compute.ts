@@ -11,8 +11,8 @@
  */
 /**
  * Knowledge entries for the Compute domain: the cluster overview, racks list,
- * multirack operations, the Slurm scheduler view, and the components that make
- * up those pages (rack table, status summary, squeue/sinfo panels, etc.).
+ * multirack operations, the scheduler view, and the components that make up
+ * those pages. Legacy ids retain their Slurm-era names for route/help compatibility.
  */
 import type { HelpContent } from "../types";
 
@@ -25,11 +25,11 @@ export const computeContent: HelpContent[] = [
     routePath: "/compute/overview",
     summary: "Top-level health and capacity snapshot for the whole cluster.",
     description:
-      "The Cluster overview is the landing page. It aggregates validation progress, node and rack counts, GPU capacity, and live scheduler activity into a set of stat tiles plus a cluster-wide squeue summary, so you can judge the state of the deployment at a glance before drilling into a rack.",
+      "The Cluster overview is the landing page. It aggregates validation progress, node and rack counts, GPU capacity, and live scheduler activity into stat tiles plus a cluster-wide active-job summary, so you can judge the state of the deployment at a glance before drilling into a rack.",
     features: [
       "Stat tiles for total racks, nodes, GPUs, and validation progress (done / failed / ongoing / pending).",
       "Cluster metadata (project name, site, platform) with an inline editor.",
-      "Cluster-wide squeue overview summarising running and pending jobs.",
+      "Cluster-wide active-job overview summarising running and pending work.",
       "NVFTP / data sync status indicators.",
       "Refresh control to re-pull live status from the head node.",
     ],
@@ -66,7 +66,7 @@ export const computeContent: HelpContent[] = [
         "Top-level cluster dashboard showing validation progress, rack and node counts, GPU capacity, and live scheduler activity.",
     },
     aiContext:
-      "The Cluster overview is the landing dashboard. It shows aggregate validation progress (done/failed/ongoing/pending), rack/node/GPU counts, cluster metadata, and a cluster-wide squeue summary. Users come here for a high-level health snapshot before drilling into individual racks.",
+      "The Cluster overview is the landing dashboard. It shows aggregate validation progress (done/failed/ongoing/pending), rack/node/GPU counts, cluster metadata, and a cluster-wide active-job summary. Users come here for a high-level health snapshot before drilling into individual racks.",
   },
   {
     id: "singleRack",
@@ -200,12 +200,12 @@ export const computeContent: HelpContent[] = [
     title: "Scheduler",
     domain: "Compute",
     routePath: "/compute/scheduler",
-    summary: "Live Slurm job queue and node state (squeue + sinfo).",
+    summary: "Live PythonCM/direct-execution jobs and node availability.",
     description:
-      "The Scheduler page surfaces live Slurm state: a squeue panel of running and pending jobs and a sinfo panel of node states (idle, alloc, drain, down). From here you can inspect jobs, tail a job's log, and understand why nodes are unavailable.",
+      "The Scheduler page surfaces PythonCM direct-execution state: running and pending jobs plus node states (idle, allocated, drained, down). From here you can inspect jobs, tail a job's log, and understand why nodes are unavailable. Slurm-named API routes remain as compatibility aliases.",
     features: [
-      "Live squeue table of running and pending jobs.",
-      "Live sinfo table of node states and reasons (sinfo -R --long).",
+      "Live table of running and pending jobs.",
+      "Live table of node availability states and reasons.",
       "Tail a selected job's log output.",
       "Cross-reference node drain/down reasons with rack validation.",
     ],
@@ -214,23 +214,23 @@ export const computeContent: HelpContent[] = [
         task: "See why a node is unavailable",
         steps: [
           "Open Compute > Scheduler.",
-          "Read the sinfo panel for the node's state (drain/down) and reason.",
+          "Read Node availability for the node's drain/down state and reason.",
           "Address the reason on the rack detail page if it is a hardware/validation issue.",
         ],
       },
       {
         task: "Tail a running job's log",
-        steps: ["Find the job in the squeue panel.", "Use the log/tail action on its row to stream output."],
+        steps: ["Find the job in Active jobs.", "Use the log/tail action on its row to stream output."],
       },
     ],
     related: ["squeuePanel", "sinfoPanel", "squeueDialog", "sinfoDialog", "jobStatusPanel"],
     keywords: ["slurm", "scheduler", "squeue", "sinfo", "jobs", "queue", "nodes", "drain", "idle", "alloc"],
     aria: {
-      label: "Slurm scheduler page",
-      description: "Live Slurm job queue (squeue) and node state (sinfo) with the ability to tail job logs.",
+      label: "Scheduler page",
+      description: "Live PythonCM/direct-execution jobs and node availability with the ability to tail job logs.",
     },
     aiContext:
-      "The Scheduler page shows live Slurm state: a squeue panel (running/pending jobs) and a sinfo panel (node states: idle/alloc/drain/down with reasons). Users tail job logs and diagnose unavailable nodes here.",
+      "The Scheduler page shows PythonCM/direct-execution jobs and node states (idle/allocated/drained/down with reasons). Users tail job logs and diagnose unavailable nodes here; legacy squeue/sinfo route names are compatibility details.",
   },
   {
     id: "rackTable",
@@ -357,103 +357,103 @@ export const computeContent: HelpContent[] = [
   {
     id: "clusterSqueueOverview",
     kind: "component",
-    title: "Cluster squeue overview",
+    title: "Cluster active jobs overview",
     domain: "Compute",
-    summary: "Parsed cluster-wide squeue summary on the overview page.",
+    summary: "Parsed cluster-wide active-job summary on the overview page.",
     description:
-      "ClusterSqueueOverview parses cluster squeue output into a summary table on the overview page, giving a cluster-wide view of running and pending jobs without opening the Scheduler page.",
-    features: ["Cluster-wide squeue summary.", "Running/pending job counts at a glance."],
+      "ClusterSqueueOverview parses the provider-normalized job payload into a summary table on the overview page, giving a cluster-wide view of running and pending jobs without opening the Scheduler page.",
+    features: ["Cluster-wide active-job summary.", "Running/pending job counts at a glance."],
     howTo: [
-      { task: "See cluster job activity", steps: ["Open the cluster overview.", "Read the squeue overview table."] },
+      { task: "See cluster job activity", steps: ["Open the cluster overview.", "Read the active-jobs table."] },
     ],
     related: ["dashboard", "slurm", "squeuePanel"],
     keywords: ["squeue", "overview", "cluster", "jobs", "summary"],
     aria: {
-      label: "Cluster squeue overview",
-      description: "Summary table of cluster-wide running and pending Slurm jobs on the overview page.",
+      label: "Cluster active jobs overview",
+      description: "Summary table of cluster-wide running and pending jobs on the overview page.",
     },
     aiContext:
-      "ClusterSqueueOverview is a parsed cluster-wide squeue summary table on the overview page (running/pending jobs across the cluster).",
+      "ClusterSqueueOverview is a parsed cluster-wide active-job summary table on the overview page; its component name is retained for compatibility.",
   },
   {
     id: "squeuePanel",
     kind: "component",
-    title: "Squeue panel",
+    title: "Active jobs panel",
     domain: "Compute",
-    summary: "Live squeue table with per-job log tail actions.",
+    summary: "Live scheduler task table with per-job log tail actions.",
     description:
-      "SqueuePanel renders a live squeue table of jobs with actions to tail a job's log. It is used both on the Scheduler page and inside the toolbar squeue dialog.",
-    features: ["Live job table (squeue).", "Tail a job's log from its row."],
+      "SqueuePanel renders provider-normalized jobs with actions to inspect, cancel, and tail output. It is used on the Scheduler page and toolbar; its component/API names are retained for compatibility.",
+    features: ["Live scheduler task table.", "Inspect, cancel, and tail a job from its row."],
     howTo: [
       { task: "Tail a job log", steps: ["Find the job row.", "Use the tail/log action to stream its output."] },
     ],
     related: ["slurm", "squeueDialog", "sinfoPanel"],
     keywords: ["squeue", "jobs", "queue", "panel", "log", "tail"],
     aria: {
-      label: "Squeue job panel",
-      description: "Live table of Slurm jobs with the ability to tail a selected job's log.",
+      label: "Active jobs panel",
+      description: "Live scheduler task table with detail, cancellation, and log-tail actions.",
     },
     aiContext:
-      "SqueuePanel is the live squeue job table (running/pending) with per-job log tailing; used on the Scheduler page and in the toolbar squeue dialog.",
+      "SqueuePanel is the provider-neutral active-job table; its legacy name and API routes are preserved for compatibility.",
   },
   {
     id: "sinfoPanel",
     kind: "component",
-    title: "Sinfo panel",
+    title: "Node availability panel",
     domain: "Compute",
-    summary: "Live sinfo table of node states and reasons.",
+    summary: "Live table of node states and reasons.",
     description:
-      "SinfoPanel renders a live `sinfo -R --long` table of node states (idle, alloc, drain, down) and the reasons nodes are unavailable.",
+      "SinfoPanel renders provider-normalized node states (idle, allocated, drained, down) and the reasons nodes are unavailable; its legacy name is retained for compatibility.",
     features: ["Live node-state table.", "Drain/down reasons per node."],
     howTo: [
-      { task: "Find unavailable nodes", steps: ["Open the sinfo panel.", "Look for drain/down states and read the reason."] },
+      { task: "Find unavailable nodes", steps: ["Open Node availability.", "Look for drain/down states and read the reason."] },
     ],
     related: ["slurm", "sinfoDialog", "squeuePanel"],
     keywords: ["sinfo", "nodes", "state", "drain", "down", "idle", "alloc", "reason"],
     aria: {
-      label: "Sinfo node panel",
-      description: "Live table of Slurm node states and reasons (idle, alloc, drain, down).",
+      label: "Node availability panel",
+      description: "Live table of scheduler node states and reasons (idle, allocated, drained, down).",
     },
     aiContext:
-      "SinfoPanel is the live `sinfo -R --long` table of node states (idle/alloc/drain/down) and drain/down reasons.",
+      "SinfoPanel is the provider-neutral node availability table; its legacy name and API route are preserved for compatibility.",
   },
   {
     id: "squeueDialog",
     kind: "dialog",
-    title: "Squeue dialog",
+    title: "Active jobs dialog",
     domain: "Compute",
-    summary: "Toolbar modal wrapping the squeue panel.",
+    summary: "Toolbar modal wrapping the active-jobs panel.",
     description:
       "SqueueDialog is a modal opened from the toolbar that wraps SqueuePanel, letting you check the job queue from anywhere in the app.",
-    features: ["Open the squeue panel from the toolbar.", "Same job table and log tailing as the Scheduler page."],
+    features: ["Open Active jobs from the toolbar.", "Same job table and log tailing as the Scheduler page."],
     howTo: [
-      { task: "Open the squeue dialog", steps: ["Click the squeue action in the toolbar.", "Review jobs in the modal."] },
+      { task: "Open the active-jobs dialog", steps: ["Click Active jobs in the toolbar.", "Review jobs in the modal."] },
     ],
     related: ["squeuePanel", "slurm", "toolbar"],
     keywords: ["squeue", "dialog", "modal", "toolbar", "jobs"],
     aria: {
-      label: "Squeue dialog",
-      description: "Modal showing the Slurm job queue, opened from the toolbar.",
+      label: "Active jobs dialog",
+      description: "Modal showing scheduler tasks, opened from the toolbar.",
     },
     aiContext: "SqueueDialog is a toolbar modal wrapping SqueuePanel so users can check the job queue from anywhere.",
   },
   {
     id: "sinfoDialog",
     kind: "dialog",
-    title: "Sinfo dialog",
+    title: "Node availability dialog",
     domain: "Compute",
-    summary: "Toolbar modal wrapping the sinfo panel.",
+    summary: "Toolbar modal wrapping the node-availability panel.",
     description:
       "SinfoDialog is a modal opened from the toolbar that wraps SinfoPanel, letting you check node states from anywhere in the app.",
-    features: ["Open the sinfo panel from the toolbar.", "Same node-state table as the Scheduler page."],
+    features: ["Open Node availability from the toolbar.", "Same node-state table as the Scheduler page."],
     howTo: [
-      { task: "Open the sinfo dialog", steps: ["Click the sinfo action in the toolbar.", "Review node states in the modal."] },
+      { task: "Open the node-availability dialog", steps: ["Click Node availability in the toolbar.", "Review node states in the modal."] },
     ],
     related: ["sinfoPanel", "slurm", "toolbar"],
     keywords: ["sinfo", "dialog", "modal", "toolbar", "nodes"],
     aria: {
-      label: "Sinfo dialog",
-      description: "Modal showing Slurm node states, opened from the toolbar.",
+      label: "Node availability dialog",
+      description: "Modal showing scheduler node states, opened from the toolbar.",
     },
     aiContext: "SinfoDialog is a toolbar modal wrapping SinfoPanel so users can check node states from anywhere.",
   },

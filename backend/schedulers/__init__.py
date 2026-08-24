@@ -27,6 +27,7 @@ from schedulers.base import (
 )
 from schedulers.factory import build_scheduler
 from schedulers.local import LocalScheduler
+from schedulers.pythoncm import PythonCMScheduler
 from schedulers.slurm import SlurmScheduler
 from schedulers.stubs import MaaSScheduler, RunAIScheduler, SlinkyScheduler
 
@@ -37,6 +38,7 @@ __all__ = [
     "JobSpec",
     "LocalScheduler",
     "MaaSScheduler",
+    "PythonCMScheduler",
     "RunAIScheduler",
     "Scheduler",
     "SlinkyScheduler",

@@ -221,13 +221,13 @@ export function Toolbar({
               </span>
             </Tooltip>
 
-            <Tooltip title="squeue">
+            <Tooltip title="Active jobs">
               <IconButton color="inherit" onClick={() => setSqueueOpen(true)} size="small">
                 <ListOrdered size={18} />
               </IconButton>
             </Tooltip>
 
-            <Tooltip title="sinfo -R">
+            <Tooltip title="Node availability">
               <IconButton color="inherit" onClick={() => setSinfoOpen(true)} size="small">
                 <Server size={18} />
               </IconButton>

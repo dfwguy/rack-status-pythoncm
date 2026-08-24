@@ -28,9 +28,9 @@ export function validationStatusTooltip(row: ValidationTooltipRow): string {
   if (n.startsWith("ongoing")) {
     const lj = (row.last_job || "").trim();
     if (lj && lj !== "-") {
-      return `Slurm job ${lj} is running; the validation log is still being written.`;
+      return `Scheduler job ${lj} is running; the validation log is still being written.`;
     }
-    return "Slurm reports a running validation job.";
+    return "The scheduler reports a running validation job.";
   }
   if (n === "fail") {
     return (

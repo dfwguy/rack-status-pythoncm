@@ -121,7 +121,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       />
       <ActionCard
         title="Stage 2 — NEMO Training (NCCL + LLMB)"
-        description={`Stage-2 single-rack validation on ${nodeCount} selected node(s) in ${rack}, both halves submitted via llmb-run: the NCCL sweep (microbenchmark_nccl) followed by Nemotron-H 56B fp8 pretraining (pretrain_nemotron-h). Slurm serialises the two jobs on the rack.`}
+        description={`Stage-2 single-rack validation on ${nodeCount} selected node(s) in ${rack}, both halves submitted via llmb-run: the NCCL sweep (microbenchmark_nccl) followed by Nemotron-H 56B fp8 pretraining (pretrain_nemotron-h). Rack Status serialises the two jobs on the rack.`}
         icon={<Play size={20} />}
         buttonLabel="Run NEMO"
         disabled={disabled}
@@ -205,7 +205,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       />
       <ActionCard
         title="Run nvloom"
-        description={`Launch nvloom (gpu-to-rack / fabric) on ${nodeCount} selected node(s) in ${rack} via Slurm. Slurm stdout: log_dir/nvloom/$USER-NVLOOM-${rack}-<jobid>.txt (NEMO-style naming).`}
+        description={`Launch nvloom (gpu-to-rack / fabric) on ${nodeCount} selected node(s) in ${rack} through PythonCM direct execution. Output: log_dir/nvloom/$USER-NVLOOM-${rack}-<jobid>.txt (NEMO-style naming).`}
         icon={<Boxes size={20} />}
         buttonLabel="Run nvloom"
         disabled={disabled}
@@ -222,7 +222,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       />
       <ActionCard
         title="Run ClusterKit"
-        description={`Launch HPC-X ClusterKit (IB bandwidth per HCA) on ${nodeCount} selected node(s) in ${rack}. Slurm stdout: log_dir/clusterkit/$USER-CK-${rack}-<jobid>.txt; artifacts under log_dir/clusterkit/${rack}/.`}
+        description={`Launch HPC-X ClusterKit (IB bandwidth per HCA) on ${nodeCount} selected node(s) in ${rack}. Output: log_dir/clusterkit/$USER-CK-${rack}-<jobid>.txt; artifacts under log_dir/clusterkit/${rack}/.`}
         icon={<Network size={20} />}
         buttonLabel="Run ClusterKit"
         disabled={disabled}
@@ -240,7 +240,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
 
       <ActionCard
         title="Run NCCL Microbenchmark (LLMB)"
-        description={`Launch the NCCL microbenchmark (llmb-run microbenchmark_nccl, fp8) on ${rack}. Resolves NVIS rack ids to real Slurm nodes and computes GPU scale (nodes*4); single rack = scale 72 on GB300 NVL72.`}
+        description={`Launch the NCCL microbenchmark (llmb-run microbenchmark_nccl, fp8) on ${rack}. Resolves NVIS rack ids to PythonCM-managed compute nodes and computes GPU scale (nodes*4); single rack = scale 72 on GB300 NVL72.`}
         icon={<Gauge size={20} />}
         buttonLabel="Run LLMB NCCL"
         disabled={disabled}
@@ -273,7 +273,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       />
       <ActionCard
         title="Cancel Running Job"
-        description="Cancel the currently running Slurm job for this rack (scancel)."
+        description="Cancel the currently running scheduler task for this rack."
         icon={<XCircle size={20} />}
         buttonLabel="Cancel"
         destructive
@@ -281,29 +281,29 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         onRun={async () => {
           const jid = (jobId ?? "").trim();
           if (!jid || jid === "-") {
-            openText("Slurm scancel", "No active job id for this rack (last_job missing or placeholder).", true);
+            openText("Cancel job", "No active job id for this rack (last_job missing or placeholder).", true);
             return;
           }
-          await runSyncJson("Slurm scancel", "/api/slurm-scancel", { rack, job_id: jid });
+          await runSyncJson("Cancel job", "/api/slurm-scancel", { rack, job_id: jid });
         }}
       />
       <ActionCard
         title="Drain Nodes"
-        description={`Drain ${nodeCount} selected node(s) — prevents new Slurm jobs from scheduling on them.`}
+        description={`Drain ${nodeCount} selected node(s) — prevents new work from starting on them.`}
         icon={<ArrowDownToLine size={20} />}
         buttonLabel="Drain"
         disabled={disabled}
         selectedNodes={selectedNodes}
-        onRun={() => runSyncJson("Slurm drain", "/api/slurm-drain", slurmTargetBody(rack, selectedNodes, naming))}
+        onRun={() => runSyncJson("Drain nodes", "/api/slurm-drain", slurmTargetBody(rack, selectedNodes, naming))}
       />
       <ActionCard
         title="Undrain Nodes"
-        description={`Resume ${nodeCount} selected node(s) — re-enables Slurm job scheduling.`}
+        description={`Resume ${nodeCount} selected node(s) — makes them available for direct execution.`}
         icon={<ArrowUpFromLine size={20} />}
         buttonLabel="Undrain"
         disabled={disabled}
         selectedNodes={selectedNodes}
-        onRun={() => runSyncJson("Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, selectedNodes, naming))}
+        onRun={() => runSyncJson("Resume nodes", "/api/slurm-undrain", slurmTargetBody(rack, selectedNodes, naming))}
       />
 
       <LaunchOptionsDialog

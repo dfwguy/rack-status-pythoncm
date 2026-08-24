@@ -25,13 +25,13 @@ export const rackDetailContent: HelpContent[] = [
     routePath: "/compute/racks/:rackId",
     summary: "Drill-down for one rack: status, nodes, and validation/hardware actions.",
     description:
-      "The Rack detail view is where you operate on a single rack. It opens with an overview card (validation tag, sinfo, last job, comment), a node selector to scope actions to specific nodes, and tabs that group the available commands: Validation, Hardware, Networking, and Services. Most actions run via an ActionCard with a confirmation and stream live output.",
+      "The Rack detail view is where you operate on a single rack. It opens with an overview card (validation tag, node availability, last job, comment), a node selector to scope actions to specific nodes, and tabs that group the available commands: Validation, Hardware, Networking, and Services. Most actions run via an ActionCard with a confirmation and stream live output.",
     features: [
-      "Overview card: validation state, sinfo, last job, comment, key fields.",
+      "Overview card: validation state, node availability, last job, comment, key fields.",
       "Node selector: multi-select nodes/trays, per-node terminal, issue-count trend and full in-SPA history.",
       "Validation tab: NEMO, burn-in, NCCL/parser runs for selected nodes.",
-      "Hardware tab: repeatable deep audit with automatic Slurm comment/drain, plus hardware checks, power reset and MAC change.",
-      "Networking tab: repeatable forced-NVLink/IB deep audit with automatic Slurm comment/drain; Services holds service commands.",
+      "Hardware tab: repeatable deep audit with automatic scheduler comment/drain, plus hardware checks, power reset and MAC change.",
+      "Networking tab: repeatable forced-NVLink/IB deep audit with automatic scheduler comment/drain; Services holds service commands.",
       "Live streaming output, last-output indicator, and rack lock awareness.",
     ],
     howTo: [
@@ -60,7 +60,7 @@ export const rackDetailContent: HelpContent[] = [
         task: "Run a deep audit and review node history",
         steps: [
           "Select the target nodes and open Hardware or Networking.",
-          "Click Start Tests on the deep-audit card; confirmed failures are commented and drained in Slurm.",
+          "Click Start Tests on the deep-audit card; confirmed failures are commented and drained through the active scheduler.",
           "Click Results beside Start Tests for the per-node audit result and corrective action.",
           "Click ▲n in the node selector to see validation participation, evidence-attributed failures, and detailed Rack Status findings.",
         ],
@@ -91,7 +91,7 @@ export const rackDetailContent: HelpContent[] = [
         "Per-rack workspace with an overview card, a node selector, and Validation, Hardware, Networking, and Services action tabs.",
     },
     aiContext:
-      "The Rack detail view operates on one rack. Its node selector adds a validation-history ▲ issue trend; clicking it opens evidence-attributed run and finding history without leaving the SPA. Hardware Deep Audit and NVLink / Network Deep Audit are repeatable durable workflows with Results next to Start Tests. Only structured, confirmed node failures are automatically recorded, given a specific Slurm reason containing the workflow id, and drained; warnings/skips/transport failures remain inconclusive.",
+      "The Rack detail view operates on one rack. Its node selector adds a validation-history ▲ issue trend; clicking it opens evidence-attributed run and finding history without leaving the SPA. Hardware Deep Audit and NVLink / Network Deep Audit are repeatable durable workflows with Results next to Start Tests. Only structured, confirmed node failures are automatically recorded, given a specific scheduler reason containing the workflow id, and drained; warnings/skips/transport failures remain inconclusive.",
   },
   {
     id: "rackOverview",
@@ -100,15 +100,15 @@ export const rackDetailContent: HelpContent[] = [
     domain: "Compute",
     summary: "Summary card of a rack's validation state and key fields.",
     description:
-      "RackOverview is the summary card at the top of the rack detail view: validation tag, sinfo state, last job, the rack comment, and key rack fields.",
-    features: ["Validation tag and sinfo state.", "Last job and rack comment.", "Key rack fields at a glance."],
+      "RackOverview is the summary card at the top of the rack detail view: validation tag, node availability, last job, the rack comment, and key rack fields.",
+    features: ["Validation tag and node availability.", "Last job and rack comment.", "Key rack fields at a glance."],
     howTo: [
       { task: "Read a rack's current state", steps: ["Open the rack detail view.", "Read the overview card at the top."] },
     ],
     related: ["rackDetail"],
     keywords: ["overview", "card", "summary", "validation", "sinfo", "comment"],
-    aria: { label: "Rack overview card", description: "Summary card showing a rack's validation state, sinfo, last job, and comment." },
-    aiContext: "RackOverview is the rack detail summary card: validation tag, sinfo state, last job, comment, and key rack fields.",
+    aria: { label: "Rack overview card", description: "Summary card showing a rack's validation state, node availability, last job, and comment." },
+    aiContext: "RackOverview is the rack detail summary card: validation tag, node availability, last job, comment, and key rack fields.",
   },
   {
     id: "nodeSelector",
@@ -117,7 +117,7 @@ export const rackDetailContent: HelpContent[] = [
     domain: "Compute",
     summary: "Tray/node grid with selection, terminal, and clickable issue trends.",
     description:
-      "NodeSelector is a grid of the rack's trays/nodes. Select nodes to scope actions, launch a terminal, or click a node's ▲n trend to open validation participation, attributed failures, Slurm state/reason, and detailed local issues in one SPA dialog.",
+      "NodeSelector is a grid of the rack's trays/nodes. Select nodes to scope actions, launch a terminal, or click a node's ▲n trend to open validation participation, attributed failures, scheduler state/reason, and detailed local issues in one SPA dialog.",
     features: ["Multi-select nodes/trays.", "Scopes action tabs to the selection.", "Per-node web terminal launch.", "Clickable ▲n / ✖ / ⚑ / ▦ issue flags and full history."],
     howTo: [
       { task: "Scope actions to nodes", steps: ["Click nodes to select them.", "Run actions from the tabs; they apply to the selection."] },
@@ -166,10 +166,10 @@ export const rackDetailContent: HelpContent[] = [
     kind: "component",
     title: "Hardware tab",
     domain: "Compute",
-    summary: "Deep hardware audit with automatic Slurm drain, plus hardware actions.",
+    summary: "Deep hardware audit with automatic scheduler drain, plus hardware actions.",
     description:
-      "The Hardware tab starts with a repeatable GB300 deep audit of GPU inventory/thermal/ECC/recovery, Xid/PCIe/EDAC, services, IMEX and storage. Results is beside Start Tests. A structured confirmed failure is recorded and immediately commented/drained in Slurm; warnings and unavailable probes do not drain. Power, MAC, hw-check and other cards remain below it.",
-    features: ["Hardware deep audit with per-node durable results.", "Automatic specific Slurm comment and drain for confirmed failures.", "Power reset/cycle.", "MAC change.", "Hardware-checker preset runs."],
+      "The Hardware tab starts with a repeatable GB300 deep audit of GPU inventory/thermal/ECC/recovery, Xid/PCIe/EDAC, services, IMEX and storage. Results is beside Start Tests. A structured confirmed failure is recorded and immediately commented/drained through the active scheduler; warnings and unavailable probes do not drain. Power, MAC, hw-check and other cards remain below it.",
+    features: ["Hardware deep audit with per-node durable results.", "Automatic specific scheduler comment and drain for confirmed failures.", "Power reset/cycle.", "MAC change.", "Hardware-checker preset runs."],
     howTo: [
       { task: "Run a hardware check", steps: ["Select nodes.", "Open the Hardware tab.", "Use the hardware check / hw-check card and confirm."] },
     ],
@@ -183,9 +183,9 @@ export const rackDetailContent: HelpContent[] = [
     kind: "component",
     title: "Networking tab",
     domain: "Compute",
-    summary: "Forced-NVLink/IB deep audit with automatic Slurm drain, plus network actions.",
-    description: "The Networking tab starts with a repeatable GB300 deep audit covering NVLink fabric and a forced data-path probe, IMEX, IB rails/rates/error counters and mlx5 bonding. Results is beside Start Tests. Confirmed node failures are recorded and immediately commented/drained in Slurm; skipped probes remain explicit and do not count as a pass or trigger a drain.",
-    features: ["Forced-NVLink and RoCE-control data-path gate.", "IB rail, line-rate, counter and mlx5 bond validation.", "Automatic specific Slurm comment and drain for confirmed node failures.", "Other NVSwitch/NVLMapper network actions."],
+    summary: "Forced-NVLink/IB deep audit with automatic scheduler drain, plus network actions.",
+    description: "The Networking tab starts with a repeatable GB300 deep audit covering NVLink fabric and a forced data-path probe, IMEX, IB rails/rates/error counters and mlx5 bonding. Results is beside Start Tests. Confirmed node failures are recorded and immediately commented/drained through the active scheduler; skipped probes remain explicit and do not count as a pass or trigger a drain.",
+    features: ["Forced-NVLink and RoCE-control data-path gate.", "IB rail, line-rate, counter and mlx5 bond validation.", "Automatic specific scheduler comment and drain for confirmed node failures.", "Other NVSwitch/NVLMapper network actions."],
     howTo: [
       { task: "Run a network command", steps: ["Select nodes.", "Open the Networking tab.", "Use the relevant action card and confirm."] },
     ],

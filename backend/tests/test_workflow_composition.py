@@ -276,6 +276,8 @@ class TestSchedulerStep:
             assert spec.nodelist == "n1,n2,n3" and spec.nodes == 3 and spec.ntasks_per_node == 4
             assert spec.script.endswith("nccl_allreduce.sbatch")
             assert any("--export=" in a and "NVIS_SCRIPTS_DIR=" in a for a in spec.extra_args)
+            assert spec.env["NVIS_SCRIPTS_DIR"].endswith("bin/scripts")
+            assert spec.env["GPUS_PER_NODE"] == "4"
             assert st["state"] == "completed"
 
 

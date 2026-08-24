@@ -110,7 +110,7 @@ function RackTile({ rack, onRackSelect }: { rack: FloorRack; onRackSelect?: (rac
     <Box sx={{ fontSize: 12, lineHeight: 1.5 }}>
       <div><strong>{row.rack}</strong></div>
       <div>State: {HEALTH_LABEL[health.health]} ({health.upCount} up / {health.downCount} down of {health.total})</div>
-      <div>sinfo: {row.sinfo || "-"}</div>
+      <div>node availability: {row.sinfo || "-"}</div>
       {row.nemo && row.nemo !== "-" && <div>Validation: {row.nemo}</div>}
       {row.last_job && row.last_job !== "-" && <div>Last job: {row.last_job}</div>}
     </Box>

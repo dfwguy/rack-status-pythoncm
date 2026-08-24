@@ -47,6 +47,7 @@ from typing import Any
 import host_exec
 import nvis_id_templates as _nvis_ids
 import results_history
+import scheduler_runtime
 from platforms import get_platform as _get_platform
 
 _logger = logging.getLogger(__name__)
@@ -795,6 +796,8 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
     the dashboard summary. Matches ``load_squeue_jobs_map()``, which calls
     ``run_slurm_on_host`` directly with no guard.
     """
+    if scheduler_runtime.is_pythoncm():
+        return scheduler_runtime.node_state_counts()
     plat = _get_platform()
     opts = (os.environ.get("SINFO_OPTS") or "").strip()
     extra = "-N -h -o '%N %t'"
@@ -875,10 +878,12 @@ def format_sinfo_cell(rack: str, counts: dict[tuple[str, str], int]) -> str:
 
 
 def _slurm_base_job_id(jid_raw: str) -> str | None:
-    """Strip Slurm step suffix (``12345.batch`` → ``12345``) for lookup keys."""
+    """Normalize a scheduler reference (including PythonCM command UUIDs)."""
     s = (jid_raw or "").strip()
     if not s:
         return None
+    if scheduler_runtime.is_pythoncm():
+        return s if scheduler_runtime.valid_reference(s) else None
     base = s.split(".", 1)[0] if "." in s else s
     return base if base.isdigit() else None
 
@@ -1070,6 +1075,8 @@ def load_squeue_jobs_map() -> tuple[set[str], dict[str, str]]:
     Job ids are normalized to the base numeric id (no ``.batch`` / ``.extern`` suffix) so they
     match ``last_job`` parsed from log filenames.
     """
+    if scheduler_runtime.is_pythoncm():
+        return scheduler_runtime.active_job_times()
     user = (os.environ.get("SQUEUE_USER") or os.environ.get("USER") or "root").strip()
     plat = _get_platform()
     try:
@@ -1109,12 +1116,18 @@ def augment_running_set_for_job_ids(
     ``squeue -u $USER`` then misses them while ``squeue -j <id>`` still shows RUNNING/PENDING.
     Disable with ``RACK_SQUEUE_JOB_LOOKUP_DISABLED=1``.
     """
+    if scheduler_runtime.is_pythoncm():
+        refs, times = scheduler_runtime.active_job_times(want)
+        running.update(refs)
+        for ref, elapsed in times.items():
+            job_times.setdefault(ref, elapsed)
+        return
     if _env_truthy("RACK_SQUEUE_JOB_LOOKUP_DISABLED"):
         return
     need: list[str] = []
     seen: set[str] = set()
     for j in want:
-        if not j or not str(j).strip().isdigit():
+        if not j or not scheduler_runtime.valid_reference(str(j).strip()):
             continue
         sj = str(j).strip()
         if sj in running or sj in seen:
@@ -1152,7 +1165,7 @@ def _last_job_for_log_row(basename: str, probe: dict[str, Any]) -> str:
         jraw = probe.get("jid")
         if isinstance(jraw, int):
             s = str(jraw)
-            if s.isdigit():
+            if scheduler_runtime.valid_reference(s):
                 return s
         s = str(jraw or "").strip()
         if s and s != "?":

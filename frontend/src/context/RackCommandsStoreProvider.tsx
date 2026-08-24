@@ -76,7 +76,7 @@ function jobFinishedOk(st: Record<string, unknown>): boolean {
 
 function syncCmdKindFromTitle(title: string): NodeCmdKind {
   const t = title.toLowerCase();
-  if (t.includes("drain") || t.includes("undrain") || t.includes("scancel")) return "slurm";
+  if (/drain|undrain|resume|cancel|scancel/.test(t)) return "scheduler";
   if (t.includes("gpu")) return "gpu";
   if (t.includes("power")) return "power";
   return "validation";

@@ -25,7 +25,7 @@ interface SqueueDialogProps {
 export function SqueueDialog({ open, onClose, logDir }: SqueueDialogProps) {
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth scroll="paper">
-      <DialogTitle sx={{ fontWeight: 600 }}>squeue</DialogTitle>
+      <DialogTitle sx={{ fontWeight: 600 }}>Active jobs</DialogTitle>
       <DialogContent dividers sx={{ pt: 1 }}>
         <SqueuePanel logDir={logDir} active={open} tableMaxHeight={360} />
       </DialogContent>

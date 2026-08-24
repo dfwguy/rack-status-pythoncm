@@ -21,6 +21,7 @@ import json
 import logging
 
 import host_exec
+import scheduler_runtime
 from config_env import _env_int
 from flask import Blueprint, jsonify, request
 from paths import SCRIPTS_DIR
@@ -46,12 +47,16 @@ def api_fabric_probe():
     node = (request.args.get("node") or "").strip()
     try:
         if not node:
-            proc = host_exec.run_slurm_on_host(
-                _get_platform().sinfo_cmd("-N -h -o '%N' | head -1"),
-                timeout=30,
-            )
-            lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
-            node = lines[0] if lines else ""
+            if scheduler_runtime.is_pythoncm():
+                names = scheduler_runtime.node_names()
+                node = names[0] if names else ""
+            else:
+                proc = host_exec.run_slurm_on_host(
+                    _get_platform().sinfo_cmd("-N -h -o '%N' | head -1"),
+                    timeout=30,
+                )
+                lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+                node = lines[0] if lines else ""
         if not node:
             return jsonify({"ok": False, "error": "no compute node found; pass ?node=<hostname>"}), 400
         script = str(SCRIPTS_DIR / "fabric_probe.sh")

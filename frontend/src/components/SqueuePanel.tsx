@@ -27,7 +27,7 @@ import {
   findSqueueJobColumnIndex,
   formatSlurmCmdDetail,
   parseSlurmStdOutPathFromScontrolText,
-  slurmJobIdForScancel,
+  schedulerJobIdForAction,
   type SlurmCmdJson,
 } from "../lib/slurmHelpers";
 import { parseSqueueStdout } from "../lib/parseSqueueStdout";
@@ -101,7 +101,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
       }
       if (data.ok === false) {
         setBannerErr(
-          [data.error || "squeue failed", data.stderr ? `\n${String(data.stderr)}` : "", data.returncode != null ? `\n(exit ${data.returncode})` : ""]
+          [data.error || "Job query failed", data.stderr ? `\n${String(data.stderr)}` : "", data.returncode != null ? `\n(exit ${data.returncode})` : ""]
             .filter(Boolean)
             .join("")
         );
@@ -156,10 +156,10 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
         const { res, data } = await fetchSlurmJson(`/api/slurm-scontrol-show-job?${qs}`);
         const showBlock = String(data.stdout || "") + (data.stderr ? `\nstderr:\n${data.stderr}` : "");
         if (!res.ok || data.ok === false) {
-          window.alert((data.error || "scontrol show job failed") + "\n\n" + formatSlurmCmdDetail(data));
+          window.alert((data.error || "Job details query failed") + "\n\n" + formatSlurmCmdDetail(data));
           return;
         }
-        const path = parseSlurmStdOutPathFromScontrolText(showBlock);
+        const path = String(data.path || "").trim() || parseSlurmStdOutPathFromScontrolText(showBlock);
         if (!path) {
           window.alert(
             `No usable StdOut= path for job ${jobId} (missing, (none), or /dev/null). Use the job id link to inspect scontrol output.`
@@ -201,7 +201,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
         }
         const detail = formatSlurmCmdDetail(data);
         if (!res.ok || !data.ok) {
-          setBannerErr(`${data.error || "scancel failed"}\n\n${detail}`);
+          setBannerErr(`${data.error || "Job cancellation failed"}\n\n${detail}`);
           return;
         }
         setScancelJobId(null);
@@ -229,7 +229,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
     <Paper variant="outlined" sx={{ borderLeft: `4px solid ${NVIDIA_GREEN}`, overflow: "hidden" }}>
       <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover", display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
         <Text kind="body/bold/md" style={{ fontWeight: 700, color: NVIDIA_GREEN }}>
-          squeue
+          Active jobs
         </Text>
         <Button size="small" kind="secondary" onClick={() => void load()} disabled={loading || !active}>
           Refresh
@@ -274,13 +274,13 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
                   />
                 ))}
                 <TableCell sx={{ fontWeight: 700, bgcolor: "action.hover", color: NVIDIA_GREEN }}>log</TableCell>
-                <TableCell sx={{ fontWeight: 700, bgcolor: "action.hover", color: NVIDIA_GREEN }}>scancel</TableCell>
+                <TableCell sx={{ fontWeight: 700, bgcolor: "action.hover", color: NVIDIA_GREEN }}>cancel</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {rowsPage.visible.map((cells, ri) => {
                 const rawJob = jobCol >= 0 && cells[jobCol] != null ? String(cells[jobCol]) : "";
-                const jid = slurmJobIdForScancel(rawJob);
+                const jid = schedulerJobIdForAction(rawJob);
                 return (
                   <TableRow key={ri} hover sx={{ "&:nth-of-type(even)": { bgcolor: "action.hover" } }}>
                     {headers.map((_, ci) => {
@@ -313,7 +313,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
                               underline="always"
                               onClick={() => void showScontrol(jid)}
                               sx={{ fontFamily: "inherit", fontSize: "inherit", cursor: "pointer" }}
-                              title={`scontrol show job ${jid} (output below table)`}
+                              title={`Show scheduler details for job ${jid}`}
                             >
                               {rawJob}
                             </Link>
@@ -338,8 +338,8 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
                     </TableCell>
                     <TableCell sx={{ whiteSpace: "nowrap" }}>
                       {jid ? (
-                        <Button size="small" kind="primary" color="danger" onClick={() => setScancelJobId(jid)} title={`scancel ${jid}`}>
-                          scancel
+                        <Button size="small" kind="primary" color="danger" onClick={() => setScancelJobId(jid)} title={`Cancel job ${jid}`}>
+                          cancel
                         </Button>
                       ) : null}
                     </TableCell>
@@ -385,7 +385,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
           }}
         >
           <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4, fontWeight: 600 }}>
-            scontrol show job — {scontrolJobId}
+            Scheduler details — {scontrolJobId}
           </Text>
           {scontrolLoading && (
             <Box sx={{ mb: 1 }}>
@@ -407,7 +407,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
             {scontrolBlock}
           </Box>
           <Button size="small" kind="secondary" onClick={() => setScontrolJobId(null)} style={{ marginTop: 8 }}>
-            Hide scontrol
+            Hide details
           </Button>
         </Box>
       )}
@@ -433,7 +433,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
         slotHeading={
           <>
             <XCircle size={18} color="var(--text-color-error, #f44336)" />
-            Cancel Slurm job {scancelJobId}?
+            Cancel job {scancelJobId}?
           </>
         }
         slotFooter={
@@ -469,7 +469,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
               wordBreak: "break-all",
             }}
           >
-            module load slurm &amp;&amp; scancel {scancelJobId}
+            Scheduler cancellation request for job {scancelJobId}
           </Text>
         </Flex>
       </Modal>

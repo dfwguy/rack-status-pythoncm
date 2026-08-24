@@ -24,7 +24,9 @@ import json
 import os
 import subprocess
 import sys
+from argparse import Namespace
 from pathlib import Path
+from uuid import uuid4
 
 import bcm_query
 import pytest
@@ -138,6 +140,55 @@ class TestShapeDevice:
         out = nbq.shape_device(Bare())
         assert out["hostname"] == "" and out["interfaces"] == []
 
+    def test_uuid_values_are_serialized_without_entity_json(self):
+        value = uuid4()
+        assert nbq._scalar(value) == str(value)
+
+
+class TestAuthentication:
+    class Settings:
+        cookie = None
+
+        def __init__(self, accepted=True):
+            self.accepted = accepted
+            self.login = None
+
+        def get_cookie(self, username, password):
+            self.login = (username, password)
+            if self.accepted:
+                self.cookie = "session=opaque"
+            return self.accepted
+
+    @staticmethod
+    def args(**values):
+        defaults = {"username": "", "password_file": "", "cookie_file": ""}
+        defaults.update(values)
+        return Namespace(**defaults)
+
+    def test_cookie_file_is_loaded_without_putting_secret_in_argv(self, tmp_path):
+        cookie_file = tmp_path / "cookie"
+        cookie_file.write_text("session=secret-value")
+        settings = self.Settings()
+        mode = nbq._configure_auth(settings, self.args(cookie_file=str(cookie_file)))
+        assert mode == "cookie"
+        assert settings.cookie == "session=secret-value"
+
+    def test_password_file_authenticates_and_rejection_is_explicit(self, tmp_path):
+        password_file = tmp_path / "password"
+        password_file.write_text("not-on-command-line")
+        settings = self.Settings(accepted=False)
+        with pytest.raises(PermissionError, match="rejected"):
+            nbq._configure_auth(
+                settings,
+                self.args(username="operator", password_file=str(password_file)),
+            )
+        assert settings.login == ("operator", "not-on-command-line")
+
+    def test_partial_login_configuration_fails_closed(self, monkeypatch):
+        monkeypatch.delenv("NVIS_BCM_PASSWORD", raising=False)
+        with pytest.raises(PermissionError, match="both BCM username and password"):
+            nbq._configure_auth(self.Settings(), self.args(username="operator"))
+
 
 class TestModuleResolution:
     def test_a_bcm_style_install_root_is_expanded_to_its_site_packages(self, tmp_path, monkeypatch):
@@ -162,6 +213,135 @@ class TestModuleResolution:
         monkeypatch.setattr(sys, "path", list(sys.path))
         assert nbq.resolve_module_path([str(tmp_path / "pythoncm-*")]).endswith("pythoncm-11")
 
+    def test_default_ca_uses_the_readable_bundle_next_to_pythoncm(self, monkeypatch):
+        paths = [
+            "/cm/local/apps/cmd/pythoncm/lib/python3.9/site-packages/pythoncm/etc/cacert.pem",
+            "/cm/local/apps/cmd/pythoncm/lib/python3.12/site-packages/pythoncm/etc/cacert.pem",
+        ]
+        monkeypatch.setattr(nbq.glob, "glob", lambda _pattern: paths)
+        assert "python3.12/site-packages/pythoncm/etc/cacert.pem" in nbq.default_ca_path()
+
+    def test_numeric_version_sort_does_not_choose_pythoncm_9_over_11(self, tmp_path, monkeypatch):
+        for version in ("pythoncm-9", "pythoncm-11"):
+            (tmp_path / version / "pythoncm").mkdir(parents=True)
+        monkeypatch.setattr(sys, "path", list(sys.path))
+        assert nbq.resolve_module_path([str(tmp_path / "pythoncm-*")]).endswith("pythoncm-11")
+
+
+class _EnumValue:
+    def __init__(self, name):
+        self.name = name
+
+
+class _Node:
+    def __init__(self, hostname):
+        self.hostname = hostname
+        self.uuid = uuid4()
+
+    def drain(self):
+        return None
+
+
+class _Status:
+    def __init__(self, node, state):
+        self.device = node
+        self.ref_device_uuid = node.uuid
+        self.status = _EnumValue(state)
+        self.reportedStatus = self.status
+        self.closed = self.muted = self.burning = False
+
+    @property
+    def final_status(self):
+        return self.status
+
+
+class _DrainResult:
+    def __init__(self, nodes, states, reasons=None, success=True):
+        self.ref_node_uuids = [node.uuid for node in nodes]
+        self.result = [_EnumValue(state) for state in states]
+        self.reason = reasons or [""] * len(nodes)
+        self.success = success
+
+
+class TestSchedulerNodeState:
+    def test_state_combines_device_drain_and_live_job_truthfully(self):
+        allocated, drained, down, unknown = [_Node(name) for name in ("n1", "n2", "n3", "n4")]
+        nodes = [allocated, drained, down, unknown]
+
+        class Parallel:
+            @staticmethod
+            def device_status(_devices):
+                return [_Status(allocated, "UP"), _Status(drained, "UP"),
+                        _Status(down, "DOWN"), _Status(unknown, "UP")]
+
+            @staticmethod
+            def drain_status(_devices):
+                return [_DrainResult(
+                    nodes,
+                    ["UNDRAINED", "DRAINED", "UNDRAINED", "UNKNOWN"],
+                    ["", "maintenance", "", "controller uncertain"],
+                )]
+
+        class Job:
+            def __init__(self):
+                self.jobID = "42"
+                self.status = _EnumValue("RUNNING")
+                self.nodes = [allocated.uuid]
+
+        class Workload:
+            @staticmethod
+            def get_jobs(_wlms):
+                return True, [Job()]
+
+        class Cluster:
+            parallel = Parallel()
+            workload = Workload()
+
+            def get_by_type(self, kind):
+                return nodes if kind == "PhysicalNode" else []
+
+            def get_by_uuid(self, value):
+                return next((node for node in nodes if node.uuid == value), None)
+
+        rows = {row["hostname"]: row for row in nbq._scheduler_nodes(Cluster())}
+        assert rows["n1"]["scheduler_state"] == "alloc"
+        assert rows["n2"]["scheduler_state"] == "drain"
+        assert rows["n2"]["reason"] == "maintenance"
+        assert rows["n3"]["scheduler_state"] == "down"
+        assert rows["n4"]["scheduler_state"] == "unknown"
+
+    def test_failed_workload_read_never_degrades_to_idle(self):
+        node = _Node("n1")
+
+        class Cluster:
+            def __init__(self):
+                self.parallel = type("Parallel", (), {
+                    "device_status": lambda _self, _nodes: [_Status(node, "UP")],
+                    "drain_status": lambda _self, _nodes: [_DrainResult([node], ["UNDRAINED"])],
+                })()
+                self.workload = type("Workload", (), {
+                    "get_jobs": lambda _self, _wlms: (False, []),
+                })()
+
+            def get_by_type(self, kind):
+                return [node] if kind == "PhysicalNode" else []
+
+            def get_by_uuid(self, value):
+                return node if value == node.uuid else None
+
+        with pytest.raises(RuntimeError, match="workload managers"):
+            nbq._scheduler_nodes(Cluster())
+
+
+class TestCompatibilityOutput:
+    def test_status_text_keeps_the_existing_ds_parser_shape(self, capsys):
+        nbq._write_cmsh({"data": [{"hostname": "node01", "status": "UP"}]}, "status")
+        assert capsys.readouterr().out == "node01 [ UP ]\n"
+
+    def test_rf0_text_keeps_hostname_then_ip_shape(self, capsys):
+        nbq._write_cmsh({"data": [{"hostname": "node01", "ip": "10.0.0.1"}]}, "rf0")
+        assert capsys.readouterr().out == "node01\n10.0.0.1\n"
+
 
 class TestScriptAlwaysAnswersJson:
     """The caller parses stdout; a traceback there would be an outage, not a fallback."""
@@ -170,7 +350,7 @@ class TestScriptAlwaysAnswersJson:
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--query", "nodes",
              "--module-path", str(tmp_path / "nowhere")],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, check=False,
         )
         body = json.loads(proc.stdout)
         assert body["ok"] is False
@@ -197,13 +377,40 @@ class TestScriptAlwaysAnswersJson:
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--query", "nodes", "--module-path", str(tmp_path),
              "--cert", str(cert), "--key", str(key), "--ca", str(secret)],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, check=False,
         )
         body = json.loads(proc.stdout)
         assert body["ok"] is False
         assert body["error"] == "credentials unavailable"
         assert "cacert.pem" in body["detail"]
         assert "admin" in body["hint"]
+
+    def test_api_hash_mismatch_is_reported_as_version_skew(self, tmp_path):
+        package = tmp_path / "pythoncm"
+        package.mkdir()
+        (package / "__init__.py").write_text("")
+        (package / "settings.py").write_text(
+            "class Settings:\n"
+            "    def __init__(self, **kwargs): self.cookie = None\n"
+        )
+        (package / "cluster.py").write_text(
+            "class Cluster:\n"
+            "    def __init__(self, settings): raise ValueError('Invalid API hash')\n"
+        )
+        cert, key, ca = (tmp_path / name for name in ("cert.pem", "cert.key", "ca.pem"))
+        for path in (cert, key, ca):
+            path.write_text("test")
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "--query", "version",
+             "--module-path", str(tmp_path), "--cert", str(cert),
+             "--key", str(key), "--ca", str(ca)],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        body = json.loads(proc.stdout)
+        assert body["ok"] is False
+        assert body["error"] == "pythoncm/cmdaemon version mismatch"
+        assert "matching install" in body["hint"]
+        assert "Traceback" not in proc.stderr
 
 
 class TestWrapper:
@@ -214,6 +421,16 @@ class TestWrapper:
         assert cmd[0] == "/cm/local/apps/python312/bin/python3"
         assert "--module-path" in cmd
         assert cmd[cmd.index("--module-path") + 1] == "/shared/nvis/pythoncm-11.0"
+
+    def test_raw_password_and_cookie_are_never_put_on_the_command_line(self, monkeypatch):
+        monkeypatch.setenv("NVIS_BCM_PASSWORD", "password-secret")
+        monkeypatch.setenv("NVIS_BCM_COOKIE", "cookie-secret")
+        monkeypatch.setenv("NVIS_BCM_PASSWORD_FILE", "/run/secrets/bcm-password")
+        monkeypatch.setenv("NVIS_BCM_COOKIE_FILE", "/run/secrets/bcm-cookie")
+        cmd = bcm_query.build_command("capabilities")
+        joined = " ".join(cmd)
+        assert "password-secret" not in joined and "cookie-secret" not in joined
+        assert "/run/secrets/bcm-password" in cmd and "/run/secrets/bcm-cookie" in cmd
 
     def test_unset_knobs_are_simply_absent_so_the_script_keeps_its_defaults(self, monkeypatch):
         for var in ("NVIS_PYTHONCM_PATH", "NVIS_BCM_HOST", "NVIS_BCM_CA", "NVIS_BCM_PYTHON"):

@@ -26,6 +26,7 @@ import shlex
 import subprocess
 
 import host_exec
+import scheduler_runtime
 from config_env import _eget, _env_int
 from core import slurm_job_base_id as _slurm_job_base_id
 from platforms import get_platform as _get_platform
@@ -43,6 +44,19 @@ _SACCT_TERMINAL_STATES = frozenset({
 
 def _run_squeue() -> dict:
     """Run ``squeue`` after optional ``module load`` (same env semantics as *scancel* / *scontrol*)."""
+    if scheduler_runtime.is_pythoncm():
+        rows = scheduler_runtime.jobs(active_only=True)
+        lines = ["JOBID NAME STATE TIME NODELIST"]
+        lines.extend(
+            f"{row['job_id']} {row['name']} {row['state']} "
+            f"{row.get('elapsed') or '00:00:00'} {row.get('nodelist') or '-'}"
+            for row in rows
+        )
+        return {
+            "ok": True, "returncode": 0, "stdout": "\n".join(lines), "stderr": "",
+            "command_display": "pythoncm active commands (Rack Status registry)",
+            "jobs": rows, "scheduler": "pythoncm",
+        }
     plat = _get_platform()
     shell_cmd = plat.squeue_cmd()
     cmd_display = shell_cmd
@@ -74,6 +88,19 @@ def _run_squeue() -> dict:
 
 def _run_sinfo_r() -> dict:
     """Run ``sinfo -R --long`` after optional ``module load`` (same env semantics as *squeue* / *scontrol*)."""
+    if scheduler_runtime.is_pythoncm():
+        nodes = scheduler_runtime.nodes()
+        affected = [row for row in nodes if str(row.get("state") or "unknown") != "idle"]
+        lines = ["REASON USER TIMESTAMP NODELIST"]
+        lines.extend(
+            f"{row.get('reason') or row.get('state') or 'unknown'} - - {row['node']}"
+            for row in affected
+        )
+        return {
+            "ok": True, "returncode": 0, "stdout": "\n".join(lines), "stderr": "",
+            "command_display": "pythoncm node states", "nodes": affected,
+            "scheduler": "pythoncm",
+        }
     plat = _get_platform()
     shell_cmd = plat.sinfo_cmd("-R --long")
     cmd_display = shell_cmd
@@ -109,10 +136,35 @@ def _run_sacct_recent(limit: int = 10, state: str = "COMPLETED") -> dict:
 
     Allocation rows only (``-X``), pipe-parseable (``-P``), newest-first, capped to *limit*.
     """
-    plat = _get_platform()
     st = (state or "COMPLETED").strip().upper()
     if not re.fullmatch(r"[A-Z_,]+", st):
         st = "COMPLETED"
+    if scheduler_runtime.is_pythoncm():
+        if st == "ALL":
+            want_states: set[str] = set()
+        elif st in ("FINISHED", "TERMINAL"):
+            want_states = set(_SACCT_TERMINAL_STATES)
+        else:
+            want_states = {item for item in st.split(",") if item}
+        jobs = []
+        for row in scheduler_runtime.jobs(active_only=False):
+            row_state = str(row.get("state") or "UNKNOWN").upper()
+            if want_states and row_state not in want_states:
+                continue
+            jobs.append({
+                "job_id": row["job_id"], "name": row.get("name") or "pythoncm-command",
+                "partition": "pythoncm", "nnodes": str(len(row.get("nodes") or [])),
+                "nodelist": row.get("nodelist") or "", "start": row.get("start") or "",
+                "end": row.get("end") or "", "elapsed": row.get("elapsed") or "",
+                "state": row_state, "exit_code": row.get("exit_code") or "",
+            })
+        jobs = jobs[:max(1, limit)]
+        return {
+            "ok": True, "returncode": 0, "stdout": "", "stderr": "",
+            "command_display": "pythoncm command history (Rack Status registry)",
+            "jobs": jobs, "scheduler": "pythoncm",
+        }
+    plat = _get_platform()
     since = (_eget("RACK_SLURM_SACCT_SINCE") or "now-7days").strip() or "now-7days"
     if not re.fullmatch(r"[A-Za-z0-9:_+\-]+", since):
         since = "now-7days"

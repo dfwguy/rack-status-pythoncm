@@ -64,9 +64,9 @@ interface MultirackViewProps {
 function isRackEligible(row: RackRow): { eligible: boolean; reason: string } {
   if (row.nemo !== "done") return { eligible: false, reason: "need validation done" };
   const sinfoStates = row.sinfo.split(",").map((s) => s.trim().split("=")[0].toLowerCase()).filter(Boolean);
-  if (sinfoStates.length === 0) return { eligible: false, reason: "no sinfo data" };
+  if (sinfoStates.length === 0) return { eligible: false, reason: "no node availability data" };
   if (sinfoStates.some((s) => s !== "idle" && s !== "alloc" && s !== "allocated")) {
-    return { eligible: false, reason: `sinfo ${row.sinfo}` };
+    return { eligible: false, reason: `node availability ${row.sinfo}` };
   }
   if (row.ct_down_unk.includes("DN:")) return { eligible: false, reason: "has DN nodes" };
   return { eligible: true, reason: "" };
@@ -721,7 +721,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
         <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 12, display: "block" }}>
           {campaign?.active && campaign.ok
             ? `Campaign eligibility is computed from the exact ${campaign.nodes_per_rack ?? 16} manifest nodes per rack; excluded trays do not disqualify the rack. NCCL receives that exact nodelist.`
-            : "Eligible racks have validation done, no drained/down trays, and Slurm showing idle or allocated. Launch-side preflight permits allocated trays only when every running job is a yieldable bringup-* diagnostic. NCCL uses all 72 GPUs per rack."}
+            : "Eligible racks have validation done, no drained/down trays, and the scheduler showing idle or allocated. Launch-side preflight permits allocated trays only when every running job is a yieldable bringup-* diagnostic. NCCL uses all 72 GPUs per rack."}
         </Text>
 
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
@@ -776,7 +776,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
                   <TableCell padding="checkbox" />
                   <TableCell>Rack</TableCell>
                   <TableCell>Validation</TableCell>
-                  <TableCell>Sinfo</TableCell>
+                  <TableCell>Node availability</TableCell>
                   <TableCell>Status</TableCell>
                 </TableRow>
               </TableHead>
@@ -874,7 +874,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
                 <TableCell>Racks</TableCell>
                 <TableCell>Validation</TableCell>
                 <TableCell>Last Job</TableCell>
-                <TableCell>Sinfo</TableCell>
+                <TableCell>Node availability</TableCell>
                 <TableCell>Log File</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>

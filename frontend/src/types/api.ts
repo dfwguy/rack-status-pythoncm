@@ -70,7 +70,7 @@ export interface ActivityTask {
   phase?: string;
   /** Work lifecycle: pending|submitted|running|collecting|done|failed|unknown */
   work_phase?: string | null;
-  /** Evidence source for work_phase: squeue|scontrol|sacct|results_log|missing */
+  /** Evidence source for work_phase. Legacy payloads may name Slurm commands; PythonCM/direct uses provider-neutral values. */
   evidence?: string | null;
   stdout_path?: string | null;
   training_log_path?: string | null;
@@ -95,7 +95,7 @@ export interface ValidationActivity {
   command_display: string;
   scheduler: string;
   dry_run: boolean;
-  /** Wrapper/launch lifecycle (not Slurm work completion). */
+  /** Wrapper/launch lifecycle (not scheduler work completion). */
   phase: string;
   /** Rolled-up work lifecycle across tasks[]. */
   work_phase?: string | null;
@@ -389,7 +389,7 @@ export interface WorkerStatus {
   finished_once: boolean;
 }
 
-/** Slurm squeue snapshot embedded in cluster overview (head / controller only). */
+/** Active-job snapshot embedded in cluster overview. The field name remains Slurm-shaped for API compatibility. */
 export interface ClusterSqueueBlock {
   ok: boolean;
   stdout: string;
@@ -421,7 +421,7 @@ export interface ClusterSnapshotMeta {
   last_error: string | null;
 }
 
-/** GET /api/cluster-overview — cluster-wide facts (env + head-only Slurm; no compute-node SSH/pdsh). */
+/** GET /api/cluster-overview — cluster-wide facts and controller-side scheduler data. */
 export interface ClusterOverviewResponse {
   ok: true;
   snapshot: ClusterSnapshotMeta;
@@ -476,7 +476,7 @@ export interface ClusterOverviewLiveSections {
   queue: LiveProbeSection<ClusterSqueueBlock>;
 }
 
-/** GET /api/cluster-overview/live — independent BCM / Slurm / queue probes. */
+/** GET /api/cluster-overview/live — independent cluster-manager / scheduler / queue probes. */
 export interface ClusterOverviewLiveResponse {
   ok: true;
   cluster_id: string;

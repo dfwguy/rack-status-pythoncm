@@ -36,6 +36,17 @@ const MONOSPACE_JOB_ENV_KEYS = new Set([
   "NVIS_CT_ID",
   "NVIS_NVSW_ID",
   "NVIS_SLURM_HOSTLIST",
+  "RACK_SCHEDULER",
+  "NVIS_BCM_PYTHON",
+  "NVIS_PYTHONCM_PATH",
+  "NVIS_BCM_HOST",
+  "NVIS_BCM_PORT",
+  "NVIS_BCM_CERT",
+  "NVIS_BCM_KEY",
+  "NVIS_BCM_CA",
+  "RACK_PYTHONCM_EXEC_SCRIPT",
+  "RACK_PYTHONCM_JOBS_DIR",
+  "RACK_PYTHONCM_USER",
   "VALIDATION_TEST",
   "NVLMAPPER_RC",
   "RACK_PROJECT_TOKEN",
@@ -344,8 +355,7 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Values are merged over the Flask process environment for the dashboard (status refresh, page title), external
             services (Grafana embed URLs, Prometheus basic auth for bundled scripts, log/chart timezones), validation, parser,
-            native status (including <Box component="code" sx={{ fontSize: "0.85em" }}>cmsh -c ds</Box>
-            ), Slurm helpers, and bundled scripts. Saving writes to{" "}
+            native status (including PythonCM inventory), scheduler helpers, and bundled scripts. Saving writes to{" "}
             <Box component="code" sx={{ fontSize: "0.85em" }}>
               {jobEnvPath || "var/cache/job_env_overrides.json"}
             </Box>

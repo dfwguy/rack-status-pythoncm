@@ -154,7 +154,7 @@ export function ParserGrafanaEmbeds({
         <GrafanaJobDeepLinks rack={rack} ge={ge} />
         <Card style={{ padding: 16 }}>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-            {ge.note || "Grafana context not available (check Slurm host expansion / embed settings)."}
+            {ge.note || "Grafana context not available (check compute-host expansion and embed settings)."}
           </Text>
         </Card>
       </Box>

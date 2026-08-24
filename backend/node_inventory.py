@@ -290,6 +290,7 @@ def collect_via_srun(
     not keep asking a queue that is already full of other people's work.
     """
     import host_exec
+    import scheduler_runtime
 
     if not nodes:
         return [], []
@@ -301,15 +302,40 @@ def collect_via_srun(
     for start in range(0, len(nodes), size):
         batch = nodes[start:start + size]
         try:
-            proc = host_exec.run_slurm_on_host(
-                build_srun_command(batch, script, minutes=minutes), timeout=timeout
-            )
+            if scheduler_runtime.is_pythoncm():
+                from schedulers import JobSpec, build_scheduler
+
+                scheduler = build_scheduler(
+                    "pythoncm", connection=host_exec.connection("control"), profile="control"
+                )
+                result = scheduler.run(JobSpec(
+                    name="nvis-inventory",
+                    nodelist=",".join(batch),
+                    ntasks_per_node=1,
+                    command=f"bash {shlex.quote(script)}",
+                    timeout=min(timeout, max(60, minutes * 60)),
+                ), poll_interval=1)
+                stdout = result.stdout or ""
+                stderr = result.stderr or ""
+                returncode = result.returncode
+                blobs = [
+                    block for block in re.split(r"(?m)^===== [^=]+ =====\n", stdout)
+                    if "\t" in block
+                ]
+            else:
+                proc = host_exec.run_slurm_on_host(
+                    build_srun_command(batch, script, minutes=minutes), timeout=timeout
+                )
+                stdout = getattr(proc, "stdout", "") or ""
+                stderr = getattr(proc, "stderr", "") or ""
+                returncode = int(getattr(proc, "returncode", 1))
+                blobs = parse_srun_labeled(stdout)
         except Exception as exc:  # noqa: BLE001 - a busy cluster is an expected outcome here
-            _log.info("srun inventory stopped after %d node(s): %s", len(records), exc)
+            _log.info("scheduler inventory stopped after %d node(s): %s", len(records), exc)
             break
 
         before = len(records)
-        for blob in parse_srun_labeled(getattr(proc, "stdout", "") or ""):
+        for blob in blobs:
             if "\t" in blob:
                 records.append(parse_record(blob))
         if progress:
@@ -318,13 +344,14 @@ def collect_via_srun(
         if len(records) == before:
             # Nothing came back: almost always --immediate declining because the nodes are
             # busy. Later chunks will meet the same queue, so stop rather than hammer it.
-            stderr = (getattr(proc, "stderr", "") or "").strip()
-            _log.info("srun inventory yielded to a busy cluster after %d node(s): %s",
-                      len(records), stderr[:200])
+            _log.info("scheduler inventory returned no records after %d node(s): %s",
+                      len(records), stderr.strip()[:200] or f"rc={returncode}")
             break
 
     seen = {(r.get("host") or {}).get("hostname") for r in records}
-    errors = [f"{n}: not reachable by SSH and no Slurm allocation was free" for n in nodes
+    mechanism = "PythonCM execution returned no inventory" if scheduler_runtime.is_pythoncm() \
+        else "not reachable by SSH and no Slurm allocation was free"
+    errors = [f"{n}: {mechanism}" for n in nodes
               if n not in seen]
     return records, errors
 

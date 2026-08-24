@@ -107,7 +107,7 @@ function buildScopeCluster(status: RackStatusResponse | null, clusterName?: stri
     const nodes: ScopeNode[] = parseNodesFromRack(id, row?.ct_down_unk ?? "", physicalRf0, traysPerRack, naming).map((n) => ({
       id: n.id,
       label: trayLabel(id, n.id),
-      // Only trays Slurm/BCM report as UP are selectable. Down / unknown / installing
+      // Only trays the scheduler/platform provider reports as UP are selectable. Down / unknown / installing
       // trays render disabled — most of this cluster is down during bring-up.
       available: n.status === "up",
       status: n.status,

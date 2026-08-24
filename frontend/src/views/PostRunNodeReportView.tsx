@@ -243,7 +243,7 @@ export function PostRunNodeReportView() {
 
   const saveMark = async () => {
     if (!selected || !reason.trim()) return;
-    if (drain && !window.confirm(`Drain ${selected.node} in Slurm and attach this exact reason?`)) return;
+    if (drain && !window.confirm(`Drain ${selected.node} through the active scheduler and attach this exact reason?`)) return;
     setSaving(true);
     try {
       await markPostRunNode({ node: selected.node, category, reason: reason.trim(), drain });
@@ -266,13 +266,13 @@ export function PostRunNodeReportView() {
       <PageHeader
         contentId="post-run-node-report"
         title="Post Run Node Report"
-        description="Validation participation, evidence-attributed failure trends, repeat flags, deep hardware/network reports, and current Slurm state in one floor-style view."
+        description="Validation participation, evidence-attributed failure trends, repeat flags, deep hardware/network reports, and current scheduler state in one floor-style view."
       />
 
       {error ? <Banner status="error" kind="inline" style={{ marginBottom: 16 }}>{error}</Banner> : null}
       {data?.refresh.accounting_error ? (
         <Banner status="warning" kind="inline" style={{ marginBottom: 16 }}>
-          Live Slurm accounting refresh failed; the durable participation snapshot is still shown: {data.refresh.accounting_error}
+          Live scheduler history refresh failed; the durable participation snapshot is still shown: {data.refresh.accounting_error}
         </Banner>
       ) : null}
 
@@ -334,7 +334,7 @@ export function PostRunNodeReportView() {
                     component="button"
                     type="button"
                     onClick={() => openNode(node)}
-                    title={`${node.node}: ${node.participation_count} runs, ${node.failure_count} attributed findings; Slurm ${node.slurm_state}${node.slurm_reason ? ` — ${node.slurm_reason}` : ""}`}
+                    title={`${node.node}: ${node.participation_count} runs, ${node.failure_count} attributed findings; scheduler ${node.slurm_state}${node.slurm_reason ? ` — ${node.slurm_reason}` : ""}`}
                     sx={{
                       textAlign: "left",
                       border: node.flagged ? "2px solid #d32f2f" : "1px solid var(--border-color-base)",
@@ -371,7 +371,7 @@ export function PostRunNodeReportView() {
               <TableRow>
                 <TableCell>Node</TableCell>
                 <TableCell>Rack</TableCell>
-                <TableCell>Slurm</TableCell>
+                <TableCell>Scheduler</TableCell>
                 <TableCell>{section === "hardware" ? "Latest hardware audit" : "Latest network / NVLink audit"}</TableCell>
                 <TableCell>Action</TableCell>
               </TableRow>
@@ -407,9 +407,9 @@ export function PostRunNodeReportView() {
             <DialogContent dividers>
               <Flex direction="column" gap="4">
                 <Paper variant="outlined" sx={{ p: 2 }}>
-                  <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 6 }}>Current Slurm comment / reason</Text>
+                  <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 6 }}>Current scheduler comment / reason</Text>
                   <Text kind="mono/sm" style={{ display: "block", whiteSpace: "pre-wrap" }}>
-                    {selected.slurm_reason || "No Slurm reason is currently set."}
+                    {selected.slurm_reason || "No scheduler reason is currently set."}
                   </Text>
                 </Paper>
 
@@ -424,7 +424,7 @@ export function PostRunNodeReportView() {
 
                 {activeAudit?.node === selected.node ? (
                   <Banner status="info" kind="inline">
-                    Running {activeAudit.kind} audit {activeAudit.runId.slice(0, 8)}. This view will refresh automatically when the Slurm job finishes.
+                    Running {activeAudit.kind} audit {activeAudit.runId.slice(0, 8)}. This view will refresh automatically when the scheduler task finishes.
                   </Banner>
                 ) : null}
 
@@ -507,7 +507,7 @@ export function PostRunNodeReportView() {
                   </Box>
                   <FormControlLabel
                     control={<Checkbox checked={drain} onChange={(event) => setDrain(event.target.checked)} />}
-                    label="Also drain this exact node in Slurm and attach the generated reason"
+                    label="Also drain this exact node through the active scheduler and attach the generated reason"
                   />
                   <Box><Button kind={drain ? "primary" : "secondary"} size="small" onClick={() => void saveMark()} disabled={saving || !reason.trim()}>{saving ? "Saving…" : drain ? "Mark and drain" : "Save mark"}</Button></Box>
                 </Paper>

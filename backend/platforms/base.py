@@ -109,6 +109,22 @@ class PlatformProvider(ABC):
     def scontrol_hostnames_cmd(self, nodespec: str) -> str:
         return self.scontrol_cmd(f"show hostnames {shlex.quote(nodespec)}")
 
+    def node_drain_cmd(self, nodespec: str, reason: str = "") -> str | list[str]:
+        """Prevent workload placement on *nodespec* through the active manager."""
+        args = ["update", f"nodename={nodespec}", "state=drain"]
+        if reason:
+            args.append(f"reason={reason}")
+        return self.scontrol_cmd(" ".join(shlex.quote(arg) for arg in args))
+
+    def node_undrain_cmd(self, nodespec: str) -> str | list[str]:
+        """Return *nodespec* to the workload manager's schedulable state."""
+        args = ["update", f"nodename={nodespec}", "state=resume"]
+        return self.scontrol_cmd(" ".join(shlex.quote(arg) for arg in args))
+
+    def node_drain_status_cmd(self, nodespec: str) -> str | list[str]:
+        """Retrieve workload-manager drain state for *nodespec*."""
+        return self.sinfo_cmd(f"-h -N -o '%N %t' -n {shlex.quote(nodespec)}")
+
     def sacct_job_cmd(self, job_id: str) -> str:
         return self.sacct_cmd(
             f"-j {shlex.quote(job_id)} -X -P -n -o NodeList%2000 --noheader"

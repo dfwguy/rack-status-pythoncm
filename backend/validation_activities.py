@@ -37,6 +37,7 @@ from typing import Any
 
 import nvis_id_templates
 import results_history
+import scheduler_runtime
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
@@ -1247,7 +1248,7 @@ def live_stage_jobs_by_rack(*, limit: int = 200) -> dict[str, dict[str, str]]:
             if not isinstance(task, dict):
                 continue
             ref = str(task.get("scheduler_ref") or "").strip()
-            if not ref.isdigit():
+            if not scheduler_runtime.valid_reference(ref):
                 continue
             wp = str(task.get("work_phase") or "").strip().lower()
             if wp and wp not in OPEN_WORK_PHASES:
@@ -1318,7 +1319,7 @@ def pick_results_log(
     that path sees nothing at all.
     """
     jid = (job_id or "").strip()
-    if not jid or not jid.isdigit():
+    if not jid or not scheduler_runtime.valid_reference(jid):
         return None
     lab = (label or "").strip().lower()
     prefer_nccl = lab in ("nccl", "stage1", "") or "nccl" in lab
@@ -1361,7 +1362,7 @@ def find_results_log_for_job(
     layer and pass the basenames to :func:`pick_results_log` instead.
     """
     jid = (job_id or "").strip()
-    if not jid or not str(jid).isdigit():
+    if not jid or not scheduler_runtime.valid_reference(str(jid)):
         return None
     root = Path(str(log_dir or "")).expanduser()
     if not root.is_dir():

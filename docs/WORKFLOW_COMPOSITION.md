@@ -9,7 +9,7 @@ so all existing workflows (`var/workflows/gpu-health-check.yaml`) keep working.
 flowchart LR
   Step["Workflow Step"] --> Cap["capability: catalog Tool id + params"]
   Step --> Conn["connection: WHERE/HOW (profile + sudo)"]
-  Step --> Sched["scheduler: HOW across nodes (slurm|local|...)"]
+  Step --> Sched["scheduler: HOW across nodes (pythoncm|slurm fallback|local|...)"]
   Step --> Eval["evaluation: HOW to judge + extract values"]
   Conn -.resolves via.-> T["transport.build_connection / RoutingConnection"]
   Sched -.resolves via.-> S["schedulers.build_scheduler"]
@@ -20,7 +20,7 @@ The three axes reuse the layers we already built:
 | Axis | Backend | Resolves to |
 | --- | --- | --- |
 | `connection` | `backend/transport/` | `RoutingConnection` (control/script) + `SudoConnection` |
-| `scheduler` | `backend/schedulers/` | `SlurmScheduler` / `LocalScheduler` (+ run:AI/slinky/MaaS stubs) |
+| `scheduler` | `backend/schedulers/` | `PythonCMScheduler` for direct execution, with `SlurmScheduler` as compatibility fallback |
 | `evaluation` | `backend/workflow_eval.py` | pass/fail + named outputs |
 | `capability` | `backend/catalog/` | a registered Tool's command + typed params |
 
@@ -51,8 +51,8 @@ The three axes reuse the layers we already built:
 - id: nccl
   type: automated
   scheduler:
-    kind: slurm                        # slurm | local | runai | slinky | maas
-    script: nccl_allreduce.sbatch      # resolved under bin/scripts (or absolute)
+    kind: pythoncm                     # pythoncm | slurm (fallback) | local | ...
+    script: nccl_allreduce.sh           # resolved under bin/scripts (or absolute)
     nodelist: "${target}"              # ${param} substitution from the run
     ntasks_per_node: "${gpus_per_node}"
     output: "${log_dir}/nccl-mpi_%j.out"
@@ -66,17 +66,19 @@ The three axes reuse the layers we already built:
   on_failure: review
 ```
 
-- `SlurmScheduler` builds `sbatch --parsable -N <nodes> --nodelist=... --ntasks-per-node=... --output=... <script>`,
-  parses the job id, polls `sacct`, and reads `StdOut` for evaluation. It makes the
-  Slurm CLI usable over a bare SSH shell (Modules init + BCM modulefiles +
-  `RACK_SLURM_BIN` fallback), so no login shell is required.
+- `PythonCMScheduler` resolves exact BCM-managed compute nodes and runs work through
+  Rack Status' bounded direct-execution and durable-run machinery. It reports the
+  same provider-neutral task lifecycle used by the UI and evaluation pipeline.
 - Node count is taken from `nodes` or derived from the nodelist.
-- `NVIS_SCRIPTS_DIR` + `GPUS_PER_NODE` are auto-forwarded via `sbatch --export` so
-  batch scripts (e.g. `nccl_allreduce.sbatch`) find `lib/fabric.inc.sh`.
+- `NVIS_SCRIPTS_DIR` + `GPUS_PER_NODE` are forwarded to direct scripts so validation
+  runners find `lib/fabric.inc.sh` and retain the same artifact layout.
 - `kind: local` runs the command/script directly (no batch system).
 - `runai`/`slinky`/`maas` are documented author-ahead stubs (raise a clear
   `NotImplementedError`); implement by subclassing `schedulers.base.Scheduler`.
-- Default backend: `RACK_SCHEDULER` env, else `slurm`.
+- `kind: slurm` remains available as an explicit compatibility fallback for existing
+  workflows and `.sbatch` assets during migration.
+- Default backend: `RACK_SCHEDULER`; this package sets it to `pythoncm` in the
+  deployment examples.
 
 ## `evaluation` — how to judge + extract values
 
@@ -136,9 +138,10 @@ fields (including `method`/`body`/`options`/`on_complete`) survive a save round-
 
 ## Reference workflows
 
-- `var/workflows/nccl-allreduce.yaml` — a `scheduler` (Slurm) step that submits the
-  cross-rack NCCL test and gates on the measured bandwidth. Validated on Boston
-  (54 nodes across 3 racks, ~557 GB/s at 1 GiB).
+- `var/workflows/nccl-allreduce.yaml` — a legacy Slurm-fallback scheduler step that
+  submits the cross-rack NCCL test and gates on the measured bandwidth. It is kept
+  as a migration example for `.sbatch` assets; select PythonCM for new workflows.
+  Validated on Boston (54 nodes across 3 racks, ~557 GB/s at 1 GiB).
 - `var/workflows/sysinfo-precheck.yaml` — a connection-only (`profile: script`)
   example that runs the node inventory as the privileged route.
 

@@ -56,19 +56,19 @@ export const shellContent: HelpContent[] = [
     kind: "shell",
     title: "Toolbar",
     domain: "Shell",
-    summary: "Top bar: page title, refresh, theme, Slurm dialogs, terminal, logout.",
+    summary: "Top bar: page title, refresh, theme, scheduler dialogs, terminal, logout.",
     description:
-      "The Toolbar is the top app bar. It shows the current page title and global actions: refresh, theme toggle, Slurm squeue/sinfo dialogs, head-node terminal, log export, active users, and logout.",
-    features: ["Page title.", "Refresh and theme toggle.", "Squeue/sinfo dialogs, terminal, log export, active users, logout."],
+      "The Toolbar is the top app bar. It shows the current page title and global actions: refresh, theme toggle, active jobs, node availability, head-node terminal, log export, active users, and logout.",
+    features: ["Page title.", "Refresh and theme toggle.", "Active-jobs/node-availability dialogs, terminal, log export, active users, logout."],
     howTo: [
       { task: "Refresh data", steps: ["Click the refresh action in the toolbar."] },
       { task: "Toggle dark/light theme", steps: ["Click the theme toggle in the toolbar."] },
     ],
     related: ["appLayout", "squeueDialog", "sinfoDialog"],
     keywords: ["toolbar", "appbar", "header", "refresh", "theme", "logout", "actions"],
-    aria: { label: "Top toolbar", description: "Top bar with the page title and global actions: refresh, theme, Slurm dialogs, terminal, log export, and logout." },
+    aria: { label: "Top toolbar", description: "Top bar with the page title and global actions: refresh, theme, scheduler dialogs, terminal, log export, and logout." },
     aiContext:
-      "The Toolbar is the top app bar with the page title and global actions: refresh, theme toggle, squeue/sinfo dialogs, head-node terminal, log export, active users, and logout.",
+      "The Toolbar is the top app bar with the page title and global actions: refresh, theme toggle, active jobs, node availability, head-node terminal, log export, active users, and logout.",
   },
   {
     id: "appBreadcrumbs",
@@ -124,7 +124,7 @@ export const shellContent: HelpContent[] = [
     domain: "Shell",
     summary: "Floating AI chat that is aware of the current page.",
     description:
-      "The AI assistant is a floating chat (a green button bottom-right) available on every page. It knows which page you are on and answers questions about rack validation, Slurm, BCM, NEMO, and how to use the app's features. Open it, type a question, and it streams an answer; you can minimize, expand full-screen, or clear the conversation.",
+      "The AI assistant is a floating chat (a green button bottom-right) available on every page. It knows which page you are on and answers questions about rack validation, PythonCM/direct execution, BCM, NEMO, and how to use the app's features. Open it, type a question, and it streams an answer; you can minimize, expand full-screen, or clear the conversation.",
     features: [
       "Page-aware: knows the current page/rack for better answers.",
       "Streams answers; can stop, clear, minimize, or expand.",
@@ -139,7 +139,7 @@ export const shellContent: HelpContent[] = [
     keywords: ["ai", "assistant", "chat", "bot", "help", "questions", "copilot"],
     aria: { label: "AI assistant", description: "Floating, page-aware AI chat that answers questions and explains how to use the app." },
     aiContext:
-      "The AI assistant is a floating, page-aware chat available on every page. It answers questions about rack validation, Slurm, BCM, NEMO, and how to use app features, using the current page's context. Configured in Settings.",
+      "The AI assistant is a floating, page-aware chat available on every page. It answers questions about rack validation, PythonCM/direct execution, BCM, NEMO, and how to use app features, using the current page's context. Configured in Settings.",
   },
   {
     id: "errorBanner",

@@ -24,7 +24,7 @@ interface SinfoDialogProps {
 export function SinfoDialog({ open, onClose }: SinfoDialogProps) {
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth scroll="paper">
-      <DialogTitle sx={{ fontWeight: 600 }}>sinfo -R --long</DialogTitle>
+      <DialogTitle sx={{ fontWeight: 600 }}>Node availability</DialogTitle>
       <DialogContent dividers sx={{ pt: 1 }}>
         <SinfoPanel active={open} tableMaxHeight={360} />
       </DialogContent>

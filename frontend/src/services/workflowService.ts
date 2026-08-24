@@ -19,7 +19,7 @@ export interface StepConnection {
 }
 
 export interface StepScheduler {
-  kind?: "slurm" | "local" | "runai" | "slinky" | "maas";
+  kind?: "pythoncm" | "slurm" | "local" | "runai" | "slinky" | "maas";
   nodes?: number | string;
   nodelist?: string;
   ntasks_per_node?: number | string;

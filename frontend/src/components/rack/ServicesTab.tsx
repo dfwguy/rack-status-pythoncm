@@ -32,7 +32,7 @@ export function ServicesTab({ rack, logDir, naming, selectedNodes, disabled }: S
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <ActionCard
         title="Restart Services"
-        description={`Restart services on ${nodeCount} selected node(s): mount -a, munge, slurmd, nvidia-imex, nvidia-dcgm.`}
+        description={`Restart cluster and NVIDIA services on ${nodeCount} selected node(s): mounts, authentication, execution agent, IMEX, and DCGM.`}
         icon={<RefreshCw size={20} />}
         buttonLabel="Restart"
         disabled={disabled}

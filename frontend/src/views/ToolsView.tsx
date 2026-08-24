@@ -1178,8 +1178,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           Runs <Box component="code" sx={{ fontSize: "0.85em" }}>run_llmb_nccl.sh</Box> (
           <Box component="code" sx={{ fontSize: "0.85em" }}>llmb-run submit -w microbenchmark_nccl -d fp8</Box>, MOP §7.3). Enter
           one or more NVIS rack ids (e.g. <Box component="code" sx={{ fontSize: "0.85em" }}>MEL01-HC07-RK0105</Box>);
-          multiple racks run the cross-rack form. The wrapper resolves real Slurm nodes via{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>sinfo</Box> and computes GPU scale (nodes×4; 72 per GB300 NVL72
+          multiple racks run the cross-rack form. The wrapper resolves real PythonCM-managed compute nodes and computes GPU scale (nodes×4; 72 per GB300 NVL72
           rack). Use <strong>Dry run</strong> to print the resolved <Box component="code" sx={{ fontSize: "0.85em" }}>llmb-run</Box>{" "}
           command without submitting.
         </Typography>
@@ -1553,7 +1552,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           <Box component="code" sx={{ fontSize: "0.85em" }}>ubergemm</Box> stress binary ships in the DCGM cuda-major
           plugins (DCGM 4.3.0+); the installer prints{" "}
           <Box component="code" sx={{ fontSize: "0.85em" }}>NVIS_MNUBERGEMM_BIN</Box> for{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>mnubergemm_stress.sbatch</Box>. Pick the{" "}
+          MNUberGEMM stress runner. Pick the{" "}
           <strong>target compute-node</strong> architecture (GBx00 = ARM, Bx00 = x86), not this head node&apos;s arch.
         </Typography>
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 640 }}>
@@ -1742,7 +1741,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           tools can use it (MOP §7.4.1). <strong>Record</strong> clones + writes a headless{" "}
           <Box component="code" sx={{ fontSize: "0.85em" }}>--play</Box> config (fast, review-only).{" "}
           <strong>Install</strong> additionally runs <Box component="code" sx={{ fontSize: "0.85em" }}>install.sh --play</Box>{" "}
-          (Python 3.12 venv + workloads + NeMo container download via SLURM — can take hours). Output streams live (green
+          (Python 3.12 venv + workloads + NeMo container download through the active scheduler — can take hours). Output streams live (green
           dot). Timeout: <Box component="code" sx={{ fontSize: "0.85em" }}>RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_TIMEOUT</Box>.
         </Typography>
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 640 }}>
@@ -1801,7 +1800,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           />
           {dgxcMode === "install" ? (
             <Alert severity="warning">
-              Install mode submits SLURM jobs to download the NeMo container and installs all selected workloads — this can
+              Install mode submits scheduler tasks to download the NeMo container and installs all selected workloads — this can
               run for hours. Use Record first to review the generated config.
             </Alert>
           ) : null}

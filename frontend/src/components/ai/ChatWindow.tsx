@@ -25,7 +25,7 @@ const PAGE_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
   singleRack: "Single Rack",
   multirack: "Multirack",
-  slurm: "Slurm",
+  slurm: "Scheduler",
   reports: "Reports",
   analytics: "Analytics",
   tools: "Utility",
@@ -113,7 +113,7 @@ export default function ChatWindow() {
         {messages.length === 0 && (
           <Box sx={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", p: 3 }}>
             <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", textAlign: "center" }}>
-              Ask me anything about rack status, validation, Slurm, or troubleshooting.
+              Ask me anything about rack status, validation, PythonCM direct execution, or troubleshooting.
             </Text>
           </Box>
         )}

@@ -39,23 +39,48 @@ class TestBCMProvider:
 
     def test_list_racks_cmd(self):
         cmd = self.plat.list_racks_cmd()
-        assert cmd[0] == "cmsh"
-        assert "rack" in cmd[-1]
-        assert "list" in cmd[-1]
+        assert cmd[0] == "/cm/local/apps/python312/bin/python3"
+        assert cmd[cmd.index("--query") + 1] == "racks"
+        assert cmd[cmd.index("--format") + 1] == "cmsh"
 
     def test_device_status_cmd(self):
         cmd = self.plat.device_status_cmd()
-        assert cmd[0] == "cmsh"
-        assert "ds" in cmd[-1]
+        assert cmd[cmd.index("--query") + 1] == "status"
+        assert cmd[cmd.index("--type") + 1] == "PhysicalNode"
 
     def test_physical_rf0_cmd(self):
         cmd = self.plat.physical_rf0_cmd()
-        assert "cmsh" == cmd[0]
-        assert "foreach" in cmd[-1]
+        assert cmd[cmd.index("--query") + 1] == "rf0"
 
     def test_device_power_cmd(self):
         cmd = self.plat.device_power_cmd("device; power -n p1-r01-ct01 off")
-        assert cmd[0] == "cmsh"
+        assert cmd[cmd.index("--query") + 1] == "power"
+        assert cmd[cmd.index("--target") + 1] == "p1-r01-ct01"
+        assert cmd[cmd.index("--action") + 1] == "off"
+
+    def test_device_power_rejects_arbitrary_cmsh(self):
+        with pytest.raises(ValueError, match="unsupported BCM power expression"):
+            self.plat.device_power_cmd("device; foreach (*) (shutdown)")
+
+    def test_node_drain_and_undrain_are_pythoncm_commands(self):
+        drain = self.plat.node_drain_cmd("node[01-02]", "maintenance window")
+        undrain = self.plat.node_undrain_cmd("node[01-02]")
+        assert drain[drain.index("--query") + 1] == "drain"
+        assert drain[drain.index("--reason") + 1] == "maintenance window"
+        assert undrain[undrain.index("--query") + 1] == "undrain"
+
+    def test_legacy_scontrol_node_update_is_translated_without_slurm(self):
+        cmd = self.plat.scontrol_cmd(
+            "update nodename='node[01-02]' state=drain reason='planned maintenance'"
+        )
+        assert "nvis_bcm_query.py" in cmd
+        assert "--query drain" in cmd
+        assert "planned maintenance" in cmd
+
+    def test_unrelated_scontrol_verb_retains_explicit_legacy_fallback(self):
+        with mock.patch.dict(os.environ, {"RACK_SLURM_SKIP_MODULE_LOAD": "1"}, clear=False):
+            cmd = self.plat.scontrol_cmd("show hostnames node[01-02]")
+        assert cmd == "scontrol show hostnames node[01-02]"
 
     def test_services_restart_remote_cmd(self):
         cmd = self.plat.services_restart_remote_cmd()

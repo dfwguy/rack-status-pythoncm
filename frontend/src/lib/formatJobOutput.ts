@@ -24,8 +24,8 @@ export function formatPowerResults(results: unknown): string {
   return lines.join("\n").trim();
 }
 
-/** Same as legacy `formatSlurmScontrolResult` — command line, exit code, stdout/stderr. */
-export function formatSlurmScontrolResult(data: Record<string, unknown>): string {
+/** Provider-neutral command details: command line, exit code, stdout, and stderr. */
+export function formatSchedulerCommandResult(data: Record<string, unknown>): string {
   const lines: string[] = [];
   if (data.command_display) lines.push(String(data.command_display));
   if (data.returncode != null) lines.push(`exit ${String(data.returncode)}`);
@@ -34,13 +34,16 @@ export function formatSlurmScontrolResult(data: Record<string, unknown>): string
   return lines.join("\n").trim();
 }
 
+/** Compatibility export for callers and tests written against the original Slurm-only helper. */
+export const formatSlurmScontrolResult = formatSchedulerCommandResult;
+
 function isAsyncJobStatusShape(data: Record<string, unknown>): boolean {
   return data.phase !== undefined && data.phase !== null;
 }
 
 /**
- * Text for immediate JSON POST results (Slurm drain/undrain/scancel, etc.).
- * Slurm sync payloads match legacy `formatSlurmScontrolResult` + completion line; async jobs keep `formatJobStatusText`.
+ * Text for immediate scheduler JSON POST results (drain/resume/cancel, etc.).
+ * Legacy Slurm-shaped payloads and PythonCM/direct payloads share the same command/result envelope.
  */
 export function formatSyncJsonResult(title: string, rack: string, data: Record<string, unknown>): string {
   if (isAsyncJobStatusShape(data)) {
@@ -48,15 +51,15 @@ export function formatSyncJsonResult(title: string, rack: string, data: Record<s
   }
 
   const t = title.toLowerCase();
-  const looksSlurmSync =
-    t.includes("slurm") &&
+  const looksSchedulerSync =
+    /slurm|scheduler|drain|undrain|resume|cancel|scancel/.test(t) &&
     (data.command_display != null ||
       data.returncode != null ||
       data.stdout != null ||
       data.stderr != null);
 
-  if (looksSlurmSync) {
-    const detail = formatSlurmScontrolResult(data);
+  if (looksSchedulerSync) {
+    const detail = formatSchedulerCommandResult(data);
     const ok = data.ok !== false;
     const err = String(data.error || "").trim();
     const jobId = String(data.job_id ?? "").trim();
@@ -67,8 +70,8 @@ export function formatSyncJsonResult(title: string, rack: string, data: Record<s
     }
 
     let head: string;
-    if (t.includes("scancel")) head = `scancel completed for job ${jobId || "?"}.`;
-    else if (t.includes("undrain")) head = `Undrain completed for ${rack}.`;
+    if (t.includes("cancel")) head = `Cancellation completed for job ${jobId || "?"}.`;
+    else if (t.includes("undrain") || t.includes("resume")) head = `Resume completed for ${rack}.`;
     else if (t.includes("drain")) head = `Drain completed for ${rack}.`;
     else head = `${title.trim()} completed for ${rack}.`;
 

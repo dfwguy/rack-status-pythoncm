@@ -37,7 +37,8 @@ export interface FabricProbeResponse {
 /**
  * Classify a compute node's fabric (compute rails vs storage/NS plane) and
  * compare against the active platform's expected fabric profile.
- * With no node, the backend probes the first Slurm node (homogeneous cluster).
+ * With no node, the backend probes the first node reported by the active provider
+ * (homogeneous cluster).
  */
 export async function probeFabric(node?: string): Promise<FabricProbeResponse> {
   const q = node ? `?node=${encodeURIComponent(node)}` : "";

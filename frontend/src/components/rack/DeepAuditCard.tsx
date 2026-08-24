@@ -199,7 +199,7 @@ export function DeepAuditCard({
         <DialogTitle>{title}</DialogTitle>
         <DialogContent>
           <Banner status="warning" kind="inline">
-            Confirmed node failures will be tagged in issue history and immediately drained in Slurm with this
+            Confirmed node failures will be tagged in issue history and immediately drained through the active scheduler with this
             validation ID and the exact reason. Warnings and unavailable probes remain inconclusive and are not drained.
           </Banner>
           <Text kind="body/regular/md" style={{ display: "block", marginTop: 16 }}>
@@ -246,7 +246,7 @@ export function DeepAuditCard({
               </Flex>
               {latestSummary?.drain_failed ? (
                 <Banner status="error" kind="inline" style={{ marginBottom: 12 }}>
-                  {latestSummary.drain_failed} confirmed failure(s) could not be drained. Review the per-node Slurm result.
+                  {latestSummary.drain_failed} confirmed failure(s) could not be drained. Review the per-node scheduler result.
                 </Banner>
               ) : null}
               {latestSummary ? (
@@ -258,7 +258,7 @@ export function DeepAuditCard({
                         <TableCell>Job ID</TableCell>
                         <TableCell>Result</TableCell>
                         <TableCell>Finding / warning</TableCell>
-                        <TableCell>Slurm action</TableCell>
+                        <TableCell>Scheduler action</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>

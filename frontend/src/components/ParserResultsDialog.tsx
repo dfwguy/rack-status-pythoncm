@@ -155,7 +155,7 @@ interface StepPoint {
 
 interface NemotronRow {
   job_id: string;
-  /** Rack id for NEMO 1Rack logs; for sn-llama LLAMA rows this is the CT hostname parsed from the Slurm log basename. */
+  /** Rack id for NEMO 1Rack logs; for sn-llama LLAMA rows this is the CT hostname parsed from the scheduler log basename. */
   rack: string;
   model: string;
   median_step_time: number;
@@ -307,7 +307,7 @@ interface ParserResponse {
   log_file: string;
   /**
    * Which log fed each validation stage, when resolved by rack. NCCL and NeMo run as separate
-   * Slurm jobs, so each stage's numbers come from its own log; a missing key means that stage
+   * scheduler jobs, so each stage's numbers come from its own log; a missing key means that stage
    * has no log for this rack yet. Absent entirely for explicit path/log_file requests.
    */
   stage_logs?: Partial<Record<"nccl" | "nemo", string>>;
@@ -422,7 +422,7 @@ function LlamaSnStepTimeMultiChart({ rows }: { rows: NemotronRow[] }) {
         LLAMA step time (all matching logs under sn-llama/)
       </Text>
       <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 12, display: "block" }}>
-        {datasets.length} series — one per Slurm job / log file (CT hostname from the log name). Iterations may differ between runs.
+        {datasets.length} series — one per scheduler task / log file (CT hostname from the log name). Iterations may differ between runs.
       </Text>
       <div style={{ height: 360 }}>
         <Line

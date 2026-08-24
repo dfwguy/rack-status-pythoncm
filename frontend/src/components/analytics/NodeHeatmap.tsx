@@ -593,7 +593,7 @@ function CellTooltip({
       <div style={{ fontFamily: "monospace", fontWeight: 700, marginBottom: 2 }}>{node}</div>
       <div style={{ opacity: 0.85, marginBottom: rows.length ? 6 : 0 }}>
         {status.toUpperCase()}
-        {fleetNode?.slurm_state ? ` · slurm ${fleetNode.slurm_state}` : ""}
+        {fleetNode?.slurm_state ? ` · scheduler ${fleetNode.slurm_state}` : ""}
       </div>
       {!rows.length && <div style={{ opacity: 0.85 }}>No bring-up results for this node.</div>}
       {rows.map((r) => (

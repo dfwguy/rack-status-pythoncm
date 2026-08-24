@@ -81,7 +81,7 @@ export function NodeIssueHistoryDialog({
                   <TableCell>Area / code</TableCell>
                   <TableCell>Finding</TableCell>
                   <TableCell>Validation</TableCell>
-                  <TableCell>Slurm action</TableCell>
+                  <TableCell>Scheduler action</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>

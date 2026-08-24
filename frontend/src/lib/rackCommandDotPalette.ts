@@ -13,6 +13,7 @@ import type { NodeCmdKind } from "./rackCommandTypes";
 
 const DOT_PALETTE: Record<NodeCmdKind, { bg: string; ring: string }> = {
   validation: { bg: "#38bdf8", ring: "rgba(56, 189, 248, 0.45)" },
+  scheduler: { bg: "#38bdf8", ring: "rgba(56, 189, 248, 0.45)" },
   slurm: { bg: "#38bdf8", ring: "rgba(56, 189, 248, 0.45)" },
   stress: { bg: "#fb923c", ring: "rgba(194, 65, 12, 0.5)" },
   power: { bg: "#4ade80", ring: "rgba(22, 101, 52, 0.55)" },

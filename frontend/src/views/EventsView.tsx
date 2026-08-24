@@ -14,11 +14,10 @@
  *
  * Only sources that genuinely exist are wired. Nothing here is generated.
  *
- * 1. **Slurm node state changes** — ``GET /api/slurm-sinfo-r`` runs ``sinfo -R --long`` on
- *    the head node and returns the reason, the user who set it, the timestamp, the resulting
- *    state and the node list for every drained / down node ("Prolog error", "Not responding",
- *    thermal drains, ...). Parsed with the existing ``parseSinfoRStdout`` and coloured with
- *    ``slurmReasonTone`` so the idiom matches the Scheduler view.
+ * 1. **Scheduler node state changes** — ``GET /api/slurm-sinfo-r`` is the stable compatibility
+ *    route. The active provider returns reason, actor, timestamp, resulting state, and node list
+ *    for unavailable nodes. The response retains the historical fixed-width shape, so it is
+ *    parsed with ``parseSinfoRStdout`` and coloured with ``slurmReasonTone``.
  *
  * 2. **Operator activity** — ``GET /api/rack-locks`` (via ``RackLocksContext``) is the tool's
  *    own record of in-flight operations and explicit rack claims, with operator attribution
@@ -54,7 +53,7 @@ type TagColor = "green" | "blue" | "teal" | "yellow" | "red" | "gray";
 type EventSource = "slurm" | "operator";
 
 const SOURCE_META: Record<EventSource, { label: string; color: TagColor }> = {
-  slurm: { label: "Slurm state", color: "yellow" },
+  slurm: { label: "Scheduler state", color: "yellow" },
   operator: { label: "Operator", color: "blue" },
 };
 
@@ -67,7 +66,7 @@ interface EventRow {
   tsRaw: string;
   /** Epoch ms when parseable, else null (row sorts last). */
   tsMs: number | null;
-  /** Short tag on the row, e.g. the Slurm state or "Lock". */
+  /** Short tag on the row, e.g. the scheduler state or "Lock". */
   label: string;
   color: TagColor;
   /** Node list / rack the event applies to. */
@@ -89,7 +88,7 @@ function toMs(raw: string): number | null {
   if (!s) return null;
   const direct = Date.parse(s);
   if (!Number.isNaN(direct)) return direct;
-  // Slurm sometimes emits "YYYY-MM-DD HH:MM:SS" which older parsers reject.
+  // Compatibility responses may emit "YYYY-MM-DD HH:MM:SS", which older parsers reject.
   const spaced = Date.parse(s.replace(" ", "T"));
   return Number.isNaN(spaced) ? null : spaced;
 }
@@ -127,7 +126,7 @@ function slurmEvents(parsed: ReturnType<typeof parseSinfoRStdout>): EventRow[] {
       source: "slurm" as const,
       tsRaw,
       tsMs: toMs(tsRaw),
-      label: state || "Slurm",
+      label: state || "Scheduler",
       color: toneColor(reason, state),
       scope: nodes,
       text: reason || "(no reason recorded)",
@@ -156,7 +155,7 @@ export function EventsView() {
       setSinfoCmd(String(data.command_display || ""));
       if (!res.ok || data.ok === false) {
         setSinfoStdout("");
-        setSinfoError(data.error || `sinfo -R --long failed (HTTP ${res.status})`);
+        setSinfoError(data.error || `Node availability query failed (HTTP ${res.status})`);
         return;
       }
       setSinfoStdout(String(data.stdout || ""));
@@ -227,7 +226,7 @@ export function EventsView() {
       <PageHeader
         contentId="obsEvents"
         title="Events"
-        description="Slurm node state changes and this tool's own operator activity — current state, newest first."
+        description="Scheduler node-state changes and this tool's own operator activity — current state, newest first."
         actions={
           <Button kind="secondary" size="small" onClick={() => void loadSinfo()} disabled={sinfoLoading}>
             <RefreshCw size={16} />
@@ -264,7 +263,7 @@ export function EventsView() {
       {sinfoUnparsed && (
         <Box sx={{ mb: 3 }}>
           <Banner status="warning" kind="inline">
-            sinfo returned output that could not be read as a table, so no Slurm rows are listed.
+            The node-state provider returned output that could not be read as a table, so no scheduler rows are listed.
             The raw text is available on the Scheduler page.
           </Banner>
         </Box>
@@ -301,7 +300,7 @@ export function EventsView() {
           </Flex>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
             {rows.length} event{rows.length === 1 ? "" : "s"}
-            {sinfoAt ? ` · sinfo ${sinfoAt}` : ""}
+            {sinfoAt ? ` · node state ${sinfoAt}` : ""}
           </Text>
         </Flex>
 

@@ -30,7 +30,8 @@ The cost is one interpreter start (~0.3 s) per call, against the 12-23 s a ``cms
 costs on this cluster — and a whole-fleet query is a single call.
 
 Output is always a single JSON object: ``{"ok": true, "query": ..., "data": [...]}`` or
-``{"ok": false, "error": ..., "hint": ...}``. The caller falls back to cmsh on ``ok: false``.
+``{"ok": false, "error": ..., "hint": ...}``. A failure is explicit and machine-readable; the
+PythonCM deployment does not silently switch to a different control plane.
 
 Usage:
   nvis_bcm_query.py --query nodes --cert ~/.cm/cert.pem --key ~/.cm/cert.key \
@@ -41,10 +42,13 @@ from __future__ import annotations
 
 import argparse
 import glob
+import importlib.util
 import json
 import os
+import re
 import sys
 import time
+from uuid import UUID
 
 #: Where pythoncm normally lives. A site with per-cluster copies passes --module-path instead.
 DEFAULT_MODULE_PATHS = (
@@ -56,6 +60,18 @@ DEFAULT_MODULE_PATHS = (
 #: (Redfish) and ipmi0 elsewhere; the class name is the reliable signal when present.
 _BMC_NAMES = {"rf0", "ipmi0", "bmc", "ipmi"}
 
+# Queries that invoke a CMDaemon operation rather than reading its entity cache. BCM protects
+# these RPCs with the web/API authentication cookie even when the client certificate is valid.
+_AUTHENTICATED_QUERIES = {
+    "status", "node-states", "power", "drain", "undrain", "drain-status",
+    "jobs", "job-history", "cancel-job",
+}
+
+
+def _natural_path_key(path: str) -> tuple[object, ...]:
+    """Sort versioned install paths numerically (``pythoncm-11`` after ``pythoncm-9``)."""
+    return tuple(int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", path))
+
 
 def resolve_module_path(candidates: list[str]) -> str | None:
     """Add the first importable pythoncm location to ``sys.path``; return the one used.
@@ -65,13 +81,37 @@ def resolve_module_path(candidates: list[str]) -> str | None:
     wired in via ``sites.d``. Expanding it here means any python3.N on the box can run this.
     """
     for raw in candidates:
-        for base in sorted(glob.glob(os.path.expanduser(raw)), reverse=True):
-            for path in (base, *sorted(glob.glob(f"{base}/lib/python3*/site-packages"), reverse=True)):
+        for base in sorted(
+            glob.glob(os.path.expanduser(raw)), key=_natural_path_key, reverse=True
+        ):
+            site_paths = sorted(
+                glob.glob(f"{base}/lib/python3*/site-packages"),
+                key=_natural_path_key,
+                reverse=True,
+            )
+            for path in (base, *site_paths):
                 if os.path.isdir(os.path.join(path, "pythoncm")):
                     if path not in sys.path:
                         sys.path.insert(0, path)
                     return path
+    # A BCM-bundled interpreter may already have the matching package on its site path. Do not
+    # declare it missing merely because a site installed it somewhere outside our known layouts.
+    found = importlib.util.find_spec("pythoncm")
+    if found and found.submodule_search_locations:
+        return os.path.dirname(next(iter(found.submodule_search_locations)))
     return None
+
+
+def default_ca_path() -> str:
+    """Return pythoncm's shipped public CA bundle, which is readable on stock BCM installs."""
+    candidates = sorted(
+        glob.glob(
+            "/cm/local/apps/cmd/pythoncm/lib/python3*/site-packages/pythoncm/etc/cacert.pem"
+        ),
+        key=_natural_path_key,
+        reverse=True,
+    )
+    return candidates[0] if candidates else "/cm/local/apps/cmd/etc/cacert.pem"
 
 
 def _attr(obj: object, *names: str, default: object = None) -> object:
@@ -90,12 +130,13 @@ def _attr(obj: object, *names: str, default: object = None) -> object:
 
 
 def _iface_dict(iface: object) -> dict[str, object]:
+    network = _attr(iface, "network")
     return {
         "name": _attr(iface, "name", default=""),
         "kind": type(iface).__name__,
         "ip": _attr(iface, "ip", default=""),
         "mac": _attr(iface, "mac", "macAddress", default=""),
-        "network": str(_attr(iface, "network", default="") or ""),
+        "network": _scalar(network) or _scalar(_attr(network, "name")),
     }
 
 
@@ -112,7 +153,7 @@ def _scalar(value: object) -> str:
     """
     if value is None:
         return ""
-    if isinstance(value, (str, int, float)):
+    if isinstance(value, (str, int, float, UUID)):
         return str(value)
     return ""
 
@@ -159,6 +200,60 @@ def shape_device(device: object, racks: dict[str, str] | None = None) -> dict[st
     }
 
 
+def _enum_text(value: object) -> str:
+    """Return a stable enum token across pythoncm versions, or a plain scalar string."""
+    name = getattr(value, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    text = _scalar(value)
+    if "." in text and text.rsplit(".", 1)[-1].isupper():
+        return text.rsplit(".", 1)[-1]
+    return text
+
+
+def shape_status(status: object) -> dict[str, object]:
+    """One :class:`pythoncm.entity.DeviceStatus` without entity-valued fields."""
+    device = _attr(status, "parent", "device")
+    return {
+        "hostname": _scalar(_attr(device, "hostname", "name")),
+        "device_uuid": _scalar(_attr(status, "ref_device_uuid")),
+        "status": _enum_text(_attr(status, "final_status", "status", default="UNDEFINED")),
+        "reported_status": _enum_text(_attr(status, "reportedStatus", "reported_status")),
+        "closed": bool(_attr(status, "closed", default=False)),
+        "muted": bool(_attr(status, "muted", default=False)),
+        "burning": bool(_attr(status, "burning", default=False)),
+        "message": _scalar(_attr(status, "userMessage", "user_message", "message")),
+    }
+
+
+def _read_secret(path: str | None) -> str:
+    if not path:
+        return ""
+    expanded = os.path.expanduser(path)
+    if not os.access(expanded, os.R_OK):
+        raise FileNotFoundError(f"secret file not readable: {path}")
+    with open(expanded, encoding="utf-8") as handle:
+        return handle.read().strip()
+
+
+def _configure_auth(settings: object, args: argparse.Namespace) -> str:
+    """Apply a cookie or obtain one without ever putting the secret on the command line."""
+    cookie = os.environ.get("NVIS_BCM_COOKIE", "") or _read_secret(args.cookie_file)
+    if cookie:
+        settings.cookie = cookie
+        return "cookie"
+
+    username = args.username or os.environ.get("NVIS_BCM_USERNAME", "")
+    password = os.environ.get("NVIS_BCM_PASSWORD", "") or _read_secret(args.password_file)
+    if username or password:
+        if not username or not password:
+            raise PermissionError("both BCM username and password are required")
+        if not settings.get_cookie(username, password):
+            raise PermissionError("BCM username/password authentication was rejected")
+        return "login"
+    return "certificate"
+
+
 def fetch_ca_chain(host: str, port: int, timeout: int = 8) -> list[str]:
     """The CA certificates the head presents, leaf excluded, newest anchor last.
 
@@ -187,8 +282,8 @@ def fetch_ca_chain(host: str, port: int, timeout: int = 8) -> list[str]:
                          else c for c in tls.get_unverified_chain()]
                 if chain:
                     return chain[1:]
-    except Exception:  # noqa: BLE001 - openssl is the fallback for exactly this
-        pass
+    except Exception as exc:  # noqa: BLE001 - openssl is the fallback for exactly this
+        print(f"warning: ssl chain collection failed, trying openssl: {exc}", file=sys.stderr)
 
     out = subprocess.run(
         ["openssl", "s_client", "-showcerts", "-connect", f"{host}:{port}"],
@@ -273,13 +368,27 @@ def _connect(args: argparse.Namespace):
         ca_file=os.path.expanduser(args.ca) if args.ca else None,
         check_hostname=False,
     )
-    return Cluster(settings)
+    auth_mode = _configure_auth(settings, args)
+    if args.query in _AUTHENTICATED_QUERIES and auth_mode == "certificate":
+        raise PermissionError(f"{args.query} requires a BCM login cookie")
+    cluster = Cluster(settings)
+    # Cluster.check_api() runs during construction. It compares pythoncm's generated API hash
+    # with CMDaemon and deliberately rejects version skew before any entity is interpreted.
+    cluster._nvis_auth_mode = auth_mode
+    return cluster
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Query BCM CMDaemon via pythoncm; emit JSON.")
-    ap.add_argument("--query", default="nodes",
-                    choices=["nodes", "switches", "devices", "version", "attrs"])
+    ap.add_argument(
+        "--query",
+        default="nodes",
+        choices=[
+            "nodes", "switches", "devices", "racks", "status", "node-states", "rf0", "version",
+            "capabilities", "attrs", "power", "drain", "undrain", "drain-status",
+            "jobs", "job-history", "cancel-job",
+        ],
+    )
     ap.add_argument("--type", default="PhysicalNode", help="entity type for --query attrs/devices")
     ap.add_argument("--module-path", action="append", default=[],
                     help="pythoncm location; repeatable. Per-cluster copies go here.")
@@ -287,21 +396,38 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=int(os.environ.get("NVIS_BCM_PORT", "8081")))
     ap.add_argument("--cert", default=os.environ.get("NVIS_BCM_CERT", "~/.cm/cert.pem"))
     ap.add_argument("--key", default=os.environ.get("NVIS_BCM_KEY", "~/.cm/cert.key"))
-    ap.add_argument("--ca", default=os.environ.get("NVIS_BCM_CA", "/cm/local/apps/cmd/etc/cacert.pem"))
+    ap.add_argument("--ca", default=os.environ.get("NVIS_BCM_CA") or default_ca_path())
     ap.add_argument("--ca-out", default=os.environ.get("NVIS_BCM_CA_OUT", "~/.cm/cluster-ca.pem"),
                     help="where --bootstrap-ca writes the pinned chain")
+    ap.add_argument("--username", default=os.environ.get("NVIS_BCM_USERNAME", ""),
+                    help="BCM login name; password is read only from environment/file")
+    ap.add_argument("--password-file", default=os.environ.get("NVIS_BCM_PASSWORD_FILE", ""),
+                    help="read BCM password from this head-node file")
+    ap.add_argument("--cookie-file", default=os.environ.get("NVIS_BCM_COOKIE_FILE", ""),
+                    help="read a pre-issued BCM Cookie header value from this head-node file")
+    ap.add_argument("--target", default="", help="BCM device/node name range")
+    ap.add_argument("--action", choices=["on", "off", "reset", "status"], default="status")
+    ap.add_argument("--reason", default="", help="drain reason")
+    ap.add_argument("--job-id", default="", help="job id for cancel-job")
+    ap.add_argument("--limit", type=int, default=1000, help="maximum job-history records")
+    ap.add_argument("--force", action="store_true", help="include closed devices in power operations")
+    ap.add_argument("--operation-timeout", type=float, default=120.0,
+                    help="seconds to wait for a parallel power operation")
+    ap.add_argument("--format", choices=["json", "cmsh"], default="json",
+                    help="JSON API output or compatibility text for existing Rack Status parsers")
     ap.add_argument("--bootstrap-ca", action="store_true",
                     help="pin the CA chain the head presents, then use it")
     args = ap.parse_args(argv)
+    if args.format == "cmsh" and args.query not in {"racks", "status", "rf0"}:
+        return _fail("unsupported output format", f"--format cmsh is not supported for {args.query}")
 
-    # Pin on request, or automatically when the configured CA is unreadable — which is the
-    # default state on a stock BCM, where cacert.pem is root-only. Set NVIS_BCM_CA_BOOTSTRAP=0
-    # to require an out-of-band CA instead. The pinned fingerprints are reported every time so
-    # the trust decision stays auditable rather than silent.
+    # CA collection is explicit by default. Automatically trusting whichever endpoint currently
+    # answers on port 8081 would turn a missing readable CA into a silent trust-on-first-use
+    # decision. A site that deliberately accepts TOFU can set NVIS_BCM_CA_BOOTSTRAP=1.
     ca_readable = bool(args.ca) and os.access(os.path.expanduser(args.ca), os.R_OK)
     pinned: dict[str, object] | None = None
     if args.bootstrap_ca or (
-        not ca_readable and os.environ.get("NVIS_BCM_CA_BOOTSTRAP", "1") != "0"
+        not ca_readable and os.environ.get("NVIS_BCM_CA_BOOTSTRAP", "0") == "1"
     ):
         try:
             pinned = bootstrap_ca(args.host, args.port, args.ca_out)
@@ -334,12 +460,23 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         return _fail("credentials unavailable", str(exc),
                      hint="the cluster CA is often root-only; ask the BCM admin for a readable copy")
-    except Exception as exc:  # noqa: BLE001 - the caller falls back to cmsh on any failure
+    except PermissionError as exc:
+        return _fail(
+            "authentication failed",
+            str(exc),
+            hint=("certificate authentication can read entities, but status/power/workload RPCs "
+                  "require a BCM login cookie; configure a head-node password/cookie file"),
+        )
+    except Exception as exc:  # noqa: BLE001 - always return structured connection failure
         detail = f"{type(exc).__name__}: {exc}"
         hint = None
         if "CERTIFICATE_VERIFY_FAILED" in detail:
             hint = ("the head presents a self-signed cluster cert; --ca must point at a CA file "
                     "this user can read (/cm/local/apps/cmd/etc/cacert.pem is root-only by default)")
+        elif "Invalid API hash" in detail or "verifyAPI" in detail:
+            hint = ("pythoncm and CMDaemon APIs do not match; run the pythoncm shipped by this "
+                    "head node or set --module-path to its matching install")
+            return _fail("pythoncm/cmdaemon version mismatch", detail, hint=hint)
         return _fail("cmdaemon connection failed", detail, hint=hint)
 
     try:
@@ -353,43 +490,357 @@ def main(argv: list[str] | None = None) -> int:
             # stderr, never stdout: the caller parses stdout as a single JSON document.
             print(f"warning: disconnect failed: {type(exc).__name__}: {exc}", file=sys.stderr)
 
-    json.dump(payload, sys.stdout)
-    sys.stdout.write("\n")
-    return 0
+    if args.format == "cmsh":
+        _write_cmsh(payload, args.query)
+    else:
+        json.dump(payload, sys.stdout)
+        sys.stdout.write("\n")
+    return 0 if payload.get("ok") else 2
+
+
+def _racks_by_uuid(cluster) -> dict[str, str]:
+    racks: dict[str, str] = {}
+    for rack in cluster.get_by_type("Rack") or []:
+        uuid = _scalar(_attr(rack, "uuid"))
+        name = _scalar(_attr(rack, "name", "hostname"))
+        if uuid and name:
+            racks[uuid] = name
+    return racks
+
+
+def _select_devices(cluster, target: str, *, nodes_only: bool = False) -> list[object]:
+    """Resolve BCM's supported name-range syntax and reject partial/ambiguous selections."""
+    if not target.strip():
+        raise ValueError("--target is required")
+    from pythoncm.device_selection import DeviceSelection
+
+    selection = DeviceSelection(cluster)
+    selection.add_devices_in_text_range(target)
+    devices = selection.get_sorted_by_name()
+    if nodes_only:
+        invalid = [d for d in devices if not callable(getattr(d, "drain", None))]
+        if invalid:
+            names = ", ".join(_scalar(_attr(d, "hostname", "name")) for d in invalid[:5])
+            raise ValueError(f"target includes non-node device(s): {names}")
+    if not devices:
+        raise ValueError(f"target matched no devices: {target}")
+    return devices
+
+
+def _name_for_uuid(cluster, value: object) -> str:
+    try:
+        entity = cluster.get_by_uuid(value)
+    except (TypeError, ValueError):
+        entity = None
+    return _scalar(_attr(entity, "hostname", "name")) or _scalar(value)
+
+
+def _shape_operation_state(cluster, state: object) -> dict[str, object]:
+    device = _attr(state, "device", "ref_device_uuid")
+    return {
+        "hostname": _name_for_uuid(cluster, device),
+        "state": _enum_text(_attr(state, "state")),
+        "operation": _enum_text(_attr(state, "operation")),
+        "info": _scalar(_attr(state, "info")),
+    }
+
+
+def _shape_drain_result(cluster, result: object) -> dict[str, object]:
+    node_uuids = list(_attr(result, "ref_node_uuids", default=[]) or [])
+    states = list(_attr(result, "result", default=[]) or [])
+    reasons = list(_attr(result, "reason", default=[]) or [])
+    return {
+        "success": bool(_attr(result, "success", default=False)),
+        "nodes": [
+            {
+                "hostname": _name_for_uuid(cluster, uuid),
+                "state": _enum_text(states[index]) if index < len(states) else "UNKNOWN",
+                "reason": _scalar(reasons[index]) if index < len(reasons) else "",
+            }
+            for index, uuid in enumerate(node_uuids)
+        ],
+    }
+
+
+def _shape_job(cluster, job: object) -> dict[str, object]:
+    nodes = _attr(job, "nodes", default=[]) or []
+    return {
+        "job_id": _scalar(_attr(job, "jobId", "jobID", "id")),
+        "name": _scalar(_attr(job, "jobName", "name")),
+        "state": _enum_text(_attr(job, "state", "status")),
+        "user": _scalar(_attr(job, "user", "username")),
+        "queue": _name_for_uuid(cluster, _attr(job, "ref_jobqueue_uuid", "queue")),
+        "nodes": [_name_for_uuid(cluster, node) for node in nodes],
+        "submit_time": int(_attr(job, "submitTime", default=0) or 0),
+        "start_time": int(_attr(job, "startTime", default=0) or 0),
+        "end_time": int(_attr(job, "endTime", default=0) or 0),
+        "exit_code": int(_attr(job, "exitCode", default=0) or 0),
+        "stdout": _scalar(_attr(job, "stdoutPath", "stdout")),
+    }
+
+
+def _power(cluster, args: argparse.Namespace) -> dict[str, object]:
+    devices = _select_devices(cluster, args.target)
+    operation = getattr(cluster.parallel, f"power_{args.action}")
+    result = operation(
+        devices,
+        force=args.force,
+        wait=True,
+        timeout=max(1.0, args.operation_timeout),
+    )
+    if isinstance(result, tuple):
+        completed, states = result
+        shaped_states = [
+            _shape_operation_state(cluster, state) for state in states or [] if state is not None
+        ]
+        accepted = True
+    else:
+        completed = accepted = bool(result)
+        shaped_states = []
+    return {
+        "accepted": accepted,
+        "completed": bool(completed),
+        "action": args.action,
+        "target": args.target,
+        "devices": [_scalar(_attr(d, "hostname", "name")) for d in devices],
+        "states": shaped_states,
+    }
+
+
+def _drain(cluster, args: argparse.Namespace, *, drain: bool) -> dict[str, object]:
+    nodes = _select_devices(cluster, args.target, nodes_only=True)
+    if drain:
+        results = cluster.parallel.drain(nodes, reason=args.reason)
+    else:
+        results = cluster.parallel.undrain(nodes)
+    shaped = [_shape_drain_result(cluster, result) for result in results or []]
+    return {
+        "target": args.target,
+        "action": "drain" if drain else "undrain",
+        "accepted": bool(shaped) and all(item["success"] for item in shaped),
+        "results": shaped,
+    }
+
+
+def _cancel_job(cluster, job_id: str) -> dict[str, object]:
+    if not re.fullmatch(r"\d+(?:_\d+)?", job_id or ""):
+        raise ValueError("--job-id must be a numeric workload job id")
+    matches = []
+    for wlm in cluster.get_by_type("WlmCluster") or []:
+        job = cluster.workload.get_job_by_wlm_uuid(wlm.uuid, job_id)
+        if job is not None:
+            matches.append((wlm, job))
+    if not matches:
+        raise ValueError(f"job not found: {job_id}")
+    if len(matches) > 1:
+        raise ValueError(f"job id {job_id} is ambiguous across workload managers")
+    wlm, job = matches[0]
+    message, success = cluster.workload.remove_job(wlm.uuid, job_id)
+    return {"job_id": job_id, "success": bool(success), "message": str(message or "")}
+
+
+def _scheduler_nodes(cluster, target: str = "") -> list[dict[str, object]]:
+    """Build truthful scheduler eligibility from BCM status, drain, and live-job RPCs.
+
+    Absence of a drain record does not mean idle by itself. A node is reported idle only after
+    device status, drain state, and workload jobs all returned successfully in this same call.
+    """
+    devices = (
+        _select_devices(cluster, target, nodes_only=True)
+        if target.strip()
+        else list(cluster.get_by_type("PhysicalNode") or [])
+    )
+    by_uuid = {_scalar(_attr(device, "uuid")): device for device in devices}
+    device_states: dict[str, dict[str, object]] = {}
+    for status in cluster.parallel.device_status(devices):
+        device_states[_scalar(_attr(status, "ref_device_uuid"))] = shape_status(status)
+
+    drain_states: dict[str, dict[str, str]] = {}
+    for result in cluster.parallel.drain_status(devices) or []:
+        shaped = _shape_drain_result(cluster, result)
+        for row in shaped["nodes"]:
+            hostname = str(row.get("hostname") or "")
+            current = drain_states.get(hostname)
+            state = str(row.get("state") or "UNKNOWN").upper()
+            # One node can appear once per WLM. Any draining/drained result wins.
+            if current is None or state in {"DRAINING", "DRAINED"}:
+                drain_states[hostname] = {
+                    "state": state,
+                    "reason": str(row.get("reason") or ""),
+                }
+
+    wlms = list(cluster.get_by_type("WlmCluster") or [])
+    jobs_ok, jobs = cluster.workload.get_jobs([wlm.uuid for wlm in wlms])
+    if not jobs_ok:
+        raise RuntimeError("one or more workload managers failed to return live jobs")
+    jobs_by_node: dict[str, list[str]] = {}
+    for job in jobs or []:
+        state = _enum_text(_attr(job, "state", "status")).upper()
+        active_state = (
+            state.startswith(("RUN", "EXEC"))
+            or state in {"SUSPENDED", "COMPLETING", "CONFIGURING"}
+        )
+        if not active_state:
+            continue
+        job_id = _scalar(_attr(job, "jobId", "jobID", "id"))
+        for node in _attr(job, "nodes", default=[]) or []:
+            hostname = _name_for_uuid(cluster, node)
+            if hostname:
+                jobs_by_node.setdefault(hostname, []).append(job_id)
+
+    rows: list[dict[str, object]] = []
+    for uuid, device in by_uuid.items():
+        hostname = _scalar(_attr(device, "hostname", "name"))
+        cm_state = str(device_states.get(uuid, {}).get("status") or "UNDEFINED").upper()
+        drain = drain_states.get(hostname, {"state": "UNKNOWN", "reason": ""})
+        drain_state = drain["state"]
+        running_jobs = [job_id for job_id in jobs_by_node.get(hostname, []) if job_id]
+        if cm_state in {"DOWN", "INSTALLER_FAILED", "INSTALLER_UNREACHABLE"}:
+            scheduler_state = "down"
+        elif drain_state == "DRAINED":
+            scheduler_state = "drain"
+        elif drain_state == "DRAINING":
+            scheduler_state = "draining"
+        elif running_jobs:
+            scheduler_state = "alloc"
+        elif cm_state == "UP" and drain_state == "UNDRAINED":
+            scheduler_state = "idle"
+        else:
+            scheduler_state = "unknown"
+        rows.append({
+            "hostname": hostname,
+            "device_status": cm_state,
+            "drain_state": drain_state,
+            "scheduler_state": scheduler_state,
+            "reason": drain["reason"],
+            "jobs": running_jobs,
+        })
+    rows.sort(key=lambda row: row["hostname"])
+    return rows
 
 
 def _run_query(cluster, args: argparse.Namespace, used: str, started: float) -> dict[str, object]:
-    if args.query == "version":
-        data: object = {"cmdaemon": str(getattr(cluster, "version", "") or "")}
-    elif args.query == "attrs":
-        # Discovery: the one honest way to learn a given BCM release's attribute spellings.
+    query = args.query
+    if query == "version":
+        try:
+            cmdaemon = str(cluster.settings.get_version() or "")
+        except Exception:  # noqa: BLE001 - API hash was already checked during Cluster()
+            cmdaemon = ""
+        try:
+            from importlib.metadata import version
+
+            pythoncm_version = version("pythoncm")
+        except Exception:  # noqa: BLE001 - older bundled installs omit dist-info
+            pythoncm_version = ""
+        data: object = {"cmdaemon": cmdaemon, "pythoncm": pythoncm_version, "api_compatible": True}
+    elif query == "capabilities":
+        auth_mode = str(getattr(cluster, "_nvis_auth_mode", "certificate"))
+        data = {
+            "auth_mode": auth_mode,
+            "authenticated_operations": auth_mode != "certificate",
+            "api_compatible": True,
+            "entity_reads": True,
+            "device_status": callable(getattr(cluster.parallel, "device_status", None)),
+            "power": all(callable(getattr(cluster.parallel, f"power_{op}", None))
+                         for op in ("on", "off", "reset", "status")),
+            "drain": callable(getattr(cluster.parallel, "drain", None)),
+            "undrain": callable(getattr(cluster.parallel, "undrain", None)),
+            "workload_jobs": callable(getattr(cluster.workload, "get_jobs", None)),
+            "workload_history": callable(getattr(cluster.workload, "filter_job_info", None)),
+            "workload_cancel": callable(getattr(cluster.workload, "remove_job", None)),
+        }
+    elif query == "attrs":
         sample = (cluster.get_by_type(args.type) or [None])[0]
         data = sorted(a for a in dir(sample) if not a.startswith("_")) if sample else []
-    else:
+    elif query == "racks":
+        data = [
+            {"name": _scalar(_attr(rack, "name", "hostname")),
+             "uuid": _scalar(_attr(rack, "uuid")),
+             "serial": _scalar(_attr(rack, "serialNumber", "serial"))}
+            for rack in cluster.get_by_type("Rack") or []
+        ]
+        data.sort(key=lambda item: item["name"])
+    elif query == "status":
+        devices = list(cluster.get_by_type(args.type or "PhysicalNode") or [])
+        data = [shape_status(status) for status in cluster.parallel.device_status(devices)]
+        data.sort(key=lambda item: item["hostname"])
+    elif query == "node-states":
+        data = _scheduler_nodes(cluster, args.target)
+    elif query == "rf0":
+        racks = _racks_by_uuid(cluster)
+        data = [shape_device(d, racks) for d in cluster.get_by_type("PhysicalNode") or []]
+        data = [{"hostname": item["hostname"], "ip": item["bmc_ip"], "mac": item["bmc_mac"]}
+                for item in data if item["hostname"] and item["bmc_ip"]]
+        data.sort(key=lambda item: item["hostname"])
+    elif query in {"nodes", "switches", "devices"}:
         wanted = {"nodes": ["PhysicalNode"], "switches": ["Switch"],
-                  "devices": [args.type]}[args.query]
-        # Rack placement is a uuid reference on the device, so resolve rack names once for the
-        # whole fleet rather than per device.
-        racks = {}
-        for rack in cluster.get_by_type("Rack") or []:
-            uuid = _scalar(_attr(rack, "uuid"))
-            name = _scalar(_attr(rack, "name", "hostname"))
-            if uuid and name:
-                racks[uuid] = name
+                  "devices": [args.type]}[query]
+        racks = _racks_by_uuid(cluster)
         devices = []
         for type_name in wanted:
             devices.extend(cluster.get_by_type(type_name) or [])
         data = [shape_device(d, racks) for d in devices]
-        data.sort(key=lambda d: d["hostname"])
+        data.sort(key=lambda item: item["hostname"])
+    elif query == "power":
+        data = _power(cluster, args)
+    elif query == "drain":
+        data = _drain(cluster, args, drain=True)
+    elif query == "undrain":
+        data = _drain(cluster, args, drain=False)
+    elif query == "drain-status":
+        nodes = _select_devices(cluster, args.target, nodes_only=True)
+        data = [_shape_drain_result(cluster, result)
+                for result in cluster.parallel.drain_status(nodes) or []]
+    elif query == "jobs":
+        wlms = list(cluster.get_by_type("WlmCluster") or [])
+        success, jobs = cluster.workload.get_jobs([wlm.uuid for wlm in wlms])
+        if not success:
+            raise RuntimeError("one or more workload managers failed to return jobs")
+        data = [_shape_job(cluster, job) for job in jobs or []]
+    elif query == "job-history":
+        limit = min(max(1, args.limit), 10000)
+        data = [_shape_job(cluster, job)
+                for job in cluster.workload.filter_job_info(job_id=args.job_id, limit=limit) or []]
+    elif query == "cancel-job":
+        data = _cancel_job(cluster, args.job_id)
+    else:  # argparse makes this unreachable; keep refusal explicit for imported use.
+        raise ValueError(f"unsupported query: {query}")
+
+    operation_ok = True
+    if query in {"power", "drain", "undrain"} and isinstance(data, dict):
+        operation_ok = bool(data.get("accepted"))
+        if query == "power":
+            operation_ok = operation_ok and bool(data.get("completed"))
+    elif query == "cancel-job" and isinstance(data, dict):
+        operation_ok = bool(data.get("success"))
 
     return {
-        "ok": True,
-        "query": args.query,
+        "ok": operation_ok,
+        "query": query,
         "count": len(data) if isinstance(data, list) else 1,
         "elapsed_seconds": round(time.time() - started, 3),
         "pythoncm_path": used,
         "data": data,
     }
+
+
+def _write_cmsh(payload: dict[str, object], query: str) -> None:
+    """Render only the legacy text shapes still consumed by existing Rack Status parsers."""
+    data = payload.get("data")
+    if not isinstance(data, list):
+        raise TypeError(f"--format cmsh is not supported for {query}")
+    if query == "racks":
+        for rack in data:
+            print(str(rack.get("name") or ""))
+    elif query == "status":
+        for status in data:
+            print(f"{status.get('hostname', '')} [ {status.get('status', 'UNDEFINED')} ]")
+    elif query == "rf0":
+        for interface in data:
+            print(str(interface.get("hostname") or ""))
+            print(str(interface.get("ip") or ""))
+    else:
+        raise ValueError(f"--format cmsh is not supported for {query}")
 
 
 def _probe_after_bootstrap(args: argparse.Namespace) -> tuple[bool, str]:

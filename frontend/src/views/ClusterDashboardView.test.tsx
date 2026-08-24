@@ -184,7 +184,7 @@ describe("ClusterDashboardView snapshot states", () => {
     expect(screen.queryByTestId("full-page-loading-skeleton")).not.toBeInTheDocument();
   });
 
-  it("keeps inventory visible while live BCM and Slurm details initialize", () => {
+  it("keeps inventory visible while live BCM and scheduler details initialize", () => {
     render(
       <ClusterDashboardView
         data={overview("fresh", 2, 32, {
@@ -207,7 +207,7 @@ describe("ClusterDashboardView snapshot states", () => {
     expect(screen.getAllByText("2").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("32")).toBeInTheDocument();
     expect(screen.getByText("BCM version")).toBeInTheDocument();
-    expect(screen.getByText("Slurm version")).toBeInTheDocument();
+    expect(screen.getByText("Scheduler version")).toBeInTheDocument();
     expect(document.querySelectorAll("[class*='nv-skeleton']").length).toBeGreaterThan(0);
     expect(screen.queryByText("live details load separately")).not.toBeInTheDocument();
   });

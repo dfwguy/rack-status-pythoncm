@@ -4,11 +4,11 @@
 [![Backend Coverage](https://gitlab-master.nvidia.com/nvis-ova/nvis-ova-rack-status/badges/v3/coverage.svg?job=python-test&key_text=Backend+Coverage&key_width=130)](https://gitlab-master.nvidia.com/nvis-ova/nvis-ova-rack-status/-/jobs)
 [![Frontend Coverage](https://gitlab-master.nvidia.com/nvis-ova/nvis-ova-rack-status/badges/v3/coverage.svg?job=frontend-test&key_text=Frontend+Coverage&key_width=130)](https://gitlab-master.nvidia.com/nvis-ova/nvis-ova-rack-status/-/jobs)
 
-NVIS Rack Status is a full-stack validation, observability, and operations platform for NVIDIA GPU clusters. It combines a Flask API, a React 19 single-page application, platform and scheduler providers, audited validation recipes, durable run history, and guarded Slurm operations.
+NVIS Rack Status is a full-stack validation, observability, and operations platform for NVIDIA GPU clusters. It combines a Flask API, a React 19 single-page application, PythonCM/direct-execution and fallback scheduler providers, audited validation recipes, and durable run history.
 
 This README is the engineering and operator entry point. For step-by-step use of every current UI surface, validation, audit, report, and troubleshooting path, see the [Rack Status operator and administrator guide](docs/RACKSTATUS_USER_GUIDE.md). The complete environment-variable reference is [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md), and the deeper execution and result-pipeline designs are linked under [Further reading](#further-reading).
 
-> **Operational safety:** the UI can submit workloads, cancel jobs, power-cycle equipment, and drain or resume Slurm nodes. Use production authentication, review exact targets before launch, keep `var/` persistent, and never treat a missing probe as proof that a node is healthy.
+> **Operational safety:** the UI can submit workloads, cancel jobs, power-cycle equipment, and drain or resume managed nodes. Use production authentication, review exact targets before launch, keep `var/` persistent, and never treat a missing probe as proof that a node is healthy.
 
 ## Contents
 
@@ -37,26 +37,26 @@ The table below is an implementation inventory of the current source, shipped wo
 | Capability | Status | Implementation / operator surface |
 |---|---|---|
 | Native Python rack status and node-level view | Implemented | `backend/native_status.py`; **Compute → Racks** and **Compute → Nodes**. The status builder waits for all per-log workers before committing its snapshot, so a completed test is not left `pending` because a worker finished after the summary was cached. |
-| Live Slurm and cluster-manager inventory | Implemented | Platform providers plus `backend/host_exec.py`; **Compute → Cluster overview**, **Racks**, **Nodes**, and **Scheduler**. |
-| Exact-node, multi-node-per-rack, and multi-rack selection | Implemented | Node selector, validation target resolution, preset prepare gate, workflow `resolve` step, and exact Slurm `--nodelist` allocation. |
+| Live scheduler and cluster-manager inventory | Implemented | PythonCM/direct scheduler and platform providers plus `backend/host_exec.py`; **Compute → Cluster overview**, **Racks**, **Nodes**, and **Scheduler**. |
+| Exact-node, multi-node-per-rack, and multi-rack selection | Implemented | Node selector, validation target resolution, preset prepare gate, workflow `resolve` step, and exact PythonCM-managed compute-node targeting. |
 | CUDA 13.3+ / NCCL 2.31.2 validation | Implemented | Direct-host preset `nccl-2.31.2`; runtime gates use `ncclGetVersion` and require `/dev/infiniband`. |
 | Llama 3.1 405B FP8 validation | Implemented and invariantly pinned | Exactly 256 GB300 nodes / 1,024 GPUs, 50 steps, TP4/PP8/CP1/VP4, MBS1, GBS6144, NeMo 26.04.01 + NCCL 2.30.7, NVLS disabled. Scale, steps, image, and profile overrides are rejected. |
-| GPT-OSS CPU-only microbenchmark | Implemented | One independently attributable Slurm job per exact selected node, up to 256 nodes. It is not presented as a GPU training validation. |
-| NVIDIA DGXC Exemplar `system_info` | Implemented | Validates the installed recipe against tag `v26.06.01`, runs once per selected node, and preserves per-node Slurm output. |
+| GPT-OSS CPU-only microbenchmark | Implemented | One independently attributable scheduler task per exact selected node, up to 256 nodes. It is not presented as a GPU training validation. |
+| NVIDIA DGXC Exemplar `system_info` | Implemented | Validates the installed recipe against tag `v26.06.01`, runs once per selected node, and preserves per-node output. |
 | NeMo and MNUberGEMM containers | Implemented with honest version pins | NeMo `26.04.01`; MNUberGEMM `26.03-v1.17`. The catalog intentionally does not claim a nonexistent MNUberGEMM `26.04.1` image. |
 | Shared NFS and node-local container execution | Implemented | Preset launch dialog and `run-validation-preset.sh`; local cache is fixed to `/tmp/containers`. |
 | Allocation-scoped rsync staging | Implemented | Size and SHA-256 verification, `flock`, resumable `rsync --append-verify`, atomic promotion, optional container IB/runtime preflight. |
 | Hardware Deep Audit | Implemented | Rack **Hardware** tab, **Results** button, workflow `hardware-deep-audit`, structured per-node output, and Post Run Node Report. |
 | NVLink / Network Deep Audit | Implemented | Rack **Networking** tab, **Results** button, workflow `nvlink-network-deep-audit`, forced data-path probe, and Post Run Node Report. |
-| Post Run Node Report punchcard | Implemented | **Analytics & Benchmarks → Post Run Node Report**; run participation, attributed failures, repeat flag, trend, current Slurm reason, audit launch, and full SPA history. |
+| Post Run Node Report punchcard | Implemented | **Analytics & Benchmarks → Post Run Node Report**; run participation, attributed failures, repeat flag, trend, current scheduler reason, audit launch, and full SPA history. |
 | Optional legacy punchcard baseline | Implemented as an input only | Google Sheets values may seed historical counts/flags. Rack Status' durable node issue store remains the operational record for new findings; the Sheets token is server-only. |
 | Generated report archive | Implemented | Completed CSV/JSON/PDF reports persist under `var/reports` and appear under **Reports**, even if the operator leaves Analytics while generation is running. |
 | Metrics rack monikers | Implemented | Raw metrics labels such as `WH1G1` remain query keys but display as `g01`; short labels are normalized and naturally sorted. |
 | Native metrics and Grafana links | Implemented | Read-only VictoriaMetrics proxy and Chart.js views, plus optional Grafana deep links/embeds. |
 | Durable validation activity registry and rack locks | Implemented | Validation history survives restarts; explicit and implicit advisory locks reduce multi-operator collisions. |
-| Configurable Slurm binary routing | Implemented | `sbatch`, `srun`, `sinfo`, `squeue`, `sacct`, `scontrol`, and `scancel` all resolve through the platform provider and per-binary configuration. |
-| Evidence-attributed failure and drain safety | Implemented | A failed multi-node job does not mark every allocated node failed. Automatic drain requires a structured node failure, a node explicitly implicated by evidence, or an exact-node Slurm prolog/unavailable finding. |
-| PythonCM cluster-manager provider | **Parked** | Not a release-candidate execution path. BCM currently uses `cmsh`; MAAS uses its provider. Do not advertise PythonCM until the provider is implemented and tested. |
+| PythonCM direct-execution scheduler | Implemented | Set `RACK_SCHEDULER=pythoncm`. Inventory, active/recent jobs, exact-node execution, cancellation, drain/resume, reasons, logs, workflow steps, and durable activities use the provider. |
+| Slurm compatibility fallback | Implemented | Set `RACK_SCHEDULER=slurm` during rollback or phased migration. Existing `/api/slurm-*` URLs and Slurm-shaped response fields remain compatibility contracts for the SPA and integrations. |
+| Evidence-attributed failure and drain safety | Implemented | A failed multi-node task does not mark every target failed. Automatic drain requires a structured node failure or node-specific evidence. |
 | Clush transport | **Parked** | Not a release-candidate transport. Current fan-out is provider/transport based (`pdsh`, SSH composition, or Slurm fan-out). |
 
 ## Architecture
@@ -77,7 +77,8 @@ Operator browser
                  └─ host_exec / transport composition
                       ├─ local execution, or SSH to a head/login node
                       ├─ BCM cmsh or MAAS inventory
-                      ├─ configured Slurm CLI binaries
+                      ├─ PythonCM/CMDaemon direct execution
+                      ├─ configured Slurm CLI fallback
                       └─ scheduler-visible jobs/fan-out on compute nodes
 
 Read-only observability path
@@ -85,7 +86,7 @@ Read-only observability path
   Grafana                         ──> optional deep links or embedded panels
 
 Durable result path
-  workload logs + Slurm accounting + validation registry
+  workload logs + scheduler history + validation registry
        ├─ native status and parser results
        ├─ SQLite results history / optional Parquet lake sink
        ├─ post-run per-node participation and issue history
@@ -123,7 +124,7 @@ The SPA uses hash routes, so deep links are refresh-safe. Examples below omit th
 
 | Navigation | Hash route | Purpose |
 |---|---|---|
-| Cluster overview | `#/compute/overview` | Cluster identity, availability, validation summary, live Slurm state, active users. |
+| Cluster overview | `#/compute/overview` | Cluster identity, availability, validation summary, live scheduler state, active users. |
 | Nodes | `#/compute/nodes` | Cross-rack node inventory and state. |
 | Racks | `#/compute/racks` | Rack status table; select a rack for exact-node actions and validation. |
 | Rack detail | `#/compute/racks/<rack-id>` | Node selector plus Validation, Hardware, Networking, and Services tabs. |
@@ -146,13 +147,13 @@ The SPA uses hash routes, so deep links are refresh-safe. Examples below omit th
 
 ### Rack and node status
 
-The native status builder joins cluster-manager inventory, Slurm state, validation logs, configured acceptance criteria, and current jobs. Each stage is represented independently:
+The native status builder joins cluster-manager inventory, scheduler state, validation logs, configured acceptance criteria, and current jobs. Each stage is represented independently:
 
 - **Stage 1:** NCCL acceptance.
 - **Stage 2:** NeMo/Nemotron workload acceptance.
 - **States:** `done`, `fail`, `ongoing`, or `pending`.
 
-The result pipeline does not equate Slurm `COMPLETED` with validation `PASS`. It separately asks whether the expected evidence exists and whether the configured acceptance criteria were reached. The snapshot builder waits for its bounded per-log analysis workers before it commits cache state, preventing a completed log from being omitted merely because its worker returned late.
+The result pipeline does not equate scheduler `COMPLETED` with validation `PASS`. It separately asks whether the expected evidence exists and whether the configured acceptance criteria were reached. The snapshot builder waits for its bounded per-log analysis workers before it commits cache state, preventing a completed log from being omitted merely because its worker returned late.
 
 The rack detail node selector supports one node, an arbitrary subset, all up nodes, all down nodes, or the whole rack. Actions receive the exact selected set, not a regenerated contiguous tray range. This matters on non-contiguous racks and when known-bad trays must be excluded.
 
@@ -161,19 +162,19 @@ The rack detail node selector supports one node, an arbitrary subset, all up nod
 Target resolution follows these rules:
 
 1. An explicit node array or selected-node target is authoritative.
-2. Every node must be a syntactically valid hostname and, when inventory is available, must exist in current Slurm inventory.
-3. The prepare gate queries live Slurm state and rejects missing, non-idle, or configured known-bad nodes.
+2. Every node must be a syntactically valid hostname and, when inventory is available, must exist in current PythonCM inventory.
+3. The prepare gate queries live scheduler state and rejects missing, unavailable, or configured known-bad nodes.
 4. A single-rack workflow preserves its exact selected-node override.
 5. A comma-separated multi-rack workflow resolves each rack separately, de-duplicates hostnames, and fans out to the combined exact list.
 6. An optional multi-rack campaign manifest can define an approved fixed number of nodes per rack. Stale campaign IDs or nodes outside the manifest fail closed.
 
-The workflow engine runs deep audits inside a scheduler-visible allocation. It requests one task per node and, for GPU audits, four GPUs per node. This is required because Slurm device cgroups otherwise hide GPUs even on a healthy host.
+The workflow engine runs deep audits as scheduler-visible tasks. PythonCM direct execution targets exact nodes; the Slurm fallback retains allocation/TRES behavior for legacy `.sbatch` workflows.
 
 ### Telemetry and metrics
 
 The native metrics view reads VictoriaMetrics through the backend. It does not expose the metrics datastore directly to the browser and validates rack/node/SU label values before building PromQL selectors.
 
-The catalog includes GPU temperature, power, enforced power cap, utilization, framebuffer, clocks, HBM temperature, NVLink bandwidth, Slurm state, BCM inventory, exporter health, and active-alert charts. The frontend derives its rack filter from series actually present in VictoriaMetrics. Therefore:
+The catalog includes GPU temperature, power, enforced power cap, utilization, framebuffer, clocks, HBM temperature, NVLink bandwidth, scheduler state, BCM inventory, exporter health, and active-alert charts. The frontend derives its rack filter from series actually present in VictoriaMetrics. Therefore:
 
 - A rack missing from the filter is normally an ingestion/label problem, not a static UI allowlist.
 - `WH1D1`, `WH1E1`, and `WH1H2` display as `d01`, `e01`, and `h02`; queries still use the raw upstream label.
@@ -219,11 +220,11 @@ Automatic corrective action is intentionally conservative:
 - `pass`: healthy for the checks that ran; no drain.
 - `warning`: a non-fatal or unsupported probe; no drain.
 - `inconclusive`: missing structured output, transport uncertainty, or unproven ownership; no drain.
-- `fail`: structured per-node evidence or an exact scheduler-confirmed node failure; record the issue and attempt an exact-node Slurm drain.
+- `fail`: structured per-node evidence or an exact scheduler-confirmed node failure; record the issue and attempt an exact-node drain.
 
 A failed 256-node collective is not assigned to all 256 nodes. Post-run attribution requires a node to be named in evidence, a single-node allocation, or a structured audit/operator finding. Control-plane signatures such as CMDaemon mass-down are categorized separately from GPU and network faults.
 
-When a confirmed audit failure is drained, the Slurm reason follows this form:
+When a confirmed audit failure is drained, the scheduler reason follows this form:
 
 ```text
 Drained for <category> deep audit - for validation <run-prefix> due to <exact reason>
@@ -231,18 +232,18 @@ Drained for <category> deep audit - for validation <run-prefix> due to <exact re
 
 The result records whether the drain succeeded. A drain failure is surfaced separately; it is never silently presented as remediated.
 
-An operator can also annotate one exact node from the Post Run Node Report and optionally drain it. The API verifies that the node is in current Slurm inventory, requires a category and reason, and records the Slurm result with the issue.
+An operator can also annotate one exact node from the Post Run Node Report and optionally drain it. The API verifies that the node is in current PythonCM inventory, requires a category and reason, and records the scheduler result with the issue.
 
 ### Post Run Node Report
 
 The Post Run Node Report is a native SPA view, not a spreadsheet viewer. It joins:
 
 - durable validation activities;
-- exact allocations recovered from Slurm accounting;
+- exact targets recovered from durable scheduler history;
 - durable per-node participation snapshots that outlive accounting retention;
 - structured hardware/network audit results;
 - operator findings;
-- current Slurm state and reason;
+- current scheduler state and reason;
 - an optional imported baseline of legacy punchcard counts/flags.
 
 For each node it shows participation count, failed jobs, attributed failures, distinct failure runs, category, recent trend, repeat flag, current scheduler state/reason, latest hardware status, latest network status, and the complete run/issue history in one view. A node is flagged after attributed failures in at least three distinct runs, rather than three duplicate messages from one failing collective.
@@ -250,7 +251,7 @@ For each node it shows participation count, failed jobs, attributed failures, di
 The view supports:
 
 - rack and node filtering;
-- a forced refresh of Slurm accounting and inventory;
+- a forced refresh of scheduler history and PythonCM inventory;
 - history, hardware report, and network report sections;
 - launch of a hardware or network audit on the selected exact node;
 - full workflow output by run and step ID;
@@ -261,7 +262,7 @@ Invalidated validator runs remain on disk for auditability but are hidden from n
 
 ### Punchcard baseline configuration
 
-`backend/node_issues.py` can read fixed cell values from Google Sheets API v4 using a server-mounted bearer token. It imports legacy counts and markers (`▲n`, drained, NCCL, maintenance) as a baseline. New Rack Status findings are appended to the local durable store with job/workflow evidence and Slurm action results.
+`backend/node_issues.py` can read fixed cell values from Google Sheets API v4 using a server-mounted bearer token. It imports legacy counts and markers (`▲n`, drained, NCCL, maintenance) as a baseline. New Rack Status findings are appended to the local durable store with job/workflow evidence and scheduler action results.
 
 The token must be mounted read-only and must never be exposed through the frontend, committed to Git, copied into an image, or printed in logs. Spreadsheet UI comments are not available through the value API and are not claimed as imported evidence.
 
@@ -275,7 +276,7 @@ The same Reports view also lists existing node/rack artifacts under the configur
 
 ### Workflow engine and result access
 
-Workflow templates are YAML documents in `var/workflows/`. The engine supports automated steps, manual/event steps, decisions, AI queries, delays, explicit resolution, transport fan-out, Slurm fan-out, evaluation, retries, and conditional transitions. State and step logs live under `var/workflows/runs/`.
+Workflow templates are YAML documents in `var/workflows/`. The engine supports automated steps, manual/event steps, decisions, AI queries, delays, explicit resolution, PythonCM/direct and fallback scheduler execution, evaluation, retries, and conditional transitions. State and step logs live under `var/workflows/runs/`.
 
 The visual designer provides a Mermaid source editor and React Flow canvas with bidirectional synchronization. Operators can inspect the current state, execution history, output snippets, and full per-step output. Deep audit cards use the same workflow state machine and output API rather than a separate background-job implementation.
 
@@ -316,7 +317,7 @@ For shared NFS mode, the source image is size/SHA-verified and, when required, t
 For node-local mode:
 
 1. The destination is fixed to `/tmp/containers/<allowlisted-image>`.
-2. A Slurm job obtains the exact node allocation; direct SSH to idle nodes is not required.
+2. A PythonCM task targets the exact managed nodes; the Slurm fallback obtains an exact allocation for legacy workflows.
 3. Each node validates the source size and locks its destination with `flock`.
 4. A matching local file is SHA-verified and reused, avoiding a cold load.
 5. If missing and rsync was approved, the source is copied to `.partial` with `--append-verify`.
@@ -333,7 +334,7 @@ No caller-supplied image path or local directory bypasses the catalog.
 - Python 3.10 or newer.
 - Node.js 22 and npm for SPA development/builds.
 - Docker Engine 20.10 or newer for container deployment.
-- For live mode: a reachable BCM or MAAS head/login node, working Slurm commands, and an account authorized for the requested operations.
+- For live BCM mode: a reachable head/login node, a BCM-matched PythonCM interpreter and client identity, and an account authorized for the requested operations. Slurm commands are required only for the fallback.
 - For SSH mode: a dedicated private key mounted read-only into the application.
 
 ### Demo or local development
@@ -496,6 +497,7 @@ Use [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) as the exhaustive reference. The 
 | `RACK_STATUS_DEMO` | `0` | Synthetic demo mode when `1`. |
 | `RACK_EXEC_MODE` | `local` | `local` or `ssh`. |
 | `RACK_PLATFORM` | `bcm` | Current platform provider, normally `bcm` or `maas`. |
+| `RACK_SCHEDULER` | `pythoncm` in the packaged examples | `pythoncm` for BCM direct execution; `slurm` for explicit fallback. |
 | `RACK_SSH_HOST`, `RACK_SSH_USER`, `RACK_SSH_PORT` | site-specific | Head/login endpoint used in SSH mode. |
 | `RACK_SSH_KEY` | `/run/secrets/ssh_key` in portable container deployments | Private key path; mount read-only. |
 | `RACK_REMOTE_BASE_PATH` | site-specific | Head-node root containing `bin/scripts` and related assets. |
@@ -505,7 +507,25 @@ Use [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) as the exhaustive reference. The 
 | `NVIS_RACK_ID`, `NVIS_CT_ID`, `NVIS_NVSW_ID` | built-in naming defaults | Regex templates for rack, compute tray, and NVSwitch identities. |
 | `RACK_VALIDATION_CT_RANGE` | `01-18` | Default tray ranges; supports non-contiguous site layouts such as `11-18,28-37`. Explicit node selection remains authoritative. |
 
-### Slurm routing
+### PythonCM/direct execution and Slurm fallback
+
+PythonCM must be loaded by the BCM-matched interpreter on the head; it is not
+vendored into the web image. See [docs/PYTHONCM_MIGRATION.md](docs/PYTHONCM_MIGRATION.md)
+for TLS setup, preflight, acceptance, and rollback.
+
+| Variable | Purpose |
+|---|---|
+| `NVIS_BCM_PYTHON`, `NVIS_PYTHONCM_PATH` | BCM-matched interpreter and optional PythonCM module override. |
+| `NVIS_BCM_HOST`, `NVIS_BCM_PORT` | CMDaemon endpoint. |
+| `NVIS_BCM_CERT`, `NVIS_BCM_KEY`, `NVIS_BCM_CA` | Client identity and pinned CA paths on the execution host. |
+| `NVIS_BCM_CA_OUT`, `NVIS_BCM_CA_BOOTSTRAP` | Pinned-CA output path and explicit trust-on-first-use opt-in. Bootstrap is disabled by default. |
+| `NVIS_BCM_USERNAME`, `NVIS_BCM_PASSWORD_FILE`, `NVIS_BCM_COOKIE_FILE` | Optional head-node credential-file alternatives; secrets never belong in argv or the package. |
+| `RACK_PYTHONCM_EXEC_SCRIPT` | Optional override for `nvis_pythoncm_exec.py`. |
+| `RACK_PYTHONCM_JOBS_DIR` | Durable task manifests and output on the execution host. |
+| `RACK_PYTHONCM_USER` | User for the BCM parallel command runner. |
+
+The following settings apply only to `RACK_SCHEDULER=slurm` and legacy shell
+scripts retained during migration.
 
 | Variable | Purpose |
 |---|---|
@@ -521,13 +541,13 @@ Use [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) as the exhaustive reference. The 
 | `RACK_SLURM_SCONTROL` | Exact `scontrol` executable. |
 | `RACK_SLURM_SCANCEL` | Exact `scancel` executable. |
 
-Per-binary variables are authoritative for backend provider calls. Shell launchers also honor `RACK_SLURM_BIN`. Keep both paths aligned to one tested Slurm installation.
+Per-binary variables are authoritative for fallback provider calls. Shell launchers also honor `RACK_SLURM_BIN`. Keep both paths aligned to one tested Slurm installation while the fallback remains enabled.
 
 ### Validation targeting and recipes
 
 | Variable | Purpose |
 |---|---|
-| `RACK_VALIDATION_EXCLUDED_NODES` | Comma-separated known-bad nodes rejected by preset prepare. This complements, not replaces, Slurm drain state. |
+| `RACK_VALIDATION_EXCLUDED_NODES` | Comma-separated known-bad nodes rejected by preset prepare. This complements, not replaces, scheduler drain state. |
 | `RACK_MULTIRACK_CAMPAIGN_ID` | Optional approved campaign identifier. |
 | `RACK_MULTIRACK_CAMPAIGN_MANIFEST` | Local or remote exact-node manifest for the campaign. |
 | `RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK` | Required node count per campaign rack. |
@@ -551,7 +571,7 @@ Per-binary variables are authoritative for backend provider calls. Shell launche
 | `RACK_POST_RUN_HISTORY_FILE` | `var/history/post_run_nodes.json`; exact per-node participation snapshots. |
 | `RACK_POST_RUN_MAX_EVENTS` | Bounded participation retention; minimum 1,000, default 100,000. |
 | `RACK_POST_RUN_REPORT_TTL_SEC` | In-process report cache TTL; default 30 seconds, minimum 5. |
-| `RACK_POST_RUN_SACCT_TIMEOUT` | Slurm accounting refresh timeout. |
+| `RACK_POST_RUN_SACCT_TIMEOUT` | Legacy field name for scheduler-history refresh timeout. |
 | `RACK_NODE_ISSUES_FILE` | `var/cache/node_issues.json`; immutable finding history and optional baseline. |
 | `NVIS_REPORTS_DIR` | `var/reports`; generated report archive. |
 | `RACK_BUG_REPORT_REMOTE_DIR` | External report/artifact inventory root. |
@@ -587,7 +607,7 @@ Per-binary variables are authoritative for backend provider calls. Shell launche
 4. Read the test description and click **Start Tests**.
 5. Confirm the exact node count and automatic-drain policy.
 6. Click **Results** beside the launch control. Active runs refresh every three seconds.
-7. Review per-node result, Slurm job ID, exact finding, and Slurm action. Use **Full output** for raw workflow evidence.
+7. Review per-node result, scheduler task ID, exact finding, and scheduler action. Use **Full output** for raw workflow evidence.
 8. Confirm final node state in **Scheduler** or the Post Run Node Report.
 
 For a multi-rack audit, launch the same workflow from **Workflows** with a comma-separated `rack` parameter or use the API with an explicit target. The resolve step expands every rack independently before fan-out.
@@ -617,7 +637,7 @@ curl -fsS http://localhost:5050/api/deep-audits/<run-id>
 
 ### Prepare and launch a validation preset
 
-Prepare is read-only with respect to workload submission, but it queries live inventory and Slurm eligibility:
+Prepare is read-only with respect to workload submission, but it queries live PythonCM inventory and scheduler eligibility:
 
 ```bash
 request='{
@@ -643,7 +663,7 @@ printf '%s\n' "$request" | jq --arg hash "$hash" '. + {plan_hash:$hash}' \
       -H 'Content-Type: application/json' --data-binary @-
 ```
 
-Track the returned application `job_id` with `/api/run-validation-preset-status?job_id=<id>` and the durable `/api/validation-activities` registry. Slurm scheduler references appear as they are discovered.
+Track the returned application `job_id` with `/api/run-validation-preset-status?job_id=<id>` and the durable `/api/validation-activities` registry. Provider scheduler references appear as they are discovered.
 
 ### Refresh and investigate post-run history
 
@@ -683,7 +703,7 @@ For each node or rack, check both ends of the path:
 1. On the node: service state, listener/process health, local exporter endpoint, labels/identity, configured remote write target, and recent service logs.
 2. On the metrics system: fresh `up`, node/cgroup metrics, and DCGM series for the exact node and rack labels.
 3. In Rack Status: `/api/metrics/health`, `/api/metrics/query`, and the Metrics rack filter.
-4. Compare expected Slurm inventory with distinct reporting host labels; list exact missing nodes.
+4. Compare expected PythonCM inventory with distinct reporting host labels; list exact missing nodes.
 
 Do not declare a fleet repaired solely because Alloy or an exporter is `active`. A cloned service `HOSTNAME`, stale WAL replay, wrong remote-write destination, or blocked network path can leave the service healthy while telemetry is mislabeled or absent.
 
@@ -703,15 +723,15 @@ The groups below highlight the release-candidate interfaces; consult the live AP
 |---|---|---|
 | GET | `/api/status` | Native rack table and stage summaries. |
 | GET | `/api/cluster-overview` | Cluster-wide cached overview. |
-| GET | `/api/cluster-overview/live` | Lightweight live Slurm overlay. |
+| GET | `/api/cluster-overview/live` | Lightweight live scheduler overlay. |
 | GET | `/api/cluster-health` | Connection and cluster reachability. |
 | POST | `/api/cluster-health/reconnect` | Reset connection state and retry. |
-| GET | `/api/slurm-squeue` | Current queue. |
-| GET | `/api/slurm-sacct-recent` | Recent accounting. |
-| GET | `/api/slurm-scontrol-show-job` | Scheduler job detail. |
-| POST | `/api/slurm-scancel` | Guarded cancellation. |
-| POST | `/api/slurm-drain` | Drain selected target. |
-| POST | `/api/slurm-undrain` | Resume selected target. |
+| GET | `/api/slurm-squeue` | Current active jobs; compatibility URL served by the selected provider. |
+| GET | `/api/slurm-sacct-recent` | Recent task history; compatibility URL served by the selected provider. |
+| GET | `/api/slurm-scontrol-show-job` | Scheduler task detail; compatibility URL. |
+| POST | `/api/slurm-scancel` | Guarded provider cancellation; compatibility URL. |
+| POST | `/api/slurm-drain` | Drain selected target through the active provider; compatibility URL. |
+| POST | `/api/slurm-undrain` | Resume selected target through the active provider; compatibility URL. |
 | GET | `/api/metrics/catalog` | Native chart catalog. |
 | GET | `/api/metrics/health` | VictoriaMetrics health/series summary. |
 | GET | `/api/metrics/chart/<chart-id>` | Chart.js-ready series with rack/node/SU filters. |
@@ -744,10 +764,10 @@ The groups below highlight the release-candidate interfaces; consult the live AP
 | Method | Endpoint | Purpose |
 |---|---|---|
 | GET | `/api/deep-audits` | Recent visible hardware/network audit runs; filter by rack/kind. |
-| GET | `/api/deep-audits/<run-id>` | Per-node findings and Slurm actions. |
+| GET | `/api/deep-audits/<run-id>` | Per-node findings and scheduler actions. |
 | GET | `/api/node-issues` | Punchcard rollups and full local issue history. |
 | POST | `/api/node-issues/sync-punchcard` | Force optional server-side baseline refresh. |
-| GET | `/api/post-run-node-report` | Participation, attributed failures, audits, trend, and current Slurm state. |
+| GET | `/api/post-run-node-report` | Participation, attributed failures, audits, trend, and current scheduler state. |
 | POST | `/api/post-run-node-report/mark` | Exact-node annotation and optional drain. |
 
 ### History and reports
@@ -771,9 +791,9 @@ The groups below highlight the release-candidate interfaces; consult the live AP
 |---|---|---|
 | `var/cache/validation_activities.json` | Durable validation launches, tasks, scheduler refs, outcome. | Reconstructs what was launched even after process restart. |
 | `var/cache/rack_locks.json` | Explicit operator claims. | Coordination only; stale entries expire. |
-| `var/cache/node_issues.json` | Structured/operator findings and optional baseline. | Node issue evidence and Slurm action audit trail. |
+| `var/cache/node_issues.json` | Structured/operator findings and optional baseline. | Node issue evidence and scheduler action audit trail. |
 | `var/history/results.db` | Parsed run and metric history. | Analytics/history source. |
-| `var/history/post_run_nodes.json` | Exact per-node participation snapshots. | Preserves membership beyond Slurm accounting retention. |
+| `var/history/post_run_nodes.json` | Exact per-node participation snapshots. | Preserves membership beyond scheduler-history retention. |
 | `var/reports/` | Generated report payloads and metadata. | Operator deliverables. |
 | `var/workflows/*.yaml` | Workflow templates. | Repeatable procedure definitions. |
 | `var/workflows/runs/` | Run state and full step logs. | Execution evidence, deep-audit results, invalidation record. |
@@ -847,7 +867,7 @@ python -m pytest -q \
   backend/tests/test_cluster_report.py
 ```
 
-These tests cover completed-log snapshot timing, exact-node and multi-rack resolution, GPU-aware Slurm fan-out, optional-argument argv safety, version/scale pins, container staging gates, per-node failure attribution, repeat flags, API registration, configured Slurm binaries, and report persistence.
+These tests cover completed-log snapshot timing, exact-node and multi-rack resolution, PythonCM/direct and fallback scheduler execution, optional-argument argv safety, version/scale pins, container staging gates, per-node failure attribution, repeat flags, API registration, configured provider commands, and report persistence.
 
 ### Frontend
 
@@ -904,7 +924,7 @@ Automated tests cannot prove a scheduler, GPU cgroup, IB fabric, or container ru
 
 1. Choose one healthy, idle, unreasoned node in a non-production QA rack.
 2. Run Hardware Deep Audit and wait for terminal state.
-3. Confirm Slurm `AllocTRES` includes four GPUs, the output enumerates all expected GPUs, and the node remains idle/un-drained on pass.
+3. Confirm the PythonCM task targets the exact node, the output enumerates all expected GPUs, and the node remains available/un-drained on pass. For the Slurm fallback, also verify `AllocTRES`.
 4. Run NVLink / Network Deep Audit sequentially.
 5. Confirm GPU allocation, active NVLinks/IB ports, forced data-path test, and no counter delta.
 6. Verify both runs appear immediately through the rack **Results** control, `/api/deep-audits`, and Post Run Node Report.
@@ -966,7 +986,7 @@ Before approving a release, verify that `version.py`, `CHANGELOG.md`, image tag,
 
 Check in this order:
 
-1. `/api/validation-activities/<id>` and Slurm accounting: did the scheduler job actually finish?
+1. `/api/validation-activities/<id>` and scheduler history: did the task actually finish?
 2. The exact stdout path and allowed-prefix configuration.
 3. The stage-specific log filename and evidence tokens.
 4. `VALIDATION_TEST` and `NEMO_TARGET_STEPS` versus the recipe actually run.
@@ -979,20 +999,20 @@ See [docs/PARSING_RESULTS_ARCHITECTURE.md](docs/PARSING_RESULTS_ARCHITECTURE.md)
 
 - Query `/api/metrics/health`.
 - Query a known metric grouped by raw `rack` and `Hostname` labels.
-- Compare results with current Slurm inventory.
+- Compare results with current PythonCM inventory.
 - Verify fresh samples and remote-write errors at VictoriaMetrics.
 - Verify exporter/Alloy service identity after cloning or reboot.
 - Remember that the UI displays a moniker but queries with the original upstream rack label.
 
 ### Deep audit shows zero GPUs on a healthy node
 
-- Inspect the Slurm allocation TRES. The audit requires `--gpus-per-node=4` on GB300.
+- Confirm the PythonCM task ran on the exact node and exposed all four GPUs. Under the Slurm fallback, inspect allocation TRES.
 - Verify the deployed workflow YAML contains `fanout.gpus_per_node: 4`.
 - Verify the running backend contains the matching workflow-engine implementation.
 - Recreate the container if the new module/mount/image was not activated.
 - Invalidate any known false audit rather than deleting its evidence, and resume a falsely drained node only after independent health confirmation.
 
-### Slurm audit fails with `execve(): 0: No such file or directory`
+### Slurm fallback audit fails with `execve(): 0: No such file or directory`
 
 The `srun` optional arguments must be emitted in equals form:
 
@@ -1011,7 +1031,7 @@ Inconclusive is a safety result, not a pass. Check scheduler allocation, prolog 
 - Confirm the running Flask route table contains `/api/post-run-node-report`, `/api/node-issues`, and `/api/deep-audits`.
 - Confirm `post_run_report.py`, `node_issues.py`, and their imports exist inside the container.
 - Confirm `/app/var` is writable.
-- Check Slurm binary routing for forced refresh errors.
+- Check active-provider history/inventory errors. Under the fallback, check Slurm binary routing.
 - Run `bin/verify-deploy.sh`; it explicitly gates these routes and missing/stale modules.
 
 ### Generated report completed but is absent
@@ -1026,7 +1046,7 @@ Inconclusive is a safety result, not a pass. Check scheduler allocation, prolog 
 
 Fetch the SPA HTML and verify every referenced hashed JS/CSS asset returns HTTP 200. Rebuild and deploy `static/spa/index.html` with the matching `static/spa/assets/`, recreate the container if mounts changed, then run `bin/verify-deploy.sh`.
 
-### Slurm works interactively but fails from the app
+### Slurm fallback works interactively but fails from the app
 
 Non-login shells may have a different module environment, `PATH`, or `SLURM_CONF`. Configure the explicit provider variables rather than adding one-off absolute paths in callers. Test `sinfo`, `squeue`, `sacct`, `scontrol`, `sbatch`, `srun`, and `scancel` through the same account and transport used by the application.
 
@@ -1040,7 +1060,7 @@ nvis-rack-status/
 │   ├── native_status.py           native rack/status snapshot builder
 │   ├── validation_presets.py      audited recipe catalog and option normalization
 │   ├── validation_activities.py   durable validation registry and accounting reconciliation
-│   ├── workflow_engine.py         workflow execution, Slurm fan-out, issue policy
+│   ├── workflow_engine.py         workflow execution, scheduler fan-out, issue policy
 │   ├── node_issues.py             durable per-node findings and optional baseline import
 │   ├── post_run_report.py         allocation-to-node history and attribution
 │   ├── report_store.py            generated report archive
@@ -1095,8 +1115,8 @@ nvis-rack-status/
 | Frontend | React 19, Vite 8, TypeScript 6 |
 | UI | NVIDIA Kaizen UI first, MUI for gaps, Lucide icons |
 | Visualization | Chart.js, Mermaid, React Flow, dagre |
-| Cluster access | local/SSH transport, BCM or MAAS provider, Slurm provider |
-| Validation | Bash/Slurm launchers, Enroot/Pyxis-style container execution, audited presets |
+| Cluster access | local/SSH transport, BCM or MAAS platform provider, PythonCM/direct scheduler with Slurm fallback |
+| Validation | Direct scripts plus compatibility batch launchers, container execution, audited presets |
 | Observability | VictoriaMetrics/Prometheus API, optional Grafana, optional result lake |
 | Testing | pytest/pytest-cov, Vitest/Testing Library, TypeScript, ESLint, Ruff |
 | Packaging | multi-stage Docker image, Compose, Kaniko, GitLab Package Registry |
@@ -1146,7 +1166,7 @@ Analytics — NCCL deviation and bus bandwidth:
   <img src="docs/screenshots/ui-screenshot-04.png" alt="Analytics NCCL charts" width="900" />
 </p>
 
-Cluster overview — identity, Slurm, and validation summary:
+Cluster overview — identity, scheduler, and validation summary:
 
 <p align="center">
   <img src="docs/screenshots/ui-screenshot-05.png" alt="Cluster overview dashboard" width="900" />

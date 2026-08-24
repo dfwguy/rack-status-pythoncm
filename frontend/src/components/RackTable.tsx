@@ -119,17 +119,17 @@ const SINFO_OPTIONS = ["idle", "alloc", "mix", "drain", "down", "comp"];
 const ACTION_LABELS: Record<ActionKind, { title: string; description: (rack: string, jobId?: string) => string; confirm: string }> = {
   drain: {
     title: "Drain Nodes",
-    description: (rack) => `This will drain all nodes in ${rack}, preventing new Slurm jobs from scheduling on them.`,
+    description: (rack) => `This will drain all nodes in ${rack}, preventing new jobs from starting on them.`,
     confirm: "Drain",
   },
   undrain: {
     title: "Undrain Nodes",
-    description: (rack) => `This will undrain (resume) all nodes in ${rack}, re-enabling Slurm job scheduling.`,
+    description: (rack) => `This will undrain (resume) all nodes in ${rack}, making them available for direct execution again.`,
     confirm: "Undrain",
   },
   cancel: {
     title: "Cancel Job",
-    description: (rack, jobId) => `This will cancel Slurm job ${jobId ?? "?"} running on ${rack}.`,
+    description: (rack, jobId) => `This will cancel job ${jobId ?? "?"} running on ${rack}.`,
     confirm: "Cancel Job",
   },
   power_up: {
@@ -731,13 +731,13 @@ export function RackTable({
           );
           break;
         case "drain":
-          fireBulkParallel("Slurm drain", (rack) =>
-            void store.runSyncJson(rack, "Slurm drain", "/api/slurm-drain", slurmTargetBody(rack, nodesFullRack(rack), naming) as Record<string, unknown>),
+          fireBulkParallel("Drain nodes", (rack) =>
+            void store.runSyncJson(rack, "Drain nodes", "/api/slurm-drain", slurmTargetBody(rack, nodesFullRack(rack), naming) as Record<string, unknown>),
           );
           break;
         case "undrain":
-          fireBulkParallel("Slurm undrain", (rack) =>
-            void store.runSyncJson(rack, "Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, nodesFullRack(rack), naming) as Record<string, unknown>),
+          fireBulkParallel("Resume nodes", (rack) =>
+            void store.runSyncJson(rack, "Resume nodes", "/api/slurm-undrain", slurmTargetBody(rack, nodesFullRack(rack), naming) as Record<string, unknown>),
           );
           break;
         default:
@@ -996,7 +996,7 @@ export function RackTable({
 
           <div style={{ minWidth: 180 }}>
             <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 4, display: "block" }}>
-              Sinfo
+              Node availability
             </Text>
             <MultiSelectCombobox
               items={SINFO_OPTIONS}
@@ -1004,7 +1004,7 @@ export function RackTable({
               onValueChange={(v) => { setSinfoFilters(v); setPage(0); }}
               size="small"
               disabled={selectMode}
-              aria-label="Filter by sinfo state"
+              aria-label="Filter by node availability"
             />
           </div>
 
@@ -1118,10 +1118,10 @@ export function RackTable({
                   <ListItemText primary="NVLMapper" secondary="Async" />
                 </MenuItem>
                 <MenuItem onClick={() => handleBulkRun("drain")}>
-                  <ListItemText primary="Slurm drain" secondary="Sync" />
+                  <ListItemText primary="Drain nodes" secondary="Sync" />
                 </MenuItem>
                 <MenuItem onClick={() => handleBulkRun("undrain")}>
-                  <ListItemText primary="Slurm undrain" secondary="Sync" />
+                  <ListItemText primary="Resume nodes" secondary="Sync" />
                 </MenuItem>
               </Menu>
               <MuiButton
@@ -1181,7 +1181,7 @@ export function RackTable({
                   onClick={() => handleSort("sinfo")}
                   disabled={selectMode}
                 >
-                  Sinfo
+                  Node availability
                 </TableSortLabel>
               </TableCell>
               <TableCell>Nodes status</TableCell>
@@ -1319,7 +1319,7 @@ export function RackTable({
         />
       </TableContainer>
 
-      {/* Sinfo actions menu */}
+      {/* Node availability actions menu; the legacy API route name is retained for compatibility. */}
       <Menu
         anchorEl={menuKind === "sinfo" ? menuAnchor : null}
         open={menuKind === "sinfo" && !!menuAnchor}
@@ -1329,7 +1329,7 @@ export function RackTable({
       >
         <MenuItem onClick={handleCheckSinfo}>
           <ListItemIcon><Server size={18} /></ListItemIcon>
-          <ListItemText>Check sinfo</ListItemText>
+          <ListItemText>Check node availability</ListItemText>
         </MenuItem>
         <MenuItem onClick={() => requestConfirm("drain")}>
           <ListItemIcon><ArrowDownToLine size={18} /></ListItemIcon>

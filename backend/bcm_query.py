@@ -27,8 +27,9 @@ differ by BCM release:
   importing it, which is a confusing failure worth configuring away.
 * ``NVIS_PYTHONCM_PATH`` — the module location, for sites keeping per-cluster copies.
 
-Every failure returns ``ok: False`` with a reason rather than raising, so callers degrade to
-cmsh instead of losing the feature. :func:`available` reports whether this path works at all.
+Every failure returns ``ok: False`` with a reason rather than raising, so callers can surface a
+precise unavailable state instead of losing the whole request. :func:`available` reports whether
+this path works at all.
 """
 from __future__ import annotations
 
@@ -57,12 +58,20 @@ def _script_path() -> str:
     base = host_exec.role_root("scripts") or ""
     if base:
         return str(Path(base) / "nvis_bcm_query.py")
-    import app  # late: app imports this module's siblings, and only the path is needed
+    remote_base = (os.environ.get("RACK_REMOTE_BASE_PATH") or "").strip()
+    if remote_base:
+        return str(Path(remote_base) / "bin" / "scripts" / "nvis_bcm_query.py")
+    # This module lives under <repo>/backend. Deriving the in-tree script directly removes the
+    # old import-app cycle and keeps command construction usable in isolated provider tests.
+    return str(Path(__file__).resolve().parent.parent / "bin" / "scripts" / "nvis_bcm_query.py")
 
-    return str(Path(app.SCRIPTS_DIR) / "nvis_bcm_query.py")
 
-
-def build_command(query: str, *, entity_type: str | None = None) -> list[str]:
+def build_command(
+    query: str,
+    *,
+    entity_type: str | None = None,
+    extra_args: list[str] | None = None,
+) -> list[str]:
     """The argv to run on the head. Separated out so tests can assert it without a cluster."""
     cmd = [
         os.environ.get("NVIS_BCM_PYTHON") or DEFAULT_PYTHON,
@@ -78,20 +87,36 @@ def build_command(query: str, *, entity_type: str | None = None) -> list[str]:
         ("--cert", "NVIS_BCM_CERT"),
         ("--key", "NVIS_BCM_KEY"),
         ("--ca", "NVIS_BCM_CA"),
+        ("--ca-out", "NVIS_BCM_CA_OUT"),
+        ("--username", "NVIS_BCM_USERNAME"),
+        ("--password-file", "NVIS_BCM_PASSWORD_FILE"),
+        ("--cookie-file", "NVIS_BCM_COOKIE_FILE"),
     ):
         value = os.environ.get(env)
         if value:
             cmd += [flag, value]
+    if (os.environ.get("NVIS_BCM_CA_BOOTSTRAP") or "").strip().lower() in {"1", "true", "yes"}:
+        cmd.append("--bootstrap-ca")
+    # NVIS_BCM_PASSWORD and NVIS_BCM_COOKIE are intentionally absent. Raw secrets are inherited
+    # only in local execution; SSH deployments use the head-node *_FILE options above so a secret
+    # never appears in argv, command displays, or transport logs.
+    if extra_args:
+        cmd.extend(str(arg) for arg in extra_args)
     return cmd
 
 
-def query(kind: str = "nodes", *, entity_type: str | None = None,
-          timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
+def query(
+    kind: str = "nodes",
+    *,
+    entity_type: str | None = None,
+    extra_args: list[str] | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
     """Run one query on the head and return its JSON, or an ``ok: False`` explanation."""
-    cmd = build_command(kind, entity_type=entity_type)
+    cmd = build_command(kind, entity_type=entity_type, extra_args=extra_args)
     try:
-        proc = host_exec.run_on_host(cmd, timeout=timeout)
-    except Exception as exc:  # transport failures are a fallback signal, not a bug
+        proc = host_exec.run_on_host(cmd, timeout=timeout, role="control")
+    except Exception as exc:  # transport failures become an unavailable response, not a 500
         _logger.debug("bcm_query transport failed", exc_info=True)
         return {"ok": False, "error": "transport failed", "detail": f"{type(exc).__name__}: {exc}"}
 
@@ -125,13 +150,47 @@ def switches(**kw: Any) -> dict[str, Any]:
     return query("switches", **kw)
 
 
-def available(timeout: int = 20) -> tuple[bool, str]:
+def capabilities(**kw: Any) -> dict[str, Any]:
+    """Report the exact operations exposed by this head's matching pythoncm package."""
+    return query("capabilities", **kw)
+
+
+def node_states(target: str = "", **kw: Any) -> dict[str, Any]:
+    """Physical-node device, drain, allocation, and reason state in one query."""
+    args = ["--target", target] if target else []
+    return query("node-states", extra_args=args, **kw)
+
+
+def power(target: str, action: str, **kw: Any) -> dict[str, Any]:
+    """Perform one parallel BCM power operation and wait for its per-device result."""
+    if action not in {"on", "off", "reset", "status"}:
+        raise ValueError(f"unsupported BCM power action: {action}")
+    return query("power", extra_args=["--target", target, "--action", action], **kw)
+
+
+def drain(target: str, reason: str = "", **kw: Any) -> dict[str, Any]:
+    args = ["--target", target]
+    if reason:
+        args += ["--reason", reason]
+    return query("drain", extra_args=args, **kw)
+
+
+def undrain(target: str, **kw: Any) -> dict[str, Any]:
+    return query("undrain", extra_args=["--target", target], **kw)
+
+
+def drain_status(target: str, **kw: Any) -> dict[str, Any]:
+    return query("drain-status", extra_args=["--target", target], **kw)
+
+
+def available(timeout: int = 45) -> tuple[bool, str]:
     """Whether the pythoncm path works here, and why not when it does not.
 
-    Callers use this to decide between the fast structured path and the cmsh fallback without
-    paying for a full fleet walk first.
+    The capability query still establishes and tears down a full PythonCM session. Forty-five
+    seconds accommodates the observed ~20 second BCM 11 connect/disconnect cycle without using
+    the 120 second whole-fleet query budget.
     """
-    result = query("version", timeout=timeout)
+    result = query("capabilities", timeout=timeout)
     if result.get("ok"):
         return True, ""
     reason = str(result.get("error") or "unavailable")

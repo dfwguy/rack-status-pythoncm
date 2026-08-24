@@ -9,11 +9,16 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-/** Slurm job id suitable for scancel (digits, optional _task for job arrays). Legacy-aligned. */
-export function slurmJobIdForScancel(raw: unknown): string {
+/** Safe scheduler task id: legacy Slurm numeric/array id or PythonCM UUID. */
+export function schedulerJobIdForAction(raw: unknown): string {
   const t = String(raw ?? "").trim();
-  return /^[1-9]\d*(_\d+)?$/.test(t) ? t : "";
+  if (/^[1-9]\d*(_\d+)?$/.test(t)) return t;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(t)) return t;
+  return "";
 }
+
+/** Compatibility export for Slurm-era callers. */
+export const slurmJobIdForScancel = schedulerJobIdForAction;
 
 /** Parse ``StdOut=`` from ``scontrol show job`` stdout (multiline). */
 export function parseSlurmStdOutPathFromScontrolText(text: string): string {

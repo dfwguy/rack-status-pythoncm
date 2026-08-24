@@ -699,11 +699,14 @@ def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
     command = sub(block.get("command") or "") or None
     output = sub(block.get("output") or "") or None
 
-    # nccl_allreduce.sbatch (and peers) resolve lib/ via NVIS_SCRIPTS_DIR; forward it +
-    # GPUS_PER_NODE through sbatch --export so the batch script finds lib/fabric.inc.sh.
+    # nccl_allreduce.sbatch (and peers) resolve lib/ via NVIS_SCRIPTS_DIR.  Keep
+    # these values in the backend-neutral JobSpec env so PythonCM passes them to
+    # ProgramRunner; retain sbatch --export for the Slurm provider.
     extra = list(block.get("extra_args") or [])
-    exports = ["ALL", f"NVIS_SCRIPTS_DIR={_scripts_dir()}"]
+    job_env = {"NVIS_SCRIPTS_DIR": _scripts_dir()}
+    exports = ["ALL", f"NVIS_SCRIPTS_DIR={job_env['NVIS_SCRIPTS_DIR']}"]
     if ntasks:
+        job_env["GPUS_PER_NODE"] = str(ntasks)
         exports.append(f"GPUS_PER_NODE={ntasks}")
     extra.append(f"--export={','.join(exports)}")
 
@@ -716,6 +719,7 @@ def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
         command=command,
         output=output,
         reservation=(sub(block.get("reservation") or "") or None),
+        env=job_env,
         extra_args=extra,
         timeout=int(step.get("timeout", block.get("timeout", 1800))),
     )

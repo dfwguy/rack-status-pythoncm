@@ -112,10 +112,12 @@ _app_dir_s = str(APP_DIR)
 if _app_dir_s not in sys.path:
     sys.path.insert(0, _app_dir_s)
 
+import bcm_query
 import cluster_overview_live
 import cluster_snapshot
 import native_status
 import nvis_id_templates
+import scheduler_runtime
 
 # --- optional backend modules (added 2026-07-28) -------------------------------------
 # Both are bind-mounted read-only from the repo (docker-compose.override.yml). A missing
@@ -634,7 +636,7 @@ def _task_needs_slurm_hydration(task: dict) -> bool:
     if not ref:
         return False
     jid = ref.split(".")[0]
-    if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
+    if not scheduler_runtime.valid_reference(jid):
         return False
     wp = str(task.get("work_phase") or "").strip().lower()
     if wp in validation_activities.OPEN_WORK_PHASES or not wp:
@@ -666,8 +668,21 @@ def _query_scheduler_state_and_stdout(job_id: str) -> tuple[str | None, str | No
     rather than freeze a prior RUNNING state.
     """
     jid = (job_id or "").strip().split(".")[0]
-    if not jid or not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
+    if not jid or not scheduler_runtime.valid_reference(jid):
         return None, None, "invalid"
+    if scheduler_runtime.is_pythoncm():
+        try:
+            state, stdout = scheduler_runtime.live_status(jid)
+            return state, (stdout or None), "pythoncm"
+        except (OSError, RuntimeError, ValueError):
+            durable = scheduler_runtime.job(jid)
+            if durable:
+                return (
+                    str(durable.get("state") or "UNKNOWN"),
+                    str(durable.get("stdout") or "") or None,
+                    "pythoncm_registry",
+                )
+            return None, None, "missing"
     try:
         sc = _run_scontrol_show_job(jid)
     except (OSError, ValueError):
@@ -719,7 +734,7 @@ def _find_results_log_on_exec_host(log_dir: str, job_id: str, label: str) -> str
     """
     base = (log_dir or "").strip()
     jid = (job_id or "").strip()
-    if not base or not jid.isdigit():
+    if not base or not scheduler_runtime.valid_reference(jid):
         return None
     try:
         found = host_exec.stat_dir(base, patterns=(f"*-{jid}.txt",), maxdepth=1)
@@ -1738,7 +1753,12 @@ def _gpu_reset_worker(job_id: str, pdsh_w: str) -> None:
 # re-exported under a new name so the 38 call sites here stay untouched.
 _truthy_env = core.truthy_env
 _SLURM_STDOUT_RE = core.SLURM_STDOUT_RE
-_slurm_job_base_id = core.slurm_job_base_id
+def _slurm_job_base_id(job_raw: str | None) -> str | None:
+    """Compatibility name for a normalized active-scheduler reference."""
+    raw = str(job_raw or "").strip()
+    if scheduler_runtime.is_pythoncm():
+        return raw if scheduler_runtime.valid_reference(raw) else None
+    return core.slurm_job_base_id(raw)
 from slurm_query import _run_squeue
 
 
@@ -2562,7 +2582,7 @@ def pick_log_for_rack(
         if not cands:
             return None
     j = (job_id or "").strip()
-    if j.isdigit():
+    if scheduler_runtime.valid_reference(j):
         suf = f"N-{j}.txt"
         for p in cands:
             if p.name.endswith(suf):
@@ -2737,6 +2757,15 @@ def _scontrol_hostnames_preserving_case(nodespec: str) -> list[str]:
     nodespec = nodespec.strip()
     if not nodespec or nodespec.lower() in ("none", "null"):
         return []
+    if scheduler_runtime.is_pythoncm():
+        try:
+            requested = scheduler_runtime.expand_nodelist(nodespec)
+        except ValueError:
+            return []
+        known = {name.casefold(): name for name in scheduler_runtime.node_names()}
+        # Preserve BCM's authoritative spelling when inventory is available; an
+        # empty inventory must fail closed rather than invent target identities.
+        return [known[name.casefold()] for name in requested if name.casefold() in known]
     proc = host_exec.run_slurm_on_host(
         _get_platform().scontrol_hostnames_cmd(nodespec),
         timeout=max(30, _env_int("RACK_SCONTROL_HOSTNAMES_TIMEOUT", 120)),
@@ -2782,6 +2811,12 @@ def _all_slurm_nodenames() -> list[str]:
     with _slurm_nodenames_lock:
         ts, cached = _slurm_nodenames_cache
         if cached and (time.monotonic() - ts) < ttl:
+            return cached
+        if scheduler_runtime.is_pythoncm():
+            hosts = _dedupe_hostnames_preserve_spelling(scheduler_runtime.node_names())
+            if hosts:
+                _slurm_nodenames_cache = (time.monotonic(), hosts)
+                return hosts
             return cached
         try:
             proc = host_exec.run_slurm_on_host(
@@ -2878,6 +2913,12 @@ def _hostnames_for_slurm_job(job_raw: str | None) -> tuple[list[str], str]:
     bid = _slurm_job_base_id(job_raw)
     if not bid:
         return [], "no_job_id"
+    if scheduler_runtime.is_pythoncm():
+        row = scheduler_runtime.job(bid)
+        if row:
+            hosts = _dedupe_hostnames_preserve_spelling(list(row.get("nodes") or []))
+            return hosts, ("pythoncm_registry" if hosts else "pythoncm_registry_empty")
+        return [], "pythoncm_job_missing"
     proc = host_exec.run_slurm_on_host(
         _get_platform().sacct_job_cmd(bid),
         timeout=max(20, _env_int("RACK_SACCT_TIMEOUT", 90)),
@@ -8136,6 +8177,28 @@ def _run_scontrol_node_update(target: str, state_kv: list[str]) -> dict:
     matching cluster login environments where *scontrol* is not on PATH until modules load.
     Set RACK_SLURM_SKIP_MODULE_LOAD=1 to invoke *scontrol* directly (e.g. full path already on PATH).
     """
+    if scheduler_runtime.is_pythoncm():
+        fields = {
+            key.lower(): value
+            for item in state_kv if "=" in item
+            for key, value in [item.split("=", 1)]
+        }
+        state = fields.get("state", "").lower()
+        if state == "drain":
+            response = bcm_query.drain(target, fields.get("reason", ""))
+            action = "drain"
+        elif state in {"resume", "undrain", "idle"}:
+            response = bcm_query.undrain(target)
+            action = "undrain"
+        else:
+            raise ValueError(f"unsupported PythonCM node state update: {state or 'missing'}")
+        return {
+            "ok": bool(response.get("ok")),
+            "returncode": 0 if response.get("ok") else 2,
+            "stdout": json.dumps(response.get("data") or {}, sort_keys=True),
+            "stderr": str(response.get("error") or response.get("detail") or ""),
+            "command_display": f"pythoncm {action} {target}",
+        }
     plat = _get_platform()
     nodename_arg = f"nodename={target}"
     tail = " ".join(shlex.quote(a) for a in ["update", nodename_arg, *state_kv])
@@ -8211,7 +8274,7 @@ def api_slurm_drain():
     ok = bool(result.get("ok"))
     payload: dict = {"ok": ok, "rack": _normalize_rack_id((body.get("rack") or "").strip()), "target": target, **result}
     if ok:
-        payload["message"] = f"Undrain (state=resume) applied to {len(target.split(','))} node(s)."
+        payload["message"] = f"Drain applied to {len(target.split(','))} node(s)."
     else:
         err = f"{result.get('stderr') or ''} {result.get('stdout') or ''}".strip()
         # Say WHAT went wrong, not just "see stdout/stderr" — the operator cannot act on that.
@@ -8248,31 +8311,43 @@ def api_slurm_undrain():
     drained: list[str] = []
     state_err = ""
     try:
-        # Resolve `sinfo` through the platform layer, exactly as _run_sinfo_r() does. A
-        # bare `sinfo` is not enough: a site may set RACK_SLURM_SKIP_MODULE_LOAD=1 and pin
-        # RACK_SLURM_SINFO to an absolute path, leaving nothing to put it on PATH. The
-        # probe then died with "sinfo: command not found" and its empty stdout read as
-        # "no drained nodes", so Undrain returned a green 200 having done nothing.
-        plat = _get_platform()
-        probe = host_exec.run_slurm_on_host(
-            plat.sinfo_cmd(f"-h -N -o '%N %t' -n {shlex.quote(target)}"),
-            timeout=max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120)),
-        )
-        # A probe that FAILED is not evidence that every node is healthy. Treat a
-        # non-zero return as unknown and fall through to the update below, rather than
-        # reporting "nothing to undrain" -- a check that cannot read its input must
-        # never report a healthy state.
-        if probe.returncode != 0:
-            state_err = (
-                f"sinfo probe failed (rc={probe.returncode}): "
-                f"{(probe.stderr or '').strip()[:200]}"
+        if scheduler_runtime.is_pythoncm():
+            state_result = bcm_query.node_states(target)
+            if state_result.get("ok"):
+                for row in state_result.get("data") or []:
+                    if not isinstance(row, dict):
+                        continue
+                    state = str(row.get("scheduler_state") or "unknown").lower()
+                    if any(token in state for token in ("drain", "down", "fail", "inval")):
+                        name = str(row.get("hostname") or "").strip()
+                        if name:
+                            drained.append(name)
+            else:
+                state_err = str(
+                    state_result.get("error") or state_result.get("detail") or
+                    "PythonCM node-state probe failed"
+                )
+        else:
+            # Resolve `sinfo` through the platform layer, exactly as _run_sinfo_r() does.
+            # A bare `sinfo` is insufficient when a site pins an absolute binary.
+            plat = _get_platform()
+            probe = host_exec.run_slurm_on_host(
+                plat.sinfo_cmd(f"-h -N -o '%N %t' -n {shlex.quote(target)}"),
+                timeout=max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120)),
             )
-        for line in (probe.stdout or "").splitlines():
-            parts = line.split()
-            if len(parts) >= 2 and any(
-                k in parts[1].lower() for k in ("drain", "down", "fail", "inval")
-            ):
-                drained.append(parts[0])
+            # A failed probe is not evidence that every node is healthy. Treat a
+            # non-zero return as unknown and fall through to the update below.
+            if probe.returncode != 0:
+                state_err = (
+                    f"sinfo probe failed (rc={probe.returncode}): "
+                    f"{(probe.stderr or '').strip()[:200]}"
+                )
+            for line in (probe.stdout or "").splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and any(
+                    k in parts[1].lower() for k in ("drain", "down", "fail", "inval")
+                ):
+                    drained.append(parts[0])
     except Exception as e:  # noqa: BLE001 - fall through to the plain update
         state_err = str(e)
 
@@ -8317,8 +8392,17 @@ def api_slurm_undrain():
 def _run_scancel(job_id: str) -> dict:
     """Run ``scancel JOBID`` after optional ``module load`` (same env semantics as *scontrol*)."""
     jid = (job_id or "").strip()
-    if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
-        raise ValueError("job_id must be a Slurm job id (digits, optional _TASK for arrays)")
+    if not scheduler_runtime.valid_reference(jid):
+        raise ValueError("job_id must be a valid scheduler reference")
+    if scheduler_runtime.is_pythoncm():
+        scheduler_runtime.cancel(jid)
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "cancel requested",
+            "stderr": "",
+            "command_display": f"pythoncm cancel {jid}",
+        }
     plat = _get_platform()
     shell_cmd = plat.scancel_cmd(shlex.quote(jid))
     cmd_display = shell_cmd
@@ -8421,11 +8505,11 @@ def api_slurm_scancel():
         return jsonify({"ok": False, "error": "job_id is required"}), 400
     if not jid:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
-    if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
+    if not scheduler_runtime.valid_reference(jid):
         return jsonify(
             {
                 "ok": False,
-                "error": "job_id must be a Slurm job id (digits, optional _TASK for arrays)",
+                "error": "job_id must be a valid scheduler reference",
             }
         ), 400
     rack_raw = (body.get("rack") or "").strip()
@@ -8454,8 +8538,26 @@ def api_slurm_scancel():
 def _run_scontrol_show_job(job_id: str) -> dict:
     """Run ``scontrol show job JOBID`` after optional ``module load`` (same env as *scancel*)."""
     jid = (job_id or "").strip()
-    if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
-        raise ValueError("job_id must be a Slurm job id (digits, optional _TASK for arrays)")
+    if not scheduler_runtime.valid_reference(jid):
+        raise ValueError("job_id must be a valid scheduler reference")
+    if scheduler_runtime.is_pythoncm():
+        try:
+            state, stdout_path = scheduler_runtime.live_status(jid)
+        except RuntimeError as exc:
+            return {
+                "ok": False, "returncode": 2, "stdout": "", "stderr": str(exc),
+                "command_display": f"pythoncm status {jid}",
+            }
+        row = scheduler_runtime.job(jid) or {}
+        fields = [
+            f"JobId={jid}", f"JobState={state}",
+            f"StdOut={stdout_path or '(none)'}",
+            f"NodeList={row.get('nodelist') or '(none)'}",
+        ]
+        return {
+            "ok": True, "returncode": 0, "stdout": " ".join(fields), "stderr": "",
+            "command_display": f"pythoncm status {jid}",
+        }
     plat = _get_platform()
     tail = " ".join(shlex.quote(a) for a in ["show", "job", jid])
     shell_cmd = plat.scontrol_cmd(tail)
@@ -11589,12 +11691,11 @@ def api_node_report_start():
 
                 facts = _cluster_facts()
                 bcm_index = {}
-                try:
-                    import bcm_query
-
-                    bcm_index = bcm_query.index_by_hostname(bcm_query.nodes())
-                except Exception:  # BCM identity is an enrichment, not a prerequisite
-                    _logger.debug("rack-status report: BCM lookup unavailable", exc_info=True)
+                if not _truthy_env("RACK_STATUS_DEMO"):
+                    try:
+                        bcm_index = bcm_query.index_by_hostname(bcm_query.nodes())
+                    except Exception:  # BCM identity is an enrichment, not a prerequisite
+                        _logger.debug("rack-status report: BCM lookup unavailable", exc_info=True)
 
                 dataset = cluster_report.build_dataset(
                     fleet=fleet, inventory=inventory, facts=facts,
@@ -12253,6 +12354,9 @@ def _save_log_analysis_cache_entries(entries: dict[str, dict[str, object]]) -> N
 
 def _slurm_running_job_ids_for_rack_status() -> set[str]:
     """Slurm job ids for SQUEUE_USER or USER (same idea as rack_status load_squeue_jobs)."""
+    if scheduler_runtime.is_pythoncm():
+        refs, _times = scheduler_runtime.active_job_times()
+        return refs
     user = (os.environ.get("SQUEUE_USER") or os.environ.get("USER") or "root").strip()
     plat = _get_platform()
     try:
@@ -12434,17 +12538,23 @@ def _multirack_campaign_snapshot() -> dict[str, object]:
         return manifest
     rack_nodes = manifest["rack_nodes"]
     assert isinstance(rack_nodes, dict)
-    proc = host_exec.run_slurm_on_host(
-        _get_platform().sinfo_cmd('-N -h -o "%N|%T"'),
-        timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
-    )
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "sinfo failed").strip())
     states: dict[str, str] = {}
-    for line in (proc.stdout or "").splitlines():
-        node, sep, state = line.partition("|")
-        if sep and node.strip():
-            states[node.strip().casefold()] = state.strip().lower().rstrip("*")
+    if scheduler_runtime.is_pythoncm():
+        states = {
+            str(row["node"]).casefold(): str(row.get("state") or "unknown")
+            for row in scheduler_runtime.nodes() if row.get("node")
+        }
+    else:
+        proc = host_exec.run_slurm_on_host(
+            _get_platform().sinfo_cmd('-N -h -o "%N|%T"'),
+            timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
+        )
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "sinfo failed").strip())
+        for line in (proc.stdout or "").splitlines():
+            node, sep, state = line.partition("|")
+            if sep and node.strip():
+                states[node.strip().casefold()] = state.strip().lower().rstrip("*")
     allowed = {"idle", "alloc", "allocated"}
     rows: list[dict[str, object]] = []
     for rack, raw_nodes in sorted(rack_nodes.items()):
@@ -14297,20 +14407,33 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
 
 def _validation_node_eligibility(nodes: list[str]) -> tuple[dict[str, str], list[str]]:
     """Return live Slurm states and fail-closed reasons for an exact target set."""
-    spec = ",".join(nodes)
-    proc = host_exec.run_slurm_on_host(
-        _get_platform().sinfo_cmd(
-            f"-N -h --nodes={shlex.quote(spec)} -o '%N|%T'"
-        ),
-        timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
-    )
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "unable to query exact node states").strip())
     states: dict[str, str] = {}
-    for line in (proc.stdout or "").splitlines():
-        node, sep, state = line.partition("|")
-        if sep and node.strip():
-            states[node.strip().casefold()] = state.strip().lower().rstrip("*")
+    if scheduler_runtime.is_pythoncm():
+        result = bcm_query.node_states(",".join(nodes))
+        if not result.get("ok"):
+            raise RuntimeError(str(
+                result.get("error") or result.get("detail") or
+                "unable to query exact node states through PythonCM"
+            ))
+        for row in result.get("data") or []:
+            if isinstance(row, dict) and row.get("hostname"):
+                states[str(row["hostname"]).casefold()] = str(
+                    row.get("scheduler_state") or "unknown"
+                ).lower()
+    else:
+        spec = ",".join(nodes)
+        proc = host_exec.run_slurm_on_host(
+            _get_platform().sinfo_cmd(
+                f"-N -h --nodes={shlex.quote(spec)} -o '%N|%T'"
+            ),
+            timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
+        )
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "unable to query exact node states").strip())
+        for line in (proc.stdout or "").splitlines():
+            node, sep, state = line.partition("|")
+            if sep and node.strip():
+                states[node.strip().casefold()] = state.strip().lower().rstrip("*")
     excluded = {
         token.strip().casefold()
         for token in (_eget("RACK_VALIDATION_EXCLUDED_NODES") or "").split(",")
@@ -14591,6 +14714,15 @@ _MNUBERGEMM_STAGE_TERMINAL_STATES = {
 
 def _mnubergemm_stage_slurm_state(job_id: str) -> tuple[str, str]:
     """Return the allocation state and exit code for one stage job."""
+    if scheduler_runtime.is_pythoncm():
+        try:
+            state, _stdout = scheduler_runtime.live_status(job_id)
+        except (OSError, RuntimeError, ValueError):
+            row = scheduler_runtime.job(job_id) or {}
+            state = str(row.get("state") or "UNKNOWN")
+        row = scheduler_runtime.job(job_id) or {}
+        rc = str(row.get("exit_code") or "")
+        return state.upper(), (f"{rc}:0" if rc.isdigit() else rc)
     plat = _get_platform()
     proc = host_exec.run_on_host(
         plat.sacct_cmd(
@@ -14615,6 +14747,99 @@ def _mnubergemm_stage_slurm_state(job_id: str) -> tuple[str, str]:
     return ((state[0].strip().upper() if state else "PENDING"), "")
 
 
+def _mnubergemm_stage_pythoncm_worker(job_id: str, plan: dict) -> None:
+    """Stage one rack at a time using native PythonCM parallel execution."""
+    from schedulers import JobSpec, build_scheduler
+
+    def patch(**kwargs: object) -> None:
+        with _stress_jobs_lock:
+            row = _stress_jobs.get(job_id)
+            if row is not None:
+                row.update(kwargs)
+        _update_validation_activity(job_id, **kwargs)
+
+    groups = [group for group in plan.get("node_groups", []) if isinstance(group, dict)]
+    artifact = plan.get("artifact") or {}
+    script = str(Path(_scripts_dir()) / "validation_container_stage_node.sh")
+    failures: list[dict[str, str]] = []
+    completed = 0
+    try:
+        scheduler = build_scheduler(
+            "pythoncm", connection=host_exec.connection("script"), profile="script"
+        )
+        patch(
+            phase="running", work_phase="running",
+            started_running_at=datetime.now(timezone.utc).isoformat(),
+            stage_total_racks=len(groups), stage_completed_racks=0, stage_failed_racks=0,
+        )
+        for ordinal, group in enumerate(groups, start=1):
+            rack = str(group.get("rack") or f"group-{ordinal:03d}")
+            nodes = [str(node) for node in group.get("nodes") or [] if str(node).strip()]
+            if not nodes:
+                failures.append({"rack": rack, "error": "empty exact-node group"})
+                continue
+            output = f"{str(plan['log_dir']).rstrip('/')}/mnubergemm-container-stage-{rack}-%j.out"
+            spec = JobSpec(
+                name=f"mnub-stage-{rack.rsplit('-', 1)[-1]}",
+                nodelist=",".join(nodes), ntasks_per_node=1,
+                script=script, output=output, timeout=7200,
+                env={
+                    "NVIS_STAGE_SOURCE": str(artifact.get("source") or ""),
+                    "NVIS_STAGE_DEST": str(artifact.get("path") or ""),
+                    "NVIS_STAGE_RSYNC": "1",
+                    "NVIS_STAGE_EXPECTED_SIZE": str(artifact.get("size") or ""),
+                    "NVIS_STAGE_EXPECTED_SHA256": str(artifact.get("sha256") or ""),
+                    "NVIS_SCRIPTS_DIR": str(_scripts_dir()),
+                },
+            )
+            patch(current_stage_rack=rack, current_stage_nodes=len(nodes))
+            handle = scheduler.submit(spec)
+            stdout_path = output.replace("%j", handle.job_id)
+            validation_activities.add_or_update_task(
+                job_id, ordinal=ordinal, label=f"stage {rack}",
+                scheduler_ref=handle.job_id, scheduler_state="PENDING",
+                phase="running", work_phase="running", stdout_path=stdout_path,
+            )
+            patch(current_stage_job_id=handle.job_id)
+            result = scheduler.wait(handle, timeout=7200, poll_interval=10)
+            if result.success:
+                completed += 1
+                validation_activities.add_or_update_task(
+                    job_id, ordinal=ordinal, label=f"stage {rack}",
+                    scheduler_ref=handle.job_id, scheduler_state=result.state,
+                    phase="done", work_phase="done", stdout_path=stdout_path,
+                    evidence="container size and SHA256 verified on every PythonCM target node",
+                )
+            else:
+                error = (result.stderr or result.stdout or f"state={result.state}")[-500:]
+                failures.append({"rack": rack, "job_id": handle.job_id, "error": error})
+                validation_activities.add_or_update_task(
+                    job_id, ordinal=ordinal, label=f"stage {rack}",
+                    scheduler_ref=handle.job_id, scheduler_state=result.state,
+                    phase="error", work_phase="failed", stdout_path=stdout_path,
+                    evidence=error,
+                )
+            patch(stage_completed_racks=completed, stage_failed_racks=len(failures),
+                  stage_failures=list(failures))
+        ok = not failures and completed == len(groups)
+        patch(
+            phase="done" if ok else "error", work_phase="done" if ok else "failed",
+            ok=ok, returncode=0 if ok else 1,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            current_stage_rack="", current_stage_job_id="",
+            error=None if ok else f"{len(failures)} rack stage command(s) failed",
+        )
+    except Exception as exc:  # persist a terminal activity on every failure
+        _logger.exception("MNUberGEMM PythonCM stage-only worker failed")
+        patch(
+            phase="error", work_phase="failed", ok=False, returncode=-1,
+            finished_at=datetime.now(timezone.utc).isoformat(), error=str(exc),
+            stage_completed_racks=completed, stage_failed_racks=len(failures),
+            stage_failures=list(failures),
+        )
+    _stress_job_purge_later(job_id)
+
+
 def _mnubergemm_stage_only_worker(job_id: str, plan: dict) -> None:
     """Stage the pinned image one physical rack at a time through Slurm.
 
@@ -14622,6 +14847,10 @@ def _mnubergemm_stage_only_worker(job_id: str, plan: dict) -> None:
     keeps each allocation attributable to exactly one NVLink domain and never runs
     the MNUberGEMM workload itself.
     """
+
+    if scheduler_runtime.is_pythoncm():
+        _mnubergemm_stage_pythoncm_worker(job_id, plan)
+        return
 
     def patch(**kwargs: object) -> None:
         with _stress_jobs_lock:
@@ -14676,7 +14905,7 @@ def _mnubergemm_stage_only_worker(job_id: str, plan: dict) -> None:
                 f"NVIS_STAGE_EXPECTED_SHA256={expected_sha}",
                 f"NVIS_SCRIPTS_DIR={scripts_dir}",
                 f"PATH={stage_path}",
-                *(tuple([f"SLURM_CONF={slurm_conf}"]) if slurm_conf else ()),
+                *((f"SLURM_CONF={slurm_conf}",) if slurm_conf else ()),
             ))
             args = [
                 "--parsable", "--no-requeue", f"--nodes={len(nodes)}",
@@ -17326,6 +17555,16 @@ def _pick_slurm_version_line(stdout: str, stderr: str) -> str:
 
 
 def _cluster_probe_slurm_version() -> tuple[str, str]:
+    if scheduler_runtime.is_pythoncm():
+        result = bcm_query.query("version", timeout=max(5, _env_int(
+            "RACK_CLUSTER_BCM_PYTHONCM_TIMEOUT", 40
+        )))
+        if not result.get("ok"):
+            return "", str(result.get("error") or result.get("detail") or "PythonCM unavailable")
+        data = result.get("data") or {}
+        pythoncm = str(data.get("pythoncm") or "bundled")
+        cmdaemon = str(data.get("cmdaemon") or "unknown")
+        return f"PythonCM {pythoncm} (CMDaemon {cmdaemon})", ""
     plat = _get_platform()
     # ``scontrol -V`` only (with platform Slurm module prefix), inside one login shell.
     shell_cmd = plat.scontrol_cmd("-V")
@@ -17348,6 +17587,15 @@ def _cluster_probe_slurm_version() -> tuple[str, str]:
 
 def _cluster_probe_bcm_cmsh_version() -> tuple[str, str]:
     """BCM / Bright Cluster Manager build from ``cmsh -c 'main; versioninfo'`` (head / dashboard host only)."""
+    if scheduler_runtime.is_pythoncm():
+        result = bcm_query.query("version", timeout=max(10, _env_int(
+            "RACK_CLUSTER_BCM_PYTHONCM_TIMEOUT", 60
+        )))
+        if not result.get("ok"):
+            return "", str(result.get("error") or result.get("detail") or "PythonCM unavailable")
+        data = result.get("data") or {}
+        version = str(data.get("cmdaemon") or data.get("pythoncm") or "")
+        return version, ("" if version else "empty PythonCM version response")
     if _truthy_env("RACK_CLUSTER_BCM_CMSH_DISABLED"):
         return "", "disabled (RACK_CLUSTER_BCM_CMSH_DISABLED)"
     cmsh = (_eget("RACK_CMSH") or "cmsh").strip() or "cmsh"
@@ -18257,11 +18505,26 @@ def _post_run_accounting(activities: list[dict]) -> list[dict]:
             if not isinstance(task, dict):
                 continue
             jid = str(task.get("scheduler_ref") or "").strip().split(".")[0]
-            if _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid) and jid not in seen:
+            if scheduler_runtime.valid_reference(jid) and jid not in seen:
                 seen.add(jid)
                 job_ids.append(jid)
     if not job_ids:
         return []
+    if scheduler_runtime.is_pythoncm():
+        wanted = set(job_ids[:400])
+        return [
+            {
+                "job_id": str(row["job_id"]),
+                "state": str(row.get("state") or "UNKNOWN"),
+                "nodelist": str(row.get("nodelist") or ""),
+                "started_at": str(row.get("start") or ""),
+                "ended_at": str(row.get("end") or ""),
+                "exit_code": str(row.get("exit_code") or ""),
+                "job_name": str(row.get("name") or "pythoncm-command"),
+            }
+            for row in scheduler_runtime.jobs()
+            if str(row.get("job_id") or "") in wanted
+        ]
     # The activity store is capped at 500 entries. Keep the newest 400 Slurm
     # allocations in the live reconciliation; older exact memberships remain in
     # post_run_nodes.json after their first snapshot.
@@ -18301,6 +18564,19 @@ def _post_run_accounting(activities: list[dict]) -> list[dict]:
 
 
 def _post_run_inventory() -> list[dict]:
+    if scheduler_runtime.is_pythoncm():
+        rows = scheduler_runtime.nodes()
+        return [
+            {
+                "node": str(row.get("node") or ""),
+                "rack": str(row.get("rack") or "") or post_run_report.rack_for_node(
+                    str(row.get("node") or "")
+                ),
+                "state": str(row.get("state") or "unknown"),
+                "reason": str(row.get("reason") or ""),
+            }
+            for row in rows if row.get("node")
+        ]
     proc = host_exec.run_slurm_on_host(
         _get_platform().sinfo_cmd('-N -h -o "%N|%T|%E"'),
         timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
@@ -18519,7 +18795,7 @@ def api_post_run_node_mark():
 def api_capture_job_attempt():
     """``?job_id=`` — record a Slurm attempt (even one that produced no log) to history + lake."""
     jid = (request.args.get("job_id") or (request.get_json(silent=True) or {}).get("job_id") or "").strip()
-    if not jid or not core.SLURM_JOB_ID_RE.fullmatch(jid):
+    if not jid or not scheduler_runtime.valid_reference(jid):
         return jsonify({"ok": False, "error": "valid job_id required"}), 400
     return jsonify(capture_job_attempt(jid))
 

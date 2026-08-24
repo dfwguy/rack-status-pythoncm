@@ -19,7 +19,7 @@ durable.
 > never converted into a pass. A confirmed node failure and a launcher/transport
 > failure are different outcomes.
 
-> **Site rule:** when a real node issue is confirmed, record an exact Slurm reason
+> **Site rule:** when a real node issue is confirmed, record an exact scheduler reason
 > and drain that node. Deep audits do this automatically only for their structured
 > `fail` results. They do not drain on warnings or inconclusive infrastructure
 > failures.
@@ -31,21 +31,21 @@ durable.
 Rack Status is a React single-page application (SPA) backed by Flask. The default
 production container is `nvis-rack-status-v3`; port `5056` on the observability VM
 maps to the service in the container. In the current Nscale deployment, the backend
-connects over SSH to the BCM head node and uses the configured platform provider,
-absolute Slurm tools, approved scripts, `cmsh`, and bounded node fanout.
+connects over SSH to the BCM head node and uses PythonCM inventory, the configured
+direct-execution scheduler, approved scripts, and bounded node fanout.
 
 Current facts:
 
 - Native Python collectors provide canonical rack status. The canonical snapshot is
   not published until its required log scan has completed at least once.
-- Slurm remains the authority for job state, allocation, drain state, and node
-  reasons.
+- PythonCM plus Rack Status' durable direct-execution registry are the authority for
+  inventory, task state, drain state, node reasons, cancellation, and output.
 - Validation and audit histories are stored under the durable application data
   directory (`/app/var` in the container).
 - Remote execution scripts are sourced from `bin/scripts/` in this repository and
   deployed to the configured remote base path on the head node.
-- PythonCM and Clush conversion are parked. Do not document or operate them as active
-  execution backends.
+- Slurm remains available only as the explicit `RACK_SCHEDULER=slurm` compatibility
+  fallback. Legacy Slurm-named routes and fields remain stable wire contracts.
 - Telemetry comes from VictoriaMetrics and Loki. Empty telemetry is displayed as
   empty or unavailable; the UI does not invent replacement data.
 
@@ -53,7 +53,7 @@ The application intentionally combines three data classes:
 
 | Class | Examples | Persistence |
 |---|---|---|
-| Live control-plane state | `squeue`, `sinfo`, current comments, service probes | Refreshed; may become stale |
+| Live control-plane state | active jobs, node availability, current comments, service probes | Refreshed; may become stale |
 | Durable execution evidence | validation activities, deep-audit findings, post-run attribution | Stored under `/app/var` |
 | Observability telemetry | GPU, host, cgroup, fabric, logs | Retained by VictoriaMetrics/Loki |
 
@@ -108,7 +108,7 @@ The root route and an unknown hash route redirect to `#/compute/overview`.
 - **Stale** preserves the last good evidence and shows its age.
 - **Failed** shows an explicit error; it does not replace data with zeros.
 - Closing a progress/result dialog normally stops browser watching only. It does not
-  cancel a Slurm job unless the dialog explicitly says **Cancel**.
+  cancel a scheduler task unless the dialog explicitly says **Cancel**.
 - Destructive actions require confirmation. Read the resolved node list and reason
   before accepting.
 - Rack and node comments are operational evidence. Use a concrete job/run identifier,
@@ -124,7 +124,7 @@ Use this sequence for a normal rack campaign.
    fresh. Check the native worker panel; required workers must have completed at
    least once.
 2. Open the rack, for example `#/compute/racks/ink50-dh01-h01`.
-3. Review every node's Slurm state and reason. Exclude known-bad, drained, down,
+3. Review every node's scheduler state and reason. Exclude known-bad, drained, down,
    failing, maintenance, or unresolved nodes. Never infer health from a BMC ping
    alone.
 4. Confirm the exact selected nodes. Rack detail selects its real inventory by
@@ -141,8 +141,8 @@ Use this sequence for a normal rack campaign.
    reported; a successful scheduler exit without the expected result contract is
    incomplete, not pass.
 10. Open `#/analytics/post-run-nodes`. Review attributed node findings, current
-    Slurm comments, repeated-failure flags, and trend arrows.
-11. For a confirmed issue, preserve evidence, apply an exact Slurm reason, and drain
+    scheduler comments, repeated-failure flags, and trend arrows.
+11. For a confirmed issue, preserve evidence, apply an exact scheduler reason, and drain
     only the implicated node. Do not mark every node in a failed collective as bad.
 
 For multi-rack work, use `#/compute/multirack`; do not manually paste a shortened
@@ -164,7 +164,7 @@ Expected behavior:
 - Counts reconcile to the active cluster scope.
 - Validation summaries distinguish done, fail, ongoing, and pending.
 - A completed log scan changes its test from pending to its parsed terminal result.
-- Active Slurm jobs update independently of historical validation cards.
+- Active scheduler tasks update independently of historical validation cards.
 
 ### 4.2 Racks
 
@@ -189,7 +189,7 @@ nodes at launch time.
 | NVLink Preflight | GPU enumeration, link/fabric/IMEX checks, P2P, and in full mode forced NVLink traffic plus RoCE control |
 | NCCL 2.31.2 Validation | Direct-host CUDA 13.3+ validation with exact NCCL 2.31.2 and `/dev/infiniband` |
 | Stage 1 NCCL Benchmark | Full LLMB NCCL suite and canonical one-rack result log |
-| Stage 2 NeMo Training | NCCL sweep followed by Nemotron-H 56B FP8; Slurm serializes the stages |
+| Stage 2 NeMo Training | NCCL sweep followed by Nemotron-H 56B FP8; Rack Status serializes the stages |
 | NeMo 26.04.01 | Pinned NeMo validation with bounded steps |
 | MNUberGEMM | Fleet-supported `26.03-v1.17` image; do not relabel it as an unavailable 26.04.1 image |
 | GPT-OSS CPU | Per-node CPU microbenchmark; not a GPU training validation |
@@ -205,13 +205,13 @@ does not automatically declare node failure.
 
 | Action | Effect and safety |
 |---|---|
-| Hardware Deep Audit | Slurm fanout; structured checks; automatically drains only confirmed failures |
+| Hardware Deep Audit | PythonCM/direct fanout; structured checks; automatically drains only confirmed failures |
 | Hardware Check | Runs approved `checker.sh` preset/custom checks |
 | Exemplar System Info | Read-only DGXC recipe inventory and validation |
 | System/Bug Report | Collects evidence into the report inventory |
 | IMEX Check | Read-only IMEX status check |
 | IMEX Reset | Restarts/repairs IMEX state; disruptive |
-| GPU Reset | Stops Slurm daemon, resets GPUs, and restarts required services; disruptive |
+| GPU Reset | Quiesces the execution agent, resets GPUs, and restarts required services; disruptive |
 | Power action | Uses the configured BCM device power workflow; disruptive |
 | BMC Recovery | Cold BMC recovery through the approved IPMI path; disruptive |
 | MAC Change | Exact one-node operation; can auto-swap when exactly one current owner exists |
@@ -234,7 +234,7 @@ Run evidence collection before reset/power operations whenever possible.
 
 | Action | Purpose |
 |---|---|
-| Restart Services | Runs mount recovery and restarts Munge, Slurmd, NVIDIA IMEX, and DCGM as configured |
+| Restart Services | Runs mount recovery and restarts authentication, execution-agent, NVIDIA IMEX, and DCGM services as configured |
 | System Info | Streams node system inventory |
 | Tail NeMo Log | Follows the latest relevant NeMo log |
 
@@ -272,7 +272,7 @@ Pinned presets prevent accidental “almost the same” recipes.
 
 The plan supports NFS or node-local `/tmp/containers` storage. Local mode can stage
 with rsync to avoid a cold image load. Preparation validates image existence, size,
-digest/version where defined, exact live Slurm eligibility, and IB requirements.
+digest/version where defined, exact live scheduler eligibility, and IB requirements.
 
 Safety semantics:
 
@@ -318,7 +318,7 @@ beside the launch button, in Post-run Nodes, and through `/api/deep-audits`.
 
 ### 7.1 Hardware Deep Audit
 
-The workflow `hardware-deep-audit` resolves rack inventory and fans out under Slurm.
+The workflow `hardware-deep-audit` resolves PythonCM rack inventory and uses bounded direct fanout.
 It checks:
 
 - expected GPU enumeration (site default: four GPUs per GB300 compute tray);
@@ -328,7 +328,7 @@ It checks:
 - fabric registration/completion on every GPU;
 - current-boot NVIDIA Xid;
 - fatal/uncorrected PCIe, DPC, EDAC, and MCE evidence;
-- Slurmd, NVIDIA IMEX, and CMDaemon when installed;
+- the configured execution agent, NVIDIA IMEX, and CMDaemon when installed;
 - active `md0` and a mounted `/raid`.
 
 Optional unavailable queries are warnings. A structured failing check exits as a
@@ -346,7 +346,7 @@ The workflow `nvlink-network-deep-audit` checks:
   after traffic; only a new delta fails the run;
 - `mlx5_bond_0` state, or an explicit warning when that interface is absent;
 - full deployed NVLink preflight, or a local nvbandwidth fallback that forces a
-  four-GPU peer-copy data path under Slurm.
+  four-GPU peer-copy data path through the active scheduler.
 
 Old cumulative IB counters alone do not fail a node. A new counter delta under the
 test traffic does.
@@ -366,7 +366,7 @@ The generated reason is:
 Drained for <category> deep audit - for validation <run-id-prefix> due to <exact reason>
 ```
 
-Never convert `execve`, SSH, Slurm launch, permission, timeout, or result-parser
+Never convert `execve`, SSH, scheduler launch, permission, timeout, or result-parser
 failure into a hardware drain. Repair the infrastructure and rerun.
 
 ### 7.4 Safe test recipe
@@ -395,10 +395,10 @@ live import of a Google punch card.
 The report joins:
 
 - validation activity history;
-- exact Slurm job allocations and accounting while available;
+- exact scheduler targets and task history while available;
 - structured Hardware/Network Deep Audit findings;
-- operator findings and current Slurm state/comments;
-- durable attribution snapshots that survive normal Slurm-accounting retention.
+- operator findings and current scheduler state/comments;
+- durable attribution snapshots that survive normal scheduler-history retention.
 
 ### Attribution rules
 
@@ -407,7 +407,7 @@ A failure is attributed only when evidence identifies the node, the job was a
 single-node allocation, or a structured node finding names it. Rack/control-plane
 failures remain run-level failures unless node evidence exists.
 
-The node tile shows runs, attributed failures, current Slurm state/comment, trend,
+The node tile shows runs, attributed failures, current scheduler state/comment, trend,
 and a repeat flag. The trend compares the most recent five attributed results with
 the preceding five:
 
@@ -423,15 +423,15 @@ jobs, exact findings, output, current comment, and latest hardware/network resul
 The page includes separate **Node hardware status report** and **Node network status
 report** sections. From the detail dialog an operator can launch a targeted audit.
 
-### Operator findings and Slurm comments
+### Operator findings and scheduler comments
 
 Use **Mark issue** only with evidence. Enter a subsystem-specific reason and job/run
 identifier. Optional drain applies only to that exact node and requires confirmation.
-The report preserves who marked it and why. Recheck current Slurm state after the
+The report preserves who marked it and why. Recheck current scheduler state after the
 action; never assume a browser success toast proves the controller accepted it.
 
 The legacy Sheets punch-card integration can seed historical context where enabled,
-but the native report, structured validations, and Slurm evidence are the operating
+but the native report, structured validations, and scheduler evidence are the operating
 source of truth.
 
 ---
@@ -521,7 +521,7 @@ and download. Log-file timestamps and Loki timestamps can differ; compare in UTC
 
 ### 10.4 Events
 
-`#/observability/events` shows current Slurm-unavailable reasons and active rack
+`#/observability/events` shows current scheduler-unavailable reasons and active rack
 locks/commands. It is a current-state view, not a durable incident timeline. Use the
 post-run ledger and logs for history. Alerts are not a complete alert-management
 surface; use the linked Grafana alerting system where configured.
@@ -637,7 +637,7 @@ NVSwitch fixes/resets. Preserve evidence first and confirm the exact node list.
 - A peer rank printing a collective-wide “test failure.”
 - A job with `NODE_FAIL` after a controller/CMDaemon mass-down.
 - A launcher `execve()` error.
-- SSH timeout, missing sudo, inaccessible script, or invalid Slurm option.
+- SSH timeout, missing sudo, inaccessible script, or invalid scheduler option.
 - Old non-incrementing IB counters.
 - A missing telemetry series.
 - A service that is active but not ingesting.
@@ -678,8 +678,8 @@ Drained for <concise subsystem fault> - for Job <job-id> due to <first decisive 
 2. Check the backend log for import or platform-provider errors.
 3. Confirm the required backend module exists in the container, not only in the
    host tree.
-4. If live Slurm reconciliation fails, the UI should retain durable data and show a
-   warning; fix configured absolute Slurm/provider execution rather than erasing the
+4. If live scheduler reconciliation fails, the UI should retain durable data and show a
+   warning; fix configured provider execution rather than erasing the
    history store.
 5. Run `bin/verify-deploy.sh` after the approved deployment.
 
@@ -701,7 +701,7 @@ require an explicit, checksum-verified migration.
 
 ### A deep audit shows `execve(): 0`
 
-This is a launcher defect, not node hardware. Slurm optional arguments must be valid
+This is a launcher defect, not node hardware. Optional scheduler arguments must be valid
 tokens such as `--kill-on-bad-exit=0` and `--immediate=60`. Mark the run inconclusive,
 fix/deploy the workflow engine, invalidate the bad durable run with an audit trail,
 and rerun. Do not drain its nodes.
@@ -806,12 +806,12 @@ For every significant validation or repair, record:
 - UTC start/end time;
 - exact route/action and active cluster;
 - rack(s) and resolved node list;
-- Slurm Job ID(s), workflow run ID, and validation preset;
+- scheduler task ID(s), workflow run ID, and validation preset;
 - image path/digest/version and storage/staging mode;
 - expected versus received node/rank/test counts;
 - first decisive error, implicated node, and corroborating evidence;
 - cancellation, drain, reset, or recovery action and operator;
-- exact Slurm reason/comment;
+- exact scheduler reason/comment;
 - rerun result and report link/path;
 - whether fresh telemetry resumed.
 
@@ -820,10 +820,11 @@ for the current incident.
 
 ---
 
-## 16. Current limitations and parked work
+## 16. Current limitations and compatibility
 
-- PythonCM execution is parked.
 - Clush support is parked.
+- Slurm-only `.sbatch` workflows require the explicit Slurm fallback until they have
+  a validated direct-execution script form.
 - Events is a current-state view, not a retained alert timeline.
 - Deep audits prove only the checks that actually executed; optional unavailable
   queries remain warnings.

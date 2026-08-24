@@ -14,12 +14,14 @@ import os
 
 from schedulers.base import Scheduler
 from schedulers.local import LocalScheduler
+from schedulers.pythoncm import PythonCMScheduler
 from schedulers.slurm import SlurmScheduler
 from schedulers.stubs import MaaSScheduler, RunAIScheduler, SlinkyScheduler
 
 _BUILDERS = {
     "slurm": SlurmScheduler,
     "local": LocalScheduler,
+    "pythoncm": PythonCMScheduler,
     "runai": RunAIScheduler,
     "slinky": SlinkyScheduler,
     "maas": MaaSScheduler,
@@ -48,8 +50,10 @@ def build_scheduler(
 
         connection = build_connection(TransportConfig.from_env())
     cls = _BUILDERS[kind]
-    # SlurmScheduler takes (connection, platform, profile); LocalScheduler (connection, profile);
-    # stubs accept (connection, platform, profile).
+    # LocalScheduler takes (connection, profile); the other providers share the
+    # common (connection, platform, profile) constructor.
     if cls is LocalScheduler:
         return cls(connection, profile)
+    if cls is PythonCMScheduler:
+        return cls(connection, platform, profile, env=e)
     return cls(connection, platform, profile)

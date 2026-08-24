@@ -51,7 +51,7 @@ const COLS: { key: keyof SlurmSacctJob; label: string; mono?: boolean }[] = [
 /** Stable accessor: column index -> that job field, as text. */
 const cellAt = (job: SlurmSacctJob, col: number) => String(job[COLS[col].key] ?? "");
 
-/** Color a Slurm terminal state: green=success, red=hard failure, orange=timeout/preempt, gray=cancelled. */
+/** Color a scheduler terminal state: green=success, red=hard failure, orange=timeout/preempt, gray=cancelled. */
 function stateColor(state: string): string | undefined {
   const s = (state || "").split(" ")[0].toUpperCase();
   if (s === "COMPLETED") return "#4caf50";
@@ -135,7 +135,7 @@ export function RecentJobsPanel({ logDir, active, limit = 10, tableMaxHeight = 4
           Recent finished jobs
         </Text>
         <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-          last {limit} finished (sacct: completed + failed) — survives after squeue drops them
+          last {limit} completed or failed jobs retained by the scheduler history
         </Text>
         <Button size="small" kind="secondary" onClick={() => void load()} disabled={loading || !active}>
           Refresh

@@ -84,7 +84,7 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
       }
       if (data.ok === false) {
         setBannerErr(
-          [data.error || "sinfo -R --long failed", data.stderr ? `\n${String(data.stderr)}` : "", data.returncode != null ? `\n(exit ${data.returncode})` : ""]
+          [data.error || "Node availability query failed", data.stderr ? `\n${String(data.stderr)}` : "", data.returncode != null ? `\n(exit ${data.returncode})` : ""]
             .filter(Boolean)
             .join("")
         );
@@ -131,7 +131,7 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
     <Paper variant="outlined" sx={{ borderLeft: `4px solid ${NVIDIA_GREEN}`, overflow: "hidden" }}>
       <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover", display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
         <Text kind="body/bold/md" style={{ fontWeight: 700, color: NVIDIA_GREEN }}>
-          sinfo -R --long
+          Node availability
         </Text>
         <Button size="small" kind="secondary" onClick={() => void load()} disabled={loading || !active}>
           Refresh

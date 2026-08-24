@@ -14,7 +14,7 @@ For architecture and UI overview, see the root [README.md](../README.md).
 |----------|---------|--------|
 | **`RACK_STATUS_USE_SHELL_TABLE`** | *(unset)* | When **unset/false**, `/api/status` uses **`native_status.py`**. When **truthy**, runs **`rack_status.sh`** and parses its table — legacy path. |
 
-Both paths share many **`RACK_STATUS_*`**, **`RACK_CMSH_*`**, Slurm, and log-probe settings below.
+Both paths share many **`RACK_STATUS_*`**, PythonCM/legacy **`RACK_CMSH_*`**, scheduler, and log-probe settings below.
 
 ---
 
@@ -208,7 +208,45 @@ Legacy name **`RACK_APP_GRAFANA_URL`** → use **`RACK_WEB_GRAFANA_URI`**.
 
 ---
 
-## 7. Slurm (dashboard host) + `native_status.py`
+## 7. Scheduler, PythonCM, and the Slurm fallback
+
+`RACK_SCHEDULER=pythoncm` is the primary BCM configuration. PythonCM is executed on
+the BCM head with the interpreter and client credentials that match that head's
+CMDaemon. Do not install an arbitrary PyPI package into the Rack Status container:
+PythonCM is version-coupled to BCM. Set `RACK_SCHEDULER=slurm` only for a phased
+migration or rollback.
+
+The historical `/api/slurm-*` routes, `sinfo`/`squeue` response shapes, and
+`slurm_*` JSON fields are stable compatibility contracts. Under PythonCM/direct
+execution they are fulfilled by provider-normalized data; their names do not mean
+that the Slurm CLI was invoked.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| **`RACK_SCHEDULER`** | `pythoncm` in the PythonCM package | `pythoncm` selects BCM inventory plus direct execution; `slurm` selects the compatibility fallback. |
+| **`NVIS_BCM_PYTHON`** | `/cm/local/apps/python312/bin/python3` | BCM-head interpreter used to import the matching PythonCM library. |
+| **`NVIS_PYTHONCM_PATH`** | BCM discovery paths | Explicit PythonCM module path for site/version-specific layouts. |
+| **`NVIS_BCM_HOST`**, **`NVIS_BCM_PORT`** | `127.0.0.1`, `8081` | CMDaemon endpoint as reached from the BCM head. |
+| **`NVIS_BCM_CERT`**, **`NVIS_BCM_KEY`** | `~/.cm/cert.pem`, `~/.cm/cert.key` | PythonCM client identity on the execution host. Never copy private keys into the repository. |
+| **`NVIS_BCM_CA`** | auto-discovered readable PythonCM CA | Override the cluster CA path when needed. The helper prefers PythonCM's readable bundled `pythoncm/etc/cacert.pem`; `/cm/local/apps/cmd/etc/cacert.pem` may be root-only. |
+| **`NVIS_BCM_CA_OUT`** | `~/.cm/cluster-ca.pem` | User-readable pinned CA chain written by the bootstrap path. |
+| **`NVIS_BCM_CA_BOOTSTRAP`** | `0` | Explicitly opt in to collecting and pinning the presented CA chain when the configured CA is unreadable. Verify the resulting fingerprints out of band. |
+| **`NVIS_BCM_USERNAME`**, **`NVIS_BCM_PASSWORD_FILE`**, **`NVIS_BCM_COOKIE_FILE`** | *(unset)* | Optional head-node login and credential-file alternatives. Prefer files on the execution host; do not put raw secrets in command arguments, git, or packages. |
+| **`RACK_PYTHONCM_EXEC_SCRIPT`** | `<scripts dir>/nvis_pythoncm_exec.py` | Override the PythonCM submit/status/cancel/result helper path on the BCM head. |
+| **`RACK_PYTHONCM_JOBS_DIR`** | `<remote base>/var/pythoncm-jobs` or `/var/tmp/nvis-pythoncm-jobs` | Durable helper manifests and task output on the execution host. Must survive web-process restarts. |
+| **`RACK_PYTHONCM_USER`** | `root` | Remote user passed to BCM's parallel command runner. Use the least-privileged account that can execute the selected tool. |
+
+Before enabling PythonCM, run the version probe from the same execution profile as
+the service and confirm the returned `pythoncm_path`, BCM version, and TLS identity.
+Then validate inventory, a one-node direct command, cancellation, drain/resume,
+active/recent job views, log tailing, and one durable workflow run. See
+[PYTHONCM_MIGRATION.md](PYTHONCM_MIGRATION.md).
+
+### 7.1 Slurm compatibility fallback
+
+These settings are read only by the Slurm provider or legacy shell scripts. Keep
+them during the first migration so rollback is a configuration change, then remove
+site-specific overrides after the PythonCM acceptance window.
 
 | Variable | Default | Effect |
 |----------|---------|--------|

@@ -27,7 +27,7 @@ export interface TailLogDialogProps {
   title: string;
   /** When null/undefined, dialog shows idle (no stream). */
   payload: TailLogDialogPayload | null;
-  /** Default ``/api/tail-log-stream``; use ``/api/tail-job-stdout-stream`` for Slurm job stdout tail. */
+  /** Default ``/api/tail-log-stream``; use ``/api/tail-job-stdout-stream`` for scheduler job output. */
   streamEndpoint?: string;
 }
 

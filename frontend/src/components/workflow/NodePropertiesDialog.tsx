@@ -433,8 +433,9 @@ export default function NodePropertiesDialog({
             <Select
               items={[
                 { value: "", children: "— none —" },
-                { value: "slurm", children: "slurm" },
-                { value: "local", children: "local" },
+                { value: "pythoncm", children: "PythonCM direct execution" },
+                { value: "local", children: "Local process" },
+                { value: "slurm", children: "Slurm (compatibility fallback)" },
                 { value: "runai", children: "run:AI (stub)" },
                 { value: "slinky", children: "slinky (stub)" },
                 { value: "maas", children: "MaaS (stub)" },
@@ -446,8 +447,8 @@ export default function NodePropertiesDialog({
           </FormField>
           {schedKind && (
             <>
-              <FormField name="node-sched-script" slotLabel="Script / batch file" slotHelp="e.g. nccl_allreduce.sbatch (resolved under bin/scripts)">
-                <TextInput value={schedScript} onValueChange={setSchedScript} placeholder="nccl_allreduce.sbatch" />
+              <FormField name="node-sched-script" slotLabel="Script" slotHelp="Resolved under bin/scripts; batch files remain supported by the Slurm fallback">
+                <TextInput value={schedScript} onValueChange={setSchedScript} placeholder="validation.sh" />
               </FormField>
               <Flex gap="2">
                 <Box sx={{ flex: 2 }}>

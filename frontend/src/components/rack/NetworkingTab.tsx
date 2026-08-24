@@ -59,7 +59,7 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
         disabled={disabled}
         kind="network"
         title="NVLink / Network Deep Audit"
-        description={`Deep NVLink fabric and forced GPU data-path test plus IMEX, IB rail/rate/error counters and mlx5 bond checks on ${selectedNodes.size} selected node(s). Confirmed failures are commented and drained in Slurm automatically.`}
+        description={`Deep NVLink fabric and forced GPU data-path test plus IMEX, IB rail/rate/error counters and mlx5 bond checks on ${selectedNodes.size} selected node(s). Confirmed failures are commented and drained through the active scheduler automatically.`}
         icon={ShieldCheck}
       />
       <ActionCard
