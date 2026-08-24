@@ -71,6 +71,8 @@ python-lint:
     # The pin alone was not enough: until ruff.toml existed there was no config in the repo at all,
     # so "which rules" was answered by ruff's built-in defaults rather than by us. ruff.toml now
     # declares it -- full PEP 8 on top of the defaults, with E501 deliberately off.
+    # Same pins as backend/requirements-dev.txt -- installed narrowly here because this job needs
+    # no runtime dependencies, so keep the two in step when bumping either.
     - pip install -q ruff==0.16.0 pylint==4.0.7
     - ruff check backend/ --exclude tests
     # backend/tests stays excluded FOR NOW, and that is a gap worth naming rather than inheriting:
@@ -110,7 +112,10 @@ python-test:
     paths:
       - .pip-cache/
   script:
-    - pip install -q -r backend/requirements.txt pytest pytest-cov
+    # requirements-dev.txt pins the test tooling so this job and a contributor's laptop run the
+    # same versions. pytest/pytest-cov used to be installed unpinned here, which meant CI tracked
+    # latest and a green local run was a different claim from a green pipeline.
+    - pip install -q -r backend/requirements.txt -r backend/requirements-dev.txt
     # BEFORE the suite, because it answers a different question and answers it clearly: does the
     # COMMITTED tree import, using only files git tracks? On 2026-08-21 an import was committed one
     # commit before the module it named, and the suite reported it as 34 collection errors whose
@@ -119,10 +124,18 @@ python-test:
     - bash bin/check-tracked-tree.sh
     # Run from the repo root so backend modules resolve repo-root assets (var/, etc.);
     # pytest adds backend/ to sys.path via the backend/tests package.
-    - python -m pytest backend/tests/ -v --tb=short --junitxml=report-python.xml --cov=ai_chat --cov=workflow_engine --cov-report=term-missing
+    # --cov-config picks up .coveragerc, which measures ALL of backend/ with branch coverage. The
+    # previous form named --cov=ai_chat --cov=workflow_engine, so the reported figure described two
+    # modules out of 136 and the gate below would have had almost nothing to check.
+    - python -m pytest backend/tests/ -v --tb=short --junitxml=report-python.xml --cov --cov-config=.coveragerc --cov-report=term-missing --cov-report=json:coverage.json
+    # REQ-45: every file meets the 50% floor, or is on a list of known exceptions that may only
+    # shrink. Runs after the suite because it reads the report the suite produced.
+    - python bin/check-coverage-floor.py coverage.json
   coverage: '/TOTAL.+\s(\d+%)/'
   artifacts:
     when: always
+    paths:
+      - coverage.json
     reports:
       junit: report-python.xml
 

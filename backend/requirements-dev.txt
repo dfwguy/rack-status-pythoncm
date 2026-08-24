@@ -1,0 +1,24 @@
+# Development and CI tooling. Runtime dependencies live in requirements.txt.
+#
+# This file exists so a contributor can reproduce the gates locally with the SAME versions CI uses.
+# The versions were previously inline in .gitlab-ci.yml with no local counterpart, which meant
+# "passes on my machine" and "passes in CI" were different claims -- and the per-file coverage floor
+# (REQ-45) is a merge blocker, so being unable to run it locally is a real obstacle to contributing.
+#
+#   pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+#
+# Then, from the repo root:
+#
+#   python -m pytest backend/tests/ -q --cov --cov-config=.coveragerc --cov-report=json:coverage.json
+#   python bin/check-coverage-floor.py coverage.json
+#   ruff check . && pylint --recursive=y backend
+
+# Pinned to the versions the 2,294-case suite and the coverage gate were verified against on
+# 2026-08-24. CI previously installed these unpinned, so it silently tracked latest.
+pytest==9.1.1
+pytest-cov==7.1.0
+
+# Pinned, not floating: a linter that changes its mind between a local run and a CI run turns a
+# green branch red for reasons the author cannot reproduce.
+ruff==0.16.0
+pylint==4.0.7
