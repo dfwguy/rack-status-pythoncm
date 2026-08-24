@@ -147,14 +147,21 @@ MB per poll.
 
 Ephemeral `job_id` polling still exists for the SPA live dialog. **Validation-family**
 launches (Stage 1/2, Llama, mnubergemm, nvloom, ClusterKit, multirack NEMO/LLMB) are
-**also** persisted via `validation_activities.py` → `var/cache/validation_activities.json`
-(fcntl flock; override `RACK_VALIDATION_ACTIVITIES_FILE`). Canonical id is `activity_id`
-(UUID); async APIs still return `job_id` as the same UUID.
+**also** persisted via `validation_activities.py` → the capped live working set
+`var/cache/validation_activities.json` (fcntl flock; override
+`RACK_VALIDATION_ACTIVITIES_FILE`) and the append-preserving acceptance archive
+`var/history/validation_activities.sqlite3` (override
+`RACK_VALIDATION_ACTIVITIES_ARCHIVE_DB`). Canonical id is `activity_id` (UUID); async APIs still
+return `job_id` as the same UUID.
 
 - Record at launch with `_record_validation_activity(...)` before starting the worker.
 - Workers mirror phase/stdout into the store; stdout `jobid=` lines become `tasks[]`.
 - External SA logs are adopted on first parser/log access (`adopt_log`).
-- List/detail GET lazily refreshes Slurm `scheduler_state` / `StdOut=` for open tasks.
+- List/detail GET lazily refreshes Slurm `scheduler_state` / `StdOut=` for open tasks. A
+  lease-controlled whole-store background sweep also refreshes unseen racks; tune it with
+  `RACK_VALIDATION_ACTIVITIES_REFRESH_{BUDGET,INTERVAL}_SEC`.
+- The live JSON cap never evicts open work. `completion_rollup` is monotonic per tool+rack and
+  comes from the unpruned archive, so a failed retry/cache replacement does not erase a pass.
 - HTTP: `GET/DELETE /api/validation-activities[/<id>]`, `POST …/adopt`.
   `GET/DELETE /api/multirack-jobs` remains a compat alias (`scope=multirack`).
 - `multirack_jobs.py` is a thin shim over `validation_activities` (legacy migration on first read).

@@ -190,7 +190,8 @@ def test_mnubergemm_multirack_plan_is_exact_and_time_capped(monkeypatch, tmp_pat
     ]
     assert plan["scope"] == "multirack"
     assert plan["max_runtime_minutes"] == 60
-    assert "Slurm TimeLimit=01:00:00" in plan["checks"]
+    assert "MNUberGEMM payload duration=3600 seconds" in plan["checks"]
+    assert "Slurm TimeLimit=01:10:00" in plan["checks"]
     assert plan["env_updates"]["NVIS_PRESET_SCOPE_MULTIRACK"] == "1"
     assert plan["cmd"].count("--group-nodelist") == 2
     assert nodes[0] in plan["command_display"] and nodes[1] in plan["command_display"]
@@ -206,6 +207,63 @@ def test_mnubergemm_multirack_plan_is_exact_and_time_capped(monkeypatch, tmp_pat
     assert unsafe_err is not None
     assert unsafe_err[1] == 409
     assert "one resolvable exact-node group" in unsafe_err[0].get_json()["error"]
+
+
+def test_mnubergemm_stage_only_plan_cannot_launch_workload(monkeypatch, tmp_path):
+    nodes = ["ink50-dh01-d01-11", "ink50-dh01-d02-11"]
+    rack_nodes = {
+        "ink50-dh01-d01": [nodes[0]],
+        "ink50-dh01-d02": [nodes[1]],
+    }
+    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(app_module, "_all_slurm_nodenames", lambda: nodes)
+    monkeypatch.setattr(app_module, "_normalize_rack_id", lambda rack: rack)
+    monkeypatch.setattr(app_module, "_multirack_campaign_snapshot", lambda: {"active": False})
+    monkeypatch.setattr(app_module, "_rack_node_hostnames_from_inventory", lambda rack: rack_nodes[rack])
+    monkeypatch.setattr(
+        app_module,
+        "_validation_node_eligibility",
+        lambda raw: ({node: "idle" for node in raw}, []),
+    )
+    with app_module.app.app_context():
+        plan, err = app_module._prepare_validation_preset({
+            "preset_id": "mnubergemm-26.03-v1.17",
+            "scope": "multirack",
+            "racks": list(rack_nodes),
+            "storage": "local",
+            "rsync_to_local": True,
+            "stage_only": True,
+        })
+    assert err is None
+    assert plan is not None
+    assert plan["stage_only"] is True
+    assert plan["cmd"] == []
+    assert "MNUberGEMM_STAGE_ONLY" in plan["command_display"]
+    assert "stage-only: no MNUberGEMM workload submission" in plan["checks"]
+    assert plan["artifact"]["path"] == "/tmp/containers/mnubergemm-26.03-v1.17-arm.sqsh"
+
+
+def test_mnubergemm_stress_prepare_forwards_bounded_canary_runtime(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(app_module, "_normalize_rack_id", lambda rack: rack)
+    monkeypatch.setattr(app_module, "validation_target_for_rack", lambda _rack, target=None: target or "ink50-dh01-d01")
+    monkeypatch.setattr(app_module, "_mnubergemm_stress_script_path", lambda: tmp_path / "run_mnubergemm_stress.sh")
+    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
+    with app_module.app.app_context():
+        prep, err = app_module._prepare_run_mnubergemm_stress({
+            "rack": "ink50-dh01-d01",
+            "target": "ink50-dh01-d01-11",
+            "runtime_seconds": 300,
+            "walltime": "00:10:00",
+            "storage": "local",
+        })
+    assert err is None
+    assert prep is not None
+    assert prep["env_updates"]["RACK_MNUBERGEMM_TIME_TO_RUN"] == "300"
+    assert prep["env_updates"]["RACK_MNUBERGEMM_TIME"] == "00:10:00"
+    assert prep["env_updates"]["RACK_MNUBERGEMM_CONT"].startswith("/tmp/containers/")
+    assert "RACK_MNUBERGEMM_TIME_TO_RUN=300" in prep["display_cmd"]
 
 
 def test_mnubergemm_dispatcher_dry_run_prints_bounded_slurm_command(tmp_path):
@@ -232,8 +290,8 @@ def test_mnubergemm_dispatcher_dry_run_prints_bounded_slurm_command(tmp_path):
         check=False,
     )
     assert proc.returncode == 0, proc.stderr
-    assert "--time=01:00:00" in proc.stdout
-    assert "MNUBERGEMM_TIME_TO_RUN=3300" in proc.stdout
+    assert "--time=01:10:00" in proc.stdout
+    assert "MNUBERGEMM_TIME_TO_RUN=3600" in proc.stdout
     assert proc.stdout.count("PLAN: sbatch --parsable --no-requeue") == 2
     assert "--nodes=1 --nodelist=ink50-dh01-d01-11" in proc.stdout
     assert "--nodes=1 --nodelist=ink50-dh01-d02-11" in proc.stdout
@@ -278,8 +336,8 @@ def test_mnubergemm_dispatcher_rejects_unsafe_multirack_groups(tmp_path, groups,
 @pytest.mark.parametrize(
     ("env_update", "message"),
     [
-        ({"RACK_MNUBERGEMM_TIME_TO_RUN": "3301"}, "must be 1-3300s"),
-        ({"RACK_MNUBERGEMM_TIME": "01:00:01"}, "exceeds the 01:00:00 hard maximum"),
+        ({"RACK_MNUBERGEMM_TIME_TO_RUN": "3601"}, "must be 1-3600s"),
+        ({"RACK_MNUBERGEMM_TIME": "01:10:01"}, "exceeds the 01:10:00 hard maximum"),
     ],
 )
 def test_legacy_mnubergemm_driver_rejects_over_one_hour(env_update, message):
@@ -340,9 +398,9 @@ def test_scripts_encode_runtime_and_result_gates():
     assert 'sacct -X -n -P -j "$mnubergemm_csv"' in dispatcher
     assert "NVIS_NCCL_SBATCH_WAIT=1" in dispatcher
     assert "train_rc=$?" in nemo and "NEMO_VALIDATION_PASS" in nemo
-    assert "mnubergemm_runtime_seconds=3300" in dispatcher
-    assert "mnubergemm_slurm_time_limit=01:00:00" in dispatcher
+    assert "mnubergemm_runtime_seconds=3600" in dispatcher
+    assert "mnubergemm_slurm_time_limit=01:10:00" in dispatcher
     assert '--time="$mnubergemm_slurm_time_limit"' in dispatcher
-    assert "MAX_WALLTIME_SECONDS=3600" in mnubergemm_driver
-    assert "MAX_PAYLOAD_SECONDS=3300" in mnubergemm_driver
+    assert "MAX_WALLTIME_SECONDS=4200" in mnubergemm_driver
+    assert "MAX_PAYLOAD_SECONDS=3600" in mnubergemm_driver
     assert 'extra=(-t "${WALLTIME}")' in mnubergemm_driver

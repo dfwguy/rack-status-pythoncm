@@ -27,6 +27,7 @@ import os
 import queue
 import re
 import shutil
+import sqlite3
 import threading
 import uuid
 from collections.abc import Iterable
@@ -35,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import nvis_id_templates
+import results_history
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
@@ -46,6 +48,10 @@ LEGACY_JOBS_FILE = Path(
 ACTIVITIES_FILE = Path(
     os.environ.get("RACK_VALIDATION_ACTIVITIES_FILE", "")
     or str(REPO_ROOT / "var" / "cache" / "validation_activities.json")
+)
+ACTIVITY_ARCHIVE_DB = Path(
+    os.environ.get("RACK_VALIDATION_ACTIVITIES_ARCHIVE_DB", "")
+    or str(REPO_ROOT / "var" / "history" / "validation_activities.sqlite3")
 )
 MULTIRACK_LEDGER_FILE = Path(
     os.environ.get("RACK_MULTIRACK_LEDGER_FILE", "")
@@ -137,6 +143,8 @@ _logger = logging.getLogger(__name__)
 _ledger_export_queue: queue.Queue[dict[str, Any]] = queue.Queue()
 _ledger_export_worker_lock = threading.Lock()
 _ledger_export_worker_started = False
+_archive_sync_lock = threading.Lock()
+_archive_sync_signature: tuple[str, str, int, int] | None = None
 
 
 def _now_iso() -> str:
@@ -224,6 +232,112 @@ def _ensure_dir() -> None:
     ACTIVITIES_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _archive_upsert_rows(rows: Iterable[dict[str, Any]]) -> bool:
+    """Persist activity snapshots outside the capped live-table cache.
+
+    The JSON registry is a bounded operational working set.  It cannot also be
+    the acceptance record: pruning, dismissal, or cache replacement would
+    otherwise erase completed work.  SQLite lives under ``var/history`` on the
+    persistent rack-data volume and is append-preserving by ``activity_id``.
+    """
+    encoded: list[tuple[str, str, str, str, str, str, str, str]] = []
+    for rec in rows:
+        if not isinstance(rec, dict):
+            continue
+        aid = str(rec.get("activity_id") or rec.get("job_id") or "").strip()
+        if not aid:
+            continue
+        encoded.append(
+            (
+                aid,
+                _normalize_tool(str(rec.get("tool") or rec.get("kind") or "external")),
+                str(rec.get("rack") or "").strip(),
+                str(rec.get("scope") or "").strip().lower(),
+                str(rec.get("log_dir") or ""),
+                str(rec.get("created_at") or ""),
+                str(rec.get("updated_at") or rec.get("created_at") or _now_iso()),
+                json.dumps(rec, ensure_ascii=False, sort_keys=True, default=str),
+            )
+        )
+    if not encoded:
+        return True
+    path = Path(ACTIVITY_ARCHIVE_DB)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(path), timeout=5.0)
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+            except sqlite3.Error:
+                pass
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS validation_activities (
+                    activity_id TEXT PRIMARY KEY,
+                    tool        TEXT NOT NULL,
+                    rack        TEXT,
+                    scope       TEXT,
+                    log_dir     TEXT,
+                    created_at  TEXT,
+                    updated_at  TEXT,
+                    payload     TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_validation_activities_tool_rack
+                    ON validation_activities(tool, rack);
+                CREATE INDEX IF NOT EXISTS idx_validation_activities_updated
+                    ON validation_activities(updated_at DESC);
+                """
+            )
+            conn.executemany(
+                """
+                INSERT INTO validation_activities
+                    (activity_id, tool, rack, scope, log_dir, created_at, updated_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(activity_id) DO UPDATE SET
+                    tool = excluded.tool,
+                    rack = excluded.rack,
+                    scope = excluded.scope,
+                    log_dir = excluded.log_dir,
+                    created_at = excluded.created_at,
+                    updated_at = excluded.updated_at,
+                    payload = excluded.payload
+                WHERE excluded.updated_at >= validation_activities.updated_at
+                """,
+                encoded,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return True
+    except (OSError, sqlite3.Error) as exc:
+        # Activity recording must remain available even if the history volume
+        # is briefly unhealthy.  The next list/read bootstraps current rows.
+        _logger.warning("could not persist validation activity archive %s: %s", path, exc)
+        return False
+
+
+def _sync_archive_from_live(rows: dict[str, dict]) -> None:
+    """Bootstrap/reconcile the archive after upgrades or out-of-band cache writes."""
+    global _archive_sync_signature
+    try:
+        st = ACTIVITIES_FILE.stat()
+        signature = (
+            str(Path(ACTIVITY_ARCHIVE_DB)),
+            str(ACTIVITIES_FILE),
+            int(st.st_mtime_ns),
+            int(st.st_size),
+        )
+    except OSError:
+        return
+    with _archive_sync_lock:
+        if signature == _archive_sync_signature:
+            return
+        if _archive_upsert_rows(rows.values()):
+            _archive_sync_signature = signature
+
+
 def _read_locked(f) -> dict[str, dict]:
     f.seek(0)
     blob = f.read()
@@ -246,7 +360,24 @@ def _prune(rows: dict[str, dict]) -> dict[str, dict]:
         key=lambda kv: str(kv[1].get("created_at") or ""),
         reverse=True,
     )
-    return dict(ordered[:MAX_ACTIVITIES])
+    # Never prune an activity that still needs scheduler/log refresh.  The old
+    # newest-500 policy could evict a long-running job and make it impossible
+    # for the background reconciler to ever observe its terminal state.
+    def _still_open(rec: dict[str, Any]) -> bool:
+        explicit = str(rec.get("work_phase") or "").strip().lower()
+        if explicit:
+            return explicit in OPEN_WORK_PHASES
+        tasks = [task for task in (rec.get("tasks") or []) if isinstance(task, dict)]
+        if tasks:
+            return rollup_work_phase(tasks) in OPEN_WORK_PHASES
+        phase = str(rec.get("phase") or "").strip().lower()
+        return phase not in TERMINAL_PHASES
+
+    open_rows = [item for item in ordered if _still_open(item[1])]
+    open_ids = {aid for aid, _rec in open_rows}
+    terminal_rows = [item for item in ordered if item[0] not in open_ids]
+    remaining = max(0, MAX_ACTIVITIES - len(open_rows))
+    return dict(open_rows + terminal_rows[:remaining])
 
 
 def _write_locked(f, rows: dict[str, dict]) -> None:
@@ -813,8 +944,21 @@ def _with_store(mutator) -> None:
                 locked = False
             try:
                 rows = _read_locked(f)
+                before_rows = {
+                    aid: json.dumps(rec, ensure_ascii=False, sort_keys=True, default=str)
+                    for aid, rec in rows.items()
+                }
                 before = _multirack_rows_fingerprint(rows)
                 mutator(rows)
+                changed_rows = [
+                    rec
+                    for aid, rec in rows.items()
+                    if before_rows.get(aid)
+                    != json.dumps(rec, ensure_ascii=False, sort_keys=True, default=str)
+                ]
+                # Archive before the bounded JSON write.  A newly-created row
+                # therefore remains durable even when the live table prunes it.
+                _archive_upsert_rows(changed_rows)
                 ledger_changed = (
                     before != _multirack_rows_fingerprint(rows)
                     or not MULTIRACK_LEDGER_FILE.exists()
@@ -1403,6 +1547,7 @@ def list_activities(
                         pass
     except (OSError, UnicodeDecodeError):
         return []
+    _sync_archive_from_live(rows)
     out = list(rows.values())
     if log_dir:
         want = str(log_dir)
@@ -1423,6 +1568,136 @@ def list_activities(
     if limit and limit > 0:
         out = out[:limit]
     return [dict(r) for r in out]
+
+
+def _activity_completed(rec: dict[str, Any]) -> bool:
+    """True when a non-dry-run activity has durable successful work evidence."""
+    if bool(rec.get("dry_run")):
+        return False
+    tasks = [task for task in (rec.get("tasks") or []) if isinstance(task, dict)]
+    if tasks:
+        return rollup_work_phase(tasks) == "done"
+    work_phase = str(rec.get("work_phase") or "").strip().lower()
+    if work_phase:
+        return work_phase == "done"
+    phase = str(rec.get("phase") or "").strip().lower()
+    return phase == "done" and rec.get("returncode") in (None, 0, "0")
+
+
+def completion_rollup(
+    *,
+    log_dir: str | None = None,
+    rack: str | None = None,
+    tool: str | None = None,
+    scope: str | None = None,
+) -> dict[str, Any]:
+    """Completed-rack rollup from the append-preserving activity archive.
+
+    Completion is monotonic per ``tool + rack``: a later failed retry remains
+    visible in the attempts list but does not erase an earlier successful
+    acceptance run.
+    """
+    # Ensures pre-upgrade live rows are imported before the first archive query.
+    list_activities(limit=0)
+    path = Path(ACTIVITY_ARCHIVE_DB)
+    raw_rows: list[sqlite3.Row] = []
+    if path.is_file():
+        try:
+            conn = sqlite3.connect(str(path), timeout=5.0)
+            conn.row_factory = sqlite3.Row
+            try:
+                raw_rows = conn.execute(
+                    "SELECT payload FROM validation_activities "
+                    "ORDER BY updated_at DESC, created_at DESC, activity_id DESC"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            _logger.warning("could not read validation activity archive %s: %s", path, exc)
+
+    want_tool = _normalize_tool(tool) if tool else None
+    want_scope = str(scope or "").strip().lower() or None
+    want_rack = str(rack or "").strip() or None
+    completed: dict[str, dict[str, dict[str, Any]]] = {}
+    for raw in raw_rows:
+        try:
+            rec = json.loads(str(raw["payload"] or "{}"))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(rec, dict) or not _activity_completed(rec):
+            continue
+        rec_tool = _normalize_tool(str(rec.get("tool") or rec.get("kind") or "external"))
+        if want_tool and rec_tool != want_tool:
+            continue
+        if log_dir and str(rec.get("log_dir") or "") != str(log_dir):
+            continue
+        if want_scope and str(rec.get("scope") or "").strip().lower() != want_scope:
+            continue
+        racks = _sanitize_racks(rec.get("racks") or [])
+        primary = str(rec.get("rack") or "").strip()
+        if primary and primary not in racks:
+            racks.insert(0, primary)
+        if want_rack:
+            racks = [candidate for candidate in racks if candidate == want_rack]
+        for rack_id in racks:
+            bucket = completed.setdefault(rec_tool, {})
+            if rack_id not in bucket:
+                bucket[rack_id] = {
+                    "activity_id": str(rec.get("activity_id") or rec.get("job_id") or ""),
+                    "completed_at": str(
+                        rec.get("finished_at") or rec.get("updated_at") or rec.get("created_at") or ""
+                    ),
+                }
+
+    # Old one-rack runs predate the activity registry and some later fell out of
+    # its capped JSON cache.  The parsed results database is also real,
+    # fingerprinted completion evidence, so merge it into the same monotonic
+    # rollup instead of requiring an operator to fabricate replacement activity
+    # rows.  Activity evidence wins where both sources exist because it carries
+    # the richer scheduler record.
+    result_tool = {"nccl": "nccl-fullrack", "nemo": "llmb-nemo-combined"}
+    result_scope_allowed = not want_scope or want_scope in {"rack", "single-rack", "one-rack"}
+    if result_scope_allowed:
+        try:
+            durable_results = results_history.latest_successful_runs_by_rack(tuple(result_tool))
+        except Exception:
+            _logger.warning("could not read completed validation results history", exc_info=True)
+            durable_results = {}
+        for result_kind, tool_name in result_tool.items():
+            if want_tool and tool_name != want_tool:
+                continue
+            for rack_id, run in (durable_results.get(result_kind) or {}).items():
+                rack_id = str(rack_id or "").strip()
+                if not rack_id or (want_rack and rack_id != want_rack):
+                    continue
+                source_path = str(run.get("source_log_path") or "")
+                if log_dir and not source_path.startswith(str(log_dir).rstrip("/") + "/"):
+                    continue
+                bucket = completed.setdefault(tool_name, {})
+                if rack_id not in bucket:
+                    bucket[rack_id] = {
+                        "activity_id": f"results:{run.get('run_id') or ''}",
+                        "completed_at": str(run.get("ended_at") or run.get("started_at") or ""),
+                        "source": "results_history",
+                        "source_log_path": source_path,
+                    }
+
+    by_tool: dict[str, Any] = {}
+    all_racks: set[str] = set()
+    for tool_name, by_rack in sorted(completed.items()):
+        racks = sorted(by_rack)
+        all_racks.update(racks)
+        by_tool[tool_name] = {
+            "completed_rack_count": len(racks),
+            "completed_racks": racks,
+            "evidence_by_rack": by_rack,
+        }
+    return {
+        "generated_at": _now_iso(),
+        "completed_rack_count": len(all_racks),
+        "completed_racks": sorted(all_racks),
+        "by_tool": by_tool,
+    }
 
 
 def adopt_log(

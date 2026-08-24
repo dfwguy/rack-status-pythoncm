@@ -1,0 +1,4 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+*/5 * * * * root /opt/observability/nvis-rack-status-v3/bin/refresh-post-run-report.py >>/var/log/nvis-post-run-refresh.log 2>&1

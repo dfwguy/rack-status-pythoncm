@@ -36,16 +36,9 @@ RACK="${2:-}"
 
 LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 LLMB_INSTALL="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
-EXP_DIR="${LLMB_INSTALL%/}/workloads/pretrain_nemotron-h/experiments"
 MARKER="### NVIS: llmb inner log for job ${JID} appended below ###"
 
 mkdir -p "${LOG_DIR}" || { echo "collect_llmb_nemo: cannot create log directory: ${LOG_DIR}" >&2; exit 2; }
-
-inner="$(find "${EXP_DIR}" -name "log-default-default*_${JID}_*.out" 2>/dev/null | head -1)"
-if [[ -z "${inner}" || ! -f "${inner}" ]]; then
-  echo "collect_llmb_nemo: no inner log for job ${JID} under ${EXP_DIR}" >&2
-  exit 3
-fi
 
 # The canonical file the dashboard/parser key on. Prefer an existing one (written by
 # the sbatch shim); otherwise synthesise the name, which needs the rack.
@@ -60,6 +53,63 @@ fi
 if grep -qF "${MARKER}" "${canon}" 2>/dev/null; then
   echo "collect_llmb_nemo: ${canon} already collected (no-op)"
   exit 0
+fi
+
+# The generated NeMo batch script records the exact inner output path in the
+# canonical shell trace.  That path is authoritative: LLMB_INSTALL is the code
+# checkout, while sites may independently relocate experiment data (as happened
+# when runs moved to /cluster/benchmark/... and every watcher searched the old
+# /home/cmods/workspace/llmb tree).  Only accept a trace target whose basename
+# carries this exact job id.
+inner=""
+while IFS= read -r candidate; do
+  candidate="${candidate#\'}"
+  candidate="${candidate%\'}"
+  candidate="${candidate#\"}"
+  candidate="${candidate%\"}"
+  # xtrace records this command before Slurm expands filename tokens, so the
+  # authoritative path commonly still contains literal %j. Resolve only the
+  # job-id token we know from the canonical filename/watcher argument.
+  candidate="${candidate//%j/${JID}}"
+  base="${candidate##*/}"
+  if [[ "${base}" == *_"${JID}"_*.out && -f "${candidate}" ]]; then
+    inner="${candidate}"
+  fi
+done < <(
+  awk '
+    /^\+ / && /srun/ {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "--output" && i < NF) print $(i + 1)
+        else if ($i ~ /^--output=/) { sub(/^--output=/, "", $i); print $i }
+      }
+    }
+  ' "${canon}" 2>/dev/null
+)
+
+searched=()
+if [[ -z "${inner}" ]]; then
+  search_roots=()
+  if [[ -n "${LLMB_EXPERIMENTS_ROOT:-}" ]]; then
+    search_roots+=("${LLMB_EXPERIMENTS_ROOT%/}")
+    search_roots+=("${LLMB_EXPERIMENTS_ROOT%/}/workloads/pretrain_nemotron-h/experiments")
+  fi
+  search_roots+=("${LLMB_INSTALL%/}/workloads/pretrain_nemotron-h/experiments")
+  for root in "${search_roots[@]}"; do
+    [[ -n "${root}" ]] || continue
+    searched+=("${root}")
+    candidate="$(find "${root}" -name "log-default-default*_${JID}_*.out" 2>/dev/null | head -1)"
+    if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+      inner="${candidate}"
+      break
+    fi
+  done
+fi
+
+if [[ -z "${inner}" || ! -f "${inner}" ]]; then
+  echo "collect_llmb_nemo: no inner log for job ${JID}" >&2
+  echo "  canonical trace: ${canon}" >&2
+  echo "  fallback roots : ${searched[*]:-(none)}" >&2
+  exit 3
 fi
 
 {

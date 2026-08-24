@@ -32,6 +32,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPTS = REPO_ROOT / "bin" / "scripts"
 INC = SCRIPTS / "lib" / "llmb_autocollect.inc.sh"
+NEMO_COLLECTOR = SCRIPTS / "collect_llmb_nemo_log.sh"
 LAUNCHERS = [SCRIPTS / "run_llmb_nccl.sh", SCRIPTS / "run_llmb_nemo.sh"]
 
 
@@ -248,6 +249,90 @@ def test_the_include_gates_on_readable():
     body = INC.read_text(encoding="utf-8")
     assert '-r "$collector"' in body
     assert '-x "$collector"' not in body
+
+
+def test_nemo_collector_uses_exact_output_path_from_canonical_trace(tmp_path):
+    """Experiment data may live outside LLMB_INSTALL; the srun trace is authoritative."""
+    log_dir = tmp_path / "rack-logs"
+    log_dir.mkdir()
+    moved_root = tmp_path / "relocated-experiments"
+    moved_root.mkdir()
+    inner = moved_root / "log-default-default.pretrain_174941_0.out"
+    inner.write_text(
+        "elapsed time per iteration (ms): 123.4\n987.6MODEL_TFLOP/s/GPU\n",
+        encoding="utf-8",
+    )
+    canonical = log_dir / "cmods-NEMO-1Rack-r01-18N-174941.txt"
+    canonical.write_text(
+        f"+ srun --output {inner} --error {inner}.err python train.py\n"
+        "+ echo job exited with code 0\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["bash", str(NEMO_COLLECTOR), "174941", "r01"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            **os.environ,
+            "RACK_JOB_LOG_DIR": str(log_dir),
+            # Deliberately wrong: this is the production regression being guarded.
+            "LLMB_INSTALL": str(tmp_path / "obsolete-llmb-checkout"),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    body = canonical.read_text(encoding="utf-8")
+    assert f"### source: {inner}" in body
+    assert "elapsed time per iteration" in body
+    assert "iters : 1" in proc.stdout
+
+    # Idempotency must not depend on the source path remaining mounted.
+    inner.unlink()
+    again = subprocess.run(
+        ["bash", str(NEMO_COLLECTOR), "174941", "r01"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "RACK_JOB_LOG_DIR": str(log_dir)},
+    )
+    assert again.returncode == 0
+    assert "already collected (no-op)" in again.stdout
+
+
+def test_nemo_collector_expands_slurm_job_token_in_trace_output(tmp_path):
+    """Generated srun xtrace contains literal %j while the file on disk has the numeric job id."""
+    jid = "84735"
+    log_dir = tmp_path / "rack-logs"
+    log_dir.mkdir()
+    moved_root = tmp_path / "relocated-experiments"
+    moved_root.mkdir()
+    inner = moved_root / f"log-default-default.pretrain_{jid}_0.out"
+    inner.write_text("elapsed time per iteration (ms): 10.0\n123.0MODEL_TFLOP/s/GPU\n", encoding="utf-8")
+    canonical = log_dir / f"cmods-NEMO-1Rack-r01-18N-{jid}.txt"
+    canonical.write_text(
+        f"+ srun --output {moved_root}/log-default-default.pretrain_%j_0.out python train.py\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["bash", str(NEMO_COLLECTOR), jid, "r01"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            **os.environ,
+            "RACK_JOB_LOG_DIR": str(log_dir),
+            "LLMB_INSTALL": str(tmp_path / "obsolete-llmb-checkout"),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert f"### source: {inner}" in canonical.read_text(encoding="utf-8")
+    assert "123.0MODEL_TFLOP/s/GPU" in canonical.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("launcher", LAUNCHERS, ids=lambda p: p.name)

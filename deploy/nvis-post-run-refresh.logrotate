@@ -1,0 +1,9 @@
+/var/log/nvis-post-run-refresh.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+}

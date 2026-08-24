@@ -944,7 +944,7 @@ def _update_validation_activity(activity_id: str, **kwargs: object) -> None:
 
 def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
     """Best-effort evidence-ladder refresh for tasks that still need hydration."""
-    if os.environ.get("RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED", "").strip().lower() in (
+    if (_eget("RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED") or "").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -963,6 +963,143 @@ def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
                 )
             continue
         _hydrate_activity_task_logs(aid, rec)
+
+
+_validation_activities_refresh_thread: threading.Thread | None = None
+_validation_activities_refresh_thread_lock = threading.Lock()
+
+
+def _validation_activities_refresh_disabled() -> bool:
+    return (_eget("RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _validation_activities_refresh_number(name: str, default: float, minimum: float) -> float:
+    try:
+        value = float((_eget(name) or "").strip() or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+def _refresh_validation_activities_cycle() -> int:
+    """Reconcile the whole live activity working set within a time budget.
+
+    Browser-filtered GETs still refresh immediately, but they are no longer the
+    only reconciliation mechanism.  A sidecar flock/cursor gives all gunicorn
+    workers one fair, restart-safe round robin over open scheduler tasks.
+    """
+    if _validation_activities_refresh_disabled():
+        return 0
+    rows = validation_activities.list_activities(limit=0)
+    candidates = [
+        rec
+        for rec in rows
+        if isinstance(rec, dict)
+        and any(
+            _task_needs_slurm_hydration(task)
+            for task in (rec.get("tasks") or [])
+            if isinstance(task, dict)
+        )
+    ]
+    if not candidates:
+        return 0
+
+    lock_raw = (_eget("RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE") or "").strip()
+    lock_path = (
+        Path(lock_raw).expanduser()
+        if lock_raw
+        else validation_activities.ACTIVITIES_FILE.with_name(
+            ".validation_activities_refresh.lock"
+        )
+    )
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lease = open(lock_path, "a+", encoding="utf-8")  # noqa: SIM115
+    except OSError as exc:
+        _logger.warning("validation activity refresh lease unavailable %s: %s", lock_path, exc)
+        return 0
+
+    refreshed = 0
+    with lease:
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            return 0
+        lease.seek(0)
+        cursor = lease.read().strip()
+        ids = [str(rec.get("activity_id") or rec.get("job_id") or "") for rec in candidates]
+        if cursor in ids:
+            pivot = ids.index(cursor) + 1
+            candidates = candidates[pivot:] + candidates[:pivot]
+        deadline = time.monotonic() + _validation_activities_refresh_number(
+            "RACK_VALIDATION_ACTIVITIES_REFRESH_BUDGET_SEC", 3.0, 0.1
+        )
+        last_attempted = cursor
+        for rec in candidates:
+            if refreshed and time.monotonic() >= deadline:
+                break
+            aid = str(rec.get("activity_id") or rec.get("job_id") or "").strip()
+            if not aid:
+                continue
+            last_attempted = aid
+            try:
+                _hydrate_activity_task_logs(aid, rec)
+            except Exception:  # one unreachable job must not stop the sweep
+                _logger.warning(
+                    "background validation activity refresh failed for %s", aid, exc_info=True
+                )
+            refreshed += 1
+        if last_attempted:
+            lease.seek(0)
+            lease.truncate()
+            lease.write(last_attempted + "\n")
+            lease.flush()
+            try:
+                os.fsync(lease.fileno())
+            except OSError:
+                pass
+        try:
+            fcntl.flock(lease, fcntl.LOCK_UN)
+        except OSError:
+            pass
+    return refreshed
+
+
+def _validation_activities_refresh_loop() -> None:
+    while not _validation_activities_refresh_disabled():
+        try:
+            _refresh_validation_activities_cycle()
+        except Exception:  # daemon must survive transient store/transport errors
+            _logger.exception("validation activity background refresh cycle failed")
+        time.sleep(
+            _validation_activities_refresh_number(
+                "RACK_VALIDATION_ACTIVITIES_REFRESH_INTERVAL_SEC", 30.0, 5.0
+            )
+        )
+
+
+def _bootstrap_validation_activities_refresh_at_startup() -> None:
+    """Start one daemon per process; the file lease elects one active worker."""
+    global _validation_activities_refresh_thread
+    if _validation_activities_refresh_disabled():
+        return
+    if os.environ.get("RACK_STATUS_DEMO", "").strip().lower() in ("1", "true", "yes"):
+        return
+    with _validation_activities_refresh_thread_lock:
+        thread = _validation_activities_refresh_thread
+        if thread is not None and thread.is_alive():
+            return
+        thread = threading.Thread(
+            target=_validation_activities_refresh_loop,
+            name="validation-activities-refresh",
+            daemon=True,
+        )
+        _validation_activities_refresh_thread = thread
+        thread.start()
 
 
 def _maybe_adopt_validation_log(log_path: Path, log_dir: Path, rack: str) -> None:
@@ -13549,6 +13686,71 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
         v = (_eget(k) or "").strip()
         if v:
             env_updates[k] = v
+
+    # The driver has always supported bounded payload/wall clocks, but the API did
+    # not forward them.  Accept only the reviewed HLT envelope: a short canary or
+    # a full 3600-second burn, with a bounded ten-minute Slurm startup/teardown
+    # envelope.  The payload itself, rather than the allocation, is the requested hour.
+    runtime_raw = body.get("runtime_seconds")
+    if runtime_raw is not None:
+        try:
+            runtime_seconds = int(runtime_raw)
+        except (TypeError, ValueError):
+            runtime_seconds = 0
+        if isinstance(runtime_raw, bool) or not 1 <= runtime_seconds <= 3600:
+            return None, (jsonify({
+                "ok": False,
+                "error": "runtime_seconds must be an integer from 1 through 3600",
+            }), 400)
+        env_updates["RACK_MNUBERGEMM_TIME_TO_RUN"] = str(runtime_seconds)
+    else:
+        runtime_seconds = 3600
+
+    walltime_raw = body.get("walltime")
+    if walltime_raw is not None:
+        walltime = str(walltime_raw).strip()
+        match = re.fullmatch(r"(\d+):(\d{2}):(\d{2})", walltime)
+        if match is None:
+            return None, (jsonify({
+                "ok": False,
+                "error": "walltime must use HH:MM:SS and be no longer than 01:10:00",
+            }), 400)
+        hours, minutes, seconds = (int(part) for part in match.groups())
+        walltime_seconds = hours * 3600 + minutes * 60 + seconds
+        if minutes >= 60 or seconds >= 60 or not 1 <= walltime_seconds <= 4200:
+            return None, (jsonify({
+                "ok": False,
+                "error": "walltime must use HH:MM:SS and be no longer than 01:10:00",
+            }), 400)
+        if runtime_seconds + 60 > walltime_seconds:
+            return None, (jsonify({
+                "ok": False,
+                "error": "walltime must leave at least 60 seconds beyond runtime_seconds",
+            }), 400)
+        env_updates["RACK_MNUBERGEMM_TIME"] = walltime
+
+    storage_raw = body.get("storage")
+    if storage_raw is not None:
+        storage = str(storage_raw).strip().lower()
+        if storage not in ("local", "nfs"):
+            return None, (jsonify({"ok": False, "error": "storage must be local or nfs"}), 400)
+        env_updates["RACK_MNUBERGEMM_CONT"] = (
+            "/tmp/containers/mnubergemm-26.03-v1.17-arm.sqsh"
+            if storage == "local"
+            else "/cluster/containers/mnubergemm-26.03-v1.17-arm.sqsh"
+        )
+
+    display_prefix = " ".join(
+        f"{key}={shlex.quote(value)}"
+        for key, value in env_updates.items()
+        if key in {
+            "RACK_MNUBERGEMM_TIME_TO_RUN",
+            "RACK_MNUBERGEMM_TIME",
+            "RACK_MNUBERGEMM_CONT",
+        }
+    )
+    if display_prefix:
+        display_cmd = f"{display_prefix} {display_cmd}"
     return (
         {
             "log_dir": log_dir,
@@ -14134,6 +14336,18 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
     except ValueError as exc:
         return None, (jsonify({"ok": False, "error": str(exc)}), 400)
 
+    stage_only = body.get("stage_only") is True
+    if stage_only and preset.id != "mnubergemm-26.03-v1.17":
+        return None, (jsonify({
+            "ok": False,
+            "error": "stage_only is supported only for the MNUberGEMM fleet image",
+        }), 400)
+    if stage_only and (options["storage"] != "local" or not options["rsync_to_local"]):
+        return None, (jsonify({
+            "ok": False,
+            "error": "MNUberGEMM stage_only requires storage=local and rsync_to_local=true",
+        }), 400)
+
     scope = str(options["scope"])
     racks_raw = body.get("racks")
     if racks_raw is None and body.get("rack"):
@@ -14239,6 +14453,26 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
                 "ok": False,
                 "error": "MNUberGEMM rack groups do not exactly cover the reviewed node target",
             }), 409)
+    if stage_only and not rack_node_groups:
+        selected = {node.casefold(): node for node in nodes}
+        for rack in racks:
+            inventory_nodes = _rack_node_hostnames_from_inventory(rack)
+            group_nodes = [selected[node.casefold()] for node in inventory_nodes if node.casefold() in selected]
+            if group_nodes:
+                rack_node_groups.append({"rack": rack, "nodes": group_nodes})
+        grouped_nodes = [
+            str(node)
+            for group in rack_node_groups
+            for node in (group.get("nodes") or [])
+            if str(node).strip()
+        ]
+        if not rack_node_groups or {
+            node.casefold() for node in grouped_nodes
+        } != {node.casefold() for node in nodes}:
+            return None, (jsonify({
+                "ok": False,
+                "error": "MNUberGEMM stage-only rack groups do not exactly cover the reviewed node target",
+            }), 409)
     if preset.max_nodes is not None and len(nodes) > preset.max_nodes:
         return None, (jsonify({"ok": False, "error": f"{preset.id} supports at most {preset.max_nodes} node(s); resolved {len(nodes)}"}), 400)
     if preset.exact_nodes is not None and len(nodes) != preset.exact_nodes:
@@ -14276,12 +14510,24 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
     if preset.id == "exemplar-system-info":
         checks += ["DGXC v26.06.01 summary present", "nonfatal findings and warnings classified per node"]
     if preset.id == "mnubergemm-26.03-v1.17":
-        checks += ["MNUberGEMM payload duration=3300 seconds", "Slurm TimeLimit=01:00:00"]
+        checks += ["MNUberGEMM payload duration=3600 seconds", "Slurm TimeLimit=01:10:00"]
+    if stage_only:
+        checks += ["stage-only: no MNUberGEMM workload submission", "one rack staged at a time"]
+        cmd = []
+        display_cmd = (
+            "MNUberGEMM_STAGE_ONLY "
+            f"source={shlex.quote(str(preset.shared_image))} "
+            f"destination={shlex.quote(str(preset.local_image))} "
+            f"racks={len(rack_node_groups)} nodes={len(nodes)} concurrency=1"
+        )
     summary = f"{preset.label}: {len(nodes)} exact node(s), storage={options['storage']}, rsync={str(options['rsync_to_local']).lower()}"
+    if stage_only:
+        summary += ", stage-only rack-sequential"
     plan = {
         "preset_id": preset.id,
         "validation": preset.kind,
         "summary": summary,
+        "stage_only": stage_only,
         "scope": scope,
         "nodes": nodes,
         "racks": racks,
@@ -14311,7 +14557,7 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         "image_override_note": ("DGXC recipe v26.06.01 with audited NeMo 26.04.01 image override" if preset.id == "exemplar-system-info" else None),
     }
     hash_fields = {key: plan[key] for key in (
-        "preset_id", "scope", "nodes", "node_groups", "racks", "campaign", "storage", "rsync_to_local",
+        "preset_id", "stage_only", "scope", "nodes", "node_groups", "racks", "campaign", "storage", "rsync_to_local",
         "local_container_dir", "container_profile", "cuda_version", "nccl_version", "max_steps",
         "max_runtime_minutes", "artifact", "log_dir",
     )}
@@ -14335,6 +14581,205 @@ def api_prepare_validation_preset():
     assert plan is not None
     public_plan = {key: value for key, value in plan.items() if key not in ("cmd", "env_updates", "timeout", "log_dir")}
     return jsonify({"ok": True, "plan": public_plan})
+
+
+_MNUBERGEMM_STAGE_TERMINAL_STATES = {
+    "BOOT_FAIL", "CANCELLED", "COMPLETED", "DEADLINE", "FAILED", "NODE_FAIL",
+    "OUT_OF_MEMORY", "PREEMPTED", "REVOKED", "TIMEOUT",
+}
+
+
+def _mnubergemm_stage_slurm_state(job_id: str) -> tuple[str, str]:
+    """Return the allocation state and exit code for one stage job."""
+    plat = _get_platform()
+    proc = host_exec.run_on_host(
+        plat.sacct_cmd(
+            f"-X -n -P -j {shlex.quote(job_id)} -o JobIDRaw,State,ExitCode"
+        ),
+        timeout=60,
+        profile="script",
+    )
+    if proc.returncode == 0:
+        for line in (proc.stdout or "").splitlines():
+            cols = line.split("|")
+            if len(cols) >= 3 and cols[0].strip() == job_id:
+                state = cols[1].strip().split()[0].rstrip("+").upper()
+                if state:
+                    return state, cols[2].strip()
+    queued = host_exec.run_on_host(
+        plat.squeue_cmd(f"-h -j {shlex.quote(job_id)} -o %T"),
+        timeout=60,
+        profile="script",
+    )
+    state = (queued.stdout or "").strip().splitlines()
+    return ((state[0].strip().upper() if state else "PENDING"), "")
+
+
+def _mnubergemm_stage_only_worker(job_id: str, plan: dict) -> None:
+    """Stage the pinned image one physical rack at a time through Slurm.
+
+    Rack-serial submission caps a cold-cache NFS pull at eighteen readers.  It also
+    keeps each allocation attributable to exactly one NVLink domain and never runs
+    the MNUberGEMM workload itself.
+    """
+
+    def patch(**kwargs: object) -> None:
+        with _stress_jobs_lock:
+            row = _stress_jobs.get(job_id)
+            if row is not None:
+                row.update(kwargs)
+        _update_validation_activity(job_id, **kwargs)
+
+    groups = [group for group in plan.get("node_groups", []) if isinstance(group, dict)]
+    artifact = plan.get("artifact") or {}
+    source = str(artifact.get("source") or "")
+    destination = str(artifact.get("path") or "")
+    expected_size = str(artifact.get("size") or "")
+    expected_sha = str(artifact.get("sha256") or "")
+    scripts_dir = str(_scripts_dir())
+    stage_script = str(Path(scripts_dir) / "validation_container_stage.sbatch")
+    log_dir = str(plan["log_dir"])
+    slurm_bin = (_eget("RACK_SLURM_BIN") or "").strip()
+    if not slurm_bin:
+        slurm_cli = (_eget("RACK_SLURM_SBATCH") or "").strip()
+        slurm_bin = str(PurePosixPath(slurm_cli).parent) if slurm_cli.startswith("/") else ""
+    stage_path = ":".join(filter(None, (
+        slurm_bin, "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin",
+    )))
+    slurm_conf = (_eget("RACK_SLURM_CONF") or "").strip()
+    failures: list[dict[str, str]] = []
+    submitted: list[dict[str, object]] = []
+    completed = 0
+    try:
+        patch(
+            phase="running",
+            work_phase="running",
+            started_running_at=datetime.now(timezone.utc).isoformat(),
+            stage_total_racks=len(groups),
+            stage_completed_racks=0,
+            stage_failed_racks=0,
+        )
+        for ordinal, group in enumerate(groups, start=1):
+            rack = str(group.get("rack") or f"group-{ordinal:03d}")
+            nodes = [str(node) for node in (group.get("nodes") or []) if str(node).strip()]
+            if not nodes:
+                failures.append({"rack": rack, "error": "empty exact-node group"})
+                continue
+            output_pattern = f"{log_dir.rstrip('/')}/mnubergemm-container-stage-{rack}-%j.out"
+            export_set = ",".join((
+                "ALL",
+                f"NVIS_STAGE_SOURCE={source}",
+                f"NVIS_STAGE_DEST={destination}",
+                "NVIS_STAGE_RSYNC=1",
+                "NVIS_STAGE_CONTAINER_PREFLIGHT=0",
+                f"NVIS_STAGE_EXPECTED_SIZE={expected_size}",
+                f"NVIS_STAGE_EXPECTED_SHA256={expected_sha}",
+                f"NVIS_SCRIPTS_DIR={scripts_dir}",
+                f"PATH={stage_path}",
+                *(tuple([f"SLURM_CONF={slurm_conf}"]) if slurm_conf else ()),
+            ))
+            args = [
+                "--parsable", "--no-requeue", f"--nodes={len(nodes)}",
+                f"--nodelist={','.join(nodes)}", "--ntasks-per-node=1",
+                "--gpus-per-node=4", f"--job-name=mnub-stage-{rack.rsplit('-', 1)[-1]}",
+                f"--output={output_pattern}", f"--export={export_set}", stage_script,
+            ]
+            patch(current_stage_rack=rack, current_stage_nodes=len(nodes))
+            submit = host_exec.run_on_host(
+                _get_platform().sbatch_cmd(shlex.join(args)),
+                timeout=120,
+                cwd=log_dir,
+                profile="script",
+            )
+            raw_submit = (submit.stdout or "").strip()
+            stage_job_id = raw_submit.splitlines()[0].split(";")[0].strip() if raw_submit else ""
+            if submit.returncode != 0 or not stage_job_id.isdigit():
+                error = (submit.stderr or raw_submit or f"sbatch rc={submit.returncode}").strip()[:500]
+                failures.append({"rack": rack, "error": error})
+                validation_activities.add_or_update_task(
+                    job_id, ordinal=ordinal, label=f"stage {rack}",
+                    scheduler_state="SUBMIT_FAILED", phase="error", work_phase="failed",
+                    evidence=error,
+                )
+                patch(stage_failed_racks=len(failures))
+                continue
+
+            stdout_path = output_pattern.replace("%j", stage_job_id)
+            submitted.append({
+                "rack": rack, "nodes": len(nodes), "job_id": stage_job_id,
+                "stdout_path": stdout_path,
+            })
+            validation_activities.add_or_update_task(
+                job_id, ordinal=ordinal, label=f"stage {rack}",
+                scheduler_ref=stage_job_id, scheduler_state="PENDING",
+                phase="running", work_phase="running", stdout_path=stdout_path,
+            )
+            patch(current_stage_job_id=stage_job_id, stage_jobs=list(submitted))
+
+            deadline = time.monotonic() + 7200
+            last_state = ""
+            state = "PENDING"
+            exit_code = ""
+            while time.monotonic() < deadline:
+                state, exit_code = _mnubergemm_stage_slurm_state(stage_job_id)
+                if state != last_state:
+                    validation_activities.add_or_update_task(
+                        job_id, ordinal=ordinal, label=f"stage {rack}",
+                        scheduler_ref=stage_job_id, scheduler_state=state,
+                        phase="done" if state == "COMPLETED" else "running",
+                        work_phase="done" if state == "COMPLETED" else "running",
+                        stdout_path=stdout_path,
+                    )
+                    last_state = state
+                if state in _MNUBERGEMM_STAGE_TERMINAL_STATES:
+                    break
+                time.sleep(10)
+            else:
+                state = "STATUS_TIMEOUT"
+
+            if state == "COMPLETED" and exit_code == "0:0":
+                completed += 1
+                validation_activities.add_or_update_task(
+                    job_id, ordinal=ordinal, label=f"stage {rack}",
+                    scheduler_ref=stage_job_id, scheduler_state=state,
+                    phase="done", work_phase="done", stdout_path=stdout_path,
+                    evidence="container size and SHA256 verified on every allocated node",
+                )
+            else:
+                error = f"state={state} exit={exit_code or 'unknown'}"
+                failures.append({"rack": rack, "job_id": stage_job_id, "error": error})
+                validation_activities.add_or_update_task(
+                    job_id, ordinal=ordinal, label=f"stage {rack}",
+                    scheduler_ref=stage_job_id, scheduler_state=state,
+                    phase="error", work_phase="failed", stdout_path=stdout_path,
+                    evidence=error,
+                )
+            patch(
+                stage_completed_racks=completed,
+                stage_failed_racks=len(failures),
+                stage_failures=list(failures),
+            )
+
+        ok = not failures and completed == len(groups)
+        patch(
+            phase="done" if ok else "error",
+            work_phase="done" if ok else "failed",
+            ok=ok,
+            returncode=0 if ok else 1,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            current_stage_rack="",
+            current_stage_job_id="",
+            error=None if ok else f"{len(failures)} rack stage job(s) failed",
+        )
+    except Exception as exc:
+        _logger.exception("MNUberGEMM stage-only worker failed")
+        patch(
+            phase="error", work_phase="failed", ok=False, returncode=-1,
+            finished_at=datetime.now(timezone.utc).isoformat(), error=str(exc),
+            stage_completed_racks=completed, stage_failed_racks=len(failures),
+            stage_failures=list(failures),
+        )
+    _stress_job_purge_later(job_id)
 
 
 def _run_validation_preset_async(body: dict):
@@ -14365,10 +14810,17 @@ def _run_validation_preset_async(body: dict):
             "log_dir": plan["log_dir"], "phase": "starting", "command_display": plan["command_display"],
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-    threading.Thread(target=_stress_worker,
-        args=(job_id, plan["cmd"], plan["log_dir"], plan["timeout"], plan["command_display"]),
-        kwargs={"error_label": "validation preset launcher", "env_updates": plan["env_updates"],
-                "profile": "script", "persist": True}, daemon=True).start()
+    if plan.get("stage_only"):
+        threading.Thread(
+            target=_mnubergemm_stage_only_worker,
+            args=(job_id, plan),
+            daemon=True,
+        ).start()
+    else:
+        threading.Thread(target=_stress_worker,
+            args=(job_id, plan["cmd"], plan["log_dir"], plan["timeout"], plan["command_display"]),
+            kwargs={"error_label": "validation preset launcher", "env_updates": plan["env_updates"],
+                    "profile": "script", "persist": True}, daemon=True).start()
     return jsonify({"ok": True, "job_id": job_id, "preset_id": plan["preset_id"],
                     "nodes": plan["nodes"], "node_count": plan["node_count"],
                     "command_display": plan["command_display"], "timeout_sec": plan["timeout"]})
@@ -14814,7 +15266,13 @@ def api_validation_activities():
         limit=limit,
     )
     _refresh_validation_activities_lazy(rows)
-    return jsonify({"ok": True, "activities": rows})
+    completion = validation_activities.completion_rollup(
+        log_dir=log_dir_filter,
+        rack=rack,
+        tool=tool,
+        scope=scope,
+    )
+    return jsonify({"ok": True, "activities": rows, "completion_rollup": completion})
 
 
 @app.route("/api/validation-activities/ledger", methods=["GET"])
@@ -18192,6 +18650,7 @@ _api_package.register(app)
 # After all routes and middleware are registered (avoid circular import via nvftp_cache_sync._eget → app).
 _bootstrap_catalog_at_startup()
 _bootstrap_nvftp_sync_at_startup()
+_bootstrap_validation_activities_refresh_at_startup()
 
 
 if __name__ == "__main__":
@@ -18250,5 +18709,3 @@ def _rack_and_nodes_from_nodelist(nodelist: str) -> tuple[str, list[str]]:
         if hit:
             return (naming.canonical_rack_id(hit[0]) or hit[0]), nodes
     return "", nodes
-
-

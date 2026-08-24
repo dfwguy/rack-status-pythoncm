@@ -18,7 +18,7 @@
 # --delete by default, so head-only files (e.g. customer additions) are preserved.
 #
 # Usage:
-#   bin/deploy-scripts.sh [--dry-run] [--delete] [user@host | ssh-alias]
+#   bin/deploy-scripts.sh [--dry-run] [--delete] [--only RELPATH ...] [user@host | ssh-alias]
 #
 # Target resolution (first that applies):
 #   1. explicit  user@host  or an  ssh-alias  argument
@@ -43,15 +43,22 @@ SRC="${REPO_ROOT}/bin/scripts/"
 DRY=""
 DELETE=""
 TARGET=""
+ONLY=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -n|--dry-run) DRY="-n"; shift ;;
     --delete)     DELETE="--delete"; shift ;;
+    --only)       ONLY+=("${2:?--only needs a path relative to bin/scripts}"); shift 2 ;;
     -h|--help)    grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)           echo "deploy-scripts: unknown option: $1" >&2; exit 2 ;;
     *)            TARGET="$1"; shift ;;
   esac
 done
+
+if (( ${#ONLY[@]} > 0 )) && [[ -n "${DELETE}" ]]; then
+  echo "deploy-scripts: --delete cannot be combined with --only" >&2
+  exit 2
+fi
 
 if [[ -z "${TARGET}" ]]; then
   [[ -n "${RACK_SSH_HOST:-}" ]] || {
@@ -73,9 +80,25 @@ SSH_CMD="ssh -o StrictHostKeyChecking=no"
 
 echo "deploy-scripts: ${SRC} -> ${DEST}${DRY:+  [dry-run]}${DELETE:+  [--delete]}"
 # -r recursive, -l links, -p perms (keep +x), -t times, -c checksum (content-based), -i itemize.
-rsync -rlptc ${DRY} ${DELETE} -i \
-  --exclude='__pycache__/' --exclude='*.pyc' --exclude='*.bak*' \
-  -e "${SSH_CMD}" \
-  "${SRC}" "${DEST}"
+if (( ${#ONLY[@]} > 0 )); then
+  sources=()
+  for rel in "${ONLY[@]}"; do
+    [[ "$rel" != /* && "$rel" != *".."* && -f "${SRC}${rel}" ]] || {
+      echo "deploy-scripts: unsafe or missing --only path: ${rel}" >&2
+      exit 2
+    }
+    # The /./ anchor plus --relative preserves a nested path such as lib/foo.sh.
+    sources+=("${SRC%/}/./${rel}")
+  done
+  printf 'deploy-scripts: selective files:'
+  printf ' %s' "${ONLY[@]}"
+  printf '\n'
+  rsync -rlptcR ${DRY} -i -e "${SSH_CMD}" "${sources[@]}" "${DEST}"
+else
+  rsync -rlptc ${DRY} ${DELETE} -i \
+    --exclude='__pycache__/' --exclude='*.pyc' --exclude='*.bak*' \
+    -e "${SSH_CMD}" \
+    "${SRC}" "${DEST}"
+fi
 
 echo "deploy-scripts: done${DRY:+ (dry-run — nothing written)}"

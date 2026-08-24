@@ -176,13 +176,20 @@ costs no more than one with it. Prefer structured output from the tool over scra
 
 ### 8. Durable run registry and locks — the system of record
 
-`backend/validation_activities.py` (`activity_id`, tasks, phases, adopted external logs) and
+`backend/validation_activities.py` (`activity_id`, tasks, phases, adopted external logs), its
+append-preserving `var/history/validation_activities.sqlite3` archive, and
 `backend/rack_locks.py` (advisory rack claims with TTL and heartbeat release).
 
 **Every launch registers; every exclusive operation claims.** The registry is the audit trail
 that answers "what ran on this rack, when, and what came of it" after the process that started it
 is gone — which is the question every handover asks. The locks are what stop two operators, or
 two agents, from running on the same rack at once.
+
+`var/cache/validation_activities.json` is only a capped live working set. Never compute acceptance
+completion from that cache alone: pruning, dismissal, cache replacement, and a later failed retry
+must not erase an earlier successful run. Completion rollups read the activity archive and
+`results_history`; open activities are retained until the scheduler/log reconciler makes them
+terminal.
 
 ### 9. Naming — rack id is not a hostname
 

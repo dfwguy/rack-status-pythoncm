@@ -516,6 +516,7 @@ workers per log dir, and live worker output is merged over the snapshot so `sinf
 | Store | Location | Holds |
 |---|---|---|
 | Validation activities | `var/cache/validation_activities.json` (`RACK_VALIDATION_ACTIVITIES_FILE`) | Every launch and adopted log, with `tasks[]`; JSON + `fcntl` locking, pruned to `MAX_ACTIVITIES = 500` |
+| Validation activity archive | `var/history/validation_activities.sqlite3` (`RACK_VALIDATION_ACTIVITIES_ARCHIVE_DB`) | Append-preserving activity snapshots and monotonic completed-rack rollups; survives live-cache prune, dismissal, replacement, and restart |
 | Results history | `var/history/results.db` (`RACK_RESULTS_DB`) | `runs` + `run_metrics`; `run_id` = SHA256 of (path, mtime, size); statuses `pass fail timeout unknown` |
 | Cluster snapshots | `var/cache/cluster_snapshots.sqlite3` | `snapshot_meta`, `cluster_snapshots` (payload must carry `rows`, `summary`, `physical_rf0`) |
 | Data lake | `POST {RACK_LAKE_URL}/v1/artifacts` | Parsed JSON + raw log as artifacts; disable with `RACK_LAKE_DISABLED` |
@@ -533,6 +534,14 @@ means Slurm is finished but no results log is bound yet — the collector-lag wi
 on the scheduler's verdict, because an unbounded wait shows a finished run as unfinished forever.
 The activity rolls up by `_WORK_PHASE_RANK` — the *most open* task wins, so `running` beats
 `collecting` beats `done`.
+
+The JSON activity table is an operational cache, not the acceptance system of record. Open rows
+are exempt from its cap until reconciliation makes them terminal. A sidecar-flocked background
+round robin refreshes all open rows (not only rows returned by a browser-filtered GET), using
+`RACK_VALIDATION_ACTIVITIES_REFRESH_BUDGET_SEC` and
+`RACK_VALIDATION_ACTIVITIES_REFRESH_INTERVAL_SEC`. Completed acceptance is monotonic: the archive
+and `results_history.latest_successful_runs_by_rack()` preserve a pass even if a later retry fails
+or `native_log_analysis.json` is replaced.
 
 ### 6.4 Frontend
 

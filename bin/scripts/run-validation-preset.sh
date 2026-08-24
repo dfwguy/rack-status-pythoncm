@@ -267,11 +267,11 @@ case "$preset" in
     # This validation is a bounded qualification, not the separate 24-hour MOP
     # burn-in. Keep both limits in the generated Slurm command so no caller can
     # accidentally inherit an unlimited partition default.
-    # Leave five minutes inside the one-hour allocation for Slurm prolog,
-    # container startup, and clean teardown; equal payload/wall clocks would
-    # deterministically turn an otherwise healthy run into TIMEOUT.
-    mnubergemm_runtime_seconds=3300
-    mnubergemm_slurm_time_limit=01:00:00
+    # Run the requested full 3600-second HLT payload. The allocation gets a
+    # bounded ten-minute envelope for Slurm prolog, container startup, and
+    # clean teardown so a healthy one-hour burn does not end as TIMEOUT.
+    mnubergemm_runtime_seconds=3600
+    mnubergemm_slurm_time_limit=01:10:00
     source_image="/cluster/containers/mnubergemm-26.03-v1.17-arm.sqsh"
     local_image="${local_container_dir}/mnubergemm-26.03-v1.17-arm.sqsh"
     if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi

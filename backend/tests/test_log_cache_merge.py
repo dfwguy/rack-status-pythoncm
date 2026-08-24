@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -136,3 +137,93 @@ def test_the_lock_is_a_sidecar_not_the_published_file(cache_path):
     native_status._save_log_cache(cache_path, {"/l/a.txt": _entry("1")}, {"/l/a.txt"})
     assert (cache_path.parent / (cache_path.name + ".lock")).exists()
     assert not (cache_path.parent / (cache_path.name + ".tmp")).exists()
+
+
+def test_completed_native_probe_is_archived_once_per_fingerprint(monkeypatch, tmp_path):
+    ingested = []
+    monkeypatch.setattr(native_status.results_history, "make_run_id", lambda *_a, **_k: "run-1")
+    monkeypatch.setattr(native_status.results_history, "get_run", lambda _rid: None)
+    monkeypatch.setattr(native_status.results_history, "ingest_run", lambda row: ingested.append(row) or "run-1")
+    native_status._native_history_seen.clear()
+
+    log = tmp_path / "cmods-NCCL-1Rack-bos01-b01-16N-42.txt"
+    probe = {"jid": "42", "nccl_ok": True, "llm_ok": False}
+    native_status._archive_completed_native_probe(
+        log, mtime_ns=2_000_000_000, size=99, rack="bos01-b01", kind="nccl", probe=probe
+    )
+    native_status._archive_completed_native_probe(
+        log, mtime_ns=2_000_000_000, size=99, rack="bos01-b01", kind="nccl", probe=probe
+    )
+
+    assert len(ingested) == 1
+    assert ingested[0] == {
+        "run_id": "run-1",
+        "source_log_path": str(log),
+        "log_basename": log.name,
+        "log_mtime": 2.0,
+        "log_size": 99,
+        "workload_kind": "nccl",
+        "rack": "bos01-b01",
+        "job_id": "42",
+        "status": "pass",
+        "source": "native_status_probe",
+        "extra": {"fingerprint_validated": True},
+    }
+
+
+@pytest.mark.parametrize(
+    ("kind", "probe"),
+    [
+        ("nccl", {"nccl_ok": False}),
+        ("nemo", {"llm_ok": False}),
+        (None, {"nccl_ok": True, "llm_ok": True}),
+    ],
+)
+def test_incomplete_native_probe_is_not_archived(monkeypatch, tmp_path, kind, probe):
+    monkeypatch.setattr(
+        native_status.results_history,
+        "ingest_run",
+        lambda _row: pytest.fail("incomplete probes must not enter completion history"),
+    )
+    native_status._archive_completed_native_probe(
+        tmp_path / "one-rack.txt",
+        mtime_ns=1,
+        size=1,
+        rack="bos01-b01",
+        kind=kind,
+        probe=probe,
+    )
+
+
+def test_worker_archives_a_fingerprint_validated_cache_hit(monkeypatch, tmp_path):
+    log = tmp_path / "cmods-NEMO-1Rack-r01-16N-43.txt"
+    cached = {"jid": "43", "nccl_ok": False, "llm_ok": True}
+    monkeypatch.setattr(
+        native_status,
+        "_load_log_cache",
+        lambda _path: {str(log): {"mtime_ns": 7, "size": 11, "probe": cached}},
+    )
+    monkeypatch.setattr(native_status, "_glob_one_rack_logs", lambda _path: [(log, 7, 11)])
+    monkeypatch.setattr(native_status, "_rack_from_1rack_log", lambda _name: "r01")
+    archived = []
+    monkeypatch.setattr(
+        native_status,
+        "_archive_completed_native_probe",
+        lambda path, **kwargs: archived.append((path, kwargs)),
+    )
+    state = native_status.NativeRackTableState("test", Path(tmp_path))
+
+    state._worker_logs(lambda _path: pytest.fail("a matching cache hit must not be re-probed"))
+
+    assert archived == [
+        (
+            log,
+            {
+                "mtime_ns": 7,
+                "size": 11,
+                "rack": "r01",
+                "kind": "nemo",
+                "probe": cached,
+            },
+        )
+    ]

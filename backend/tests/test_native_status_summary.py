@@ -13,7 +13,14 @@ import threading
 from pathlib import Path
 
 import native_status
+import pytest
 from native_status import NativeRackTableState, rack_total_sinfo_nodes
+
+
+@pytest.fixture(autouse=True)
+def _no_host_results_history(monkeypatch):
+    """Unit tests must not inherit completion rows from a developer/live DB."""
+    monkeypatch.setattr(native_status, "_durable_completed_stage_logs_by_rack", dict)
 
 
 def test_rack_total_sinfo_nodes_sums_states():
@@ -117,6 +124,58 @@ def test_split_stage_failure_is_attributed_to_the_failing_stage(monkeypatch):
     }
     _rows, summary, _f, _l = st.build_table_rows()
     assert summary["fail"] == 1, "a failed stage 1 must not be masked by a passing stage 2"
+
+
+def test_durable_completion_survives_failed_probe_cache_and_cache_replacement(monkeypatch):
+    """Acceptance does not disappear when the replaceable parser cache is wrong or empty."""
+    monkeypatch.setattr(
+        native_status,
+        "_durable_completed_stage_logs_by_rack",
+        lambda: {
+            rack: {
+                "nccl": {
+                    "nemo_state": "done",
+                    "nccl_ok": True,
+                    "llm_ok": False,
+                    "jid": 10,
+                    "_path": f"/logs/nccl-{rack}-10.txt",
+                    "_mtime": 10,
+                },
+                "nemo": {
+                    "nemo_state": "done",
+                    "nccl_ok": False,
+                    "llm_ok": True,
+                    "jid": 11,
+                    "_path": f"/logs/nemo-{rack}-11.txt",
+                    "_mtime": 11,
+                },
+            }
+            for rack in ("r01", "r02")
+        },
+    )
+    st = _build(
+        monkeypatch,
+        racks=["r01", "r02"],
+        sinfo_counts={("r01", "idle"): 18, ("r02", "idle"): 18},
+        by_rack_log={
+            # r01 has a later bad parser-cache row; r02 represents a complete
+            # cache replacement with no ephemeral log evidence at all.
+            "r01": {
+                "nemo_state": "fail",
+                "nccl_ok": False,
+                "llm_ok": False,
+                "jid": 12,
+                "_path": "cmods-NEMO-1Rack-r01-18N-12.txt",
+            },
+        },
+    )
+    rows, summary, _f, _l = st.build_table_rows()
+    assert {row["rack"]: (row["stage1"], row["stage2"]) for row in rows} == {
+        "r01": ("done", "done"),
+        "r02": ("done", "done"),
+    }
+    assert summary["done"] == 2
+    assert summary["stage2"]["done"] == 2
 
 
 def test_logs_without_a_stage_marker_keep_the_single_log_verdict(monkeypatch):

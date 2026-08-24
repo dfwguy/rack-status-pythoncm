@@ -46,6 +46,7 @@ from typing import Any
 
 import host_exec
 import nvis_id_templates as _nvis_ids
+import results_history
 from platforms import get_platform as _get_platform
 
 _logger = logging.getLogger(__name__)
@@ -930,6 +931,43 @@ def validation_status_hint(
 STAGE_LABELS = {"stage1": "NCCL", "stage2": "NeMo"}
 
 
+def _durable_completed_stage_logs_by_rack() -> dict[str, dict[str, dict[str, Any]]]:
+    """Build probe-shaped stage evidence from the persistent results database.
+
+    ``native_log_analysis.json`` is intentionally replaceable parser cache.  A
+    completed acceptance run must not revert to fail/pending when that cache is
+    rotated, a worker starts cold, or a later retry fails.  Results history is
+    the durable source of successful NCCL/NeMo evidence.
+    """
+    try:
+        completed = results_history.latest_successful_runs_by_rack(("nccl", "nemo"))
+    except Exception:  # status still renders while history storage is unhealthy
+        _logger.warning("could not load durable validation completion evidence", exc_info=True)
+        return {}
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    for kind in ("nccl", "nemo"):
+        for rack, run in (completed.get(kind) or {}).items():
+            if not isinstance(run, dict):
+                continue
+            job_id = str(run.get("job_id") or "").strip()
+            try:
+                log_mtime = float(run.get("log_mtime") or 0)
+            except (TypeError, ValueError):
+                log_mtime = 0.0
+            probe: dict[str, Any] = {
+                "nemo_state": "done",
+                "nccl_ok": kind == "nccl",
+                "llm_ok": kind == "nemo",
+                "jid": int(job_id) if job_id.isdigit() else job_id,
+                "_path": str(run.get("source_log_path") or ""),
+                "_mtime": log_mtime,
+                "_durable_completion": True,
+                "_completed_at": str(run.get("ended_at") or run.get("started_at") or ""),
+            }
+            out.setdefault(str(rack), {})[kind] = probe
+    return out
+
+
 _NCCL_TOKENS = frozenset(
     {
         "nccl_all_reduce",
@@ -1260,6 +1298,62 @@ def format_multirack_sinfo_cell(
 
 _states_lock = threading.Lock()
 _states: dict[str, NativeRackTableState] = {}
+_native_history_lock = threading.Lock()
+_native_history_seen: set[str] = set()
+
+
+def _archive_completed_native_probe(
+    path: Path,
+    *,
+    mtime_ns: int,
+    size: int,
+    rack: str | None,
+    kind: str | None,
+    probe: dict[str, Any],
+) -> None:
+    """Persist fingerprint-validated one-rack completion evidence.
+
+    The JSON probe file is a replaceable cache, not an acceptance ledger.  Both
+    freshly parsed probes and cache hits arrive here only after the worker has
+    matched the cache entry to the current file ``mtime_ns`` and ``size``.
+    Successful stage evidence is therefore safe to archive in results history;
+    failures remain visible in the live attempt/cache view but cannot erase an
+    earlier acceptance pass.
+    """
+    passed = (kind == "nccl" and probe.get("nccl_ok") is True) or (
+        kind == "nemo" and probe.get("llm_ok") is True
+    )
+    if not passed or not rack or kind not in {"nccl", "nemo"}:
+        return
+
+    mtime = mtime_ns / 1_000_000_000
+    run_id = results_history.make_run_id(str(path), mtime, size)
+    with _native_history_lock:
+        if run_id in _native_history_seen:
+            return
+        try:
+            existing = results_history.get_run(run_id)
+            if not existing or existing.get("status") != "pass":
+                results_history.ingest_run(
+                    {
+                        "run_id": run_id,
+                        "source_log_path": str(path),
+                        "log_basename": path.name,
+                        "log_mtime": mtime,
+                        "log_size": size,
+                        "workload_kind": kind,
+                        "rack": rack,
+                        "job_id": probe.get("jid"),
+                        "status": "pass",
+                        "source": "native_status_probe",
+                        "extra": {"fingerprint_validated": True},
+                    }
+                )
+            _native_history_seen.add(run_id)
+        except Exception:
+            # History is a durability overlay.  A locked/unavailable DB must not
+            # prevent the live rack table from publishing its parser result.
+            _logger.warning("could not archive native completion probe for %s", path, exc_info=True)
 
 
 class NativeRackTableState:
@@ -1380,6 +1474,15 @@ class NativeRackTableState:
                 rec_d = rec if isinstance(rec, dict) else {}
                 rk = _rack_from_1rack_log(p.name)
                 m_this = mtime_ns / 1_000_000_000
+                kind = _stage_kind_of_log_bn(p.name)
+                _archive_completed_native_probe(
+                    p,
+                    mtime_ns=mtime_ns,
+                    size=size,
+                    rack=rk,
+                    kind=kind,
+                    probe=rec_d,
+                )
                 with self.lock:
                     self.per_path_probe[keyp] = rec_d
                     if rk:
@@ -1389,7 +1492,6 @@ class NativeRackTableState:
                             replace = m_this >= float(prev.get("_mtime") or 0.0)
                         if replace:
                             self.by_rack_log[rk] = {**rec_d, "_path": str(p), "_mtime": m_this}
-                        kind = _stage_kind_of_log_bn(p.name)
                         if kind:
                             bucket = self.by_rack_stage_log.setdefault(rk, {})
                             prev_k = bucket.get(kind)
@@ -1462,6 +1564,7 @@ class NativeRackTableState:
         except Exception:  # noqa: BLE001 — the overlay is best-effort; the rack table must still
             # render if the activities store is missing, locked or corrupt.
             live_jobs = {}
+        durable_stage_logs = _durable_completed_stage_logs_by_rack()
         with self.lock:
             racks = list(self.racks)
             ct = dict(self.ct_by_rack)
@@ -1485,6 +1588,27 @@ class NativeRackTableState:
                     want.add(sj)
         for rack in sorted(racks, key=_rack_sort_key):
             pr_full = by_rack.get(rack)
+            stage_logs = {
+                kind: dict(src)
+                for kind, src in (by_rack_stage.get(rack) or {}).items()
+                if isinstance(src, dict)
+            }
+            durable_for_rack = durable_stage_logs.get(rack) or {}
+            # Acceptance completion is monotonic.  A failed retry remains in
+            # history/attempt views, but it cannot replace a prior pass in the
+            # completion table.  An actually queued live job still overrides
+            # this below and paints the relevant stage ongoing.
+            for kind, src in durable_for_rack.items():
+                if isinstance(src, dict):
+                    stage_logs[kind] = dict(src)
+            if not pr_full and stage_logs:
+                pr_full = max(
+                    stage_logs.values(),
+                    key=lambda src: (
+                        float(src.get("_mtime") or 0),
+                        str(src.get("_completed_at") or ""),
+                    ),
+                )
             if not pr_full:
                 continue
             pr0 = {k: v for k, v in pr_full.items() if k not in ("_path", "_mtime")}
@@ -1494,7 +1618,7 @@ class NativeRackTableState:
             lj0 = _last_job_for_log_row(bn0, pr0)
             if lj0 != "-" and lj0.isdigit():
                 want.add(lj0)
-            for src in (by_rack_stage.get(rack) or {}).values():
+            for src in stage_logs.values():
                 if not isinstance(src, dict):
                     continue
                 sp = str(src.get("_path") or "")
@@ -1513,6 +1637,22 @@ class NativeRackTableState:
             live_nccl = str((live or {}).get("nccl") or "").strip()
             live_nemo = str((live or {}).get("nemo") or "").strip()
             pr_full = by_rack.get(rack)
+            stage_logs = {
+                kind: dict(src)
+                for kind, src in (by_rack_stage.get(rack) or {}).items()
+                if isinstance(src, dict)
+            }
+            for kind, src in (durable_stage_logs.get(rack) or {}).items():
+                if isinstance(src, dict):
+                    stage_logs[kind] = dict(src)
+            if not pr_full and stage_logs:
+                pr_full = max(
+                    stage_logs.values(),
+                    key=lambda src: (
+                        float(src.get("_mtime") or 0),
+                        str(src.get("_completed_at") or ""),
+                    ),
+                )
             if not pr_full:
                 # No results log yet — still paint ongoing when an activity-tracked job is live.
                 nccl_live = bool(live_nccl and live_nccl in running)
@@ -1575,7 +1715,6 @@ class NativeRackTableState:
             # have every rack read as pending regardless of a passing probe. Those racks fall
             # through to the single-log path below, where an unclassifiable probe still yields
             # pending via the `not st` branch -- which is the case worth protecting.
-            stage_logs = by_rack_stage.get(rack) or {}
             nccl_src = stage_logs.get("nccl") or pr_full
             nemo_src = stage_logs.get("nemo") or pr_full
             split_stage_logs = "nccl" in stage_logs and "nemo" in stage_logs

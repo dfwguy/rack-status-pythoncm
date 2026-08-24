@@ -37,7 +37,7 @@
 #   RACK_MNUBERGEMM_TAG         image tag        (default tensorrt-26.03-v1.17-arm)
 #   RACK_MNUBERGEMM_IMAGE_DIR   staging dir      (default /home/cmods/bringup/containers)
 #   RACK_MNUBERGEMM_PARTITION   optional sbatch -p
-#   RACK_MNUBERGEMM_TIME        optional shorter walltime (hard maximum 01:00:00)
+#   RACK_MNUBERGEMM_TIME        optional shorter walltime (hard maximum 01:10:00)
 #   NVIS_SLURM_HOSTLIST         explicit comma-separated NodeName list (skips expansion)
 #   RACK_MNUBERGEMM_NO_SUBMIT=1 stage + validate only, do not sbatch (dry run)
 set -uo pipefail
@@ -74,23 +74,23 @@ IMAGE_DIR="${RACK_MNUBERGEMM_IMAGE_DIR:-/home/cmods/bringup/containers}"
 # MOP/AAT naming: the 'tensorrt-' prefix is dropped in the .sqsh filename, i.e.
 #   tag tensorrt-26.03-v1.17-arm  ->  mnubergemm-26.03-v1.17-arm.sqsh
 CONT="${RACK_MNUBERGEMM_CONT:-${IMAGE_DIR}/mnubergemm-${TAG#tensorrt-}.sqsh}"
-# Rack Status qualifications are capped at one hour. Longer factory burn-ins use a
-# separately reviewed workflow; this operator-facing launcher never inherits an unlimited
-# partition default. The payload gets five minutes of teardown margin inside that ceiling.
-MAX_WALLTIME_SECONDS=3600
-MAX_PAYLOAD_SECONDS=3300
-TIME_TO_RUN="${RACK_MNUBERGEMM_TIME_TO_RUN:-3300}"
+# The HLT request is a true one-hour payload. Keep the Slurm allocation bounded to
+# 70 minutes so the application receives all 3600 seconds plus measured headroom
+# for prolog, container/NCCL startup, and clean teardown.
+MAX_WALLTIME_SECONDS=4200
+MAX_PAYLOAD_SECONDS=3600
+TIME_TO_RUN="${RACK_MNUBERGEMM_TIME_TO_RUN:-3600}"
 case "${TIME_TO_RUN}" in ''|*[!0-9]*) die "RACK_MNUBERGEMM_TIME_TO_RUN must be seconds (got '${TIME_TO_RUN}')" ;; esac
 (( TIME_TO_RUN > 0 && TIME_TO_RUN <= MAX_PAYLOAD_SECONDS )) || \
   die "RACK_MNUBERGEMM_TIME_TO_RUN must be 1-${MAX_PAYLOAD_SECONDS}s (got '${TIME_TO_RUN}')"
 
 # Slurm walltime is always explicit. An optional shorter limit is accepted only when it is
-# parseable and no longer than the product's one-hour ceiling.
-WALLTIME="${RACK_MNUBERGEMM_TIME:-01:00:00}"
+# parseable and no longer than the reviewed HLT envelope.
+WALLTIME="${RACK_MNUBERGEMM_TIME:-01:10:00}"
 WALLTIME_SECONDS="$(duration_seconds "$WALLTIME")" || \
-  die "RACK_MNUBERGEMM_TIME must be a Slurm duration no longer than 01:00:00 (got '${WALLTIME}')"
+  die "RACK_MNUBERGEMM_TIME must be a Slurm duration no longer than 01:10:00 (got '${WALLTIME}')"
 (( WALLTIME_SECONDS > 0 && WALLTIME_SECONDS <= MAX_WALLTIME_SECONDS )) || \
-  die "RACK_MNUBERGEMM_TIME exceeds the 01:00:00 hard maximum (got '${WALLTIME}')"
+  die "RACK_MNUBERGEMM_TIME exceeds the 01:10:00 hard maximum (got '${WALLTIME}')"
 
 mkdir -p "${LOG_DIR}" || die "cannot create log directory: ${LOG_DIR}"
 
