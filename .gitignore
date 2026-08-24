@@ -131,6 +131,16 @@ plc-evidence.jsonl
 .plc/security/*
 !.plc/security/threat-model-*.md
 
+# Same reasoning for the validation reports, and outside the managed block for the same reason.
+# These are the advisory output of plc-requirements-validation / plc-design-validation /
+# plc-v-model-validate. Tracked deliberately: Keith asked for the requirements, design and test
+# documents to be committed so the project's progress is visible over time, and a review that found
+# 30 findings is part of that record -- a snapshot of what the documents looked like when reviewed.
+# Run state (v-model-state.json) stays untracked; it is per-developer working state, not evidence.
+!.plc/plc-requirements-validation-report.md
+!.plc/plc-design-validation-report.md
+!.plc/plc-v-model-validate-summary.md
+
 # Agentic PLC skills are a per-developer local install (each dev runs the
 # installer), not a work product. Our tracked agent guidance stays where it
 # already lives: AGENTS.md, the CLAUDE.md symlink, and .cursor/rules.
