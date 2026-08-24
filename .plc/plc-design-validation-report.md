@@ -247,9 +247,54 @@ views / 121 components / 37 lib modules / 13 service clients / 7 context pairs.
   outbound interface carrying request/response payloads and must appear in the interface table with
   payload schema, destination, transport security and retention — and its plaintext default sits
   oddly beside REQ-30's TLS ≥ 1.2 mandate for the inbound surface and directly engages SRD open
-  question 3 (data-handling classification: what may leave a customer site). If it is vestigial,
-  remove it. Note it is disabled by default (`is_disabled()` is checked first), which lowers
-  present exposure but not the documentation gap.
+  question 3 (data-handling classification: what may leave a customer site).
+
+- **CORRECTION, 2026-08-24 (this report's own error).** An earlier revision of this finding said the
+  path is "disabled by default, so present exposure is limited". **That is wrong and it understated
+  the severity.** `is_disabled()` returns True only when `RACK_LAKE_DISABLED` is explicitly set, and
+  it is set in no deployment file — not `rack-config.env`, not `docker-compose.yml`, not
+  `bin/run-local-nscale-tx.sh`. Verified by resolving the module with all `RACK_LAKE_*` variables
+  cleared: `is_disabled() = False`, `lake_url() = http://host.docker.internal:9410`, capture mode
+  `actions`, timeout 20 s. **A default deployment captures and posts.** The only thing limiting
+  exposure in practice is that usually nothing listens on `:9410`, so the POST fails
+  connection-refused — an accident of the environment, not a control.
+
+- **ESCALATED — the payload contains credentials.** Capture is not limited to metadata.
+  `_lake_should_capture` returns True for every `POST/PUT/PATCH/DELETE` under `/api/` except seven
+  high-frequency polls, which is **102 mutating endpoints**, and the record includes `request_body`
+  verbatim. Two of those endpoints carry secrets:
+  - **`POST /api/login`** — body is `{"password": "..."}` (`api/auth.py:74-78`). The dashboard
+    password is written into `request_body` and shipped.
+  - **`PUT /api/vault/nvftp-token`** — body carries the NVFTP token (`api/vault.py:36-52`).
+
+  `lake_sink.py` performs **no redaction** (zero occurrences), and `logging_config.py`'s redaction
+  filter cannot help: `lake_sink` builds its own JSON and POSTs it through `urllib`, bypassing the
+  logging system entirely. So the one component in the product that knows how to redact is not on
+  this path. **Transport encryption does not address this** — it delivers the credential intact to a
+  Parquet artifact that is retained deliberately and permanently, which is the whole point of a
+  provenance lake.
+
+- **Status: RESOLVED 2026-08-24.** The operator identified the path as a colleague's provenance lake
+  and asked whether HTTPS would satisfy the requirement. It would not, on its own — so all four
+  gaps were closed together:
+
+  | Gap | Fix |
+  | :---- | :---- |
+  | Credentials in the payload | `lake_sink.NEVER_CAPTURE` refuses `/api/login`, `/api/logout`, `/api/vault/*`, `/api/auth*` before the body is read, and `RACK_LAKE_CAPTURE=all` cannot widen onto them. Enforced again in `scrub_record` so a second caller cannot bypass it |
+  | No redaction | `redact()` by key name plus by value, reusing `logging_config.sensitive_values()` rather than a second secret list |
+  | Plaintext transport | `RACK_LAKE_CA_BUNDLE` + a verifying `ssl` context; no skip-verify switch, asserted by a test; fails closed on a bad bundle path; warns once on plain HTTP to a non-local host |
+  | On by default | `RACK_LAKE_CAPTURE` now defaults to `off` |
+
+  Plus the availability problem found alongside it: capture was a **synchronous** 20 s-timeout POST
+  inside `after_request` across ~100 endpoints, and is now a bounded queue drained by a daemon
+  thread, dropping *and counting* under backpressure. `push_run` stays synchronous for the
+  provenance callers that need an honest status.
+
+  Traceability closed too: **REQ-48, REQ-49 and REQ-50** added to the SRD, an *Egress design* section
+  and a payload schema added to the SADD's interface table, and `docs/ENVIRONMENT.md` §16b written.
+  Pinned by 30 cases in `backend/tests/test_lake_egress.py`, written as refusals rather than as
+  "redaction works" — a test asserting a redacted field is present would still pass if an
+  unredacted copy were added beside it.
 
 ### C2. Response compression is configured with a deliberately narrowed mimetype list, and the SADD never mentions compression
 - **Code behavior**: `Compress(app)` at `backend/app.py:206`, with `COMPRESS_MIMETYPES` set

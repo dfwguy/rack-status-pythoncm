@@ -272,6 +272,9 @@ to shipped code, a shipped document, or a recorded decision.
 | REQ-45 | New code carries its own tests | Every source file shall be covered by automated tests to at least 50% of its statements and branches, enforced in CI. Files below that threshold at the time the gate was introduced are recorded as a finite, named exception list that may only shrink. | Test Automatability |
 | REQ-46 | Contribution without code change | Adding a validation tool, preset, hardware platform or customer site shall be achievable by editing catalog data and configuration, without modifying application code. | Functional, Non-Functional |
 | REQ-47 | Verification evidence is attributable | Verification evidence that is not an automated test — inspection and demonstration results — shall be committed to the repository and signed off by a named approver from the authorised set. | Non-Functional |
+| REQ-48 | Provenance export to a data lake | The product shall be able to export validation-run provenance — the parsed result, the raw log and the inputs that defined the run — to an external data lake, so a published measurement stays traceable to exactly what produced it. | Functional, Telemetry |
+| REQ-49 | Egress is opt-in, minimised and encrypted | Any outbound export of operator activity shall be disabled by default; shall never include credential-bearing request bodies; shall redact secrets by key name and by value in whatever it does include; and shall support TLS 1.2 or higher with certificate verification that cannot be disabled. | Security, Telemetry |
+| REQ-50 | Egress never degrades the operator surface | Outbound export shall not block a response, shall be bounded in memory, and shall count what it discards rather than dropping silently. | Non-Functional, KPI |
 
 ---
 

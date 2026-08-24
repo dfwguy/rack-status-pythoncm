@@ -806,12 +806,26 @@ _LAKE_BODY_MAX = 64 * 1024
 
 
 def _lake_capture_mode() -> str:
-    return (os.environ.get("RACK_LAKE_CAPTURE") or "actions").strip().lower()
+    """Capture mode. Default ``off`` -- request capture is OPT-IN.
+
+    It used to default to ``actions``, so any deployment that had never heard of the data lake still
+    captured ~100 mutating endpoints and posted them to ``host.docker.internal:9410``. That looked
+    harmless only because usually nothing listens there; the protection was the environment, not a
+    decision. A site that wants the lake now says so.
+    """
+    return (os.environ.get("RACK_LAKE_CAPTURE") or "off").strip().lower()
 
 
 def _lake_should_capture(path: str, method: str) -> bool:
     mode = _lake_capture_mode()
     if mode == "off" or not path.startswith("/api/"):
+        return False
+    # Checked before `mode == "all"`, deliberately: "all" means every ordinary endpoint, never the
+    # credential-bearing ones. `POST /api/login` carries the dashboard password in its body and
+    # `PUT /api/vault/nvftp-token` carries a token; both were captured verbatim into `request_body`
+    # until 2026-08-24. The lake retains artifacts permanently on purpose, so this is the one gate
+    # that must not be overridable by a debug setting.
+    if lake_sink is not None and lake_sink.never_capture(path):
         return False
     if mode == "all":
         return True
@@ -875,10 +889,22 @@ def _lake_capture_request(response):
             **dict(zip(("remote_addr", "remote_addr_trust"), _common.client_addr())),
             "rack": rack,
         }
-        lake_sink.push_run(
+        # Scrub before anything leaves. `scrub_record` redacts by key name and by known secret
+        # value, and returns None for a path that must not be captured at all -- the same rule as
+        # the predicate above, enforced twice on purpose so a future caller building its own record
+        # cannot bypass the first gate.
+        record["response_body"] = body
+        safe = lake_sink.scrub_record(record)
+        if safe is None:
+            return response
+        body = str(safe.pop("response_body", "") or "")
+        # submit, not push: this runs inside after_request, so a synchronous POST would put the
+        # lake's availability in the operator's latency path -- 20 s of default timeout per
+        # captured request, on a dashboard that would simply feel broken with no way to tell why.
+        lake_sink.submit_run(
             run_id=lake_sink.make_run_id(f"req-{action}", rack, uuid.uuid4().hex[:12]),
             workload="rackstatus_request", rack=rack, job_id=None, nodes=[],
-            status=record["status"], parsed=record,
+            status=safe["status"], parsed=safe,
             log_path=f"synthesized:{action}.response.json", log_text=body,
         )
     except Exception as e:  # noqa: BLE001 - never break a response

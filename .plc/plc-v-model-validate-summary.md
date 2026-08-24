@@ -134,9 +134,18 @@ Reason code: `deferred_scope_by_operator`.
 1. **Two Safety requirements have no designed refusal path** (REQ-6, REQ-7). Implemented in code,
    absent from the design. For a product whose output is acceptance evidence, an undesigned refusal
    is what a reviewer finds first.
-2. **An undocumented outbound egress path carries request and response bodies in plaintext**
-   (`lake_sink.py`). Disabled by default; unrequirmented, undesigned, and directly relevant to the
-   open question about what data may leave a customer site.
+2. ~~**The lake egress path ships credentials in plaintext, and it is ON by default.**~~
+   **RESOLVED 2026-08-24, same session.** Revised upward first: it was **not** disabled by default
+   (no deployment file sets `RACK_LAKE_DISABLED`) and capture covered **102 mutating endpoints**
+   including `POST /api/login`, whose body is `{"password": "..."}`, and
+   `PUT /api/vault/nvftp-token` — with no redaction, because `lake_sink` builds its own payload and
+   bypasses the logging system's redaction filter.
+
+   Then closed on all four axes rather than just the transport the question asked about: credential
+   paths refused before the body is read, redaction by key name and by value, verified TLS with no
+   skip-verify switch, and capture now opt-in. The synchronous 20 s POST inside `after_request` —
+   an availability problem found alongside — became a bounded, counting queue. REQ-48/49/50 added,
+   SADD *Egress design* written, `ENVIRONMENT.md` §16b written, 30 tests.
 3. **Three shipped components have no requirement authorising them**: the AI assistant, the
    interactive terminal (constrained by REQ-28/29 but never required), and the lake capture path.
    An unrequirmented feature is also an unthreat-modelled one.
@@ -154,7 +163,7 @@ Reason code: `deferred_scope_by_operator`.
 
 | # | Action | Addresses | Effort |
 | :----: | :---- | :---- | :---- |
-| 1 | Decide the lake sink's fate — specify it as an interface or remove it | Design C1, Requirements C-3 | Small + a scope decision |
+| ~~1~~ | ~~Decide the lake sink's fate — specify it as an interface or remove it~~ — **done**: specified, secured, opt-in, requirmented (REQ-48/49/50) | Design C1, Requirements C-3 | Small + a scope decision |
 | 2 | Design the two refusal paths in the SADD's Dynamic Design | Requirements B-1, B-2 | Small — rationale exists in `.cursor/rules/` |
 | ~~3~~ | ~~Correct the audit-ordering claim in the SADD and the false comment at `app.py`~~ — **done**, plus a mutation-checked guard test | Design B1 | Trivial |
 | ~~4~~ | ~~Update the stale `import app` debt note~~ — **done** in the SADD and `core-designs.mdc` | Design B2 | Trivial |

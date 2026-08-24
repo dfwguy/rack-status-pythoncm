@@ -264,6 +264,45 @@ explicit allowlist. Full reference: `docs/ENVIRONMENT.md`.
 | VictoriaMetrics | outbound | Read-only proxy; PromQL selectors built from an allowlisted label pattern |
 | Grafana | outbound | Deep links by dashboard uid/slug with template variables; optional `/d-solo/` embeds |
 | Container images | outbound | Version-pinned per platform `tool_param_defaults` |
+| **Data lake (`nvis-lakewriter`)** | **outbound** | `POST /v1/artifacts` with a JSON envelope: `run_id`, `cluster`, `job_id`, `harness`, `captured_at`, `resolve_context`, and `artifacts[]` of `{artifact_path, encoding: utf8\|base64, content, sha256, size_bytes}`. Digest is computed over raw bytes pre-encoding so the writer can verify either encoding. Carries run provenance (parsed result, raw log, defining inputs) and — only when opted in — a per-request record. See *Egress design* below |
+
+### Egress design (`lake_sink.py`) — REQ-48, REQ-49, REQ-50
+
+This is the product's only outbound data path, which makes its design a security design. Its purpose
+is provenance: a busbw or power figure published six months ago must remain traceable to the exact
+log and inputs that produced it, which SQLite results and head-node log files could not guarantee.
+
+Four controls, each answering a specific way the path was found to be wrong on 2026-08-24:
+
+- **Opt-in.** `RACK_LAKE_CAPTURE` defaults to `off`. Request capture previously defaulted to
+  `actions`, so a site that had never heard of the lake still posted ~100 mutating endpoints to
+  `host.docker.internal:9410`; the only thing making that safe was that nothing usually listens
+  there, which is an accident of the environment rather than a control.
+- **Credential paths are refused, not filtered.** `NEVER_CAPTURE` is checked before a body is read
+  and cannot be widened by `RACK_LAKE_CAPTURE=all`. `POST /api/login` carries the password in its
+  body; `PUT /api/vault/nvftp-token` carries a token. This mirrors the audit trail's choice to drop
+  query strings rather than filter them — a credential is invisible to key-name redaction as often
+  as not, so the reliable control is not to take the data. Enforced twice, at the capture predicate
+  and again in `scrub_record`, so a second caller building its own record cannot bypass the first.
+- **Redaction by key and by value** on whatever is captured, reusing `logging_config`'s env-sourced
+  secret list rather than growing a second one — a parallel list would drift, and silently.
+- **Verified TLS with no escape hatch.** `RACK_LAKE_CA_BUNDLE` supports a self-signed or internal-CA
+  lake; there is deliberately no skip-verify switch, because an unverified TLS connection to a
+  provenance store authenticates nothing while looking secure in review. Switching to `https://`
+  without a trusted certificate fails rather than downgrading, and an unreadable bundle path raises
+  rather than falling back to system trust.
+
+**Availability.** Request capture enqueues onto a bounded queue drained by a daemon thread. It runs
+inside `after_request`, so a synchronous POST would place the lake's availability directly in the
+operator's latency path — up to `RACK_LAKE_TIMEOUT` (default 20 s) per captured request across ~100
+endpoints, which would present as a dashboard that simply feels broken. A full queue drops and
+**counts**, surfaced by `GET /api/lake/health`, because the product's own absent-versus-zero rule
+applies to its own telemetry. `push_run` stays synchronous for the results-ingest path, which needs
+the honest status: a silent provenance failure is the exact class of bug this platform exists to
+catch.
+
+This is an interface to a system outside this repository, owned by a colleague, so the payload schema
+above is the contract as this side understands it; the writer owns its own validation.
 
 ### Dependencies (design-level)
 

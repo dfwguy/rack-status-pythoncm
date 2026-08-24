@@ -429,6 +429,60 @@ Search in **`app.py`** for: `_DISABLED`, `_DRY_RUN`, `_TIMEOUT`, `_DISABLED` on 
 
 ---
 
+## 16b. Data lake egress (`RACK_LAKE_*`) — what leaves the site
+
+The lake sink pushes validation-run provenance (parsed results, raw logs, the sbatch/conf/YAML that
+defined a run) to `nvis-lakewriter`, and optionally a record of each API request. It is the
+product's only **outbound** data path, so its settings are security settings.
+
+| Variable | Default | Meaning |
+| :---- | :---- | :---- |
+| `RACK_LAKE_CAPTURE` | **`off`** | Request capture: `off`, `actions`, `all`. **Opt-in.** |
+| `RACK_LAKE_URL` | `http://host.docker.internal:9410` | Lake writer endpoint. Use `https://` off-host. |
+| `RACK_LAKE_CA_BUNDLE` | *(system trust)* | PEM bundle verifying an `https://` lake. |
+| `RACK_LAKE_DISABLED` | *(unset = enabled)* | `1` disables the sink entirely, run pushes included. |
+| `RACK_LAKE_CLUSTER` | active catalog cluster/customer | Cluster tag every record is filed under. |
+| `RACK_LAKE_TIMEOUT` | `20` | Per-request timeout, seconds. |
+| `RACK_LAKE_QUEUE_MAX` | `256` | Bounded async queue depth for request capture. |
+
+**Request capture is opt-in, and that is a change.** It used to default to `actions`, so a
+deployment that had never heard of the lake still captured ~100 mutating endpoints and posted them
+to `host.docker.internal:9410`. Nothing usually listens there, which made it look harmless — the
+protection was the environment rather than a decision.
+
+**Credential-bearing endpoints are never captured, in any mode.** `POST /api/login` carries the
+dashboard password in its body and `PUT /api/vault/nvftp-token` carries a token; both were captured
+verbatim until 2026-08-24. `lake_sink.NEVER_CAPTURE` refuses them before the body is read, and
+`RACK_LAKE_CAPTURE=all` cannot widen scope onto them. This follows the same reasoning as the audit
+trail dropping query strings rather than filtering them: a credential is invisible to key-name
+redaction as often as not, so the reliable control is not to take the data.
+
+Everything that *is* captured is redacted twice — by key name (`password`, `token`, `secret`,
+`api_key`, `auth`, `cookie`, `session`, …) and by value, reusing the same env-sourced secret list
+`NVIS_LOG_SENSITIVE_KEYS` feeds to the log redaction filter.
+
+**TLS is verified or it fails.** There is deliberately no skip-verify switch: an unverified TLS
+connection to a provenance store authenticates nothing while looking secure in review, so a
+misdirected endpoint would be indistinguishable from the real one. Consequences worth knowing:
+
+- Switching `RACK_LAKE_URL` to `https://` without a trusted certificate makes posts **fail**, not
+  silently downgrade. That is intended.
+- For a self-signed or internal-CA lake, point `RACK_LAKE_CA_BUNDLE` at the CA.
+  `bin/gen-tls-cert.py --mode ca` writes a suitable `ca.crt`.
+- A `RACK_LAKE_CA_BUNDLE` path that does not exist raises rather than falling back to system trust —
+  a typo must not quietly become an unverified connection.
+- Plain HTTP to a **non-local** host logs one warning. Plaintext to `host.docker.internal` or
+  loopback is not warned about: that is the same machine over Docker's bridge.
+
+**Capture never blocks a response.** Request capture enqueues onto a bounded queue drained by a
+daemon thread, because it runs inside `after_request` — a synchronous POST there would put the
+lake's availability in the operator's latency path, up to `RACK_LAKE_TIMEOUT` per request. When the
+queue is full, records are dropped **and counted**; `GET /api/lake/health` reports the depth and the
+drop count, so loss is visible rather than silent. `push_run` remains synchronous for the
+results-ingest path, which needs the honest status back.
+
+---
+
 ## 17. Execution target: connection topology vs. the flat env contract
 
 How NVIS reaches the cluster can be expressed two ways. The env vars below are the
@@ -509,8 +563,11 @@ RACK_HW_CHECK_TIMEOUT
 RACK_IMEX_CHECK_SCRIPT
 RACK_IMEX_RESET_SCRIPT
 RACK_IMEX_RESET_TIMEOUT
+RACK_LAKE_CA_BUNDLE               # PEM bundle verifying an https:// lake; see §16b
+RACK_LAKE_CAPTURE                 # request capture: off (default) | actions | all; see §16b
 RACK_LAKE_CLUSTER                 # lake cluster tag; defaults to the active catalog cluster/customer, else "unknown-cluster"
 RACK_LAKE_DISABLED
+RACK_LAKE_QUEUE_MAX               # bounded async capture queue depth (default 256)
 RACK_LAKE_TIMEOUT
 RACK_LAKE_URL
 RACK_LLAMA_DISABLED
