@@ -19,12 +19,17 @@
 
 ## Summary
 
-| Group | Critical | Warning | Info | Total |
-| :---- | :----: | :----: | :----: | :----: |
-| A — SRD template compliance | 0 | 3 | 3 | 6 |
-| B — SRD → SADD coverage | 2 | 3 | 5 | 10 |
-| C — SADD → SRD traceability | 0 | 3 | 2 | 5 |
-| **Total** | **2** | **9** | **10** | **21** |
+| Group | Critical | Warning | Info | Total | Resolved |
+| :---- | :----: | :----: | :----: | :----: | :----: |
+| A — SRD template compliance | 0 | 3 | 3 | 6 | 0 |
+| B — SRD → SADD coverage | 2 | 4 | 5 | 11 | 2 |
+| C — SADD → SRD traceability | 0 | 3 | 2 | 5 | 1 |
+| **Total** | **2** | **10** | **10** | **22** | **3** |
+
+**Resolved since this report was written (2026-08-24, same session):** both Critical findings (B-1,
+B-2 — the two undesigned refusal paths) and C-3 (the lake egress path, which was fixed as well as
+documented). One new finding was opened by closing B-1: **B-1a**, that the launch binding covers one
+endpoint out of thirteen — a code gap the design work surfaced.
 
 **What changed since the previous assessment.** The August security-only assessment recorded the
 SRD, SADD and SUTP as `missing`, so requirements validation and design validation were both `SKIP`
@@ -138,6 +143,24 @@ presented, what identifies it, and where the comparison-and-refusal happens
 (`validation_launch.py`). The SRD's citizen-3 concept of a pinned, versioned campaign roster is the
 natural place to anchor it.
 
+**Status: RESOLVED (design) 2026-08-24 — and the control turned out to be stronger than assumed,
+while its coverage turned out to be narrower.** The SADD now carries a *Launch safety* subsection
+describing the real mechanism: a `prepare` → `launch` split where `prepare` resolves the target and
+returns a SHA-256 `plan_hash` over the decided plan, and `launch` **re-resolves** and compares with
+`secrets.compare_digest`, answering 409 with *"validation plan changed; prepare and review it
+again"*. Re-resolution rather than request-checksumming is what makes it a genuine gate — a drained
+rack, a superseded campaign or a cluster switched under a stale browser tab all change the digest.
+
+**New finding B-1a (Warning) — the binding covers one launch endpoint out of thirteen.**
+`plan_hash` is enforced only in `_run_validation_preset_async`. Verified by search: it appears
+nowhere else. `/api/run-nccl-fullrack-async`, `/api/run-nemo-xrack-async`,
+`/api/run-llmb-nccl-async`, `/api/run-mnubergemm-stress-async`, `/api/run-nvloom-async`,
+`/api/run-clusterkit-async`, `/api/run-validation-async` and the llama/exemplar family resolve their
+target at launch and rely on a client-side confirmation dialog — which is not a binding, because
+nothing detects that what the operator reviewed has since changed. So REQ-6 is satisfied on the
+preset path and **unsatisfied on the legacy paths**, which is a code gap rather than a documentation
+one. Remediation: route those launches through prepare/launch, or give them the same digest.
+
 ### B-2 (Critical) REQ-7 per-rack fan-out refusal has no design
 
 > REQ-7: *For recipes confined to one NVLink domain, the product shall submit one job per rack and
@@ -153,6 +176,16 @@ allocation spanning two physical racks joins two separate NVLink domains and the
 (`bin/scripts/run-validation-preset.sh`, `--group-nodelist` per rack), the partition invariant (a
 node in two groups or outside the selection is a refusal, not a warning), and the allocation
 ceiling. `.cursor/rules/dcgm-mndiag-mnubergemm.mdc` already holds the rationale.
+
+**Status: RESOLVED 2026-08-24.** Documented in the SADD's *Launch safety* subsection, and the
+implementation is better than the requirement asks for: the partition is checked **twice**, in
+Python on the app host (`_prepare_validation_preset` — overlapping groups, union not exactly the
+reviewed set, a rack with no resolvable group) and again in bash on the head node
+(`validate_exact_groups` — a member outside the target, a member in two groups, a differing member
+count, a non-explicit node name). Both fail closed; the shell exits 2 before any `sbatch` runs. The
+duplication is deliberate rather than redundant: the dispatcher is reachable by an operator with
+shell access and so does not assume the caller was the API. `max_runtime_minutes=60` is enforced as
+an equality, not a maximum, so a caller cannot quietly raise the ceiling.
 
 ### B-3 (Warning) REQ-16 evidence-first node state change has no design coverage
 

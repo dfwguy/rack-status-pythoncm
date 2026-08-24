@@ -131,9 +131,20 @@ Reason code: `deferred_scope_by_operator`.
 
 ## Top risks
 
-1. **Two Safety requirements have no designed refusal path** (REQ-6, REQ-7). Implemented in code,
-   absent from the design. For a product whose output is acceptance evidence, an undesigned refusal
-   is what a reviewer finds first.
+1. ~~**Two Safety requirements have no designed refusal path** (REQ-6, REQ-7)~~ — **RESOLVED
+   2026-08-24, same session.** Both are now in the SADD's *Launch safety* subsection, and both
+   controls proved stronger than the report assumed: REQ-6 is a `prepare`→`launch` split with a
+   SHA-256 `plan_hash` that is **re-resolved** and compared in constant time, and REQ-7's partition
+   invariant is checked twice — in Python on the app host and again in bash on the head node, both
+   failing closed.
+
+   **But closing it opened a real one.** `plan_hash` is enforced in exactly **one launch endpoint
+   out of thirteen**. The legacy per-tool launches (`run-nccl-fullrack-async`,
+   `run-nemo-xrack-async`, `run-llmb-nccl-async`, `run-mnubergemm-stress-async`, `run-nvloom-async`,
+   `run-clusterkit-async`, the llama/exemplar family) resolve their target at launch and rely on a
+   client-side confirmation dialog, which detects nothing. So REQ-6 holds on the preset path and
+   **fails on the legacy paths** — a code gap, now finding B-1a, and the highest-value remaining
+   item.
 2. ~~**The lake egress path ships credentials in plaintext, and it is ON by default.**~~
    **RESOLVED 2026-08-24, same session.** Revised upward first: it was **not** disabled by default
    (no deployment file sets `RACK_LAKE_DISABLED`) and capture covered **102 mutating endpoints**
@@ -164,7 +175,8 @@ Reason code: `deferred_scope_by_operator`.
 | # | Action | Addresses | Effort |
 | :----: | :---- | :---- | :---- |
 | ~~1~~ | ~~Decide the lake sink's fate — specify it as an interface or remove it~~ — **done**: specified, secured, opt-in, requirmented (REQ-48/49/50) | Design C1, Requirements C-3 | Small + a scope decision |
-| 2 | Design the two refusal paths in the SADD's Dynamic Design | Requirements B-1, B-2 | Small — rationale exists in `.cursor/rules/` |
+| ~~2~~ | ~~Design the two refusal paths in the SADD's Dynamic Design~~ — **done** | Requirements B-1, B-2 | Small — rationale exists in `.cursor/rules/` |
+| **2a** | **Extend the `plan_hash` binding to the twelve legacy launch endpoints**, or route them through prepare/launch. Opened by closing B-1 | Requirements B-1a | Medium — one shared helper, thirteen call sites |
 | ~~3~~ | ~~Correct the audit-ordering claim in the SADD and the false comment at `app.py`~~ — **done**, plus a mutation-checked guard test | Design B1 | Trivial |
 | ~~4~~ | ~~Update the stale `import app` debt note~~ — **done** in the SADD and `core-designs.mdc` | Design B2 | Trivial |
 | 5 | Requirement the interactive terminal and the AI assistant, or scope them out | Requirements C-1, C-2 | Small |

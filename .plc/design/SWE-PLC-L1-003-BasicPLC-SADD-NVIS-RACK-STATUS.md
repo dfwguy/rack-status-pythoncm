@@ -359,6 +359,74 @@ affected (status, principal, action, resource), but the latency it measures excl
 The accurate invariant is: **last among the application's own handlers**. The lake capture at the
 head of the chain reads the response body before the security headers exist on it.
 
+### Launch safety: two refusals — REQ-6, REQ-7
+
+A validation launch takes a customer's rack out of service and consumes real GPU hours, so the two
+requirements governing it are refusals rather than capabilities. Both were implemented before this
+document existed and neither was written down; a design that describes only the success path of a
+safety control is describing the half that cannot go wrong.
+
+**REQ-6 — the reviewed target is bound to the launch.** The path is deliberately split in two:
+
+```
+POST /api/validation-presets/prepare   -> resolves nodes, returns `plan` + `plan_hash`
+        (operator reads the resolved target in ValidationPresetDialog)
+POST /api/run-validation-preset-async  -> re-resolves, recomputes the hash, compares, launches
+```
+
+`_prepare_validation_preset` (`validation_launch.py`) resolves the target from an explicit node
+list, a Slurm nodespec, or a rack/campaign expansion, then hashes the *decided* plan — SHA-256 over
+`preset_id, scope, nodes, node_groups, racks, campaign, storage, container/cuda/nccl versions,
+max_steps, max_runtime_minutes, artifact, log_dir` — and returns the digest with the plan.
+
+Launch calls the same resolver again on the same body and compares with
+`secrets.compare_digest`. A missing hash and a mismatched hash are both **409**, the latter carrying
+the new digest so the UI can re-present the changed plan:
+
+> `"validation plan changed; prepare and review it again"`
+
+Two properties matter. Re-resolution is what makes this a real gate rather than a checksum of the
+request: the node list is derived again from Slurm and the catalog, so a rack that drained, a
+campaign that was superseded, or a cluster switched underneath a stale browser tab all change the
+digest and refuse. And a constant-time compare is used because the digest is echoed by the client;
+that is cheap and removes the question entirely.
+
+A second, narrower binding exists for exact-node campaigns: a supplied `campaign` id that no longer
+matches the resolved campaign is refused as *"stale or unknown exact-node campaign id"*, which
+catches a stale roster even where the plan hash would not.
+
+**Coverage is partial, and that is a real gap rather than a documentation one.** `plan_hash` is
+enforced in `_run_validation_preset_async` only. The other launch endpoints —
+`/api/run-nccl-fullrack-async`, `/api/run-nemo-xrack-async`, `/api/run-llmb-nccl-async`,
+`/api/run-mnubergemm-stress-async`, `/api/run-nvloom-async`, `/api/run-clusterkit-async` and the
+llama/exemplar family — resolve their target at launch time and rely on a client-side confirmation
+dialog, which is not a binding: nothing detects that what the operator reviewed has since changed.
+Closing this means either routing those launches through prepare/launch or giving them the same
+digest. Tracked as a finding in the requirements validation report.
+
+**REQ-7 — a multi-rack target must be a clean partition, or it is refused.** MNUberGEMM is an
+NVLink-domain test: the audited sbatch disables InfiniBand and enables MNNVL, so one Slurm
+allocation spanning two physical racks joins two separate NVLink domains and **hangs**. The dispatch
+is therefore one job per rack, and the grouping is checked to be an exact partition of the reviewed
+selection — not a warning, a refusal.
+
+Checked twice, in different languages, on different hosts:
+
+| Layer | Where | Refuses |
+| :---- | :---- | :---- |
+| Plan builder (Python, app host) | `validation_launch.py`, in `_prepare_validation_preset` | groups that overlap; groups whose union is not exactly the reviewed node set; a rack with no resolvable group |
+| Dispatcher (bash, head node) | `bin/scripts/run-validation-preset.sh`, `validate_exact_groups` | a member outside the reviewed target; a member in two groups; a total member count that differs from the reviewed target; a non-explicit node name |
+
+The duplication is deliberate. The dispatcher is invoked on the head node and is reachable by an
+operator with shell access, so it does not assume the caller was the API; the API check gives the
+operator a 409 with a readable reason instead of a job that fails minutes later on a compute tray.
+Both fail closed — the shell exits 2 before any `sbatch` runs.
+
+The preset also carries `max_runtime_minutes=60`, enforced as an equality rather than a maximum
+(`normalize_options` refuses a *different* supplied value rather than clamping it, so a caller cannot
+quietly raise the ceiling), and the dispatcher passes `--time=01:00:00` with an internal 3,300-second
+budget. A wedged run therefore cannot hold a rack indefinitely.
+
 ### Data Flow
 
 ```
