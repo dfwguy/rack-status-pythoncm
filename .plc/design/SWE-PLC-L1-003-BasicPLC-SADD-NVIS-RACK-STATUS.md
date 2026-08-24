@@ -1,0 +1,342 @@
+# NVIS Rack Status
+
+## PLC-L1: Basic PLC: Software Architecture and Design Document
+
+## Documentation Control
+
+| Item | Description |
+| :---- | :---- |
+| Title | NVIS Rack Status — Software Architecture and Design Document |
+| Author(s) | Rafael M. Koike (NVIS OVA team), reconstructed with Agentic PLC |
+| Revision | Aug. 24, 2026 |
+| State | Development |
+| Reviewed in | GitLab (`nvis/nvis-rack-status`) |
+| nSpect | NSPECT-S57Q-EI19 |
+| Input SRD | `.plc/requirements/SWE-PLC-L1-002-BasicPLC-SRD-NVIS-RACK-STATUS.md` |
+| PLC-L1 SADD Template Revision | SWE-PLC-L1-001-BasicPLC-SADD-TMPL |
+
+Revision History
+
+| Date | Author | Summary of Change |
+| :---- | :---- | :---- |
+| Aug. 24, 2026 | Agentic PLC | Initial reconstruction from the shipped source tree (134 backend modules, 38 API modules, 218 routes), `.cursor/rules/core-designs.mdc`, `docs/EXECUTION_ARCHITECTURE.md`, `docs/PARSING_RESULTS_ARCHITECTURE.md` and the `auth-audit-logging` brief. Skill: plc-design-reconstruction; Timestamp: 2026-08-24T15:30Z; Input ref: NSPECT-S57Q-EI19. Human decision: pending; Reviewed by: pending |
+
+---
+
+# Introduction
+
+## Purpose and Scope
+
+This document describes the architecture and design of NVIS Rack Status as built. It covers the
+Flask backend, the React SPA, the execution transport, the catalog, the results pipeline, the
+durable registries and the audit subsystem. It does not cover the cluster software being exercised
+(BCM, Slurm, NeMo, DCGM) except at the interface.
+
+The design is organised around a small number of **first-class citizens** — abstractions that own a
+concern for the whole product. The governing rule is that a new capability extends the citizen that
+owns its concern rather than adding a parallel structure beside it, because a second structure doing
+the same job drifts from the first and the drift is discovered by a customer rather than by us.
+
+## Assumptions
+
+As stated in the SRD: a supported cluster manager and Slurm are present; the application reaches
+the cluster over SSH or runs adjacent to it; a persistent data directory exists; operators are
+trusted staff; telemetry, where present, comes from VictoriaMetrics and Loki.
+
+## Constraints
+
+Air-gapped operation with no runtime internet dependency; access over an SSH tunnel; one repository
+serving several customers with no hard-coded site specifics; the deployed container's bind mounts
+and named volume shadow build-time artifacts; head-node `sshd MaxSessions` bounds relayed fan-out;
+Python 3.12 / React 19 / Kaizen UI.
+
+## Dependencies
+
+Internal: none outside this repository. External: BCM `cmsh`/CMDaemon, Slurm binaries,
+VictoriaMetrics, Loki, Grafana, DCGM, NCCL, NeMo/DGXC recipe containers, OEM BMC/Redfish.
+
+## Definitions, Acronyms, Abbreviations
+
+As per the SRD. Design-specific additions:
+
+| Term | Description |
+| :---- | :---- |
+| Citizen | First-class abstraction owning a concern product-wide |
+| Chokepoint | The single point every instance of a class of operation must pass through |
+| Overlay | A layer of configuration values with defined precedence |
+| Hop | One SSH leg in a composed multi-leg connection |
+| Fan-out | Executing the same work across N nodes with bounded concurrency |
+
+## References
+
+`.cursor/rules/core-designs.mdc`; `docs/EXECUTION_ARCHITECTURE.md`;
+`docs/PARSING_RESULTS_ARCHITECTURE.md`; `docs/RACKSTATUS_USER_GUIDE.md`;
+`.plc/briefs/auth-audit-logging-brief.md`; `docs/AUTH_PROGRAMME_SCOPE.md`;
+`docs/MULTI_USER_MULTI_CLUSTER_PLAN.md`.
+
+---
+
+# Architectural Details
+
+**High-level description**
+
+```
+                    Browser (React 19 SPA, Kaizen UI, Vite bundle)
+                                     │  HTTPS (TLS >= 1.2), SSH tunnel in practice
+                    ┌────────────────▼─────────────────────────────────┐
+                    │ Flask application (backend/app.py)               │
+                    │  composition root: ~970 lines, 3 routes          │
+                    │  auth gate · middleware pairs · SPA catch-alls   │
+                    └──┬────────────────┬───────────────┬──────────────┘
+                       │                │               │
+      ┌────────────────▼───┐   ┌────────▼────────┐   ┌──▼─────────────────┐
+      │ backend/api/       │   │ audit/          │   │ catalog/           │
+      │ 38 modules,        │   │ chokepoint,     │   │ Platform · Tool ·  │
+      │ 218 routes,        │   │ actions, sink   │   │ Project/Cluster    │
+      │ auto-discovered    │   └─────────────────┘   │ (TinyDB + overlays)│
+      └────────┬───────────┘                         └────────────────────┘
+               │ imports (one direction only)
+      ┌────────▼──────────────────────────────────────────────────────────┐
+      │ mechanism modules                                                  │
+      │  host_exec + transport/   rack_status_engine   results_ingest      │
+      │  workflow_engine          validation_activities  rack_locks        │
+      │  paths · naming · node_targets · config_env · slurm_query · ...    │
+      └────────┬──────────────────────────────┬────────────────────────────┘
+               │ platforms/ · schedulers/      │ nvis_logscan · universal_parser
+      ┌────────▼───────────┐         ┌─────────▼──────────────┐
+      │ cluster head node  │         │ VictoriaMetrics · Loki │
+      │ cmsh · Slurm · pdsh│         │ Grafana                │
+      │ bin/scripts/*      │         └────────────────────────┘
+      └────────────────────┘
+```
+
+**Static and dynamic aspects**
+
+Statically the dependency graph is one-directional: `app.py → api/<domain>.py → core.py`. `app.py`
+is a composition root that owns the Flask object, startup bootstraps, the auth gate, two middleware
+pairs and the SPA catch-alls; it holds three routes. Adding an endpoint means adding a file to
+`backend/api/`, which the loader discovers at startup — nothing else is edited. An `api/` module
+never imports `app`.
+
+Dynamically the product is a request/response API over a set of long-running background
+operations. Anything that outlives a request is owned by the workflow/state-machine citizen: it
+returns an identifier immediately, runs on a background thread, persists under `var/`, and exposes
+progress and per-step output. Fleet-wide reads are served from a cross-process leased snapshot
+rather than re-scanned per request.
+
+**Key assumptions and limitations**
+
+- The head node is a bottleneck by construction when hops are relayed through it; its
+  `MaxSessions` (default 10) bounds concurrency. A direct node route exists as an opt-in where the
+  network permits it.
+- The catalog is a document store, not a relational one; cross-record integrity is enforced in
+  code, not by the store.
+- The product is single-tenant per running instance in terms of identity: an operator label is
+  self-reported until the identity phase lands, so today's activity ledger is advisory rather than
+  authenticated. This is the explicit motivation for the auth programme.
+
+---
+
+# Design Details
+
+## Design Alternatives
+
+| Decision | Chosen | Alternative rejected | Why |
+| :---- | :---- | :---- | :---- |
+| Endpoint organisation | 38 auto-discovered `api/` modules | Keep routes in `app.py` | `app.py` reached 20,000 lines and 135 routes; every feature touched it, so parallel work collided by construction and a whole feature was once lost uncommitted on a customer deployment |
+| Long-running work | One durable workflow/state-machine runner | Per-feature in-memory job dicts | Four such dicts existed; each loses state on deploy, and a 2,000-node sweep whose progress nobody can see is indistinguishable from a hang |
+| Tools and presets | Catalog documents with platform defaults | Frozen registry in Python | A code constant cannot be edited by an operator, ships one site's absolute paths everywhere, and needs a deploy to add a test |
+| Result parsing | Single bounded pass, structured output preferred | Multi-pass shell scan with head/tail sampling | Logs reach hundreds of MB; sampling silently missed results in the middle of files, and the scanner replaced ~16 full-file passes |
+| Report formats | One dataset, several renderers | A generator per format | Parallel generators drift on the first added column, and a report that contradicts itself is worse than a missing one |
+| Policy engine (planned) | Interface plus RBAC model now, engine later | Adopt AWS Cedar immediately | Cedar has no NVIDIA-maintained Python SDK; the viable binding needs a vendored wheel for air-gapped sites, which is a conscious dependency decision rather than a detail |
+| Audit event emission | One `after_request` chokepoint | Per-handler emit calls | Provenance you have to remember to add is provenance you will forget to add |
+| TLS certificates | Self-signed by default, internal CA opt-in | ACME/Certbot with dynamic DNS | Operators reach the UI through an SSH tunnel and air-gapped sites cannot reach an ACME server |
+
+## Static Design
+
+### Component inventory
+
+| Citizen | Modules | Owns |
+| :---- | :---- | :---- |
+| 0. API surface | `backend/api/` (38) | Where an endpoint lives; auto-discovery by `bp` or `install(app)` |
+| 1. Connection / transport | `host_exec.py`, `transport/` | Every command that leaves the process: local/SSH executors, multi-hop chains, fan-out, retries, sudo, ControlMaster |
+| 2. Catalog / Tools | `catalog/` (`models`, `store`, `context`, `api`) | What the product can run: Platform, Tool, Project/Cluster documents |
+| 3. Project / Cluster | `catalog/models.py`, `catalog/context.py` | Which site, which nodes, which customer; high and low configuration overlays |
+| 4. Workflow / state machine | `workflow_engine.py` | How long work runs: identifiers, background execution, persistence, fan-out steps |
+| 5. Configuration resolution | `config_env.py` + settings registry | Where a knob comes from, and in what precedence |
+| 6. Platform / scheduler providers | `platforms/`, `schedulers/` | Which cluster manager, which queue |
+| 7. Results pipeline | `nvis_logscan.py`, `universal_parser.py`, `results_ingest.py` | Raw tool output becoming metrics |
+| 8. Durable registry and locks | `validation_activities.py`, `rack_locks.py` | The system of record and exclusive access |
+| 9. Naming | `nvis_id_templates.py`, `naming.py`, `node_targets.py` | Rack id versus real hostname |
+| 10. Artifacts and reports | `cluster_report.py`, `cluster_report_pdf.py`, `node_report.py` | One dataset, many renderers |
+| 11. Auth | `web_auth.py`, `token_vault.py`, `rack_web/pam_*` | One gate |
+| 12. Frontend contexts | `ActiveClusterContext`, `RackCommandsStoreContext`, `ThemeContext` | Shared SPA state |
+| (new) Audit | `audit/` (`__init__`, `actions`, `sink`, `request_hook`) | The durable trail of who did what |
+
+### Configuration Data
+
+Configuration resolves through one accessor set (`_eget`, `_eget_int`, `_subprocess_env`) with a
+defined precedence: **active cluster high overlay → job env overrides → process environment →
+platform low overlay**. The high overlay carries cluster identity, naming and connection; the low
+overlay carries platform geometry defaults and per-tool parameter defaults. Overlays are also
+materialised into `os.environ` so that modules reading the environment directly stay consistent.
+
+A bare `os.environ.get` in new code silently opts out of the overlay, which is how a setting comes
+to work on one cluster and not another; the accessors exist to prevent that. Settings are declared
+in a registry so the defaults are testable, and non-prefixed knobs are forwarded across SSH by an
+explicit allowlist. Full reference: `docs/ENVIRONMENT.md`.
+
+### External Interface and Specification
+
+| Interface | Direction | Specification |
+| :---- | :---- | :---- |
+| HTTP/JSON API, 218 routes | inbound | Browsable API reference generated from the URL map; `job_id` retained as the canonical `activity_id` for compatibility |
+| WebSocket `/ws/terminal` | inbound | WSGI middleware above the router; authenticated and origin-checked before upgrade |
+| SSH to head node / nodes | outbound | Composed hops with ControlMaster multiplexing; env forwarding by allowlist |
+| Cluster manager | outbound | `cmsh` (BCM) or `maas-cli` (MAAS) behind a provider interface; an optional read-only `cmsh` allowlist wrapper constrains it to four inventory queries |
+| Slurm | outbound | Absolute binary paths, individually configurable |
+| VictoriaMetrics | outbound | Read-only proxy; PromQL selectors built from an allowlisted label pattern |
+| Grafana | outbound | Deep links by dashboard uid/slug with template variables; optional `/d-solo/` embeds |
+| Container images | outbound | Version-pinned per platform `tool_param_defaults` |
+
+### Dependencies (design-level)
+
+`api/` depends on mechanism modules and on `core.py`; mechanism modules depend on `transport/` and
+on each other only through the module that owns the shared concern. `core.py` imports neither Flask
+nor `app`, which is what keeps the dependency one-directional. Two modules still `import app`
+inside function bodies to dodge a cycle; that is recorded debt, not a pattern to copy.
+
+### Integration Validation Plan
+
+Deployment is verified by an automated gate (`bin/verify-deploy.sh`) that fails unless the container
+is running rather than crash-looping, every backend module imports, no module in the container is
+staler than the tree, and every asset the served page references resolves. A separate gate
+(`bin/check-tracked-tree.sh`) proves the committed tree imports and passes its tests using only
+files git tracks, which is what catches an import committed before the module it names, or a test
+that depends on an unbuilt frontend.
+
+## Dynamic Design
+
+### Functionality and Behavior
+
+A request arrives, passes the auth gate, is routed to an `api/` module, which resolves
+configuration through the overlays, resolves targets through the naming citizen, and executes
+through the transport citizen. Anything long-running is handed to the workflow runner and answered
+immediately with an identifier. Every mutating request emits exactly one audit event on the way out.
+
+### Control Flow
+
+```
+request ──► auth gate ──► before_request: audit timer, lake capture
+        ──► api/<domain> handler
+              ├─ config_env overlays ──► catalog/context (generation-cached)
+              ├─ naming/node_targets ──► real hostnames
+              ├─ rack_locks.claim    ──► advisory exclusivity
+              ├─ host_exec/transport ──► head node or per-node fan-out
+              └─ validation_activities.record ──► durable registry
+        ──► after_request (reverse registration order):
+              security headers ──► no-store ──► audit emit (runs last, sees final response)
+```
+
+Registration order of the `after_request` handlers is load-bearing: Flask runs them in reverse
+order of registration, so the audit hook is installed first in order to run last and observe the
+fully decorated response.
+
+### Data Flow
+
+```
+tool on node ──► log file on shared/remote FS
+   ──► nvis_logscan.py (single pass, bounded memory, NDJSON)
+   ──► universal_parser.py / nvis_nccl_ingest tiers (structured JSON → experiment dir → scrape)
+   ──► results_ingest.py predicates: is this a real measurement or parser.sh's "---" placeholder?
+   ──► results_history (SQLite) + validation_activities archive
+   ──► rack_status_engine dataset ──► /api/status, /api/cluster-overview, exports, reports
+```
+
+Three data classes are deliberately combined and separately labelled: live control-plane state
+(refreshable, may be stale), durable execution evidence (under `/app/var`), and observability
+telemetry (retained externally). Empty telemetry is rendered empty, never as a substituted value.
+
+### Error Handling
+
+- A tool or upstream failure is reported as data, not raised: a non-zero return code from a
+  fan-out is an outcome the operator needs to see, not a server error.
+- The dominant convention is a JSON body carrying an HTTP error status; the one deliberate
+  exception is the SPA shell, which answers a missing bundle with a human-readable HTML page and
+  503, because its audience is a person in a browser.
+- Audit and logging failures degrade silently rather than converting a refusal into a 500.
+- Any probe that might not find its answer is read-capped, so a file without the answer costs no
+  more than one with it.
+
+### Logging and Debugging
+
+Central configuration (`logging_config.py`) selects sinks (stdout, file, syslog), level and format
+(text or JSON), applies a redaction filter, and preserves pytest's capture handler. Application log
+and audit trail have independent rotation budgets so log volume cannot evict evidence.
+
+The audit subsystem is separate: `audit/actions.py` declares a stable action vocabulary by
+decorator (89 actions over 35 services, covering 103 mutating routes, with a startup validation gate
+and a snapshot test); `audit/request_hook.py` is the single emission chokepoint;
+`audit/sink.py` writes an append-only JSONL trail with owner-only permissions, rotation sized by a
+retention target and a byte ceiling, and a flood guard that collapses repeated refusals after a
+threshold.
+
+### State Machine
+
+Validation activities move through recorded phases and are reconciled against Slurm and the result
+log until terminal. Two stores back them, and the distinction is a correctness requirement rather
+than an optimisation: `var/cache/validation_activities.json` is a capped live working set, while
+`var/history/validation_activities.sqlite3` is the append-preserving archive. Acceptance completion
+is computed from the archive, because pruning, dismissal, cache replacement or a later failed retry
+must not erase an earlier successful run. The live cap never evicts open work.
+
+Workflow runs have their own state: queued → running per step → terminal, persisted under `var/` so
+a container restart does not lose them.
+
+### Security Design
+
+| Control | Design |
+| :---- | :---- |
+| Authentication | One gate (`_require_dashboard_auth`) with an explicit bypass list; PAM locally, shared token in containers |
+| Terminal | Authenticated and origin-checked in WSGI middleware above the router; target validated before session creation |
+| Command injection | Node targets validated against inventory or a strict RFC 1123 predicate; arguments quoted; script allowlists |
+| Transport | TLS ≥ 1.2 enforced in a shared policy applied to both the dev server and gunicorn; compression and client renegotiation disabled |
+| Browser | CSP, HSTS (only over TLS), `X-Content-Type-Options`, `Referrer-Policy`, frame-ancestors; no CORS headers, because the SPA and API are one origin |
+| Source provenance | Client address resolved right-to-left across a configured trusted-proxy set and labelled peer / proxy / claimed-untrusted; overly broad CIDRs refused |
+| Audit | One event per mutating request, bounded and rotated independently, surviving container recreate on a named volume |
+| Read-only posture | A deployment can disable cancellation, privileged script execution and cluster-manager mutation by configuration; an allowlist wrapper can constrain `cmsh` to inventory queries |
+| Planned | Local identity store with SRP, OIDC federation, JWT id/access tokens, RBAC with default-deny policy evaluation (Phases 2–3) |
+
+Threat model: `.plc/security/threat-model-NVIS-RACK-STATUS.md` (T-1..T-64).
+
+### Test Automation
+
+2,270 backend tests (pytest) plus frontend Vitest, gating merges in CI. The execution layer is
+stubbable at one chokepoint, which is what makes route-level testing safe; `subprocess` is stubbed
+as a hard floor for the code paths that still bypass it. Demonstration mode serves synthetic data
+for out-of-process cases. Meta-tests enforce architectural invariants: route parity across the URL
+map, no deferred `app` attribute lookups, no duplicate module-level assignment, no stdlib import
+inside a function, and full action-declaration coverage for mutating routes.
+
+---
+
+## Appendix: Reconstruction provenance and open questions
+
+Reconstructed from the shipped tree; every component named above exists in the source. Parked paths
+(PythonCM provider, Clush transport) are excluded deliberately, per the README capability inventory.
+
+**Open questions for the author:**
+
+1. **Component boundary for nSpect.** Same question as the SRD: is this a product-level SADD or a
+   component SADD under a larger NVIS OVA registration?
+2. **Is the frontend in scope for this SADD?** This draft describes it only as a client. The SPA has
+   its own substantial design (contexts, the workflow designer's Mermaid-as-source-of-truth, the
+   Kaizen/MUI theme bridge). Should it be a section here, or its own document?
+3. **Identity design commitment.** Phases 2–3 are scoped in `docs/AUTH_PROGRAMME_SCOPE.md` but not
+   designed. Should this SADD describe the planned identity/policy architecture as design, or stay
+   strictly as-built and let the phase briefs carry it?
+4. **The two remaining `import app` cycles.** Recorded as debt in `core-designs.mdc`. Is unwinding
+   them a committed design intent to state here, or accepted permanently?
+5. **`pythoncm` migration.** `docs/MULTI_USER_MULTI_CLUSTER_PLAN.md` names moving read traffic from
+   `cmsh` to `pythoncm` to reduce head-node load, while the README lists PythonCM as parked. Which
+   is current — is the migration intended, and if so is it a design commitment?
