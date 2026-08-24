@@ -162,10 +162,15 @@ class TestTC37HookOrdering:
     """TC-37 (FR-6): two `after_request` hooks now share the chain, and order is the risk.
 
     Flask runs `after_request` handlers in REVERSE registration order, so the audit hook -- which
-    `app.py` installs before the header decorators are declared -- runs last and therefore sees the
-    fully decorated response. Nothing enforces that except the position of one call, and inverting
-    it would be silent: headers would still reach the browser, and only the audit hook's view of
-    the response would change. Hence a test rather than a comment.
+    `app.py` installs before the header decorators are declared -- runs after them and therefore
+    sees a response they have already decorated. Nothing enforces that except the position of one
+    call, and inverting it would be silent: headers would still reach the browser, and only the
+    audit hook's view of the response would change. Hence a test rather than a comment.
+
+    It is NOT last in the chain, and this docstring used to say it was. `flask_compress` registers
+    earlier still, so its handler runs after the audit hook. `test_the_chain_order_is_what_the_docs
+    _claim` pins both halves, because the design doc, an `app.py` comment and this docstring all
+    asserted the stronger claim and all three were wrong.
 
     The event assertion is confined to `result`, because the FR-5 field set has no header or status
     field and TC-6 pins that key set exactly.
@@ -241,3 +246,31 @@ class TestTC37HookOrdering:
         resp = client.get("/api/auth-check")
         assert "no-store" in (resp.headers.get("Cache-Control") or "")
         assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
+    def test_the_chain_order_is_what_the_docs_claim(self):
+        """Pin the ordering as a structural fact, not as prose in three places that drifted.
+
+        The load-bearing half is that the audit hook runs AFTER the two header decorators, so the
+        trail records a finished response. The honest half is that it is not last: flask_compress
+        registers earlier and so runs later. A PLC design validation on 2026-08-24 found the
+        stronger claim asserted in the SADD, in an `app.py` comment and in this class's docstring,
+        and false in all three. Asserting it here means the next person is corrected by a failing
+        test instead of by a review.
+        """
+        order = [f.__name__ for f in reversed(app_module.app.after_request_funcs[None])]
+
+        for hook in ("_security_headers", "_api_json_no_store", "_audit_emit"):
+            assert hook in order, f"{hook} left the after_request chain"
+
+        audit_at = order.index("_audit_emit")
+        assert order.index("_security_headers") < audit_at, (
+            "the audit hook must run after the security headers, or the trail records a response "
+            f"that is not yet decorated; order was {order}"
+        )
+        assert order.index("_api_json_no_store") < audit_at, f"order was {order}"
+
+        # Not last, deliberately asserted so the docs and this fact cannot diverge again.
+        assert audit_at != len(order) - 1, (
+            "the audit hook is now last -- if flask_compress was removed this is an improvement, "
+            "but update the SADD's Control Flow and the app.py comment, which both say it is not"
+        )

@@ -157,6 +157,13 @@
   alters. State the true invariant: the audit hook runs last **among the application's own**
   handlers, and its latency figure excludes compression. Correct the claim rather than leaving an
   invariant that a future change could rely on and be wrong about.
+- **Status**: **RESOLVED 2026-08-24.** Corrected in all three places that asserted it — the SADD's
+  Control Flow, the `app.py` comment, and the `TestTC37HookOrdering` docstring, which had inherited
+  the same claim. Also pinned as a structural fact by a new test,
+  `test_security_headers.py::TestTC37HookOrdering::test_the_chain_order_is_what_the_docs_claim`,
+  which asserts both halves: the audit hook runs after the two header decorators (load-bearing) and
+  is not last (honest). Mutation-checked — it fails when the chain is inverted and when the audit
+  hook is forced last, and passes when restored.
 
 ### B2. The "two modules import app in a function body" debt note is stale in both count and identity
 - **SDD claim**: *Dependencies (design-level)* — "Two modules still `import app` inside function
@@ -172,6 +179,10 @@
   appeared in a module the docs never mentioned. Update both the SADD and `core-designs.mdc` to name
   `agent/registrations.py`. Worth noting the meta-test `test_no_deferred_app_lookups.py` catches
   deferred *attribute* lookups but not this import form, which is why the drift went unnoticed.
+- **Status**: **RESOLVED 2026-08-24.** Both the SADD and `core-designs.mdc` now name
+  `agent/registrations.py` and record that the two previously named modules are clean. The
+  `core-designs.mdc` entry also explains why the meta-test did not catch it, so the next reader does
+  not assume the rule is machine-enforced when only half of it is.
 
 ### B3. The `api/` module count includes files the loader does not register
 - **SDD claim**: "`backend/api/` (38)", "38 auto-discovered `api/` modules", "38 modules, 218 routes".

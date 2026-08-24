@@ -269,8 +269,13 @@ explicit allowlist. Full reference: `docs/ENVIRONMENT.md`.
 
 `api/` depends on mechanism modules and on `core.py`; mechanism modules depend on `transport/` and
 on each other only through the module that owns the shared concern. `core.py` imports neither Flask
-nor `app`, which is what keeps the dependency one-directional. Two modules still `import app`
-inside function bodies to dodge a cycle; that is recorded debt, not a pattern to copy.
+nor `app` (verified: zero matches), which is what keeps the dependency one-directional.
+
+**One module still `import app`s inside a function body** to dodge a cycle —
+`agent/registrations.py` — and that is recorded debt, not a pattern to copy. An earlier revision of
+this section said "two modules" and the governing rule named `workflow_engine.py` and `bcm_query.py`;
+both are now clean, so the debt was largely paid without the record being updated. Corrected
+2026-08-24 from a word-boundary search across all 130 non-test backend modules.
 
 ### Integration Validation Plan
 
@@ -300,13 +305,20 @@ request ──► auth gate ──► before_request: audit timer, lake capture
               ├─ rack_locks.claim    ──► advisory exclusivity
               ├─ host_exec/transport ──► head node or per-node fan-out
               └─ validation_activities.record ──► durable registry
-        ──► after_request (reverse registration order):
-              security headers ──► no-store ──► audit emit (runs last, sees final response)
+        ──► after_request (Flask runs these in REVERSE registration order):
+              lake capture ──► security headers ──► no-store ──► audit emit ──► response compression
 ```
 
 Registration order of the `after_request` handlers is load-bearing: Flask runs them in reverse
-order of registration, so the audit hook is installed first in order to run last and observe the
-fully decorated response.
+order of registration, so the audit hook is registered early in order to run late — after the
+security-headers and no-store hooks have decorated the response.
+
+It is **not** last, and it is worth being precise because the natural assumption is wrong.
+`flask_compress` is registered before the audit hook and therefore runs after it, rewriting the body
+encoding, `Content-Encoding`, `Content-Length` and `Vary`. Nothing the audit event records is
+affected (status, principal, action, resource), but the latency it measures excludes compression.
+The accurate invariant is: **last among the application's own handlers**. The lake capture at the
+head of the chain reads the response body before the security headers exist on it.
 
 ### Data Flow
 

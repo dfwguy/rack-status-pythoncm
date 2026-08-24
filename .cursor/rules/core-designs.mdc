@@ -81,8 +81,17 @@ where prefix arithmetic would be a way to change a URL by accident.
 **Never `from app import ...` in an `api/` module.** That recreates the cycle the package exists
 to remove: the dependency runs `app.py → api/<domain>.py → core.py`, one direction only. If you
 need something from `app.py`, move it to `core.py` (Flask-free) or `api/_common.py` (if it builds
-a response). `workflow_engine.py` and `bcm_query.py` still `import app` inside function bodies to
-dodge this; that is debt to unwind, not a pattern to copy.
+a response).
+
+**One module still does it: `agent/registrations.py`** (`import app as _app_mod`, inside a function,
+to dodge the cycle). That is debt to unwind, not a pattern to copy. This line used to name
+`workflow_engine.py` and `bcm_query.py`; both are now clean, and nobody updated the note — so for a
+while the rule pointed at two innocent modules and missed the guilty one. Verified 2026-08-24 by a
+word-boundary search across all 130 non-test backend modules, which returns exactly one hit.
+
+Worth knowing why the meta-test did not catch the drift: `test_no_deferred_app_lookups.py` bans
+deferred *attribute* lookups (`app.<name>` resolved at call time), not the function-level `import app`
+that enables them. The import form is still only caught by reading.
 
 **Two conventions that exist because of specific failures.** Imports are not wrapped in `try` — a
 module that cannot import must take startup down and name itself, because a swallowed import

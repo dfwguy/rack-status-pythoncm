@@ -686,10 +686,17 @@ web_auth.set_wsgi_authenticator(_wsgi_environ_authenticated)
 
 
 # The audit chokepoint is installed HERE, deliberately, and not at the end of the file. Flask runs
-# ``after_request`` handlers in reverse registration order, so the first registered runs last —
-# which is what lets the audit hook observe the fully decorated response instead of one that has
-# not yet been through the security-headers hook below. Moving this call after those decorators
-# would silently invert that.
+# ``after_request`` handlers in reverse registration order, so registering earlier means running
+# later — which is what lets the audit hook see the response AFTER the security-headers and
+# no-store hooks below have decorated it. Moving this call under those decorators would silently
+# invert that, and the trail would record a response that had not finished being built.
+#
+# It does NOT run last, and an earlier version of this comment claimed it did. ``Compress(app)``
+# is registered ~490 lines above, so flask_compress's own handler runs after this one and rewrites
+# the body encoding, ``Content-Encoding``, ``Content-Length`` and ``Vary``. Nothing the audit event
+# records is affected by that (status, principal, action, resource), but the latency it measures
+# excludes compression, and anything added here that needs to observe the truly final response
+# would be wrong. The accurate invariant is: last among the application's own handlers.
 import audit as _audit
 from audit import request_hook as _audit_request_hook
 

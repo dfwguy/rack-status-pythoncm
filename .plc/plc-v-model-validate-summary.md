@@ -142,10 +142,13 @@ Reason code: `deferred_scope_by_operator`.
    An unrequirmented feature is also an unthreat-modelled one.
 4. **`slurm_admin.py` is thin in both design and test** — no citizen row, no dedicated test module
    (SUTP gap G-7). It owns drain, resume and cancel: the operations that remove customer capacity.
-5. **Two documented invariants are false or stale**: the audit hook does not run last
-   (`flask_compress` follows it, and a code comment asserts otherwise), and the "two modules import
-   `app` in a function body" note names two modules that are both now clean while missing the one
-   that is not.
+5. ~~**Two documented invariants are false or stale**~~ — **RESOLVED 2026-08-24, same session.** The
+   audit hook does not run last (`flask_compress` follows it); corrected in the SADD, the `app.py`
+   comment and the test docstring that had all three inherited the claim, and now pinned by
+   `test_the_chain_order_is_what_the_docs_claim`, which was mutation-checked to confirm it fails on a
+   real regression. The "two modules import `app` in a function body" note named two modules that
+   are both now clean; the SADD and `core-designs.mdc` now name `agent/registrations.py`, the one
+   that is not, and record why the meta-test missed it.
 
 ## Next actions
 
@@ -153,8 +156,8 @@ Reason code: `deferred_scope_by_operator`.
 | :----: | :---- | :---- | :---- |
 | 1 | Decide the lake sink's fate — specify it as an interface or remove it | Design C1, Requirements C-3 | Small + a scope decision |
 | 2 | Design the two refusal paths in the SADD's Dynamic Design | Requirements B-1, B-2 | Small — rationale exists in `.cursor/rules/` |
-| 3 | Correct the audit-ordering claim in the SADD **and** the false comment at `app.py:688-692` | Design B1 | Trivial |
-| 4 | Update the stale `import app` debt note in the SADD and `core-designs.mdc` to name `agent/registrations.py` | Design B2 | Trivial |
+| ~~3~~ | ~~Correct the audit-ordering claim in the SADD and the false comment at `app.py`~~ — **done**, plus a mutation-checked guard test | Design B1 | Trivial |
+| ~~4~~ | ~~Update the stale `import app` debt note~~ — **done** in the SADD and `core-designs.mdc` | Design B2 | Trivial |
 | 5 | Requirement the interactive terminal and the AI assistant, or scope them out | Requirements C-1, C-2 | Small |
 | 6 | Add Legal-and-Standards and Virtualization requirements, or mark N/A | Requirements A-1, A-2 | Small |
 | 7 | Add an Operational Considerations section, stating "none committed" where true | Design A8 | Medium |
