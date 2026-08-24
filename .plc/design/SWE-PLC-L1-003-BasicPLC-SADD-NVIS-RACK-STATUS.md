@@ -395,14 +395,30 @@ A second, narrower binding exists for exact-node campaigns: a supplied `campaign
 matches the resolved campaign is refused as *"stale or unknown exact-node campaign id"*, which
 catches a stale roster even where the plan hash would not.
 
-**Coverage is partial, and that is a real gap rather than a documentation one.** `plan_hash` is
-enforced in `_run_validation_preset_async` only. The other launch endpoints —
-`/api/run-nccl-fullrack-async`, `/api/run-nemo-xrack-async`, `/api/run-llmb-nccl-async`,
-`/api/run-mnubergemm-stress-async`, `/api/run-nvloom-async`, `/api/run-clusterkit-async` and the
-llama/exemplar family — resolve their target at launch time and rely on a client-side confirmation
-dialog, which is not a binding: nothing detects that what the operator reviewed has since changed.
-Closing this means either routing those launches through prepare/launch or giving them the same
-digest. Tracked as a finding in the requirements validation report.
+**The same binding now covers the ten legacy launches** (closed 2026-08-24; it previously covered
+the preset path only, which was finding B-1a). They share a prepare signature
+(`_prepare_run_*(body) -> (prep, err)`) and an identical result shape, and each prepare is
+deterministic for a fixed body — verified empirically, and the precondition for a
+re-resolve-and-compare gate. So the binding is one implementation, not eleven:
+
+| Piece | Where |
+| :---- | :---- |
+| `POST /api/launch/prepare` | One endpoint for all ten, dispatching on `kind` via `_PREPARE_BY_KIND` |
+| Digest | `validation_launch.launch_digest` over the resolved `cmd` plus target/rack/racks/nodes/log_dir |
+| Gate | `validation_launch.reviewed_launch_error`, applied by `_prepared()` which wraps every legacy prepare |
+| Client | `frontend/src/lib/launchReview.ts` — the SPA's two shared launchers and both direct call sites |
+
+Two design choices worth recording. The legacy digest covers the **resolved argv** rather than a
+hand-picked field list, because `cmd` already embeds the nodelist, container and version pins and
+every other decision the prepare made — which is what lets one digest work uniformly where the
+preset needed enumerated fields. And the gate is applied by *wrapping the prepare* rather than by
+editing ten launch bodies: those call sites were byte-identical, so inlining would have produced ten
+copies of the same four lines, and the eleventh endpoint would have been the one that forgot.
+
+`RACK_LAUNCH_REVIEW` (`strict` default / `warn` / `off`) exists for sites with their own automation
+posting to these endpoints. `warn` allows an *unbound* launch and logs it; it still refuses a
+*mismatched* digest, because a mismatch is not a caller that never learned the protocol — it is a
+caller whose reviewed target no longer holds, which is the case the requirement is about.
 
 **REQ-7 — a multi-rack target must be a clean partition, or it is refused.** MNUberGEMM is an
 NVLink-domain test: the audited sbatch disables InfiniBand and enables MNNVL, so one Slurm

@@ -47,6 +47,7 @@ import {
 import { validationStatusTooltip } from "../lib/validationStatusTooltip";
 import { VALIDATION_CATEGORIES, nemoCategory } from "../lib/validationStages";
 import { buildRackRowMap } from "../lib/rackTopology";
+import { launchWithReview } from "../lib/launchReview";
 import type { MultirackJob, RackRow, RackStatusResponse } from "../types/api";
 import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
@@ -459,11 +460,9 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
       if (kind === "llmb") body.dry_run = dryRun;
       if (kind === "llmb" && campaign?.active && campaign.id) body.campaign = campaign.id;
       attachLaunchOptions(body, opts);
-      const res = await fetch(meta.asyncUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      // prepare -> digest -> launch (REQ-6): a multirack launch that was reviewed against one
+      // roster must not run against another.
+      const res = await launchWithReview(meta.asyncUrl, body);
       const json = await res.json();
       if (json.ok) {
         setSnackbar({ open: true, message: `${meta.label} launched (${racks.length} racks)`, severity: "success" });

@@ -504,6 +504,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "validation_runs.api_prepare_launch",
+  "method": "POST",
+  "action": "validation:prepare_launch",
+  "variant": "sync"
+ },
+ {
   "endpoint": "validation_runs.api_prepare_validation_preset",
   "method": "POST",
   "action": "validation:prepare_preset",

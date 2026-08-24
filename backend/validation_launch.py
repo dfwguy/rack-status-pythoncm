@@ -41,11 +41,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
+import secrets
 import shlex
 import subprocess
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import host_exec
 import validation_activities
@@ -762,15 +766,120 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
                         "NVIS_PRESET_SCOPE_MULTIRACK": "1" if scope == "multirack" else "0"},
         "image_override_note": ("DGXC recipe v26.06.01 with audited NeMo 26.04.01 image override" if preset.id == "exemplar-system-info" else None),
     }
-    hash_fields = {key: plan[key] for key in (
+    plan["plan_hash"] = plan_digest({key: plan[key] for key in (
         "preset_id", "scope", "nodes", "node_groups", "racks", "campaign", "storage", "rsync_to_local",
         "local_container_dir", "container_profile", "cuda_version", "nccl_version", "max_steps",
         "max_runtime_minutes", "artifact", "log_dir",
-    )}
-    plan["plan_hash"] = hashlib.sha256(
-        json.dumps(hash_fields, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    )})
     return plan, None
+
+
+# ---------------------------------------------------------------------------------------------
+# Reviewed-target binding (REQ-6)
+# ---------------------------------------------------------------------------------------------
+#
+# The preset path has bound a reviewed target to its launch since it was written: `prepare` returns
+# a digest, `launch` re-resolves and compares. A PLC requirements validation on 2026-08-24 found
+# that binding covered ONE launch endpoint out of thirteen -- every legacy per-tool launch resolved
+# its target at launch time and relied on a client-side confirmation dialog, which detects nothing
+# when what the operator reviewed has since changed. REQ-6 held on one path and failed on twelve.
+#
+# These helpers are what the legacy endpoints share so the binding is one implementation rather
+# than thirteen. The digest function is the same one the preset uses, deliberately: two hash
+# implementations would drift, and a digest that drifts refuses valid launches.
+
+
+def plan_digest(fields: Mapping[str, Any]) -> str:
+    """SHA-256 over a canonical JSON rendering of the launch-defining fields.
+
+    Canonical means sorted keys and no incidental whitespace, so the digest depends on the values
+    and not on dict ordering or json formatting. Shared by the preset path and the legacy paths.
+    """
+    return hashlib.sha256(
+        json.dumps(fields, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+#: The fields of a legacy `_prepare_run_*` result that define WHAT WILL RUN AND WHERE. All ten
+#: legacy prepares return this same shape -- verified empirically, along with their determinism for
+#: a fixed body, which is what makes a re-resolve-and-compare gate possible at all.
+#:
+#: `cmd` is the resolved argv, so it already embeds the nodelist, the container and version pins,
+#: sizes and every other flag the prepare decided. Digesting it covers target drift without having
+#: to enumerate per-endpoint semantics, which is why this works uniformly where the preset needed a
+#: hand-picked field list.
+_LEGACY_DIGEST_KEYS = ("cmd", "target", "rk", "rack", "racks", "nodes", "log_dir")
+
+
+def launch_digest(prep: Mapping[str, Any]) -> str:
+    """Digest of a legacy prepare result. Absent keys are omitted, not defaulted.
+
+    Omitting rather than defaulting matters: a prepare that grows a `racks` key later would
+    otherwise have been digesting `"racks": None` all along, and the digest would silently change
+    for every caller on the day the key appeared.
+    """
+    fields: dict[str, Any] = {}
+    for key in _LEGACY_DIGEST_KEYS:
+        if key not in prep:
+            continue
+        value = prep[key]
+        fields[key] = [str(item) for item in value] if isinstance(value, (list, tuple)) else str(value)
+    return plan_digest(fields)
+
+
+def review_mode() -> str:
+    """``strict`` (default), ``warn`` or ``off`` — see docs/ENVIRONMENT.md.
+
+    Default is strict because a permissive default would mean REQ-6 is unmet on a stock deployment,
+    which is precisely the criticism the requirement exists to answer. `warn` exists for a site with
+    its own automation posting to these endpoints: it keeps launching, and every unbound launch is
+    audited so the migration has a worklist instead of a guess.
+    """
+    mode = (os.environ.get("RACK_LAUNCH_REVIEW") or "strict").strip().lower()
+    return mode if mode in ("strict", "warn", "off") else "strict"
+
+
+def reviewed_launch_error(body: Mapping[str, Any], prep: Mapping[str, Any]):
+    """``None`` when this launch may proceed, or a Flask ``(response, status)`` refusing it.
+
+    The gate is a re-resolve-and-compare, not a checksum of the request: the caller has already run
+    the prepare again by the time this is called, so a rack that drained, a campaign that was
+    superseded or a cluster switched under a stale browser tab all produce a different digest and a
+    409 carrying the new one, which is what lets the UI re-present the changed plan.
+
+    Constant-time compare because the digest is echoed by the client. Cheap, and it removes the
+    question rather than leaving it to be asked in review.
+    """
+    mode = review_mode()
+    if mode == "off":
+        return None
+    expected = launch_digest(prep)
+    supplied = str(body.get("plan_hash") or "").strip()
+
+    if not supplied:
+        if mode == "warn":
+            _logger.warning(
+                "launch without a reviewed-target digest (RACK_LAUNCH_REVIEW=warn); "
+                "expected plan_hash=%s", expected,
+            )
+            return None
+        return jsonify({
+            "ok": False,
+            "error": "plan_hash from /api/launch/prepare is required",
+            "plan_hash": expected,
+        }), 409
+
+    if not secrets.compare_digest(supplied, expected):
+        # Returned even in warn mode: a MISMATCH is not a legacy caller that never learned the
+        # protocol, it is a caller whose reviewed target no longer holds. That is the case the
+        # requirement is about, and honouring it in warn mode would make the mode meaningless.
+        return jsonify({
+            "ok": False,
+            "error": "launch target changed since it was reviewed; prepare and review it again",
+            "plan_hash": expected,
+        }), 409
+
+    return None
 
 
 def _validation_preset_status_payload(job_id: str):

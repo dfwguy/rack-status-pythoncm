@@ -161,6 +161,16 @@ nothing detects that what the operator reviewed has since changed. So REQ-6 is s
 preset path and **unsatisfied on the legacy paths**, which is a code gap rather than a documentation
 one. Remediation: route those launches through prepare/launch, or give them the same digest.
 
+**Status of B-1a: RESOLVED 2026-08-24.** All ten legacy launches now carry the binding. One
+`POST /api/launch/prepare` serves them all, dispatching on `kind`; the digest covers the resolved
+argv (which already embeds nodelist, container and version pins) plus target/rack/racks/nodes/log_dir;
+and the gate is applied by wrapping each prepare rather than by editing ten identical launch bodies,
+so an eleventh endpoint cannot be added through that helper and be left unbound. The SPA was migrated
+in the same change — both shared launchers and both direct call sites — so the product's own UI needs
+no configuration. `RACK_LAUNCH_REVIEW` (`strict` default) provides a `warn` window for sites with
+their own automation, and `warn` still refuses a *mismatched* digest. 19 new tests (10 backend, 9
+frontend). REQ-6 now holds on 11 of 11 launch endpoints.
+
 ### B-2 (Critical) REQ-7 per-rack fan-out refusal has no design
 
 > REQ-7: *For recipes confined to one NVLink domain, the product shall submit one job per rack and

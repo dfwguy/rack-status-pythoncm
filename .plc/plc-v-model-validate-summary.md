@@ -138,13 +138,13 @@ Reason code: `deferred_scope_by_operator`.
    invariant is checked twice — in Python on the app host and again in bash on the head node, both
    failing closed.
 
-   **But closing it opened a real one.** `plan_hash` is enforced in exactly **one launch endpoint
-   out of thirteen**. The legacy per-tool launches (`run-nccl-fullrack-async`,
-   `run-nemo-xrack-async`, `run-llmb-nccl-async`, `run-mnubergemm-stress-async`, `run-nvloom-async`,
-   `run-clusterkit-async`, the llama/exemplar family) resolve their target at launch and rely on a
-   client-side confirmation dialog, which detects nothing. So REQ-6 holds on the preset path and
-   **fails on the legacy paths** — a code gap, now finding B-1a, and the highest-value remaining
-   item.
+   **Closing it opened a real one — B-1a — which is now also closed.** `plan_hash` had been
+   enforced in exactly **one launch endpoint out of eleven**; the ten legacy per-tool launches
+   resolved their target at launch and relied on a client-side confirmation dialog, which detects
+   nothing. All ten are now bound: one `POST /api/launch/prepare` dispatching on `kind`, a digest
+   over the resolved argv, and a gate applied by wrapping each prepare so a new endpoint cannot be
+   added through that helper unbound. SPA migrated in the same change. **REQ-6 now holds on 11 of 11
+   launch endpoints.**
 2. ~~**The lake egress path ships credentials in plaintext, and it is ON by default.**~~
    **RESOLVED 2026-08-24, same session.** Revised upward first: it was **not** disabled by default
    (no deployment file sets `RACK_LAKE_DISABLED`) and capture covered **102 mutating endpoints**
@@ -176,7 +176,7 @@ Reason code: `deferred_scope_by_operator`.
 | :----: | :---- | :---- | :---- |
 | ~~1~~ | ~~Decide the lake sink's fate — specify it as an interface or remove it~~ — **done**: specified, secured, opt-in, requirmented (REQ-48/49/50) | Design C1, Requirements C-3 | Small + a scope decision |
 | ~~2~~ | ~~Design the two refusal paths in the SADD's Dynamic Design~~ — **done** | Requirements B-1, B-2 | Small — rationale exists in `.cursor/rules/` |
-| **2a** | **Extend the `plan_hash` binding to the twelve legacy launch endpoints**, or route them through prepare/launch. Opened by closing B-1 | Requirements B-1a | Medium — one shared helper, thirteen call sites |
+| ~~2a~~ | ~~Extend the `plan_hash` binding to the legacy launch endpoints~~ — **done**: all ten bound, SPA migrated, 19 tests | Requirements B-1a | Medium — one shared helper, ten call sites |
 | ~~3~~ | ~~Correct the audit-ordering claim in the SADD and the false comment at `app.py`~~ — **done**, plus a mutation-checked guard test | Design B1 | Trivial |
 | ~~4~~ | ~~Update the stale `import app` debt note~~ — **done** in the SADD and `core-designs.mdc` | Design B2 | Trivial |
 | 5 | Requirement the interactive terminal and the AI assistant, or scope them out | Requirements C-1, C-2 | Small |

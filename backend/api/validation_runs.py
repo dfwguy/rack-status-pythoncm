@@ -116,6 +116,8 @@ from validation_launch import (
     _validation_preset_status_payload,
     _validation_worker,
     _xrack_worker,
+    launch_digest,
+    reviewed_launch_error,
 )
 
 from ._common import operator_from_request as _operator_from_request
@@ -124,6 +126,36 @@ _logger = logging.getLogger(__name__)
 
 # Empty prefix: routes keep the paths they had in app.py, so the move cannot change a URL.
 bp = Blueprint("validation_runs", __name__, url_prefix="")
+
+
+def _prepared(prepare, body: dict) -> tuple[dict | None, tuple[object, int] | None]:
+    """Run a legacy prepare, then apply the reviewed-target gate (REQ-6).
+
+    Wrapping the prepare rather than editing ten launch bodies is deliberate. The ten call sites
+    were byte-identical (`prep, err = _prepare_X(body)` / `if err is not None: return err[0],
+    err[1]` / `assert prep is not None`), so inlining the gate would have produced ten copies of the
+    same four lines -- which pylint's duplicate-code check would flag, and rightly: the next
+    endpoint added would be the one that forgot the gate. Here it is impossible to add a launch
+    endpoint through this helper and not be bound.
+
+    Returns the prepare's own error unchanged when the prepare failed, or the gate's 409 when the
+    reviewed target no longer holds. Both are the `(response, status)` shape the call sites already
+    unpack, so no call site changes shape.
+    """
+    prep, err = prepare(body)
+    if err is not None:
+        return None, err
+    assert prep is not None
+    gate = reviewed_launch_error(body, prep)
+    if gate is not None:
+        return None, gate
+    return prep, None
+
+
+#: Launch kinds `POST /api/launch/prepare` can resolve, mapped to the prepare that owns each.
+#: Populated below, after the prepares are defined -- a dict literal up here would reference names
+#: that do not exist yet.
+_PREPARE_BY_KIND: dict[str, object] = {}
 
 
 def _validation_tool_and_stage() -> tuple[str, str]:
@@ -337,7 +369,7 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
 def api_run_validation():
     """Run singlerack validation script with one target, e.g. p26-r05-ct[01-18] (cwd = log_dir)."""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepare_run_validation(body)
+    prep, err = _prepared(_prepare_run_validation, body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -382,7 +414,7 @@ def api_run_validation():
 def api_run_validation_async():
     """Start validation in a background thread; poll GET /api/run-validation-status?job_id=…"""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepare_run_validation(body)
+    prep, err = _prepared(_prepare_run_validation, body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -502,7 +534,7 @@ def api_run_nemo_xrack_async():
     Process cwd is *log_dir* (same as ``/api/run-validation``) so Slurm batch stdout files land there.
     """
     body = request.get_json(silent=True) or {}
-    prep, err = _prepare_run_nemo_xrack(body)
+    prep, err = _prepared(_prepare_run_nemo_xrack, body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -698,7 +730,7 @@ def _prepare_run_exemplar_llama(body: dict) -> tuple[dict | None, tuple[object, 
 def api_run_exemplar_llama_async():
     """Submit Llama 3.1 405B Exemplar pretraining across eight selected racks."""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepare_run_exemplar_llama(body)
+    prep, err = _prepared(_prepare_run_exemplar_llama, body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -772,7 +804,7 @@ def api_run_exemplar_llama_async():
 def api_run_llama_async():
     """Start ``run-llama.sh`` in the background; poll ``/api/run-llama-status``."""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepare_run_llama(body)
+    prep, err = _prepared(_prepare_run_llama, body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -1432,6 +1464,69 @@ def api_prepare_validation_preset():
     return jsonify({"ok": True, "plan": public_plan})
 
 
+# The legacy counterpart of the preset `prepare` above (REQ-6). One endpoint for all ten legacy
+# launches rather than ten sibling routes: they share a prepare signature and a result shape, so ten
+# routes would be ten chances for one to drift.
+_PREPARE_BY_KIND.update({
+    "validation": _prepare_run_validation,
+    "nemo-xrack": _prepare_run_nemo_xrack,
+    "exemplar-llama": _prepare_run_exemplar_llama,
+    "llama": _prepare_run_llama,
+    "mnubergemm-stress": _prepare_run_mnubergemm_stress,
+    "nccl-fullrack": _prepare_run_nccl_fullrack,
+    "nvloom": _prepare_run_nvloom_singlerack,
+    "clusterkit": _prepare_run_clusterkit_singlerack,
+    "llmb-nccl": _prepare_run_llmb_nccl,
+})
+
+
+@bp.route("/api/launch/prepare", methods=["POST"])
+@action("validation:prepare_launch")
+def api_prepare_launch():
+    """Resolve a legacy launch for review and return its digest, without launching anything.
+
+    ``{"kind": "<one of _PREPARE_BY_KIND>", ...}`` — the rest of the body is the launch body the
+    caller intends to send, so the digest is computed over exactly what would run.
+
+    What comes back is the resolved command, the resolved target and a ``plan_hash``. The command is
+    the honest answer to "what will this do": for these endpoints the operator previously reviewed
+    only the options they had typed, never the resolved argv, so nothing detected a target that had
+    changed underneath them.
+
+    Deliberately does not launch, and deliberately does not stash the plan server-side. A stored
+    plan would need an expiry, a cleanup path and a per-operator scope, and would still not answer
+    the real question, which is whether the target is the same *now*. The digest costs nothing to
+    recompute and cannot go stale in a way the compare misses.
+    """
+    body = request.get_json(silent=True) or {}
+    kind = str(body.get("kind") or "").strip()
+    prepare = _PREPARE_BY_KIND.get(kind)
+    if prepare is None:
+        return jsonify({
+            "ok": False,
+            "error": f"unknown launch kind {kind!r}",
+            "kinds": sorted(_PREPARE_BY_KIND),
+        }), 400
+
+    launch_body = {k: v for k, v in body.items() if k != "kind"}
+    prep, err = prepare(launch_body)
+    if err is not None:
+        return err[0], err[1]
+    assert prep is not None
+    return jsonify({
+        "ok": True,
+        "kind": kind,
+        "plan": {
+            "target": str(prep.get("target") or ""),
+            "rack": str(prep.get("rk") or prep.get("rack") or ""),
+            "command_display": str(prep.get("display_cmd") or ""),
+            "log_dir": str(prep.get("log_dir") or ""),
+            "timeout_sec": prep.get("timeout"),
+        },
+        "plan_hash": launch_digest(prep),
+    })
+
+
 def _run_validation_preset_async(body: dict):
     plan, err = _prepare_validation_preset(body)
     if err is not None:
@@ -1498,7 +1593,7 @@ def api_run_exemplar_sysinfo_status():
 def api_run_mnubergemm_stress_async():
     """Start mnubergemm stress driver; poll GET /api/run-mnubergemm-stress-status?job_id=…"""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepare_run_mnubergemm_stress(body)
+    prep, err = _prepared(_prepare_run_mnubergemm_stress, body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -1561,7 +1656,7 @@ def api_run_mnubergemm_stress_async():
 def api_run_nccl_fullrack_async():
     """Start the standalone Stage-1 NCCL benchmark; poll GET /api/run-nccl-fullrack-status?job_id=…"""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepare_run_nccl_fullrack(body)
+    prep, err = _prepared(_prepare_run_nccl_fullrack, body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -1632,7 +1727,7 @@ def api_run_nccl_fullrack_async():
 def api_run_nvloom_async():
     """Start nvloom singlerack Slurm driver (sbatch --wait); poll GET /api/run-nvloom-status?job_id=…"""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepare_run_nvloom_singlerack(body)
+    prep, err = _prepared(_prepare_run_nvloom_singlerack, body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -1695,7 +1790,7 @@ def api_run_nvloom_async():
 def api_run_clusterkit_async():
     """Start ClusterKit singlerack Slurm driver; poll GET /api/run-clusterkit-status?job_id=…"""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepare_run_clusterkit_singlerack(body)
+    prep, err = _prepared(_prepare_run_clusterkit_singlerack, body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -1764,7 +1859,7 @@ def api_run_llmb_nccl_async():
     the head node).
     """
     body = request.get_json(silent=True) or {}
-    prep, err = _prepare_run_llmb_nccl(body)
+    prep, err = _prepared(_prepare_run_llmb_nccl, body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None

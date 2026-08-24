@@ -429,6 +429,44 @@ Search in **`app.py`** for: `_DISABLED`, `_DRY_RUN`, `_TIMEOUT`, `_DISABLED` on 
 
 ---
 
+## 16a. Launch review binding (`RACK_LAUNCH_REVIEW`) — REQ-6
+
+A validation launch takes a rack out of service and consumes real GPU hours, so REQ-6 requires that
+the target the operator **reviewed** is the target that runs. The mechanism is a two-call protocol:
+
+```
+POST /api/launch/prepare        {"kind": "...", ...launch body}  -> resolved plan + plan_hash
+POST /api/run-<tool>-async      {...launch body, "plan_hash": ...} -> re-resolves, compares, launches
+```
+
+The launch re-runs the same resolution and compares digests in constant time. A drained rack, a
+superseded campaign, or a browser tab left open while someone switched clusters all change the
+digest and earn a **409** carrying the new one, so the UI can re-present the changed plan.
+
+| Value | Behaviour |
+| :---- | :---- |
+| `strict` *(default)* | A launch without a digest is refused; a mismatched digest is refused. |
+| `warn` | A launch **without** a digest is allowed and logged; a **mismatched** digest is still refused. |
+| `off` | The pre-2026-08-24 contract: no binding. |
+
+**Why `strict` by default.** A permissive default would mean REQ-6 is unmet on a stock deployment,
+which is the criticism the requirement exists to answer. The in-repo SPA does prepare→launch for
+every one of these endpoints (`frontend/src/lib/launchReview.ts`), so the product's own UI needs no
+configuration.
+
+**Why `warn` exists.** A site with its own automation posting directly to these endpoints — a MOP
+script, a cron job, an operator's `curl` — would otherwise break on upgrade. `warn` keeps those
+launching while every unbound launch is logged, which turns the migration into a worklist rather
+than a guess. Note what `warn` does *not* relax: a **mismatched** digest is still refused, because a
+mismatch is not a caller that never learned the protocol — it is a caller whose reviewed target no
+longer holds, which is exactly the case the requirement is about.
+
+The endpoints covered are the ten legacy per-tool launches. `/api/run-validation-preset-async` is
+**not** affected: it has had its own stronger binding since it was written (a digest over
+hand-picked semantic fields rather than the resolved argv), and is deliberately not double-gated.
+
+---
+
 ## 16b. Data lake egress (`RACK_LAKE_*`) — what leaves the site
 
 The lake sink pushes validation-run provenance (parsed results, raw logs, the sbatch/conf/YAML that
@@ -570,6 +608,7 @@ RACK_LAKE_DISABLED
 RACK_LAKE_QUEUE_MAX               # bounded async capture queue depth (default 256)
 RACK_LAKE_TIMEOUT
 RACK_LAKE_URL
+RACK_LAUNCH_REVIEW                # reviewed-target binding: strict (default) | warn | off; see §16a
 RACK_LLAMA_DISABLED
 RACK_LLAMA_SCRIPT
 RACK_LLAMA_TIMEOUT

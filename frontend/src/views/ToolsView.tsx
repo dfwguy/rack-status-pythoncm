@@ -29,6 +29,7 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { ToolsLiveOutputDialog } from "../components/ToolsLiveOutputDialog";
 import { CollapsibleLog } from "../components/CollapsibleLog";
+import { launchWithReview } from "../lib/launchReview";
 type LiveKind = "nemo" | "hpcx" | "cudaNccl" | "nvloom" | "dgxc" | "dcgm" | "grafana";
 
 type ExemplarMode = "record" | "install";
@@ -907,11 +908,12 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     }
     setLlmbLoading(true);
     try {
-      const startRes = await fetch("/api/run-llmb-nccl-async", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ racks, dry_run: llmbDryRun, log_dir: logDir }),
+      // prepare -> digest -> launch (REQ-6). launchWithReview goes through apiFetch, which already
+      // sends same-origin credentials, so the behaviour here is unchanged apart from the binding.
+      const startRes = await launchWithReview("/api/run-llmb-nccl-async", {
+        racks,
+        dry_run: llmbDryRun,
+        log_dir: logDir,
       });
       if (startRes.status === 401) {
         window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;

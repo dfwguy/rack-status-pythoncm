@@ -795,13 +795,130 @@ class TestRackLocksAPI:
         assert resp.get_json()["removed"] is False
 
 
+def _launch(client, url: str, kind: str, body: dict):
+    """POST a legacy launch through the reviewed-target protocol (REQ-6).
+
+    `prepare` resolves the target and returns a digest; the launch echoes it back and the server
+    re-resolves and compares. Since 2026-08-24 the ten legacy launch endpoints require that binding,
+    so a test that posts a bare body is testing the refusal, not the launch.
+
+    A helper rather than a fixture because it takes the kind and body per call, and it deliberately
+    fetches the digest instead of hard-coding one: a hard-coded digest would stop testing the
+    binding the first time a prepare's resolved command changed for an unrelated reason.
+    """
+    prep = client.post("/api/launch/prepare", json={"kind": kind, **body}).get_json()
+    assert prep and prep.get("ok"), f"prepare failed for kind={kind}: {prep}"
+    return client.post(url, json={**body, "plan_hash": prep["plan_hash"]})
+
+
+class TestReviewedLaunchBinding:
+    """REQ-6 on the legacy launch endpoints: what the operator reviewed is what runs.
+
+    Before this, `plan_hash` was enforced on the validation-preset path only -- one endpoint out of
+    thirteen -- and the legacy launches relied on a client-side confirmation dialog, which detects
+    nothing when the target has changed since it was shown. Found by a PLC requirements validation.
+    """
+
+    def test_a_launch_without_a_digest_is_refused(self, client, log_dir):
+        resp = client.post(
+            "/api/run-llmb-nccl-async",
+            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        )
+        assert resp.status_code == 409
+        body = resp.get_json()
+        assert body["ok"] is False
+        # The refusal carries the digest, so a client can review and retry without a second round.
+        assert body.get("plan_hash")
+
+    def test_a_stale_digest_is_refused(self, client, log_dir):
+        resp = client.post(
+            "/api/run-llmb-nccl-async",
+            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True, "plan_hash": "0" * 64},
+        )
+        assert resp.status_code == 409
+        assert "changed since it was reviewed" in (resp.get_json().get("error") or "")
+
+    def test_the_prepared_digest_is_accepted(self, client, log_dir):
+        resp = _launch(
+            client, "/api/run-llmb-nccl-async", "llmb-nccl",
+            {"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json()["ok"] is True
+
+    def test_changing_the_target_after_review_invalidates_the_digest(self, client, log_dir):
+        """The point of the gate: a digest earned for one target must not launch another."""
+        prep = client.post(
+            "/api/launch/prepare",
+            json={"kind": "llmb-nccl", "rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        ).get_json()
+        assert prep["ok"] is True
+        resp = client.post(
+            "/api/run-llmb-nccl-async",
+            # Same digest, different rack.
+            json={"rack": "p5-r02", "log_dir": log_dir, "dry_run": True,
+                  "plan_hash": prep["plan_hash"]},
+        )
+        assert resp.status_code == 409
+
+    def test_a_malformed_body_still_gets_its_own_error_not_a_digest_complaint(self, client, log_dir):
+        """Gate order matters: the prepare's own 400 must win, or every bad request looks like a
+        review problem and the operator is sent to fix the wrong thing."""
+        resp = client.post("/api/run-llmb-nccl-async", json={"log_dir": log_dir})
+        assert resp.status_code == 400
+
+    def test_prepare_rejects_an_unknown_kind(self, client, log_dir):
+        resp = client.post("/api/launch/prepare", json={"kind": "not-a-tool", "rack": "p5-r01"})
+        assert resp.status_code == 400
+        assert "kinds" in resp.get_json(), "the error should name the valid kinds"
+
+    def test_prepare_does_not_launch(self, client, log_dir, isolated_validation_activities):
+        """A review step that started the job would be worse than no review step."""
+        prep = client.post(
+            "/api/launch/prepare",
+            json={"kind": "llmb-nccl", "rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        ).get_json()
+        assert prep["ok"] is True
+        assert "job_id" not in prep
+        listed = client.get(
+            "/api/validation-activities", query_string={"log_dir": log_dir}
+        ).get_json()
+        assert listed["activities"] == []
+
+    def test_off_mode_restores_the_legacy_contract(self, client, log_dir, monkeypatch):
+        """The compatibility escape hatch, for a site with its own automation posting here."""
+        monkeypatch.setenv("RACK_LAUNCH_REVIEW", "off")
+        resp = client.post(
+            "/api/run-llmb-nccl-async",
+            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        )
+        assert resp.status_code == 200
+
+    def test_warn_mode_allows_an_unbound_launch_but_still_refuses_a_stale_one(
+        self, client, log_dir, monkeypatch
+    ):
+        """`warn` is for migrating callers, not for disabling the check that matters: a MISMATCH is
+        a target that changed, not a caller that never learned the protocol."""
+        monkeypatch.setenv("RACK_LAUNCH_REVIEW", "warn")
+        unbound = client.post(
+            "/api/run-llmb-nccl-async",
+            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        )
+        assert unbound.status_code == 200
+        stale = client.post(
+            "/api/run-llmb-nccl-async",
+            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True, "plan_hash": "0" * 64},
+        )
+        assert stale.status_code == 409
+
+
 class TestRunLlmbNccl:
     """Async + status endpoints for the NCCL Microbenchmark (LLMB) tool."""
 
     def test_single_rack_starts_job(self, client, log_dir):
-        resp = client.post(
-            "/api/run-llmb-nccl-async",
-            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        resp = _launch(
+            client, "/api/run-llmb-nccl-async", "llmb-nccl",
+            {"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
         )
         assert resp.status_code == 200
         data = resp.get_json()
@@ -814,9 +931,9 @@ class TestRunLlmbNccl:
         assert "--dry-run" in (data.get("command_display") or "")
 
     def test_multi_rack_starts_job(self, client, log_dir):
-        resp = client.post(
-            "/api/run-llmb-nccl-async",
-            json={"racks": ["p5-r01", "p5-r02", "p5-r01"], "log_dir": log_dir},
+        resp = _launch(
+            client, "/api/run-llmb-nccl-async", "llmb-nccl",
+            {"racks": ["p5-r01", "p5-r02", "p5-r01"], "log_dir": log_dir},
         )
         assert resp.status_code == 200
         data = resp.get_json()
@@ -836,9 +953,9 @@ class TestRunLlmbNccl:
         assert resp.status_code == 400
 
     def test_status_for_started_job(self, client, log_dir):
-        start = client.post(
-            "/api/run-llmb-nccl-async",
-            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        start = _launch(
+            client, "/api/run-llmb-nccl-async", "llmb-nccl",
+            {"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
         ).get_json()
         job_id = start["job_id"]
         resp = client.get(f"/api/run-llmb-nccl-status?job_id={job_id}")
@@ -863,9 +980,9 @@ class TestValidationActivitiesAPI:
         assert data["activities"] == []
 
     def test_async_launch_creates_activity(self, client, log_dir, isolated_validation_activities):
-        start = client.post(
-            "/api/run-llmb-nccl-async",
-            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        start = _launch(
+            client, "/api/run-llmb-nccl-async", "llmb-nccl",
+            {"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
         ).get_json()
         assert start["ok"] is True
         job_id = start["job_id"]
@@ -881,9 +998,9 @@ class TestValidationActivitiesAPI:
         assert detail["activity"]["tool"] == "llmb-nccl"
 
     def test_delete_activity(self, client, log_dir, isolated_validation_activities):
-        start = client.post(
-            "/api/run-llmb-nccl-async",
-            json={"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
+        start = _launch(
+            client, "/api/run-llmb-nccl-async", "llmb-nccl",
+            {"rack": "p5-r01", "log_dir": log_dir, "dry_run": True},
         ).get_json()
         job_id = start["job_id"]
         resp = client.delete(f"/api/validation-activities/{job_id}")
@@ -892,9 +1009,9 @@ class TestValidationActivitiesAPI:
         assert listed["activities"] == []
 
     def test_multirack_jobs_compat_alias(self, client, log_dir, isolated_validation_activities):
-        start = client.post(
-            "/api/run-nemo-xrack-async",
-            json={"racks": ["p5-r01", "p5-r02"], "log_dir": log_dir, "dry_run": True},
+        start = _launch(
+            client, "/api/run-nemo-xrack-async", "nemo-xrack",
+            {"racks": ["p5-r01", "p5-r02"], "log_dir": log_dir, "dry_run": True},
         ).get_json()
         assert start["ok"] is True
         resp = client.get("/api/multirack-jobs", query_string={"log_dir": log_dir})

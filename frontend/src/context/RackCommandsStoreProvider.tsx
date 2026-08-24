@@ -26,6 +26,7 @@ import { formatJobStatusText, formatSyncJsonResult } from "../lib/formatJobOutpu
 import type { NodeCmdKind, RackLastAsyncOutput } from "../lib/rackCommandTypes";
 import { validationRackKey } from "../lib/rackCommandTypes";
 import { apiFetch } from "../lib/apiFetch";
+import { launchWithReview } from "../lib/launchReview";
 import { useRackLocksContext } from "./RackLocksContext";
 import type { RackLockEntry } from "../hooks/useRackLocks";
 import {
@@ -286,11 +287,9 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
       if (!proceed) return;
       const pid = pushPending(rack, label);
       try {
-        const res = await apiFetch(postUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
+        // prepare -> digest -> launch, so the target the operator reviewed is the target that
+        // runs (REQ-6). A no-op for a URL outside LAUNCH_KIND_BY_URL.
+        const res = await launchWithReview(postUrl, body);
         const data = (await res.json()) as { ok?: boolean; job_id?: string; error?: string };
         if (!res.ok || !data.ok || !data.job_id) {
           throw new Error(data.error || "failed to start job");
@@ -325,11 +324,9 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
 
       let jobId = "";
       try {
-        const res = await apiFetch(postUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
+        // prepare -> digest -> launch, so the target the operator reviewed is the target that
+        // runs (REQ-6). A no-op for a URL outside LAUNCH_KIND_BY_URL.
+        const res = await launchWithReview(postUrl, body);
         const data = (await res.json()) as { ok?: boolean; job_id?: string; error?: string };
         if (!res.ok || !data.ok || !data.job_id) {
           throw new Error(data.error || "failed to start job");
