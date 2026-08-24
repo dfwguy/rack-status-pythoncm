@@ -7,7 +7,8 @@ alwaysApply: true
 
 A local pass proves the code works **with whatever else is lying around your tree**. CI starts from
 a fresh clone of tracked files only, in a slim image. Three different versions of this gap turned
-the pipeline red on 2026-08-21 alone, each with a green local suite.
+the pipeline red on 2026-08-21 alone, each with a green local suite — and a fourth on 2026-08-24,
+where the difference was not pass/fail at all but a *coverage percentage* (§3).
 
 ## 1. The frontend is not built in CI — this is the one that bites tests
 
@@ -41,7 +42,30 @@ instead of removing it, and the SPA-missing path is real behaviour on any backen
 Locally: 1686 tests green. In CI: `ImportError` and 34 collection errors. `git status` showed the
 untracked file next to twenty other lines nobody reads twice.
 
-## 3. The job image is not your shell — and it cuts both ways
+## 3. Coverage is not the same number in both trees
+
+`backend/universal_parser.py` measures **52.8% in a working tree and 48.1% from a clean checkout** —
+a test opportunistically picks up untracked sample data that happens to be lying around. That is
+below the 50% floor `bin/check-coverage-floor.py` enforces, so the gate's exception list was seeded
+from a local run, passed locally, and failed on the first push.
+
+Comparing the two trees moved **13 files, by up to 3.0 points**. Only that one crossed the floor, but
+the lesson generalises: **any per-file coverage number you write down must come from a tracked-only
+run**, because that is the tree the gate runs in.
+
+```bash
+# reproduce CI's tree, then measure in it
+git ls-tree --name-only HEAD | grep -v -e '^\.' -e '^frontend$' \
+  | xargs git archive HEAD -- | tar -x -C /tmp/citree
+cp .coveragerc /tmp/citree/ && cd /tmp/citree
+python -m pytest backend/tests -q --cov --cov-config=.coveragerc --cov-report=json:cov.json
+```
+
+The gate reports a listed file clearing the floor as information, not as an instruction — it tells
+you to confirm in a tracked-only tree first, because "remove this entry" is wrong advice when the
+number came from your own working tree.
+
+## 4. The job image is not your shell — and it cuts both ways
 
 `python:3.12-slim` has **no `git`**: the runner clones in a separate helper container, so a script
 that shelled out to `git archive` died with `git: command not found`. Check `command -v <tool>`

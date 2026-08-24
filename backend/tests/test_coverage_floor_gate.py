@@ -120,11 +120,18 @@ class TestTheGateAllows:
         assert proc.returncode == 0
 
     def test_a_listed_file_rising_above_the_floor_passes_but_says_so(self, tmp_path):
-        """Paying down debt must not fail the build, but should tell you to drop the entry."""
+        """Paying down debt must not fail the build, and the advice must be qualified.
+
+        A working tree can read higher than a clean checkout -- universal_parser.py is 52.8% locally
+        and 48.1% from a tracked-files-only export -- so "remove this entry" is wrong advice unless
+        it was confirmed in CI's tree. The gate says so rather than inviting a removal that turns
+        the pipeline red.
+        """
         name = next(iter(gate.EXCEPTIONS))
         proc = _run(tmp_path, _report({name: 90.0}))
         assert proc.returncode == 0
-        assert "no longer need to be exceptions" in proc.stdout
+        assert "cleared the floor in this run" in proc.stdout
+        assert "tracked-files-only" in proc.stdout
 
 
 class TestTheExceptionListIsHonest:

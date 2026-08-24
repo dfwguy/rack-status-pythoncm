@@ -97,8 +97,8 @@ operators against real deployments, recorded as evidence rather than as automate
 | Backend test files | 109 |
 | Backend tests | 2,294 passing, 17 skipped |
 | Frontend test files | 52 |
-| Backend statement+branch coverage | 65.3% (26,042 statements, `.coveragerc` scope, tests excluded) |
-| Files below 50% coverage | 13, all on the gate's exception list |
+| Backend statement+branch coverage | 65.0% from a clean checkout, 65.3% in a working tree (26,051 statements, `.coveragerc` scope, tests excluded) |
+| Files below 50% coverage | 14, all on the gate's exception list |
 | Coverage floor | 50% per file, enforced (REQ-45) by `bin/check-coverage-floor.py` |
 | Suite runtime | ~110 s local, ~200 s with coverage instrumentation, ~220 s in CI |
 | Static analysis | ruff and pylint clean on `backend/` excluding tests |
@@ -196,6 +196,9 @@ python bin/check-coverage-floor.py coverage.json     # REQ-45
 bash bin/check-tracked-tree.sh --with-tests          # the committed-tree gate
 ```
 
+Run the gate this way to *check* a change, but measure any number you intend to write down — a new
+exception baseline, a figure in this plan — in a tracked-files-only tree, per the note above.
+
 Verification evidence that is not a pytest case is recorded in
 `docs/AUDIT_PHASE1_VERIFICATION.md`: the `getLogger` diff inspection (TC-39) and the container
 recreate demonstration (TC-40, container `ef3693ea312f` → `71f758789132` with the audit event
@@ -209,10 +212,15 @@ result. Approver surnames remain to be filled in — see open question 3.
 
 ## Function List
 
-Coverage by area, and the honest gaps. Thirteen files remain below 50%; they are listed because a
-test plan that reports only the total is not a test plan. Those thirteen are also the *entire*
-exception list in `bin/check-coverage-floor.py` — the table below and the gate cannot drift apart,
-because the gate fails if a listed file no longer exists or has climbed above the floor.
+Coverage by area, and the honest gaps. Fourteen files remain below 50%; they are listed because a
+test plan that reports only the total is not a test plan. Those fourteen are also the *entire*
+exception list in `bin/check-coverage-floor.py`, so the table below and the gate cannot drift apart.
+
+**Figures are from a tracked-files-only tree, which is what CI measures.** That distinction is not
+pedantry: `universal_parser.py` reads 52.8% in a working tree and 48.1% from a clean checkout,
+because a test picks up untracked sample data. Seeding the gate from a local run is exactly what
+made its first CI push fail. Thirteen files differ between the two trees by up to 3.0 points; only
+that one crosses the floor. See `.cursor/rules/local-vs-ci-tree.mdc` §3.
 
 | Area | Coverage | Assessment |
 | :---- | :---- | :---- |
@@ -228,7 +236,8 @@ because the gate fails if a listed file no longer exists or has climbed above th
 | `api/analytics.py`, `api/fabric_ops.py`, `api/diagnostics.py`, `api/bringup.py`, `metrics_query.py` | 45–50% | Within a few points of the line |
 | `api/rack_power.py` | 26.7% | **Gap G-1** — privileged: power, BMC recovery, MAC change |
 | `api/parser_results.py` | 19.3% | **Gap G-2** |
-| `rack_status_engine.py` | 25.9% | **Gap G-2** — needs a synthetic fleet fixture |
+| `rack_status_engine.py` | 25.5% | **Gap G-2** — needs a synthetic fleet fixture |
+| `universal_parser.py` | 48.1% | 986 statements, the NCCL/NeMo result scrapers. Reads 52.8% locally — see the note above |
 | `api/exports.py` | 22.3% | **Gap G-2** |
 | `api/terminal.py` | 28.5% | **Gap G-4** — needs WebSocket upgrade simulation |
 | `api/bug_report.py`, `api/logs.py`, `agent/registrations.py` | 28–37% | **Gap G-2** |

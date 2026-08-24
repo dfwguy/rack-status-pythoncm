@@ -38,16 +38,28 @@ from pathlib import Path
 FLOOR = 50.0
 
 #: Allowed slippage on an exception file before the gate complains. Coverage moves by fractions of a
-#: percent when unrelated code is added, and a gate that fails on noise gets switched off.
+#: percent when unrelated code is added, and a gate that fails on noise gets switched off. Sized
+#: against measured environment variance too: comparing a full working tree with a tracked-files-only
+#: export moved 13 files, by up to 3.0 points. None of them are listed here today, but a listed file
+#: that starts to vary between environments needs this raised rather than the gate disabled.
 TOLERANCE = 1.5
 
-#: Files below the floor when the gate was introduced (2026-08-24, backend at 65.3% overall).
-#: Each value is the coverage measured that day. THIS LIST MAY ONLY SHRINK.
+#: Files below the floor when the gate was introduced (2026-08-24). THIS LIST MAY ONLY SHRINK.
 #: The highest-risk entries are tracked as gaps G-1..G-6 in the SUTP.
+#:
+#: SEED THESE FROM A TRACKED-FILES-ONLY RUN, NOT YOUR WORKING TREE. The first version of this list
+#: was measured in a full local tree and CI rejected it on the first push: universal_parser.py reads
+#: 52.8% locally and 48.1% from a clean checkout, because a test picks up untracked sample data that
+#: happens to be lying around. Reproduce CI's tree before touching these numbers:
+#:
+#:   git ls-tree --name-only HEAD | grep -v -e '^\.' -e '^frontend$' \
+#:     | xargs git archive HEAD -- | tar -x -C <dir>
+#:
+#: See .cursor/rules/local-vs-ci-tree.mdc -- this is the fourth distinct instance of that gap.
 EXCEPTIONS: dict[str, float] = {
     "backend/api/parser_results.py": 19.3,    # G-2
     "backend/api/exports.py": 22.3,           # G-2
-    "backend/rack_status_engine.py": 25.9,    # G-2: needs a synthetic fleet fixture
+    "backend/rack_status_engine.py": 25.5,    # G-2: needs a synthetic fleet fixture
     "backend/api/rack_power.py": 26.7,        # G-1: power, BMC recovery, MAC change
     "backend/api/terminal.py": 28.5,          # G-4: needs WebSocket upgrade simulation
     "backend/api/bug_report.py": 28.9,
@@ -55,6 +67,7 @@ EXCEPTIONS: dict[str, float] = {
     "backend/agent/registrations.py": 37.4,
     "backend/metrics_query.py": 45.4,
     "backend/api/diagnostics.py": 46.5,
+    "backend/universal_parser.py": 48.1,      # 986 statements; the NCCL/NeMo result scrapers
     "backend/api/tools.py": 48.3,             # G-2, and bypasses the exec chokepoint (G-6)
     "backend/api/bringup.py": 48.5,
     "backend/api/analytics.py": 49.8,
@@ -91,7 +104,7 @@ def main(argv: list[str]) -> int:
             if pct < FLOOR:
                 new_violations.append(f"{name}: {pct:.1f}% is below the {FLOOR:.0f}% floor")
         elif pct >= FLOOR:
-            improved.append(f"{name}: {pct:.1f}% — now above the floor, remove it from EXCEPTIONS")
+            improved.append(f"{name}: {pct:.1f}% — above the floor in THIS run")
         elif pct < baseline - TOLERANCE:
             regressions.append(
                 f"{name}: {pct:.1f}%, was {baseline:.1f}% when listed — the list may only shrink"
@@ -100,9 +113,11 @@ def main(argv: list[str]) -> int:
     stale = [n for n in EXCEPTIONS if n not in files]
 
     if improved:
-        print("coverage-floor: exceptions that no longer need to be exceptions:")
+        print("coverage-floor: listed files that cleared the floor in this run:")
         for line in improved:
             print(f"  {line}")
+        print("  Confirm in a tracked-files-only tree before removing an entry -- a working tree can")
+        print("  read higher than a clean checkout (see the note on EXCEPTIONS above).")
     if stale:
         print("coverage-floor: listed files that no longer exist (delete these entries):")
         for name in stale:
