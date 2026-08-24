@@ -1,0 +1,48 @@
+{
+  "name": "NVIS Rack Status (Cursor Autorun Sandbox)",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/nvis-rack-status,type=bind,consistency=cached",
+  "workspaceFolder": "/workspaces/nvis-rack-status",
+
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" },
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+  },
+
+  // The host tree is macOS-built: root .venv holds Mach-O binaries and
+  // frontend/node_modules holds darwin esbuild/rollup. Shadow both with
+  // container-local volumes so neither side corrupts the other.
+  "mounts": [
+    "source=nvis-rack-status-venv,target=/workspaces/nvis-rack-status/.venv,type=volume",
+    "source=nvis-rack-status-node-modules,target=/workspaces/nvis-rack-status/frontend/node_modules,type=volume"
+  ],
+
+  "onCreateCommand": "sudo chown -R vscode:vscode .venv frontend/node_modules",
+  // requirements-dev.txt pins the test/lint tooling to the versions CI uses, so the container
+  // reproduces the gates (including the per-file coverage floor) rather than tracking latest.
+  "postCreateCommand": "python -m venv .venv && .venv/bin/pip install -r backend/requirements.txt -r backend/requirements-dev.txt",
+
+  "remoteEnv": {
+    "RACK_STATUS_DEMO": "1",
+    "RACK_EXEC_MODE": "local",
+    "BUILD_FRONTEND": "0"
+  },
+
+  "forwardPorts": [5050],
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/workspaces/nvis-rack-status/.venv/bin/python"
+      },
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  },
+
+  "remoteUser": "vscode"
+}
