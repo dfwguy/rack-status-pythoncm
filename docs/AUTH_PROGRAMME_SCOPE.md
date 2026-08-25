@@ -12,8 +12,8 @@ scope record; it is not a spec and it does not carry acceptance criteria.
 |---|---|---|
 | 0 | Defect fixes: the unauthenticated `/ws/terminal`, `target` command injection, `0.0.0.0` exposure | done |
 | 0.5 | HTTPS: self-signed by default, internal CA opt-in, TLS 1.2 floor, CSP/HSTS, Origin policy | done |
-| 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | requirements v0.7, design v0.6, test plan v0.1 — implementation not started |
-| 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | not started |
+| 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | **done** — all 7 work items, 40/40 test cases, merged to `main` 2026-08-25 |
+| 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | requirements in progress |
 | 3 | **Authorization**: policy engine, policy documents, attach-to-principal, enforcement before dispatch | not started; `docs/PHASE3_POLICY_ENGINE_SPIKE.md` is the decision-support draft |
 
 ## Phase 1 — implementation work items
@@ -32,10 +32,10 @@ design references are to `.plc/briefs/auth-audit-logging-brief.md`; TC numbers a
 | 1 | `backend/logging_config.py` — sinks, level, format, redaction filter, settings registry | TC-1…TC-5, TC-21 | **done**, 24 tests |
 | 2 | `backend/audit/actions.py` — the `@action` decorator, grammar, `build_registry` startup validation | TC-15…TC-17 | **done**, 27 tests |
 | 3 | The 103 `@action` declarations across 25 modules, plus the committed `action_snapshot.json` | TC-18 | **done**, 6 tests; gate live |
-| 4 | `backend/audit/sink.py` + `audit/__init__.py` — event schema, bounded rotating JSONL, flood guard | TC-6…TC-14, TC-32, TC-33 | next |
-| 5 | Client-address resolver + trusted-proxy validation (`core.py`, `api/_common.py`) | TC-19, TC-20 | pending |
-| 6 | The `after_request` chokepoint + the WSGI terminal refusal hook | TC-22…TC-31 | pending |
-| 7 | Performance, compatibility and regression cases | TC-34…TC-40 | pending |
+| 4 | `backend/audit/sink.py` + `audit/__init__.py` — event schema, bounded rotating JSONL, flood guard | TC-6…TC-14, TC-32, TC-33 | **done** |
+| 5 | Client-address resolver + trusted-proxy validation (`core.py`, `api/_common.py`) | TC-19, TC-20 | **done** |
+| 6 | The `after_request` chokepoint + the WSGI terminal refusal hook | TC-22…TC-31 | **done** |
+| 7 | Performance, compatibility and regression cases | TC-34…TC-40 | **done** — incl. TC-39 inspection and TC-40 demonstration |
 
 Two things fixed along the way that were not work items and are worth not rediscovering: a missing
 `static/spa/index.html` made `serve_spa_asset` hand off a file it had just found absent, returning
@@ -43,9 +43,25 @@ Two things fixed along the way that were not work items and are worth not redisc
 unignored files, one `git add .` from the repo.
 
 After item 7 come the closing V-model steps — verification, security scan, acceptance validation and
-the traceability matrix — which are phases in the state file rather than work items here.
+the traceability matrix — which are phases in the state file rather than work items here. As of
+2026-08-25 **verification and the security scan are complete**; acceptance validation and the
+traceability matrix are deliberately deferred, not attempted and failed (both inputs exist).
+
+One item-7 result worth carrying forward, because the final number hides it: the 5 ms p95 audit
+budget (NFR-2a) was **breached at +8.66 ms** until the active cluster label was cached.
+`catalog_context.resolve()` was reading TinyDB on every audited request to attach a label that
+changes only when an operator switches project. Caching it on the store's generation counter brought
+it to +0.37 ms. Any future per-request enrichment should assume the same trap.
 
 ## Phase 2 — identity, and why groups belong here
+
+Requirements: **[`.plc/briefs/auth-identity-brief.md`](../.plc/briefs/auth-identity-brief.md)** —
+37 requirements, 42 acceptance criteria, drafted 2026-08-25. Four decisions were taken at kickoff and
+two of them reverse the recommendation, so they are recorded in that brief rather than here: SRP is
+**kept** rather than replaced by an argon2id verifier over TLS; JWTs are used for the browser too but
+transported in an `HttpOnly` cookie rather than `localStorage`; OIDC is **in** this phase and needs no
+new backend dependency beyond the PyJWT that our own tokens require; groups are flat with user-level
+denial winning.
 
 The identity store owns **users, groups, and membership**. Groups are not a Phase 3 concern despite
 being consumed by policy, for a scheduling reason: adding group membership to an SRP-backed user store
