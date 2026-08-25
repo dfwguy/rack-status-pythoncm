@@ -208,7 +208,7 @@ surviving).
 **Such evidence requires a named approver (REQ-47).** A committed record establishes that the
 inspection or demonstration happened, but not that anyone other than its author accepted the result,
 and inspection is precisely the method where that distinction matters. Sign-off is by one of
-**Rafael M. Koike, Giovanni, or Felix**, recorded in the evidence document itself alongside the
+**Rafael M. Koike, Giovanni Mascari, or Felix Melligan**, recorded in the evidence document itself alongside the
 result. Approver surnames remain to be filled in — see open question 3.
 
 ## Function List
@@ -254,7 +254,7 @@ that one crosses the floor. See `.cursor/rules/local-vs-ci-tree.mdc` §3.
 | G-5 | `backend/tests` is not linted by CI (99 findings, 63 auto-fixable), so a new test file's own quality is unchecked. | Low | Enable after working the backlog |
 | G-6 | Eight `subprocess` call sites in `api/tools.py` bypass the execution chokepoint, so test safety there rests on a second stub rather than on the architecture. | Medium | Move them behind `host_exec` |
 | G-7 | `slurm_admin.py` has no dedicated test module, so REQ-16 and REQ-17 rest on incidental coverage. It reaches 65.2% through the endpoint smoke harness and the routing tests, which is above the floor but exercises the *paths* rather than asserting the *guards*: refusal without an explicit node list, refusal when cancellation is disabled, and the reason string reaching `scontrol`. Coverage percentage is not the same as intent being pinned. | **Medium** | Add a `test_slurm_admin.py` with those three guard cases. Lowered from High after measurement: the earlier draft cited 21.7%, a stale figure predating the smoke harness |
-| G-9 | REQ-47 requires a named approver for evidence that is not an automated test, but `docs/AUDIT_PHASE1_VERIFICATION.md` records TC-39 and TC-40 without one. The requirement exists ahead of its own evidence. | **Medium** | Add an approver line (Rafael M. Koike, Giovanni, or Felix) to that document, and a template line to any future inspection or demonstration record |
+| G-9 | REQ-47 requires a named approver for evidence that is not an automated test, but `docs/AUDIT_PHASE1_VERIFICATION.md` records TC-39 and TC-40 without one. The requirement exists ahead of its own evidence. | **Medium** | Add an approver line (Rafael M. Koike, Giovanni Mascari, or Felix Melligan) to that document, and a template line to any future inspection or demonstration record |
 | G-8 | The frontend has no per-file coverage floor. The backend gate (REQ-45) covers `backend/` only; Vitest runs and must pass, and the job already reports a total (50.61%), but nothing fails when a new component merges untested. Now a real gap rather than a scoping choice, since the frontend is in scope for this plan. | **Medium** | The measurement already exists, so the work is the gate, not the instrumentation: point `bin/check-coverage-floor.py` at Vitest's JSON report, or set a `vitest --coverage` threshold, with the same shrinking-exception discipline |
 
 ---
@@ -270,7 +270,7 @@ measured run, not estimated.
 | :---- | :---- | :---- |
 | 1 | Coverage target as a requirement? | **Yes, an enforced gate at 50% per file** (REQ-45), implemented as `bin/check-coverage-floor.py` in the `python-test` job with a shrinking exception list. Measuring it also corrected two figures in this plan and downgraded gap G-7. |
 | 2 | Is the frontend in scope? | **Yes** — part of the application, so its tests gate merges. It has no per-file floor yet, now recorded as gap G-8 rather than left implicit. |
-| 3 | Sign-off for non-test evidence? | **A named approver is required**: Rafael M. Koike, Giovanni, or Felix (REQ-47). The committed record alone is not sufficient. |
+| 3 | Sign-off for non-test evidence? | **A named approver is required**: Rafael M. Koike, Giovanni Mascari, or Felix Melligan (REQ-47). The committed record alone is not sufficient. |
 
 **Remaining open questions:**
 
@@ -280,8 +280,7 @@ measured run, not estimated.
 2. **Release qualification.** `docs/RELEASE_QA_2026-08-13.md` exists as a point-in-time exercise.
    Should a standing release-qualification checklist be part of this plan, distinct from the
    per-commit gates? Relevant now that releases are periodic and contribution-driven.
-3. **Approver surnames** for the REQ-47 table — Giovanni and Felix are first-name only.
-4. **Do the eight PLC test layers need explicit N/A statements?** This plan covers unit,
+3. **Do the eight PLC test layers need explicit N/A statements?** This plan covers unit,
    integration, performance, compatibility, regression and system. Stress/soak/endurance and formal
    security testing are not represented; the product's own validation recipes are arguably the
    stress layer, but that is a judgement I should not make.

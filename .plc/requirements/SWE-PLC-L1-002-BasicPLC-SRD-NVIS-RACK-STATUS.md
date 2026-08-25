@@ -331,7 +331,7 @@ explicitly not release-candidate execution paths.
 | 3 | Release and support posture? | Periodic releases; **collaborative SA-driven development** with contributions by merge request; explicitly not a one-way door. No formal supported-version window or upgrade/rollback commitment. Recorded above under *Development and contribution model*. |
 | 4 | Committed performance targets? | **None beyond REQ-35's 5 ms audit budget.** No SLAs exist for page load, fleet-scan duration or live-state staleness, and none are planned yet; they may be added incrementally. Recorded as a deliberate absence rather than an oversight. |
 | 5 | Coverage threshold as a gate? | **Yes** — 50% per file, enforced in CI, so every new feature carries its own tests. Now REQ-45. |
-| 6 | Who signs off non-test evidence? | A named approver from **Rafael M. Koike, Giovanni, or Felix**. Now REQ-47. |
+| 6 | Who signs off non-test evidence? | A named approver from **Rafael M. Koike, Giovanni Mascari, or Felix Melligan**. Now REQ-47. |
 
 **Remaining open questions — lower priority, still unanswered:**
 
@@ -343,5 +343,3 @@ explicitly not release-candidate execution paths.
 3. **Data-handling classification.** Validation logs and reports contain customer cluster topology
    and hostnames. Is there a required classification, retention limit or export restriction beyond
    the current bounded audit budget?
-4. **Approver surnames.** Giovanni and Felix are identified by first name only; full names are
-   needed for the approver table.

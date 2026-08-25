@@ -97,7 +97,6 @@
     ],
     "open_questions": [
       "Should the two sibling deployments (nvis-mel01 worktree: Firmus MEL01, Boston BOS01) be covered by this same registration or their own?",
-      "Full names for the REQ-47 evidence approvers: Giovanni and Felix are recorded by first name only.",
       "Whether to commit performance SLAs (page load, fleet-scan duration at 2000+ nodes, acceptable staleness of live state). None exist today beyond the audit path's 5 ms p95 budget, and none are planned yet."
     ]
   }

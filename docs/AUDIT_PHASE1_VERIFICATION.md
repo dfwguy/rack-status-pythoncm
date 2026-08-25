@@ -115,7 +115,7 @@ an audit trail that lives only in stdout does not survive the deploy that produc
 REQ-47 requires evidence that is not an automated test to carry a named approver. A committed record
 establishes that an inspection or demonstration happened; it does not establish that anyone other
 than its author accepted the result, and inspection is exactly the method where that distinction
-carries the weight. Authorised approvers: **Rafael M. Koike, Giovanni, or Felix**.
+carries the weight. Authorised approvers: **Rafael M. Koike, Giovanni Mascari, or Felix Melligan**.
 
 | Case | Method | Result | Recorded by | Approved by | Date |
 | :---- | :---- | :---- | :---- | :---- | :---- |
