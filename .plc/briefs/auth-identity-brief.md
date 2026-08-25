@@ -67,8 +67,10 @@ release-gate evidence.
 | ID | Requirement | Source | Notes |
 |---|---|---|---|
 | FR-1 | The product shall maintain a local identity store holding user records, group records and group membership, persisted in the deployment's own storage and surviving process and container restart. | user request; scope doc | Groups are in this phase deliberately: adding membership to a store that already holds credentials is a migration with an authentication outage in it |
-| FR-2 | A user record shall carry a stable immutable identifier distinct from its login name, so that renaming a user does not orphan the audit trail or any policy attached to it. The identifier shall be an opaque **uuid4**, not a name, an email address or a sequence number. | design necessity; shape fixed 2026-08-25 | the audit trail is append-only, so a renamed principal must stay resolvable. Opaque because the alternatives all leak or collide: an email changes when someone changes team, and a sequence number tells an observer how many operators exist and which account is the oldest. The same split the product already makes between a **rack id** and a **node hostname** — one to reference, one to read. Full taxonomy: `docs/RESOURCE_MODEL.md` |
-| FR-2a | Every login identifier shall be unique across the identity store, and a create or rename that would collide shall be refused. Comparison shall be case-insensitive, so `Admin` and `admin` cannot both exist. | feature-lead direction 2026-08-25 ("all logins must be unique user id") | uniqueness is what makes a login name usable as the thing an operator types and the audit trail names. Case-folding is included because two accounts differing only in case are indistinguishable to a human reading an audit event |
+| FR-2 | The **login identifier shall be the user's identity**: unique, **immutable once created**, and used unchanged as the principal in audit events and policy. No separate opaque identifier shall appear in a principal string or a policy document. | feature-lead direction 2026-08-25, replacing the uuid4 form | measured: `user:rkoike` is 11 bytes against `user:<uuid4>`'s 41, which is ~3 days of retention at FR-7b's ceiling — and an audit trail whose purpose is *who did what* is far more useful when it says `user:rkoike` than a uuid nobody can resolve while reading. **Immutability is the price, not a detail**: the uuid existed solely to survive a rename, so removing the uuid requires removing the rename |
+| FR-2a | Every login identifier shall be unique across the identity store, compared **case-insensitively**, and shall be stored and rendered in a single canonical case. A create that would collide shall be refused. | feature-lead direction 2026-08-25 | two accounts differing only in case are indistinguishable to a human reading an audit event. Canonical case matters more now that the identifier *is* the principal: `user:Admin` and `user:admin` must not be two strings for one subject, or a policy matches one and misses the other |
+| FR-2b | A login identifier shall **never be reused**. Deleting or disabling a user shall retire its identifier permanently, and a create shall be refused if the identifier has ever been used. | **consequence of FR-2, and the one that protects the audit trail** | this is the requirement that stops the trail becoming *actively wrong* rather than merely ambiguous. Without it: `jdoe` leaves, the account is deleted, a different `jdoe` is created — and every action the first person took is now attributed to the second. A policy naming `user:jdoe` would also transfer its grants to the new person, which is privilege transfer by clerical accident |
+| FR-2c | A user record may carry a mutable display name for presentation. It shall not be an identifier, shall not appear in a principal string, and shall not be required to be unique. | consequence of FR-2's immutability | the honest answer to "someone's name changed": the login stays, the display name moves. Renaming the *identifier* is not supported, and a typo at creation is corrected by creating a new user and retiring the old identifier — which is what the audit trail should show anyway, since they are two principals |
 | FR-3 | A local credential shall be persisted only as an SRP salt and verifier. No other representation of the password shall be written to the store. | user request ("secure, reliable and non reversible") | reworded from "no recoverable password material" — *recoverable* is a claim about cryptography that no test can settle. What a test **can** settle is which fields exist and that the plaintext appears in none of them |
 | FR-4 | Local password authentication shall use the **SRP-6a** protocol, such that the plaintext password does not appear in any HTTP request body, header, query string or URL sent to the server. | user request; feature-lead decision 2026-08-25 (reaffirmed against the alternative of an argon2id verifier over TLS) | reworded from "never transmitted in any form": a *derived* value is a form of the password, so the original phrasing was unfalsifiable. Naming the four observation points makes it testable |
 | FR-4c | The product shall reject any JWT whose header names an algorithm other than the one the deployment is configured to use, and shall never accept `alg: none`. | **gap found in self-review 2026-08-25** — the draft required tokens to be "signed" without constraining the algorithm | algorithm confusion is the classic JWT break: a token signed with `none`, or an RS256 verifier tricked into HS256 with the public key as the secret. Without this, FR-5's "signed" is satisfiable by an attacker |
@@ -125,7 +127,11 @@ Every requirement above has at least one criterion.
 | ID | Req | Criterion | Method | Verification idea |
 |---|---|---|---|---|
 | AC-1 | FR-1 | A user, a group and a membership created through the API are all present after a process restart. | automated test | create, restart the app object, read back |
-| AC-2 | FR-2 | Renaming a user's login name leaves prior audit events and any attachment resolvable to the same subject. | automated test | assert the stable id is unchanged and still resolves |
+| AC-2 | FR-2 | An attempt to change a user's login identifier is refused, and the identifier appears unchanged in audit events written before and after any other edit to the record. | automated test | replaces the previous rename-survives criterion: rename is now the thing that must fail |
+| AC-2a | FR-2b | Creating a user with the identifier of a previously deleted user is refused. | automated test | **the criterion that protects the trail.** Without it a recreated `jdoe` inherits the departed `jdoe`'s history and grants |
+| AC-2b | FR-2b | After deletion, the identifier is still resolvable as retired — prior audit events naming it do not become unattributable. | automated test | retirement must not be the same as erasure, or the trail loses its subject |
+| AC-2c | FR-2a | `Admin` and `admin` cannot both exist, and the principal string for either is the same canonical form. | automated test | asserts the canonicalisation, not just the refusal |
+| AC-2d | FR-2c | Changing a display name does not change the principal in a subsequent audit event. | automated test | proves the display name is not load-bearing |
 | AC-3 | FR-3 | No field of a persisted user record contains the password, and the record cannot be used to recover it. | automated test | create with a known password; assert it appears nowhere in the serialised store |
 | AC-4 | FR-4 | Across a successful login, the plaintext password appears in no request body, header, query string or path reaching the server. | automated test | capture every request the client makes during login; assert the password string is absent from all four locations |
 | AC-4a | FR-4c | A token with `alg: none` is refused, and a token signed with an algorithm other than the configured one is refused. | automated test | two negative cases; the second is the RS256→HS256 confusion attack |
@@ -374,12 +380,28 @@ nothing about *kind*. Once there are local users, federated users, groups and ev
 principals, the field has to be self-describing or every consumer guesses. So:
 
 ```
-principal  ::= "user:"    <uuid4>     # local or federated — one namespace (FR-7a)
-             | "group:"   <uuid4>
+principal  ::= "user:"    <login>     # local or federated — one namespace (FR-7a)
+             | "group:"   <name>
              | "service:" <name>      # future: automation, not a person
              | "anonymous"            # retained: pre-auth and refused requests
 resource   ::= <type> ":" <id> [ ":" <id> … ]    # type from the 36-type vocabulary
 ```
+
+**The identifier is the login, not a uuid — revised 2026-08-25 after measuring it.** The first draft
+used an opaque uuid4 on the usual reasoning that a rename must not orphan the trail. Measurement
+changed the balance: `user:rkoike` is 11 bytes to `user:<uuid4>`'s 41, worth ~3 days of retention at
+FR-7b's ceiling, and an audit trail exists to be *read* — `user:rkoike` answers "who did what" where a
+uuid needs a lookup the reader may not have.
+
+**The price is that two things become requirements, not conventions.** The uuid was doing exactly one
+job, surviving a rename, so removing it means removing the rename (FR-2) and forbidding identifier
+reuse (FR-2b). The second is the one that matters: without it, `jdoe` leaves, the account is deleted,
+a different `jdoe` is created, and the trail now attributes the first person's actions to the second.
+That is not ambiguity — it is an audit trail that is confidently wrong, about the product's own
+acceptance evidence. A policy naming `user:jdoe` would transfer its grants too.
+
+Which is why FR-2c exists: the human-facing name that *does* change is a display name, and it is
+explicitly not an identifier.
 
 **Qualification 1 — no `urn:` prefix, and the reason is measured rather than aesthetic.** A full
 `urn:nvis:identity:user:<uuid>` is 59 bytes against `anonymous`'s 9, which is **+50 bytes on a

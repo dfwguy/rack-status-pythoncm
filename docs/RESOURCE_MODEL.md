@@ -46,11 +46,18 @@ Principals and resources share one form, because a policy language with two addr
 policy language nobody writes correctly:
 
 ```
-principal ::= "user:" <uuid4> | "group:" <uuid4> | "service:" <name> | "anonymous"
+principal ::= "user:" <login> | "group:" <name> | "service:" <name> | "anonymous"
 resource  ::= <type> ":" <id> [ ":" <id> … ]     # type from the table below
 ```
 
-So `user:8f14e45f-…`, `rack.power:p5-r01`, `validation.activity:<uuid>`, `slurm.job:mayo:127391`.
+So `user:rkoike`, `rack.power:p5-r01`, `validation.activity:<uuid>`, `slurm.job:mayo:127391`.
+
+**The principal is the login, and that costs two constraints.** `user:rkoike` is 11 bytes to a uuid
+form's 41 — ~3 days of retention at FR-7b's ceiling — and it is legible to whoever reads the trail,
+which is the point of having one. In exchange the login must be **immutable** and **never reused**
+(brief FR-2, FR-2b). The second is the load-bearing one: if an identifier could be recycled, a
+departed `jdoe`'s actions would be attributed to a new `jdoe`, and a policy naming `user:jdoe` would
+hand over their grants. A mutable *display name* covers the human need that rename would have served.
 
 **Deliberately not `urn:nvis:…`.** Measured, not preferred: a full URN principal is 59 bytes against
 `anonymous`'s 9, which is **+50 bytes on a 397-byte audit event — 12.6%** — and `principal` appears in
@@ -99,20 +106,29 @@ Grouped by root, as the action vocabulary groups them. **Verbs** are the actions
 
 | Type | Identifier | Shape | Verbs | Notes |
 |---|---|---|---|---|
-| `identity.user` | stable opaque id, **not** the login name | uuid4 | create, read, update, disable, delete, revoke | FR-2. The login name is a mutable *attribute*; the id is what audit events and policy attachments reference, so a rename orphans nothing. Note the two renderings: **as a resource** it is `identity.user:<uuid>` (the thing being administered); **as a principal** it is `user:<uuid>` (the thing acting). Same record, two roles — and a policy about who may edit users needs the first while the actor is the second |
-| `identity.group` | group id | uuid4 | create, read, update, delete | FR-8: flat, cannot contain a group |
-| `identity.membership` | (group id, user id) pair | composite | add_member, remove_member | Not independently identified — it is an edge, and modelling it as an entity would invite a policy that grants membership editing without naming the group |
+| `identity.user` | the login identifier | immutable, unique, never reused | create, read, update, disable, delete, revoke | FR-2/2a/2b. There is deliberately **no** second opaque id: the login *is* the identity, which is what makes the audit trail readable. Note the two renderings — **as a resource** `identity.user:rkoike` (the thing being administered), **as a principal** `user:rkoike` (the thing acting). Same record, two roles, and a policy about who may edit users needs the first while the actor is the second |
+| `identity.group` | group name | immutable, unique, never reused | create, read, update, delete | FR-8: flat, cannot contain a group. Same immutability reasoning as users — a recycled group name would silently re-grant whatever the old group had |
+| `identity.membership` | (group, user) pair | composite | add_member, remove_member | Not independently identified — it is an edge, and modelling it as an entity would invite a policy that grants membership editing without naming the group |
 
-**Answering the direct question — why a uuid4 and not the login name.** The login name is what an
-operator types and what an audit event should *display*, and it is also renameable (FR-2a permits
-rename, refusing only collisions). If policy attached to the login name, renaming `jdoe` to
-`j.doe` would silently detach every policy and orphan every prior audit event. So the record carries
-both: an immutable id for reference, a unique case-insensitive login name for humans. This is the same
-split the product already makes between a **rack id** and a **node hostname** — one for grouping and
-reference, one for reaching the thing.
+**Why the login and not an opaque id — and what it costs.** The first draft of this document used a
+uuid4, on the standard reasoning that policy and audit references must survive a rename. Measuring it
+inverted the decision: `user:rkoike` is 11 bytes against `user:<uuid4>`'s 41, worth about 3 days of
+retention at FR-7b's ceiling, and an audit trail exists to be read — a uuid needs a lookup that
+whoever is reading a JSONL file at 2 a.m. does not have.
+
+The trade is that the rename has to go. The opaque id was doing precisely one job, and once it is gone
+two things must hold or the trail is worse than before:
+
+- **Immutable** (FR-2). No rename. A genuine name change moves the *display name* (FR-2c), which is
+  explicitly not an identifier.
+- **Never reused** (FR-2b). This is the load-bearing one. If `jdoe` departs, the account is deleted,
+  and a different `jdoe` is created, then every action the first person took is attributed to the
+  second — and a policy naming `user:jdoe` hands over their grants. Retirement, not erasure: a retired
+  identifier stays resolvable so old events keep their subject.
 
 A federated subject resolves to the same shape (FR-7a), so `identity.user` has one identifier
-regardless of how the principal authenticated.
+regardless of how the principal authenticated — which matters once Entra supplies logins, because an
+email-shaped login (`user:rkoike@nvidia.com`, 22 bytes) is still well inside the uuid's cost.
 
 ### Cluster and hardware
 
