@@ -14,7 +14,7 @@ scope record; it is not a spec and it does not carry acceptance criteria.
 | 0.5 | HTTPS: self-signed by default, internal CA opt-in, TLS 1.2 floor, CSP/HSTS, Origin policy | done |
 | 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | **done** — all 7 work items, 40/40 test cases, merged to `main` 2026-08-25 |
 | 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | requirements in progress |
-| 3 | **Authorization**: policy engine, policy documents, attach-to-principal, enforcement before dispatch | not started; `docs/PHASE3_POLICY_ENGINE_SPIKE.md` is the decision-support draft |
+| 3 | **Authorization**: policy engine, policy documents, attach-to-principal, enforcement before dispatch | not started; `docs/PHASE3_POLICY_ENGINE_SPIKE.md` is the decision-support draft. **Gated on a test credential facility** — see below |
 
 ## Phase 1 — implementation work items
 
@@ -92,6 +92,30 @@ Three properties Phase 2 has to settle, because Phase 3's evaluator depends on a
 
 The decision table in `docs/PHASE3_POLICY_ENGINE_SPIKE.md` §2 carries rows for these so they are
 answered by a test rather than by an implementation accident.
+
+## Phase 3 is gated on tests that actually authenticate
+
+Recorded as a gate rather than a task, because it is the kind of prerequisite that gets discovered
+half-way through the phase that needs it.
+
+**Today the suite bypasses authentication.** `backend/tests/conftest.py` sets
+`RACK_WEB_AUTH_DISABLED=1`, so **2,286 of 2,339 tests reach every endpoint unauthenticated**; the 53
+that do exercise the gate use the shared-token mode Phase 2 removes. The product's own test suite has
+therefore never authenticated as anybody.
+
+**That is survivable for Phase 2 and fatal for Phase 3.** An authorization assertion has the shape
+*user A may do this and user B may not*, which needs two authenticated principals with different
+group memberships in the same test run. A bypass cannot produce one principal, let alone two. So the
+work is not "write authorization tests" — it is a **test credential facility** that issues or
+retrieves a real credential for a named user, after which the suite logs in like an operator does
+(`.plc/briefs/auth-identity-brief.md` FR-18b, with FR-18c removing the switch once it exists).
+
+This is also what the phrase *first-class citizen* means for auth, in the sense `core-designs.mdc`
+uses it: a concern the product exercises, not one it switches off so its own tests will pass. An
+authentication gate that no test authenticates through is a gate whose behaviour is asserted 53 times
+and assumed 2,286 times.
+
+Tracked as SUTP gap **G-10** (High).
 
 ## The admin UI — named, so it stops being invisible
 

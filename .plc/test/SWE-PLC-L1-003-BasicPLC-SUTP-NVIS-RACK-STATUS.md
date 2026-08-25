@@ -44,6 +44,15 @@ may execute anything**. That is enforced structurally rather than by convention:
    are redirected to temporary directories before any test module imports the app, so no test can
    read or damage a developer's active project.
 
+**One consequence of that safety is a real hole, and it belongs in the strategy rather than only in
+the gap list.** `conftest.py` also sets `RACK_WEB_AUTH_DISABLED=1`, so **2,286 of 2,339 tests reach
+every endpoint unauthenticated**; only 53 exercise the gate. The suite therefore verifies what the
+endpoints do, and almost nothing about who may reach them. Coverage cannot see this — the lines
+execute, the gate simply is not in the path. Closing it is not a test-writing exercise but a missing
+facility (gap **G-10**, and `auth-identity-brief.md` FR-18b), and it is a hard prerequisite for
+testing authorization at all: proving user A may do what user B may not needs two authenticated
+principals, which a bypass cannot produce.
+
 Beyond safety, the strategy has three deliberate emphases.
 
 **Meta-tests defend architecture, not behaviour.** Several invariants in the SADD cannot be checked
@@ -255,6 +264,7 @@ that one crosses the floor. See `.cursor/rules/local-vs-ci-tree.mdc` §3.
 | G-6 | Eight `subprocess` call sites in `api/tools.py` bypass the execution chokepoint, so test safety there rests on a second stub rather than on the architecture. | Medium | Move them behind `host_exec` |
 | G-7 | `slurm_admin.py` has no dedicated test module, so REQ-16 and REQ-17 rest on incidental coverage. It reaches 65.2% through the endpoint smoke harness and the routing tests, which is above the floor but exercises the *paths* rather than asserting the *guards*: refusal without an explicit node list, refusal when cancellation is disabled, and the reason string reaching `scontrol`. Coverage percentage is not the same as intent being pinned. | **Medium** | Add a `test_slurm_admin.py` with those three guard cases. Lowered from High after measurement: the earlier draft cited 21.7%, a stale figure predating the smoke harness |
 | G-9 | REQ-47 requires a named approver for evidence that is not an automated test, but `docs/AUDIT_PHASE1_VERIFICATION.md` records TC-39 and TC-40 without one. The requirement exists ahead of its own evidence. | **Medium** | Add an approver line (Rafael M. Koike, Giovanni Mascari, or Felix Melligan) to that document, and a template line to any future inspection or demonstration record |
+| G-10 | **The authentication gate is bypassed by 2,286 of 2,339 tests.** `conftest.py` sets `RACK_WEB_AUTH_DISABLED=1` suite-wide, so only the 53 cases in `test_web_auth_gate.py`, `test_ws_terminal_auth.py` and `test_wsgi_auth_hook.py` ever exercise `_require_dashboard_auth`. Every other test reaches every endpoint unauthenticated. That is the product's single largest untested surface, and this plan did not declare it until 2026-08-25. Worse, the 53 that do test it authenticate by the shared-token mode that Phase 2 removes, so they verify a path with no future. | **High** | Not a test-writing task — it needs a **test credential facility** so tests authenticate as real users (`.plc/briefs/auth-identity-brief.md` FR-18b, gating Phase 3). Recorded here because a coverage percentage cannot see this: the lines execute, the gate simply is not in the path |
 | G-8 | The frontend has no per-file coverage floor. The backend gate (REQ-45) covers `backend/` only; Vitest runs and must pass, and the job already reports a total (50.61%), but nothing fails when a new component merges untested. Now a real gap rather than a scoping choice, since the frontend is in scope for this plan. | **Medium** | The measurement already exists, so the work is the gate, not the instrumentation: point `bin/check-coverage-floor.py` at Vitest's JSON report, or set a `vitest --coverage` threshold, with the same shrinking-exception discipline |
 
 ---
