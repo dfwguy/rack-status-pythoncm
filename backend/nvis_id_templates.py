@@ -52,7 +52,7 @@ DEFAULT_NVIS_RACK_ID = r"p[\d+]-r[\d+]"
 DEFAULT_NVIS_CT_ID = r"p[\d+]-r[\d+]-ct[\d+]"
 DEFAULT_NVIS_NVSW_ID = r"p[\d+]-r[\d+]-nvsw-[\d+]"
 
-# CBR / Firmus: variable pod/hall + fixed two-digit ``SVR-CN`` / ``NSW-NV`` suffix pairs.
+# Generic legacy template: variable pod/hall plus fixed two-digit suffix pairs.
 CBR_NVIS_RACK_ID = r"CBR[\d+]-DH[\d+]-SVR-CN[01-99][01-99]"
 CBR_NVIS_CT_ID = r"CBR[\d+]-DH[\d+]-SVR-CN[01-99][01-99][01-99]"
 CBR_NVIS_NVSW_ID = r"CBR[\d+]-DH[\d+]-NSW-NV[01-99][01-99][01-99]"
@@ -703,8 +703,7 @@ class RackParts:
 
     Levels are derived from the trailing slots of ``NVIS_RACK_ID``: the last slot
     is the rack, the second-to-last the row, the third-to-last the section. Sites
-    with fewer slots simply collapse the higher levels (Boston ``bos01-[A-Z][01-99]``
-    -> row letter + rack; Bright ``p[\\d+]-r[\\d+]`` -> pod-as-row + rack).
+    with fewer slots simply collapse the higher levels into row/rack groupings.
     """
 
     rack_id: str
@@ -917,8 +916,7 @@ class NvisNaming:
         rows/sections consumes this instead of parsing rack ids itself. Racks that
         don't match ``NVIS_RACK_ID`` are returned under ``unmatched`` (never
         silently dropped). ``levels`` lists which grouping levels are meaningful
-        for the active naming (``section`` is omitted for 2-slot templates such as
-        Boston's ``bos01-[A-Z][01-99]``).
+        for the active naming (``section`` is omitted for 2-slot templates).
         """
         sections: dict[str, dict] = {}
         rows: dict[tuple[str, str], dict] = {}

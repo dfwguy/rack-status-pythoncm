@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { useState, useCallback, useEffect, useRef, lazy, Suspense } from "react";
+import { useState, useCallback, useEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import { Text } from "@nvidia/foundations-react-core";
@@ -384,6 +384,22 @@ function AppContent() {
 }
 
 function AuthGate() {
+  return (
+    <RequireAuth>
+      <ActiveClusterProvider>
+        <AIChatProvider>
+          <HelpPanelProvider>
+            <RackLocksProvider>
+              <AppContent />
+            </RackLocksProvider>
+          </HelpPanelProvider>
+        </AIChatProvider>
+      </ActiveClusterProvider>
+    </RequireAuth>
+  );
+}
+
+function RequireAuth({ children }: { children: ReactNode }) {
   const { authenticated, loading } = useAuth();
 
   if (loading) {
@@ -398,24 +414,20 @@ function AuthGate() {
     return <LoginPage />;
   }
 
-  return (
-    <ActiveClusterProvider>
-      <AIChatProvider>
-        <HelpPanelProvider>
-          <RackLocksProvider>
-            <AppContent />
-          </RackLocksProvider>
-        </HelpPanelProvider>
-      </AIChatProvider>
-    </ActiveClusterProvider>
-  );
+  return children;
 }
 
 export default function App() {
   if (window.location.pathname === "/terminal") {
     return (
       <ThemeProvider>
-        <TerminalView />
+        <AuthProvider>
+          <RequireAuth>
+            <Suspense fallback={<ViewSuspenseFallback />}>
+              <TerminalView />
+            </Suspense>
+          </RequireAuth>
+        </AuthProvider>
       </ThemeProvider>
     );
   }
@@ -423,9 +435,13 @@ export default function App() {
   if (window.location.pathname === "/terminal-grid") {
     return (
       <ThemeProvider>
-        <Suspense fallback={<ViewSuspenseFallback />}>
-          <TerminalGridTabView />
-        </Suspense>
+        <AuthProvider>
+          <RequireAuth>
+            <Suspense fallback={<ViewSuspenseFallback />}>
+              <TerminalGridTabView />
+            </Suspense>
+          </RequireAuth>
+        </AuthProvider>
       </ThemeProvider>
     );
   }

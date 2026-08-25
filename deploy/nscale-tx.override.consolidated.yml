@@ -81,7 +81,7 @@ services:
       - RACK_SLURM_SCONTROL=/cm/local/apps/slurm/25.05/bin/scontrol
       - RACK_SLURM_SCANCEL=/cm/local/apps/slurm/25.05/bin/scancel
       - RACK_SLURM_SACCT=/cm/local/apps/slurm/25.05/bin/sacct
-      - RACK_WEB_AUTH_TOKEN=nvis1234!
+      - 'RACK_WEB_AUTH_TOKEN=${RACK_WEB_AUTH_TOKEN:?set RACK_WEB_AUTH_TOKEN in deployment environment}'
       # SSH mode: keep validation output on the cluster NFS exported by 10.40.112.3,
       # not on the head node's local /home filesystem.
       - RACK_STATUS_LOG_DIR=/cluster/benchmark/harish/rack_status/logs
@@ -156,8 +156,12 @@ services:
       # Health-probe credentials ONLY (GET /api/observability/health -> dashboard count).
       # They are never emitted in an embed URL; iframes rely on the operator's own
       # Grafana session cookie (or GF_AUTH_ANONYMOUS_ENABLED).
-      - RACK_GRAFANA_USER=nvis
-      - RACK_GRAFANA_PASSWORD=nvis1234!
+      # Supply RACK_GRAFANA_TOKEN or RACK_GRAFANA_USER/PASSWORD through the
+      # deployment environment/secret manager. Never commit probe credentials.
+      - RACK_GRAFANA_USER=${RACK_GRAFANA_USER:-}
+      - RACK_GRAFANA_PASSWORD=${RACK_GRAFANA_PASSWORD:-}
+      # Isolate Nscale from any legacy/default catalog in the persistent volume.
+      - NVIS_CATALOG_FILE=/app/var/store/catalog-nscale-tx.json
       # Durable run/metric history (backend/results_history.py). /app/var is the named
       # volume `rack-data`, so the DB survives restarts AND image rebuilds.
       # Parquet data lake — every parsed run is mirrored here for provenance.

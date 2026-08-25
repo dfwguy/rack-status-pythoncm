@@ -301,6 +301,12 @@ _physical_rf0_loaded = False
 _app_clients_lock = threading.Lock()
 _app_clients_last_seen: dict[str, float] = {}
 
+# Async validation launchers may still be preparing/staging before native task
+# references exist. Retain their local/SSH process handles so cancelling the
+# durable outer activity can stop submission as well as every native child.
+_validation_launcher_processes_lock = threading.Lock()
+_validation_launcher_processes: dict[str, object] = {}
+
 _rack_status_cache_lock = threading.Lock()
 _rack_status_exec_lock = threading.Lock()
 _rack_status_cache: dict[str, dict] = {}
@@ -582,6 +588,25 @@ def _validation_tool_and_stage() -> tuple[str, str]:
     return "singlerack", "stage2"
 
 
+def _validation_execution_metadata(kind: str) -> dict[str, object]:
+    """Describe the provider selected for a validation launch.
+
+    Nscale's primary provider remains PythonCM, but the accepted validation
+    recipes listed in :mod:`pythoncm_validation` require targeted Slurm
+    semantics.  Returning this block on every launch keeps that distinction
+    visible to the SPA, API clients, and handoff evidence.
+    """
+    primary = scheduler_runtime.scheduler_kind()
+    reason = pythoncm_validation.unsupported_reason(kind) if primary == "pythoncm" else None
+    provider = "slurm" if reason else primary
+    return {
+        "scheduler": provider,
+        "execution_provider": provider,
+        "fallback": bool(reason),
+        "fallback_reason": reason or "",
+    }
+
+
 def _record_validation_activity(
     tool: str,
     *,
@@ -595,6 +620,9 @@ def _record_validation_activity(
     operator: str = "",
     dry_run: bool = False,
     scheduler: str = "slurm",
+    execution_provider: str = "",
+    fallback: bool = False,
+    fallback_reason: str = "",
     nodes: list[str] | None = None,
 ) -> str:
     """Persist a validation launch in the durable activities store."""
@@ -609,6 +637,9 @@ def _record_validation_activity(
         command_display=command_display,
         dry_run=dry_run,
         scheduler=scheduler,
+        execution_provider=execution_provider or scheduler,
+        fallback=fallback,
+        fallback_reason=fallback_reason,
         nodes=nodes,
         activity_id=activity_id,
     )
@@ -974,6 +1005,34 @@ def _update_validation_activity(activity_id: str, **kwargs: object) -> None:
     """Persist activity fields and hydrate Slurm task logs when wrapper stdout carries job ids."""
     validation_activities.update_activity(activity_id, **kwargs)
     _hydrate_activity_task_logs(activity_id)
+    if str(kwargs.get("phase") or "").strip().lower() in validation_activities.TERMINAL_PHASES:
+        row = validation_activities.get_activity(activity_id)
+        if row:
+            _lake_push_job(activity_id, row)
+
+
+def _validation_cancel_requested(activity_id: str) -> bool:
+    row = validation_activities.get_activity(activity_id) or {}
+    return bool(row.get("cancel_requested")) or str(row.get("phase") or "") == "cancelled"
+
+
+def _register_validation_launcher(activity_id: str, process: object) -> bool:
+    """Register a wrapper process and return whether cancellation already won the race."""
+    with _validation_launcher_processes_lock:
+        _validation_launcher_processes[activity_id] = process
+    cancelled = _validation_cancel_requested(activity_id)
+    if cancelled:
+        try:
+            process.kill()  # type: ignore[attr-defined]
+        except (AttributeError, OSError):
+            pass
+    return cancelled
+
+
+def _unregister_validation_launcher(activity_id: str, process: object) -> None:
+    with _validation_launcher_processes_lock:
+        if _validation_launcher_processes.get(activity_id) is process:
+            _validation_launcher_processes.pop(activity_id, None)
 
 
 def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
@@ -1182,27 +1241,30 @@ def _validation_worker(
     """
 
     def _patch(**kwargs: object) -> None:
-        finished = None
         with _validation_jobs_lock:
             row = _validation_jobs.get(job_id)
             if row is not None:
                 row.update(kwargs)
-                if str(kwargs.get("phase") or "") in ("done", "error"):
-                    finished = dict(row)
         _update_validation_activity(job_id, **kwargs)
-        if finished is not None:
-            _lake_push_job(job_id, finished)
 
     try:
         _patch(
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
+        if _validation_cancel_requested(job_id):
+            _patch(
+                phase="cancelled", work_phase="failed", returncode=-1,
+                ok=False, error="cancelled by operator before launcher start",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            return
         # NeMo/validation launchers run on the privileged "script" target (root@slogin):
         # they pdsh-rsync the .sqsh into root-owned /raid/data on compute nodes and submit
         # via sbatch — neither possible as the unprivileged control-plane user on the head.
         hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates),
                                      profile="script", env_extra=env_updates)
+        _register_validation_launcher(job_id, hp)
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -1222,6 +1284,16 @@ def _validation_worker(
                 command_display=display_cmd,
             )
             _validation_job_purge_later(job_id)
+            return
+        finally:
+            _unregister_validation_launcher(job_id, hp)
+        if _validation_cancel_requested(job_id):
+            _patch(
+                phase="cancelled", work_phase="failed", returncode=-1,
+                ok=False, error="cancelled by operator",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                command_display=display_cmd,
+            )
             return
         rc = hp.returncode if hp.returncode is not None else -1
         ok = rc == 0
@@ -1318,6 +1390,7 @@ def _start_pythoncm_validation(
         activity_id=job_id,
         operator=_operator_from_request(),
         scheduler="pythoncm",
+        execution_provider="pythoncm",
         nodes=nodes,
     )
     with _stress_jobs_lock:
@@ -1377,7 +1450,7 @@ def _pythoncm_validation_worker(
             if row is not None:
                 row.update(kwargs)
         if persist:
-            validation_activities.update_activity(job_id, **kwargs)
+            _update_validation_activity(job_id, **kwargs)
 
     scheduler = None
     handle = None
@@ -1389,6 +1462,14 @@ def _pythoncm_validation_worker(
             scheduler="pythoncm",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
+        if _validation_cancel_requested(job_id):
+            patch_row(
+                phase="cancelled", work_phase="failed", ok=False, returncode=-1,
+                error="cancelled by operator before PythonCM submission",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            purge(job_id)
+            return
         scheduler = build_scheduler(
             "pythoncm",
             connection=host_exec.connection("script"),
@@ -1409,6 +1490,16 @@ def _pythoncm_validation_worker(
             stdout_path=output_path,
             started_at=submitted_at,
         )
+        if _validation_cancel_requested(job_id):
+            scheduler.cancel(handle)
+            patch_row(
+                phase="cancelled", work_phase="failed", ok=False, returncode=-1,
+                scheduler_ref=handle.job_id,
+                error="cancelled by operator",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            purge(job_id)
+            return
         patch_row(
             phase="running",
             work_phase="running",
@@ -1416,6 +1507,14 @@ def _pythoncm_validation_worker(
             command_display=f"PythonCM ProgramRunner: {spec.name}",
         )
         result = scheduler.wait(handle, timeout=spec.timeout, poll_interval=5)
+        if _validation_cancel_requested(job_id):
+            patch_row(
+                phase="cancelled", work_phase="failed", ok=False, returncode=-1,
+                error="cancelled by operator",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            purge(job_id)
+            return
         if result.state == "TIMEOUT":
             scheduler.cancel(handle)
         ok = result.success
@@ -1506,8 +1605,16 @@ def _stress_worker(
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
+        if _validation_cancel_requested(job_id):
+            _patch(
+                phase="cancelled", work_phase="failed", returncode=-1,
+                ok=False, error="cancelled by operator before launcher start",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            return
         hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates),
                                      profile=profile, env_extra=env_updates)
+        _register_validation_launcher(job_id, hp)
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -1527,6 +1634,16 @@ def _stress_worker(
                 command_display=display_cmd,
             )
             _stress_job_purge_later(job_id)
+            return
+        finally:
+            _unregister_validation_launcher(job_id, hp)
+        if _validation_cancel_requested(job_id):
+            _patch(
+                phase="cancelled", work_phase="failed", returncode=-1,
+                ok=False, error="cancelled by operator",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                command_display=display_cmd,
+            )
             return
         rc = hp.returncode if hp.returncode is not None else -1
         ok = rc == 0
@@ -1592,11 +1709,19 @@ def _xrack_worker(
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
+        if _validation_cancel_requested(job_id):
+            _patch(
+                phase="cancelled", work_phase="failed", returncode=-1,
+                ok=False, error="cancelled by operator before launcher start",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            return
         # NeMo/validation launchers run on the privileged "script" target (root@slogin):
         # they pdsh-rsync the .sqsh into root-owned /raid/data on compute nodes and submit
         # via sbatch — neither possible as the unprivileged control-plane user on the head.
         hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates),
                                      profile="script", env_extra=env_updates)
+        _register_validation_launcher(job_id, hp)
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -1616,6 +1741,16 @@ def _xrack_worker(
                 command_display=display_cmd,
             )
             _xrack_job_purge_later(job_id)
+            return
+        finally:
+            _unregister_validation_launcher(job_id, hp)
+        if _validation_cancel_requested(job_id):
+            _patch(
+                phase="cancelled", work_phase="failed", returncode=-1,
+                ok=False, error="cancelled by operator",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                command_display=display_cmd,
+            )
             return
         rc = hp.returncode if hp.returncode is not None else -1
         ok = rc == 0
@@ -1668,10 +1803,18 @@ def _llama_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
+        if _validation_cancel_requested(job_id):
+            _patch(
+                phase="cancelled", work_phase="failed", returncode=-1,
+                ok=False, error="cancelled by operator before launcher start",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            return
         # NeMo/validation launchers run on the privileged "script" target (root@slogin):
         # they pdsh-rsync the .sqsh into root-owned /raid/data on compute nodes and submit
         # via sbatch — neither possible as the unprivileged control-plane user on the head.
         hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(), profile="script")
+        _register_validation_launcher(job_id, hp)
         try:
             out, err = hp.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -1691,6 +1834,16 @@ def _llama_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
                 command_display=display_cmd,
             )
             _llama_job_purge_later(job_id)
+            return
+        finally:
+            _unregister_validation_launcher(job_id, hp)
+        if _validation_cancel_requested(job_id):
+            _patch(
+                phase="cancelled", work_phase="failed", returncode=-1,
+                ok=False, error="cancelled by operator",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                command_display=display_cmd,
+            )
             return
         rc = hp.returncode if hp.returncode is not None else -1
         ok = rc == 0
@@ -3195,8 +3348,7 @@ def _dedupe_hostnames_preserve_spelling(hosts: list[str]) -> list[str]:
 # --- Live inventory (Slurm NodeNames) -------------------------------------------------
 # The authoritative list of *real* node hostnames for node-targeting tools (sysinfo,
 # pdsh, validation). Using inventory instead of a generated ``<rack>-<ctNN>`` template
-# makes targets correct on any site naming scheme (e.g. Boston's
-# ``bos01-a07-13-s1-dgx-03-c03`` under rack ``bos01-a07``). Short TTL cache so repeated
+# makes targets correct without generating names from a site template. Short TTL cache so repeated
 # target builds in one request don't re-run ``sinfo``.
 _slurm_nodenames_cache: tuple[float, list[str]] = (0.0, [])
 _slurm_nodenames_lock = threading.Lock()
@@ -4448,8 +4600,8 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
 
     1. An override that is a **plain comma-list of real node hostnames** (no ``[`` range
        syntax) is honored as an explicit node selection — e.g. the UI sends the selected
-       trays directly when the site's hostnames don't fold into ``<rack><joiner>[NN]``
-       (Boston: ``bos01-b07-11-s1-dgx-07-c01``). The list is intersected with live Slurm
+       trays directly when hostnames don't fold into ``<rack><joiner>[NN]``.
+       The list is intersected with live scheduler
        inventory for the rack when available (drops typos / foreign hosts); if inventory
        is unavailable the tokens are trusted as-is.
     2. An override in ``<rack><joiner>[ranges]`` template form is validated/normalized by
@@ -7066,8 +7218,7 @@ def _prepare_hw_check(body: dict) -> tuple[dict[str, object] | None, tuple[objec
     else:
         # Fallback: derive the whole-rack node list from live inventory (real Slurm
         # NodeNames) when the client sent no tray specs. Keeps hw-check working on
-        # sites where the dashboard tray parse is naming-template dependent (e.g.
-        # Boston's bos01-aRR-NN-s1-dgx-GG-cNN hostnames).
+        # sites where the dashboard tray parse is naming-template dependent.
         rack = (body.get("rack") or "").strip()
         hosts = _rack_node_hostnames_from_inventory(rack) if rack else []
         if hosts:
@@ -8651,7 +8802,7 @@ _SLURM_SCANCEL_JOB_ID_RE = core.SLURM_JOB_ID_RE  # one definition, in core
 
 
 def _slurm_nodename_target_from_body(body: dict) -> tuple[str | None, str | None]:
-    """Parse rack (+ optional target) into Slurm nodename=… value; (None, err) on error."""
+    """Parse rack (+ optional target) into an exact scheduler target; (None, err) on error."""
     rack = (body.get("rack") or "").strip()
     if not rack:
         return None, "rack is required"
@@ -8666,11 +8817,12 @@ def _slurm_nodename_target_from_body(body: dict) -> tuple[str | None, str | None
 
 
 def _run_scontrol_node_update(target: str, state_kv: list[str]) -> dict:
-    """Run scontrol update nodename=TARGET …; state_kv e.g. [\"state=drain\", \"reason=admin\"].
+    """Apply a node-state update with PythonCM, or targeted scontrol on a Slurm deployment.
 
-    By default runs under ``bash -lc`` after ``module load <RACK_SLURM_MODULE>`` (default *slurm*),
-    matching cluster login environments where *scontrol* is not on PATH until modules load.
-    Set RACK_SLURM_SKIP_MODULE_LOAD=1 to invoke *scontrol* directly (e.g. full path already on PATH).
+    ``state_kv`` is the compatibility shape used by both providers, for example
+    ``[\"state=drain\", \"reason=admin\"]``. Nscale/PythonCM dispatches to BCM before
+    any Slurm command is constructed. A non-PythonCM deployment uses its configured
+    targeted ``scontrol update`` path.
     """
     if scheduler_runtime.is_pythoncm():
         fields = {
@@ -8741,7 +8893,7 @@ def _run_scontrol_node_update(target: str, state_kv: list[str]) -> dict:
 @app.route("/api/scheduler-drain", methods=["POST"])
 @app.route("/api/slurm-drain", methods=["POST"])
 def api_slurm_drain():
-    """POST JSON {\"rack\": \"p34-r07\"} — ``module load`` then scontrol update nodename=… drain."""
+    """Drain an exact rack/node target through the active provider (PythonCM on Nscale)."""
     if os.environ.get("RACK_SLURM_NODES_STATE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "Slurm drain/undrain disabled (RACK_SLURM_NODES_STATE_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -8796,7 +8948,7 @@ def api_slurm_drain():
 @app.route("/api/scheduler-resume", methods=["POST"])
 @app.route("/api/slurm-undrain", methods=["POST"])
 def api_slurm_undrain():
-    """POST JSON {\"rack\": \"p34-r07\"} — ``module load`` then scontrol update nodename=… state=idle."""
+    """Undrain an exact rack/node target through the active provider (PythonCM on Nscale)."""
     if os.environ.get("RACK_SLURM_NODES_STATE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "Slurm drain/undrain disabled (RACK_SLURM_NODES_STATE_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -8901,26 +9053,102 @@ def _run_scancel(job_id: str) -> dict:
     jid = (job_id or "").strip()
     if not scheduler_runtime.valid_reference(jid):
         raise ValueError("job_id must be a valid scheduler reference")
+    activity = validation_activities.get_activity(jid)
+    if activity is not None:
+        requested_at = datetime.now(timezone.utc).isoformat()
+        validation_activities.update_activity(
+            jid,
+            phase="cancelled",
+            work_phase="failed",
+            cancel_requested=True,
+            cancel_requested_at=requested_at,
+            error="cancelled by operator",
+            finished_at=requested_at,
+        )
+        wrapper_killed = False
+        with _validation_launcher_processes_lock:
+            process = _validation_launcher_processes.get(jid)
+        if process is not None:
+            try:
+                process.kill()  # type: ignore[attr-defined]
+                wrapper_killed = True
+            except (AttributeError, OSError):
+                _logger.warning("could not terminate validation wrapper %s", jid, exc_info=True)
+
+        seen: set[str] = set()
+        task_results: list[dict[str, object]] = []
+        terminal = {
+            "COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL",
+            "OUT_OF_MEMORY", "BOOT_FAIL", "DEADLINE", "PREEMPTED",
+        }
+        for task in activity.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            native_ref = str(task.get("scheduler_ref") or "").strip()
+            if not scheduler_runtime.valid_reference(native_ref) or native_ref in seen:
+                continue
+            seen.add(native_ref)
+            prior_state = _slurm_job_state_base(str(task.get("scheduler_state") or ""))
+            provider = scheduler_runtime.reference_kind(native_ref) or str(
+                activity.get("execution_provider") or activity.get("scheduler") or "unknown"
+            )
+            if prior_state in terminal:
+                task_results.append({
+                    "scheduler_ref": native_ref,
+                    "scheduler": provider,
+                    "ok": True,
+                    "skipped": True,
+                    "state": prior_state,
+                })
+                continue
+            try:
+                scheduler_runtime.cancel(native_ref)
+                task_results.append({
+                    "scheduler_ref": native_ref,
+                    "scheduler": provider,
+                    "ok": True,
+                    "skipped": False,
+                })
+            except (OSError, RuntimeError, ValueError) as exc:
+                task_results.append({
+                    "scheduler_ref": native_ref,
+                    "scheduler": provider,
+                    "ok": False,
+                    "skipped": False,
+                    "error": str(exc),
+                })
+        failed = [row for row in task_results if not row.get("ok")]
+        validation_activities.update_activity(jid, cancel_results=task_results)
+        providers = sorted({str(row.get("scheduler") or "unknown") for row in task_results})
+        provider_label = providers[0] if len(providers) == 1 else ("mixed" if providers else str(
+            activity.get("execution_provider") or activity.get("scheduler") or "pending"
+        ))
+        return {
+            "ok": not failed,
+            "returncode": 0 if not failed else 1,
+            "stdout": (
+                f"cancel requested for activity {jid}; wrapper_killed={wrapper_killed}; "
+                f"native_tasks={len(task_results)}"
+            ),
+            "stderr": "; ".join(str(row.get("error") or "") for row in failed),
+            "command_display": f"activity cancel {jid}",
+            "scheduler": provider_label,
+            "scheduler_ref": jid,
+            "scheduler_refs": sorted(seen),
+            "wrapper_killed": wrapper_killed,
+            "tasks": task_results,
+        }
     if scheduler_runtime.is_pythoncm():
         native_ref = jid
-        if scheduler_runtime.job(native_ref) is None:
-            activity = validation_activities.get_activity(jid) or {}
-            candidates = [
-                str(task.get("scheduler_ref") or "").strip()
-                for task in (activity.get("tasks") or [])
-                if isinstance(task, dict)
-            ]
-            native_ref = next(
-                (ref for ref in reversed(candidates) if scheduler_runtime.valid_reference(ref)),
-                jid,
-            )
         scheduler_runtime.cancel(native_ref)
+        provider = scheduler_runtime.reference_kind(native_ref) or "unknown"
         return {
             "ok": True,
             "returncode": 0,
             "stdout": "cancel requested",
             "stderr": "",
-            "command_display": f"pythoncm cancel {native_ref}",
+            "command_display": f"{provider} cancel {native_ref}",
+            "scheduler": provider,
             "scheduler_ref": native_ref,
         }
     plat = _get_platform()
@@ -8966,7 +9194,8 @@ def _slurm_job_log_path(job_id: str, log_dir: Path) -> tuple[str, str]:
             return "", "invalid"
         row = scheduler_runtime.job(jid) or {}
         path = str(row.get("stdout") or "").strip()
-        return (path, "pythoncm") if path else ("", "not_found")
+        provider = scheduler_runtime.reference_kind(jid) or "unknown"
+        return (path, provider) if path else ("", "not_found")
     jid = _slurm_job_base_id(job_id) or ""
     if not jid:
         return "", "invalid"
@@ -9070,13 +9299,58 @@ def _run_scontrol_show_job(job_id: str) -> dict:
     jid = (job_id or "").strip()
     if not scheduler_runtime.valid_reference(jid):
         raise ValueError("job_id must be a valid scheduler reference")
+    activity = validation_activities.get_activity(jid)
+    if activity is not None:
+        _hydrate_activity_task_logs(jid, activity)
+        activity = validation_activities.get_activity(jid) or activity
+        details: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for task in activity.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            native_ref = str(task.get("scheduler_ref") or "").strip()
+            if (
+                native_ref == jid
+                or native_ref in seen
+                or not scheduler_runtime.valid_reference(native_ref)
+            ):
+                continue
+            seen.add(native_ref)
+            detail = _run_scontrol_show_job(native_ref)
+            details.append({"scheduler_ref": native_ref, **detail})
+        phase = str(activity.get("work_phase") or activity.get("phase") or "pending").upper()
+        provider = str(
+            activity.get("execution_provider") or activity.get("scheduler") or "unknown"
+        )
+        stdout = "\n".join(
+            str(row.get("stdout") or "").strip() for row in details if row.get("stdout")
+        ) or f"JobId={jid} JobState={phase} StdOut=(none) NodeList={activity.get('target') or '(none)'}"
+        ok = all(bool(row.get("ok")) for row in details) if details else True
+        return {
+            "ok": ok,
+            "returncode": 0 if ok else 1,
+            "stdout": stdout,
+            "stderr": "\n".join(
+                str(row.get("stderr") or "").strip() for row in details if row.get("stderr")
+            ),
+            "command_display": f"activity status {jid}",
+            "scheduler": provider,
+            "execution_provider": provider,
+            "scheduler_ref": jid,
+            "scheduler_refs": sorted(seen),
+            "activity_phase": str(activity.get("phase") or ""),
+            "work_phase": str(activity.get("work_phase") or ""),
+            "tasks": details,
+        }
     if scheduler_runtime.is_pythoncm():
+        provider = scheduler_runtime.reference_kind(jid) or "unknown"
         try:
             state, stdout_path = scheduler_runtime.live_status(jid)
         except RuntimeError as exc:
             return {
                 "ok": False, "returncode": 2, "stdout": "", "stderr": str(exc),
-                "command_display": f"pythoncm status {jid}",
+                "command_display": f"{provider} status {jid}",
+                "scheduler": provider,
             }
         row = scheduler_runtime.job(jid) or {}
         fields = [
@@ -9086,7 +9360,8 @@ def _run_scontrol_show_job(job_id: str) -> dict:
         ]
         return {
             "ok": True, "returncode": 0, "stdout": " ".join(fields), "stderr": "",
-            "command_display": f"pythoncm status {jid}",
+            "command_display": f"{provider} status {jid}",
+            "scheduler": provider,
         }
     plat = _get_platform()
     tail = " ".join(shlex.quote(a) for a in ["show", "job", jid])
@@ -10008,8 +10283,8 @@ def _lake_push_job(job_id: str, row: dict) -> None:
         body = "\n".join(
             x for x in (
                 f"$ {row.get('command_display') or ''}",
-                "--- stdout ---", str(row.get("stdout") or ""),
-                "--- stderr ---", str(row.get("stderr") or ""),
+                "--- stdout ---", str(row.get("stdout") or row.get("stdout_tail") or ""),
+                "--- stderr ---", str(row.get("stderr") or row.get("stderr_tail") or ""),
             ) if x is not None
         )
         out = lake_sink.push_run(
@@ -13735,8 +14010,8 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
     script = _validation_script_path()
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"validation script not found: {script}"}), 500)
-    # Pass the resolved rack id as $2 so the script names the log …-1Rack-<rack>-… correctly for any
-    # naming convention (Bright p<N>-r<N> or Boston bos01-b05); the script's own regex is Bright-only.
+    # Pass the PythonCM-resolved Nscale rack id as $2 so the script names the
+    # log …-1Rack-<rack>-… without guessing from the node target.
     cmd = ["bash", str(script), target, rk]
     display_cmd = "./" + script.name + " " + shlex.quote(target) + " " + shlex.quote(rk)
     timeout = max(30, _job_env_int("RACK_VALIDATION_TIMEOUT", 600))
@@ -13768,7 +14043,7 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
 
 @app.route("/api/run-validation", methods=["POST"])
 def api_run_validation():
-    """Run singlerack validation script with one target, e.g. p26-r05-ct[01-18] (cwd = log_dir)."""
+    """Run the single-rack fallback on one exact Nscale node target."""
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_validation(body)
     if err is not None:
@@ -13780,6 +14055,22 @@ def api_run_validation():
     cmd = prep["cmd"]
     display_cmd = str(prep["display_cmd"])
     timeout = int(prep["timeout"])
+    job_id = str(uuid.uuid4())
+    provider = _validation_execution_metadata("validation")
+    val_tool, val_stage = _validation_tool_and_stage()
+    _record_validation_activity(
+        val_tool,
+        stage=val_stage,
+        scope="rack",
+        rack=rk,
+        racks=[rk],
+        log_dir=str(log_dir),
+        command_display=display_cmd,
+        activity_id=job_id,
+        operator=_operator_from_request(),
+        **provider,
+        nodes=_scontrol_hostnames_preserving_case(target),
+    )
     try:
         with _track_sync_op(rk, "validation", _operator_from_request()):
             # Privileged "script" target (root@slogin): pdsh-rsync to root-owned /raid/data
@@ -13792,20 +14083,63 @@ def api_run_validation():
                 profile="script",
             )
     except subprocess.TimeoutExpired:
-        return jsonify({"ok": False, "error": "validation script timed out", "target": target}), 504
+        _update_validation_activity(
+            job_id,
+            phase="timeout",
+            work_phase="failed",
+            returncode=-1,
+            ok=False,
+            error="validation script timed out",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+        )
+        return jsonify({
+            "ok": False,
+            "job_id": job_id,
+            "error": "validation script timed out",
+            "target": target,
+            **provider,
+        }), 504
     except Exception as e:
         _logger.debug("api_run_validation: ignoring error", exc_info=True)
-        return jsonify({"ok": False, "error": str(e), "target": target}), 500
+        _update_validation_activity(
+            job_id,
+            phase="error",
+            work_phase="failed",
+            returncode=-1,
+            ok=False,
+            error=str(e),
+            finished_at=datetime.now(timezone.utc).isoformat(),
+        )
+        return jsonify({
+            "ok": False,
+            "job_id": job_id,
+            "error": str(e),
+            "target": target,
+            **provider,
+        }), 500
     ok = proc.returncode == 0
+    _update_validation_activity(
+        job_id,
+        phase="done" if ok else "error",
+        work_phase="done" if ok else "failed",
+        returncode=proc.returncode,
+        stdout=(proc.stdout or "").strip(),
+        stderr=(proc.stderr or "").strip(),
+        ok=ok,
+        error=None if ok else "validation script exited non-zero",
+        finished_at=datetime.now(timezone.utc).isoformat(),
+    )
     return jsonify(
         {
             "ok": ok,
+            "job_id": job_id,
             "returncode": proc.returncode,
             "rack": rk,
             "target": target,
             "command_display": display_cmd,
             "stdout": (proc.stdout or "").strip(),
             "stderr": (proc.stderr or "").strip(),
+            **provider,
         }
     ), (200 if ok else 502)
 
@@ -13830,6 +14164,7 @@ def api_run_validation_async():
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
     val_tool, val_stage = _validation_tool_and_stage()
+    provider = _validation_execution_metadata("validation")
     _record_validation_activity(
         val_tool,
         stage=val_stage,
@@ -13840,6 +14175,8 @@ def api_run_validation_async():
         command_display=display_cmd,
         activity_id=job_id,
         operator=operator,
+        **provider,
+        nodes=_scontrol_hostnames_preserving_case(target),
     )
     if env_merged is None:
         env_merged = {}
@@ -13855,6 +14192,7 @@ def api_run_validation_async():
             "phase": "starting",
             "command_display": display_cmd,
             "created_at": created,
+            **provider,
         }
     threading.Thread(
         target=_validation_worker,
@@ -13869,6 +14207,7 @@ def api_run_validation_async():
             "rack": rk,
             "target": target,
             "command_display": display_cmd,
+            **provider,
         }
     )
 
@@ -13948,6 +14287,7 @@ def api_run_nemo_xrack_async():
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
+    provider = _validation_execution_metadata("nemo-xrack")
     # Same as run-validation: cwd=log_dir so Slurm --output=… writes under the UI log dir.
     cwd = _host_job_cwd(log_dir)
     with _xrack_jobs_lock:
@@ -13962,6 +14302,7 @@ def api_run_nemo_xrack_async():
             "command_display": display_cmd,
             "created_at": created,
             "xrack_arg": arg,
+            **provider,
         }
     _record_validation_activity(
         "nemo-xrack",
@@ -13973,6 +14314,8 @@ def api_run_nemo_xrack_async():
         command_display=display_cmd,
         activity_id=job_id,
         operator=operator,
+        **provider,
+        nodes=_scontrol_hostnames_preserving_case(arg),
     )
     threading.Thread(
         target=_xrack_worker,
@@ -13985,6 +14328,7 @@ def api_run_nemo_xrack_async():
             "ok": True,
             "job_id": job_id,
             "command_display": display_cmd,
+            **provider,
         }
     )
 
@@ -14139,6 +14483,7 @@ def api_run_exemplar_llama_async():
     display_cmd = str(prep["display_cmd"])
     log_dir = str(prep["log_dir"])
     dry_run = bool(prep["dry_run"])
+    provider = _validation_execution_metadata("llama-exemplar")
     _record_validation_activity(
         "llama-exemplar",
         stage="stage2",
@@ -14150,6 +14495,8 @@ def api_run_exemplar_llama_async():
         activity_id=job_id,
         operator=operator,
         dry_run=dry_run,
+        **provider,
+        nodes=_scontrol_hostnames_preserving_case(str(prep["nodelist"])),
     )
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
@@ -14168,6 +14515,7 @@ def api_run_exemplar_llama_async():
             "phase": "starting",
             "command_display": display_cmd,
             "created_at": created,
+            **provider,
         }
     env_updates = {"NVIS_ACTIVITY_ID": job_id}
     threading.Thread(
@@ -14193,6 +14541,7 @@ def api_run_exemplar_llama_async():
             "tuning": prep["tuning"],
             "dry_run": dry_run,
             "command_display": display_cmd,
+            **provider,
         }
     )
 
@@ -14214,6 +14563,7 @@ def api_run_llama_async():
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
+    provider = _validation_execution_metadata("llama")
     cwd = _host_job_cwd(log_dir)
     _record_validation_activity(
         "llama",
@@ -14225,6 +14575,8 @@ def api_run_llama_async():
         command_display=display_cmd,
         activity_id=job_id,
         operator=operator,
+        **provider,
+        nodes=_scontrol_hostnames_preserving_case(nodes_spec),
     )
     with _llama_jobs_lock:
         _llama_jobs[job_id] = {
@@ -14237,6 +14589,7 @@ def api_run_llama_async():
             "phase": "starting",
             "command_display": display_cmd,
             "created_at": created,
+            **provider,
         }
     threading.Thread(
         target=_llama_worker,
@@ -14249,6 +14602,7 @@ def api_run_llama_async():
             "job_id": job_id,
             "rack": rk,
             "command_display": display_cmd,
+            **provider,
         }
     )
 
@@ -15322,6 +15676,13 @@ def _mnubergemm_stage_pythoncm_worker(job_id: str, plan: dict) -> None:
             stage_total_racks=len(groups), stage_completed_racks=0, stage_failed_racks=0,
         )
         for ordinal, group in enumerate(groups, start=1):
+            if _validation_cancel_requested(job_id):
+                patch(
+                    phase="cancelled", work_phase="failed", ok=False, returncode=-1,
+                    error="cancelled by operator",
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                )
+                return
             rack = str(group.get("rack") or f"group-{ordinal:03d}")
             nodes = [str(node) for node in group.get("nodes") or [] if str(node).strip()]
             if not nodes:
@@ -15349,8 +15710,23 @@ def _mnubergemm_stage_pythoncm_worker(job_id: str, plan: dict) -> None:
                 scheduler_ref=handle.job_id, scheduler_state="PENDING",
                 phase="running", work_phase="running", stdout_path=stdout_path,
             )
+            if _validation_cancel_requested(job_id):
+                scheduler.cancel(handle)
+                patch(
+                    phase="cancelled", work_phase="failed", ok=False, returncode=-1,
+                    error="cancelled by operator",
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                )
+                return
             patch(current_stage_job_id=handle.job_id)
             result = scheduler.wait(handle, timeout=7200, poll_interval=10)
+            if _validation_cancel_requested(job_id):
+                patch(
+                    phase="cancelled", work_phase="failed", ok=False, returncode=-1,
+                    error="cancelled by operator",
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                )
+                return
             if result.success:
                 completed += 1
                 validation_activities.add_or_update_task(
@@ -15438,6 +15814,13 @@ def _mnubergemm_stage_only_worker(job_id: str, plan: dict) -> None:
             stage_failed_racks=0,
         )
         for ordinal, group in enumerate(groups, start=1):
+            if _validation_cancel_requested(job_id):
+                patch(
+                    phase="cancelled", work_phase="failed", ok=False, returncode=-1,
+                    error="cancelled by operator",
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                )
+                return
             rack = str(group.get("rack") or f"group-{ordinal:03d}")
             nodes = [str(node) for node in (group.get("nodes") or []) if str(node).strip()]
             if not nodes:
@@ -15499,6 +15882,14 @@ def _mnubergemm_stage_only_worker(job_id: str, plan: dict) -> None:
             state = "PENDING"
             exit_code = ""
             while time.monotonic() < deadline:
+                if _validation_cancel_requested(job_id):
+                    scheduler_runtime.cancel(stage_job_id)
+                    patch(
+                        phase="cancelled", work_phase="failed", ok=False, returncode=-1,
+                        error="cancelled by operator",
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                    return
                 state, exit_code = _mnubergemm_stage_slurm_state(stage_job_id)
                 if state != last_state:
                     validation_activities.add_or_update_task(
@@ -15571,11 +15962,26 @@ def _validation_preset_fallback(preset_id: str, plan: dict):
     }[preset_id]
     racks = [str(rack) for rack in plan["racks"]]
     provider = "pythoncm" if plan.get("stage_only") else "slurm"
+    fallback_reason = (
+        "stage-only container copy runs once per exact rack through ProgramRunner"
+        if provider == "pythoncm" else pythoncm_validation.unsupported_reason(
+            {
+                "llama31-405b-fp8": "llama-exemplar",
+                "gpt-oss-cpu": "gpt-oss-cpu",
+                "exemplar-system-info": "exemplar-system-info",
+                "nemo-26.04.01": "nemo-xrack",
+                "nccl-2.31.2": "nccl-2.31.2",
+                "mnubergemm-26.03-v1.17": "mnubergemm",
+            }[preset_id]
+        ) or "no equivalent PythonCM recipe"
+    )
     _record_validation_activity(
         tool, stage="other", scope=str(plan["scope"]),
         rack=racks[0] if racks else "", racks=racks, log_dir=str(plan["log_dir"]),
         command_display=str(plan["command_display"]), activity_id=job_id,
-        operator=operator, scheduler=provider,
+        operator=operator, scheduler=provider, execution_provider=provider,
+        fallback=provider == "slurm", fallback_reason=fallback_reason,
+        nodes=[str(node) for node in plan["nodes"]],
     )
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
@@ -15583,18 +15989,8 @@ def _validation_preset_fallback(preset_id: str, plan: dict):
             "operator": operator, "racks": racks, "nodes": plan["nodes"],
             "node_count": plan["node_count"], "log_dir": plan["log_dir"],
             "phase": "starting", "command_display": plan["command_display"],
-            "execution_provider": provider, "fallback_reason": (
-                "stage-only container copy runs once per exact rack through ProgramRunner"
-                if provider == "pythoncm" else pythoncm_validation.unsupported_reason(
-                {
-                    "llama31-405b-fp8": "llama-exemplar",
-                    "gpt-oss-cpu": "gpt-oss-cpu",
-                    "exemplar-system-info": "exemplar-system-info",
-                    "nemo-26.04.01": "nemo-xrack",
-                    "nccl-2.31.2": "nccl-2.31.2",
-                    "mnubergemm-26.03-v1.17": "mnubergemm",
-                }[preset_id]
-            ) or "no equivalent PythonCM recipe"),
+            "scheduler": provider, "execution_provider": provider,
+            "fallback": provider == "slurm", "fallback_reason": fallback_reason,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
     if plan.get("stage_only"):
@@ -15610,7 +16006,8 @@ def _validation_preset_fallback(preset_id: str, plan: dict):
         "ok": True, "job_id": job_id, "preset_id": preset_id,
         "nodes": plan["nodes"], "node_count": plan["node_count"],
         "command_display": plan["command_display"], "timeout_sec": plan["timeout"],
-        "execution_provider": provider, "fallback": provider == "slurm",
+        "scheduler": provider, "execution_provider": provider,
+        "fallback": provider == "slurm", "fallback_reason": fallback_reason,
     })
 
 
@@ -15675,7 +16072,9 @@ def _run_validation_preset_async(body: dict):
     racks = [str(rack) for rack in plan["racks"]]
     _record_validation_activity(tool, stage="other", scope=str(plan["scope"]),
         rack=racks[0] if racks else "", racks=racks, log_dir=str(plan["log_dir"]),
-        command_display=str(plan["command_display"]), activity_id=job_id, operator=operator)
+        command_display=str(plan["command_display"]), activity_id=job_id, operator=operator,
+        scheduler="slurm", execution_provider="slurm",
+        nodes=[str(node) for node in plan["nodes"]])
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
             "job_id": job_id, "kind": "validation-preset", "preset_id": plan["preset_id"],
@@ -15758,6 +16157,7 @@ def api_run_mnubergemm_stress_async():
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
+    provider = _validation_execution_metadata("mnubergemm")
     _record_validation_activity(
         "mnubergemm",
         stage="other",
@@ -15768,6 +16168,8 @@ def api_run_mnubergemm_stress_async():
         command_display=display_cmd,
         activity_id=job_id,
         operator=operator,
+        **provider,
+        nodes=_scontrol_hostnames_preserving_case(target),
     )
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
@@ -15780,6 +16182,7 @@ def api_run_mnubergemm_stress_async():
             "phase": "starting",
             "command_display": display_cmd,
             "created_at": created,
+            **provider,
         }
     threading.Thread(
         target=_stress_worker,
@@ -15797,6 +16200,7 @@ def api_run_mnubergemm_stress_async():
             "command_display": display_cmd,
             "timeout_sec": timeout,
             "client_poll_deadline_ms": client_poll_deadline_ms,
+            **provider,
         }
     )
 
@@ -15824,6 +16228,7 @@ def api_run_nccl_fullrack_async():
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
+    provider = _validation_execution_metadata("nccl-fullrack")
     _record_validation_activity(
         "nccl-fullrack",
         stage="stage1",
@@ -15834,6 +16239,8 @@ def api_run_nccl_fullrack_async():
         command_display=display_cmd,
         activity_id=job_id,
         operator=operator,
+        **provider,
+        nodes=_scontrol_hostnames_preserving_case(target),
     )
     if env_merged is None:
         env_merged = {}
@@ -15849,6 +16256,7 @@ def api_run_nccl_fullrack_async():
             "phase": "starting",
             "command_display": display_cmd,
             "created_at": created,
+            **provider,
         }
     threading.Thread(
         target=_stress_worker,
@@ -15871,6 +16279,7 @@ def api_run_nccl_fullrack_async():
             "command_display": display_cmd,
             "timeout_sec": timeout,
             "client_poll_deadline_ms": client_poll_deadline_ms,
+            **provider,
         }
     )
 
@@ -15898,6 +16307,7 @@ def api_run_nvloom_async():
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
+    provider = _validation_execution_metadata("nvloom")
     _record_validation_activity(
         "nvloom",
         stage="other",
@@ -15908,6 +16318,8 @@ def api_run_nvloom_async():
         command_display=display_cmd,
         activity_id=job_id,
         operator=operator,
+        **provider,
+        nodes=_scontrol_hostnames_preserving_case(target),
     )
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
@@ -15920,6 +16332,7 @@ def api_run_nvloom_async():
             "phase": "starting",
             "command_display": display_cmd,
             "created_at": created,
+            **provider,
         }
     threading.Thread(
         target=_stress_worker,
@@ -15937,6 +16350,7 @@ def api_run_nvloom_async():
             "command_display": display_cmd,
             "timeout_sec": timeout,
             "client_poll_deadline_ms": client_poll_deadline_ms,
+            **provider,
         }
     )
 
@@ -15964,6 +16378,7 @@ def api_run_clusterkit_async():
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
+    provider = _validation_execution_metadata("clusterkit")
     _record_validation_activity(
         "clusterkit",
         stage="other",
@@ -15974,6 +16389,8 @@ def api_run_clusterkit_async():
         command_display=display_cmd,
         activity_id=job_id,
         operator=operator,
+        **provider,
+        nodes=_scontrol_hostnames_preserving_case(target),
     )
     with _stress_jobs_lock:
         _stress_jobs[job_id] = {
@@ -15986,6 +16403,7 @@ def api_run_clusterkit_async():
             "phase": "starting",
             "command_display": display_cmd,
             "created_at": created,
+            **provider,
         }
     threading.Thread(
         target=_stress_worker,
@@ -16003,6 +16421,7 @@ def api_run_clusterkit_async():
             "command_display": display_cmd,
             "timeout_sec": timeout,
             "client_poll_deadline_ms": client_poll_deadline_ms,
+            **provider,
         }
     )
 
@@ -16067,6 +16486,7 @@ def api_run_llmb_nccl_async():
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
     scope = str(prep.get("scope") or ("multirack" if len(racks) > 1 else "rack"))
+    provider = _validation_execution_metadata("llmb-nccl")
     _record_validation_activity(
         "llmb-nccl",
         stage="stage1",
@@ -16078,6 +16498,8 @@ def api_run_llmb_nccl_async():
         activity_id=job_id,
         operator=operator,
         dry_run=dry_run,
+        **provider,
+        nodes=nodes,
     )
     if env_merged is None:
         env_merged = {}
@@ -16096,6 +16518,7 @@ def api_run_llmb_nccl_async():
             "phase": "starting",
             "command_display": display_cmd,
             "created_at": created,
+            **provider,
         }
     threading.Thread(
         target=_stress_worker,
@@ -16120,6 +16543,7 @@ def api_run_llmb_nccl_async():
             "command_display": display_cmd,
             "timeout_sec": timeout,
             "client_poll_deadline_ms": client_poll_deadline_ms,
+            **provider,
         }
     )
 
@@ -16588,7 +17012,7 @@ def _nvswitch_audit_stream_generator(prep: dict):
 
 @app.route("/api/run-sysinfo", methods=["POST"])
 def api_run_sysinfo():
-    """Run sysinfo.sh with one NODELIST target, e.g. p22-r05-ct[01-18] (cwd = log_dir)."""
+    """Run sysinfo.sh with one exact Nscale NODELIST target (cwd = log_dir)."""
     body = request.get_json(silent=True) or {}
     prep, err = _parse_sysinfo_request(body)
     if err is not None:

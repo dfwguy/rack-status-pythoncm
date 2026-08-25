@@ -394,7 +394,7 @@ ensure_git_lfs() {
   fi
 
   # Resolve an apt privilege escalation: root needs none; a non-root user with
-  # PASSWORDLESS sudo (e.g. Boston `cmods`, NOPASSWD as of 2026-07-02) can still
+  # PASSWORDLESS sudo on an approved Nscale build host can still
   # install system-wide. A SYSTEM-WIDE git-lfs is preferred over ~/.local/bin
   # because dgxc-benchmarking's install.sh preflight (and its srun/subshell
   # recipes) don't inherit our PATH — a user-space binary is invisible to them.

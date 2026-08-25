@@ -44,7 +44,7 @@ LOG_ROOT="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/r
 # Normalize <hosts> into a "host:GPN,host:GPN,..." CSV. Three cases:
 #   (a) already node:gpus CSV (contains ':')            -> use as-is
 #   (b) Slurm bracket range e.g. p26-r05-ct[01-18]      -> expand via scontrol (needs slurm on PATH)
-#   (c) plain comma list of real hostnames (Boston)     -> split ourselves, no scontrol needed
+#   (c) plain comma list of exact real hostnames        -> split ourselves, no scontrol needed
 # Make slurm CLI reachable in non-login SSH shells (Modules not initialized) for case (b).
 export PATH="$PATH:/cm/local/apps/slurm/current/bin:/cm/shared/apps/slurm/current/bin:/usr/local/slurm/bin"
 _expand_names() {  # emit one hostname per line from a comma list

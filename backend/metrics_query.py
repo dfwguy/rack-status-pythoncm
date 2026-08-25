@@ -73,6 +73,10 @@ def is_disabled() -> bool:
     return _env("RACK_METRICS_DISABLED").lower() in ("1", "true", "yes", "on")
 
 
+def _pythoncm_primary() -> bool:
+    return _env("RACK_SCHEDULER", "pythoncm").lower() == "pythoncm"
+
+
 def _timeout() -> int:
     try:
         return max(2, int(_env("RACK_METRICS_TIMEOUT", "12")))
@@ -197,6 +201,10 @@ CHARTS: dict[str, dict[str, Any]] = {
         "unit": "nodes",
         "kind": "line",
         "range": True,
+        # Retained for explicitly Slurm-backed deployments. Nscale/PythonCM
+        # hides it from the UI catalog because `bcm_devices` is the native
+        # equivalent and does not depend on a Slurm exporter.
+        "provider": "slurm",
         "series": {
             "total": "sum(slurm_nodes_total{sel})",
             "idle": "sum(slurm_nodes_idle{sel})",
@@ -317,8 +325,10 @@ def api_metrics_catalog():
             {"id": cid, "title": c["title"], "unit": c["unit"], "kind": c["kind"],
              "group": c.get("group") or "other", "range": bool(c.get("range"))}
             for cid, c in CHARTS.items()
-            if not want or (c.get("group") or "other") == want
+            if (not want or (c.get("group") or "other") == want)
+            and not (_pythoncm_primary() and c.get("provider") == "slurm")
         ],
+        "scheduler": "pythoncm" if _pythoncm_primary() else "slurm",
     })
 
 

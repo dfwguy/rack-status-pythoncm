@@ -72,7 +72,7 @@ TAIL_CHARS = 8000
 OPERATOR_MAX_LEN = 64
 LEDGER_TEXT_MAX_LEN = 4000
 MAX_CORRECTIVE_ACTIONS = 100
-TERMINAL_PHASES = frozenset({"done", "error", "timeout"})
+TERMINAL_PHASES = frozenset({"done", "error", "timeout", "cancelled"})
 WORK_PHASES = frozenset({
     "pending",
     "submitted",
@@ -136,6 +136,12 @@ _UPDATABLE = frozenset({
     "stderr_tail",
     "command_display",
     "scheduler",
+    "execution_provider",
+    "fallback",
+    "fallback_reason",
+    "cancel_requested",
+    "cancel_requested_at",
+    "cancel_results",
     "scheduler_ref",
     "started_running_at",
     "nodes",
@@ -912,6 +918,13 @@ def _upgrade_legacy_record(rec: dict[str, Any], *, activity_id: str) -> dict[str
         "operator": _sanitize_operator(rec.get("operator")),
         "command_display": str(rec.get("command_display") or ""),
         "scheduler": str(rec.get("scheduler") or "unknown"),
+        "execution_provider": str(
+            rec.get("execution_provider") or rec.get("scheduler") or "unknown"
+        ),
+        "fallback": bool(rec.get("fallback")),
+        "fallback_reason": str(rec.get("fallback_reason") or ""),
+        "nodes": [str(node) for node in (rec.get("nodes") or []) if str(node).strip()],
+        "target": str(rec.get("target") or ""),
         "dry_run": bool(rec.get("dry_run")),
         "phase": str(rec.get("phase") or "starting"),
         "returncode": rec.get("returncode"),
@@ -1071,6 +1084,9 @@ def record_activity(
     command_display: str = "",
     dry_run: bool = False,
     scheduler: str = "unknown",
+    execution_provider: str = "",
+    fallback: bool = False,
+    fallback_reason: str = "",
     source: str = "ui",
     activity_id: str | None = None,
     tasks: list[dict[str, Any]] | None = None,
@@ -1096,6 +1112,9 @@ def record_activity(
             "operator": _sanitize_operator(operator),
             "command_display": str(command_display or ""),
             "scheduler": scheduler,
+            "execution_provider": execution_provider or scheduler,
+            "fallback": fallback,
+            "fallback_reason": str(fallback_reason or ""),
             "nodes": [str(node) for node in (nodes or []) if str(node).strip()],
             "target": ",".join(str(node) for node in (nodes or []) if str(node).strip()),
             "dry_run": dry_run,

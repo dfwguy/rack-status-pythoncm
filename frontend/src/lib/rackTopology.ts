@@ -16,15 +16,14 @@
  * ``NVIS_RACK_ID`` template (from ``GET /api/status`` ``naming``), and turns the
  * per-rack ``sinfo`` / ``ct_down_unk`` strings into tray-level up/down sets and a
  * rolled-up health verdict. Generation-agnostic: it derives structure from the
- * template's digit slots, so it works for ``MEL01-HC07-SVR-CN0103`` (hall/row/rack)
- * and Bright ``p5-r03`` (pod/rack) alike.
+ * template's digit slots, including the Nscale ``ink50-dh01-h04`` rack hierarchy.
  */
 import type { NvisNamingSchema } from "../types/naming";
 import type { RackRow, RackHierarchy } from "../types/api";
 
 /** A rack id decomposed against the naming template. */
 export interface RackParts {
-  /** Grouping key for the section (e.g. ``MEL01-HC07``); "" when the template has < 3 slots. */
+  /** Grouping key for the section (e.g. ``ink50-dh01``); "" when the template has < 3 slots. */
   sectionKey: string;
   /** Human label for the section header. */
   sectionLabel: string;

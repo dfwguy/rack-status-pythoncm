@@ -67,7 +67,7 @@ rack_from_fname() {
   if [[ "$b" =~ 1Rack-(p[0-9]+-r[0-9]+)(\[|-) ]]; then
     printf '%s\n' "${BASH_REMATCH[1]}"; return 0
   fi
-  # CBR / Firmus: …1Rack-CBR01-DH01-SVR-CN0102[11-18]-…
+  # Legacy variable-depth template: extract rack identity before the node suffix.
   if [[ "$b" =~ 1Rack-(CBR[0-9]{2}-DH[0-9]{2}-SVR-CN[0-9]{4})(\[|-) ]]; then
     printf '%s\n' "${BASH_REMATCH[1]}"; return 0
   fi

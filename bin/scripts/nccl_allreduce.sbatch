@@ -16,7 +16,7 @@
 # management net (ob1/tcp over the NS iface) and the NCCL *data path* on the IB
 # compute rails (NCCL_IB_HCA). This deliberately avoids llmb-run's containerized
 # UCX harness (the container exposes only tcp/IPoIB netdevs, no mlx5 verbs, so
-# UCX_NET_DEVICES=mlx5_* fails). Validated on Boston at ~322 GB/s busbw (b05<->b07).
+# UCX_NET_DEVICES=mlx5_* fails). Keep rail selection explicit on Nscale.
 #
 # Submit with: sbatch -N <n> --nodelist=<nodes> --ntasks-per-node=<gpus> \
 #              --output=<logdir>/nccl-mpi_<label>_%j.out nccl_allreduce.sbatch
@@ -37,7 +37,7 @@ SIZE_MAX="${NCCL_SIZE_MAX:-1G}"
 # --- Discover the host toolchain (env overrides win; else newest matching) ------
 # Generation-flexible: pick the newest-version cuda*/hpcx-* DIRECTORY present (the
 # .tbz tarballs and CPU arch are handled by _pick_first). We intentionally do NOT
-# key off the catalog CUDA_MAJ: it can lag the actually-staged toolchain (e.g. Boston
+# key off the catalog CUDA_MAJ: it can lag the actually-staged Nscale toolchain
 # GB200 is catalogued cuda12 but validated on cuda13/driver-580). For deterministic
 # per-cluster pinning set NVIS_HPCX_DIR / NVIS_NCCL_TESTS_BIN / NVIS_NCCL_LIB / NVIS_CUDA_LIB.
 # Return the highest-version DIRECTORY matching the first glob group that hits.

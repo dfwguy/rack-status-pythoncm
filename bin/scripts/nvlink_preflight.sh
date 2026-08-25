@@ -12,7 +12,7 @@
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
 #
 # Catches the node states that make NCCL NVLS/MNNVL collectives HANG, BEFORE you
-# launch a job. ROOT CAUSE (MEL01, confirmed): on an NVL72 there is NO direct
+# launch a job. On an NVL72 there is NO direct
 # GPU<->GPU NVLink — every GPU's 18 NVLink5 ports go up into the rack's L1 NVSwitch
 # trays, so even a 2-GPU same-node collective routes GPU -> NVSwitch -> GPU. When the
 # NVSwitch SDN routing (programmed by NMX-C / GFM) is unprogrammed or wedged, EVERY
@@ -67,7 +67,7 @@
 #      link layer (InfiniBand OR Ethernet/RoCE); Stage 2 runs sharp_hello and the passers are the
 #      SHARP rails. Gate = SHARP rails >= #GPUs (one compute rail per GPU), so the Ethernet
 #      BlueField-3 storage plane is simply not counted (no false WARN) and it works on GB200/
-#      GB300/B200/B300 with no hard-coded mlx5 list. On Boston GB200 the SHARP rails resolve to
+#      Nscale GB300 with no hard-coded mlx5 list. The SHARP rails resolve to
 #      "mlx5_0 mlx5_1 mlx5_4 mlx5_5" (4 = #GPUs -> PASS). Env: SHARP_ENABLE (default 1),
 #      SHARP_HELLO (path; autodetected under /opt/hpcx|/opt/mellanox), SHARP_HCAS (override the
 #      candidate set), SHARP_EXPECT (override the expected rail count; default #GPUs),

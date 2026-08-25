@@ -42,7 +42,8 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { useRackLocksContext } from "../context/RackLocksContext";
 import { fetchSlurmJson } from "../lib/slurmHelpers";
-import { parseSinfoRStdout } from "../lib/parseSinfoRStdout";
+import { parseSinfoRStdout, schedulerNodeReasonsTable } from "../lib/parseSinfoRStdout";
+import type { SchedulerNodeReason } from "../lib/slurmHelpers";
 import { slurmReasonTone } from "../lib/slurmReasonTone";
 import { resolveGrafanaBase } from "../lib/grafanaLinks";
 import { useGrafanaDeeplinks } from "../lib/useGrafanaDeeplinks";
@@ -139,6 +140,7 @@ export function EventsView() {
   const [activeSources, setActiveSources] = useState<Set<EventSource>>(() => new Set(SOURCE_ORDER));
 
   const [sinfoStdout, setSinfoStdout] = useState("");
+  const [nodeReasons, setNodeReasons] = useState<SchedulerNodeReason[]>([]);
   const [sinfoCmd, setSinfoCmd] = useState("");
   const [sinfoError, setSinfoError] = useState("");
   const [sinfoLoading, setSinfoLoading] = useState(false);
@@ -155,13 +157,16 @@ export function EventsView() {
       setSinfoCmd(String(data.command_display || ""));
       if (!res.ok || data.ok === false) {
         setSinfoStdout("");
+        setNodeReasons([]);
         setSinfoError(data.error || `Node availability query failed (HTTP ${res.status})`);
         return;
       }
       setSinfoStdout(String(data.stdout || ""));
+      setNodeReasons(Array.isArray(data.nodes) ? data.nodes : []);
       setSinfoAt(new Date().toLocaleTimeString());
     } catch (e) {
       setSinfoStdout("");
+      setNodeReasons([]);
       setSinfoError(e instanceof Error ? e.message : String(e));
     } finally {
       setSinfoLoading(false);
@@ -203,7 +208,10 @@ export function EventsView() {
     });
   }, [locksCtx.locks]);
 
-  const sinfoParsed = useMemo(() => parseSinfoRStdout(sinfoStdout), [sinfoStdout]);
+  const sinfoParsed = useMemo(
+    () => nodeReasons.length ? schedulerNodeReasonsTable(nodeReasons) : parseSinfoRStdout(sinfoStdout),
+    [nodeReasons, sinfoStdout]
+  );
   const slurmRows = useMemo(() => slurmEvents(sinfoParsed), [sinfoParsed]);
   /** ``sinfo`` produced output the fixed-width parser could not turn into a table. */
   const sinfoUnparsed = sinfoParsed.useRaw && sinfoStdout.trim().length > 0;

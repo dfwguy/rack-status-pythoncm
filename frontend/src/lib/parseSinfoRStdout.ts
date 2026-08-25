@@ -64,3 +64,29 @@ export function parseSinfoRStdout(stdout: string): {
   }
   return { headers, rows, useRaw: false };
 }
+
+/** Shape provider-neutral structured node reasons into the existing table contract. */
+export function schedulerNodeReasonsTable(
+  nodes: Array<{
+    node?: unknown;
+    state?: unknown;
+    reason?: unknown;
+    actor?: unknown;
+    timestamp?: unknown;
+  }>
+): ReturnType<typeof parseSinfoRStdout> {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return { headers: [], rows: [], useRaw: false };
+  }
+  return {
+    headers: ["STATE", "REASON", "USER", "TIMESTAMP", "NODELIST"],
+    rows: nodes.map((row) => [
+      String(row.state ?? "unknown"),
+      String(row.reason ?? ""),
+      String(row.actor ?? ""),
+      String(row.timestamp ?? ""),
+      String(row.node ?? ""),
+    ]),
+    useRaw: false,
+  };
+}

@@ -66,11 +66,11 @@ Operator starts a feature
 | Physical nodes | Racks, Nodes, target pickers | PythonCM | BCM `PhysicalNode` entities provide exact node names, rack placement, serial/MAC/interface data, and BMC address where exposed. |
 | Device health | status cells and counts | PythonCM | `cluster.parallel.device_status(...)` supplies device state. |
 | Drain state/reason | Scheduler, Racks, node report | PythonCM | `cluster.parallel.drain_status(...)` supplies drained/undrained state and reason. |
-| Allocation/activity overlay | Racks and Scheduler | local registry | PythonCM UUID and explicit Slurm fallback rows are read from the durable activity registry. This does not query Slurm. |
+| Allocation/activity overlay | Racks and Scheduler | local registry | PythonCM UUID and explicit Slurm fallback rows, exact nodes, provider, and fallback reason are read from the durable activity registry. This does not query Slurm. |
 | Active/recent jobs | Scheduler | hybrid registry | Each row carries provider provenance. UUID rows are PythonCM; numeric rows are Slurm fallbacks. |
-| Job detail | Scheduler/job dialog | hybrid, targeted | A UUID calls PythonCM status. A numeric fallback ID makes one targeted `scontrol show job` request when the operator opens or polls that job. |
+| Job detail | Scheduler/job dialog | hybrid, targeted | A native PythonCM UUID calls PythonCM status. A native numeric fallback ID makes one targeted `scontrol show job` request. An outer Rack Status activity UUID aggregates every child reference instead of misclassifying the wrapper as PythonCM. |
 | Job output | job/log dialogs | local/remote file path | Reads the output path recorded by the selected provider; no fleet-wide queue query. |
-| Job cancel | `POST /api/scheduler-cancel` | hybrid, targeted | UUID calls PythonCM kill; numeric fallback ID calls one targeted `scancel`. |
+| Job cancel | `POST /api/scheduler-cancel` | hybrid, targeted | Native UUID calls PythonCM kill; native numeric ID calls targeted `scancel`. An outer activity UUID kills its still-running wrapper and cancels every nonterminal native child, returning per-task results. A pre-submit cancellation prevents the wrapper from spawning. |
 | Post-run inventory | Post Run Node Report | PythonCM | Current node identity/state comes from PythonCM. |
 | Post-run accounting | Post Run Node Report | hybrid, on demand | PythonCM UUIDs reconcile from the registry; numeric fallback IDs use one batched `sacct` query only when the report is explicitly refreshed. |
 | Physical rf0 | rack/node details | PythonCM | BMC/rf0 address is read from PythonCM entity/interface data. |
@@ -79,6 +79,8 @@ Operator starts a feature
 | Cluster version/capabilities | overview/settings | PythonCM | PythonCM/CMDaemon version and capability probes replace `scontrol -V` and `cmsh versioninfo`. |
 | Fabric probe | Infrastructure | PythonCM ProgramRunner | Executes the node-local probe on an exact PhysicalNode and returns per-node output. |
 | Uptime | rack actions | PythonCM ProgramRunner | Runs `uptime` on exact PythonCM-resolved nodes. |
+| Native observability metrics | Metrics/Infrastructure | VictoriaMetrics, read-only | DCGM/exporter/BCM series are queried from the metrics store. The Slurm-node chart is hidden when PythonCM is primary because `bcm_devices` is the native equivalent. This path never runs a scheduler CLI. |
+| Grafana metrics/logs/events/Ethernet/IB/storage views | Observability | Grafana, read-only | Uses the external Nscale embed map and operator Grafana session. The route contracts are simulated in acceptance; live dashboards still require the deployed map and reachable Grafana. |
 
 ### The 30-second Racks guarantee
 
@@ -137,25 +139,26 @@ because the Racks page refreshed.
 | NVLoom | Current recipe combines sysinfo collection and MPI-over-SSH. |
 | MNUberGEMM 26.03-v1.17 | Stage-only container copy uses PythonCM ProgramRunner once per exact rack. The workload itself uses Slurm because a proposed direct `dcgmi mndiag` command is not the pinned-container MNUberGEMM workload. |
 
-Preset launch responses and durable activities identify the execution provider
-as `slurm` and retain a human-readable fallback reason. Numeric scheduler job
-IDs remain cancellable and inspectable through the provider-neutral Scheduler
-API.
+Preset and direct launch responses identify the execution provider immediately.
+Durable activities retain that provider, the human-readable fallback reason,
+and exact node membership after process restart. The public outer activity UUID
+remains the stable handle; provider-neutral detail and cancel aggregate all
+numeric/UUID children instead of selecting only the newest child.
 
 ## Other restored application features
 
 | Feature | Provider | Notes |
 |---|---|---|
 | Interactive head/node terminal | SSH/PTTY fallback | PythonCM ProgramRunner is non-interactive and cannot adopt xterm sessions. The Terminal page, detached tab, grid, and per-node launch are restored. |
-| Workflows | per-step hybrid | Default exact-node fan-out uses PythonCM. Explicit `.sbatch`/`scheduler.kind: slurm` steps use Slurm. Explicit SSH hops and head-local steps keep their transport. |
+| Workflows | per-step hybrid | Default exact-node fan-out uses PythonCM. Explicit `.sbatch`/`scheduler.kind: slurm` steps use Slurm. The active provider/reference is persisted; cancel dispatches to the native child and a completion race cannot overwrite `cancelled`. Explicit SSH hops and head-local steps keep their transport. |
 | Bring-up configuration and reports | local/script/transport fallback | These features orchestrate existing report files and site scripts, not a scheduler-equivalent operation. |
 | Post-run node reports | PythonCM inventory plus on-demand accounting fallback | Feature and operator marking/drain are restored. |
 | Tools/installers | dashboard host plus explicit build-host fallback | Downloads and local preparation run on the dashboard host. Existing compute build/install steps use their documented transport/Slurm dependency where PythonCM cannot reproduce the installer. |
 | Reports/downloads | dashboard filesystem | Read-only listing/download remains local; remote collection provider is described separately above. |
-| Projects & Clusters | application database/config | Restored. It does not change the fixed Nscale production target unless an administrator explicitly changes deployment configuration. |
+| Projects & Clusters | application database/config | Restored. Nscale uses the isolated `/app/var/store/catalog-nscale-tx.json`, so a stale generic catalog in the shared volume cannot replace the Nscale/GB300/PythonCM identity. |
 | Platform Catalog | application database/config | Restored for metadata management; active Nscale runtime still resolves `nscale-tx`. |
 | Tool Registry | application database/config | Restored for tool metadata and paths. |
-| API Reference | local OpenAPI/help data | Provider-neutral scheduler routes are primary; historical `/api/slurm-*` aliases remain callable for client compatibility. |
+| API Reference | local OpenAPI/help data | Provider-neutral scheduler routes are primary; historical `/api/slurm-*` aliases remain callable for client compatibility but do not choose the runtime provider. |
 | AI/help | local content plus configured LLM | Guidance says PythonCM-primary and names explicit fallbacks; it no longer claims features are blocked or invents live Nscale state. |
 
 ## PythonCM examples used by this build
@@ -227,8 +230,11 @@ with `scheduler="slurm"`; the launcher submits its allocation, records the
 numeric job ID, and returns immediately to asynchronous status tracking. Later:
 
 ```text
-GET  /api/scheduler-job-status?job_id=12345  -> targeted scontrol
+GET  /api/scheduler-job-detail?job_id=12345  -> targeted scontrol
 POST /api/scheduler-cancel {"job_id":"12345"} -> targeted scancel
+
+GET  /api/scheduler-job-detail?job_id=<activity-uuid> -> all child details
+POST /api/scheduler-cancel {"job_id":"<activity-uuid>"} -> wrapper + all children
 ```
 
 No fleet-wide Slurm query is added to `/api/status`.
@@ -242,6 +248,8 @@ RACK_CLUSTER_CUSTOMER_NAME=Nscale
 RACK_CLUSTER_PRODUCT_LINE=gb300
 RACK_PLATFORM=bcm
 RACK_SCHEDULER=pythoncm
+RACK_STATUS_BACKGROUND_INTERVAL_SEC=30
+NVIS_CATALOG_FILE=/app/var/store/catalog-nscale-tx.json
 
 NVIS_BCM_PYTHON=/cm/local/apps/python312/bin/python3
 NVIS_PYTHONCM_PATH=/cm/local/apps/cmd/pythoncm
@@ -255,7 +263,30 @@ NVIS_BCM_COOKIE_FILE=/path/to/cookie
 ```
 
 Secrets must not be placed in this repository, an artifact manifest, or a
-frontend setting.
+frontend setting. Grafana probe credentials are likewise supplied through the
+deployment environment/secret manager; the tracked deployment override contains
+no literal username/password.
+
+## Simulated end-to-end acceptance
+
+`backend/tests/test_nscale_simulated_acceptance.py` enters through the public
+Flask routes used by the SPA and replaces only external systems with deterministic
+Nscale responses. It covers:
+
+| Area | Simulated operator lifecycle |
+|---|---|
+| Racks | `/api/status`, overview/live overview, scheduler jobs/history/reasons, activities, tools, projects/catalog, reports, parser results, and the 30-second source contract. |
+| NVLoom/validation | POST NVLoom -> durable Slurm-fallback provider/reason/nodes -> terminal family status; synchronous timeout returns its recoverable activity UUID; pre-cancel prevents a wrapper spawn. |
+| Scheduler lifecycle | One outer activity with two native children -> aggregated detail -> both children cancelled -> durable cancelled state. |
+| Post-run node report | Operator marks an Ethernet issue and requests drain; the action routes to simulated PythonCM drain. |
+| Analytics | Start asynchronous aggregate -> poll to terminal -> verify normalized single-rack result payload. |
+| Observability | Metrics, logs, events, Ethernet, IB/NVLink, and storage view maps; Grafana health/auth/embed checks; native VictoriaMetrics catalog/health/chart shaping. |
+| Network/Ethernet | Exact PhysicalNode fabric probe -> PythonCM ProgramRunner -> Ethernet rails/storage-interface result. |
+| Workflows | Public launch/status/cancel for a running PythonCM child and for cancellation while Slurm `submit()` is blocked; native child is cancelled exactly once and final state remains cancelled. |
+| Terminal | Standalone terminal/grid require frontend auth; an unauthenticated WebSocket cannot allocate a PTY. |
+
+These simulations prove application routing and lifecycle behavior without
+claiming a live workload result or mutating Nscale production.
 
 ## Deployment and live acceptance
 
@@ -264,9 +295,10 @@ backend/frontend deployment; a plain container restart cannot add a module that
 was not mounted into the old image.
 
 Read-only PythonCM inventory was validated against BCM 11 and returned 220 racks
-and 3,943 PhysicalNodes. The remaining live gate is controlled mutation and
-compute execution. It requires a BCM login cookie or username/password file and
-an administrator-approved reserved node. On that node, acceptance must prove:
+and 3,943 PhysicalNodes. The remaining live gates are external connectivity and
+controlled mutation/compute execution. They require the Nscale Grafana embed map,
+reachable Grafana/VictoriaMetrics endpoints, a BCM login cookie or username/password
+file, and an administrator-approved reserved node. On that node, acceptance must prove:
 
 1. harmless ProgramRunner submit, UUID persistence, status, stdout/stderr, and
    completion across an application restart;
@@ -276,14 +308,16 @@ an administrator-approved reserved node. On that node, acceptance must prove:
 5. each retained Slurm validation launches, reports, tails, and cancels through
    its numeric job ID;
 6. no recurring `/api/status` request starts a Slurm or `cmsh` command.
+7. the external Grafana map resolves real Nscale dashboard UIDs/panel IDs and the
+   Ethernet/IB/storage collectors actually expose data.
 
 No destructive or compute mutation is claimed without those credentials and an
 approved node.
 
 ## Automated verification for this package
 
-- backend: **1,440 passed, 1 skipped**;
-- frontend: **379 passed** across 53 test files;
+- backend: **1,454 passed, 1 skipped**;
+- frontend: **380 passed** across 54 test files;
 - TypeScript and production Vite build: **passed**;
 - generated help registry: **78 entries**, including every navigable view;
 - frontend lint: **0 errors** (57 existing warnings);

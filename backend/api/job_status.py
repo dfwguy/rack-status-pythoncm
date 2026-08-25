@@ -43,6 +43,16 @@ from job_registry import (
 bp = Blueprint("job_status", __name__, url_prefix="")
 
 
+def _job_payload(job_id: str, registry: dict, lock) -> dict | None:
+    """Read the live row, then the durable activity after restart or purge."""
+    with lock:
+        row = registry.get(job_id)
+        payload = dict(row) if row is not None else None
+    if payload is None:
+        payload = validation_activities.get_activity(job_id)
+    return payload
+
+
 @bp.route("/api/reset-job-status", methods=["GET"])
 def api_reset_job_status():
     """Poll async jobs: power, GPU reset, services restart, HW check, bug report, NMXC cycle, NVLink SDN reset, NVLink system reset, IMEX reset, NVLMAPPER, Precheck, NVSWICTH check, or IMEX check."""
@@ -64,11 +74,9 @@ def api_run_validation_status():
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _validation_jobs_lock:
-        row = _validation_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
+    payload = _job_payload(job_id, _validation_jobs, _validation_jobs_lock)
+    if payload is None:
+        return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
     payload["ok"] = True
     return jsonify(payload)
 
@@ -78,11 +86,9 @@ def api_run_nemo_xrack_status():
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _xrack_jobs_lock:
-        row = _xrack_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
+    payload = _job_payload(job_id, _xrack_jobs, _xrack_jobs_lock)
+    if payload is None:
+        return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
     payload["ok"] = True
     return jsonify(payload)
 
@@ -92,11 +98,9 @@ def api_run_llama_status():
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _llama_jobs_lock:
-        row = _llama_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
+    payload = _job_payload(job_id, _llama_jobs, _llama_jobs_lock)
+    if payload is None:
+        return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
     payload["ok"] = True
     return jsonify(payload)
 
@@ -107,11 +111,9 @@ def api_run_mnubergemm_stress_status():
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _stress_jobs_lock:
-        row = _stress_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
+    payload = _job_payload(job_id, _stress_jobs, _stress_jobs_lock)
+    if payload is None:
+        return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
     payload["ok"] = True
     return jsonify(payload)
 
@@ -122,11 +124,9 @@ def api_run_nccl_fullrack_status():
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _stress_jobs_lock:
-        row = _stress_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
+    payload = _job_payload(job_id, _stress_jobs, _stress_jobs_lock)
+    if payload is None:
+        return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
     payload["ok"] = True
     return jsonify(payload)
 
@@ -137,11 +137,9 @@ def api_run_nvloom_status():
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _stress_jobs_lock:
-        row = _stress_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
+    payload = _job_payload(job_id, _stress_jobs, _stress_jobs_lock)
+    if payload is None:
+        return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
     payload["ok"] = True
     return jsonify(payload)
 
@@ -152,11 +150,9 @@ def api_run_clusterkit_status():
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _stress_jobs_lock:
-        row = _stress_jobs.get(job_id)
-        if row is None:
-            return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
-        payload = dict(row)
+    payload = _job_payload(job_id, _stress_jobs, _stress_jobs_lock)
+    if payload is None:
+        return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
     payload["ok"] = True
     return jsonify(payload)
 
@@ -167,11 +163,7 @@ def api_run_llmb_nccl_status():
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
-    with _stress_jobs_lock:
-        row = _stress_jobs.get(job_id)
-        payload = dict(row) if row is not None else None
-    if payload is None:
-        payload = validation_activities.get_activity(job_id)
+    payload = _job_payload(job_id, _stress_jobs, _stress_jobs_lock)
     if payload is None:
         return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
     payload["ok"] = True

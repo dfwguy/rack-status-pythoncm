@@ -42,6 +42,15 @@ export type SlurmSacctJob = {
   exit_code: string;
 };
 
+export type SchedulerNodeReason = {
+  node: string;
+  state?: string;
+  reason?: string;
+  rack?: string;
+  actor?: string;
+  timestamp?: string;
+};
+
 export type SlurmCmdJson = {
   ok?: boolean;
   error?: string;
@@ -55,6 +64,9 @@ export type SlurmCmdJson = {
   /** /api/slurm-job-log-path */
   path?: string;
   source?: string;
+  scheduler?: string;
+  /** Structured PythonCM PhysicalNode state; preferred over compatibility stdout. */
+  nodes?: SchedulerNodeReason[];
 };
 
 export function formatSlurmCmdDetail(data: SlurmCmdJson): string {

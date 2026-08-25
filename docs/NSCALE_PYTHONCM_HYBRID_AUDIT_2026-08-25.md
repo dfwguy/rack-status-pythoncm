@@ -10,6 +10,36 @@ transport fallback only for the feature-specific gaps documented in
 
 The original `PYTHONCM_ZERO_SLURM_AUDIT_2026-08-25.md` is superseded.
 
+## Final remediation sweep
+
+The independent audits were not treated as documentation-only reviews. Their
+runtime findings produced these additional changes before packaging:
+
+- isolated the active catalog as `catalog-nscale-tx.json`, preventing a stale
+  generic/default catalog in the persistent volume from overriding Nscale,
+  GB300, SSH, naming, or PythonCM settings;
+- removed the tracked Grafana password and switched the compose override to
+  deployment-time secret/environment injection;
+- made validation provider, fallback reason, and exact nodes durable fields;
+- made every family status endpoint fall back to the durable activity after an
+  app restart or in-memory purge;
+- made outer activity detail aggregate every native child and outer activity
+  cancellation kill the wrapper plus every nonterminal child;
+- closed pre-submit cancellation races for validation wrappers, PythonCM jobs,
+  MNUberGEMM staging, and workflows;
+- made workflow provider/reference state durable and cancellation race-safe;
+- centralized terminal activity capture into the results/lake path, including
+  failures and stage-only runs without a parsed benchmark artifact;
+- used structured PythonCM node reasons in Events/Scheduler rather than parsing
+  them as fixed-width Slurm text;
+- authenticated standalone terminal tabs and rejected unauthenticated terminal
+  WebSockets before PTY allocation;
+- hid the Slurm-exporter node chart when PythonCM is primary and retained the
+  native BCM inventory chart;
+- removed non-Nscale examples/default rack pools from active frontend and
+  launcher source. The on-demand NCCL campaign now requires explicit approved
+  `ink...` rack ids.
+
 ## Independent audit inputs
 
 Three read-only agents independently traced the shared tree.
@@ -70,12 +100,20 @@ child launcher, and status store. Findings incorporated here:
 | UUID/numeric IDs retain provider provenance | `backend/scheduler_runtime.py` | `test_registry_keeps_provider_provenance` |
 | Numeric status/cancel is targeted Slurm | `backend/scheduler_runtime.py` | `test_numeric_status_and_cancel_use_targeted_slurm_calls` |
 | UUID cancel is PythonCM | `backend/scheduler_runtime.py` | `test_uuid_cancel_uses_pythoncm_not_slurm` |
+| Outer activity detail/cancel aggregates every child | `backend/app.py`, `backend/validation_activities.py` | `test_validation_activity_aggregates_status_and_cancels_every_native_child` |
+| Pre-cancelled validation never spawns a wrapper | `backend/app.py` | `test_pre_cancelled_validation_never_spawns_fallback_wrapper` |
+| Failed sync validation returns recoverable provider/activity | `backend/app.py` | `test_sync_validation_failure_returns_recoverable_activity_and_provider` |
 | rf0, power, drain/resume provider is PythonCM | `backend/bcm_query.py`, `backend/app.py` | `test_rf0_power_drain_resume_use_pythoncm` plus scheduler API tests |
 | GPU/service/hardware/bug-report/NVLink commands use ProgramRunner | `backend/app.py` | `test_gpu_services_bugreport_hw_and_nvlink_use_programrunner` |
 | Compatibility URLs do not change provider | `backend/slurm_query.py`, `backend/api/slurm_queries.py` | `test_neutral_and_legacy_scheduler_urls_are_compatible` |
 | Workflow and validation feature surfaces are enabled | API blueprints and `backend/app.py` | `test_workflows_and_validation_presets_are_not_blanket_disabled` |
 | Every validation gap has a reason | `backend/pythoncm_validation.py` | `test_validation_gap_has_documented_slurm_fallback_reason` |
 | PythonCM UUID/terminal state is durable | `backend/app.py`, helper manifests | `test_pythoncm_worker_persists_uuid_and_terminal_state` |
+| Workflow cancel reaches native child and stays cancelled | `backend/workflow_engine.py` | `test_workflow_cancel_dispatches_native_child_and_cannot_be_overwritten` |
+| Workflow submit/cancel race kills child before wait | `backend/workflow_engine.py` | `test_workflow_cancel_while_submit_is_blocked_kills_handle_before_wait` |
+| Nscale observability and Ethernet contracts | `backend/grafana_embeds.py`, `backend/metrics_query.py`, `backend/api/fabric_probe.py` | three simulated acceptance tests for all six views, upstream health/chart shaping, and PythonCM Ethernet probe |
+| Slurm metrics chart hidden under PythonCM | `backend/metrics_query.py` | simulated native metrics catalog assertion |
+| Terminal WebSocket requires signed session | `backend/api/terminal.py` | `test_unauthorized_websocket_falls_through_without_opening_a_pty` |
 | Log-only rack probe executes no cluster command | `bin/scripts/rack_status.sh` | `test_log_probe_executes_no_cluster_command` |
 | Browser uses a 30,000 ms interval | `frontend/src/hooks/useRackStatus.ts` | frontend `useRackStatus` timer test |
 | Every navigable route has help | frontend content registry | `content.test.ts` |
@@ -101,11 +139,14 @@ Static/unit/integration tests do not authorize cluster mutation. ProgramRunner,
 cancel, drain/resume, power, and real validation submission need the Nscale BCM
 credential files and an approved reserved node. A final live acceptance must
 also verify shared result-directory visibility and the submit/manifest crash
-window described in the handoff README.
+window described in the handoff README. Observability route contracts passed
+simulation, but real Grafana/VictoriaMetrics and Ethernet/IB/storage data remain
+external gates because the production embed map and collectors are not contained
+in this repository.
 
 ## Automated evidence
 
-The final source state passed 1,440 backend tests with 1 skipped, all 379
+The final source state passed 1,454 backend tests with 1 skipped, all 380
 frontend tests, the production TypeScript/Vite build, production-module Ruff,
 Python byte compilation, shell/`.sbatch` syntax checks, and Git whitespace
 checks. Frontend lint completed with zero errors and 57 existing warnings.

@@ -1,5 +1,5 @@
 {
-  "_comment": "Pinned spec for the vetted NeMo validation container baked by build_vetted_nemo_image.sh. Ships in the repo so every customer cluster (Boston/NSCALE/Firmus) builds the SAME image; the ~34GB .sqsh artifact itself lives on NFS (and optionally a dist/ air-gapped bundle), not in git.",
+  "_comment": "Pinned spec for the vetted Nscale NeMo validation container baked by build_vetted_nemo_image.sh. The ~34GB .sqsh artifact itself lives on NFS (and optionally a dist/air-gapped bundle), not in git.",
   "base_image": "nemo-25.11.01.sqsh",
   "output_image": "nemo-vetted-nccl2.28.9.sqsh",
   "arch": "aarch64",

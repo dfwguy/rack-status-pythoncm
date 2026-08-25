@@ -61,7 +61,7 @@ source "${SCRIPT_DIR}/lib/nodes.inc.sh"
 # "ink50-dh01-h02-[11-18" and "28-37]". Neither is a rack id, so nvis_nodes_resolve found nothing
 # and we fell through to the per-spec fallback — which works here only because the CT template
 # happens to equal the real hostname, and would produce wrong names on a site where it does not
-# (Boston: real = bos01-b05-11-s1-dgx-05-c01). Bright ranges like [01-18] have no inner comma,
+# Exact Nscale hostnames are inventory-backed. Simple ranges like [11-18] have no inner comma,
 # which is why this stayed hidden.
 _specs=()
 _buf=""
@@ -118,7 +118,7 @@ n=$(( ${#hosts[*]} / 2 * 2 ))
 # force MNNVL (fatal across a rack boundary). Explicit NVIS_NEMO_XRACK from the caller wins.
 #
 # Group hosts by rack via NVIS_RACK_ID (nvis_nodes_rack_of). This used to hardcode
-# 'bos01-[a-z][0-9]+', which matches nothing outside Boston: elsewhere every hostname
+# a fixed site regex, which matches nothing outside that layout: every hostname
 # stayed distinct, so an 18-node SINGLE-rack run counted 18 "racks" and was pushed
 # onto the cross-rack IB path. Without the template, fall back to the number of rack
 # specs the caller passed (the dashboard always passes one spec per rack).
@@ -256,7 +256,7 @@ fi
 # ExitCode 0:53). Derive the distinct rack ids from the resolved hosts instead.
 #
 # Via nvis_nodes_rack_of (NVIS_RACK_ID), the same way the rack count above does. This was the
-# second place hardcoding 'bos01-[a-z][0-9]+'; only the count was converted. Outside Boston the
+# second place hardcoding one site prefix; only the count was converted. On Nscale the
 # sed matched nothing, so every hostname stayed distinct and _racktag became all N hostnames
 # joined by '+' — roughly 700 characters for 36 nodes, which is exactly the >255-byte --output
 # name this comment warns about.

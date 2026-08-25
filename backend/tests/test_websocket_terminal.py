@@ -75,3 +75,39 @@ def test_non_websocket_request_falls_through(terminal_middleware, monkeypatch):
     }
     body = list(terminal_middleware(environ, start_response))
     assert body == [b"fallback"]
+
+
+def test_unauthorized_websocket_falls_through_without_opening_a_pty(monkeypatch):
+    """Flask owns the 401 response when the signed session is missing/invalid."""
+    called = {"fallback": 0, "handle": 0}
+
+    def fallback(environ, start_response):
+        called["fallback"] += 1
+        start_response("401 Unauthorized", [("Content-Type", "text/plain")])
+        return [b"unauthorized"]
+
+    middleware = terminal_module._WebSocketTerminalMiddleware(
+        fallback,
+        authorized=lambda _environ: False,
+    )
+    monkeypatch.setattr(
+        middleware,
+        "_handle_terminal",
+        lambda environ: called.__setitem__("handle", called["handle"] + 1),
+    )
+    monkeypatch.setattr(terminal_module, "_TERMINAL_ENABLED", True)
+    status = {"value": None}
+
+    def start_response(value, headers, exc_info=None):
+        status["value"] = value
+        return lambda _data: None
+
+    body = list(middleware({
+        "PATH_INFO": "/ws/terminal",
+        "HTTP_UPGRADE": "websocket",
+        "werkzeug.socket": object(),
+    }, start_response))
+
+    assert body == [b"unauthorized"]
+    assert status["value"] == "401 Unauthorized"
+    assert called == {"fallback": 1, "handle": 0}

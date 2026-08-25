@@ -409,7 +409,7 @@ export NVIS_NEMO_MODEL_SIZE=${NVIS_NEMO_MODEL_SIZE:-56b}
 export NVIS_NEMO_GBS=${NVIS_NEMO_GBS:-$((192*SLURM_NNODES/16))}
 # Parallelism/overlap args. Default: explicit perf config (tp2/pp1/gbs, FSDP off, TE CUDA graphs) —
 # preserves the validated FP8 soak. NVIS_NEMO_RECIPE_DEFAULT=1 drops ALL of these so run_script.py
-# uses the DGXC recipe's built-in optimal parallelism for the model/size/dtype (mirrors Mayo's
+# uses the DGXC recipe's built-in optimal parallelism for the model/size/dtype (mirrors the
 # run_nemotronh.sh, which passed no tp/pp/mb/gb) — use for BF16 where the hardcoded config OOMs.
 if [ "${NVIS_NEMO_RECIPE_DEFAULT:-0}" = 1 ]; then
   export NVIS_NEMO_EXTRA_ARGS=""
@@ -450,7 +450,7 @@ export NVTE_FUSED_ATTN=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NVTE_FWD_LAYERNORM_SM_MARGIN=16
 export NVTE_BWD_LAYERNORM_SM_MARGIN=16
-# Mayo-proven NemotronH perf/stability env (from the delivered DGXC recipe, dgxc-runai/run_nemotronh.sh).
+# delivered NemotronH perf/stability env (DGXC recipe, dgxc-runai/run_nemotronh.sh).
 # NCCL_GRAPH_REGISTER=0 is REQUIRED with expandable_segments + CUDA graphs (else "illegal memory access");
 # the NVTE amax knobs match the recipe. NVLS multicast is controlled outside via NVIS_NEMO_NVLS_ENABLE
 # (set 0 for BF16 to avoid the UserBuffers reduce-scatter / Cuda-226 multicast failure seen on GB200).

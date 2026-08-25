@@ -22,7 +22,7 @@ import TextField from "@mui/material/TextField";
 import LinearProgress from "@mui/material/LinearProgress";
 import { Text, Button } from "@nvidia/foundations-react-core";
 import { fetchSlurmJson } from "../lib/slurmHelpers";
-import { parseSinfoRStdout } from "../lib/parseSinfoRStdout";
+import { parseSinfoRStdout, schedulerNodeReasonsTable } from "../lib/parseSinfoRStdout";
 import { slurmReasonTone, slurmToneColor } from "../lib/slurmReasonTone";
 import { useSortedPagedRows } from "../hooks/useSortedPagedRows";
 import { TablePager } from "./TablePager";
@@ -91,7 +91,11 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
       }
       const out = data.stdout != null ? String(data.stdout) : "";
       setStdout(out);
-      setParsed(parseSinfoRStdout(out));
+      setParsed(
+        Array.isArray(data.nodes) && data.nodes.length
+          ? schedulerNodeReasonsTable(data.nodes)
+          : parseSinfoRStdout(out)
+      );
       if (data.ok && data.stderr && String(data.stderr).trim()) {
         setStderrNote(`stderr:\n${String(data.stderr).trim()}`);
       }

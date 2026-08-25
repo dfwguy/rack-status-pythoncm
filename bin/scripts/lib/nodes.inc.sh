@@ -12,8 +12,8 @@
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
 #
 # Source (do not execute). Extracted from run_llmb_nccl.sh so any launcher can
-# reuse the rack->node mapping. A rack id (e.g. MEL01-HC07-RK0105 or a Boston
-# bos01-b06) is NOT a Slurm hostname, so it has to be mapped. In priority order:
+# reuse the rack->node mapping. An Nscale rack id is not itself a node hostname,
+# so it has to be mapped. In priority order:
 #
 #   1. RACK_TO_NODE_SED + RACK_NODE_MATCH_SUFFIX — explicit per-site override. sed
 #      turns the rack id into a node-name prefix; the suffix regex is appended when
@@ -85,9 +85,7 @@ nvis_nodes_rack_of() {
 
 # Candidate anchored regexes matching a rack id's Slurm nodes, most specific first.
 # See the header for the precedence rules. The built-in conventions cover:
-#   MEL01      MEL01-HC07-RK0105          -> MEL01-HC07-SVR-CN0105<digits>
 #   NscaleTX   ink50-dh01-h18             -> ink50-dh01-h18-11
-#   Boston     bos01-a05                  -> bos01-a05-11-s1-dgx-01-c01
 # The hyphen in candidates 2/3 is what the old bare default lacked: '[0-9]+$' glued
 # straight onto the rack id can never match a '<rack>-<tray>' hostname.
 _nvis_nodes_candidates() {

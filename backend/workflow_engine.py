@@ -47,6 +47,11 @@ RUNS_DIR = WORKFLOWS_DIR / "runs"
 
 _runs_lock = threading.Lock()
 _active_runs: dict[str, dict] = {}
+# Native scheduler objects cannot be serialized, so keep them beside the
+# durable provider/reference recorded on each run. This lets an in-process
+# cancel reach the exact PythonCM/Slurm child while state.json remains useful
+# for recovery, reporting, and best-effort cancellation after a restart.
+_active_scheduler_jobs: dict[str, dict[str, Any]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +165,10 @@ def _save_run(run: dict) -> None:
     run_path = _run_dir(run_id)
     run_path.mkdir(parents=True, exist_ok=True)
     path = run_path / "state.json"
-    tmp = path.with_suffix(".tmp")
+    # Scheduler completion and an operator cancel can save concurrently. A
+    # shared `state.tmp` lets one writer replace the other's temp file; use a
+    # unique sibling while retaining atomic os.replace semantics.
+    tmp = run_path / f".state.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(run, f, indent=2, default=str)
     tmp.replace(path)
@@ -418,10 +426,69 @@ def cancel_run(run_id: str) -> dict:
 
     run["state"] = "cancelled"
     run["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    active_meta = dict(run.get("active_scheduler") or {})
+    if active_meta:
+        active_meta["state"] = "cancel_requested"
+        run["active_scheduler"] = active_meta
     with _runs_lock:
         _active_runs[run_id] = run
+        active_native = _active_scheduler_jobs.get(run_id)
+        cancel_claimed = bool(active_native and not active_native.get("cancel_dispatched"))
+        if cancel_claimed and active_native:
+            active_native["cancel_dispatched"] = True
     _save_run(run)
-    return {"run_id": run_id, "state": "cancelled"}
+
+    cancel_error = ""
+    cancel_dispatched = False
+    provider = str(active_meta.get("provider") or "")
+    scheduler_ref = str(active_meta.get("scheduler_ref") or "")
+    try:
+        if active_native and cancel_claimed:
+            active_native["scheduler"].cancel(active_native["handle"])
+            cancel_dispatched = True
+        elif active_native:
+            cancel_dispatched = True
+        elif provider and scheduler_ref:
+            # The web process may have restarted while native work continued.
+            # Rebuild the provider from the persisted workflow step and cancel
+            # the exact native reference rather than merely changing UI state.
+            from schedulers import JobHandle, build_scheduler
+
+            wf = get_workflow(str(run.get("workflow_id") or "")) or {}
+            step = next(
+                (
+                    item for item in wf.get("steps", [])
+                    if str(item.get("id") or "") == str(active_meta.get("step_id") or "")
+                ),
+                {},
+            )
+            conn, profile = _resolve_step_connection(step)
+            sched = build_scheduler(provider, connection=conn, profile=profile)
+            sched.cancel(JobHandle(job_id=scheduler_ref, kind=provider))
+            cancel_dispatched = True
+    except Exception as exc:
+        if active_native:
+            with _runs_lock:
+                active_native["cancel_dispatched"] = False
+        cancel_error = str(exc)
+        _logger.exception("Workflow %s child cancellation failed", run_id)
+
+    run["cancel"] = {
+        "provider": provider,
+        "scheduler_ref": scheduler_ref,
+        "dispatched": cancel_dispatched,
+        "error": cancel_error,
+        "requested_at": run["updated_at"],
+    }
+    _save_run(run)
+    return {
+        "run_id": run_id,
+        "state": "cancelled",
+        "provider": provider,
+        "scheduler_ref": scheduler_ref,
+        "cancel_dispatched": cancel_dispatched,
+        **({"cancel_error": cancel_error} if cancel_error else {}),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +562,7 @@ def _execute_run(run_id: str) -> None:
         if step_type == "automated":
             success, output = _execute_automated_step(run, step)
             _eval_meta = run.get("evaluations", {}).get(step_id, {})
+            scheduler_meta = dict(run.get("step_schedulers", {}).get(step_id, {}))
             run["history"].append({
                 "step_id": step_id,
                 "type": "automated",
@@ -504,7 +572,15 @@ def _execute_run(run_id: str) -> None:
                 "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 **({"message": _eval_meta["message"]} if _eval_meta.get("message") else {}),
                 **({"prompt": _eval_meta["prompt"]} if _eval_meta.get("prompt") else {}),
+                **({"scheduler": scheduler_meta} if scheduler_meta else {}),
+                **({"cancelled": True} if run.get("state") == "cancelled" else {}),
             })
+            # Cancellation can race with the blocking scheduler wait. Never let
+            # the wait result overwrite the durable cancelled terminal state.
+            if run.get("state") == "cancelled":
+                run["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                _save_run(run)
+                return
             if not success:
                 run["had_failure"] = True
             # ``continue_on_failure`` (workflow-level): keep walking the sequence past a
@@ -532,6 +608,9 @@ def _execute_run(run_id: str) -> None:
             run["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             _save_run(run)
             time.sleep(delay_sec)
+            if run.get("state") == "cancelled":
+                _save_run(run)
+                return
             output += f"[Delay] Completed after {delay_sec}s."
             _save_step_output(run["run_id"], step_id, output)
             run["history"].append({
@@ -755,9 +834,65 @@ def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
             connection=conn,
             profile=profile,
         )
+        if run.get("state") == "cancelled":
+            out = "[Scheduler cancelled] workflow was cancelled before native submission"
+            _save_step_output(run_id, step_id, out)
+            return False, out
         handle = sched.submit(spec)
         _logger.info("Workflow %s step %s submitted job %s via %s", run_id, step_id, handle.job_id, sched.kind)
-        result = sched.wait(handle, timeout=spec.timeout)
+        scheduler_meta = {
+            "step_id": step_id,
+            "provider": sched.kind,
+            "scheduler_ref": str(handle.job_id),
+            "state": "submitted",
+            "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        run.setdefault("step_schedulers", {})[step_id] = scheduler_meta
+        run["active_scheduler"] = dict(scheduler_meta)
+        with _runs_lock:
+            _active_scheduler_jobs[run_id] = {
+                "scheduler": sched,
+                "handle": handle,
+                "step_id": step_id,
+            }
+        _save_run(run)
+        # submit() itself can block. If cancellation won while it was waiting,
+        # immediately kill the newly-created child before entering wait().
+        if run.get("state") == "cancelled":
+            try:
+                with _runs_lock:
+                    current = _active_scheduler_jobs.get(run_id) or {}
+                    already_dispatched = bool(current.get("cancel_dispatched"))
+                    if not already_dispatched:
+                        current["cancel_dispatched"] = True
+                if not already_dispatched:
+                    sched.cancel(handle)
+                scheduler_meta["state"] = "CANCELLED"
+            finally:
+                with _runs_lock:
+                    _active_scheduler_jobs.pop(run_id, None)
+                run["active_scheduler"] = None
+                run.setdefault("step_schedulers", {})[step_id] = scheduler_meta
+                _save_run(run)
+            out = (
+                f"[Scheduler cancelled] provider={sched.kind} "
+                f"job={handle.job_id} before wait"
+            )
+            _save_step_output(run_id, step_id, out)
+            return False, out
+        try:
+            result = sched.wait(handle, timeout=spec.timeout)
+        finally:
+            with _runs_lock:
+                current = _active_scheduler_jobs.get(run_id)
+                if current and current.get("handle") is handle:
+                    _active_scheduler_jobs.pop(run_id, None)
+        scheduler_meta["state"] = str(result.state)
+        scheduler_meta["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        run.setdefault("step_schedulers", {})[step_id] = scheduler_meta
+        if str((run.get("active_scheduler") or {}).get("scheduler_ref") or "") == str(handle.job_id):
+            run["active_scheduler"] = None
+        _save_run(run)
         out = result.stdout or ""
         out += f"\n--- scheduler={sched.kind} job={result.job_id} state={result.state} ---\n"
         success, out = _apply_evaluation(run, step, result.returncode, result.stdout or "",

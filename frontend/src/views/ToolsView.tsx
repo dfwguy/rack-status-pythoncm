@@ -902,7 +902,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
       .map((s) => s.trim())
       .filter(Boolean);
     if (racks.length === 0) {
-      setLlmbError("Enter one or more NVIS rack ids (e.g. MEL01-HC07-RK0105).");
+      setLlmbError("Enter one or more Nscale rack ids (e.g. ink50-dh01-h04).");
       return;
     }
     setLlmbLoading(true);
@@ -1177,7 +1177,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Runs <Box component="code" sx={{ fontSize: "0.85em" }}>run_llmb_nccl.sh</Box> (
           <Box component="code" sx={{ fontSize: "0.85em" }}>llmb-run submit -w microbenchmark_nccl -d fp8</Box>, MOP §7.3). Enter
-          one or more NVIS rack ids (e.g. <Box component="code" sx={{ fontSize: "0.85em" }}>MEL01-HC07-RK0105</Box>);
+          one or more Nscale rack ids (e.g. <Box component="code" sx={{ fontSize: "0.85em" }}>ink50-dh01-h04</Box>);
           multiple racks run the cross-rack form. The wrapper resolves real PythonCM-managed compute nodes and computes GPU scale (nodes×4; 72 per GB300 NVL72
           rack). Use <strong>Dry run</strong> to print the resolved <Box component="code" sx={{ fontSize: "0.85em" }}>llmb-run</Box>{" "}
           command without submitting.
@@ -1189,7 +1189,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             fullWidth
             value={llmbRacks}
             onChange={(e) => setLlmbRacks(e.target.value)}
-            placeholder="MEL01-HC07-RK0105"
+            placeholder="ink50-dh01-h04"
           />
           <FormControlLabel
             control={<Checkbox checked={llmbDryRun} onChange={(e) => setLlmbDryRun(e.target.checked)} size="small" />}
@@ -1465,7 +1465,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             fullWidth
             value={cudaNcclBuildHost}
             onChange={(e) => persistCudaNcclBuildHost(e.target.value)}
-            placeholder="e.g. p22-r05-ct01"
+            placeholder="e.g. ink50-dh01-h04-11"
             helperText="Suggestions from rack status (physical_rf0); you may type any reachable hostname."
             slotProps={{ input: { inputProps: { list: "nvis-cuda-nccl-build-hosts" } } }}
           />
@@ -1672,7 +1672,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             fullWidth
             value={nvloomBuildHost}
             onChange={(e) => persistNvloomBuildHost(e.target.value)}
-            placeholder="e.g. p22-r05-ct01"
+            placeholder="e.g. ink50-dh01-h04-11"
             helperText="Suggestions from rack status (physical_rf0); you may type any reachable hostname."
             slotProps={{ input: { inputProps: { list: "nvis-nvloom-build-hosts" } } }}
           />

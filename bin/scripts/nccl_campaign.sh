@@ -8,7 +8,7 @@
 # disclosure or distribution of this material and related documentation
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
-# nccl_campaign.sh — post-fix NCCL microbenchmark validation campaign (FIRMUS/MEL01).
+# nccl_campaign.sh — explicit Nscale NCCL microbenchmark validation campaign.
 #
 # Runs single (72) -> double (144) -> quad (288) GPU tiers of
 # `llmb-run microbenchmark_nccl` across the healthy rack pool, collecting the
@@ -34,15 +34,22 @@ GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
 POLL="${POLL:-30}"
 TIER_TIMEOUT="${TIER_TIMEOUT:-$((90 * 60))}"
 
-# Candidate rack pool (PM target list, excl HC07-RK0116 NVLink HW). The live
-# FULL-idle filter decides what actually runs each tier.
-CANDIDATES=(
-  HC07-RK0103 HC07-RK0104 HC07-RK0105 HC07-RK0112 HC07-RK0115
-  HC07-RK0208 HC07-RK0213 HC07-RK0215 HC07-RK0216
-  HC08-RK0101 HC08-RK0102 HC08-RK0104 HC08-RK0107 HC08-RK0110
-  HC08-RK0112 HC08-RK0203 HC08-RK0204 HC08-RK0209 HC08-RK0210
-  HC08-RK0212 HC08-RK0213 HC08-RK0214
-)
+# Never ship a hidden site rack pool. The operator must supply reviewed Nscale
+# rack ids (comma or space separated), for example:
+# NVIS_NCCL_CAMPAIGN_RACKS='ink50-dh01-h04 ink50-dh01-h05'
+_campaign_racks="${NVIS_NCCL_CAMPAIGN_RACKS:-}"
+_campaign_racks="${_campaign_racks//,/ }"
+read -r -a CANDIDATES <<<"${_campaign_racks}"
+[ "${#CANDIDATES[@]}" -gt 0 ] || {
+  echo "FATAL: set NVIS_NCCL_CAMPAIGN_RACKS to approved Nscale rack ids" >&2
+  exit 2
+}
+for _rack in "${CANDIDATES[@]}"; do
+  [[ "${_rack}" =~ ^ink[0-9]+-dh[0-9]+-[a-z][0-9]+$ ]] || {
+    echo "FATAL: non-Nscale or invalid rack id: ${_rack}" >&2
+    exit 2
+  }
+done
 
 # --- Slurm + venv on PATH (non-login shell) ------------------------------------
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -66,8 +73,8 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "${LOG}"; }
 full_idle_candidates() {
   local live
   live="$(sinfo -N -h -o '%t %N' 2>/dev/null | awk -v N="${NODES_PER_RACK}" '
-    $1=="idle" && match($2,/HC[0-9]+-SVR-CN[0-9]{6}$/){
-      hc=substr($2,index($2,"HC"),4); rk=substr($2,length($2)-5,4); c[hc"-RK"rk]++
+    $1=="idle" && match($2,/^ink[0-9]+-dh[0-9]+-[a-z][0-9]+-[0-9]+$/){
+      rack=$2; sub(/-[0-9]+$/, "", rack); c[rack]++
     } END{for(k in c) if(c[k]>=N) print k}')"
   local rk
   for rk in "${CANDIDATES[@]}"; do
@@ -77,12 +84,10 @@ full_idle_candidates() {
 
 # Echo a bracketed Slurm nodelist of the first NODES_PER_RACK idle nodes in a rack.
 rack_nodelist() {
-  local rk="$1" hc num pref
-  hc="${rk%%-RK*}"; num="${rk#*-RK}"
-  pref="MEL01-${hc}-SVR-CN${num}"
+  local rk="$1"
   local nodes csv
   mapfile -t nodes < <(sinfo -N -h -o '%t %N' 2>/dev/null \
-    | awk -v P="${pref}" '$1=="idle" && $2 ~ ("^"P"[0-9][0-9]$"){print $2}' \
+    | awk -v P="${rk}-" '$1=="idle" && index($2,P)==1 && $2 ~ /-[0-9]+$/{print $2}' \
     | sort -u | head -"${NODES_PER_RACK}")
   [ "${#nodes[@]}" -ge "${NODES_PER_RACK}" ] || return 1
   csv="$(IFS=,; echo "${nodes[*]}")"

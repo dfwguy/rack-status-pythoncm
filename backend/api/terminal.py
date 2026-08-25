@@ -39,6 +39,8 @@ import termios
 import threading
 import time
 import uuid
+from collections.abc import Callable
+from http.cookies import SimpleCookie
 
 import host_exec
 from core import truthy_env
@@ -205,8 +207,13 @@ class _WebSocketTerminalMiddleware:
     one (e.g. from a pop-out tab) can reattach to the same PTY.
     """
 
-    def __init__(self, wsgi_app):  # type: ignore[no-untyped-def]
+    def __init__(
+        self,
+        wsgi_app,
+        authorized: Callable[[dict], bool] | None = None,
+    ):  # type: ignore[no-untyped-def]
         self.wsgi_app = wsgi_app
+        self.authorized = authorized or (lambda _environ: True)
         self._sessions: dict[str, _TerminalSession] = {}
         self._sessions_lock = threading.Lock()
 
@@ -218,7 +225,16 @@ class _WebSocketTerminalMiddleware:
         # websocket before claiming this path. simple_websocket writes the HTTP 101
         # response on the raw socket and never calls start_response; Werkzeug still
         # finalizes with write(b""), so we must call start_response before returning.
-        if path == "/ws/terminal" and upgrade == "websocket" and has_socket and _TERMINAL_ENABLED:
+        if (
+            path == "/ws/terminal"
+            and upgrade == "websocket"
+            and has_socket
+            and _TERMINAL_ENABLED
+        ):
+            if not self.authorized(environ):
+                # Delegate to Flask so its normal /ws authentication response is
+                # returned before any socket upgrade or PTY allocation occurs.
+                return self.wsgi_app(environ, start_response)
             try:
                 self._handle_terminal(environ)
             finally:
@@ -415,4 +431,24 @@ def install(app) -> None:  # type: ignore[no-untyped-def]
     if not _TERMINAL_ENABLED:
         _logger.info("web terminal disabled (RACK_ENABLE_WEB_TERMINAL)")
         return
-    app.wsgi_app = _WebSocketTerminalMiddleware(app.wsgi_app)
+    def authorized(environ: dict) -> bool:
+        if truthy_env("RACK_WEB_AUTH_DISABLED"):
+            return True
+        try:
+            cookies = SimpleCookie()
+            cookies.load(str(environ.get("HTTP_COOKIE") or ""))
+            cookie_name = str(app.config.get("SESSION_COOKIE_NAME") or "session")
+            morsel = cookies.get(cookie_name)
+            serializer = app.session_interface.get_signing_serializer(app)
+            if morsel is None or serializer is None:
+                return False
+            values = serializer.loads(
+                morsel.value,
+                max_age=int(app.permanent_session_lifetime.total_seconds()),
+            )
+            return isinstance(values, dict) and values.get("rack_web_auth") == "1"
+        except Exception:
+            _logger.debug("terminal websocket session authentication failed", exc_info=True)
+            return False
+
+    app.wsgi_app = _WebSocketTerminalMiddleware(app.wsgi_app, authorized=authorized)
