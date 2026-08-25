@@ -1,0 +1,307 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+# Author: Rafael M. Koike & Cursor Agent ("Ada")
+"""SRP-6a enrolment and the server half of the exchange (FR-4, FR-4a, FR-4b, FR-4e).
+
+The password never reaches this process. A client proves it knows one; the server holds only a salt
+and a verifier, from which the password cannot be recovered. That is worth having even with TLS in
+front, because it means no proxy, memory dump or debug log can contain a credential that does not
+exist here in the first place.
+
+Three things in this module are easy to get wrong, so each is stated rather than left to the reader:
+
+**The library's defaults are unsafe** (FR-4e). ``srp`` 1.0.22 defaults to ``hash_alg=0`` — SHA-1 —
+and ``salt_len=4``, a 32-bit salt. A reasonable-looking ``create_salted_verification_key(user, pw)``
+therefore enrols a SHA-1 credential and nothing fails. Every parameter here is explicit, and
+``test_identity_srp.py`` asserts the defaults are *not* in use rather than only asserting the result.
+
+**An unknown login must cost and look the same as a wrong password** (FR-4b). Otherwise the login
+form is a user-enumeration oracle. The synthetic path below derives a *deterministic* salt and
+pseudo-password from the server secret, so probing the same unknown login twice returns the same
+salt — a fresh random salt each time would itself reveal non-existence, including across a restart.
+
+**The exchange is stateful, and the state is the attack surface.** SRP-6a needs two round trips with
+a server-held ephemeral value in between. That table is bounded (an unauthenticated caller must not
+be able to exhaust memory by starting exchanges it never finishes), single-use under a lock (a
+check-then-delete is a replay window), and expiring.
+
+Single process, several threads: the deployment runs ``gunicorn --workers 1 --threads N
+--worker-class gthread``. **A second worker would split this table and break login intermittently**
+— see :func:`assert_single_worker_safe`.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import os
+import secrets as _secrets
+import threading
+import time
+from dataclasses import dataclass
+from typing import Any
+
+import srp as _srp
+from srp import _pysrp
+
+from identity.models import canonical_login
+
+# --- Parameters. Explicit at every call site, per FR-4e. -----------------------------------------
+#: SHA-256, not the library's SHA-1 default.
+HASH_ALG = _srp.SHA256
+#: 2048-bit group. Also the library default, stated anyway so a default change cannot silently
+#: weaken it and so the three parameters read as one decision.
+NG_TYPE = _srp.NG_2048
+#: 32 bytes, not the library's 4.
+SALT_LEN = 32
+
+#: How long a started exchange stays completable. Seconds, because the client's second call follows
+#: immediately; a longer window only widens the replay and memory surface.
+CHALLENGE_TTL_SECONDS = 60
+#: Bounded so unfinished exchanges cannot accumulate. 512 concurrent logins is far beyond the
+#: 20-operator design target (NFR-7), and the oldest is evicted rather than the newest refused --
+#: refusing the newest would let an attacker lock out real logins by filling the table.
+MAX_CHALLENGES = 512
+
+
+class SrpError(Exception):
+    """An exchange that cannot proceed. Deliberately says little; the caller maps it to a uniform
+    failure so a client cannot distinguish causes (FR-4b)."""
+
+
+# --- Enrolment ------------------------------------------------------------------------------------
+
+
+def _hash_class() -> Any:
+    return _pysrp._hash_map[HASH_ALG]
+
+
+def verifier_for_salt(login: str, password: str, salt: bytes) -> bytes:
+    """The verifier for a **chosen** salt.
+
+    ``create_salted_verification_key`` generates its own random salt and offers no way to supply
+    one, which the synthetic path needs (a decoy salt must be reproducible). This is not
+    reimplemented cryptography: it is the library's own expression, ``g ** gen_x(...) mod N``, called
+    with our salt instead of theirs, using their ``gen_x`` and their group.
+
+    It does reach into ``_pysrp`` for ``gen_x`` and the hash map, which is private API. That is why
+    ``test_derived_verifier_matches_the_library`` exists: it asserts this function reproduces
+    ``create_salted_verification_key``'s output for the same salt, so a library change fails a test
+    instead of silently breaking authentication.
+    """
+    n, g = _pysrp.get_ng(NG_TYPE, None, None)
+    x = _pysrp.gen_x(_hash_class(), salt, login.encode(), password.encode())
+    return _pysrp.long_to_bytes(pow(g, x, n))
+
+
+def enroll(login: str, password: str) -> tuple[str, str]:
+    """``(salt_hex, verifier_hex)`` for a new or changed password (FR-3).
+
+    Hex rather than base64: the store is JSON a human may need to read while debugging, and 512
+    characters per user at a 20-operator scale is not worth optimising.
+    """
+    key = canonical_login(login)
+    if not password:
+        raise SrpError("password must not be empty")
+    salt = _secrets.token_bytes(SALT_LEN)
+    verifier = verifier_for_salt(key, password, salt)
+    return salt.hex(), verifier.hex()
+
+
+# --- The decoy credential for an unknown login (FR-4b) --------------------------------------------
+
+
+def _server_secret() -> bytes:
+    """Keyed material for the synthetic credential.
+
+    ``RACK_WEB_SECRET_KEY`` is bootstrapped into the environment by ``app.py`` from
+    ``var/secrets/.rack_web_secret_key``, so it is stable across restarts — which is the property
+    that matters here: a decoy salt must not change between two probes of the same unknown login.
+
+    Read from the environment rather than by importing ``app``: an ``identity`` module importing
+    ``app`` would recreate the dependency cycle ``backend/api/`` exists to remove.
+    """
+    raw = (os.environ.get("RACK_WEB_SECRET_KEY") or "").strip()
+    if not raw:
+        # No secret yet (a bare import in a test, say). A per-process value keeps the exchange
+        # uniform within this process, which is all an unauthenticated prober can observe in one
+        # session; it is not persisted because there is nowhere agreed to persist it from here.
+        raw = _PROCESS_FALLBACK_SECRET
+    return hashlib.sha256(raw.encode()).digest()
+
+
+_PROCESS_FALLBACK_SECRET = _secrets.token_hex(32)
+
+
+def synthetic_credential(login: str) -> tuple[bytes, bytes]:
+    """A deterministic decoy ``(salt, verifier)`` for a login that does not exist.
+
+    Deterministic is the whole point. A random salt per probe would make an unknown login
+    distinguishable from a known one by asking twice, which is exactly the enumeration FR-4b
+    forbids — and it would differ across a restart too, where a real user's salt does not.
+
+    The pseudo-password is derived and never revealed, so the exchange completes the same shape of
+    work as a real one and then fails at the proof, which is what a wrong password does.
+    """
+    key = canonical_login(login)
+    secret = _server_secret()
+    salt = hmac.new(secret, b"srp-salt:" + key.encode(), hashlib.sha256).digest()[:SALT_LEN]
+    pseudo = hmac.new(secret, b"srp-pw:" + key.encode(), hashlib.sha256).hexdigest()
+    return salt, verifier_for_salt(key, pseudo, salt)
+
+
+# --- The exchange ---------------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class _Challenge:
+    login: str
+    verifier: Any  # srp.Verifier — holds the ephemeral private value between the two round trips
+    created: float
+    real: bool  # False for the decoy path; never told to the client
+
+
+class _ChallengeTable:
+    """Bounded, single-use, expiring, thread-safe.
+
+    Each property is here because of a specific failure: unbounded lets an unauthenticated caller
+    exhaust memory with exchanges it never finishes; multi-use is a replay window; unexpiring keeps
+    ephemeral key material alive indefinitely; and unlocked ``pop`` under ``gthread`` means two
+    threads can both consume one challenge.
+    """
+
+    def __init__(self) -> None:
+        self._items: dict[str, _Challenge] = {}
+        self._lock = threading.Lock()
+
+    def put(self, challenge: _Challenge) -> str:
+        token = _secrets.token_urlsafe(24)
+        with self._lock:
+            self._evict_expired_locked()
+            if len(self._items) >= MAX_CHALLENGES:
+                # Drop the oldest rather than refuse the newest: refusing would let a flood of
+                # unfinished exchanges deny login to real operators.
+                oldest = min(self._items, key=lambda k: self._items[k].created)
+                self._items.pop(oldest, None)
+            self._items[token] = challenge
+        return token
+
+    def take(self, token: str) -> _Challenge | None:
+        """Removes and returns in one atomic step. Never a get-then-delete."""
+        with self._lock:
+            self._evict_expired_locked()
+            return self._items.pop(token or "", None)
+
+    def _evict_expired_locked(self) -> None:
+        cutoff = time.monotonic() - CHALLENGE_TTL_SECONDS
+        for token in [t for t, c in self._items.items() if c.created < cutoff]:
+            self._items.pop(token, None)
+
+    def __len__(self) -> int:
+        with self._lock:
+            self._evict_expired_locked()
+            return len(self._items)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+
+
+_challenges = _ChallengeTable()
+
+
+def begin(
+    login: str, a_hex: str, salt_hex: str = "", verifier_hex: str = ""
+) -> tuple[str, str, str]:
+    """Round trip 1: ``(challenge_token, salt_hex, B_hex)``.
+
+    Takes the client's public value ``A``, because SRP-6a has the client send it alongside the
+    username and the server cannot compute ``B`` without it. (Worth stating: a first draft of this
+    module tried to answer with a salt and ``B`` before ``A`` arrived, which the maths does not
+    allow — so the protocol is one request in, one response out, not three legs.)
+
+    Pass the stored ``salt_hex``/``verifier_hex`` for a login that exists. Omit them and the decoy
+    path runs, which is what makes an unknown login indistinguishable — **the caller must not branch
+    on existence in a way the response reveals**, which is why the return shape is identical either
+    way and ``real`` is kept server-side.
+    """
+    key = canonical_login(login)
+    real = bool(salt_hex and verifier_hex)
+    salt, verifier = (
+        (bytes.fromhex(salt_hex), bytes.fromhex(verifier_hex))
+        if real
+        else synthetic_credential(key)
+    )
+    try:
+        a_bytes = bytes.fromhex(a_hex)
+    except ValueError as exc:
+        raise SrpError("malformed client public value") from exc
+
+    svr = _srp.Verifier(
+        key, salt, verifier, a_bytes, hash_alg=HASH_ALG, ng_type=NG_TYPE
+    )
+    s, b = svr.get_challenge()
+    if s is None or b is None:
+        # The library refuses a degenerate A (A mod N == 0). Uniform failure, no detail.
+        raise SrpError("authentication failed")
+    token = _challenges.put(_Challenge(login=key, verifier=svr, created=time.monotonic(), real=real))
+    return token, s.hex(), b.hex()
+
+
+def finish(token: str, m_hex: str) -> tuple[str, bytes]:
+    """Round trip 2: verify the client's proof, return ``(HAMK_hex, session_key)``.
+
+    Raises :class:`SrpError` for every failure — unknown token, expired token, bad proof, decoy
+    path — so the caller has nothing to leak. The challenge is consumed whether or not the proof
+    verifies, which makes a wrong guess cost a new exchange rather than allowing retries against one
+    ``B``.
+    """
+    challenge = _challenges.take(token)
+    if challenge is None:
+        raise SrpError("authentication failed")
+    try:
+        m = bytes.fromhex(m_hex)
+    except ValueError as exc:
+        raise SrpError("authentication failed") from exc
+
+    hamk = challenge.verifier.verify_session(m)
+    if hamk is None or not challenge.verifier.authenticated() or not challenge.real:
+        # `not challenge.real` is last on purpose: the decoy exchange has already done the same work,
+        # so the refusal costs what a real wrong password costs.
+        raise SrpError("authentication failed")
+    return hamk.hex(), challenge.verifier.get_session_key()
+
+
+# --- Operational guards ---------------------------------------------------------------------------
+
+
+def pending_count() -> int:
+    """Open exchanges. For a health endpoint, and for the test that proves the bound holds."""
+    return len(_challenges)
+
+
+def reset_for_tests() -> None:
+    _challenges.clear()
+
+
+def assert_single_worker_safe(workers: int) -> None:
+    """Raise if the deployment would split the challenge table across processes.
+
+    The table is in-process, so a second worker means round trip 2 can land on a worker that never
+    saw round trip 1 — an intermittent login failure that looks like a client bug. The Dockerfile
+    pins ``--workers 1``; this exists so raising it fails loudly at startup instead of producing a
+    login that works about half the time.
+    """
+    if workers > 1:
+        raise SrpError(
+            f"SRP login holds per-exchange state in process memory and cannot span "
+            f"{workers} workers. Either run --workers 1 or move the challenge table to a shared "
+            "store (see the Phase 2 brief, design open question A)."
+        )

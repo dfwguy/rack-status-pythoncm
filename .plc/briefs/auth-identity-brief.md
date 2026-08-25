@@ -435,10 +435,15 @@ engine would make the identifier a migration if the other wins. The typed pair f
 
 ### Decision 2 — the SRP exchange needs bounded server state, and that is the interesting part
 
-SRP-6a is two round trips: the client sends a username and gets a salt plus the server's public
-value; it then sends its own public value and a proof, and gets the server's proof back. Between
-those calls the server holds an ephemeral private value. That is **state in a stateless API**, and it
-is where an SRP implementation usually goes wrong.
+SRP-6a is two round trips: the client sends a username **and its public value `A`** and gets back a
+salt plus the server's public value `B`; it then sends a proof and gets the server's proof back.
+Between those calls the server holds an ephemeral private value. That is **state in a stateless
+API**, and it is where an SRP implementation usually goes wrong.
+
+*(Corrected during implementation, 2026-08-25. This paragraph previously had `A` arriving in the
+second leg, which would make the exchange three legs. The server cannot compute `B` without `A` —
+`srp.Verifier` requires it at construction — so the first draft of `identity/srp.py` had a `begin()`
+that could not work and was deleted rather than kept as a stub.)*
 
 The design: a short-lived in-process challenge table keyed by an opaque id, bounded in size and
 expiring in seconds, holding only the ephemeral values. Three properties it must have, each because
@@ -452,14 +457,37 @@ of a specific failure:
   username and a server secret, at comparable cost. A real implementation that skips this leaks the
   user list through timing or through an obviously different response.
 
+**Two things implementation added to the uniformity requirement**, both because "deterministic" and
+"comparable cost" are easy to write and easy to miss:
+
+*Deterministic needs a salt the library will not let you choose.*
+`create_salted_verification_key` generates its own random salt and accepts none, so a decoy built
+with it returns a **different salt on every probe** — which reveals non-existence by asking twice,
+and differs across a restart where a real user's salt does not. `identity.srp.verifier_for_salt`
+therefore computes `g ** gen_x(...) mod N` using the library's own `gen_x` and group with our salt.
+That reaches into `srp._pysrp`, which is private API, so
+`test_derived_verifier_matches_the_library` asserts it reproduces `create_salted_verification_key`
+for the same salt — a library change then fails a test instead of silently breaking login. The salt
+and the pseudo-password are HMACs keyed on the persisted `RACK_WEB_SECRET_KEY`, which is what makes
+them stable across a restart.
+
+*Comparable cost is now measured, not intended.* `begin()` was timed at **15.35 ms for an unknown
+login against 13.79 ms for a real one — 1.11x** (medians of 40). A test pins the ratio inside a wide
+band, skipped under `CI` because a timing comparison on a shared runner is noise. The band is wide
+deliberately: it catches an order-of-magnitude mistake such as an early return or a skipped modular
+exponentiation, and does not pretend to be a constant-time proof.
+
 **Thread-safe, not merely bounded.** The deployment runs `gunicorn --workers 1 --threads N
 --worker-class gthread` (verified in the `Dockerfile` entrypoint), so there is one process and
 several concurrent threads. The table therefore needs a lock, and the single-use consumption on
 verify must be atomic — a check-then-delete without one is a replay window. The single worker is also
 why design open question A is deferrable rather than urgent: a second worker would split the table
 and break login, so if the worker count ever rises this becomes a correctness bug, not a slowdown.
-Worth a comment at the call site, since `--workers 1` is in a Dockerfile nobody reads while
-debugging a login.
+
+That last point was implemented as a guard rather than the comment this paragraph originally called
+for: `identity.srp.assert_single_worker_safe(workers)` raises with the reason. A comment does not
+help the person who raised `--workers` for throughput and is now looking at a login that succeeds
+about half the time — an intermittent failure that reads as a client bug and would cost hours.
 
 ### Decision 3 — JWT in an `HttpOnly` cookie, with the algorithm pinned
 
