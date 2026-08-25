@@ -7,12 +7,11 @@
 # disclosure or distribution of this material and related documentation
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
-"""Scheduler-neutral runtime facts used by Rack Status routes.
+"""Hybrid Nscale scheduler runtime facts used by Rack Status routes.
 
-The Nscale frontend calls only provider-neutral scheduler URLs; historical
-Slurm URL aliases return 404 in PythonCM mode. Some persisted fields retain old
-names for data compatibility. This module prevents those names from turning
-into Slurm command execution when the deployment selects PythonCM.
+The Nscale frontend calls provider-neutral scheduler URLs. Historical Slurm URL
+aliases remain for client compatibility. PythonCM is the primary provider;
+numeric Slurm references are accepted only for explicit feature fallbacks.
 
 PythonCM command UUIDs are opaque scheduler references.  Completed and active
 work is reconciled from Rack Status' durable validation-activity registry;
@@ -34,6 +33,7 @@ _PYTHONCM_REF_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
     r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
+_SLURM_REF_RE = re.compile(r"^[1-9][0-9]*(?:_[0-9]+)?$")
 _OPEN_STATES = frozenset({
     "PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "SUBMITTED", "COLLECTING",
 })
@@ -63,13 +63,18 @@ def is_pythoncm() -> bool:
     return scheduler_kind() == "pythoncm"
 
 
-def valid_reference(value: object) -> bool:
+def reference_kind(value: object) -> str | None:
     text = str(value or "").strip()
-    if is_pythoncm():
-        return bool(_PYTHONCM_REF_RE.fullmatch(text))
-    # Keep the legacy array-id dialect without importing core (which imports
-    # this module indirectly through app in some test configurations).
-    return bool(re.fullmatch(r"[1-9][0-9]*(?:_[0-9]+)?", text))
+    if _PYTHONCM_REF_RE.fullmatch(text):
+        return "pythoncm"
+    if _SLURM_REF_RE.fullmatch(text):
+        return "slurm"
+    return None
+
+
+def valid_reference(value: object) -> bool:
+    """Accept native PythonCM UUIDs and explicit Slurm fallback job IDs."""
+    return reference_kind(value) is not None
 
 
 def _activity_rows(limit: int = 500) -> list[dict[str, Any]]:
@@ -89,16 +94,16 @@ def jobs(*, active_only: bool = False, limit: int = 500) -> list[dict[str, Any]]
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for activity in _activity_rows(limit):
-        # A deployment may reuse a durable registry written before migration.
-        # Numeric legacy task ids must never become PythonCM queue rows or an
-        # allocation overlay merely because they share the same JSON store.
-        if str(activity.get("scheduler") or "").strip().lower() != "pythoncm":
+        # Provider provenance is mandatory: a UUID cannot masquerade as Slurm,
+        # and a numeric fallback id cannot masquerade as PythonCM.
+        activity_scheduler = str(activity.get("scheduler") or "").strip().lower()
+        if activity_scheduler not in {"pythoncm", "slurm"}:
             continue
         for task in activity.get("tasks") or []:
             if not isinstance(task, dict):
                 continue
             ref = str(task.get("scheduler_ref") or "").strip()
-            if not valid_reference(ref) or ref in seen:
+            if reference_kind(ref) != activity_scheduler or ref in seen:
                 continue
             state = str(task.get("scheduler_state") or task.get("work_phase") or "UNKNOWN")
             state = state.strip().upper().split("+", 1)[0] or "UNKNOWN"
@@ -130,6 +135,7 @@ def jobs(*, active_only: bool = False, limit: int = 500) -> list[dict[str, Any]]
                 "exit_code": str(task.get("returncode") if task.get("returncode") is not None else ""),
                 "stdout": str(task.get("stdout_path") or ""),
                 "activity_id": str(activity.get("activity_id") or ""),
+                "scheduler": activity_scheduler,
             })
     return out
 
@@ -159,10 +165,27 @@ def job(reference: str) -> dict[str, Any] | None:
 
 
 def live_status(reference: str) -> tuple[str, str]:
-    """Return ``(state, stdout_path)`` from PythonCM plus durable metadata."""
+    """Return ``(state, stdout_path)`` from the reference's native provider."""
     ref = str(reference or "").strip()
     if not valid_reference(ref):
         raise ValueError("invalid scheduler reference")
+    if reference_kind(ref) == "slurm":
+        import shlex
+
+        import host_exec
+        from platforms import get_platform
+
+        proc = host_exec.run_slurm_on_host(
+            get_platform().scontrol_cmd(f"show job -o {shlex.quote(ref)}"), timeout=60
+        )
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "scontrol failed").strip())
+        state_match = re.search(r"\bJobState=(\S+)", proc.stdout or "")
+        stdout_match = re.search(r"\bStdOut=(\S+)", proc.stdout or "")
+        if not state_match:
+            raise RuntimeError("scontrol returned no JobState")
+        stdout = stdout_match.group(1) if stdout_match else ""
+        return state_match.group(1).upper(), ("" if stdout in {"/dev/null", "(none)"} else stdout)
     import host_exec
     from schedulers import JobHandle, build_scheduler
 
@@ -178,6 +201,18 @@ def cancel(reference: str) -> None:
     ref = str(reference or "").strip()
     if not valid_reference(ref):
         raise ValueError("invalid scheduler reference")
+    if reference_kind(ref) == "slurm":
+        import shlex
+
+        import host_exec
+        from platforms import get_platform
+
+        proc = host_exec.run_slurm_on_host(
+            get_platform().scancel_cmd(shlex.quote(ref)), timeout=60
+        )
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "scancel failed").strip())
+        return
     import host_exec
     from schedulers import JobHandle, build_scheduler
 
@@ -189,6 +224,9 @@ def cancel(reference: str) -> None:
 
 def active_job_times(wanted: Iterable[str] | None = None) -> tuple[set[str], dict[str, str]]:
     selected = {str(item).strip() for item in (wanted or []) if str(item).strip()}
+    # The 30-second Racks path uses only this durable registry snapshot. Include
+    # known Slurm fallback allocations so the UI does not hide them, but never
+    # poll squeue/sacct/scontrol from this recurring path.
     rows = jobs(active_only=True)
     if selected:
         rows = [row for row in rows if row["job_id"] in selected]

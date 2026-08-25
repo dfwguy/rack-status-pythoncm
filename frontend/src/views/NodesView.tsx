@@ -28,7 +28,9 @@ import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import { Banner, Flex, Tag, Text } from "@nvidia/foundations-react-core";
 import { MultiSelectCombobox } from "../components/MultiSelectCombobox";
-import { Search } from "lucide-react";
+import { Search, Terminal } from "lucide-react";
+import IconButton from "@mui/material/IconButton";
+import Tooltip from "@mui/material/Tooltip";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { type NodeInfo } from "../components/rack/NodeSelector";
@@ -40,6 +42,7 @@ import { NetworkingTab } from "../components/rack/NetworkingTab";
 import { ServicesTab } from "../components/rack/ServicesTab";
 import { ParserResultsDialog } from "../components/ParserResultsDialog";
 import { BringupResultsPanel } from "../components/bringup/BringupResultsPanel";
+import WebTerminalDialog from "../components/rack/WebTerminalDialog";
 import { RackCommandProvider } from "../context/RackCommandProvider";
 import { useActiveCluster } from "../context/ActiveClusterContext";
 import type { RackStatusResponse, RackRow } from "../types/api";
@@ -115,6 +118,7 @@ export function NodesView({ data, logDir }: NodesViewProps) {
   const [selectedId, setSelectedId] = useState<string | null>(linkedNode || null);
   const [tabIndex, setTabIndex] = useState(0);
   const [parserOpen, setParserOpen] = useState(false);
+  const [terminalNode, setTerminalNode] = useState("");
 
   // A page holds exactly one rack, so the page size is that rack's tray count. Cluster geometry
   // overrides the platform's — the same precedence the backend applies in catalog.context.
@@ -303,12 +307,13 @@ export function NodesView({ data, logDir }: NodesViewProps) {
               <TableCell>Row</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>BMC / RedFish</TableCell>
+              <TableCell align="right">Terminal</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {pagedNodes.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5}>
+                <TableCell colSpan={6}>
                   <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
                     {allNodes.length === 0 ? "No nodes reported yet." : "No nodes match the current filters."}
                   </Text>
@@ -359,6 +364,13 @@ export function NodesView({ data, logDir }: NodesViewProps) {
                         {n.ip || "—"}
                       </Text>
                     )}
+                  </TableCell>
+                  <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                    <Tooltip title={`Open terminal to ${n.id}`}>
+                      <IconButton size="small" onClick={() => setTerminalNode(n.id)} aria-label={`Open terminal to ${n.id}`}>
+                        <Terminal size={16} />
+                      </IconButton>
+                    </Tooltip>
                   </TableCell>
                 </TableRow>
               );
@@ -457,6 +469,13 @@ export function NodesView({ data, logDir }: NodesViewProps) {
           </RackCommandProvider>
         )}
       </Box>
+
+      <WebTerminalDialog
+        open={!!terminalNode}
+        onClose={() => setTerminalNode("")}
+        target={terminalNode}
+        mode="node"
+      />
 
     </Box>
   );

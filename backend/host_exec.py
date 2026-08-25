@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import shlex
 import subprocess
 import threading
@@ -575,41 +574,6 @@ def _slurm_module_init_snippet() -> str:
     )
 
 
-_PYTHONCM_FORBIDDEN_EXEC_RE = re.compile(
-    r"(?<![A-Za-z0-9_])(?:cmsh|sinfo|squeue|scontrol|sacct|sbatch|srun|scancel|pdsh)"
-    r"(?![A-Za-z0-9_])|module\s+load\s+slurm|slurm-init\.inc\.sh",
-    re.IGNORECASE,
-)
-_PYTHONCM_FORBIDDEN_WRAPPER_RE = re.compile(
-    r"(?:^|[/\s])(?:run[-_](?:validation|nemo|llama|llmb|nccl|mnubergemm)"
-    r"[^/\s]*|gpu_reset\.sh|services_restart\.sh|sysinfo\.sh|hw_check_pdsh\.sh|"
-    r"nvswitches_rack_audit\.sh|imex_(?:check|reset)\.sh|run_nvlmapper\.sh|"
-    r"bmc-recovery\.sh|install-(?:cuda-nccl|nvloom|dgxc-benchmarking)-workspace\.sh)"
-    r"(?:$|[\s])"
-    r"|\.sbatch(?:$|[\s])",
-    re.IGNORECASE,
-)
-
-
-def _reject_pythoncm_legacy_command(cmd: str | list[str]) -> None:
-    """Fail closed before an Nscale PythonCM path can execute CM/Slurm/pdsh tooling."""
-    kind = (os.environ.get("RACK_SCHEDULER") or "pythoncm").strip().lower()
-    cluster_id = (os.environ.get("RACK_CLUSTER_ID") or "").strip().lower()
-    customer = (os.environ.get("RACK_CLUSTER_CUSTOMER_NAME") or "").strip().lower()
-    nscale = cluster_id == "nscale-tx" or customer == "nscale"
-    if kind != "pythoncm" and not nscale:
-        return
-    display = cmd if isinstance(cmd, str) else shlex.join(str(part) for part in cmd)
-    match = _PYTHONCM_FORBIDDEN_EXEC_RE.search(display)
-    if match is None:
-        match = _PYTHONCM_FORBIDDEN_WRAPPER_RE.search(display)
-    if match:
-        raise RuntimeError(
-            f"legacy cluster command {match.group(0)!r} is forbidden while "
-            "RACK_SCHEDULER=pythoncm"
-        )
-
-
 def run_slurm_on_host(
     shell_cmd: str,
     *,
@@ -623,7 +587,6 @@ def run_slurm_on_host(
     ``module load slurm`` does not pull in bash-completion (the common
     ``FATAL: Missing required source file`` on head nodes).
     """
-    _reject_pythoncm_legacy_command(shell_cmd)
     inner = _slurm_module_init_snippet() + shell_cmd
     conn = _conn()
     if conn.kind == "ssh":
@@ -673,7 +636,6 @@ def run_on_host(
         the launch dialog's "Extra environment variables" field work for keys
         outside the allowlisted prefixes (e.g. ``NCCL_*``).
     """
-    _reject_pythoncm_legacy_command(cmd)
     return _conn().run(
         cmd, timeout=timeout, cwd=cwd, env=env, login_shell=login_shell,
         profile=role or profile, env_extra=env_extra,
@@ -695,7 +657,6 @@ def popen_on_host(
     stays open until ``communicate()`` / ``kill()`` is called. ``role`` is the
     preferred spelling of ``profile`` (see :func:`run_on_host`).
     """
-    _reject_pythoncm_legacy_command(cmd)
     return _conn().popen(cmd, cwd=cwd, env=env, profile=role or profile, env_extra=env_extra)
 
 

@@ -28,7 +28,6 @@ re-materializes the active overlay.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 from flask import Blueprint, jsonify, request
@@ -45,18 +44,6 @@ from .store import (
 _logger = logging.getLogger(__name__)
 
 catalog_bp = Blueprint("catalog", __name__, url_prefix="/api/catalog")
-
-
-def _nscale_locked_response():
-    cluster_id = (os.environ.get("RACK_CLUSTER_ID") or "").strip().lower()
-    customer = (os.environ.get("RACK_CLUSTER_CUSTOMER_NAME") or "").strip().lower()
-    if cluster_id != "nscale-tx" and customer != "nscale":
-        return None
-    return jsonify({
-        "ok": False,
-        "blocked": True,
-        "error": "This deployment is pinned to the Nscale TX project and catalog",
-    }), 409
 
 
 def _err(message: str | list[str], code: int = 400):
@@ -126,8 +113,6 @@ def list_platforms():
 
 @catalog_bp.post("/platforms")
 def create_platform():
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     return _crud_upsert(TABLE_PLATFORMS, models.Platform)
 
 
@@ -138,15 +123,11 @@ def get_platform(doc_id: str):
 
 @catalog_bp.put("/platforms/<doc_id>")
 def update_platform(doc_id: str):
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     return _crud_upsert(TABLE_PLATFORMS, models.Platform, doc_id=doc_id)
 
 
 @catalog_bp.delete("/platforms/<doc_id>")
 def delete_platform(doc_id: str):
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     return _crud_delete(TABLE_PLATFORMS, doc_id)
 
 
@@ -167,8 +148,6 @@ def list_tools():
 
 @catalog_bp.post("/tools")
 def create_tool():
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     return _crud_upsert(TABLE_TOOLS, models.Tool)
 
 
@@ -179,15 +158,11 @@ def get_tool(doc_id: str):
 
 @catalog_bp.put("/tools/<doc_id>")
 def update_tool(doc_id: str):
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     return _crud_upsert(TABLE_TOOLS, models.Tool, doc_id=doc_id)
 
 
 @catalog_bp.delete("/tools/<doc_id>")
 def delete_tool(doc_id: str):
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     return _crud_delete(TABLE_TOOLS, doc_id)
 
 
@@ -203,8 +178,6 @@ def list_projects():
 
 @catalog_bp.post("/projects")
 def create_project():
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     return _crud_upsert(TABLE_PROJECTS, models.Project)
 
 
@@ -215,15 +188,11 @@ def get_project(doc_id: str):
 
 @catalog_bp.put("/projects/<doc_id>")
 def update_project(doc_id: str):
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     return _crud_upsert(TABLE_PROJECTS, models.Project, doc_id=doc_id)
 
 
 @catalog_bp.delete("/projects/<doc_id>")
 def delete_project(doc_id: str):
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     return _crud_delete(TABLE_PROJECTS, doc_id)
 
 
@@ -269,8 +238,6 @@ def get_npi_tool(doc_id: str):
 @catalog_bp.post("/npi-tools/import")
 def import_npi_tools():
     """Re-sync the NPI reference catalog from the configured snapshot/source dir."""
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     from .npi_import import import_npi_catalog
 
     body = _body()
@@ -310,8 +277,6 @@ def get_active():
 
 @catalog_bp.put("/active")
 def set_active():
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     body = _body()
     project_id = (body.get("project") or "").strip()
     cluster_id = (body.get("cluster") or "").strip()
@@ -369,8 +334,6 @@ def get_topology():
 @catalog_bp.put("/topology")
 def set_topology():
     """Replace the active cluster's ``endpoints``/``roles`` and rebuild the transport."""
-    if (blocked := _nscale_locked_response()) is not None:
-        return blocked
     body = _body()
     _project, cluster, _platform = context.resolve()
     if cluster is None:

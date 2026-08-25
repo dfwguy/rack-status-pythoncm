@@ -689,7 +689,7 @@ def _query_scheduler_state_and_stdout(job_id: str) -> tuple[str | None, str | No
     jid = (job_id or "").strip().split(".")[0]
     if not jid or not scheduler_runtime.valid_reference(jid):
         return None, None, "invalid"
-    if scheduler_runtime.is_pythoncm():
+    if scheduler_runtime.reference_kind(jid) == "pythoncm":
         try:
             state, stdout = scheduler_runtime.live_status(jid)
             return state, (stdout or None), "pythoncm"
@@ -1281,18 +1281,6 @@ def _pythoncm_validation_spec(kind: str, prep: dict):
         env=env_updates,
     )
     return spec, nodes
-
-
-def _pythoncm_unsupported_response(kind: str):
-    reason = pythoncm_validation.unsupported_reason(kind)
-    if not reason:
-        return None
-    return jsonify({
-        "ok": False,
-        "scheduler": "pythoncm",
-        "blocked": True,
-        "error": f"{kind} is unavailable in Nscale PythonCM mode: {reason}",
-    }), 501
 
 
 def _start_pythoncm_validation(
@@ -5748,51 +5736,6 @@ def _prepare_power_reset(body: dict) -> tuple[dict[str, object] | None, tuple[ob
     return {"specs": specs}, None
 
 
-def _pythoncm_blocked_action(
-    action: str, reason: str
-) -> tuple[None, tuple[object, int]]:
-    """Return a synchronous fail-closed response before any legacy worker starts."""
-    return None, (
-        jsonify(
-            {
-                "ok": False,
-                "blocked": True,
-                "scheduler": "pythoncm",
-                "error": f"{action} is unavailable in Nscale PythonCM mode: {reason}",
-            }
-        ),
-        409,
-    )
-
-
-@app.before_request
-def _pythoncm_hide_legacy_slurm_routes():
-    """Do not expose Slurm-named compatibility URLs on the Nscale deployment."""
-    if scheduler_runtime.is_pythoncm() and request.path.startswith("/api/slurm-"):
-        return jsonify(
-            {
-                "ok": False,
-                "scheduler": "pythoncm",
-                "error": "legacy Slurm API names are not available in Nscale PythonCM mode",
-            }
-        ), 404
-    return None
-
-
-@app.before_request
-def _pythoncm_block_unreviewed_tools_surfaces():
-    """Nscale exposes no head-local Tools status or mutation as PythonCM."""
-    if (
-        scheduler_runtime.is_pythoncm()
-        and request.path.startswith("/api/tools/")
-    ):
-        return _pythoncm_blocked_action(
-            "Tools operation",
-            "head-local status/download/install/launch utilities are not PythonCM ProgramRunner operations",
-        )[1]
-    return None
-
-
 @app.route("/api/power-on", methods=["POST"])
 def api_power_on():
     """POST JSON {\"specs\": [\"pNN-rMM-ct[id]\", …]} or {\"ct_down_unk\": \"…\"} — cmsh power off/sleep/on per tray."""
@@ -6084,11 +6027,6 @@ def run_bmc_recovery_one(node: str, iface: str) -> dict:
 
 def _prepare_bmc_recovery(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate the request body; return ({nodes, iface}, None) or (None, (response, code))."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "BMC recovery",
-            "the installed recovery recipe reads BMC credentials and interface data through cmsh",
-        )
     if os.environ.get("RACK_BMC_RECOVERY_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (jsonify({"ok": False, "error": "bmc recovery disabled (RACK_BMC_RECOVERY_DISABLED)"}), 403)
     specs_raw = body.get("specs")
@@ -6259,11 +6197,6 @@ def run_mac_change(
 
 def _prepare_mac_change(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate the request body; return ({node, node_mac, ifspecs, dry_run}, None) or (None, err)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "MAC change",
-            "the installed macswap workflow has not been validated against PythonCM device interfaces",
-        )
     if os.environ.get("RACK_MAC_CHANGE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (jsonify({"ok": False, "error": "mac change disabled (RACK_MAC_CHANGE_DISABLED)"}), 403)
     node_raw = body.get("node")
@@ -6756,11 +6689,6 @@ def _bug_report_worker(job_id: str, pdsh_w: str) -> None:
 @app.route("/api/bug-report-async", methods=["POST"])
 def api_bug_report_async():
     """POST JSON like GPU reset: ``{"specs": ["pNN-rMM-ct[dd]", …], "rack": "pNN-rMM"}`` — pdsh nvidia-bug-report.sh."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "bug-report collection",
-            "ProgramRunner can create the report, but PythonCM file transfer has not been validated",
-        )[1]
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_bug_report_async(body)
     if err is not None:
@@ -6793,12 +6721,6 @@ def api_bug_report_async():
 @app.route("/api/bug-report-bundle", methods=["GET"])
 def api_bug_report_bundle():
     """GET ``?job_id=…`` — zip of ``bug_report_files`` from a completed bug_report job (ssh cat per host)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "bug-report bundle download",
-            "collecting binary report files still requires direct per-node SSH; "
-            "PythonCM ProgramRunner file transfer has not been validated",
-        )[1]
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
@@ -7353,11 +7275,6 @@ def api_hw_check_help():
 
 def _prepare_nvswitch_fix_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate JSON for async NMXC cycle (``nvswitches_rack_audit.sh --fix RACK``)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "NVSwitch fix",
-            "the installed switch audit/fix recipe uses cmsh and pdsh internally",
-        )
     if os.environ.get("RACK_NVSWITCH_AUDIT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (
             jsonify({"ok": False, "error": "nvswitch audit disabled (RACK_NVSWITCH_AUDIT_DISABLED)"}),
@@ -7490,11 +7407,6 @@ def api_nvswitch_fix_async():
 
 
 def _prepare_nvswitch_sdn_reset_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "NVSwitch SDN reset",
-            "the installed switch reset recipe has no reviewed PythonCM implementation",
-        )
     """Validate JSON for async NVLink SDN reset (``nvswitch_sdn_reset.sh RACK``)."""
     log_raw = body.get("log_dir")
     try:
@@ -7625,11 +7537,6 @@ def api_nvswitch_sdn_reset_async():
 
 
 def _prepare_nvswitch_system_reset_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "NVSwitch system reset",
-            "the installed switch reset recipe has no reviewed PythonCM implementation",
-        )
     """Validate JSON for async NVLink system reset (``nvswitch_system_reset.sh RACK NVSWITCH_HOST``)."""
     log_raw = body.get("log_dir")
     try:
@@ -7786,11 +7693,6 @@ def api_nvswitch_system_reset_async():
 
 
 def _prepare_imex_reset_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "IMEX reset",
-            "the installed reset recipe performs its own pdsh fan-out and stops CMDaemon",
-        )
     """Validate JSON for async IMEX reset (``imex_reset.sh RACK``)."""
     log_raw = body.get("log_dir")
     try:
@@ -7933,11 +7835,6 @@ def _nvlmapper_reports_base() -> Path:
 
 
 def _prepare_nvlmapper_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "NVLMapper",
-            "the installed mapper builds switch inventory through cmsh",
-        )
     """Validate JSON for async NVLMAPPER (stage under reports/<rack>, run ``./run_nvlmapper.sh <rack>``)."""
     if os.environ.get("RACK_NVLMAPPER_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (jsonify({"ok": False, "error": "NVLMAPPER disabled (RACK_NVLMAPPER_DISABLED)"}), 403)
@@ -8170,11 +8067,6 @@ def api_nvlmapper_zip():
 
 def _prepare_precheck_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate JSON for async Precheck (sysinfo.sh)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "system precheck",
-            "the installed sysinfo recipe performs its own SSH fan-out instead of PythonCM",
-        )
     prep, err = _parse_sysinfo_request(body)
     if err is not None:
         return None, err
@@ -8293,11 +8185,6 @@ def _prepare_nvswitch_check_async(
     body: dict,
 ) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate JSON for async NVSwitch check (nvswitch audit without --fix)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "NVSwitch check",
-            "the installed switch audit recipe uses cmsh and pdsh internally",
-        )
     body2 = dict(body)
     body2["fix"] = False
     prep, err = _parse_nvswitch_audit_request(body2)
@@ -8417,11 +8304,6 @@ def api_nvswitch_check_async():
 
 def _prepare_imex_check_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate JSON for async IMEX check (imex-related checks from sysinfo only)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "IMEX check",
-            "the installed IMEX check recipe performs its own pdsh fan-out",
-        )
     prep, err = _parse_sysinfo_request(body)
     if err is not None:
         return None, err
@@ -10491,11 +10373,6 @@ def api_universal_scan():
 @app.route("/api/bringup/config")
 def api_bringup_config():
     """Discovery: whether Travis's bring-up automation tree is present, and where."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "bring-up integration",
-            "the installed daily-report/status-check integration derives state from Slurm",
-        )[1]
     if _truthy_env("RACK_STATUS_DEMO"):
         return jsonify({"ok": True, "enabled": True, "present": True, "home": "/home/cmods/bringup"})
     if _bringup is None:
@@ -10509,11 +10386,6 @@ def api_bringup_config():
 @app.route("/api/bringup/node")
 def api_bringup_node():
     """Per-node bring-up job summary (status+reason from status-check, metric from daily-report)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "bring-up node report",
-            "the installed report scripts derive state from Slurm",
-        )[1]
     node = (request.args.get("node") or "").strip()
     if not node or not re.match(r"^[A-Za-z0-9._-]+$", node):
         return jsonify({"ok": False, "error": "a valid node name is required"}), 400
@@ -10553,11 +10425,6 @@ def api_bringup_fleet():
     share a verdict cache, so this is ~2 round trips for the whole cluster. POST so the node
     list travels as a JSON body; GET still works for a whole-cluster query with no list.
     """
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "bring-up fleet report",
-            "the installed report scripts derive state from Slurm",
-        )[1]
     if _truthy_env("RACK_STATUS_DEMO"):
         # Seed the synthetic fleet from the demo rack inventory so node names line up with
         # what the dashboard is already showing.
@@ -10658,11 +10525,6 @@ def api_node_report():
     saves what it is given. POST carries the node list as a JSON body; ``download`` (body or
     query) sets a filename so the SPA can hand the file straight to the user.
     """
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "node report generation",
-            "the current fleet collector uses Slurm-derived bring-up data and direct SSH fan-out",
-        )[1]
     if _node_report is None:
         return jsonify({"ok": False, "error": "report generator unavailable"}), 503
     try:
@@ -12255,11 +12117,6 @@ def api_node_report_kinds():
     Discovered rather than hardcoded in the SPA: PDF depends on reportlab being present in the
     image, so a build without it must not offer a button that returns 503.
     """
-    if scheduler_runtime.is_pythoncm():
-        return jsonify({
-            "ok": True, "kinds": [], "blocked": True, "scheduler": "pythoncm",
-            "message": "Node report generation is not certified for Nscale PythonCM",
-        })
     pdf_ok = _cluster_report_pdf_available()
     kinds = []
     for kind, formats in _REPORT_KINDS.items():
@@ -12289,11 +12146,6 @@ def api_node_report_start():
     is the normal way to find out whether the first press worked, and at ~2000 nodes the second
     sweep would cost four minutes of SSH against the whole cluster.
     """
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "node report generation",
-            "the current fleet collector uses Slurm-derived bring-up data and direct SSH fan-out",
-        )[1]
     if _node_report is None:
         return jsonify({"ok": False, "error": "report generator unavailable"}), 503
     body = request.get_json(silent=True) or {}
@@ -12435,11 +12287,6 @@ def api_node_report_status():
     The document itself is *not* returned here — at 2000 nodes it is several MB and polling
     would ship it repeatedly. ``/api/node-report/result`` collects it once it is ready.
     """
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "node report generation",
-            "the current fleet collector is disabled in Nscale PythonCM mode",
-        )[1]
     job_id = (request.args.get("job_id") or "").strip()
     with _node_report_jobs_lock:
         row = _node_report_jobs.get(job_id)
@@ -12457,11 +12304,6 @@ def api_node_report_status():
 @app.route("/api/node-report/result", methods=["GET"])
 def api_node_report_result():
     """Collect the finished document, optionally as a download."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "node report generation",
-            "the current fleet collector is disabled in Nscale PythonCM mode",
-        )[1]
     job_id = (request.args.get("job_id") or "").strip()
     with _node_report_jobs_lock:
         row = _node_report_jobs.get(job_id)
@@ -13927,8 +13769,6 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
 @app.route("/api/run-validation", methods=["POST"])
 def api_run_validation():
     """Run singlerack validation script with one target, e.g. p26-r05-ct[01-18] (cwd = log_dir)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_unsupported_response("validation")
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_validation(body)
     if err is not None:
@@ -13973,8 +13813,6 @@ def api_run_validation():
 @app.route("/api/run-validation-async", methods=["POST"])
 def api_run_validation_async():
     """Start validation in a background thread; poll GET /api/run-validation-status?job_id=…"""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_unsupported_response("validation")
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_validation(body)
     if err is not None:
@@ -14094,8 +13932,6 @@ def api_run_nemo_xrack_async():
 
     Process cwd is *log_dir* (same as ``/api/run-validation``) so Slurm batch stdout files land there.
     """
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_unsupported_response("nemo-xrack")
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_nemo_xrack(body)
     if err is not None:
@@ -14291,8 +14127,6 @@ def _prepare_run_exemplar_llama(body: dict) -> tuple[dict | None, tuple[object, 
 @app.route("/api/run-exemplar-llama-async", methods=["POST"])
 def api_run_exemplar_llama_async():
     """Submit Llama 3.1 405B Exemplar pretraining across eight selected racks."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_unsupported_response("llama-exemplar")
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_exemplar_llama(body)
     if err is not None:
@@ -14366,8 +14200,6 @@ def api_run_exemplar_llama_async():
 @app.route("/api/run-llama-async", methods=["POST"])
 def api_run_llama_async():
     """Start ``run-llama.sh`` in the background; poll ``/api/run-llama-status``."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_unsupported_response("llama")
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_llama(body)
     if err is not None:
@@ -14479,7 +14311,7 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _mnubergemm_stress_script_path()
-    if not scheduler_runtime.is_pythoncm() and not _script_exists(script):
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"stress script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
@@ -14643,7 +14475,7 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
     launcher = (_eget("RACK_NCCL_FULLRACK_LAUNCHER") or "llmb").strip().lower()
     use_llmb = launcher not in ("mpi", "sbatch", "direct", "nccl_mpi")
     script = _run_llmb_nccl_script_path() if use_llmb else _run_nccl_mpi_script_path()
-    if not scheduler_runtime.is_pythoncm() and not _script_exists(script):
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"NCCL launcher not found: {script}"}), 500)
     env_updates: dict[str, str] = {"RACK_JOB_LOG_DIR": str(log_dir), "NVIS_RACK": rk}
 
@@ -14737,7 +14569,7 @@ def _prepare_run_nvloom_singlerack(body: dict) -> tuple[dict | None, tuple[objec
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _nvloom_singlerack_script_path()
-    if not scheduler_runtime.is_pythoncm() and not _script_exists(script):
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"nvloom script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
@@ -14799,7 +14631,7 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _clusterkit_script_path()
-    if not scheduler_runtime.is_pythoncm() and not _script_exists(script):
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"clusterkit script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
@@ -15315,7 +15147,7 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         return None, (jsonify({"ok": False, "error": f"exact target is not idle/eligible: {shown}{suffix}"}), 409)
 
     script = Path(_scripts_dir()) / "run-validation-preset.sh"
-    if not scheduler_runtime.is_pythoncm() and not _script_exists(script):
+    if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"validation preset launcher not found: {script}"}), 500)
     node_spec = ",".join(nodes)
     cmd = ["bash", str(script), "--preset", preset.id, "--nodelist", node_spec,
@@ -15409,26 +15241,11 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
 
 @app.route("/api/validation-presets", methods=["GET"])
 def api_validation_presets():
-    if scheduler_runtime.is_pythoncm():
-        return jsonify({
-            "ok": True,
-            "presets": [],
-            "blocked": True,
-            "scheduler": "pythoncm",
-            "message": "No validation preset is yet certified as ProgramRunner-only on Nscale",
-        })
     return jsonify({"ok": True, "presets": validation_presets.catalogue()})
 
 
 @app.route("/api/validation-presets/prepare", methods=["POST"])
 def api_prepare_validation_preset():
-    if scheduler_runtime.is_pythoncm():
-        return jsonify({
-            "ok": False,
-            "blocked": True,
-            "scheduler": "pythoncm",
-            "error": "Validation presets are unavailable until their exact ProgramRunner-only semantics are validated on Nscale",
-        }), 409
     body = request.get_json(silent=True) or {}
     plan, err = _prepare_validation_preset(body)
     if err is not None:
@@ -15743,6 +15560,60 @@ def _mnubergemm_stage_only_worker(job_id: str, plan: dict) -> None:
     _stress_job_purge_later(job_id)
 
 
+def _validation_preset_fallback(preset_id: str, plan: dict):
+    """Launch the exact preset, preferring PythonCM for safe stage-only work."""
+    job_id = str(uuid.uuid4())
+    operator = _operator_from_request()
+    tool = {
+        "nccl-2.31.2": "nccl-fullrack", "llama31-405b-fp8": "llama-exemplar",
+        "gpt-oss-cpu": "external", "exemplar-system-info": "external",
+        "nemo-26.04.01": "nemo-xrack", "mnubergemm-26.03-v1.17": "mnubergemm",
+    }[preset_id]
+    racks = [str(rack) for rack in plan["racks"]]
+    provider = "pythoncm" if plan.get("stage_only") else "slurm"
+    _record_validation_activity(
+        tool, stage="other", scope=str(plan["scope"]),
+        rack=racks[0] if racks else "", racks=racks, log_dir=str(plan["log_dir"]),
+        command_display=str(plan["command_display"]), activity_id=job_id,
+        operator=operator, scheduler=provider,
+    )
+    with _stress_jobs_lock:
+        _stress_jobs[job_id] = {
+            "job_id": job_id, "kind": "validation-preset", "preset_id": preset_id,
+            "operator": operator, "racks": racks, "nodes": plan["nodes"],
+            "node_count": plan["node_count"], "log_dir": plan["log_dir"],
+            "phase": "starting", "command_display": plan["command_display"],
+            "execution_provider": provider, "fallback_reason": (
+                "stage-only container copy runs once per exact rack through ProgramRunner"
+                if provider == "pythoncm" else pythoncm_validation.unsupported_reason(
+                {
+                    "llama31-405b-fp8": "llama-exemplar",
+                    "gpt-oss-cpu": "gpt-oss-cpu",
+                    "exemplar-system-info": "exemplar-system-info",
+                    "nemo-26.04.01": "nemo-xrack",
+                    "nccl-2.31.2": "nccl-2.31.2",
+                    "mnubergemm-26.03-v1.17": "mnubergemm",
+                }[preset_id]
+            ) or "no equivalent PythonCM recipe"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    if plan.get("stage_only"):
+        threading.Thread(target=_mnubergemm_stage_only_worker, args=(job_id, plan), daemon=True).start()
+    else:
+        threading.Thread(
+            target=_stress_worker,
+            args=(job_id, plan["cmd"], plan["log_dir"], plan["timeout"], plan["command_display"]),
+            kwargs={"error_label": "validation preset launcher", "env_updates": plan["env_updates"],
+                    "profile": "script", "persist": True}, daemon=True,
+        ).start()
+    return jsonify({
+        "ok": True, "job_id": job_id, "preset_id": preset_id,
+        "nodes": plan["nodes"], "node_count": plan["node_count"],
+        "command_display": plan["command_display"], "timeout_sec": plan["timeout"],
+        "execution_provider": provider, "fallback": provider == "slurm",
+    })
+
+
 def _run_validation_preset_async(body: dict):
     plan, err = _prepare_validation_preset(body)
     if err is not None:
@@ -15759,21 +15630,8 @@ def _run_validation_preset_async(body: dict):
             "nccl-2.31.2": "nccl-2.31.2",
             "mnubergemm-26.03-v1.17": "mnubergemm",
         }.get(preset_id)
-        blocked_kind = {
-            "llama31-405b-fp8": "llama-exemplar",
-            "gpt-oss-cpu": "gpt-oss-cpu",
-            "exemplar-system-info": "exemplar-system-info",
-            "nemo-26.04.01": "nemo-xrack",
-        }.get(preset_id)
-        if blocked_kind:
-            return _pythoncm_unsupported_response(blocked_kind)
-        if not direct_kind:
-            return jsonify({
-                "ok": False,
-                "scheduler": "pythoncm",
-                "blocked": True,
-                "error": f"preset {preset_id} has no reviewed PythonCM/direct runner",
-            }), 501
+        if not direct_kind or pythoncm_validation.unsupported_reason(direct_kind):
+            return _validation_preset_fallback(preset_id, plan)
         if plan.get("stage_only"):
             return jsonify({
                 "ok": False,
@@ -15843,13 +15701,6 @@ def _run_validation_preset_async(body: dict):
 
 @app.route("/api/run-validation-preset-async", methods=["POST"])
 def api_run_validation_preset_async():
-    if scheduler_runtime.is_pythoncm():
-        return jsonify({
-            "ok": False,
-            "blocked": True,
-            "scheduler": "pythoncm",
-            "error": "Validation presets are unavailable until their exact ProgramRunner-only semantics are validated on Nscale",
-        }), 501
     return _run_validation_preset_async(request.get_json(silent=True) or {})
 
 
@@ -15887,16 +15738,12 @@ def api_run_exemplar_sysinfo_status():
 @app.route("/api/run-mnubergemm-stress-async", methods=["POST"])
 def api_run_mnubergemm_stress_async():
     """Start mnubergemm stress driver; poll GET /api/run-mnubergemm-stress-status?job_id=…"""
-    if scheduler_runtime.is_pythoncm():
-        blocked = _pythoncm_unsupported_response("mnubergemm")
-        if blocked is not None:
-            return blocked
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_mnubergemm_stress(body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
-    if scheduler_runtime.is_pythoncm():
+    if scheduler_runtime.is_pythoncm() and not pythoncm_validation.unsupported_reason("mnubergemm"):
         return _start_pythoncm_validation(
             "mnubergemm", prep, tool="mnubergemm", stage="other"
         )
@@ -15957,16 +15804,12 @@ def api_run_mnubergemm_stress_async():
 @app.route("/api/run-nccl-fullrack-async", methods=["POST"])
 def api_run_nccl_fullrack_async():
     """Start the standalone Stage-1 NCCL benchmark; poll GET /api/run-nccl-fullrack-status?job_id=…"""
-    if scheduler_runtime.is_pythoncm():
-        blocked = _pythoncm_unsupported_response("nccl-fullrack")
-        if blocked is not None:
-            return blocked
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_nccl_fullrack(body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
-    if scheduler_runtime.is_pythoncm():
+    if scheduler_runtime.is_pythoncm() and not pythoncm_validation.unsupported_reason("nccl-fullrack"):
         return _start_pythoncm_validation(
             "nccl-fullrack", prep, tool="nccl-fullrack", stage="stage1"
         )
@@ -16035,16 +15878,12 @@ def api_run_nccl_fullrack_async():
 @app.route("/api/run-nvloom-async", methods=["POST"])
 def api_run_nvloom_async():
     """Start nvloom singlerack Slurm driver (sbatch --wait); poll GET /api/run-nvloom-status?job_id=…"""
-    if scheduler_runtime.is_pythoncm():
-        blocked = _pythoncm_unsupported_response("nvloom")
-        if blocked is not None:
-            return blocked
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_nvloom_singlerack(body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
-    if scheduler_runtime.is_pythoncm():
+    if scheduler_runtime.is_pythoncm() and not pythoncm_validation.unsupported_reason("nvloom"):
         return _start_pythoncm_validation(
             "nvloom", prep, tool="nvloom", stage="other"
         )
@@ -16105,16 +15944,12 @@ def api_run_nvloom_async():
 @app.route("/api/run-clusterkit-async", methods=["POST"])
 def api_run_clusterkit_async():
     """Start ClusterKit singlerack Slurm driver; poll GET /api/run-clusterkit-status?job_id=…"""
-    if scheduler_runtime.is_pythoncm():
-        blocked = _pythoncm_unsupported_response("clusterkit")
-        if blocked is not None:
-            return blocked
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_clusterkit_singlerack(body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
-    if scheduler_runtime.is_pythoncm():
+    if scheduler_runtime.is_pythoncm() and not pythoncm_validation.unsupported_reason("clusterkit"):
         return _start_pythoncm_validation(
             "clusterkit", prep, tool="clusterkit", stage="other"
         )
@@ -16181,16 +16016,12 @@ def api_run_llmb_nccl_async():
     under the UI log dir. Runs on the privileged ``script`` profile (Slurm + llmb-run on
     the head node).
     """
-    if scheduler_runtime.is_pythoncm():
-        blocked = _pythoncm_unsupported_response("llmb-nccl")
-        if blocked is not None:
-            return blocked
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_llmb_nccl(body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
-    if scheduler_runtime.is_pythoncm():
+    if scheduler_runtime.is_pythoncm() and not pythoncm_validation.unsupported_reason("llmb-nccl"):
         racks = [str(rack) for rack in prep.get("racks") or []]
         if not prep.get("nodes"):
             prep["nodes"] = [
@@ -16758,8 +16589,6 @@ def _nvswitch_audit_stream_generator(prep: dict):
 @app.route("/api/run-sysinfo", methods=["POST"])
 def api_run_sysinfo():
     """Run sysinfo.sh with one NODELIST target, e.g. p22-r05-ct[01-18] (cwd = log_dir)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_unsupported_response("sysinfo")
     body = request.get_json(silent=True) or {}
     prep, err = _parse_sysinfo_request(body)
     if err is not None:
@@ -17570,11 +17399,6 @@ def _validate_cuda_nccl_build_host(raw: object) -> tuple[str | None, str | None]
 @app.route("/api/tools/install-cuda-nccl-workspace", methods=["POST"])
 def api_tools_install_cuda_nccl_workspace():
     """Run ``install-cuda-nccl-workspace.sh``: download on localhost, install on ``build_host`` via pdsh."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "CUDA/NCCL workspace install",
-            "the installed build orchestrator reaches its compute build host through pdsh",
-        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -17659,11 +17483,6 @@ def api_tools_install_cuda_nccl_workspace():
 @app.route("/api/tools/install-cuda-nccl-workspace-stream", methods=["POST"])
 def api_tools_install_cuda_nccl_workspace_stream():
     """Stream ``install-cuda-nccl-workspace.sh`` (same POST JSON as ``/api/tools/install-cuda-nccl-workspace``)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "CUDA/NCCL workspace install",
-            "the installed build orchestrator reaches its compute build host through pdsh",
-        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -17749,11 +17568,6 @@ def api_tools_install_cuda_nccl_workspace_stream():
 @app.route("/api/tools/install-nvloom-workspace", methods=["POST"])
 def api_tools_install_nvloom_workspace():
     """Run ``install-nvloom-workspace.sh``: git clone on localhost, build on ``build_host`` via pdsh."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "NVLoom workspace install",
-            "the installed build orchestrator reaches its compute build host through pdsh",
-        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -17816,11 +17630,6 @@ def api_tools_install_nvloom_workspace():
 @app.route("/api/tools/install-nvloom-workspace-stream", methods=["POST"])
 def api_tools_install_nvloom_workspace_stream():
     """Stream ``install-nvloom-workspace.sh`` (POST JSON: ``workspace``, ``cuda_major``, ``build_host``)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "NVLoom workspace install",
-            "the installed build orchestrator reaches its compute build host through pdsh",
-        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -17970,11 +17779,6 @@ def _exemplar_display_cmd(meta: dict, ws: str) -> str:
 @app.route("/api/tools/install-dgxc-benchmarking-workspace", methods=["POST"])
 def api_tools_install_dgxc_benchmarking_workspace():
     """Run ``install-dgxc-benchmarking-workspace.sh``: clone + (record|install) Exemplar/llmb."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "DGXC benchmarking install",
-            "the installed package invokes workload-manager launch commands during install",
-        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -18035,11 +17839,6 @@ def api_tools_install_dgxc_benchmarking_workspace_stream():
     Routed to the privileged ``script`` SSH plane (like ``run_llmb_nccl.sh``) so the
     workloads install to the same ``LLMB_INSTALL`` the NCCL/NeMo launchers later read.
     """
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "DGXC benchmarking install",
-            "the installed package invokes workload-manager launch commands during install",
-        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -18098,8 +17897,6 @@ def api_tools_install_dgxc_benchmarking_workspace_stream():
 @app.route("/api/run-sysinfo-stream", methods=["POST"])
 def api_run_sysinfo_stream():
     """Stream merged stdout/stderr from sysinfo.sh as text/plain (UTF-8)."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_unsupported_response("sysinfo")
     body = request.get_json(silent=True) or {}
     prep, err = _parse_sysinfo_request(body)
     if err is not None:
@@ -18127,11 +17924,6 @@ def api_run_sysinfo_stream():
 @app.route("/api/run-nvswitch-audit-stream", methods=["POST"])
 def api_run_nvswitch_audit_stream():
     """Stream nvswitches_rack_audit.sh for one rack (optional body.fix true => --fix). cwd = log_dir."""
-    if scheduler_runtime.is_pythoncm():
-        return _pythoncm_blocked_action(
-            "NVSwitch audit",
-            "the installed switch audit recipe uses cmsh and pdsh internally",
-        )[1]
     body = request.get_json(silent=True) or {}
     prep, err = _parse_nvswitch_audit_request(body)
     if err is not None:
@@ -18827,21 +18619,6 @@ def _job_environment_settings_payload() -> dict[str, object]:
     ovr = _job_env_overrides_load()
     eff = _job_env_effective_values()
     definitions = list(JOB_ENV_UI_DEFINITIONS)
-    if scheduler_runtime.is_pythoncm():
-        forbidden_key = re.compile(
-            r"(?:SLURM|CMSH|PDSH|NEMO|LLAMA|LLMB|NCCL|MNUBERGEMM|NVLOOM|"
-            r"CLUSTERKIT|SYSINFO|NVSWITCH|IMEX|NVLMAPPER|BMC|MAC_CHANGE)",
-            re.IGNORECASE,
-        )
-        definitions = [
-            d for d in definitions
-            if not forbidden_key.search(str(d.get("key") or ""))
-            and not re.search(
-                r"\b(?:slurm|cmsh|pdsh|mayo|boston|firmus)\b",
-                str(d.get("description") or ""),
-                re.IGNORECASE,
-            )
-        ]
     variables: list[dict[str, object]] = []
     for d in definitions:
         k = d["key"]
@@ -18855,7 +18632,7 @@ def _job_environment_settings_payload() -> dict[str, object]:
     sections: list[dict[str, object]] = []
     for sec_id, title in JOB_ENV_SECTION_ORDER:
         if scheduler_runtime.is_pythoncm() and sec_id == "native_cmsh":
-            title = "Nscale naming & log parsing"
+            title = "Nscale naming, PythonCM, and Slurm fallbacks"
         sec_vars: list[dict[str, object]] = []
         for d in definitions:
             if d.get("section") != sec_id:
@@ -18917,17 +18694,6 @@ def api_settings_job_environment():
     for k, v in raw_updates.items():
         if not isinstance(k, str) or k not in _JOB_ENV_ALLOWED_KEYS:
             return jsonify({"ok": False, "error": f"unknown or disallowed key: {k!r}"}), 400
-        if scheduler_runtime.is_pythoncm() and re.search(
-            r"(?:SLURM|CMSH|PDSH|NEMO|LLAMA|LLMB|NCCL|MNUBERGEMM|NVLOOM|"
-            r"CLUSTERKIT|SYSINFO|NVSWITCH|IMEX|NVLMAPPER|BMC|MAC_CHANGE)",
-            k,
-            re.IGNORECASE,
-        ):
-            return jsonify({
-                "ok": False,
-                "blocked": True,
-                "error": f"{k} is not configurable in Nscale PythonCM mode",
-            }), 409
         if v is None or (isinstance(v, str) and not v.strip()):
             cur.pop(k, None)
             continue
@@ -19430,8 +19196,9 @@ _post_run_report_cache: tuple[float, dict] = (0.0, {})
 
 
 def _post_run_accounting(activities: list[dict]) -> list[dict]:
-    """One Slurm accounting query for all tracked validation task ids."""
+    """Reconcile tracked PythonCM UUIDs and explicit Slurm fallback job ids."""
     job_ids: list[str] = []
+    provider_rows: list[dict] = []
     seen: set[str] = set()
     for activity in activities:
         for task in activity.get("tasks") or []:
@@ -19444,8 +19211,15 @@ def _post_run_accounting(activities: list[dict]) -> list[dict]:
     if not job_ids:
         return []
     if scheduler_runtime.is_pythoncm():
-        wanted = set(job_ids[:400])
-        return [
+        pythoncm_ids = {
+            job_id for job_id in job_ids[:400]
+            if scheduler_runtime.reference_kind(job_id) == "pythoncm"
+        }
+        slurm_ids = [
+            job_id for job_id in job_ids[:400]
+            if scheduler_runtime.reference_kind(job_id) == "slurm"
+        ]
+        provider_rows = [
             {
                 "job_id": str(row["job_id"]),
                 "state": str(row.get("state") or "UNKNOWN"),
@@ -19456,8 +19230,11 @@ def _post_run_accounting(activities: list[dict]) -> list[dict]:
                 "job_name": str(row.get("name") or "pythoncm-command"),
             }
             for row in scheduler_runtime.jobs()
-            if str(row.get("job_id") or "") in wanted
+            if str(row.get("job_id") or "") in pythoncm_ids
         ]
+        if not slurm_ids:
+            return provider_rows
+        job_ids = slurm_ids
     # The activity store is capped at 500 entries. Keep the newest 400 Slurm
     # allocations in the live reconciliation; older exact memberships remain in
     # post_run_nodes.json after their first snapshot.
@@ -19473,7 +19250,7 @@ def _post_run_accounting(activities: list[dict]) -> list[dict]:
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout or "sacct failed").strip())
     wanted = set(selected)
-    rows: list[dict] = []
+    rows: list[dict] = list(provider_rows)
     found: set[str] = set()
     for line in (proc.stdout or "").splitlines():
         cols = line.split("|")

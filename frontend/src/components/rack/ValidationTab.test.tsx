@@ -24,8 +24,8 @@ vi.mock("../../context/RackCommandContext", () => ({
 vi.mock("./NvlinkPreflightPanel", () => ({ NvlinkPreflightPanel: () => null }));
 vi.mock("./ValidationActivitiesTable", () => ({ ValidationActivitiesTable: () => null }));
 
-describe("ValidationTab PythonCM boundary", () => {
-  it("shows the historical recipes but blocks every launch", () => {
+describe("ValidationTab hybrid provider boundary", () => {
+  it("keeps validation fallbacks available", () => {
     render(
       <ValidationTab
         rack="d01"
@@ -35,12 +35,12 @@ describe("ValidationTab PythonCM boundary", () => {
     );
 
     expect(screen.getByText("Llama 3.1 405B FP8 — 1024 GPUs / 50 Steps")).toBeInTheDocument();
-    expect(screen.getByText(/New validation submissions are blocked/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Multirack Only" })).toBeDisabled();
     expect(screen.getByText("NeMo 26.04.01 Validation")).toBeInTheDocument();
     expect(screen.getByText("MNUberGEMM 26.03-v1.17 Validation")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Plan GPT-OSS" })).toBeDisabled();
-    expect(screen.getAllByText(/blocked:/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Plan GPT-OSS" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Plan NCCL" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Run nvloom" })).toBeEnabled();
   });
 
   it("does not permit the single-node GPT-OSS overhead benchmark on multiple nodes", () => {
@@ -53,6 +53,6 @@ describe("ValidationTab PythonCM boundary", () => {
     );
 
     expect(screen.getByRole("button", { name: "Plan GPT-OSS" })).toBeDisabled();
-    expect(screen.getByText(/GPT-OSS recipe has no validated ProgramRunner-only form/i)).toBeInTheDocument();
+    expect(screen.getByText(/exactly one selected node/i)).toBeInTheDocument();
   });
 });

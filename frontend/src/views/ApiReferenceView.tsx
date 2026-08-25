@@ -82,7 +82,6 @@ function flatten(spec: OpenApiSpec | null): Operation[] {
   if (!spec?.paths) return [];
   const out: Operation[] = [];
   for (const [path, methods] of Object.entries(spec.paths)) {
-    if (path.startsWith("/api/slurm-")) continue;
     for (const [method, op] of Object.entries(methods)) {
       out.push({
         key: `${method}:${path}`,

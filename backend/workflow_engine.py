@@ -701,27 +701,19 @@ def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
     output = sub(block.get("output") or "") or None
 
     requested_kind = str(block.get("kind") or "").strip().lower()
-    if scheduler_runtime.is_pythoncm():
-        if requested_kind and requested_kind != "pythoncm":
-            raise ValueError(
-                f"scheduler kind {requested_kind!r} is forbidden in Nscale PythonCM mode"
-            )
-        reviewed_scripts = {
-            "nccl_allreduce.sbatch",
-            "clusterkit.sbatch",
-            "nvloom_singlerack.sbatch",
-            "nvis_pythoncm_mnubergemm.sh",
-        }
+    effective_kind = requested_kind or (
+        "slurm" if script and script.endswith(".sbatch") else scheduler_runtime.scheduler_kind()
+    )
+    if effective_kind == "pythoncm":
         explicitly_direct = block.get("pythoncm_direct") is True
-        if script and Path(script).name not in reviewed_scripts and not explicitly_direct:
+        if script and not explicitly_direct:
             raise ValueError(
-                f"workflow script {Path(script).name!r} is not reviewed for PythonCM/direct execution"
+                f"workflow script {Path(script).name!r} requires scheduler.pythoncm_direct=true"
             )
         if command and not explicitly_direct:
             raise ValueError(
                 "inline workflow commands require scheduler.pythoncm_direct=true in PythonCM mode"
             )
-        host_exec._reject_pythoncm_legacy_command(command or script or "")
 
     # nccl_allreduce.sbatch (and peers) resolve lib/ via NVIS_SCRIPTS_DIR.  Keep
     # these values in the backend-neutral JobSpec env so PythonCM passes them to
@@ -732,7 +724,7 @@ def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
     if ntasks:
         job_env["GPUS_PER_NODE"] = str(ntasks)
         exports.append(f"GPUS_PER_NODE={ntasks}")
-    if not scheduler_runtime.is_pythoncm():
+    if effective_kind != "pythoncm":
         extra.append(f"--export={','.join(exports)}")
     else:
         job_env["NVIS_PYTHONCM_DIRECT"] = "1"
@@ -759,7 +751,7 @@ def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
     conn, profile = _resolve_step_connection(step)
     try:
         sched = build_scheduler(
-            "pythoncm" if scheduler_runtime.is_pythoncm() else block.get("kind"),
+            effective_kind,
             connection=conn,
             profile=profile,
         )
@@ -1138,17 +1130,14 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
             sub_hop(block.get("node") or {"kind": "ssh"})
         )
         timeout = int(step.get("timeout", block.get("timeout", 300)))
-        if scheduler_runtime.is_pythoncm():
+        requested_scheduler = str(block.get("scheduler") or "").strip().lower()
+        use_pythoncm = (
+            requested_scheduler == "pythoncm"
+            or (not requested_scheduler and scheduler_runtime.is_pythoncm() and not block.get("hops"))
+        )
+        if use_pythoncm:
             from schedulers import JobSpec, build_scheduler
 
-            if block.get("hops"):
-                raise ValueError("workflow fanout.hops is unavailable in PythonCM mode")
-            requested_scheduler = str(block.get("scheduler") or "").strip().lower()
-            if requested_scheduler and requested_scheduler != "pythoncm":
-                raise ValueError(
-                    f"fanout scheduler {requested_scheduler!r} is forbidden in PythonCM mode"
-                )
-            host_exec._reject_pythoncm_legacy_command(cmd)
             scheduler = build_scheduler(
                 "pythoncm", connection=host_exec.connection("control"), profile="control"
             )
@@ -1503,33 +1492,8 @@ def _execute_inline_run(run: dict, step: dict, params: dict, script_text: str) -
         except PermissionError:
             pass
     try:
-        if scheduler_runtime.is_pythoncm():
-            from schedulers import JobSpec, build_scheduler
-
-            if step.get("connection"):
-                raise ValueError("workflow connection overrides are unavailable in PythonCM mode")
-            host_exec._reject_pythoncm_legacy_command(script_text)
-            inventory = scheduler_runtime.node_names()
-            if not inventory:
-                raise ValueError("PythonCM PhysicalNode inventory is empty")
-            scheduler = build_scheduler(
-                "pythoncm", connection=host_exec.connection("control"), profile="control"
-            )
-            result = scheduler.run(
-                JobSpec(
-                    name=f"workflow-{step_id}",
-                    nodes=1,
-                    nodelist=inventory[0],
-                    command=script_text,
-                    launch_mode="head",
-                    execution_user=(os.environ.get("RACK_PYTHONCM_USER") or "root"),
-                    timeout=timeout,
-                )
-            )
-            out, err, returncode = result.stdout or "", result.stderr or "", result.returncode
-        else:
-            proc = _run_step_command(step, host_cmd, timeout)
-            out, err, returncode = proc.stdout or "", proc.stderr or "", proc.returncode
+        proc = _run_step_command(step, host_cmd, timeout)
+        out, err, returncode = proc.stdout or "", proc.stderr or "", proc.returncode
         output = out + ("\n--- stderr ---\n" + err if err else "")
         output += f"\n--- exit {returncode} ---\n"
         if not output.strip():
@@ -1611,8 +1575,6 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
         host_cmd = command[5:].strip()
         for key, val in params.items():
             host_cmd = host_cmd.replace(f"${{{key}}}", str(val))
-        if scheduler_runtime.is_pythoncm():
-            return _execute_inline_run(run, step, params, host_cmd)
         timeout = int(step.get("timeout", 120))
 
         # Identify rack: explicit step field wins; otherwise first match in the substituted command.
@@ -1730,8 +1692,6 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
                     target = f"{rack_for_target}-ct[{ct_range}]"
         if target:
             host_cmd += f" {target}"
-        if scheduler_runtime.is_pythoncm():
-            return _execute_inline_run(run, step, params, host_cmd)
         timeout = int(step.get("timeout", 300))
 
         rack_raw = params.get("rack", "")

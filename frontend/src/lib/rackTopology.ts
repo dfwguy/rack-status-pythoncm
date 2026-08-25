@@ -41,8 +41,8 @@ export interface RackParts {
 // Mirrors the backend DSL (nvis_id_templates.py): variable digits ``[\d+]``,
 // fixed two-digit ``[NN-NN]``, and single-letter row slots ``[A-Z]`` / ``[a-z]``.
 // NOTE: the backend ``hierarchy`` payload is the source of truth; this client
-// parser is only a fallback for older backends, but it must stay alpha-aware so
-// row-letter sites (e.g. Boston ``bos01-a05``) still group into rows a/b.
+// parser is only a fallback for older backends, but it stays alpha-aware for
+// any configured row-letter rack template.
 const TOKEN_RE = /\[\\d\+\]|\[\d{2}-\d{2}\]|\[[A-Za-z]-[A-Za-z]\]/g;
 
 interface TemplateSeg {

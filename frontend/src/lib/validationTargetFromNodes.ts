@@ -55,8 +55,8 @@ function trayFromNodeId(
  * Two shapes are produced depending on the site naming scheme:
  *  - Trays that fold into the ``NVIS_*`` ct template are compressed into the compact
  *    ``<rack><joiner>[NN-MM]`` range form (e.g. ``mel01-r05-ct[01-04]``).
- *  - Sites whose node hostnames don't fold into that template (e.g. Boston
- *    ``bos01-b07-11-s1-dgx-07-c01``) fall back to passing the **real selected hostnames**
+ *  - Nodes whose hostnames do not fold into that template fall back to passing
+ *    the **real selected hostnames**
  *    through as a comma list, so the backend targets exactly the chosen nodes instead of
  *    falling back to the whole rack.
  *

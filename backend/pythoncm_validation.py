@@ -7,7 +7,7 @@
 # disclosure or distribution of this material and related documentation
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
-"""Fail-closed direct validation plans for Nscale's PythonCM scheduler."""
+"""Map validation recipes to PythonCM support or an explicit Slurm fallback."""
 from __future__ import annotations
 
 import scheduler_runtime
@@ -15,7 +15,7 @@ from schedulers import JobSpec
 
 
 class UnsupportedValidation(RuntimeError):
-    """The installed recipe has no reviewed PythonCM/direct execution form."""
+    """The installed recipe has no semantically equivalent PythonCM form."""
 
 
 _BLOCKED = {
@@ -40,6 +40,7 @@ def unsupported_reason(kind: str) -> str | None:
 
 
 def require_supported(kind: str) -> None:
+    """Require a PythonCM-native recipe; callers may instead select Slurm fallback."""
     reason = unsupported_reason(kind)
     if reason:
         raise UnsupportedValidation(reason)
@@ -76,7 +77,7 @@ def build_spec(
     timeout: int,
     env: dict[str, str] | None = None,
 ) -> JobSpec:
-    """Refuse validation until an exact ProgramRunner-only recipe is reviewed."""
+    """Build an exact PythonCM recipe when one is available."""
     normalized = str(kind or "").strip().lower()
     require_supported(normalized)
     raise UnsupportedValidation(

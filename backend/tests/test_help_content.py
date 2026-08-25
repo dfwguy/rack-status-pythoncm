@@ -91,9 +91,10 @@ class TestHelpContentAPI:
         assert data["ok"] is True
         assert data["entry"]["id"] == "scheduler"
 
-    def test_disabled_workflow_help_is_absent(self, client):
+    def test_restored_workflow_help_is_available(self, client):
         resp = client.get("/api/help/content/workflows")
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        assert resp.get_json()["entry"]["id"] == "workflows"
 
     def test_entry_not_found(self, client):
         resp = client.get("/api/help/content/nope")

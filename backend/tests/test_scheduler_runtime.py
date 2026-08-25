@@ -12,7 +12,9 @@ UUID = "123e4567-e89b-42d3-a456-426614174000"
 def test_pythoncm_reference_and_bracket_expansion(monkeypatch):
     monkeypatch.setenv("RACK_SCHEDULER", "pythoncm")
     assert scheduler_runtime.valid_reference(UUID)
-    assert not scheduler_runtime.valid_reference("12345")
+    assert scheduler_runtime.reference_kind(UUID) == "pythoncm"
+    assert scheduler_runtime.valid_reference("12345")
+    assert scheduler_runtime.reference_kind("12345") == "slurm"
     assert scheduler_runtime.expand_nodelist("rack-ct[01-03],rack-ct07") == [
         "rack-ct01", "rack-ct02", "rack-ct03", "rack-ct07",
     ]

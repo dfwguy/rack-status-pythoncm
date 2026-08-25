@@ -167,7 +167,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   const [validationFilters, setValidationFilters] = useState<string[]>([]);
   const [eligibleOnly, setEligibleOnly] = useState(false);
   const [launchingKind, setLaunchingKind] = useState<MultirackLaunchKind | null>(null);
-  const [, setLaunchingPreset] = useState<ValidationPresetId | null>(null);
+  const [launchingPreset, setLaunchingPreset] = useState<ValidationPresetId | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: "success" | "error" | "info" }>({
     open: false, message: "", severity: "info",
   });
@@ -694,14 +694,14 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           </MuiButton>
           <FormControlLabel
             control={<Checkbox checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} size="small" />}
-            label="Validation launch unavailable in Nscale PythonCM mode"
+            label="Dry run (NCCL/Llama — print plan, don't submit)"
           />
           <Flex gap="2" align="center" wrap="wrap" style={{ marginLeft: "auto" }}>
             <Button
               kind="primary"
               size="small"
               onClick={() => setPendingKind("nemo")}
-              disabled
+              disabled={noRacks || selected.size === 0 || launchingKind !== null}
             >
               <Layers size={16} style={{ marginRight: 6 }} />
               {launchingKind === "nemo" ? "Launching…" : `Launch Multirack Validation (${selected.size})`}
@@ -710,7 +710,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
               kind="secondary"
               size="small"
               onClick={() => setPendingKind("llmb")}
-              disabled
+              disabled={noRacks || selected.size === 0 || launchingKind !== null}
             >
               <Gauge size={16} style={{ marginRight: 6 }} />
               {launchingKind === "llmb" ? "Launching…" : `Launch NCCL Microbenchmark (${selected.size})`}
@@ -727,18 +727,18 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
           <Flex gap="2" align="center" wrap="wrap" style={{ marginBottom: 8 }}>
             <Text kind="body/bold/md" style={{ marginRight: "auto" }}>Pinned validation recipes</Text>
-            <Tag color="yellow" kind="outline" readOnly density="compact">blocked pending ProgramRunner-only recipes</Tag>
+            <Tag color="green" kind="outline" readOnly density="compact">prepare → review → launch</Tag>
           </Flex>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginBottom: 12 }}>
-            No multirack validation recipe is currently certified for Nscale PythonCM. Controls remain visible only to show the audited gap and cannot launch work.
+            Server-validated versions and image inventory. PythonCM is used where the recipe has an equivalent; recipes requiring allocation, MPI, Pyxis, or LLMB semantics use the documented Slurm fallback.
           </Text>
           <Flex gap="2" wrap="wrap">
-            <Button kind="secondary" size="small" disabled>NCCL 2.31.2 / CUDA 13.3+</Button>
-            <Button kind="secondary" size="small" disabled>Llama 405B FP8 — 1024 GPUs / 50 steps</Button>
-            <Button kind="secondary" size="small" disabled>GPT-OSS CPU — per-node fan-out</Button>
-            <Button kind="secondary" size="small" disabled>DGXC system_info</Button>
-            <Button kind="secondary" size="small" disabled>NeMo 26.04.01</Button>
-            <Button kind="secondary" size="small" disabled>MNUberGEMM 26.03-v1.17</Button>
+            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nccl-2.31.2")}>NCCL 2.31.2 / CUDA 13.3+</Button>
+            <Button kind="secondary" size="small" disabled={!llama1024Ready || launchingPreset !== null} onClick={() => setPendingPreset("llama31-405b-fp8")}>Llama 405B FP8 — 1024 GPUs / 50 steps</Button>
+            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("gpt-oss-cpu")}>GPT-OSS CPU — per-node fan-out</Button>
+            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("exemplar-system-info")}>DGXC system_info</Button>
+            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nemo-26.04.01")}>NeMo 26.04.01</Button>
+            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("mnubergemm-26.03-v1.17")}>MNUberGEMM 26.03-v1.17</Button>
           </Flex>
           {selected.size > 0 && !llama1024Ready ? (
             <div style={{ marginTop: 12 }}>

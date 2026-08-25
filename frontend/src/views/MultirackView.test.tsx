@@ -269,20 +269,20 @@ describe("MultirackView rack filters", () => {
     expect(screen.getByText("2 selected")).toBeTruthy();
   });
 
-  it("blocks DGXC system_info, GPT-OSS, and fixed Llama validation on Nscale", async () => {
+  it("enables fallback validations while enforcing fixed Llama geometry", async () => {
     renderView();
     await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeTruthy());
     fireEvent.click(screen.getByText("Select all eligible (4)"));
 
     const sysinfoButton = screen.getByRole("button", { name: "DGXC system_info" });
-    expect(sysinfoButton).toBeDisabled();
-    expect(screen.getByRole("button", { name: "GPT-OSS CPU — per-node fan-out" })).toBeDisabled();
+    expect(sysinfoButton).toBeEnabled();
+    expect(screen.getByRole("button", { name: "GPT-OSS CPU — per-node fan-out" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: /Legacy Llama|512-GPU/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Llama 405B FP8 — 1024 GPUs / 50 steps" })).toBeDisabled();
-    expect(screen.getByText(/blocked pending ProgramRunner-only recipes/i)).toBeInTheDocument();
+    expect(screen.getByText(/documented Slurm fallback/i)).toBeInTheDocument();
   });
 
-  it("blocks MNUberGEMM and never prepares a request", async () => {
+  it("makes MNUberGEMM planning available", async () => {
     const emptyBody = { ok: true, rows: [], jobs: [] };
     vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
       const url = String(input);
@@ -322,13 +322,12 @@ describe("MultirackView rack filters", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Select rack ink50-dh01-d02" }));
 
     const button = screen.getByRole("button", { name: "MNUberGEMM 26.03-v1.17" });
-    expect(button).toBeDisabled();
+    expect(button).toBeEnabled();
     fireEvent.click(button);
-    const prepareCall = vi.mocked(globalThis.fetch).mock.calls.find(([url]) => String(url) === "/api/validation-presets/prepare");
-    expect(prepareCall).toBeUndefined();
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 
-  it("keeps fixed Llama blocked even when a campaign resolves 256 nodes", async () => {
+  it("enables fixed Llama when a campaign resolves exactly 256 nodes", async () => {
     const campaignRacks = Array.from({ length: 16 }, (_, index) => `rack-${String(index + 1).padStart(2, "0")}`);
     const emptyBody = { ok: true, rows: [], jobs: [] };
     vi.mocked(globalThis.fetch).mockImplementation((input) => {
@@ -380,7 +379,7 @@ describe("MultirackView rack filters", () => {
 
     await waitFor(() => expect(screen.getByText("Select all eligible (16)")).toBeInTheDocument());
     fireEvent.click(screen.getByText("Select all eligible (16)"));
-    expect(screen.getByRole("button", { name: "Llama 405B FP8 — 1024 GPUs / 50 steps" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Llama 405B FP8 — 1024 GPUs / 50 steps" })).toBeEnabled();
     expect(screen.getByText(/16 selected nodes per rack/i)).toBeInTheDocument();
   });
 

@@ -157,7 +157,9 @@ NVIDIA GPU cluster racks. You have expertise in:
 
 Guidelines:
 - Be concise and actionable. Prefer bullet points for multi-step answers.
-- This deployment is Nscale BCM 11. Use PythonCM only; never suggest Slurm, cmsh, or pdsh.
+- This deployment is Nscale BCM 11. Prefer PythonCM for every equivalent operation, especially recurring status/inventory calls.
+- Slurm is an allowed on-demand fallback only for features whose allocation, MPI, Pyxis, or LLMB semantics have no equivalent PythonCM implementation. State that fallback explicitly.
+- Do not suggest cmsh polling. Do not imply that a preserved Slurm fallback runs on the 30-second Racks refresh path.
 - If the user is looking at a specific rack, focus advice on that rack.
 - Reference validation results, NCCL bandwidth numbers, and PythonCM states when relevant.
 - For troubleshooting, suggest a systematic workflow: check status → isolate → fix → verify.
@@ -442,9 +444,9 @@ graph TD
     # NCCL
     (
         ["nccl", "all-reduce", "bandwidth", "bus bw", "collective"],
-        ("NCCL submission is currently blocked in Nscale PythonCM mode. The installed direct "
-        "recipe still launches MPI through SSH, so it is not certified as ProgramRunner-only. "
-        "Existing result logs remain readable; no new NCCL job is submitted through a fallback."),
+        ("NCCL remains available through the documented on-demand Slurm fallback because the "
+        "validated recipe needs allocation and MPI launcher semantics that PythonCM ProgramRunner "
+        "does not reproduce. It is never called by the 30-second Racks refresh."),
     ),
     # PythonCM / drain / nodes. Legacy terms remain query synonyms only.
     (
@@ -469,8 +471,8 @@ graph TD
         "**3. Attempt GPU reset:**\n"
         "```\nnvidia-smi -r -i <gpu_id>\n```\n\n"
         "**4. If reset fails:** use the rack Power action, which calls PythonCM's device API.\n\n"
-        "After recovery, run the PythonCM hardware and NVLink checks. NCCL remains blocked until "
-        "its ProgramRunner-only recipe is validated."),
+        "After recovery, run the PythonCM hardware and NVLink checks. Use the explicit Slurm "
+        "fallback when the exact NCCL validation recipe is required."),
     ),
     # NVLink
     (
@@ -494,16 +496,16 @@ graph TD
         "**3. Check subnet manager:**\n"
         "```\nsminfo\nibswitches\n```\n\n"
         "Use the Nscale fabric probe for current read-only PythonCM ProgramRunner results. "
-        "Switch resets and network deep-audit/fix operations are blocked because the installed "
-        "recipes are not ProgramRunner-only. Demo chat does not invent fabric health."),
+        "Switch resets and vendor-script audits remain available as explicit on-demand fallbacks "
+        "where PythonCM has no equivalent. Demo chat does not invent fabric health."),
     ),
     # NEMO / validation / training
     (
         ["nemo", "validation", "training", "llm", "megatron", "run validation", "test.*rack"],
-        ("New validation submissions are currently fail-closed in Nscale PythonCM mode. "
-        "The installed NCCL, NeMo, Llama, ClusterKit, NVLoom, MNUberGEMM, GPT-OSS, and "
-        "system-info recipes are not yet equivalent ProgramRunner-only implementations. "
-        "Rack Status will not fall back to Slurm, cmsh, pdsh, MPI-over-SSH, or hidden wrapper fan-out."),
+        ("Validation remains fully available. Rack Status uses PythonCM when an exact equivalent "
+        "exists; the installed NCCL, NeMo, Llama, ClusterKit, NVLoom, MNUberGEMM, GPT-OSS, and "
+        "system-info recipes use explicit on-demand Slurm or transport fallbacks where their "
+        "allocation, MPI, Pyxis, LLMB, or file-transfer semantics have no PythonCM equivalent."),
     ),
     # Troubleshooting / help / how to
     (
@@ -512,7 +514,7 @@ graph TD
         "**Step 1 — Identify the issue:**\n"
         "- Check rack status on the Dashboard for an overview\n"
         "- Look for nodes in `drain` or `down` state in the Scheduler's PythonCM view\n"
-        "- Review existing validation results; new validation submissions are blocked\n\n"
+        "- Review existing validation results and the provider shown for each launch\n\n"
         "**Step 2 — Isolate the root cause:**\n"
         "- GPU errors → Run `nvidia-smi -q`, check Xid codes in `dmesg`\n"
         "- NVLink issues → Run `nvidia-smi nvlink -s` and `-e` for errors\n"
@@ -526,7 +528,7 @@ graph TD
         "**Step 4 — Verify:**\n"
         "- Re-run the enabled PythonCM hardware/NVLink read-only checks\n"
         "- Confirm nodes are back to `idle` in PythonCM\n"
-        "- Do not submit NCCL or NeMo validation until a ProgramRunner-only recipe is certified\n\n"
+        "- Run NCCL or NeMo through the documented on-demand Slurm fallback when needed\n\n"
         "Would you like me to walk through any of these steps in detail?"),
     ),
     # Power / IPMI / BMC
@@ -539,10 +541,11 @@ graph TD
     # PythonCM / BCM. Legacy terms remain query synonyms only.
     (
         ["cmsh", "bcm", "base command", "bright", "cluster manager", "cm "],
-        ("This Nscale deployment uses BCM 11 through PythonCM only.\n\n"
+        ("This Nscale deployment uses BCM 11 with PythonCM as the primary provider.\n\n"
         "- Rack and node inventory comes from the PythonCM rack/device APIs.\n"
         "- Drain/resume and power actions use PythonCM device operations.\n"
-        "- Enabled commands use PythonCM ProgramRunner with UUID tracking; validation is blocked.\n"
+        "- Equivalent commands use PythonCM ProgramRunner with UUID tracking.\n"
+        "- Validations and other semantic gaps use explicit, on-demand Slurm/transport fallbacks.\n"
         "- The Racks view refreshes this PythonCM-derived state every 30 seconds.\n\n"
         "Use the Racks or Scheduler page for live state; this assistant does not fabricate a cluster snapshot."),
     ),

@@ -39,7 +39,7 @@ export const shellContent: HelpContent[] = [
     domain: "Shell",
     summary: "Left navigation grouped by domain, with Settings, Docs, and Help.",
     description:
-      "The Sidebar is the left navigation. It groups Nscale destinations by domain (Compute, Infrastructure, Observability, Analytics & Benchmarks) and has bottom items for Settings, Documentation, and Help. It can collapse to an icon rail.",
+      "The Sidebar is the left navigation. It groups Nscale destinations by domain (Compute, Infrastructure, Observability, Tools, Analytics & Benchmarks, Platform) and has bottom items for Settings, Documentation, and Help. It can collapse to an icon rail.",
     features: ["Domain-grouped navigation.", "Collapsible to an icon rail.", "Settings, Documentation, and Help links."],
     howTo: [
       { task: "Navigate to a page", steps: ["Open the relevant domain group in the sidebar.", "Click the destination."] },
@@ -49,26 +49,26 @@ export const shellContent: HelpContent[] = [
     keywords: ["sidebar", "navigation", "menu", "nav", "drawer", "collapse"],
     aria: { label: "Sidebar navigation", description: "Left navigation grouped by domain with Settings, Documentation, and Help." },
     aiContext:
-      "The Sidebar is the Nscale navigation grouped by domain (Compute, Infrastructure, Observability, Analytics & Benchmarks) with bottom links to Settings, Documentation, and Help; collapsible to an icon rail.",
+      "The Sidebar is the Nscale navigation grouped by domain, including Tools and Platform; it is collapsible to an icon rail.",
   },
   {
     id: "toolbar",
     kind: "shell",
     title: "Toolbar",
     domain: "Shell",
-    summary: "Top bar: page title, refresh, theme, PythonCM scheduler dialogs, and logout.",
+    summary: "Top bar: page title, refresh, theme, scheduler dialogs, terminal, and logout.",
     description:
-      "The Toolbar is the top app bar. It shows the current page title and global actions: refresh, theme toggle, PythonCM active jobs, node availability, log export, active users, and logout.",
-    features: ["Page title.", "Refresh and theme toggle.", "PythonCM active-jobs/node-availability dialogs, log export, active users, logout."],
+      "The Toolbar is the top app bar. It shows the current page title and global actions: refresh, theme toggle, active jobs, node availability, head-node terminal, log export, active users, and logout.",
+    features: ["Page title.", "Refresh and theme toggle.", "Active-jobs/node-availability dialogs, terminal, log export, active users, logout."],
     howTo: [
       { task: "Refresh data", steps: ["Click the refresh action in the toolbar."] },
       { task: "Toggle dark/light theme", steps: ["Click the theme toggle in the toolbar."] },
     ],
     related: ["appLayout", "squeueDialog", "sinfoDialog"],
     keywords: ["toolbar", "appbar", "header", "refresh", "theme", "logout", "actions"],
-    aria: { label: "Top toolbar", description: "Top bar with the page title and global actions: refresh, theme, PythonCM scheduler dialogs, log export, and logout." },
+    aria: { label: "Top toolbar", description: "Top bar with the page title and global actions: refresh, theme, scheduler dialogs, terminal, log export, and logout." },
     aiContext:
-      "The Toolbar is the top app bar with the page title and global actions: refresh, theme toggle, PythonCM active jobs, node availability, log export, active users, and logout.",
+      "The Toolbar is the top app bar with the page title and global actions; periodic state is PythonCM-backed, while its interactive terminal is an explicit SSH fallback.",
   },
   {
     id: "appBreadcrumbs",
@@ -109,10 +109,10 @@ export const shellContent: HelpContent[] = [
     title: "Preview banner",
     domain: "Shell",
     summary: "Banner shown on preview/mock pages.",
-    description: "PreviewBanner is shown on preview pages to indicate that data is mock or not yet live.",
+    description: "PreviewBanner is shown on preview pages to indicate that data is mock or not yet live, including the Terminal placeholder when applicable.",
     features: ["Indicates preview/mock pages."],
     howTo: [{ task: "Know if a page is live", steps: ["Look for the preview banner.", "If present, the page uses mock data."] }],
-    related: ["infraEthernet", "obsMetrics"],
+    related: ["infraEthernet", "obsMetrics", "terminal"],
     keywords: ["preview", "banner", "mock", "placeholder"],
     aria: { label: "Preview banner", description: "Banner indicating a page is a preview backed by mock data." },
     aiContext: "PreviewBanner marks preview pages as mock/not-yet-live.",

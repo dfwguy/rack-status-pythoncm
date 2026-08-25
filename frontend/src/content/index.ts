@@ -22,31 +22,27 @@ import { rackDetailContent } from "./registry/rackDetail";
 import { parserContent } from "./registry/parser";
 import { infrastructureContent } from "./registry/infrastructure";
 import { observabilityContent } from "./registry/observability";
+import { toolsContent } from "./registry/tools";
+import { workflowContent } from "./registry/workflow";
 import { analyticsContent } from "./registry/analytics";
 import { platformContent } from "./registry/platform";
 import { shellContent } from "./registry/shell";
 
 export type { HelpContent, HelpRegistry, HelpKind, HelpHowTo, HelpFaq, HelpAria } from "./types";
 
-/** Nscale-supported content entries, in authoring order. */
-const NSCALE_CONTENT: HelpContent[] = [
+/** All Nscale UI content entries, in authoring order. */
+export const ALL_CONTENT: HelpContent[] = [
   ...computeContent,
-  ...rackDetailContent.filter((entry) => entry.id !== "webTerminalDialog"),
+  ...rackDetailContent,
   ...parserContent,
   ...infrastructureContent,
   ...observabilityContent,
-  ...analyticsContent.filter((entry) => entry.id !== "postRunNodeReport"),
-  ...platformContent.filter((entry) => !["projects", "platformCatalog", "toolRegistry"].includes(entry.id)),
+  ...toolsContent,
+  ...workflowContent,
+  ...analyticsContent,
+  ...platformContent,
   ...shellContent,
 ];
-
-const NSCALE_CONTENT_IDS = new Set(NSCALE_CONTENT.map((entry) => entry.id));
-
-/** Help/AI registry with references to disabled legacy surfaces removed. */
-export const ALL_CONTENT: HelpContent[] = NSCALE_CONTENT.map((entry) => ({
-  ...entry,
-  related: (entry.related ?? []).filter((id) => NSCALE_CONTENT_IDS.has(id)),
-}));
 
 /** Keyed registry: `id` -> entry. Throws on duplicate ids to keep ids unique. */
 export const CONTENT_REGISTRY: HelpRegistry = ALL_CONTENT.reduce<HelpRegistry>((acc, entry) => {

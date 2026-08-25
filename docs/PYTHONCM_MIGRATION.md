@@ -1,7 +1,9 @@
-# Nscale TX PythonCM-only deployment
+# Nscale TX PythonCM-primary deployment
 
-This runbook applies only to Nscale TX. The authoritative conversion ledger is
-[`PYTHONCM_ZERO_SLURM_AUDIT_2026-08-25.md`](PYTHONCM_ZERO_SLURM_AUDIT_2026-08-25.md).
+This runbook applies only to Nscale TX. The authoritative feature/provider map is
+[`../README_NSCALE_PYTHONCM_HYBRID.md`](../README_NSCALE_PYTHONCM_HYBRID.md),
+with independent evidence in
+[`NSCALE_PYTHONCM_HYBRID_AUDIT_2026-08-25.md`](NSCALE_PYTHONCM_HYBRID_AUDIT_2026-08-25.md).
 
 ## Required configuration
 
@@ -14,8 +16,8 @@ RACK_PLATFORM=bcm
 RACK_SCHEDULER=pythoncm
 ```
 
-The application refuses to start or construct a scheduler if Nscale selects a
-provider other than PythonCM.
+The primary Nscale provider must be PythonCM. Explicit Slurm construction is
+retained only inside the feature-specific fallback paths described in the map.
 
 ## Deployment requirement
 
@@ -79,8 +81,11 @@ reserved node:
 8. Exercise enabled read-only hardware/NVLink/fabric commands and verify exact
    placement and per-node output.
 
-Validation families are not part of this sequence: they remain blocked until a
-separate recipe-level review proves an exact ProgramRunner-only equivalent.
+After PythonCM acceptance, validate one approved instance of each retained Slurm
+recipe (NCCL, NeMo, Llama, GPT-OSS, Exemplar/system-info, ClusterKit, NVLoom,
+and MNUberGEMM). Confirm numeric job-ID status, log discovery, cancellation, and
+durable activity recovery. These are on-demand fallbacks and must not change the
+provider used by `/api/status`.
 
 A successful HTTP response is not acceptance. Every native UUID and process must
 be accounted for, and no process may survive cancellation or failure.

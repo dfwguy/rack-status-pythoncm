@@ -337,11 +337,11 @@ export function ReportsView() {
           <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>*.xls*</Box>{" "}
           under each rack subdirectory, optional legacy <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>nvlmapper.*.zip</Box>, and Excel{" "}
           <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>*.xlsx</Box> (e.g. parser exports under{" "}
-          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>parser-excel/</Box>). This view is read-only — sync or copy here if
+          <Box component="code" sx={{ fontFamily: "monospace", fontSize: "0.9em" }}>parser-excel/</Box>). No pdsh — sync or copy here if
           needed. Use <strong>Download</strong> on a row to save a file.
         </Text>
         <Text kind="body/regular/md" style={{ display: "block", lineHeight: 1.6, color: "var(--text-color-secondary)" }}>
-          New compute-node bug-report collection is blocked until PythonCM file transfer is validated; when a supported job
+          To <strong>generate</strong> new reports on compute nodes, use <strong>Generate bug report</strong> from the rack table; when that job
           finishes, use the rack download control for a zip. This page only lists files already present under the server reports directory.
         </Text>
       </Paper>

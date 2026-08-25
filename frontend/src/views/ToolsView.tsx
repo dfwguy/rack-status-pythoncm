@@ -1444,8 +1444,11 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           )}
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Unavailable in this Nscale PythonCM build: the existing compute-node installer has not yet been converted
-          to ProgramRunner. No legacy fallback is attempted.
+          <Box component="code" sx={{ fontSize: "0.85em" }}>01-download-cuda-nccl-workspace.sh</Box> runs on this dashboard
+          host. Then <Box component="code" sx={{ fontSize: "0.85em" }}>02-install-cuda-nccl-workspace.sh</Box>{" "}
+          runs on the chosen compute node through the documented on-demand fallback. NCCL needs HPC-X and{" "}
+          <Box component="code" sx={{ fontSize: "0.85em" }}>nvcc</Box> on that node. Timeout:{" "}
+          <Box component="code" sx={{ fontSize: "0.85em" }}>RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_TIMEOUT</Box>.
         </Typography>
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 640 }}>
           <TextField
@@ -1457,7 +1460,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             placeholder={clusterData?.tools_workspace_default || "/home/<user>/workspace"}
           />
           <TextField
-            label="Build host (conversion pending)"
+            label="Build host"
             size="small"
             fullWidth
             value={cudaNcclBuildHost}
@@ -1503,7 +1506,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
               variant="contained"
               onClick={() => void runCudaNcclInstall()}
               disabled={
-                true
+                cudaNcclLoading || (!installCudaToolkit && !buildNccl) || !cudaNcclBuildHost.trim()
               }
             >
               {cudaNcclLoading ? "Running…" : "Run CUDA / NCCL install"}
@@ -1650,8 +1653,9 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           )}
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Unavailable in this Nscale PythonCM build: the existing compute-node builder has not yet been converted
-          to ProgramRunner. No legacy fallback is attempted.
+          Clones NVIDIA nvloom and downloads the required CMake toolchain on the dashboard host, then runs the
+          existing build recipe on the selected build host through the documented on-demand fallback. Timeout:{" "}
+          <Box component="code" sx={{ fontSize: "0.85em" }}>RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_TIMEOUT</Box>.
         </Typography>
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 640 }}>
           <TextField
@@ -1663,7 +1667,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             placeholder={clusterData?.tools_workspace_default || "/home/<user>/workspace"}
           />
           <TextField
-            label="Build host (conversion pending)"
+            label="Build host"
             size="small"
             fullWidth
             value={nvloomBuildHost}
@@ -1692,7 +1696,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             <Button
               variant="contained"
               onClick={() => void runNvloomInstall()}
-              disabled
+              disabled={nvloomLoading || !nvloomBuildHost.trim() || !nvloomWorkspace.trim()}
             >
               {nvloomLoading ? "Running…" : "Run install nvloom"}
             </Button>
@@ -1722,8 +1726,9 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           </Typography>
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Unavailable in this Nscale PythonCM build: the packaged Exemplar installer still invokes workload-manager
-          launch commands. It is disabled until a reviewed ProgramRunner installer is available.
+          Runs <Box component="code" sx={{ fontSize: "0.85em" }}>install-dgxc-benchmarking-workspace.sh</Box> to prepare
+          NVIDIA dgxc-benchmarking and llmb-run. Record creates a reviewable headless configuration; Install also runs
+          the packaged installer and may use the documented Slurm fallback for workload-manager operations.
         </Typography>
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 640 }}>
           <TextField
@@ -1789,7 +1794,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             <Button
               variant="contained"
               onClick={() => void runDgxcSetup()}
-              disabled
+              disabled={dgxcLoading || !dgxcWorkspace.trim()}
             >
               {dgxcLoading ? "Running…" : dgxcMode === "install" ? "Run Exemplar install" : "Record Exemplar config"}
             </Button>

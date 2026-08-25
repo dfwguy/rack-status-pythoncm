@@ -27,12 +27,15 @@ import {
   LayoutDashboard,
   Layers,
   Server,
+  Terminal,
   FileDown,
   Settings,
   BookOpen,
   HelpCircle,
   ChevronLeft,
   LineChart,
+  Wrench,
+  Workflow,
   Cpu,
   BarChart3,
   Network,
@@ -44,7 +47,11 @@ import {
   Gauge,
   ScrollText,
   Bell,
+  Boxes,
+  FolderKanban,
   CircuitBoard,
+  Code2,
+  ClipboardCheck,
 } from "lucide-react";
 
 export type ViewId =
@@ -61,6 +68,13 @@ export type ViewId =
   | "multirack"
   | "reports"
   | "analytics"
+  | "postRunNodeReport"
+  | "tools"
+  | "workflows"
+  | "terminal"
+  | "projects"
+  | "platformCatalog"
+  | "toolRegistry"
   | "apiReference"
   | "settings";
 
@@ -100,6 +114,17 @@ const ICON_SIZE = 20;
  * Several leaves are design previews (mock data) pending backend wiring.
  */
 const navEntries: NavEntry[] = [
+  {
+    kind: "group",
+    id: "grp-tools",
+    label: "Tools",
+    icon: <Wrench size={ICON_SIZE} />,
+    leaves: [
+      { id: "tools", label: "Operations & Scripts", icon: <Wrench size={ICON_SIZE} /> },
+      { id: "workflows", label: "Workflows", icon: <Workflow size={ICON_SIZE} /> },
+      { id: "terminal", label: "Terminal", icon: <Terminal size={ICON_SIZE} /> },
+    ],
+  },
   {
     kind: "group",
     id: "grp-compute",
@@ -142,7 +167,20 @@ const navEntries: NavEntry[] = [
     icon: <BarChart3 size={ICON_SIZE} />,
     leaves: [
       { id: "analytics", label: "Analytics", icon: <LineChart size={ICON_SIZE} /> },
+      { id: "postRunNodeReport", label: "Post Run Node Report", icon: <ClipboardCheck size={ICON_SIZE} /> },
       { id: "reports", label: "Reports", icon: <FileDown size={ICON_SIZE} /> },
+    ],
+  },
+  {
+    kind: "group",
+    id: "grp-platform",
+    label: "Platform",
+    icon: <Boxes size={ICON_SIZE} />,
+    leaves: [
+      { id: "projects", label: "Projects & Clusters", icon: <FolderKanban size={ICON_SIZE} /> },
+      { id: "platformCatalog", label: "Platform Catalog", icon: <CircuitBoard size={ICON_SIZE} /> },
+      { id: "toolRegistry", label: "Tool Registry", icon: <Wrench size={ICON_SIZE} /> },
+      { id: "apiReference", label: "API Reference", icon: <Code2 size={ICON_SIZE} /> },
     ],
   },
 ];

@@ -41,7 +41,6 @@ import time
 import uuid
 
 import host_exec
-import scheduler_runtime
 from core import truthy_env
 
 _logger = logging.getLogger("rack_web.api.terminal")
@@ -219,10 +218,7 @@ class _WebSocketTerminalMiddleware:
         # websocket before claiming this path. simple_websocket writes the HTTP 101
         # response on the raw socket and never calls start_response; Werkzeug still
         # finalizes with write(b""), so we must call start_response before returning.
-        if (
-            path == "/ws/terminal" and upgrade == "websocket" and has_socket
-            and _TERMINAL_ENABLED and not scheduler_runtime.is_pythoncm()
-        ):
+        if path == "/ws/terminal" and upgrade == "websocket" and has_socket and _TERMINAL_ENABLED:
             try:
                 self._handle_terminal(environ)
             finally:
@@ -247,8 +243,6 @@ class _WebSocketTerminalMiddleware:
 
     def _get_or_create_session(self, qs: dict) -> _TerminalSession | None:
         """Return an existing session for reconnect, or create a new one."""
-        if scheduler_runtime.is_pythoncm():
-            return None
         session_id = (qs.get("session") or [""])[0].strip()
         if session_id:
             with self._sessions_lock:
@@ -316,9 +310,7 @@ class _WebSocketTerminalMiddleware:
 
             if sess is None:
                 reason = (
-                    "Interactive SSH terminals are disabled in Nscale PythonCM mode"
-                    if scheduler_runtime.is_pythoncm()
-                    else "Demo mode — terminal connections are disabled"
+                    "Demo mode — terminal connections are disabled"
                     if truthy_env("RACK_STATUS_DEMO")
                     else "Missing target node"
                 )
