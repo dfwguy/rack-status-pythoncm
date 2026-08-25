@@ -1,12 +1,13 @@
 ---
-description: Multi-cluster deployment map (Mayo / Firmus / Boston) — worktree dir, branch, catalog file, and connection details to avoid silently targeting the wrong cluster
+description: Multi-cluster deployment map (Mayo / Nscale TX / Nscale NC / Firmus / Boston) — worktree dir, branch, catalog file, and connection details to avoid silently targeting the wrong cluster
 alwaysApply: true
 ---
 
 # Multi-Cluster Deployments — DO NOT MIX
 
-Three customer deployments share this repo. Before running anything cluster-specific,
+Five customer deployments share this repo. Before running anything cluster-specific,
 state which cluster you are targeting. The wrong host/catalog silently hits the wrong cluster.
+(More Nscale kits are *reachable* than are deployed here — see the jumphost map below.)
 
 ## Quick map
 
@@ -14,12 +15,29 @@ state which cluster you are targeting. The wrong host/catalog silently hits the 
 |-----|-----|-----|-----|-----|
 | **Mayo Clinic** | `~/Documents/code/nvis-rack-status` | `v3` | `var/store/catalog.json` | Mayo Clinic / MAYO |
 | **Nscale TX** (GB300) | `~/Documents/code/nvis-rack-status` | `v3` | *(deployed on the OVA)* | NscaleTX / NscaleTX-GB300 |
+| **Nscale NC** | `~/Documents/code/nvis-rack-status` | `v3` | *(not yet created)* | *(not yet created)* |
 | **Firmus** (MEL01) | `~/Documents/code/nvis-mel01` | `mel01-validation` | `var/store/catalog.json` (default) | Firmus BK2 / Firmus |
 | **Boston Markley** (BOS01) | `~/Documents/code/nvis-mel01` | `mel01-validation` | `var/store/catalog-boston.json` | Boston Markley / NVIDIA |
 
-⚠️ **Mayo and Nscale TX share the `nvis-rack-status` worktree and the `v3` branch.** They are
-distinguished by *deployment target*, not by checkout: Nscale TX runs as a container on its
-own OVA. Product work for either lands on `v3`.
+⚠️ **Mayo, Nscale TX and Nscale NC share the `nvis-rack-status` worktree and the `v3` branch.**
+They are distinguished by *deployment target*, not by checkout: each Nscale kit runs as a
+container on its own appliance. Product work for any of them lands on `v3`.
+
+⚠️ **On Nscale, the IP address is not cluster identity — the mobilekit jumphost is.** Every
+Nscale kit is reached through its own `mobilekit-p-phy-deviceN` Teleport jumphost and every one
+of them numbers its hosts out of the same `192.168.10.0/2x`, so the *same* IP behind a different
+device is a different cluster in a different physical location. `192.168.10.3` alone is
+ambiguous: behind device100 it is one kit, behind device2 another. **Never target a bare Nscale
+IP** — always go through the alias, which pins the jumphost:
+
+| Jumphost | Entry host | Alias | Cluster |
+|-----|-----|-----|-----|
+| `…-device2` | `nvis@192.168.10.3` (OVA), `cmods@192.168.10.2` (BCM head) | `nscale-tx-ova`, `nscale-tx-node` | Nscale TX (GB300) |
+| `…-device100` | `rkoike@192.168.10.3`, key `id_nscale_16k` | `nscale-tx-16k` | Nscale 16k — a **separate kit** from TX despite the `tx` in the alias; not a rack-status deployment (yet) |
+| `…-device3` | `rkoike@192.168.10.4`, key `id_nscale_nc` | `nscale-nc-app` | Nscale NC |
+
+`…-device1` is also in the Teleport inventory and is not mapped here. An unmapped device is an
+unknown cluster, not a spare route to a known one.
 
 ⚠️ **Firmus and Boston share the `nvis-mel01` worktree.** They are distinguished ONLY by
 `NVIS_CATALOG_FILE`: Firmus = default `catalog.json`; Boston = `catalog-boston.json` (set by
@@ -45,9 +63,17 @@ mbcm01; reach the UI via an SSH tunnel.
 password-only, an agent can never open a fresh session — the human runs
 `ssh nscale-tx-ova 'echo ok'` once, then the agent reuses the `ControlMaster`. Dashboard =
 container on the OVA at `:5056`, reached via a local **5156** forward (`~/Documents/code/ns-tun.sh`).
-**device1/2/3 are NOT interchangeable** — each bridges its own `192.168.10.0/2x`; this kit is
-behind device2 only. `Connection closed by UNKNOWN port 65535` means the jumphost is offline,
-not a cert problem. Full detail: **[docs/NSCALE_TX_DEPLOYMENT.md](../../docs/NSCALE_TX_DEPLOYMENT.md)**.
+Reached via device2 — see the jumphost map above; the devices are **not** interchangeable.
+`Connection closed by UNKNOWN port 65535` means the jumphost is offline, not a cert problem.
+Full detail: **[docs/NSCALE_TX_DEPLOYMENT.md](../../docs/NSCALE_TX_DEPLOYMENT.md)**.
+
+**Nscale NC** — new as of 2026-08-25, and **not the TX kit**. Two hops, key auth throughout:
+Teleport cert to `mobilekit-p-phy-device3.nscale.teleport.sh`, then key `id_nscale_nc` to
+`rkoike@192.168.10.4` (`ssh nscale-nc-app`, the app server). Unlike TX there is **no password
+hop**, so an agent can open its own sessions rather than borrowing a human's `ControlMaster`.
+Everything past the app server is still unmapped — BCM head, rack/node naming, dashboard port
+and the catalog Project/Cluster record do not exist yet, so treat any NC target beyond
+`nscale-nc-app` as unverified until it has been confirmed on the box.
 
 **Mayo Clinic** — main repo on `v3`. SSH/deploy specifics are not captured here; confirm with
 the operator before acting on Mayo.
@@ -58,6 +84,6 @@ the operator before acting on Mayo.
 - Boston: privileged tools (validation, NeMo, sysinfo, hw-check, cuda-nccl) use the **script**
  profile (root@slogin); cmsh/slurm queries use **control** (cmods@head). Firmus does it all on
  the single head.
-- Commits: Boston/Firmus → `mel01-validation`; Mayo → `v3`.
+- Commits: Boston/Firmus → `mel01-validation`; Mayo / Nscale TX / Nscale NC → `v3`.
 - `:5000` on macOS is the AirPlay Receiver and returns **403 Forbidden** — never tunnel a
  container to local `:5000`; pick another local port (e.g. `ssh -L 8080:localhost:<remote>`).
