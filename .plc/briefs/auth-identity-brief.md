@@ -309,6 +309,140 @@ no criterion referencing a requirement that does not exist.** Checked mechanical
    federated subject to resolve to a local record; whether `admin@nvidia.com` becomes the login
    identifier or maps to one affects FR-2a's uniqueness rule.
 
+## Design Delta
+
+Drafted 2026-08-25, after the requirements above. Decisions are recorded with what was rejected,
+because the rejected option is usually the one someone proposes again in six months.
+
+### Decision 1 — identity gets its own store, and this is not a preference
+
+**Rejected: a `users` table in the catalog.** It was the cheap option and it looked right — the
+catalog's `TinyDBRepo` already provides atomic writes, an `RLock` and an `fcntl` flock, which is
+NFR-5 satisfied for free.
+
+**It is disqualified by one fact.** `NVIS_CATALOG_FILE` selects *which catalog file* the process
+reads: Firmus uses `var/store/catalog.json`, Boston uses `var/store/catalog-boston.json`. If users
+lived in the catalog, **an environment variable would change who can log in** — a direct violation of
+FR-12, which requires that no configuration input grants access. The catalog is also a document store
+whose contents operators legitimately hand-edit and whose exports are plaintext configuration, and
+neither property is acceptable for credential material.
+
+There is a cleaner statement of the same point: the catalog answers *what this deployment can run and
+where*. Identity answers *who may use it*. Those have different lifetimes, different blast radii and
+different backup stories, and FR-14 wants an encrypted export of one and not the other.
+
+**Chosen: a separate store that reuses the mechanism, not the file.** `_AtomicJSONStorage` is a
+TinyDB `Storage` subclass parameterised only by path — verified: it has no coupling to catalog tables
+— so identity gets its own file through the same class. One implementation of atomic-write-plus-lock,
+two stores. Per `core-designs.mdc`, this is the documented exception: a genuinely new capability that
+no existing citizen covers. **Identity is a new first-class citizen**, and the obligation that comes
+with that is to add it to `core-designs.mdc` when it lands, so the next person inherits it.
+
+Location: `var/identity/identity.json`, mode `0600`, under `/app/var` — which is the `rack-data`
+named volume, so it survives a container recreate for the same reason the audit trail does (Phase 1,
+TC-40).
+
+### Components
+
+| Module | Owns |
+|---|---|
+| `backend/identity/models.py` | `User`, `Group`, `Membership` records; the stable-id and login-uniqueness rules (FR-2, FR-2a) |
+| `backend/identity/store.py` | Persistence over `_AtomicJSONStorage`; the only writer |
+| `backend/identity/srp.py` | SRP-6a verifier creation and the server side of the exchange (FR-4) |
+| `backend/identity/tokens.py` | JWT mint and verify, algorithm pinning, issuer/audience/expiry (FR-5, FR-4c, FR-4d) |
+| `backend/identity/revocation.py` | `subject → revoked_at`, with the generation-cached read NFR-3 requires |
+| `backend/identity/oidc.py` | Provider config, JWKS fetch, ID-token validation (FR-7) |
+| `backend/identity/bootstrap.py` | First-boot `admin` creation and one-time password emission (FR-10, FR-10b) |
+| `backend/identity/testing.py` | The test credential facility (FR-18b) |
+| `backend/api/identity.py` | Users, groups and membership CRUD, each `@action`-declared (FR-13, FR-13a, FR-13b) |
+| `backend/api/auth.py` | Rewritten: SRP init/verify, OIDC callback, logout. Token and PAM paths deleted (FR-18) |
+| `frontend/src/views/UsersView.tsx`, `GroupsView.tsx` | Admin surfaces (FR-17) |
+| `frontend/src/lib/srpClient.ts` | Browser side of the exchange |
+
+### Decision 2 — the SRP exchange needs bounded server state, and that is the interesting part
+
+SRP-6a is two round trips: the client sends a username and gets a salt plus the server's public
+value; it then sends its own public value and a proof, and gets the server's proof back. Between
+those calls the server holds an ephemeral private value. That is **state in a stateless API**, and it
+is where an SRP implementation usually goes wrong.
+
+The design: a short-lived in-process challenge table keyed by an opaque id, bounded in size and
+expiring in seconds, holding only the ephemeral values. Three properties it must have, each because
+of a specific failure:
+
+- **Bounded**, or an unauthenticated caller can exhaust memory by starting exchanges it never
+  finishes. This is the same reasoning as Phase 1's flood guard and the lake sink's queue.
+- **Single-use** — a challenge is consumed on verify, so a captured proof cannot be replayed.
+- **Uniform on unknown users.** FR-4b requires that an unknown login be indistinguishable from a
+  wrong password, so the init call must return a *synthetic* salt derived deterministically from the
+  username and a server secret, at comparable cost. A real implementation that skips this leaks the
+  user list through timing or through an obviously different response.
+
+**Thread-safe, not merely bounded.** The deployment runs `gunicorn --workers 1 --threads N
+--worker-class gthread` (verified in the `Dockerfile` entrypoint), so there is one process and
+several concurrent threads. The table therefore needs a lock, and the single-use consumption on
+verify must be atomic — a check-then-delete without one is a replay window. The single worker is also
+why design open question A is deferrable rather than urgent: a second worker would split the table
+and break login, so if the worker count ever rises this becomes a correctness bug, not a slowdown.
+Worth a comment at the call site, since `--workers 1` is in a Dockerfile nobody reads while
+debugging a login.
+
+### Decision 3 — JWT in an `HttpOnly` cookie, with the algorithm pinned
+
+Tokens are minted HS256 over a key **derived** from the deployment secret rather than the secret
+itself, so a JWT signing key leak is not a Flask session forgery key leak. Verification pins the
+algorithm to exactly the configured one, which is what FR-4c requires: PyJWT will otherwise honour
+the token's own `alg` header, and `alg: none` or an RS256→HS256 substitution both become valid
+signatures.
+
+The cookie replaces `session["rack_web_auth"]` as the source of the gate's verdict, and login writes
+`session["rack_web_user"]` — the seam Phase 1 reserved and never filled. That single line is what
+turns every audit event from `principal: anonymous` into a named subject (FR-15).
+
+### Decision 4 — revocation is a cached read, sized by Phase 1's lesson
+
+FR-6 puts a check on every authorised request, and NFR-3 gives it 5 ms at p95. Phase 1 established
+exactly how that budget gets blown: `catalog_context.resolve()` read TinyDB on every audited request
+and cost 4.74 ms, breaching the audit budget until it was cached on the store's generation counter.
+
+So `revocation.py` uses the same pattern from the start: a generation counter bumped on every write,
+and a cached read keyed on it. Not an optimisation to add later — the identical mistake is already
+documented in this repository.
+
+### Decision 5 — OIDC without a new backend dependency
+
+PyJWT arrives for our own tokens, and an IdP's ID token is a JWT. So validation is PyJWT plus a
+cached JWKS fetch, and `authlib` is not needed. The browser side can use `oidc-react` or MSAL.
+
+The consequence to state: JWKS requires reaching the provider, so an air-gapped site simply leaves
+federation unconfigured, and FR-19a makes an unreachable provider a visible message rather than a
+broken login form.
+
+### What this changes in existing citizens
+
+- **Auth (citizen 11)** keeps its single gate; only the source of its verdict changes. `web_auth.py`
+  loses `_token_verify`, `_pam_verify` and the mode selection.
+- **The audit trail** gains real values in two fields it already carries. No schema change (FR-15).
+- **Frontend contexts (citizen 12)**: `AuthContext` grows a username and the provider list;
+  `LoginPage` grows a username field and federation buttons.
+- **The action vocabulary** grows by the identity CRUD actions, each of which must be declared or the
+  build fails (NFR-8) — so administering who may do what is itself audited.
+
+### Design open questions
+
+- **A. Multi-worker SRP state.** The challenge table is in-process. The deployment runs
+  `--workers 1` today (verified), so this is deferrable — but it is a *correctness* dependency on a
+  Dockerfile flag, not a performance one. Either share the table (Redis, or the store itself), pin a
+  login to a worker, or assert `--workers 1` at startup so raising it fails loudly rather than
+  producing intermittent login failures.
+- **B. Token lifetimes.** FR-5b requires short-lived and renewable; the numbers are a deployment
+  question (open question 3 above).
+- **C. Where the JWT signing key lives.** Derived from `RACK_WEB_SECRET_KEY` is simplest and couples
+  two concerns; its own file under `var/secrets/` is cleaner and is one more thing to bootstrap.
+- **D. Does `operator_from_request()` survive as a display name?** FR-16 requires durable artifacts to
+  carry the authenticated principal; whether a separate label remains, and what the 46 call sites do,
+  is unresolved (open question 2 above).
+
 ## Explicit non-goals for this phase
 
 - **Authorization.** No policy engine, no policy documents, no permission evaluation. The audit
