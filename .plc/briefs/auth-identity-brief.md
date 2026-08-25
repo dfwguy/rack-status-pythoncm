@@ -93,7 +93,8 @@ release-gate evidence.
 | FR-13a | The product shall provide create, read, update and delete operations for **groups**, each as a distinctly named audited action. | as above | |
 | FR-13b | The product shall provide add-member and remove-member operations for **group membership**, each as a distinctly named audited action. | as above | membership editing is the surface that makes groups worth having |
 | FR-14 | The product shall support exporting the identity store in an **encrypted** form, and importing it, such that the export is useless without its key. | user request ("export the identity store in a secure way with key encryption") | for migration and backup; the export contains verifiers, not passwords |
-| FR-15 | The audit event's `principal` shall be the authenticated subject's stable identifier and `auth_method` shall name the mechanism used (`srp`, `oidc`, `token`, `pam`), replacing the current constant `anonymous`/`none`. | Phase 1 FR-5; the reserved seam | fills `session["rack_web_user"]`, which is read today and never written |
+| FR-15 | The audit event's `principal` shall be the authenticated subject's typed identifier in the form `user:<id>`, and `auth_method` shall name the mechanism used (`srp`, `oidc`), replacing the current constant `anonymous`/`none`. | Phase 1 FR-5; the reserved seam | fills `session["rack_web_user"]`, which is read today and never written. `token` and `pam` are **not** in the value set: FR-18 removes those mechanisms |
+| FR-15a | Principal and resource identifiers shall be produced and parsed by a single module, and no other code shall construct or split them by string manipulation. | Decision 1a | the action vocabulary's lesson applied to identifiers: a grammar with one implementation, or three regexes that disagree |
 | FR-16 | Operator attribution recorded against durable artifacts — rack lock claims and validation activities — shall be the authenticated principal, and shall not be derived from any client-supplied header. | the 46 `operator_from_request()` call sites | this is what turns the activity ledger into acceptance evidence. The trailing "a display name may remain" was dropped: *may* is not a requirement, and it made the clause untestable. Whether a display label survives is now open question 2 |
 | FR-17 | The product shall provide operator surfaces for user administration and for group and membership administration, built on the existing frontend contexts and the Kaizen design system. | scope doc "admin UI"; REQ-44 | `UsersView`, `GroupsView` |
 | FR-18 | The legacy authentication methods shall be **removed**, not deprecated. Specifically: the shared-token mode and its `RACK_WEB_AUTH_TOKEN`, the PAM mode and its `RACK_WEB_AUTH_MODE` / `RACK_WEB_AUTH_USER` / `RACK_WEB_PAM_SERVICE` / `RACK_WEB_PAM_HELPER_PYTHON`, and the vendored PAM bindings, shall no longer exist as authentication paths. Username-and-password against the identity store, or federation, shall be the only ways in. | feature-lead direction 2026-08-25 | **This reverses the previous FR-18, which required backward compatibility.** Recorded as a deliberate, accepted break of SRD REQ-41 — see *Breaking change* below. The live Nscale TX override currently carries `RACK_WEB_AUTH_TOKEN=nvis1234!`, a shared password in a committed deployment file, which is the concrete case for removal rather than deprecation |
@@ -154,7 +155,9 @@ Every requirement above has at least one criterion.
 | AC-23a | FR-13a | Each of create, read, update and delete for a group emits exactly one audit event naming the actor and the group. | automated test | |
 | AC-23b | FR-13b | Add-member and remove-member each emit exactly one audit event naming the actor, the group and the member. | automated test | |
 | AC-24 | FR-14 | An export re-imports to an equivalent store, and is unreadable without the key. | automated test | round trip; then assert failure with a wrong key |
-| AC-25 | FR-15 | An audited request from a logged-in user records that user's stable id and the mechanism used, not `anonymous`/`none`. | automated test | the direct fix for Phase 1's placeholder |
+| AC-25 | FR-15 | An audited request from a logged-in user records `user:<id>` and the mechanism used, not `anonymous`/`none`. | automated test | the direct fix for Phase 1's placeholder |
+| AC-25a | FR-15 | `principal` never contains a `urn:` prefix, and an audited event stays within the per-event byte figure the retention budget assumes. | automated test | the 12.6% measurement is the reason for the short form; asserting it stops a later "let's be more standards-compliant" change from silently cutting retention |
+| AC-25b | FR-15a | No module outside the identifier module splits or concatenates a principal or resource string. | automated test | source-level, like AC-4d and the no-deferred-`app`-lookup meta-test |
 | AC-26 | FR-16 | A rack lock claim and a validation activity record the authenticated principal, and a spoofed `X-Rack-Operator` header does not change it. | automated test | mirrors Phase 1's `test_principal_never_from_header` |
 | AC-27 | FR-17 | The user and group views render, and their mutating calls carry declared actions. | automated test | frontend render tests plus the action gate |
 | AC-28 | FR-18 | Setting `RACK_WEB_AUTH_TOKEN` grants no access, and neither token nor PAM appears as a selectable authentication mode. | automated test | the inverse of the criterion this replaces. `test_web_auth_gate.py` **will** need rewriting, which is the point |
@@ -361,6 +364,52 @@ TC-40).
 | `backend/api/auth.py` | Rewritten: SRP init/verify, OIDC callback, logout. Token and PAM paths deleted (FR-18) |
 | `frontend/src/views/UsersView.tsx`, `GroupsView.tsx` | Admin surfaces (FR-17) |
 | `frontend/src/lib/srpClient.ts` | Browser side of the exchange |
+
+### Decision 1a — principals are typed identifiers, rendered short, and resources use the same scheme
+
+**Yes to a principal URN, with three qualifications that came out of measuring it.**
+
+A bare `principal` string is what Phase 1 shipped, and it is already inadequate: `anonymous` says
+nothing about *kind*. Once there are local users, federated users, groups and eventually service
+principals, the field has to be self-describing or every consumer guesses. So:
+
+```
+principal  ::= "user:"    <uuid4>     # local or federated — one namespace (FR-7a)
+             | "group:"   <uuid4>
+             | "service:" <name>      # future: automation, not a person
+             | "anonymous"            # retained: pre-auth and refused requests
+resource   ::= <type> ":" <id> [ ":" <id> … ]    # type from the 36-type vocabulary
+```
+
+**Qualification 1 — no `urn:` prefix, and the reason is measured rather than aesthetic.** A full
+`urn:nvis:identity:user:<uuid>` is 59 bytes against `anonymous`'s 9, which is **+50 bytes on a
+397-byte audit event, 12.6%**. `principal` appears in *every* event, so that is a ~12.6% cut in
+retention days for the same byte ceiling — 41.8 days becomes roughly 37 at FR-7b's budget. The
+`urn:nvis:identity:` prefix is constant across every principal in the system, so it carries **zero
+information per event** while being the most-repeated bytes in the file. `user:<uuid>` keeps the type
+discriminator, the single parse point and the extensibility, at 42 bytes. Registering an RFC 8141 NID
+was never realistically on the table either.
+
+**Qualification 2 — the pair is the storage form; the string is a rendering.** In memory and on disk a
+principal is `(kind, id)`. The colon form is produced and consumed by **one module** with a
+constructor and accessors — the same decision as the action vocabulary, and for the same reason:
+structure encoded in a string gets parsed with a regex at the third call site and drifts from the
+second. Nothing outside that module splits on `":"`.
+
+**Qualification 3 — resources use the same scheme, or a policy language has two addressing models.**
+`docs/RESOURCE_MODEL.md` already describes resources as `(type, id)`; the URN is their rendering, so
+`rack.power:p5-r01` and `validation.activity:<uuid>` read the same way as `user:<uuid>`. This is what
+lets a policy be written against principals and resources with one grammar.
+
+**One asymmetry worth stating, because it falls out of Decision 1.** Resources are often
+cluster-scoped — a Slurm job id is not unique across clusters — but **principals are not**. The
+identity store is instance-wide precisely because it cannot live in the catalog, so a user means the
+same thing whichever cluster is active, and a principal identifier needs no scope segment. That is a
+consequence of the store decision rather than a separate choice.
+
+**Rejected: Cedar's `Type::"id"` form.** It is the native syntax of one candidate engine and the
+Phase 3 spike has not chosen an engine. Adopting one engine's serialisation before choosing the
+engine would make the identifier a migration if the other wins. The typed pair feeds either.
 
 ### Decision 2 — the SRP exchange needs bounded server state, and that is the interesting part
 

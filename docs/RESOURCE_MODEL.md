@@ -40,6 +40,36 @@ resolver must be able to produce.
 
 ---
 
+## The addressing grammar
+
+Principals and resources share one form, because a policy language with two addressing models is a
+policy language nobody writes correctly:
+
+```
+principal ::= "user:" <uuid4> | "group:" <uuid4> | "service:" <name> | "anonymous"
+resource  ::= <type> ":" <id> [ ":" <id> … ]     # type from the table below
+```
+
+So `user:8f14e45f-…`, `rack.power:p5-r01`, `validation.activity:<uuid>`, `slurm.job:mayo:127391`.
+
+**Deliberately not `urn:nvis:…`.** Measured, not preferred: a full URN principal is 59 bytes against
+`anonymous`'s 9, which is **+50 bytes on a 397-byte audit event — 12.6%** — and `principal` appears in
+every event, so it cuts FR-7b's retention from ~41.8 days to ~37 at the same byte ceiling. The
+`urn:nvis:identity:` prefix is identical for every principal in the system, so it is the most-repeated
+and least-informative bytes in the file. The colon form keeps the type discriminator, the single parse
+point and the extensibility without paying for a constant.
+
+**The pair is the storage form; the string is a rendering.** `(type, id)` in memory and on disk, with
+one module owning format and parse. Nothing else splits on `":"` — the same rule as the action
+vocabulary, for the same reason: structure encoded in a string acquires a regex at the third call site
+and drifts from the second.
+
+**Principals carry no scope; resources sometimes must.** A user means the same thing whichever cluster
+is active, because the identity store is instance-wide (it cannot live in the catalog — see the Phase 2
+brief, Decision 1). A Slurm job id, by contrast, is not unique across clusters, so a resource
+identifier may need a cluster segment. That asymmetry is a consequence of where identity lives, not a
+separate design choice.
+
 ## Identifier shapes in use
 
 Six shapes cover everything. Worth naming because the differences are what make a policy language
@@ -69,7 +99,7 @@ Grouped by root, as the action vocabulary groups them. **Verbs** are the actions
 
 | Type | Identifier | Shape | Verbs | Notes |
 |---|---|---|---|---|
-| `identity.user` | stable opaque id, **not** the login name | uuid4 | create, read, update, disable, delete, revoke | FR-2. The login name is a mutable *attribute*; the id is what audit events and policy attachments reference, so a rename orphans nothing |
+| `identity.user` | stable opaque id, **not** the login name | uuid4 | create, read, update, disable, delete, revoke | FR-2. The login name is a mutable *attribute*; the id is what audit events and policy attachments reference, so a rename orphans nothing. Note the two renderings: **as a resource** it is `identity.user:<uuid>` (the thing being administered); **as a principal** it is `user:<uuid>` (the thing acting). Same record, two roles — and a policy about who may edit users needs the first while the actor is the second |
 | `identity.group` | group id | uuid4 | create, read, update, delete | FR-8: flat, cannot contain a group |
 | `identity.membership` | (group id, user id) pair | composite | add_member, remove_member | Not independently identified — it is an edge, and modelling it as an entity would invite a policy that grants membership editing without naming the group |
 
