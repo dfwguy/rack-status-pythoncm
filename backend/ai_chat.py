@@ -148,8 +148,8 @@ You are the NVIS Rack Status AI Assistant. You help users understand and trouble
 NVIDIA GPU cluster racks. You have expertise in:
 
 - Rack validation status (NCCL tests, GPU health, NVLink, InfiniBand)
-- Slurm job scheduling and node states (drain, idle, alloc, down)
-- BCM (Base Command Manager) cluster management via cmsh
+- BCM 11 PythonCM ProgramRunner jobs and PythonCM node states (drain, idle, alloc, down)
+- BCM cluster inventory and lifecycle management through PythonCM
 - Network topology and switch configuration
 - NEMO framework validation runs
 - GPU reset, power cycling, and hardware diagnostics
@@ -157,9 +157,9 @@ NVIDIA GPU cluster racks. You have expertise in:
 
 Guidelines:
 - Be concise and actionable. Prefer bullet points for multi-step answers.
-- When suggesting commands, use the platform context (BCM vs MAAS).
+- This deployment is Nscale BCM 11. Use PythonCM only; never suggest Slurm, cmsh, or pdsh.
 - If the user is looking at a specific rack, focus advice on that rack.
-- Reference validation results, NCCL bandwidth numbers, and Slurm states when relevant.
+- Reference validation results, NCCL bandwidth numbers, and PythonCM states when relevant.
 - For troubleshooting, suggest a systematic workflow: check status → isolate → fix → verify.
 """
 
@@ -419,8 +419,8 @@ _DEMO_TOPIC_RESPONSES: list[tuple[list[str], str]] = [
 graph TD
     start(["Start"]) -->|"begin"| check_nodes["Check Node Health"]
     check_nodes -->|"all healthy"| run_nccl["Run NCCL Test"]
-    check_nodes -->|"nodes down"| check_slurm["Check Slurm State"]
-    check_slurm --> undrain(["Undrain Nodes"])
+    check_nodes -->|"nodes down"| check_pythoncm["Check PythonCM State"]
+    check_pythoncm --> undrain(["Resume Nodes with PythonCM"])
     undrain --> run_nccl
     run_nccl -->|"pass"| done(["Done - Healthy"])
     run_nccl -->|"fail"| diagnose{"Hardware or Software?"}
@@ -435,41 +435,23 @@ graph TD
     # Rack status
     (
         ["rack status", "rack health", "how.*rack", "status of", "what.*status", "overview"],
-        ("Here is the current rack status summary:\n\n"
-        "- **p34-r07**: All 18 nodes healthy, NCCL passed, bus BW 42.1 GB/s avg\n"
-        "- **p34-r08**: 16/18 nodes healthy, 2 nodes in `drain` (gpu07, gpu12 — Xid 79 errors)\n"
-        "- **p34-r09**: All 18 nodes healthy, NCCL passed, bus BW 41.8 GB/s avg\n"
-        "- **p34-r10**: 17/18 nodes healthy, 1 node `down` (gpu03 — NVLink failure)\n\n"
-        "Overall cluster health: **94.4%** (68/72 nodes operational). "
-        "I'd recommend investigating the Xid 79 errors on p34-r08 first — those are typically recoverable with a GPU reset."),
+        ("Use the Racks view for the current Nscale TX snapshot. It refreshes every 30 seconds "
+        "from PythonCM PhysicalNode, device-status, and node-state data. Demo chat does not "
+        "invent rack names, health counts, or validation results."),
     ),
     # NCCL
     (
         ["nccl", "all-reduce", "bandwidth", "bus bw", "collective"],
-        ("The latest NCCL all-reduce test results across the cluster:\n\n"
-        "| Rack | Nodes | Bus BW (avg) | Status |\n"
-        "|------|-------|-------------|--------|\n"
-        "| p34-r07 | 18/18 | 42.1 GB/s | PASS |\n"
-        "| p34-r08 | 16/18 | 38.7 GB/s | PARTIAL — 2 nodes excluded |\n"
-        "| p34-r09 | 18/18 | 41.8 GB/s | PASS |\n"
-        "| p34-r10 | 17/18 | 40.2 GB/s | PASS — 1 node excluded |\n\n"
-        "Expected bus bandwidth for H100 NVLink: **>40 GB/s** per link. "
-        "p34-r08 is below threshold — the excluded nodes (gpu07, gpu12) are likely dragging the average when partially tested. "
-        "Run `nccl-tests --rack p34-r08 --exclude gpu07,gpu12` to confirm the healthy nodes pass independently."),
+        ("NCCL submission is currently blocked in Nscale PythonCM mode. The installed direct "
+        "recipe still launches MPI through SSH, so it is not certified as ProgramRunner-only. "
+        "Existing result logs remain readable; no new NCCL job is submitted through a fallback."),
     ),
-    # Slurm / drain / nodes
+    # PythonCM / drain / nodes. Legacy terms remain query synonyms only.
     (
         ["slurm", "drain", "undrain", "sinfo", "squeue", "node state", "idle", "alloc", "scontrol"],
-        ("Current Slurm node states:\n\n"
-        "- **idle**: 42 nodes\n"
-        "- **alloc**: 24 nodes (3 active jobs)\n"
-        "- **drain**: 4 nodes — `gpu07@p34-r08` (Xid 79), `gpu12@p34-r08` (Xid 79), `gpu03@p34-r10` (NVLink), `gpu15@p34-r10` (health check timeout)\n"
-        "- **down**: 2 nodes — `gpu03@p34-r10` (hardware), `mgmt01@p34-r11` (unreachable)\n\n"
-        "To investigate a drained node:\n"
-        "```\nscontrol show node gpu07-p34-r08\n```\n\n"
-        "To undrain after fixing:\n"
-        "```\nscontrol update nodename=gpu07-p34-r08 state=idle reason=\"cleared\"\n```\n\n"
-        "The Xid 79 errors on p34-r08 nodes are GPU-level faults. Try `nvidia-smi -r` (GPU reset) first before hardware escalation."),
+        ("Use the Scheduler page for current Nscale PythonCM command and node state. "
+        "Drain and Resume call PythonCM directly; ProgramRunner commands are identified by UUID. "
+        "Demo chat does not fabricate live counts or node names."),
     ),
     # GPU issues
     (
@@ -486,9 +468,9 @@ graph TD
         "- **Xid 79**: GPU fallen off the bus — try GPU reset, reseat if persists\n\n"
         "**3. Attempt GPU reset:**\n"
         "```\nnvidia-smi -r -i <gpu_id>\n```\n\n"
-        "**4. If reset fails, power cycle the node:**\n"
-        "```\nipmitool -H <bmc_ip> -U admin -P <pass> chassis power cycle\n```\n\n"
-        "After recovery, run NCCL tests to validate the GPU is performing correctly."),
+        "**4. If reset fails:** use the rack Power action, which calls PythonCM's device API.\n\n"
+        "After recovery, run the PythonCM hardware and NVLink checks. NCCL remains blocked until "
+        "its ProgramRunner-only recipe is validated."),
     ),
     # NVLink
     (
@@ -498,13 +480,8 @@ graph TD
         "```\nnvidia-smi topo -m\nnvidia-smi nvlink -s\n```\n\n"
         "**Check for NVLink errors:**\n"
         "```\nnvidia-smi nvlink -e\n```\n\n"
-        "Current cluster NVLink status:\n"
-        "- p34-r07: All links active, 0 CRC errors\n"
-        "- p34-r08: gpu07 — 3 NVLink links showing CRC errors (sub0, sub2, sub5)\n"
-        "- p34-r09: All links active, 0 CRC errors\n"
-        "- p34-r10: gpu03 — NVLink 2 down, hardware fault detected\n\n"
-        "For gpu07@p34-r08, try clearing the counters with `nvidia-smi nvlink -r` and re-checking after 10 minutes. "
-        "Persistent CRC errors indicate a cable or connector issue — reseat the NVLink bridge."),
+        "Use the Nscale rack NVLink preflight for current node results. Demo chat has no live "
+        "cluster telemetry and will not invent rack, GPU, link, or error-count state."),
     ),
     # InfiniBand / network
     (
@@ -516,27 +493,17 @@ graph TD
         "```\nperfquery\nibdiagnet --ls 10\n```\n\n"
         "**3. Check subnet manager:**\n"
         "```\nsminfo\nibswitches\n```\n\n"
-        "Current fabric health:\n"
-        "- Active ports: 284/288 (98.6%)\n"
-        "- 4 ports down: 2 on leaf switch sw-p34-r08-l1 (likely related to drained nodes), 2 on spine switch sw-p34-spine01 (planned maintenance)\n"
-        "- Symbol error rate: within threshold on all active ports\n\n"
-        "If a node's IB port is down:\n"
-        "```\nibportstate -D 0 1 reset\n```"),
+        "Use the Nscale fabric probe for current read-only PythonCM ProgramRunner results. "
+        "Switch resets and network deep-audit/fix operations are blocked because the installed "
+        "recipes are not ProgramRunner-only. Demo chat does not invent fabric health."),
     ),
     # NEMO / validation / training
     (
         ["nemo", "validation", "training", "llm", "megatron", "run validation", "test.*rack"],
-        ("To run NEMO validation on a rack:\n\n"
-        "**Quick validation (NCCL only, ~5 min):**\n"
-        "```\n./bin/scripts/01-run-validation.sh --rack p34-r07 --test nccl\n```\n\n"
-        "**Full validation (NCCL + NEMO training smoke test, ~30 min):**\n"
-        "```\n./bin/scripts/01-run-validation.sh --rack p34-r07 --test full\n```\n\n"
-        "**Latest validation results for the cluster:**\n"
-        "- p34-r07: Full validation PASS (last run: 2h ago)\n"
-        "- p34-r08: NCCL PARTIAL — 2 nodes excluded, re-validation needed after GPU reset\n"
-        "- p34-r09: Full validation PASS (last run: 4h ago)\n"
-        "- p34-r10: Not run since gpu03 went down\n\n"
-        "I recommend re-running validation on p34-r08 and p34-r10 after addressing the drained/down nodes."),
+        ("New validation submissions are currently fail-closed in Nscale PythonCM mode. "
+        "The installed NCCL, NeMo, Llama, ClusterKit, NVLoom, MNUberGEMM, GPT-OSS, and "
+        "system-info recipes are not yet equivalent ProgramRunner-only implementations. "
+        "Rack Status will not fall back to Slurm, cmsh, pdsh, MPI-over-SSH, or hidden wrapper fan-out."),
     ),
     # Troubleshooting / help / how to
     (
@@ -544,65 +511,53 @@ graph TD
         ("Here's a systematic troubleshooting workflow:\n\n"
         "**Step 1 — Identify the issue:**\n"
         "- Check rack status on the Dashboard for an overview\n"
-        "- Look for nodes in `drain` or `down` state in the Slurm view\n"
-        "- Check if NCCL tests have failed recently\n\n"
+        "- Look for nodes in `drain` or `down` state in the Scheduler's PythonCM view\n"
+        "- Review existing validation results; new validation submissions are blocked\n\n"
         "**Step 2 — Isolate the root cause:**\n"
         "- GPU errors → Run `nvidia-smi -q`, check Xid codes in `dmesg`\n"
         "- NVLink issues → Run `nvidia-smi nvlink -s` and `-e` for errors\n"
         "- Network/IB → Run `ibstat`, `perfquery`, `ibdiagnet`\n"
-        "- Software → Check if NEMO containers are mounted, Slurm config is correct\n\n"
+        "- Software → Check container mounts and the PythonCM ProgramRunner result/log\n\n"
         "**Step 3 — Apply fix:**\n"
         "- Xid errors → GPU reset (`nvidia-smi -r`)\n"
         "- NVLink down → Reseat cable, power cycle node\n"
         "- IB port down → `ibportstate reset`, check switch\n"
         "- Software → Restart services, re-pull containers\n\n"
         "**Step 4 — Verify:**\n"
-        "- Run NCCL test on the affected rack\n"
-        "- Confirm nodes are back to `idle` in Slurm\n"
-        "- Run full NEMO validation if training jobs are planned\n\n"
+        "- Re-run the enabled PythonCM hardware/NVLink read-only checks\n"
+        "- Confirm nodes are back to `idle` in PythonCM\n"
+        "- Do not submit NCCL or NeMo validation until a ProgramRunner-only recipe is certified\n\n"
         "Would you like me to walk through any of these steps in detail?"),
     ),
     # Power / IPMI / BMC
     (
         ["power", "ipmi", "bmc", "power cycle", "power on", "power off", "chassis"],
-        ("For power management via IPMI/BMC:\n\n"
-        "**Check power status:**\n"
-        "```\nipmitool -H <bmc_ip> -U admin -P <pass> chassis status\n```\n\n"
-        "**Power cycle a node:**\n"
-        "```\nipmitool -H <bmc_ip> -U admin -P <pass> chassis power cycle\n```\n\n"
-        "**Power on/off:**\n"
-        "```\nipmitool -H <bmc_ip> -U admin -P <pass> chassis power on\nipmitool -H <bmc_ip> -U admin -P <pass> chassis power off\n```\n\n"
-        "**Check sensor readings:**\n"
-        "```\nipmitool -H <bmc_ip> -U admin -P <pass> sensor list\n```\n\n"
-        "Note: Always drain the node in Slurm before power cycling to avoid disrupting running jobs. "
-        "After power cycle, wait 2–3 minutes for POST, then verify with `ssh` and `nvidia-smi`."),
+        ("Use the Nscale rack Power action for status, on, off, or reset. It calls the "
+        "PythonCM parallel device API and never shells out to IPMI or cmsh. Drain through "
+        "PythonCM first and perform mutations only on an approved reserved node."),
     ),
-    # cmsh / BCM
+    # PythonCM / BCM. Legacy terms remain query synonyms only.
     (
         ["cmsh", "bcm", "base command", "bright", "cluster manager", "cm "],
-        ("Base Command Manager (BCM) / cmsh commands:\n\n"
-        "**List racks:**\n"
-        "```\ncmsh -c \"rack; list\"\n```\n\n"
-        "**Check node status in a rack:**\n"
-        "```\ncmsh -c \"device; status -n gpu*-p34-r07\"\n```\n\n"
-        "**Run device setup:**\n"
-        "```\ncmsh -c \"device; foreach -n gpu*-p34-r07 (setupnetwork)\"\n```\n\n"
-        "**View hardware inventory:**\n"
-        "```\ncmsh -c \"device; foreach -n gpu01-p34-r07 (get hardwareprofile)\"\n```\n\n"
-        "Current BCM cluster status: 72 managed nodes, 4 in error state (matching the Slurm drain list)."),
+        ("This Nscale deployment uses BCM 11 through PythonCM only.\n\n"
+        "- Rack and node inventory comes from the PythonCM rack/device APIs.\n"
+        "- Drain/resume and power actions use PythonCM device operations.\n"
+        "- Enabled commands use PythonCM ProgramRunner with UUID tracking; validation is blocked.\n"
+        "- The Racks view refreshes this PythonCM-derived state every 30 seconds.\n\n"
+        "Use the Racks or Scheduler page for live state; this assistant does not fabricate a cluster snapshot."),
     ),
 ]
 
 _DEMO_FALLBACK = (
-    "I can help you with rack status, GPU diagnostics, NCCL tests, Slurm management, "
+    "I can help you with rack status, GPU diagnostics, NCCL tests, PythonCM job and node management, "
     "NVLink troubleshooting, InfiniBand fabric health, NEMO validation, power management, "
     "and workflow design.\n\n"
     "Here are some things you can ask me:\n\n"
     "- \"What's the status of the racks?\"\n"
     "- \"How do I troubleshoot a GPU Xid error?\"\n"
     "- \"Show me the latest NCCL test results\"\n"
-    "- \"Help me undrain nodes in Slurm\"\n"
-    "- \"Check NVLink status on p34-r08\"\n"
+    "- \"Help me resume nodes through PythonCM\"\n"
+    "- \"Check NVLink status on an Nscale rack\"\n"
     "- \"Generate a workflow for GPU troubleshooting\"\n\n"
     "What would you like to know?"
 )

@@ -43,10 +43,10 @@ export function ServicesTab({ rack, logDir, naming, selectedNodes, disabled }: S
       />
       <ActionCard
         title="System Info"
-        description={`Stream live system info from ${nodeCount} selected node(s). GPU status, driver, fabric manager.`}
+        description="Blocked: the installed system-info script performs its own host fan-out."
         icon={<Info size={20} />}
         buttonLabel="View Sysinfo"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() =>
           openStream(

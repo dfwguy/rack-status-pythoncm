@@ -264,7 +264,7 @@ class _DrainResult:
 
 
 class TestSchedulerNodeState:
-    def test_state_combines_device_drain_and_live_job_truthfully(self):
+    def test_state_uses_device_and_drain_without_workload_manager(self):
         allocated, drained, down, unknown = [_Node(name) for name in ("n1", "n2", "n3", "n4")]
         nodes = [allocated, drained, down, unknown]
 
@@ -304,13 +304,16 @@ class TestSchedulerNodeState:
                 return next((node for node in nodes if node.uuid == value), None)
 
         rows = {row["hostname"]: row for row in nbq._scheduler_nodes(Cluster())}
-        assert rows["n1"]["scheduler_state"] == "alloc"
+        # Allocation ownership is overlaid from Rack Status' ProgramRunner
+        # registry by scheduler_runtime.  This helper must never query BCM's
+        # WlmCluster/cluster.workload surface because Nscale backs it with Slurm.
+        assert rows["n1"]["scheduler_state"] == "idle"
         assert rows["n2"]["scheduler_state"] == "drain"
         assert rows["n2"]["reason"] == "maintenance"
         assert rows["n3"]["scheduler_state"] == "down"
         assert rows["n4"]["scheduler_state"] == "unknown"
 
-    def test_failed_workload_read_never_degrades_to_idle(self):
+    def test_workload_surface_is_never_read(self):
         node = _Node("n1")
 
         class Cluster:
@@ -320,7 +323,9 @@ class TestSchedulerNodeState:
                     "drain_status": lambda _self, _nodes: [_DrainResult([node], ["UNDRAINED"])],
                 })()
                 self.workload = type("Workload", (), {
-                    "get_jobs": lambda _self, _wlms: (False, []),
+                    "get_jobs": lambda _self, _wlms: (_ for _ in ()).throw(
+                        AssertionError("cluster.workload must not be read")
+                    ),
                 })()
 
             def get_by_type(self, kind):
@@ -329,8 +334,8 @@ class TestSchedulerNodeState:
             def get_by_uuid(self, value):
                 return node if value == node.uuid else None
 
-        with pytest.raises(RuntimeError, match="workload managers"):
-            nbq._scheduler_nodes(Cluster())
+        rows = nbq._scheduler_nodes(Cluster())
+        assert rows[0]["scheduler_state"] == "idle"
 
 
 class TestCompatibilityOutput:

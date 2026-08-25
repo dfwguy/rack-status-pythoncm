@@ -19,13 +19,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shlex
 
 import host_exec
 import scheduler_runtime
 from config_env import _env_int
 from flask import Blueprint, jsonify, request
-from paths import SCRIPTS_DIR
+from paths import SCRIPTS_DIR, _scripts_dir
 from platforms import get_platform as _get_platform
+from schedulers import JobSpec, build_scheduler
 
 _logger = logging.getLogger(__name__)
 
@@ -59,19 +62,45 @@ def api_fabric_probe():
                 node = lines[0] if lines else ""
         if not node:
             return jsonify({"ok": False, "error": "no compute node found; pass ?node=<hostname>"}), 400
-        script = str(SCRIPTS_DIR / "fabric_probe.sh")
-        proc = host_exec.run_on_host(
-            ["bash", script, node],
-            timeout=max(30, _env_int("RACK_FABRIC_PROBE_TIMEOUT", 60)),
-        )
-        out = (proc.stdout or "").strip()
+        timeout = max(30, _env_int("RACK_FABRIC_PROBE_TIMEOUT", 60))
+        if scheduler_runtime.is_pythoncm():
+            # Run the local-sysfs branch on the selected PhysicalNode. Passing a
+            # node argument to fabric_probe.sh would make that script open SSH.
+            script = f"{_scripts_dir().rstrip('/')}/fabric_probe.sh"
+            scheduler = build_scheduler(
+                "pythoncm", connection=host_exec.connection("control"), profile="control"
+            )
+            result = scheduler.run(JobSpec(
+                name="fabric-probe",
+                nodes=1,
+                nodelist=node,
+                command=f"bash {shlex.quote(script)}",
+                launch_mode="fanout",
+                execution_user=(os.environ.get("RACK_PYTHONCM_USER") or "root").strip(),
+                timeout=timeout,
+            ))
+            if result.returncode != 0:
+                return jsonify({
+                    "ok": False,
+                    "error": "PythonCM fabric probe failed",
+                    "node": node,
+                    "stderr": (result.stderr or "")[-500:],
+                }), 502
+            out = (result.stdout or "").strip()
+        else:
+            script = str(SCRIPTS_DIR / "fabric_probe.sh")
+            proc = host_exec.run_on_host(
+                ["bash", script, node],
+                timeout=timeout,
+            )
+            out = (proc.stdout or "").strip()
         json_lines = [ln for ln in out.splitlines() if ln.lstrip().startswith("{")]
         if not json_lines:
             return jsonify({
                 "ok": False,
                 "error": "fabric probe returned no JSON",
                 "node": node,
-                "stderr": (proc.stderr or "")[-500:],
+                "stderr": "fabric probe produced no parseable result",
             }), 502
         data = json.loads(json_lines[-1])
         return jsonify({"ok": True, "node": node, "fabric": data})

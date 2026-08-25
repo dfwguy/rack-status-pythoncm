@@ -17,9 +17,9 @@ os.environ["RACK_STATUS_DEMO"] = "1"
 os.environ["RACK_WEB_AUTH_DISABLED"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
-from app import app
 import ai_chat
 import help_content
+from app import app
 
 
 @pytest.fixture
@@ -85,11 +85,15 @@ class TestHelpContentAPI:
         assert data["count"] > 0
 
     def test_entry_endpoint(self, client):
-        resp = client.get("/api/help/content/workflows")
+        resp = client.get("/api/help/content/scheduler")
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["ok"] is True
-        assert data["entry"]["id"] == "workflows"
+        assert data["entry"]["id"] == "scheduler"
+
+    def test_disabled_workflow_help_is_absent(self, client):
+        resp = client.get("/api/help/content/workflows")
+        assert resp.status_code == 404
 
     def test_entry_not_found(self, client):
         resp = client.get("/api/help/content/nope")

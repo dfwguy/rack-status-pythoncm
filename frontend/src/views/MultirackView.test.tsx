@@ -269,23 +269,20 @@ describe("MultirackView rack filters", () => {
     expect(screen.getByText("2 selected")).toBeTruthy();
   });
 
-  it("offers DGXC system_info and GPT-OSS per-node fanout for selected racks", async () => {
+  it("blocks DGXC system_info, GPT-OSS, and fixed Llama validation on Nscale", async () => {
     renderView();
     await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeTruthy());
     fireEvent.click(screen.getByText("Select all eligible (4)"));
 
     const sysinfoButton = screen.getByRole("button", { name: "DGXC system_info" });
-    expect(sysinfoButton).toBeEnabled();
-    expect(screen.getByRole("button", { name: "GPT-OSS CPU — per-node fan-out" })).toBeEnabled();
+    expect(sysinfoButton).toBeDisabled();
+    expect(screen.getByRole("button", { name: "GPT-OSS CPU — per-node fan-out" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: /Legacy Llama|512-GPU/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Llama 405B FP8 — 1024 GPUs / 50 steps" })).toBeDisabled();
-    fireEvent.click(sysinfoButton);
-
-    expect(await screen.findByRole("dialog", { name: "NVIDIA DGXC v26.06.01 system_info" })).toBeInTheDocument();
-    expect(screen.getByText(/fans out to every selected node/i)).toBeInTheDocument();
+    expect(screen.getByText(/blocked pending ProgramRunner-only recipes/i)).toBeInTheDocument();
   });
 
-  it("offers MNUberGEMM for a multirack selection and prepares the exact request", async () => {
+  it("blocks MNUberGEMM and never prepares a request", async () => {
     const emptyBody = { ok: true, rows: [], jobs: [] };
     vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
       const url = String(input);
@@ -325,28 +322,13 @@ describe("MultirackView rack filters", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Select rack ink50-dh01-d02" }));
 
     const button = screen.getByRole("button", { name: "MNUberGEMM 26.03-v1.17" });
-    expect(button).toBeEnabled();
+    expect(button).toBeDisabled();
     fireEvent.click(button);
-    expect(await screen.findByRole("dialog", { name: "MNUberGEMM 26.03 v1.17" })).toBeInTheDocument();
-    expect(screen.getByText(/one independent, rack-scoped MNUberGEMM job per selected rack/i)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Review dry run" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "Review dry run" }));
-    await waitFor(() => expect(screen.getByText("MNUberGEMM as two independent rack jobs")).toBeInTheDocument());
-
     const prepareCall = vi.mocked(globalThis.fetch).mock.calls.find(([url]) => String(url) === "/api/validation-presets/prepare");
-    expect(prepareCall).toBeDefined();
-    expect(JSON.parse(String(prepareCall?.[1]?.body))).toEqual({
-      preset_id: "mnubergemm-26.03-v1.17",
-      scope: "multirack",
-      racks: ["ink50-dh01-d01", "ink50-dh01-d02"],
-      log_dir: "/logs",
-      storage: "local",
-      rsync_to_local: true,
-      local_container_dir: "/tmp/containers",
-    });
+    expect(prepareCall).toBeUndefined();
   });
 
-  it("enables fixed Llama 1024 only when the exact-node campaign resolves 256 nodes", async () => {
+  it("keeps fixed Llama blocked even when a campaign resolves 256 nodes", async () => {
     const campaignRacks = Array.from({ length: 16 }, (_, index) => `rack-${String(index + 1).padStart(2, "0")}`);
     const emptyBody = { ok: true, rows: [], jobs: [] };
     vi.mocked(globalThis.fetch).mockImplementation((input) => {
@@ -398,7 +380,7 @@ describe("MultirackView rack filters", () => {
 
     await waitFor(() => expect(screen.getByText("Select all eligible (16)")).toBeInTheDocument());
     fireEvent.click(screen.getByText("Select all eligible (16)"));
-    expect(screen.getByRole("button", { name: "Llama 405B FP8 — 1024 GPUs / 50 steps" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Llama 405B FP8 — 1024 GPUs / 50 steps" })).toBeDisabled();
     expect(screen.getByText(/16 selected nodes per rack/i)).toBeInTheDocument();
   });
 

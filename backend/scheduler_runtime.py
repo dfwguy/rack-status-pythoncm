@@ -7,12 +7,12 @@
 # disclosure or distribution of this material and related documentation
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
-"""Scheduler-neutral runtime facts used by legacy Rack Status routes.
+"""Scheduler-neutral runtime facts used by Rack Status routes.
 
-The public HTTP schema still contains historical ``slurm_*`` field and route
-names for client compatibility.  This module is the boundary that prevents
-those compatibility names from turning into Slurm command execution when the
-deployment selects ``RACK_SCHEDULER=pythoncm``.
+The Nscale frontend calls only provider-neutral scheduler URLs; historical
+Slurm URL aliases return 404 in PythonCM mode. Some persisted fields retain old
+names for data compatibility. This module prevents those names from turning
+into Slurm command execution when the deployment selects PythonCM.
 
 PythonCM command UUIDs are opaque scheduler references.  Completed and active
 work is reconciled from Rack Status' durable validation-activity registry;
@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
@@ -39,10 +41,22 @@ _TERMINAL_STATES = frozenset({
     "COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
     "BOOT_FAIL", "DEADLINE", "PREEMPTED", "UNKNOWN",
 })
+_INVENTORY_LOCK = threading.Lock()
+_INVENTORY_CACHE: tuple[float, list[dict[str, str]]] = (0.0, [])
+_INVENTORY_SOURCE: tuple[int, int] = (0, 0)
+_RACKS_CACHE: tuple[float, list[str]] = (0.0, [])
 
 
 def scheduler_kind() -> str:
-    return (os.environ.get("RACK_SCHEDULER") or "slurm").strip().lower()
+    # Nscale fail-safe: an omitted setting must never activate a legacy provider.
+    kind = (os.environ.get("RACK_SCHEDULER") or "pythoncm").strip().lower()
+    cluster_id = (os.environ.get("RACK_CLUSTER_ID") or "").strip().lower()
+    customer = (os.environ.get("RACK_CLUSTER_CUSTOMER_NAME") or "").strip().lower()
+    if (cluster_id == "nscale-tx" or customer == "nscale") and kind != "pythoncm":
+        raise RuntimeError(
+            f"Nscale TX requires RACK_SCHEDULER=pythoncm; refusing unsafe value {kind!r}"
+        )
+    return kind
 
 
 def is_pythoncm() -> bool:
@@ -75,11 +89,16 @@ def jobs(*, active_only: bool = False, limit: int = 500) -> list[dict[str, Any]]
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for activity in _activity_rows(limit):
+        # A deployment may reuse a durable registry written before migration.
+        # Numeric legacy task ids must never become PythonCM queue rows or an
+        # allocation overlay merely because they share the same JSON store.
+        if str(activity.get("scheduler") or "").strip().lower() != "pythoncm":
+            continue
         for task in activity.get("tasks") or []:
             if not isinstance(task, dict):
                 continue
             ref = str(task.get("scheduler_ref") or "").strip()
-            if not ref or ref in seen:
+            if not valid_reference(ref) or ref in seen:
                 continue
             state = str(task.get("scheduler_state") or task.get("work_phase") or "UNKNOWN")
             state = state.strip().upper().split("+", 1)[0] or "UNKNOWN"
@@ -99,7 +118,13 @@ def jobs(*, active_only: bool = False, limit: int = 500) -> list[dict[str, Any]]
                 "state": state,
                 "nodes": list(nodes) if isinstance(nodes, list) else [],
                 "nodelist": ",".join(nodes) if isinstance(nodes, list) else "",
-                "start": str(task.get("started_at") or activity.get("started_at") or ""),
+                "start": str(
+                    task.get("started_at")
+                    or activity.get("started_running_at")
+                    or activity.get("started_at")
+                    or activity.get("created_at")
+                    or ""
+                ),
                 "end": str(task.get("finished_at") or activity.get("finished_at") or ""),
                 "elapsed": _elapsed(task, activity),
                 "exit_code": str(task.get("returncode") if task.get("returncode") is not None else ""),
@@ -171,7 +196,14 @@ def active_job_times(wanted: Iterable[str] | None = None) -> tuple[set[str], dic
     return refs, {str(row["job_id"]): str(row.get("elapsed") or "?") for row in rows}
 
 
-def nodes() -> list[dict[str, str]]:
+def _inventory_ttl() -> float:
+    try:
+        return max(0.0, float(os.environ.get("RACK_PYTHONCM_STATUS_TTL_SEC", "25")))
+    except ValueError:
+        return 25.0
+
+
+def _load_nodes() -> list[dict[str, str]]:
     """Physical nodes with normalized scheduling state and reason.
 
     Entity inventory is certificate-readable.  Drain state is an authenticated
@@ -209,7 +241,80 @@ def nodes() -> list[dict[str, str]]:
                 item.get("scheduler_state") or item.get("state") or "unknown"
             ).strip().lower()
             row["reason"] = str(item.get("reason") or "").strip()
+            if item.get("device_status"):
+                row["device_status"] = str(item["device_status"]).strip().upper()
+
+    # PythonCM ProgramRunner work is the only allocation source in PythonCM mode.
+    # Do not consult cluster.workload/WlmCluster here: on Nscale that is the Slurm
+    # workload manager exposed through PythonCM, which would make the Racks refresh
+    # Slurm-derived even though no CLI was executed.
+    active_nodes: set[str] = set()
+    for job_row in jobs(active_only=True):
+        for node in job_row.get("nodes") or []:
+            active_nodes.add(str(node).casefold())
+    for key in active_nodes:
+        row = rows.get(key)
+        if row is not None and row["state"] not in {"down", "drain", "draining"}:
+            row["state"] = "alloc"
     return sorted(rows.values(), key=lambda row: row["node"].casefold())
+
+
+def nodes(*, force: bool = False) -> list[dict[str, str]]:
+    """Cached PythonCM physical-node status used by every dashboard refresh worker."""
+    global _INVENTORY_CACHE, _INVENTORY_SOURCE
+    now = time.monotonic()
+    source = (id(bcm_query.nodes), id(bcm_query.node_states))
+    if source != _INVENTORY_SOURCE:
+        _INVENTORY_CACHE = (0.0, [])
+        _INVENTORY_SOURCE = source
+    cached_at, cached = _INVENTORY_CACHE
+    if not force and cached and now - cached_at < _inventory_ttl():
+        return [dict(row) for row in cached]
+    with _INVENTORY_LOCK:
+        cached_at, cached = _INVENTORY_CACHE
+        if not force and cached and now - cached_at < _inventory_ttl():
+            return [dict(row) for row in cached]
+        fresh = _load_nodes()
+        if fresh:
+            _INVENTORY_CACHE = (time.monotonic(), fresh)
+            return [dict(row) for row in fresh]
+        # Preserve only cached identity on a transient CMDaemon/auth failure.
+        # Replaying an old idle/allocated/drained value as current would make a
+        # failed PythonCM refresh look healthy to the 30-second Racks poll.
+        stale: list[dict[str, str]] = []
+        for cached_row in cached:
+            row = dict(cached_row)
+            row["state"] = "unknown"
+            row["reason"] = "PythonCM inventory refresh unavailable"
+            row["stale"] = "true"
+            stale.append(row)
+        return stale
+
+
+def rack_names(*, force: bool = False) -> list[str]:
+    """Rack entities from CMDaemon, cached independently of fast node status."""
+    global _RACKS_CACHE
+    now = time.monotonic()
+    cached_at, cached = _RACKS_CACHE
+    try:
+        ttl = max(0.0, float(os.environ.get("RACK_NATIVE_RACK_LIST_TTL_SEC", "900")))
+    except ValueError:
+        ttl = 900.0
+    if not force and cached and now - cached_at < ttl:
+        return list(cached)
+    result = bcm_query.racks()
+    names = sorted(
+        {
+            str(item.get("name") or "").strip()
+            for item in (result.get("data") or [])
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        },
+        key=str.casefold,
+    ) if result.get("ok") else []
+    if names:
+        _RACKS_CACHE = (now, names)
+        return list(names)
+    return list(cached)
 
 
 def node_names() -> list[str]:

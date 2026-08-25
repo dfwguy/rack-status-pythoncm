@@ -1,37 +1,25 @@
-# PythonCM validation record — 2026-08-24
+# PythonCM validation record — 2026-08-24 (corrected 2026-08-25)
 
-Target: Nscale TX 16k BCM application server (`appserver`), PythonCM/CMDaemon 11.0.
+The original record incorrectly treated compatibility-route smoke tests and
+partially converted launchers as acceptance. It is superseded by
+[`PYTHONCM_ZERO_SLURM_AUDIT_2026-08-25.md`](PYTHONCM_ZERO_SLURM_AUDIT_2026-08-25.md).
 
-## Passed
+Facts that remain valid:
 
-- PythonCM/CMDaemon API compatibility: 11.0 / 11.0.
-- Certificate-authenticated inventory: 220 racks and 3,943 PhysicalNode entities.
-- Backend regression: 1,409 passed, 1 skipped.
-- PythonCM combined focused regression: 89 passed across the provider, scheduler,
-  compatibility runtime, workflow, and factory suites (including the 61-test
-  provider sub-suite).
-- Frontend TypeScript build and production SPA build completed.
-- Flask/SPA smoke test: `/`, scheduler compatibility routes, validation presets,
-  and workflows returned HTTP 200 under `RACK_SCHEDULER=pythoncm`.
-- Python lint, byte compilation, shell syntax, and `git diff --check` passed.
+- Target: Nscale TX, BCM/PythonCM 11.x.
+- Certificate-authenticated inventory returned 220 racks and 3,943
+  `PhysicalNode` entities.
+- The service certificate did not authorize `cmproc`/ProgramRunner mutation.
+- No destructive production mutation was attempted without credentials and an
+  approved reserved node.
 
-## Live acceptance gate
+Correction:
 
-The service account has a valid client certificate, but BCM 11 requires an
-authenticated login cookie for `cmproc`/`cmjob`. The live readiness probe therefore
-correctly returns:
-
-```text
-PythonCM execution needs --cookie-file/NVIS_BCM_COOKIE or a username plus
---password-file/NVIS_BCM_PASSWORD
-```
-
-Provision `NVIS_BCM_COOKIE_FILE`, or `NVIS_BCM_USERNAME` plus
-`NVIS_BCM_PASSWORD_FILE`, on the BCM head. Then reserve an approved test node and
-complete the mutation sequence in `PYTHONCM_MIGRATION.md`: harmless execution,
-status/output, cancellation, drain/resume, power status, and the enabled validation
-families. No power or drain mutation was attempted without authorization.
-
-Slurm-native workload scripts remain explicit compatibility workloads until each
-site-specific script has a validated PythonCM/direct form. PythonCM mode never
-silently falls back to Slurm for scheduler/provider operations.
+- No validation family is currently accepted for submission. NCCL, LLMB,
+  NeMo, Llama, GPT-OSS, Exemplar/system-info, ClusterKit, NVLoom, and
+  MNUberGEMM are all blocked until an exact, semantically equivalent,
+  ProgramRunner-only recipe is certified.
+- Workflows, terminal, bring-up/report collection, management recovery, and
+  Tools/installers are also blocked where they are not PythonCM operations.
+- Current test counts, conversion coverage, compatibility remnants, and live
+  gates are recorded only in the replacement audit.

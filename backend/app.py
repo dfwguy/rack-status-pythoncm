@@ -117,7 +117,9 @@ import cluster_overview_live
 import cluster_snapshot
 import native_status
 import nvis_id_templates
+import pythoncm_validation
 import scheduler_runtime
+from schedulers import JobSpec, build_scheduler
 
 # --- optional backend modules (added 2026-07-28) -------------------------------------
 # Both are bind-mounted read-only from the repo (docker-compose.override.yml). A missing
@@ -204,6 +206,9 @@ _TOOLS_NEMO_CONTAINER_SQSH = "nemo-25.11.01.sqsh"
 
 app = Flask(__name__, static_folder=str(REPO_ROOT / "static"), static_url_path="/static")
 _logger = logging.getLogger(__name__)
+# Refuse to start an Nscale process with a misspelled or legacy scheduler.
+# A request-level branch is too late: background threads begin during startup.
+scheduler_runtime.scheduler_kind()
 
 # Gzip/brotli compression for static assets (the ~2.2 MB SPA bundle) and JSON API
 # payloads. The Vite bundle is served as ``text/javascript``, which is not in
@@ -530,7 +535,7 @@ def _parse_physical_rf0_stdout(text: str) -> dict[str, str]:
 
 
 def get_physical_rf0_map() -> dict[str, str]:
-    """Run cmsh foreach once per process; merged into /api/status. Disable with RACK_PHYSICAL_RF0_MAP_DISABLED=1."""
+    """Load physical-node rf0 addresses once from the selected BCM provider."""
     global _physical_rf0_loaded, _physical_rf0_map
     if os.environ.get("RACK_PHYSICAL_RF0_MAP_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return {}
@@ -538,6 +543,18 @@ def get_physical_rf0_map() -> dict[str, str]:
         if _physical_rf0_loaded:
             return dict(_physical_rf0_map)
         _physical_rf0_map = {}
+        if scheduler_runtime.is_pythoncm():
+            result = bcm_query.rf0(
+                timeout=max(20, _env_int("RACK_PHYSICAL_RF0_TIMEOUT", 180))
+            )
+            if result.get("ok"):
+                _physical_rf0_map = {
+                    str(row.get("hostname") or "").casefold(): str(row.get("ip") or "")
+                    for row in result.get("data") or []
+                    if isinstance(row, dict) and row.get("hostname") and row.get("ip")
+                }
+            _physical_rf0_loaded = True
+            return dict(_physical_rf0_map)
         plat = _get_platform()
         cmd = plat.physical_rf0_cmd()
         if not host_exec.which(cmd[0]):
@@ -578,6 +595,7 @@ def _record_validation_activity(
     operator: str = "",
     dry_run: bool = False,
     scheduler: str = "slurm",
+    nodes: list[str] | None = None,
 ) -> str:
     """Persist a validation launch in the durable activities store."""
     return validation_activities.record_activity(
@@ -591,6 +609,7 @@ def _record_validation_activity(
         command_display=command_display,
         dry_run=dry_run,
         scheduler=scheduler,
+        nodes=nodes,
         activity_id=activity_id,
     )
 
@@ -1240,6 +1259,234 @@ def _stress_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
     threading.Thread(target=_purge, daemon=True).start()
 
 
+def _pythoncm_validation_spec(kind: str, prep: dict):
+    """Build an exact-node direct plan; never inspect a Slurm inventory."""
+    explicit = [str(node) for node in (prep.get("nodes") or []) if str(node).strip()]
+    nodes = pythoncm_validation.resolve_nodes(
+        target=str(prep.get("target") or ""),
+        explicit=explicit or None,
+    )
+    env_updates = {
+        str(key): str(value)
+        for key, value in (prep.get("env_updates") or {}).items()
+        if value is not None
+    }
+    spec = pythoncm_validation.build_spec(
+        kind,
+        nodes=nodes,
+        rack=str(prep.get("rk") or prep.get("rack") or ""),
+        log_dir=_host_job_cwd(prep["log_dir"]),
+        scripts_dir=_scripts_dir(),
+        timeout=int(prep["timeout"]),
+        env=env_updates,
+    )
+    return spec, nodes
+
+
+def _pythoncm_unsupported_response(kind: str):
+    reason = pythoncm_validation.unsupported_reason(kind)
+    if not reason:
+        return None
+    return jsonify({
+        "ok": False,
+        "scheduler": "pythoncm",
+        "blocked": True,
+        "error": f"{kind} is unavailable in Nscale PythonCM mode: {reason}",
+    }), 501
+
+
+def _start_pythoncm_validation(
+    kind: str,
+    prep: dict,
+    *,
+    tool: str,
+    stage: str,
+    scope: str = "rack",
+    racks: list[str] | None = None,
+):
+    """Register and launch a reviewed direct validation through PythonCM."""
+    try:
+        spec, nodes = _pythoncm_validation_spec(kind, prep)
+    except (ValueError, RuntimeError, pythoncm_validation.UnsupportedValidation) as exc:
+        return jsonify({
+            "ok": False,
+            "scheduler": "pythoncm",
+            "blocked": isinstance(exc, pythoncm_validation.UnsupportedValidation),
+            "error": str(exc),
+        }), 409
+    rack = str(prep.get("rk") or prep.get("rack") or "")
+    rack_list = [str(item) for item in (racks or ([rack] if rack else []))]
+    job_id = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat()
+    display = f"PythonCM ProgramRunner ({spec.launch_mode}): {spec.name} on {','.join(nodes)}"
+    _record_validation_activity(
+        tool,
+        stage=stage,
+        scope=scope,
+        rack=rack or (rack_list[0] if rack_list else ""),
+        racks=rack_list,
+        log_dir=str(prep["log_dir"]),
+        command_display=display,
+        activity_id=job_id,
+        operator=_operator_from_request(),
+        scheduler="pythoncm",
+        nodes=nodes,
+    )
+    with _stress_jobs_lock:
+        _stress_jobs[job_id] = {
+            "job_id": job_id,
+            "kind": kind,
+            "operator": _operator_from_request(),
+            "rack": rack,
+            "racks": rack_list,
+            "nodes": nodes,
+            "target": ",".join(nodes),
+            "log_dir": str(prep["log_dir"]),
+            "phase": "starting",
+            "work_phase": "pending",
+            "scheduler": "pythoncm",
+            "command_display": display,
+            "created_at": created,
+        }
+    threading.Thread(
+        target=_pythoncm_validation_worker,
+        args=(job_id, spec),
+        kwargs={
+            "registry": _stress_jobs,
+            "registry_lock": _stress_jobs_lock,
+            "purge": _stress_job_purge_later,
+        },
+        daemon=True,
+    ).start()
+    return jsonify({
+        "ok": True,
+        "job_id": job_id,
+        "scheduler": "pythoncm",
+        "rack": rack,
+        "racks": rack_list,
+        "nodes": nodes,
+        "target": ",".join(nodes),
+        "command_display": display,
+        "timeout_sec": spec.timeout,
+        "client_poll_deadline_ms": min(spec.timeout * 1000 + 600000, 48 * 3600 * 1000),
+    })
+
+
+def _pythoncm_validation_worker(
+    job_id: str,
+    spec,
+    *,
+    registry: dict,
+    registry_lock: threading.Lock,
+    purge,
+    persist: bool = True,
+) -> None:
+    """Submit, track and collect one reviewed PythonCM ProgramRunner command."""
+
+    def patch_row(**kwargs: object) -> None:
+        with registry_lock:
+            row = registry.get(job_id)
+            if row is not None:
+                row.update(kwargs)
+        if persist:
+            validation_activities.update_activity(job_id, **kwargs)
+
+    scheduler = None
+    handle = None
+    output_path = ""
+    try:
+        patch_row(
+            phase="submitting",
+            work_phase="submitted",
+            scheduler="pythoncm",
+            started_running_at=datetime.now(timezone.utc).isoformat(),
+        )
+        scheduler = build_scheduler(
+            "pythoncm",
+            connection=host_exec.connection("script"),
+            profile="script",
+        )
+        handle = scheduler.submit(spec)
+        output_path = str(spec.output or "").replace("%j", handle.job_id)
+        submitted_at = datetime.now(timezone.utc).isoformat()
+        validation_activities.add_or_update_task(
+            job_id,
+            ordinal=1,
+            label=spec.name,
+            scheduler_ref=handle.job_id,
+            scheduler_state="PENDING",
+            phase="running",
+            work_phase="submitted",
+            evidence="pythoncm",
+            stdout_path=output_path,
+            started_at=submitted_at,
+        )
+        patch_row(
+            phase="running",
+            work_phase="running",
+            scheduler_ref=handle.job_id,
+            command_display=f"PythonCM ProgramRunner: {spec.name}",
+        )
+        result = scheduler.wait(handle, timeout=spec.timeout, poll_interval=5)
+        if result.state == "TIMEOUT":
+            scheduler.cancel(handle)
+        ok = result.success
+        work_phase = "done" if ok else "failed"
+        validation_activities.add_or_update_task(
+            job_id,
+            ordinal=1,
+            label=spec.name,
+            scheduler_ref=handle.job_id,
+            scheduler_state=result.state,
+            phase="done" if ok else "error",
+            work_phase=work_phase,
+            evidence="pythoncm",
+            stdout_path=output_path,
+            returncode=result.returncode,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+        )
+        patch_row(
+            phase="done" if ok else "error",
+            work_phase=work_phase,
+            ok=ok,
+            returncode=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            error=None if ok else f"PythonCM command ended in {result.state}",
+        )
+    except Exception as exc:  # fail closed; no legacy launcher fallback
+        _logger.exception("PythonCM validation worker failed")
+        if handle is not None:
+            try:
+                # Any failure after native submission must not leave an
+                # untracked ProgramRunner command running behind a failed UI row.
+                assert scheduler is not None
+                scheduler.cancel(handle)
+            except Exception:
+                _logger.exception("unable to cancel PythonCM command after worker failure")
+            validation_activities.add_or_update_task(
+                job_id,
+                ordinal=1,
+                label=spec.name,
+                scheduler_ref=handle.job_id,
+                scheduler_state="FAILED",
+                phase="error",
+                work_phase="failed",
+                evidence="pythoncm",
+                stdout_path=output_path,
+            )
+        patch_row(
+            phase="error",
+            work_phase="failed",
+            ok=False,
+            returncode=-1,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            error=str(exc),
+        )
+    purge(job_id)
+
+
 def _stress_worker(
     job_id: str,
     cmd: list[str],
@@ -1529,8 +1776,139 @@ def _power_reset_worker(job_id: str, specs: list[str]) -> None:
     _reset_job_purge_later(job_id)
 
 
+_PYTHONCM_NODE_BANNER_RE = re.compile(r"^===== (.+) =====$")
+
+
+def _pythoncm_prefixed_output(text: str) -> str:
+    """Convert ProgramRunner's per-node sections to the legacy ``host: line`` shape."""
+    host = ""
+    lines: list[str] = []
+    for raw in (text or "").splitlines():
+        match = _PYTHONCM_NODE_BANNER_RE.fullmatch(raw.strip())
+        if match:
+            host = match.group(1).strip()
+            continue
+        lines.append(f"{host}: {raw}" if host else raw)
+    return "\n".join(lines).strip()
+
+
+def _run_pythoncm_fanout(
+    target: str,
+    command: str,
+    *,
+    name: str,
+    timeout: int,
+    env: dict[str, str] | None = None,
+) -> dict:
+    """Run one reviewed node-local command through PythonCM ProgramRunner."""
+    nodes = pythoncm_validation.resolve_nodes(target=target)
+    scheduler = build_scheduler(
+        "pythoncm", connection=host_exec.connection("control"), profile="control"
+    )
+    spec = JobSpec(
+        name=name,
+        nodes=len(nodes),
+        nodelist=",".join(nodes),
+        command=command,
+        env=dict(env or {}),
+        launch_mode="fanout",
+        execution_user=(os.environ.get("RACK_PYTHONCM_USER") or "root").strip() or "root",
+        timeout=max(1, timeout),
+    )
+    activity_id = validation_activities.record_activity(
+        name,
+        stage="operation",
+        scope="nodes",
+        scheduler="pythoncm",
+        source="pythoncm-operation",
+        command_display=f"PythonCM ProgramRunner fanout: {name}",
+        nodes=nodes,
+    )
+    handle = None
+    try:
+        handle = scheduler.submit(spec)
+        started = datetime.now(timezone.utc).isoformat()
+        validation_activities.add_or_update_task(
+            activity_id,
+            ordinal=1,
+            label=name,
+            scheduler_ref=handle.job_id,
+            scheduler_state="PENDING",
+            phase="running",
+            work_phase="submitted",
+            evidence="pythoncm",
+            started_at=started,
+        )
+        validation_activities.update_activity(
+            activity_id,
+            phase="running",
+            work_phase="running",
+            scheduler_ref=handle.job_id,
+            started_running_at=started,
+        )
+        result = scheduler.wait(handle, timeout=spec.timeout, poll_interval=5)
+        finished = datetime.now(timezone.utc).isoformat()
+        ok = result.success
+        validation_activities.add_or_update_task(
+            activity_id,
+            ordinal=1,
+            label=name,
+            scheduler_ref=handle.job_id,
+            scheduler_state=result.state,
+            phase="done" if ok else "error",
+            work_phase="done" if ok else "failed",
+            evidence="pythoncm",
+            returncode=result.returncode,
+            finished_at=finished,
+        )
+        validation_activities.update_activity(
+            activity_id,
+            phase="done" if ok else "error",
+            work_phase="done" if ok else "failed",
+            returncode=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            finished_at=finished,
+        )
+    except Exception as exc:
+        if handle is not None:
+            try:
+                scheduler.cancel(handle)
+            except Exception:
+                _logger.exception("unable to cancel failed PythonCM fanout %s", handle.job_id)
+        validation_activities.update_activity(
+            activity_id,
+            phase="error",
+            work_phase="failed",
+            returncode=-1,
+            error=str(exc),
+            finished_at=datetime.now(timezone.utc).isoformat(),
+        )
+        raise
+    return {
+        "returncode": result.returncode,
+        "stdout": _pythoncm_prefixed_output(result.stdout),
+        "stderr": _pythoncm_prefixed_output(result.stderr),
+        "command_display": f"pythoncm fanout {name} {','.join(nodes)}",
+        "pdsh_w": ",".join(nodes),
+        "scheduler_ref": result.job_id,
+        "scheduler_state": result.state,
+        "activity_id": activity_id,
+    }
+
+
 def run_services_restart(pdsh_w: str) -> dict:
     """Run pdsh across hosts: mount -a, restart munge/slurmd/nvidia-imex, then nvidia-dcgm or cuda-dcgm."""
+    if scheduler_runtime.is_pythoncm():
+        timeout = max(30, _env_int("RACK_SERVICES_RESTART_TIMEOUT", 1800))
+        command = (
+            "mount -a; "
+            "systemctl restart nvidia-imex; "
+            "systemctl restart nvidia-dcgm 2>/dev/null || systemctl restart cuda-dcgm"
+        )
+        return _run_pythoncm_fanout(
+            pdsh_w, command, name="services-restart", timeout=timeout
+        )
     w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
@@ -1593,6 +1971,44 @@ def _parse_pdsh_prefixed_lines(stdout: str) -> list[dict[str, str]]:
 def run_rack_uptime_pdsh(rack: str) -> dict:
     """Run ``pdsh -w <rack><ct_joiner>[RANGE] uptime`` (RANGE from RACK_VALIDATION_CT_RANGE)."""
     rk = _normalize_rack_id(rack)
+    if scheduler_runtime.is_pythoncm():
+        nodes = _rack_node_hostnames_from_inventory(rk)
+        if not nodes:
+            raise ValueError(f"no PythonCM PhysicalNode entities found for rack {rk}")
+        timeout = max(15, _env_int("RACK_UPTIME_PDSH_TIMEOUT", 120))
+        scheduler = build_scheduler(
+            "pythoncm", connection=host_exec.connection("control"), profile="control"
+        )
+        spec = JobSpec(
+            name=f"uptime-{rk}",
+            nodes=len(nodes),
+            nodelist=",".join(nodes),
+            command="uptime",
+            launch_mode="fanout",
+            execution_user=(os.environ.get("RACK_PYTHONCM_USER") or "root"),
+            timeout=timeout,
+        )
+        result = scheduler.run(spec)
+        rows: list[dict[str, str]] = []
+        host = ""
+        for raw in result.stdout.splitlines():
+            match = re.fullmatch(r"===== (.+) =====", raw.strip())
+            if match:
+                host = match.group(1).strip()
+            elif raw.strip():
+                rows.append({"host": host, "uptime": raw.strip()})
+        return {
+            "ok": result.success,
+            "returncode": result.returncode,
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+            "command_display": f"pythoncm fanout uptime {','.join(nodes)}",
+            "pdsh_w": ",".join(nodes),
+            "rack": rk,
+            "rows": rows,
+            "scheduler_ref": result.job_id,
+            **({} if result.success else {"error": f"PythonCM uptime ended in {result.state}"}),
+        }
     w = _expand_pdsh_w_slurm_nodenames(
         _nvis_naming().uptime_pdsh_wildcard(rack, _validation_ct_inner())
     )
@@ -2626,7 +3042,7 @@ def pick_logs_for_rack(
             return {}
 
     j = (job_id or "").strip()
-    suf = f"N-{j}.txt" if j.isdigit() else None
+    suf = f"N-{j}.txt" if scheduler_runtime.valid_reference(j) else None
     out: dict[str, Path] = {}
     # cands is newest-first, so the first hit per stage is that stage's newest log.
     for p in cands:
@@ -2728,7 +3144,7 @@ def _primary_stage_log(stage_paths: dict[str, Path], job_id: str | None) -> Path
     if not stage_paths:
         return None
     j = (job_id or "").strip()
-    if j.isdigit():
+    if scheduler_runtime.valid_reference(j):
         suf = f"N-{j}.txt"
         for p in stage_paths.values():
             if p.name.endswith(suf):
@@ -2910,15 +3326,18 @@ def _expand_pdsh_w_slurm_nodenames(w: str) -> str:
 
 
 def _hostnames_for_slurm_job(job_raw: str | None) -> tuple[list[str], str]:
-    bid = _slurm_job_base_id(job_raw)
-    if not bid:
-        return [], "no_job_id"
     if scheduler_runtime.is_pythoncm():
-        row = scheduler_runtime.job(bid)
+        ref = str(job_raw or "").strip()
+        if not scheduler_runtime.valid_reference(ref):
+            return [], "no_job_id"
+        row = scheduler_runtime.job(ref)
         if row:
             hosts = _dedupe_hostnames_preserve_spelling(list(row.get("nodes") or []))
             return hosts, ("pythoncm_registry" if hosts else "pythoncm_registry_empty")
         return [], "pythoncm_job_missing"
+    bid = _slurm_job_base_id(job_raw)
+    if not bid:
+        return [], "no_job_id"
     proc = host_exec.run_slurm_on_host(
         _get_platform().sacct_job_cmd(bid),
         timeout=max(20, _env_int("RACK_SACCT_TIMEOUT", 90)),
@@ -4358,13 +4777,27 @@ def _run_cmsh_device_power(
 
 
 def run_cmsh_power_reset(specs: list[str]) -> list[dict]:
-    """For each tray spec: cmsh device; power … off, sleep, then device; power … on."""
+    """Power-cycle exact tray specs through the selected BCM provider."""
     cmsh = _eget("RACK_CMSH", "cmsh") or "cmsh"
     timeout = max(5, _env_int("RACK_POWER_TIMEOUT", 120))
     sleep_sec = max(0, _env_int("RACK_POWER_RESET_SLEEP_SEC", 10))
     dry = os.environ.get("RACK_POWER_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
     results: list[dict] = []
     for spec in specs:
+        if scheduler_runtime.is_pythoncm():
+            for phase in ("off", "on"):
+                response = bcm_query.power(spec, phase, timeout=timeout)
+                results.append({
+                    "spec": spec,
+                    "phase": phase,
+                    "returncode": 0 if response.get("ok") else 2,
+                    "stdout": json.dumps(response.get("data") or {}, sort_keys=True),
+                    "stderr": str(response.get("error") or response.get("detail") or ""),
+                    "command": f"pythoncm power {phase} {spec}",
+                })
+                if phase == "off" and sleep_sec:
+                    time.sleep(float(sleep_sec))
+            continue
         inner_off = f"device; power -n {spec} off"
         inner_on = f"device; power -n {spec} on"
         if dry:
@@ -4661,7 +5094,7 @@ def _merge_live_native_workers_into_status(out: dict, log_dir: Path) -> None:
     Cached ``/api/status`` JSON can otherwise keep ``sinfo`` / ``ct_down_unk`` as ``?`` forever
     (first snapshot was taken before ds/sinfo threads finished) while only worker metadata was merged.
     """
-    if _truthy_env("RACK_STATUS_USE_SHELL_TABLE"):
+    if _truthy_env("RACK_STATUS_USE_SHELL_TABLE") and not scheduler_runtime.is_pythoncm():
         return
     ld = _rpath(log_dir)
     snap = native_status.worker_snapshot_for_log_dir(ld)
@@ -4784,6 +5217,10 @@ def _rack_sort_key_for_cmsh_list(rid: str) -> tuple[int, int, str]:
 def _try_populate_cmsh_rack_list_file() -> None:
     """Run ``cmsh -c 'rack; list'`` at most once per process; write one rack id per line for rack_status.sh."""
     global _CMSH_RACK_LIST_STATE
+    if scheduler_runtime.is_pythoncm():
+        with _CMSH_RACK_LIST_LOCK:
+            _CMSH_RACK_LIST_STATE = "failed"
+        return
     if _truthy_env("RACK_CMSH_RACK_LIST_CACHE_DISABLED"):
         with _CMSH_RACK_LIST_LOCK:
             if _CMSH_RACK_LIST_STATE == "pending":
@@ -4825,6 +5262,9 @@ def _try_populate_cmsh_rack_list_file() -> None:
 
 def _ensure_cmsh_rack_list_env_for_subprocess(env: dict) -> None:
     """Always set RACK_CMSH_RACK_LIST_FILE to the default cache path (rack_status uses it only if readable)."""
+    if scheduler_runtime.is_pythoncm():
+        env.pop("RACK_CMSH_RACK_LIST_FILE", None)
+        return
     if _truthy_env("RACK_CMSH_RACK_LIST_CACHE_DISABLED"):
         env.pop("RACK_CMSH_RACK_LIST_FILE", None)
         return
@@ -4838,6 +5278,8 @@ def _ensure_cmsh_rack_list_env_for_subprocess(env: dict) -> None:
 def _start_cmsh_rack_list_warm_thread() -> None:
     """Background: populate cmsh rack list before the first rack_status run when possible."""
     global _CMSH_RACK_LIST_WARM_THREAD_STARTED
+    if scheduler_runtime.is_pythoncm():
+        return
     if _truthy_env("RACK_CMSH_RACK_LIST_CACHE_DISABLED"):
         return
     with _CMSH_RACK_WARM_START_LOCK:
@@ -4856,7 +5298,7 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
         import demo_data
         return demo_data.generate_demo_status(log_dir, include_raw)
 
-    if _truthy_env("RACK_STATUS_USE_SHELL_TABLE"):
+    if _truthy_env("RACK_STATUS_USE_SHELL_TABLE") and not scheduler_runtime.is_pythoncm():
         script = _script_path()
         if not _script_exists(script):
             raise FileNotFoundError(f"rack_status script not found: {script}")
@@ -4965,7 +5407,10 @@ def _cluster_snapshot_identity() -> str:
             project_id = str(active.get("project") or "").strip()
             cluster_id = str(active.get("cluster") or "").strip()
             if project_id or cluster_id:
-                return f"catalog:{project_id}/{cluster_id}"
+                return (
+                    f"catalog:{project_id}/{cluster_id}/"
+                    f"provider:{scheduler_runtime.scheduler_kind()}"
+                )
         except Exception:
             _logger.debug("_cluster_snapshot_identity: ignoring error", exc_info=True)
     configured = (
@@ -4975,7 +5420,10 @@ def _cluster_snapshot_identity() -> str:
         or os.environ.get("RACK_SSH_HOST")
         or ""
     ).strip()
-    return f"cluster:{configured or socket.gethostname()}"
+    return (
+        f"cluster:{configured or socket.gethostname()}/"
+        f"provider:{scheduler_runtime.scheduler_kind()}"
+    )
 
 
 def _cluster_overview_live_db_path() -> Path:
@@ -5124,7 +5572,8 @@ def _ensure_rack_status_background_thread() -> None:
             daemon=True,
         )
         _rack_status_bg_thread.start()
-    _start_cmsh_rack_list_warm_thread()
+    if not scheduler_runtime.is_pythoncm():
+        _start_cmsh_rack_list_warm_thread()
 
 
 def _rack_status_background_loop() -> None:
@@ -5299,6 +5748,51 @@ def _prepare_power_reset(body: dict) -> tuple[dict[str, object] | None, tuple[ob
     return {"specs": specs}, None
 
 
+def _pythoncm_blocked_action(
+    action: str, reason: str
+) -> tuple[None, tuple[object, int]]:
+    """Return a synchronous fail-closed response before any legacy worker starts."""
+    return None, (
+        jsonify(
+            {
+                "ok": False,
+                "blocked": True,
+                "scheduler": "pythoncm",
+                "error": f"{action} is unavailable in Nscale PythonCM mode: {reason}",
+            }
+        ),
+        409,
+    )
+
+
+@app.before_request
+def _pythoncm_hide_legacy_slurm_routes():
+    """Do not expose Slurm-named compatibility URLs on the Nscale deployment."""
+    if scheduler_runtime.is_pythoncm() and request.path.startswith("/api/slurm-"):
+        return jsonify(
+            {
+                "ok": False,
+                "scheduler": "pythoncm",
+                "error": "legacy Slurm API names are not available in Nscale PythonCM mode",
+            }
+        ), 404
+    return None
+
+
+@app.before_request
+def _pythoncm_block_unreviewed_tools_surfaces():
+    """Nscale exposes no head-local Tools status or mutation as PythonCM."""
+    if (
+        scheduler_runtime.is_pythoncm()
+        and request.path.startswith("/api/tools/")
+    ):
+        return _pythoncm_blocked_action(
+            "Tools operation",
+            "head-local status/download/install/launch utilities are not PythonCM ProgramRunner operations",
+        )[1]
+    return None
+
+
 @app.route("/api/power-on", methods=["POST"])
 def api_power_on():
     """POST JSON {\"specs\": [\"pNN-rMM-ct[id]\", …]} or {\"ct_down_unk\": \"…\"} — cmsh power off/sleep/on per tray."""
@@ -5369,6 +5863,19 @@ def _gpu_reset_script_path() -> Path:
 
 def run_gpu_reset(pdsh_w: str) -> dict:
     """Run gpu_reset.sh once; argument is the pdsh -w host pattern (may contain commas)."""
+    if scheduler_runtime.is_pythoncm():
+        timeout = max(30, _env_int("RACK_GPU_RESET_TIMEOUT", 3600))
+        command = (
+            "systemctl stop nvidia-imex; "
+            "systemctl stop nvidia-dcgm 2>/dev/null || systemctl stop cuda-dcgm; "
+            "sleep 10; nvidia-smi -r; _nvis_rc=$?; sleep 10; "
+            "systemctl start nvidia-imex; "
+            "systemctl start nvidia-dcgm 2>/dev/null || systemctl start cuda-dcgm; "
+            "exit $_nvis_rc"
+        )
+        return _run_pythoncm_fanout(
+            pdsh_w, command, name="gpu-reset", timeout=timeout
+        )
     script = _gpu_reset_script_path()
     if not _script_exists(script):
         raise OSError(f"gpu_reset script not found: {script}")
@@ -5577,6 +6084,11 @@ def run_bmc_recovery_one(node: str, iface: str) -> dict:
 
 def _prepare_bmc_recovery(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate the request body; return ({nodes, iface}, None) or (None, (response, code))."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "BMC recovery",
+            "the installed recovery recipe reads BMC credentials and interface data through cmsh",
+        )
     if os.environ.get("RACK_BMC_RECOVERY_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (jsonify({"ok": False, "error": "bmc recovery disabled (RACK_BMC_RECOVERY_DISABLED)"}), 403)
     specs_raw = body.get("specs")
@@ -5747,6 +6259,11 @@ def run_mac_change(
 
 def _prepare_mac_change(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate the request body; return ({node, node_mac, ifspecs, dry_run}, None) or (None, err)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "MAC change",
+            "the installed macswap workflow has not been validated against PythonCM device interfaces",
+        )
     if os.environ.get("RACK_MAC_CHANGE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (jsonify({"ok": False, "error": "mac change disabled (RACK_MAC_CHANGE_DISABLED)"}), 403)
     node_raw = body.get("node")
@@ -5908,6 +6425,16 @@ def _bug_report_remote_dir() -> str:
 
 def run_bug_report_pdsh(pdsh_w: str) -> dict:
     """Run nvidia-bug-report.sh on each host via pdsh (same -w pattern as GPU reset)."""
+    if scheduler_runtime.is_pythoncm():
+        remote = _bug_report_remote_dir()
+        rq = shlex.quote(remote)
+        command = f"mkdir -p {rq}/$HOSTNAME && cd {rq}/$HOSTNAME && nvidia-bug-report.sh"
+        return _run_pythoncm_fanout(
+            pdsh_w,
+            command,
+            name="nvidia-bug-report",
+            timeout=max(120, _env_int("RACK_BUG_REPORT_TIMEOUT", 10800)),
+        )
     w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
@@ -5988,6 +6515,18 @@ def _parse_bug_report_paths_from_pdsh(stdout: str) -> list[dict[str, str]]:
 
 def run_bug_report_list_pdsh(pdsh_w: str) -> dict:
     """List newest nvidia-bug-report *.log.gz per host under ``<remote>/$HOSTNAME/``."""
+    if scheduler_runtime.is_pythoncm():
+        remote = _bug_report_remote_dir()
+        command = (
+            f"ls -t {shlex.quote(remote)}/$HOSTNAME/nvidia-bug-report*.log.gz "
+            "2>/dev/null | head -1"
+        )
+        return _run_pythoncm_fanout(
+            pdsh_w,
+            command,
+            name="nvidia-bug-report-list",
+            timeout=max(30, _env_int("RACK_BUG_REPORT_LIST_TIMEOUT", 600)),
+        )
     w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
@@ -6217,6 +6756,11 @@ def _bug_report_worker(job_id: str, pdsh_w: str) -> None:
 @app.route("/api/bug-report-async", methods=["POST"])
 def api_bug_report_async():
     """POST JSON like GPU reset: ``{"specs": ["pNN-rMM-ct[dd]", …], "rack": "pNN-rMM"}`` — pdsh nvidia-bug-report.sh."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "bug-report collection",
+            "ProgramRunner can create the report, but PythonCM file transfer has not been validated",
+        )[1]
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_bug_report_async(body)
     if err is not None:
@@ -6249,6 +6793,12 @@ def api_bug_report_async():
 @app.route("/api/bug-report-bundle", methods=["GET"])
 def api_bug_report_bundle():
     """GET ``?job_id=…`` — zip of ``bug_report_files`` from a completed bug_report job (ssh cat per host)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "bug-report bundle download",
+            "collecting binary report files still requires direct per-node SSH; "
+            "PythonCM ProgramRunner file transfer has not been validated",
+        )[1]
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
@@ -6460,15 +7010,9 @@ _HW_CHECK_PRESETS: dict[str, list[str]] = {
                     "-p", "0", "-N", "1"],
     # BOM / inventory: nvidia-smi -L, ECC, nvlink -s, fabric state, topo -p2p n
     "bom_inventory": ["-e", "0", "-s", "0", "-g", "1", "-i", "0", "-b", "0", "-x", "0", "-p", "0"],
-    # Job-launch stack: slurmd, munge, Prolog/Epilog (incl. a dry execution), pyxis SPANK
-    # plugin, enroot runtime dirs. Added 2026-07-28 after job 63850 was CANCELLED with
-    # Reason=Prolog while every GPU/NVLink/CUDA check on the tray passed — nothing here
-    # covered the launch path, so a tray that could not start a job still reported healthy.
-    "slurm_stack": ["-e", "0", "-s", "0", "-g", "0", "-i", "0", "-b", "0", "-x", "0",
-                    "-p", "0", "-S", "1"],
-    # Full MOP pre-flight: BOM + dcgmi diag -r 3 + nvbandwidth + launch stack
+    # Full Nscale/PythonCM MOP pre-flight: BOM + dcgmi diag -r 3 + nvbandwidth.
     "mop_preflight": ["-e", "1", "-s", "1", "-g", "1", "-i", "0", "-b", "1", "-x", "0",
-                      "-p", "0", "-D", "1", "-L", "3", "-N", "1", "-S", "1"],
+                      "-p", "0", "-D", "1", "-L", "3", "-N", "1"],
 }
 
 _HW_CHECK_ARG_TOKEN_RE = re.compile(r"^[-a-zA-Z0-9_=.,]+$")
@@ -6521,6 +7065,22 @@ def _hw_check_argv_for_preset(preset: str) -> list[str]:
 
 def run_hw_check(pdsh_w: str, checker_argv: list[str]) -> dict:
     """Run hw_check_pdsh.sh once; checker_argv is passed after -- to checker.sh on each node."""
+    if scheduler_runtime.is_pythoncm():
+        if any(token in {"-S", "--check-slurm-stack"} for token in checker_argv):
+            raise ValueError("the legacy workload-manager stack check is forbidden in PythonCM mode")
+        checker = _checker_script_path()
+        if not _script_exists(checker):
+            raise OSError(f"checker.sh not found: {checker}")
+        command = " ".join(
+            ["bash", shlex.quote(str(checker)), *(shlex.quote(arg) for arg in checker_argv)]
+        )
+        return _run_pythoncm_fanout(
+            pdsh_w,
+            command,
+            name="hardware-check",
+            timeout=max(60, _env_int("RACK_HW_CHECK_TIMEOUT", 3600)),
+            env={"RACK_WEB_HW_CHECK": "1"},
+        )
     script = _hw_check_pdsh_script_path()
     if not _script_exists(script):
         raise OSError(f"hw_check_pdsh.sh not found: {script}")
@@ -6793,6 +7353,11 @@ def api_hw_check_help():
 
 def _prepare_nvswitch_fix_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate JSON for async NMXC cycle (``nvswitches_rack_audit.sh --fix RACK``)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "NVSwitch fix",
+            "the installed switch audit/fix recipe uses cmsh and pdsh internally",
+        )
     if os.environ.get("RACK_NVSWITCH_AUDIT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (
             jsonify({"ok": False, "error": "nvswitch audit disabled (RACK_NVSWITCH_AUDIT_DISABLED)"}),
@@ -6925,6 +7490,11 @@ def api_nvswitch_fix_async():
 
 
 def _prepare_nvswitch_sdn_reset_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "NVSwitch SDN reset",
+            "the installed switch reset recipe has no reviewed PythonCM implementation",
+        )
     """Validate JSON for async NVLink SDN reset (``nvswitch_sdn_reset.sh RACK``)."""
     log_raw = body.get("log_dir")
     try:
@@ -7055,6 +7625,11 @@ def api_nvswitch_sdn_reset_async():
 
 
 def _prepare_nvswitch_system_reset_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "NVSwitch system reset",
+            "the installed switch reset recipe has no reviewed PythonCM implementation",
+        )
     """Validate JSON for async NVLink system reset (``nvswitch_system_reset.sh RACK NVSWITCH_HOST``)."""
     log_raw = body.get("log_dir")
     try:
@@ -7211,6 +7786,11 @@ def api_nvswitch_system_reset_async():
 
 
 def _prepare_imex_reset_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "IMEX reset",
+            "the installed reset recipe performs its own pdsh fan-out and stops CMDaemon",
+        )
     """Validate JSON for async IMEX reset (``imex_reset.sh RACK``)."""
     log_raw = body.get("log_dir")
     try:
@@ -7353,6 +7933,11 @@ def _nvlmapper_reports_base() -> Path:
 
 
 def _prepare_nvlmapper_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "NVLMapper",
+            "the installed mapper builds switch inventory through cmsh",
+        )
     """Validate JSON for async NVLMAPPER (stage under reports/<rack>, run ``./run_nvlmapper.sh <rack>``)."""
     if os.environ.get("RACK_NVLMAPPER_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (jsonify({"ok": False, "error": "NVLMAPPER disabled (RACK_NVLMAPPER_DISABLED)"}), 403)
@@ -7585,6 +8170,11 @@ def api_nvlmapper_zip():
 
 def _prepare_precheck_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate JSON for async Precheck (sysinfo.sh)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "system precheck",
+            "the installed sysinfo recipe performs its own SSH fan-out instead of PythonCM",
+        )
     prep, err = _parse_sysinfo_request(body)
     if err is not None:
         return None, err
@@ -7703,6 +8293,11 @@ def _prepare_nvswitch_check_async(
     body: dict,
 ) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate JSON for async NVSwitch check (nvswitch audit without --fix)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "NVSwitch check",
+            "the installed switch audit recipe uses cmsh and pdsh internally",
+        )
     body2 = dict(body)
     body2["fix"] = False
     prep, err = _parse_nvswitch_audit_request(body2)
@@ -7822,6 +8417,11 @@ def api_nvswitch_check_async():
 
 def _prepare_imex_check_async(body: dict) -> tuple[dict[str, object] | None, tuple[object, int] | None]:
     """Validate JSON for async IMEX check (imex-related checks from sysinfo only)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "IMEX check",
+            "the installed IMEX check recipe performs its own pdsh fan-out",
+        )
     prep, err = _parse_sysinfo_request(body)
     if err is not None:
         return None, err
@@ -7957,6 +8557,19 @@ def run_nvlink_preflight_pdsh(pdsh_w: str, *, quick: bool) -> dict:
     script = _nvlink_preflight_script_path()
     if not _script_exists(script):
         raise OSError(f"nvlink_preflight.sh not found: {script}")
+    if scheduler_runtime.is_pythoncm():
+        nodes = pythoncm_validation.resolve_nodes(target=pdsh_w)
+        default_timeout = 600 if quick else 1800
+        timeout = max(60, _env_int("RACK_NVLINK_PREFLIGHT_TIMEOUT", default_timeout))
+        command = f"bash {shlex.quote(str(script))} {'--quick' if quick else '--full'}"
+        result = _run_pythoncm_fanout(
+            ",".join(nodes), command, name="nvlink-preflight", timeout=timeout
+        )
+        rows = nvlink_preflight.parse_nvlink_preflight_output(
+            str(result.get("stdout") or ""), str(result.get("stderr") or ""), nodes
+        )
+        result.update({"quick": quick, "rows": rows, "summary": nvlink_preflight.summarize(rows)})
+        return result
     w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
@@ -8243,6 +8856,7 @@ def _run_scontrol_node_update(target: str, state_kv: list[str]) -> dict:
     }
 
 
+@app.route("/api/scheduler-drain", methods=["POST"])
 @app.route("/api/slurm-drain", methods=["POST"])
 def api_slurm_drain():
     """POST JSON {\"rack\": \"p34-r07\"} — ``module load`` then scontrol update nodename=… drain."""
@@ -8278,7 +8892,12 @@ def api_slurm_drain():
     else:
         err = f"{result.get('stderr') or ''} {result.get('stdout') or ''}".strip()
         # Say WHAT went wrong, not just "see stdout/stderr" — the operator cannot act on that.
-        if "Invalid node state" in err:
+        if scheduler_runtime.is_pythoncm():
+            payload["error"] = (
+                "PythonCM drain failed: "
+                f"{err[:300] or 'CMDaemon returned no diagnostic'}"
+            )
+        elif "Invalid node state" in err:
             payload["error"] = (
                 "scontrol rejected the state change — usually because none of these nodes are "
                 "drained or down, so there is nothing to undrain. Check Slurm state first "
@@ -8292,6 +8911,7 @@ def api_slurm_drain():
     return jsonify(payload), (200 if ok else 502)
 
 
+@app.route("/api/scheduler-resume", methods=["POST"])
 @app.route("/api/slurm-undrain", methods=["POST"])
 def api_slurm_undrain():
     """POST JSON {\"rack\": \"p34-r07\"} — ``module load`` then scontrol update nodename=… state=idle."""
@@ -8377,7 +8997,12 @@ def api_slurm_undrain():
             f"Undrained {len(drained) or 'all targeted'} node(s): {apply_to[:200]}")
     else:
         err = f"{result.get('stderr') or ''} {result.get('stdout') or ''}".strip()
-        if "Invalid node state" in err:
+        if scheduler_runtime.is_pythoncm():
+            payload["error"] = (
+                "PythonCM resume failed: "
+                f"{err[:300] or 'CMDaemon returned no diagnostic'}"
+            )
+        elif "Invalid node state" in err:
             payload["error"] = ("Slurm rejected the state change — none of these nodes are "
                                 "drained or down. No change was made.")
         elif "Invalid node name" in err:
@@ -8395,13 +9020,26 @@ def _run_scancel(job_id: str) -> dict:
     if not scheduler_runtime.valid_reference(jid):
         raise ValueError("job_id must be a valid scheduler reference")
     if scheduler_runtime.is_pythoncm():
-        scheduler_runtime.cancel(jid)
+        native_ref = jid
+        if scheduler_runtime.job(native_ref) is None:
+            activity = validation_activities.get_activity(jid) or {}
+            candidates = [
+                str(task.get("scheduler_ref") or "").strip()
+                for task in (activity.get("tasks") or [])
+                if isinstance(task, dict)
+            ]
+            native_ref = next(
+                (ref for ref in reversed(candidates) if scheduler_runtime.valid_reference(ref)),
+                jid,
+            )
+        scheduler_runtime.cancel(native_ref)
         return {
             "ok": True,
             "returncode": 0,
             "stdout": "cancel requested",
             "stderr": "",
-            "command_display": f"pythoncm cancel {jid}",
+            "command_display": f"pythoncm cancel {native_ref}",
+            "scheduler_ref": native_ref,
         }
     plat = _get_platform()
     shell_cmd = plat.scancel_cmd(shlex.quote(jid))
@@ -8440,6 +9078,13 @@ def _slurm_job_log_path(job_id: str, log_dir: Path) -> tuple[str, str]:
     """Resolve a finished job's stdout path: ``scontrol`` ``StdOut=`` (jobs still within
     MinJobAge), else glob the dashboard log dir for the launcher's ``*_<jid>.out`` /
     ``*-<jid>.txt`` (for jobs that have aged out of the controller)."""
+    if scheduler_runtime.is_pythoncm():
+        jid = (job_id or "").strip()
+        if not scheduler_runtime.valid_reference(jid):
+            return "", "invalid"
+        row = scheduler_runtime.job(jid) or {}
+        path = str(row.get("stdout") or "").strip()
+        return (path, "pythoncm") if path else ("", "not_found")
     jid = _slurm_job_base_id(job_id) or ""
     if not jid:
         return "", "invalid"
@@ -8469,12 +9114,13 @@ def _slurm_job_log_path(job_id: str, log_dir: Path) -> tuple[str, str]:
     return "", "not_found"
 
 
+@app.route("/api/scheduler-job-log-path", methods=["GET"])
 @app.route("/api/slurm-job-log-path", methods=["GET"])
 def api_slurm_job_log_path():
     """Resolve a finished job's stdout log path (for the Recent-jobs 'open log' action)."""
     job_id = (request.args.get("job_id") or "").strip()
-    if not _slurm_job_base_id(job_id):
-        return jsonify({"ok": False, "error": "job_id must be a Slurm job id"}), 400
+    if not scheduler_runtime.valid_reference(job_id):
+        return jsonify({"ok": False, "error": "job_id must be a valid scheduler reference"}), 400
     try:
         log_dir = _resolve_log_dir((request.args.get("log_dir") or "").strip() or None)
     except ValueError as e:
@@ -8485,11 +9131,13 @@ def api_slurm_job_log_path():
         return jsonify({"ok": False, "error": str(e)}), 500
     if not path:
         return jsonify(
-            {"ok": False, "error": f"no stdout log found for job {job_id} (aged out of scontrol; no matching file under log_dir)"}
+            {"ok": False, "error": f"no stdout log found for scheduler task {job_id}"}
         ), 404
-    return jsonify({"ok": True, "job_id": _slurm_job_base_id(job_id), "path": path, "source": source})
+    normalized = job_id if scheduler_runtime.is_pythoncm() else _slurm_job_base_id(job_id)
+    return jsonify({"ok": True, "job_id": normalized, "path": path, "source": source})
 
 
+@app.route("/api/scheduler-cancel", methods=["POST"])
 @app.route("/api/slurm-scancel", methods=["POST"])
 def api_slurm_scancel():
     """POST JSON ``{\"job_id\": \"…\"}`` — ``module load`` then ``scancel`` (optional ``rack`` for context only)."""
@@ -8627,6 +9275,7 @@ def _resolve_slurm_job_stdout_path(path_raw: str, log_dir_raw: str | None) -> Pa
         ) from e
 
 
+@app.route("/api/scheduler-job-detail", methods=["GET"])
 @app.route("/api/slurm-scontrol-show-job", methods=["GET"])
 def api_slurm_scontrol_show_job():
     """``GET ?job_id=`` — ``module load`` then ``scontrol show job JOBID`` (dashboard host)."""
@@ -8635,11 +9284,11 @@ def api_slurm_scontrol_show_job():
     jid = (request.args.get("job_id") or "").strip()
     if not jid:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
-    if not _SLURM_SCANCEL_JOB_ID_RE.fullmatch(jid):
+    if not scheduler_runtime.valid_reference(jid):
         return jsonify(
             {
                 "ok": False,
-                "error": "job_id must be a Slurm job id (digits, optional _TASK for arrays)",
+                "error": "job_id must be a valid scheduler reference",
             }
         ), 400
     try:
@@ -8651,10 +9300,11 @@ def api_slurm_scontrol_show_job():
     ok = bool(result.get("ok"))
     payload: dict = {"ok": ok, "job_id": jid, **result}
     if not ok:
-        payload["error"] = "scontrol show job failed (see stdout/stderr)"
+        payload["error"] = "scheduler status lookup failed (see stdout/stderr)"
     return jsonify(payload), (200 if ok else 502)
 
 
+@app.route("/api/scheduler-job-output", methods=["GET"])
 @app.route("/api/slurm-job-stdout-content", methods=["GET"])
 def api_slurm_job_stdout_content():
     """``GET ?path=&log_dir=`` — read job stdout file if path is allowed (from ``scontrol show job``)."""
@@ -8697,6 +9347,7 @@ def api_slurm_job_stdout_content():
     )
 
 
+@app.route("/api/scheduler-job-output-download", methods=["GET"])
 @app.route("/api/slurm-job-stdout-download", methods=["GET"])
 def api_slurm_job_stdout_download():
     """Download job stdout file (same path rules as ``/api/slurm-job-stdout-content``)."""
@@ -9840,6 +10491,11 @@ def api_universal_scan():
 @app.route("/api/bringup/config")
 def api_bringup_config():
     """Discovery: whether Travis's bring-up automation tree is present, and where."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "bring-up integration",
+            "the installed daily-report/status-check integration derives state from Slurm",
+        )[1]
     if _truthy_env("RACK_STATUS_DEMO"):
         return jsonify({"ok": True, "enabled": True, "present": True, "home": "/home/cmods/bringup"})
     if _bringup is None:
@@ -9853,6 +10509,11 @@ def api_bringup_config():
 @app.route("/api/bringup/node")
 def api_bringup_node():
     """Per-node bring-up job summary (status+reason from status-check, metric from daily-report)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "bring-up node report",
+            "the installed report scripts derive state from Slurm",
+        )[1]
     node = (request.args.get("node") or "").strip()
     if not node or not re.match(r"^[A-Za-z0-9._-]+$", node):
         return jsonify({"ok": False, "error": "a valid node name is required"}), 400
@@ -9892,6 +10553,11 @@ def api_bringup_fleet():
     share a verdict cache, so this is ~2 round trips for the whole cluster. POST so the node
     list travels as a JSON body; GET still works for a whole-cluster query with no list.
     """
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "bring-up fleet report",
+            "the installed report scripts derive state from Slurm",
+        )[1]
     if _truthy_env("RACK_STATUS_DEMO"):
         # Seed the synthetic fleet from the demo rack inventory so node names line up with
         # what the dashboard is already showing.
@@ -9992,6 +10658,11 @@ def api_node_report():
     saves what it is given. POST carries the node list as a JSON body; ``download`` (body or
     query) sets a filename so the SPA can hand the file straight to the user.
     """
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "node report generation",
+            "the current fleet collector uses Slurm-derived bring-up data and direct SSH fan-out",
+        )[1]
     if _node_report is None:
         return jsonify({"ok": False, "error": "report generator unavailable"}), 503
     try:
@@ -11584,6 +12255,11 @@ def api_node_report_kinds():
     Discovered rather than hardcoded in the SPA: PDF depends on reportlab being present in the
     image, so a build without it must not offer a button that returns 503.
     """
+    if scheduler_runtime.is_pythoncm():
+        return jsonify({
+            "ok": True, "kinds": [], "blocked": True, "scheduler": "pythoncm",
+            "message": "Node report generation is not certified for Nscale PythonCM",
+        })
     pdf_ok = _cluster_report_pdf_available()
     kinds = []
     for kind, formats in _REPORT_KINDS.items():
@@ -11613,6 +12289,11 @@ def api_node_report_start():
     is the normal way to find out whether the first press worked, and at ~2000 nodes the second
     sweep would cost four minutes of SSH against the whole cluster.
     """
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "node report generation",
+            "the current fleet collector uses Slurm-derived bring-up data and direct SSH fan-out",
+        )[1]
     if _node_report is None:
         return jsonify({"ok": False, "error": "report generator unavailable"}), 503
     body = request.get_json(silent=True) or {}
@@ -11754,6 +12435,11 @@ def api_node_report_status():
     The document itself is *not* returned here — at 2000 nodes it is several MB and polling
     would ship it repeatedly. ``/api/node-report/result`` collects it once it is ready.
     """
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "node report generation",
+            "the current fleet collector is disabled in Nscale PythonCM mode",
+        )[1]
     job_id = (request.args.get("job_id") or "").strip()
     with _node_report_jobs_lock:
         row = _node_report_jobs.get(job_id)
@@ -11771,6 +12457,11 @@ def api_node_report_status():
 @app.route("/api/node-report/result", methods=["GET"])
 def api_node_report_result():
     """Collect the finished document, optionally as a download."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "node report generation",
+            "the current fleet collector is disabled in Nscale PythonCM mode",
+        )[1]
     job_id = (request.args.get("job_id") or "").strip()
     with _node_report_jobs_lock:
         row = _node_report_jobs.get(job_id)
@@ -12215,7 +12906,11 @@ def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
     mvt = (_eget("RACK_MULTIRACK_VALIDATION_TEST") or "nccl_all_reduce").strip() or "nccl_all_reduce"
     vt_if_unset = mvt if _is_multirack_log_basename(ap.name) else "nccl_all_reduce,llm"
     env = _subprocess_env({"NO_COLOR": "1"}, validation_test_if_unset=vt_if_unset)
-    _ensure_cmsh_rack_list_env_for_subprocess(env)
+    probe_args = ["--probe-json", str(ap)]
+    if scheduler_runtime.is_pythoncm():
+        probe_args = ["--no-squeue", "--no-cmsh", "--no-sinfo", *probe_args]
+    else:
+        _ensure_cmsh_rack_list_env_for_subprocess(env)
     # ``env=`` is LOCAL ONLY -- run_on_host drops it for an SSH target, which is how this
     # deployment runs the script. Without env_extra the remote never sees VALIDATION_TEST and
     # validation_test_env.sh falls back to its strictest suite
@@ -12229,7 +12924,7 @@ def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
             env_extra[_k] = _v
     try:
         proc = host_exec.run_on_host(
-            [str(script), "--probe-json", str(ap)],
+            [str(script), *probe_args],
             cwd=str(ap.parent),
             env=env,
             env_extra=env_extra,
@@ -13232,6 +13927,8 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
 @app.route("/api/run-validation", methods=["POST"])
 def api_run_validation():
     """Run singlerack validation script with one target, e.g. p26-r05-ct[01-18] (cwd = log_dir)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_unsupported_response("validation")
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_validation(body)
     if err is not None:
@@ -13276,6 +13973,8 @@ def api_run_validation():
 @app.route("/api/run-validation-async", methods=["POST"])
 def api_run_validation_async():
     """Start validation in a background thread; poll GET /api/run-validation-status?job_id=…"""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_unsupported_response("validation")
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_validation(body)
     if err is not None:
@@ -13395,6 +14094,8 @@ def api_run_nemo_xrack_async():
 
     Process cwd is *log_dir* (same as ``/api/run-validation``) so Slurm batch stdout files land there.
     """
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_unsupported_response("nemo-xrack")
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_nemo_xrack(body)
     if err is not None:
@@ -13590,6 +14291,8 @@ def _prepare_run_exemplar_llama(body: dict) -> tuple[dict | None, tuple[object, 
 @app.route("/api/run-exemplar-llama-async", methods=["POST"])
 def api_run_exemplar_llama_async():
     """Submit Llama 3.1 405B Exemplar pretraining across eight selected racks."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_unsupported_response("llama-exemplar")
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_exemplar_llama(body)
     if err is not None:
@@ -13663,6 +14366,8 @@ def api_run_exemplar_llama_async():
 @app.route("/api/run-llama-async", methods=["POST"])
 def api_run_llama_async():
     """Start ``run-llama.sh`` in the background; poll ``/api/run-llama-status``."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_unsupported_response("llama")
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_llama(body)
     if err is not None:
@@ -13774,7 +14479,7 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _mnubergemm_stress_script_path()
-    if not _script_exists(script):
+    if not scheduler_runtime.is_pythoncm() and not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"stress script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
@@ -13938,7 +14643,7 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
     launcher = (_eget("RACK_NCCL_FULLRACK_LAUNCHER") or "llmb").strip().lower()
     use_llmb = launcher not in ("mpi", "sbatch", "direct", "nccl_mpi")
     script = _run_llmb_nccl_script_path() if use_llmb else _run_nccl_mpi_script_path()
-    if not _script_exists(script):
+    if not scheduler_runtime.is_pythoncm() and not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"NCCL launcher not found: {script}"}), 500)
     env_updates: dict[str, str] = {"RACK_JOB_LOG_DIR": str(log_dir), "NVIS_RACK": rk}
 
@@ -14032,7 +14737,7 @@ def _prepare_run_nvloom_singlerack(body: dict) -> tuple[dict | None, tuple[objec
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _nvloom_singlerack_script_path()
-    if not _script_exists(script):
+    if not scheduler_runtime.is_pythoncm() and not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"nvloom script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
@@ -14094,7 +14799,7 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     script = _clusterkit_script_path()
-    if not _script_exists(script):
+    if not scheduler_runtime.is_pythoncm() and not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"clusterkit script not found: {script}"}), 500)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
@@ -14610,7 +15315,7 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         return None, (jsonify({"ok": False, "error": f"exact target is not idle/eligible: {shown}{suffix}"}), 409)
 
     script = Path(_scripts_dir()) / "run-validation-preset.sh"
-    if not _script_exists(script):
+    if not scheduler_runtime.is_pythoncm() and not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"validation preset launcher not found: {script}"}), 500)
     node_spec = ",".join(nodes)
     cmd = ["bash", str(script), "--preset", preset.id, "--nodelist", node_spec,
@@ -14623,7 +15328,12 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
             cmd += ["--group-nodelist", ",".join(str(node) for node in group["nodes"])]
     display_cmd = " ".join(shlex.quote(part) for part in cmd)
     image_path = preset.local_image if options["storage"] == "local" else preset.shared_image
-    checks = ["exact Slurm node identity", "scheduler eligibility at allocation time"]
+    checks = [
+        "exact PythonCM PhysicalNode identity"
+        if scheduler_runtime.is_pythoncm()
+        else "exact Slurm node identity",
+        "scheduler eligibility at allocation time",
+    ]
     if preset.shared_image:
         checks += ["allowlisted image byte size", "allowlisted image SHA256"]
     if preset.requires_infiniband:
@@ -14633,7 +15343,14 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
     if preset.id == "exemplar-system-info":
         checks += ["DGXC v26.06.01 summary present", "nonfatal findings and warnings classified per node"]
     if preset.id == "mnubergemm-26.03-v1.17":
-        checks += ["MNUberGEMM payload duration=3600 seconds", "Slurm TimeLimit=01:10:00"]
+        checks += [
+            "MNUberGEMM payload duration=3600 seconds",
+            (
+                "PythonCM ProgramRunner max_run_time=4200 seconds"
+                if scheduler_runtime.is_pythoncm()
+                else "Slurm TimeLimit=01:10:00"
+            ),
+        ]
     if stage_only:
         checks += ["stage-only: no MNUberGEMM workload submission", "one rack staged at a time"]
         cmd = []
@@ -14692,11 +15409,26 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
 
 @app.route("/api/validation-presets", methods=["GET"])
 def api_validation_presets():
+    if scheduler_runtime.is_pythoncm():
+        return jsonify({
+            "ok": True,
+            "presets": [],
+            "blocked": True,
+            "scheduler": "pythoncm",
+            "message": "No validation preset is yet certified as ProgramRunner-only on Nscale",
+        })
     return jsonify({"ok": True, "presets": validation_presets.catalogue()})
 
 
 @app.route("/api/validation-presets/prepare", methods=["POST"])
 def api_prepare_validation_preset():
+    if scheduler_runtime.is_pythoncm():
+        return jsonify({
+            "ok": False,
+            "blocked": True,
+            "scheduler": "pythoncm",
+            "error": "Validation presets are unavailable until their exact ProgramRunner-only semantics are validated on Nscale",
+        }), 409
     body = request.get_json(silent=True) or {}
     plan, err = _prepare_validation_preset(body)
     if err is not None:
@@ -15021,6 +15753,60 @@ def _run_validation_preset_async(body: dict):
         return jsonify({"ok": False, "error": "plan_hash from /api/validation-presets/prepare is required"}), 409
     if not secrets.compare_digest(supplied_hash, str(plan["plan_hash"])):
         return jsonify({"ok": False, "error": "validation plan changed; prepare and review it again", "plan_hash": plan["plan_hash"]}), 409
+    if scheduler_runtime.is_pythoncm():
+        preset_id = str(plan["preset_id"])
+        direct_kind = {
+            "nccl-2.31.2": "nccl-2.31.2",
+            "mnubergemm-26.03-v1.17": "mnubergemm",
+        }.get(preset_id)
+        blocked_kind = {
+            "llama31-405b-fp8": "llama-exemplar",
+            "gpt-oss-cpu": "gpt-oss-cpu",
+            "exemplar-system-info": "exemplar-system-info",
+            "nemo-26.04.01": "nemo-xrack",
+        }.get(preset_id)
+        if blocked_kind:
+            return _pythoncm_unsupported_response(blocked_kind)
+        if not direct_kind:
+            return jsonify({
+                "ok": False,
+                "scheduler": "pythoncm",
+                "blocked": True,
+                "error": f"preset {preset_id} has no reviewed PythonCM/direct runner",
+            }), 501
+        if plan.get("stage_only"):
+            return jsonify({
+                "ok": False,
+                "scheduler": "pythoncm",
+                "blocked": True,
+                "error": "MNUberGEMM image staging has no reviewed PythonCM file-transfer runner",
+            }), 501
+        if direct_kind == "mnubergemm" and len(plan.get("node_groups") or []) > 1:
+            return jsonify({
+                "ok": False,
+                "scheduler": "pythoncm",
+                "blocked": True,
+                "error": "multirack MNUberGEMM requires one independent PythonCM command per NVLink domain",
+            }), 501
+        racks = [str(rack) for rack in plan.get("racks") or []]
+        prep = {
+            "nodes": list(plan["nodes"]),
+            "target": str(plan["target"]),
+            "rk": racks[0] if len(racks) == 1 else f"{len(racks)}racks",
+            "rack": racks[0] if racks else "",
+            "log_dir": plan["log_dir"],
+            "timeout": plan["timeout"],
+            "env_updates": plan.get("env_updates") or {},
+        }
+        tool = "nccl-fullrack" if direct_kind == "nccl-2.31.2" else "mnubergemm"
+        return _start_pythoncm_validation(
+            direct_kind,
+            prep,
+            tool=tool,
+            stage="other",
+            scope=str(plan["scope"]),
+            racks=racks,
+        )
     job_id = str(uuid.uuid4())
     operator = _operator_from_request()
     tool = {
@@ -15057,6 +15843,13 @@ def _run_validation_preset_async(body: dict):
 
 @app.route("/api/run-validation-preset-async", methods=["POST"])
 def api_run_validation_preset_async():
+    if scheduler_runtime.is_pythoncm():
+        return jsonify({
+            "ok": False,
+            "blocked": True,
+            "scheduler": "pythoncm",
+            "error": "Validation presets are unavailable until their exact ProgramRunner-only semantics are validated on Nscale",
+        }), 501
     return _run_validation_preset_async(request.get_json(silent=True) or {})
 
 
@@ -15094,11 +15887,19 @@ def api_run_exemplar_sysinfo_status():
 @app.route("/api/run-mnubergemm-stress-async", methods=["POST"])
 def api_run_mnubergemm_stress_async():
     """Start mnubergemm stress driver; poll GET /api/run-mnubergemm-stress-status?job_id=…"""
+    if scheduler_runtime.is_pythoncm():
+        blocked = _pythoncm_unsupported_response("mnubergemm")
+        if blocked is not None:
+            return blocked
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_mnubergemm_stress(body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
+    if scheduler_runtime.is_pythoncm():
+        return _start_pythoncm_validation(
+            "mnubergemm", prep, tool="mnubergemm", stage="other"
+        )
     log_dir = prep["log_dir"]
     rk = str(prep["rk"])
     target = str(prep["target"])
@@ -15156,11 +15957,19 @@ def api_run_mnubergemm_stress_async():
 @app.route("/api/run-nccl-fullrack-async", methods=["POST"])
 def api_run_nccl_fullrack_async():
     """Start the standalone Stage-1 NCCL benchmark; poll GET /api/run-nccl-fullrack-status?job_id=…"""
+    if scheduler_runtime.is_pythoncm():
+        blocked = _pythoncm_unsupported_response("nccl-fullrack")
+        if blocked is not None:
+            return blocked
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_nccl_fullrack(body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
+    if scheduler_runtime.is_pythoncm():
+        return _start_pythoncm_validation(
+            "nccl-fullrack", prep, tool="nccl-fullrack", stage="stage1"
+        )
     log_dir = prep["log_dir"]
     rk = str(prep["rk"])
     target = str(prep["target"])
@@ -15226,11 +16035,19 @@ def api_run_nccl_fullrack_async():
 @app.route("/api/run-nvloom-async", methods=["POST"])
 def api_run_nvloom_async():
     """Start nvloom singlerack Slurm driver (sbatch --wait); poll GET /api/run-nvloom-status?job_id=…"""
+    if scheduler_runtime.is_pythoncm():
+        blocked = _pythoncm_unsupported_response("nvloom")
+        if blocked is not None:
+            return blocked
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_nvloom_singlerack(body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
+    if scheduler_runtime.is_pythoncm():
+        return _start_pythoncm_validation(
+            "nvloom", prep, tool="nvloom", stage="other"
+        )
     log_dir = prep["log_dir"]
     rk = str(prep["rk"])
     target = str(prep["target"])
@@ -15288,11 +16105,19 @@ def api_run_nvloom_async():
 @app.route("/api/run-clusterkit-async", methods=["POST"])
 def api_run_clusterkit_async():
     """Start ClusterKit singlerack Slurm driver; poll GET /api/run-clusterkit-status?job_id=…"""
+    if scheduler_runtime.is_pythoncm():
+        blocked = _pythoncm_unsupported_response("clusterkit")
+        if blocked is not None:
+            return blocked
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_clusterkit_singlerack(body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
+    if scheduler_runtime.is_pythoncm():
+        return _start_pythoncm_validation(
+            "clusterkit", prep, tool="clusterkit", stage="other"
+        )
     log_dir = prep["log_dir"]
     rk = str(prep["rk"])
     target = str(prep["target"])
@@ -15356,11 +16181,45 @@ def api_run_llmb_nccl_async():
     under the UI log dir. Runs on the privileged ``script`` profile (Slurm + llmb-run on
     the head node).
     """
+    if scheduler_runtime.is_pythoncm():
+        blocked = _pythoncm_unsupported_response("llmb-nccl")
+        if blocked is not None:
+            return blocked
     body = request.get_json(silent=True) or {}
     prep, err = _prepare_run_llmb_nccl(body)
     if err is not None:
         return err[0], err[1]
     assert prep is not None
+    if scheduler_runtime.is_pythoncm():
+        racks = [str(rack) for rack in prep.get("racks") or []]
+        if not prep.get("nodes"):
+            prep["nodes"] = [
+                node
+                for rack in racks
+                for node in _rack_node_hostnames_from_inventory(rack)
+            ]
+        prep["rk"] = racks[0] if len(racks) == 1 else f"{len(racks)}racks"
+        if prep.get("dry_run"):
+            try:
+                spec, nodes = _pythoncm_validation_spec("llmb-nccl", prep)
+            except (ValueError, RuntimeError) as exc:
+                return jsonify({"ok": False, "scheduler": "pythoncm", "error": str(exc)}), 409
+            return jsonify({
+                "ok": True,
+                "dry_run": True,
+                "scheduler": "pythoncm",
+                "launch_mode": spec.launch_mode,
+                "nodes": nodes,
+                "command_display": f"PythonCM ProgramRunner ({spec.launch_mode}): {spec.name}",
+            })
+        return _start_pythoncm_validation(
+            "llmb-nccl",
+            prep,
+            tool="llmb-nccl",
+            stage="stage1",
+            scope="multirack" if len(racks) > 1 else "rack",
+            racks=racks,
+        )
     log_dir = prep["log_dir"]
     racks = [str(r) for r in prep["racks"]]
     cmd = prep["cmd"]
@@ -15707,6 +16566,11 @@ def _merged_stdout_stream_generator(
     (sysinfo, switch audits) that require root + ``pdsh`` and therefore cannot run
     as the unprivileged control-plane user on the head node.
     """
+    # This helper hand-builds a Popen path instead of using run_on_host(), so it
+    # must apply the same PythonCM fail-closed boundary itself.  This protects
+    # every streaming route, including future routes that forget a route-level
+    # PythonCM guard.
+    host_exec._reject_pythoncm_legacy_command(cmd)
     cmd_run = list(cmd)
     # Transport-boundary code: this builds a streaming Popen by hand out of
     # host_exec.wrap_for_host(), so unlike ordinary callers it does have to know the
@@ -15894,6 +16758,8 @@ def _nvswitch_audit_stream_generator(prep: dict):
 @app.route("/api/run-sysinfo", methods=["POST"])
 def api_run_sysinfo():
     """Run sysinfo.sh with one NODELIST target, e.g. p22-r05-ct[01-18] (cwd = log_dir)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_unsupported_response("sysinfo")
     body = request.get_json(silent=True) or {}
     prep, err = _parse_sysinfo_request(body)
     if err is not None:
@@ -16704,6 +17570,11 @@ def _validate_cuda_nccl_build_host(raw: object) -> tuple[str | None, str | None]
 @app.route("/api/tools/install-cuda-nccl-workspace", methods=["POST"])
 def api_tools_install_cuda_nccl_workspace():
     """Run ``install-cuda-nccl-workspace.sh``: download on localhost, install on ``build_host`` via pdsh."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "CUDA/NCCL workspace install",
+            "the installed build orchestrator reaches its compute build host through pdsh",
+        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -16788,6 +17659,11 @@ def api_tools_install_cuda_nccl_workspace():
 @app.route("/api/tools/install-cuda-nccl-workspace-stream", methods=["POST"])
 def api_tools_install_cuda_nccl_workspace_stream():
     """Stream ``install-cuda-nccl-workspace.sh`` (same POST JSON as ``/api/tools/install-cuda-nccl-workspace``)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "CUDA/NCCL workspace install",
+            "the installed build orchestrator reaches its compute build host through pdsh",
+        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -16873,6 +17749,11 @@ def api_tools_install_cuda_nccl_workspace_stream():
 @app.route("/api/tools/install-nvloom-workspace", methods=["POST"])
 def api_tools_install_nvloom_workspace():
     """Run ``install-nvloom-workspace.sh``: git clone on localhost, build on ``build_host`` via pdsh."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "NVLoom workspace install",
+            "the installed build orchestrator reaches its compute build host through pdsh",
+        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -16935,6 +17816,11 @@ def api_tools_install_nvloom_workspace():
 @app.route("/api/tools/install-nvloom-workspace-stream", methods=["POST"])
 def api_tools_install_nvloom_workspace_stream():
     """Stream ``install-nvloom-workspace.sh`` (POST JSON: ``workspace``, ``cuda_major``, ``build_host``)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "NVLoom workspace install",
+            "the installed build orchestrator reaches its compute build host through pdsh",
+        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -17084,6 +17970,11 @@ def _exemplar_display_cmd(meta: dict, ws: str) -> str:
 @app.route("/api/tools/install-dgxc-benchmarking-workspace", methods=["POST"])
 def api_tools_install_dgxc_benchmarking_workspace():
     """Run ``install-dgxc-benchmarking-workspace.sh``: clone + (record|install) Exemplar/llmb."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "DGXC benchmarking install",
+            "the installed package invokes workload-manager launch commands during install",
+        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -17144,6 +18035,11 @@ def api_tools_install_dgxc_benchmarking_workspace_stream():
     Routed to the privileged ``script`` SSH plane (like ``run_llmb_nccl.sh``) so the
     workloads install to the same ``LLMB_INSTALL`` the NCCL/NeMo launchers later read.
     """
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "DGXC benchmarking install",
+            "the installed package invokes workload-manager launch commands during install",
+        )[1]
     if os.environ.get("RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
@@ -17202,6 +18098,8 @@ def api_tools_install_dgxc_benchmarking_workspace_stream():
 @app.route("/api/run-sysinfo-stream", methods=["POST"])
 def api_run_sysinfo_stream():
     """Stream merged stdout/stderr from sysinfo.sh as text/plain (UTF-8)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_unsupported_response("sysinfo")
     body = request.get_json(silent=True) or {}
     prep, err = _parse_sysinfo_request(body)
     if err is not None:
@@ -17229,6 +18127,11 @@ def api_run_sysinfo_stream():
 @app.route("/api/run-nvswitch-audit-stream", methods=["POST"])
 def api_run_nvswitch_audit_stream():
     """Stream nvswitches_rack_audit.sh for one rack (optional body.fix true => --fix). cwd = log_dir."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_blocked_action(
+            "NVSwitch audit",
+            "the installed switch audit recipe uses cmsh and pdsh internally",
+        )[1]
     body = request.get_json(silent=True) or {}
     prep, err = _parse_nvswitch_audit_request(body)
     if err is not None:
@@ -17923,8 +18826,24 @@ def _job_environment_settings_payload() -> dict[str, object]:
     """Same JSON shape for GET /api/settings/job-environment and successful PUT (avoids multi-worker GET races)."""
     ovr = _job_env_overrides_load()
     eff = _job_env_effective_values()
+    definitions = list(JOB_ENV_UI_DEFINITIONS)
+    if scheduler_runtime.is_pythoncm():
+        forbidden_key = re.compile(
+            r"(?:SLURM|CMSH|PDSH|NEMO|LLAMA|LLMB|NCCL|MNUBERGEMM|NVLOOM|"
+            r"CLUSTERKIT|SYSINFO|NVSWITCH|IMEX|NVLMAPPER|BMC|MAC_CHANGE)",
+            re.IGNORECASE,
+        )
+        definitions = [
+            d for d in definitions
+            if not forbidden_key.search(str(d.get("key") or ""))
+            and not re.search(
+                r"\b(?:slurm|cmsh|pdsh|mayo|boston|firmus)\b",
+                str(d.get("description") or ""),
+                re.IGNORECASE,
+            )
+        ]
     variables: list[dict[str, object]] = []
-    for d in JOB_ENV_UI_DEFINITIONS:
+    for d in definitions:
         k = d["key"]
         variables.append(
             {
@@ -17935,8 +18854,10 @@ def _job_environment_settings_payload() -> dict[str, object]:
         )
     sections: list[dict[str, object]] = []
     for sec_id, title in JOB_ENV_SECTION_ORDER:
+        if scheduler_runtime.is_pythoncm() and sec_id == "native_cmsh":
+            title = "Nscale naming & log parsing"
         sec_vars: list[dict[str, object]] = []
-        for d in JOB_ENV_UI_DEFINITIONS:
+        for d in definitions:
             if d.get("section") != sec_id:
                 continue
             k = d["key"]
@@ -17996,6 +18917,17 @@ def api_settings_job_environment():
     for k, v in raw_updates.items():
         if not isinstance(k, str) or k not in _JOB_ENV_ALLOWED_KEYS:
             return jsonify({"ok": False, "error": f"unknown or disallowed key: {k!r}"}), 400
+        if scheduler_runtime.is_pythoncm() and re.search(
+            r"(?:SLURM|CMSH|PDSH|NEMO|LLAMA|LLMB|NCCL|MNUBERGEMM|NVLOOM|"
+            r"CLUSTERKIT|SYSINFO|NVSWITCH|IMEX|NVLMAPPER|BMC|MAC_CHANGE)",
+            k,
+            re.IGNORECASE,
+        ):
+            return jsonify({
+                "ok": False,
+                "blocked": True,
+                "error": f"{k} is not configurable in Nscale PythonCM mode",
+            }), 409
         if v is None or (isinstance(v, str) and not v.strip()):
             cur.pop(k, None)
             continue
@@ -18210,7 +19142,8 @@ def api_status():
     ``raw=1`` remains a diagnostic collector bypass. It is never persisted and
     therefore can never become the source of Overview inventory counts.
     """
-    _start_cmsh_rack_list_warm_thread()
+    if not scheduler_runtime.is_pythoncm():
+        _start_cmsh_rack_list_warm_thread()
     _ensure_rack_status_background_thread()
     nvftp_cache_sync.ensure_background_thread()
     try:
@@ -18726,7 +19659,8 @@ def api_post_run_node_mark():
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{1,127}", node):
         return jsonify({"ok": False, "error": "a valid exact node is required"}), 400
     if node.casefold() not in {name.casefold() for name in _all_slurm_nodenames()}:
-        return jsonify({"ok": False, "error": "node is not in current Slurm inventory"}), 409
+        inventory_name = "PythonCM" if scheduler_runtime.is_pythoncm() else "scheduler"
+        return jsonify({"ok": False, "error": f"node is not in current {inventory_name} inventory"}), 409
     if category not in {
         "hardware", "network", "gpu", "thermal", "storage", "control_plane",
         "validation", "maintenance",
@@ -18759,10 +19693,11 @@ def api_post_run_node_mark():
             or f"returncode={result.get('returncode')}"
         )[:2000]
         if not drained:
+            provider = "PythonCM" if scheduler_runtime.is_pythoncm() else "scheduler"
             return jsonify({
                 "ok": False,
-                "error": "Slurm drain failed",
-                "slurm": result,
+                "error": f"{provider} drain failed",
+                "scheduler": result,
             }), 502
     operator = _operator_from_request() or "rack-status-operator"
     entry = node_issues.record_issue(

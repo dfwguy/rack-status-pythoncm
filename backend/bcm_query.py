@@ -145,6 +145,16 @@ def nodes(**kw: Any) -> dict[str, Any]:
     return query("nodes", **kw)
 
 
+def racks(**kw: Any) -> dict[str, Any]:
+    """Every BCM rack entity, including racks that currently contain no compute node."""
+    return query("racks", **kw)
+
+
+def rf0(**kw: Any) -> dict[str, Any]:
+    """Physical-node BMC/rf0 addresses from PythonCM network-interface entities."""
+    return query("rf0", **kw)
+
+
 def switches(**kw: Any) -> dict[str, Any]:
     """Switch devices — on NVL72 these are the NVLink switch trays, each with its own BMC."""
     return query("switches", **kw)

@@ -19,9 +19,6 @@
 
 set -uo pipefail
 
-# Slurm CLI on PATH (non-login SSH shells don't init Modules — see slurm-init.inc.sh).
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
-
 use_color=0
 force_c="${FORCE_COLOR:-0}"
 [[ "$force_c" =~ ^(1|[Yy]|[Yy][Ee][Ss]|[Tt][Rr][Uu][Ee])$ ]] && force_on=1 || force_on=0
@@ -119,6 +116,13 @@ while [[ "${1:-}" == -* ]]; do
       ;;
   esac
 done
+
+# Log-only PythonCM probes pass --no-squeue/--no-cmsh/--no-sinfo and must not
+# initialize or query Slurm at all. Load its CLI only for the legacy queue path.
+if [[ "$USE_SQUEUE" -eq 1 || "$USE_SINFO" -eq 1 ]]; then
+  # shellcheck disable=SC1091
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
+fi
 
 if [[ -n "$tmp_status_arg" ]]; then
   [[ -f "$tmp_status_arg" ]] || {

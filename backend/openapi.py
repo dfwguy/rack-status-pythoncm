@@ -208,7 +208,7 @@ _DOMAIN_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("run-", "launch"),
     ("validation", "validation"),
     ("rack", "racks"),
-    ("node", "nodes"),
+    ("node", "cluster"),
     ("cluster", "cluster"),
 )
 
@@ -280,7 +280,10 @@ def build_spec(app: Any, *, version: str = "", server_url: str = "") -> dict[str
         entry = paths.setdefault(openapi_path, {})
         for method in methods:
             operation: dict[str, Any] = {
-                "operationId": f"{rule.endpoint}_{method.lower()}",
+                "operationId": (
+                    f"{method.lower()}_"
+                    f"{re.sub(r'[^a-zA-Z0-9]+', '_', openapi_path).strip('_')}"
+                ),
                 "tags": [tag],
                 "summary": summary or rule.endpoint.replace("_", " "),
                 "responses": _responses(source, bool(summary)),

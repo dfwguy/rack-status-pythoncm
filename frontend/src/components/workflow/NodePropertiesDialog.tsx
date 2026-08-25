@@ -434,11 +434,6 @@ export default function NodePropertiesDialog({
               items={[
                 { value: "", children: "— none —" },
                 { value: "pythoncm", children: "PythonCM direct execution" },
-                { value: "local", children: "Local process" },
-                { value: "slurm", children: "Slurm (compatibility fallback)" },
-                { value: "runai", children: "run:AI (stub)" },
-                { value: "slinky", children: "slinky (stub)" },
-                { value: "maas", children: "MaaS (stub)" },
               ]}
               value={schedKind}
               onValueChange={setSchedKind}
@@ -447,7 +442,7 @@ export default function NodePropertiesDialog({
           </FormField>
           {schedKind && (
             <>
-              <FormField name="node-sched-script" slotLabel="Script" slotHelp="Resolved under bin/scripts; batch files remain supported by the Slurm fallback">
+              <FormField name="node-sched-script" slotLabel="Script" slotHelp="Resolved under bin/scripts and submitted through PythonCM ProgramRunner">
                 <TextInput value={schedScript} onValueChange={setSchedScript} placeholder="validation.sh" />
               </FormField>
               <Flex gap="2">
@@ -576,11 +571,11 @@ export default function NodePropertiesDialog({
           <TextInput value={capability} onValueChange={setCapability} placeholder="e.g. sysinfo" />
         </FormField>
 
-        <FormField name="node-run" slotLabel="Run (inline batch script / command)" slotHelp="Optional: a shell script/command run on the connection. Supports ${nodelist}, ${scripts_dir}, ${rack}. Exit non-zero (or use Evaluation) to fail the step.">
+        <FormField name="node-run" slotLabel="Run (inline script / command)" slotHelp="Optional: a command submitted through PythonCM ProgramRunner. Supports ${nodelist}, ${scripts_dir}, ${rack}. Exit non-zero (or use Evaluation) to fail the step.">
           <textarea
             value={runScript}
             onChange={(e) => setRunScript(e.target.value)}
-            placeholder={"pdsh -R ssh -w ${nodelist} <<'EOF' | dshbak -c\nnvidia-smi -L\nEOF"}
+            placeholder={"nvidia-smi -L"}
             rows={5}
             style={{
               width: "100%", fontFamily: "monospace", fontSize: 12, padding: 8,

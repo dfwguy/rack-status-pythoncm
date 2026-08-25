@@ -24,10 +24,10 @@ interface SlurmViewProps {
 export function SlurmView({ logDir }: SlurmViewProps) {
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
-      <PageHeader contentId="slurm" title="Scheduler" description="Live jobs, recent history, and node availability from PythonCM direct execution." />
+      <PageHeader contentId="scheduler" title="Scheduler" description="Live jobs, recent history, and node availability from PythonCM direct execution." />
 
       <Text kind="body/regular/sm" style={{ marginBottom: 16, display: "block", color: "var(--text-color-secondary)" }}>
-        Job log tail uses the log directory from settings (or the server default). Legacy Slurm-named API routes remain available for compatibility.
+        Job log tail uses the log directory from settings (or the server default). All job state and actions on Nscale come from PythonCM ProgramRunner.
       </Text>
 
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "stretch" }}>

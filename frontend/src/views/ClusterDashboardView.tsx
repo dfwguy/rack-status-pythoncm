@@ -404,7 +404,7 @@ export function ClusterDashboardView({
     liveLoading,
   );
   const bcmVersion = liveStringValue(data?.bcm_version, liveData?.sections.bcm, liveLoading);
-  const slurmVersion = liveStringValue(data?.slurm_version, liveData?.sections.slurm, liveLoading);
+  const schedulerVersion = liveStringValue(data?.slurm_version, liveData?.sections.slurm, liveLoading);
 
   return (
     <Box
@@ -806,8 +806,8 @@ export function ClusterDashboardView({
             >
               <InfoTile label="Product line" value={data.product_line} hint="RACK_CLUSTER_PRODUCT_LINE" />
               <InfoTile label="HW vendor" value={data.hw_vendor} hint="RACK_CLUSTER_HW_VENDOR" />
-              <InfoTile label="BCM version" value={bcmVersion} mono hint='RACK_CLUSTER_BCM_VERSION, else cmsh versioninfo' />
-              <InfoTile label="Scheduler version" value={slurmVersion} mono hint="Active scheduler/provider version; legacy payload field is slurm_version" />
+              <InfoTile label="BCM version" value={bcmVersion} mono hint="RACK_CLUSTER_BCM_VERSION, else PythonCM/CMDaemon version" />
+              <InfoTile label="Scheduler version" value={schedulerVersion} mono hint="Active PythonCM provider version" />
               <InfoTile label="NEMO container" value={data.nemo_container} mono hint="RACK_CLUSTER_NEMO_* or NEMO_SQSH_SRC" />
               <InfoTile label="Dashboard build" value={data.app_version} mono hint="var/build-info.json from the image build, else version.py" />
             </Box>

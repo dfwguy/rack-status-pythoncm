@@ -266,7 +266,7 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
                   : "Running the full gate. The forced-NVLink probe allows up to 120s per node; nodes are checked in parallel."}
               </Banner>
               {/* Indeterminate rather than a percentage: the nodes are checked in one parallel
-                  pdsh pass, so no partial count exists until it returns. KUI reserves Spinner
+                  PythonCM ProgramRunner pass, so no partial count exists until it returns. KUI reserves Spinner
                   for 1-5s waits and points at a bar for longer ones, and this runs for minutes. */}
               <Box sx={{ mt: 1.5 }}>
                 <ProgressBar

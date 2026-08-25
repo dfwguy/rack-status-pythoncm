@@ -28,6 +28,7 @@ from typing import Any
 
 import host_exec
 import rack_locks
+import scheduler_runtime
 import workflow_models
 import yaml
 
@@ -699,6 +700,29 @@ def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
     command = sub(block.get("command") or "") or None
     output = sub(block.get("output") or "") or None
 
+    requested_kind = str(block.get("kind") or "").strip().lower()
+    if scheduler_runtime.is_pythoncm():
+        if requested_kind and requested_kind != "pythoncm":
+            raise ValueError(
+                f"scheduler kind {requested_kind!r} is forbidden in Nscale PythonCM mode"
+            )
+        reviewed_scripts = {
+            "nccl_allreduce.sbatch",
+            "clusterkit.sbatch",
+            "nvloom_singlerack.sbatch",
+            "nvis_pythoncm_mnubergemm.sh",
+        }
+        explicitly_direct = block.get("pythoncm_direct") is True
+        if script and Path(script).name not in reviewed_scripts and not explicitly_direct:
+            raise ValueError(
+                f"workflow script {Path(script).name!r} is not reviewed for PythonCM/direct execution"
+            )
+        if command and not explicitly_direct:
+            raise ValueError(
+                "inline workflow commands require scheduler.pythoncm_direct=true in PythonCM mode"
+            )
+        host_exec._reject_pythoncm_legacy_command(command or script or "")
+
     # nccl_allreduce.sbatch (and peers) resolve lib/ via NVIS_SCRIPTS_DIR.  Keep
     # these values in the backend-neutral JobSpec env so PythonCM passes them to
     # ProgramRunner; retain sbatch --export for the Slurm provider.
@@ -708,7 +732,10 @@ def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
     if ntasks:
         job_env["GPUS_PER_NODE"] = str(ntasks)
         exports.append(f"GPUS_PER_NODE={ntasks}")
-    extra.append(f"--export={','.join(exports)}")
+    if not scheduler_runtime.is_pythoncm():
+        extra.append(f"--export={','.join(exports)}")
+    else:
+        job_env["NVIS_PYTHONCM_DIRECT"] = "1"
 
     spec = JobSpec(
         name=block.get("name") or step_id,
@@ -721,12 +748,21 @@ def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
         reservation=(sub(block.get("reservation") or "") or None),
         env=job_env,
         extra_args=extra,
+        launch_mode=str(block.get("launch_mode") or "fanout"),
+        execution_user=(
+            str(block.get("execution_user") or "").strip()
+            or os.environ.get("RACK_PYTHONCM_VALIDATION_USER", "cmods")
+        ),
         timeout=int(step.get("timeout", block.get("timeout", 1800))),
     )
 
     conn, profile = _resolve_step_connection(step)
     try:
-        sched = build_scheduler(block.get("kind"), connection=conn, profile=profile)
+        sched = build_scheduler(
+            "pythoncm" if scheduler_runtime.is_pythoncm() else block.get("kind"),
+            connection=conn,
+            profile=profile,
+        )
         handle = sched.submit(spec)
         _logger.info("Workflow %s step %s submitted job %s via %s", run_id, step_id, handle.job_id, sched.kind)
         result = sched.wait(handle, timeout=spec.timeout)
@@ -1029,7 +1065,14 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
     ``evaluation`` block on the grouped stdout (e.g. ``success_when: {stdout_empty: true}``).
     """
     import host_exec
-    from transport import HopSpec, build_chain, fanout, fanout_errors, group_outputs
+    from transport import (
+        HopSpec,
+        NodeResult,
+        build_chain,
+        fanout,
+        fanout_errors,
+        group_outputs,
+    )
 
     params = {**run.get("outputs", {}), **(step.get("parameters") or {}), **run.get("params", {})}
     params.setdefault("scripts_dir", _scripts_dir())
@@ -1065,8 +1108,19 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
         except Exception:
             _logger.debug("_execute_fanout_step: ignoring error", exc_info=True)
             nodes_raw = params.get("target") or ""
-    # Drop empties and any residual unresolved ${...} placeholders.
-    nodes = [n for n in re.split(r"[,\s]+", nodes_raw) if n and "$" not in n]
+    # Drop empties and any residual unresolved ${...} placeholders. PythonCM
+    # expands BCM bracket targets and validates every identity against PhysicalNode.
+    if scheduler_runtime.is_pythoncm():
+        requested = scheduler_runtime.expand_nodelist(nodes_raw)
+        known = {name.casefold(): name for name in scheduler_runtime.node_names()}
+        missing = [name for name in requested if name.casefold() not in known]
+        if missing:
+            out = "[Fanout error] node(s) not in PythonCM inventory: " + ", ".join(missing[:20])
+            _save_step_output(run_id, step_id, out)
+            return False, out
+        nodes = [known[name.casefold()] for name in requested]
+    else:
+        nodes = [n for n in re.split(r"[,\s]+", nodes_raw) if n and "$" not in n]
     if not nodes:
         out = "[Fanout error] no target nodes resolved (set fanout.nodes or a rack/${nodelist})"
         _save_step_output(run_id, step_id, out)
@@ -1084,7 +1138,70 @@ def _execute_fanout_step(run: dict, step: dict) -> tuple[bool, str]:
             sub_hop(block.get("node") or {"kind": "ssh"})
         )
         timeout = int(step.get("timeout", block.get("timeout", 300)))
-        if str(block.get("scheduler") or "").strip().lower() == "slurm":
+        if scheduler_runtime.is_pythoncm():
+            from schedulers import JobSpec, build_scheduler
+
+            if block.get("hops"):
+                raise ValueError("workflow fanout.hops is unavailable in PythonCM mode")
+            requested_scheduler = str(block.get("scheduler") or "").strip().lower()
+            if requested_scheduler and requested_scheduler != "pythoncm":
+                raise ValueError(
+                    f"fanout scheduler {requested_scheduler!r} is forbidden in PythonCM mode"
+                )
+            host_exec._reject_pythoncm_legacy_command(cmd)
+            scheduler = build_scheduler(
+                "pythoncm", connection=host_exec.connection("control"), profile="control"
+            )
+            execution_user = (
+                node_spec.user
+                or os.environ.get("RACK_PYTHONCM_USER")
+                or "root"
+            )
+            result = scheduler.run(
+                JobSpec(
+                    name=f"nvis-{run.get('workflow_id') or step_id}",
+                    nodes=len(nodes),
+                    nodelist=",".join(nodes),
+                    command=cmd,
+                    launch_mode="fanout",
+                    execution_user=execution_user,
+                    timeout=timeout,
+                )
+            )
+
+            def sections(text: str) -> dict[str, str]:
+                out_by_node: dict[str, list[str]] = {}
+                current = ""
+                for line in (text or "").splitlines():
+                    match = re.fullmatch(r"===== (.+) =====", line.strip())
+                    if match:
+                        current = match.group(1).strip()
+                        out_by_node.setdefault(current.casefold(), [])
+                    elif current:
+                        out_by_node[current.casefold()].append(line)
+                return {key: "\n".join(value) for key, value in out_by_node.items()}
+
+            stdout_by_node = sections(result.stdout)
+            stderr_by_node = sections(result.stderr)
+            rc_by_node = {
+                str(row.get("node") or "").casefold(): row.get("returncode")
+                for row in result.node_results
+                if isinstance(row, dict)
+            }
+            results = [
+                NodeResult(
+                    node=node,
+                    stdout=stdout_by_node.get(node.casefold(), ""),
+                    stderr=stderr_by_node.get(node.casefold(), ""),
+                    returncode=(
+                        int(rc_by_node[node.casefold()])
+                        if rc_by_node.get(node.casefold()) is not None
+                        else result.returncode
+                    ),
+                )
+                for node in nodes
+            ]
+        elif str(block.get("scheduler") or "").strip().lower() == "slurm":
             results = _execute_slurm_fanout(
                 nodes,
                 cmd,
@@ -1386,13 +1503,38 @@ def _execute_inline_run(run: dict, step: dict, params: dict, script_text: str) -
         except PermissionError:
             pass
     try:
-        proc = _run_step_command(step, host_cmd, timeout)
-        out, err = proc.stdout or "", proc.stderr or ""
+        if scheduler_runtime.is_pythoncm():
+            from schedulers import JobSpec, build_scheduler
+
+            if step.get("connection"):
+                raise ValueError("workflow connection overrides are unavailable in PythonCM mode")
+            host_exec._reject_pythoncm_legacy_command(script_text)
+            inventory = scheduler_runtime.node_names()
+            if not inventory:
+                raise ValueError("PythonCM PhysicalNode inventory is empty")
+            scheduler = build_scheduler(
+                "pythoncm", connection=host_exec.connection("control"), profile="control"
+            )
+            result = scheduler.run(
+                JobSpec(
+                    name=f"workflow-{step_id}",
+                    nodes=1,
+                    nodelist=inventory[0],
+                    command=script_text,
+                    launch_mode="head",
+                    execution_user=(os.environ.get("RACK_PYTHONCM_USER") or "root"),
+                    timeout=timeout,
+                )
+            )
+            out, err, returncode = result.stdout or "", result.stderr or "", result.returncode
+        else:
+            proc = _run_step_command(step, host_cmd, timeout)
+            out, err, returncode = proc.stdout or "", proc.stderr or "", proc.returncode
         output = out + ("\n--- stderr ---\n" + err if err else "")
-        output += f"\n--- exit {proc.returncode} ---\n"
+        output += f"\n--- exit {returncode} ---\n"
         if not output.strip():
-            output = f"[Command completed with exit code {proc.returncode}]"
-        success, output = _apply_evaluation(run, step, proc.returncode, out, err, output)
+            output = f"[Command completed with exit code {returncode}]"
+        success, output = _apply_evaluation(run, step, returncode, out, err, output)
         _save_step_output(run_id, step_id, output)
         return success, output
     except Exception as exc:
@@ -1469,6 +1611,8 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
         host_cmd = command[5:].strip()
         for key, val in params.items():
             host_cmd = host_cmd.replace(f"${{{key}}}", str(val))
+        if scheduler_runtime.is_pythoncm():
+            return _execute_inline_run(run, step, params, host_cmd)
         timeout = int(step.get("timeout", 120))
 
         # Identify rack: explicit step field wins; otherwise first match in the substituted command.
@@ -1586,6 +1730,8 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
                     target = f"{rack_for_target}-ct[{ct_range}]"
         if target:
             host_cmd += f" {target}"
+        if scheduler_runtime.is_pythoncm():
+            return _execute_inline_run(run, step, params, host_cmd)
         timeout = int(step.get("timeout", 300))
 
         rack_raw = params.get("rack", "")

@@ -12,7 +12,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RackStatusResponse } from "../types/api";
 
-const DEFAULT_POLL_MS = 15_000;
+// Keep the Racks view aligned with the server's 30-second PythonCM snapshot cadence.
+export const DEFAULT_RACKS_POLL_MS = 30_000;
 const CLIENT_ID_KEY = "nvis-rack-client-id";
 
 let _clientId: string | null = null;
@@ -28,7 +29,7 @@ export function getClientId(): string {
   return _clientId;
 }
 
-export function useRackStatus(logDir: string, pollMs = DEFAULT_POLL_MS) {
+export function useRackStatus(logDir: string, pollMs = DEFAULT_RACKS_POLL_MS) {
   const [data, setData] = useState<RackStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

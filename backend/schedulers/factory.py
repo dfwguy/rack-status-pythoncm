@@ -38,11 +38,17 @@ def build_scheduler(
 ) -> Scheduler:
     """Build a scheduler backend.
 
-    ``kind`` defaults to ``RACK_SCHEDULER`` env, then ``slurm``. When *connection*
+    ``kind`` defaults to ``RACK_SCHEDULER`` env, then ``pythoncm``. When *connection*
     is None, the app's active transport connection is built from the environment.
     """
     e = env if env is not None else os.environ
-    kind = (kind or e.get("RACK_SCHEDULER") or "slurm").strip().lower()
+    kind = (kind or e.get("RACK_SCHEDULER") or "pythoncm").strip().lower()
+    cluster_id = (e.get("RACK_CLUSTER_ID") or "").strip().lower()
+    customer = (e.get("RACK_CLUSTER_CUSTOMER_NAME") or "").strip().lower()
+    if (cluster_id == "nscale-tx" or customer == "nscale") and kind != "pythoncm":
+        raise ValueError(
+            f"Nscale TX requires the pythoncm scheduler; refusing {kind!r}"
+        )
     if kind not in _BUILDERS:
         raise ValueError(f"unknown scheduler kind {kind!r} (expected one of {tuple(_BUILDERS)})")
     if connection is None:

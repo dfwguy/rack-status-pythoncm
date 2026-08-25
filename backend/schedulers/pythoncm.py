@@ -135,6 +135,8 @@ class PythonCMScheduler(Scheduler):
             "command": spec.command or "",
             "output": spec.output or "",
             "env": spec.env,
+            "launch_mode": spec.launch_mode,
+            "execution_user": spec.execution_user or "",
             "timeout": spec.timeout,
             "jobs_dir": jobs_dir,
         }
@@ -148,6 +150,8 @@ class PythonCMScheduler(Scheduler):
             raise ValueError(
                 "PythonCMScheduler requires an exact nodelist for multi-node work"
             )
+        if spec.launch_mode not in {"fanout", "leader", "head"}:
+            raise ValueError("PythonCMScheduler launch_mode must be fanout, leader, or head")
         result = self._call("submit", "--payload", self._payload(spec, self._jobs_dir()))
         task_id = str(result.get("task_id") or "").strip()
         native_id = str(result.get("pythoncm_id") or "").strip()
@@ -208,7 +212,12 @@ class PythonCMScheduler(Scheduler):
                 if rc == 0:
                     rc = 1
                     state = "FAILED"
-        return JobResult(rc, state, stdout, stderr, handle.job_id)
+        node_results = [
+            dict(row) for row in (payload.get("nodes") or []) if isinstance(row, dict)
+        ]
+        return JobResult(
+            rc, state, stdout, stderr, handle.job_id, node_results=node_results
+        )
 
     def wait(
         self,
@@ -224,4 +233,15 @@ class PythonCMScheduler(Scheduler):
             if state in TERMINAL_STATES:
                 return self._result(handle)
             time.sleep(max(0.05, poll_interval))
-        return JobResult(1, "TIMEOUT", job_id=handle.job_id)
+        try:
+            self.cancel(handle)
+        except Exception as exc:
+            raise RuntimeError(
+                f"PythonCM command {handle.job_id} timed out and cancellation failed: {exc}"
+            ) from exc
+        return JobResult(
+            1,
+            "CANCELLED",
+            stderr="timeout expired; PythonCM cancellation requested",
+            job_id=handle.job_id,
+        )

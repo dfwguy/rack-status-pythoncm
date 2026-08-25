@@ -704,6 +704,45 @@ def parse_cmsh_ds_to_ct_column_by_rack(ds_text: str) -> dict[str, str]:
     return out
 
 
+def pythoncm_ct_column_by_rack(rows: Iterable[dict[str, str]]) -> dict[str, str]:
+    """Render the legacy CT column exclusively from PythonCM device status rows."""
+    by_rack: dict[str, dict[str, list[str]]] = defaultdict(
+        lambda: {"DN": [], "INST": [], "UP": []}
+    )
+    for row in rows:
+        hostname = str(row.get("node") or "").strip()
+        rack = _normalize_rack_key_for_ds(str(row.get("rack") or "").strip())
+        parsed = _rack_tray_from_hostname_token(hostname)
+        if parsed:
+            parsed_rack, tray = parsed
+            rack = rack or parsed_rack
+        else:
+            tray = hostname
+        if not rack or not tray:
+            continue
+        state = str(row.get("device_status") or "UNKNOWN").strip().upper()
+        if state == "UP":
+            bucket = "UP"
+        elif state in {"DOWN", "UNREACHABLE", "INSTALLER_FAILED", "INSTALLER_UNREACHABLE"}:
+            bucket = "DN"
+        else:
+            bucket = "INST"
+        by_rack[rack][bucket].append(tray)
+
+    result: dict[str, str] = {}
+    for rack, buckets in by_rack.items():
+        parts: list[str] = []
+        for label in ("DN", "INST", "UP"):
+            values = buckets[label]
+            if not values:
+                continue
+            inner = _condense_tray_tokens(" ".join(values))
+            blob = _nvis_naming().ct_blob(rack, inner) if inner else ",".join(values)
+            parts.append(f"{label}:{blob}")
+        result[rack] = ";".join(parts) if parts else "-"
+    return result
+
+
 def _parse_cmsh_ds_nvis_templates(ds_text: str) -> dict[str, str]:
     """Parse ``cmsh ds`` using ``NVIS_CT_ID`` / ``NVIS_RACK_ID`` templates from Settings."""
     try:
@@ -909,8 +948,8 @@ def validation_status_hint(
         )
     if n.startswith("ongoing"):
         if lj and lj != "-":
-            return f"Slurm job {lj} is running; the validation log is still being written."
-        return "Slurm reports a running validation job; elapsed time is shown in the status label."
+            return f"Scheduler job {lj} is running; the validation log is still being written."
+        return "The scheduler reports a running validation job; elapsed time is shown in the status label."
     if n == "fail":
         parts: list[str] = []
         if nccl_ok is False:
@@ -1428,7 +1467,11 @@ class NativeRackTableState:
             with self.lock:
                 if self.racks and ttl > 0 and now - self.racks_refreshed_monotonic < ttl:
                     return
-            racks = _cmsh_rack_list()
+            racks = (
+                scheduler_runtime.rack_names(force=True)
+                if scheduler_runtime.is_pythoncm()
+                else _cmsh_rack_list()
+            )
             if not racks:
                 return
             with self.lock:
@@ -1437,8 +1480,11 @@ class NativeRackTableState:
 
     def _worker_ds(self) -> None:
         try:
-            text = _cmsh_ds_text()
-            col = parse_cmsh_ds_to_ct_column_by_rack(text)
+            if scheduler_runtime.is_pythoncm():
+                col = pythoncm_ct_column_by_rack(scheduler_runtime.nodes())
+            else:
+                text = _cmsh_ds_text()
+                col = parse_cmsh_ds_to_ct_column_by_rack(text)
             with self.lock:
                 self.ct_by_rack = col
                 self.ds_done = True
@@ -1597,7 +1643,7 @@ class NativeRackTableState:
                 continue
             for jid in kinds.values():
                 sj = str(jid or "").strip()
-                if sj.isdigit():
+                if scheduler_runtime.valid_reference(sj):
                     want.add(sj)
         for rack in sorted(racks, key=_rack_sort_key):
             pr_full = by_rack.get(rack)
@@ -1629,7 +1675,7 @@ class NativeRackTableState:
             path0_s = str(path0) if path0 else ""
             bn0 = Path(path0_s).name if path0_s else ""
             lj0 = _last_job_for_log_row(bn0, pr0)
-            if lj0 != "-" and lj0.isdigit():
+            if lj0 != "-" and scheduler_runtime.valid_reference(lj0):
                 want.add(lj0)
             for src in stage_logs.values():
                 if not isinstance(src, dict):
@@ -1638,7 +1684,7 @@ class NativeRackTableState:
                 sbn = Path(sp).name if sp else ""
                 probe = {k: v for k, v in src.items() if k not in ("_path", "_mtime")}
                 lj = _last_job_for_log_row(sbn, probe)
-                if lj != "-" and lj.isdigit():
+                if lj != "-" and scheduler_runtime.valid_reference(lj):
                     want.add(lj)
         augment_running_set_for_job_ids(running, job_times, want)
         for rack in sorted(racks, key=_rack_sort_key):
@@ -1890,7 +1936,11 @@ class NativeRackTableState:
             "stage1": stage1_summary,
             "stage2": stage2_summary,
         }
-        legend = "rack; list (cmsh) — native table; async: ds, sinfo, log probes"
+        legend = (
+            "PythonCM rack/device inventory — async: PythonCM node state and log probes"
+            if scheduler_runtime.is_pythoncm()
+            else "rack; list (cmsh) — native table; async: ds, sinfo, log probes"
+        )
         footnotes = errs[:12]
         return rows, summary, footnotes, legend
 
@@ -1908,13 +1958,21 @@ def _worker_snapshot(st: NativeRackTableState) -> dict[str, Any]:
             "workers": [
                 {
                     "id": "ds",
-                    "label": "cmsh device status (ds)",
+                    "label": (
+                        "PythonCM device status"
+                        if scheduler_runtime.is_pythoncm()
+                        else "cmsh device status (ds)"
+                    ),
                     "thread_alive": _alive(st.ds_thread),
                     "finished_once": st.ds_done,
                 },
                 {
                     "id": "sinfo",
-                    "label": "Slurm sinfo / scontrol hostnames",
+                    "label": (
+                        "PythonCM node availability"
+                        if scheduler_runtime.is_pythoncm()
+                        else "Slurm sinfo / scontrol hostnames"
+                    ),
                     "thread_alive": _alive(st.sinfo_thread),
                     "finished_once": st.sinfo_done,
                 },
@@ -2147,7 +2205,7 @@ class MultirackTableState:
             keyp = str(p)
             probe = probe_map.get(keyp, {})
             lj = _last_job_for_log_row(p.name, probe)
-            if lj != "-" and lj.isdigit():
+            if lj != "-" and scheduler_runtime.valid_reference(lj):
                 want.add(lj)
         augment_running_set_for_job_ids(running, job_times, want)
         rows: list[dict[str, str]] = []
@@ -2214,7 +2272,11 @@ def _multirack_worker_snapshot(st: MultirackTableState) -> dict[str, Any]:
             "workers": [
                 {
                     "id": "sinfo",
-                    "label": "Slurm sinfo / scontrol hostnames",
+                    "label": (
+                        "PythonCM node availability"
+                        if scheduler_runtime.is_pythoncm()
+                        else "Slurm sinfo / scontrol hostnames"
+                    ),
                     "thread_alive": _alive(st.sinfo_thread),
                     "finished_once": st.sinfo_done,
                 },

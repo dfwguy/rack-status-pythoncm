@@ -31,30 +31,21 @@ import { useClusterOverview } from "./hooks/useClusterOverview";
 import { useClusterOverviewLive } from "./hooks/useClusterOverviewLive";
 import { RackDetailView } from "./views/RackDetailView";
 // Lazy-loaded routes: keep the initial (index) bundle small by code-splitting each view. Heavy
-// deps move into their own on-demand chunks (reactflow -> Workflows, chart.js -> Analytics/Metrics,
-// the large ToolsView -> Tools). ClusterDashboard + SingleRack stay eager for fast first paint.
+// deps move into their own on-demand chunks (chart.js -> Analytics/Metrics, the large ToolsView
+// -> Tools). ClusterDashboard + SingleRack stay eager for fast first paint.
 const NodesView = lazy(() => import("./views/NodesView").then((m) => ({ default: m.NodesView })));
 const MultirackView = lazy(() => import("./views/MultirackView").then((m) => ({ default: m.MultirackView })));
 const SlurmView = lazy(() => import("./views/SlurmView").then((m) => ({ default: m.SlurmView })));
 const ReportsView = lazy(() => import("./views/ReportsView").then((m) => ({ default: m.ReportsView })));
 const AnalyticsView = lazy(() => import("./views/AnalyticsView").then((m) => ({ default: m.AnalyticsView })));
-const PostRunNodeReportView = lazy(() => import("./views/PostRunNodeReportView").then((m) => ({ default: m.PostRunNodeReportView })));
-const ToolsView = lazy(() => import("./views/ToolsView").then((m) => ({ default: m.ToolsView })));
-const WorkflowsView = lazy(() => import("./views/WorkflowsView").then((m) => ({ default: m.WorkflowsView })));
 const MetricsView = lazy(() => import("./views/MetricsView").then((m) => ({ default: m.MetricsView })));
 const LogsView = lazy(() => import("./views/LogsView").then((m) => ({ default: m.LogsView })));
 const EventsView = lazy(() => import("./views/EventsView").then((m) => ({ default: m.EventsView })));
 const InfrastructureView = lazy(() => import("./views/InfrastructureView").then((m) => ({ default: m.InfrastructureView })));
 const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ default: m.SettingsView })));
-const ProjectsView = lazy(() => import("./views/ProjectsView").then((m) => ({ default: m.ProjectsView })));
-const PlatformCatalogView = lazy(() => import("./views/PlatformCatalogView").then((m) => ({ default: m.PlatformCatalogView })));
-const ToolRegistryView = lazy(() => import("./views/ToolRegistryView").then((m) => ({ default: m.ToolRegistryView })));
 const ApiReferenceView = lazy(() => import("./views/ApiReferenceView").then((m) => ({ default: m.ApiReferenceView })));
 import { ActiveClusterProvider } from "./context/ActiveClusterProvider";
 import { LoginPage } from "./pages/LoginPage";
-const TerminalView = lazy(() => import("./views/TerminalView"));
-const TerminalGridTabView = lazy(() => import("./views/TerminalGridTabView"));
-const TerminalWorkspaceView = lazy(() => import("./views/TerminalWorkspaceView"));
 import { useRackStatus } from "./hooks/useRackStatus";
 import type { RackStatusResponse } from "./types/api";
 import { RackCommandsStoreProvider } from "./context/RackCommandsStoreProvider";
@@ -70,7 +61,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   dashboard: "Cluster overview",
   nodes: "Nodes",
   singleRack: "Racks",
-  slurm: "Scheduler",
+  scheduler: "Scheduler",
   infraEthernet: "Ethernet",
   infraIbNvlink: "IB / NVLink",
   infraStorage: "Storage",
@@ -80,13 +71,6 @@ const VIEW_TITLES: Record<ViewId, string> = {
   multirack: "Multirack operations",
   reports: "Reports",
   analytics: "Analytics",
-  postRunNodeReport: "Post Run Node Report",
-  tools: "Operations & Scripts",
-  workflows: "Workflows",
-  terminal: "Terminal",
-  projects: "Projects & Clusters",
-  platformCatalog: "Platform Catalog",
-  toolRegistry: "Tool Registry",
   apiReference: "API Reference",
   settings: "Settings",
 };
@@ -289,9 +273,6 @@ function AppContent() {
           onMenuToggle={handleSidebarToggle}
           activeUsers={activeUsers}
           logDir={logDir}
-          onClusterSwitched={() => {
-            void refreshAll();
-          }}
           backendConnected={backendConnected}
           clusterReachable={!clusterUnreachable}
           execMode={data?.exec_mode ?? clusterOverview?.exec_mode ?? "ssh"}
@@ -356,15 +337,8 @@ function AppContent() {
           <Route path="/observability/metrics" element={<MetricsView />} />
           <Route path="/observability/logs" element={<LogsView />} />
           <Route path="/observability/events" element={<EventsView />} />
-          <Route path="/tools/operations" element={<ToolsView logDir={logDir} />} />
-          <Route path="/tools/workflows" element={<WorkflowsView rackData={data} />} />
-          <Route path="/tools/terminal" element={<TerminalWorkspaceView logDir={logDir} />} />
           <Route path="/analytics/overview" element={<AnalyticsView logDir={logDir} rows={data?.rows ?? []} status={data} />} />
-          <Route path="/analytics/post-run-nodes" element={<PostRunNodeReportView />} />
           <Route path="/analytics/reports" element={<ReportsView />} />
-          <Route path="/platform/projects" element={<ProjectsView />} />
-          <Route path="/platform/catalog" element={<PlatformCatalogView />} />
-          <Route path="/platform/tools" element={<ToolRegistryView />} />
           <Route path="/platform/api" element={<ApiReferenceView />} />
           <Route
             path="/settings"
@@ -415,26 +389,6 @@ function AuthGate() {
 }
 
 export default function App() {
-  // Detached terminal tabs render outside the router and the app chrome: they own the whole
-  // viewport and take their state from the query string, so there is no shell to draw around them.
-  if (window.location.pathname === "/terminal") {
-    return (
-      <ThemeProvider>
-        <TerminalView />
-      </ThemeProvider>
-    );
-  }
-
-  if (window.location.pathname === "/terminal-grid") {
-    return (
-      <ThemeProvider>
-        <Suspense fallback={<ViewSuspenseFallback />}>
-          <TerminalGridTabView />
-        </Suspense>
-      </ThemeProvider>
-    );
-  }
-
   return (
     <ThemeProvider>
       <HashRouter>

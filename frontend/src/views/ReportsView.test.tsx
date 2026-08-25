@@ -47,7 +47,7 @@ describe("ReportsView generated report archive", () => {
     render(<ReportsView />);
 
     const table = await screen.findByRole("table", { name: "Generated reports" });
-    expect(within(table).getByText("rack-status-NscaleTX.pdf")).toBeInTheDocument();
+    expect(await within(table).findByText("rack-status-NscaleTX.pdf")).toBeInTheDocument();
     expect(within(table).getByText("NscaleTX-GB300 · 2016 nodes")).toBeInTheDocument();
     expect(within(table).getByText("2.0 MiB")).toBeInTheDocument();
     expect(screen.getByText(/newest 40 reports are retained/i)).toBeInTheDocument();

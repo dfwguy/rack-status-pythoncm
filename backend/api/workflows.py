@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 
+import scheduler_runtime
 import workflow_engine
 from flask import Blueprint, jsonify, request
 
@@ -30,15 +31,38 @@ _logger = logging.getLogger(__name__)
 bp = Blueprint("workflows", __name__, url_prefix="")
 
 
+def _pythoncm_workflow_block():
+    return jsonify({
+        "ok": False,
+        "blocked": True,
+        "scheduler": "pythoncm",
+        "error": (
+            "Workflow execution is unavailable in Nscale PythonCM mode until the "
+            "catalog is restricted to reviewed structured ProgramRunner capabilities; "
+            "arbitrary shell workflows are not permitted"
+        ),
+    }), 409
+
+
 @bp.route("/api/workflows", methods=["GET"])
 def api_workflows_list():
     """List available workflow templates."""
+    if scheduler_runtime.is_pythoncm():
+        return jsonify({
+            "ok": True,
+            "workflows": [],
+            "blocked": True,
+            "scheduler": "pythoncm",
+            "message": "No workflow templates are certified for Nscale PythonCM execution",
+        })
     return jsonify({"ok": True, "workflows": workflow_engine.list_workflows()})
 
 
 @bp.route("/api/workflows/<workflow_id>", methods=["GET"])
 def api_workflow_get(workflow_id: str):
     """Get a specific workflow template."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_workflow_block()
     wf = workflow_engine.get_workflow(workflow_id)
     if not wf:
         return jsonify({"ok": False, "error": "Workflow not found"}), 404
@@ -48,6 +72,8 @@ def api_workflow_get(workflow_id: str):
 @bp.route("/api/workflows", methods=["POST"])
 def api_workflow_save():
     """Create or update a workflow template."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_workflow_block()
     body = request.get_json(silent=True) or {}
     if not body.get("name"):
         return jsonify({"ok": False, "error": "name is required"}), 400
@@ -73,6 +99,8 @@ def api_workflow_delete(workflow_id: str):
 @bp.route("/api/workflows/<workflow_id>/run", methods=["POST"])
 def api_workflow_run(workflow_id: str):
     """Start a workflow execution instance."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_workflow_block()
     body = request.get_json(silent=True) or {}
     params = body.get("params")
     try:
@@ -111,6 +139,8 @@ def api_workflow_run_state(run_id: str):
 @bp.route("/api/workflow-runs/<run_id>/advance", methods=["POST"])
 def api_workflow_run_advance(run_id: str):
     """Advance a workflow (for manual/decision steps)."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_workflow_block()
     body = request.get_json(silent=True) or {}
     try:
         result = workflow_engine.advance_run(run_id, body)
@@ -122,6 +152,8 @@ def api_workflow_run_advance(run_id: str):
 @bp.route("/api/workflow-runs/<run_id>/cancel", methods=["POST"])
 def api_workflow_run_cancel(run_id: str):
     """Cancel a running workflow."""
+    if scheduler_runtime.is_pythoncm():
+        return _pythoncm_workflow_block()
     try:
         result = workflow_engine.cancel_run(run_id)
         return jsonify({"ok": True, **result})

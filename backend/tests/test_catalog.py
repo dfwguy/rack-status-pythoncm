@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import pytest
-
 from catalog import context, models, seed
 from catalog.store import (
     TABLE_PLATFORMS,
@@ -176,9 +175,9 @@ class TestSeed:
 class TestContext:
     def test_active_and_resolve(self, seeded):
         active = context.get_active()
-        assert active["project"] == "default"
-        project, cluster, platform = context.resolve()
-        assert project.id == "default"
+        assert active["project"] == "nscale"
+        project, _cluster, platform = context.resolve()
+        assert project.id == "nscale"
         assert platform.id == "gb300-nvl72"
 
     def test_high_overlay(self, seeded):
@@ -246,7 +245,7 @@ class TestContext:
         h1, _ = context.overlays_for_active()
         assert h1["RACK_PLATFORM"] == "bcm"
         # mutate active cluster manager and confirm cache refreshes
-        proj = seeded.get(TABLE_PROJECTS, "default")
+        proj = seeded.get(TABLE_PROJECTS, "nscale")
         proj["clusters"][0]["cluster_manager"] = "maas"
         seeded.upsert(TABLE_PROJECTS, proj)
         h2, _ = context.overlays_for_active()

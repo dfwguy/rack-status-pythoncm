@@ -61,7 +61,8 @@ describe("knowledge registry", () => {
   it("searches across title, summary, keywords, and features", () => {
     expect(searchContent("validation").length).toBeGreaterThan(0);
     expect(searchContent("squeue").some((e) => e.id === "squeuePanel")).toBe(true);
-    expect(searchContent("workflow").some((e) => e.id === "workflows")).toBe(true);
+    expect(searchContent("workflow").some((e) => e.id === "workflows")).toBe(false);
+    expect(searchContent("terminal").some((e) => e.id === "terminal")).toBe(false);
     expect(searchContent("").length).toBe(0);
   });
 

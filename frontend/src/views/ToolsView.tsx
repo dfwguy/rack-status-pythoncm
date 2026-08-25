@@ -1444,13 +1444,8 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           )}
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          <Box component="code" sx={{ fontSize: "0.85em" }}>01-download-cuda-nccl-workspace.sh</Box> runs on this dashboard
-          host (CUDA .run download). Then <Box component="code" sx={{ fontSize: "0.85em" }}>02-install-cuda-nccl-workspace.sh</Box>{" "}
-          runs on the chosen compute node via <Box component="code" sx={{ fontSize: "0.85em" }}>pdsh</Box> (same{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>$HOME</Box> path). NCCL needs HPC-X +{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>nvcc</Box> on that node. Timeout:{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_TIMEOUT</Box> (default
-          28800s).
+          Unavailable in this Nscale PythonCM build: the existing compute-node installer has not yet been converted
+          to ProgramRunner. No legacy fallback is attempted.
         </Typography>
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 640 }}>
           <TextField
@@ -1462,7 +1457,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             placeholder={clusterData?.tools_workspace_default || "/home/<user>/workspace"}
           />
           <TextField
-            label="Build host (compute node for pdsh)"
+            label="Build host (conversion pending)"
             size="small"
             fullWidth
             value={cudaNcclBuildHost}
@@ -1508,7 +1503,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
               variant="contained"
               onClick={() => void runCudaNcclInstall()}
               disabled={
-                cudaNcclLoading || (!installCudaToolkit && !buildNccl) || !cudaNcclBuildHost.trim()
+                true
               }
             >
               {cudaNcclLoading ? "Running…" : "Run CUDA / NCCL install"}
@@ -1655,16 +1650,8 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           )}
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          <Box component="code" sx={{ fontSize: "0.85em" }}>01-clone-nvloom-workspace.sh</Box> clones{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>https://github.com/NVIDIA/nvloom</Box> into{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>nvloom/</Box> under the workspace path on this host.{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>00-download-cmake-nvloom-workspace.sh</Box> fetches Kitware CMake 3.28.1 (aarch64 tarball) on this dashboard host only;{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>02-build-nvloom-workspace.sh</Box> runs on the build host (e.g. via{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>pdsh</Box>) and sources{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>cuda/env.sh</Box> (or <Box component="code" sx={{ fontSize: "0.85em" }}>cuda12/</Box> /{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>cuda13/</Box>), then <Box component="code" sx={{ fontSize: "0.85em" }}>cmake .</Box> and{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>make -j</Box> (aarch64 only). Timeout:{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_TIMEOUT</Box> (default 28800s).
+          Unavailable in this Nscale PythonCM build: the existing compute-node builder has not yet been converted
+          to ProgramRunner. No legacy fallback is attempted.
         </Typography>
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 640 }}>
           <TextField
@@ -1676,7 +1663,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             placeholder={clusterData?.tools_workspace_default || "/home/<user>/workspace"}
           />
           <TextField
-            label="Build host (compute node for pdsh)"
+            label="Build host (conversion pending)"
             size="small"
             fullWidth
             value={nvloomBuildHost}
@@ -1705,7 +1692,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             <Button
               variant="contained"
               onClick={() => void runNvloomInstall()}
-              disabled={nvloomLoading || !nvloomBuildHost.trim() || !nvloomWorkspace.trim()}
+              disabled
             >
               {nvloomLoading ? "Running…" : "Run install nvloom"}
             </Button>
@@ -1735,14 +1722,8 @@ export function ToolsView({ logDir }: ToolsViewProps) {
           </Typography>
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Runs <Box component="code" sx={{ fontSize: "0.85em" }}>install-dgxc-benchmarking-workspace.sh</Box>: clones{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>NVIDIA/dgxc-benchmarking</Box> (v25.10.01) into the workspace and
-          prepares <Box component="code" sx={{ fontSize: "0.85em" }}>llmb-run</Box> (the “Exemplar” suite) so the NCCL/NEMO
-          tools can use it (MOP §7.4.1). <strong>Record</strong> clones + writes a headless{" "}
-          <Box component="code" sx={{ fontSize: "0.85em" }}>--play</Box> config (fast, review-only).{" "}
-          <strong>Install</strong> additionally runs <Box component="code" sx={{ fontSize: "0.85em" }}>install.sh --play</Box>{" "}
-          (Python 3.12 venv + workloads + NeMo container download through the active scheduler — can take hours). Output streams live (green
-          dot). Timeout: <Box component="code" sx={{ fontSize: "0.85em" }}>RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_TIMEOUT</Box>.
+          Unavailable in this Nscale PythonCM build: the packaged Exemplar installer still invokes workload-manager
+          launch commands. It is disabled until a reviewed ProgramRunner installer is available.
         </Typography>
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 640 }}>
           <TextField
@@ -1808,7 +1789,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             <Button
               variant="contained"
               onClick={() => void runDgxcSetup()}
-              disabled={dgxcLoading || !dgxcWorkspace.trim()}
+              disabled
             >
               {dgxcLoading ? "Running…" : dgxcMode === "install" ? "Run Exemplar install" : "Record Exemplar config"}
             </Button>

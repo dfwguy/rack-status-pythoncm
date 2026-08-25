@@ -239,6 +239,16 @@ def _submit(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("unknown BCM node(s): " + ", ".join(missing[:20]))
         if not nodes:
             raise ValueError("no BCM target nodes resolved")
+        launch_mode = str(payload.get("launch_mode") or "fanout").strip().lower()
+        if launch_mode not in {"fanout", "leader", "head"}:
+            raise ValueError("launch_mode must be fanout, leader, or head")
+        if launch_mode == "head":
+            head = cluster.active_head_node()
+            if head is None:
+                raise RuntimeError("BCM returned no active head node for head launch")
+            execution_nodes = [head]
+        else:
+            execution_nodes = nodes[:1] if launch_mode == "leader" else nodes
         task_dir.mkdir(parents=True, exist_ok=False)
         env = {str(k): str(v) for k, v in (payload.get("env") or {}).items() if v is not None}
         env.update({
@@ -248,11 +258,17 @@ def _submit(payload: dict[str, Any]) -> dict[str, Any]:
         })
         if payload.get("ntasks_per_node"):
             env["NVIS_NTASKS_PER_NODE"] = str(payload["ntasks_per_node"])
+        execution_user = str(
+            payload.get("execution_user")
+            or os.environ.get("RACK_PYTHONCM_USER", "root")
+        ).strip()
+        if not execution_user:
+            raise ValueError("PythonCM execution user is empty")
         _success, status = cluster.parallel.execute(
-            nodes=nodes,
+            nodes=execution_nodes,
             command=_wrapped_command(command, task_dir),
             env=env,
-            user=os.environ.get("RACK_PYTHONCM_USER", "root"),
+            user=execution_user,
             max_run_time=int(payload.get("timeout") or 1800),
             wait=False,
             info=f"Rack Status: {payload.get('name') or task_id}",
@@ -261,7 +277,10 @@ def _submit(payload: dict[str, Any]) -> dict[str, Any]:
             "task_id": task_id,
             "pythoncm_id": str(status.uuid),
             "nodes": [str(getattr(node, "hostname", "")) for node in nodes],
-            "node_uuids": [str(node.uuid) for node in nodes],
+            "execution_nodes": [str(getattr(node, "hostname", "")) for node in execution_nodes],
+            "node_uuids": [str(node.uuid) for node in execution_nodes],
+            "launch_mode": launch_mode,
+            "execution_user": execution_user,
             "name": str(payload.get("name") or "nvis-job"),
             "output": str(payload.get("output") or ""),
             "cancelled": False,
@@ -276,7 +295,7 @@ def _submit(payload: dict[str, Any]) -> dict[str, Any]:
 def _node_results(manifest: dict[str, Any], jobs_dir: str) -> list[dict[str, Any]]:
     task_dir = Path(jobs_dir) / str(manifest["task_id"])
     rows = []
-    for name in manifest.get("nodes") or []:
+    for name in manifest.get("execution_nodes") or manifest.get("nodes") or []:
         status_path = task_dir / f"{name}.status"
         try:
             rc = int(status_path.read_text(encoding="utf-8").strip())
@@ -335,7 +354,7 @@ def _cancel(manifest: dict[str, Any], jobs_dir: str) -> None:
 def _collect(manifest: dict[str, Any], jobs_dir: str) -> tuple[str, str]:
     task_dir = Path(jobs_dir) / str(manifest["task_id"])
     stdout, stderr = [], []
-    for node in manifest.get("nodes") or []:
+    for node in manifest.get("execution_nodes") or manifest.get("nodes") or []:
         for suffix, target in (("stdout", stdout), ("stderr", stderr)):
             path = task_dir / f"{node}.{suffix}"
             try:

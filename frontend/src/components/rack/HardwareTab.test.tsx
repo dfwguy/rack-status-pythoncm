@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HardwareTab } from "./HardwareTab";
 
@@ -24,7 +24,7 @@ vi.mock("../../context/RackCommandContext", () => ({
 afterEach(() => vi.restoreAllMocks());
 
 describe("HardwareTab Exemplar validation", () => {
-  it("opens a DGXC v26.06.01 system_info plan for every selected node", async () => {
+  it("is visibly blocked and cannot open a plan", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -53,9 +53,8 @@ describe("HardwareTab Exemplar validation", () => {
       />,
     );
 
-    expect(screen.getByText(/every one of the 2 selected node/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Plan Sysinfo" }));
-    expect(await screen.findByRole("dialog", { name: "NVIDIA DGXC v26.06.01 system_info" })).toBeInTheDocument();
-    expect(screen.getByText(/fans out to every selected node/i)).toBeInTheDocument();
+    expect(screen.getByText(/Exemplar system-info recipe has no ProgramRunner-only form/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Plan Sysinfo" })).toBeDisabled();
+    expect(screen.queryByRole("dialog", { name: "NVIDIA DGXC v26.06.01 system_info" })).not.toBeInTheDocument();
   });
 });

@@ -76,7 +76,7 @@ export const toolsContent: HelpContent[] = [
       },
     ],
     related: ["webTerminalDialog", "nodeSelector"],
-    keywords: ["terminal", "shell", "ssh", "console", "grid", "multiple terminals", "detach", "head node", "pdsh", "cmsh"],
+    keywords: ["terminal", "shell", "console", "grid", "multiple terminals", "detach", "head node"],
     aria: { label: "Terminal page", description: "A resizable grid of live head-node and compute shells." },
     aiContext:
       "Tools > Terminal is a react-grid-layout workspace of live xterm.js shells over the dashboard's SSH path. Add terminal opens a picker listing compute nodes (derived from rack rows by parseNodesFromRack) plus the head node (target 'headnode', mode 'headnode'). Panes auto-place 1x1 -> 2x1 -> 2x2 and are draggable by header only so terminal text stays selectable. A pane detaches to /terminal?session=<id> and the whole grid to /terminal-grid?g=<base64url>, both carrying live session ids so shells are adopted rather than reopened. Layout persists per cluster in localStorage; sessions do not survive a reload.",

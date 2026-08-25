@@ -25,7 +25,6 @@ import { HardwareTab } from "../components/rack/HardwareTab";
 import { NetworkingTab } from "../components/rack/NetworkingTab";
 import { ServicesTab } from "../components/rack/ServicesTab";
 import { ParserResultsDialog } from "../components/ParserResultsDialog";
-import WebTerminalDialog from "../components/rack/WebTerminalDialog";
 import { RackCommandProvider } from "../context/RackCommandProvider";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { VisuallyHidden } from "../components/a11y/VisuallyHidden";
@@ -52,7 +51,6 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
   const [tabIndex, setTabIndex] = useState(0);
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
   const [parserOpen, setParserOpen] = useState(false);
-  const [terminalNode, setTerminalNode] = useState("");
   const [issueNode, setIssueNode] = useState("");
   const [issueData, setIssueData] = useState<NodeIssuesResponse | null>(null);
   const { activeCluster, activePlatform } = useActiveCluster();
@@ -189,7 +187,6 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
             nodes={nodes}
             selected={selectedNodes}
             onSelectionChange={setSelectedNodes}
-            onOpenTerminal={(nodeId) => setTerminalNode(nodeId)}
             issueNodes={issueData?.nodes}
             onOpenIssues={(nodeId) => setIssueNode(nodeId)}
           />
@@ -265,12 +262,6 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
         logDir={logDir}
       />
 
-      <WebTerminalDialog
-        open={!!terminalNode}
-        onClose={() => setTerminalNode("")}
-        target={terminalNode}
-        mode="node"
-      />
 
       <NodeIssueHistoryDialog
         open={!!issueNode}

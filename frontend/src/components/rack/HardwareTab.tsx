@@ -63,15 +63,15 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
         rack={rack}
         selectedNodes={selectedNodes}
         naming={naming}
-        disabled={disabled}
+        disabled
         kind="hardware"
         title="Hardware Deep Audit"
-        description={`Deep GPU/thermal/ECC/recovery, Xid/PCIe/EDAC, service/IMEX and storage audit on ${nodeCount} selected node(s). Confirmed failures are commented and drained through the active scheduler automatically.`}
+        description="Blocked: the shipped deep-audit workflow is not a reviewed structured ProgramRunner workflow."
         icon={ScanSearch}
       />
       <ActionCard
         title="Power On"
-        description={`Power on ${nodeCount} selected node(s) in ${rack} via cmsh device power cycle.`}
+        description={`Power-cycle ${nodeCount} selected node(s) in ${rack} through the PythonCM device power API.`}
         icon={<Power size={20} />}
         buttonLabel="Power On"
         disabled={disabled}
@@ -98,7 +98,7 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
               <Text kind="body/bold/md">Hardware Check</Text>
             </Flex>
             <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-              {`Run hardware diagnostic (checker.sh) on ${nodeCount} selected node(s) via pdsh. Choose preset or custom arguments before running.`}
+              {`Run checker.sh on ${nodeCount} selected node(s) through PythonCM ProgramRunner. Choose a PythonCM-safe preset or custom arguments.`}
             </Text>
           </div>
           <KuiButton
@@ -125,10 +125,10 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
       />
       <ActionCard
         title="Exemplar System Info Validation"
-        description={`Run NVIDIA DGXC v26.06.01 system_info on every one of the ${nodeCount} selected node(s), then validate each result against the Exemplar recipe.`}
+        description="Blocked: the Exemplar system-info recipe has no ProgramRunner-only form."
         icon={<ClipboardCheck size={20} />}
         buttonLabel="Plan Sysinfo"
-        disabled={disabled || nodeCount === 0}
+        disabled
         onRun={() => setSysinfoDialogOpen(true)}
       />
       <ValidationPresetDialog
@@ -151,37 +151,37 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
       />
       <ActionCard
         title="Bug Report"
-        description={`Collect nvidia-bug-report.sh from ${nodeCount} selected node(s). Archives stored on dashboard host.`}
+        description="Blocked: PythonCM file transfer for the generated reports has not been validated."
         icon={<Bug size={20} />}
         buttonLabel="Collect"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("Bug report", "hw", "/api/bug-report-async", specsBody())}
       />
       <ActionCard
         title="IMEX Reset"
-        description={`Reset IMEX daemon on ${rack} (rack-level script).`}
+        description="Blocked: the installed IMEX reset recipe is not ProgramRunner-only."
         icon={<RotateCcw size={20} />}
         buttonLabel="Reset IMEX"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("IMEX reset", "nmxc", "/api/imex-reset-async", imexBody())}
       />
       <ActionCard
         title="IMEX Check"
-        description={`Verify IMEX daemon health on ${rack}.`}
+        description="Blocked: the installed IMEX check recipe is not ProgramRunner-only."
         icon={<CircleCheck size={20} />}
         buttonLabel="Check IMEX"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("IMEX check", "hw", "/api/imex-check-async", imexBody())}
       />
       <ActionCard
         title="BMC Recovery"
-        description={`Cold-reset the BMC (rf0) on ${nodeCount} selected node(s) via ipmitool.`}
+        description="Blocked: the installed BMC recovery recipe bypasses PythonCM."
         icon={<Zap size={20} />}
         buttonLabel="Reset BMC"
-        disabled={disabled}
+        disabled
         destructive
         selectedNodes={selectedNodes}
         onRun={() =>
@@ -190,10 +190,10 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
       />
       <ActionCard
         title="MAC Change"
-        description={macChangeDescription}
+        description={`Blocked: MAC mutation is not validated through PythonCM. ${macChangeDescription}`}
         icon={<Network size={20} />}
         buttonLabel="Change MAC"
-        disabled={disabled || !singleNode}
+        disabled
         onRun={() => setMacDialogOpen(true)}
       />
       {singleNode && (

@@ -36,7 +36,7 @@ describe("JobLogContentDialog", () => {
     );
     await waitFor(() => expect(screen.getByText("hello full log body")).toBeInTheDocument());
     expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain(
-      "/api/slurm-job-stdout-content?path=",
+      "/api/scheduler-job-output?path=",
     );
   });
 
@@ -44,7 +44,7 @@ describe("JobLogContentDialog", () => {
     vi.stubGlobal("fetch", mockFetch({ ok: true, too_large: true, size_bytes: 20 * 1024 * 1024, filename: "big.txt" }));
     render(<JobLogContentDialog open onClose={() => {}} title="node / big" path="/x/results/n/big.txt" />);
     const link = await screen.findByRole("link", { name: /Download the full log/ });
-    expect(link).toHaveAttribute("href", expect.stringContaining("/api/slurm-job-stdout-download?path="));
+    expect(link).toHaveAttribute("href", expect.stringContaining("/api/scheduler-job-output-download?path="));
   });
 
   it("surfaces an error from the endpoint", async () => {

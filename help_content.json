@@ -1,6 +1,6 @@
 {
   "generated_by": "frontend/scripts/gen-help-content.mjs",
-  "count": 78,
+  "count": 59,
   "entries": [
     {
       "id": "dashboard",
@@ -46,7 +46,7 @@
       ],
       "related": [
         "singleRack",
-        "slurm",
+        "scheduler",
         "statTiles",
         "clusterSqueueOverview"
       ],
@@ -238,13 +238,13 @@
       "aiContext": "Multirack operations runs the same validation/command across many selected racks at once, with aggregated progress and combined log tailing. Used for campaign-style validation of many racks."
     },
     {
-      "id": "slurm",
+      "id": "scheduler",
       "kind": "view",
       "title": "Scheduler",
       "domain": "Compute",
       "routePath": "/compute/scheduler",
       "summary": "Live PythonCM/direct-execution jobs and node availability.",
-      "description": "The Scheduler page surfaces PythonCM direct-execution state: running and pending jobs plus node states (idle, allocated, drained, down). From here you can inspect jobs, tail a job's log, and understand why nodes are unavailable. Slurm-named API routes remain as compatibility aliases.",
+      "description": "The Scheduler page surfaces PythonCM ProgramRunner state: running and pending commands plus PythonCM node states (idle, allocated, drained, down). From here you can inspect commands, tail a command log, and understand why nodes are unavailable.",
       "features": [
         "Live table of running and pending jobs.",
         "Live table of node availability states and reasons.",
@@ -276,10 +276,8 @@
         "jobStatusPanel"
       ],
       "keywords": [
-        "slurm",
+        "pythoncm",
         "scheduler",
-        "squeue",
-        "sinfo",
         "jobs",
         "queue",
         "nodes",
@@ -291,7 +289,7 @@
         "label": "Scheduler page",
         "description": "Live PythonCM/direct-execution jobs and node availability with the ability to tail job logs."
       },
-      "aiContext": "The Scheduler page shows PythonCM/direct-execution jobs and node states (idle/allocated/drained/down with reasons). Users tail job logs and diagnose unavailable nodes here; legacy squeue/sinfo route names are compatibility details."
+      "aiContext": "The Scheduler page shows PythonCM ProgramRunner commands and PythonCM node states (idle/allocated/drained/down with reasons). Users tail command logs and diagnose unavailable nodes here."
     },
     {
       "id": "rackTable",
@@ -510,7 +508,7 @@
       ],
       "related": [
         "dashboard",
-        "slurm",
+        "scheduler",
         "squeuePanel"
       ],
       "keywords": [
@@ -547,7 +545,7 @@
         }
       ],
       "related": [
-        "slurm",
+        "scheduler",
         "squeueDialog",
         "sinfoPanel"
       ],
@@ -586,7 +584,7 @@
         }
       ],
       "related": [
-        "slurm",
+        "scheduler",
         "sinfoDialog",
         "squeuePanel"
       ],
@@ -628,7 +626,7 @@
       ],
       "related": [
         "squeuePanel",
-        "slurm",
+        "scheduler",
         "toolbar"
       ],
       "keywords": [
@@ -666,7 +664,7 @@
       ],
       "related": [
         "sinfoPanel",
-        "slurm",
+        "scheduler",
         "toolbar"
       ],
       "keywords": [
@@ -851,12 +849,11 @@
       "kind": "component",
       "title": "Node selector",
       "domain": "Compute",
-      "summary": "Tray/node grid with selection, terminal, and clickable issue trends.",
-      "description": "NodeSelector is a grid of the rack's trays/nodes. Select nodes to scope actions, launch a terminal, or click a node's ▲n trend to open validation participation, attributed failures, scheduler state/reason, and detailed local issues in one SPA dialog.",
+      "summary": "Tray/node grid with selection and clickable issue trends.",
+      "description": "NodeSelector is a grid of the rack's trays/nodes. Select nodes to scope PythonCM actions, or click a node's ▲n trend to open validation participation, attributed failures, scheduler state/reason, and detailed local issues in one SPA dialog.",
       "features": [
         "Multi-select nodes/trays.",
         "Scopes action tabs to the selection.",
-        "Per-node web terminal launch.",
         "Clickable ▲n / ✖ / ⚑ / ▦ issue flags and full history."
       ],
       "howTo": [
@@ -869,8 +866,7 @@
         }
       ],
       "related": [
-        "rackDetail",
-        "webTerminalDialog"
+        "rackDetail"
       ],
       "keywords": [
         "node",
@@ -878,13 +874,13 @@
         "tray",
         "select",
         "scope",
-        "terminal"
+        "pythoncm"
       ],
       "aria": {
         "label": "Node selector",
-        "description": "Grid of rack nodes with multi-select to scope actions and per-node terminal launch."
+        "description": "Grid of rack nodes with multi-select to scope PythonCM actions."
       },
-      "aiContext": "NodeSelector is the tray/node grid; selecting nodes scopes the action tabs to them, and each node can launch a web terminal."
+      "aiContext": "NodeSelector is the tray/node grid; selecting nodes scopes the PythonCM action tabs to them."
     },
     {
       "id": "rackLastOutputDot",
@@ -1207,44 +1203,6 @@
       "aiContext": "CommandTextDialog is a modal showing a completed command's static text output or JSON result."
     },
     {
-      "id": "webTerminalDialog",
-      "kind": "dialog",
-      "title": "Web terminal dialog",
-      "domain": "Compute",
-      "summary": "Embedded web terminal to a node.",
-      "description": "WebTerminalDialog opens an embedded web terminal session to a node (it opens the /terminal page with session params), so you can run commands interactively.",
-      "features": [
-        "Interactive terminal in-app.",
-        "Per-node session."
-      ],
-      "howTo": [
-        {
-          "task": "Open a node terminal",
-          "steps": [
-            "Select a node in the node selector.",
-            "Use the terminal action to open the web terminal."
-          ]
-        }
-      ],
-      "related": [
-        "nodeSelector",
-        "terminal"
-      ],
-      "keywords": [
-        "terminal",
-        "web",
-        "shell",
-        "ssh",
-        "dialog",
-        "node"
-      ],
-      "aria": {
-        "label": "Web terminal dialog",
-        "description": "Embedded interactive web terminal session to a node."
-      },
-      "aiContext": "WebTerminalDialog opens an embedded interactive web terminal to a node (loads /terminal with session params)."
-    },
-    {
       "id": "lockConflictDialog",
       "kind": "dialog",
       "title": "Lock conflict dialog",
@@ -1464,8 +1422,7 @@
         }
       ],
       "related": [
-        "parserResultsDialog",
-        "toolsLiveOutputDialog"
+        "parserResultsDialog"
       ],
       "keywords": [
         "nvloom",
@@ -1501,8 +1458,7 @@
         }
       ],
       "related": [
-        "parserResultsDialog",
-        "tools"
+        "parserResultsDialog"
       ],
       "keywords": [
         "clusterkit",
@@ -1902,587 +1858,6 @@
       "aiContext": "ScopeTree is the cluster→rack→host selection tree inside ScopeExplorer that sets the active observability scope."
     },
     {
-      "id": "tools",
-      "kind": "view",
-      "title": "Operations & Scripts",
-      "domain": "Tools",
-      "routePath": "/tools/operations",
-      "summary": "Run utility scripts and installers: NEMO, HPC-X, CUDA/NCCL, nvloom, Grafana.",
-      "description": "The Operations & Scripts page is the utility toolbox. It runs install and benchmark scripts on the cluster — NEMO, HPC-X, CUDA/NCCL, nvloom, Grafana install — and streams their stdout live. Clusterkit and NVLoom workspace tooling is embedded here.",
-      "features": [
-        "Run installer/benchmark scripts with live streamed output.",
-        "NEMO, HPC-X, CUDA/NCCL, nvloom, and Grafana install helpers.",
-        "Clusterkit and NVLoom workspace tooling."
-      ],
-      "howTo": [
-        {
-          "task": "Run a utility script",
-          "steps": [
-            "Open Tools > Operations & Scripts.",
-            "Pick the script/installer.",
-            "Start it and watch the live output dialog."
-          ]
-        }
-      ],
-      "related": [
-        "toolsLiveOutputDialog",
-        "clusterkitResultsSection",
-        "nvloomHeatmapsSection",
-        "workflows"
-      ],
-      "keywords": [
-        "tools",
-        "operations",
-        "scripts",
-        "utility",
-        "install",
-        "nemo",
-        "hpc-x",
-        "cuda",
-        "nccl",
-        "nvloom",
-        "grafana",
-        "clusterkit"
-      ],
-      "aria": {
-        "label": "Operations and scripts page",
-        "description": "Utility toolbox to run install and benchmark scripts (NEMO, HPC-X, CUDA/NCCL, nvloom, Grafana) with live output."
-      },
-      "aiContext": "The Operations & Scripts (tools) page runs utility/install/benchmark scripts on the cluster (NEMO, HPC-X, CUDA/NCCL, nvloom, Grafana install) with live streamed output, plus embedded Clusterkit and NVLoom tooling."
-    },
-    {
-      "id": "terminal",
-      "kind": "view",
-      "title": "Terminal",
-      "domain": "Tools",
-      "routePath": "/tools/terminal",
-      "summary": "A grid of live head-node and compute shells, side by side in one workspace.",
-      "description": "The Terminal page is a workspace of live shells. Add terminal opens a searchable picker of every compute node in the active cluster plus the head node; each one you add becomes a pane in a grid that grows from one full-width shell to two side by side, then two by two, and on from there. Panes are dragged by their header (the terminal body stays selectable) and resized from their corner, and the shell reflows to whatever size you give it. A single pane detaches to its own browser tab, or Detach grid moves the whole arrangement to a new tab at once. Detaching hands over the running session rather than dialling a second one, so it is a move, not a duplicate. Your panes and their arrangement are remembered per cluster; the sessions themselves end with the page.",
-      "features": [
-        "Searchable picker over every compute node in the active cluster, plus the head node.",
-        "Grid grows 1x1 to 2x1 to 2x2 as you add shells; drag by the header, resize from the corner.",
-        "Detach one pane, or the whole grid, into a browser tab — carrying the live session.",
-        "Pane list and layout are remembered per cluster across reloads."
-      ],
-      "howTo": [
-        {
-          "task": "Open shells on several nodes at once",
-          "steps": [
-            "Open Tools > Terminal.",
-            "Click Add terminal and pick the head node, or search for a compute node by name or rack.",
-            "Repeat to add more; each new shell is placed beside or below the last.",
-            "Drag a pane by its header to rearrange, or its corner to resize."
-          ]
-        },
-        {
-          "task": "Move the terminals into their own window",
-          "steps": [
-            "Use Detach grid to move every open shell to a new browser tab.",
-            "Or use the detach icon on a single pane's header to move just that one."
-          ]
-        }
-      ],
-      "related": [
-        "webTerminalDialog",
-        "nodeSelector"
-      ],
-      "keywords": [
-        "terminal",
-        "shell",
-        "ssh",
-        "console",
-        "grid",
-        "multiple terminals",
-        "detach",
-        "head node",
-        "pdsh",
-        "cmsh"
-      ],
-      "aria": {
-        "label": "Terminal page",
-        "description": "A resizable grid of live head-node and compute shells."
-      },
-      "aiContext": "Tools > Terminal is a react-grid-layout workspace of live xterm.js shells over the dashboard's SSH path. Add terminal opens a picker listing compute nodes (derived from rack rows by parseNodesFromRack) plus the head node (target 'headnode', mode 'headnode'). Panes auto-place 1x1 -> 2x1 -> 2x2 and are draggable by header only so terminal text stays selectable. A pane detaches to /terminal?session=<id> and the whole grid to /terminal-grid?g=<base64url>, both carrying live session ids so shells are adopted rather than reopened. Layout persists per cluster in localStorage; sessions do not survive a reload."
-    },
-    {
-      "id": "toolsLiveOutputDialog",
-      "kind": "dialog",
-      "title": "Tool live output dialog",
-      "domain": "Tools",
-      "summary": "Streams stdout from utility scripts.",
-      "description": "ToolsLiveOutputDialog streams the live stdout of a utility script (NEMO, HPC-X, CUDA/NCCL, nvloom, Grafana install) so you can watch installs/benchmarks as they run.",
-      "features": [
-        "Live stdout streaming.",
-        "Auto-scroll as output arrives."
-      ],
-      "howTo": [
-        {
-          "task": "Watch a script run",
-          "steps": [
-            "Start a script from the Operations page.",
-            "Read the live output dialog."
-          ]
-        }
-      ],
-      "related": [
-        "tools",
-        "commandStreamDialog"
-      ],
-      "keywords": [
-        "tool",
-        "output",
-        "dialog",
-        "stream",
-        "stdout",
-        "script",
-        "live"
-      ],
-      "aria": {
-        "label": "Tool live output dialog",
-        "description": "Modal that streams the live stdout of a utility script."
-      },
-      "aiContext": "ToolsLiveOutputDialog streams the live stdout of utility scripts (NEMO, HPC-X, CUDA/NCCL, nvloom, Grafana install)."
-    },
-    {
-      "id": "workflows",
-      "kind": "view",
-      "title": "Workflows",
-      "domain": "Tools",
-      "routePath": "/tools/workflows",
-      "summary": "Design, save, and run multi-step rack workflows.",
-      "description": "The Workflows page lets you build reusable multi-step procedures (e.g. an energise-and-validate runbook) as a flowchart, save them, and execute them against racks while tracking step-by-step progress. Mermaid source text is the single source of truth and is kept in sync with a React Flow canvas.",
-      "features": [
-        "Visual workflow editor (React Flow canvas) synced to mermaid source.",
-        "Node types: automated (green), manual/event (blue), decision (yellow).",
-        "Save workflows and view past runs.",
-        "Run a workflow against a rack/target with live progress.",
-        "AI-assisted workflow generation from a natural-language prompt."
-      ],
-      "howTo": [
-        {
-          "task": "Create and run a workflow",
-          "steps": [
-            "Open Tools > Workflows and create a new workflow.",
-            "Build the flow in the editor (or generate it with AI), then save.",
-            "Start a run, choose the target rack/hostlist, and watch step progress."
-          ]
-        }
-      ],
-      "tips": [
-        "Mermaid text is canonical; the canvas reads from and writes back to it. Node shape determines step type, so keep shapes intact when editing."
-      ],
-      "related": [
-        "workflowList",
-        "workflowDesigner",
-        "flowDiagram",
-        "workflowRunDialog",
-        "workflowAIGenerator"
-      ],
-      "keywords": [
-        "workflow",
-        "workflows",
-        "runbook",
-        "flowchart",
-        "mermaid",
-        "react flow",
-        "automation",
-        "steps"
-      ],
-      "aria": {
-        "label": "Workflows page",
-        "description": "Design, save, and run multi-step rack workflows with a visual editor synced to mermaid source."
-      },
-      "aiContext": "The Workflows page builds reusable multi-step rack procedures as flowcharts (mermaid is the source of truth, synced to a React Flow canvas) and runs them against racks with live step progress. Node types: automated (green rect), manual/event (blue stadium), decision (yellow diamond). Includes AI-assisted generation."
-    },
-    {
-      "id": "workflowList",
-      "kind": "component",
-      "title": "Workflow list",
-      "domain": "Tools",
-      "summary": "Lists saved workflows and past runs.",
-      "description": "WorkflowList lists saved workflows and previous runs with actions to create, edit, run, and delete.",
-      "features": [
-        "List of saved workflows.",
-        "Past run history.",
-        "Create / edit / run / delete actions."
-      ],
-      "howTo": [
-        {
-          "task": "Run a saved workflow",
-          "steps": [
-            "Find the workflow in the list.",
-            "Click run and choose the target."
-          ]
-        }
-      ],
-      "related": [
-        "workflows",
-        "workflowDesigner",
-        "workflowRunDialog"
-      ],
-      "keywords": [
-        "workflow",
-        "list",
-        "saved",
-        "runs",
-        "history"
-      ],
-      "aria": {
-        "label": "Workflow list",
-        "description": "List of saved workflows and past runs with create, edit, run, and delete actions."
-      },
-      "aiContext": "WorkflowList lists saved workflows and past runs with create/edit/run/delete actions."
-    },
-    {
-      "id": "workflowDesigner",
-      "kind": "component",
-      "title": "Workflow designer",
-      "domain": "Tools",
-      "summary": "Mermaid + React Flow editor; save workflow definition.",
-      "description": "WorkflowDesigner is the editor: a code panel of mermaid source alongside the React Flow canvas. Edits in either stay in sync; saving preserves node step types inferred from mermaid shapes.",
-      "features": [
-        "Mermaid code panel + canvas.",
-        "Two-way sync.",
-        "Save preserves step types."
-      ],
-      "howTo": [
-        {
-          "task": "Edit a workflow",
-          "steps": [
-            "Open a workflow in the designer.",
-            "Edit the mermaid or the canvas.",
-            "Save to persist."
-          ]
-        }
-      ],
-      "related": [
-        "workflows",
-        "flowDiagram",
-        "customNode"
-      ],
-      "keywords": [
-        "designer",
-        "editor",
-        "mermaid",
-        "canvas",
-        "react flow",
-        "save"
-      ],
-      "aria": {
-        "label": "Workflow designer",
-        "description": "Workflow editor with a mermaid code panel synced to a React Flow canvas."
-      },
-      "aiContext": "WorkflowDesigner is the workflow editor: mermaid code panel + React Flow canvas kept in sync; saving preserves step types inferred from mermaid shapes."
-    },
-    {
-      "id": "flowDiagram",
-      "kind": "component",
-      "title": "Flow diagram canvas",
-      "domain": "Tools",
-      "summary": "React Flow canvas: nodes, edges, connections, toolbar.",
-      "description": "FlowDiagram is the React Flow canvas wrapper. It registers node/edge types, handles connections (Top/Left = target, Bottom/Right = source), and provides the editor toolbar; it syncs back to mermaid.",
-      "features": [
-        "Node/edge rendering.",
-        "Connection handles.",
-        "Editor toolbar.",
-        "Mermaid sync."
-      ],
-      "howTo": [
-        {
-          "task": "Connect two nodes",
-          "steps": [
-            "Drag from a node's bottom/right handle.",
-            "Drop on another node's top/left handle."
-          ]
-        }
-      ],
-      "related": [
-        "workflowDesigner",
-        "customNode",
-        "customEdge"
-      ],
-      "keywords": [
-        "flow",
-        "diagram",
-        "canvas",
-        "nodes",
-        "edges",
-        "connect",
-        "react flow"
-      ],
-      "aria": {
-        "label": "Workflow canvas",
-        "description": "React Flow canvas for arranging workflow nodes and edges."
-      },
-      "aiContext": "FlowDiagram is the React Flow canvas wrapper (node/edge types, connection handles, toolbar) that syncs back to mermaid."
-    },
-    {
-      "id": "customNode",
-      "kind": "component",
-      "title": "Workflow node",
-      "domain": "Tools",
-      "summary": "Automated/manual/decision node renderers with edge-delete on hover.",
-      "description": "CustomNode renders the workflow node styles: automated (green rectangle), manual/event (blue stadium), and decision (yellow diamond). Edge delete buttons appear on node hover.",
-      "features": [
-        "Three node styles by step type.",
-        "Edge delete buttons on hover."
-      ],
-      "howTo": [
-        {
-          "task": "Delete an edge",
-          "steps": [
-            "Hover the node.",
-            "Click the edge delete button that appears."
-          ]
-        }
-      ],
-      "related": [
-        "flowDiagram",
-        "customEdge",
-        "nodePropertiesDialog"
-      ],
-      "keywords": [
-        "node",
-        "automated",
-        "manual",
-        "decision",
-        "diamond",
-        "stadium",
-        "rectangle"
-      ],
-      "aria": {
-        "label": "Workflow node",
-        "description": "Workflow node rendered by step type (automated, manual/event, or decision)."
-      },
-      "aiContext": "CustomNode renders workflow nodes by step type: automated (green rect), manual/event (blue stadium), decision (yellow diamond); edge delete buttons appear on hover."
-    },
-    {
-      "id": "customEdge",
-      "kind": "component",
-      "title": "Workflow edge",
-      "domain": "Tools",
-      "summary": "Smooth-step edges with optional labels.",
-      "description": "CustomEdge renders workflow connections as smooth-step edges with optional labels.",
-      "features": [
-        "Smooth-step edge rendering.",
-        "Optional edge labels."
-      ],
-      "howTo": [
-        {
-          "task": "Label an edge",
-          "steps": [
-            "In mermaid, add a label to the connection.",
-            "The canvas renders it on the edge."
-          ]
-        }
-      ],
-      "related": [
-        "flowDiagram",
-        "customNode"
-      ],
-      "keywords": [
-        "edge",
-        "connection",
-        "smoothstep",
-        "label",
-        "arrow"
-      ],
-      "aria": {
-        "label": "Workflow edge",
-        "description": "Smooth-step connection between two workflow nodes, with an optional label."
-      },
-      "aiContext": "CustomEdge renders workflow connections as smooth-step edges with optional labels."
-    },
-    {
-      "id": "nodePropertiesDialog",
-      "kind": "dialog",
-      "title": "Node properties dialog",
-      "domain": "Tools",
-      "summary": "Edit node name, command/tool, timeouts, and step type.",
-      "description": "NodePropertiesDialog edits a workflow node's name, command/tool, timeouts, and step type.",
-      "features": [
-        "Edit node name and step type.",
-        "Set command/tool and timeouts."
-      ],
-      "howTo": [
-        {
-          "task": "Configure a node",
-          "steps": [
-            "Open the node in the designer.",
-            "Edit its properties and save."
-          ]
-        }
-      ],
-      "related": [
-        "customNode",
-        "workflowDesigner"
-      ],
-      "keywords": [
-        "node",
-        "properties",
-        "dialog",
-        "command",
-        "timeout",
-        "step type"
-      ],
-      "aria": {
-        "label": "Node properties dialog",
-        "description": "Editor for a workflow node's name, command/tool, timeouts, and step type."
-      },
-      "aiContext": "NodePropertiesDialog edits a workflow node's name, command/tool, timeouts, and step type."
-    },
-    {
-      "id": "workflowRunDialog",
-      "kind": "dialog",
-      "title": "Workflow run dialog",
-      "domain": "Tools",
-      "summary": "Start a run with rack/target/hostlist overrides.",
-      "description": "WorkflowRunDialog starts a workflow run, letting you set the target rack, target, or hostlist overrides.",
-      "features": [
-        "Choose target rack/hostlist.",
-        "Start a run."
-      ],
-      "howTo": [
-        {
-          "task": "Start a run",
-          "steps": [
-            "Click run on a workflow.",
-            "Set the rack/target/hostlist.",
-            "Start."
-          ]
-        }
-      ],
-      "related": [
-        "workflows",
-        "workflowRunPanel",
-        "workflowList"
-      ],
-      "keywords": [
-        "workflow",
-        "run",
-        "dialog",
-        "target",
-        "rack",
-        "hostlist"
-      ],
-      "aria": {
-        "label": "Workflow run dialog",
-        "description": "Start a workflow run with rack, target, or hostlist overrides."
-      },
-      "aiContext": "WorkflowRunDialog starts a workflow run with target rack/target/hostlist overrides."
-    },
-    {
-      "id": "workflowRunPanel",
-      "kind": "component",
-      "title": "Workflow run panel",
-      "domain": "Tools",
-      "summary": "Side panel for active run progress and step actions.",
-      "description": "WorkflowRunPanel is a side panel that shows an active run's progress and per-step actions.",
-      "features": [
-        "Live run progress.",
-        "Per-step actions."
-      ],
-      "howTo": [
-        {
-          "task": "Monitor a run",
-          "steps": [
-            "Start a run.",
-            "Watch progress in the run panel and act on steps."
-          ]
-        }
-      ],
-      "related": [
-        "workflowRunDialog",
-        "stepOutputDialog"
-      ],
-      "keywords": [
-        "workflow",
-        "run",
-        "panel",
-        "progress",
-        "steps"
-      ],
-      "aria": {
-        "label": "Workflow run panel",
-        "description": "Side panel showing an active workflow run's progress and step actions."
-      },
-      "aiContext": "WorkflowRunPanel is a side panel showing active run progress and per-step actions."
-    },
-    {
-      "id": "stepOutputDialog",
-      "kind": "dialog",
-      "title": "Step output dialog",
-      "domain": "Tools",
-      "summary": "View output from a completed workflow step.",
-      "description": "StepOutputDialog shows the output of a completed workflow step.",
-      "features": [
-        "View completed step output."
-      ],
-      "howTo": [
-        {
-          "task": "Read step output",
-          "steps": [
-            "In the run panel, click a completed step.",
-            "Read its output in the dialog."
-          ]
-        }
-      ],
-      "related": [
-        "workflowRunPanel"
-      ],
-      "keywords": [
-        "step",
-        "output",
-        "dialog",
-        "result"
-      ],
-      "aria": {
-        "label": "Step output dialog",
-        "description": "Shows the output of a completed workflow step."
-      },
-      "aiContext": "StepOutputDialog shows the output of a completed workflow step."
-    },
-    {
-      "id": "workflowAIGenerator",
-      "kind": "dialog",
-      "title": "AI workflow generator",
-      "domain": "Tools",
-      "summary": "Generate a workflow flowchart from a natural-language prompt.",
-      "description": "WorkflowAIGenerator is a dialog that turns a natural-language description into a Mermaid flowchart using the AI assistant, which you can then refine in the designer.",
-      "features": [
-        "Natural-language to mermaid flowchart.",
-        "Refine the result in the editor."
-      ],
-      "howTo": [
-        {
-          "task": "Generate a workflow with AI",
-          "steps": [
-            "Open the AI generator.",
-            "Describe the workflow.",
-            "Generate, then refine in the designer and save."
-          ]
-        }
-      ],
-      "related": [
-        "workflows",
-        "workflowDesigner",
-        "aiChatWidget"
-      ],
-      "keywords": [
-        "ai",
-        "generator",
-        "workflow",
-        "mermaid",
-        "prompt",
-        "generate"
-      ],
-      "aria": {
-        "label": "AI workflow generator",
-        "description": "Generate a workflow flowchart from a natural-language description using AI."
-      },
-      "aiContext": "WorkflowAIGenerator turns a natural-language description into a Mermaid workflow flowchart via the AI assistant, for refinement in the designer."
-    },
-    {
       "id": "analytics",
       "kind": "view",
       "title": "Analytics",
@@ -2580,72 +1955,6 @@
       "aiContext": "The Analytics page has a Rack Level tab (cluster-wide aggregate charts: validation pass rates, NCCL/NEMO trends, cross-rack comparisons) and a Node Level tab (per-node heatmap grouped by rack; the fill is a selectable view — node up/down, test completion, or a bring-up metric like NCCL busbw — and the border always shows up/down). Test completion counts a test as done once it has a verdict, pass or fail, so it answers 'has this node been tested' rather than 'did it pass'. Two layouts: Compact tiles racks eight across as tray blocks with a per-rack good/warn/bad tally (the whole floor on one screen), Linear gives each rack a row and each node a load gauge. Metric views auto-scale to the fleet's observed range. Download image renders the heatmap to a light-background PNG/JPEG with title, legend, cluster and timestamp baked in, drawn on a canvas so it does not depend on the UI theme. The Rack Level tab carries a report generator with two reports. The Rack Status standard report renders one dataset as CSV, JSON, or a PDF with an executive summary and rack-level charts. The Nscale TX JSON schema report answers the customer's Consolidated Test Plan contract and is validated against the vendored schema before download, so it is JSON only; fields bring-up cannot measure are marked TBD for the operator to edit. Both reports share one fleet sweep of per-node hardware and firmware identity — asking twice while a sweep runs joins the running job rather than starting a second one — and report progress per node. PDF is only offered when the image can render it."
     },
     {
-      "id": "postRunNodeReport",
-      "kind": "view",
-      "title": "Post Run Node Report",
-      "domain": "Analytics & Benchmarks",
-      "routePath": "/analytics/post-run-nodes",
-      "summary": "Floor-style node validation participation, failure trends, deep audits, and scheduler status.",
-      "description": "The Post Run Node Report is built from Rack Status validation activities joined to exact scheduler targets. It counts every validation a node participated in, attributes failures only when evidence names that node, flags repeat failures across distinct runs, and preserves the snapshot after scheduler history ages out. Hardware and NVLink/network reports are available as persistent sections. Selecting a node shows Job IDs, categories, findings, current scheduler reason, and controls for immediate deep audits or an explicit operator mark/drain.",
-      "features": [
-        "Punchcard-style floor view grouped by rack, with run and attributed-failure counts per node.",
-        "Increasing, decreasing, flat, and new failure trends; a repeat flag requires at least three findings across three distinct runs.",
-        "Node drill-down with every validation participation, Job ID, scheduler state, evidence category, and finding.",
-        "Current scheduler state and reason shown beside validation history.",
-        "Persistent Node hardware status and Node network status report sections.",
-        "One-node hardware or NVLink/network deep audits can be launched from the investigation dialog.",
-        "Operator findings can be recorded locally or explicitly attached to a scheduler drain after confirmation."
-      ],
-      "howTo": [
-        {
-          "task": "Investigate a repeat offender",
-          "steps": [
-            "Open Analytics & Benchmarks > Post Run Node Report.",
-            "Look for a red flag or increasing trend arrow.",
-            "Select the node.",
-            "Review the Job IDs, attributed failures, and current scheduler comment.",
-            "Launch the relevant hardware or NVLink/network audit and watch its report section refresh."
-          ]
-        },
-        {
-          "task": "Record and drain a confirmed node issue",
-          "steps": [
-            "Open the node from the floor view.",
-            "Choose an evidence category and enter the exact reason.",
-            "Enable the scheduler drain option.",
-            "Confirm the exact node; Rack Status records the finding and applies the generated scheduler reason."
-          ]
-        }
-      ],
-      "tips": [
-        "A failed multi-node job is visible as participation but does not count against every tray. A node failure requires explicit evidence, a single-node job, or a structured audit/operator finding."
-      ],
-      "related": [
-        "analytics",
-        "reports",
-        "nodes",
-        "singleRack"
-      ],
-      "keywords": [
-        "post run",
-        "node history",
-        "punchcard",
-        "trend",
-        "repeat failure",
-        "slurm reason",
-        "hardware audit",
-        "network audit",
-        "nvlink",
-        "nccl",
-        "job id"
-      ],
-      "aria": {
-        "label": "Post Run Node Report page",
-        "description": "Floor-style validation participation and evidence-attributed node failure history with deep audit reports."
-      },
-      "aiContext": "This page is the first-class post-run node history, not a Google punchcard import. It joins durable validation activities to exact scheduler targets, snapshots node membership, counts attributed failures only with node-specific evidence, flags repeat offenders across distinct runs, and shows current scheduler state/reason. It has persistent hardware and NVLink/network report sections. A selected node can launch either deep audit or receive an operator mark; draining requires an explicit confirmation."
-    },
-    {
       "id": "reports",
       "kind": "view",
       "title": "Reports",
@@ -2701,155 +2010,6 @@
         "description": "Download saved cluster reports and node bug report archives."
       },
       "aiContext": "Analytics > Reports lists (1) generated reports from report_store.py, served by GET /api/reports/generated with download and DELETE at /api/reports/generated/<id>, kept under var/reports on the rack-data volume so they survive restarts, and (2) bug report / NVLMapper files from the reports directory via /api/bug-report-inventory. Reports are archived by the node-report worker when it completes, not when downloaded, so closing the tab mid-sweep no longer loses the run. Generation itself happens on Analytics > Analytics, Rack Level tab."
-    },
-    {
-      "id": "projects",
-      "kind": "view",
-      "title": "Projects & Clusters",
-      "domain": "Platform",
-      "routePath": "/platform/projects",
-      "summary": "Customer projects and clusters; set the active cluster to re-scope the app.",
-      "description": "Projects & Clusters defines each customer engagement and the clusters within it: naming convention (rack/node/NVSwitch templates), site geometry, the hardware platform, the cluster manager (BCM/MAAS), and the connection (local or SSH). The active cluster is server-authoritative: switching it re-scopes status, validation geometry, tool execution, and the AI context across the whole app.",
-      "features": [
-        "Create projects with a customer name and description.",
-        "Add clusters with platform, manager, naming convention, geometry, and connection.",
-        "Set the active cluster (also available from the top-bar switcher)."
-      ],
-      "howTo": [
-        {
-          "task": "Switch the active cluster",
-          "steps": [
-            "Open Projects & Clusters.",
-            "Find the cluster card.",
-            "Click 'Set active' (or use the top-bar switcher)."
-          ]
-        },
-        {
-          "task": "Add a cluster",
-          "steps": [
-            "Open the project.",
-            "Click 'Cluster'.",
-            "Pick a platform, set naming + connection, and save."
-          ]
-        }
-      ],
-      "related": [
-        "platformCatalog",
-        "toolRegistry",
-        "settings"
-      ],
-      "keywords": [
-        "project",
-        "cluster",
-        "customer",
-        "naming",
-        "active",
-        "switch",
-        "tenant",
-        "bcm",
-        "maas",
-        "ssh"
-      ],
-      "aria": {
-        "label": "Projects and clusters page",
-        "description": "Manage customer projects and clusters and set the active cluster."
-      },
-      "aiContext": "Projects & Clusters manages customer projects and their clusters (platform, manager, naming, geometry, connection). The active cluster is server-authoritative and re-scopes status, geometry, tools, and AI context."
-    },
-    {
-      "id": "platformCatalog",
-      "kind": "view",
-      "title": "Platform Catalog",
-      "domain": "Platform",
-      "routePath": "/platform/catalog",
-      "summary": "Hardware/system SKUs (GPU, CPU, vendor, topology, geometry, capabilities).",
-      "description": "The Platform Catalog defines hardware/system SKUs across NVIDIA generations (GB200/GB300/B200/B300, future VR200/R200), with CPU vendor (Grace/Intel/AMD), system vendor (NVIDIA/DGX/Dell/SMC), form factor, per-rack geometry, interconnect, capabilities (nvlink, nvswitch, imex, mnnvl, roce), and tool parameter defaults. A cluster's platform drives dashboard geometry and which tools are compatible.",
-      "features": [
-        "Define GPU/CPU/vendor/form-factor and per-rack geometry.",
-        "Declare capabilities used for tool compatibility.",
-        "Set tool parameter defaults (e.g. GPU model flag, MNNVL topology, CUDA major)."
-      ],
-      "howTo": [
-        {
-          "task": "Add a platform",
-          "steps": [
-            "Open Platform Catalog.",
-            "Click 'New platform'.",
-            "Fill GPU/CPU/vendor, geometry, capabilities, and save."
-          ]
-        }
-      ],
-      "related": [
-        "projects",
-        "toolRegistry"
-      ],
-      "keywords": [
-        "platform",
-        "gpu",
-        "gb200",
-        "gb300",
-        "b200",
-        "b300",
-        "vr200",
-        "r200",
-        "geometry",
-        "capability",
-        "nvlink",
-        "nvswitch",
-        "mnnvl",
-        "vendor"
-      ],
-      "aria": {
-        "label": "Platform catalog page",
-        "description": "Define hardware/system platforms and their geometry and capabilities."
-      },
-      "aiContext": "The Platform Catalog defines hardware SKUs (GPU/CPU/vendor/form-factor), per-rack geometry, capabilities, and tool param defaults. The active cluster's platform drives geometry and tool compatibility."
-    },
-    {
-      "id": "toolRegistry",
-      "kind": "view",
-      "title": "Tool Registry",
-      "domain": "Platform",
-      "routePath": "/platform/tools",
-      "summary": "Each script as a document: platform compatibility, surfaces, and execution.",
-      "description": "The Tool Registry describes each validation/performance/maintenance script as a document: the script basename, optional env-key override, platform compatibility (all platforms, required capabilities, or specific platform ids), where it surfaces in the UI, and how it executes (async/sync/stream; rack/multirack/cluster/node). Tools are filtered to the active cluster's platform so only compatible tools are offered.",
-      "features": [
-        "Register a tool with its script and execution mode/target.",
-        "Set platform compatibility by capability or platform id.",
-        "Declare UI surfaces (e.g. rackDetail.hardware)."
-      ],
-      "howTo": [
-        {
-          "task": "Register a tool",
-          "steps": [
-            "Open Tool Registry.",
-            "Click 'New tool'.",
-            "Set script, compatibility, surfaces, execution, and save."
-          ]
-        }
-      ],
-      "related": [
-        "projects",
-        "platformCatalog",
-        "tools"
-      ],
-      "keywords": [
-        "tool",
-        "registry",
-        "script",
-        "sysinfo",
-        "clusterkit",
-        "nvloom",
-        "compatibility",
-        "surface",
-        "execution",
-        "platform"
-      ],
-      "aria": {
-        "label": "Tool registry page",
-        "description": "Define tools, their platform compatibility, surfaces, and execution."
-      },
-      "aiContext": "The Tool Registry describes scripts as documents (script, compatibility by capability/platform, surfaces, execution mode/target). Tools are filtered to the active platform."
     },
     {
       "id": "settings",
@@ -3029,7 +2189,6 @@
         }
       ],
       "related": [
-        "toolRegistry",
         "settings"
       ],
       "keywords": [
@@ -3097,7 +2256,7 @@
       "title": "Sidebar navigation",
       "domain": "Shell",
       "summary": "Left navigation grouped by domain, with Settings, Docs, and Help.",
-      "description": "The Sidebar is the left navigation. It groups destinations by domain (Compute, Infrastructure, Observability, Tools, Analytics & Benchmarks) and has bottom items for Settings, Documentation, and Help. It can collapse to an icon rail.",
+      "description": "The Sidebar is the left navigation. It groups Nscale destinations by domain (Compute, Infrastructure, Observability, Analytics & Benchmarks) and has bottom items for Settings, Documentation, and Help. It can collapse to an icon rail.",
       "features": [
         "Domain-grouped navigation.",
         "Collapsible to an icon rail.",
@@ -3135,19 +2294,19 @@
         "label": "Sidebar navigation",
         "description": "Left navigation grouped by domain with Settings, Documentation, and Help."
       },
-      "aiContext": "The Sidebar is the left navigation grouped by domain (Compute, Infrastructure, Observability, Tools, Analytics & Benchmarks) with bottom links to Settings, Documentation, and Help; collapsible to an icon rail."
+      "aiContext": "The Sidebar is the Nscale navigation grouped by domain (Compute, Infrastructure, Observability, Analytics & Benchmarks) with bottom links to Settings, Documentation, and Help; collapsible to an icon rail."
     },
     {
       "id": "toolbar",
       "kind": "shell",
       "title": "Toolbar",
       "domain": "Shell",
-      "summary": "Top bar: page title, refresh, theme, scheduler dialogs, terminal, logout.",
-      "description": "The Toolbar is the top app bar. It shows the current page title and global actions: refresh, theme toggle, active jobs, node availability, head-node terminal, log export, active users, and logout.",
+      "summary": "Top bar: page title, refresh, theme, PythonCM scheduler dialogs, and logout.",
+      "description": "The Toolbar is the top app bar. It shows the current page title and global actions: refresh, theme toggle, PythonCM active jobs, node availability, log export, active users, and logout.",
       "features": [
         "Page title.",
         "Refresh and theme toggle.",
-        "Active-jobs/node-availability dialogs, terminal, log export, active users, logout."
+        "PythonCM active-jobs/node-availability dialogs, log export, active users, logout."
       ],
       "howTo": [
         {
@@ -3179,9 +2338,9 @@
       ],
       "aria": {
         "label": "Top toolbar",
-        "description": "Top bar with the page title and global actions: refresh, theme, scheduler dialogs, terminal, log export, and logout."
+        "description": "Top bar with the page title and global actions: refresh, theme, PythonCM scheduler dialogs, log export, and logout."
       },
-      "aiContext": "The Toolbar is the top app bar with the page title and global actions: refresh, theme toggle, active jobs, node availability, head-node terminal, log export, active users, and logout."
+      "aiContext": "The Toolbar is the top app bar with the page title and global actions: refresh, theme toggle, PythonCM active jobs, node availability, log export, active users, and logout."
     },
     {
       "id": "appBreadcrumbs",
@@ -3273,7 +2432,7 @@
       "title": "Preview banner",
       "domain": "Shell",
       "summary": "Banner shown on preview/mock pages.",
-      "description": "PreviewBanner is the banner shown on preview pages (Infrastructure, Observability, Terminal placeholder) to indicate the data is mock/not yet live.",
+      "description": "PreviewBanner is shown on preview pages to indicate that data is mock or not yet live.",
       "features": [
         "Indicates preview/mock pages."
       ],
@@ -3288,8 +2447,7 @@
       ],
       "related": [
         "infraEthernet",
-        "obsMetrics",
-        "terminal"
+        "obsMetrics"
       ],
       "keywords": [
         "preview",
@@ -3301,7 +2459,7 @@
         "label": "Preview banner",
         "description": "Banner indicating a page is a preview backed by mock data."
       },
-      "aiContext": "PreviewBanner marks preview pages (Infrastructure, Observability, Terminal placeholder) as mock/not-yet-live."
+      "aiContext": "PreviewBanner marks preview pages as mock/not-yet-live."
     },
     {
       "id": "aiChatWidget",

@@ -64,7 +64,6 @@ _BMC_NAMES = {"rf0", "ipmi0", "bmc", "ipmi"}
 # these RPCs with the web/API authentication cookie even when the client certificate is valid.
 _AUTHENTICATED_QUERIES = {
     "status", "node-states", "power", "drain", "undrain", "drain-status",
-    "jobs", "job-history", "cancel-job",
 }
 
 
@@ -386,7 +385,6 @@ def main(argv: list[str] | None = None) -> int:
         choices=[
             "nodes", "switches", "devices", "racks", "status", "node-states", "rf0", "version",
             "capabilities", "attrs", "power", "drain", "undrain", "drain-status",
-            "jobs", "job-history", "cancel-job",
         ],
     )
     ap.add_argument("--type", default="PhysicalNode", help="entity type for --query attrs/devices")
@@ -408,8 +406,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--target", default="", help="BCM device/node name range")
     ap.add_argument("--action", choices=["on", "off", "reset", "status"], default="status")
     ap.add_argument("--reason", default="", help="drain reason")
-    ap.add_argument("--job-id", default="", help="job id for cancel-job")
-    ap.add_argument("--limit", type=int, default=1000, help="maximum job-history records")
     ap.add_argument("--force", action="store_true", help="include closed devices in power operations")
     ap.add_argument("--operation-timeout", type=float, default=120.0,
                     help="seconds to wait for a parallel power operation")
@@ -562,23 +558,6 @@ def _shape_drain_result(cluster, result: object) -> dict[str, object]:
     }
 
 
-def _shape_job(cluster, job: object) -> dict[str, object]:
-    nodes = _attr(job, "nodes", default=[]) or []
-    return {
-        "job_id": _scalar(_attr(job, "jobId", "jobID", "id")),
-        "name": _scalar(_attr(job, "jobName", "name")),
-        "state": _enum_text(_attr(job, "state", "status")),
-        "user": _scalar(_attr(job, "user", "username")),
-        "queue": _name_for_uuid(cluster, _attr(job, "ref_jobqueue_uuid", "queue")),
-        "nodes": [_name_for_uuid(cluster, node) for node in nodes],
-        "submit_time": int(_attr(job, "submitTime", default=0) or 0),
-        "start_time": int(_attr(job, "startTime", default=0) or 0),
-        "end_time": int(_attr(job, "endTime", default=0) or 0),
-        "exit_code": int(_attr(job, "exitCode", default=0) or 0),
-        "stdout": _scalar(_attr(job, "stdoutPath", "stdout")),
-    }
-
-
 def _power(cluster, args: argparse.Namespace) -> dict[str, object]:
     devices = _select_devices(cluster, args.target)
     operation = getattr(cluster.parallel, f"power_{args.action}")
@@ -622,28 +601,12 @@ def _drain(cluster, args: argparse.Namespace, *, drain: bool) -> dict[str, objec
     }
 
 
-def _cancel_job(cluster, job_id: str) -> dict[str, object]:
-    if not re.fullmatch(r"\d+(?:_\d+)?", job_id or ""):
-        raise ValueError("--job-id must be a numeric workload job id")
-    matches = []
-    for wlm in cluster.get_by_type("WlmCluster") or []:
-        job = cluster.workload.get_job_by_wlm_uuid(wlm.uuid, job_id)
-        if job is not None:
-            matches.append((wlm, job))
-    if not matches:
-        raise ValueError(f"job not found: {job_id}")
-    if len(matches) > 1:
-        raise ValueError(f"job id {job_id} is ambiguous across workload managers")
-    wlm, job = matches[0]
-    message, success = cluster.workload.remove_job(wlm.uuid, job_id)
-    return {"job_id": job_id, "success": bool(success), "message": str(message or "")}
-
-
 def _scheduler_nodes(cluster, target: str = "") -> list[dict[str, object]]:
-    """Build truthful scheduler eligibility from BCM status, drain, and live-job RPCs.
+    """Build PythonCM eligibility from BCM device and drain-status RPCs.
 
-    Absence of a drain record does not mean idle by itself. A node is reported idle only after
-    device status, drain state, and workload jobs all returned successfully in this same call.
+    ProgramRunner allocation ownership is overlaid by Rack Status from its durable
+    PythonCM activity registry. This helper deliberately does not query WlmCluster
+    or ``cluster.workload`` because Nscale's WLM is Slurm.
     """
     devices = (
         _select_devices(cluster, target, nodes_only=True)
@@ -669,40 +632,19 @@ def _scheduler_nodes(cluster, target: str = "") -> list[dict[str, object]]:
                     "reason": str(row.get("reason") or ""),
                 }
 
-    wlms = list(cluster.get_by_type("WlmCluster") or [])
-    jobs_ok, jobs = cluster.workload.get_jobs([wlm.uuid for wlm in wlms])
-    if not jobs_ok:
-        raise RuntimeError("one or more workload managers failed to return live jobs")
-    jobs_by_node: dict[str, list[str]] = {}
-    for job in jobs or []:
-        state = _enum_text(_attr(job, "state", "status")).upper()
-        active_state = (
-            state.startswith(("RUN", "EXEC"))
-            or state in {"SUSPENDED", "COMPLETING", "CONFIGURING"}
-        )
-        if not active_state:
-            continue
-        job_id = _scalar(_attr(job, "jobId", "jobID", "id"))
-        for node in _attr(job, "nodes", default=[]) or []:
-            hostname = _name_for_uuid(cluster, node)
-            if hostname:
-                jobs_by_node.setdefault(hostname, []).append(job_id)
-
     rows: list[dict[str, object]] = []
     for uuid, device in by_uuid.items():
         hostname = _scalar(_attr(device, "hostname", "name"))
         cm_state = str(device_states.get(uuid, {}).get("status") or "UNDEFINED").upper()
         drain = drain_states.get(hostname, {"state": "UNKNOWN", "reason": ""})
         drain_state = drain["state"]
-        running_jobs = [job_id for job_id in jobs_by_node.get(hostname, []) if job_id]
+        running_jobs: list[str] = []
         if cm_state in {"DOWN", "INSTALLER_FAILED", "INSTALLER_UNREACHABLE"}:
             scheduler_state = "down"
         elif drain_state == "DRAINED":
             scheduler_state = "drain"
         elif drain_state == "DRAINING":
             scheduler_state = "draining"
-        elif running_jobs:
-            scheduler_state = "alloc"
         elif cm_state == "UP" and drain_state == "UNDRAINED":
             scheduler_state = "idle"
         else:
@@ -745,9 +687,10 @@ def _run_query(cluster, args: argparse.Namespace, used: str, started: float) -> 
                          for op in ("on", "off", "reset", "status")),
             "drain": callable(getattr(cluster.parallel, "drain", None)),
             "undrain": callable(getattr(cluster.parallel, "undrain", None)),
-            "workload_jobs": callable(getattr(cluster.workload, "get_jobs", None)),
-            "workload_history": callable(getattr(cluster.workload, "filter_job_info", None)),
-            "workload_cancel": callable(getattr(cluster.workload, "remove_job", None)),
+            "programrunner_execute": callable(getattr(cluster.parallel, "execute", None)),
+            "programrunner_status": callable(
+                getattr(cluster.parallel, "active_command_status", None)
+            ),
         }
     elif query == "attrs":
         sample = (cluster.get_by_type(args.type) or [None])[0]
@@ -791,18 +734,6 @@ def _run_query(cluster, args: argparse.Namespace, used: str, started: float) -> 
         nodes = _select_devices(cluster, args.target, nodes_only=True)
         data = [_shape_drain_result(cluster, result)
                 for result in cluster.parallel.drain_status(nodes) or []]
-    elif query == "jobs":
-        wlms = list(cluster.get_by_type("WlmCluster") or [])
-        success, jobs = cluster.workload.get_jobs([wlm.uuid for wlm in wlms])
-        if not success:
-            raise RuntimeError("one or more workload managers failed to return jobs")
-        data = [_shape_job(cluster, job) for job in jobs or []]
-    elif query == "job-history":
-        limit = min(max(1, args.limit), 10000)
-        data = [_shape_job(cluster, job)
-                for job in cluster.workload.filter_job_info(job_id=args.job_id, limit=limit) or []]
-    elif query == "cancel-job":
-        data = _cancel_job(cluster, args.job_id)
     else:  # argparse makes this unreachable; keep refusal explicit for imported use.
         raise ValueError(f"unsupported query: {query}")
 
@@ -811,8 +742,6 @@ def _run_query(cluster, args: argparse.Namespace, used: str, started: float) -> 
         operation_ok = bool(data.get("accepted"))
         if query == "power":
             operation_ok = operation_ok and bool(data.get("completed"))
-    elif query == "cancel-job" and isinstance(data, dict):
-        operation_ok = bool(data.get("success"))
 
     return {
         "ok": operation_ok,

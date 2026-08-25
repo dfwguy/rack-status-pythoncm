@@ -732,12 +732,12 @@ export function RackTable({
           break;
         case "drain":
           fireBulkParallel("Drain nodes", (rack) =>
-            void store.runSyncJson(rack, "Drain nodes", "/api/slurm-drain", slurmTargetBody(rack, nodesFullRack(rack), naming) as Record<string, unknown>),
+            void store.runSyncJson(rack, "Drain nodes", "/api/scheduler-drain", slurmTargetBody(rack, nodesFullRack(rack), naming) as Record<string, unknown>),
           );
           break;
         case "undrain":
           fireBulkParallel("Resume nodes", (rack) =>
-            void store.runSyncJson(rack, "Resume nodes", "/api/slurm-undrain", slurmTargetBody(rack, nodesFullRack(rack), naming) as Record<string, unknown>),
+            void store.runSyncJson(rack, "Resume nodes", "/api/scheduler-resume", slurmTargetBody(rack, nodesFullRack(rack), naming) as Record<string, unknown>),
           );
           break;
         default:
@@ -768,7 +768,7 @@ export function RackTable({
 
   const handleCheckSinfo = useCallback(() => {
     closeMenu();
-    window.open("/api/slurm-sinfo-r", "_blank");
+    window.open("/api/scheduler-node-reasons", "_blank");
   }, [closeMenu]);
 
   const handleOpenLog = useCallback(async () => {
@@ -838,15 +838,15 @@ export function RackTable({
 
       switch (kind) {
         case "drain":
-          url = "/api/slurm-drain";
+          url = "/api/scheduler-drain";
           body = { rack };
           break;
         case "undrain":
-          url = "/api/slurm-undrain";
+          url = "/api/scheduler-resume";
           body = { rack };
           break;
         case "cancel":
-          url = "/api/slurm-scancel";
+          url = "/api/scheduler-cancel";
           body = { job_id: jobId ?? "", rack };
           break;
         case "power_up":

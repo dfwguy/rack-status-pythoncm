@@ -83,7 +83,7 @@ export function RecentJobsPanel({ logDir, active, limit = 10, tableMaxHeight = 4
     setCmd("");
     try {
       const qs = new URLSearchParams({ limit: String(limit), state: "FINISHED" });
-      const { res, data } = await fetchSlurmJson(`/api/slurm-sacct-recent?${qs}`);
+      const { res, data } = await fetchSlurmJson(`/api/scheduler-history?${qs}`);
       setCmd(data.command_display || "");
       if (!res.ok || data.ok === false) {
         setBannerErr(
@@ -110,7 +110,7 @@ export function RecentJobsPanel({ logDir, active, limit = 10, tableMaxHeight = 4
         const qs = new URLSearchParams({ job_id: jobId });
         const d = (logDir ?? "").trim();
         if (d) qs.set("log_dir", d);
-        const { res, data } = await fetchSlurmJson(`/api/slurm-job-log-path?${qs}`);
+        const { res, data } = await fetchSlurmJson(`/api/scheduler-job-log-path?${qs}`);
         if (!res.ok || data.ok === false || !data.path) {
           window.alert(data.error || `Could not resolve a log path for job ${jobId}.`);
           return;

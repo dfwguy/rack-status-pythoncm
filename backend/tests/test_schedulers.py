@@ -139,10 +139,8 @@ class TestFactory:
         conn = FakeConn()
         with mock.patch.dict("os.environ", {"RACK_SCHEDULER": "local"}, clear=False):
             assert build_scheduler(connection=conn).kind == "local"
-        with mock.patch.dict("os.environ", {}, clear=False):
-            import os
-            os.environ.pop("RACK_SCHEDULER", None)
-            assert build_scheduler(connection=conn).kind == "slurm"
+        with mock.patch.dict("os.environ", {}, clear=True):
+            assert build_scheduler(connection=conn).kind == "pythoncm"
 
     def test_unknown_raises(self):
         with pytest.raises(ValueError, match="unknown scheduler"):

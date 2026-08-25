@@ -14,8 +14,8 @@
  *
  * Only sources that genuinely exist are wired. Nothing here is generated.
  *
- * 1. **Scheduler node state changes** — ``GET /api/slurm-sinfo-r`` is the stable compatibility
- *    route. The active provider returns reason, actor, timestamp, resulting state, and node list
+ * 1. **PythonCM node state changes** — the provider-neutral scheduler route returns reason,
+ *    actor, timestamp, resulting state, and node list
  *    for unavailable nodes. The response retains the historical fixed-width shape, so it is
  *    parsed with ``parseSinfoRStdout`` and coloured with ``slurmReasonTone``.
  *
@@ -50,14 +50,14 @@ import { useGrafanaDeeplinks } from "../lib/useGrafanaDeeplinks";
 type TagColor = "green" | "blue" | "teal" | "yellow" | "red" | "gray";
 
 /** The two sources that are actually wired. Alerts are handled separately (not wired). */
-type EventSource = "slurm" | "operator";
+type EventSource = "scheduler" | "operator";
 
 const SOURCE_META: Record<EventSource, { label: string; color: TagColor }> = {
-  slurm: { label: "Scheduler state", color: "yellow" },
+  scheduler: { label: "PythonCM state", color: "yellow" },
   operator: { label: "Operator", color: "blue" },
 };
 
-const SOURCE_ORDER: EventSource[] = ["slurm", "operator"];
+const SOURCE_ORDER: EventSource[] = ["scheduler", "operator"];
 
 interface EventRow {
   key: string;
@@ -122,8 +122,8 @@ function slurmEvents(parsed: ReturnType<typeof parseSinfoRStdout>): EventRow[] {
     const state = iState >= 0 ? cells[iState] || "" : "";
     const nodes = iNodes >= 0 ? cells[iNodes] || "" : "";
     return {
-      key: `slurm:${i}:${nodes}:${tsRaw}`,
-      source: "slurm" as const,
+      key: `scheduler:${i}:${nodes}:${tsRaw}`,
+      source: "scheduler" as const,
       tsRaw,
       tsMs: toMs(tsRaw),
       label: state || "Scheduler",
@@ -151,7 +151,7 @@ export function EventsView() {
     setSinfoLoading(true);
     setSinfoError("");
     try {
-      const { res, data } = await fetchSlurmJson("/api/slurm-sinfo-r");
+      const { res, data } = await fetchSlurmJson("/api/scheduler-node-reasons");
       setSinfoCmd(String(data.command_display || ""));
       if (!res.ok || data.ok === false) {
         setSinfoStdout("");

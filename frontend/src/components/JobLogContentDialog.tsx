@@ -40,12 +40,12 @@ function downloadHref(path: string, logDir?: string): string {
   const p = new URLSearchParams({ path });
   const d = (logDir ?? "").trim();
   if (d) p.set("log_dir", d);
-  return `/api/slurm-job-stdout-download?${p}`;
+  return `/api/scheduler-job-output-download?${p}`;
 }
 
 /**
  * Shows the WHOLE contents of a completed job stdout file (static, one-shot read
- * via /api/slurm-job-stdout-content) rather than a tail. Use this for finished
+ * via the provider-neutral scheduler output endpoint rather than a tail. Use this for finished
  * results; for a job still being written use TailLogDialog (live `tail -f`).
  * Files over the inline cap fall back to a download link.
  */
@@ -73,7 +73,7 @@ export function JobLogContentDialog({ open, onClose, title, path, logDir }: JobL
         const params = new URLSearchParams({ path });
         const d = (logDir ?? "").trim();
         if (d) params.set("log_dir", d);
-        const res = await fetch(`/api/slurm-job-stdout-content?${params}`, {
+        const res = await fetch(`/api/scheduler-job-output?${params}`, {
           credentials: "same-origin",
           signal: ac.signal,
         });

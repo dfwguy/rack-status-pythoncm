@@ -25,7 +25,7 @@ const PAGE_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
   singleRack: "Single Rack",
   multirack: "Multirack",
-  slurm: "Scheduler",
+  scheduler: "Scheduler",
   reports: "Reports",
   analytics: "Analytics",
   tools: "Utility",

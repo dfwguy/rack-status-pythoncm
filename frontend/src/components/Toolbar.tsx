@@ -31,15 +31,12 @@ import {
   Server,
   LogOut,
   Users,
-  Terminal,
 } from "lucide-react";
 import { ConnectionStatusIndicator } from "./ConnectionStatusIndicator";
 import { SqueueDialog } from "./SqueueDialog";
 import { SinfoDialog } from "./SinfoDialog";
-import WebTerminalDialog from "./rack/WebTerminalDialog";
 import { useAuth } from "../context/AuthContext";
 import { useRackLocksContext } from "../context/RackLocksContext";
-import { ProjectSwitcher } from "./ProjectSwitcher";
 
 interface ToolbarProps {
   title: string;
@@ -51,8 +48,6 @@ interface ToolbarProps {
   onMenuToggle: () => void;
   activeUsers?: number;
   logDir?: string;
-  /** Called after the active project/cluster is switched (refresh dashboards). */
-  onClusterSwitched?: () => void;
   /** UI ↔ backend link state for the connection indicator. */
   backendConnected?: boolean;
   /** Backend ↔ cluster (SSH) link state for the connection indicator. */
@@ -72,7 +67,6 @@ export function Toolbar({
   onMenuToggle,
   activeUsers,
   logDir,
-  onClusterSwitched,
   backendConnected = true,
   clusterReachable = true,
   execMode = "ssh",
@@ -82,7 +76,6 @@ export function Toolbar({
   const { user, logout } = useAuth();
   const [squeueOpen, setSqueueOpen] = useState(false);
   const [sinfoOpen, setSinfoOpen] = useState(false);
-  const [headTerminalOpen, setHeadTerminalOpen] = useState(false);
   const [excelExporting, setExcelExporting] = useState(false);
   const [usersAnchor, setUsersAnchor] = useState<HTMLElement | null>(null);
 
@@ -187,7 +180,7 @@ export function Toolbar({
 
           <Box sx={{ flexGrow: 1, display: "flex", alignItems: "center", ml: 2 }}>
             <Box sx={{ width: "33%", minWidth: 220 }}>
-              <ProjectSwitcher onSwitched={onClusterSwitched} />
+              <Tag color="green" kind="outline" readOnly density="compact">Nscale TX · PythonCM</Tag>
             </Box>
           </Box>
 
@@ -230,12 +223,6 @@ export function Toolbar({
             <Tooltip title="Node availability">
               <IconButton color="inherit" onClick={() => setSinfoOpen(true)} size="small">
                 <Server size={18} />
-              </IconButton>
-            </Tooltip>
-
-            <Tooltip title="Head node terminal">
-              <IconButton color="inherit" onClick={() => setHeadTerminalOpen(true)} size="small">
-                <Terminal size={18} />
               </IconButton>
             </Tooltip>
 
@@ -334,13 +321,6 @@ export function Toolbar({
 
       <SqueueDialog open={squeueOpen} onClose={() => setSqueueOpen(false)} logDir={logDir} />
       <SinfoDialog open={sinfoOpen} onClose={() => setSinfoOpen(false)} />
-      <WebTerminalDialog
-        open={headTerminalOpen}
-        onClose={() => setHeadTerminalOpen(false)}
-        target="headnode"
-        label="Head Node"
-        mode="headnode"
-      />
     </>
   );
 }

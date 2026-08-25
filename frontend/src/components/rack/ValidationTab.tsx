@@ -91,22 +91,26 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)" }}>
         Validation Stages
       </Text>
+      <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+        New validation submissions are blocked: no installed recipe is yet certified as an exact,
+        ProgramRunner-only equivalent on Nscale. Existing results remain available below.
+      </Text>
 
       <ActionCard
         title="NCCL 2.31.2 Validation"
-        description={`Run the pinned NCCL-only acceptance recipe on ${nodeCount} selected node(s). Requires CUDA 13.3+, mounts /dev/infiniband, and verifies NCCL 2.31.2 before testing.`}
+        description="Blocked: the NCCL recipe still depends on MPI-over-SSH and is not ProgramRunner-only."
         icon={<Gauge size={20} />}
         buttonLabel="Plan NCCL"
-        disabled={disabled}
+        disabled
         onRun={() => setPresetDialog("nccl-2.31.2")}
       />
 
       <ActionCard
         title="Stage 1 — NCCL Benchmark"
-        description={`Stage-1 NCCL acceptance on ${nodeCount} selected node(s) in ${rack}, submitted via llmb-run (workload microbenchmark_nccl): the full 24-test sweep across all_reduce / all_gather / reduce_scatter / alltoall / sendrecv up to 16G, including the NVLS variants. Writes an NCCL-1Rack log to log_dir so it appears on the dashboard + parser results.`}
+        description="Blocked: the installed multi-node NCCL launcher is not ProgramRunner-only."
         icon={<Activity size={20} />}
         buttonLabel="Run NCCL"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() =>
           setPendingLaunch({
@@ -121,10 +125,10 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       />
       <ActionCard
         title="Stage 2 — NEMO Training (NCCL + LLMB)"
-        description={`Stage-2 single-rack validation on ${nodeCount} selected node(s) in ${rack}, both halves submitted via llmb-run: the NCCL sweep (microbenchmark_nccl) followed by Nemotron-H 56B fp8 pretraining (pretrain_nemotron-h). Rack Status serialises the two jobs on the rack.`}
+        description="Blocked: no validated ProgramRunner-only NeMo/Nemotron launcher exists on Nscale."
         icon={<Play size={20} />}
         buttonLabel="Run NEMO"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() =>
           setPendingLaunch({
@@ -157,41 +161,41 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
 
       <ActionCard
         title="Llama 3.1 405B FP8 — 1024 GPUs / 50 Steps"
-        description="The proven Llama 3.1 405B FP8 recipe is a 256-node / 1024-GPU multirack validation pinned to TP4 PP8 CP1 VP4, 50 steps, NeMo 26.04.01, NCCL 2.30.7, and NVLS disabled. Launch it from Multirack Validation."
+        description="Blocked: no validated ProgramRunner-only Llama training launcher exists on Nscale."
         icon={<Flame size={20} />}
         buttonLabel="Multirack Only"
         disabled
       />
       <ActionCard
         title="GPT-OSS CPU Overhead Microbenchmark — Single Node"
-        description="Run only the GPT-OSS CPU overhead microbenchmark on exactly one selected node. No GPU training workload or rack fanout is included."
+        description="Blocked: the GPT-OSS recipe has no validated ProgramRunner-only form."
         icon={<Cpu size={20} />}
         buttonLabel="Plan GPT-OSS"
-        disabled={disabled || nodeCount !== 1}
+        disabled
         onRun={() => setPresetDialog("gpt-oss-cpu")}
       />
       <ActionCard
         title="NeMo 26.04.01 Validation"
-        description={`Run only the pinned NeMo 26.04.01 validation recipe on ${nodeCount} selected node(s), with NFS or node-local container staging.`}
+        description="Blocked: the NeMo recipe has no validated ProgramRunner-only form."
         icon={<Database size={20} />}
         buttonLabel="Plan NeMo"
-        disabled={disabled}
+        disabled
         onRun={() => setPresetDialog("nemo-26.04.01")}
       />
       <ActionCard
         title="MNUberGEMM 26.03-v1.17 Validation"
-        description={`Run only the available MNUberGEMM 26.03-v1.17 image on ${nodeCount} selected node(s), with optional rsync staging to /tmp/containers.`}
+        description="Blocked: the proposed direct command does not preserve the pinned-container MNUberGEMM semantics."
         icon={<Zap size={20} />}
         buttonLabel="Plan MNUberGEMM"
-        disabled={disabled}
+        disabled
         onRun={() => setPresetDialog("mnubergemm-26.03-v1.17")}
       />
       <ActionCard
         title="Run Stress"
-        description={`Launch MNUBERGEMM stress test on ${nodeCount} selected node(s) in ${rack}. Sustained GPU compute load for burn-in and thermal validation.`}
+        description="Blocked until the pinned MNUberGEMM workload has an equivalent ProgramRunner-only implementation."
         icon={<Zap size={20} />}
         buttonLabel="Run Stress"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() =>
           runAsyncValidationFamily(
@@ -205,10 +209,10 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       />
       <ActionCard
         title="Run nvloom"
-        description={`Launch nvloom (gpu-to-rack / fabric) on ${nodeCount} selected node(s) in ${rack} through PythonCM direct execution. Output: log_dir/nvloom/$USER-NVLOOM-${rack}-<jobid>.txt (NEMO-style naming).`}
+        description="Blocked: the installed NVLoom recipe contains hidden SSH fan-out."
         icon={<Boxes size={20} />}
         buttonLabel="Run nvloom"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() =>
           runAsyncValidationFamily(
@@ -222,10 +226,10 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       />
       <ActionCard
         title="Run ClusterKit"
-        description={`Launch HPC-X ClusterKit (IB bandwidth per HCA) on ${nodeCount} selected node(s) in ${rack}. Output: log_dir/clusterkit/$USER-CK-${rack}-<jobid>.txt; artifacts under log_dir/clusterkit/${rack}/.`}
+        description="Blocked: the external ClusterKit multi-host launcher is not certified ProgramRunner-only."
         icon={<Network size={20} />}
         buttonLabel="Run ClusterKit"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() =>
           runAsyncValidationFamily(
@@ -240,10 +244,10 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
 
       <ActionCard
         title="Run NCCL Microbenchmark (LLMB)"
-        description={`Launch the NCCL microbenchmark (llmb-run microbenchmark_nccl, fp8) on ${rack}. Resolves NVIS rack ids to PythonCM-managed compute nodes and computes GPU scale (nodes*4); single rack = scale 72 on GB300 NVL72.`}
+        description="Blocked: the LLMB NCCL replacement still launches MPI through SSH."
         icon={<Gauge size={20} />}
         buttonLabel="Run LLMB NCCL"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() =>
           setPendingLaunch({
@@ -284,7 +288,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
             openText("Cancel job", "No active job id for this rack (last_job missing or placeholder).", true);
             return;
           }
-          await runSyncJson("Cancel job", "/api/slurm-scancel", { rack, job_id: jid });
+          await runSyncJson("Cancel job", "/api/scheduler-cancel", { rack, job_id: jid });
         }}
       />
       <ActionCard
@@ -294,7 +298,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         buttonLabel="Drain"
         disabled={disabled}
         selectedNodes={selectedNodes}
-        onRun={() => runSyncJson("Drain nodes", "/api/slurm-drain", slurmTargetBody(rack, selectedNodes, naming))}
+        onRun={() => runSyncJson("Drain nodes", "/api/scheduler-drain", slurmTargetBody(rack, selectedNodes, naming))}
       />
       <ActionCard
         title="Undrain Nodes"
@@ -303,7 +307,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         buttonLabel="Undrain"
         disabled={disabled}
         selectedNodes={selectedNodes}
-        onRun={() => runSyncJson("Resume nodes", "/api/slurm-undrain", slurmTargetBody(rack, selectedNodes, naming))}
+        onRun={() => runSyncJson("Resume nodes", "/api/scheduler-resume", slurmTargetBody(rack, selectedNodes, naming))}
       />
 
       <LaunchOptionsDialog

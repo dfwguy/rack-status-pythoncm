@@ -128,6 +128,7 @@ _SBATCH_SUBMITTED_RE = re.compile(r"Submitted batch job\s+(\d+)", re.IGNORECASE)
 
 _UPDATABLE = frozenset({
     "phase",
+    "work_phase",
     "returncode",
     "error",
     "finished_at",
@@ -135,6 +136,10 @@ _UPDATABLE = frozenset({
     "stderr_tail",
     "command_display",
     "scheduler",
+    "scheduler_ref",
+    "started_running_at",
+    "nodes",
+    "target",
     "tasks",
     "issue_summary",
     "outcome_summary",
@@ -1069,6 +1074,7 @@ def record_activity(
     source: str = "ui",
     activity_id: str | None = None,
     tasks: list[dict[str, Any]] | None = None,
+    nodes: list[str] | None = None,
 ) -> str:
     """Persist a new validation activity. Returns ``activity_id`` (UUID)."""
     aid = (activity_id or "").strip() or str(uuid.uuid4())
@@ -1090,6 +1096,8 @@ def record_activity(
             "operator": _sanitize_operator(operator),
             "command_display": str(command_display or ""),
             "scheduler": scheduler,
+            "nodes": [str(node) for node in (nodes or []) if str(node).strip()],
+            "target": ",".join(str(node) for node in (nodes or []) if str(node).strip()),
             "dry_run": dry_run,
             "phase": "starting",
             "returncode": None,
@@ -1390,6 +1398,9 @@ def add_or_update_task(
     results_log_path: str | None = None,
     task_id: str | None = None,
     collecting_since: str | None = None,
+    returncode: int | None = None,
+    started_at: str | None = None,
+    finished_at: str | None = None,
 ) -> str:
     """Add or merge a child task on an activity. Returns ``task_id``."""
     aid = (activity_id or "").strip()
@@ -1437,6 +1448,12 @@ def add_or_update_task(
             patch["training_log_path"] = training_log_path
         if results_log_path is not None:
             patch["results_log_path"] = results_log_path
+        if returncode is not None:
+            patch["returncode"] = int(returncode)
+        if started_at is not None:
+            patch["started_at"] = started_at
+        if finished_at is not None:
+            patch["finished_at"] = finished_at
         # Empty string clears it (the task left "collecting"); None leaves it alone.
         if collecting_since is not None:
             patch["collecting_since"] = collecting_since or None

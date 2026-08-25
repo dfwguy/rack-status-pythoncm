@@ -24,6 +24,9 @@ import tempfile
 os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
+# Most historical unit tests exercise the retained compatibility implementation.
+# Production defaults fail safe to PythonCM; legacy test intent is explicit here.
+os.environ.setdefault("RACK_SCHEDULER", "slurm")
 # Force a fresh, isolated catalog store (seeded on first access -> "default" project
 # with the default demo rack-id convention). Drop any inherited rack-id template.
 os.environ.pop("NVIS_RACK_ID", None)

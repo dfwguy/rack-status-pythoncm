@@ -557,9 +557,14 @@ def build_default_project_from_env(env: dict[str, str] | None = None) -> models.
     cluster_name = (
         env.get("RACK_CLUSTER_NAME") or env.get("CLUSTER_NAME") or "Default Cluster"
     ).strip() or "Default Cluster"
+    cluster_id = (env.get("RACK_CLUSTER_ID") or "default").strip() or "default"
+    project_id = (
+        env.get("RACK_PROJECT_ID")
+        or ("nscale" if customer.casefold() == "nscale" else "default")
+    ).strip() or "default"
 
     cluster = models.Cluster(
-        id="default",
+        id=cluster_id,
         name=cluster_name,
         platform_id=_guess_platform_id(env),
         cluster_manager=(env.get("RACK_PLATFORM") or "bcm").strip().lower() or "bcm",
@@ -581,7 +586,7 @@ def build_default_project_from_env(env: dict[str, str] | None = None) -> models.
         ),
     )
     return models.Project(
-        id="default",
+        id=project_id,
         name=customer if customer != "Default" else "Default Project",
         customer=customer,
         description="Auto-created from environment on first boot.",

@@ -12,7 +12,7 @@
 /**
  * Knowledge entries for the Compute domain: the cluster overview, racks list,
  * multirack operations, the scheduler view, and the components that make up
- * those pages. Legacy ids retain their Slurm-era names for route/help compatibility.
+ * those pages. Some internal ids are retained for route/help compatibility.
  */
 import type { HelpContent } from "../types";
 
@@ -58,7 +58,7 @@ export const computeContent: HelpContent[] = [
       },
     ],
     tips: ["Use the Refresh button in the toolbar to re-pull cluster status without reloading the page."],
-    related: ["singleRack", "slurm", "statTiles", "clusterSqueueOverview"],
+    related: ["singleRack", "scheduler", "statTiles", "clusterSqueueOverview"],
     keywords: ["overview", "dashboard", "cluster", "summary", "capacity", "health", "home", "landing"],
     aria: {
       label: "Cluster overview page",
@@ -195,14 +195,14 @@ export const computeContent: HelpContent[] = [
       "Multirack operations runs the same validation/command across many selected racks at once, with aggregated progress and combined log tailing. Used for campaign-style validation of many racks.",
   },
   {
-    id: "slurm",
+    id: "scheduler",
     kind: "view",
     title: "Scheduler",
     domain: "Compute",
     routePath: "/compute/scheduler",
     summary: "Live PythonCM/direct-execution jobs and node availability.",
     description:
-      "The Scheduler page surfaces PythonCM direct-execution state: running and pending jobs plus node states (idle, allocated, drained, down). From here you can inspect jobs, tail a job's log, and understand why nodes are unavailable. Slurm-named API routes remain as compatibility aliases.",
+      "The Scheduler page surfaces PythonCM ProgramRunner state: running and pending commands plus PythonCM node states (idle, allocated, drained, down). From here you can inspect commands, tail a command log, and understand why nodes are unavailable.",
     features: [
       "Live table of running and pending jobs.",
       "Live table of node availability states and reasons.",
@@ -224,13 +224,13 @@ export const computeContent: HelpContent[] = [
       },
     ],
     related: ["squeuePanel", "sinfoPanel", "squeueDialog", "sinfoDialog", "jobStatusPanel"],
-    keywords: ["slurm", "scheduler", "squeue", "sinfo", "jobs", "queue", "nodes", "drain", "idle", "alloc"],
+    keywords: ["pythoncm", "scheduler", "jobs", "queue", "nodes", "drain", "idle", "alloc"],
     aria: {
       label: "Scheduler page",
       description: "Live PythonCM/direct-execution jobs and node availability with the ability to tail job logs.",
     },
     aiContext:
-      "The Scheduler page shows PythonCM/direct-execution jobs and node states (idle/allocated/drained/down with reasons). Users tail job logs and diagnose unavailable nodes here; legacy squeue/sinfo route names are compatibility details.",
+      "The Scheduler page shows PythonCM ProgramRunner commands and PythonCM node states (idle/allocated/drained/down with reasons). Users tail command logs and diagnose unavailable nodes here.",
   },
   {
     id: "rackTable",
@@ -366,7 +366,7 @@ export const computeContent: HelpContent[] = [
     howTo: [
       { task: "See cluster job activity", steps: ["Open the cluster overview.", "Read the active-jobs table."] },
     ],
-    related: ["dashboard", "slurm", "squeuePanel"],
+    related: ["dashboard", "scheduler", "squeuePanel"],
     keywords: ["squeue", "overview", "cluster", "jobs", "summary"],
     aria: {
       label: "Cluster active jobs overview",
@@ -387,7 +387,7 @@ export const computeContent: HelpContent[] = [
     howTo: [
       { task: "Tail a job log", steps: ["Find the job row.", "Use the tail/log action to stream its output."] },
     ],
-    related: ["slurm", "squeueDialog", "sinfoPanel"],
+    related: ["scheduler", "squeueDialog", "sinfoPanel"],
     keywords: ["squeue", "jobs", "queue", "panel", "log", "tail"],
     aria: {
       label: "Active jobs panel",
@@ -408,7 +408,7 @@ export const computeContent: HelpContent[] = [
     howTo: [
       { task: "Find unavailable nodes", steps: ["Open Node availability.", "Look for drain/down states and read the reason."] },
     ],
-    related: ["slurm", "sinfoDialog", "squeuePanel"],
+    related: ["scheduler", "sinfoDialog", "squeuePanel"],
     keywords: ["sinfo", "nodes", "state", "drain", "down", "idle", "alloc", "reason"],
     aria: {
       label: "Node availability panel",
@@ -429,7 +429,7 @@ export const computeContent: HelpContent[] = [
     howTo: [
       { task: "Open the active-jobs dialog", steps: ["Click Active jobs in the toolbar.", "Review jobs in the modal."] },
     ],
-    related: ["squeuePanel", "slurm", "toolbar"],
+    related: ["squeuePanel", "scheduler", "toolbar"],
     keywords: ["squeue", "dialog", "modal", "toolbar", "jobs"],
     aria: {
       label: "Active jobs dialog",
@@ -449,7 +449,7 @@ export const computeContent: HelpContent[] = [
     howTo: [
       { task: "Open the node-availability dialog", steps: ["Click Node availability in the toolbar.", "Review node states in the modal."] },
     ],
-    related: ["sinfoPanel", "slurm", "toolbar"],
+    related: ["sinfoPanel", "scheduler", "toolbar"],
     keywords: ["sinfo", "dialog", "modal", "toolbar", "nodes"],
     aria: {
       label: "Node availability dialog",

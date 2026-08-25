@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
-"""Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct.
+"""Read-only scheduler views with historical Slurm URL aliases.
 
 Three views of the same scheduler, kept together because they share the module-load semantics and
 the timeout knob, and because the interesting one only makes sense next to the others:
@@ -17,10 +17,10 @@ the timeout knob, and because the interesting one only makes sense next to the o
 it" gap. The Scheduler panel needs finished jobs (success *and* failure) to still be listed with
 their log, so it reads the accounting DB instead.
 
-Every command goes through the platform provider's own binary and ``host_exec.run_slurm_on_host``,
-which applies the ``module load slurm`` dance unless RACK_SLURM_SKIP_MODULE_LOAD says otherwise. A
-timeout returns ok=false with the elapsed budget rather than raising: a slow controller is a
-reportable condition, not a 500.
+The provider-neutral URLs return PythonCM registry and PhysicalNode state on Nscale. Historical
+Slurm-named aliases are rejected by the Nscale request guard before these handlers run. Other
+deployments retain the original provider behavior. A dependency timeout is reportable state,
+not a 500.
 """
 from __future__ import annotations
 
@@ -36,9 +36,10 @@ _logger = logging.getLogger(__name__)
 bp = Blueprint("slurm_queries", __name__, url_prefix="")
 
 
+@bp.route("/api/scheduler-jobs", methods=["GET"])
 @bp.route("/api/slurm-squeue", methods=["GET"])
-def api_slurm_squeue():
-    """Run ``module load slurm && squeue`` (unless ``RACK_SLURM_SKIP_MODULE_LOAD``) for the dashboard host."""
+def api_scheduler_jobs():
+    """Return active commands from the selected scheduler provider."""
     if os.environ.get("RACK_SLURM_SQUEUE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "squeue disabled (RACK_SLURM_SQUEUE_DISABLED)"}), 403
     try:
@@ -48,9 +49,10 @@ def api_slurm_squeue():
     return jsonify(result)
 
 
+@bp.route("/api/scheduler-history", methods=["GET"])
 @bp.route("/api/slurm-sacct-recent", methods=["GET"])
-def api_slurm_sacct_recent():
-    """Recent finished Slurm jobs via ``sacct`` — query ``limit`` (1-50, default 10) and ``state`` (default COMPLETED)."""
+def api_scheduler_history():
+    """Return recent terminal commands from the selected scheduler provider."""
     if os.environ.get("RACK_SLURM_SACCT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "sacct disabled (RACK_SLURM_SACCT_DISABLED)", "jobs": []}), 403
     try:
@@ -66,9 +68,10 @@ def api_slurm_sacct_recent():
     return jsonify(result)
 
 
+@bp.route("/api/scheduler-node-reasons", methods=["GET"])
 @bp.route("/api/slurm-sinfo-r", methods=["GET"])
-def api_slurm_sinfo_r():
-    """Run ``module load slurm && sinfo -R --long`` (unless ``RACK_SLURM_SKIP_MODULE_LOAD``) for the dashboard host."""
+def api_scheduler_node_reasons():
+    """Return unavailable nodes and reasons from the selected scheduler provider."""
     if os.environ.get("RACK_SLURM_SINFO_R_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "sinfo -R --long disabled (RACK_SLURM_SINFO_R_DISABLED)"}), 403
     try:

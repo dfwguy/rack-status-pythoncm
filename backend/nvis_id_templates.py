@@ -431,12 +431,19 @@ def multirack_rack_count(name: str) -> int | None:
 
 
 def job_id_from_log_basename(name: str) -> str | None:
-    """Slurm job id from a validation log basename, or ``None``.
+    """Scheduler reference from a validation log basename, or ``None``.
 
     Llama stdout is checked first: ``…NEMO-LLAMA3_8B-1N-<host>-<jid>.txt`` has no ``N-<jid>``
     tail, and a hostname ending in ``N`` would otherwise make the generic pattern ambiguous.
     """
     base = _basename_only(name)
+    uuid_ref = (
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+        r"[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+    )
+    mu = re.search(rf"(?:N-|[_-])({uuid_ref})\.(?:txt|out)$", base, re.IGNORECASE)
+    if mu:
+        return mu.group(1)
     m = re.search(r"NEMO-LLAMA3_8B-1N-.+-(\d+)\.txt$", base, re.IGNORECASE)
     if m:
         return m.group(1)

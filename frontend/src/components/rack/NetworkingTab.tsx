@@ -25,7 +25,7 @@ interface NetworkingTabProps {
   naming?: NvisNamingSchema;
 }
 
-export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }: NetworkingTabProps) {
+export function NetworkingTab({ rack, logDir, selectedNodes, naming }: NetworkingTabProps) {
   const { runAsyncReset, openStream, openText } = useRackCommands();
 
   const rackLogBody = () => attachLogDir({ rack }, logDir);
@@ -56,46 +56,46 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
         rack={rack}
         selectedNodes={selectedNodes}
         naming={naming}
-        disabled={disabled}
+        disabled
         kind="network"
         title="NVLink / Network Deep Audit"
-        description={`Deep NVLink fabric and forced GPU data-path test plus IMEX, IB rail/rate/error counters and mlx5 bond checks on ${selectedNodes.size} selected node(s). Confirmed failures are commented and drained through the active scheduler automatically.`}
+        description="Blocked: the shipped network deep-audit workflow is not a reviewed structured ProgramRunner workflow."
         icon={ShieldCheck}
       />
       <ActionCard
         title="NVSwitch Fix"
-        description={`Run NVSwitch recovery (NMXC cycle) for ${rack}.`}
+        description="Blocked: the installed NVSwitch recovery recipe is not ProgramRunner-only."
         icon={<Network size={20} />}
         buttonLabel="Fix"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("NVSwitch fix", "nmxc", "/api/nvswitch-fix-async", rackLogBody())}
       />
       <ActionCard
         title="NVSwitch SDN Reset"
-        description={`Reset NVSwitch SDN controller for ${rack}.`}
+        description="Blocked: the installed SDN reset recipe is not ProgramRunner-only."
         icon={<RotateCcw size={20} />}
         buttonLabel="SDN Reset"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("NVSwitch SDN reset", "nmxc", "/api/nvswitch-sdn-reset-async", rackLogBody())}
       />
       <ActionCard
         title="NVSwitch System Reset"
-        description={`Full NVLink system reset for ${rack} (first NVSwitch host from inventory).`}
+        description="Blocked: the installed NVLink system reset recipe is not ProgramRunner-only."
         icon={<Radio size={20} />}
         buttonLabel="System Reset"
         destructive
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={runSystemReset}
       />
       <ActionCard
         title="NVSwitch Audit"
-        description={`Stream live NVSwitch audit for ${rack} (check-only).`}
+        description="Blocked: the installed NVSwitch audit recipe contains legacy fan-out."
         icon={<ShieldCheck size={20} />}
         buttonLabel="Audit"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() =>
           openStream("NVSwitch audit (stream)", "/api/run-nvswitch-audit-stream", { ...rackLogBody(), fix: false })
@@ -103,19 +103,19 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
       />
       <ActionCard
         title="NVSwitch Check"
-        description={`Async NVSwitch health check for ${rack}.`}
+        description="Blocked: the installed NVSwitch check recipe is not ProgramRunner-only."
         icon={<ScanSearch size={20} />}
         buttonLabel="Check"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("NVSwitch check", "nmxc", "/api/nvswitch-check-async", rackLogBody())}
       />
       <ActionCard
         title="NVLMapper"
-        description={`Run NVLMapper topology analysis on ${rack}.`}
+        description="Blocked: NVLMapper has no validated ProgramRunner-only form."
         icon={<Map size={20} />}
         buttonLabel="Run NVLMapper"
-        disabled={disabled}
+        disabled
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("NVLMapper", "nmxc", "/api/nvlmapper-async", { rack })}
       />

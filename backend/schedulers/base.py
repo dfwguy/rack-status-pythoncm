@@ -45,6 +45,8 @@ class JobSpec:
     reservation: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     extra_args: list[str] = field(default_factory=list)
+    launch_mode: str = "fanout"          # fanout, first target (leader), or BCM head
+    execution_user: str | None = None      # native remote account (PythonCM ProgramRunner)
     timeout: int = 1800                 # default wait/exec budget (seconds)
 
 
@@ -62,6 +64,7 @@ class JobResult:
     stdout: str = ""
     stderr: str = ""
     job_id: str | None = None
+    node_results: list[dict[str, object]] = field(default_factory=list)
 
     @property
     def success(self) -> bool:
@@ -91,4 +94,10 @@ class Scheduler(ABC):
 
     def run(self, spec: JobSpec, *, poll_interval: int = 5) -> JobResult:
         """Convenience: submit + wait using the spec's timeout."""
-        return self.wait(self.submit(spec), timeout=spec.timeout, poll_interval=poll_interval)
+        handle = self.submit(spec)
+        result = self.wait(handle, timeout=spec.timeout, poll_interval=poll_interval)
+        if result.state == "TIMEOUT":
+            # Waiting expiring is not permission to leave native work running.
+            # Providers implement idempotent/best-effort cancellation semantics.
+            self.cancel(handle)
+        return result
