@@ -56,12 +56,19 @@ it to +0.37 ms. Any future per-request enrichment should assume the same trap.
 ## Phase 2 — identity, and why groups belong here
 
 Requirements: **[`.plc/briefs/auth-identity-brief.md`](../.plc/briefs/auth-identity-brief.md)** —
-37 requirements, 42 acceptance criteria, drafted 2026-08-25. Four decisions were taken at kickoff and
-two of them reverse the recommendation, so they are recorded in that brief rather than here: SRP is
-**kept** rather than replaced by an argon2id verifier over TLS; JWTs are used for the browser too but
-transported in an `HttpOnly` cookie rather than `localStorage`; OIDC is **in** this phase and needs no
-new backend dependency beyond the PyJWT that our own tokens require; groups are flat with user-level
-denial winning.
+42 requirements, 48 acceptance criteria, drafted 2026-08-25. Decisions taken at kickoff, recorded in
+that brief rather than here: SRP is **kept** rather than replaced by an argon2id verifier over TLS;
+JWTs are used for the browser too but transported in an `HttpOnly` cookie rather than `localStorage`;
+OIDC is **in** this phase and needs no new backend dependency beyond the PyJWT our own tokens
+require; groups are flat with user-level denial winning.
+
+> ⚠️ **This phase removes the existing authentication methods, it does not extend them.** Shared-token
+> and PAM login, and the five `RACK_WEB_AUTH_*` / `RACK_WEB_PAM_*` variables, cease to exist. Every
+> deployment in service authenticates by shared token today, so **the upgrade is a credential
+> change**: the same start that removes the legacy path bootstraps an `admin` user and prints a
+> generated password once (FR-10b). Read it from the container's startup output, log in, change it,
+> create real users. This needs to reach the deployment documentation before the release, not after.
+> Full rationale and blast radius: the brief's *Breaking change* section.
 
 The identity store owns **users, groups, and membership**. Groups are not a Phase 3 concern despite
 being consumed by policy, for a scheduling reason: adding group membership to an SRP-backed user store

@@ -68,6 +68,7 @@ release-gate evidence.
 |---|---|---|---|
 | FR-1 | The product shall maintain a local identity store holding user records, group records and group membership, persisted in the deployment's own storage and surviving process and container restart. | user request; scope doc | Groups are in this phase deliberately: adding membership to a store that already holds credentials is a migration with an authentication outage in it |
 | FR-2 | A user record shall carry a stable immutable identifier distinct from its login name, so that renaming a user does not orphan the audit trail or any policy attached to it. | design necessity | the audit trail is append-only; a renamed principal must remain resolvable |
+| FR-2a | Every login identifier shall be unique across the identity store, and a create or rename that would collide shall be refused. Comparison shall be case-insensitive, so `Admin` and `admin` cannot both exist. | feature-lead direction 2026-08-25 ("all logins must be unique user id") | uniqueness is what makes a login name usable as the thing an operator types and the audit trail names. Case-folding is included because two accounts differing only in case are indistinguishable to a human reading an audit event |
 | FR-3 | A local credential shall be persisted only as an SRP salt and verifier. No other representation of the password shall be written to the store. | user request ("secure, reliable and non reversible") | reworded from "no recoverable password material" — *recoverable* is a claim about cryptography that no test can settle. What a test **can** settle is which fields exist and that the plaintext appears in none of them |
 | FR-4 | Local password authentication shall use the **SRP-6a** protocol, such that the plaintext password does not appear in any HTTP request body, header, query string or URL sent to the server. | user request; feature-lead decision 2026-08-25 (reaffirmed against the alternative of an argon2id verifier over TLS) | reworded from "never transmitted in any form": a *derived* value is a form of the password, so the original phrasing was unfalsifiable. Naming the four observation points makes it testable |
 | FR-4c | The product shall reject any JWT whose header names an algorithm other than the one the deployment is configured to use, and shall never accept `alg: none`. | **gap found in self-review 2026-08-25** — the draft required tokens to be "signed" without constraining the algorithm | algorithm confusion is the classic JWT break: a token signed with `none`, or an RS256 verifier tricked into HS256 with the public key as the secret. Without this, FR-5's "signed" is satisfiable by an attacker |
@@ -82,10 +83,11 @@ release-gate evidence.
 | FR-7a | A federated subject shall be resolved to a local user record, so that groups, policy attachment and the audit trail work identically for local and federated principals. | design necessity | otherwise Phase 3 has two principal models |
 | FR-8 | Groups shall be **flat**: a group shall contain users and shall not contain another group. | feature-lead decision 2026-08-25 | removes transitive resolution and the cycle guard it would need; revisit only with a stated need |
 | FR-9 | Where a user-level and a group-level grant conflict, an explicit **user-level denial shall take precedence** over a group-level permission. | feature-lead decision 2026-08-25 | one sentence an operator can hold in their head; Phase 3's evaluator binds to it |
-| FR-10 | On first boot with no existing user records, the product shall create a single administrative user with a **randomly generated password**, emit that password once through the deployment's own startup output, and store only its verifier. | user request | the password is never recoverable afterwards, by construction (FR-3) |
+| FR-10 | On first boot with no existing user records, the product shall create a single administrative user with the login identifier **`admin`** and a **randomly generated password**, emit that password once through the deployment's own startup output, and store only its verifier. | user request; login name fixed by feature-lead direction 2026-08-25 | the password is never recoverable afterwards, by construction (FR-3) |
+| FR-10b | The bootstrap in FR-10 shall run on **any** start that finds an empty identity store, including the first start after upgrading a deployment that previously authenticated by shared token or PAM. | consequence of FR-18; feature-lead direction 2026-08-25 | this is the requirement that prevents the upgrade from being a lockout: the legacy credential stops working in the same release that removes it, so the replacement must appear in the same start |
 | FR-10a | The generated credential shall be marked as requiring a change on first use. | standard practice | a bootstrap credential that lives forever is a shared password |
 | FR-11 | The **only** path to creating a user shall be an authenticated, authorised request. There shall be no self-registration and no unauthenticated provisioning endpoint. | user request | stated explicitly because its absence is the vulnerability |
-| FR-12 | Once the identity store holds at least one user, authentication shall not be bypassable by any configuration input. Specifically, `RACK_WEB_AUTH_DISABLED`, `RACK_WEB_AUTH_TOKEN` and the PAM fallback shall not grant access to a populated store, and no recovery code or reset endpoint shall exist. Recovery from losing every administrative credential shall be by redeploying the store. | user request | the original phrasing was an untestable negative universal ("no backdoor"). Enumerating the three existing bypasses makes it testable, and they are the three that actually exist |
+| FR-12 | Authentication shall not be bypassable by any configuration input. No environment variable shall grant access, disable the gate, or carry a credential. No recovery code or credential-reset endpoint shall exist. Recovery from losing every administrative credential shall be by redeploying the identity store. | user request; strengthened by FR-18 | previously scoped to "a populated store", which left the empty-store case open. With the legacy methods removed there is no configuration path to authenticate at all, so the requirement is now unconditional |
 | FR-13 | The product shall provide create, read, update, disable and delete operations for **users**, each as a distinctly named audited action. | user request; scope doc | split from the original combined requirement: one requirement covering three entities × four operations gave a single pass/fail for twelve claims |
 | FR-13a | The product shall provide create, read, update and delete operations for **groups**, each as a distinctly named audited action. | as above | |
 | FR-13b | The product shall provide add-member and remove-member operations for **group membership**, each as a distinctly named audited action. | as above | membership editing is the surface that makes groups worth having |
@@ -93,7 +95,10 @@ release-gate evidence.
 | FR-15 | The audit event's `principal` shall be the authenticated subject's stable identifier and `auth_method` shall name the mechanism used (`srp`, `oidc`, `token`, `pam`), replacing the current constant `anonymous`/`none`. | Phase 1 FR-5; the reserved seam | fills `session["rack_web_user"]`, which is read today and never written |
 | FR-16 | Operator attribution recorded against durable artifacts — rack lock claims and validation activities — shall be the authenticated principal, and shall not be derived from any client-supplied header. | the 46 `operator_from_request()` call sites | this is what turns the activity ledger into acceptance evidence. The trailing "a display name may remain" was dropped: *may* is not a requirement, and it made the clause untestable. Whether a display label survives is now open question 2 |
 | FR-17 | The product shall provide operator surfaces for user administration and for group and membership administration, built on the existing frontend contexts and the Kaizen design system. | scope doc "admin UI"; REQ-44 | `UsersView`, `GroupsView` |
-| FR-18 | Existing deployments shall continue to authenticate without an identity store configured, so that upgrading does not lock an operator out. | REQ-41 backward compatibility | the current token/PAM modes remain until an identity store exists |
+| FR-18 | The legacy authentication methods shall be **removed**, not deprecated. Specifically: the shared-token mode and its `RACK_WEB_AUTH_TOKEN`, the PAM mode and its `RACK_WEB_AUTH_MODE` / `RACK_WEB_AUTH_USER` / `RACK_WEB_PAM_SERVICE` / `RACK_WEB_PAM_HELPER_PYTHON`, and the vendored PAM bindings, shall no longer exist as authentication paths. Username-and-password against the identity store, or federation, shall be the only ways in. | feature-lead direction 2026-08-25 | **This reverses the previous FR-18, which required backward compatibility.** Recorded as a deliberate, accepted break of SRD REQ-41 — see *Breaking change* below. The live Nscale TX override currently carries `RACK_WEB_AUTH_TOKEN=nvis1234!`, a shared password in a committed deployment file, which is the concrete case for removal rather than deprecation |
+| FR-18a | The `RACK_WEB_AUTH_DISABLED` switch shall be removed as a production capability. Any remaining ability to run without authentication shall be confined to demonstration mode and to the test suite, shall be unavailable when an identity store exists, and shall not be reachable by setting an environment variable on a normal deployment. | consequence of FR-12; see open question 6 | separated from FR-18 because this one is a *switch*, not a credential, and 67 test files plus local demo development depend on it. Deleting it outright without a replacement seam breaks the suite; leaving it is an authentication bypass. The mechanism is a design question, the constraint is not |
+| FR-19 | The login screen shall offer local username-and-password entry and, when federation is configured, a clearly labelled button per configured provider — initially **NVIDIA SSO**. | feature-lead direction 2026-08-25 | the button is the visible half of FR-7; NVIDIA SSO is the first provider, to be configured against Entra ID |
+| FR-19a | A configured-but-unreachable provider shall leave local login usable, and shall say that the provider is unavailable rather than failing silently or blocking the form. | assumption 6; product's own absent-vs-zero rule | an IdP outage must not be an outage of the product |
 
 ## Proposed Non-Functional Requirements
 
@@ -147,7 +152,13 @@ Every requirement above has at least one criterion.
 | AC-25 | FR-15 | An audited request from a logged-in user records that user's stable id and the mechanism used, not `anonymous`/`none`. | automated test | the direct fix for Phase 1's placeholder |
 | AC-26 | FR-16 | A rack lock claim and a validation activity record the authenticated principal, and a spoofed `X-Rack-Operator` header does not change it. | automated test | mirrors Phase 1's `test_principal_never_from_header` |
 | AC-27 | FR-17 | The user and group views render, and their mutating calls carry declared actions. | automated test | frontend render tests plus the action gate |
-| AC-28 | FR-18 | With no identity store configured, the existing token and PAM logins still succeed and the current auth-gate tests pass unchanged. | automated test | `test_web_auth_gate.py` must not need editing |
+| AC-28 | FR-18 | Setting `RACK_WEB_AUTH_TOKEN` grants no access, and neither token nor PAM appears as a selectable authentication mode. | automated test | the inverse of the criterion this replaces. `test_web_auth_gate.py` **will** need rewriting, which is the point |
+| AC-28a | FR-18 | No module under `backend/` reads `RACK_WEB_AUTH_TOKEN`, `RACK_WEB_AUTH_MODE`, `RACK_WEB_AUTH_USER` or `RACK_WEB_PAM_SERVICE`, and the vendored PAM modules are gone. | automated test | a source-level assertion, like the existing no-deferred-`app`-lookup meta-test; a removed feature that still reads its env var has not been removed |
+| AC-28b | FR-18a | With an identity store present, no environment variable disables the gate; an unauthenticated request to a protected route is refused. | automated test | |
+| AC-28c | FR-10b | Starting against a store-less deployment that previously used a shared token creates the `admin` user and emits a password, so the upgrade is not a lockout. | automated test | the migration case; asserts the ordering that FR-10b exists to guarantee |
+| AC-29a | FR-2a | Creating a second user whose login differs only in case is refused, and so is renaming into a collision. | automated test | two cases; case-folding is the part a naive uniqueness check misses |
+| AC-29b | FR-19 | The login screen renders a local username and password form, and renders one button per configured provider. | automated test | frontend render test with zero and with one provider configured |
+| AC-29c | FR-19a | With a provider configured but unreachable, the local form still submits and the screen states the provider is unavailable. | automated test | |
 | AC-29 | NFR-1 | Verification uses a constant-time comparison, and unknown-user and known-user timings are within a stated tolerance. | automated test | |
 | AC-30 | NFR-2 | Login p95 over 100 sequential logins is ≤ 500 ms, measured server-side from first login request to token issue, in demo mode. | performance test | skipped when `CI` is set, like Phase 1's TC-34 — a p95 on a shared runner is not a measurement. Verified locally and the figure recorded in the evidence document per REQ-47 |
 | AC-31 | NFR-3 | The revocation check adds ≤ 5 ms at p95 to an authorised request. | performance test | same environment and skip rule as AC-30 |
@@ -191,6 +202,44 @@ browser side can use `oidc-react` or MSAL. Air-gapped sites simply leave it disa
 **Groups are flat and user-level denial wins.** Both chosen for reviewability: no transitive
 resolution means no cycle guard, and the precedence rule fits in a sentence. Phase 3's evaluator
 binds to FR-9, so changing it later is an evaluator change, not a schema change.
+
+## Breaking change: the legacy authentication methods are removed
+
+FR-18 reverses this brief's own earlier FR-18, which required backward compatibility. Recorded here
+rather than buried in a table cell, because it is a deliberate, accepted break of **SRD REQ-41**
+(backward-compatible identifiers and compatibility aliases) and it affects every deployment in
+service.
+
+**Why removal rather than deprecation.** A shared token is not a weaker identity, it is the absence
+of one: it cannot name who acted, so the audit trail Phase 1 built stays anonymous for as long as the
+token path exists. Keeping it alongside the identity store would mean the product has one door that
+records who came through and another that does not — and the second door is the one an operator uses
+when the first is inconvenient. The concrete case is already in the tree:
+`deploy/nscale-tx.override.consolidated.yml` line 84 carries `RACK_WEB_AUTH_TOKEN=nvis1234!`, a
+shared password committed to the repository.
+
+**What breaks, specifically.** All four deployments — Mayo Clinic, Nscale TX, Firmus MEL01, Boston
+Markley — authenticate by shared token today. On upgrade, the token stops working. **FR-10b is the
+requirement that stops this being a lockout**: the same start that removes the legacy path
+bootstraps `admin` with a generated password and prints it once. The operational sequence therefore
+becomes: upgrade, read the password from the container's startup output, log in as `admin`, change
+it, create real users. That sequence needs to be in the deployment documentation before this ships,
+not after.
+
+**The test suite is the larger mechanical cost.** 67 test files reference `RACK_WEB_AUTH*`, and
+`backend/tests/conftest.py` sets `RACK_WEB_AUTH_DISABLED=1` suite-wide — which is why almost none of
+the 2,339 tests exercise the gate today. FR-18a keeps the constraint (no production bypass) while
+leaving the mechanism to design. The honest options, neither free:
+
+- A session-injecting fixture, so tests authenticate as a real user instead of disabling
+  authentication. Strictly better, because the suite would then exercise the gate rather than
+  bypass it, and it is the larger change.
+- A bypass confined to demonstration mode and unavailable once a store exists. Cheaper, and it keeps
+  a bypass in the product.
+
+**Two documents already contradict this and must be updated when it lands**: SRD **REQ-27** states
+authentication supports "PAM locally and a shared token for container deployments", and
+`docs/ENVIRONMENT.md` documents all five removed variables.
 
 ## Testability self-review, 2026-08-25
 
@@ -241,9 +290,19 @@ no criterion referencing a requirement that does not exist.** Checked mechanical
 4. **Does an OIDC-federated user need a local record before first login, or is one created on the
    fly?** Just-in-time provisioning is convenient and is also an unauthenticated path to creating a
    user record, which sits uneasily with FR-11.
-5. **Is `RACK_WEB_AUTH_DISABLED` still permitted once a store exists?** The whole test suite sets it
-   (`conftest.py`), so it cannot simply be removed, but FR-12 argues it must not bypass a populated
-   store.
+5. ~~Is `RACK_WEB_AUTH_DISABLED` still permitted once a store exists?~~ **Answered:** no. FR-12 is now
+   unconditional and FR-18a confines any no-auth capability to demo mode and the test suite.
+6. **By what mechanism does the test suite authenticate?** FR-18a states the constraint and leaves
+   the mechanism open, because it is a real trade: a session-injecting fixture makes 2,339 tests
+   exercise the gate instead of bypassing it, and is the larger change; a demo-mode-only bypass is
+   cheaper and keeps a bypass in the product. This is the first design decision Phase 2 owes an
+   answer to.
+7. **Which OIDC provider values does "NVIDIA SSO" resolve to?** FR-19 names the button; the tenant,
+   client id, redirect URI and the claim that carries the login identifier are deployment
+   configuration, and Entra ID specifics are not settled here.
+8. **Does the operator's login identifier come from the IdP, or is it mapped?** FR-7a requires a
+   federated subject to resolve to a local record; whether `admin@nvidia.com` becomes the login
+   identifier or maps to one affects FR-2a's uniqueness rule.
 
 ## Explicit non-goals for this phase
 
