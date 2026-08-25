@@ -18,3 +18,20 @@ reportlab>=5.0,<6
 # Optional: MCP server facade (agent/mcp_server.py) for external agents (Cursor/Claude).
 # Only needed to run `python -m agent.mcp_server`; the in-app agent loop does not require it.
 mcp>=1.2,<2
+# --- Identity (auth programme Phase 2) -------------------------------------------------------
+# SRP-6a for local password authentication: the password never reaches the server, so it cannot
+# appear in a proxy, a memory dump or a debug log. Chosen over an argon2id verifier deliberately
+# (brief FR-4); both were on the table and TLS covers a different threat.
+#
+# Ships as `py3-none-any` and resolves to the pure-Python backend (`srp._pysrp`) — no compiler and
+# no OpenSSL ctypes binding, which is what makes it installable at an air-gapped site (FR-4a).
+#
+# ⚠️ ITS DEFAULTS ARE NOT SAFE. `hash_alg=0` is SHA-1 and `salt_len=4` is a 32-bit salt, so a
+# reasonable-looking `create_salted_verification_key(user, pw)` enrols a SHA-1 credential. Always
+# pass hash_alg/ng_type/salt_len explicitly — brief FR-4e, enforced by AC-4c and AC-4d.
+srp>=1.0.22,<2
+# JWT id/access tokens (FR-5). Also validates a federated provider's ID token, which is why OIDC
+# needs no `authlib` — an ID token is a JWT and PyJWT plus a JWKS fetch covers it.
+# Verification must pin `algorithms=[...]`: PyJWT otherwise trusts the token's own `alg` header,
+# which is the alg:none and RS256->HS256 confusion attack (FR-4c).
+PyJWT>=2.13,<3
