@@ -82,6 +82,8 @@ release-gate evidence.
 | FR-4b | A failed authentication shall not reveal whether the login name exists. | standard practice | the SRP exchange must proceed with a synthetic salt for an unknown user, at comparable cost |
 | FR-5 | On successful authentication the product shall issue a **JWT id token** (who the subject is) and a **JWT access token** (what the session may do), signed by a deployment-held key. | user request | id/access split as specified |
 | FR-5a | Browser-delivered tokens shall be transported in a cookie marked `HttpOnly`, `Secure` when TLS is configured, and `SameSite=Lax` or stricter — **not** in `localStorage` or `sessionStorage`. | design decision 2026-08-25, honouring "JWT everywhere" without an XSS token-theft path | script-readable storage means one XSS is one stolen session; the cookie keeps JWT semantics and removes that path |
+| FR-5c | Every token shall carry its **type** (`id`, `access`, `refresh`), and verification shall require the caller to state the type it expects, refusing any other. | **gap found during implementation 2026-08-25** — FR-5 named the id/access split without requiring it be *enforced* | JWT libraries have no notion of token type, so nothing distinguishes our three tokens by default. The refresh token lives 48x longer than the access token, so presenting one as the other would authorise requests for half a day; the reverse would let an access token mint fresh ones forever. The expected type therefore has **no default parameter** — type confusion should need a wrong argument, not an omitted one |
+| FR-6a | If no revocation check is registered, the product shall refuse **every** token rather than treat the absence as "nothing is revoked". | **design decision during implementation 2026-08-25** | fail-closed, because FR-6's invariant is *grants may be stale, denials may not*. Phase 1 supplies the precedent directly: the config materialise hook, when unregistered, produced wrong values on some clusters and an error on none, and needed `test_config_materialize_hook.py` purely to assert the wire existed. Here the same absence is a loud total refusal, caught by the first request rather than by an incident. Minting deliberately stays available so first-boot bootstrap (FR-10) can run before the revocation store is wired |
 | FR-5b | Access tokens shall be short-lived and renewable without re-entering a password, and the renewal path shall itself be revocable. | FR-6 depends on it | short TTL is what bounds the staleness FR-6 permits |
 | FR-6 | Before honouring any token-derived grant, the product shall consult a revocation record for the subject. A revocation shall take effect within **10 seconds**; a withdrawn *grant* may lag by up to the access-token lifetime. | scope doc; `docs/PHASE3_POLICY_ENGINE_SPIKE.md` §5b | "within seconds" was unquantified and therefore untestable. 10 s is the stated bound; it also caps any cache TTL on the revocation record. The invariant is *grants may be stale, denials may not* — a stateless JWT cannot be withdrawn before expiry, so this check is what makes JWT acceptable |
 | FR-7 | The product shall support **OIDC federation** as an alternative authentication method, configurable per deployment and disabled by default, validating the provider's ID token before establishing a session. | user request; feature-lead decision 2026-08-25 (in Phase 2, not deferred) | absence of an IdP must not affect local login (assumption 6) |
@@ -138,6 +140,9 @@ Every requirement above has at least one criterion.
 | AC-4 | FR-4 | Across a successful login, the plaintext password appears in no request body, header, query string or path reaching the server. | automated test | capture every request the client makes during login; assert the password string is absent from all four locations |
 | AC-4a | FR-4c | A token with `alg: none` is refused, and a token signed with an algorithm other than the configured one is refused. | automated test | two negative cases; the second is the RS256→HS256 confusion attack |
 | AC-4b | FR-4d | A token with a wrong issuer, a wrong audience, or past expiry is refused, for tokens the product minted itself. | automated test | three negative cases — the mirror of AC-14, which only covered federated tokens |
+| AC-5c | FR-5c | Each of the six wrong (token type, expected type) pairs is refused, and `verify` cannot be called without naming an expected type. | automated test | all six, because the two dangerous directions are opposite: refresh-as-access buys 12 hours of authority, access-as-refresh buys perpetual renewal |
+| AC-6a | FR-6a | With no checker registered, verification of a validly signed, unexpired token is refused; the checker is never invoked for a token that failed signature or claim validation. | automated test | the second clause matters as much: a revocation checker handed attacker-controlled claims from an unverified token is a new attack surface, not a control |
+| AC-4j | FR-4d | A token minted under one deployment secret is refused under another, and a rotated secret invalidates already-issued tokens without a restart. | automated test | pins what *actually* separates deployments — the derived key — since `iss` and `aud` are product constants and identical everywhere |
 | AC-4h | FR-4e | The configured group is ≥ 4096 bits, its modulus equals RFC 5054 Appendix A's 4096-bit prime, its generator is 5, and `(N-1)/2` is prime. | automated test | the last clause is the safe-prime property, and it is the one a substituted or hand-generated modulus would fail silently. Costs ~2 s of Miller-Rabin and earns it |
 | AC-4i | FR-4g | The SRP-begin route refuses a caller exceeding its configured rate, and the refusal does not perform the modular exponentiation. | automated test | shedding *before* the expensive work is the whole point; a limiter that rejects after computing has not removed the amplification |
 | AC-4f | FR-4f | The active backend's RFC-5054 padding flag reads enabled; a deliberately mismatched exchange is refused; and switching the mode leaves an enrolled verifier byte-identical. | automated test | three separate claims: the pin holds, the pin matters, and the pin needed no credential migration |
@@ -526,6 +531,23 @@ signatures.
 The cookie replaces `session["rack_web_auth"]` as the source of the gate's verdict, and login writes
 `session["rack_web_user"]` — the seam Phase 1 reserved and never filled. That single line is what
 turns every audit event from `principal: anonymous` into a named subject (FR-15).
+
+**Implementation found two silent holes in PyJWT 2.13's defaults**, both measured rather than
+assumed, and neither of which raises or looks wrong at the call site:
+
+- **`iss` is not validated at all** unless `issuer=` is passed. The claim can name anyone.
+- **A token with no `exp` claim is accepted**, and never expires.
+
+So verification passes `issuer=` and `audience=` *and* an explicit `require` list naming all seven
+claims. `aud` is the one PyJWT does check unprompted, and pinning `algorithms=[...]` does correctly
+refuse `alg: none` and an HS512→HS256 substitution — the pin works, it simply has to be written.
+
+One framing correction worth keeping: **`iss` and `aud` do not separate deployments.** They are
+product constants, identical on every install. The *derived key* is the boundary, since each
+deployment has its own secret — verified by minting under one secret and failing verification under
+another. Validating `iss`/`aud` buys something narrower and still worth having: it stops a token
+minted for a different audience, most concretely a federated provider's ID token (also a JWT), being
+presented as one of ours.
 
 ### Decision 4 — revocation is a cached read, sized by Phase 1's lesson
 
