@@ -21,6 +21,7 @@ Revision History
 | Date | Author | Summary of Change |
 | :---- | :---- | :---- |
 | Aug. 24, 2026 | Agentic PLC | Initial reconstruction from the shipped suite: 108 backend test files (2,294 tests), 52 frontend test files, measured coverage, and the `auth-audit-logging` test plan's 40 cases. Skill: plc-test-plan-reconstruction; Timestamp: 2026-08-24T16:00Z; Input ref: NSPECT-S57Q-EI19. Human decision: pending; Reviewed by: pending |
+| Aug. 26, 2026 | Rafael M. Koike & Cursor Agent ("Ada") | Refreshed metrics for Phase 2 identity: 115 backend test files (2,503 tests, 164 of them covering `backend/identity/`), 65.7% coverage over 26,883 statements, and the runtime cost of 4096-bit SRP. Recorded that three cases are now measurement-only and skip under `CI`, and noted the two Phase 2 test techniques worth reusing — asserting a cache actually *hits* before asserting it cannot go stale, and running a sub-second boundary many times because that class of bug presents as flakiness rather than failure. |
 
 ---
 
@@ -103,14 +104,14 @@ operators against real deployments, recorded as evidence rather than as automate
 
 | Metric | Value (Aug. 24, 2026) |
 | :---- | :---- |
-| Backend test files | 109 |
-| Backend tests | 2,294 passing, 17 skipped |
+| Backend test files | 115 |
+| Backend tests | 2,503 passing, 17 skipped (of which 164 cover `backend/identity/`) |
 | Frontend test files | 52 |
 | Frontend coverage | 50.61% (reported by the `frontend-test` job; no per-file floor — gap G-8) |
-| Backend statement+branch coverage | 65.0% from a clean checkout, 65.3% in a working tree (26,051 statements, `.coveragerc` scope, tests excluded) |
+| Backend statement+branch coverage | 65.7% in a working tree (26,883 statements, `.coveragerc` scope, tests excluded). The clean-checkout figure runs ~0.3 pt lower — see §3 of `local-vs-ci-tree.mdc` and confirm any per-file number against a tracked-only run |
 | Files below 50% coverage | 14, all on the gate's exception list |
 | Coverage floor | 50% per file, enforced (REQ-45) by `bin/check-coverage-floor.py` |
-| Suite runtime | ~110 s local, ~200 s with coverage instrumentation, ~220 s in CI |
+| Suite runtime | ~130 s local, ~220 s with coverage instrumentation, ~240 s in CI. Phase 2 added ~15 s: 4096-bit modular exponentiation in the SRP cases, plus ~2 s of Miller-Rabin asserting the group's modulus is a safe prime |
 | Static analysis | ruff and pylint clean on `backend/` excluding tests |
 
 Coverage is measured over `backend/` with the tests themselves omitted, because including them
@@ -191,9 +192,11 @@ Latest gating run (commit `0bea87c`, CI pipeline on `feat/auth-audit-logging`):
 | `python-lint` (ruff + pylint + secret scan) | passing |
 | `check-tracked-tree` | 134 modules imported, 218 routes |
 
-Local full run: 2,294 passed, 17 skipped, ~200 s with coverage instrumentation. The count differs
-between environments because the TC-34 latency case skips when `CI` is set — a p95 measurement on a
-shared runner is not a measurement — and the local tracked-tree export omits `frontend/`.
+Local full run: 2,503 passed, 17 skipped, ~220 s with coverage instrumentation. The count differs
+between environments because measurement cases skip when `CI` is set — a p95 or a timing ratio on a
+shared runner is not a measurement — and the local tracked-tree export omits `frontend/`. Three cases
+are in that category now: TC-34's audit latency, the revocation check's 5 ms budget (NFR-3), and the
+SRP unknown-login cost ratio that keeps FR-4b from becoming a timing oracle.
 
 **Reproducing the gates locally.** Test tooling is pinned in `backend/requirements-dev.txt` so a
 contributor runs the same versions CI does; previously CI installed `pytest`/`pytest-cov` unpinned

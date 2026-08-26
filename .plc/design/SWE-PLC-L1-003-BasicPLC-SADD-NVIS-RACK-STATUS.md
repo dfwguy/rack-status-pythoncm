@@ -20,6 +20,7 @@ Revision History
 | Date | Author | Summary of Change |
 | :---- | :---- | :---- |
 | Aug. 24, 2026 | Agentic PLC | Initial reconstruction from the shipped source tree (134 backend modules, 38 API modules, 218 routes), `.cursor/rules/core-designs.mdc`, `docs/EXECUTION_ARCHITECTURE.md`, `docs/PARSING_RESULTS_ARCHITECTURE.md` and the `auth-audit-logging` brief. Skill: plc-design-reconstruction; Timestamp: 2026-08-24T15:30Z; Input ref: NSPECT-S57Q-EI19. Human decision: pending; Reviewed by: pending |
+| Aug. 26, 2026 | Rafael M. Koike & Cursor Agent ("Ada") | Added **Identity design** (`backend/identity/`) as as-built, covering the six modules, the separate-store decision, the SRP group and wire-format pins, the token type discipline and PyJWT's two silent gaps, and revocation's four granularities and cache design. Recorded the two traps the subsystem produced — the "add a second to be safe" cutoff that locked users out of their own next login, and the read path that defeated its own cache. Security Design rows split from one Authentication line into four; resolved open question 1 (identity is now as-built); corrected the `import app` debt count to one; refreshed the test count |
 
 ---
 
@@ -179,7 +180,7 @@ rather than re-scanned per request.
 | 8. Durable registry and locks | `validation_activities.py`, `rack_locks.py` | The system of record and exclusive access |
 | 9. Naming | `nvis_id_templates.py`, `naming.py`, `node_targets.py` | Rack id versus real hostname |
 | 10. Artifacts and reports | `cluster_report.py`, `cluster_report_pdf.py`, `node_report.py` | One dataset, many renderers |
-| 11. Auth | `web_auth.py`, `token_vault.py`, `rack_web/pam_*` | One gate |
+| 11. Auth | `web_auth.py`, `token_vault.py`, `rack_web/pam_*`, `identity/` (principals, models, store, srp, tokens, revocation) | One gate |
 | 12. Frontend contexts | `ActiveClusterContext`, `RackCommandsStoreContext`, `ThemeContext` | Shared SPA state |
 | (new) Audit | `audit/` (`__init__`, `actions`, `sink`, `request_hook`) | The durable trail of who did what |
 
@@ -303,6 +304,146 @@ catch.
 
 This is an interface to a system outside this repository, owned by a colleague, so the payload schema
 above is the contract as this side understands it; the writer owns its own validation.
+
+### Identity design (`backend/identity/`) — FR-1..FR-6, FR-15
+
+Six modules, each owning one concern, built in dependency order. This is the Phase 2 half of the
+auth programme (`docs/AUTH_PROGRAMME_SCOPE.md`); Phase 3 adds policy evaluation on top and is not
+described here.
+
+| Module | Owns |
+| :---- | :---- |
+| `principals.py` | The identifier grammar. `user:<login>` produced and parsed in one place (FR-15a) |
+| `models.py` | `User` / `Group` / `Membership` records, immutability, canonicalisation, reserved logins |
+| `store.py` | Persistence, the retirement ledger, concurrency, and the revocation tables |
+| `srp.py` | SRP-6a enrolment and the server half of the exchange |
+| `tokens.py` | Minting and verifying our own JWTs |
+| `revocation.py` | The check every authorised request consults |
+
+**Identity is a separate store from the catalog, and that is a correctness decision rather than
+tidiness.** `NVIS_CATALOG_FILE` selects *which catalog file* a process reads — Firmus
+`catalog.json`, Boston `catalog-boston.json` — so putting users in the catalog would let an
+environment variable decide who can log in, which FR-12 forbids outright. The catalog also holds
+configuration operators hand-edit and exports as plaintext, neither acceptable for credential
+material. What *is* reused is the mechanism: `catalog.store._AtomicJSONStorage` is parameterised only
+by path, so one implementation of write-to-temp-then-`os.replace` under an `fcntl` flock serves both.
+
+**Logins are immutable and never reused** (FR-2b). Retiring rather than freeing an identifier keeps
+the audit trail honest: without it, `jdoe` leaves, the account is deleted, a different `jdoe` is
+created, and every action the first person took is now attributed to the second while any policy
+naming `user:jdoe` silently hands over their grants. Retirement is not erasure — a retired login
+stays resolvable so old audit events keep their subject.
+
+**Owner-only permissions have to be re-applied after every write, not set once.** The atomic write
+replaces the file via `os.replace`, so each save installs a **new inode carrying the process umask**
+— typically `0o644`. A `chmod` in the constructor is undone by the first save, and the file holding
+SRP verifiers quietly becomes world-readable. `audit/sink.py` hit the identical trap with log
+rotation. Caught here by a test that writes repeatedly rather than once.
+
+#### SRP-6a (`srp.py`)
+
+The password never reaches the process; the server holds a salt and a verifier. Worth having behind
+TLS because it means no proxy, memory dump or debug log can contain a credential that does not exist
+here.
+
+- **Group: RFC 5054 Appendix A, 4096-bit, `g = 5`.** 2048-bit is 112-bit security, which NIST
+  SP 800-57 disallows after 2030. Changing the group invalidates every enrolled verifier
+  (`v = g**x mod N`), so it was done while no identity store existed anywhere — free then, a
+  credential migration at any later date. Naming caution: **"group 5" in the IKE/RFC 3526 registry is
+  the 1536-bit group**, weaker than what this replaced; the 4096-bit modulus is group 16, and the 5
+  is the generator.
+- **The library's defaults are unsafe and its wire format is off-standard.** `srp` 1.0.22 defaults to
+  SHA-1 with a 4-byte salt, and defaults RFC 5054 §2.6 padding **off**. Every parameter is explicit,
+  and the padding is pinned on **whichever backend the package bound** — `srp/__init__.py` prefers
+  the OpenSSL `_ctsrp` and falls back to `_pysrp`, each keeping its *own* padding flag, so pinning
+  the wrong module is a silent no-op. Which one binds is decided by `dlopen`, not by us.
+- **Cost is an accepted trade, with a consequence.** 4096-bit raised server CPU per login from
+  31.7 ms to 121.6 ms. Irrelevant once per session, but `begin` must stay reachable unauthenticated
+  because it *is* the login route, so one worker saturates a core at ~19 anonymous requests/second
+  against ~75 before. FR-4b makes that unavoidable rather than accidental — a cheap path for unknown
+  logins would be an enumeration oracle, so every caller gets the expensive one. The answer is a rate
+  limit at the route (FR-4g), shedding *before* the exponentiation.
+- **Challenge state is bounded, single-use under a lock, and expiring**, and it is **in-process**, so
+  `assert_single_worker_safe()` refuses `--workers > 1`. A second worker splits the table and makes
+  login succeed about half the time — an intermittent failure that reads as a client bug.
+
+#### Tokens (`tokens.py`)
+
+Three types — `id`, `access`, `refresh` — and verification requires the caller to *name* the type it
+expects, with no default parameter, so type confusion needs a wrong argument rather than an omission.
+The refresh token lives 48× longer than the access token, so presenting one as the other authorises
+requests for half a day; the reverse allows perpetual renewal.
+
+**PyJWT 2.13's defaults leave two silent holes**, measured rather than assumed, neither of which
+raises or looks wrong at the call site:
+
+- `iss` is **not validated at all** unless `issuer=` is passed — the claim can name anyone.
+- A token with **no `exp` claim is accepted**, and never expires.
+
+Verification therefore passes `issuer=` and `audience=` *and* an explicit `require` list naming all
+seven claims. Pinning `algorithms=[...]` does correctly refuse `alg: none` and an HS512→HS256
+substitution — the pin works, it simply has to be written.
+
+**What separates deployments is the key, not the claims.** `iss` and `aud` are product constants,
+identical on every install; the HKDF-derived signing key differs because each deployment's secret
+does. Validating `iss`/`aud` buys something narrower and still worth having: it stops a federated
+provider's ID token — also a JWT — being presented as one of ours. The key is derived from
+`RACK_WEB_SECRET_KEY` with a labelled `info` so a JWT key leak is not Flask session forgery, and is
+deliberately **not cached**, so rotation takes effect without a restart.
+
+#### Revocation (`revocation.py`)
+
+The invariant: **grants may be stale, denials may not.** A stateless JWT cannot be withdrawn before
+it expires, so what makes JWT acceptable is a check on every request that can deny faster than the
+token would have expired. FR-6 bounds that at 10 seconds.
+
+Four granularities, answering different questions: by **subject** (the user is gone); by **`jti`**
+(one session or a leaked refresh token, without disturbing the user's others — this is what makes
+FR-5b's revocable renewal path useful rather than a blunt logout); by **issue time** (*log out
+everywhere*, and the only mechanism available for it, since outstanding token ids cannot be
+enumerated but their `iat` can be compared); and **implicitly** for a login disabled or retired in
+the store, so deleting a user and forgetting the revocation row does not leave their tokens live.
+
+**Fail-closed** (FR-6a): with no checker registered, `tokens.verify` refuses *everything* rather than
+treating absence as "nothing is revoked". Phase 1 supplies the precedent — an unregistered config
+materialise hook produced wrong values on some clusters and an error on none, and needed a test
+purely to assert the wire existed. Here the absence is a loud total refusal caught by the first
+request. Minting stays available so first-boot bootstrap can run before the revocation store is
+wired. The checker is also invoked only *after* signature and claim validation: a checker handed
+attacker-controlled claims from an unverified token would be a new surface, not a control.
+
+**Caching is the design problem, and the generation counter alone does not solve it.** NFR-3 gives
+the check 5 ms at p95 and it runs on every authorised request, over TinyDB. Phase 1 hit exactly this:
+`catalog_context.resolve()` read TinyDB per audited request at 4.74 ms and breached the audit budget
+until it was cached on the store's generation counter. That counter is, however, a **process-local
+integer**, so a write from another process — an operator running a CLI against the same file — never
+bumps it and the cache would serve a stale **allow** indefinitely, blowing the 10-second bound with
+no symptom. The cache key therefore also includes the file's `stat()` identity (mtime and size, a few
+microseconds), with a hard 5-second age ceiling as a backstop for coarse mtime granularity. Measured
+**0.0034 ms cached, 0.092 ms uncached**.
+
+#### Two traps this subsystem produced, stated so they are not rediscovered
+
+**1. "Add a second to be safe" is the wrong fix, and it is the tempting one.** The *log out
+everywhere* cutoff compares a token's `iat` against a stored moment. With whole-second `iat` you
+cannot distinguish a token minted just *before* the cutoff from one minted just *after*, so the first
+implementation pushed the cutoff one second into the future to be certain no live token survived.
+That is safe in the direction people check and broken in the direction they do not: it also refuses
+the user's **own next login** for up to a second, so a password change or a forced logout presents as
+a broken account, intermittently, depending on sub-second timing. The correct fix removes the
+ambiguity instead of padding around it — record `iat` with **sub-second precision**, which RFC 7519
+§2 explicitly permits for NumericDate, and set the cutoff to exactly *now*. Verified over 300
+logout-then-relogin cycles: zero old tokens accepted, zero fresh logins refused. The general lesson:
+when a comparison is ambiguous because a value is too coarse, widen the value — do not add a margin
+to one side, because the margin becomes a defect on the other.
+
+**2. A read path that writes will defeat its own cache.** `revocation_snapshot()` originally pruned
+expired token rows while reading. TinyDB's `remove()` **rewrites the file even when nothing matches**,
+so every read performed a write, and that write changed the mtime *in the cache key* — the cache was
+invalidated by its own reads and never hit once, silently putting NFR-3 at risk. Nothing functional
+failed; what caught it was a test asserting the cache actually serves reads, which is why that
+assertion is not redundant. Expired rows are now filtered in memory and cleared by the next write,
+and `_prune_expired_tokens_locked` is documented as write-path-only.
 
 ### Dependencies (design-level)
 
@@ -498,7 +639,10 @@ a container restart does not lose them.
 
 | Control | Design |
 | :---- | :---- |
-| Authentication | One gate (`_require_dashboard_auth`) with an explicit bypass list; PAM locally, shared token in containers |
+| Authentication | One gate (`_require_dashboard_auth`) with an explicit bypass list. Verdict source is migrating: PAM / shared token today, SRP-6a plus a JWT in an `HttpOnly` cookie once Phase 2's routes land, at which point both legacy methods are **removed** rather than deprecated (FR-18) |
+| Credentials | SRP-6a: the password never reaches the server. RFC 5054 4096-bit group, SHA-256, 32-byte salt — all explicit, because the library's defaults are SHA-1 with a 4-byte salt and non-standard padding |
+| Tokens | HS256 pinned at verification, over a key HKDF-derived from the deployment secret (so a JWT key leak is not session forgery). Issuer, audience and expiry all *required*, not merely validated-if-present. Three token types, with the expected type mandatory at every verification |
+| Revocation | Consulted on every authorised request, effective within 10 s, **fail-closed** if unregistered. Revocable by subject, by token id, by issue time, and implicitly for a disabled or deleted login |
 | Terminal | Authenticated and origin-checked in WSGI middleware above the router; target validated before session creation |
 | Command injection | Node targets validated against inventory or a strict RFC 1123 predicate; arguments quoted; script allowlists |
 | Transport | TLS ≥ 1.2 enforced in a shared policy applied to both the dev server and gunicorn; compression and client renegotiation disabled |
@@ -506,13 +650,13 @@ a container restart does not lose them.
 | Source provenance | Client address resolved right-to-left across a configured trusted-proxy set and labelled peer / proxy / claimed-untrusted; overly broad CIDRs refused |
 | Audit | One event per mutating request, bounded and rotated independently, surviving container recreate on a named volume |
 | Read-only posture | A deployment can disable cancellation, privileged script execution and cluster-manager mutation by configuration; an allowlist wrapper can constrain `cmsh` to inventory queries |
-| Planned | Local identity store with SRP, OIDC federation, JWT id/access tokens, RBAC with default-deny policy evaluation (Phases 2–3) |
+| Planned | OIDC federation, the login route's rate limit (FR-4g), and RBAC with default-deny policy evaluation (Phase 3). The identity substrate itself — store, SRP, tokens, revocation — is built; see *Identity design* above |
 
 Threat model: `.plc/security/threat-model-NVIS-RACK-STATUS.md` (T-1..T-64).
 
 ### Test Automation
 
-2,294 backend tests (pytest) plus frontend Vitest, gating merges in CI. The execution layer is
+2,503 backend tests (pytest) plus frontend Vitest, gating merges in CI. The execution layer is
 stubbable at one chokepoint, which is what makes route-level testing safe; `subprocess` is stubbed
 as a hard floor for the code paths that still bypass it. Demonstration mode serves synthetic data
 for out-of-process cases. Meta-tests enforce architectural invariants: route parity across the URL
@@ -533,16 +677,20 @@ Reconstructed from the shipped tree; every component named above exists in the s
 | 1 | Product or component SADD? | **Product-level.** Rack Status is a standalone product deployed at customer clusters. |
 | 2 | Is the frontend in scope? | **Yes.** Now a section under Static Design, covering the contexts, the Kaizen/MUI bridge, the vendored assets, the workflow designer's single source of truth and the build coupling. |
 
+**Resolved by implementation, Aug. 26, 2026:**
+
+| # | Question | Answer |
+| :---- | :---- | :---- |
+| 3 | Identity design commitment — describe the planned architecture, or stay strictly as-built? | **Moot, and answered as-built.** The Phase 2 substrate is now implemented and merged (`backend/identity/`, six modules, 164 tests), so *Identity design* above is as-built rather than planned. Phase 3 policy evaluation stays out until it lands, per the same rule. What remains planned is named explicitly in the Security Design table |
+
 **Remaining open questions:**
 
-1. **Identity design commitment.** Phases 2–3 are scoped in `docs/AUTH_PROGRAMME_SCOPE.md` but not
-   designed. Should this SADD describe the planned identity and policy architecture as design, or
-   stay strictly as-built and let the phase briefs carry it until they land?
-2. **The two remaining `import app` cycles.** Recorded as debt in `core-designs.mdc`. Is unwinding
-   them a committed design intent to state here, or accepted permanently?
-3. **`pythoncm` migration.** `docs/MULTI_USER_MULTI_CLUSTER_PLAN.md` names moving read traffic from
+1. **The one remaining `import app` cycle.** Recorded as debt in `core-designs.mdc`
+   (`agent/registrations.py`). Is unwinding it a committed design intent to state here, or accepted
+   permanently?
+2. **`pythoncm` migration.** `docs/MULTI_USER_MULTI_CLUSTER_PLAN.md` names moving read traffic from
    `cmsh` to `pythoncm` to reduce head-node load, while the README lists PythonCM as parked. Which
    is current — is the migration intended, and if so is it a design commitment?
-4. **Frontend performance and accessibility design.** With the frontend now in scope, the absence of
+3. **Frontend performance and accessibility design.** With the frontend now in scope, the absence of
    committed page-load targets (SRD resolved question 4) and of an external accessibility standard
    becomes a design gap rather than only a requirements gap.

@@ -1,0 +1,115 @@
+---
+description: Identity/auth traps in backend/identity — coarse-value comparisons, read paths that write, unsafe library defaults, fail-closed controls
+alwaysApply: true
+---
+
+# `backend/identity/` — traps that cost real time, don't relearn them
+
+Built Aug 2026 (Phase 2 of the auth programme). Six modules: `principals`, `models`, `store`, `srp`,
+`tokens`, `revocation`. Full design in the SADD's *Identity design* section; requirements and
+measurements in `.plc/briefs/auth-identity-brief.md`. **Every item below was found by a test, not by
+reasoning** — which is the reason each one is written down rather than trusted to be obvious.
+
+## 1. Never widen a margin to fix an ambiguous comparison — widen the value
+
+The most generalisable one. *Log out everywhere* compares a token's `iat` against a stored cutoff.
+With whole-second `iat` you cannot tell a token minted just **before** the cutoff from one minted just
+**after**, so the first implementation set the cutoff to `now + 1` "to be safe".
+
+That is safe in the direction you check and broken in the direction you don't: it also refuses the
+user's **own next login** for up to a second, so a password change presents as a broken account —
+*intermittently*, depending on sub-second timing, which is the worst possible bug report to receive.
+
+The fix is to remove the ambiguity, not to pad around it: record `iat` with **sub-second precision**
+(RFC 7519 §2 explicitly permits fractional NumericDate) and set the cutoff to exactly `now`.
+
+> **When a comparison is ambiguous because a value is too coarse, increase the value's resolution.
+> Adding a safety margin to one side just moves the defect to the other side, where nobody is
+> looking.**
+
+Verified over 300 logout-then-relogin cycles — a single-shot test passes either way, because this
+class of bug presents as flakiness rather than failure. **If you touch the `not_before` cutoff or
+`iat`, run the cycle test, not one login.**
+
+## 2. A read path that writes will silently defeat its own cache
+
+`revocation_snapshot()` pruned expired rows while reading. **TinyDB's `remove()` rewrites the file
+even when nothing matches**, so every read performed a write — and that write changed the file mtime,
+which is part of the cache key. The cache was invalidated by its own reads and **never hit once**,
+quietly putting the NFR-3 5 ms budget at risk while every functional test passed.
+
+- Pruning belongs on **write** paths (`_prune_expired_tokens_locked` says so in its docstring);
+  reads filter in memory.
+- **Assert the cache actually hits.** `test_the_cache_is_actually_serving_reads` is what caught this;
+  without it, staleness tests prove nothing, because a cache that never hits cannot go stale.
+
+## 3. `os.replace` installs a new inode with the umask — re-apply the mode after *every* write
+
+The atomic write (write-temp-then-replace) means a `chmod 0o600` in a constructor is undone by the
+first save, and the file holding SRP verifiers quietly becomes world-readable. `_OwnerOnlyAtomicStorage`
+re-applies the mode after each write. `audit/sink.py` hit the identical trap with log rotation.
+
+**Test permissions across several writes, not after one** — a single-write test passes on the broken
+version.
+
+## 4. The `srp` library's defaults are unsafe, and its wire format is off-standard
+
+- `hash_alg=0` is **SHA-1**; `salt_len=4` is a **32-bit salt**. A perfectly reasonable-looking
+  `create_salted_verification_key(user, pw)` enrols a SHA-1 credential and nothing fails. Pass
+  `hash_alg` / `ng_type` / `salt_len` explicitly, always.
+- **RFC 5054 §2.6 padding defaults OFF**, producing a variant that interoperates only with itself.
+  Mainstream JS/TS SRP libraries follow the RFC, so a mismatch breaks the browser client — and it
+  does not error, it produces a proof that fails to verify, so **every login looks exactly like a
+  wrong password**.
+- **The padding flag is per-backend.** `srp/__init__.py` prefers the OpenSSL `_ctsrp` and falls back
+  to `_pysrp`; each keeps its own `_rfc5054_compat`. Toggling `_pysrp` directly is a silent no-op
+  whenever the C backend is active. Call package-level `srp.rfc5054_enable()` and assert against
+  `srp._mod`.
+- **Which backend binds is decided by `dlopen`, not by the package.** We get `_pysrp` on macOS and in
+  `python:3.12-slim` only because `_ctsrp` asks for `libssl.so` / `libssl.so.1.1.0` and both ship
+  `libssl.so.3`. **Installing `libssl-dev` creates that symlink and flips the backend.**
+
+## 5. Changing the SRP group is a credential migration
+
+`v = g**x mod N`, so a new group invalidates **every** enrolled verifier. Done at 4096-bit while no
+identity store existed anywhere — free then, a migration for every user at every site afterwards.
+Padding mode, by contrast, does **not** affect verifiers (it changes `u` and `k`, not `gen_x`), which
+is why that flag could be turned on safely in place.
+
+Naming: **"group 5" in the IKE/RFC 3526 registry is the 1536-bit group** — *weaker* than 2048. The
+4096-bit modulus is group 16; the 5 is the generator. Read a request for "group 5" as "the group
+whose generator is 5" and confirm before implementing.
+
+## 6. PyJWT validates less than it looks like it does (2.13.0, measured)
+
+- **`iss` is not checked at all** unless you pass `issuer=`. The claim can name anyone.
+- **A token with no `exp` is accepted** and never expires.
+
+Neither raises or looks wrong at the call site. Pass `issuer=`, `audience=`, **and** an explicit
+`options={"require": [...]}` naming every claim. Pinning `algorithms=[...]` *does* correctly refuse
+`alg: none` and an HS512→HS256 substitution — the pin works, it just has to be written.
+
+Also: **`iss`/`aud` do not separate deployments.** They are product constants, identical everywhere.
+The HKDF-derived signing key is the boundary.
+
+## 7. Fail-closed controls: don't "fix" them by defaulting to permissive
+
+`tokens.verify` refuses **everything** until `revocation.install()` registers a checker (FR-6a). If
+you see that error, wire the checker — do **not** add a default that allows. The precedent is Phase
+1's config materialise hook: unregistered, it produced wrong values on some clusters and an error on
+none, and needed a test purely to assert the wire existed. A loud total refusal is the correct failure
+direction for a security control.
+
+Related: the revocation checker runs **only after** signature and claim validation. A checker handed
+attacker-controlled claims from an unverified token is a new attack surface, not a control.
+
+## 8. Two operational constraints that are not obvious from the code
+
+- **SRP challenge state is in-process**, so `--workers 1` is load-bearing;
+  `assert_single_worker_safe()` refuses more. A second worker splits the table and login succeeds
+  about half the time, which reads as a client bug.
+- **The unauthenticated login route is a CPU amplifier.** A 4096-bit `begin()` costs ~52 ms of server
+  CPU, so one worker saturates a core at ~19 anonymous requests/second. FR-4b makes this unavoidable
+  — a cheap path for unknown logins would be an enumeration oracle, so every caller gets the
+  expensive one. **The route needs a rate limit that sheds before the exponentiation** (FR-4g), and
+  the bounded challenge table caps memory only, never CPU.
