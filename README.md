@@ -1134,6 +1134,7 @@ nvis-rack-status/
 | [INSTALL.md](INSTALL.md) | Docker, SSH keys, air-gapped bundle, and installation troubleshooting. |
 | [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) | Exhaustive environment-variable reference. |
 | [docs/EXECUTION_ARCHITECTURE.md](docs/EXECUTION_ARCHITECTURE.md) | Local/SSH execution, endpoint roles, transports, and path resolution. |
+| [docs/API_RESPONSE_CODES.md](docs/API_RESPONSE_CODES.md) | What every endpoint may return, and the authentication/authorization codes: 401 vs 403 vs 429, and why "cannot evaluate authentication" is a 503 rather than a 401. |
 | [docs/WORKFLOW_COMPOSITION.md](docs/WORKFLOW_COMPOSITION.md) | Workflow connection, scheduler, evaluation, and capability axes. |
 | [docs/PARSING_RESULTS_ARCHITECTURE.md](docs/PARSING_RESULTS_ARCHITECTURE.md) | Validation log generation through durable presentation. |
 | [docs/GRAFANA_PROMETHEUS_INTEGRATION.md](docs/GRAFANA_PROMETHEUS_INTEGRATION.md) | Metrics/Grafana topology, labels, and troubleshooting. |

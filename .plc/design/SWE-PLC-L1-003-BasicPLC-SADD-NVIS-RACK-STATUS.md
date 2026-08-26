@@ -469,6 +469,16 @@ token was never ours or never valid; **Type** means it is ours and being misused
 **Implicit** mean it was valid and has been withdrawn; **Operational** means the deployment changed
 underneath it. Only the third group should ever be reported to a user as "your session ended".
 
+**How these map to HTTP is a design decision, not a mechanical one** — full policy in
+[`docs/API_RESPONSE_CODES.md`](../../docs/API_RESPONSE_CODES.md), and one case is counter-intuitive.
+INV-01..INV-17 are all **401** with a uniform body, because distinguishing them would rebuild the
+enumeration oracle FR-4b exists to prevent. But **INV-18 is a 503, not a 401**: when the revocation
+record cannot be consulted the credential may be perfectly valid and the *deployment* is what failed,
+so answering 401 sends an operator into a re-authentication loop that can never succeed. 401 means
+"your credential is not good"; 503 means "we cannot tell". Only the first is fixable by the caller.
+INV-19 has no code at all — it produces a 200 that should have been a 401, which is why it is an
+operational control rather than a response.
+
 #### Two traps this subsystem produced, stated so they are not rediscovered
 
 **1. "Add a second to be safe" is the wrong fix, and it is the tempting one.** The *log out

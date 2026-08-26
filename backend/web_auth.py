@@ -110,6 +110,65 @@ def _safe_next(raw: str | None) -> str:
 # ``config_env.set_materialize_hook`` (``core-designs.mdc`` §5).
 # ---------------------------------------------------------------------------
 
+#: Protection space named in the `WWW-Authenticate` challenge. One realm: there is one gate.
+AUTH_REALM = "nvis-rack-status"
+
+#: Endpoints the gate does **not** protect. The login routes, the auth probe the SPA polls before it
+#: has a session, and Flask's static handler.
+#:
+#: It lives here rather than in `app.py` because two other places legitimately need it — the gate
+#: itself, and the OpenAPI generator, which must know whether an operation can return 401 — and
+#: `backend/openapi.py` reaching into `app` for it was a deferred `import app` inside a function
+#: body, which `test_no_deferred_app_lookups.py` correctly rejected. Auth policy belongs with the
+#: auth mechanism; keeping the only copy here is what stops the spec drifting from the gate.
+#:
+#: Adding to this list makes an endpoint reachable with no credential. That is almost never right —
+#: `api_login` is in it because it is how a credential is obtained in the first place.
+AUTH_BYPASS_ENDPOINTS: tuple[str, ...] = (
+    "auth.login",
+    "auth.api_login",
+    "auth.api_auth_check",
+    "static",
+)
+
+
+def www_authenticate(credential_presented: bool) -> str:
+    """The `WWW-Authenticate` value for a 401.
+
+    RFC 9110 §11.6.1 makes this header **mandatory** on a 401, and the gate omitted it — a
+    conformance gap that also costs real behaviour: a client, proxy or API-tooling chain has nothing
+    to tell it *how* to authenticate, and generic HTTP clients cannot distinguish "you must
+    authenticate" from an opaque refusal.
+
+    `Bearer` because the credential is a JWT once Phase 2 lands (a browser carries it in an
+    `HttpOnly` cookie; a programmatic client sends `Authorization: Bearer`).
+
+    ``credential_presented`` selects between the two RFC 6750 §3 forms, and **this does not leak
+    anything**: the caller already knows whether it sent a credential. What it must *not* do is say
+    which of the invalidation causes applied — expired, revoked, malformed and wrong-audience all map
+    to the single `invalid_token`, which is exactly the uniformity FR-4b wants, so no
+    `error_description` is emitted.
+    """
+    if credential_presented:
+        return f'Bearer realm="{AUTH_REALM}", error="invalid_token"'
+    return f'Bearer realm="{AUTH_REALM}"'
+
+
+def credential_presented(headers: object, cookies: object = None) -> bool:
+    """Whether the request carried *something* it believed was a credential.
+
+    Deliberately generous — an `Authorization` header or a session cookie both count — because the
+    only consequence is which of two equally non-disclosing challenge forms is returned. For the same
+    reason it never raises: failing to build a header is not worth turning a 401 into a 500.
+    """
+    try:
+        if (getattr(headers, "get", lambda _k: None)("Authorization") or "").strip():
+            return True
+        return bool(cookies is not None and ("session" in cookies or "nvis_token" in cookies))
+    except (AttributeError, TypeError):
+        return False
+
+
 _wsgi_authenticator: Callable[[dict], bool] | None = None
 
 

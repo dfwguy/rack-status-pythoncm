@@ -40,6 +40,8 @@ import logging
 import re
 from typing import Any
 
+import web_auth
+
 _log = logging.getLogger(__name__)
 
 OPENAPI_VERSION = "3.1.0"
@@ -141,11 +143,38 @@ def _path_parameters(rule: Any) -> list[dict[str, Any]]:
     return params
 
 
-def _responses(source: str, has_doc: bool) -> dict[str, Any]:
-    """200 plus every explicit status the handler returns.
+#: Statuses the **auth gate** can return for any gated endpoint, which are therefore invisible to
+#: source scraping — they are produced by middleware, above the handler, so no `return` line in the
+#: handler mentions them.
+#:
+#: Omitting them was a real accuracy bug rather than a nicety: **2 of 221 operations declared 401
+#: while the gate could return it for all of them**, so a client generated from this document
+#: believed authentication failure was impossible on 219 endpoints. Anything derived from the spec —
+#: a typed client, a contract test, a retry policy — inherited that.
+#:
+#: See `docs/API_RESPONSE_CODES.md` for what each one means and why it is not one of the others.
+_GATE_RESPONSES: dict[str, str] = {
+    "401": (
+        "Not authenticated: no session, or credentials that are absent, malformed, expired or "
+        "revoked. The body is deliberately uniform and does not say which. Re-authenticating is "
+        "the remedy."
+    ),
+    "503": (
+        "Authentication could not be *evaluated* — the deployment cannot consult its revocation "
+        "record. The credential may be perfectly valid, so this is not 401: re-authenticating "
+        "cannot help and an operator must fix the deployment. Carries `Retry-After`."
+    ),
+}
 
-    Only `return` lines are considered, and only real HTTP statuses are accepted, so a numeric
-    literal that happens to sit after a comma cannot become a response code.
+
+def _responses(source: str, has_doc: bool, *, gated: bool = True) -> dict[str, Any]:
+    """200, every explicit status the handler returns, and the statuses the gate can add.
+
+    Only `return` lines are considered for the scraped part, and only real HTTP statuses are
+    accepted, so a numeric literal that happens to sit after a comma cannot become a response code.
+
+    ``gated`` is False for the handful of endpoints on the auth bypass list — the login route itself,
+    chiefly — where a 401 comes from the handler's own logic and a gate 503 cannot apply.
     """
     codes = {"200"}
     for line in source.splitlines():
@@ -154,15 +183,29 @@ def _responses(source: str, has_doc: bool) -> dict[str, Any]:
         for code in _STATUS_RE.findall(line.rstrip()):
             if code in _HTTP_STATUSES:
                 codes.add(code)
+    if gated:
+        codes.update(_GATE_RESPONSES)
     out: dict[str, Any] = {}
     for code in sorted(codes):
         out[code] = {
-            "description": _STATUS_TEXT.get(code, "See the endpoint description."),
+            "description": _GATE_RESPONSES.get(code)
+            if gated and code in _GATE_RESPONSES and code not in _scraped(source)
+            else _STATUS_TEXT.get(code, "See the endpoint description."),
             "content": {"application/json": {"schema": {"type": "object"}}},
         }
     if not has_doc:
         out["200"]["description"] = "Success (endpoint has no docstring)."
     return out
+
+
+def _scraped(source: str) -> set[str]:
+    """Statuses the handler itself returns — so a gate description does not overwrite a more
+    specific one the endpoint documented for the same code (503 is used by both)."""
+    found = set()
+    for line in source.splitlines():
+        if "return" in line:
+            found.update(c for c in _STATUS_RE.findall(line.rstrip()) if c in _HTTP_STATUSES)
+    return found
 
 
 _STATUS_TEXT = {
@@ -243,6 +286,18 @@ def _flask_path_to_openapi(rule_path: str) -> str:
     return re.sub(r"<(?:[^:<>]+:)?([^<>]+)>", r"{\1}", rule_path)
 
 
+def _is_gated(endpoint: str) -> bool:
+    """Whether the auth gate applies to *endpoint*.
+
+    Reads the single canonical list from :mod:`web_auth`, so the spec cannot claim an endpoint is
+    public when the gate protects it. The first version of this reached into `app` for the list from
+    inside a function body — a deferred `import app`, which `core-designs.mdc` bans and
+    `test_no_deferred_app_lookups.py` caught immediately. Moving the list to `web_auth` removed the
+    need rather than suppressing the check.
+    """
+    return endpoint not in web_auth.AUTH_BYPASS_ENDPOINTS
+
+
 def build_spec(app: Any, *, version: str = "", server_url: str = "") -> dict[str, Any]:
     """The OpenAPI document for *app*."""
     paths: dict[str, dict[str, Any]] = {}
@@ -283,7 +338,7 @@ def build_spec(app: Any, *, version: str = "", server_url: str = "") -> dict[str
                 "operationId": f"{rule.endpoint}_{method.lower()}",
                 "tags": [tag],
                 "summary": summary or rule.endpoint.replace("_", " "),
-                "responses": _responses(source, bool(summary)),
+                "responses": _responses(source, bool(summary), gated=_is_gated(rule.endpoint)),
             }
             if description:
                 operation["description"] = description

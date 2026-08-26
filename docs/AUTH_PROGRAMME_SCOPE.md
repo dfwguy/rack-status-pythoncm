@@ -90,6 +90,23 @@ Three properties Phase 2 has to settle, because Phase 3's evaluator depends on a
   `docs/PHASE3_POLICY_ENGINE_SPIKE.md` §5b; `identity.user:revoke` is itself an audited, governed
   action.
 
+**What each refusal returns over HTTP is part of this phase, not a detail left to routes.**
+[`docs/API_RESPONSE_CODES.md`](API_RESPONSE_CODES.md) is the contract: 401 for an unauthenticated
+caller with a uniform body and a mandatory `WWW-Authenticate`, 403 for an authenticated one refused by
+policy, 429 with `Retry-After` for the login rate limit (FR-4g), and **503 where authentication cannot
+be evaluated** — the fail-closed case, which must not be a 401 because the credential may be valid and
+re-authenticating cannot help.
+
+Two things there need settling before Phase 3 ships, both recorded rather than deferred silently:
+
+- **403 already means "feature disabled by configuration"** at all 32 current sites, and Phase 3 gives
+  it a second meaning with the opposite remediation. Resolved by a `reason` discriminator in the body
+  (`feature_disabled` / `not_authorized`) instead of migrating 44 endpoints' status codes; the auth
+  paths emit it, the feature-disabled sites do not yet (FR-4h).
+- **A 403 must not become an existence oracle.** Phase 3 has to decide, per resource type, whether an
+  unauthorised read returns 403 or 404 — the same reasoning as FR-4b for logins, applied to racks,
+  runs and users.
+
 The decision table in `docs/PHASE3_POLICY_ENGINE_SPIKE.md` §2 carries rows for these so they are
 answered by a test rather than by an implementation accident.
 

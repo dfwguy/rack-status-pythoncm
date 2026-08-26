@@ -638,7 +638,9 @@ def _is_public_spa_static_path() -> bool:
 #: ``auth.login`` is belt-and-braces: ``_is_public_spa_static_path`` already allows ``/login`` by
 #: path. ``auth.api_login`` and ``auth.api_auth_check`` have no such second layer and are the
 #: load-bearing entries. The ``auth.`` prefix is the blueprint name in ``api/auth.py``.
-_AUTH_BYPASS_ENDPOINTS = ("auth.login", "auth.api_login", "auth.api_auth_check", "static")
+#: Re-exported so the historical name keeps working; the list itself lives in `web_auth`, which is
+#: also where `openapi.py` reads it from — see the note there.
+_AUTH_BYPASS_ENDPOINTS = web_auth.AUTH_BYPASS_ENDPOINTS
 
 
 @app.before_request
@@ -660,10 +662,14 @@ def _require_dashboard_auth():
     if _session_ok():
         return None
     if request.path.startswith("/api/") or request.path.startswith("/ws/"):
-        return (
-            jsonify({"ok": False, "error": "authentication required", "login": "/login"}),
-            401,
+        # `WWW-Authenticate` is mandatory on a 401 (RFC 9110 §11.6.1) and was missing. The body stays
+        # uniform: it must not say *which* credential problem applied. See
+        # docs/API_RESPONSE_CODES.md.
+        resp = jsonify({"ok": False, "error": "authentication required", "login": "/login"})
+        resp.headers["WWW-Authenticate"] = web_auth.www_authenticate(
+            web_auth.credential_presented(request.headers, request.cookies)
         )
+        return resp, 401
     nxt = _safe_next(request.full_path)
     if nxt:
         return redirect(url_for("auth.login", next=nxt))
