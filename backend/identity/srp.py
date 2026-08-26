@@ -32,6 +32,16 @@ a server-held ephemeral value in between. That table is bounded (an unauthentica
 be able to exhaust memory by starting exchanges it never finishes), single-use under a lock (a
 check-then-delete is a replay window), and expiring.
 
+**The exchange is also a CPU amplifier, and the 4096-bit group made it a worse one.** :func:`begin`
+must be reachable unauthenticated — it *is* the login endpoint — and one call costs about 52 ms of
+server CPU at ``NG_4096``, against 13 ms at ``NG_2048``. With a single worker that is roughly 19
+anonymous requests per second to saturate a core, down from about 75. The bounded challenge table
+below caps *memory* and does nothing about this. **The route that calls :func:`begin` must be rate
+limited** (FR-4g); the limit belongs at the endpoint, not in here, because only the endpoint knows
+the caller. The uniform-cost property FR-4b requires makes this unavoidable rather than accidental:
+a cheap path for unknown logins would be an enumeration oracle, so every caller gets the expensive
+one.
+
 Single process, several threads: the deployment runs ``gunicorn --workers 1 --threads N
 --worker-class gthread``. **A second worker would split this table and break login intermittently**
 — see :func:`assert_single_worker_safe`.
@@ -56,9 +66,18 @@ from identity.models import canonical_login
 # --- Parameters. Explicit at every call site, per FR-4e. -----------------------------------------
 #: SHA-256, not the library's SHA-1 default.
 HASH_ALG = _srp.SHA256
-#: 2048-bit group. Also the library default, stated anyway so a default change cannot silently
-#: weaken it and so the three parameters read as one decision.
-NG_TYPE = _srp.NG_2048
+#: RFC 5054 Appendix A **4096-bit** group, whose generator is ``g = 5`` (not 2, as at 2048).
+#:
+#: Chosen over the 2048-bit group deliberately: 2048-bit finite-field crypto is 112-bit security,
+#: which NIST SP 800-57 disallows after 2030. Changing the group **invalidates every enrolled
+#: verifier** — ``v = g**x mod N`` depends on both — so this is nearly free today, with no users
+#: enrolled anywhere, and would be a credential migration later. Moving now is the cheap moment.
+#:
+#: It costs about 3.8x: measured server CPU per login rose from **31.7 ms to 121.6 ms** (52 ms in
+#: ``begin``, 70 ms in ``finish``). Irrelevant for a once-per-session login at a 20-operator scale
+#: — but see the amplification warning in the module docstring, because ``begin`` is unauthenticated
+#: by necessity and that number is now the cost an anonymous caller can impose per request.
+NG_TYPE = _srp.NG_4096
 #: 32 bytes, not the library's 4.
 SALT_LEN = 32
 

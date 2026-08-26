@@ -78,8 +78,8 @@ class TestParametersAreExplicit:
         salt_hex, _ = S.enroll("rkoike", "pw")
         assert len(bytes.fromhex(salt_hex)) == S.SALT_LEN
 
-    def test_the_group_is_at_least_2048_bit(self):
-        assert S.NG_TYPE in (lib.NG_2048, lib.NG_4096, lib.NG_8192)
+    def test_the_group_is_not_a_weak_one(self):
+        assert S.NG_TYPE in (lib.NG_4096, lib.NG_8192)
 
     def test_the_proof_length_corresponds_to_sha256(self):
         """AC-4c: a 20-byte proof would mean SHA-1 slipped back in."""
@@ -167,38 +167,68 @@ class TestWireCompatibilityIsPinned:
 
 
 class TestTheGroupIsTheStandardOne:
-    """The modulus is RFC 5054's, not one we generated.
+    """The modulus is RFC 5054's 4096-bit group, not one we generated.
 
     SRP needs `N` to be a safe prime so the group has no small subgroups to confine an exchange
     into. A bespoke modulus buys nothing — it is public and shared by design — and risks getting
     that property wrong silently, so the standard group is both safer and interoperable.
+
+    4096-bit rather than 2048-bit because 2048 is 112-bit security, which NIST SP 800-57 disallows
+    after 2030. Note the generator is **5** here, where the 2048-bit group used 2.
     """
 
-    #: RFC 5054 Appendix A, 2048-bit group.
+    #: RFC 5054 Appendix A, 4096-bit group. (Same modulus as RFC 3526's 4096-bit MODP group — which
+    #: is group **16** in the IKE registry, not group 5. "Group 5" in that registry is the 1536-bit
+    #: group, weaker than what we replaced; the 5 here is the generator.)
     RFC_5054_N = int(
-        "AC6BDB41324A9A9BF166DE5E1389582FAF72B6651987EE07FC3192943DB56050"
-        "A37329CBB4A099ED8193E0757767A13DD52312AB4B03310DCD7F48A9DA04FD50"
-        "E8083969EDB767B0CF6095179A163AB3661A05FBD5FAAAE82918A9962F0B93B8"
-        "55F97993EC975EEAA80D740ADBF4FF747359D041D5C33EA71D281E446B14773B"
-        "CA97B43A23FB801676BD207A436C6481F1D2B9078717461A5B9D32E688F87748"
-        "544523B524B0D57D5EA77A2775D2ECFA032CFBDBF52FB3786160279004E57AE6"
-        "AF874E7303CE53299CCC041C7BC308D82A5698F3A8D0C38271AE35F8E9DBFBB6"
-        "94B5C803D89F7AE435DE236D525F54759B65E372FCD68EF20FA7111F9E4AFF73",
+        "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"
+        "29024E088A67CC74020BBEA63B139B22514A08798E3404DD"
+        "EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"
+        "E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"
+        "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D"
+        "C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"
+        "83655D23DCA3AD961C62F356208552BB9ED529077096966D"
+        "670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B"
+        "E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9"
+        "DE2BCBF6955817183995497CEA956AE515D2261898FA0510"
+        "15728E5A8AAAC42DAD33170D04507A33A85521ABDF1CBA64"
+        "ECFB850458DBEF0A8AEA71575D060C7DB3970F85A6E1E4C7"
+        "ABF5AE8CDB0933D71E8C94E04A25619DCEE3D2261AD2EE6B"
+        "F12FFA06D98A0864D87602733EC86A64521F2B18177B200C"
+        "BBE117577A615D6C770988C0BAD946E208E24FA074E5AB31"
+        "43DB5BFCE0FD108E4B82D120A92108011A723C12A787E6D7"
+        "88719A10BDBA5B2699C327186AF4E23C1A946834B6150BDA"
+        "2583E9CA2AD44CE8DBBBC2DB04DE8EF92E8EFC141FBECAA6"
+        "287C59474E6BC05D99B2964FA090C3A2233BA186515BE7ED"
+        "1F612970CEE2D7AFB81BDD762170481CD0069127D5B05AA9"
+        "93B4EA988D8FDDC186FFB7DC90A6C08F4DF435C934063199"
+        "FFFFFFFFFFFFFFFF",
         16,
     )
 
     def test_the_modulus_is_the_rfc_group(self):
         n, _g = _pysrp.get_ng(S.NG_TYPE, None, None)
         assert n == self.RFC_5054_N
-        assert n.bit_length() == 2048
+        assert n.bit_length() == 4096
 
-    def test_the_generator_is_two(self):
+    def test_the_generator_is_five(self):
         _n, g = _pysrp.get_ng(S.NG_TYPE, None, None)
-        assert g == 2
+        assert g == 5
+
+    def test_the_group_is_not_a_deprecated_size(self):
+        """2048-bit is 112-bit security, disallowed by NIST SP 800-57 after 2030. This is the
+        assertion that fails if someone steps the group back down for speed."""
+        n, _g = _pysrp.get_ng(S.NG_TYPE, None, None)
+        assert n.bit_length() >= 4096
 
     def test_the_modulus_is_a_safe_prime(self):
         """`N = 2q + 1` with `q` prime. The property that rules out small-subgroup confinement, and
-        the one a hand-rolled modulus is most likely to miss."""
+        the one a hand-rolled modulus is most likely to miss.
+
+        Costs about 2 s: two Miller-Rabin runs over a 4096-bit number. Worth it — this is the test
+        that catches a substituted or hand-generated group, which is the failure that would not
+        announce itself.
+        """
         n = self.RFC_5054_N
         q, remainder = divmod(n - 1, 2)
         assert remainder == 0
@@ -206,9 +236,10 @@ class TestTheGroupIsTheStandardOne:
         assert _is_probable_prime(q), "(N-1)/2 is not prime, so N is not a safe prime"
 
 
-def _is_probable_prime(n: int, rounds: int = 24) -> bool:
-    """Miller-Rabin. Deterministic enough at 24 rounds for a one-off assertion about a fixed
-    constant; this is checking a published value, not screening candidates."""
+def _is_probable_prime(n: int, rounds: int = 8) -> bool:
+    """Miller-Rabin. Eight rounds against a 4096-bit number is ~2 s and ample here: this verifies a
+    fixed published constant and guards against a *substituted* one, rather than screening random
+    candidates, and a wrong value would fail the first base with overwhelming probability."""
     if n < 2:
         return False
     for small in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37):
@@ -353,7 +384,7 @@ class TestUnknownLoginsAreIndistinguishable:
         password — which is the leak it exists to prevent."""
         salt, verifier = S.synthetic_credential("ghost")
         assert len(salt) == S.SALT_LEN
-        assert len(verifier) > 200  # 2048-bit group
+        assert len(verifier) > 500  # a 4096-bit group yields a 512-byte verifier
 
 
 class TestChallengeStateIsBoundedAndSingleUse:
