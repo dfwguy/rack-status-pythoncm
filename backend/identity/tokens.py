@@ -195,13 +195,19 @@ def mint(
     if ttl_seconds <= 0:
         raise TokenError("ttl_seconds must be positive")
 
-    now = int(time.time())
+    # Fractional seconds, which RFC 7519 §2 explicitly permits for NumericDate. Integer `iat` cannot
+    # distinguish a token minted just *before* a revocation cutoff from one minted just after, and
+    # `identity.revocation` compares exactly that. The first version of this used whole seconds and
+    # forced the cutoff a second into the future to stay safe, which locked a user out of a *fresh*
+    # login for up to a second after their own password change. Sub-second `iat` removes the
+    # ambiguity rather than trading one error for the other.
+    now = time.time()
     payload: dict[str, Any] = {
         "iss": issuer(),
         "aud": AUDIENCE,
         "sub": principal,
         "iat": now,
-        "exp": now + int(ttl_seconds),
+        "exp": now + float(ttl_seconds),
         # Per-token id, so a single refresh token can be revoked without revoking the user.
         "jti": uuid.uuid4().hex,
         "typ": token_type,

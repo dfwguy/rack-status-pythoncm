@@ -141,6 +141,9 @@ Every requirement above has at least one criterion.
 | AC-4a | FR-4c | A token with `alg: none` is refused, and a token signed with an algorithm other than the configured one is refused. | automated test | two negative cases; the second is the RS256→HS256 confusion attack |
 | AC-4b | FR-4d | A token with a wrong issuer, a wrong audience, or past expiry is refused, for tokens the product minted itself. | automated test | three negative cases — the mirror of AC-14, which only covered federated tokens |
 | AC-5c | FR-5c | Each of the six wrong (token type, expected type) pairs is refused, and `verify` cannot be called without naming an expected type. | automated test | all six, because the two dangerous directions are opposite: refresh-as-access buys 12 hours of authority, access-as-refresh buys perpetual renewal |
+| AC-6b | FR-6 | A revoked subject, a revoked `jti`, and a token issued before a "log out everywhere" cutoff are each refused; a disabled or deleted login is refused even with no revocation row written; and revoking one token leaves the same user's other tokens working. | automated test | five separate claims because they are five distinct mechanisms, and the last is what makes FR-5b's revocable renewal usable rather than a blunt logout |
+| AC-6c | FR-6 | Immediately after a "log out everywhere", existing tokens are refused **and a fresh login is accepted**; asserted over repeated cycles. | automated test | the regression guard for a real defect. A whole-second `iat` forced a cutoff a second into the future, which refused the user's own next login — so a password change looked like a broken account. Repeated cycles because a sub-second ordering bug presents as flakiness, not a failure |
+| AC-6d | FR-6, NFR-3 | Repeated checks are served from cache; a revocation written by another process is still observed; the cache age ceiling is below FR-6's 10 s; and the check's p95 is within 5 ms. | automated test | the cache is the one component that can turn a denial into a grant silently. The "actually serving reads" clause is not redundant — it caught a read path that wrote, defeating its own cache |
 | AC-6a | FR-6a | With no checker registered, verification of a validly signed, unexpired token is refused; the checker is never invoked for a token that failed signature or claim validation. | automated test | the second clause matters as much: a revocation checker handed attacker-controlled claims from an unverified token is a new attack surface, not a control |
 | AC-4j | FR-4d | A token minted under one deployment secret is refused under another, and a rotated secret invalidates already-issued tokens without a restart. | automated test | pins what *actually* separates deployments — the derived key — since `iss` and `aud` are product constants and identical everywhere |
 | AC-4h | FR-4e | The configured group is ≥ 4096 bits, its modulus equals RFC 5054 Appendix A's 4096-bit prime, its generator is 5, and `(N-1)/2` is prime. | automated test | the last clause is the safe-prime property, and it is the one a substituted or hand-generated modulus would fail silently. Costs ~2 s of Miller-Rabin and earns it |
@@ -558,6 +561,35 @@ and cost 4.74 ms, breaching the audit budget until it was cached on the store's 
 So `revocation.py` uses the same pattern from the start: a generation counter bumped on every write,
 and a cached read keyed on it. Not an optimisation to add later — the identical mistake is already
 documented in this repository.
+
+**Implementation found the generation counter is not sufficient on its own.** It is a *process-local*
+integer, so a write from another process — an operator running a CLI against the same file — never
+bumps it, and the cache would serve a stale **allow** indefinitely with no symptom, blowing FR-6's
+10-second bound. The key therefore also includes the file's `stat()` identity (mtime and size, a few
+microseconds), with a hard 5-second age ceiling as a backstop for a filesystem whose mtime
+granularity hides a fast second write. Measured: **0.0034 ms cached, 0.092 ms uncached**, against the
+5 ms budget.
+
+**And a read path was quietly writing.** `revocation_snapshot()` originally pruned expired token rows
+while reading, which was self-defeating twice: TinyDB's `remove()` rewrites the file *even when
+nothing matches*, so every read became a write, and that write changed the mtime in the cache key —
+so the cache was invalidated by its own reads and never hit once. A test asserting the cache actually
+serves reads caught it. Expired rows are now filtered in memory and cleared by the next write.
+
+**Four revocation granularities, because they answer different questions:** by subject (a user is
+gone), by `jti` (one session or a leaked refresh token, without disturbing the user's others — which
+is what makes FR-5b's revocable renewal path useful), by issue time (*log out everywhere*, and the
+only mechanism available for it since outstanding token ids cannot be enumerated), and implicitly for
+a login that is disabled or retired in the store — so deleting a user and forgetting the revocation
+row does not leave their tokens live.
+
+That third one carried a real bug worth recording, because the tempting fix is the wrong one. `iat`
+at whole-second resolution cannot distinguish a token minted just before a cutoff from one just
+after, so the first version pushed the cutoff a second into the future to stay safe — which then
+refused the user's own *next* login for up to a second, making a password change look like a broken
+account. Fixed by recording `iat` with sub-second precision (RFC 7519 §2 permits fractional
+NumericDate), so the cutoff can be exactly *now*. Verified over 300 logout-then-relogin cycles: zero
+old tokens accepted, zero fresh logins refused.
 
 ### Decision 5 — OIDC without a new backend dependency
 

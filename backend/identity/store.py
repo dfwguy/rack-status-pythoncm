@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,12 @@ _TABLE_USERS = "users"
 _TABLE_GROUPS = "groups"
 _TABLE_MEMBERS = "memberships"
 _TABLE_RETIRED = "retired"
+#: Revocation lives in the identity file rather than beside it: it is identity state, and sharing the
+#: file means it also shares the atomic write, the flock and — the part that matters — the generation
+#: counter `identity.revocation` keys its cache on (FR-6, Decision 4).
+_TABLE_REVOKED_SUBJECTS = "revoked_subjects"
+_TABLE_REVOKED_TOKENS = "revoked_tokens"
+_TABLE_NOT_BEFORE = "not_before"
 
 
 class _OwnerOnlyAtomicStorage(_AtomicJSONStorage):
@@ -310,6 +317,116 @@ class IdentityStore:
         with _lock:
             rows = self._db.table(_TABLE_RETIRED).search(Query().kind == _TABLE_USERS)
         return sorted(str(r.get("id", "")) for r in rows)
+
+    # -- revocation (FR-6) ---------------------------------------------------------------------
+
+    def revoke_subject(self, principal: str, reason: str = "") -> None:
+        """Deny every token for a principal until explicitly restored."""
+        with _lock:
+            table = self._db.table(_TABLE_REVOKED_SUBJECTS)
+            row = {"principal": principal, "reason": reason, "at": time.time()}
+            if table.get(Query().principal == principal):
+                table.update(row, Query().principal == principal)
+            else:
+                table.insert(row)
+            _bump()
+
+    def restore_subject(self, principal: str) -> None:
+        with _lock:
+            if self._db.table(_TABLE_REVOKED_SUBJECTS).remove(Query().principal == principal):
+                _bump()
+
+    def revoke_token(self, jti: str, expires_at: float, reason: str = "") -> None:
+        """Deny one token by id — logging out a single session, or burning a leaked refresh token.
+
+        ``expires_at`` is stored so the row can be dropped once the token would have expired anyway.
+        Without it this table grows for the life of the deployment, and it sits on the hot path.
+        """
+        with _lock:
+            table = self._db.table(_TABLE_REVOKED_TOKENS)
+            if not table.get(Query().jti == jti):
+                table.insert(
+                    {
+                        "jti": jti,
+                        "expires_at": float(expires_at),
+                        "reason": reason,
+                        "at": time.time(),
+                    }
+                )
+            self._prune_expired_tokens_locked()
+            _bump()
+
+    def set_not_before(self, principal: str, moment: float) -> None:
+        """Deny every token for a principal *issued before* ``moment``.
+
+        The mechanism behind "log out everywhere" and "revoke on password change". Needed because
+        outstanding token ids cannot be enumerated — only their issue time can be compared.
+        """
+        with _lock:
+            table = self._db.table(_TABLE_NOT_BEFORE)
+            row = {"principal": principal, "at": float(moment)}
+            if table.get(Query().principal == principal):
+                table.update(row, Query().principal == principal)
+            else:
+                table.insert(row)
+            _bump()
+
+    def revocation_snapshot(self) -> dict[str, Any]:
+        """Everything a revocation decision needs, in one read.
+
+        One call rather than four because the caller caches the result on the generation counter, and
+        four separate reads would be four chances to observe a half-applied change.
+
+        Includes ``disabled`` and ``retired`` logins deliberately. Without them, deleting or
+        disabling a user and forgetting to *also* write a revocation row would leave their existing
+        tokens working until expiry — a gap that costs nothing to close while the whole snapshot is
+        being cached anyway.
+
+        **Strictly read-only, and that is load-bearing.** This originally pruned expired token rows
+        here, which was self-defeating twice over: TinyDB's ``remove()`` rewrites the file *even when
+        nothing matches*, so every read performed a write, and that write changed the file's mtime —
+        which is part of the cache key ``identity.revocation`` uses, so the cache was invalidated by
+        its own reads and never hit once. Caught by a test asserting the cache actually serves
+        reads. Expired rows are filtered out in memory instead and cleared by the next write.
+        """
+        now = time.time()
+        with _lock:
+            return {
+                "subjects": {
+                    str(r["principal"]): str(r.get("reason", ""))
+                    for r in self._db.table(_TABLE_REVOKED_SUBJECTS).all()
+                },
+                "tokens": {
+                    str(r["jti"]): float(r.get("expires_at", 0))
+                    for r in self._db.table(_TABLE_REVOKED_TOKENS).all()
+                    if float(r.get("expires_at", 0)) >= now
+                },
+                "not_before": {
+                    str(r["principal"]): float(r.get("at", 0))
+                    for r in self._db.table(_TABLE_NOT_BEFORE).all()
+                },
+                "disabled": {
+                    str(r.get("login", ""))
+                    for r in self._db.table(_TABLE_USERS).all()
+                    if r.get("disabled")
+                },
+                "retired": {
+                    str(r.get("id", ""))
+                    for r in self._db.table(_TABLE_RETIRED).search(Query().kind == _TABLE_USERS)
+                },
+            }
+
+    def _prune_expired_tokens_locked(self) -> None:
+        """Drop revocation rows for tokens that have expired on their own.
+
+        Safe because an expired token is refused by :func:`identity.tokens.verify` regardless, so the
+        row stops carrying information the moment ``expires_at`` passes.
+
+        Called from **write** paths only. ``remove()`` rewrites the file even with nothing to remove,
+        so calling it on a read turned every lookup into a write — see
+        :meth:`revocation_snapshot`.
+        """
+        self._db.table(_TABLE_REVOKED_TOKENS).remove(Query().expires_at < time.time())
 
     # -- lifecycle -----------------------------------------------------------------------------
 
