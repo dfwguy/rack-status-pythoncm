@@ -20,6 +20,7 @@ also authenticated the wrong password, leaked which logins exist, or used SHA-1.
 from __future__ import annotations
 
 import os
+import random
 import statistics
 import sys
 import threading
@@ -28,6 +29,7 @@ from pathlib import Path
 
 import pytest
 import srp as lib
+from srp import _pysrp
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -98,6 +100,136 @@ class TestParametersAreExplicit:
             "rkoike", "pw", hash_alg=S.HASH_ALG, ng_type=S.NG_TYPE, salt_len=S.SALT_LEN
         )
         assert S.verifier_for_salt("rkoike", "pw", salt) == vkey
+
+
+class TestWireCompatibilityIsPinned:
+    """RFC 5054 §2.6 padding, which the library defaults *off*.
+
+    This class exists because the failure mode is uniquely expensive: a padding mismatch does not
+    raise, it produces a proof that does not verify, so every login fails looking exactly like a
+    wrong password. The browser client is in-repo TypeScript and mainstream JS SRP libraries follow
+    the RFC, so the server has to as well.
+    """
+
+    def test_rfc5054_padding_is_enabled_on_the_active_backend(self):
+        assert S.RFC5054_COMPAT is True
+        active = getattr(lib, "_mod", None)
+        assert active is not None
+        assert active._rfc5054_compat is True, (
+            f"{active.__name__} is the bound backend and its padding flag is off; "
+            "a standards-compliant client will fail to authenticate"
+        )
+
+    def test_the_flag_is_read_from_whichever_backend_is_bound(self):
+        """`srp/__init__.py` prefers the OpenSSL `_ctsrp` and falls back to `_pysrp`, and each has
+        its own `_rfc5054_compat`. So the package-level name must be the one we set, or the pin is a
+        no-op on whichever module we did not touch."""
+        assert lib.rfc5054_enable is lib._mod.rfc5054_enable
+        assert S.active_backend() == lib._mod.__name__
+
+    def test_a_padding_mismatch_refuses_and_looks_like_a_wrong_password(self):
+        """The justification for pinning, demonstrated rather than asserted.
+
+        Runs a real exchange with the client on one padding mode and the server on the other, and
+        shows it is refused — with no error distinguishing it from a bad credential.
+        """
+        salt_hex, ver_hex = S.enroll("rkoike", "pw")
+        active = lib._mod
+        try:
+            usr = _client("rkoike", "pw")
+            _, big_a = usr.start_authentication()  # client computes A in RFC mode
+            lib.rfc5054_enable(False)  # server now disagrees about padding
+            token, s_hex, b_hex = S.begin("rkoike", big_a.hex(), salt_hex, ver_hex)
+            lib.rfc5054_enable(True)
+            proof = usr.process_challenge(bytes.fromhex(s_hex), bytes.fromhex(b_hex))
+            lib.rfc5054_enable(False)
+            with pytest.raises(S.SrpError, match="authentication failed"):
+                S.finish(token, proof.hex())
+        finally:
+            lib.rfc5054_enable(S.RFC5054_COMPAT)
+            assert active._rfc5054_compat is True
+
+    def test_the_mode_does_not_change_stored_verifiers(self):
+        """Why enabling this needs no migration: padding affects the session values `u` and `k`, not
+        `gen_x`. If this ever fails, turning the flag on has invalidated every enrolled credential
+        and the change is no longer safe to make in place."""
+        active = lib._mod
+        try:
+            salt, in_rfc_mode = lib.create_salted_verification_key(
+                "rkoike", "pw", hash_alg=S.HASH_ALG, ng_type=S.NG_TYPE, salt_len=S.SALT_LEN
+            )
+            lib.rfc5054_enable(False)
+            in_legacy_mode = S.verifier_for_salt("rkoike", "pw", salt)
+        finally:
+            lib.rfc5054_enable(S.RFC5054_COMPAT)
+            assert active._rfc5054_compat is True
+        assert in_rfc_mode == in_legacy_mode
+
+
+class TestTheGroupIsTheStandardOne:
+    """The modulus is RFC 5054's, not one we generated.
+
+    SRP needs `N` to be a safe prime so the group has no small subgroups to confine an exchange
+    into. A bespoke modulus buys nothing — it is public and shared by design — and risks getting
+    that property wrong silently, so the standard group is both safer and interoperable.
+    """
+
+    #: RFC 5054 Appendix A, 2048-bit group.
+    RFC_5054_N = int(
+        "AC6BDB41324A9A9BF166DE5E1389582FAF72B6651987EE07FC3192943DB56050"
+        "A37329CBB4A099ED8193E0757767A13DD52312AB4B03310DCD7F48A9DA04FD50"
+        "E8083969EDB767B0CF6095179A163AB3661A05FBD5FAAAE82918A9962F0B93B8"
+        "55F97993EC975EEAA80D740ADBF4FF747359D041D5C33EA71D281E446B14773B"
+        "CA97B43A23FB801676BD207A436C6481F1D2B9078717461A5B9D32E688F87748"
+        "544523B524B0D57D5EA77A2775D2ECFA032CFBDBF52FB3786160279004E57AE6"
+        "AF874E7303CE53299CCC041C7BC308D82A5698F3A8D0C38271AE35F8E9DBFBB6"
+        "94B5C803D89F7AE435DE236D525F54759B65E372FCD68EF20FA7111F9E4AFF73",
+        16,
+    )
+
+    def test_the_modulus_is_the_rfc_group(self):
+        n, _g = _pysrp.get_ng(S.NG_TYPE, None, None)
+        assert n == self.RFC_5054_N
+        assert n.bit_length() == 2048
+
+    def test_the_generator_is_two(self):
+        _n, g = _pysrp.get_ng(S.NG_TYPE, None, None)
+        assert g == 2
+
+    def test_the_modulus_is_a_safe_prime(self):
+        """`N = 2q + 1` with `q` prime. The property that rules out small-subgroup confinement, and
+        the one a hand-rolled modulus is most likely to miss."""
+        n = self.RFC_5054_N
+        q, remainder = divmod(n - 1, 2)
+        assert remainder == 0
+        assert _is_probable_prime(n), "N is not prime"
+        assert _is_probable_prime(q), "(N-1)/2 is not prime, so N is not a safe prime"
+
+
+def _is_probable_prime(n: int, rounds: int = 24) -> bool:
+    """Miller-Rabin. Deterministic enough at 24 rounds for a one-off assertion about a fixed
+    constant; this is checking a published value, not screening candidates."""
+    if n < 2:
+        return False
+    for small in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37):
+        if n % small == 0:
+            return n == small
+    d, r = n - 1, 0
+    while d % 2 == 0:
+        d //= 2
+        r += 1
+    for _ in range(rounds):
+        a = random.randrange(2, n - 1)
+        x = pow(a, d, n)
+        if x in (1, n - 1):
+            continue
+        for _ in range(r - 1):
+            x = x * x % n
+            if x == n - 1:
+                break
+        else:
+            return False
+    return True
 
 
 class TestTheExchange:

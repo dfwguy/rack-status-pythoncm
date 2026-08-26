@@ -23,12 +23,23 @@ mcp>=1.2,<2
 # appear in a proxy, a memory dump or a debug log. Chosen over an argon2id verifier deliberately
 # (brief FR-4); both were on the table and TLS covers a different threat.
 #
-# Ships as `py3-none-any` and resolves to the pure-Python backend (`srp._pysrp`) — no compiler and
-# no OpenSSL ctypes binding, which is what makes it installable at an air-gapped site (FR-4a).
+# Ships as `py3-none-any` — no compiler — which is what makes it installable at an air-gapped site
+# (FR-4a).
 #
 # ⚠️ ITS DEFAULTS ARE NOT SAFE. `hash_alg=0` is SHA-1 and `salt_len=4` is a 32-bit salt, so a
 # reasonable-looking `create_salted_verification_key(user, pw)` enrols a SHA-1 credential. Always
 # pass hash_alg/ng_type/salt_len explicitly — brief FR-4e, enforced by AC-4c and AC-4d.
+#
+# ⚠️ AND ITS WIRE FORMAT DEFAULTS OFF-STANDARD. RFC 5054 padding is disabled unless
+# `srp.rfc5054_enable(True)` is called, and a mismatch with the client does not error — it fails
+# every login looking exactly like a wrong password. `identity/srp.py` pins it at import; do not
+# call `rfc5054_enable` anywhere else. Brief FR-4f.
+#
+# ⚠️ THE BACKEND IS CHOSEN BY dlopen, NOT BY THE PACKAGE. `srp/__init__.py` prefers the OpenSSL
+# ctypes backend `_ctsrp` and falls back to pure-Python `_pysrp`; each keeps its *own* padding flag.
+# We get `_pysrp` today only because `_ctsrp` asks for `libssl.so`/`libssl.so.1.1.0` while both
+# macOS and `python:3.12-slim` ship `libssl.so.3`. Installing `libssl-dev` creates that symlink and
+# flips the backend — which is why the pin asserts against the *active* module rather than `_pysrp`.
 srp>=1.0.22,<2
 # JWT id/access tokens (FR-5). Also validates a federated provider's ID token, which is why OIDC
 # needs no `authlib` — an ID token is a JWT and PyJWT plus a JWKS fetch covers it.

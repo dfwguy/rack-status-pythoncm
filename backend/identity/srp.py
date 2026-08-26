@@ -76,6 +76,62 @@ class SrpError(Exception):
     failure so a client cannot distinguish causes (FR-4b)."""
 
 
+# --- Wire compatibility. Pinned, because the default is non-standard and the flag is per-backend. --
+
+#: RFC 5054 §2.6 requires values be left-padded to the width of ``N`` before hashing (``u =
+#: H(PAD(A), PAD(B))``, ``k = H(N, PAD(g))``). **The library defaults this off**, computing a variant
+#: that only interoperates with itself.
+#:
+#: On, because the browser client is in-repo TypeScript and mainstream JS SRP libraries implement the
+#: RFC. A mismatch does not error — it produces a proof that does not verify, so **every login fails
+#: looking exactly like a wrong password**, which is the most expensive failure mode this module
+#: could have. Measured: RFC↔RFC and non-RFC↔non-RFC both authenticate; the two cross pairs both
+#: refuse.
+#:
+#: Safe to turn on now and safe to have turned on later: the padding affects only the session values
+#: ``u`` and ``k``, not ``gen_x``, so **stored salts and verifiers are unchanged by this flag**
+#: (asserted by ``test_the_mode_does_not_change_stored_verifiers``). Enrolments do not need migrating.
+RFC5054_COMPAT = True
+
+
+def active_backend() -> str:
+    """Which implementation ``srp`` bound: ``srp._pysrp`` or ``srp._ctsrp``.
+
+    Worth exposing because the choice is made by whether ``dlopen`` finds OpenSSL, not by us, and it
+    changes where the compatibility flag lives.
+    """
+    return getattr(_srp, "_mod", _pysrp).__name__
+
+
+def _pin_wire_compatibility() -> None:
+    """Set the RFC-5054 mode on **the active backend**, then verify it took.
+
+    The subtlety that makes this a function rather than a line: ``srp/__init__.py`` tries the
+    OpenSSL-backed ``_ctsrp`` first and falls back to ``_pysrp``, and **each module has its own
+    ``_rfc5054_compat`` global**. Toggling ``_pysrp`` directly is therefore a silent no-op whenever
+    the C backend is active. ``srp.rfc5054_enable`` is re-exported from whichever won, so it is the
+    only correct thing to call.
+
+    Which one wins is decided by ``dlopen``: ``_ctsrp`` asks for ``libssl.so`` or
+    ``libssl.so.1.1.0``, and both this workstation and ``python:3.12-slim`` ship only
+    ``libssl.so.3``, so today it is always ``_pysrp``. That is luck, not design — installing
+    ``libssl-dev`` creates the ``libssl.so`` symlink and flips it. Hence the assertion: if the
+    binding ever changes, this raises at import instead of leaving authentication silently on the
+    wrong wire format.
+    """
+    _srp.rfc5054_enable(RFC5054_COMPAT)
+    active = getattr(_srp, "_mod", _pysrp)
+    if getattr(active, "_rfc5054_compat", None) is not RFC5054_COMPAT:
+        raise SrpError(
+            f"could not pin RFC 5054 padding on {active.__name__}: the flag did not take. "
+            "Client and server must agree on padding or every login fails looking like a wrong "
+            "password. Do not proceed without resolving this."
+        )
+
+
+_pin_wire_compatibility()
+
+
 # --- Enrolment ------------------------------------------------------------------------------------
 
 
@@ -91,10 +147,13 @@ def verifier_for_salt(login: str, password: str, salt: bytes) -> bytes:
     reimplemented cryptography: it is the library's own expression, ``g ** gen_x(...) mod N``, called
     with our salt instead of theirs, using their ``gen_x`` and their group.
 
-    It does reach into ``_pysrp`` for ``gen_x`` and the hash map, which is private API. That is why
-    ``test_derived_verifier_matches_the_library`` exists: it asserts this function reproduces
-    ``create_salted_verification_key``'s output for the same salt, so a library change fails a test
-    instead of silently breaking authentication.
+    It does reach into ``_pysrp`` for ``gen_x`` and the hash map, which is private API, and does so
+    even when :func:`active_backend` reports ``_ctsrp``. That is sound for one specific reason —
+    ``gen_x`` takes no width argument, so the verifier does not depend on the RFC-5054 padding mode
+    and the two backends agree on it — but it is not obvious, so
+    ``test_derived_verifier_matches_the_library`` compares this against **the active backend's**
+    ``create_salted_verification_key`` for the same salt. Either a library change or a backend switch
+    then fails a test instead of silently breaking authentication.
     """
     n, g = _pysrp.get_ng(NG_TYPE, None, None)
     x = _pysrp.gen_x(_hash_class(), salt, login.encode(), password.encode())
