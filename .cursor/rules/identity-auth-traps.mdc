@@ -103,7 +103,36 @@ direction for a security control.
 Related: the revocation checker runs **only after** signature and claim validation. A checker handed
 attacker-controlled claims from an unverified token is a new attack surface, not a control.
 
-## 8. Two operational constraints that are not obvious from the code
+## 8. "Why is this token suddenly invalid?" — and the one where it's suddenly *valid*
+
+Nineteen catalogued causes, one row each, in `backend/tests/test_identity_token_invalidation.py`
+(ids `INV-01`..`INV-19`) with the table in the SADD. Read those before debugging a token. **Four are
+routinely triggered by accident, three of them from fixtures:**
+
+| Symptom | Likely cause |
+| :---- | :---- |
+| *Every* token refused, including freshly minted ones | `revocation.install()` was never called — fail-closed (INV-18), not a bug |
+| A token valid a moment ago is refused | `RACK_WEB_SECRET_KEY` changed since it was minted; `monkeypatch.setenv` after a mint does this (INV-17) |
+| A token refused with no revocation in sight | wrong expected token type — `verify` demands it, and the message names both (INV-09..11) |
+| **A revoked token works again** | the identity store was repointed or replaced (INV-19) |
+
+That last one is the only cause that *grants* rather than denies, so it is the one to be careful
+with. Revocation state lives in the identity file; a store with no revocation row honours what the
+previous store refused.
+
+Scope it correctly, because the obvious version is safe and the realistic one is not.
+`var/secrets/.rack_web_secret_key` and `var/identity/identity.json` share the `rack-data` named
+volume, so **losing the volume is harmless** — the secret regenerates and every signature fails.
+The hazard is replacing the identity file *while the secret survives*: **restoring `identity.json`
+from a backup predating an offboarding re-honours that person's tokens** until expiry (≤15 min
+access, ≤12 h refresh). A restore of the identity store is not purely additive. If you must, rotate
+`RACK_WEB_SECRET_KEY` alongside it and everything outstanding dies with it.
+
+When reading a refusal, the category tells you what happened: **Crypto/Claims** = never ours or never
+valid; **Type** = ours, being misused; **Revocation/Implicit** = was valid, withdrawn; **Operational**
+= the deployment moved. Only the third should ever reach a user as "your session ended".
+
+## 9. Two operational constraints that are not obvious from the code
 
 - **SRP challenge state is in-process**, so `--workers 1` is load-bearing;
   `assert_single_worker_safe()` refuses more. A second worker splits the table and login succeeds

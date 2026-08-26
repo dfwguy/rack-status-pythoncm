@@ -21,7 +21,7 @@ Revision History
 | Date | Author | Summary of Change |
 | :---- | :---- | :---- |
 | Aug. 24, 2026 | Agentic PLC | Initial reconstruction from the shipped suite: 108 backend test files (2,294 tests), 52 frontend test files, measured coverage, and the `auth-audit-logging` test plan's 40 cases. Skill: plc-test-plan-reconstruction; Timestamp: 2026-08-24T16:00Z; Input ref: NSPECT-S57Q-EI19. Human decision: pending; Reviewed by: pending |
-| Aug. 26, 2026 | Rafael M. Koike & Cursor Agent ("Ada") | Refreshed metrics for Phase 2 identity: 115 backend test files (2,503 tests, 164 of them covering `backend/identity/`), 65.7% coverage over 26,883 statements, and the runtime cost of 4096-bit SRP. Recorded that three cases are now measurement-only and skip under `CI`, and noted the two Phase 2 test techniques worth reusing — asserting a cache actually *hits* before asserting it cannot go stale, and running a sub-second boundary many times because that class of bug presents as flakiness rather than failure. |
+| Aug. 26, 2026 | Rafael M. Koike & Cursor Agent ("Ada") | Refreshed metrics for Phase 2 identity: 115 backend test files (2,503 tests, 164 of them covering `backend/identity/`), 65.7% coverage over 26,883 statements, and the runtime cost of 4096-bit SRP. Recorded that three cases are now measurement-only and skip under `CI`, and noted the two Phase 2 test techniques worth reusing — asserting a cache actually *hits* before asserting it cannot go stale, and running a sub-second boundary many times because that class of bug presents as flakiness rather than failure. Added the `INV-01`..`INV-19` token-invalidation catalogue, whose completeness guard is itself mutation-checked. |
 
 ---
 
@@ -104,8 +104,8 @@ operators against real deployments, recorded as evidence rather than as automate
 
 | Metric | Value (Aug. 24, 2026) |
 | :---- | :---- |
-| Backend test files | 115 |
-| Backend tests | 2,503 passing, 17 skipped (of which 164 cover `backend/identity/`) |
+| Backend test files | 116 |
+| Backend tests | 2,524 passing, 17 skipped (of which 185 cover `backend/identity/`, including the 19-row token-invalidation catalogue) |
 | Frontend test files | 52 |
 | Frontend coverage | 50.61% (reported by the `frontend-test` job; no per-file floor — gap G-8) |
 | Backend statement+branch coverage | 65.7% in a working tree (26,883 statements, `.coveragerc` scope, tests excluded). The clean-checkout figure runs ~0.3 pt lower — see §3 of `local-vs-ci-tree.mdc` and confirm any per-file number against a tracked-only run |
@@ -192,7 +192,7 @@ Latest gating run (commit `0bea87c`, CI pipeline on `feat/auth-audit-logging`):
 | `python-lint` (ruff + pylint + secret scan) | passing |
 | `check-tracked-tree` | 134 modules imported, 218 routes |
 
-Local full run: 2,503 passed, 17 skipped, ~220 s with coverage instrumentation. The count differs
+Local full run: 2,524 passed, 17 skipped, ~220 s with coverage instrumentation. The count differs
 between environments because measurement cases skip when `CI` is set — a p95 or a timing ratio on a
 shared runner is not a measurement — and the local tracked-tree export omits `frontend/`. Three cases
 are in that category now: TC-34's audit latency, the revocation check's 5 ms budget (NFR-3), and the

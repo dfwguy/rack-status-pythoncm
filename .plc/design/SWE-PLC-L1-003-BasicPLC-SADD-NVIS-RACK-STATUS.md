@@ -20,6 +20,7 @@ Revision History
 | Date | Author | Summary of Change |
 | :---- | :---- | :---- |
 | Aug. 24, 2026 | Agentic PLC | Initial reconstruction from the shipped source tree (134 backend modules, 38 API modules, 218 routes), `.cursor/rules/core-designs.mdc`, `docs/EXECUTION_ARCHITECTURE.md`, `docs/PARSING_RESULTS_ARCHITECTURE.md` and the `auth-audit-logging` brief. Skill: plc-design-reconstruction; Timestamp: 2026-08-24T15:30Z; Input ref: NSPECT-S57Q-EI19. Human decision: pending; Reviewed by: pending |
+| Aug. 26, 2026 | Rafael M. Koike & Cursor Agent ("Ada") | Added the **token-invalidation catalogue** (`INV-01`..`INV-19`): every way a session ends, categorised, each with a matching test case and a guard that fails if a refusal path is added without a row. Includes INV-19, the only cause that *grants* rather than denies — replacing the identity store un-revokes, so restoring `identity.json` from a backup predating an offboarding re-honours those tokens until expiry |
 | Aug. 26, 2026 | Rafael M. Koike & Cursor Agent ("Ada") | Added **Identity design** (`backend/identity/`) as as-built, covering the six modules, the separate-store decision, the SRP group and wire-format pins, the token type discipline and PyJWT's two silent gaps, and revocation's four granularities and cache design. Recorded the two traps the subsystem produced — the "add a second to be safe" cutoff that locked users out of their own next login, and the read path that defeated its own cache. Security Design rows split from one Authentication line into four; resolved open question 1 (identity is now as-built); corrected the `import app` debt count to one; refreshed the test count |
 
 ---
@@ -422,6 +423,52 @@ no symptom. The cache key therefore also includes the file's `stat()` identity (
 microseconds), with a hard 5-second age ceiling as a backstop for coarse mtime granularity. Measured
 **0.0034 ms cached, 0.092 ms uncached**.
 
+#### Token invalidation: the complete catalogue
+
+Nineteen ways a token stops being honoured. Enumerated rather than described because "what can
+invalidate a session?" is a question with a finite answer that should not have to be reconstructed by
+reading two modules — and because several of these get triggered *by accident*, particularly from
+test fixtures. Ids are stable and each has a matching case in
+`backend/tests/test_identity_token_invalidation.py`, which also fails if a refusal path is added to
+the code without a row here.
+
+| # | Cause | Category | Notes |
+| :---- | :---- | :---- | :---- |
+| INV-01 | `exp` has passed | Time | The ordinary case. Access ≤ 15 min, refresh ≤ 12 h |
+| INV-02 | Signature does not match the payload | Crypto | Tampering with any claim |
+| INV-03 | Signed by another deployment | Crypto | Different secret → different derived key. **This**, not `iss`, is the boundary between installs |
+| INV-04 | Algorithm is not the pinned one | Crypto | `alg: none` and HS512→HS256 substitution both refused (FR-4c) |
+| INV-05 | A required claim is absent | Claims | All seven. Includes `exp` — PyJWT accepts a token without it and treats it as eternal, so the explicit `require` list is the only thing refusing this |
+| INV-06 | `iss` is wrong | Claims | PyJWT does not check this at all unless `issuer=` is passed |
+| INV-07 | `aud` is wrong | Claims | Stops a federated provider's ID token being presented as ours |
+| INV-08 | `sub` is not a valid principal | Claims | The FR-15a grammar, applied on the way out too |
+| INV-09 | Refresh presented as access | Type | Would otherwise authorise requests for 12 h |
+| INV-10 | Id presented as access | Type | |
+| INV-11 | Access presented as refresh | Type | Would otherwise buy perpetual renewal |
+| INV-12 | Subject revoked | Revocation | Outlives the token live at the time — a disabled user cannot simply log in again |
+| INV-13 | This token revoked by `jti` | Revocation | One session or a leaked refresh token; the user's **other** tokens keep working |
+| INV-14 | Issued before a *log out everywhere* cutoff | Revocation | A fresh login afterwards **is** honoured — see trap 1 below |
+| INV-15 | Account disabled | Implicit | No revocation row needed |
+| INV-16 | Account deleted / login retired | Implicit | No revocation row needed |
+| INV-17 | Deployment secret rotated | Operational | Invalidates **everything** outstanding. Deliberate, and why the signing key is not cached |
+| INV-18 | No revocation checker registered | Operational | Fail-closed: refuses *all* tokens, not only revoked ones (FR-6a). A forgotten `revocation.install()` presents as total refusal |
+| INV-19 | Identity store replaced or repointed | Operational | **Inverts: a revoked token becomes valid again.** See below |
+
+**INV-19 deserves its own paragraph, because it is the only entry that makes a dead token live.**
+Revocation state lives in the identity file, so a store with no revocation row honours a token that
+the previous store refused. The deployment layout mitigates the obvious version and not the realistic
+one: `var/secrets/.rack_web_secret_key` and `var/identity/identity.json` share the `rack-data` named
+volume, so **losing the volume is safe** — the secret is regenerated, every signature fails, and
+INV-17 applies. What is not safe is replacing the identity file while the secret survives. Restoring
+`identity.json` from a backup taken before someone was offboarded re-honours their tokens until
+expiry, bounded by the TTLs in INV-01. **A restore of the identity store is therefore not purely
+additive, and a `NVIS_IDENTITY_FILE` change in a fixture silently un-revokes.**
+
+The categories are worth keeping distinct when reading a failure: **Crypto** and **Claims** mean the
+token was never ours or never valid; **Type** means it is ours and being misused; **Revocation** and
+**Implicit** mean it was valid and has been withdrawn; **Operational** means the deployment changed
+underneath it. Only the third group should ever be reported to a user as "your session ended".
+
 #### Two traps this subsystem produced, stated so they are not rediscovered
 
 **1. "Add a second to be safe" is the wrong fix, and it is the tempting one.** The *log out
@@ -656,7 +703,7 @@ Threat model: `.plc/security/threat-model-NVIS-RACK-STATUS.md` (T-1..T-64).
 
 ### Test Automation
 
-2,503 backend tests (pytest) plus frontend Vitest, gating merges in CI. The execution layer is
+2,524 backend tests (pytest) plus frontend Vitest, gating merges in CI. The execution layer is
 stubbable at one chokepoint, which is what makes route-level testing safe; `subprocess` is stubbed
 as a hard floor for the code paths that still bypass it. Demonstration mode serves synthetic data
 for out-of-process cases. Meta-tests enforce architectural invariants: route parity across the URL
