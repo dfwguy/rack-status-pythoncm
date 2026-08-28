@@ -1,0 +1,342 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Author: Rafael M. Koike & Cursor Agent ("Ada")
+"""TC-31 of the Phase 1 test plan: the whole feature end to end, under default configuration.
+
+Traces to NFR-8, FR-10, FR-10b, AC-14, AC-14d, AC-26.
+
+**This case exists because every other one is scoped too narrowly to answer NFR-8.** The rest of the
+suite verifies pieces: that the schema is right, that rotation is bounded, that a refusal carries a
+decision. NFR-8 makes a claim about the *product as shipped* — that a deployment which enables no
+hardening option, configures no syslog, and turns on no encryption still produces a readable audit
+trail. Nothing that runs in-process through the Flask test client can establish that, because the
+test client shares this interpreter's logging configuration; it is the one thing a real deployment
+does not.
+
+So a real server is started as a subprocess with **token-mode authentication actually on**, and three
+requests are driven over a real socket:
+
+1. a permitted mutating request, carrying a session established through `/api/login`;
+2. the same request with no credential, which the gate refuses;
+3. an unauthenticated `/ws/terminal` upgrade.
+
+Rows 2 and 3 are the point. A trail that records only successes is an activity log, not an audit
+trail — the entries with evidentiary value are the refusals, and `/ws/terminal` is answered by WSGI
+middleware **above Flask's router**, so it is the one surface no `after_request` hook can reach. If
+the terminal refusal is missing from the trail, the product's single highest-privilege endpoint is
+the one whose denials go unrecorded.
+
+Gunicorn is the server here, not Werkzeug, because it is what the Dockerfile's ENTRYPOINT runs and
+because the terminal middleware only claims a path when the environ carries a real socket
+(`gunicorn.socket` / `werkzeug.socket`). TC-35 owns the gunicorn-versus-dev-server question; this
+case just needs a server that behaves like production while the audit configuration stays default.
+"""
+
+from __future__ import annotations
+
+import http.client
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+#: The same audited endpoint the rest of the phase's cases use, so a break here is a break there.
+CANONICAL_ENDPOINT = "/api/rack-uptime"
+CANONICAL_ACTION = "rack:uptime"
+
+#: Shared secret for token-mode auth. A literal in a test fixture, never a real credential.
+TOKEN = "tc31-e2e-token"
+
+STARTUP_TIMEOUT_SEC = 45.0
+EVENT_TIMEOUT_SEC = 20.0
+
+pytestmark = pytest.mark.skipif(
+    not (REPO_ROOT / "gunicorn.conf.py").is_file(),
+    reason="gunicorn.conf.py absent; TC-31 drives the server the ENTRYPOINT runs",
+)
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+class _LiveServer:
+    """A gunicorn child under default audit configuration, plus the audit file it writes."""
+
+    def __init__(self, port: int, audit_file: Path, proc: subprocess.Popen):
+        self.port = port
+        self.audit_file = audit_file
+        self.proc = proc
+        self.session_cookie: str | None = None
+
+    # -- transport ------------------------------------------------------------------------------
+    def _request(
+        self, method: str, path: str, body: dict | None = None, *, with_session: bool = False,
+        extra_headers: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, str], bytes]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=20)
+        headers = {"Content-Type": "application/json"}
+        if with_session and self.session_cookie:
+            headers["Cookie"] = self.session_cookie
+        if extra_headers:
+            headers.update(extra_headers)
+        payload = json.dumps(body).encode() if body is not None else None
+        try:
+            conn.request(method, path, body=payload, headers=headers)
+            resp = conn.getresponse()
+            data = resp.read()
+            return int(resp.status), dict(resp.getheaders()), data
+        finally:
+            conn.close()
+
+    def login(self) -> int:
+        """Establish a session the way the SPA does, so the permitted request is really permitted.
+
+        In token mode the shared secret is presented as the password to `/api/login`, which sets a
+        Flask session cookie; the gate checks that cookie, not the token. Sending the token on the
+        audited request instead would be refused, and the test would prove the opposite of what it
+        claims.
+        """
+        status, headers, _ = self._request("POST", "/api/login", {"password": TOKEN})
+        cookie = headers.get("Set-Cookie") or ""
+        if cookie:
+            self.session_cookie = cookie.split(";", 1)[0]
+        return status
+
+    def upgrade_terminal(self) -> int:
+        """Attempt a WebSocket upgrade on /ws/terminal with no credential.
+
+        The middleware only claims the path when `Upgrade: websocket` is present AND the environ
+        carries a real socket, so the headers matter: without them this falls through to Flask's
+        router and exercises a different refusal entirely.
+        """
+        status, _, _ = self._request(
+            "GET", "/ws/terminal?mode=headnode",
+            extra_headers={
+                "Upgrade": "websocket",
+                "Connection": "Upgrade",
+                "Sec-WebSocket-Version": "13",
+                "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+            },
+        )
+        return status
+
+    # -- observation ----------------------------------------------------------------------------
+    def audit_events(self) -> list[dict]:
+        if not self.audit_file.is_file():
+            return []
+        out = []
+        for line in self.audit_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except ValueError:
+                # A line that does not parse is itself a finding; surface it rather than hide it.
+                pytest.fail(f"unparseable line in the audit trail: {line[:200]!r}")
+            if isinstance(parsed, dict):
+                out.append(parsed)
+        return out
+
+    def wait_for(self, predicate, timeout: float = EVENT_TIMEOUT_SEC) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.2)
+        return False
+
+    def find(self, **match) -> dict | None:
+        for event in self.audit_events():
+            if all(event.get(k) == v for k, v in match.items()):
+                return event
+        return None
+
+
+@pytest.fixture
+def live_server(tmp_path):
+    """A real server with authentication ON and every audit hardening option left at its default."""
+    port = _free_port()
+    audit_file = tmp_path / "audit" / "audit.jsonl"
+
+    env = dict(os.environ)
+    env.update(
+        {
+            "RACK_STATUS_DEMO": "1",
+            # The subject of this case: the gate is ON. Patching cannot cross a process boundary,
+            # so the environment is the only way to configure the child.
+            "RACK_WEB_AUTH_MODE": "token",
+            "RACK_WEB_AUTH_TOKEN": TOKEN,
+            "RACK_WEB_SECRET_KEY": "tc31-session-signing-key",
+            "RACK_EXEC_MODE": "local",
+            # Only the audit *path* is overridden, so the test can read it. Sinks, format, level,
+            # rotation, retention and the flood guard are all left at their defaults -- that is
+            # what makes this NFR-8 evidence rather than a configured happy path.
+            "NVIS_AUDIT_FILE": str(audit_file),
+            "RACK_UPTIME_DRY_RUN": "1",
+            "NVIS_CATALOG_FILE": str(tmp_path / "catalog.json"),
+            "PYTHONUNBUFFERED": "1",
+        }
+    )
+    # Explicitly clear anything the developer's own shell may have set, or "default configuration"
+    # would mean "whatever this laptop has".
+    for leaked in (
+        "NVIS_AUDIT_ENABLED", "NVIS_AUDIT_LONG_RETENTION", "NVIS_LOG_SINKS", "NVIS_LOG_FORMAT",
+        "NVIS_LOG_LEVEL", "NVIS_LOG_SYSLOG_HOST", "NVIS_LOG_FILE",
+        "RACK_WEB_TLS_CERT", "RACK_WEB_TLS_KEY", "RACK_WEB_AUTH_DISABLED",
+        "RACK_WEB_ALLOWED_ORIGINS", "RACK_WEB_TRUSTED_PROXIES",
+    ):
+        env.pop(leaked, None)
+
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "gunicorn",
+            "-c", str(REPO_ROOT / "gunicorn.conf.py"),
+            "--workers", "1", "--threads", "2", "--worker-class", "gthread",
+            "--pythonpath", str(REPO_ROOT / "backend"),
+            "--bind", f"127.0.0.1:{port}",
+            "app:app",
+        ],
+        cwd=str(REPO_ROOT), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        deadline = time.monotonic() + STARTUP_TIMEOUT_SEC
+        ready = False
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                out = proc.stdout.read() if proc.stdout else ""
+                pytest.fail(f"server exited during startup ({proc.returncode}):\n{out[-3000:]}")
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.settimeout(0.5)
+                if probe.connect_ex(("127.0.0.1", port)) == 0:
+                    ready = True
+                    break
+            time.sleep(0.2)
+        if not ready:
+            pytest.fail(f"server never listened on {port} within {STARTUP_TIMEOUT_SEC}s")
+        yield _LiveServer(port, audit_file, proc)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
+
+
+def test_default_deployment_produces_a_readable_trail(live_server):
+    """NFR-8 / AC-26: a permitted action lands in the trail with nothing switched on.
+
+    The assertion is deliberately on the FR-5 field set and not merely on the action string: an
+    event that arrives without a principal, a result or a request id is not usable as audit
+    evidence, and "a line appeared" would pass while the line was useless.
+    """
+    assert live_server.login() == 200, "token-mode login must succeed for the permitted request"
+
+    status, _, _ = live_server._request(
+        "POST", CANONICAL_ENDPOINT, {"rack": "p5-r01"}, with_session=True
+    )
+    assert status != 401, "the session cookie should have authenticated this request"
+
+    assert live_server.wait_for(
+        lambda: live_server.find(action=CANONICAL_ACTION, result="success") is not None
+    ), (
+        "no successful audited event reached the trail under default configuration. NFR-8 claims a "
+        "deployment that enables nothing still produces a readable trail; this is that claim.\n"
+        f"trail so far: {json.dumps(live_server.audit_events()[-5:], indent=1)}"
+    )
+
+    event = live_server.find(action=CANONICAL_ACTION, result="success")
+    assert event is not None
+    for field in ("event_id", "ts", "principal", "action", "result", "request_id", "src_ip"):
+        assert field in event, f"{field} missing — the event is not usable as audit evidence"
+    assert event["principal"], "an authenticated request must not record an empty principal"
+
+
+def test_refusals_reach_the_trail_on_a_live_server(live_server):
+    """AC-14 / AC-14d / FR-10b: both refusal paths are recorded, each with its reason.
+
+    Two refusals, chosen because they are answered in different places. The first is refused by the
+    Flask gate and so passes through the `after_request` chokepoint. The second is refused by WSGI
+    middleware *above* the router, where no Flask hook runs at all — a separate, deliberate emit
+    call site, and the one that would silently disappear if that call were ever dropped.
+    """
+    # (b) no credential at all -> the gate refuses.
+    status, headers, _ = live_server._request("POST", CANONICAL_ENDPOINT, {"rack": "p5-r01"})
+    assert status == 401, f"expected the gate to refuse an uncredentialed request, got {status}"
+    assert "WWW-Authenticate" in headers, "RFC 9110 requires a challenge on a 401"
+
+    assert live_server.wait_for(
+        lambda: any(
+            e.get("result") in ("refused", "denied") and e.get("action") == CANONICAL_ACTION
+            for e in live_server.audit_events()
+        )
+    ), (
+        "the auth refusal did not reach the trail. A trail holding only successes is an activity "
+        f"log.\ntrail: {json.dumps(live_server.audit_events()[-5:], indent=1)}"
+    )
+    refusal = next(
+        e for e in live_server.audit_events()
+        if e.get("result") in ("refused", "denied") and e.get("action") == CANONICAL_ACTION
+    )
+    assert refusal.get("decision"), "AC-14d: a refusal must record the decision that produced it"
+
+    # (c) an unauthenticated terminal upgrade -> refused above Flask's router.
+    assert live_server.upgrade_terminal() == 403, (
+        "an unauthenticated /ws/terminal upgrade must be refused with a plain 403 and never "
+        "reach a socket"
+    )
+
+    assert live_server.wait_for(
+        lambda: live_server.find(action="terminal:open", result="refused") is not None
+    ), (
+        "the terminal refusal did not reach the trail. This surface is answered above Flask's "
+        "router, so no after_request hook can record it -- it is the product's highest-privilege "
+        f"endpoint.\ntrail: {json.dumps(live_server.audit_events()[-5:], indent=1)}"
+    )
+
+    terminal = live_server.find(action="terminal:open", result="refused")
+    assert terminal is not None
+    assert terminal.get("reason") == "unauthenticated", (
+        f"the refusal must say why; got {terminal.get('reason')!r}"
+    )
+    assert terminal.get("principal") == "anonymous"
+    assert terminal.get("resource") == "/ws/terminal"
+
+
+def test_the_trail_is_one_object_per_line(live_server):
+    """The readability half of NFR-8: "readable" means machine-readable, line by line.
+
+    `audit_events()` fails the test on any unparseable line, so this drives traffic and then simply
+    requires that the file be non-empty and every line have parsed. Without it, a trail of pretty-
+    printed multi-line JSON would satisfy the two cases above and be unreadable by any collector.
+    """
+    live_server.login()
+    live_server._request("POST", CANONICAL_ENDPOINT, {"rack": "p5-r01"}, with_session=True)
+    assert live_server.wait_for(lambda: bool(live_server.audit_events()))
+
+    raw = live_server.audit_file.read_text(encoding="utf-8")
+    lines = [ln for ln in raw.splitlines() if ln.strip()]
+    assert lines, "the trail is empty"
+    for line in lines:
+        parsed = json.loads(line)  # audit_events() already asserted this; be explicit
+        assert isinstance(parsed, dict), "each line must be one JSON object"

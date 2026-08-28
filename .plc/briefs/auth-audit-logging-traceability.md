@@ -4,7 +4,7 @@
 
 \<content authored by agent, review thoroughly and remove after human review\>
 
-Agentic PLC version: v1.13.0; Skill: plc-traceability-matrix; LLM: unknown; Timestamp: 2026-08-28T18:49:47Z; Input ref: NVRACKSTAT-52
+Agentic PLC version: v1.13.0; Skill: plc-traceability-matrix; LLM: unknown; Timestamp: 2026-08-28T21:11:19Z; Input ref: NVRACKSTAT-52
 
 | Req ID | Req text | Repo | Revision | Design ref | Code | Test ID | Last verified | Status |
 |---|---|---|---|---|---|---|---|---|
@@ -17,7 +17,7 @@ Agentic PLC version: v1.13.0; Skill: plc-traceability-matrix; LLM: unknown; Time
 | FR-7 | The audit sink shall append each event as one line to a JSONL file, never rewriting or truncating a previously written line, and shall by default bound total audit storage by size-capped rotation. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
 | FR-8 | The audit event shall record the TCP peer address as `src_ip`; shall record a forwarded address chain only when the peer is a configured trusted proxy, resolved by scanning the chain right-to-left past known proxies; and shall label the derivation in `src_ip_trust` as `peer`, `proxy`, or `claimed-untrusted`. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
 | FR-9 | The audit event shall record the principal from the authenticated session when one exists, and otherwise the literal `anonymous`; it shall not derive the principal from a client-supplied header. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
-| FR-10 | The application shall record an audit event for both permitted and refused actions, with `result` distinguishing success, failure and error. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
+| FR-10 | The application shall record an audit event for both permitted and refused actions, with `result` distinguishing success, failure and error. | — | 434c93298219b1f9afdeb183188c6a94b6787238 | — | — | — | 434c932  2026-08-28 | GAP |
 | FR-11 | Audit logging shall be enabled by default and shall produce a usable audit trail on a fresh deployment with no configuration supplied. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
 | FR-12 | The application shall audit mutating actions and authentication events by default, and shall exclude read-only requests from the audit trail unless read auditing is explicitly enabled. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
 | FR-13 | Every configuration knob introduced by this feature shall have a working default, such that no new environment variable is required for the feature to function. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
@@ -29,7 +29,7 @@ Agentic PLC version: v1.13.0; Skill: plc-traceability-matrix; LLM: unknown; Time
 | NFR-5 | The trusted-proxy list and the sensitive-key list shall be deploy-time configuration that an authenticated dashboard operator cannot alter at runtime. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
 | NFR-6 | The feature shall not require edits to the existing 81 `logging.getLogger` call sites. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
 | NFR-7 | The product shall document that, for tunnelled access, `src_ip` records the tunnel endpoint rather than the operator's address, and that the operator's address exists only in the SSH server's authentication log. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
-| NFR-8 | Hardening beyond the default — external syslog, transport encryption, encryption at rest, remote retention — shall be opt-in, and the audit trail shall remain fully functional with all of it disabled. | — | — | — | — | — | — | GAP |
+| NFR-8 | Hardening beyond the default — external syslog, transport encryption, encryption at rest, remote retention — shall be opt-in, and the audit trail shall remain fully functional with all of it disabled. | — | 434c93298219b1f9afdeb183188c6a94b6787238 | — | — | — | 434c932  2026-08-28 | GAP |
 | NFR-9 | The default configuration shall require no network egress, no external service, and no additional credential. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
 | NFR-10 | The audit sink shall serialize every event through a JSON encoder that escapes control characters, and shall never construct an audit record by string formatting or concatenation. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
 | NFR-11 | The audit event shall exclude query strings from `resource` by default, and the redaction filter shall redact configured sensitive key names appearing as query parameters. | — | d5e4f7cbd4afa813aa89ab975a6885dd13440d36 | — | — | — | d5e4f7c  2026-08-28 | GAP |
@@ -61,7 +61,7 @@ Agentic PLC version: v1.13.0; Skill: plc-traceability-matrix; LLM: unknown; Time
 | NFR-5 | GAP | Code, Design ref, Test ID | fill the missing traceability pointer and rerun verification evidence |
 | NFR-6 | GAP | Code, Design ref, Test ID | fill the missing traceability pointer and rerun verification evidence |
 | NFR-7 | GAP | Code, Design ref, Test ID | fill the missing traceability pointer and rerun verification evidence |
-| NFR-8 | GAP | Code, Design ref, Test ID, Last verified | fill the missing traceability pointer and rerun verification evidence |
+| NFR-8 | GAP | Code, Design ref, Test ID | fill the missing traceability pointer and rerun verification evidence |
 | NFR-9 | GAP | Code, Design ref, Test ID | fill the missing traceability pointer and rerun verification evidence |
 | NFR-10 | GAP | Code, Design ref, Test ID | fill the missing traceability pointer and rerun verification evidence |
 | NFR-11 | GAP | Code, Design ref, Test ID | fill the missing traceability pointer and rerun verification evidence |
@@ -86,7 +86,7 @@ Agentic PLC version: v1.13.0; Skill: plc-traceability-matrix; LLM: unknown; Time
 
 | Timestamp | Section changed | Change summary | Provenance | Human decision | Reviewed by | Acceptance reference |
 |---|---|---|---|---|---|---|
-| 2026-08-28T18:49:47Z | Matrix | Initial agent-authored report | Agentic PLC version: v1.13.0; Skill: plc-traceability-matrix; LLM: unknown; Timestamp: 2026-08-28T18:49:47Z; Input ref: NVRACKSTAT-52 | pending | \<dev\> | none |
+| 2026-08-28T21:11:19Z | Matrix | Initial agent-authored report | Agentic PLC version: v1.13.0; Skill: plc-traceability-matrix; LLM: unknown; Timestamp: 2026-08-28T21:11:19Z; Input ref: NVRACKSTAT-52 | pending | \<dev\> | none |
 
 ## Disclaimer
 
@@ -134,9 +134,9 @@ How each column was obtained, so a reader can re-derive it:
 | **FR-7d** | audit/sink.py, logging_config.py | TC-10 | 3 | 3 passed | 1 | — |
 | **FR-8** | api/_common.py, core.py | TC-19 | 8 | 8 passed | 2 | — |
 | **FR-9** | — | TC-26 | 1 | 1 passed | 1 | — |
-| **FR-10** | — | TC-24, TC-31 | 2 | 2 passed | 4 | TC-31 |
+| **FR-10** | — | TC-24, TC-31 | 4 | 4 passed | 6 | — |
 | **FR-10a** | audit/__init__.py, audit/sink.py | TC-13, TC-14 | 4 | 4 passed | 3 | — |
-| **FR-10b** | api/terminal.py | TC-25, TC-31 | 0 | not executed | 0 | TC-25, TC-31 |
+| **FR-10b** | api/terminal.py | TC-25, TC-31 | 4 | 5 passed | 1 | — |
 | **FR-11** | — | TC-23 | 4 | 4 passed | 3 | — |
 | **FR-11a** | audit/sink.py, logging_config.py | TC-10, TC-35, TC-40 | 4 | 4 passed | 2 | TC-40 |
 | **FR-12** | audit/actions.py | TC-18, TC-23 | 5 | 5 passed | 2 | — |
@@ -153,43 +153,59 @@ How each column was obtained, so a reader can re-derive it:
 | **NFR-5** | — | TC-30 | 1 | 1 passed | 1 | — |
 | **NFR-6** | — | TC-39 | 0 | not executed | 2 | TC-39 |
 | **NFR-7** | — | TC-21 | 2 | 2 passed | 1 | — |
-| **NFR-8** | — | TC-31 | 0 | not executed | 0 | TC-31 |
+| **NFR-8** | — | TC-31 | 2 | 2 passed | 1 | — |
 | **NFR-9** | audit/sink.py, logging_config.py | TC-5 | 5 | 5 passed | 1 | — |
 | **NFR-10** | audit/sink.py | TC-7, TC-32 | 4 | 4 passed | 2 | — |
 | **NFR-11** | — | TC-33 | 1 | 1 passed | 1 | — |
 | **NFR-13** | — | TC-27 | 2 | 2 passed | 1 | — |
 | **NFR-14** | — | TC-20 | 5 | 12 passed | 1 | — |
 
-**39 requirements**, each with a design pointer and at least one test case. 129 test-node references across the matrix (requirements share cases, so this exceeds the 99 distinct nodes executed); every executed node passed.
+**39 requirements**, each with a design pointer and at least one test case. 137 test-node references across the matrix (requirements share cases, so this exceeds the 99 distinct nodes executed); every executed node passed.
 
-- Requirements with **no evidence row**: 2 — FR-10b, NFR-8
-- Requirements resolving to **no executed test**: 3 — FR-10b, NFR-6, NFR-8
+- Requirements with **no evidence row**: 0
+- Requirements resolving to **no executed test**: 1 — NFR-6
 
-### The one real gap
+### Unresolved test cases
 
-Two test cases in the plan resolve to no implemented test, and one of them is the reason the
-acceptance report has a finding:
+Two remain, and both are unresolved **by design** — they verify by a method that is not a
+pytest run, so their evidence is a committed checklist rather than a node id:
 
-| Requirement | Unresolved TC | What it was to verify | Consequence |
-|---|---|---|---|
-| FR-10b, NFR-8 | TC-31 | The whole feature end-to-end against a **live server** under default configuration — a permitted action, an auth refusal and an unauthenticated `/ws/terminal` upgrade all landing in the audit file | **AC-26 is MISSING.** Every constituent behaviour is covered by a unit-level case, but nothing proves the default deployment produces a readable trail end to end |
-| FR-10b | TC-25 | One audit event per refusal, each recording its reason, each readable immediately | Partially covered: the refusal-event shape is verified by TC-24 and the chokepoint cases; the *immediacy* claim is not separately asserted |
+| TC | Method | Evidence |
+|---|---|---|
+| TC-39 | inspection — the feature diff carries no hunk touching a pre-existing `logging.getLogger` call site (NFR-6) | `docs/AUDIT_PHASE1_VERIFICATION.md` |
+| TC-40 | demonstration — audit history survived a container recreate on the `rack-data` named volume (FR-11a / AC-10f) | `docs/AUDIT_PHASE1_VERIFICATION.md` |
 
-Neither is a defect in delivered behaviour — they are missing *verification*, which is exactly
-the distinction this matrix exists to make visible.
+NFR-6 therefore shows **no executed test** above and that is correct, not a gap: an
+inspection has no test to execute.
 
-### Pointer drift found while building this
+**Closed on 2026-08-28**, and worth recording because the plan claimed no gaps existed while
+these two had no implementation at all:
 
-**25 of the 54 pytest node ids the test plan cites no longer resolve** — 7 name three files that
-were never created (`test_audit_e2e.py`, `test_audit_injection.py`, `test_audit_settings.py`) and
-18 name functions that were renamed during implementation. The coverage is intact; the citations
-went stale, because the tests were reorganised into `TestTC<N>...` classes after the plan was
-written.
+- **TC-31** (NFR-8 / AC-26) — the end-to-end case. Now `backend/tests/test_audit_e2e.py`: a real gunicorn child with token auth on, driven with a permitted action, an auth refusal and an unauthenticated `/ws/terminal` upgrade, all asserted present in the trail while every audit hardening option stays at its default. **This was the sole finding in the acceptance report, and it now passes.**
+- **TC-25** (FR-10b / AC-14d) — the terminal refusal hook. Now `TestTC25TerminalRefusalsAreAudited`, parametrized over all three reasons `_refuse_reason` can return, plus a case proving the three do not collapse into one flood-guard entry.
 
-That class convention is the more durable anchor and is what this matrix resolves against: the TC
-id lives in the class name, so renaming a method cannot break the mapping. The plan's *Test
-artifact* column should be refreshed to match, and until it is, a reader following it will
-conclude the tests are missing.
+Both were checked by **mutation** rather than by passing alone: deleting the
+`_audit_terminal_refusal` call in `api/terminal.py` makes the end-to-end case fail. A refusal test that still passes with the audit call removed is worse than no test, because it reports coverage that does not exist.
+
+### Pointer drift found while building this — now fixed
+
+**25 of the 54 pytest node ids the test plan cited resolved to nothing**: 7 named three files
+that were never created (`test_audit_e2e.py`, `test_audit_injection.py`,
+`test_audit_settings.py`) and 18 named functions renamed when the tests were reorganised into
+`TestTC<N>...` classes. The coverage was intact throughout, which is exactly what made it
+invisible — every test passed, and only a reader who tried to *follow* a citation would find it
+led nowhere.
+
+All 103 citations were regenerated from the tree on 2026-08-28 and now collect cleanly (119
+tests, zero unresolvable). The `TestTC<N>` class convention is the durable anchor and is what
+this matrix resolves against: the TC id lives in the class name, so renaming a method cannot
+break the mapping and the column can be re-derived from source at any time.
+
+One correction was drafted and **withdrawn**, and it is the reason only exact-match strategies
+feed this matrix: a keyword search for TC-25's subject matter found
+`test_principal_never_from_header`, which is real, passing, and verifies a *different*
+requirement (FR-9/AC-13, TC-26). Recording it would have put a false pointer into the audit
+trail — a plausible-looking citation is worse than an absent one, because nobody re-checks it.
 
 One correction was drafted and **withdrawn** during this run, and it is worth recording why: a
 keyword search for TC-25's subject matter found `test_principal_never_from_header`, which is real,

@@ -29,6 +29,8 @@ channel the auth work settles on. If that channel is not the Flask session cooki
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 
 import pytest
@@ -36,7 +38,10 @@ import pytest
 os.environ["RACK_EXEC_MODE"] = "local"
 
 import api.terminal as terminal_module
+import audit
+import logging_config as lc
 from app import app
+from audit import sink
 
 
 class _FakeWebSocket:
@@ -204,3 +209,125 @@ def test_target_with_shell_metacharacters_is_rejected(armed_middleware):
         "interpolated into the remote command string on the head-node hop, so it is remote "
         "command injection. Validate target against the node inventory before building argv."
     )
+
+
+class TestTC25TerminalRefusalsAreAudited:
+    """TC-25: every refusal reason produces its own audit event, readable immediately.
+
+    Traces to FR-10b, AC-14d.
+
+    The tests above prove the gate *refuses*. This proves the refusal is *recorded*, which is a
+    separate property and the one with evidentiary value: an operator investigating an intrusion
+    needs to know that somebody tried, from where, and why they were turned away. A gate that
+    refuses silently leaves the product's highest-privilege surface with no denial trail at all.
+
+    Parametrized over all three reasons `_refuse_reason` can return, because they are three
+    distinct code paths, and because each is a distinct flood-guard key. Each reason is driven once,
+    so all three stay below the collapse threshold and every event must be individually present --
+    which is what "readable immediately, with no flush step" in the plan means.
+    """
+
+    #: Every value `api.terminal._refuse_reason` can return. If a fourth is ever added, this list
+    #: and the parametrisation below are what should fail to make somebody consider auditing it.
+    ALL_REASONS = ("unauthenticated", "cross-origin", "invalid target")
+
+    @pytest.fixture(autouse=True)
+    def _audit_to_tmp(self, monkeypatch, tmp_path):
+        """Point the audit sink at a file this test owns, and reset it afterwards."""
+        for name in list(lc.SETTINGS):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("NVIS_LOG_SINKS", "file")
+        monkeypatch.setenv("NVIS_LOG_FILE", str(tmp_path / "app.log"))
+        monkeypatch.setenv("NVIS_AUDIT_FILE", str(tmp_path / "audit" / "audit.jsonl"))
+        audit.reset_for_tests()
+        lc.reset_for_tests()
+        lc.configure(force=True)
+        audit.configure(force=True)
+        yield
+        audit.reset_for_tests()
+        lc.reset_for_tests()
+
+    @staticmethod
+    def _events(tmp_path) -> list[dict]:
+        for handler in logging.getLogger(sink.AUDIT_LOGGER).handlers:
+            handler.flush()
+        path = tmp_path / "audit" / "audit.jsonl"
+        if not path.is_file():
+            return []
+        return [
+            json.loads(ln)
+            for ln in path.read_text(encoding="utf-8").splitlines()
+            if ln.strip()
+        ]
+
+    @staticmethod
+    def _environ_for(reason: str) -> dict:
+        """An environ that `_refuse_reason` will reject for exactly the named reason."""
+        if reason == "unauthenticated":
+            return _upgrade_environ()
+        if reason == "cross-origin":
+            # Authenticated, but the Origin header names a host the allowlist does not.
+            environ = _authenticated_environ()
+            environ["HTTP_ORIGIN"] = "https://attacker.example.net"
+            return environ
+        if reason == "invalid target":
+            return _authenticated_environ(query="target=node01;id>/tmp/pwned")
+        raise AssertionError(f"unhandled reason {reason!r}")
+
+    @pytest.mark.parametrize("reason", ALL_REASONS)
+    def test_each_refusal_reason_is_recorded_with_its_reason(
+        self, armed_middleware, monkeypatch, tmp_path, reason
+    ):
+        mw, created, _ = armed_middleware
+        if reason == "cross-origin":
+            # An allowlist that exists and does not contain the attacker's origin. Without this the
+            # policy is permissive by default and the request would be allowed, so the case would
+            # silently test nothing.
+            monkeypatch.setenv("RACK_WEB_ALLOWED_ORIGINS", "https://dashboard.example.com")
+
+        mw(self._environ_for(reason), _start_response)
+
+        assert created == [], f"a {reason} upgrade must not reach session creation"
+
+        events = self._events(tmp_path)
+        matching = [
+            e for e in events
+            if e.get("action") == "terminal:open" and e.get("reason") == reason
+        ]
+        assert len(matching) == 1, (
+            f"expected exactly one audit event for a {reason!r} refusal, found {len(matching)}. "
+            "One refusal is below the flood-guard threshold, so it must be written individually "
+            f"and be readable without a flush step.\nevents: {json.dumps(events, indent=1)}"
+        )
+
+        event = matching[0]
+        assert event.get("result") == "refused"
+        assert event.get("principal") == "anonymous"
+        assert event.get("resource") == "/ws/terminal"
+        assert event.get("auth_method") == "none"
+        for field in ("event_id", "ts", "src_ip", "src_ip_trust"):
+            assert field in event, f"{field} missing; the event cannot answer 'who, from where'"
+
+    def test_the_three_reasons_are_distinct_flood_guard_keys(
+        self, armed_middleware, monkeypatch, tmp_path
+    ):
+        """All three in one run must yield three events, not one collapsed summary.
+
+        The flood guard keys on (principal, action, reason). These refusals share principal and
+        action and differ only in reason, so this is what proves `reason` is part of the key. If it
+        were not, three different attacks on the same endpoint would collapse into one line and the
+        trail would lose the distinction that matters most.
+        """
+        mw, created, _ = armed_middleware
+        monkeypatch.setenv("RACK_WEB_ALLOWED_ORIGINS", "https://dashboard.example.com")
+
+        for reason in self.ALL_REASONS:
+            mw(self._environ_for(reason), _start_response)
+
+        assert created == []
+        events = [e for e in self._events(tmp_path) if e.get("action") == "terminal:open"]
+        observed = sorted(e.get("reason") for e in events)
+        assert observed == sorted(self.ALL_REASONS), (
+            f"expected one event per reason, got {observed}. Three distinct refusals collapsing "
+            "into fewer events means `reason` is not part of the flood-guard key."
+        )

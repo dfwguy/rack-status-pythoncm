@@ -1,17 +1,17 @@
-# Acceptance Validation — verdict: UNVERIFIED
+# Acceptance Validation — verdict: PASS
 
 ## Summary
 
 \<content authored by agent, review thoroughly and remove after human review\>
 
-Agentic PLC version: v1.13.0; Skill: plc-acceptance-validation; LLM: unknown; Timestamp: 2026-08-28T18:47:47Z; Input ref: NVRACKSTAT-52
+Agentic PLC version: v1.13.0; Skill: plc-acceptance-validation; LLM: unknown; Timestamp: 2026-08-28T21:09:36Z; Input ref: NVRACKSTAT-52
 
 | Status | Count |
 |---|---:|
-| PASS | 33 |
+| PASS | 34 |
 | FAIL | 0 |
 | UNVERIFIED | 0 |
-| MISSING | 1 |
+| MISSING | 0 |
 | N/A | 0 |
 
 ## Acceptance Criteria
@@ -142,12 +142,12 @@ Agentic PLC version: v1.13.0; Skill: plc-acceptance-validation; LLM: unknown; Ti
 - Evidence: external-test/pytest/2026-08-28
 - Notes: —
 
-### AC-26 — MISSING
+### AC-26 — PASS
 
 - Requirement: NFR-8
-- Severity: Warning
-- Evidence: —
-- Notes: no test case, evidence row, or signoff was located for this AC
+- Severity: Info
+- Evidence: external-test/pytest/2026-08-28
+- Notes: —
 
 ### AC-27 — PASS
 
@@ -256,9 +256,7 @@ Agentic PLC version: v1.13.0; Skill: plc-acceptance-validation; LLM: unknown; Ti
 
 ## Findings
 
-| Severity | AC ID | Status | Action |
-|---|---|---|---|
-| Warning | AC-26 | MISSING | no test case, evidence row, or signoff was located for this AC |
+_No non-passing findings._
 
 ## Scope and Caveats
 
@@ -270,7 +268,7 @@ Agentic PLC version: v1.13.0; Skill: plc-acceptance-validation; LLM: unknown; Ti
 
 | Timestamp | Section changed | Change summary | Provenance | Human decision | Reviewed by | Acceptance reference |
 |---|---|---|---|---|---|---|
-| 2026-08-28T18:47:47Z | Summary | Initial agent-authored report | Agentic PLC version: v1.13.0; Skill: plc-acceptance-validation; LLM: unknown; Timestamp: 2026-08-28T18:47:47Z; Input ref: NVRACKSTAT-52 | pending | \<dev\> | none |
+| 2026-08-28T21:09:36Z | Summary | Initial agent-authored report | Agentic PLC version: v1.13.0; Skill: plc-acceptance-validation; LLM: unknown; Timestamp: 2026-08-28T21:09:36Z; Input ref: NVRACKSTAT-52 | pending | \<dev\> | none |
 
 ## Disclaimer
 

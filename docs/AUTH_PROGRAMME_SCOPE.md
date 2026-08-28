@@ -12,7 +12,7 @@ scope record; it is not a spec and it does not carry acceptance criteria.
 |---|---|---|
 | 0 | Defect fixes: the unauthenticated `/ws/terminal`, `target` command injection, `0.0.0.0` exposure | done |
 | 0.5 | HTTPS: self-signed by default, internal CA opt-in, TLS 1.2 floor, CSP/HSTS, Origin policy | done |
-| 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | **closed** — 7/7 work items merged to `main` 2026-08-25; the four closing V-model steps completed 2026-08-28 with one open finding (AC-26 / TC-31) |
+| 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | **closed** — 7/7 work items merged to `main` 2026-08-25; the four closing V-model steps completed 2026-08-28, acceptance verdict **PASS** on all 34 criteria, no open findings |
 | 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | requirements in progress |
 | 3 | **Authorization**: policy engine, policy documents, attach-to-principal, enforcement before dispatch | not started; `docs/PHASE3_POLICY_ENGINE_SPIKE.md` is the decision-support draft. **Gated on a test credential facility** — see below |
 
@@ -58,23 +58,44 @@ Two things that ran ahead of them and are the reason this took a second pass:
   but because nothing connected the passing tests to the criteria they satisfy. Ingestion had to come
   first; it is now 55 rows keyed to ACs and requirements.
 
-**Result: 33 of 34 acceptance criteria PASS against evidence that was executed, not assumed** — 99
-pytest node ids resolved and run for the validation, 117 outcomes, all passing.
+**Result, after the two gaps below were closed: all 34 acceptance criteria PASS against evidence
+that was executed, not assumed** — 103 pytest node ids resolved and run, 122 outcomes, all passing.
+The acceptance gate's verdict is `PASS`.
 
-**One finding, and it is a real one.** **AC-26 is MISSING** because **TC-31 was never implemented**:
-the end-to-end case that drives a live server under default configuration and asserts that a
-permitted action, an auth refusal and an unauthenticated `/ws/terminal` upgrade all reach the audit
-file. Every constituent behaviour has unit-level cover; what is missing is proof that a *default
-deployment* produces a readable trail end to end — which is the claim NFR-8 exists to make. TC-25
-(refusal immediacy) is likewise unimplemented, partially covered by TC-24.
+**The gate found a real hole on the first run, and it is worth knowing what kind.** The plan's
+*Coverage Gaps* section said "None. All 39 requirements and all 54 acceptance criteria have at least
+one covering test case" — true of the plan, false of the tree. **Two test cases had no
+implementation at all**, and the whole suite passed regardless, because a test that does not exist
+cannot fail:
 
-**And the test plan's pointers have gone stale: 25 of the 54 pytest node ids it cites no longer
-resolve.** Three named files were never created (`test_audit_e2e.py`, `test_audit_injection.py`,
-`test_audit_settings.py`) and 18 functions were renamed when the tests were reorganised into
-`TestTC<N>...` classes. The coverage is intact — the citations are not, and a reader following them
-concludes the tests are missing. The class convention is the durable anchor (the TC id is in the
-class name, so renaming a method cannot break the mapping) and the plan's *Test artifact* column
-should be refreshed to match.
+- **TC-31** (NFR-8 / AC-26) — the end-to-end case, and the reason AC-26 came back MISSING. Now
+  `backend/tests/test_audit_e2e.py`: a real gunicorn child with **token authentication actually on**,
+  driven with a permitted action, an auth refusal, and an unauthenticated `/ws/terminal` upgrade,
+  each asserted present in the trail while every audit hardening option stays at its default. That
+  last one is the point — `/ws/terminal` is answered by WSGI middleware *above* Flask's router, so
+  it is the one surface no `after_request` hook reaches, and it is the product's highest-privilege
+  endpoint.
+- **TC-25** (FR-10b / AC-14d) — the terminal refusal hook. Now
+  `TestTC25TerminalRefusalsAreAudited`, parametrized over all three reasons `_refuse_reason` can
+  return, plus a case proving the three do not collapse into a single flood-guard entry.
+
+Both were checked by **mutation**, not by passing alone: deleting the `_audit_terminal_refusal` call
+in `api/terminal.py` makes the end-to-end case fail. A refusal test that still passes with the audit
+call removed is worse than no test, because it reports coverage that is not there.
+
+**The test plan's pointers had also gone stale — 25 of its 54 pytest node ids resolved to nothing.**
+Three named files were never created (`test_audit_e2e.py`, `test_audit_injection.py`,
+`test_audit_settings.py`) and 18 named functions renamed when the tests were reorganised into
+`TestTC<N>...` classes. The coverage was intact throughout, which is what made it invisible: every
+test passed, and only a reader who tried to *follow* a citation would discover it led nowhere.
+**All 103 citations were regenerated from the tree and now collect cleanly** (119 tests, zero
+unresolvable). The `TestTC<N>` convention is the durable anchor — the TC id is in the class name, so
+renaming a method cannot break the mapping and the column can be re-derived from source.
+
+**38 of 40 test cases now resolve to executing tests.** The two that do not are TC-39 (inspection)
+and TC-40 (demonstration), which verify by method rather than by pytest; their evidence is the
+committed checklist at [`docs/AUDIT_PHASE1_VERIFICATION.md`](AUDIT_PHASE1_VERIFICATION.md). NFR-6
+consequently shows no executed test, which is correct rather than a gap.
 
 Reports: [`acceptance-validation`](../.plc/briefs/auth-audit-logging-acceptance-validation.md) and
 [`traceability`](../.plc/briefs/auth-audit-logging-traceability.md). The bundled traceability CLI
