@@ -12,7 +12,7 @@ scope record; it is not a spec and it does not carry acceptance criteria.
 |---|---|---|
 | 0 | Defect fixes: the unauthenticated `/ws/terminal`, `target` command injection, `0.0.0.0` exposure | done |
 | 0.5 | HTTPS: self-signed by default, internal CA opt-in, TLS 1.2 floor, CSP/HSTS, Origin policy | done |
-| 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | **done** — all 7 work items, 40/40 test cases, merged to `main` 2026-08-25 |
+| 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | **closed** — 7/7 work items merged to `main` 2026-08-25; the four closing V-model steps completed 2026-08-28 with one open finding (AC-26 / TC-31) |
 | 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | requirements in progress |
 | 3 | **Authorization**: policy engine, policy documents, attach-to-principal, enforcement before dispatch | not started; `docs/PHASE3_POLICY_ENGINE_SPIKE.md` is the decision-support draft. **Gated on a test credential facility** — see below |
 
@@ -43,9 +43,51 @@ Two things fixed along the way that were not work items and are worth not redisc
 unignored files, one `git add .` from the repo.
 
 After item 7 come the closing V-model steps — verification, security scan, acceptance validation and
-the traceability matrix — which are phases in the state file rather than work items here. As of
-2026-08-25 **verification and the security scan are complete**; acceptance validation and the
-traceability matrix are deliberately deferred, not attempted and failed (both inputs exist).
+the traceability matrix — which are phases in the state file rather than work items here. **All four
+are now complete (2026-08-28).** Phase 1 is closed.
+
+Two things that ran ahead of them and are the reason this took a second pass:
+
+- **The security-scan artefacts were dated 20 August — before any of the seven work items landed.**
+  A stale scan reads exactly like a current one. Re-run scoped to Phase 1's delivered 82-file work
+  unit: SAST clean; dependencies 0 new against 3 pre-existing; licence flags `paramiko` for OSRB.
+  The secret scan is a recorded **SKIP** — the Pulse image is not local and the registry pull could
+  not be authorised in-session — never a silent omission.
+- **Evidence ingestion had never run, so the evidence log held no row referencing any AC.** Run
+  as-is, the acceptance gate scored *every* criterion UNVERIFIED — not because the work was unproven
+  but because nothing connected the passing tests to the criteria they satisfy. Ingestion had to come
+  first; it is now 55 rows keyed to ACs and requirements.
+
+**Result: 33 of 34 acceptance criteria PASS against evidence that was executed, not assumed** — 99
+pytest node ids resolved and run for the validation, 117 outcomes, all passing.
+
+**One finding, and it is a real one.** **AC-26 is MISSING** because **TC-31 was never implemented**:
+the end-to-end case that drives a live server under default configuration and asserts that a
+permitted action, an auth refusal and an unauthenticated `/ws/terminal` upgrade all reach the audit
+file. Every constituent behaviour has unit-level cover; what is missing is proof that a *default
+deployment* produces a readable trail end to end — which is the claim NFR-8 exists to make. TC-25
+(refusal immediacy) is likewise unimplemented, partially covered by TC-24.
+
+**And the test plan's pointers have gone stale: 25 of the 54 pytest node ids it cites no longer
+resolve.** Three named files were never created (`test_audit_e2e.py`, `test_audit_injection.py`,
+`test_audit_settings.py`) and 18 functions were renamed when the tests were reorganised into
+`TestTC<N>...` classes. The coverage is intact — the citations are not, and a reader following them
+concludes the tests are missing. The class convention is the durable anchor (the TC id is in the
+class name, so renaming a method cannot break the mapping) and the plan's *Test artifact* column
+should be refreshed to match.
+
+Reports: [`acceptance-validation`](../.plc/briefs/auth-audit-logging-acceptance-validation.md) and
+[`traceability`](../.plc/briefs/auth-audit-logging-traceability.md). The bundled traceability CLI
+marks all 39 requirements `GAP` because it accepts no `--test-plan` and does not scan source; a
+companion matrix built from the plan, the resolved tests and the evidence log is appended to the same
+file, with the tool's own output left visible beside it.
+
+**A tooling limitation worth knowing before the next phase:** the evidence CLI validates ids against
+`^(FR|NFR|AC)-\d+$`, which cannot express the letter-suffixed ids these briefs use throughout
+(`AC-14a`, `FR-7b`, `AC-28a`…). Twenty of Phase 1's 55 criteria are therefore keyed to their base
+requirement with the exact criterion named in `notes`, and the acceptance CLI — which reads the id
+fields, not the notes — parses only the 34 unsuffixed ACs. Phase 2's brief uses the same suffix
+convention, so this recurs unless the tool is fixed or the convention changes.
 
 One item-7 result worth carrying forward, because the final number hides it: the 5 ms p95 audit
 budget (NFR-2a) was **breached at +8.66 ms** until the active cluster label was cached.
