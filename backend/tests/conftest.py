@@ -31,6 +31,15 @@ os.environ["NVIS_CATALOG_FILE"] = os.path.join(
     tempfile.mkdtemp(prefix="nvis-catalog-test-"), "catalog.json"
 )
 
+# Same reasoning as the catalog, with sharper teeth: the startup bootstrap mints a real
+# administrator credential into whatever this points at. Unset, that is `var/identity/identity.json`
+# inside the worktree -- so every test run would write a live credential into the repo and print it
+# into the test output. Isolating it here also keeps the 4096-bit SRP enrolment (~50 ms) off every
+# session but the first.
+os.environ["NVIS_IDENTITY_FILE"] = os.path.join(
+    tempfile.mkdtemp(prefix="nvis-identity-test-"), "identity.json"
+)
+
 # Validation-activity writes also maintain the append-only multi-rack ledger. Keep its
 # generated document/outbox out of the worktree and never let unit tests call lakewriter.
 _ledger_test_root = tempfile.mkdtemp(prefix="nvis-multirack-ledger-test-")

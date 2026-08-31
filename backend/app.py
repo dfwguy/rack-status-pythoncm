@@ -157,6 +157,12 @@ except Exception as _catalog_exc:  # pragma: no cover - defensive
     catalog_bp = None  # type: ignore[assignment]
     _CATALOG_AVAILABLE = False
 
+# Identity. Imported plainly, NOT behind a try/except like the catalog above: `core-designs.mdc`
+# §0 says a module that cannot import must take startup down and name itself, because a swallowed
+# ImportError means the feature is simply absent with no error anywhere. For authentication that is
+# the worst possible failure shape — a deployment that looks healthy and cannot authenticate anyone,
+# or worse, one that skipped the bootstrap and has no administrator. `srp` and `PyJWT` are declared
+# runtime dependencies, so an ImportError here is a broken install and should read as one.
 # ---- Host paths, naming and per-request identity now live in their own modules ------------
 # Imported under the existing names so the ~200 call sites below are untouched.
 # Request-scoped helpers need Flask, so they live with the API package, not in core.
@@ -166,6 +172,9 @@ from api._common import (
 from api._common import (
     serve_spa_asset as _serve_spa_asset,
 )
+from identity import bootstrap as identity_bootstrap
+from identity import revocation as identity_revocation
+from identity import store as identity_store
 from rack_status_engine import (
     _ai_live_inventory_block,
     _rack_status_cache_clear_all,
@@ -606,6 +615,45 @@ def _bootstrap_catalog_at_startup() -> None:
         _logger.exception("catalog bootstrap failed; continuing with legacy env behavior")
 
 
+def _bootstrap_identity_at_startup() -> None:
+    """Register the revocation checker, then mint an administrator if no user exists.
+
+    **Order matters and the first half is not optional.** ``tokens.verify`` refuses *every* token
+    until a revocation checker is installed (FR-6a) — deliberately, because the alternative default
+    is "nothing is revoked", and a control that fails open is not a control. The consequence is that
+    an unwired checker does not degrade the product, it stops it: every authenticated request is
+    refused with a message about the checker. Phase 1 supplied this exact precedent with the config
+    materialise hook, which needed a test purely to assert the wire existed.
+
+    Minting stays available before the checker is registered, so the bootstrap below can run.
+
+    Failures are logged rather than fatal **only while the gate still authenticates by the legacy
+    shared token**. The moment FR-18 lands and the gate reads token verdicts, a deployment that
+    reaches this point without an administrator is a deployment nobody can log into, and this should
+    take startup down instead of logging — the whole point of FR-10b is that the release which
+    removes the old credential mints the new one in the same start.
+    """
+    try:
+        identity_revocation.install()
+    except Exception:
+        _logger.exception(
+            "identity: revocation checker not installed; every token will be refused (FR-6a)"
+        )
+    try:
+        store = identity_store.IdentityStore()
+    except Exception:
+        _logger.exception("identity: store unavailable; no administrator could be bootstrapped")
+        return
+    try:
+        # `ensure_admin` is idempotent on a populated store and emits nothing there, so this is a
+        # no-op on every start after the first (AC-19).
+        identity_bootstrap.ensure_admin(store)
+    except Exception:
+        _logger.exception("identity: administrator bootstrap failed")
+    finally:
+        store.close()
+
+
 def _bootstrap_nvftp_sync_at_startup() -> None:
     """Load job-env overrides and start NVFTP background sync (retries when config becomes ready)."""
     try:
@@ -966,6 +1014,7 @@ _audit_actions.build_registry(app)
 
 # After all routes and middleware are registered (avoid circular import via nvftp_cache_sync._eget → app).
 _bootstrap_catalog_at_startup()
+_bootstrap_identity_at_startup()
 _bootstrap_nvftp_sync_at_startup()
 _bootstrap_validation_activities_refresh_at_startup()
 
