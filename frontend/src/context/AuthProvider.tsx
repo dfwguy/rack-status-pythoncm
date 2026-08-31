@@ -15,6 +15,7 @@
  * Components only; the context object and `useAuth` live in AuthContext.ts.
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { srpLogin } from "../lib/srpClient";
 import { AuthContext, type AuthState } from "./AuthContext";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -38,22 +39,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
   }, []);
 
-  const login = useCallback(async (password: string) => {
-    const res = await fetch("/api/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      setState({ authenticated: true, user: data.user, loading: false });
-      return { ok: true };
+  /**
+   * Log in over SRP. The password is used to compute a proof and is never sent.
+   *
+   * Takes a username now — the old signature was `login(password)` against a single shared
+   * secret, which is precisely what this phase replaces. There is no fallback to `/api/login`:
+   * that route still answers and still sets a Flask session, but the gate stopped honouring
+   * sessions, so falling back would report success and then 401 on every subsequent request.
+   */
+  const login = useCallback(async (username: string, password: string) => {
+    const result = await srpLogin(username, password);
+    if (result.ok) {
+      setState({
+        authenticated: true,
+        user: result.user?.display_name || result.user?.login || username,
+        loading: false,
+        mustChangePassword: Boolean(result.mustChangePassword),
+      });
+      return { ok: true, mustChangePassword: Boolean(result.mustChangePassword) };
     }
-    return { ok: false, error: data.error || "Login failed" };
+    return { ok: false, error: result.error || "Login failed" };
   }, []);
 
   const logout = useCallback(async () => {
-    await fetch("/api/logout", { method: "POST" });
+    // The new endpoint revokes the tokens by `jti` as well as clearing the cookies. Clearing alone
+    // would leave a copy taken beforehand valid until it expired.
+    await fetch("/api/auth/logout", { method: "POST" });
     setState({ authenticated: false, user: null, loading: false });
   }, []);
 

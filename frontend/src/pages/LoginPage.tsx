@@ -17,6 +17,7 @@ import { useAuth } from "../context/AuthContext";
 
 export function LoginPage() {
   const { login } = useAuth();
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -25,10 +26,12 @@ export function LoginPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const result = await login(password);
+    const result = await login(username, password);
     setLoading(false);
     if (!result.ok) {
       setError(result.error || "Login failed");
+      // Only the password is cleared. Wiping the username too would make a mistyped password cost
+      // two fields to retype, and it protects nothing — the username is not a secret.
       setPassword("");
     }
   };
@@ -65,6 +68,17 @@ export function LoginPage() {
         )}
 
         <form onSubmit={handleSubmit}>
+          <TextField
+            fullWidth
+            type="text"
+            label="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+            autoFocus
+            disabled={loading}
+            sx={{ mb: 2 }}
+          />
           <TextField
             fullWidth
             type="password"

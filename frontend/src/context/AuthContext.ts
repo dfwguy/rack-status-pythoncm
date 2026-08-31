@@ -21,10 +21,19 @@ export interface AuthState {
   authenticated: boolean;
   user: string | null;
   loading: boolean;
+  /** The bootstrap credential is flagged for change (FR-10a); the UI should insist on it. */
+  mustChangePassword?: boolean;
 }
 
 export interface AuthContextValue extends AuthState {
-  login: (password: string) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * SRP login. Takes a username because there are users now — the previous signature took only a
+   * password, which was the shape of a single shared secret.
+   */
+  login: (
+    username: string,
+    password: string,
+  ) => Promise<{ ok: boolean; error?: string; mustChangePassword?: boolean }>;
   logout: () => Promise<void>;
 }
 

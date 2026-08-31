@@ -60,11 +60,20 @@ def logout():
 
 @bp.route("/api/auth-check")
 def api_auth_check():
-    """Check if the current session is authenticated. Returns 401 if not."""
+    """Whether this request carries a valid credential. 401 when it does not.
+
+    Reads the **token**, matching what the gate enforces. It used to answer from the Flask session,
+    and after the gate moved to tokens that produced the worst possible shape: this endpoint said
+    200 while every other route said 401, so the SPA rendered a logged-in shell over a dashboard
+    where nothing loaded and nothing explained why.
+    """
+    import web_auth
+
     if not _auth_enabled():
         return jsonify({"authenticated": True, "user": _auth_user(), "auth_disabled": True})
-    if _session_ok():
-        return jsonify({"authenticated": True, "user": _auth_user()})
+    principal = web_auth.authenticated_principal(request.headers, request.cookies)
+    if principal:
+        return jsonify({"authenticated": True, "user": principal})
     return jsonify({"authenticated": False}), 401
 
 
