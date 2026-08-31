@@ -2,7 +2,20 @@ flask>=3.0,<4
 openpyxl>=3.1,<4
 requests>=2.33,<3
 pyyaml>=6.0,<7
-cryptography>=48.0,<49
+# Four call sites: HKDF signing-key derivation (identity/tokens.py), the Fernet vault
+# (token_vault.py), x509 generation (bin/gen-tls-cert.py), and transitively paramiko + PyJWT.
+#
+# Bumped off 48.0.1 on 2026-08-31: it carried PYSEC-2026-3552/3553/3554 (fixed in 49.0.0 and
+# 50.0.0), and it is the library that generates our TLS certificates, so it is load-bearing for
+# the security posture rather than incidental. Verified by running the whole suite against 50.0.1
+# — 2545 passed — with the shadow confirmed to reach the gunicorn child processes, not just the
+# test interpreter.
+#
+# Worth knowing what that green run does and does not prove: the same tests also pass on 44.0.0,
+# so they verify *our usage* of a stable public API across versions. They would catch an API
+# removal or a behaviour change; they cannot tell you whether a CVE is patched. Only the version
+# can, which is why the floor is raised rather than just the ceiling.
+cryptography>=50.0,<51
 paramiko>=5.0,<6
 flask-sock>=0.7,<1
 tinydb>=4.8,<5
