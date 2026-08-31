@@ -102,8 +102,12 @@ entry is "Pending", no dates are filled, and the Reviewers table carries one emp
 
 **Remediation:** none required while the document is a draft. Before this is offered as PLC audit
 evidence it needs real approver dates, and the empty reviewer row should be removed or filled.
-Note this is the same gap as SUTP gap G-9 (REQ-47 sign-off pending) in a different document — one
-remediation pass could close both.
+
+**Update 2026-08-31:** the related half is closed. This finding is about the *SRD's own* approval
+block; SUTP gap G-9 was about the verification record's sign-off, and that one now carries a named
+approver (Rafael M. Koike) for TC-39 and TC-40. The two looked like one remediation pass and are
+not: signing the evidence record does not approve the SRD, and this entry stays open on its own
+terms.
 
 ### A-5 (Info) Reference table carries no SWE numbers or revisions
 

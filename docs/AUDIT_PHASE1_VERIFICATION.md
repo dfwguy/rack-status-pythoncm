@@ -117,10 +117,16 @@ establishes that an inspection or demonstration happened; it does not establish 
 than its author accepted the result, and inspection is exactly the method where that distinction
 carries the weight. Authorised approvers: **Rafael M. Koike, Giovanni Mascari, or Felix Melligan**.
 
-| Case | Method | Result | Recorded by | Approved by | Date |
-| :---- | :---- | :---- | :---- | :---- | :---- |
-| TC-39 | Inspection | PASS | Cursor Agent ("Ada") | _pending_ | 2026-08-24 |
-| TC-40 | Demonstration | PASS (`ef3693ea312f` → `71f758789132`) | Cursor Agent ("Ada") | _pending_ | 2026-08-24 |
+| Case | Method | Result | Recorded by | Recorded | Approved by | Approved |
+| :---- | :---- | :---- | :---- | :---- | :---- | :---- |
+| TC-39 | Inspection | PASS | Cursor Agent ("Ada") | 2026-08-24 | **Rafael M. Koike** | 2026-08-31 |
+| TC-40 | Demonstration | PASS (`ef3693ea312f` → `71f758789132`) | Cursor Agent ("Ada") | 2026-08-24 | **Rafael M. Koike** | 2026-08-31 |
 
-Approvers: replace `_pending_` with your name to accept the recorded result. Leaving it pending is
-also information — it says the evidence exists but has not been reviewed.
+The single `Date` column became two. It sat between *Recorded by* and *Approved by* and belonged to
+neither: recording and approval happened a week apart, so one date could only have been right about
+one of them. Whichever way it were read, the other fact would have been quietly wrong — and the
+point of this table is that "somebody other than the author accepted this" is separable from "this
+was written down".
+
+Approvers: replace `_pending_` with your name and the date to accept a recorded result. Leaving it
+pending is also information — it says the evidence exists but has not been reviewed.
