@@ -37,7 +37,7 @@ import time
 import uuid
 from typing import Any
 
-from flask import g, request, session
+from flask import g, request
 
 import audit
 from audit import actions as _actions
@@ -73,21 +73,46 @@ def _result_for(status: int) -> str:
 
 
 def _principal() -> tuple[str, str]:
-    """``(principal, auth_method)`` from the session — never from a header (FR-9).
+    """``(principal, auth_method)`` from the verified token — never from a header (FR-9, FR-16).
 
     ``X-Rack-Operator`` is self-reported display metadata and is deliberately not consulted: a
-    principal a caller can choose turns the ledger into decoration. Phase 1 has no user identity in
-    the session yet, so an authenticated request is still ``anonymous`` with its auth method
-    recorded; Phase 2 substitutes a real subject without changing the record's shape.
+    principal a caller can choose turns the ledger into decoration.
+
+    Phase 2 fills this in for real. The value is read from ``g``, where the auth gate put the
+    subject of the access token it had *already verified* — not re-derived here. One verification
+    per request means the trail cannot disagree with the gate about who the caller was, which is the
+    property that makes an audit record usable as evidence rather than as a second opinion.
+
+    ``anonymous`` remains correct for a request that reached a bypassed route or ran with the gate
+    disabled, and the ``auth_method`` says which.
     """
     try:
-        authed = session.get("rack_web_auth") == "1"
-        subject = str(session.get("rack_web_user") or "").strip()
+        subject = str(getattr(g, "auth_principal", "") or "").strip()
+        method = str(getattr(g, "auth_method", "") or "").strip()
     except RuntimeError:  # outside a request context
         return "anonymous", "none"
     if subject:
-        return subject, "session"
-    return ("anonymous", "session" if authed else "none")
+        return subject, method or "token"
+    return "anonymous", "none"
+
+
+def _authz() -> tuple[str, str]:
+    """``(decision, policy_engine)`` for this request.
+
+    Absent for a request the gate never authorised — a bypassed route, or a disabled gate — and the
+    record then keeps Phase 1's honest ``not-evaluated``/``none`` rather than implying an engine
+    weighed in.
+    """
+    try:
+        decision = getattr(g, "authz_decision", None)
+    except RuntimeError:
+        return audit.Decision.NOT_EVALUATED, audit.POLICY_ENGINE_NONE
+    if decision is None:
+        return audit.Decision.NOT_EVALUATED, audit.POLICY_ENGINE_NONE
+    return (
+        audit.Decision.ALLOW if decision.allowed else audit.Decision.DENY,
+        decision.engine,
+    )
 
 
 def _resource(path: str) -> str:
@@ -201,6 +226,7 @@ def _record(response) -> bool:
     src_ip, src_ip_trust = _common.client_addr()
     t0 = getattr(g, _TIMER, None)
     principal, auth_method = _principal()
+    decision, policy_engine = _authz()
 
     return audit.emit(
         action=action,
@@ -208,6 +234,8 @@ def _record(response) -> bool:
         result=_result_for(response.status_code),
         principal=principal,
         auth_method=auth_method,
+        decision=decision,
+        policy_engine=policy_engine,
         resource=_resource(path),
         src_ip=src_ip,
         src_ip_trust=src_ip_trust,

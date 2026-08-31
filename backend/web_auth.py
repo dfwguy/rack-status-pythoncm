@@ -49,8 +49,81 @@ _logger = logging.getLogger(__name__)
 
 
 def _auth_enabled() -> bool:
-    """Dashboard login via PAM or token unless RACK_WEB_AUTH_DISABLED is set."""
+    """Whether the gate is enforced.
+
+    ``RACK_WEB_AUTH_DISABLED`` survives FR-18's removal of the legacy credentials as an explicit
+    development and test switch (FR-18a), and only that: it no longer selects a login method, it
+    turns the gate off entirely. FR-18c retires it once the suite authenticates through a real
+    credential facility instead of bypassing — until then some 2,500 tests depend on it.
+    """
     return not _truthy_env("RACK_WEB_AUTH_DISABLED")
+
+
+#: The cookie a browser carries the access token in. Duplicated from ``api/auth_srp`` rather than
+#: imported: the dependency runs ``app.py -> api/<domain>.py -> core.py`` in one direction only
+#: (core-designs.mdc §0), and the gate importing a route module would invert it.
+ACCESS_COOKIE = "nvis_access"
+
+
+def bearer_token(headers: object) -> str:
+    """The token from an ``Authorization: Bearer`` header, or empty.
+
+    Programmatic clients — CI, ``curl``, the deploy scripts — cannot hold a cookie jar, so the
+    header is their path. A browser uses the ``HttpOnly`` cookie instead (FR-5a). Both end at the
+    same verification, so there is one notion of a valid caller rather than two.
+    """
+    try:
+        raw = (headers.get("Authorization") or "").strip()  # type: ignore[union-attr]
+    except (AttributeError, TypeError):
+        return ""
+    scheme, _, value = raw.partition(" ")
+    return value.strip() if scheme.lower() == "bearer" else ""
+
+
+def authenticated_principal(headers: object, cookies: object = None) -> str:
+    """The verified principal for this request, or ``""`` when there is none.
+
+    **The principal comes from a signed token and from nowhere else** (FR-16). Not from
+    ``X-Rack-Operator``, which is self-reported display metadata; not from a query parameter. A
+    principal the caller can choose turns the activity ledger and the rack locks into decoration,
+    and turns authorization into a suggestion.
+
+    Returns a plain string rather than a ``(principal, method)`` tuple, and that is a deliberate
+    guard: a tuple is *always truthy*, so the natural ``if principal:`` at the call site would admit
+    every anonymous request. The suite runs with the gate disabled, so no existing test would have
+    caught it — this shape makes the mistake unavailable.
+
+    Cookie before header. The order matters only for a client sending both, and preferring the
+    cookie means a stale ``Authorization`` left by a fetch wrapper cannot displace a live session.
+    """
+    from identity import tokens  # local: keeps identity off the import path of a bare web_auth
+
+    candidates: list[str] = []
+    try:
+        cookie_value = cookies.get(ACCESS_COOKIE) if cookies is not None else None  # type: ignore[union-attr]
+    except (AttributeError, TypeError):
+        cookie_value = None
+    if cookie_value:
+        candidates.append(str(cookie_value))
+    header_value = bearer_token(headers)
+    if header_value:
+        candidates.append(header_value)
+
+    for raw in candidates:
+        try:
+            claims = tokens.verify(raw, tokens.TOKEN_ACCESS)
+        except tokens.TokenError:
+            # Every refusal reason is equivalent here — expired, revoked, forged, wrong type.
+            # INV-01..INV-19 hold the taxonomy; saying which one applied would tell a caller whether
+            # they hold a real token that is merely stale.
+            continue
+        except Exception:
+            _logger.exception("token verification raised; treating as unauthenticated")
+            continue
+        subject = str(claims.get("sub") or "").strip()
+        if subject:
+            return subject
+    return ""
 
 
 def _auth_mode() -> str:

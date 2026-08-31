@@ -60,7 +60,11 @@ CANONICAL_ENDPOINT = "/api/rack-uptime"
 CANONICAL_ACTION = "rack:uptime"
 
 #: Shared secret for token-mode auth. A literal in a test fixture, never a real credential.
-TOKEN = "tc31-e2e-token"
+#: The bootstrap administrator, re-enrolled with a password this test knows. The child server
+#: mints its own random one and keeps only the verifier, so the only way to drive a real login
+#: is to write a known credential into the store before the server starts.
+ADMIN_LOGIN = "admin"
+ADMIN_PASSWORD = "tc31-e2e-admin-password"
 
 STARTUP_TIMEOUT_SEC = 45.0
 EVENT_TIMEOUT_SEC = 20.0
@@ -69,6 +73,28 @@ pytestmark = pytest.mark.skipif(
     not (REPO_ROOT / "gunicorn.conf.py").is_file(),
     reason="gunicorn.conf.py absent; TC-31 drives the server the ENTRYPOINT runs",
 )
+
+
+def _seed_admin(identity_file: Path) -> None:
+    """Create the administrator with a password this test knows."""
+    from identity import bootstrap
+    from identity import srp as srp_mod
+    from identity.store import IdentityStore
+
+    identity_file.parent.mkdir(parents=True, exist_ok=True)
+    store = IdentityStore(str(identity_file))
+    try:
+        bootstrap.ensure_admin(store, emit=False)
+        user = store.get_user(ADMIN_LOGIN)
+        salt, verifier = srp_mod.enroll(ADMIN_LOGIN, ADMIN_PASSWORD)
+        store.update_user(user.edited(srp_salt=salt, srp_verifier=verifier))
+    finally:
+        store.close()
+
+
+def _set_cookies(headers: list[tuple[str, str]]) -> list[str]:
+    """Every Set-Cookie value. The login sets two and both must be carried."""
+    return [v for k, v in headers if k.lower() == "set-cookie"]
 
 
 def _free_port() -> int:
@@ -90,7 +116,7 @@ class _LiveServer:
     def _request(
         self, method: str, path: str, body: dict | None = None, *, with_session: bool = False,
         extra_headers: dict[str, str] | None = None,
-    ) -> tuple[int, dict[str, str], bytes]:
+    ) -> tuple[int, list[tuple[str, str]], bytes]:
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=20)
         headers = {"Content-Type": "application/json"}
         if with_session and self.session_cookie:
@@ -102,22 +128,46 @@ class _LiveServer:
             conn.request(method, path, body=payload, headers=headers)
             resp = conn.getresponse()
             data = resp.read()
-            return int(resp.status), dict(resp.getheaders()), data
+            # The RAW header list, not a dict: a dict keeps one Set-Cookie and the login
+            # exchange sets two, so the access cookie would be silently dropped.
+            return int(resp.status), list(resp.getheaders()), data
         finally:
             conn.close()
 
     def login(self) -> int:
-        """Establish a session the way the SPA does, so the permitted request is really permitted.
+        """Authenticate through the real SRP exchange, so the permitted request is really permitted.
 
-        In token mode the shared secret is presented as the password to `/api/login`, which sets a
-        Flask session cookie; the gate checks that cookie, not the token. Sending the token on the
-        audited request instead would be refused, and the test would prove the opposite of what it
-        claims.
+        This drove `/api/login` with the shared token until FR-18 removed that path. It is now the
+        two-leg SRP exchange against the bootstrap administrator, which is worth more than a fixture
+        convenience: the end-to-end case now exercises the credential a deployment actually uses.
         """
-        status, headers, _ = self._request("POST", "/api/login", {"password": TOKEN})
-        cookie = headers.get("Set-Cookie") or ""
-        if cookie:
-            self.session_cookie = cookie.split(";", 1)[0]
+        import srp as srp_lib
+        from identity import srp as srp_mod
+
+        srp_lib.rfc5054_enable(srp_mod.RFC5054_COMPAT)
+        user = srp_lib.User(
+            ADMIN_LOGIN, ADMIN_PASSWORD, hash_alg=srp_mod.HASH_ALG, ng_type=srp_mod.NG_TYPE
+        )
+        _uname, a_value = user.start_authentication()
+
+        status, _headers, body = self._request(
+            "POST", "/api/auth/srp/begin", {"login": ADMIN_LOGIN, "A": a_value.hex()}
+        )
+        if status != 200:
+            return status
+        begun = json.loads(body)
+        proof = user.process_challenge(
+            bytes.fromhex(begun["salt"]), bytes.fromhex(begun["B"])
+        )
+        assert proof is not None, "the client refused the server's challenge"
+
+        status, headers, _ = self._request(
+            "POST", "/api/auth/srp/finish", {"token": begun["token"], "M": proof.hex()}
+        )
+        # Carry every cookie the exchange set; the access cookie is what the gate reads.
+        jar = [c.split(";", 1)[0] for c in _set_cookies(headers)]
+        if jar:
+            self.session_cookie = "; ".join(jar)
         return status
 
     def upgrade_terminal(self) -> int:
@@ -176,16 +226,23 @@ def live_server(tmp_path):
     """A real server with authentication ON and every audit hardening option left at its default."""
     port = _free_port()
     audit_file = tmp_path / "audit" / "audit.jsonl"
+    identity_file = tmp_path / "identity" / "identity.json"
+
+    # Enrol a known credential BEFORE the child starts. The child's own bootstrap would mint a
+    # random password and keep only the verifier, so there would be no way to log in; doing it here
+    # means the test drives the same SRP exchange a real operator does.
+    _seed_admin(identity_file)
 
     env = dict(os.environ)
     env.update(
         {
             "RACK_STATUS_DEMO": "1",
             # The subject of this case: the gate is ON. Patching cannot cross a process boundary,
-            # so the environment is the only way to configure the child.
-            "RACK_WEB_AUTH_MODE": "token",
-            "RACK_WEB_AUTH_TOKEN": TOKEN,
-            "RACK_WEB_SECRET_KEY": "tc31-session-signing-key",
+            # so the environment is the only way to configure the child. There is no longer a
+            # credential *variable* to set — FR-18 removed them — so the credential is written into
+            # the identity store below instead, which is the real deployment shape.
+            "RACK_WEB_SECRET_KEY": "tc31-token-signing-key",
+            "NVIS_IDENTITY_FILE": str(identity_file),
             "RACK_EXEC_MODE": "local",
             # Only the audit *path* is overridden, so the test can read it. Sinks, format, level,
             # rotation, retention and the flood guard are all left at their defaults -- that is
@@ -283,7 +340,9 @@ def test_refusals_reach_the_trail_on_a_live_server(live_server):
     # (b) no credential at all -> the gate refuses.
     status, headers, _ = live_server._request("POST", CANONICAL_ENDPOINT, {"rack": "p5-r01"})
     assert status == 401, f"expected the gate to refuse an uncredentialed request, got {status}"
-    assert "WWW-Authenticate" in headers, "RFC 9110 requires a challenge on a 401"
+    assert any(k.lower() == "www-authenticate" for k, _v in headers), (
+        "RFC 9110 requires a challenge on a 401"
+    )
 
     assert live_server.wait_for(
         lambda: any(

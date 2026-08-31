@@ -67,9 +67,15 @@ class Result:
 class Decision:
     """The authorization verdict.
 
-    ``NOT_EVALUATED`` is the only value Phase 1 may record. Writing ``allow`` would assert that a
-    policy engine permitted the action, which is false until Phase 3 — and a record that overstates
-    its own authority is worse than one that admits its limit (NFR-13, threat T-52).
+    ``NOT_EVALUATED`` was the only value Phase 1 could honestly record: writing ``allow`` would have
+    asserted that a policy engine permitted the action, which was false while none existed, and a
+    record that overstates its own authority is worse than one that admits its limit (NFR-13,
+    threat T-52).
+
+    Phase 2 registers an engine, so ``allow`` and ``deny`` are now reachable — but the claim is only
+    as strong as the ``policy_engine`` beside it. ``allow`` from ``allow-all`` means "an explicitly
+    permissive policy was consulted and said yes", not "a policy authorised this". Keep the two
+    fields together when reading a record; either alone is misleading.
     """
 
     NOT_EVALUATED = "not-evaluated"
@@ -126,6 +132,7 @@ def build_event(
     cluster: str = "",
     latency_ms: float | None = None,
     decision: str = Decision.NOT_EVALUATED,
+    policy_engine: str = POLICY_ENGINE_NONE,
     service: str | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
@@ -144,7 +151,11 @@ def build_event(
         "variant": variant,
         "resource": resource,
         "decision": decision,
-        "policy_engine": POLICY_ENGINE_NONE,
+        # Was hard-coded to POLICY_ENGINE_NONE, correctly, while no engine existed. Now a parameter
+        # so the record names which evaluator produced the verdict: `allow` from `allow-all` and
+        # `allow` from a real policy are very different claims, and a reader must be able to tell
+        # them apart without knowing which release they are looking at (NFR-13, threat T-52).
+        "policy_engine": policy_engine,
         "result": result,
         "src_ip": src_ip,
         "src_ip_trust": src_ip_trust,

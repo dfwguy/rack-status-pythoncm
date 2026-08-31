@@ -166,6 +166,7 @@ except Exception as _catalog_exc:  # pragma: no cover - defensive
 # ---- Host paths, naming and per-request identity now live in their own modules ------------
 # Imported under the existing names so the ~200 call sites below are untouched.
 # Request-scoped helpers need Flask, so they live with the API package, not in core.
+import authz
 from api._common import (
     operator_from_request as _operator_from_request,
 )
@@ -420,7 +421,7 @@ from activity_hydration import (
     _task_needs_slurm_hydration,
 )
 from security_headers import grafana_frame_origin, security_headers
-from web_auth import _auth_enabled, _safe_next, _session_lifetime, _session_ok
+from web_auth import _auth_enabled, _safe_next, _session_lifetime
 
 # ---------------------------------------------------------------------------
 # Rack-locks helpers: operator label from request, active-job iterator for
@@ -639,6 +640,13 @@ def _bootstrap_identity_at_startup() -> None:
         _logger.exception(
             "identity: revocation checker not installed; every token will be refused (FR-6a)"
         )
+    # Authorization engine. Permissive for now and explicitly so: `authz.authorize` refuses when
+    # nothing is registered, which keeps "the deployment chose a permissive policy" distinguishable
+    # from "nobody wired an engine". Phase 3 changes this one line.
+    try:
+        authz.install_default()
+    except Exception:
+        _logger.exception("authz: default engine not installed; every request will be refused")
     try:
         store = identity_store.IdentityStore()
     except Exception:
@@ -707,8 +715,38 @@ def _require_dashboard_auth():
         return None
     if _is_public_spa_static_path():
         return None
-    if _session_ok():
+
+    # Authentication: a signed access token, from the HttpOnly cookie or an Authorization header.
+    # The principal is stashed on `g` so the audit chokepoint and the authorizer read the SAME
+    # verified subject this gate accepted — one verification per request, and no second opinion.
+    #
+    # A plain string, empty when there is no credential — deliberately not a `(principal, method)`
+    # tuple. A tuple here is a trap: `(None, "none")` is a non-empty tuple and therefore truthy, so
+    # `if principal:` would admit every anonymous request, and no existing test would catch it
+    # because the suite runs with the gate disabled.
+    principal = web_auth.authenticated_principal(request.headers, request.cookies)
+    if principal:
+        g.auth_principal = principal
+        g.auth_method = "token"
+
+        # Authorization. Permissive today (`allow-all`), but the seam is real: the verdict and the
+        # engine that produced it land in the audit record, so a reader can tell how much the
+        # `allow` is worth. Phase 3 swaps the engine without touching this call.
+        act = _audit_actions.resolve(request.endpoint, request.method)
+        if act is not None:
+            decision = authz.authorize(principal, act.action, request.path)
+            g.authz_decision = decision
+            if not decision.allowed:
+                # 403, not 401: the caller IS authenticated and simply may not do this. Returning
+                # 401 would tell a client to re-authenticate, which cannot help and produces a
+                # credential-prompt loop. See docs/API_RESPONSE_CODES.md.
+                return jsonify({
+                    "ok": False,
+                    "error": "not authorized",
+                    "reason": "policy",
+                }), 403
         return None
+
     if request.path.startswith("/api/") or request.path.startswith("/ws/"):
         # `WWW-Authenticate` is mandatory on a 401 (RFC 9110 §11.6.1) and was missing. The body stays
         # uniform: it must not say *which* credential problem applied. See
@@ -728,12 +766,17 @@ def _wsgi_environ_authenticated(environ) -> bool:
     """The gate above, for a request Flask never routes.
 
     ``/ws/terminal`` is served by WSGI middleware wrapping ``app.wsgi_app``, so
-    ``_require_dashboard_auth`` cannot see it. Opening a request context is what turns the signed
-    cookie carried in *environ* into ``session``, which is why this lives here -- it is the one
-    place that has the app -- and is handed to ``web_auth`` rather than reimplemented there.
+    ``_require_dashboard_auth`` cannot see it. The request context is opened to get Werkzeug's
+    header and cookie parsing rather than re-deriving it from raw ``environ`` keys -- the terminal
+    is the product's highest-privilege surface and is the last place to want a second, subtly
+    different parser.
+
+    Same token check as the Flask gate, deliberately: two implementations of "is this caller
+    authenticated" is how one of them ends up more permissive than the other, which is exactly the
+    defect that left this endpoint open to anonymous upgrades in the first place.
     """
     with app.request_context(environ):
-        return _session_ok()
+        return bool(web_auth.authenticated_principal(request.headers, request.cookies))
 
 
 web_auth.set_wsgi_authenticator(_wsgi_environ_authenticated)

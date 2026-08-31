@@ -113,25 +113,42 @@ def test_login_endpoint_is_reachable_without_a_session(auth_client):
     assert (resp.get_json() or {}).get("ok") is False
 
 
-def test_successful_login_grants_access(auth_client):
-    """The whole point: log in, then reach a protected endpoint with the session cookie."""
-    resp = auth_client.post("/api/login", json={"password": TOKEN})
-    assert resp.status_code == 200
-    assert (resp.get_json() or {}).get("ok") is True
+def test_the_shared_token_no_longer_grants_access(auth_client):
+    """FR-18, and it is the breaking change: the shared token is *removed*, not deprecated.
 
-    checked = auth_client.get("/api/auth-check")
-    assert checked.status_code == 200
-    assert (checked.get_json() or {}).get("authenticated") is True
+    This test previously asserted the opposite — that `/api/login` with the token reached a
+    protected endpoint. Inverting it is the point. Two credential paths means the weaker one decides
+    the product's security, and a shared secret that every operator knows and nobody can rotate
+    individually is strictly weaker than a per-user token bound to a revocable identity.
 
-    protected = auth_client.get("/api/status")
-    assert protected.status_code == 200, "a logged-in session must reach a protected endpoint"
-
-
-def test_logout_revokes_the_session(auth_client):
+    Whether `/api/login` still *responds* is not asserted; the route is scheduled for deletion. What
+    matters is that whatever it returns, the gate is not opened by it. AC-22.
+    """
     auth_client.post("/api/login", json={"password": TOKEN})
-    assert auth_client.get("/api/auth-check").status_code == 200
-    assert auth_client.post("/api/logout").status_code == 200
-    assert auth_client.get("/api/auth-check").status_code == 401
+
+    assert auth_client.get("/api/status").status_code == 401, (
+        "the shared token opened the gate. FR-18 removes it: only a signed access token from the "
+        "SRP exchange authenticates, and a legacy credential must not be a second way in."
+    )
+
+
+def test_a_flask_session_cookie_is_not_a_credential(auth_client):
+    """Even a validly signed session cookie must not authenticate (FR-12, FR-18).
+
+    Forged the way the legacy login would have set it, so this fails if the gate ever consults
+    `session` again — a plausible regression, because the cookie keeps working for everything else
+    Flask uses it for.
+    """
+    from app import app
+
+    serializer = app.session_interface.get_signing_serializer(app)
+    assert serializer is not None
+    auth_client.set_cookie(
+        app.config.get("SESSION_COOKIE_NAME") or "session",
+        serializer.dumps({"rack_web_auth": "1", "rack_web_user": "admin"}),
+    )
+
+    assert auth_client.get("/api/status").status_code == 401
 
 
 def test_spa_assets_stay_public(auth_client):
