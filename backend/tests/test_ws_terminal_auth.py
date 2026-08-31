@@ -40,6 +40,7 @@ os.environ["RACK_EXEC_MODE"] = "local"
 import api.terminal as terminal_module
 import audit
 import logging_config as lc
+import web_auth
 from app import app
 from audit import sink
 
@@ -120,12 +121,21 @@ def _upgrade_environ(query: str = "target=some-node", cookie: str | None = None)
 
 
 def _authenticated_environ(query: str = "target=some-node") -> dict:
-    """An environ carrying a validly signed dashboard session cookie."""
-    serializer = app.session_interface.get_signing_serializer(app)
-    assert serializer is not None, "app has no secret key; cannot sign a session cookie"
-    cookie_value = serializer.dumps({"rack_web_auth": "1"})
-    name = app.config.get("SESSION_COOKIE_NAME") or "session"
-    return _upgrade_environ(query, cookie=f"{name}={cookie_value}")
+    """An environ carrying a valid access token in the session cookie.
+
+    This is the single place the module's docstring promised would need editing when the credential
+    channel changed, and Phase 2 changed it: the gate now verifies a signed JWT rather than a Flask
+    session, so a signed session cookie authenticates nobody. Everything else in this file asserts
+    the *property* — an unauthenticated caller must not reach session creation — and is untouched.
+    """
+    from identity import revocation, tokens
+
+    # `verify` refuses everything until a checker is registered (FR-6a), and a bare test module has
+    # not run app.py's startup wiring.
+    if not tokens.revocation_checker_registered():
+        revocation.install()
+    token = tokens.mint("user:test-operator", tokens.TOKEN_ACCESS)
+    return _upgrade_environ(query, cookie=f"{web_auth.ACCESS_COOKIE}={token}")
 
 
 def _start_response(status, headers, exc_info=None):
