@@ -128,6 +128,16 @@ AUTH_BYPASS_ENDPOINTS: tuple[str, ...] = (
     "auth.login",
     "auth.api_login",
     "auth.api_auth_check",
+    # The SRP exchange is how a caller obtains a credential, so it cannot require one. Both legs
+    # are listed: leg 2 presents a challenge token, not a session, and gating it would make login
+    # impossible rather than merely awkward.
+    #
+    # These are the only additions this phase makes to the bypass set, and the bar for a fourth is
+    # high — an entry here is a route reachable by anyone who can reach the port. `/refresh` is
+    # deliberately NOT here: it authenticates with the refresh cookie and must be refused without
+    # one.
+    "auth_srp.srp_begin",
+    "auth_srp.srp_finish",
     "static",
 )
 

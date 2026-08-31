@@ -78,6 +78,30 @@
   "variant": "form"
  },
  {
+  "endpoint": "auth_srp.logout_session",
+  "method": "POST",
+  "action": "auth:logout_session",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "auth_srp.refresh_session",
+  "method": "POST",
+  "action": "auth:refresh",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "auth_srp.srp_begin",
+  "method": "POST",
+  "action": "auth.srp:begin",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "auth_srp.srp_finish",
+  "method": "POST",
+  "action": "auth.srp:finish",
+  "variant": "sync"
+ },
+ {
   "endpoint": "bringup.api_bringup_fleet",
   "method": "POST",
   "action": "bringup:run",

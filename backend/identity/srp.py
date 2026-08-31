@@ -333,13 +333,19 @@ def begin(
     return token, s.hex(), b.hex()
 
 
-def finish(token: str, m_hex: str) -> tuple[str, bytes]:
-    """Round trip 2: verify the client's proof, return ``(HAMK_hex, session_key)``.
+def finish(token: str, m_hex: str) -> tuple[str, str, bytes]:
+    """Round trip 2: verify the client's proof, return ``(login, HAMK_hex, session_key)``.
 
     Raises :class:`SrpError` for every failure — unknown token, expired token, bad proof, decoy
     path — so the caller has nothing to leak. The challenge is consumed whether or not the proof
     verifies, which makes a wrong guess cost a new exchange rather than allowing retries against one
     ``B``.
+
+    **The login is returned rather than left to the caller, and that is a security property, not a
+    convenience.** It comes from the challenge this server minted in round trip 1. A caller that had
+    to supply the login again on the second leg could prove knowledge of one account's password and
+    name a different account — the proof and the claim would be bound to nothing. Returning it here
+    means there is no second place for them to disagree.
     """
     challenge = _challenges.take(token)
     if challenge is None:
@@ -354,7 +360,7 @@ def finish(token: str, m_hex: str) -> tuple[str, bytes]:
         # `not challenge.real` is last on purpose: the decoy exchange has already done the same work,
         # so the refusal costs what a real wrong password costs.
         raise SrpError("authentication failed")
-    return hamk.hex(), challenge.verifier.get_session_key()
+    return challenge.login, hamk.hex(), challenge.verifier.get_session_key()
 
 
 # --- Operational guards ---------------------------------------------------------------------------

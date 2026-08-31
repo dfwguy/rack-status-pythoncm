@@ -58,7 +58,7 @@ def _exchange(login: str, password: str, stored: tuple[str, str] | tuple[()]) ->
     if proof is None:
         return "client-refused-server"
     try:
-        hamk_hex, _key = S.finish(token, proof.hex())
+        _login, hamk_hex, _key = S.finish(token, proof.hex())
     except S.SrpError:
         return "refused"
     usr.verify_session(bytes.fromhex(hamk_hex))
@@ -89,7 +89,7 @@ class TestParametersAreExplicit:
         token, s_hex, b_hex = S.begin("rkoike", big_a.hex(), salt_hex, ver_hex)
         proof = usr.process_challenge(bytes.fromhex(s_hex), bytes.fromhex(b_hex))
         assert len(proof) == 32, "expected SHA-256 sized proof"
-        hamk_hex, _ = S.finish(token, proof.hex())
+        _login, hamk_hex, _ = S.finish(token, proof.hex())
         assert len(bytes.fromhex(hamk_hex)) == 32
 
     def test_derived_verifier_matches_the_library(self):
@@ -299,7 +299,7 @@ class TestTheExchange:
         _, big_a = usr.start_authentication()
         token, s_hex, b_hex = S.begin("rkoike", big_a.hex(), salt_hex, ver_hex)
         proof = usr.process_challenge(bytes.fromhex(s_hex), bytes.fromhex(b_hex))
-        hamk_hex, server_key = S.finish(token, proof.hex())
+        _login, hamk_hex, server_key = S.finish(token, proof.hex())
         usr.verify_session(bytes.fromhex(hamk_hex))
         assert usr.get_session_key() == server_key
 
