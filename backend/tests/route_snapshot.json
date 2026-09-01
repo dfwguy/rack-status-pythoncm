@@ -1320,6 +1320,36 @@
   ]
  },
  {
+  "rule": "/oidc/authorize",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/oidc/introspect",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/oidc/revoke",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/oidc/token",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/oidc/userinfo",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
   "rule": "/spa/",
   "methods": [
    "GET"

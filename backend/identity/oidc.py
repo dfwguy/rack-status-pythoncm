@@ -137,14 +137,26 @@ def discovery_document() -> dict[str, object]:
         document: dict[str, object] = {
             "issuer": issuer,
             "jwks_uri": f"{issuer}/.well-known/jwks.json",
+            "authorization_endpoint": f"{issuer}/oidc/authorize",
+            "token_endpoint": f"{issuer}/oidc/token",
+            "userinfo_endpoint": f"{issuer}/oidc/userinfo",
+            "introspection_endpoint": f"{issuer}/oidc/introspect",
+            "revocation_endpoint": f"{issuer}/oidc/revoke",
             "id_token_signing_alg_values_supported": ["ES256"],
             "subject_types_supported": ["public"],
             # Only `openid` until Phase 3. A scope that appears in a token and gates nothing must
             # not be advertised as though it did.
             "scopes_supported": ["openid"],
-            "response_types_supported": [],
-            "grant_types_supported": [],
-            "claims_supported": ["iss", "aud", "sub", "exp", "iat", "jti", "token_use"],
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            # S256 only. `plain` is advertised by many providers and protects nothing against an
+            # intercepted code, so declining to offer it is the point rather than an omission.
+            "code_challenge_methods_supported": ["S256"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
+            "claims_supported": [
+                "iss", "aud", "sub", "exp", "iat", "jti",
+                "token_use", "auth_time", "azp", "nonce", "scope",
+            ],
         }
         _doc_cache = (issuer, document)
         return document

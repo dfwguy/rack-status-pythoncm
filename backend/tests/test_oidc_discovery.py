@@ -111,11 +111,27 @@ class TestDiscoveryDocument:
         advertised = client.get(DISCOVERY).get_json()["id_token_signing_alg_values_supported"]
         assert advertised == [keys_mod.ALGORITHM] == ["ES256"]
 
-    def test_unimplemented_flows_are_advertised_as_empty_not_omitted(self, client, provider):
-        """Empty says "none yet"; omitted lets a client assume a default and try one."""
+    def test_only_implemented_grants_and_response_types_are_advertised(self, client, provider):
         doc = client.get(DISCOVERY).get_json()
-        assert doc["grant_types_supported"] == []
-        assert doc["response_types_supported"] == []
+        assert set(doc["grant_types_supported"]) == {"authorization_code", "refresh_token"}
+        assert doc["response_types_supported"] == ["code"]
+
+    def test_plain_pkce_is_not_advertised(self, client, provider):
+        """Many providers offer `plain`. It protects nothing against an intercepted code, and
+        declining to offer it is the point rather than an omission."""
+        assert client.get(DISCOVERY).get_json()["code_challenge_methods_supported"] == ["S256"]
+
+    def test_every_advertised_endpoint_resolves(self, client, provider):
+        """AC-8. A document naming an endpoint that 404s is worse than no document: the client
+        configures itself successfully and then fails at the point of use."""
+        doc = client.get(DISCOVERY).get_json()
+        endpoints = [v for k, v in doc.items() if k.endswith("_endpoint") or k == "jwks_uri"]
+        assert len(endpoints) >= 5
+
+        rules = {str(r) for r in client.application.url_map.iter_rules()}
+        for url in endpoints:
+            path = url.replace(ISSUER, "")
+            assert path in rules, f"{path} is advertised but is not a route"
 
     def test_only_the_openid_scope_is_advertised(self, client, provider):
         """Phase 3 owns authorization. A scope that gates nothing must not be advertised as if it
@@ -268,15 +284,26 @@ class TestTheGate:
         endpoint = "oidc.openid_configuration" if "configuration" in path else "oidc.jwks"
         assert endpoint in web_auth.AUTH_BYPASS_ENDPOINTS
 
-    def test_the_provider_adds_exactly_two_bypass_entries(self):
-        """The bar for a third is that it must be impossible to serve any other way.
+    def test_the_bypass_set_is_exactly_what_this_phase_intends(self):
+        """FR-6b and FR-6c. Two categories, and the difference matters.
 
-        This list is the set of routes reachable by anyone who can reach the port, so it is worth a
-        test that notices growth rather than a comment asking people not to.
+        The `.well-known` pair need **no credential at all**. The four OAuth routes authenticate by
+        a mechanism this gate does not implement — client credentials, or a Bearer token — so they
+        must bypass it and check for themselves. `/authorize` is deliberately absent: it needs a
+        signed-in operator, which is what the gate is for.
+
+        Pinned as a set rather than a count, because growth here is the thing to notice: an entry
+        in this list is a route the gate will not check.
         """
         import web_auth
 
-        assert {e for e in web_auth.AUTH_BYPASS_ENDPOINTS if e.startswith("oidc.")} == {
+        assert {
+            e for e in web_auth.AUTH_BYPASS_ENDPOINTS if e.startswith(("oidc.", "oidc_provider."))
+        } == {
             "oidc.openid_configuration",
             "oidc.jwks",
+            "oidc_provider.token",
+            "oidc_provider.userinfo",
+            "oidc_provider.introspect",
+            "oidc_provider.revoke",
         }

@@ -390,6 +390,24 @@
   "variant": "sync"
  },
  {
+  "endpoint": "oidc_provider.introspect",
+  "method": "POST",
+  "action": "oidc.token:introspect",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "oidc_provider.revoke",
+  "method": "POST",
+  "action": "oidc.token:revoke",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "oidc_provider.token",
+  "method": "POST",
+  "action": "oidc.token:grant",
+  "variant": "sync"
+ },
+ {
   "endpoint": "parser_results.api_capture_job_attempt",
   "method": "POST",
   "action": "results:capture",

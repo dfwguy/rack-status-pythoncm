@@ -223,6 +223,25 @@ AUTH_BYPASS_ENDPOINTS: tuple[str, ...] = (
     # rather than a coincidence: everything else the provider serves takes a credential.
     "oidc.openid_configuration",
     "oidc.jwks",
+    # The OAuth endpoints, and these are a DIFFERENT CATEGORY to everything above.
+    #
+    # The entries above are genuinely unauthenticated: anyone who can reach the port gets an answer.
+    # These four are not — they authenticate by a mechanism this gate does not implement. `/token`,
+    # `/introspect` and `/revoke` authenticate the *client* (secret or HTTP Basic); `/userinfo`
+    # authenticates the *bearer* of an access token. The gate only understands the dashboard session
+    # cookie, so leaving them gated would refuse a correctly-credentialled OAuth client before it
+    # could present anything.
+    #
+    # **A bypass entry is only safe because the route authenticates for itself**, which is exactly
+    # the kind of claim that rots. `test_oidc_provider.py` asserts each of these four refuses an
+    # unauthenticated caller, so the entry cannot outlive the check that justifies it.
+    #
+    # `/authorize` is deliberately NOT here: it needs a signed-in operator, which is precisely what
+    # this gate is for.
+    "oidc_provider.token",
+    "oidc_provider.userinfo",
+    "oidc_provider.introspect",
+    "oidc_provider.revoke",
     "static",
 )
 
