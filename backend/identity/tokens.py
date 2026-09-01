@@ -161,6 +161,53 @@ def refresh_ttl() -> int:
 #: accepts a token without it and treats it as eternal.
 REQUIRED_CLAIMS = ("iss", "aud", "sub", "exp", "iat", "jti", "typ")
 
+# --- The OIDC provider fork (Phase 2.5, FR-19) -----------------------------------------------
+#
+# Four things differ when `RACK_WEB_OIDC_ENABLED` is on, and **nothing else does**. They are
+# collected here rather than scattered through `mint` and `verify` so the difference between the two
+# modes can be read in one place — and so "off is identical to today" is inspectable rather than
+# hoped for. `test_identity_tokens.py` passing unchanged with the flag off is the real assertion.
+#
+#   1. ES256 with a per-key `kid` header, instead of HS256 with none.
+#   2. `token_use` instead of the custom `typ` claim. `typ` is a *header* parameter in JOSE with a
+#      different meaning (RFC 9068 uses it for `at+jwt`), so a claim of the same name invites a
+#      verifier to check the wrong one.
+#   3. `iss` is the deployment's URL, not the opaque string `nvis-rack-status`. OIDC Discovery
+#      requires it and conforming clients enforce it.
+#   4. `auth_time` and `scope` appear.
+#
+# There is no third mode and no partial state: the same flag governs signing and the published
+# endpoints, because HS256 tokens beside a published JWKS is a key that verifies nothing.
+
+#: The claim naming the token's kind. Renamed rather than duplicated — carrying both would let a
+#: verifier check whichever it happened to know about, which is how a type confusion survives.
+TYPE_CLAIM_LEGACY = "typ"
+TYPE_CLAIM_OIDC = "token_use"
+
+
+def _oidc_mode() -> bool:
+    """Whether to mint and verify as an OIDC provider. Read per call, never captured."""
+    from identity import oidc
+
+    return oidc.enabled()
+
+
+def _type_claim() -> str:
+    return TYPE_CLAIM_OIDC if _oidc_mode() else TYPE_CLAIM_LEGACY
+
+
+def _required_claims() -> list[str]:
+    return [c for c in REQUIRED_CLAIMS if c != TYPE_CLAIM_LEGACY] + [_type_claim()]
+
+
+def _effective_issuer() -> str:
+    if _oidc_mode():
+        from identity import oidc
+
+        return oidc.issuer_url()
+    return issuer()
+
+
 #: No clock-skew allowance. One process mints and verifies against one clock, so leeway would only
 #: extend the life of an expired token and loosen the FR-6 bound for nothing.
 LEEWAY_SECONDS = 0
@@ -250,6 +297,7 @@ def mint(
     token_type: str,
     ttl_seconds: int | None = None,
     claims: dict[str, Any] | None = None,
+    auth_time: float | None = None,
 ) -> str:
     """Sign a token for ``principal`` (a ``user:<login>`` string).
 
@@ -290,20 +338,86 @@ def mint(
     # ambiguity rather than trading one error for the other.
     now = time.time()
     payload: dict[str, Any] = {
-        "iss": issuer(),
+        "iss": _effective_issuer(),
         "aud": AUDIENCE,
         "sub": principal,
         "iat": now,
         "exp": now + float(ttl_seconds),
         # Per-token id, so a single refresh token can be revoked without revoking the user.
         "jti": uuid.uuid4().hex,
-        "typ": token_type,
+        _type_claim(): token_type,
     }
-    for reserved in REQUIRED_CLAIMS:
+
+    if _oidc_mode():
+        # When the user actually authenticated, which is NOT when this token was minted.
+        #
+        # The distinction only shows up on refresh, and it is invisible when wrong: a renewed token
+        # whose `auth_time` is "now" claims the user authenticated a moment ago, when they may have
+        # signed in weeks earlier. Every `max_age` check a relying party makes is then answered with
+        # a plausible, well-formed lie. Callers renewing a session must pass the original value
+        # through; `mint` cannot recover it.
+        payload["auth_time"] = float(auth_time) if auth_time is not None else now
+        if token_type == TOKEN_ACCESS:
+            # `openid` only until Phase 3. A scope that appears in a token and gates nothing is a
+            # claim, not access control, and must not be presented as the latter.
+            payload["scope"] = "openid"
+
+    for reserved in (*REQUIRED_CLAIMS, TYPE_CLAIM_OIDC):
         if claims and reserved in claims:
             raise TokenError(f"caller may not override the {reserved!r} claim")
     payload.update(claims or {})
+
+    if _oidc_mode():
+        from identity import keys as keys_mod
+
+        key = keys_mod.key_set().ensure()
+        return jwt.encode(
+            payload,
+            key.private,
+            algorithm=keys_mod.ALGORITHM,
+            # The `kid` is what lets a verifier pick the right key out of the JWKS without
+            # trial-verifying against every one of them, and it is what makes rotation
+            # non-disruptive rather than a flag day.
+            headers={"kid": key.kid},
+        )
     return jwt.encode(payload, signing_key(), algorithm=ALGORITHM)
+
+
+def _verification_material(token: str) -> tuple[Any, str]:
+    """The key and algorithm to verify this token with.
+
+    In legacy mode there is one of each. In OIDC mode the key is chosen by the token's own ``kid``,
+    which means reading an **unverified** header — unavoidable and standard, because you cannot
+    check a signature before you know which key to check it against. Two rules make that safe:
+    nothing from the header is used for anything except *looking up* a key we already hold, and the
+    algorithm is pinned from our own configuration rather than taken from the header.
+
+    That second rule is what defeats the attack the published key creates. With a JWKS available, an
+    attacker can take our **public** key, sign a token with it as an HMAC secret, and set
+    ``alg: HS256``. A verifier that trusts the header's algorithm then validates it against a value
+    we handed out. Passing ``algorithms=[ES256]`` refuses it — but only because it is written.
+    """
+    if not _oidc_mode():
+        return signing_key(), ALGORITHM
+
+    from identity import keys as keys_mod
+
+    try:
+        header = jwt.get_unverified_header(token)
+    except jwt.PyJWTError as exc:
+        raise TokenError(f"token rejected: {type(exc).__name__}") from exc
+
+    kid = header.get("kid")
+    if not kid:
+        # No fallback to "try the current key". A missing `kid` must not be a way to have a token
+        # verified against whichever key happens to be active, which would re-admit exactly the
+        # tokens a rotation is meant to retire.
+        raise TokenError("token has no `kid`; it cannot be matched to a signing key")
+
+    key = keys_mod.key_set().verifier(str(kid))
+    if key is None:
+        raise TokenError(f"token names an unknown or retired signing key ({kid!r})")
+    return key.private.public_key(), keys_mod.ALGORITHM
 
 
 def verify(token: str, expect_type: str) -> dict[str, Any]:
@@ -321,16 +435,17 @@ def verify(token: str, expect_type: str) -> dict[str, Any]:
             "no revocation checker registered, so FR-6 cannot be satisfied and no token may be "
             "honoured. Call identity.tokens.set_revocation_checker() during startup."
         )
+    verifying_key, algorithm = _verification_material(token)
     try:
         claims = jwt.decode(
             token,
-            signing_key(),
-            algorithms=[ALGORITHM],  # pinned: rejects alg:none and any substitution (FR-4c)
+            verifying_key,
+            algorithms=[algorithm],  # pinned: rejects alg:none and any substitution (FR-4c)
             audience=AUDIENCE,
-            issuer=issuer(),  # without this kwarg PyJWT does not check `iss` at all
+            issuer=_effective_issuer(),  # without this kwarg PyJWT does not check `iss` at all
             leeway=LEEWAY_SECONDS,
             options={
-                "require": list(REQUIRED_CLAIMS),  # without this, a token lacking `exp` is eternal
+                "require": _required_claims(),  # without this, a token lacking `exp` is eternal
                 "verify_signature": True,
                 "verify_exp": True,
                 "verify_iat": True,
@@ -342,7 +457,7 @@ def verify(token: str, expect_type: str) -> dict[str, Any]:
         # Uniform on purpose: the type of failure is useful in a log, not in a response.
         raise TokenError(f"token rejected: {type(exc).__name__}") from exc
 
-    actual = claims.get("typ")
+    actual = claims.get(_type_claim())
     if actual != expect_type:
         raise TokenError(f"token type is {actual!r}, expected {expect_type!r}")
 

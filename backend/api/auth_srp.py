@@ -36,6 +36,7 @@ gate accepts both.
 from __future__ import annotations
 
 import logging
+import time
 
 import core
 import web_auth
@@ -254,8 +255,17 @@ def srp_finish():
             store.close()
 
     principal = principals.user_principal(login)
-    access = tokens.mint(principal, tokens.TOKEN_ACCESS)
-    refresh = tokens.mint(principal, tokens.TOKEN_REFRESH)
+    # One authentication event, one `auth_time` — sampled once and given to both tokens.
+    #
+    # Letting each `mint` stamp its own "now" is the obvious form and it is wrong. The two calls are
+    # milliseconds apart, so the access and refresh tokens disagree about when the user
+    # authenticated; refresh then propagates the *refresh* token's value and `auth_time` creeps
+    # forward by a few milliseconds on every renewal. Measured, not theorised — a millisecond
+    # comparison caught a 3 ms drift that a whole-second assertion would have called equal, and
+    # hourly renewal over a long session compounds it.
+    authenticated_at = time.time()
+    access = tokens.mint(principal, tokens.TOKEN_ACCESS, auth_time=authenticated_at)
+    refresh = tokens.mint(principal, tokens.TOKEN_REFRESH, auth_time=authenticated_at)
 
     resp = make_response(jsonify({
         "ok": True,
@@ -308,7 +318,17 @@ def refresh_session():
             store.close()
 
     resp = make_response(jsonify({"ok": True, "principal": principal}))
-    _set_token_cookies(resp, tokens.mint(principal, tokens.TOKEN_ACCESS))
+    # `auth_time` carries forward from the refresh token rather than being re-stamped (FR-8).
+    #
+    # This is the whole reason the parameter exists. A renewed access token whose `auth_time` is
+    # "now" asserts the user authenticated a moment ago, when the SRP exchange may have been weeks
+    # earlier — and with silent hourly renewal, "weeks earlier" is the normal case. The value is
+    # well-formed either way, so a relying party asking `max_age` gets a plausible answer that is
+    # simply untrue, and nothing anywhere logs a problem.
+    _set_token_cookies(
+        resp,
+        tokens.mint(principal, tokens.TOKEN_ACCESS, auth_time=claims.get("auth_time")),
+    )
     return resp
 
 
