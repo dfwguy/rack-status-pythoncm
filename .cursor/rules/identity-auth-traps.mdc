@@ -43,14 +43,33 @@ quietly putting the NFR-3 5 ms budget at risk while every functional test passed
 - **Assert the cache actually hits.** `test_the_cache_is_actually_serving_reads` is what caught this;
   without it, staleness tests prove nothing, because a cache that never hits cannot go stale.
 
-## 3. `os.replace` installs a new inode with the umask — re-apply the mode after *every* write
+## 3. An atomic write installs the *temp file's* mode — so create the temp with the mode you want
 
-The atomic write (write-temp-then-replace) means a `chmod 0o600` in a constructor is undone by the
-first save, and the file holding SRP verifiers quietly becomes world-readable. `_OwnerOnlyAtomicStorage`
-re-applies the mode after each write. `audit/sink.py` hit the identical trap with log rotation.
+The symptom is real and has bitten twice: a `chmod 0o600` in a constructor is undone by the first
+save, and the file holding SRP verifiers quietly becomes world-readable. `audit/sink.py` hit the
+identical trap with log rotation.
 
-**Test permissions across several writes, not after one** — a single-write test passes on the broken
-version.
+**But the cause is not `os.replace`, and the distinction changes the fix.** `os.replace` preserves
+the *source* inode's mode. The 0644 comes from creating the temp with a plain `open()`, which takes
+the umask. Measured 2026-09-01, umask 022:
+
+| how the temp is created | mode after `os.replace` |
+|---|---|
+| `open(tmp, "w")` | **0644** — the trap |
+| `os.open(tmp, …, 0o600)` | **0600** |
+| `tempfile.mkstemp()` | 0600 (mkstemp defaults to 0600; safe by accident) |
+
+So re-applying the mode *after* the write is a correction applied once a world-readable inode
+already exists — a narrower window, not no window. **Create the temp with the target mode and the
+window never opens**, and you keep atomicity. This is the same lesson as trap 1: fix the value, do
+not shrink the margin around the defect.
+
+`_OwnerOnlyAtomicStorage` currently does the re-apply form. It is not wrong, but new code should
+create correctly instead. `bin/gen-tls-cert.py::_write` already does (`os.open(..., 0o600)`),
+though without a temp, so it trades atomicity for the same guarantee.
+
+**Test permissions across several writes, not after one** — a single-write test passes on the
+broken version regardless of which mechanism is used.
 
 ## 4. The `srp` library's defaults are unsafe, and its wire format is off-standard
 

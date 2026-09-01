@@ -79,7 +79,7 @@ and is impossible while it is not.
 |---|---|---|---|
 | FR-1 | Tokens shall be signed with an **asymmetric** algorithm — `RS256` or `ES256` — such that the key required to verify a token is not sufficient to mint one. | the structural blocker above | this is the requirement the rest of the phase depends on. Under HS256 "publish a verification key" and "publish a minting key" are the same sentence |
 | FR-2 | The signing key pair shall be **generated on first boot** if absent, persisted in the deployment's own storage, and survive process and container restart. | operational; mirrors the identity store | resolves **Phase 2 design open question C**, which this phase forces: derived-from-`RACK_WEB_SECRET_KEY` is not available for an asymmetric key, so the key needs its own home |
-| FR-2a | The private key file shall be created with **owner-only permissions**, and those permissions shall be re-applied after **every** write, not only at creation. | `identity-auth-traps.mdc` trap 3 | `os.replace` installs a **new inode with the umask**, so a `chmod` in a constructor is undone by the first save. This has already happened twice in this codebase — the identity store and the audit sink. Test across several writes; a single-write test passes on the broken version |
+| FR-2a | The private key file shall be owner-only at every observable moment, including during a rewrite. It shall be written by **creating the replacement with the target mode and then atomically replacing** — never by writing then correcting the mode. | `identity-auth-traps.mdc` trap 3, **re-measured 2026-09-01** | the trap is real but the rule states its cause imprecisely, and the imprecision led me to draft the workaround. **`os.replace` preserves the *source* inode's mode**; the 0644 comes from creating the temp with a plain `open()`, which takes the umask. Measured: `open()`+replace → 0644, `os.open(…, 0o600)`+replace → **0600**, `tempfile.mkstemp`+replace → 0600 (mkstemp defaults to 0600). So "re-apply the mode after every write" is a correction applied *after* a world-readable inode already exists — a window, not a fix. Creating the temp correctly gives atomicity **and** permissions with no window and no re-chmod. `bin/gen-tls-cert.py::_write` already does the non-atomic version of this (`os.open` in place) for exactly this reason. **Keep testing across several writes** — a single-write test passes on the broken version either way |
 | FR-3 | Every minted token shall carry a **`kid`** in its JOSE header identifying the key that signed it. | RFC 7515 §4.1.4; prerequisite for FR-4 | without `kid` a verifier must trial-verify against every published key, and rotation cannot be non-disruptive |
 | FR-4 | The product shall support **more than one valid verification key at a time**: a rotation shall publish the new key, sign new tokens with it, and continue to verify tokens signed by the previous key until they expire. | operational; consequence of FR-1 | rotation that invalidates outstanding tokens is an outage, and an outage nobody will schedule is a rotation nobody will perform. The overlap window is at least the maximum refresh lifetime (30 days, per the Phase 2 ceiling) |
 | FR-4a | A token whose `kid` names no published key shall be refused. A token with **no** `kid` shall be refused. | consequence of FR-3 | a missing `kid` must not silently fall back to "try the current key", which would re-admit exactly the tokens rotation is meant to retire |
@@ -264,6 +264,111 @@ deployment's own hardware, since these are Apple silicon numbers.
 
 Decision 2 also resolves **Phase 2 design open question C**, which this phase forced: an asymmetric
 key cannot be derived from `RACK_WEB_SECRET_KEY` the way the HMAC key was, so it needed a home.
+
+## Design Delta
+
+### Decision 5 — instance identity is one bootstrap, but not one key
+
+Feature-lead direction, 2026-09-01: the deployment already mints a TLS certificate on first boot,
+and the token-signing key should be bootstrapped by that same act, because both answer *which
+Rack Status is this*.
+
+That framing is right and it is worth naming, because the two halves are usually treated as
+unrelated plumbing. A deployment has a **cryptographic instance identity** with two faces:
+
+- the **TLS key and certificate** — the identity you check when you connect, already fingerprintable
+  via `bin/gen-tls-cert.py --fingerprint`;
+- the **token signing key** — the identity you check when you're handed a token that claims to come
+  from it. Its public half is the JWKS, and from this phase on it is what makes a Rack Status token
+  verifiable by anything other than Rack Status.
+
+**They bootstrap together. They are not the same key**, and that is the load-bearing part of this
+decision:
+
+| | TLS key | Signing key |
+|---|---|---|
+| Exposure | presented in every handshake; held by gunicorn | never leaves the app process |
+| Compromise means | impersonate the server to a client, MITM the session | **mint a token for any user** — a total authentication bypass |
+| Rotation | 730-day leaf, re-issued as a unit | overlapping, driven by the 30-day refresh ceiling (FR-4) |
+| Published half | the certificate, to whoever connects | the JWK, to anyone at all |
+
+Reusing one key for both would couple those rows: a TLS re-issue would invalidate every token, and
+the key with the larger attack surface would be the one that can forge identity. Key separation is
+the standard rule and this is a clean instance of why it exists.
+
+**What is shared is the mechanism, not the material.** One module owns "generate, load, persist,
+permission and rotate a P-256 key pair"; TLS and signing are two callers. The existing
+`bin/gen-tls-cert.py` already generates **P-256** (`_key()` → `SECP256R1`) and already writes private
+material with `os.open(..., 0o600)` rather than chmod-after — the same curve we chose in decision 1,
+and the correct write pattern from FR-2a. So this is extending a mechanism that exists, not adding
+one beside it.
+
+**Both live under `var/secrets/`** (decision 2), which is already gitignored and already on the
+`rack-data` volume. Note the canonical TLS path is `var/secrets/tls/`, **not** `var/tls/` — a stray
+`var/tls/` in a developer tree is a manual run, not a product path.
+
+### Bootstrap sequence
+
+Ordered by dependency; each step is a no-op if its material already exists, so a restart changes
+nothing:
+
+1. `RACK_WEB_SECRET_KEY` → `var/secrets/.rack_web_secret_key` *(exists today)*
+2. TLS key + certificate → `var/secrets/tls/` *(exists today, Phase 0.5)*
+3. **Signing key pair → `var/secrets/oidc/` (new)**
+4. Identity store + bootstrap admin *(exists today, Phase 2)*
+
+Step 3 sits before step 4 deliberately: the admin bootstrap prints a one-time password and the
+operator's first act is to sign in, which mints a token — so the key must exist before the first
+credential does.
+
+### `kid` derivation
+
+The `kid` is the **base64url SHA-256 JWK thumbprint (RFC 7638)** of the public key, not a counter or
+a uuid. Three reasons, in order of how much they matter:
+
+- It is **derivable by the verifier** from the JWK itself, so a client can check that the `kid` in a
+  header names the key it thinks it does, rather than trusting our label.
+- It is **stable across restarts** without persisting anything extra — a counter needs state, and
+  state that can reset produces two different keys claiming `kid: 1`, where the second silently
+  fails to verify the first's tokens.
+- Rotation gets a natural identity: two keys cannot collide unless they are the same key.
+
+### Rotation, and the one property that makes it non-disruptive
+
+Keys live in a small set, not a single slot. Exactly one is **active** (signs); all valid ones
+**verify** and appear in the JWKS. A rotation appends a new active key and demotes the previous one
+to verify-only; the demoted key is removed once nothing it signed can still be live — at least the
+refresh ceiling, 30 days.
+
+The failure this avoids is worth stating: rotate by *replacing* the key and every outstanding token
+becomes invalid at once, which is the same event as the FR-18 cutover. A rotation that logs everyone
+out is a rotation nobody will ever schedule, which means the key is never rotated at all.
+
+### What this changes in existing citizens
+
+- **Auth (citizen 11)** keeps its single gate. `tokens.signing_key()` becomes "the active private
+  key"; `tokens.verify` gains `kid` lookup against the key set. The gate itself does not change.
+- **Configuration (citizen 5)**: the flag (FR-19), the algorithm and the key directory are settings,
+  read through the accessors — not `os.environ.get` at the call site.
+- **API modules (citizen 0)**: the OP endpoints are new files under `backend/api/`. The two
+  `.well-known` paths need the auth bypass list (FR-6b), which is the only new bypass this phase adds.
+- **The action vocabulary** grows by the OP endpoints; undeclared actions fail the build (NFR-4).
+- **`identity-auth-traps.mdc` needs two edits** as part of this phase: trap 3's cause is stated
+  imprecisely (see FR-2a), and the note that `iss`/`aud` do not separate deployments stops being
+  true once we verify a federated provider's tokens alongside our own (FR-17).
+
+### Design open questions
+
+- **A. Where the authorization-code table lives.** In-process is simplest and inherits the SRP
+  challenge table's single-worker dependency (NFR-5). The identity store is durable but a code has
+  a 60-second life, so persisting it is mostly write amplification. Leaning in-process **with the
+  startup assertion**, since that is already the state of things for SRP and one shared constraint
+  is easier to hold than two mechanisms.
+- **B. Whether the id token's `aud` should be the client or the product.** OIDC says the client;
+  today `aud` is the constant `nvis-rack-status`. Changing it affects the existing verify path, so
+  it interacts with the FR-19 flag.
+- **C. What `scope` values exist before Phase 3.** A scope that appears in a token and gates nothing
+  must not be presented as access control. Possibly only `openid` until the policy engine lands.
 
 ## Explicit non-goals for this phase
 
