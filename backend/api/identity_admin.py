@@ -70,6 +70,20 @@ def _store() -> IdentityStore:
     return IdentityStore()
 
 
+def _is_hex(value: str) -> bool:
+    """Whether the string is parseable hex.
+
+    Checked before anything reaches the credential store: a non-hex verifier written there is a
+    credential nobody can ever authenticate against — a lockout authored by the client, and one that
+    only surfaces when the user first tries to sign in.
+    """
+    try:
+        bytes.fromhex(value)
+    except ValueError:
+        return False
+    return bool(value)
+
+
 def _caller_login() -> str:
     """The signed-in administrator's login, or empty when the gate is disabled."""
     principal = str(getattr(g, "auth_principal", "") or "")
@@ -140,10 +154,25 @@ def list_users():
 @bp.route("/users", methods=["POST"])
 @action("identity.user:create")
 def create_user():
-    """Create a user and return its one-time password.
+    """Create a user, either with a generated password or with one the operator chose.
 
-    The password appears in this response and nowhere else, ever again — same contract as the
-    first-boot bootstrap, for the same reason (FR-3).
+    **Two modes, and the difference is where the password exists.**
+
+    *Generated* (send no credential): the server generates one, returns it in this response and
+    nowhere else ever again, and stores only its verifier — the same contract as the first-boot
+    bootstrap, for the same reason (FR-3).
+
+    *Chosen* (send `salt` and `verifier`): the operator picked a password and the **browser** derived
+    the credential from it, so the password itself never reaches this process. That is the same
+    property SRP gives a login, extended to enrolment: it cannot appear in a request body, a proxy
+    log or a crash report.
+
+    A chosen password is deliberately **not** accepted as plaintext for the server to hash. Doing so
+    would be easier and would put a live credential in exactly the places SRP exists to keep it out
+    of, which is a strange thing to do in an SRP system.
+
+    Either way the account is flagged to change it at first sign-in: a password conveyed by one
+    person to another is a shared password until the recipient replaces it.
     """
     body = request.get_json(silent=True) or {}
     raw_login = str(body.get("login") or "").strip()
@@ -156,8 +185,27 @@ def create_user():
     except IdentityError as exc:
         return _bad(str(exc))
 
-    password = bootstrap.generate_password()
-    salt, verifier = srp_mod.enroll(login, password)
+    if body.get("password"):
+        # Named explicitly rather than ignored, so a caller that tries it learns why instead of
+        # wondering which password the account ended up with.
+        return _bad(
+            "send `salt` and `verifier` derived in the client, not `password`. This is an SRP "
+            "store: a plaintext password here would defeat the point of it.",
+        )
+
+    supplied_salt = str(body.get("salt") or "").strip()
+    supplied_verifier = str(body.get("verifier") or "").strip()
+    if bool(supplied_salt) != bool(supplied_verifier):
+        return _bad("`salt` and `verifier` must be supplied together")
+
+    password: str | None = None
+    if supplied_salt:
+        if not _is_hex(supplied_salt) or not _is_hex(supplied_verifier):
+            return _bad("`salt` and `verifier` must be hex")
+        salt, verifier = supplied_salt, supplied_verifier
+    else:
+        password = bootstrap.generate_password()
+        salt, verifier = srp_mod.enroll(login, password)
 
     store = _store()
     try:
@@ -177,12 +225,16 @@ def create_user():
     finally:
         store.close()
 
-    return jsonify({
+    payload: dict[str, object] = {
         "ok": True,
         "user": {"login": login, "display_name": display_name or login},
-        "password": password,
-        "note": "Copy this now. It is not stored and cannot be shown again.",
-    }), 201
+    }
+    if password is not None:
+        # Only present when the server generated it. Omitted rather than sent as null for a chosen
+        # password, so a client cannot render an empty "here is the password" panel.
+        payload["password"] = password
+        payload["note"] = "Copy this now. It is not stored and cannot be shown again."
+    return jsonify(payload), 201
 
 
 @bp.route("/users/<login>", methods=["GET"])

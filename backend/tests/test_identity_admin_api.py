@@ -342,6 +342,93 @@ class TestAC23bNoUnauthenticatedCredentialPath:
         assert "identity_admin.reset_credential" not in web_auth.AUTH_BYPASS_ENDPOINTS
 
 
+class TestCreatingWithAChosenPassword:
+    """The operator picks the password; the browser derives the credential from it.
+
+    The point is where the password exists. In *chosen* mode it never reaches this process — the
+    client sends a salt and verifier, exactly as SRP does for a login. A plaintext `password` field
+    is refused rather than hashed server-side, because accepting it would put a live credential in a
+    request body in a system built to keep it out of one.
+    """
+
+    def test_a_chosen_credential_authenticates(self, admin_api):
+        password = "an-operator-chosen-password"
+        salt, verifier = srp_mod.enroll("chosen", password)
+
+        created = admin_api.post(
+            "/api/identity/users",
+            json={"login": "chosen", "salt": salt, "verifier": verifier},
+        )
+        assert created.status_code == 201
+
+        srp_lib.rfc5054_enable(srp_mod.RFC5054_COMPAT)
+        user = srp_lib.User(
+            "chosen", password, hash_alg=srp_mod.HASH_ALG, ng_type=srp_mod.NG_TYPE
+        )
+        _name, a = user.start_authentication()
+        begin = admin_api.post(
+            "/api/auth/srp/begin", json={"login": "chosen", "A": a.hex()}
+        ).get_json()
+        proof = user.process_challenge(bytes.fromhex(begin["salt"]), bytes.fromhex(begin["B"]))
+        finish = admin_api.post(
+            "/api/auth/srp/finish", json={"token": begin["token"], "M": proof.hex()}
+        )
+        assert finish.status_code == 200
+
+    def test_no_password_is_returned_for_a_chosen_credential(self, admin_api):
+        """Omitted, not null — a client must not render an empty "here is the password" panel."""
+        salt, verifier = srp_mod.enroll("chosen2", "pw")
+        body = admin_api.post(
+            "/api/identity/users",
+            json={"login": "chosen2", "salt": salt, "verifier": verifier},
+        ).get_json()
+        assert "password" not in body
+
+    def test_a_plaintext_password_is_refused(self, admin_api):
+        resp = admin_api.post(
+            "/api/identity/users", json={"login": "plain", "password": "hunter2"}
+        )
+        assert resp.status_code == 400
+        assert "srp" in resp.get_json()["error"].lower()
+
+    @pytest.mark.parametrize("payload", [
+        {"login": "half1", "salt": "aabb"},
+        {"login": "half2", "verifier": "aabb"},
+    ])
+    def test_half_a_credential_is_refused(self, admin_api, payload):
+        assert admin_api.post("/api/identity/users", json=payload).status_code == 400
+
+    @pytest.mark.parametrize("bad", ["zz", "not-hex", "abc"])
+    def test_a_non_hex_credential_is_refused(self, admin_api, bad):
+        """A non-hex verifier in the store is a credential nobody can authenticate against."""
+        resp = admin_api.post(
+            "/api/identity/users", json={"login": "bad", "salt": "aabb", "verifier": bad}
+        )
+        assert resp.status_code == 400
+        assert admin_api.get("/api/identity/users/bad").status_code == 404
+
+    def test_the_login_charset_stays_ascii_so_the_client_can_canonicalise(self):
+        """Pins a coupling the frontend depends on and cannot see.
+
+        `identityService.createUserWithPassword` derives the verifier against
+        `login.toLowerCase()`, because SRP hashes the identity into `x` and the client must use the
+        same string the server stores. The server uses `casefold()`, which differs from
+        `toLowerCase()` only outside ASCII — and `_LOGIN_RE` is validated *before* the fold, so every
+        login that reaches it is ASCII.
+
+        Widening that regex to accept non-ASCII would silently break chosen-password enrolment for
+        those logins, presenting as "wrong password" at first sign-in. This fails instead.
+        """
+        from identity.models import _LOGIN_RE
+
+        assert _LOGIN_RE.pattern == r"^[A-Za-z0-9](?:[A-Za-z0-9._@+-]*[A-Za-z0-9])?$", (
+            "the login charset changed; if it now admits non-ASCII, casefold() and the client's "
+            "toLowerCase() can disagree and chosen-password enrolment breaks silently"
+        )
+        for non_ascii in ("Ünter", "İstanbul", "straße"):
+            assert not _LOGIN_RE.match(non_ascii), f"{non_ascii!r} is now a valid login"
+
+
 class TestYouCannotLockEveryoneOut:
     """FR-12 makes recovery from losing every credential a **redeploy of the identity store**, which
     on a customer cluster discards every user, group and membership. A misclick must not cost that.

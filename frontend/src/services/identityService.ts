@@ -25,6 +25,7 @@
  */
 
 import { apiFetch } from "../lib/apiFetch";
+import { deriveVerifier } from "../lib/srpClient";
 import type { IdentityGroup, IdentityUser, IssuedCredential } from "../types/identity";
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -55,7 +56,12 @@ export async function listUsers(): Promise<IdentityUser[]> {
   return data.users ?? [];
 }
 
-/** Create a user. The returned password is shown once and is then unrecoverable. */
+/**
+ * Create a user with a server-generated password.
+ *
+ * The returned password exists in that one response and nowhere else — the server keeps only its
+ * verifier — so a caller that discards it has created an account nobody can sign in to.
+ */
 export async function createUser(
   login: string,
   displayName?: string,
@@ -65,6 +71,43 @@ export async function createUser(
     json({ login, display_name: displayName ?? "" }),
   );
   return { login: data.user.login, password: data.password };
+}
+
+/**
+ * Create a user with a password the operator chose.
+ *
+ * **The password does not leave this browser.** `deriveVerifier` turns it into a salt and verifier
+ * here, and only those are sent — the same property SRP gives a login, extended to enrolment. The
+ * server refuses a plaintext `password` field outright rather than hashing it for you, which would
+ * put a live credential in a request body in an SRP system.
+ *
+ * Returns nothing: there is no one-time password to show, because the operator already knows it.
+ */
+export async function createUserWithPassword(
+  login: string,
+  password: string,
+  displayName?: string,
+): Promise<void> {
+  // Derived against the *canonical* login the server will store: SRP hashes the identity into `x`,
+  // so deriving against the raw input would produce a verifier that never matches at sign-in — the
+  // same failure shape as the change-password bug, reported as "wrong password".
+  //
+  // The server case-folds, and `toLowerCase()` is equivalent here for one specific reason:
+  // `_LOGIN_RE` permits only `[A-Za-z0-9._@+-]` and is validated BEFORE the fold, so every login
+  // that reaches it is ASCII, where `casefold` and `toLowerCase` agree. That coupling is not
+  // obvious, so `test_identity_admin_api.py` pins the charset — if the regex is ever widened to
+  // accept non-ASCII, that test fails rather than this line silently diverging.
+  const canonical = login.trim().toLowerCase();
+  const { saltHex, verifierHex } = await deriveVerifier(canonical, password);
+  await apiJson(
+    "/api/identity/users",
+    json({
+      login: canonical,
+      display_name: displayName ?? "",
+      salt: saltHex,
+      verifier: verifierHex,
+    }),
+  );
 }
 
 export async function updateDisplayName(

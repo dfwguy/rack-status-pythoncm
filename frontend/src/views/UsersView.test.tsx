@@ -121,6 +121,88 @@ describe("the one-time password", () => {
   });
 });
 
+describe("choosing the initial password", () => {
+  it("generates by default, so the safer path needs no decision", async () => {
+    vi.mocked(identity.createUser).mockResolvedValue({ login: "n", password: "generated" });
+
+    render(asAdmin(<UsersView />));
+    await screen.findByText("operator1");
+    fireEvent.click(screen.getByRole("button", { name: /add user/i }));
+    fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "n" } });
+    fireEvent.click(screen.getByRole("button", { name: /create and show password/i }));
+
+    await waitFor(() => expect(identity.createUser).toHaveBeenCalled());
+    expect(identity.createUserWithPassword).not.toHaveBeenCalled();
+  });
+
+  it("sends a chosen password through the deriving path, never the generating one", async () => {
+    vi.mocked(identity.createUserWithPassword).mockResolvedValue(undefined);
+
+    render(asAdmin(<UsersView />));
+    await screen.findByText("operator1");
+    fireEvent.click(screen.getByRole("button", { name: /add user/i }));
+    fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "chosen" } });
+    fireEvent.click(screen.getByLabelText(/set a password now/i));
+
+    const password = "a-long-enough-password";
+    fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: password } });
+    fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: password } });
+    fireEvent.click(screen.getByRole("button", { name: /^create user$/i }));
+
+    await waitFor(() =>
+      expect(identity.createUserWithPassword).toHaveBeenCalledWith("chosen", password, ""),
+    );
+    expect(identity.createUser).not.toHaveBeenCalled();
+  });
+
+  it("shows no one-time password panel for a chosen password", async () => {
+    /* There is nothing to reveal — the operator already knows it — and an empty "here is the
+       password" dialog would read as a bug. */
+    vi.mocked(identity.createUserWithPassword).mockResolvedValue(undefined);
+
+    render(asAdmin(<UsersView />));
+    await screen.findByText("operator1");
+    fireEvent.click(screen.getByRole("button", { name: /add user/i }));
+    fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "chosen" } });
+    fireEvent.click(screen.getByLabelText(/set a password now/i));
+    const pw = "a-long-enough-password";
+    fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: pw } });
+    fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: pw } });
+    fireEvent.click(screen.getByRole("button", { name: /^create user$/i }));
+
+    await waitFor(() => expect(identity.createUserWithPassword).toHaveBeenCalled());
+    expect(screen.queryByText(/only time this password is shown/i)).not.toBeInTheDocument();
+  });
+
+  it("will not submit a chosen password that is too short or mismatched", async () => {
+    render(asAdmin(<UsersView />));
+    await screen.findByText("operator1");
+    fireEvent.click(screen.getByRole("button", { name: /add user/i }));
+    fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "chosen" } });
+    fireEvent.click(screen.getByLabelText(/set a password now/i));
+
+    fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: "short" } });
+    fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: "short" } });
+    expect(screen.getByRole("button", { name: /^create user$/i })).toBeDisabled();
+
+    const ok = "a-long-enough-password";
+    fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: ok } });
+    fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: `${ok}x` } });
+    expect(screen.getByRole("button", { name: /^create user$/i })).toBeDisabled();
+
+    expect(identity.createUserWithPassword).not.toHaveBeenCalled();
+  });
+
+  it("tells the operator the password does not reach the server", async () => {
+    render(asAdmin(<UsersView />));
+    await screen.findByText("operator1");
+    fireEvent.click(screen.getByRole("button", { name: /add user/i }));
+    fireEvent.click(screen.getByLabelText(/set a password now/i));
+
+    expect(screen.getByText(/not sent to the server/i)).toBeInTheDocument();
+  });
+});
+
 describe("destructive actions name their consequence", () => {
   it("says a deleted login is retired permanently", async () => {
     render(asAdmin(<UsersView />));

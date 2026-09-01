@@ -29,6 +29,10 @@
  */
 
 import Box from "@mui/material/Box";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import FormLabel from "@mui/material/FormLabel";
+import Radio from "@mui/material/Radio";
+import RadioGroup from "@mui/material/RadioGroup";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
@@ -78,6 +82,11 @@ export function UsersView() {
   const [creating, setCreating] = useState(false);
   const [newLogin, setNewLogin] = useState("");
   const [newDisplayName, setNewDisplayName] = useState("");
+  //: Generate by default. It is the safer path — a generated password is high-entropy and nobody
+  //: has typed it into a second place — so the operator has to opt into choosing one.
+  const [credentialMode, setCredentialMode] = useState<"generate" | "choose">("generate");
+  const [newPassword, setNewPassword] = useState("");
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
 
   const reload = useCallback(async () => {
     try {
@@ -159,18 +168,32 @@ export function UsersView() {
     }
   };
 
+  const resetCreateForm = () => {
+    setCreating(false);
+    setNewLogin("");
+    setNewDisplayName("");
+    setCredentialMode("generate");
+    setNewPassword("");
+    setNewPasswordConfirm("");
+  };
+
   const create = async () => {
     const login = newLogin.trim();
     if (!login) return;
     setBusyLogin(login);
     setError("");
     try {
-      const credential = await identity.createUser(login, newDisplayName.trim());
-      setCreating(false);
-      setNewLogin("");
-      setNewDisplayName("");
-      // Shown before the reload, because the password is the only unrecoverable thing here.
-      setIssued(credential);
+      if (credentialMode === "choose") {
+        // The password is turned into a salt and verifier in this browser; only those are sent.
+        await identity.createUserWithPassword(login, newPassword, newDisplayName.trim());
+        resetCreateForm();
+        setNotice(`${login} was created. Give them the password you chose.`);
+      } else {
+        const credential = await identity.createUser(login, newDisplayName.trim());
+        resetCreateForm();
+        // Shown before the reload, because this password is the only unrecoverable thing here.
+        setIssued(credential);
+      }
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create the user");
@@ -178,6 +201,13 @@ export function UsersView() {
       setBusyLogin(null);
     }
   };
+
+  const chosenTooShort = newPassword.length > 0 && newPassword.length < 12;
+  const chosenMismatch = newPasswordConfirm.length > 0 && newPassword !== newPasswordConfirm;
+  const canCreate =
+    newLogin.trim().length > 0 &&
+    (credentialMode === "generate" ||
+      (newPassword.length >= 12 && newPassword === newPasswordConfirm));
 
   if (loading) {
     return (
@@ -359,7 +389,7 @@ export function UsersView() {
       </Menu>
 
       {/* Add user */}
-      <Dialog open={creating} onClose={() => setCreating(false)} maxWidth="sm" fullWidth>
+      <Dialog open={creating} onClose={resetCreateForm} maxWidth="sm" fullWidth>
         <DialogTitle>Add user</DialogTitle>
         <DialogContent>
           <TextField
@@ -377,12 +407,66 @@ export function UsersView() {
             helperText="For presentation only. Freely editable later."
             value={newDisplayName}
             onChange={(e) => setNewDisplayName(e.target.value)}
+            sx={{ mb: 3 }}
           />
+
+          <FormLabel>
+            <Text kind="body/bold/sm">Initial password</Text>
+          </FormLabel>
+          <RadioGroup
+            value={credentialMode}
+            onChange={(e) => setCredentialMode(e.target.value as "generate" | "choose")}
+          >
+            <FormControlLabel
+              value="generate"
+              control={<Radio size="small" />}
+              label="Generate one and show it once (recommended)"
+            />
+            <FormControlLabel
+              value="choose"
+              control={<Radio size="small" />}
+              label="Set a password now"
+            />
+          </RadioGroup>
+
+          {credentialMode === "choose" && (
+            <Box sx={{ mt: 1 }}>
+              <TextField
+                fullWidth
+                type="password"
+                label="Password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                autoComplete="new-password"
+                error={chosenTooShort}
+                helperText={chosenTooShort ? "At least 12 characters" : " "}
+                sx={{ mb: 1 }}
+              />
+              <TextField
+                fullWidth
+                type="password"
+                label="Confirm password"
+                value={newPasswordConfirm}
+                onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                autoComplete="new-password"
+                error={chosenMismatch}
+                helperText={chosenMismatch ? "The two entries do not match" : " "}
+              />
+              <Text
+                kind="body/regular/sm"
+                style={{ display: "block", color: "var(--text-color-secondary)" }}
+              >
+                The password is turned into a verifier in your browser — it is not sent to the
+                server and cannot be recovered from what is stored. {newLogin.trim() || "The user"}{" "}
+                will still be required to choose their own at first sign-in, since you know this one.
+              </Text>
+            </Box>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button kind="tertiary" onClick={() => setCreating(false)}>Cancel</Button>
-          <Button kind="primary" disabled={!newLogin.trim()} onClick={() => void create()}>
-            Create and show password
+          <Button kind="tertiary" onClick={resetCreateForm}>Cancel</Button>
+          <Button kind="primary" disabled={!canCreate} onClick={() => void create()}>
+            {credentialMode === "choose" ? "Create user" : "Create and show password"}
           </Button>
         </DialogActions>
       </Dialog>
