@@ -394,12 +394,6 @@
   ]
  },
  {
-  "rule": "/api/login",
-  "methods": [
-   "POST"
-  ]
- },
- {
   "rule": "/api/logout",
   "methods": [
    "POST"

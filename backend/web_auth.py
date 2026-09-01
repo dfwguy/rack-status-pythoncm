@@ -30,20 +30,14 @@ builds a response.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import secrets
-import subprocess
 from collections.abc import Callable
 from datetime import timedelta
 from urllib.parse import urlsplit
 
-import host_exec
-from config_env import _env_int, _subprocess_env
+from config_env import _env_int
 from core import truthy_env as _truthy_env
-from flask import session
-from paths import APP_DIR
 
 _logger = logging.getLogger(__name__)
 
@@ -126,39 +120,45 @@ def authenticated_principal(headers: object, cookies: object = None) -> str:
     return ""
 
 
-def _auth_mode() -> str:
-    """Return ``pam`` or ``token``.  Defaults to ``token`` when inside a container (SSH mode)."""
-    explicit = (os.environ.get("RACK_WEB_AUTH_MODE") or "").strip().lower()
-    if explicit in ("pam", "token"):
-        return explicit
-    # PAM authenticates against *this* machine's accounts, so it is only meaningful
-    # when the app runs on the target host; a remote target has no such mapping.
-    return "pam" if host_exec.exec_kind() == "local" else "token"
-
-
-def _auth_token() -> str | None:
-    """Token string when RACK_WEB_AUTH_MODE=token."""
-    t = (os.environ.get("RACK_WEB_AUTH_TOKEN") or "").strip()
-    return t or None
+# --- Removed 2026-09-01: shared-token and PAM authentication (FR-18) ------------------------------
+#
+# `_auth_mode`, `_auth_token`, `_pam_service`, `_pam_verify`, `_token_verify` and `_session_ok` are
+# gone, along with `RACK_WEB_AUTH_MODE`, `RACK_WEB_AUTH_TOKEN`, `RACK_WEB_PAM_SERVICE` and the
+# vendored `rack_web/pam_*` bindings. Every caller authenticates through `authenticated_principal`
+# above, which verifies a signed access token and nothing else.
+#
+# **They were deleted rather than deprecated**, and the reason is specific: after the gate moved to
+# tokens, `POST /api/login` still answered `200 {"ok": true}` and set a Flask session the gate no
+# longer honoured. An operator logged in, saw a dashboard shell, and watched every panel return 401
+# with nothing on screen explaining why. A credential path that succeeds and grants nothing is worse
+# than an absent one, because the failure surfaces far from its cause.
+#
+# `RACK_WEB_AUTH_DISABLED` survives as a development and test switch (FR-18a) and is the *only*
+# remaining configuration input that affects authentication — it turns the gate off entirely rather
+# than selecting a weaker credential. FR-18c retires it once the suite authenticates for real.
+#
+# `RACK_WEB_AUTH_USER` also survives, narrowed to what it always actually was: a display default.
 
 
 def _auth_user() -> str:
+    """Fallback display name when there is no authenticated principal.
+
+    Not a credential and never was — it named who a PAM login would authenticate *as*. Kept only so
+    the auth-disabled development path has something to show.
+    """
     return (os.environ.get("RACK_WEB_AUTH_USER") or "root").strip() or "root"
 
 
-def _pam_service() -> str:
-    return (os.environ.get("RACK_WEB_PAM_SERVICE") or "login").strip() or "login"
-
-
 def _session_lifetime() -> timedelta:
+    """Kept for the Flask session cookie's own lifetime, which still carries CSRF and flash state.
+
+    It no longer bounds *authentication* — an access token's TTL does that (`tokens.ACCESS_TTL_SECONDS`),
+    and a refresh token's bounds how long a session can be renewed without a password.
+    """
     h = _env_int("RACK_WEB_SESSION_HOURS", 8)
     h = max(h, 1)
     h = min(h, 24 * 30)
     return timedelta(hours=h)
-
-
-def _session_ok() -> bool:
-    return session.get("rack_web_auth") == "1"
 
 
 def _safe_next(raw: str | None) -> str:
@@ -199,7 +199,9 @@ AUTH_REALM = "nvis-rack-status"
 #: `api_login` is in it because it is how a credential is obtained in the first place.
 AUTH_BYPASS_ENDPOINTS: tuple[str, ...] = (
     "auth.login",
-    "auth.api_login",
+    # `auth.api_login` is gone with FR-18. Its removal from this tuple matters as much as its
+    # removal from the router: an entry naming a route that no longer exists is dead weight that
+    # reads as an intentional exemption to the next person auditing this list.
     "auth.api_auth_check",
     # The SRP exchange is how a caller obtains a credential, so it cannot require one. Both legs
     # are listed: leg 2 presents a challenge token, not a session, and gating it would make login
@@ -333,73 +335,3 @@ def wsgi_origin_allowed(environ: dict) -> bool:
     except ValueError:
         return False
     return bool(origin_host) and origin_host == host
-
-
-def _pam_helper_python_exe() -> str:
-    return (os.environ.get("RACK_WEB_PAM_HELPER_PYTHON") or "/usr/bin/python3").strip() or "/usr/bin/python3"
-
-
-def _pam_verify_subprocess(username: str, password: str, service: str) -> bool:
-    """Authenticate via pam_helper.py under a Python that can load ctypes (e.g. /usr/bin/python3)."""
-    exe = _pam_helper_python_exe()
-    helper = APP_DIR / "rack_web" / "pam_helper.py"
-    if not helper.is_file():
-        raise RuntimeError(f"Internal error: missing {helper}")
-    payload = json.dumps({"user": username, "password": password, "service": service})
-    try:
-        proc = subprocess.run(
-            [exe, str(helper)],
-            input=payload.encode("utf-8"),
-            capture_output=True,
-            timeout=90,
-            env=_subprocess_env(),
-            check=False,
-        )
-    except FileNotFoundError:
-        raise RuntimeError(
-            f"PAM helper interpreter not found: {exe!r}. Set RACK_WEB_PAM_HELPER_PYTHON to a "
-            "Python whose ctypes module works (often /usr/bin/python3), or recreate the venv with "
-            "that interpreter instead of a mismatched module-loaded Python."
-        ) from None
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError("PAM authentication subprocess timed out") from e
-    out = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
-    err_tail = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"PAM helper process failed (exit {proc.returncode}). "
-            f"Try RACK_WEB_PAM_HELPER_PYTHON=/usr/bin/python3. Stderr: {err_tail[-1200:]}"
-        )
-    if not out:
-        raise RuntimeError(
-            "PAM helper produced no output. "
-            f"Try RACK_WEB_PAM_HELPER_PYTHON=/usr/bin/python3. Stderr: {err_tail[-1200:]}"
-        )
-    line = out.splitlines()[-1].strip()
-    try:
-        data = json.loads(line)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"PAM helper returned invalid JSON ({line[:200]!r}): {e}") from e
-    if data.get("error"):
-        raise RuntimeError(str(data["error"]))
-    return bool(data.get("ok"))
-
-
-def _token_verify(password: str) -> bool:
-    """Verify password against RACK_WEB_AUTH_TOKEN (simple shared-secret)."""
-    token = _auth_token()
-    if not token:
-        return False
-    return secrets.compare_digest(password, token)
-
-
-def _pam_verify(username: str, password: str, service: str) -> bool:
-    if password is None:
-        return False
-    if _auth_mode() == "token":
-        return _token_verify(password)
-    try:
-        from rack_web.pam_ctypes import authenticate as pam_authenticate
-    except (ImportError, OSError):
-        return _pam_verify_subprocess(username, password, service)
-    return bool(pam_authenticate(username, password, service=service))

@@ -41,7 +41,6 @@ services:
     env_file: rack-config.env
     environment:
       - RACK_SSH_HOST=${RACK_SSH_HOST}
-      - RACK_WEB_AUTH_TOKEN=${RACK_WEB_AUTH_TOKEN:-}
       # TLS: point these at bin/gen-tls-cert.py output to serve HTTPS. Unset = plain HTTP.
       - RACK_WEB_TLS_CERT=${RACK_WEB_TLS_CERT:-}
       - RACK_WEB_TLS_KEY=${RACK_WEB_TLS_KEY:-}

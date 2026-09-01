@@ -22,12 +22,11 @@ os.environ["RACK_EXEC_MODE"] = "local"
 # Activity hydration moved out of app.py; patch the module that owns these names.
 import activity_hydration
 import app as app_module
+import rack_locks
 import rack_status_engine
+import validation_activities
 from api import dashboard
 from app import app
-
-import rack_locks
-import validation_activities
 
 
 @pytest.fixture
@@ -76,11 +75,24 @@ class TestAuthEndpoints:
         resp = client.get("/api/auth-check")
         assert resp.status_code == 200
 
-    def test_login_when_disabled(self, client):
-        resp = client.post("/api/login", json={"password": "anything"})
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["ok"] is True
+    def test_the_legacy_login_route_is_gone(self, client):
+        """FR-18. Replaces a test that asserted `POST /api/login` returned 200 with `ok: true`.
+
+        That behaviour is exactly what had to go: after the gate moved to tokens the route still
+        succeeded and set a session nothing honoured, so a caller was told it had authenticated and
+        then refused on every subsequent request.
+
+        **405, not 404, and the reason is worth knowing.** With the rule deleted the path falls
+        through to the SPA catch-all, which is GET-only — so a POST is "method not allowed" on that
+        catch-all rather than "no such path". A GET does return a 404 with a JSON body, because the
+        catch-all deliberately refuses to serve the HTML shell for anything under `/api/`. Either
+        way there is no credential path here; asserting the exact code pins which refusal arrives,
+        so a future routing change that resurrects a 200 fails loudly.
+        """
+        assert client.post("/api/login", json={"password": "anything"}).status_code == 405
+        get = client.get("/api/login")
+        assert get.status_code == 404
+        assert get.headers.get("Content-Type", "").startswith("application/json")
 
 
 class TestStatusEndpoint:
@@ -114,7 +126,7 @@ class TestSharedClusterSnapshotAPI:
             lambda: {"ok": True, "stdout": ""},
         )
         # Avoid ~1.5s filesystem reads on every _eget during API shell assembly.
-        monkeypatch.setattr(app_module, "_job_env_overrides_load", lambda: {})
+        monkeypatch.setattr(app_module, "_job_env_overrides_load", dict)
         # Local mode reachability is a no-op; do not stub it so SSH-mode regressions surface.
 
     @staticmethod
@@ -430,7 +442,7 @@ class TestClusterOverviewLiveAPI:
         monkeypatch.setattr(dashboard, "_start_cmsh_rack_list_warm_thread", lambda: None)
         monkeypatch.setattr(dashboard, "_resolve_log_dir", lambda _raw: Path("/logs"))
         monkeypatch.setattr(app_module.host_exec, "reachability_state", lambda: (True, ""))
-        monkeypatch.setattr(app_module, "_job_env_overrides_load", lambda: {})
+        monkeypatch.setattr(app_module, "_job_env_overrides_load", dict)
         # Force a fresh live-service singleton for this DB path.
         app_module._cluster_overview_live_service_cache = None
         yield

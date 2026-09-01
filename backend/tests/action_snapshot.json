@@ -60,12 +60,6 @@
   "variant": "async"
  },
  {
-  "endpoint": "auth.api_login",
-  "method": "POST",
-  "action": "auth:login",
-  "variant": "sync"
- },
- {
   "endpoint": "auth.api_logout",
   "method": "POST",
   "action": "auth:logout",

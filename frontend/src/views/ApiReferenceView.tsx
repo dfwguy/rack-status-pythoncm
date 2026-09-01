@@ -211,8 +211,10 @@ export function ApiReferenceView() {
         >
           Generated from this deployment&apos;s own route table, so it describes exactly what this
           build serves. Query parameters are the ones each handler actually reads. Request bodies are
-          free-form JSON by design — the description carries the contract, not a schema. Authenticate
-          with <code>POST /api/login</code> before calling anything else.{" "}
+            free-form JSON by design — the description carries the contract, not a schema. Authenticate
+            over SRP (<code>POST /api/auth/srp/begin</code> then <code>/finish</code>) and send the
+            resulting token as <code>Authorization: Bearer</code>, or hold the cookie the exchange
+            sets, before calling anything else.{" "}
           <a href={NVIS_RACK_STATUS_DOC_URL} target="_blank" rel="noopener noreferrer">
             Source repository
           </a>

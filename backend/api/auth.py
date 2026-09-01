@@ -30,13 +30,7 @@ import logging
 
 from audit.actions import action
 from flask import Blueprint, jsonify, redirect, request, session
-from web_auth import (
-    _auth_enabled,
-    _auth_user,
-    _pam_service,
-    _pam_verify,
-    _session_ok,
-)
+from web_auth import _auth_enabled, _auth_user
 
 from ._common import serve_spa_asset as _serve_spa_asset
 
@@ -49,8 +43,15 @@ bp = Blueprint("auth", __name__, url_prefix="")
 
 @bp.route("/login", methods=["GET"])
 def login():
-    """Redirect to SPA — the React LoginPage handles authentication."""
-    if not _auth_enabled() or _session_ok():
+    """Serve the SPA shell; the React LoginPage drives the SRP exchange.
+
+    An already-authenticated caller is redirected away, and "authenticated" now means a valid access
+    token rather than a Flask session — otherwise a stale session cookie would bounce a signed-out
+    operator off the one page they need.
+    """
+    import web_auth
+
+    if not _auth_enabled() or web_auth.authenticated_principal(request.headers, request.cookies):
         return redirect("/")
     return _serve_spa_asset("index.html")
 
@@ -107,26 +108,21 @@ def api_auth_check():
     })
 
 
-@bp.route("/api/login", methods=["POST"])
-@action("auth:login")
-def api_login():
-    """JSON login endpoint for the React SPA. Accepts {"password": "..."}."""
-    if not _auth_enabled():
-        return jsonify({"ok": True, "user": _auth_user(), "auth_disabled": True})
-    data = request.get_json(silent=True) or {}
-    pw = str(data.get("password") or "")
-    au = _auth_user()
-    psvc = _pam_service()
-    try:
-        ok = _pam_verify(au, pw, psvc)
-    except RuntimeError as e:
-        return jsonify({"ok": False, "error": f"PAM error: {e}"}), 500
-    if ok:
-        session.clear()
-        session.permanent = True
-        session["rack_web_auth"] = "1"
-        return jsonify({"ok": True, "user": au})
-    return jsonify({"ok": False, "error": "Invalid password"}), 401
+# --- Removed 2026-09-01: POST /api/login (FR-18) ---------------------------------------------
+#
+# The shared-token and PAM login endpoint is gone. `POST /api/auth/srp/begin` and `/finish` replace
+# it: the password is never transmitted, so it cannot appear in a proxy log or a crash report.
+#
+# **Deleted rather than left returning an error.** Once the gate moved to tokens this route still
+# answered `200 {"ok": true}` and set a Flask session nothing honoured — an operator logged in, got
+# a dashboard shell, and every panel returned 401 with nothing explaining why. A route that succeeds
+# and grants nothing is worse than one that is absent, because the failure appears far from its
+# cause. A 410 was considered and rejected for the same reason: the SPA no longer calls it, so the
+# only readers would be scripts, and a hard 404 with the path simply gone is the clearer signal.
+#
+# Migration for a caller that used it: authenticate over SRP and send the resulting access token as
+# `Authorization: Bearer <token>`, or hold the `HttpOnly` cookie the exchange sets. See
+# `docs/API_RESPONSE_CODES.md` and the login flow in `frontend/src/lib/srpClient.ts`.
 
 
 @bp.route("/api/logout", methods=["POST"])

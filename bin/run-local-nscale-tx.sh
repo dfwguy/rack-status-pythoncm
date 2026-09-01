@@ -122,17 +122,13 @@ export RACK_STATUS_DEMO=0
 # and the Origin guard never run. Pass RACK_WEB_AUTH_DISABLED=0 to test them.
 export RACK_WEB_AUTH_DISABLED="${RACK_WEB_AUTH_DISABLED:-1}"
 if [[ "${RACK_WEB_AUTH_DISABLED}" != "1" ]]; then
-  # exec_kind() is "ssh" here, so _auth_mode() resolves to token and the password IS the token.
-  # Without one, _token_verify() returns False for every input and nobody can log in -- a blank
-  # login screen that rejects everything, which reads as a broken build rather than missing config.
-  export RACK_WEB_AUTH_MODE="${RACK_WEB_AUTH_MODE:-token}"
-  if [[ -z "${RACK_WEB_AUTH_TOKEN:-}" ]]; then
-    echo "STOP: auth is enabled (RACK_WEB_AUTH_DISABLED=0) but RACK_WEB_AUTH_TOKEN is unset." >&2
-    echo "      In token mode the password IS the token, so login would reject everything." >&2
-    echo "      Re-run with: RACK_WEB_AUTH_DISABLED=0 RACK_WEB_AUTH_TOKEN=<pick-one> $0" >&2
-    exit 1
-  fi
-  echo "[auth] ENABLED in ${RACK_WEB_AUTH_MODE} mode — log in with the token as the password"
+  # Shared-token and PAM login were removed in FR-18, so there is no token to hand out and nothing
+  # to configure here. Authentication is SRP against the local identity store: the first start with
+  # an empty store prints a one-time `admin` password to this terminal.
+  echo "[auth] ENABLED — sign in as 'admin' with the one-time password printed at startup."
+  echo "[auth] It is shown once and is not recoverable; bin/run-local-auth.sh gives you a"
+  echo "[auth] private store and a fresh password on every run if you would rather not use"
+  echo "[auth] this cluster's."
 fi
 
 # --- Paths on the HEAD NODE (not this Mac) -------------------------------------------------------

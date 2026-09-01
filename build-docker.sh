@@ -222,7 +222,6 @@ run_prod() {
   local port="${RACK_WEB_PORT:-5000}"
   local ssh_host="${RACK_SSH_HOST:-}"
   local ssh_key="${RACK_SSH_KEY_PATH:-$HOME/.ssh/id_rsa}"
-  local auth_token="${RACK_WEB_AUTH_TOKEN:-}"
   local config="${RACK_CONFIG_FILE:-rack-config.env}"
 
   if [[ -z "$ssh_host" ]]; then
@@ -230,11 +229,14 @@ run_prod() {
     echo "  RACK_SSH_HOST=10.0.0.1 ./build-docker.sh prod"
     exit 1
   fi
-  if [[ -z "$auth_token" ]]; then
-    echo "Error: RACK_WEB_AUTH_TOKEN is required for prod token auth."
-    echo "  RACK_WEB_AUTH_TOKEN=secret ./build-docker.sh prod"
-    exit 1
-  fi
+  # No credential to pass in. Shared-token and PAM login were removed (FR-18): the container
+  # authenticates against its own identity store, and the FIRST start with an empty store prints a
+  # one-time `admin` password to the container log. Capture it there:
+  #
+  #     docker logs CONTAINER 2>&1 | grep -A6 "ONE-TIME ADMINISTRATOR"
+  #
+  # It is shown once and only its verifier is kept, so losing it means resetting the credential
+  # from another administrator's session — or redeploying the identity store if there is none.
   if [[ ! -f "$ssh_key" ]]; then
     echo "Warning: SSH key not found at ${ssh_key}"
   fi
@@ -247,7 +249,6 @@ run_prod() {
   docker run -d --name "$CONTAINER" -p "${port}:5000" \
     --env-file "$config" \
     -e RACK_SSH_HOST="$ssh_host" \
-    -e RACK_WEB_AUTH_TOKEN="$auth_token" \
     -v "${ssh_key}:/run/secrets/ssh_key:ro" \
     --restart unless-stopped \
     "$IMAGE"

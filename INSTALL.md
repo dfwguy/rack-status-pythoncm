@@ -42,7 +42,6 @@ NEMO_SQSH_SRC=/path/to/nemo.sqsh   # NeMo container image on head node
 docker run -d --name rack-status -p 5000:5000 \
   --env-file rack-config.env \
   -e RACK_SSH_HOST=<head-node-ip> \
-  -e RACK_WEB_AUTH_TOKEN=<password> \
   -v ~/.ssh/id_rsa:/run/secrets/ssh_key:ro \
   --restart unless-stopped \
   nvis-rack-status:local
@@ -64,7 +63,7 @@ docker compose up -d
 
 ```bash
 # Edit rack-config.env first
-RACK_SSH_HOST=10.0.0.1 RACK_WEB_AUTH_TOKEN=secret ./build-docker.sh prod
+RACK_SSH_HOST=10.0.0.1 ./build-docker.sh prod
 ```
 
 ## Deploying Scripts to the Head Node
@@ -91,7 +90,16 @@ Then set `RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status` in `rack-confi
 | `http://<host>:5000/` | Legacy HTML dashboard |
 | `http://<host>:5000/api/status` | JSON API |
 
-Log in with the password set in `RACK_WEB_AUTH_TOKEN`. If authentication is
+After the container starts, read the one-time administrator password from its log:
+
+```bash
+docker logs <container> 2>&1 | grep -A6 "ONE-TIME ADMINISTRATOR"
+```
+
+Sign in as `admin` with that password; the UI will require you to choose your own. It is shown once
+and only its verifier is stored, so capture it before anyone needs to sign in.
+
+If authentication is
 disabled (`RACK_WEB_AUTH_DISABLED=1`), no login is required.
 
 ## Configuration Reference
@@ -116,8 +124,6 @@ disabled (`RACK_WEB_AUTH_DISABLED=1`), no login is required.
 
 | Variable | Default | Description |
 |---|---|---|
-| `RACK_WEB_AUTH_MODE` | auto | `token` (shared password) or `pam` (system PAM). Auto-selects `token` in ssh mode |
-| `RACK_WEB_AUTH_TOKEN` | — | Login password when using token mode |
 | `RACK_WEB_AUTH_DISABLED` | `0` | Set to `1` to disable login entirely |
 | `RACK_WEB_SECRET_KEY` | random | Set a fixed value for stable sessions across container restarts |
 
@@ -174,7 +180,6 @@ docker run -d --name rack-status -p 5000:5000 \
   --env-file rack-config.env \
   -e RACK_SSH_HOST=host.docker.internal \
   -e RACK_SSH_PORT=2222 \
-  -e RACK_WEB_AUTH_TOKEN=<password> \
   -v ~/.ssh/key:/run/secrets/ssh_key:ro \
   --add-host=host.docker.internal:host-gateway \
   nvis-rack-status:local
@@ -240,7 +245,7 @@ docker run -d --name rack-status -p 5000:5000 \
 
 For a real cluster, swap the demo flags for the SSH/auth env described in
 [Configuration Reference](#configuration-reference) (e.g. `--env-file rack-config.env`,
-`RACK_SSH_HOST`, `RACK_WEB_AUTH_TOKEN`, and the SSH key mount).
+`RACK_SSH_HOST` and the SSH key mount).
 
 ## Running Tests
 
@@ -285,7 +290,8 @@ docker stop rack-status && docker rm rack-status
 - For jump hosts, verify the SSH tunnel is active: `lsof -i :<tunnel-port>`
 
 **Login page appears but password is rejected:**
-- Ensure `RACK_WEB_AUTH_TOKEN` is set and matches what you type at login
+- Read the one-time `admin` password from the container log (see above); if the identity
+  store already has users, no password is printed and you must use an existing account
 - Or set `RACK_WEB_AUTH_DISABLED=1` to bypass login
 
 **NEMO container fails to start (pyxis/enroot errors):**

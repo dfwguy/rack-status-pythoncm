@@ -174,7 +174,7 @@ export const platformContent: HelpContent[] = [
     ],
     howTo: [
       { task: "Find an endpoint", steps: ["Open API Reference.", "Type a path, verb or keyword in the filter.", "Click an operation to expand its parameters and responses."] },
-      { task: "Integrate another system", steps: ["Open API Reference.", "Click 'openapi.json' to download the document.", "Point your client generator at it; authenticate first via POST /api/login."] },
+      { task: "Integrate another system", steps: ["Open API Reference.", "Click 'openapi.json' to download the document.", "Point your client generator at it.", "Authenticate over SRP (POST /api/auth/srp/begin then /finish) and send the access token as 'Authorization: Bearer'."] },
     ],
     related: ["toolRegistry", "settings"],
     keywords: ["api", "openapi", "swagger", "rest", "endpoint", "integration", "client", "spec", "schema", "json", "yaml"],

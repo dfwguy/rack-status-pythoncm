@@ -245,6 +245,70 @@ class TestFR16ThePrincipalComesFromTheToken:
         assert gated.get(PROTECTED).status_code == 401
 
 
+class TestFR18TheLegacyCredentialsAreGone:
+    """Removed, not deprecated — and this is the test that stops them coming back.
+
+    The failure that motivated deletion is worth restating, because a future "just add a compatible
+    fallback" would recreate it exactly: once the gate verified tokens, `POST /api/login` still
+    answered `200 {"ok": true}` and set a Flask session the gate ignored. An operator logged in, got
+    a dashboard shell, and every panel returned 401 with nothing on screen explaining why. A
+    credential path that succeeds and grants nothing is worse than an absent one.
+    """
+
+    def test_the_login_route_grants_nothing(self, gated):
+        """Whatever the refusal code, the point is that no credential comes out of it.
+
+        The path now falls through to the GET-only SPA catch-all, so a POST is 405. What matters is
+        that the response is not a success and sets no session cookie — a 200 here would mean the
+        route came back.
+        """
+        resp = gated.post("/api/login", json={"password": "anything"})
+        assert resp.status_code >= 400
+        assert not any("session" in c for c in resp.headers.getlist("Set-Cookie"))
+
+    def test_no_route_in_the_map_is_the_legacy_login(self):
+        from app import app
+
+        assert "/api/login" not in {str(r) for r in app.url_map.iter_rules()}
+
+    @pytest.mark.parametrize("symbol", [
+        "_auth_mode", "_auth_token", "_pam_service", "_pam_verify", "_token_verify", "_session_ok",
+    ])
+    def test_the_mechanism_is_gone_from_web_auth(self, symbol):
+        """Leaving these importable invites a caller to reach for one."""
+        import web_auth
+
+        assert not hasattr(web_auth, symbol), f"web_auth.{symbol} still exists"
+
+    def test_the_pam_bindings_are_deleted(self):
+        from pathlib import Path
+
+        rack_web = Path(__file__).resolve().parents[1] / "rack_web"
+        leftovers = sorted(p.name for p in rack_web.glob("pam_*.py"))
+        assert not leftovers, f"vendored PAM bindings remain: {leftovers}"
+
+    @pytest.mark.parametrize("env", [
+        "RACK_WEB_AUTH_TOKEN", "RACK_WEB_AUTH_MODE", "RACK_WEB_PAM_SERVICE",
+    ])
+    def test_the_removed_variables_grant_nothing(self, gated, monkeypatch, env):
+        """FR-12: no environment variable grants access. Setting these must change nothing.
+
+        Asserted against a *running gate* rather than by grepping, because the question is whether
+        the variable has any effect, not whether the string appears anywhere.
+        """
+        monkeypatch.setenv(env, "some-value")
+        assert gated.get(PROTECTED).status_code == 401
+
+    def test_the_bypass_set_names_no_removed_route(self):
+        """An entry for a route that no longer exists reads as an intentional exemption."""
+        import web_auth
+        from app import app
+
+        known = {r.endpoint for r in app.url_map.iter_rules()}
+        stale = [e for e in web_auth.AUTH_BYPASS_ENDPOINTS if e not in known]
+        assert not stale, f"bypass entries with no matching route: {stale}"
+
+
 class TestTheDisableSwitchStillWorks:
     def test_auth_disabled_bypasses_the_gate(self, monkeypatch, tmp_path):
         """FR-18a. ~2,500 tests depend on this, and FR-18c retires it once they authenticate."""

@@ -106,13 +106,39 @@ Used by **`bin/scripts/launch-grafana-bright-prometheus.sh`** (not by Flask). Af
 | **`FLASK_DEBUG`** | *(unset)* | `1` → Flask debug (**not** for production). |
 | **`PROJECT_NAME`**, **`RACK_WEB_PROJECT_NAME`** | *(unset)* | Optional page title suffix. |
 | **`RACK_WEB_VERSION`** | `dev` | `/api/app-stats`. |
-| **`RACK_WEB_AUTH_DISABLED`** | *(unset)* | Truthy → no HTTP login. |
-| **`RACK_WEB_AUTH_USER`** | `root` | PAM user. |
-| **`RACK_WEB_PAM_SERVICE`** | `login` | PAM stack. |
-| **`RACK_WEB_PAM_HELPER_PYTHON`** | `/usr/bin/python3` | Interpreter for `backend/rack_web/pam_helper.py`. |
+| **`RACK_WEB_AUTH_DISABLED`** | *(unset)* | Truthy → the gate is off entirely. **Development and test only** (FR-18a). It does not select a weaker credential — it removes authentication, so every request is anonymous and every action unattributable. It is also the *only* remaining configuration input that affects authentication, which is what FR-12 requires. |
+| **`RACK_WEB_AUTH_USER`** | `root` | Display name shown when the gate is disabled. Not a credential. |
 | **`RACK_WEB_SECRET_KEY`** | *(auto on first start)* | Flask session signing and NVFTP vault encryption. If unset, the app creates `var/secrets/.rack_web_secret_key` on first launch (gitignored, persisted on the `var/` volume in Docker). Set this env var explicitly to use your own key. |
 | **`NVIS_VAULT_MASTER_KEY`** | *(empty)* | Optional override for vault encryption instead of `RACK_WEB_SECRET_KEY`. |
 | **`NVIS_TOKEN_VAULT_DIR`** | `var/secrets/` | Directory for encrypted token vault files (**never commit** — see `.gitignore` and `scripts/check_no_vault_in_git.sh`). |
+
+### Authentication: there is nothing to configure
+
+**Removed 2026-09-01 (FR-18): `RACK_WEB_AUTH_MODE`, `RACK_WEB_AUTH_TOKEN`, `RACK_WEB_PAM_SERVICE`
+and `RACK_WEB_PAM_HELPER_PYTHON`.** Shared-token and PAM login are gone, along with the vendored
+`rack_web/pam_*` bindings and `POST /api/login`. Setting any of those variables now has no effect —
+which is the point of FR-12: no environment variable grants access.
+
+Authentication is SRP against the local identity store. Passwords are never transmitted and never
+stored; the server keeps a verifier. On the **first start with an empty store** the app creates an
+`admin` user and prints a one-time password:
+
+```bash
+docker logs <container> 2>&1 | grep -A6 "ONE-TIME ADMINISTRATOR"
+```
+
+Sign in with it and the UI will require you to choose your own. The store lives under `var/`, which
+in Docker is the `rack-data` named volume, so it survives a `docker compose up -d` recreate — a
+store that vanished on redeploy would lock everyone out.
+
+**Upgrading a deployment that used a shared token:** the token stops working in this release, and the
+same start that removes it bootstraps the `admin` account (FR-10b). Read the password from the
+startup output before anyone needs to sign in. `NVIS_IDENTITY_FILE` overrides the store location if
+you keep state elsewhere.
+
+**Losing every administrator credential means redeploying the identity store.** There is no recovery
+code and no self-service reset — an authenticated administrator can reset *another* user's
+credential (FR-13a), but nothing can help when nobody can sign in.
 
 ### NVFTP cache sync (`var/cache` → SFTP)
 
@@ -725,8 +751,6 @@ RACK_WEB_GRAFANA_URI
 RACK_WEB_GRAFANA_VAR_HOST
 RACK_WEB_GRAFANA_VAR_RACK
 RACK_WEB_HW_CHECK                 # set by hw_check_pdsh.sh on targets (see §9)
-RACK_WEB_PAM_HELPER_PYTHON
-RACK_WEB_PAM_SERVICE
 RACK_WEB_PRINT_HELP               # set by app for checker.sh --help (see §9)
 RACK_WEB_PROJECT_NAME
 RACK_WEB_SECRET_KEY
