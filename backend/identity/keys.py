@@ -96,6 +96,21 @@ DEFAULT_VALIDITY_SECONDS = 18 * _SECONDS_PER_MONTH
 #: never sign at all. Startup refuses rather than serving a deployment that cannot mint a session.
 MIN_VALIDITY_MARGIN_SECONDS = 60
 
+#: The intended floor on how long a key actually *signs*, as distinct from how long it stays valid.
+#:
+#: Feature-lead direction: "at least 1 year + extra time to support the last issued token with the
+#: longest TTL". At the 18-month default and today's 1-month ceiling the derived signing period is
+#: 17 months, so the floor is met with five months to spare — but it is met *by the default*, not by
+#: anything in the code, and a lowered validity would quietly erode it.
+#:
+#: **Warned, not refused**, and the distinction is deliberate. A short signing period is not unsafe:
+#: every token still verifies for its full life, because the cutoff derivation guarantees that
+#: independently. It is *operationally* poor — it churns the JWKS, which is the exact concern that
+#: motivated a long-lived key in the first place, and a client that mishandles a rollover fails
+#: intermittently. Refusing to start over a working-but-churny configuration would be the wrong
+#: severity; saying nothing would let the intent evaporate silently.
+MIN_INTENDED_SIGNING_PERIOD_SECONDS = 365 * 24 * 60 * 60
+
 
 class KeyError_(Exception):
     """Anything that makes the key set unusable. Named to avoid shadowing the builtin."""
@@ -356,13 +371,33 @@ class KeySet:
             return key
 
     def _assert_validity_exceeds(self, t_max: int) -> None:
-        """FR-4d: a key that cannot outlive its own tokens can never sign one."""
+        """Two checks at different severities, because they are different problems.
+
+        FR-4d **refuses**: a key that cannot outlive its own tokens produces a cutoff in the past
+        and can never sign anything, so the deployment cannot mint a session at all.
+
+        The signing-period floor only **warns**: that configuration works correctly — every token
+        still verifies for its full life — it just rotates far more often than intended and churns
+        the JWKS for every consumer.
+        """
         if self.validity_seconds <= t_max + MIN_VALIDITY_MARGIN_SECONDS:
             raise KeyError_(
                 f"signing-key validity ({self.validity_seconds}s) must exceed the longest token "
                 f"lifetime ({t_max}s) by more than {MIN_VALIDITY_MARGIN_SECONDS}s, or the signing "
                 f"cutoff falls in the past and no token can ever be minted. Raise "
                 f"RACK_WEB_SIGNING_KEY_VALIDITY_SECONDS or lower the refresh-token ceiling."
+            )
+        signing_period = self.validity_seconds - t_max
+        if signing_period < MIN_INTENDED_SIGNING_PERIOD_SECONDS:
+            _logger.warning(
+                "signing key will rotate every %.1f months (validity %.1f months minus a %.1f-month "
+                "token ceiling), below the intended %.0f-month floor. This is safe — tokens still "
+                "verify for their full life — but it republishes the JWKS that often, and consumers "
+                "that cache keys will see more rollovers than intended.",
+                signing_period / (30 * 86400),
+                self.validity_seconds / (30 * 86400),
+                t_max / (30 * 86400),
+                MIN_INTENDED_SIGNING_PERIOD_SECONDS / (30 * 86400),
             )
 
     # -- reads -------------------------------------------------------------------------------

@@ -287,6 +287,41 @@ class TestTheInvariantThatProtectsOutstandingTokens:
             "the refusal must name both values, or it is a puzzle rather than a fix"
         )
 
+    def test_the_default_gives_more_than_a_year_of_signing_at_the_real_ceiling(
+        self, key_dir, month_tokens
+    ):
+        """The feature lead's floor: "at least 1 year + extra time for the last issued token".
+
+        18-month validity against today's 1-month ceiling is 17 months of signing. Asserted rather
+        than assumed, because it is a property of two independently configurable numbers and either
+        could move.
+        """
+        key = _set(key_dir).ensure(now=T0)
+        signing_period = key.signing_cutoff(K._t_max()) - T0
+        assert signing_period >= K.MIN_INTENDED_SIGNING_PERIOD_SECONDS
+        assert signing_period == pytest.approx(17 * MONTH)
+
+    def test_a_short_signing_period_warns_but_still_works(self, key_dir, month_tokens, caplog):
+        """Warned, not refused — the severity is the point.
+
+        Such a key is not unsafe: the cutoff derivation still guarantees every token verifies for
+        its full life. It just rotates constantly, which is the exact thing a long-lived key exists
+        to avoid. Refusing to boot over a working configuration would be the wrong response;
+        silence would let the intent decay unnoticed.
+        """
+        with caplog.at_level(logging.WARNING):
+            key = _set(key_dir, 3 * MONTH).ensure(now=T0)
+
+        assert key.kid, "a short signing period must still produce a usable key"
+        assert "below the intended" in caplog.text
+        assert key.can_verify(now=T0 + 2 * MONTH)
+
+    def test_no_warning_at_the_default(self, key_dir, month_tokens, caplog):
+        """Guards the other direction: a floor that always fires is noise nobody reads."""
+        with caplog.at_level(logging.WARNING):
+            _set(key_dir).ensure(now=T0)
+        assert "below the intended" not in caplog.text
+
     def test_rotation_is_refused_on_the_same_grounds(self, key_dir, monkeypatch):
         """The check belongs on every minting path, not only the bootstrap one."""
         monkeypatch.setenv("RACK_WEB_REFRESH_TTL_SECONDS", str(MONTH))
