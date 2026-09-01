@@ -19,7 +19,23 @@ import { createContext, useContext } from "react";
 
 export interface AuthState {
   authenticated: boolean;
+  /** What to show a human. A display name, a login, or a principal — never fed to a computation. */
   user: string | null;
+  /**
+   * The bare login (`admin`), and the only value SRP may be given.
+   *
+   * Named `userLogin` rather than `login` because `login` is already the sign-in
+   * *method* on this context, and a field colliding with it does not compile.
+   *
+   * Separate from `user` because conflating them was a real bug: SRP derives
+   * `x = H(salt, H(login ":" password))`, so the identity string has to be byte-identical to the
+   * one the server enrolled. `user` held a *display name* after a fresh login (`"Administrator"`
+   * for the bootstrap admin) and a *principal* after a reload (`"user:admin"`), and either one
+   * produced a valid-looking proof the server could only reject — surfacing as "current password is
+   * incorrect" with a password that was perfectly correct.
+   */
+  userLogin?: string | null;
+  /** True until the mount-time credential check has answered. */
   loading: boolean;
   /** The bootstrap credential is flagged for change (FR-10a); the UI should insist on it. */
   mustChangePassword?: boolean;

@@ -35,6 +35,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setState({
           authenticated: true,
           user: data.user,
+          // `data.user` is the principal (`user:admin`). Strip the kind prefix to get the login
+          // SRP needs; anything else produces a proof the server cannot verify.
+          userLogin: String(data.user ?? "").replace(/^user:/, "") || null,
           loading: false,
           // Carried through the mount check as well as login, so a page reload cannot walk past
           // the change-password prompt (FR-10a).
@@ -42,7 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
       })
       .catch(() => {
-        setState({ authenticated: false, user: null, loading: false });
+        setState({ authenticated: false, user: null, userLogin: null, loading: false });
       });
   }, []);
 
@@ -60,6 +63,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setState({
         authenticated: true,
         user: result.user?.display_name || result.user?.login || username,
+        // The login, not the display name. `username` is what the operator typed, which the server
+        // canonicalises — so prefer the server's own value when it sent one.
+        userLogin: result.user?.login || username,
         loading: false,
         mustChangePassword: Boolean(result.mustChangePassword),
       });
@@ -72,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // The new endpoint revokes the tokens by `jti` as well as clearing the cookies. Clearing alone
     // would leave a copy taken beforehand valid until it expired.
     await fetch("/api/auth/logout", { method: "POST" });
-    setState({ authenticated: false, user: null, loading: false });
+    setState({ authenticated: false, user: null, userLogin: null, loading: false });
   }, []);
 
   return (

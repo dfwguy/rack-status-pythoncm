@@ -36,7 +36,15 @@ export function ChangePasswordPage({
   login,
   onChanged,
 }: {
-  login: string;
+  /**
+   * The bare enrolled login (`admin`) — **not** a display name and not a principal.
+   *
+   * SRP derives `x = H(salt, H(login ":" password))`, so this string has to be byte-identical to
+   * what the server enrolled. Passing `"Administrator"` or `"user:admin"` produces a well-formed
+   * proof the server can only reject, and the operator is told their password is wrong when it is
+   * not. Nullable so a missing value is a visible error rather than a silent guess.
+   */
+  login: string | null | undefined;
   onChanged: () => void;
 }) {
   const [current, setCurrent] = useState("");
@@ -55,6 +63,15 @@ export function ChangePasswordPage({
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (!login) {
+      // Says what is actually wrong. Attempting the exchange with a guessed identity would return
+      // "current password is incorrect", sending the operator to re-check a password that is fine.
+      setError(
+        "Your signed-in identity could not be determined, so the password cannot be changed. " +
+          "Sign out and in again.",
+      );
+      return;
+    }
     setError("");
     setBusy(true);
     const result = await changePassword(login, current, next);

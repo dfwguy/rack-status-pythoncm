@@ -394,7 +394,7 @@ function AppContent() {
 }
 
 function AuthGate() {
-  const { authenticated, loading, mustChangePassword, user, logout } = useAuth();
+  const { authenticated, loading, mustChangePassword, userLogin, logout } = useAuth();
 
   if (loading) {
     return (
@@ -408,7 +408,10 @@ function AuthGate() {
   // printed into a startup log, so anyone who can read that log is the administrator until it is
   // changed — which makes "the operator will get round to it" the wrong design (FR-10a).
   if (authenticated && mustChangePassword) {
-    return <ChangePasswordPage login={user ?? "admin"} onChanged={logout} />;
+    // `login`, never `user`. `user` is a display value and SRP needs the exact enrolled login.
+    // No `?? "admin"` fallback either: guessing here is what turns a state bug into "your password
+    // is wrong", which is the least debuggable message this product can show.
+    return <ChangePasswordPage login={userLogin} onChanged={logout} />;
   }
 
   if (!authenticated) {
