@@ -132,6 +132,9 @@ and is impossible while it is not.
 |---|---|---|---|
 | FR-18 | The migration from HS256 to asymmetric signing shall be **documented as a breaking change that ends every live session**, with the operator-visible consequence stated. | INV-17; assumption 5 | there is no dual-verification trick worth building: honouring HS256 tokens during a window means keeping the symmetric secret live, which is the thing being removed. One clean break, announced |
 | FR-18a | On upgrade, a deployment with no key pair shall generate one and start normally — the upgrade shall not require an operator action beyond re-authenticating. | operational | |
+| FR-19 | The asymmetric signing path shall be selectable by a **single deployment flag, defaulting to the existing HS256 behaviour**, so that merging this phase does not by itself end any session. With the flag off, the product shall behave exactly as before: HS256 tokens, no `kid`, and the OP endpoints absent from discovery. | **decision 4** | a flag that only half-switches is worse than none — a deployment signing HS256 while advertising a JWKS would publish a key that verifies nothing, and every external consumer would fail in a way that looks like our bug |
+| FR-19a | Turning the flag on shall be **one-way in effect**: tokens minted under it do not verify with the flag off, and vice versa. The flag shall be documented as a scheduled cutover, not a runtime toggle. | consequence of FR-19 | stated because "there is a flag" invites someone to flip it back when something looks wrong, which signs everyone out a *second* time rather than restoring service |
+| FR-19b | The flag and the HS256 path shall be **removed** once the cutover is complete; the brief's acceptance is not met while both paths remain in the tree indefinitely. | the cost accepted in decision 4 | a dead flag that nobody deletes becomes a permanently untested second code path through the authentication gate. Scheduling the removal here is what makes decision 4 affordable |
 
 ## Proposed Non-Functional Requirements
 
@@ -190,6 +193,11 @@ and is impossible while it is not.
 | AC-25 | NFR-5 | The authorization-code table is bounded under sustained issuance, and startup refuses a multi-worker configuration. | automated |
 | AC-26 | NFR-7 | After this phase the SPA still receives `HttpOnly` cookies and no token is written to `localStorage`. | automated |
 | AC-27 | FR-18 | The upgrade note states that every live session ends, and `ENVIRONMENT.md` documents the new key material. | review |
+| AC-28 | FR-19 | With the flag off, tokens are HS256 with no `kid`, the OP endpoints are absent, and the Phase 2 token tests pass unchanged. | automated — "Phase 2's tests pass unchanged" is the real assertion: the flag is only safe if off means *identical*, not *similar* |
+| AC-29 | FR-19 | With the flag on, tokens are ES256 with a `kid` and the OP endpoints are present in discovery. | automated |
+| AC-30 | FR-19 | There is no configuration in which the product signs HS256 while advertising a JWKS, or signs ES256 while advertising none. | automated — the half-switched state, which is the one that would strand every external consumer |
+| AC-31 | FR-19a | A token minted with the flag on is refused with it off, and the reverse. | automated |
+| AC-32 | FR-19b | After the cutover, no HS256 signing path and no flag remain in the tree. | **deferred — verified at cutover completion, not at implementation.** This criterion cannot pass while the phase is being built, by construction: FR-19 requires both paths to exist. It is recorded as an explicit gate on *closing* the phase rather than omitted, because the alternative is a requirement with no criterion, which is how a temporary flag becomes permanent. Same treatment as identity FR-18c |
 
 ## Testability self-review, 2026-09-01
 
@@ -221,12 +229,21 @@ observable property of our own system, and no AC verifies something adjacent to 
 cites. The `nonce` requirement gained a second AC (AC-13a) because an opaque client-controlled
 value echoed into a token is an injection surface as well as a replay defence.
 
-## Decisions to take before implementation
+## Decisions taken, 2026-09-01
 
-These are the ones I do not think I should settle alone.
+Settled by the feature lead. Recorded with what each one costs, because the cost is the part that
+gets forgotten.
 
-1. **RS256 or ES256.** Measured on this machine, PyJWT 2.13 / `cryptography`, 400 iterations, RSA
-   2048 and P-256:
+| # | Decision | Consequence accepted |
+|---|---|---|
+| 1 | **ES256** | 23 µs slower verification per request than RS256, and narrower support in very old client libraries. Bought: 359-byte tokens instead of 615, and 32× faster signing |
+| 2 | **Key pair in `var/secrets/`**, beside `RACK_WEB_SECRET_KEY` | The identity store, the vault master key and now the signing key share one directory and one volume, so losing `rack-data` loses all three at once. That is already true of the first two and the recovery is the same: regenerate, everyone re-authenticates |
+| 3 | **`POST /token` sits beside `/api/auth/refresh`**, which delegates to shared logic | Two URLs for one operation, which must not become two implementations. The existing route becomes a thin caller — if it ever grows its own behaviour, the drift is the bug |
+| 4 | **Cutover behind a flag, default off** | A dead flag to remove afterwards, and a window in which both signing paths exist in the code. FR-19 below specifies it so the removal is scheduled rather than forgotten |
+
+### Decision 1 in detail — the measurement, and how it corrected the draft
+
+Measured on this machine, PyJWT 2.13 / `cryptography`, 400 iterations, RSA 2048 and P-256:
 
    | | sign p50 | verify p50 | verify p95 | token bytes |
    |---|---|---|---|---|
@@ -241,17 +258,12 @@ These are the ones I do not think I should settle alone.
    and refresh). And **RS256 signs 32× slower and produces 71% larger tokens**.
 
    At ~20 operators the signing gap is irrelevant in absolute terms, and the verify gap is 23
-   microseconds. So the honest deciding factor is **token size**: 615 vs 359 bytes, doubled because
-   access and refresh both ride in cookies on every request. Still lean **ES256**, now for the
-   right reason — and worth confirming on the deployment's own hardware, since these are Apple
-   silicon numbers.
-2. **Where the key pair lives.** `var/secrets/` alongside the existing secret, on the `rack-data`
-   volume, is consistent and inherits the existing backup story. The alternative is its own path.
-   This resolves Phase 2 open question C either way.
-3. **Whether `/token` replaces `/api/auth/refresh` or sits beside it.** I lean beside, with the
-   existing route delegating, so the SPA is unaffected by the cutover beyond re-authenticating.
-4. **Scheduling the cutover.** Every operator is signed out at once. That is a deploy-window
-   decision, not an engineering one.
+microseconds. So the honest deciding factor is **token size**: 615 vs 359 bytes, doubled because
+access and refresh both ride in cookies on every request. **ES256**, and worth re-confirming on the
+deployment's own hardware, since these are Apple silicon numbers.
+
+Decision 2 also resolves **Phase 2 design open question C**, which this phase forced: an asymmetric
+key cannot be derived from `RACK_WEB_SECRET_KEY` the way the HMAC key was, so it needed a home.
 
 ## Explicit non-goals for this phase
 
