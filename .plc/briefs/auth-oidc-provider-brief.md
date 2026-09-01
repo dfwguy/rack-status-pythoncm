@@ -84,6 +84,10 @@ and is impossible while it is not.
 | FR-4 | The product shall support **more than one valid verification key at a time**: a rotation shall publish the new key, sign new tokens with it, and continue to verify tokens signed by the previous key until they expire. | operational; consequence of FR-1 | rotation that invalidates outstanding tokens is an outage, and an outage nobody will schedule is a rotation nobody will perform. The overlap window is at least the maximum refresh lifetime (30 days, per the Phase 2 ceiling) |
 | FR-4a | A token whose `kid` names no published key shall be refused. A token with **no** `kid` shall be refused. | consequence of FR-3 | a missing `kid` must not silently fall back to "try the current key", which would re-admit exactly the tokens rotation is meant to retire |
 | FR-4b | The product shall refuse any token whose header names an algorithm outside the deployment's configured set, and shall **never** accept `alg: none`. | carried forward from **identity FR-4c**, restated because the set is no longer a single value | the classic break, and it gets *easier* to make here: with a published public key, an attacker who substitutes `alg: HS256` and signs with that public key as the HMAC secret is verifying against a value we handed them. Under HS256-only this attack had no material to work with; from this phase on it does |
+| FR-4c | A signing key shall have a **signing period defaulting to one year**, after which it is demoted to verify-only and a successor becomes active. | feature-lead direction 2026-09-01 | the key is deliberately far longer-lived than any token. A JWKS that changes often is a JWKS that clients must re-fetch often, and the client that gets it wrong fails intermittently — a rotation is only invisible to a client that re-fetches on an unknown `kid`, and not all of them do. An ES256 key signing on the order of 10⁵ tokens a year is nowhere near a cryptographic limit, so the rotation cadence is an operational choice, not a cryptographic one |
+| FR-4d | A demoted key shall remain a **valid verifier for at least the longest lifetime any token it signed can have** — i.e. no less than the configured refresh-token ceiling. The product shall **refuse to start** if the configured key tail is shorter than that ceiling. | **the invariant, and the reason this is a requirement rather than a constant** | get this wrong and tokens stop verifying *before the `exp` they advertise*. That does not present as a configuration error; it presents as operators being logged out at random, on a schedule nobody connects to a key setting. The check is cheap and the failure mode is expensive, so it is enforced at startup rather than documented |
+| FR-4e | A signing key reaching the end of its signing period shall **rotate automatically**, not refuse to sign. | operational; consistent with the TLS CA's reasoning | `bin/gen-tls-cert.py` already records the principle for the deployment CA: "an expiry is an outage nobody is watching for". A signing key that expires into a refusal takes authentication down on a date chosen a year earlier, on a cluster with no one watching for it |
+| FR-4f | Rotation shall be invocable **on demand**, independently of expiry. | consequence of FR-4c's one-year default | with a yearly cadence the rotation path would otherwise execute once a year in production and never in anger. The time you need it is immediately after a suspected key compromise, which is the worst moment to discover it does not work |
 
 ### Discovery and key publication
 
@@ -159,6 +163,11 @@ and is impossible while it is not.
 | AC-4 | FR-2a | After **three** successive writes the private key file is still owner-only. | automated — three, because one passes on the broken version |
 | AC-5 | FR-3, FR-4a | Every minted token has a `kid`; a token with an unknown `kid` is refused; a token with no `kid` is refused. | automated |
 | AC-6 | FR-4 | After rotation, a token signed by the previous key still verifies, a new token is signed by the new key, and JWKS contains both. | automated |
+| AC-6a | FR-4c | The default signing period is one year, and is configurable. | automated |
+| AC-6b | FR-4d | A token minted immediately before its key is demoted still verifies at any point up to its own `exp`, including after the demotion. | automated with a controlled clock — **the invariant made concrete**, and the case a "does rotation work" test misses by only checking freshly minted tokens |
+| AC-6c | FR-4d | Startup refuses when the configured key tail is shorter than the refresh-token ceiling, and the message names both values. | automated — naming both is what turns this from a puzzle into a fix |
+| AC-6d | FR-4e | A key past its signing period rotates rather than failing to sign. | automated with a controlled clock |
+| AC-6e | FR-4f | Rotation can be triggered on demand, and the previous key keeps verifying its outstanding tokens afterwards. | automated |
 | AC-7 | FR-4b | `alg: none` is refused; an `HS256` token signed with the published **public key** as the HMAC secret is refused. | automated — the attack the public key enables |
 | AC-8 | FR-5 | Every endpoint named in the discovery document resolves to a route that exists. | automated — walks the document against the URL map |
 | AC-8a | FR-5 | Every algorithm, scope and `grant_type` advertised in the discovery document is actually accepted, and every one accepted is advertised. | automated — **added in self-review**: AC-8 checked only the endpoints, so a document advertising `RS256` on an ES256-only deployment, or a `grant_type` we reject, would have passed. Both directions, because silently supporting something undeclared is how an unreviewed flow stays unreviewed |
@@ -337,12 +346,44 @@ a uuid. Three reasons, in order of how much they matter:
 
 Keys live in a small set, not a single slot. Exactly one is **active** (signs); all valid ones
 **verify** and appear in the JWKS. A rotation appends a new active key and demotes the previous one
-to verify-only; the demoted key is removed once nothing it signed can still be live — at least the
-refresh ceiling, 30 days.
+to verify-only.
 
 The failure this avoids is worth stating: rotate by *replacing* the key and every outstanding token
 becomes invalid at once, which is the same event as the FR-18 cutover. A rotation that logs everyone
 out is a rotation nobody will ever schedule, which means the key is never rotated at all.
+
+### Key lifetime — three durations, and only one of them is a free choice
+
+Feature-lead direction 2026-09-01: the key is long-lived, because a JWKS that changes often is one
+that clients must re-fetch often, and a client that gets that wrong fails intermittently.
+
+Three durations, which are routinely conflated into one:
+
+| | Meaning | Value |
+|---|---|---|
+| **Signing period** `S` | how long this key is the active signer | **1 year**, default; a free operational choice |
+| **Verification tail** `V` | after demotion, how long it still verifies | **derived: ≥ the refresh-token ceiling** — not a free choice |
+| **Total validity** | `S + V` | ~13 months at the defaults |
+
+**`V` is forced, and this is the part worth checking.** A key stops signing at the end of `S`, so
+the last token it signs is minted at that instant and lives until `S_end + T_max`, where `T_max` is
+the longest configurable token lifetime — today the 30-day refresh ceiling from Phase 2. So the key
+must verify until then. Set `V` shorter and tokens stop verifying **before the `exp` they
+advertise**, which does not look like a misconfiguration: it looks like operators being logged out
+at random. FR-4d makes it a startup refusal for that reason.
+
+The stated example was "6-month tokens, 1-year key". The ratio and the absolute point in slightly
+different directions against our actual numbers, so both are honoured rather than averaged: the
+**1 year is taken as the signing period**, and the tail is **derived from the real ceiling (30 days)
+rather than fixed at half the key life**. Deriving it matters more than the number — if someone
+later raises the refresh ceiling to 6 months, `V` must grow with it, and a hard-coded tail would
+silently start truncating tokens instead.
+
+**One consequence to accept:** a compromised key stays valid for up to a year unless someone
+rotates it. That is what FR-4f is for — on-demand rotation, so the response to a suspected
+compromise is a command rather than a wait. Long-lived keys are only safe when rotation is a
+routine operation rather than an emergency procedure, which is also why the path should be
+exercised rather than left to fire once a year.
 
 ### What this changes in existing citizens
 
