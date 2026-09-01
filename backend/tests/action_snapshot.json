@@ -306,6 +306,60 @@
   "variant": "stream"
  },
  {
+  "endpoint": "identity_admin.add_member",
+  "method": "POST",
+  "action": "identity.group:add_member",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "identity_admin.create_group",
+  "method": "POST",
+  "action": "identity.group:create",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "identity_admin.create_user",
+  "method": "POST",
+  "action": "identity.user:create",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "identity_admin.delete_group",
+  "method": "DELETE",
+  "action": "identity.group:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "identity_admin.delete_user",
+  "method": "DELETE",
+  "action": "identity.user:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "identity_admin.remove_member",
+  "method": "DELETE",
+  "action": "identity.group:remove_member",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "identity_admin.set_user_disabled",
+  "method": "PUT",
+  "action": "identity.user:set_disabled",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "identity_admin.update_group",
+  "method": "PATCH",
+  "action": "identity.group:update",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "identity_admin.update_user",
+  "method": "PATCH",
+  "action": "identity.user:update",
+  "variant": "sync"
+ },
+ {
   "endpoint": "logs.api_tail_job_stdout_stream",
   "method": "POST",
   "action": "logs:tail_job",
