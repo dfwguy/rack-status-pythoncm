@@ -226,6 +226,122 @@ class TestDisablingTakesEffectImmediately:
             tokens.verify(token, tokens.TOKEN_ACCESS)
 
 
+class TestAC23aCredentialReset:
+    """FR-13a. Four properties, because the tempting implementation satisfies the first two.
+
+    A reset that issues a working password and leaves the old one working, or leaves the flag clear,
+    or lets the previous holder's sessions run out their lifetime, is not a reset — and each of
+    those failures is invisible from the response, which reports success either way.
+    """
+
+    @staticmethod
+    def _srp_login(client, login, password):
+        srp_lib.rfc5054_enable(srp_mod.RFC5054_COMPAT)
+        user = srp_lib.User(login, password, hash_alg=srp_mod.HASH_ALG, ng_type=srp_mod.NG_TYPE)
+        _name, a = user.start_authentication()
+        begin = client.post(
+            "/api/auth/srp/begin", json={"login": login, "A": a.hex()}
+        ).get_json()
+        proof = user.process_challenge(bytes.fromhex(begin["salt"]), bytes.fromhex(begin["B"]))
+        return client.post(
+            "/api/auth/srp/finish", json={"token": begin["token"], "M": proof.hex()}
+        )
+
+    def test_the_new_password_authenticates(self, admin_api):
+        original = _create(admin_api, "reset-me").get_json()["password"]
+        resp = admin_api.post("/api/identity/users/reset-me/credential")
+        assert resp.status_code == 200
+        issued = resp.get_json()["password"]
+        assert issued != original
+
+        srp_mod.reset_for_tests()
+        assert self._srp_login(admin_api, "reset-me", issued).status_code == 200
+
+    def test_the_previous_password_stops_working(self, admin_api):
+        original = _create(admin_api, "reset-me2").get_json()["password"]
+        admin_api.post("/api/identity/users/reset-me2/credential")
+
+        srp_mod.reset_for_tests()
+        assert self._srp_login(admin_api, "reset-me2", original).status_code == 401
+
+    def test_the_account_is_flagged_for_change_again(self, admin_api, tmp_path):
+        _create(admin_api, "reset-me3")
+        # Clear the flag first, so this cannot pass on the *creation* flag still being set — which
+        # it would, and the test would then prove nothing about reset.
+        store = IdentityStore(str(tmp_path / "identity.json"))
+        try:
+            user = store.get_user("reset-me3")
+            store.update_user(user.edited(must_change_password=False))
+        finally:
+            store.close()
+        assert admin_api.get(
+            "/api/identity/users/reset-me3"
+        ).get_json()["user"]["must_change_password"] is False
+
+        admin_api.post("/api/identity/users/reset-me3/credential")
+        assert admin_api.get(
+            "/api/identity/users/reset-me3"
+        ).get_json()["user"]["must_change_password"] is True
+
+    def test_existing_sessions_are_revoked(self, admin_api):
+        """A reset whose previous holder keeps working is the opposite of the operation."""
+        from identity import revocation, tokens
+
+        revocation.reset_for_tests()
+        revocation.install()
+        _create(admin_api, "reset-me4")
+        token = tokens.mint("user:reset-me4", tokens.TOKEN_ACCESS)
+        assert tokens.verify(token, tokens.TOKEN_ACCESS)
+
+        admin_api.post("/api/identity/users/reset-me4/credential")
+
+        with pytest.raises(tokens.TokenError):
+            tokens.verify(token, tokens.TOKEN_ACCESS)
+
+    def test_resetting_an_unknown_user_is_404(self, admin_api):
+        assert admin_api.post("/api/identity/users/ghost/credential").status_code == 404
+
+    def test_the_password_is_not_persisted(self, admin_api, tmp_path):
+        _create(admin_api, "reset-me5")
+        issued = admin_api.post(
+            "/api/identity/users/reset-me5/credential"
+        ).get_json()["password"]
+        assert issued not in (tmp_path / "identity.json").read_text(encoding="utf-8")
+
+
+class TestAC23bNoUnauthenticatedCredentialPath:
+    """The half of FR-12 that survives the amendment, and the reason it was safe to narrow.
+
+    Walks the whole URL map rather than checking the routes this file happens to know about — a
+    future self-service reset added elsewhere is exactly the regression this is for.
+    """
+
+    def test_no_bypassed_route_issues_or_clears_a_credential(self):
+        import web_auth
+        from app import app
+
+        credential_paths = []
+        for rule in app.url_map.iter_rules():
+            path = str(rule)
+            if not any(
+                token in path for token in ("/credential", "/password", "/users")
+            ):
+                continue
+            mutating = bool({"POST", "PUT", "PATCH", "DELETE"} & rule.methods)
+            if mutating and rule.endpoint in web_auth.AUTH_BYPASS_ENDPOINTS:
+                credential_paths.append(f"{rule.endpoint} {path}")
+
+        assert not credential_paths, (
+            "these credential-affecting routes are in the auth bypass set, which is the "
+            f"unauthenticated recovery path FR-12 forbids: {credential_paths}"
+        )
+
+    def test_the_reset_route_is_not_bypassed(self):
+        import web_auth
+
+        assert "identity_admin.reset_credential" not in web_auth.AUTH_BYPASS_ENDPOINTS
+
+
 class TestYouCannotLockEveryoneOut:
     """FR-12 makes recovery from losing every credential a **redeploy of the identity store**, which
     on a customer cluster discards every user, group and membership. A misclick must not cost that.

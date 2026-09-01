@@ -270,6 +270,58 @@ def set_user_disabled(login: str):
     return jsonify({"ok": True, "user": updated.public_dict()})
 
 
+@bp.route("/users/<login>/credential", methods=["POST"])
+@action("identity.user:reset_credential")
+def reset_credential(login: str):
+    """Issue a new one-time password for a user — FR-13a.
+
+    **The most consequential thing this surface can do**, which is why it is its own action rather
+    than a variant of `identity.user:update`: it is taking over an account. Policy has to be able to
+    withhold it from an operator who may still rename and disable, and a shared action name would
+    make that impossible to express.
+
+    FR-12 forbids an *unauthenticated* recovery path — no code, no self-service reset, no "forgot
+    password". This is not that: it requires an authenticated administrator and cannot help a caller
+    with no credential at all, so it does not reopen the hole FR-12 closes. The requirement's
+    absolute wording was narrowed on 2026-09-01 to say so, because FR-2b (logins are never reused)
+    made the literal reading untenable — "delete and recreate" cannot restore a forgotten password,
+    and the person could never hold their login again.
+
+    Sessions are revoked, and that is the half most easily forgotten. A reset whose previous holder
+    keeps working until their token expires is the opposite of the operation.
+    """
+    store = _store()
+    try:
+        user = store.get_user(login)
+        if user is None:
+            return _not_found("user")
+
+        password = bootstrap.generate_password()
+        salt, verifier = srp_mod.enroll(user.login, password)
+        store.update_user(
+            user.edited(srp_salt=salt, srp_verifier=verifier, must_change_password=True)
+        )
+    except IdentityError as exc:
+        return _bad(str(exc))
+    finally:
+        store.close()
+
+    try:
+        revocation.revoke_all_for(principals.user_principal(login))
+    except Exception:
+        # The credential is already replaced, so the account is secured either way; the residue is
+        # that the previous holder's tokens live out their remaining minutes. Worth logging loudly
+        # rather than failing the request and leaving the operator unsure whether it took effect.
+        _logger.exception("credential reset: sessions were not revoked for %s", login)
+
+    return jsonify({
+        "ok": True,
+        "user": {"login": user.login},
+        "password": password,
+        "note": "Copy this now. It is not stored and cannot be shown again.",
+    })
+
+
 @bp.route("/users/<login>", methods=["DELETE"])
 @action("identity.user:delete")
 def delete_user(login: str):

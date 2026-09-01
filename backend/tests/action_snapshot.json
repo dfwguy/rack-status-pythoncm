@@ -342,6 +342,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "identity_admin.reset_credential",
+  "method": "POST",
+  "action": "identity.user:reset_credential",
+  "variant": "sync"
+ },
+ {
   "endpoint": "identity_admin.set_user_disabled",
   "method": "PUT",
   "action": "identity.user:set_disabled",
