@@ -174,6 +174,8 @@ from api._common import (
     serve_spa_asset as _serve_spa_asset,
 )
 from identity import bootstrap as identity_bootstrap
+from identity import keys as identity_keys
+from identity import oidc as identity_oidc
 from identity import revocation as identity_revocation
 from identity import store as identity_store
 from rack_status_engine import (
@@ -647,6 +649,28 @@ def _bootstrap_identity_at_startup() -> None:
         authz.install_default()
     except Exception:
         _logger.exception("authz: default engine not installed; every request will be refused")
+    # Signing key, before the administrator (Phase 2.5, FR-2). Order matters: the bootstrap below
+    # prints a one-time password and the operator's first act is to sign in, which mints a token —
+    # so the key has to exist before the first credential does.
+    #
+    # It is also what stops `/.well-known/jwks.json` publishing `{"keys": []}`. Minting lazily on
+    # first sign-in would leave a window where the provider is enabled and advertises no keys, and a
+    # client would cache that empty document for the full hour we ask it to. The read path cannot
+    # fix this itself: minting is a write, and a read that writes defeats the cache above it.
+    if identity_oidc.enabled():
+        try:
+            key = identity_keys.key_set().ensure()
+            _logger.info("identity: signing key %s active (OIDC provider enabled)", key.kid)
+        except Exception:
+            # Fatal in effect rather than by exception: with the provider on and no key, nothing can
+            # be signed. Logged loudly rather than raised so the rest of the bootstrap still runs and
+            # the operator gets a diagnosable process instead of a crash loop.
+            _logger.exception(
+                "identity: no signing key could be established while %s is on; "
+                "token minting will fail until this is resolved",
+                identity_oidc.FLAG_ENV,
+            )
+
     try:
         store = identity_store.IdentityStore()
     except Exception:

@@ -6,6 +6,18 @@
   ]
  },
  {
+  "rule": "/.well-known/jwks.json",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/.well-known/openid-configuration",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
   "rule": "/<path:path>",
   "methods": [
    "GET"
@@ -13,6 +25,12 @@
  },
  {
   "rule": "/api/ai/chat",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/ai/chat/resume",
   "methods": [
    "POST"
   ]
@@ -28,6 +46,12 @@
   "rule": "/api/ai/test",
   "methods": [
    "POST"
+  ]
+ },
+ {
+  "rule": "/api/ai/tools",
+  "methods": [
+   "GET"
   ]
  },
  {
@@ -70,6 +94,42 @@
   "rule": "/api/auth-check",
   "methods": [
    "GET"
+  ]
+ },
+ {
+  "rule": "/api/auth/logout",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/auth/password/begin",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/auth/password/finish",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/auth/refresh",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/auth/srp/begin",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/auth/srp/finish",
+  "methods": [
+   "POST"
   ]
  },
  {
@@ -376,6 +436,59 @@
   ]
  },
  {
+  "rule": "/api/identity/groups",
+  "methods": [
+   "GET",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/identity/groups/<name>",
+  "methods": [
+   "DELETE",
+   "PATCH"
+  ]
+ },
+ {
+  "rule": "/api/identity/groups/<name>/members",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/identity/groups/<name>/members/<login>",
+  "methods": [
+   "DELETE"
+  ]
+ },
+ {
+  "rule": "/api/identity/users",
+  "methods": [
+   "GET",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/identity/users/<login>",
+  "methods": [
+   "DELETE",
+   "GET",
+   "PATCH"
+  ]
+ },
+ {
+  "rule": "/api/identity/users/<login>/credential",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/identity/users/<login>/disabled",
+  "methods": [
+   "PUT"
+  ]
+ },
+ {
   "rule": "/api/imex-check-async",
   "methods": [
    "POST"
@@ -391,6 +504,12 @@
   "rule": "/api/lake/health",
   "methods": [
    "GET"
+  ]
+ },
+ {
+  "rule": "/api/launch/prepare",
+  "methods": [
+   "POST"
   ]
  },
  {

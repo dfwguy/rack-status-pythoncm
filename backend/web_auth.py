@@ -213,6 +213,16 @@ AUTH_BYPASS_ENDPOINTS: tuple[str, ...] = (
     # one.
     "auth_srp.srp_begin",
     "auth_srp.srp_finish",
+    # Phase 2.5 (FR-6b). OIDC obliges both to be reachable without a credential — a client cannot
+    # authenticate before it has discovered how to, and cannot verify a token before it has the
+    # key. Neither carries anything secret: one describes endpoints, the other publishes keys whose
+    # purpose is publication. Both 404 unless the provider is enabled, so on a default deployment
+    # these entries name routes that answer nothing.
+    #
+    # These are the ONLY additions Phase 2.5 makes to this set, which is itself a requirement
+    # rather than a coincidence: everything else the provider serves takes a credential.
+    "oidc.openid_configuration",
+    "oidc.jwks",
     "static",
 )
 
