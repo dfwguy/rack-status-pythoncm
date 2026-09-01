@@ -47,6 +47,7 @@ first request rather than by an incident.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -70,17 +71,91 @@ ALGORITHM = "HS256"
 #: warn, which is a useful reminder that key length must track the algorithm.)
 KEY_BYTES = 32
 
+_logger = logging.getLogger(__name__)
+
 TOKEN_ID = "id"
 TOKEN_ACCESS = "access"
 TOKEN_REFRESH = "refresh"
 TOKEN_TYPES = (TOKEN_ID, TOKEN_ACCESS, TOKEN_REFRESH)
 
-#: Short, because FR-6 permits a withdrawn *grant* to lag by up to this long. It is the bound on how
-#: stale an authorisation decision can be, so it is a security parameter and not a convenience knob.
-ACCESS_TTL_SECONDS = 15 * 60
-ID_TTL_SECONDS = 15 * 60
-#: Longer, and revocable by ``jti`` — that combination is what FR-5b asks for.
-REFRESH_TTL_SECONDS = 12 * 60 * 60
+# --- Lifetimes ------------------------------------------------------------------------------------
+#
+# **What an access TTL does and does not bound here.** The original 15 minutes was chosen because
+# FR-6 says "a withdrawn *grant* may lag by up to the access-token lifetime". That sentence describes
+# a design where grants ride inside the token — and this implementation does not do that. `mint`
+# puts only `sub`, `typ` and timing in the payload: no groups, no roles, no scopes. Membership and
+# policy are read from the store on **every** request, and the revocation record is consulted on
+# every verify.
+#
+# So lengthening these does not slow a revocation and does not staleness-bound an authorisation
+# decision. What it lengthens is the window in which a **stolen token nobody has revoked** still
+# works. That is a real cost and it is the one to weigh: 1 hour is four times 15 minutes for that
+# case, and 7 days is a long-lived bearer credential.
+#
+# What keeps that tolerable is the revocation fast path, which is why it is load-bearing rather than
+# a nicety: `revocation.revoke_subject` and `revoke_all_for` cut a session immediately regardless of
+# how much life the token had left, and disabling, deleting or resetting a user all call one of them.
+#
+# Defaults raised 2026-09-01 on feature-lead direction: 15 min forced a re-authentication mid-task
+# often enough to be the product's most-felt friction, and the auto-refresh in `apiFetch` did not
+# exist yet.
+
+#: Access token. Default one hour; a deployment may ask for up to a week.
+ACCESS_TTL_SECONDS = 60 * 60
+MAX_ACCESS_TTL_SECONDS = 7 * 24 * 60 * 60
+
+#: The id token is a claims carrier for the UI, not a credential for the gate, so it tracks the
+#: access lifetime rather than having a knob of its own.
+ID_TTL_SECONDS = ACCESS_TTL_SECONDS
+
+#: Refresh token. Default one day; extensible to a month. Revocable by ``jti``, which is the
+#: combination FR-5b asks for — a renewal path that can itself be withdrawn.
+#:
+#: This is the one that decides how long an idle operator stays signed in, because `apiFetch` renews
+#: the access token silently. A month means a browser left open for a month is still a live session,
+#: so the ceiling is deliberately not "unbounded".
+REFRESH_TTL_SECONDS = 24 * 60 * 60
+MAX_REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60
+
+
+def _configured_ttl(name: str, default: int, ceiling: int) -> int:
+    """A lifetime from the environment, clamped to its ceiling and floored at a minute.
+
+    Clamped with a warning rather than refused: taking startup down over a too-generous TTL would
+    turn a configuration opinion into an outage. Warned rather than silent because an operator who
+    asked for 90 days and got 30 needs to know which one is in force — a security parameter quietly
+    disagreeing with its configuration is worse than either value.
+    """
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        seconds = int(raw)
+    except ValueError:
+        _logger.warning("%s=%r is not an integer; using the default %ds", name, raw, default)
+        return default
+    if seconds < 60:
+        _logger.warning("%s=%d is below the 60s floor; using 60s", name, seconds)
+        return 60
+    if seconds > ceiling:
+        _logger.warning(
+            "%s=%d exceeds the %ds ceiling; using %ds", name, seconds, ceiling, ceiling
+        )
+        return ceiling
+    return seconds
+
+
+def access_ttl() -> int:
+    """Effective access-token lifetime. Read per call, so a restart is not needed to change it."""
+    return _configured_ttl("RACK_WEB_ACCESS_TTL_SECONDS", ACCESS_TTL_SECONDS, MAX_ACCESS_TTL_SECONDS)
+
+
+def refresh_ttl() -> int:
+    """Effective refresh-token lifetime."""
+    return _configured_ttl(
+        "RACK_WEB_REFRESH_TTL_SECONDS", REFRESH_TTL_SECONDS, MAX_REFRESH_TTL_SECONDS
+    )
+
 
 #: Demanded present, not merely validated if present. ``exp`` is the one that matters most: PyJWT
 #: accepts a token without it and treats it as eternal.
@@ -187,13 +262,25 @@ def mint(
     _parsed_or_refused(principal)
 
     if ttl_seconds is None:
+        access = access_ttl()
         ttl_seconds = {
-            TOKEN_ID: ID_TTL_SECONDS,
-            TOKEN_ACCESS: ACCESS_TTL_SECONDS,
-            TOKEN_REFRESH: REFRESH_TTL_SECONDS,
+            TOKEN_ID: access,
+            TOKEN_ACCESS: access,
+            TOKEN_REFRESH: refresh_ttl(),
         }[token_type]
     if ttl_seconds <= 0:
         raise TokenError("ttl_seconds must be positive")
+
+    # The explicit override is capped too. Without this, the ceiling would only constrain the
+    # *configured* default and any caller passing `ttl_seconds` could mint a decade-long token —
+    # a ceiling that the shortest path around it ignores is not a ceiling. Tests legitimately mint
+    # far-future tokens, so this refuses rather than clamps: a test asserting on an unbounded
+    # lifetime should fail loudly, not silently receive a 7-day one.
+    ceiling = MAX_REFRESH_TTL_SECONDS if token_type == TOKEN_REFRESH else MAX_ACCESS_TTL_SECONDS
+    if ttl_seconds > ceiling:
+        raise TokenError(
+            f"ttl_seconds={ttl_seconds} exceeds the {ceiling}s ceiling for a {token_type} token"
+        )
 
     # Fractional seconds, which RFC 7519 §2 explicitly permits for NumericDate. Integer `iat` cannot
     # distinguish a token minted just *before* a revocation cutoff from one minted just after, and

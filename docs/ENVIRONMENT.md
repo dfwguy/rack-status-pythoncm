@@ -112,6 +112,32 @@ Used by **`bin/scripts/launch-grafana-bright-prometheus.sh`** (not by Flask). Af
 | **`NVIS_VAULT_MASTER_KEY`** | *(empty)* | Optional override for vault encryption instead of `RACK_WEB_SECRET_KEY`. |
 | **`NVIS_TOKEN_VAULT_DIR`** | `var/secrets/` | Directory for encrypted token vault files (**never commit** — see `.gitignore` and `scripts/check_no_vault_in_git.sh`). |
 
+### Session lifetimes
+
+| Variable | Default | Ceiling | Purpose |
+|----------|---------|---------|---------|
+| **`RACK_WEB_ACCESS_TTL_SECONDS`** | `3600` (1 hour) | `604800` (7 days) | Access-token lifetime. The SPA renews it silently, so this is rarely the number an operator feels. |
+| **`RACK_WEB_REFRESH_TTL_SECONDS`** | `86400` (1 day) | `2592000` (30 days) | Refresh-token lifetime — **this** is how long an idle browser stays signed in, because renewal is automatic. |
+
+Both are clamped to their ceiling and floored at 60 seconds, with a warning naming the value in
+force. A too-generous setting is not a startup failure; it is also not silently obeyed.
+
+**What these bound, and what they don't.** Raising them does *not* slow a revocation, and does not
+let an authorisation decision go stale. Tokens carry no grants — only `sub`, `typ` and timing — so
+group membership and policy are read from the store on every request, and the revocation record is
+consulted on every verify. Disabling, deleting or resetting a user cuts every live session
+immediately, whatever life the token had left.
+
+What a longer lifetime does extend is the window in which a **stolen token that nobody has revoked**
+still works. That is the trade-off to weigh: one hour is four times fifteen minutes for that case,
+and seven days is a genuinely long-lived bearer credential. The revocation fast path is what makes
+the longer defaults defensible, which is why it is load-bearing rather than a nicety.
+
+*Raised from 15 minutes / 12 hours on 2026-09-01.* The original short access TTL was chosen on the
+reasoning that it bounded FR-6 staleness — reasoning that described a design where grants ride
+inside the token, which is not what was built. It cost a re-authentication mid-task several times a
+day and, until the SPA gained automatic renewal, presented as the product logging you out at random.
+
 ### Authentication: there is nothing to configure
 
 **Removed 2026-09-01 (FR-18): `RACK_WEB_AUTH_MODE`, `RACK_WEB_AUTH_TOKEN`, `RACK_WEB_PAM_SERVICE`

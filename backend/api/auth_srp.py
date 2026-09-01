@@ -127,13 +127,13 @@ def _set_token_cookies(resp, access: str, refresh: str | None = None) -> None:
     secure = _tls_active()
     resp.set_cookie(
         ACCESS_COOKIE, access,
-        max_age=tokens.ACCESS_TTL_SECONDS,
+        max_age=tokens.access_ttl(),
         httponly=True, secure=secure, samesite="Lax", path="/",
     )
     if refresh is not None:
         resp.set_cookie(
             REFRESH_COOKIE, refresh,
-            max_age=tokens.REFRESH_TTL_SECONDS,
+            max_age=tokens.refresh_ttl(),
             httponly=True, secure=secure, samesite="Lax", path=REFRESH_COOKIE_PATH,
         )
 
