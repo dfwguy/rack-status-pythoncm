@@ -52,6 +52,9 @@ import {
   CircuitBoard,
   Code2,
   ClipboardCheck,
+  ShieldCheck,
+  Users,
+  UsersRound,
 } from "lucide-react";
 
 export type ViewId =
@@ -73,6 +76,8 @@ export type ViewId =
   | "workflows"
   | "terminal"
   | "projects"
+  | "identityUsers"
+  | "identityGroups"
   | "platformCatalog"
   | "toolRegistry"
   | "apiReference"
@@ -169,6 +174,16 @@ const navEntries: NavEntry[] = [
       { id: "analytics", label: "Analytics", icon: <LineChart size={ICON_SIZE} /> },
       { id: "postRunNodeReport", label: "Post Run Node Report", icon: <ClipboardCheck size={ICON_SIZE} /> },
       { id: "reports", label: "Reports", icon: <FileDown size={ICON_SIZE} /> },
+    ],
+  },
+  {
+    kind: "group",
+    id: "grp-access",
+    label: "Access",
+    icon: <ShieldCheck size={ICON_SIZE} />,
+    leaves: [
+      { id: "identityUsers", label: "Users", icon: <Users size={ICON_SIZE} /> },
+      { id: "identityGroups", label: "Groups", icon: <UsersRound size={ICON_SIZE} /> },
     ],
   },
   {

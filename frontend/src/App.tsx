@@ -46,6 +46,8 @@ const LogsView = lazy(() => import("./views/LogsView").then((m) => ({ default: m
 const EventsView = lazy(() => import("./views/EventsView").then((m) => ({ default: m.EventsView })));
 const InfrastructureView = lazy(() => import("./views/InfrastructureView").then((m) => ({ default: m.InfrastructureView })));
 const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ default: m.SettingsView })));
+const UsersView = lazy(() => import("./views/UsersView").then((m) => ({ default: m.UsersView })));
+const GroupsView = lazy(() => import("./views/GroupsView").then((m) => ({ default: m.GroupsView })));
 const ProjectsView = lazy(() => import("./views/ProjectsView").then((m) => ({ default: m.ProjectsView })));
 const PlatformCatalogView = lazy(() => import("./views/PlatformCatalogView").then((m) => ({ default: m.PlatformCatalogView })));
 const ToolRegistryView = lazy(() => import("./views/ToolRegistryView").then((m) => ({ default: m.ToolRegistryView })));
@@ -86,6 +88,8 @@ const VIEW_TITLES: Record<ViewId, string> = {
   workflows: "Workflows",
   terminal: "Terminal",
   projects: "Projects & Clusters",
+  identityUsers: "Users",
+  identityGroups: "Groups",
   platformCatalog: "Platform Catalog",
   toolRegistry: "Tool Registry",
   apiReference: "API Reference",
@@ -363,7 +367,9 @@ function AppContent() {
           <Route path="/analytics/overview" element={<AnalyticsView logDir={logDir} rows={data?.rows ?? []} status={data} />} />
           <Route path="/analytics/post-run-nodes" element={<PostRunNodeReportView />} />
           <Route path="/analytics/reports" element={<ReportsView />} />
-          <Route path="/platform/projects" element={<ProjectsView />} />
+            <Route path="/access/users" element={<UsersView />} />
+            <Route path="/access/groups" element={<GroupsView />} />
+            <Route path="/platform/projects" element={<ProjectsView />} />
           <Route path="/platform/catalog" element={<PlatformCatalogView />} />
           <Route path="/platform/tools" element={<ToolRegistryView />} />
           <Route path="/platform/api" element={<ApiReferenceView />} />
