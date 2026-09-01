@@ -4,6 +4,7 @@
 **Programme:** `docs/AUTH_PROGRAMME_SCOPE.md` — Phase 2.5, between identity (Phase 2) and
 authorization (Phase 3).
 **Directed by:** feature lead, 2026-09-01 — "full OP", sequenced after Phase 2.
+**Jira:** [NVRACKSTAT-57](https://jirasw.nvidia.com/browse/NVRACKSTAT-57), under epic [NVRACKSTAT-53](https://jirasw.nvidia.com/browse/NVRACKSTAT-53).
 
 > **Requirement numbering is per-brief**, as in Phase 1 and Phase 2. `FR-4c` below is *this*
 > document's FR-4c. Where a Phase 2 requirement is meant, it is written **`identity FR-4c`**. This

@@ -14,7 +14,8 @@
     "project_id": "nvis-rack-status",
     "nspect_registration_id": "NSPECT-S57Q-EI19",
     "workspace_id": null,
-    "jira_project_key": "NVRACKSTAT"
+    "jira_project_key": "NVRACKSTAT",
+    "jira_epic_key": "NVRACKSTAT-53"
   },
   "artifacts": {
     "srd": {

@@ -8,6 +8,26 @@ notices is missing until it is expensive.
 Per-phase requirements live in PLC feature briefs under `.plc/briefs/`. This file is the index and the
 scope record; it is not a spec and it does not carry acceptance criteria.
 
+**Jira:** the programme is tracked under epic
+[NVRACKSTAT-53](https://jirasw.nvidia.com/browse/NVRACKSTAT-53), one ticket per phase. Created
+2026-09-01, retroactively — phases 0–2 were built before the tickets existed, so **the tickets
+follow this document rather than the other way round**. If the two disagree, this file is the
+source of truth and the ticket is stale.
+
+| Phase | Jira | Owns | State |
+|---|---|---|---|
+| 0 | [NVRACKSTAT-54](https://jirasw.nvidia.com/browse/NVRACKSTAT-54) | defect fixes | delivered |
+| 0.5 | [NVRACKSTAT-55](https://jirasw.nvidia.com/browse/NVRACKSTAT-55) | HTTPS | delivered |
+| 1 | [NVRACKSTAT-52](https://jirasw.nvidia.com/browse/NVRACKSTAT-52) | audit trail | delivered |
+| 2 | [NVRACKSTAT-56](https://jirasw.nvidia.com/browse/NVRACKSTAT-56) | identity | delivered, federation open |
+| 2.5 | [NVRACKSTAT-57](https://jirasw.nvidia.com/browse/NVRACKSTAT-57) | OIDC provider | in progress |
+| 3 | [NVRACKSTAT-58](https://jirasw.nvidia.com/browse/NVRACKSTAT-58) | authorization | not started |
+
+Every one of them sits in **Backlog**, including the phases that are finished. That is deliberate,
+not an oversight: under PLC a workflow transition *is* the release owner's attestation, so the
+`plc-jira-ticket-creation` skill forbids tooling from moving a ticket's state. Advancing them is a
+human action.
+
 | Phase | Owns | State |
 |---|---|---|
 | 0 | Defect fixes: the unauthenticated `/ws/terminal`, `target` command injection, `0.0.0.0` exposure | done |
