@@ -26,6 +26,8 @@ so it must serve the same ``index.html`` as ``/`` or the two load different bund
 """
 from __future__ import annotations
 
+import logging
+
 from audit.actions import action
 from flask import Blueprint, jsonify, redirect, request, session
 from web_auth import (
@@ -40,6 +42,8 @@ from ._common import serve_spa_asset as _serve_spa_asset
 
 # Empty prefix: routes keep the paths they had in app.py, so the move cannot change a URL.
 # The blueprint NAME, however, does change the endpoint names -- see the docstring.
+_logger = logging.getLogger("rack_web.api.auth")
+
 bp = Blueprint("auth", __name__, url_prefix="")
 
 
@@ -72,9 +76,35 @@ def api_auth_check():
     if not _auth_enabled():
         return jsonify({"authenticated": True, "user": _auth_user(), "auth_disabled": True})
     principal = web_auth.authenticated_principal(request.headers, request.cookies)
-    if principal:
-        return jsonify({"authenticated": True, "user": principal})
-    return jsonify({"authenticated": False}), 401
+    if not principal:
+        return jsonify({"authenticated": False}), 401
+
+    # `must_change_password` is reported here, not only at login. The SPA re-checks on every mount,
+    # so without it a page reload silently clears the flag and the operator walks past the prompt —
+    # which is the whole of FR-10a defeated by pressing F5.
+    must_change = False
+    try:
+        from identity import principals
+        from identity.store import IdentityStore
+
+        kind, login = principals.parse_principal(principal)
+        if kind == principals.KIND_USER:
+            store = IdentityStore()
+            try:
+                user = store.get_user(login)
+                must_change = bool(user is not None and user.must_change_password)
+            finally:
+                store.close()
+    except Exception:
+        # A store hiccup must not lock out a caller whose token is perfectly valid; the worst case
+        # is one missed prompt, and the next login re-reports it.
+        _logger.exception("auth-check: could not read the password-change flag")
+
+    return jsonify({
+        "authenticated": True,
+        "user": principal,
+        "must_change_password": must_change,
+    })
 
 
 @bp.route("/api/login", methods=["POST"])

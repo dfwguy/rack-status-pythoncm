@@ -32,7 +32,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw new Error("not authenticated");
       })
       .then((data) => {
-        setState({ authenticated: true, user: data.user, loading: false });
+        setState({
+          authenticated: true,
+          user: data.user,
+          loading: false,
+          // Carried through the mount check as well as login, so a page reload cannot walk past
+          // the change-password prompt (FR-10a).
+          mustChangePassword: Boolean(data.must_change_password),
+        });
       })
       .catch(() => {
         setState({ authenticated: false, user: null, loading: false });

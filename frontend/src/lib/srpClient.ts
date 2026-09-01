@@ -227,6 +227,98 @@ export function startSrp(login: string, password: string, privateValue?: bigint)
   };
 }
 
+/**
+ * Derive `(salt, verifier)` for a new password — the enrolment half of SRP, done in the browser.
+ *
+ * `v = g^x mod N` where `x = H(salt, H(login:password))`. The verifier is not reversible, so the
+ * server can check a password it has never seen. This is why a password change can send only these
+ * two values: the new password stays here, exactly as the old one did at login.
+ */
+export async function deriveVerifier(
+  login: string,
+  password: string,
+): Promise<{ saltHex: string; verifierHex: string }> {
+  // 16 bytes, matching `identity.srp.SALT_LEN`. The library's own default is 4 bytes — a 32-bit
+  // salt — which is one of the unsafe defaults the server pins away from, and the client has to
+  // pin away from it too or enrolment quietly weakens on this side instead.
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+
+  const inner = await sha256(encoder.encode(`${login}:${password}`));
+  const x = toBigInt(await sha256(salt, inner));
+  const v = modPow(g, x, N);
+
+  return { saltHex: toHex(salt), verifierHex: toHex(toBytes(v)) };
+}
+
+export interface PasswordChangeResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Change the signed-in user's password.
+ *
+ * Two legs like a login, and for the same reason: the first proves knowledge of the **current**
+ * password. Being signed in is not sufficient — a stolen session would otherwise be enough to lock
+ * the real owner out of their own account.
+ *
+ * On success the server revokes every session including this one, so the caller must sign in again.
+ * That is deliberate rather than an oversight: a password change that left existing tokens working
+ * would be cosmetic against the compromise it is usually a response to.
+ */
+export async function changePassword(
+  login: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<PasswordChangeResult> {
+  const handshake = startSrp(login, currentPassword);
+
+  const begin = await fetch("/api/auth/password/begin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ A: handshake.A }),
+  });
+  if (!begin.ok) return { ok: false, error: "Current password is incorrect" };
+
+  const challenge = await begin.json();
+  if (!challenge?.salt || !challenge?.B || !challenge?.token) {
+    return { ok: false, error: "Current password is incorrect" };
+  }
+
+  let proof: string;
+  try {
+    proof = await handshake.proof(challenge.salt, challenge.B);
+  } catch {
+    return { ok: false, error: "Current password is incorrect" };
+  }
+
+  const { saltHex, verifierHex } = await deriveVerifier(login, newPassword);
+
+  const finish = await fetch("/api/auth/password/finish", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      token: challenge.token,
+      M: proof,
+      new_salt: saltHex,
+      new_verifier: verifierHex,
+    }),
+  });
+  if (!finish.ok) {
+    // 401 means the current-password proof failed; anything else is the write failing, and the two
+    // need different words because only one of them is the user's mistake.
+    return {
+      ok: false,
+      error:
+        finish.status === 401
+          ? "Current password is incorrect"
+          : "Could not change the password. Try again.",
+    };
+  }
+  return { ok: true };
+}
+
 export interface LoginResult {
   ok: boolean;
   error?: string;

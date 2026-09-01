@@ -84,6 +84,18 @@
   "variant": "sync"
  },
  {
+  "endpoint": "auth_srp.password_change_begin",
+  "method": "POST",
+  "action": "auth.password:begin",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "auth_srp.password_change_finish",
+  "method": "POST",
+  "action": "auth.password:change",
+  "variant": "sync"
+ },
+ {
   "endpoint": "auth_srp.refresh_session",
   "method": "POST",
   "action": "auth:refresh",

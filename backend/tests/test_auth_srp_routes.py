@@ -424,6 +424,122 @@ class TestMalformedInput:
         assert resp.get_json() == {"ok": False, "error": "authentication failed"}
 
 
+class TestPasswordChange:
+    """FR-10a and FR-3: prove the current password, and never send either one.
+
+    The property worth stating is the one that is easy to get wrong in the permissive direction:
+    **being signed in is not enough**. A stolen session must not be usable to lock the real owner
+    out of their own account, so the current password is re-proved over a fresh SRP exchange.
+    """
+
+    @staticmethod
+    def _change(client, login, current, new):
+        user = _Client(login, current)
+        begin = client.post("/api/auth/password/begin", json={"A": user.start()})
+        if begin.status_code != 200:
+            return begin
+        body = begin.get_json()
+        proof = user.process(body["salt"], body["B"])
+        new_salt, new_verifier = srp_mod.enroll(login, new)
+        return client.post("/api/auth/password/finish", json={
+            "token": body["token"], "M": proof,
+            "new_salt": new_salt, "new_verifier": new_verifier,
+        })
+
+    def test_the_new_password_works_and_the_old_one_does_not(self, client, admin):
+        login, old = admin
+        _u, r = _login(client, login, old)
+        assert r.status_code == 200
+
+        assert self._change(client, login, old, "a-brand-new-password").status_code == 200
+
+        srp_mod.reset_for_tests()
+        _u2, with_old = _login(client, login, old)
+        assert with_old.status_code == 401, "the old password still authenticates"
+
+        srp_mod.reset_for_tests()
+        _u3, with_new = _login(client, login, "a-brand-new-password")
+        assert with_new.status_code == 200
+
+    def test_the_change_clears_the_must_change_flag(self, client, admin):
+        login, old = admin
+        _u, _r = _login(client, login, old)
+        self._change(client, login, old, "another-new-password")
+
+        srp_mod.reset_for_tests()
+        _u2, again = _login(client, login, "another-new-password")
+        assert again.get_json()["must_change_password"] is False
+
+    def test_a_wrong_current_password_is_refused(self, client, admin):
+        login, old = admin
+        _u, _r = _login(client, login, old)
+        assert self._change(client, login, "not-the-current-one", "new").status_code == 401
+
+        srp_mod.reset_for_tests()
+        _u2, still = _login(client, login, old)
+        assert still.status_code == 200, "a failed change must leave the credential alone"
+
+    def test_an_unauthenticated_caller_cannot_change_a_password(self, client, admin):
+        """No session at all. The route is not in the bypass set, so the gate should refuse —
+        and with the gate disabled in this suite, the handler's own principal check must."""
+        login, old = admin
+        assert self._change(client, login, old, "new").status_code in (401, 403)
+
+    def test_every_session_is_revoked_afterwards(self, client, admin):
+        """A password change is usually a response to a compromise. Leaving the attacker's token
+        alive for the rest of its lifetime would make the change cosmetic."""
+        login, old = admin
+        _u, _r = _login(client, login, old)
+        stolen = client.get_cookie("nvis_access")
+        assert stolen is not None
+
+        assert self._change(client, login, old, "post-compromise-password").status_code == 200
+
+        with pytest.raises(tokens_mod.TokenError):
+            tokens_mod.verify(stolen.value, tokens_mod.TOKEN_ACCESS)
+
+    def test_the_caller_is_told_to_reauthenticate(self, client, admin):
+        login, old = admin
+        _u, _r = _login(client, login, old)
+        resp = self._change(client, login, old, "yet-another-password")
+        assert resp.get_json()["reauthenticate"] is True
+        cleared = [c for c in resp.headers.getlist("Set-Cookie") if "nvis_" in c]
+        assert len(cleared) == 2, "the cookies must be cleared, not left pointing at dead tokens"
+
+    @pytest.mark.parametrize("bad", ["", "zz", "not-hex", "abc"])
+    def test_a_malformed_verifier_is_refused_before_it_is_stored(self, client, admin, bad):
+        """A non-hex verifier written to the store is a credential nobody can authenticate
+        against — a lockout authored by the client."""
+        login, old = admin
+        _u, _r = _login(client, login, old)
+
+        user = _Client(login, old)
+        body = client.post(
+            "/api/auth/password/begin", json={"A": user.start()}
+        ).get_json()
+        proof = user.process(body["salt"], body["B"])
+        resp = client.post("/api/auth/password/finish", json={
+            "token": body["token"], "M": proof,
+            "new_salt": "aabb", "new_verifier": bad,
+        })
+        assert resp.status_code in (400, 401)
+
+        srp_mod.reset_for_tests()
+        _u2, still = _login(client, login, old)
+        assert still.status_code == 200, "the original credential was damaged"
+
+    def test_the_password_never_reaches_the_server(self, client, admin, tmp_path):
+        """FR-3 again, for the change path: only salt and verifier are persisted."""
+        login, old = admin
+        _u, _r = _login(client, login, old)
+        secret = "a-very-distinctive-new-password"
+        assert self._change(client, login, old, secret).status_code == 200
+
+        raw = (tmp_path / "identity.json").read_text(encoding="utf-8")
+        assert secret not in raw
+        assert old not in raw
+
+
 class TestTheRateLimiterItself:
     def test_a_full_bucket_refills_over_time(self):
         limiter = rate_limit.RateLimiter(limit=2, window=0.2)

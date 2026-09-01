@@ -51,6 +51,7 @@ const PlatformCatalogView = lazy(() => import("./views/PlatformCatalogView").the
 const ToolRegistryView = lazy(() => import("./views/ToolRegistryView").then((m) => ({ default: m.ToolRegistryView })));
 const ApiReferenceView = lazy(() => import("./views/ApiReferenceView").then((m) => ({ default: m.ApiReferenceView })));
 import { ActiveClusterProvider } from "./context/ActiveClusterProvider";
+import { ChangePasswordPage } from "./pages/ChangePasswordPage";
 import { LoginPage } from "./pages/LoginPage";
 const TerminalView = lazy(() => import("./views/TerminalView"));
 const TerminalGridTabView = lazy(() => import("./views/TerminalGridTabView"));
@@ -387,7 +388,7 @@ function AppContent() {
 }
 
 function AuthGate() {
-  const { authenticated, loading } = useAuth();
+  const { authenticated, loading, mustChangePassword, user, logout } = useAuth();
 
   if (loading) {
     return (
@@ -395,6 +396,13 @@ function AuthGate() {
         <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>Loading...</Text>
       </Box>
     );
+  }
+
+  // Stands in front of the dashboard, not beside it in a settings menu. The bootstrap password was
+  // printed into a startup log, so anyone who can read that log is the administrator until it is
+  // changed — which makes "the operator will get round to it" the wrong design (FR-10a).
+  if (authenticated && mustChangePassword) {
+    return <ChangePasswordPage login={user ?? "admin"} onChanged={logout} />;
   }
 
   if (!authenticated) {

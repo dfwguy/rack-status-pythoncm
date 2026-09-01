@@ -38,8 +38,9 @@ from __future__ import annotations
 import logging
 
 import core
+import web_auth
 from audit.actions import action
-from flask import Blueprint, jsonify, make_response, request
+from flask import Blueprint, g, jsonify, make_response, request
 from identity import principals, revocation, srp, tokens
 from identity.models import IdentityError, canonical_login
 from identity.rate_limit import RateLimiter
@@ -65,6 +66,30 @@ REFRESH_COOKIE = "nvis_refresh"
 #: surface on which the longest-lived credential is presented — an XSS cannot read it either way,
 #: but a confused-deputy request to an unrelated endpoint will not carry it.
 REFRESH_COOKIE_PATH = "/api/auth"
+
+
+def _current_login() -> str:
+    """The signed-in user's login, or empty.
+
+    Prefers what the gate already verified and stashed on ``g``, and falls back to verifying the
+    credential here. The fallback is not redundancy for its own sake: with
+    ``RACK_WEB_AUTH_DISABLED`` set the gate does not run at all, and a route that read only ``g``
+    would be unusable in every development deployment and untestable in a suite that runs with the
+    switch on — while *appearing* correct, because refusing is also what it does when there is
+    genuinely no caller.
+
+    Still fail-closed. No verifiable token means no login, and the password routes refuse.
+    """
+    principal = str(getattr(g, "auth_principal", "") or "")
+    if not principal:
+        principal = web_auth.authenticated_principal(request.headers, request.cookies)
+    if not principal:
+        return ""
+    try:
+        kind, login = principals.parse_principal(principal)
+    except principals.PrincipalError:
+        return ""
+    return login if kind == principals.KIND_USER else ""
 
 
 def _uniform_failure():
@@ -285,6 +310,132 @@ def refresh_session():
     resp = make_response(jsonify({"ok": True, "principal": principal}))
     _set_token_cookies(resp, tokens.mint(principal, tokens.TOKEN_ACCESS))
     return resp
+
+
+@bp.route("/password/begin", methods=["POST"])
+@action("auth.password:begin")
+def password_change_begin():
+    """Leg 1 of a password change: prove you know the *current* one.
+
+    **Being logged in is not enough to change a password.** A session that has been stolen — a
+    borrowed laptop, a token lifted before `HttpOnly` was in place — could otherwise be used to
+    lock the real owner out of their own account, silently and permanently. Requiring the current
+    password means possession of a session is not possession of the account.
+
+    This is the login exchange again, deliberately: same two legs, same primitives, no second
+    implementation of SRP to keep in step with the first. The difference is that the login is taken
+    from the verified token rather than from the request, so a caller can only re-prove *their own*
+    password.
+    """
+    login = _current_login()
+    if not login:
+        return _uniform_failure()
+
+    body = request.get_json(silent=True) or {}
+    a_hex = str(body.get("A") or "").strip()
+    if not a_hex:
+        return _uniform_failure()
+
+    store = None
+    try:
+        store = IdentityStore()
+        user = store.get_user(login)
+        if user is None or user.disabled or not user.has_credential:
+            return _uniform_failure()
+        salt_hex, verifier_hex = user.srp_salt, user.srp_verifier
+    except Exception:
+        _logger.exception("password begin: identity store unavailable")
+        return _uniform_failure()
+    finally:
+        if store is not None:
+            store.close()
+
+    try:
+        challenge, salt_out, b_hex = srp.begin(login, a_hex, salt_hex, verifier_hex)
+    except srp.SrpError:
+        return _uniform_failure()
+    return jsonify({"ok": True, "token": challenge, "salt": salt_out, "B": b_hex})
+
+
+@bp.route("/password/finish", methods=["POST"])
+@action("auth.password:change")
+def password_change_finish():
+    """Leg 2: verify the current-password proof, then install the new verifier.
+
+    **The new password never reaches the server either.** The client derives the new salt and
+    verifier locally and sends only those, exactly as enrolment does — so a password change has the
+    same disclosure properties as a login, and the server still holds nothing reversible (FR-3).
+
+    On success every existing session is revoked. That is the point of changing a password after a
+    suspected compromise: leaving the attacker's token valid for the rest of its lifetime would make
+    the change cosmetic. The caller is logged out too, which is the honest consequence — "log out
+    everywhere" includes here.
+    """
+    login = _current_login()
+    if not login:
+        return _uniform_failure()
+
+    body = request.get_json(silent=True) or {}
+    challenge = str(body.get("token") or "").strip()
+    m_hex = str(body.get("M") or "").strip()
+    new_salt = str(body.get("new_salt") or "").strip()
+    new_verifier = str(body.get("new_verifier") or "").strip()
+    if not (challenge and m_hex and new_salt and new_verifier):
+        return _uniform_failure()
+
+    if not _is_hex(new_salt) or not _is_hex(new_verifier):
+        # The values go straight into the credential store; a non-hex string there would be a
+        # credential nobody can ever authenticate against, i.e. a lockout written by the client.
+        return jsonify({"ok": False, "error": "malformed credential"}), 400
+
+    try:
+        proved_login, _hamk, _key = srp.finish(challenge, m_hex)
+    except srp.SrpError:
+        return _uniform_failure()
+
+    if proved_login != login:
+        # The challenge belongs to a different account than the token. Cannot happen through the
+        # routes above; refusing anyway, because the alternative is changing someone else's
+        # password on the strength of a proof about your own.
+        _logger.error("password change: challenge login %r != token login %r", proved_login, login)
+        return _uniform_failure()
+
+    store = None
+    try:
+        store = IdentityStore()
+        user = store.get_user(login)
+        if user is None or user.disabled:
+            return _uniform_failure()
+        store.update_user(
+            user.edited(
+                srp_salt=new_salt,
+                srp_verifier=new_verifier,
+                must_change_password=False,
+            )
+        )
+    except Exception:
+        _logger.exception("password change: could not write the new credential")
+        return jsonify({"ok": False, "error": "could not change password"}), 500
+    finally:
+        if store is not None:
+            store.close()
+
+    try:
+        revocation.revoke_all_for(principals.user_principal(login))
+    except Exception:
+        _logger.exception("password change: sessions were not revoked")
+
+    resp = make_response(jsonify({"ok": True, "reauthenticate": True}))
+    _clear_token_cookies(resp)
+    return resp
+
+
+def _is_hex(value: str) -> bool:
+    try:
+        bytes.fromhex(value)
+    except ValueError:
+        return False
+    return bool(value)
 
 
 @bp.route("/logout", methods=["POST"])
