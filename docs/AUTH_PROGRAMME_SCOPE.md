@@ -14,6 +14,7 @@ scope record; it is not a spec and it does not carry acceptance criteria.
 | 0.5 | HTTPS: self-signed by default, internal CA opt-in, TLS 1.2 floor, CSP/HSTS, Origin policy | done |
 | 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | **closed** — 7/7 work items merged to `main` 2026-08-25; the four closing V-model steps completed 2026-08-28, acceptance verdict **PASS** on all 34 criteria, no open findings |
 | 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | requirements in progress |
+| 2.5 | **OIDC Provider**: asymmetric signing + JWKS, discovery, standard claim names, authorization-code flow with PKCE, `/token`, `/userinfo`, introspection and revocation endpoints | not started; scoped below. Directed 2026-09-01 |
 | 3 | **Authorization**: policy engine, policy documents, attach-to-principal, enforcement before dispatch | not started; `docs/PHASE3_POLICY_ENGINE_SPIKE.md` is the decision-support draft. **Gated on a test credential facility** — see below |
 
 ## Phase 1 — implementation work items
@@ -172,6 +173,74 @@ Two things there need settling before Phase 3 ships, both recorded rather than d
 
 The decision table in `docs/PHASE3_POLICY_ENGINE_SPIKE.md` §2 carries rows for these so they are
 answered by a test rather than by an implementation accident.
+
+## Phase 2.5 — becoming an OIDC Provider, with SRP kept underneath
+
+Directed 2026-09-01. **SRP stays.** It is not in tension with OIDC, and the distinction is the whole
+basis of this phase: SRP is an authentication *method* — how a server satisfies itself that you know
+a password without the password crossing the wire — while OIDC standardises everything downstream of
+that check. OIDC has never specified how a provider verifies a password; every provider does it
+privately. So SRP sits exactly where a provider's private credential check has always sat, and
+replacing it with a form POST would be a downgrade, not a standardisation.
+
+The precedent is Cognito, which is what was asked for at the outset: its `USER_SRP_AUTH` flow is
+SRP-6a internally, and what it publishes is an ordinary OIDC id/access/refresh triad plus a JWKS
+endpoint. We arrived at the same split without planning to.
+
+**Two motivations, only one of which is this phase.** Being an OIDC *client*, so operators sign in
+with NVIDIA SSO, is FR-19 and needs none of this. Being an OIDC *provider*, so other software can
+consume our tokens, is this phase. The consumers worth naming: the Grafana embeds, which today sit
+outside the auth story entirely, and a future CLI or agent that needs a credential we can verify
+without sharing a minting secret.
+
+### What already conforms
+
+More than expected. The id/access/refresh triad *is* the OIDC triad. All seven registered claims are
+present and **demanded** rather than validated-if-present, which is stricter than most providers.
+Refresh works and is revocable by `jti`.
+
+### The divergences, and which one is structural
+
+| Divergence | Consequence |
+|---|---|
+| `HS256` symmetric signing | **The blocker.** Verification and minting are the same capability, so no key can ever be published |
+| No `/.well-known/openid-configuration` | No client can self-configure |
+| No `/.well-known/jwks.json` | Nothing external can verify a token |
+| Custom `typ` claim | Standard is `token_use` (Cognito) or RFC 9068's header `typ` |
+| No `auth_time`, `nonce`, `azp`, `scope` | A relying party cannot tell how old the authentication is, or bind a nonce against replay |
+| `POST /api/auth/refresh` | OAuth 2.0 spells this `POST /token` with `grant_type=refresh_token` |
+| No authorization-code flow | Nothing can delegate login to us |
+| Cookie transport, not `Authorization: Bearer` | **Deliberate — do not "fix" it.** See below |
+
+Only the first is structural. Everything else on that list becomes straightforward once signing is
+asymmetric, and is blocked while it is not.
+
+### Three things to get right
+
+**The algorithm change invalidates every outstanding token, and it is bigger than a constant.** The
+signing key is HKDF-derived from `RACK_WEB_SECRET_KEY`; asymmetric signing needs a real key pair,
+durable storage for it, a `kid` in the header so more than one can be live at once, and a rotation
+procedure. This is INV-17 in `identity-auth-traps.mdc` — every token minted before the switch fails
+verification after it, so the cutover logs everyone out and that has to be planned rather than
+discovered.
+
+**Being both provider and client makes `iss` load-bearing for the first time.** The traps rule
+currently records that `iss` and `aud` do not separate deployments, because they are product
+constants. That stops being true the moment we verify NVIDIA SSO's tokens alongside our own:
+accepting a token from the wrong issuer is a full authentication bypass, and the check that prevents
+it is a parameter PyJWT ignores unless passed (also INV territory — see trap 6).
+
+**Keep cookies for the SPA.** `HttpOnly` + `Secure` + `SameSite` beats a Bearer token in
+`localStorage`, because XSS can read `localStorage` and cannot read an `HttpOnly` cookie. This is a
+deviation from how OIDC apps are usually *demonstrated*, not from the specification — a provider may
+set cookies for its own first-party UI and serve Bearer tokens to API clients. The phase should
+*add* Bearer acceptance for programmatic callers, not migrate the browser to it.
+
+### Sequencing
+
+After Phase 2 closes, before Phase 3. Phase 3 binds policy to principals and will want `scope`, so
+the claim vocabulary should settle first — but Phase 2's remaining work does not depend on any of
+this, and the OP surface is a coherent slice on its own.
 
 ## Phase 3 is gated on tests that actually authenticate
 
