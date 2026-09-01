@@ -36,6 +36,29 @@ var/logs/
 # Generated reports kept for later download (report_store.py); operator artifacts, not source
 var/reports/
 
+# ---- Identity store (NEVER commit — SRP verifiers and revocation state) ----
+#
+# A verifier is not a password, but it is credential material: it is the value `srp` checks a proof
+# against, and it is what an offline guessing attack runs against. The store also carries the
+# revocation cutoffs, so a committed copy silently re-honours sessions a later deployment withdrew
+# (INV-19 in identity-auth-traps.mdc).
+#
+# `NVIS_IDENTITY_FILE` defaults under var/identity/, and bin/run-local-auth.sh points at
+# var/local-auth/, so both appear in a developer tree after the first local login.
+var/identity/
+var/local-auth/
+**/identity.json
+
+# ---- TLS material (NEVER commit — server.key is a private key) ----
+#
+# Phase 0.5 generates a self-signed pair here on first boot. Committing the key would publish the
+# private half of every developer's certificate, and re-issuing is a one-line regeneration, so
+# there is never a reason to track it.
+var/tls/
+**/*.key
+**/*.pem
+!**/*.pub.pem
+
 # ---- Token vault (NEVER commit — encrypted NVFTP tokens + master key material) ----
 var/secrets/
 **/*.vault.json
