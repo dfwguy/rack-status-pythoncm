@@ -171,8 +171,17 @@ valid; **Type** = ours, being misused; **Revocation/Implicit** = was valid, with
 - **SRP challenge state is in-process**, so `--workers 1` is load-bearing;
   `assert_single_worker_safe()` refuses more. A second worker splits the table and login succeeds
   about half the time, which reads as a client bug.
-- **The unauthenticated login route is a CPU amplifier.** A 4096-bit `begin()` costs ~52 ms of server
-  CPU, so one worker saturates a core at ~19 anonymous requests/second. FR-4b makes this unavoidable
-  — a cheap path for unknown logins would be an enumeration oracle, so every caller gets the
-  expensive one. **The route needs a rate limit that sheds before the exponentiation** (FR-4g), and
-  the bounded challenge table caps memory only, never CPU.
+- **The unauthenticated login route is a CPU amplifier, and the cost depends on which SRP backend
+ bound.** A 4096-bit `begin()` costs **~52 ms** where `_ctsrp` (OpenSSL) binds and **~110 ms** where
+ the pure-Python `_pysrp` does — measured 2026-09-02, so one worker saturates a core at ~19/s or
+ ~9/s respectively. Check before quoting either: `python -c "import srp; print(srp._mod.__name__)"`.
+ FR-4b makes the cost unavoidable — a cheap path for unknown logins would be an enumeration oracle,
+ so every caller gets the expensive one. **The route needs a rate limit that sheds before the
+ exponentiation** (FR-4g; now `@throttle.throttle(10)` plus the global hook), and the bounded
+ challenge table caps memory only, never CPU.
+
+ Two consequences worth holding together. The 2× gap means trap 4's warning cuts both ways:
+ installing `libssl-dev` flips the backend, which is a **performance win and a protocol risk** in
+ the same change, so re-run the SRP interop tests if it happens. And because the deployment is
+ `--workers 1` with a GIL, **this ceiling does not improve with more cores** — full numbers and the
+ scaling table in `docs/PERFORMANCE_BASELINE.md`.
