@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 """
-Shared helpers for ``swap-node-macs.py`` and ``change-node-macs.py``.
+Shared helpers for ``swap_node_macs.py`` and ``change_node_macs.py``.
 
 Kept deliberately small: just the bits both scripts need to import the
 BCM ``pythoncm`` library, identify MACs, and configure logging in a

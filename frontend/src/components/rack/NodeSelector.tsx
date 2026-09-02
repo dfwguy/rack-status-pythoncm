@@ -220,4 +220,3 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
     </Box>
   );
 }
-

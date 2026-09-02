@@ -117,7 +117,6 @@ const ICON_SIZE = 20;
 /**
  * Domain navigation per the UX framework (docs/UX_FRAMEWORK.md, Sections 5 & 8.2).
  * Compute → Infrastructure → Observability → Tools → Analytics, macro to micro.
- * Several leaves are design previews (mock data) pending backend wiring.
  */
 const navEntries: NavEntry[] = [
   {

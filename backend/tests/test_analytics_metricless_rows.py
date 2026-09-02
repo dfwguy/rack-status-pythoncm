@@ -29,9 +29,9 @@ import pytest
 os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
-import app as app_module  # noqa: E402
-import native_status  # noqa: E402
-from api import analytics as analytics_module  # noqa: E402
+import app as app_module
+import native_status
+from api import analytics as analytics_module
 
 FOUR_RACK_LOG = "root-NEMO-p05-r01+p05-r02+p05-r03+p05-r04-72N-131805.txt"
 

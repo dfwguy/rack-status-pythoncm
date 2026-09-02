@@ -22,7 +22,7 @@ TWO GENERATIONS live here at once, deliberately:
 
 The preset path is the direction (core-designs.mdc citizen 2): a frozen list of tools in code ships one
 site's absolute paths to every other site, and adding a test needs a deploy. New tools should arrive as
-catalog documents and be launched through the preset routes -- do not add a fourteenth run-* endpoint.
+catalog documents and be launched through the preset routes -- do not add another run-* endpoint.
 
 Operator-supplied environment is the sharp edge. ``_custom_env_from_body`` and ``_launch_env_from_body``
 bound what reaches an sbatch: ``_ENV_KEY_RE`` for the names, ``_ENV_MAX_VARS`` and
@@ -1464,9 +1464,9 @@ def api_prepare_validation_preset():
     return jsonify({"ok": True, "plan": public_plan})
 
 
-# The legacy counterpart of the preset `prepare` above (REQ-6). One endpoint for all ten legacy
-# launches rather than ten sibling routes: they share a prepare signature and a result shape, so ten
-# routes would be ten chances for one to drift.
+# The legacy counterpart of the preset `prepare` above (REQ-6). One endpoint for every legacy
+# launch rather than a sibling route each: they share a prepare signature and a result shape, so
+# one route per kind would be one more chance for each to drift.
 _PREPARE_BY_KIND.update({
     "validation": _prepare_run_validation,
     "nemo-xrack": _prepare_run_nemo_xrack,

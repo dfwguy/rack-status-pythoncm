@@ -12,10 +12,13 @@
 /**
  * Infrastructure → Ethernet fabric / InfiniBand + NVLink / Storage.
  *
- * Every counter and device table on these pages is now a REAL Grafana panel. The 1:1
- * section→dashboard map comes from the backend (`GET /api/observability/dashboards/infrastructure`);
- * this view resolves the browser-facing URL, applies the app's light/dark theme, and filters the
- * returned sections down to the segment being viewed.
+ * Charts render NATIVELY with Chart.js from our own metrics API (`MetricChartGrid`, group
+ * `infra`), which reads VictoriaMetrics — the same path `MetricsView` uses. This replaced the
+ * previous Grafana `<iframe>` embeds: no second tunnel, no second login, no `allow_embedding`.
+ *
+ * The 1:1 section→dashboard map is still fetched from the backend
+ * (`GET /api/observability/dashboards/infrastructure`), but it no longer renders anything — it
+ * only tells the operator whether Grafana has mapped boards for this segment to deep-link to.
  *
  * Honesty notes: the Ethernet and InfiniBand boards are genuinely DARK right now — the
  * cumulus_* / lldpq_* / ib_* / ufm_* scrapers are stopped for an incident, and UFM REST auth is
@@ -152,8 +155,9 @@ const SEGMENTS: Record<InfraSegment, SegmentMeta> = {
     contentId: "infraEthernet",
     match: ["ethernet"],
     coverage:
-      "Live Grafana embeds — no synthetic data. These panels are expected to be EMPTY today: the " +
-      "cumulus_* and lldpq_* switch scrapers are stopped for an incident and must not be restarted.",
+      "Live charts from /api/metrics — no synthetic data. These panels are expected to be EMPTY " +
+      "today: the cumulus_* and lldpq_* switch scrapers are stopped for an incident and must not " +
+      "be restarted.",
   },
   "ib-nvlink": {
     title: "InfiniBand / NVLink",
@@ -161,9 +165,9 @@ const SEGMENTS: Record<InfraSegment, SegmentMeta> = {
     contentId: "infraIbNvlink",
     match: ["ib-nvlink", "infiniband", "nvlink", "ib "],
     coverage:
-      "Live Grafana embeds — no synthetic data. The NVSwitch tray panels are LIVE (BCM-sourced); the " +
-      "InfiniBand panels are expected to be EMPTY because the ib_*/ufm_* scrapers are stopped for an " +
-      "incident and UFM REST auth is an open blocker.",
+      "Live charts from /api/metrics — no synthetic data. The NVSwitch tray panels are LIVE " +
+      "(BCM-sourced); the InfiniBand panels are expected to be EMPTY because the ib_*/ufm_* " +
+      "scrapers are stopped for an incident and UFM REST auth is an open blocker.",
   },
   storage: {
     title: "Storage",
@@ -176,8 +180,13 @@ const SEGMENTS: Record<InfraSegment, SegmentMeta> = {
   },
 };
 
-const EMBEDDING_NOTE =
-  "Embedding requires Grafana to run with GF_SECURITY_ALLOW_EMBEDDING=true; if a frame stays blank, use “Open in Grafana”.";
+/**
+ * Appended only when the backend has Grafana boards mapped for this segment. Nothing on this page
+ * is an embed, so this is a pointer to where the full dashboard lives — not an explanation of a
+ * blank frame.
+ */
+const MAPPED_DASHBOARD_NOTE =
+  "Grafana has mapped dashboards for this segment; the charts below are rendered locally from /api/metrics.";
 
 /**
  * Does this section belong to the segment currently being viewed?
@@ -319,7 +328,7 @@ export function InfrastructureView({ segment }: InfrastructureViewProps) {
           <Banner status="error" kind="inline">
             {`Grafana is not reachable from the Greenlight backend${
               health?.error ? ` (${health.error})` : ""
-            }. No panel below can load — this is a broken data path, not an empty cluster.`}
+            }. The charts below read /api/metrics and are unaffected, but Grafana deep-links will not open.`}
           </Banner>
         </Box>
       )}
@@ -334,7 +343,7 @@ export function InfrastructureView({ segment }: InfrastructureViewProps) {
 
       <Box sx={{ mb: 3 }}>
         <Banner status="warning" kind="inline">
-          {sections.length > 0 ? `${meta.coverage} ${EMBEDDING_NOTE}` : meta.coverage}
+          {sections.length > 0 ? `${meta.coverage} ${MAPPED_DASHBOARD_NOTE}` : meta.coverage}
         </Banner>
       </Box>
 

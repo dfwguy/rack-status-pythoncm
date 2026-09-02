@@ -21,8 +21,8 @@ os.environ["RACK_WEB_AUTH_DISABLED"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 os.environ["RACK_WEB_SECRET_KEY"] = "test-vault-master-key"
 
-import token_vault  # noqa: E402
-from app import app  # noqa: E402
+import token_vault
+from app import app
 
 
 @pytest.fixture(autouse=True)

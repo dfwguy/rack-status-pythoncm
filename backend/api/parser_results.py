@@ -594,7 +594,7 @@ def api_parser_results():
         pdisp = str(g_embed["display_timezone"])
 
     # --- universal ingest + durable history (2026-07-28) -----------------------------
-    # Additive only: the four parser.sh tables in ``data`` are untouched, so the NCCL /
+    # Additive only: the three parser.sh tables in ``data`` are untouched, so the NCCL /
     # Nemotron / MNUBERGEMM charts keep rendering exactly what they rendered before. When
     # parser.sh produced nothing usable (a foreign tool, or the stale head-node v6 that
     # returns rack='?' and '---' for a real MNUBERGEMM log) a ``data.universal`` key is
@@ -1017,7 +1017,12 @@ def api_capture_job_attempt():
 def capture_job_attempt(job_id: str) -> dict:
     """Record one Slurm job attempt (state, reason, exit code, nodes) to history + the lake.
 
-    Works whether or not the job produced output — that is the entire point.
+    Works whether or not the job produced output — that is the entire point. Job 63850
+    (MNUBERGEMM, h01) was CANCELLED in the Slurm prolog: RunTime 00:00:00, no stdout file ever
+    created. It therefore left NO trace in the log dir, in results_history, or in the lake — the
+    attempt was invisible even though it consumed an 18-node allocation and drained a tray.
+    Capturing only successful runs is the same blank-read-as-success failure this platform
+    exists to catch.
     """
     res: dict[str, object] = {"ok": False, "job_id": job_id, "error": None}
     try:

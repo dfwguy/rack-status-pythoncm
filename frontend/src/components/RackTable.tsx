@@ -452,7 +452,7 @@ export function RackTable({
 
   // Declared above its first consumer (openLogForRow, just below). When it sat further down,
   // the React Compiler refused to compile this component at all -- which silently disabled
-  // the memoisation on the six useMemo/useCallback blocks in this file.
+  // the memoisation on every useMemo/useCallback block in this file.
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: "success" | "error" }>({
     open: false, message: "", severity: "success",
   });

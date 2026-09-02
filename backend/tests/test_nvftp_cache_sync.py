@@ -23,8 +23,8 @@ os.environ["RACK_WEB_AUTH_DISABLED"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 os.environ["RACK_WEB_SECRET_KEY"] = "test-secret"
 
-import nvftp_cache_sync as sync  # noqa: E402
-import token_vault  # noqa: E402
+import nvftp_cache_sync as sync
+import token_vault
 
 
 #: Settings this module's tests run against. Held in an explicit table rather than

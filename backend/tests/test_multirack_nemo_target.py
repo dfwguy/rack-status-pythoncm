@@ -30,10 +30,10 @@ os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
-import app as app_module  # noqa: E402
-from api import validation_runs  # noqa: E402
-import naming as naming_mod  # noqa: E402
-import nvis_id_templates as nid  # noqa: E402
+import app as app_module
+from api import validation_runs
+import naming as naming_mod
+import nvis_id_templates as nid
 
 BACKEND = Path(__file__).resolve().parent.parent
 SCRIPTS = BACKEND.parent / "bin" / "scripts"

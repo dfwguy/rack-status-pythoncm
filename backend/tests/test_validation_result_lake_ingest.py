@@ -18,7 +18,7 @@ os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 # Activity hydration moved out of app.py; patch the module that owns these names.
 import activity_hydration
 import app as app_module
-import core  # noqa: E402
+import core
 
 
 def test_new_activity_result_ingests_once_when_missing(monkeypatch):

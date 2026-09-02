@@ -43,4 +43,3 @@ def test_latest_successful_run_survives_later_failure_and_reopen(tmp_path, monke
     completed = results_history.latest_successful_runs_by_rack(("nemo",))
     assert completed["nemo"]["r01"]["job_id"] == "100"
     assert completed["nemo"]["r01"]["status"] == "pass"
-

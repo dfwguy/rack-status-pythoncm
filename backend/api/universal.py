@@ -93,7 +93,11 @@ _UNIVERSAL_SCAN_IGNORE_RE = re.compile(
     os.environ.get("RACK_UNIVERSAL_SCAN_IGNORE_RE")
     # These are llmb's INTERMEDIATE files, not results. Each has a real aggregated
     # counterpart (<user>-NCCL-1Rack-… / <user>-NEMO-1Rack-…) that the collectors write;
-    # ingesting the intermediates too produces duplicate or empty rows.
+    # ingesting the intermediates too produces duplicate or empty rows. Worse than
+    # duplicates: the raw sbatch stdout is routinely judged ``fail`` because it still holds
+    # srun/pmix noise from launch attempts llmb-run went on to retry successfully, so a
+    # passing rack surfaced as failed in the dashboard. Judge a run by its aggregated log,
+    # never by sbatch stdout.
     #   llmb-nccl_<label>_<jid>.out   sbatch stdout. <label> was `nodes` until 2026-07-31,
     #                                 when it became the rack id — so match ANY label, or
     #                                 rack-labelled files silently start being ingested.

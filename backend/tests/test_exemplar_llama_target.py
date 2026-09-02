@@ -19,7 +19,7 @@ os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
 from api import validation_runs
-import naming as naming_mod  # noqa: E402
+import naming as naming_mod
 import nvis_id_templates as nid
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "bin" / "scripts"

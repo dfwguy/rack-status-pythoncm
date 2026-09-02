@@ -15,14 +15,14 @@ The *mechanism*, deliberately separate from both the endpoints that use it (``ap
 gate that enforces it (``_require_dashboard_auth`` in ``app.py``). One module answers "how does this
 app decide who you are", which is the question the coming authorization work has to build on.
 
-Two modes, chosen by :func:`_auth_mode`. PAM authenticates against *this machine's* accounts, so it
-is only meaningful when the app runs on the target host; a container talking to a remote head node has
-no such mapping, which is why a remote target defaults to a shared token instead.
+One mechanism, not two. :func:`authenticated_principal` verifies a signed access token -- the
+``nvis_access`` cookie first, then an ``Authorization: Bearer`` header -- and nothing else. The
+shared-token and PAM paths were **deleted** on 2026-09-01 (FR-18), not deprecated; the note above
+:func:`_auth_user` records which names went with them and why a credential path that succeeds while
+granting nothing was the worse option to leave standing.
 
-PAM verification prefers in-process ctypes and falls back to a subprocess helper under a Python whose
-ctypes actually works -- a module-loaded Python on a cluster login node frequently cannot load it, and
-the error that produces is opaque, so the fallback raises RuntimeError naming
-``RACK_WEB_PAM_HELPER_PYTHON``.
+``RACK_WEB_AUTH_DISABLED`` is the only remaining configuration input that affects authentication,
+and it turns the gate off entirely rather than selecting a weaker credential.
 
 Not an endpoint module and not under ``api/``: it imports Flask only for ``session``, and nothing here
 builds a response.

@@ -20,7 +20,7 @@ os.environ["RACK_STATUS_DEMO"] = "1"
 os.environ["RACK_WEB_AUTH_DISABLED"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
-import app as app_module  # noqa: E402
+import app as app_module
 
 
 @pytest.fixture(autouse=True)

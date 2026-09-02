@@ -79,22 +79,6 @@ export function selectionSummary(topology: ScopeCluster, selected: Set<string>):
   return `${count} nodes across ${racksTouched.length} racks`;
 }
 
-// ---- Metrics ----------------------------------------------------------------
-
-/**
- * Descriptor for a metric card. Kept as a type for view code; the synthetic
- * `METRIC_PANELS` / `makeSeries()` / `timeLabels()` generators were deleted — the
- * Metrics view renders Grafana panels instead of locally generated waveforms.
- */
-export interface MetricPanel {
-  id: string;
-  title: string;
-  unit: string;
-  color: string;
-  base: number;
-  amplitude: number;
-}
-
 // ---- Logs -------------------------------------------------------------------
 
 export type LogLevel = "info" | "warn" | "error";

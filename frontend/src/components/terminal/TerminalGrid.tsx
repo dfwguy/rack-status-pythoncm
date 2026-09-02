@@ -137,5 +137,3 @@ export function TerminalGrid({ panes, layout, width, onChange, onSession }: Term
     </GridLayout>
   );
 }
-
-

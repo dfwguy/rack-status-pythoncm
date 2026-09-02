@@ -106,7 +106,7 @@ export function BringupResultsPanel({ node, logDir }: BringupResultsPanelProps) 
 
   // Stable payload identity: TailLogDialog restarts its `tail -f` stream whenever
   // this object's reference changes, and the panel re-renders on every parent poll
-  // (rack-locks ~5s, rack-status ~30s). An inline literal here made the log flicker
+  // (rack-locks ~5s, rack-status ~15s). An inline literal here made the log flicker
   // and eventually read "(stopped)". Memoize so it only changes with the real inputs.
   const logPayload = useMemo<JobStdoutTailPayload | null>(
     () => (logFilePath && logIsLive ? { path: logFilePath, log_dir: logDir } : null),

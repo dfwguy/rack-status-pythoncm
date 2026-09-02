@@ -155,7 +155,7 @@ export function TerminalPane({ spec, onClose, onSession }: TerminalPaneProps) {
 
       {/* Two boxes on purpose: the inset lives on the outer one, and the terminal mounts in an
           inner box that carries NO padding.
-          
+
           FitAddon sizes the shell from `term.element.parentElement` — the element xterm was opened
           on. Padding that element does not shrink what FitAddon measures, so it computed rows for
           the full height and the content was then displaced downwards by padding-top and clipped at

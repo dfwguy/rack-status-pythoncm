@@ -233,7 +233,7 @@ def build_registry(app: Any, *, install: bool = True) -> Registry:
     Coverage is deliberately *not* enforced here. FR-14b makes a missing declaration fail the
     **build**, which is a test's job (see :func:`undeclared_mutating_routes`); making it fail
     startup instead would mean a half-migrated tree could not boot at all, and the declarations
-    land over 38 modules.
+    are spread across the whole api package.
     """
     global _registry
 

@@ -62,7 +62,7 @@ ChartJS.register(
   Filler,
 );
 
-/** Same key as legacy index.html (displayTzSelect). */
+/** localStorage key carried over from the pre-SPA UI — renaming it drops the operator's saved timezone. */
 const DISPLAY_TZ_KEY = "rackWebDisplayTimezone";
 /** Persist "Full rack validation (18N)" preference across opens. */
 const FULL_RACK_KEY = "rackWebParserFullRack";
@@ -113,7 +113,11 @@ export interface ParserResultsDialogProps {
    * via ``/api/parser-results?path=…``, bypassing the rack/basename resolution.
    */
   logPath?: string;
-  /** 0 = Summary, 1 = NCCL, 2 = NEMO, 3 = LLAMA when server returned rows, 4 = NVLOOM (or LLAMA then NVLOOM), 5 = ClusterKit when runs exist. */
+  /**
+   * 0 = Summary, 1 = NCCL, 2 = NEMO. The rest SHIFT with what the server returned: LLAMA takes 3
+   * only when it has rows, so NVLOOM is 4 with a LLAMA tab and 3 without (``nvloomTabIndex``), and
+   * ClusterKit follows it when runs exist. Do not hardcode 4/5 — compute from the same flags.
+   */
   initialTabIndex?: number;
 }
 

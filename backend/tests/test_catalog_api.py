@@ -18,10 +18,10 @@ os.environ["RACK_STATUS_DEMO"] = "1"
 os.environ["RACK_WEB_AUTH_DISABLED"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
-from app import app  # noqa: E402
+from app import app
 
-from catalog import seed  # noqa: E402
-from catalog.store import TinyDBRepo, set_repo  # noqa: E402
+from catalog import seed
+from catalog.store import TinyDBRepo, set_repo
 
 
 @pytest.fixture

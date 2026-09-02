@@ -35,13 +35,11 @@ Per-log NCCL/LLM heuristics for the **shell** table are cached in var/cache/log_
 ``--tmp-status`` built from cache + fresh squeue. Disable with RACK_LOG_ANALYSIS_CACHE_DISABLED=1.
 Cap with RACK_LOG_ANALYSIS_CACHE_MAX_FILES (default 200).
 
-Optional HTTP login (enabled by default) checks the same PAM password as system login for
-the account named by RACK_WEB_AUTH_USER (default: root) using RACK_WEB_PAM_SERVICE (default:
-login), via vendored ctypes bindings to libpam (no PyPI pam package). If the Flask
-interpreter cannot load ctypes (common with a mismatched module-loaded Python), set
-RACK_WEB_PAM_HELPER_PYTHON to a working interpreter (default /usr/bin/python3) to run
-rack_web/pam_helper.py for checks. Disable auth with RACK_WEB_AUTH_DISABLED=1. Set
-RACK_WEB_SECRET_KEY for stable sessions across restarts. HTTPS: RACK_WEB_COOKIE_SECURE=1.
+HTTP login (enabled by default) authenticates an identity-store principal over SRP and issues a
+signed access token; the gate below verifies that token and nothing else. The older PAM and
+shared-token paths were deleted on 2026-09-01 (FR-18) -- ``web_auth.py`` records what went with
+them. Disable the gate entirely with RACK_WEB_AUTH_DISABLED=1. Set RACK_WEB_SECRET_KEY for stable
+sessions and stable token signatures across restarts. HTTPS: RACK_WEB_COOKIE_SECURE=1.
 
 Parser results dialog: optional embedded Grafana solo panels (GPU thermal / power) use
 ``RACK_WEB_GRAFANA_URI`` (Grafana base URL, no trailing slash; empty = same hostname as the

@@ -25,7 +25,7 @@ grow the table without limit.
 # Notes that stayed in app.py when this module took the code, during the api/ migration. The
 # prose describes subjects that live here now; it is reunited with them rather than deleted.
 #
-# NVLMAPPER output zips under reports/<rack>/ (staged + ./run_nvlmapper.sh from app.py).
+# NVLMAPPER output zips under reports/<rack>/ (staged + ./run_nvlmapper.sh from api/fabric_ops.py).
 # Parser Excel copies (e.g. rack-parser-export-*.xlsx) and other workbooks under reports/.
 # Reserved inventory ``host`` for ``*.xlsx`` files sitting directly under the reports base dir (not in a subfolder).
 #

@@ -82,8 +82,8 @@ export function UsersView() {
   const [creating, setCreating] = useState(false);
   const [newLogin, setNewLogin] = useState("");
   const [newDisplayName, setNewDisplayName] = useState("");
-  //: Generate by default. It is the safer path — a generated password is high-entropy and nobody
-  //: has typed it into a second place — so the operator has to opt into choosing one.
+  // Generate by default. It is the safer path — a generated password is high-entropy and nobody
+  // has typed it into a second place — so the operator has to opt into choosing one.
   const [credentialMode, setCredentialMode] = useState<"generate" | "choose">("generate");
   const [newPassword, setNewPassword] = useState("");
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");

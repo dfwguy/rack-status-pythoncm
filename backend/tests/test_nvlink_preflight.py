@@ -27,7 +27,7 @@ import os
 os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
-from nvlink_preflight import (  # noqa: E402
+from nvlink_preflight import (
     expand_hostlist,
     expand_pdsh_w,
     parse_nvlink_preflight_output,
@@ -86,6 +86,7 @@ def test_expand_pdsh_w_of_the_real_h08_target():
     hosts = expand_pdsh_w("ink50-dh01-h08-[11-18,28-37]")
     assert len(hosts) == 18
     assert "ink50-dh01-h08-[11-18" not in hosts, "the comma-split bug is back"
+
 
 # A healthy node, as pdsh prefixes it.
 GOOD = """\

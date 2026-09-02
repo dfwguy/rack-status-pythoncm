@@ -22,7 +22,7 @@ os.environ.setdefault("RACK_EXEC_MODE", "local")
 import app as app_module
 from api import validation_runs
 import validation_launch
-import naming as naming_mod  # noqa: E402
+import naming as naming_mod
 import nvis_id_templates as nid
 
 
@@ -44,6 +44,8 @@ def _campaign_env(monkeypatch, manifest: Path) -> None:
     monkeypatch.setattr(validation_launch, "_eget_int", lambda key, default: int(values.get(key, default)))
     monkeypatch.setattr(validation_launch, "_nvis_naming", _naming)
     monkeypatch.setattr(naming_mod, "_nvis_naming", _naming)
+
+
 def test_campaign_snapshot_uses_only_manifest_nodes(monkeypatch, tmp_path):
     manifest = tmp_path / "nodes.list"
     manifest.write_text(

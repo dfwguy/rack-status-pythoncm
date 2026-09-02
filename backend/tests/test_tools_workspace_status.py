@@ -9,7 +9,7 @@
 # its affiliates is strictly prohibited.
 from pathlib import PurePosixPath
 
-import app as app_module  # noqa: F401 - imported for the Flask app/test client
+import app as app_module
 # The Tools helpers moved to api/tools.py; patch and call the module that OWNS them, not app's
 # view of them (see backend-api.mdc on the aliasing trap).
 from api import tools as tools_module
