@@ -103,6 +103,21 @@ class TestTheTwoModesAreDistinct:
         assert claims["token_use"] == "access"
         assert "typ" not in claims
 
+    def test_the_audience_is_renamed_only_under_the_flag(self, oidc_mode):
+        """The product rename rides the cutover, which is what makes it free.
+
+        `aud` is a protocol constant: renaming it refuses every token carrying the old value. The
+        ES256 cutover already ends every session, so tying the rename to the same flag costs one
+        logout instead of two. Renaming it independently would have meant a second mass logout for
+        a change no operator can see.
+        """
+        assert _unverified(T.mint("user:admin", T.TOKEN_ACCESS))["aud"] == "nvis-greenlight"
+
+    def test_the_legacy_audience_is_left_alone(self, legacy_mode):
+        """Frozen at the old name deliberately — every HS256 token in existence carries it. It dies
+        with the HS256 path at FR-19b rather than being migrated."""
+        assert _unverified(T.mint("user:admin", T.TOKEN_ACCESS))["aud"] == "nvis-rack-status"
+
     def test_the_issuer_becomes_a_url_in_oidc_mode(self, oidc_mode):
         assert _unverified(T.mint("user:admin", T.TOKEN_ACCESS))["iss"] == ISSUER
 
@@ -157,7 +172,7 @@ class TestRoundTrip:
         public = keys_mod.key_set().ensure().private.public_key()
 
         claims = jwt.decode(
-            token, public, algorithms=["ES256"], audience=T.AUDIENCE, issuer=ISSUER
+            token, public, algorithms=["ES256"], audience=T.AUDIENCE_OIDC, issuer=ISSUER
         )
         assert claims["sub"] == "user:admin"
 

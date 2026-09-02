@@ -317,7 +317,7 @@ export function InfrastructureView({ segment }: InfrastructureViewProps) {
       {grafanaDown && (
         <Box sx={{ mb: 2 }}>
           <Banner status="error" kind="inline">
-            {`Grafana is not reachable from the Rack Status backend${
+            {`Grafana is not reachable from the Greenlight backend${
               health?.error ? ` (${health.error})` : ""
             }. No panel below can load — this is a broken data path, not an empty cluster.`}
           </Banner>

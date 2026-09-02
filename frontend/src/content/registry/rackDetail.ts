@@ -62,7 +62,7 @@ export const rackDetailContent: HelpContent[] = [
           "Select the target nodes and open Hardware or Networking.",
           "Click Start Tests on the deep-audit card; confirmed failures are commented and drained in Slurm.",
           "Click Results beside Start Tests for the per-node audit result and corrective action.",
-          "Click ▲n in the node selector to see validation participation, evidence-attributed failures, and detailed Rack Status findings.",
+          "Click ▲n in the node selector to see validation participation, evidence-attributed failures, and detailed Greenlight findings.",
         ],
       },
     ],

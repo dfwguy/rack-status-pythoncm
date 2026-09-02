@@ -220,12 +220,12 @@ export function ValidationPresetDialog({
           ) : null}
           {presetId === "gpt-oss-cpu" && nodeList.length > 1 ? (
             <Banner status="info">
-              GPT-OSS stays a single-node recipe. Rack Status will submit one independent job for each of the {nodeList.length} exact selected nodes.
+              GPT-OSS stays a single-node recipe. Greenlight will submit one independent job for each of the {nodeList.length} exact selected nodes.
             </Banner>
           ) : null}
           {presetId === "mnubergemm-26.03-v1.17" && rackList.length > 1 ? (
             <Banner status="info">
-              Rack Status submits one independent, rack-scoped MNUberGEMM job per selected rack. It never combines physical racks into one MNNVL domain.
+              Greenlight submits one independent, rack-scoped MNUberGEMM job per selected rack. It never combines physical racks into one MNNVL domain.
             </Banner>
           ) : null}
           {unsupportedScope ? (

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+  SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+  NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+  property and proprietary rights in and to this material, related
+  documentation and any modifications thereto. Any use, reproduction,
+  disclosure or distribution of this material and related documentation
+  without an express license agreement from NVIDIA CORPORATION or
+  its affiliates is strictly prohibited.
+
+  Author: Rafael M. Koike & Cursor Agent ("Ada")
+
+  NVIS Greenlight horizontal lockup, for slides, docs and the login card.
+
+  The wordmark is LIVE TEXT, not outlines, so it picks up the NVIDIA Sans faces
+  vendored under frontend/src/styles/kaizen/fonts/ when this renders inside the
+  app. Standalone (a slide, a PDF, a host without NVIDIA Sans) it falls back down
+  the stack and the letterforms change - convert the text to outlines in a vector
+  editor before handing the file to anyone outside the app.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="64" viewBox="0 0 300 64"
+     role="img" aria-label="NVIS Greenlight">
+  <g transform="translate(8 12) scale(1.6667)">
+    <rect x="6.4" y="1.9" width="11.2" height="20.2" rx="2.8"
+          fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.75"/>
+    <g fill="currentColor" opacity="0.45">
+      <circle cx="12" cy="6.6" r="2.25"/>
+      <circle cx="12" cy="12.0" r="2.25"/>
+    </g>
+    <circle cx="12" cy="17.4" r="2.7" fill="#76B900"/>
+  </g>
+  <text x="46" y="41" font-family="'NVIDIA Sans','Nvidia Sans',-apple-system,'Segoe UI',Roboto,sans-serif"
+        font-size="27" letter-spacing="0.2">
+    <tspan fill="currentColor" opacity="0.6" font-weight="500">NVIS</tspan
+    ><tspan fill="currentColor" font-weight="700" dx="9">Greenlight</tspan>
+  </text>
+</svg>

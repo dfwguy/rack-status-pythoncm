@@ -360,7 +360,7 @@ def build_spec(app: Any, *, version: str = "", server_url: str = "") -> dict[str
     spec: dict[str, Any] = {
         "openapi": OPENAPI_VERSION,
         "info": {
-            "title": "NVIS Rack Status API",
+            "title": "NVIS Greenlight API",
             "version": version or "0",
             "summary": "Cluster bring-up, validation and observability for GB200/GB300 fleets.",
             "description": (

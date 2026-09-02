@@ -81,7 +81,7 @@ class TestMaskKey:
 class TestBuildSystemPrompt:
     def test_base_prompt_included(self):
         prompt = ai_chat.build_system_prompt({})
-        assert "NVIS Rack Status AI Assistant" in prompt
+        assert "NVIS Greenlight AI Assistant" in prompt
 
     def test_dashboard_context(self):
         # Page context is now sourced from the help-content registry.

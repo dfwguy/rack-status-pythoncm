@@ -24,7 +24,7 @@ export const observabilityContent: HelpContent[] = [
     routePath: "/observability/metrics",
     summary: "Live GPU, platform, and exporter time series from VictoriaMetrics.",
     description:
-      "The Metrics page renders the live chart catalog returned by Rack Status' read-only VictoriaMetrics API. Use the rack and time-window selectors to inspect GPU temperature, power, utilization, NVLink, exporter, and infrastructure series. Raw BCM labels remain the query keys, while the UI displays short rack monikers such as d01, e01, f01, g01, and h01. An empty chart is reported as no data; Rack Status never substitutes a zero or mock series.",
+      "The Metrics page renders the live chart catalog returned by Greenlight's read-only VictoriaMetrics API. Use the rack and time-window selectors to inspect GPU temperature, power, utilization, NVLink, exporter, and infrastructure series. Raw BCM labels remain the query keys, while the UI displays short rack monikers such as d01, e01, f01, g01, and h01. An empty chart is reported as no data; Greenlight never substitutes a zero or mock series.",
     features: [
       "Live Chart.js time-series panels backed by VictoriaMetrics.",
       "Rack and 15-minute, 1-hour, 6-hour, or 24-hour window filters.",

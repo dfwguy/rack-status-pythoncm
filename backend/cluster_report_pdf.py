@@ -87,7 +87,7 @@ def to_pdf(dataset: dict[str, Any]) -> bytes:
         leftMargin=14 * mm, rightMargin=14 * mm,
         topMargin=12 * mm, bottomMargin=12 * mm,
         title=f"{meta.get('report', 'Rack Status report')} — {meta.get('cluster', '')}",
-        author="NVIS Rack Status",
+        author="NVIS Greenlight",
     )
 
     sheet = getSampleStyleSheet()

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+  SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+  NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+  property and proprietary rights in and to this material, related
+  documentation and any modifications thereto. Any use, reproduction,
+  disclosure or distribution of this material and related documentation
+  without an express license agreement from NVIDIA CORPORATION or
+  its affiliates is strictly prohibited.
+
+  Author: Rafael M. Koike & Cursor Agent ("Ada")
+
+  NVIS Greenlight  "lit rack" mark. Cabinet outline inherits currentColor so the
+  mark tracks the KUI light/dark theme; the trays carry NVIDIA green.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" role="img" aria-label="NVIS Greenlight">
+  <rect x="4.6" y="2.6" width="14.8" height="18.8" rx="2.6"
+        fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.75"/>
+  <g fill="#76B900">
+    <rect x="7.6" y="5.6" width="8.8" height="2.4" rx="0.9"/>
+    <rect x="7.6" y="10.8" width="8.8" height="2.4" rx="0.9"/>
+    <rect x="7.6" y="16.0" width="8.8" height="2.4" rx="0.9"/>
+  </g>
+</svg>

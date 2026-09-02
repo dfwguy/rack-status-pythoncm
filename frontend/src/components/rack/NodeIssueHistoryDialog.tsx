@@ -64,13 +64,13 @@ export function NodeIssueHistoryDialog({
           <Banner status="info" kind="inline" style={{ marginBottom: 14 }}>
             Imported punchcard baseline: {rollup?.imported_count} prior issue/comment event(s)
             {punchcardSyncedAt ? ` (synced ${when(punchcardSyncedAt)})` : ""}. Google exposes the count and flags,
-            but not the underlying cell-comment text; detailed history below is retained for Rack Status findings from now on.
+            but not the underlying cell-comment text; detailed history below is retained for Greenlight findings from now on.
           </Banner>
         )}
 
         {local.length === 0 ? (
           <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
-            No detailed Rack Status findings have been recorded for this node yet.
+            No detailed Greenlight findings have been recorded for this node yet.
           </Text>
         ) : (
           <TableContainer component={Paper} variant="outlined">

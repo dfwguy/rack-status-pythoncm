@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+  SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+  NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+  property and proprietary rights in and to this material, related
+  documentation and any modifications thereto. Any use, reproduction,
+  disclosure or distribution of this material and related documentation
+  without an express license agreement from NVIDIA CORPORATION or
+  its affiliates is strictly prohibited.
+
+  Author: Rafael M. Koike & Cursor Agent ("Ada")
+
+  NVIS Greenlight primary mark: a rack cabinet in silhouette that is also a signal
+  head, cleared on the bottom lamp.
+
+  The unlit lamps sit at 0.45, not the 0.28 they were first drawn at. Grey on white
+  is far fainter than the same grey on near-black, and at 0.28 the mark collapsed to
+  a single green dot on the light theme while still reading correctly on dark. 0.45
+  holds on both, so this stays one file with no per-theme branching - do not lower it
+  without checking the light theme at 16px.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" role="img" aria-label="NVIS Greenlight">
+  <rect x="6.4" y="1.9" width="11.2" height="20.2" rx="2.8"
+        fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.75"/>
+  <g fill="currentColor" opacity="0.45">
+    <circle cx="12" cy="6.6" r="2.25"/>
+    <circle cx="12" cy="12.0" r="2.25"/>
+  </g>
+  <circle cx="12" cy="17.4" r="2.7" fill="#76B900"/>
+</svg>

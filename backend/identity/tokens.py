@@ -212,7 +212,31 @@ def _effective_issuer() -> str:
 #: extend the life of an expired token and loosen the FR-6 bound for nothing.
 LEEWAY_SECONDS = 0
 
-AUDIENCE = "nvis-rack-status"
+#: Legacy audience. Frozen at the old product name **on purpose**: every HS256 token in existence
+#: carries `aud: nvis-rack-status`, so renaming this would refuse them all. It dies with the HS256
+#: path at FR-19b rather than being migrated.
+AUDIENCE_LEGACY = "nvis-rack-status"
+
+#: The audience under the OIDC provider. Renamed to the launch name, which costs nothing because
+#: the cutover to ES256 already invalidates every outstanding token — one logout, not two.
+AUDIENCE_OIDC = "nvis-greenlight"
+
+
+def audience() -> str:
+    """The `aud` this deployment mints and demands.
+
+    Tied to the provider flag rather than to a rename commit, which is what makes the product rename
+    free: the flag day already ends every session, so a token that used the old audience is gone by
+    the time the new one is in force. Renaming it independently would have meant a *second* mass
+    logout for a change no operator can see.
+    """
+    return AUDIENCE_OIDC if _oidc_mode() else AUDIENCE_LEGACY
+
+
+#: Kept as a module constant because a lot of existing code and tests read `tokens.AUDIENCE`. It
+#: resolves to the legacy value, which is correct for every caller that is not inside a request
+#: under the provider flag; the flag-aware path uses `audience()`.
+AUDIENCE = AUDIENCE_LEGACY
 
 
 class TokenError(Exception):
@@ -339,7 +363,7 @@ def mint(
     now = time.time()
     payload: dict[str, Any] = {
         "iss": _effective_issuer(),
-        "aud": AUDIENCE,
+        "aud": audience(),
         "sub": principal,
         "iat": now,
         "exp": now + float(ttl_seconds),
@@ -441,7 +465,7 @@ def verify(token: str, expect_type: str) -> dict[str, Any]:
             token,
             verifying_key,
             algorithms=[algorithm],  # pinned: rejects alg:none and any substitution (FR-4c)
-            audience=AUDIENCE,
+            audience=audience(),
             issuer=_effective_issuer(),  # without this kwarg PyJWT does not check `iss` at all
             leeway=LEEWAY_SECONDS,
             options={

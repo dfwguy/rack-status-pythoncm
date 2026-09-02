@@ -212,7 +212,7 @@ export function UsersView() {
   if (loading) {
     return (
       <Box sx={{ p: 3 }}>
-        <PageHeader title="Users" description="Manage who can sign in to Rack Status." />
+        <PageHeader title="Users" description="Manage who can sign in to NVIS Greenlight." />
         <Skeleton style={{ height: 320, marginTop: 16 }} />
       </Box>
     );
@@ -222,7 +222,7 @@ export function UsersView() {
     <Box sx={{ p: 3 }}>
       <PageHeader
         title="Users"
-        description="Manage who can sign in to Rack Status. New accounts receive a one-time password and must choose their own at first sign-in."
+        description="Manage who can sign in to NVIS Greenlight. New accounts receive a one-time password and must choose their own at first sign-in."
         actions={
           <Button kind="primary" size="small" onClick={() => setCreating(true)}>
             <UserPlus size={16} />

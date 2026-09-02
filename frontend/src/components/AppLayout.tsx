@@ -48,7 +48,7 @@ export function AppLayout({ sidebar, toolbar, children, breadcrumbs, backendMode
           }}
         >
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-            NVIS Rack Status
+            NVIS Greenlight
           </Text>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
             {backendMode ? `backend: ${backendMode}` : ""}
