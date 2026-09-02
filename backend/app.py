@@ -107,10 +107,11 @@ import native_status
 import nvis_id_templates
 
 # --- optional backend modules (added 2026-07-28) -------------------------------------
-# Both are bind-mounted read-only from the repo (docker-compose.override.yml). A missing
+# Each is bind-mounted read-only from the repo (docker-compose.override.yml). A missing
 # mount, a syntax error or an unavailable stdlib feature MUST degrade to the previous
 # behaviour, never stop the app booting mid cluster bring-up — hence the soft import and
-# the ``is None`` guards at every call site (``_history_enabled`` / ``_universal_enabled``).
+# the ``is None`` guard at every call site (``results_history``, ``_uparse``, ``_bringup``,
+# ``_node_report``).
 try:
     import lake_sink
     import results_history
@@ -164,7 +165,8 @@ except Exception as _catalog_exc:  # pragma: no cover - defensive
 # or worse, one that skipped the bootstrap and has no administrator. `srp` and `PyJWT` are declared
 # runtime dependencies, so an ImportError here is a broken install and should read as one.
 # ---- Host paths, naming and per-request identity now live in their own modules ------------
-# Imported under the existing names so the ~200 call sites below are untouched.
+# Imported under the existing private names, so the call sites that moved to ``backend/api/``
+# did not have to change with them.
 # Request-scoped helpers need Flask, so they live with the API package, not in core.
 import authz
 from api._common import (
@@ -182,9 +184,6 @@ from rack_status_engine import (
     _ai_live_inventory_block,
     _rack_status_cache_clear_all,
 )
-
-# Output basename for Tools → 05-download-containers.sh (must match script).
-
 
 app = Flask(__name__, static_folder=str(REPO_ROOT / "static"), static_url_path="/static")
 _logger = logging.getLogger(__name__)
@@ -256,9 +255,10 @@ _rack_status_exec_lock = threading.Lock()
 
 
 # ---- Configuration resolution lives in config_env.py -------------------------------------
-# Imported under the existing private names so the ~120 _eget / 95 _env_int / 35 _subprocess_env
-# call sites below are untouched by the move. The writer (_job_env_overrides_write) stays in this
-# file: it invalidates the rack-status cache, which config_env has no business knowing about.
+# Imported under the existing private names so the call sites did not change when the ladder
+# moved out — most of them now live in ``backend/api/`` rather than here. The writer
+# (_job_env_overrides_write) stays in this file: it invalidates the rack-status cache, which
+# config_env has no business knowing about.
 import config_env
 from config_env import (
     _STATUS_ROW_ENV_KEYS,
@@ -412,7 +412,7 @@ def _bootstrap_validation_activities_refresh_at_startup() -> None:
 
 
 # One implementation, in the module the API packages can also import. Aliased rather than
-# re-exported under a new name so the 38 call sites here stay untouched.
+# re-exported under a new name so the call sites here stay untouched.
 _truthy_env = core.truthy_env
 _SLURM_STDOUT_RE = core.SLURM_STDOUT_RE
 _slurm_job_base_id = core.slurm_job_base_id
@@ -424,14 +424,6 @@ from activity_hydration import (
 )
 from security_headers import grafana_frame_origin, security_headers
 from web_auth import _auth_enabled, _safe_next, _session_lifetime
-
-# ---------------------------------------------------------------------------
-# Rack-locks helpers: operator label from request, active-job iterator for
-# ``rack_locks.build_lock_snapshot``, and a context manager that registers
-# long-running sync / stream handlers in ``_reset_jobs`` so they show up in
-# the same advisory snapshot the SPA polls.
-# ---------------------------------------------------------------------------
-
 
 _RACK_WEB_SECRET_FILE = (REPO_ROOT / "var" / "secrets" / ".rack_web_secret_key").resolve()
 
@@ -786,6 +778,60 @@ def _require_dashboard_auth():
     return redirect(url_for("auth.login"))
 
 
+@app.before_request
+def _enforce_request_throttle():
+    """Shed before the view function. Registered immediately **after** the auth gate, deliberately.
+
+    The tempting placement is first, so a refused request costs nothing. That is wrong here, and
+    the reason is worth keeping: `g.auth_principal` is set *by* the gate, so a hook running ahead
+    of it sees no principal and falls back to the address for **every** request — which, through an
+    SSH tunnel where the whole team shares `127.0.0.1`, is one bucket for everybody. One operator's
+    bulk operation would throttle their colleagues. Measured, not reasoned: the first version of
+    this ran first and did exactly that.
+
+    Running second costs one token verification per refused request — 0.055 ms for ES256, measured
+    — and still sheds before the view function, the cluster queries and every fan-out. For the
+    unauthenticated routes that matter most (`srp/begin`, ~52 ms of CPU) the gate bypasses
+    verification entirely, so nothing extra is paid there either.
+
+    See `backend/throttle.py` for why the key differs by category.
+    """
+    endpoint = request.endpoint or ""
+    # Static and SPA serving are exempt, and this is a real constraint rather than an optimisation:
+    # TC-29 pins that an asset request does *no* work, and resolving the client address reads
+    # `RACK_WEB_TRUSTED_PROXIES`. Throttling file serving is also the wrong layer -- a proxy or the
+    # OS does that better, and a page load legitimately fetches dozens of hashed chunks at once.
+    # All three SPA endpoints, verified by asking the router rather than guessing: `/assets/...`
+    # and `/index.html` resolve to `serve_root_spa`, `/spa/...` to `serve_spa`, and `/` to `index`.
+    # Exempting only one of them left asset requests reading a setting, which TC-29 caught.
+    if not endpoint or endpoint in ("static", "serve_spa", "serve_root_spa", "index"):
+        return None
+
+    principal = getattr(g, "auth_principal", "") or ""
+    if principal:
+        key = f"principal:{principal}"
+    else:
+        # The same resolver the audit chokepoint uses, so a forwarded header is believed only
+        # from a configured trusted proxy — otherwise a header could mint a fresh allowance per
+        # request and the limit would be decorative.
+        addr, _trust = _api_common.client_addr()
+        key = f"addr:{addr or 'unknown'}"
+
+    allowed, retry_after = throttle.registry().limiter_for(endpoint).check(key)
+    if allowed:
+        return None
+
+    _logger.warning("throttle: refused %s for %s (retry in %.1fs)", endpoint, key, retry_after)
+    response = jsonify({
+        "error": "rate limited",
+        "detail": "too many requests; retry shortly",
+        "retry_after_seconds": int(retry_after) + 1,
+    })
+    response.status_code = 429
+    response.headers["Retry-After"] = str(int(retry_after) + 1)
+    return response
+
+
 def _wsgi_environ_authenticated(environ) -> bool:
     """The gate above, for a request Flask never routes.
 
@@ -819,6 +865,8 @@ web_auth.set_wsgi_authenticator(_wsgi_environ_authenticated)
 # excludes compression, and anything added here that needs to observe the truly final response
 # would be wrong. The accurate invariant is: last among the application's own handlers.
 import audit as _audit
+import throttle
+from api import _common as _api_common
 from audit import request_hook as _audit_request_hook
 
 _audit.configure()
@@ -882,20 +930,6 @@ ai_chat.set_live_inventory_provider(_ai_live_inventory_block)
 
 # last_job / scancel: plain id or job array id (e.g. 12345_0)
 _SLURM_SCANCEL_JOB_ID_RE = core.SLURM_JOB_ID_RE  # one definition, in core
-
-
-# Intermediate artefacts that are SUPERSEDED by an aggregated result log and must not be
-# ingested as runs of their own.
-#
-# llmb-run writes raw sbatch stdout to ``llmb-nccl_nodes_<jobid>.out`` and a collector trace to
-# ``llmb-autocollect_<jobid>.log``; ``collect_llmb_nccl_log.sh`` then aggregates the real result
-# into ``cmods-NCCL-1Rack-<rack>-<N>N-<jobid>.txt``. Ingesting the raw stdout too produced TWO
-# history rows per job, and the raw one is routinely marked ``fail`` because it still contains
-# srun/pmix noise from launch attempts that llmb-run retried successfully — so a passing rack
-# surfaced as failed in the dashboard. Judge a run by its aggregated log, never by sbatch stdout.
-#
-# Override with RACK_UNIVERSAL_SCAN_IGNORE_RE (a full-match regex over the basename); set it to
-# something that matches nothing (e.g. ``$^``) to restore the previous behaviour.
 
 
 _truthy_arg = core.truthy_arg
@@ -1043,9 +1077,6 @@ def index():
     return _serve_spa_asset("index.html")
 
 
-# Strip ``module load <mod> &&`` from command strings for cluster-dashboard display only.
-
-
 @app.route("/spa/")
 @app.route("/spa/<path:path>")
 def serve_spa(path: str = "index.html"):
@@ -1073,7 +1104,7 @@ _api_package.register(app)
 #
 # Coverage is not checked here. FR-14b makes a *missing* declaration fail the build, which is
 # test_audit_actions.py's job — enforcing it at startup would stop a half-migrated tree booting
-# at all, and the declarations span 38 modules.
+# at all, and the declarations are spread across the whole api package.
 import audit.actions as _audit_actions
 from api import _common
 
@@ -1081,6 +1112,7 @@ _audit_actions.build_registry(app)
 
 # After all routes and middleware are registered (avoid circular import via nvftp_cache_sync._eget → app).
 _bootstrap_catalog_at_startup()
+throttle.install(app)  # collect @throttle declarations now every blueprint is registered
 _bootstrap_identity_at_startup()
 _bootstrap_nvftp_sync_at_startup()
 _bootstrap_validation_activities_refresh_at_startup()
@@ -1112,12 +1144,3 @@ if __name__ == "__main__":
         threaded=True,
         ssl_context=_ssl,
     )
-
-# ---------------------------------------------------------------------------------------------
-# Job-attempt capture — a run that never produces a log MUST still be recorded.
-#
-# Job 63850 (MNUBERGEMM, h01) was CANCELLED in the Slurm prolog: RunTime 00:00:00, no stdout file
-# ever created. It therefore left NO trace in the log dir, in results_history, or in the lake — the
-# attempt was invisible even though it consumed an 18-node allocation and drained a tray. Capturing
-# only successful runs is the same blank-read-as-success failure this platform exists to catch.
-# ---------------------------------------------------------------------------------------------

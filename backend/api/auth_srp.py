@@ -39,12 +39,12 @@ import logging
 import time
 
 import core
+import throttle
 import web_auth
 from audit.actions import action
 from flask import Blueprint, g, jsonify, make_response, request
 from identity import principals, revocation, srp, tokens
 from identity.models import IdentityError, canonical_login
-from identity.rate_limit import RateLimiter
 from identity.store import IdentityStore
 
 from . import _common
@@ -56,7 +56,6 @@ bp = Blueprint("auth_srp", __name__, url_prefix="/api/auth")
 #: One limiter for the whole module, keyed by resolved client address. Module-level because the
 #: bucket state must outlive a request; `--workers 1` is already required by the SRP challenge
 #: table, so per-process is per-deployment here.
-_begin_limiter = RateLimiter()
 
 #: Cookie names. `nvis_` prefixed so they cannot collide with the legacy Flask `session` cookie
 #: while both exist during the FR-18 transition.
@@ -160,20 +159,20 @@ def _client_key() -> str:
 
 
 @bp.route("/srp/begin", methods=["POST"])
+@throttle.throttle(10, rationale="~52ms of CPU per call: a 4096-bit SRP exponentiation that FR-4b makes unavoidable for every caller. One worker saturates a core at ~19 req/s, so this is the one route where the limit is the only thing between an anonymous caller and the CPU.")
 @action("auth.srp:begin")
 def srp_begin():
     """Leg 1. Returns the salt and the server's public value `B`.
 
-    The rate-limit check is the FIRST thing this function does, before the store is touched and
-    before `srp.begin` runs its 4096-bit exponentiation. That ordering is FR-4g's actual
-    requirement — shedding after the expensive work protects nothing that matters.
-    """
-    allowed, retry_after = _begin_limiter.check(_client_key())
-    if not allowed:
-        resp = jsonify({"ok": False, "error": "too many authentication attempts"})
-        resp.headers["Retry-After"] = str(max(1, int(retry_after + 0.5)))
-        return resp, 429
+    **Shedding happens before this function is entered**, in `app._enforce_request_throttle`, so the
+    4096-bit exponentiation below is never reached by a refused caller. That ordering is FR-4g's
+    actual requirement — shedding after the expensive work protects nothing that matters.
 
+    This route used to carry its own `RateLimiter`. It was removed when the global throttle landed:
+    two limiters on one route consume separately, so the effective allowance was half of either
+    declared value, and neither number described the behaviour. The limit now lives in the
+    `@throttle.throttle` declaration above, where the rationale sits next to it.
+    """
     body = request.get_json(silent=True) or {}
     login_raw = str(body.get("login") or "").strip()
     a_hex = str(body.get("A") or "").strip()
@@ -217,6 +216,7 @@ def srp_begin():
 
 
 @bp.route("/srp/finish", methods=["POST"])
+@throttle.throttle(20, rationale="also SRP math; 20 rather than 10 because one login is a begin AND a finish, plus room for a retry.")
 @action("auth.srp:finish")
 def srp_finish():
     """Leg 2. Verifies the client's proof and, on success, issues the session cookies."""

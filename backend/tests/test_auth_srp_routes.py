@@ -93,11 +93,8 @@ def client():
 
 @pytest.fixture(autouse=True)
 def _clear_limiter():
-    from api import auth_srp
 
-    auth_srp._begin_limiter.reset()
     yield
-    auth_srp._begin_limiter.reset()
 
 
 class _Client:
@@ -217,10 +214,18 @@ class TestFR4bAnUnknownLoginIsIndistinguishable:
 
 
 class TestFR4gTheBeginRouteShedsLoad:
-    def test_it_refuses_past_the_limit(self, client):
-        from api import auth_srp
+    """FR-4g, now enforced by the shared throttle rather than a route-local limiter.
 
-        limit = auth_srp._begin_limiter.limit
+    The route used to own a `RateLimiter`. It was removed when the global throttle landed, because
+    two limiters on one route consume separately -- the effective allowance was half of either
+    declared value and neither number described the behaviour. The limit is read from the registry
+    here so the test cannot drift from the declaration.
+    """
+
+    def test_it_refuses_past_the_limit(self, client):
+        import throttle
+
+        limit = throttle.registry().limit_for("auth_srp.srp_begin").limit
         payload = {"login": "someone", "A": _Client("someone", "x").start()}
         for _ in range(limit):
             assert client.post("/api/auth/srp/begin", json=payload).status_code == 200
@@ -237,7 +242,12 @@ class TestFR4gTheBeginRouteShedsLoad:
 
         A limiter placed after `srp.begin` returns the same 429 while still paying the ~52 ms. This
         asserts the expensive call is never reached, which is the only way to tell the two apart.
+
+        The guarantee is stronger since the move to a `before_request` hook: the view function is
+        not entered at all, rather than entered and returning early.
         """
+        import throttle
+
         from api import auth_srp
 
         calls: list[tuple] = []
@@ -250,7 +260,7 @@ class TestFR4gTheBeginRouteShedsLoad:
         monkeypatch.setattr(auth_srp.srp, "begin", counting_begin)
 
         payload = {"login": "someone", "A": _Client("someone", "x").start()}
-        for _ in range(auth_srp._begin_limiter.limit):
+        for _ in range(throttle.registry().limit_for("auth_srp.srp_begin").limit):
             client.post("/api/auth/srp/begin", json=payload)
         before = len(calls)
 

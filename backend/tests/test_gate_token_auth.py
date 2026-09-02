@@ -56,9 +56,6 @@ def gated(monkeypatch, tmp_path):
     # in from 127.0.0.1. Without this reset the bucket carries over from whatever ran earlier in the
     # session — so these tests pass alone and 429 in a full run, which is the least useful failure
     # mode there is.
-    from api import auth_srp
-
-    auth_srp._begin_limiter.reset()
 
     store = IdentityStore(str(tmp_path / "identity.json"))
     try:

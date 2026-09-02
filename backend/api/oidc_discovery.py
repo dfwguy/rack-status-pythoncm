@@ -27,6 +27,7 @@ spelled as a module-derived prefix.
 
 from __future__ import annotations
 
+import throttle
 from flask import Blueprint, jsonify
 from identity import keys as keys_mod
 from identity import oidc
@@ -50,6 +51,7 @@ def _disabled():
 
 
 @bp.get("/.well-known/openid-configuration")
+@throttle.throttle(120, rationale="memoised document; a client fetches it at cold start. Generous because refusing discovery breaks configuration rather than degrading it.")
 def openid_configuration():
     """OIDC Discovery 1.0 §4. Advertises only what this build actually serves (FR-5)."""
     if not oidc.enabled():
@@ -67,6 +69,7 @@ def openid_configuration():
 
 
 @bp.get("/.well-known/jwks.json")
+@throttle.throttle(120, rationale="in-memory key set. Consumers are told to refresh hourly, so 2/s is far above real use.")
 def jwks():
     """The JWK Set: the public half of every currently valid verification key (FR-6)."""
     if not oidc.enabled():

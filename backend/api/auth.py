@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 
+import throttle
 from audit.actions import action
 from flask import Blueprint, jsonify, redirect, request, session
 from web_auth import _auth_enabled, _auth_user
@@ -41,6 +42,7 @@ _logger = logging.getLogger("rack_web.api.auth")
 bp = Blueprint("auth", __name__, url_prefix="")
 
 
+@throttle.throttle(60, rationale="serves the SPA shell; cheap, but anonymous.")
 @bp.route("/login", methods=["GET"])
 def login():
     """Serve the SPA shell; the React LoginPage drives the SRP exchange.
@@ -63,6 +65,7 @@ def logout():
     return redirect("/")
 
 
+@throttle.throttle(120, rationale="one token verification. The SPA calls it on mount and after every renewal, so it must clear normal use comfortably.")
 @bp.route("/api/auth-check")
 def api_auth_check():
     """Whether this request carries a valid credential. 401 when it does not.

@@ -101,3 +101,18 @@ def _reset_naming_caches():
     native_status.invalidate_job_env_file_cache()
     yield
     native_status.invalidate_job_env_file_cache()
+
+
+@pytest.fixture(autouse=True)
+def _reset_request_throttle():
+    """Clear the global throttle buckets between tests.
+
+    The limiter is deliberately process-global -- that is what makes it a limit -- so without this
+    one test's burst spends the allowance the next test needs, and the failure surfaces in an
+    unrelated file. Forty-five tests failed exactly that way when the throttle first landed.
+    """
+    import throttle
+
+    throttle.registry().reset_for_tests()
+    yield
+    throttle.registry().reset_for_tests()

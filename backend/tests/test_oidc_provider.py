@@ -339,7 +339,15 @@ class TestTheBypassingRoutesAuthenticateThemselves:
 
 
 class TestAuthorizeShedsLoad:
-    """NFR-6, AC-24b. Counted rather than timed, so it does not turn flaky on a loaded runner."""
+    """NFR-6, AC-24b, via the shared throttle rather than a route-local limiter.
+
+    `/authorize` originally carried its own `RateLimiter`. It was removed when the global throttle
+    landed: two limiters on one route consume separately, so the effective allowance was half of
+    either declared number and neither described the behaviour. The declaration now sits on the
+    view; enforcement is `app._enforce_request_throttle`.
+
+    Counted rather than timed, so a loaded runner cannot make this flaky.
+    """
 
     def test_a_flood_is_refused_before_any_code_is_minted(self, signed_in):
         """The point of shedding early: the expensive work must never start.
@@ -347,41 +355,46 @@ class TestAuthorizeShedsLoad:
         A flood here would evict legitimate codes from the bounded table before they could be
         redeemed -- a denial of service against login rather than against the server.
         """
-        from api import oidc_provider
         from identity import oidc_codes
 
-        oidc_provider._authorize_limiter.reset()
         oidc_codes.store().reset()
 
         statuses = [_authorize(signed_in)[0].status_code for _ in range(40)]
 
-        assert 429 in statuses, "the limiter never shed"
+        assert 429 in statuses, "the throttle never shed"
         assert oidc_codes.store().outstanding() <= 30, (
             "a refused request must not have minted a code"
         )
 
     def test_the_refusal_says_when_to_retry(self, signed_in):
-        from api import oidc_provider
 
-        oidc_provider._authorize_limiter.reset()
         resp = None
         for _ in range(40):
             resp, _ = _authorize(signed_in)
             if resp.status_code == 429:
                 break
 
-        assert resp.status_code == 429
-        assert resp.get_json()["error"] == "temporarily_unavailable"
+        assert resp is not None and resp.status_code == 429
+        assert resp.get_json()["error"] == "rate limited"
         assert int(resp.headers["Retry-After"]) >= 1
 
     def test_normal_use_is_never_shed(self, signed_in):
         """A limit that fires during ordinary work is a bug, not a control. An interactive
         authorization is a human clicking a button."""
-        from api import oidc_provider
 
-        oidc_provider._authorize_limiter.reset()
         for _ in range(5):
             assert _authorize(signed_in)[0].status_code == 302
+
+
+class TestTheDeclaredLimitIsWhatIsEnforced:
+    def test_authorize_declares_thirty_and_the_installer_collected_it(self):
+        """A declaration the installer never picked up would fall back to the authenticated
+        default, which is thirty times looser -- and nothing would say so."""
+        import throttle
+
+        declared = throttle.registry().declared()
+        assert "oidc_provider.authorize" in declared
+        assert declared["oidc_provider.authorize"].limit == 30
 
 
 class TestTokenTypeConfusion:
