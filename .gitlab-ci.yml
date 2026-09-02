@@ -139,6 +139,47 @@ python-test:
     reports:
       junit: report-python.xml
 
+auth-benchmark:
+  stage: test
+  image: python:3.12-slim
+  # RECORDS, NEVER GATES. A runner is a noisy shared machine, so a latency assertion here would
+  # fail on unrelated commits — and a perf job that cries wolf is one somebody sets to
+  # allow_failure and then stops reading. `bin/bench-auth.py` always exits 0 by design; this
+  # `allow_failure` covers the job's own plumbing (deps, artifacts), not the numbers.
+  allow_failure: true
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .pip-cache/
+  script:
+    - pip install -q -r backend/requirements.txt
+    # The line to read first in the log. `srp.begin` is ~1,400x every other operation and the two
+    # SRP backends differ by ~2x, so the backend decides what the rest of the output means. It is
+    # picked by whether libssl can be dlopen'd — not by us — so a base-image bump can change it
+    # silently. `python:3.12-slim` ships libssl.so.3 while the package asks for libssl.so.1.1,
+    # which is why we expect the pure-Python fallback here; this job is how we find out when that
+    # stops being true.
+    - python -c "import srp; print('SRP backend:', srp._mod.__name__)"
+    - |
+      D=$(mktemp -d)
+      RACK_WEB_SECRET_KEY=ci-benchmark-not-a-credential \
+      NVIS_IDENTITY_FILE=$D/identity.json \
+      RACK_WEB_SIGNING_KEY_DIR=$D/oidc \
+        python bin/bench-auth.py --metrics auth-metrics.txt --json auth-bench.json
+      rm -rf "$D"
+  artifacts:
+    when: always
+    expire_in: 1 year
+    paths:
+      # The durable series. Kept a year because the value is the trend, and it carries the
+      # environment beside the numbers — a latency history whose hardware is unrecorded cannot be
+      # reasoned about later, which is the exact mistake docs/PERFORMANCE_BASELINE.md had to unpick.
+      - auth-bench.json
+    reports:
+      # GitLab diffs these against the target branch and shows the change on the merge request, so
+      # a regression is visible where it is introduced rather than in a dashboard nobody opens.
+      metrics: auth-metrics.txt
+
 frontend-test:
   stage: test
   image: node:22-slim

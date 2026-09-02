@@ -125,6 +125,35 @@ D=$(mktemp -d) && RACK_WEB_SECRET_KEY=k NVIS_IDENTITY_FILE=$D/i.json \
   RACK_WEB_SIGNING_KEY_DIR=$D/oidc .venv/bin/python bin/bench-auth.py; rm -rf "$D"
 ```
 
+## Tracking this over time in CI
+
+The `auth-benchmark` job runs `bin/bench-auth.py` on every pipeline in `python:3.12-slim` and
+publishes two things:
+
+- **`auth-metrics.txt`** as a GitLab `reports:metrics` artifact. GitLab diffs it against the target
+  branch and shows the change **on the merge request**, so a regression appears where it was
+  introduced rather than in a dashboard nobody opens.
+- **`auth-bench.json`**, kept for a year, carrying the environment beside the numbers. A latency
+  history whose hardware is unrecorded cannot be reasoned about later — which is exactly the
+  problem finding 2 above had to unpick.
+
+**It records; it does not gate.** `allow_failure: true`, and the script returns 0 unconditionally.
+A runner is a noisy shared machine, so a latency assertion would fail on commits that changed
+nothing — and a perf job that cries wolf is one somebody silences and then stops reading. The
+`allow_failure` covers the job's own plumbing, not the numbers.
+
+**The first line of the log is the one to read**, because the SRP backend decides what the rest
+means. `python:3.12-slim` ships `libssl.so.3` while the `srp` package asks for `libssl.so.1.1`, so
+the pure-Python fallback is expected in CI — but that is a property of the base image, not a
+guarantee. If a bump ever makes `_ctsrp` bind, login times will roughly halve, the
+`auth_srp_backend_is_openssl` metric flips from 0 to 1, and this job is how anyone finds out. That
+metric exists precisely so the halving is not mistaken for a code change.
+
+`backend/tests/test_bench_auth.py` guards the harness rather than the timings: that results are
+recorded, that the environment travels with them, that the OpenMetrics lines parse, and that the
+**metric names have not changed** — GitLab keys a series by name, so a rename silently discards the
+history this job exists to build.
+
 ## Service expectations at this spec
 
 Derived from the table, for the deployment shape this product actually has (one worker, ~20

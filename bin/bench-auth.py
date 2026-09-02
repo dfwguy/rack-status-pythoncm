@@ -29,6 +29,7 @@ CPU — the SRP section alone is a few seconds of a saturated core.
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -50,6 +51,24 @@ SRP_ITERATIONS = 20
 FAST_ITERATIONS = 300
 
 
+#: Filled by `bench`, drained by the writers. A module-level accumulator rather than threading a
+#: collector through every call, because the alternative is a signature change on every line of
+#: `main` for no readability gain.
+RESULTS: list[dict[str, object]] = []
+
+
+def _metric_name(label: str) -> str:
+    """A stable OpenMetrics-safe name for a human label.
+
+    Stability matters more than prettiness: GitLab tracks a metric across pipelines by name, so
+    renaming one silently starts a new series and loses the history this job exists to build.
+    """
+    keep = []
+    for ch in label.lower():
+        keep.append(ch if (ch.isalnum() or ch == "_") else "_")
+    return "auth_" + "_".join(filter(None, "".join(keep).split("_")))
+
+
 def bench(label: str, fn, iterations: int) -> tuple[float, float]:
     """Return (p50, p95) in milliseconds.
 
@@ -67,10 +86,86 @@ def bench(label: str, fn, iterations: int) -> tuple[float, float]:
     p95 = samples[int(len(samples) * 0.95)]
     ceiling = 1000.0 / p50 if p50 else float("inf")
     print(f"  {label:<36} p50={p50:9.3f}ms  p95={p95:9.3f}ms  ceiling={ceiling:10.1f}/s")
+    RESULTS.append({
+        "label": label,
+        "metric": _metric_name(label),
+        "p50_ms": round(p50, 4),
+        "p95_ms": round(p95, 4),
+        "ceiling_per_s": round(ceiling, 1),
+        "iterations": iterations,
+    })
     return p50, p95
 
 
+def _environment() -> dict[str, object]:
+    import srp as srp_lib
+
+    return {
+        "arch": platform.machine(),
+        "system": f"{platform.system()} {platform.release()}",
+        "python": sys.version.split()[0],
+        "cores": os.cpu_count(),
+        # The single most important field. `srp.begin` dominates every other cost and the two
+        # backends differ by ~2x, so a run without this label is not comparable to anything.
+        "srp_backend": srp_lib._mod.__name__,
+        "container": os.path.exists("/.dockerenv"),
+        "ci": bool(os.environ.get("CI")),
+        "commit": os.environ.get("CI_COMMIT_SHORT_SHA", ""),
+        "pipeline": os.environ.get("CI_PIPELINE_ID", ""),
+    }
+
+
+def write_metrics(path: Path, env: dict[str, object]) -> None:
+    """OpenMetrics text, which is what GitLab's `reports:metrics` consumes.
+
+    That format is the point of this job: GitLab diffs these values against the target branch and
+    shows the change on the merge request, so a regression is visible where it is introduced rather
+    than in a dashboard nobody opens.
+
+    The SRP backend rides along as a label on every metric. Without it a 2x jump would look like a
+    performance regression when it is really a base-image change, and somebody would spend a day
+    on it.
+    """
+    backend = str(env["srp_backend"]).rsplit(".", 1)[-1]
+    lines = [
+        "# Auth path latency. Lower is better. See docs/PERFORMANCE_BASELINE.md.",
+        f'auth_srp_backend_is_openssl{{backend="{backend}"}} {1 if backend == "_ctsrp" else 0}',
+    ]
+    for row in RESULTS:
+        labels = f'{{backend="{backend}",arch="{env["arch"]}"}}'
+        lines.append(f'{row["metric"]}_p50_ms{labels} {row["p50_ms"]}')
+        lines.append(f'{row["metric"]}_p95_ms{labels} {row["p95_ms"]}')
+    path.write_text("\n".join(lines) + "\n")
+    print(f"  wrote {len(RESULTS) * 2 + 1} metrics to {path}")
+
+
+def write_json(path: Path, env: dict[str, object]) -> None:
+    """The durable record. Keeps the environment beside the numbers, permanently.
+
+    A latency series whose hardware is unrecorded cannot be reasoned about later — which is the
+    mistake `docs/PERFORMANCE_BASELINE.md` had to unpick when our own ~52 ms figure turned out to
+    have been measured on a different SRP backend.
+    """
+    payload = {
+        "schema": "nvis-greenlight/auth-bench/v1",
+        "measured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "environment": env,
+        "results": RESULTS,
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    print(f"  wrote {path}")
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--metrics", type=Path, help="write OpenMetrics text for GitLab")
+    parser.add_argument("--json", type=Path, dest="json_out", help="write the durable record")
+    parser.add_argument(
+        "--quick", action="store_true",
+        help="fewer iterations — a smoke check, NOT a recorded baseline",
+    )
+    args = parser.parse_args()
+
     import srp as srp_lib
     from authz import policy as authz_policy
     from identity import keys as keys_mod
@@ -79,6 +174,12 @@ def main() -> int:
 
     srp_lib.rfc5054_enable(srp_mod.RFC5054_COMPAT)
     revocation.install()
+
+    # `--quick` trades precision for wall time. Named as unsuitable for a baseline in the help
+    # text because a 3-sample p95 is noise, and a number that looks like a measurement is worse
+    # than an obviously missing one.
+    srp_iterations = 3 if args.quick else SRP_ITERATIONS
+    fast_iterations = 40 if args.quick else FAST_ITERATIONS
 
     print("=== environment ===")
     print(f"  arch/system  {platform.machine()} / {platform.system()} {platform.release()}")
@@ -96,7 +197,7 @@ def main() -> int:
 
     print("=== SRP (4096-bit) — the dominant cost in the product ===")
     bench("srp.enroll (create/reset credential)",
-          lambda: srp_mod.enroll("bench", password), SRP_ITERATIONS)
+          lambda: srp_mod.enroll("bench", password), srp_iterations)
 
     def one_begin() -> None:
         user = srp_lib.User("bench", password,
@@ -104,17 +205,17 @@ def main() -> int:
         _name, a_value = user.start_authentication()
         srp_mod.begin("bench", salt, verifier, a_value.hex())
 
-    begin_p50, _ = bench("srp.begin (login leg 1)", one_begin, SRP_ITERATIONS)
+    begin_p50, _ = bench("srp.begin (login leg 1)", one_begin, srp_iterations)
 
     print()
     print("=== tokens ===")
     keys_mod.key_set().ensure()
 
     bench("mint  HS256 (provider off)",
-          lambda: tokens.mint("user:bench", tokens.TOKEN_ACCESS), FAST_ITERATIONS)
+          lambda: tokens.mint("user:bench", tokens.TOKEN_ACCESS), fast_iterations)
     hs_token = tokens.mint("user:bench", tokens.TOKEN_ACCESS)
     bench("verify HS256 (provider off)",
-          lambda: tokens.verify(hs_token, tokens.TOKEN_ACCESS), FAST_ITERATIONS)
+          lambda: tokens.verify(hs_token, tokens.TOKEN_ACCESS), fast_iterations)
 
     os.environ["RACK_WEB_OIDC_ENABLED"] = "1"
     os.environ.setdefault("RACK_WEB_OIDC_ISSUER", "https://bench.example.com")
@@ -123,11 +224,11 @@ def main() -> int:
     oidc_mod.reset_for_tests()
 
     bench("mint  ES256 (provider on)",
-          lambda: tokens.mint("user:bench", tokens.TOKEN_ACCESS), FAST_ITERATIONS)
+          lambda: tokens.mint("user:bench", tokens.TOKEN_ACCESS), fast_iterations)
     es_token = tokens.mint("user:bench", tokens.TOKEN_ACCESS)
     bench("verify ES256 (provider on)",
-          lambda: tokens.verify(es_token, tokens.TOKEN_ACCESS), FAST_ITERATIONS)
-    bench("jwks render", lambda: keys_mod.key_set().public_jwks(), FAST_ITERATIONS)
+          lambda: tokens.verify(es_token, tokens.TOKEN_ACCESS), fast_iterations)
+    bench("jwks render", lambda: keys_mod.key_set().public_jwks(), fast_iterations)
 
     print()
     print("=== authorization ===")
@@ -143,12 +244,25 @@ def main() -> int:
         ]}))
         engine = authz_policy.PolicyEngine(policy_file, group_lookup=lambda _p: ("ops",))
         bench("policy eval (50 statements)",
-              lambda: engine.evaluate("user:bench", "svc49.act:do", "rack:a01"), FAST_ITERATIONS)
+              lambda: engine.evaluate("user:bench", "svc49.act:do", "rack:a01"), fast_iterations)
 
     print()
     print(f"=== summary: srp.begin is {begin_p50:.1f} ms, so the login ceiling is "
           f"{1000.0 / begin_p50:.1f}/s on ONE core ===")
     print("  More cores will not raise it. See docs/PERFORMANCE_BASELINE.md, finding 1.")
+
+    env = _environment()
+    if args.metrics:
+        write_metrics(args.metrics, env)
+    if args.json_out:
+        write_json(args.json_out, env)
+
+    # Deliberately always 0. This job RECORDS, it does not gate.
+    #
+    # A CI runner is a noisy shared machine; a latency assertion on one would fail on unrelated
+    # commits, and a perf test that cries wolf is a perf test somebody disables with `allow_failure`
+    # and then ignores. Making the numbers visible on the merge request is the useful half, and it
+    # costs nobody a red pipeline they cannot act on.
     return 0
 
 
