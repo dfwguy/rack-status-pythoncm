@@ -767,7 +767,7 @@
             "Select the target nodes and open Hardware or Networking.",
             "Click Start Tests on the deep-audit card; confirmed failures are commented and drained in Slurm.",
             "Click Results beside Start Tests for the per-node audit result and corrective action.",
-            "Click ▲n in the node selector to see validation participation, evidence-attributed failures, and detailed Rack Status findings."
+            "Click ▲n in the node selector to see validation participation, evidence-attributed failures, and detailed Greenlight findings."
           ]
         }
       ],
@@ -1696,7 +1696,7 @@
       "domain": "Observability",
       "routePath": "/observability/metrics",
       "summary": "Live GPU, platform, and exporter time series from VictoriaMetrics.",
-      "description": "The Metrics page renders the live chart catalog returned by Rack Status' read-only VictoriaMetrics API. Use the rack and time-window selectors to inspect GPU temperature, power, utilization, NVLink, exporter, and infrastructure series. Raw BCM labels remain the query keys, while the UI displays short rack monikers such as d01, e01, f01, g01, and h01. An empty chart is reported as no data; Rack Status never substitutes a zero or mock series.",
+      "description": "The Metrics page renders the live chart catalog returned by Greenlight's read-only VictoriaMetrics API. Use the rack and time-window selectors to inspect GPU temperature, power, utilization, NVLink, exporter, and infrastructure series. Raw BCM labels remain the query keys, while the UI displays short rack monikers such as d01, e01, f01, g01, and h01. An empty chart is reported as no data; Greenlight never substitutes a zero or mock series.",
       "features": [
         "Live Chart.js time-series panels backed by VictoriaMetrics.",
         "Rack and 15-minute, 1-hour, 6-hour, or 24-hour window filters.",
@@ -2489,7 +2489,7 @@
       "domain": "Analytics & Benchmarks",
       "routePath": "/analytics/overview",
       "summary": "Rack-level and node-level analytics, plus the cluster and customer-schema reports.",
-      "description": "The Analytics page has two tabs. Rack Level aggregates rack and benchmark data into cluster-wide charts and tables — validation pass rates, NCCL/NEMO benchmark trends, and comparisons across racks. Node Level shows a heatmap with one square per node, coloured by a selectable data view (node up/down, test completion, or any bring-up benchmark that produces a metric such as NCCL busbw), with each node's up/down state always drawn as the square's border. The Compact layout tiles racks eight across as blocks of trays so a whole floor fits on one screen; Linear gives each rack its own row and shows a load gauge per node. The heatmap can be downloaded as a PNG or JPEG image. The Rack Level tab carries a report generator offering two reports: the Rack Status standard report (cluster details plus a row per node, as CSV, JSON, or a PDF with rack-level charts) and the Nscale TX JSON schema report (the customer's Consolidated Test Plan contract, schema-validated before download).",
+      "description": "The Analytics page has two tabs. Rack Level aggregates rack and benchmark data into cluster-wide charts and tables — validation pass rates, NCCL/NEMO benchmark trends, and comparisons across racks. Node Level shows a heatmap with one square per node, coloured by a selectable data view (node up/down, test completion, or any bring-up benchmark that produces a metric such as NCCL busbw), with each node's up/down state always drawn as the square's border. The Compact layout tiles racks eight across as blocks of trays so a whole floor fits on one screen; Linear gives each rack its own row and shows a load gauge per node. The heatmap can be downloaded as a PNG or JPEG image. The Rack Level tab carries a report generator offering two reports: the rack status standard report (cluster details plus a row per node, as CSV, JSON, or a PDF with rack-level charts) and the Nscale TX JSON schema report (the customer's Consolidated Test Plan contract, schema-validated before download).",
       "features": [
         "Rack Level: cluster-wide aggregate charts, benchmark trends, cross-rack comparisons.",
         "Node Level: per-node heatmap grouped by rack, with a data-view selector.",
@@ -2498,7 +2498,7 @@
         "Up/down state shown as each cell's border on every view.",
         "Metric views scale against the fleet's observed range, stated in the legend.",
         "Download image: the heatmap as a report-ready PNG or JPEG with title, legend and timestamp.",
-        "Report generator (Rack Level tab): the Rack Status report as CSV/JSON/PDF, or the Nscale TX schema report as validated JSON. Both sweep every node for hardware and firmware identity, with a progress bar."
+        "Report generator (Rack Level tab): the rack status report as CSV/JSON/PDF, or the Nscale TX schema report as validated JSON. Both sweep every node for hardware and firmware identity, with a progress bar."
       ],
       "howTo": [
         {
@@ -2577,7 +2577,7 @@
         "label": "Analytics page",
         "description": "Rack-level and node-level analytics with downloadable cluster reports."
       },
-      "aiContext": "The Analytics page has a Rack Level tab (cluster-wide aggregate charts: validation pass rates, NCCL/NEMO trends, cross-rack comparisons) and a Node Level tab (per-node heatmap grouped by rack; the fill is a selectable view — node up/down, test completion, or a bring-up metric like NCCL busbw — and the border always shows up/down). Test completion counts a test as done once it has a verdict, pass or fail, so it answers 'has this node been tested' rather than 'did it pass'. Two layouts: Compact tiles racks eight across as tray blocks with a per-rack good/warn/bad tally (the whole floor on one screen), Linear gives each rack a row and each node a load gauge. Metric views auto-scale to the fleet's observed range. Download image renders the heatmap to a light-background PNG/JPEG with title, legend, cluster and timestamp baked in, drawn on a canvas so it does not depend on the UI theme. The Rack Level tab carries a report generator with two reports. The Rack Status standard report renders one dataset as CSV, JSON, or a PDF with an executive summary and rack-level charts. The Nscale TX JSON schema report answers the customer's Consolidated Test Plan contract and is validated against the vendored schema before download, so it is JSON only; fields bring-up cannot measure are marked TBD for the operator to edit. Both reports share one fleet sweep of per-node hardware and firmware identity — asking twice while a sweep runs joins the running job rather than starting a second one — and report progress per node. PDF is only offered when the image can render it."
+      "aiContext": "The Analytics page has a Rack Level tab (cluster-wide aggregate charts: validation pass rates, NCCL/NEMO trends, cross-rack comparisons) and a Node Level tab (per-node heatmap grouped by rack; the fill is a selectable view — node up/down, test completion, or a bring-up metric like NCCL busbw — and the border always shows up/down). Test completion counts a test as done once it has a verdict, pass or fail, so it answers 'has this node been tested' rather than 'did it pass'. Two layouts: Compact tiles racks eight across as tray blocks with a per-rack good/warn/bad tally (the whole floor on one screen), Linear gives each rack a row and each node a load gauge. Metric views auto-scale to the fleet's observed range. Download image renders the heatmap to a light-background PNG/JPEG with title, legend, cluster and timestamp baked in, drawn on a canvas so it does not depend on the UI theme. The Rack Level tab carries a report generator with two reports. The rack status standard report renders one dataset as CSV, JSON, or a PDF with an executive summary and rack-level charts. The Nscale TX JSON schema report answers the customer's Consolidated Test Plan contract and is validated against the vendored schema before download, so it is JSON only; fields bring-up cannot measure are marked TBD for the operator to edit. Both reports share one fleet sweep of per-node hardware and firmware identity — asking twice while a sweep runs joins the running job rather than starting a second one — and report progress per node. PDF is only offered when the image can render it."
     },
     {
       "id": "postRunNodeReport",
@@ -2586,7 +2586,7 @@
       "domain": "Analytics & Benchmarks",
       "routePath": "/analytics/post-run-nodes",
       "summary": "Floor-style node validation participation, failure trends, deep audits, and Slurm status.",
-      "description": "The Post Run Node Report is built from Rack Status validation activities joined to exact Slurm allocations. It counts every validation a node participated in, attributes failures only when evidence names that node, flags repeat failures across distinct runs, and preserves the snapshot after Slurm accounting ages out. Hardware and NVLink/network reports are available as persistent sections. Selecting a node shows Job IDs, categories, findings, current Slurm reason, and controls for immediate deep audits or an explicit operator mark/drain.",
+      "description": "The Post Run Node Report is built from Greenlight validation activities joined to exact Slurm allocations. It counts every validation a node participated in, attributes failures only when evidence names that node, flags repeat failures across distinct runs, and preserves the snapshot after Slurm accounting ages out. Hardware and NVLink/network reports are available as persistent sections. Selecting a node shows Job IDs, categories, findings, current Slurm reason, and controls for immediate deep audits or an explicit operator mark/drain.",
       "features": [
         "Punchcard-style floor view grouped by rack, with run and attributed-failure counts per node.",
         "Increasing, decreasing, flat, and new failure trends; a repeat flag requires at least three findings across three distinct runs.",
@@ -2613,7 +2613,7 @@
             "Open the node from the floor view.",
             "Choose an evidence category and enter the exact reason.",
             "Enable the Slurm drain option.",
-            "Confirm the exact node; Rack Status records the finding and applies the generated Slurm reason."
+            "Confirm the exact node; Greenlight records the finding and applies the generated Slurm reason."
           ]
         }
       ],
@@ -2654,7 +2654,7 @@
       "summary": "Download saved cluster reports, plus bug report and NVLMapper archives.",
       "description": "The Reports page holds two separate things. Generated reports are the cluster and customer-schema documents produced from Analytics > Rack Level; each is saved when it finishes, so you can start a report, leave the page, and download it here later — a fleet sweep takes minutes and is no longer lost by navigating away. Rows show the report type, format, when it was generated, the node count it covers, and any schema errors, and can be downloaded or deleted. Below that, the bug report section lists NVIDIA bug report archives, NVLMapper outputs and Excel exports already present in the reports directory on this dashboard host.",
       "features": [
-        "Generated Rack Status (CSV/JSON/PDF) and Nscale TX schema (JSON) reports, saved automatically when they finish.",
+        "Generated rack status (CSV/JSON/PDF) and Nscale TX schema (JSON) reports, saved automatically when they finish.",
         "Reports survive leaving the page and a container restart; the most recent are kept and older ones pruned.",
         "Schema errors are shown on the row, so a report that failed validation is visible without regenerating it.",
         "Separate listing of nvidia-bug-report archives, NVLMapper CSV/XLS and parser Excel exports from the reports directory."
@@ -2706,8 +2706,8 @@
       "id": "identityUsers",
       "kind": "view",
       "title": "Users",
-      "domain": "Access",
-      "routePath": "/access/users",
+      "domain": "Identity",
+      "routePath": "/identity/users",
       "summary": "Who can sign in; create accounts, reset passwords, disable and delete.",
       "description": "Users manages the local identity store. Accounts authenticate with SRP, so the server holds a verifier and never a password — which shapes everything on this page. A new user receives a one-time password shown exactly once and must choose their own at first sign-in; a reset issues a fresh one and signs the previous holder out everywhere. A login is the principal in every audit record: it cannot be renamed, and once deleted it is retired permanently and can never be created again, because reusing it would reattribute a departed operator's history to somebody else. Disable is the reversible operation; delete is not.",
       "features": [
@@ -2773,8 +2773,8 @@
       "id": "identityGroups",
       "kind": "view",
       "title": "Groups",
-      "domain": "Access",
-      "routePath": "/access/groups",
+      "domain": "Identity",
+      "routePath": "/identity/groups",
       "summary": "Organise users into flat groups; membership is how grants will be conferred.",
       "description": "Groups collect users for authorization. Groups are flat — a group holds users and never another group — so there is no nesting to reason about and no inherited membership. Membership recorded now takes effect when the policy engine lands: today authorization is permissive for every signed-in user, so a group grants nothing yet and this page is not restricting access. A group name is its identifier and cannot be changed; deleting a group removes its memberships but leaves the users untouched.",
       "features": [

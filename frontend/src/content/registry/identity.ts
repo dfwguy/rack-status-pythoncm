@@ -11,7 +11,7 @@
  */
 
 /**
- * Knowledge-registry entries for the Access domain — user and group administration.
+ * Knowledge-registry entries for the Identity domain — user and group administration.
  *
  * These feed the contextual help panel and the AI context, so the wording carries the constraints
  * an operator will otherwise discover by hitting a refusal: a login is permanent and never reused,
@@ -21,13 +21,13 @@
 
 import type { HelpContent } from "../types";
 
-export const accessContent: HelpContent[] = [
+export const identityContent: HelpContent[] = [
   {
     id: "identityUsers",
     kind: "view",
     title: "Users",
-    domain: "Access",
-    routePath: "/access/users",
+    domain: "Identity",
+    routePath: "/identity/users",
     summary: "Who can sign in; create accounts, reset passwords, disable and delete.",
     description:
       "Users manages the local identity store. Accounts authenticate with SRP, so the server holds a verifier and never a password — which shapes everything on this page. A new user receives a one-time password shown exactly once and must choose their own at first sign-in; a reset issues a fresh one and signs the previous holder out everywhere. A login is the principal in every audit record: it cannot be renamed, and once deleted it is retired permanently and can never be created again, because reusing it would reattribute a departed operator's history to somebody else. Disable is the reversible operation; delete is not.",
@@ -80,8 +80,8 @@ export const accessContent: HelpContent[] = [
     id: "identityGroups",
     kind: "view",
     title: "Groups",
-    domain: "Access",
-    routePath: "/access/groups",
+    domain: "Identity",
+    routePath: "/identity/groups",
     summary: "Organise users into flat groups; membership is how grants will be conferred.",
     description:
       "Groups collect users for authorization. Groups are flat — a group holds users and never another group — so there is no nesting to reason about and no inherited membership. Membership recorded now takes effect when the policy engine lands: today authorization is permissive for every signed-in user, so a group grants nothing yet and this page is not restricting access. A group name is its identifier and cannot be changed; deleting a group removes its memberships but leaves the users untouched.",

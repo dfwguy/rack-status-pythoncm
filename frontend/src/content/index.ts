@@ -25,7 +25,7 @@ import { observabilityContent } from "./registry/observability";
 import { toolsContent } from "./registry/tools";
 import { workflowContent } from "./registry/workflow";
 import { analyticsContent } from "./registry/analytics";
-import { accessContent } from "./registry/access";
+import { identityContent } from "./registry/identity";
 import { platformContent } from "./registry/platform";
 import { shellContent } from "./registry/shell";
 
@@ -41,7 +41,7 @@ export const ALL_CONTENT: HelpContent[] = [
   ...toolsContent,
   ...workflowContent,
   ...analyticsContent,
-  ...accessContent,
+  ...identityContent,
   ...platformContent,
   ...shellContent,
 ];

@@ -522,6 +522,86 @@ class TestConfiguration:
         assert K.key_set().directory == tmp_path / "b"
 
 
+class TestThePrivateKeyStaysOutOfEveryObservable:
+    """NFR-3, AC-25a. Five named observables, because "never appears in a log line" is untestable.
+
+    The draft requirement quantified over every future log statement, which no test can establish.
+    These are the five places it would realistically leak, each of which a test can actually check.
+    """
+
+    def _secret_bytes(self, key):
+        return key.private.private_numbers().private_value.to_bytes(32, "big")
+
+    def test_it_is_not_in_the_jwks(self, key_dir, month_tokens):
+        ks = _set(key_dir, 18 * MONTH)
+        key = ks.ensure(now=T0)
+        rendered = json.dumps(ks.public_jwks(now=T0))
+        assert K._b64u(self._secret_bytes(key)) not in rendered
+
+    def test_it_is_not_in_the_repr_or_str_of_the_holder(self, key_dir, month_tokens):
+        """A dataclass `repr` that dumps the key object is how a secret reaches a traceback."""
+        key = _set(key_dir, 18 * MONTH).ensure(now=T0)
+        secret = str(key.private.private_numbers().private_value)
+
+        for rendering in (repr(key), str(key), repr(key.private), str(key.private)):
+            assert secret not in rendering
+            assert "BEGIN" not in rendering
+
+    def test_it_is_not_in_the_pem_path_or_the_metadata(self, key_dir, month_tokens):
+        """The PEM on disk holds it by necessity; the metadata index must not."""
+        ks = _set(key_dir, 18 * MONTH)
+        ks.ensure(now=T0)
+        meta = (key_dir / "keys.json").read_text()
+        assert "BEGIN" not in meta and "PRIVATE" not in meta
+
+    def test_it_is_not_in_an_error_raised_on_a_bad_key_set(self, key_dir, month_tokens):
+        """A message that quotes file contents to be helpful is a common leak."""
+        ks = _set(key_dir, 18 * MONTH)
+        key = ks.ensure(now=T0)
+        pem = (key_dir / f"{key.kid}.pem").read_text()
+        (key_dir / f"{key.kid}.pem").rename(key_dir / "moved.pem")
+        meta = json.loads((key_dir / "keys.json").read_text())
+        meta["keys"][0]["kid"] = "moved"
+        (key_dir / "keys.json").write_text(json.dumps(meta))
+        K.reset_for_tests()
+
+        with pytest.raises(K.KeyError_) as exc:
+            _set(key_dir, 18 * MONTH).ensure(now=T0 + 1)
+        assert "BEGIN" not in str(exc.value)
+        assert pem.split("\n")[1] not in str(exc.value)
+
+
+class TestTheCodeTableIsBounded:
+    """NFR-5. A bound that is never exercised is a bound that may not hold."""
+
+    def test_outstanding_codes_never_exceed_the_capacity(self):
+        from identity import oidc_codes
+
+        store = oidc_codes.CodeStore(capacity=16)
+        _verifier, challenge = oidc_codes.verifier_for("seed")
+        for i in range(200):
+            store.issue(
+                client_id="c", principal=f"user:u{i}", redirect_uri="https://x/cb",
+                code_challenge=challenge, code_challenge_method="S256",
+            )
+        assert store.outstanding() <= 16
+
+    def test_expired_codes_are_evicted_on_issue(self):
+        """Eviction happens on a write path, never on a read -- a read that writes would defeat any
+        cache above it, which is the Phase 2 revocation-cache lesson."""
+        from identity import oidc_codes
+
+        store = oidc_codes.CodeStore(ttl_seconds=60, capacity=1024)
+        _v, challenge = oidc_codes.verifier_for("seed")
+        store.issue(client_id="c", principal="user:a", redirect_uri="https://x/cb",
+                    code_challenge=challenge, code_challenge_method="S256", now=1000.0)
+        assert store.outstanding() == 1
+
+        store.issue(client_id="c", principal="user:b", redirect_uri="https://x/cb",
+                    code_challenge=challenge, code_challenge_method="S256", now=2000.0)
+        assert store.outstanding() == 1, "the lapsed code should be gone, not merely unusable"
+
+
 class TestReadsDoNotWrite:
     """NFR-2a. A read path that writes defeats any cache built over it (Phase 2, trap 2)."""
 

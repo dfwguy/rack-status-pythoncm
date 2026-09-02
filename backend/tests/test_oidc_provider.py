@@ -338,6 +338,52 @@ class TestTheBypassingRoutesAuthenticateThemselves:
         assert "WWW-Authenticate" in resp.headers
 
 
+class TestAuthorizeShedsLoad:
+    """NFR-6, AC-24b. Counted rather than timed, so it does not turn flaky on a loaded runner."""
+
+    def test_a_flood_is_refused_before_any_code_is_minted(self, signed_in):
+        """The point of shedding early: the expensive work must never start.
+
+        A flood here would evict legitimate codes from the bounded table before they could be
+        redeemed -- a denial of service against login rather than against the server.
+        """
+        from api import oidc_provider
+        from identity import oidc_codes
+
+        oidc_provider._authorize_limiter.reset()
+        oidc_codes.store().reset()
+
+        statuses = [_authorize(signed_in)[0].status_code for _ in range(40)]
+
+        assert 429 in statuses, "the limiter never shed"
+        assert oidc_codes.store().outstanding() <= 30, (
+            "a refused request must not have minted a code"
+        )
+
+    def test_the_refusal_says_when_to_retry(self, signed_in):
+        from api import oidc_provider
+
+        oidc_provider._authorize_limiter.reset()
+        resp = None
+        for _ in range(40):
+            resp, _ = _authorize(signed_in)
+            if resp.status_code == 429:
+                break
+
+        assert resp.status_code == 429
+        assert resp.get_json()["error"] == "temporarily_unavailable"
+        assert int(resp.headers["Retry-After"]) >= 1
+
+    def test_normal_use_is_never_shed(self, signed_in):
+        """A limit that fires during ordinary work is a bug, not a control. An interactive
+        authorization is a human clicking a button."""
+        from api import oidc_provider
+
+        oidc_provider._authorize_limiter.reset()
+        for _ in range(5):
+            assert _authorize(signed_in)[0].status_code == 302
+
+
 class TestTokenTypeConfusion:
     """FR-12a. The property must survive the rename from `typ` to `token_use`."""
 

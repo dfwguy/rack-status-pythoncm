@@ -179,8 +179,8 @@ const navEntries: NavEntry[] = [
   },
   {
     kind: "group",
-    id: "grp-access",
-    label: "Access",
+    id: "grp-identity",
+    label: "Identity",
     icon: <ShieldCheck size={ICON_SIZE} />,
     leaves: [
       { id: "identityUsers", label: "Users", icon: <Users size={ICON_SIZE} /> },

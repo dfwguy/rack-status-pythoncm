@@ -41,7 +41,7 @@ from urllib.parse import urlencode
 import jwt
 from audit.actions import action
 from flask import Blueprint, g, jsonify, redirect, request
-from identity import oidc, principals, tokens
+from identity import oidc, principals, rate_limit, tokens
 from identity import oidc_clients as clients_mod
 from identity import oidc_codes as codes_mod
 from identity import revocation as revocation_mod
@@ -75,11 +75,37 @@ def _current_principal() -> str | None:
 # --- /authorize -------------------------------------------------------------------------------
 
 
+#: NFR-6: shed before doing work, as the SRP `begin` route does.
+#:
+#: `/authorize` mints a cryptographically random code and inserts it into a bounded table, so a
+#: flood evicts legitimate codes before they can be redeemed -- a denial of service against login
+#: rather than against the server. The route requires a session, which narrows *who* can do this to
+#: an authenticated operator; it does not make the route free to call, and NFR-6 asks for the limit
+#: regardless of who the caller is.
+#:
+#: Sized generously: an interactive authorization is a human clicking a button, so 30 in a minute
+#: per client is far above real use and far below what would churn the table.
+_authorize_limiter = rate_limit.RateLimiter(limit=30, window=60.0)
+
+
 @bp.get("/authorize")
 def authorize():
     """Authorization endpoint (FR-11). Issues a code to a registered client for a signed-in user."""
     if not oidc.enabled():
         return _disabled()
+
+    # Before the client lookup, the redirect validation and the code generation -- the point of
+    # shedding early is that the expensive work never starts.
+    # Unpacked, never truth-tested. `check` returns `(allowed, retry_after)`, and a tuple is
+    # *always* truthy -- so `if not limiter.check(...)` would silently never shed. Same shape of
+    # mistake `web_auth.authenticated_principal` returns a bare string to make unavailable.
+    allowed, retry_after = _authorize_limiter.check(request.remote_addr or "unknown")
+    if not allowed:
+        resp, status = _oauth_error(
+            "temporarily_unavailable", "too many authorization requests; retry shortly", 429
+        )
+        resp.headers["Retry-After"] = str(int(retry_after) + 1)
+        return resp, status
 
     client_id = (request.args.get("client_id") or "").strip()
     redirect_uri = (request.args.get("redirect_uri") or "").strip()

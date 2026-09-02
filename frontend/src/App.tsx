@@ -367,8 +367,8 @@ function AppContent() {
           <Route path="/analytics/overview" element={<AnalyticsView logDir={logDir} rows={data?.rows ?? []} status={data} />} />
           <Route path="/analytics/post-run-nodes" element={<PostRunNodeReportView />} />
           <Route path="/analytics/reports" element={<ReportsView />} />
-            <Route path="/access/users" element={<UsersView />} />
-            <Route path="/access/groups" element={<GroupsView />} />
+            <Route path="/identity/users" element={<UsersView />} />
+            <Route path="/identity/groups" element={<GroupsView />} />
             <Route path="/platform/projects" element={<ProjectsView />} />
           <Route path="/platform/catalog" element={<PlatformCatalogView />} />
           <Route path="/platform/tools" element={<ToolRegistryView />} />
