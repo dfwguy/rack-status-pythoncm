@@ -138,6 +138,48 @@ reasoning that it bounded FR-6 staleness — reasoning that described a design w
 inside the token, which is not what was built. It cost a re-authentication mid-task several times a
 day and, until the SPA gained automatic renewal, presented as the product logging you out at random.
 
+### OIDC provider (Phase 2.5) — off by default
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| **`RACK_WEB_OIDC_ENABLED`** | *(off)* | Truthy → asymmetric signing **and** the provider endpoints, together. |
+| **`RACK_WEB_OIDC_ISSUER`** | *(none)* | **Required when enabled.** This deployment's own base URL, e.g. `https://rack.example.com`. `http://localhost:PORT` is accepted, since that is how an operator reaches a tunnelled deployment. |
+| **`RACK_WEB_SIGNING_KEY_DIR`** | `var/secrets/oidc/` | Where the ES256 key pair lives. Generated on first boot. |
+| **`RACK_WEB_SIGNING_KEY_VALIDITY_SECONDS`** | `46656000` (18 months) | Key validity. Signing stops at `not_after − T_max`, so at the 30-day refresh ceiling a key signs for ~17 months. |
+| **`RACK_WEB_OIDC_CLIENTS_FILE`** | `var/secrets/oidc/clients.json` | Registered relying parties. Absent = no clients, which is a valid state. |
+
+**Turning this on ends every live session, once.** HS256 and ES256 tokens do not verify against
+each other, and there is no dual-verification mode: honouring the old tokens would mean keeping the
+symmetric secret alive, which is the thing being removed. Everyone signs in again. **Flipping the
+flag back does not undo it** — it signs everyone out a second time. Treat it as a scheduled cutover,
+not a runtime toggle.
+
+**One flag governs signing and the endpoints together**, deliberately. The dangerous state is not
+on or off but half: a deployment signing HS256 while publishing a JWKS advertises a key that
+verifies nothing, and every consumer then fails in a way that looks like our bug.
+
+**The issuer is configured, never derived from the request.** A `Host` header is attacker-controlled
+and the issuer is a security boundary — deriving it would let someone make us mint a token claiming
+to come from an origin they control.
+
+`clients.json` registers relying parties. `redirect_uris` are matched by **exact string**; wildcards
+are refused at load with an explanation, because an over-broad match hands the authorization code to
+an attacker-chosen origin:
+
+```json
+{"clients": [
+  {"client_id": "grafana", "client_type": "confidential", "client_secret": "…",
+   "redirect_uris": ["https://grafana.example.com/login/generic_oauth"]},
+  {"client_id": "cli", "client_type": "public",
+   "redirect_uris": ["http://localhost:8123/callback"]}
+]}
+```
+
+**Guidance for consumers**, adopted from Microsoft's for Entra rather than invented: cache keys
+individually by `kid`, refresh about hourly, and **do not depend on how many keys the JWKS holds** —
+it is two in steady state and three during a rotation, and an emergency rotation can change that at
+any time.
+
 ### Authentication: there is nothing to configure
 
 **Removed 2026-09-01 (FR-18): `RACK_WEB_AUTH_MODE`, `RACK_WEB_AUTH_TOKEN`, `RACK_WEB_PAM_SERVICE`

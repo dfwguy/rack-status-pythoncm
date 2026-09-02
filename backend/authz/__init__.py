@@ -50,8 +50,10 @@ known.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 _logger = logging.getLogger(__name__)
@@ -188,12 +190,46 @@ def authorize(principal: str, action: str, resource: str) -> Decision:
 
 
 def install_default() -> None:
-    """Register the permissive engine. Called by `app.py`; explicit so it appears in a diff.
+    """Register an engine at startup. Called by `app.py`; explicit so it appears in a diff.
+
+    **A policy file is what turns authorization on** (Phase 3). Present → the RBAC engine, which is
+    default-deny. Absent → `AllowAllEngine`, exactly as before.
+
+    That choice is the entire rollout story, and the alternative was rejected on purpose. Shipping
+    Phase 3 as default-deny would mean the release that adds authorization locks every existing
+    deployment out of its own dashboard, on upgrade, with no policy file to fix it from — a security
+    feature whose first act is an outage teaches operators to disable security features.
+
+    So the switch is an operator writing `policies.json`. Until they do, nothing changes and the
+    audit trail keeps saying `policy_engine: allow-all`, which is the truth. Once they do, the same
+    trail names the statement that decided each request.
+
+    Note this is still not the same as *no* engine: an unregistered engine refuses everything, and
+    that distinction is what separates "the deployment chose permissive" from "nobody wired this up".
 
     Deliberately not done at import time. An engine that registers itself on import means the
-    permissive default is impossible to *not* have, and the whole point of the unregistered-refuses
-    rule is that choosing a policy is a visible act.
+    permissive default is impossible to *not* have, and the point of the unregistered-refuses rule
+    is that choosing a policy is a visible act.
     """
+
+    from authz.policy import DEFAULT_POLICY_FILE, PolicyEngine
+
+    configured = (os.environ.get("RACK_WEB_POLICY_FILE") or "").strip()
+    path = Path(configured) if configured else DEFAULT_POLICY_FILE
+
+    if path.is_file():
+        engine = PolicyEngine(path)
+        _logger.info(
+            "authz: policy file %s found; enforcing %s (default-deny)", path, engine.name
+        )
+        set_engine(engine)
+        return
+
+    _logger.info(
+        "authz: no policy file at %s; every authenticated request is permitted "
+        "(policy_engine=allow-all). Write that file to enforce policy.",
+        path,
+    )
     set_engine(AllowAllEngine())
 
 

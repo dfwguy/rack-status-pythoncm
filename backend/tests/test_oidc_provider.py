@@ -176,6 +176,23 @@ class TestTheHappyPath:
         assert claims["nonce"] == "n-0S6_WzA2Mj"
         assert claims["token_use"] == "id"
 
+    def test_at_hash_binds_the_id_token_to_the_access_token(self, signed_in):
+        """OIDC Core §3.1.3.6, computed the way a conforming client will check it.
+
+        The left-most **half** of the digest, not the whole thing. A full digest looks entirely
+        plausible and is rejected by every conforming client, with nothing visibly wrong on our
+        side — so the test recomputes it independently rather than comparing against our helper.
+        """
+        resp, verifier = _authorize(signed_in)
+        body = _exchange(signed_in, _code_from(resp), verifier).get_json()
+        claims = jwt.decode(body["id_token"], options={"verify_signature": False})
+
+        digest = hashlib.sha256(body["access_token"].encode("ascii")).digest()
+        expected = _b64(digest[: len(digest) // 2])
+
+        assert claims["at_hash"] == expected
+        assert len(base64.urlsafe_b64decode(claims["at_hash"] + "==")) == 16, "half of SHA-256"
+
     def test_no_nonce_claim_when_none_was_requested(self, signed_in):
         resp, verifier = _authorize(signed_in)
         body = _exchange(signed_in, _code_from(resp), verifier).get_json()

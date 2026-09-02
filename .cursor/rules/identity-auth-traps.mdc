@@ -108,8 +108,23 @@ Neither raises or looks wrong at the call site. Pass `issuer=`, `audience=`, **a
 `options={"require": [...]}` naming every claim. Pinning `algorithms=[...]` *does* correctly refuse
 `alg: none` and an HS512→HS256 substitution — the pin works, it just has to be written.
 
-Also: **`iss`/`aud` do not separate deployments.** They are product constants, identical everywhere.
-The HKDF-derived signing key is the boundary.
+Also: **`iss`/`aud` did not separate deployments — and from Phase 2.5 that changes.** They were
+product constants (`nvis-rack-status`), identical everywhere, with the HKDF-derived signing key as
+the only boundary.
+
+With the OIDC provider enabled, `iss` becomes **this deployment's URL**, because OIDC Discovery
+§4.3 requires it and conforming clients enforce it. Two consequences:
+
+- **`iss` is now load-bearing.** Once federation lands and we verify NVIDIA SSO's tokens alongside
+  our own, accepting a token from the wrong issuer is a full authentication bypass — and PyJWT does
+  not check `iss` at all unless `issuer=` is passed (trap 6). Two issuers, one verify path, and the
+  parameter that separates them is easy to omit.
+- **It is configured, never derived from the request.** Taking it from the `Host` header would hand
+  an attacker the issuer of our tokens: they set a header, we mint a token claiming their origin,
+  and any relying party trusting that origin accepts it. `RACK_WEB_OIDC_ISSUER` is validated for
+  scheme, host, query and trailing slash at startup, because clients compare it by exact string.
+
+The signing key is still the real boundary between deployments. `iss` is what a *client* checks.
 
 ## 7. Fail-closed controls: don't "fix" them by defaulting to permissive
 
