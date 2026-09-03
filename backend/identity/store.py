@@ -70,6 +70,9 @@ _generation = 0
 _TABLE_USERS = "users"
 _TABLE_GROUPS = "groups"
 _TABLE_MEMBERS = "memberships"
+#: Phase 3. Separate table rather than a field on the user, so an attachment is one row and
+#: detaching cannot rewrite an unrelated part of a user record.
+_TABLE_POLICY_ATTACHMENTS = "policy_attachments"
 _TABLE_RETIRED = "retired"
 #: Revocation lives in the identity file rather than beside it: it is identity state, and sharing the
 #: file means it also shares the atomic write, the flock and — the part that matters — the generation
@@ -294,6 +297,74 @@ class IdentityStore:
         with _lock:
             rows = self._db.table(_TABLE_MEMBERS).search(Query().login == u)
         return sorted(str(r.get("group", "")) for r in rows)
+
+    # -- policy attachment (Phase 3, FR-18) ----------------------------------------------------
+    #
+    # Deliberately the same shape as membership above. An attachment is the same kind of relation —
+    # a named edge between a principal and a thing — and a second mechanism for it would drift from
+    # the first, which is how two tables come to disagree about whether a user still has a grant.
+    #
+    # One difference, and it is the reason `attach_policy` cannot simply copy `add_member`: the
+    # policy documents live in a FILE the operator edits (`var/store/policies.json`), not in this
+    # store. So this cannot verify the policy end exists the way `add_member` verifies the group —
+    # see the note there.
+
+    def attach_policy(self, subject: str, policy_id: str) -> None:
+        """Attach a policy to `user:<login>` or `group:<name>`.
+
+        The *principal* end is verified; the *policy* end is not, and that asymmetry is deliberate
+        rather than an omission. Policies are a file the operator edits outside this store, so
+        requiring the document to exist first would forbid the natural order of work — attach the
+        role, then write the rule — and would make an attachment fail because of an unrelated
+        editing state. An attachment to a policy that does not exist is safe: the engine logs it and
+        skips it, so the effect is default-deny rather than an accidental grant.
+        """
+        kind, _, name = str(subject).partition(":")
+        if kind not in ("user", "group") or not name:
+            raise IdentityError(
+                f"attachment subject must be 'user:<login>' or 'group:<name>', got {subject!r}"
+            )
+        with _lock:
+            if kind == "user":
+                if not self._db.table(_TABLE_USERS).get(Query().login == canonical_login(name)):
+                    raise IdentityError(f"no such user {name!r}")
+                normalised = f"user:{canonical_login(name)}"
+            else:
+                if not self._db.table(_TABLE_GROUPS).get(
+                    Query().name == canonical_group_name(name)
+                ):
+                    raise IdentityError(f"no such group {name!r}")
+                normalised = f"group:{canonical_group_name(name)}"
+
+            table = self._db.table(_TABLE_POLICY_ATTACHMENTS)
+            if table.get((Query().subject == normalised) & (Query().policy == policy_id)):
+                return  # idempotent, like add_member
+            table.insert({"subject": normalised, "policy": policy_id})
+            _bump()
+
+    def detach_policy(self, subject: str, policy_id: str) -> None:
+        with _lock:
+            removed = self._db.table(_TABLE_POLICY_ATTACHMENTS).remove(
+                (Query().subject == subject) & (Query().policy == policy_id)
+            )
+            if removed:
+                _bump()
+
+    def policies_for(self, subject: str) -> list[str]:
+        """Policy ids attached to one subject. The engine's hot path."""
+        with _lock:
+            rows = self._db.table(_TABLE_POLICY_ATTACHMENTS).search(Query().subject == subject)
+        return sorted(str(r.get("policy", "")) for r in rows)
+
+    def subjects_with_policy(self, policy_id: str) -> list[str]:
+        """Who a policy is attached to.
+
+        Powers the "attached to" column (FR-20) and the question behind it: deleting a policy that
+        is still attached silently changes access, so the UI has to be able to show that first.
+        """
+        with _lock:
+            rows = self._db.table(_TABLE_POLICY_ATTACHMENTS).search(Query().policy == policy_id)
+        return sorted(str(r.get("subject", "")) for r in rows)
 
     # -- retirement ----------------------------------------------------------------------------
 
