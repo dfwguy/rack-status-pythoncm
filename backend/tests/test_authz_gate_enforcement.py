@@ -425,3 +425,90 @@ class TestCollectionsAndInstancesAreDifferentResources:
         from authz import resources as R
 
         assert R.COLLECTION.startswith("_")
+
+
+class TestTheOperatorLabelIsEvidence:
+    """FR-16 / AC-26 — the durable record names the authenticated principal, not a header.
+
+    `operator_from_request()` read `X-Rack-Operator` unconditionally and stamped it onto rack lock
+    claims and validation activities. It was correctly never trusted for *authorization*, and its
+    docstring said so — but that was never the whole job. Those records answer "who locked this
+    rack" and "who ran this on that tray" after the process that did it is gone, which is the
+    question every handover asks. A label anyone could set with a curl flag made the answer
+    unprovable, so the ledger held a *claim* rather than evidence.
+
+    Asserted through the **stored artifact** rather than by spying on the function: a rack lock is
+    exactly the durable record the requirement is about, and reading back what was persisted proves
+    the whole path — gate, principal, label, store — rather than one call. All 47 call sites across
+    12 api modules route through that one function.
+    """
+
+    def _signed_in_with_everything(self, deployment):
+        """Grants the lock verbs by pattern, NOT with a bare `*`.
+
+        A bare `*` in an allow is refused by the schema on purpose, so a policy using one fails to
+        load and the engine default-denies the whole request — which is what the first draft of
+        this test hit, and is the guard behaving correctly rather than a test problem.
+        """
+        deployment.write_policies([{
+            "id": "lock-operator",
+            "statements": [{
+                "effect": "allow",
+                "actions": ["rack.lock:*", "rack:*"],
+                "resources": ["rack.lock:*", "rack:*"],
+            }],
+        }])
+        deployment.attach("user:operator", "lock-operator")
+        deployment.sign_in_as("operator")
+
+    def _stored_operators(self, deployment):
+        body = deployment.get("/api/rack-locks").get_json() or {}
+        rows = body.get("locks") or body.get("claims") or body.get("data") or []
+        if isinstance(rows, dict):
+            rows = list(rows.values())
+        return [str(r.get("operator", "")) for r in rows if isinstance(r, dict)]
+
+    def test_a_spoofed_header_cannot_override_the_principal(self, deployment):
+        """The headline property. Previously the header won outright, so this stored
+        `somebody-else` — a name nobody authenticated as."""
+        self._signed_in_with_everything(deployment)
+
+        claim = deployment.post(
+            "/api/rack-locks/p17-r01",
+            json={},
+            content_type="application/json",
+            headers={"X-Rack-Operator": "somebody-else"},
+        )
+        assert claim.status_code < 400, claim.get_json()
+
+        stored = self._stored_operators(deployment)
+        assert stored, "the claim was not persisted, so this test proves nothing"
+        assert "somebody-else" not in stored, (
+            f"a client header was stored as the operator on a durable lock claim: {stored} — the "
+            "activity ledger records a forgeable name"
+        )
+        assert "operator" in stored, f"expected the authenticated login, stored {stored}"
+
+    def test_the_label_is_the_bare_login_not_the_principal_rendering(self, deployment):
+        """`operator`, not `user:operator`. The label is shown to operators and stored beside
+        free-text history; nothing compares it, so readability wins."""
+        self._signed_in_with_everything(deployment)
+        deployment.post("/api/rack-locks/p17-r02", json={}, content_type="application/json")
+
+        assert all(not s.startswith("user:") for s in self._stored_operators(deployment))
+
+    def test_the_header_still_works_when_there_is_no_principal(self):
+        """The one case the fallback exists for: `RACK_WEB_AUTH_DISABLED`, where no principal can
+        be had. Nothing recorded in that mode is evidence, so local development keeps working —
+        and this is a *fallback*, never a precedence, which the spoof test above pins."""
+        from api import _common
+        from app import app
+
+        with app.test_request_context("/api/status", headers={"X-Rack-Operator": "dev-laptop"}):
+            assert _common.operator_from_request() == "dev-laptop"
+
+    def test_it_returns_empty_outside_a_request(self):
+        """Worker threads call this too, and must not raise."""
+        from api import _common
+
+        assert _common.operator_from_request() == ""

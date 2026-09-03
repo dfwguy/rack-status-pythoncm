@@ -28,7 +28,7 @@ import shlex
 import core
 import logging_config as lc
 import rack_locks
-from flask import jsonify, request, send_file
+from flask import g, jsonify, request, send_file
 from naming import _normalize_rack_id
 from node_targets import validation_target_for_rack
 from paths import REPO_ROOT, _resolve_log_dir, _script_exists, _sysinfo_script_path
@@ -129,12 +129,42 @@ _APP_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{8,80}$")
 
 
 def operator_from_request() -> str:
-    """Operator label from the ``X-Rack-Operator`` header. Advisory metadata only -- never
-    trusted for authorization. Empty when the SPA hasn't set a display name."""
+    """Who is performing this operation, for the durable record (FR-16).
+
+    **The authenticated principal wins; the header can no longer override it.** This used to read
+    ``X-Rack-Operator`` unconditionally — a client-supplied string — and stamp it onto rack lock
+    claims and validation activities. It was correctly never trusted for *authorization*, but that
+    was never the whole job: those records are the evidence for "who locked this rack" and "who ran
+    this on that tray", and an operator label anyone could set with a curl flag made that
+    unprovable. A handover reading the ledger could not tell a real claim from a typed one.
+
+    Now that the gate verifies a token and publishes the subject on ``g``, the label comes from
+    there and is unforgeable while the gate is on.
+
+    The header survives as a fallback for exactly one case: ``RACK_WEB_AUTH_DISABLED``, where there
+    is no principal to be had. Nothing recorded in that mode is evidence anyway, so keeping it
+    costs nothing and keeps local development working. It is a *fallback*, never a precedence — a
+    request carrying both gets the principal.
+
+    All 47 call sites across 12 api modules route through here, so this is the one place the rule
+    lives. Returns a bare login (``rkoike``), not the ``user:rkoike`` principal rendering: the label
+    is displayed to operators and stored beside free-text history, and nothing compares it.
+    """
+    try:
+        principal = getattr(g, "auth_principal", "") or ""
+    except RuntimeError:
+        principal = ""
+
+    if principal:
+        # `user:rkoike` -> `rkoike`. An unexpected shape is kept whole rather than dropped: a label
+        # we cannot parse is still better evidence than falling through to the header.
+        _, _, login = principal.partition(":")
+        return rack_locks.sanitize_operator(login or principal)
+
     try:
         raw = request.headers.get("X-Rack-Operator", "")
     except RuntimeError:
-        # Outside a request context (worker thread): fall back to empty label.
+        # Outside a request context (worker thread): fall back to an empty label.
         raw = ""
     return rack_locks.sanitize_operator(raw)
 
