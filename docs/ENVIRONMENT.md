@@ -1,5 +1,45 @@
 # NVIS Rack Status configuration reference
 
+## `greenlight.toml` and the required-setting preflight
+
+Every variable in this document can also be set in **`greenlight.toml`** at the repo root (copy
+`greenlight.toml.example`, or point elsewhere with `NVIS_GREENLIGHT_CONFIG`). The file is the
+**baseline**: anything already present in the environment at launch wins, so this document remains
+the authority on what each variable *means* and the file only changes where a value can come from.
+
+Mechanically, the loader materializes the file into `os.environ` with `setdefault` semantics before
+any other first-party module is imported. That matters for two reasons an operator can observe:
+
+* **An empty value is a value.** `FOO=""` in the environment is *not* overwritten by the file,
+  because several readers here distinguish empty from unset.
+* **The file can set `NVIS_LOG_LEVEL`**, because it is read before logging is configured. The
+  loader's own diagnostics are buffered and replayed once a handler exists, so they appear slightly
+  after other startup lines.
+
+Types map as you would expect, with one refusal: `true`/`false` become `1`/`0`, integers render in
+base 10, arrays join on `,` with no spaces — and **floats are rejected**. Both float-shaped settings
+here are version strings (`NVIS_NCCL_MIN_CUDA_VERSION`, `RACK_WEB_TLS_MIN_VERSION`) and rendering
+one changes its meaning: `13.30` becomes `13.3`, and a shell comparison that splits on `.` then
+reads a different number. Quote them.
+
+**Secrets are refused from the file.** A variable whose name matches `PASSWORD|SECRET|TOKEN|API_KEY|
+CREDENTIAL` — or that is explicitly declared secret — makes startup fail if it appears there. The
+file is exactly the artifact that ends up in bug reports and support bundles, and it is not covered
+by `.gitignore` once copied. `RACK_PROJECT_TOKEN` is the documented exception: it matches the
+pattern but is an NVFTP folder name, so it is declared non-secret.
+
+### Settings that can refuse a launch
+
+| Setting | Required when | Why it cannot be defaulted |
+|---|---|---|
+| `RACK_WEB_OIDC_ISSUER` | `RACK_WEB_OIDC_ENABLED` is truthy | OIDC Discovery §4.3 requires it to be the URL discovery is served from; deriving it from `Host` would let a caller choose our token issuer |
+| `RACK_SSH_HOST` | the resolved control connection is SSH and `RACK_STATUS_DEMO` is falsy | no default can reach a customer's head node |
+| `RACK_WEB_TLS_KEY` | `RACK_WEB_TLS_CERT` is set | a cert with no key downgrades one path silently and crashes the other |
+
+All missing settings are reported **together**, then startup exits `78`. A setting with a working
+default is deliberately absent from this table even when it is "required in practice": missing and
+defaulted are different states, and only the first is a fault.
+
 This document lists **environment variables**, **credential files**, and related knobs under **`/home/cmsupport/nvis-rack-status`** only (Python: `backend/app.py`, `backend/native_status.py`, `backend/rack_web/`; shell: `bin/scripts/`). Third-party code under **`.venv/`** is not catalogued here.
 
 **Truthy** (unless noted): `1`, `true`, `yes`, or `on` (case-insensitive).
@@ -147,6 +187,16 @@ day and, until the SPA gained automatic renewal, presented as the product loggin
 | **`RACK_WEB_SIGNING_KEY_DIR`** | `var/secrets/oidc/` | Where the ES256 key pair lives. Generated on first boot. |
 | **`RACK_WEB_SIGNING_KEY_VALIDITY_SECONDS`** | `46656000` (18 months) | Key validity. Signing stops at `not_after − T_max`, so at the 30-day refresh ceiling a key signs for ~17 months. |
 | **`RACK_WEB_OIDC_CLIENTS_FILE`** | `var/secrets/oidc/clients.json` | Registered relying parties. Absent = no clients, which is a valid state. |
+
+**With the provider on and no issuer, the app refuses to start.** That is deliberate, and it
+replaced a much worse behaviour: measured 2026-09-03, the app booted perfectly in that state —
+`GET /login` returned 200 and `bin/verify-deploy.sh` passed — and then *every* sign-in failed at
+token-mint time. A deployment green by every health check in which nobody can log in. Startup now
+refuses instead, naming the variable, so the failure is one a deploy is built to catch.
+
+The issuer cannot be defaulted or derived. OIDC Discovery 1.0 §4.3 requires it to be the URL
+discovery is served from, and reading it from the `Host` header would let a caller choose the issuer
+of our tokens. It is operator-configured, always.
 
 **Turning this on ends every live session, once.** HS256 and ES256 tokens do not verify against
 each other, and there is no dual-verification mode: honouring the old tokens would mean keeping the
@@ -630,7 +680,7 @@ them when present. See [`docs/EXECUTION_ARCHITECTURE.md`](EXECUTION_ARCHITECTURE
 | **`RACK_SSH_PORT`** | `22` | SSH port. |
 | **`RACK_SSH_OPTS`** | *(unset)* | Extra `ssh` flags (space-separated), e.g. `-J bastion`. Applied to the leg that leaves this machine, in both batch and interactive (terminal) paths. |
 | **`RACK_DIRECT_NODE_SSH`** | *(unset)* | Truthy → the app opens its own ssh to a compute node instead of relaying through the control host. Faster, and it consumes none of the head's `MaxSessions` slots, but the app must hold a credential the node accepts. **No hostname pattern** — it applies to every node target on the deployment (it was previously gated on one site's tray regex and silently did nothing elsewhere). |
-| **`RACK_NODE_SSH_USER`** | *(unset)* | Account for the node leg. Unset → the leg inherits whoever runs it (the control host's ssh user on a relay); required in practice for `RACK_DIRECT_NODE_SSH`, which defaults to `root`. |
+| **`RACK_NODE_SSH_USER`** | *(unset)* on a relay; **`root`** on a direct leg | Account for the node leg, and the default depends on which leg. Relaying, unset means the hop inherits the control host's ssh user (`host_exec.py:798`). On a **direct** leg — the one `RACK_DIRECT_NODE_SSH` selects — there is no predecessor to inherit from, so it resolves to `root` (`host_exec.py:802`). Previously documented as simply *(unset)*, which is only half true and made this read like a setting with no default. It has one, which is why the launch preflight does **not** require it — but `root` is the wrong account at some sites (Nscale TX uses `cmods`), and a wrong value is not something a presence check can catch. |
 | **`RACK_NODE_SSH_KEY`** | `RACK_SSH_KEY` | Key for a **direct** node leg. Ignored when relaying, since the control host supplies its own credentials. |
 | **`RACK_SSH_MULTIPLEX`** | `1` | ControlMaster multiplexing; `0` opts out (see §6 of the architecture doc). Load-bearing for fan-out — a **stale master** degrades every hop and logs `disabling multiplexing` without this ever changing; recovery in §6.1. |
 | **`RACK_SCRIPT_SSH_*`** | *(unset)* | Same fields for the privileged (`script`) route. Unset → both routes collapse to control. |

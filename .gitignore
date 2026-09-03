@@ -176,3 +176,10 @@ plc-evidence.jsonl
 # product. Untracked and unignored is the dangerous combination — one `git add .`
 # commits the lot — so it is named here explicitly.
 .scratch/
+
+# Launch configuration. The .example is tracked; the real file is per-deployment and
+# must not enter shared git history -- five clusters use this repo
+# (cluster-deployments.mdc). Secrets are refused from it at startup, but a site's
+# hostnames and paths are still nobody else's business.
+greenlight.toml
+!greenlight.toml.example

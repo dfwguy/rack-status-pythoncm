@@ -1,0 +1,51 @@
+# NVIS Greenlight — launch configuration (EXAMPLE)
+#
+# Copy to `greenlight.toml` in this directory and edit. The real file is gitignored on
+# purpose: five customer deployments share this repo, and per-site values in shared git
+# history is the cluster-mixing hazard `cluster-deployments.mdc` exists to prevent.
+#
+# PRECEDENCE: this file is the baseline. A real environment variable or a `docker run -e`
+# flag overrides it, so a launch always wins over the file.
+#
+# TABLES ARE GROUPING ONLY. A leaf key is the exact environment variable name --
+# `[auth] RACK_WEB_OIDC_ISSUER` sets RACK_WEB_OIDC_ISSUER, not AUTH_RACK_WEB_OIDC_ISSUER.
+#
+# NO SECRETS HERE. A setting the registry resolves as secret refuses startup if it appears in
+# this file. Secrets belong in the environment or a mounted secret, never in a file that gets
+# copied into bug reports and support bundles.
+#
+# Six settings CANNOT live here: RACK_WEB_BIND_ADDR, RACK_WEB_PORT, RACK_SSH_HOST(*),
+# RACK_WEB_TLS_CERT, RACK_WEB_TLS_KEY and RACK_SSH_KEY_PATH are interpolated by
+# docker-compose.yml to publish ports and build bind mounts, which Docker resolves before
+# Python starts. Keep those in the infra env file. (*) RACK_SSH_HOST works here for a
+# non-Compose launch; Compose needs its own copy.
+
+[auth]
+# This deployment's own base URL, used as the OIDC `iss` claim. Required when the OIDC provider 
+# is enabled. Cannot be derived from the request: OIDC Discovery 1.0 §4.3 requires it to be the 
+# URL discovery is served from, and a Host header is attacker-controlled. http is accepted only 
+# for localhost, which is how an operator reaches a tunnelled deployment.
+# REQUIRED when the condition above holds; startup refuses without it.
+# RACK_WEB_OIDC_ISSUER = "https://greenlight.example.com"
+
+[connection]
+# Where the tooling is deployed on the head node. Script paths and the default log directory der
+# ive from it. Optional: unset falls back to the repo root, and a declared topology's scripts ro
+# le root supersedes it.
+# RACK_REMOTE_BASE_PATH = "/home/cmsupport/nvis-rack-status"
+
+# Head node for the SSH control connection. Required unless the deployment is in demo mode or RA
+# CK_EXEC_MODE=local.
+# REQUIRED when the condition above holds; startup refuses without it.
+# RACK_SSH_HOST = "10.0.0.1"
+
+[nvftp]
+# NVFTP project folder name. Not a credential, despite matching the sensitive-name pattern on 'T
+# OKEN'.
+# RACK_PROJECT_TOKEN = "my-project"
+
+[tls]
+# Private key for the TLS certificate. Required whenever RACK_WEB_TLS_CERT is set: a cert with n
+# o key downgrades one path silently and crashes the other.
+# REQUIRED when the condition above holds; startup refuses without it.
+# RACK_WEB_TLS_KEY = "/etc/greenlight/tls/server.key"

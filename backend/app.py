@@ -82,15 +82,41 @@ APP_DIR = Path(__file__).resolve().parent
 # Repo root (parent of backend/) holds runtime assets that live outside the Python
 # tree: bin/scripts, static/spa, var/, help_content.json, rack_comments.json.
 REPO_ROOT = APP_DIR.parent
+_app_dir_s = str(APP_DIR)
+if _app_dir_s not in sys.path:
+    sys.path.insert(0, _app_dir_s)
+
+# ---- greenlight.toml, before ANY other first-party import (DC-3, FR-3a) ----------------------
+#
+# This placement is the feature, not a detail. ``config_env.py:737`` snapshots ``os.environ`` at
+# *import* time for the 95 Settings-managed keys and ``:773`` **pops** any of them absent from that
+# snapshot -- a path ``_bootstrap_nvftp_sync_at_startup`` reaches on every deployment that has never
+# opened the Settings screen. A value materialized after that import is therefore *deleted during
+# startup*, silently. So the loader goes above every first-party import except its own closure
+# (``config_launch``, ``config_registry``, ``toml_compat``), none of which reads the environment at
+# import.
+#
+# It is also above ``logging_config`` so the file can set ``NVIS_LOG_LEVEL`` -- which means there is
+# no log handler yet, and the loader's records are buffered and replayed a few lines below.
+import config_launch as _config_launch
+
+try:
+    _config_result = _config_launch.load()
+except _config_launch.ConfigError as _config_exc:
+    _config_launch.fatal(_config_exc)
+
 # Canonical overrides file for this install; native_status reads the same path via this env
 # (set before ``import native_status`` so the first mtime load targets the app tree).
+#
+# Moved to *after* the loader deliberately. It used to sit above it, which made this the one key
+# whose file value could never take effect -- ``setdefault`` would always find the value this line
+# had just written. Below the loader, ``greenlight.toml`` can point the overrides store somewhere
+# else and this stays the default for everyone who does not. Nothing between here and the loader
+# depends on the order; the loader's only real constraint is that ``sys.path`` is set up first.
 os.environ.setdefault(
     "NVIS_JOB_ENV_OVERRIDES_FILE",
     str((REPO_ROOT / "var" / "cache" / "job_env_overrides.json").resolve()),
 )
-_app_dir_s = str(APP_DIR)
-if _app_dir_s not in sys.path:
-    sys.path.insert(0, _app_dir_s)
 
 # Logging is configured before any other first-party import, because every one of them obtains a
 # module logger at import time and until this call the root logger has no handler at all — Python
@@ -100,6 +126,14 @@ if _app_dir_s not in sys.path:
 import logging_config
 
 logging_config.configure()
+
+# The loader ran before any handler existed, so replay what it recorded now that one does. Without
+# this the provenance block and the undeclared-key warnings are simply lost -- and a value that
+# arrived from a file, invisibly, is the thing an operator most needs to be able to see.
+for _record in _config_result.records:
+    getattr(logging.getLogger("config"), _record.level, logging.getLogger("config").info)(
+        _record.message
+    )
 
 import native_status
 import nvis_id_templates
@@ -650,18 +684,19 @@ def _bootstrap_identity_at_startup() -> None:
     # client would cache that empty document for the full hour we ask it to. The read path cannot
     # fix this itself: minting is a write, and a read that writes defeats the cache above it.
     if identity_oidc.enabled():
-        # Validate the ISSUER at startup, before anything tries to mint (FR-18).
+        # The issuer's *presence* is the launch preflight's job now (FR-20) — it runs above this
+        # and refuses with every fault at once rather than one per restart. What stays here is the
+        # part the preflight cannot do: validating the *shape* of the URL, which lives in
+        # `identity_oidc.issuer_url()` and depends on rules only that module knows (scheme, host,
+        # no query, no trailing slash).
         #
-        # Measured 2026-09-03: with the provider on and no `RACK_WEB_OIDC_ISSUER`, the app booted
-        # perfectly, `GET /login` returned 200, `verify-deploy.sh` passed — and then every sign-in
-        # raised OIDCConfigError from `mint()`. A dashboard that is green by every health check and
-        # in which nobody can log in. After the cutover deletes the HS256 path there is no fallback
-        # either, so on five customer deployments that is an outage no gate would have caught.
+        # Kept as a refusal rather than removed. The preflight guarantees the variable is non-blank,
+        # not that it is a usable issuer, and a malformed one produces the same green-but-unusable
+        # deployment as a missing one: measured 2026-09-03, the app booted, `GET /login` returned
+        # 200 and `verify-deploy.sh` passed, and then every sign-in failed at mint time.
         #
-        # Raising here converts it into the failure a deploy is designed to catch: the container
-        # does not come up, `verify-deploy.sh` fails, and the message names the variable. Compare
-        # the missing signing key below, which is logged rather than raised — that one is
-        # recoverable by fixing permissions on a running box, whereas an unset issuer means the
+        # Contrast the missing signing key below, which is logged and not raised — that is
+        # recoverable by fixing permissions on a running box, whereas an unusable issuer means the
         # deployment was never configured for the provider at all.
         try:
             issuer = identity_oidc.issuer_url()
@@ -1174,6 +1209,22 @@ _audit_actions.build_registry(app)
 
 # After all routes and middleware are registered (avoid circular import via nvftp_cache_sync._eget → app).
 _bootstrap_catalog_at_startup()
+
+# Required-setting preflight (DC-4, FR-22). AFTER the catalog and BEFORE identity, and both bounds
+# are load-bearing.
+#
+# After the catalog, because predicates resolve through `_subprocess_env()` and therefore through
+# the active cluster's high overlay — and `_bootstrap_catalog_at_startup` is what *creates* the
+# default project on a first boot. The obvious placement (first thing, before any bootstrap) would
+# refuse every genuinely fresh deployment at all five sites, which is why the requirement was
+# rewritten before this line was written.
+#
+# Before identity, because that bootstrap is the first consumer of a required setting: it is where
+# a missing OIDC issuer used to surface, as a green deployment nobody could log in to.
+import config_preflight
+
+config_preflight.run()
+
 throttle.install(app)  # collect @throttle declarations now every blueprint is registered
 _bootstrap_identity_at_startup()
 _bootstrap_nvftp_sync_at_startup()

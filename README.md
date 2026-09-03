@@ -511,6 +511,56 @@ Release pipelines also build a Kaniko image tarball, publish it to the GitLab Pa
 
 ## Configuration
 
+Greenlight reads two things at launch: a **configuration file**, and the **environment**.
+
+### `greenlight.toml`
+
+Copy `greenlight.toml.example` to `greenlight.toml` in the repo root and edit it. Point the app
+somewhere else with `NVIS_GREENLIGHT_CONFIG=/path/to/file`.
+
+**The file is the baseline; the launch wins.** A real environment variable or a `docker run -e`
+flag overrides any value in the file, so a per-site file can be checked against a deployment while
+an operator still overrides one setting for a single run. An absent file is completely normal —
+the real file is gitignored, so a fresh clone has none and behaves exactly as it did before this
+existed.
+
+Two things about the shape. **Tables group, they do not namespace**: a leaf key is the exact
+environment variable name, so `[auth] RACK_WEB_OIDC_ISSUER = "…"` sets `RACK_WEB_OIDC_ISSUER` and
+not `AUTH_RACK_WEB_OIDC_ISSUER`. And **secrets are refused** — a setting the app resolves as
+secret makes startup fail if it appears in the file, because this file gets copied into bug
+reports and support bundles. Put secrets in the environment or a mounted secret.
+
+Six settings deliberately cannot live here: `RACK_WEB_BIND_ADDR`, `RACK_WEB_PORT`, `RACK_SSH_HOST`,
+`RACK_WEB_TLS_CERT`, `RACK_WEB_TLS_KEY` and `RACK_SSH_KEY_PATH` are interpolated by
+`docker-compose.yml` to publish ports and build bind mounts, which Docker resolves before Python
+starts. Those stay in `rack-config.env`. (`RACK_SSH_HOST` does work in the file for a non-Compose
+launch; Compose needs its own copy.)
+
+### Required settings, and why startup can refuse
+
+Most settings have a sensible default and are optional. A few cannot be guessed, and for those
+**Greenlight refuses to start rather than boot into a state where it cannot work** — reporting
+*every* missing setting at once, with an example value, so one restart fixes all of them.
+
+| Setting | Required when |
+|---|---|
+| `RACK_WEB_OIDC_ISSUER` | the OIDC provider is enabled |
+| `RACK_SSH_HOST` | the cluster is reached over SSH — i.e. not demo mode and not `RACK_EXEC_MODE=local` |
+| `RACK_WEB_TLS_KEY` | `RACK_WEB_TLS_CERT` is set (a cert with no key downgrades one path silently and crashes the other) |
+
+A setting that *has* a working default is deliberately **not** on this list, even where it is
+"required in practice" — `RACK_REMOTE_BASE_PATH` falls back to the repo root, and
+`RACK_NODE_SSH_USER` resolves to `root` on a direct node leg. Missing and defaulted are different
+states, and only the first is a fault.
+
+This is why a laptop still works: `./start.sh` on macOS runs in demo mode, so no connection
+setting is required and nothing is refused.
+
+The exit code is `78` (`EX_CONFIG`), though gunicorn masks it — the message on stderr is what an
+operator actually gets.
+
+### Environment variables
+
 Use [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) as the exhaustive reference. The tables below list the variables most likely to affect correctness or safety.
 
 ### Connection, platform, and naming
