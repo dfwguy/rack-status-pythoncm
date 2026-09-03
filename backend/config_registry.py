@@ -41,7 +41,6 @@ omits: a bare `KEY` would match `RACK_SSH_KEY` and `RACK_WEB_TLS_KEY`, which hol
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -53,13 +52,44 @@ from logging_config import SENSITIVE_NAME_PATTERN
 TOML_STR = "string"
 TOML_BOOL = "boolean"
 TOML_INT = "integer"
-TOML_FLOAT = "float"
 TOML_ARRAY = "array"
-TOML_TYPES = (TOML_STR, TOML_BOOL, TOML_INT, TOML_FLOAT, TOML_ARRAY)
+TOML_TYPES = (TOML_STR, TOML_BOOL, TOML_INT, TOML_ARRAY)
+
+#: Floats are REFUSED, not rendered, and the review that found this had better evidence than my
+#: reasoning did. I had settled on `repr()` because it round-trips. It does -- but both float-shaped
+#: settings in this tree are **version strings**, and for those, round-tripping is not the property
+#: that matters:
+#:
+#:   * `bin/scripts/nccl_allreduce.sbatch:107,114` reads NVIS_NCCL_MIN_CUDA_VERSION and compares it
+#:     in awk by splitting on `.`; under `format(v,"f")` "13.3" becomes "13.300000" and the
+#:     fail-closed gate evaluates `3 >= 300000`, refusing every allocated node.
+#:   * `tls_server.py:60-66` matches RACK_WEB_TLS_MIN_VERSION as a STRING against 1.2/1.3, and an
+#:     unrecognised value warns and keeps the 1.2 floor -- so a rendering rule produces a silent
+#:     TLS downgrade.
+#:
+#: `repr()` survives both, but `13.30` still renormalises to `"13.3"` -- a different value than the
+#: operator typed, applied without comment. Refusing is free (nothing declares a float) and the
+#: diagnostic lands where the mistake was made: declare it as a string.
 
 
 class RegistryError(Exception):
     """A malformed declaration. Raised at import, never logged and continued."""
+
+
+@dataclass(frozen=True)
+class Requirement:
+    """Whether a setting is required, with room for "could not tell".
+
+    `required is None` is the third state, and it exists so a failing predicate is *reported*
+    rather than silently resolved in either direction — see `Setting.requirement`.
+    """
+
+    required: bool | None
+    error: str | None = None
+
+    @property
+    def undetermined(self) -> bool:
+        return self.required is None
 
 
 @dataclass(frozen=True)
@@ -104,24 +134,33 @@ class Setting:
             return self.secret
         return bool(SENSITIVE_NAME_PATTERN.search(self.name))
 
-    def is_required(self) -> bool:
-        """Whether this launch needs it. Never raises — a predicate that throws is not a reason to
-        refuse a boot, so it is treated as "not required" and the preflight logs it.
+    def requirement(self) -> Requirement:
+        """Whether this launch needs it — as a **tri-state**, not a boolean.
 
-        The alternative would let an unrelated bug in one predicate take the whole deployment down,
-        which is a worse failure than the one the preflight exists to prevent.
+        The first version of this returned `bool` and answered `False` when the predicate raised.
+        That was fail-open on a fail-closed control, and `identity-auth-traps.mdc` trap 7 names
+        exactly that mistake: a predicate that throws means the preflight *cannot tell* whether the
+        setting is required, and resolving "cannot tell" to "not required" boots a deployment with a
+        possibly-missing required setting. That is the green-but-unusable outcome this whole feature
+        exists to prevent. Its docstring also claimed "the preflight logs it" while this module
+        imports no logger and the method returned a bare bool — so the stated mitigation could not
+        exist.
+
+        Three answers, so DC-4 can report a third fault class ("could not evaluate X's predicate")
+        in the same report-all diagnostic FR-17 already requires. That keeps one unrelated predicate
+        bug from refusing a boot *and* stops the failure being silent, which the boolean form could
+        not do at the same time.
         """
         if self.required_when is None:
-            return False
+            return Requirement(required=False)
         try:
-            return bool(self.required_when())
-        except Exception:  # noqa: BLE001 - see the docstring; narrowing this would defeat it
-            # Broad on purpose. A predicate can fail for reasons that have nothing to do with this
-            # setting -- an unavailable catalog, a half-written overrides file -- and the correct
-            # response to "we cannot tell whether this is required" is not to refuse the boot.
-            # Enumerating the exception types would mean the next unanticipated one takes the
-            # deployment down, which is the failure this whole feature exists to prevent.
-            return False
+            return Requirement(required=bool(self.required_when()))
+        except Exception as exc:  # noqa: BLE001 - any predicate failure is reportable, not fatal
+            # Broad on purpose: a predicate can fail for reasons unrelated to its setting (an
+            # unavailable catalog, a half-written overrides file). Enumerating the types would mean
+            # the next unanticipated one takes the deployment down. Unlike the previous version this
+            # does not swallow it — the error text reaches the operator through DC-4.
+            return Requirement(required=None, error=f"{type(exc).__name__}: {exc}")
 
 
 _SETTINGS: dict[str, Setting] = {}
@@ -171,8 +210,27 @@ def is_secret(name: str) -> bool:
 
 
 def required_now() -> tuple[Setting, ...]:
-    """The settings this launch requires, evaluated against the environment as it stands."""
-    return tuple(s for s in _SETTINGS.values() if s.is_required())
+    """The settings this launch definitely requires, against the environment as it stands.
+
+    Settings whose predicate could not be evaluated are **not** here — they are in
+    `undetermined_now()`. Folding them in either direction is what made the first version
+    fail-open; keeping them separate is what lets DC-4 report all three outcomes.
+    """
+    return tuple(s for s in _SETTINGS.values() if s.requirement().required is True)
+
+
+def undetermined_now() -> tuple[tuple[Setting, str], ...]:
+    """Settings whose `required_when` raised, with the error text.
+
+    DC-4's third fault class. A caller that ignores this is back to fail-open, so the preflight
+    reports these alongside genuine faults rather than treating an unanswerable question as a no.
+    """
+    out: list[tuple[Setting, str]] = []
+    for setting in _SETTINGS.values():
+        result = setting.requirement()
+        if result.undetermined:
+            out.append((setting, result.error or "predicate failed"))
+    return tuple(out)
 
 
 def reset_for_tests() -> None:
@@ -199,18 +257,39 @@ def _oidc_provider_enabled() -> bool:
 
 
 def _ssh_control_connection_in_use() -> bool:
-    """SSH is the default transport (`transport/factory.py:36`), so this fires unless the
-    deployment is in demo mode.
+    """Whether this deployment actually reaches its cluster over SSH.
 
-    The demo conjunct is decision 10 and it is not a convenience. Without it, `./start.sh` on a
-    macOS laptop — which is demo mode — and every genuinely-fresh first boot at all five sites
-    would be refused, because `catalog/seed.py:577` stores an empty `ssh_host` when the variable is
-    unset. That would make the preflight worse than the defect it exists to prevent.
+    Two things here were wrong in the first version and both mattered.
+
+    **It read `RACK_EXEC_MODE` directly.** FR-21 forbids that explicitly: the variable is
+    *deprecated* (`transport/factory.py:45-55`), and `TransportConfig.from_env` is not a synonym for
+    reading it — that function warns when it is set and coerces an unrecognised value to
+    `DEFAULT_EXEC_MODE`, neither of which a bare read does. The predicate must key off the
+    **resolved** connection.
+
+    **It read raw `os.environ`, so the active cluster's high overlay was never consulted.** That is
+    the citizen-5 mistake `core-designs.mdc` names in as many words — "a bare `os.environ.get` opts
+    out of the per-cluster overlay and produces a feature that works on one cluster and not
+    another" — and it defeats the entire reason FR-22 places the preflight *after* the catalog
+    bootstrap. A cluster supplying `RACK_SSH_HOST` through its overlay would have been refused.
+
+    The demo conjunct is decision 10 and is separately load-bearing: without it, `./start.sh` on a
+    macOS laptop (demo mode) and every genuinely-fresh first boot at all five sites is refused,
+    because `catalog/seed.py:577` stores an empty `ssh_host` when the variable is unset.
+
+    Both imports are function-level, following `_oidc_provider_enabled` above: DC-3 loads before the
+    first first-party import, this module sits on that path, and `config_env` is precisely what
+    DD-1 rule 2 forbids on it at module scope.
     """
-    if (os.environ.get("RACK_STATUS_DEMO") or "").strip().lower() in ("1", "true", "yes", "on"):
+    from core import truthy_env
+
+    if truthy_env("RACK_STATUS_DEMO"):
         return False
-    mode = (os.environ.get("RACK_EXEC_MODE") or "").strip().lower()
-    return mode != "local"
+
+    from config_env import _subprocess_env
+    from transport import factory
+
+    return factory.TransportConfig.from_env(_subprocess_env()).exec_mode == "ssh"
 
 
 RACK_WEB_OIDC_ISSUER = register(
@@ -265,16 +344,53 @@ RACK_PROJECT_TOKEN = register(
     )
 )
 
+#: Declared but NOT required, and the correction is worth recording.
+#:
+#: I first registered this with the same predicate as `RACK_SSH_HOST`, which made it required on
+#: every non-demo deployment. An independent design review caught it: `paths.py:37-43` falls back to
+#: `REPO_ROOT/bin/scripts` when it is unset, `ENVIRONMENT.md:632` documents its default as unset,
+#: and `paths.py:56` prefers a declared topology's `scripts` role root over it entirely. So a
+#: topology-declared deployment that legitimately sets no base path would have been **refused
+#: startup** — decision 10's failure mode reintroduced on a different key, and a direct violation of
+#: the rule stated in this module's own docstring: a setting with a sensible default does not belong
+#: in the required set, because "missing" and "defaulted" are different states and only the first is
+#: a fault.
 RACK_REMOTE_BASE_PATH = register(
     Setting(
         name="RACK_REMOTE_BASE_PATH",
         secret=False,
-        required_when=_ssh_control_connection_in_use,
         example="/home/cmsupport/nvis-rack-status",
         section="connection",
         description=(
-            "Where the tooling is deployed on the head node. Every script path and the default log "
-            "directory derive from it, so a wrong value fails at first use rather than at launch."
+            "Where the tooling is deployed on the head node. Script paths and the default log "
+            "directory derive from it. Optional: unset falls back to the repo root, and a declared "
+            "topology's scripts role root supersedes it."
+        ),
+    )
+)
+
+
+def _tls_cert_configured() -> bool:
+    """A certificate without its key is the asymmetric failure this row exists for.
+
+    `tls_server.py` needs both. With only the cert, one path downgrades silently and the other
+    crashes — so the key is required exactly when the cert is present, and not otherwise.
+    """
+    from config_env import _eget
+
+    return bool((_eget("RACK_WEB_TLS_CERT") or "").strip())
+
+
+RACK_WEB_TLS_KEY = register(
+    Setting(
+        name="RACK_WEB_TLS_KEY",
+        secret=False,  # a path, not the key material; see SENSITIVE_NAME_PATTERN's omission of KEY
+        required_when=_tls_cert_configured,
+        example="/etc/greenlight/tls/server.key",
+        section="tls",
+        description=(
+            "Private key for the TLS certificate. Required whenever RACK_WEB_TLS_CERT is set: a "
+            "cert with no key downgrades one path silently and crashes the other."
         ),
     )
 )
