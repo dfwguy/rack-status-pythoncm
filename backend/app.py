@@ -173,6 +173,7 @@ from api._common import (
 from api._common import (
     serve_spa_asset as _serve_spa_asset,
 )
+from authz import resources as _authz_resources
 from identity import bootstrap as identity_bootstrap
 from identity import keys as identity_keys
 from identity import oidc as identity_oidc
@@ -738,18 +739,57 @@ def _require_dashboard_auth():
     # tuple. A tuple here is a trap: `(None, "none")` is a non-empty tuple and therefore truthy, so
     # `if principal:` would admit every anonymous request, and no existing test would catch it
     # because the suite runs with the gate disabled.
+    def _request_facts() -> _authz_resources.RequestFacts:
+        """The parts of the request a resource resolver may read.
+
+        `get_json(silent=True)` rather than `get_json()`: a body that is absent, empty or malformed
+        must not raise *here*, in the gate, because the view is what should decide how to answer a
+        bad body — a 400 from the authorization layer would report the wrong problem.
+
+        Flask caches the parsed body on the request, so reading it here does not consume the stream
+        and the view still sees it. That is the one thing to preserve if this is ever changed to
+        read `request.data` or a stream directly: doing so would leave the view with an empty body,
+        and the failure would land on POST routes only.
+        """
+        body = request.get_json(silent=True) if request.is_json else None
+        return _authz_resources.RequestFacts(
+            view_args=request.view_args or {},
+            query=request.args or {},
+            body=body if isinstance(body, dict) else {},
+        )
+
     principal = web_auth.authenticated_principal(request.headers, request.cookies)
     if principal:
         g.auth_principal = principal
         g.auth_method = "token"
 
-        # Authorization. Permissive today (`allow-all`), but the seam is real: the verdict and the
-        # engine that produced it land in the audit record, so a reader can tell how much the
-        # `allow` is worth. Phase 3 swaps the engine without touching this call.
+        # Authorization. The verdict and the engine that produced it land in the audit record, so a
+        # reader can tell how much an `allow` is worth.
         act = _audit_actions.resolve(request.endpoint, request.method)
         if act is not None:
-            decision = authz.authorize(principal, act.action, request.path)
+            # The resource is a RESOURCE_MODEL identifier (`rack.power:a01`), NOT `request.path`.
+            # It used to be the path, which no policy can name — so every resource-scoped statement
+            # matched nothing and fell through to default-deny, silently, because with no policy
+            # file the engine is permissive and nothing looked wrong. See authz/resources.py.
+            try:
+                resource = _authz_resources.resolve(act.action, _request_facts())
+            except _authz_resources.Unresolvable as exc:
+                # Refuse rather than substitute a filler id. Any filler is matched by the `type:*`
+                # grant an operator would reasonably write, so a resolution failure would become a
+                # grant. `test_authz_resource_coverage.py` is what keeps this off the hot path.
+                _logger.warning("authz: refusing %s %s: %s", request.method, request.path, exc)
+                g.authz_decision = authz.Decision(
+                    allowed=False, engine="resource-resolver", reason=str(exc)
+                )
+                return jsonify({
+                    "ok": False,
+                    "error": "not authorized",
+                    "reason": "the target of this request could not be identified",
+                }), 403
+
+            decision = authz.authorize(principal, act.action, resource)
             g.authz_decision = decision
+            g.authz_resource = resource
             if not decision.allowed:
                 # 403, not 401: the caller IS authenticated and simply may not do this. Returning
                 # 401 would tell a client to re-authenticate, which cannot help and produces a
