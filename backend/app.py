@@ -1080,7 +1080,7 @@ def _lake_capture_request(response):
             # actions to any address, in a record that reads as authoritative. Same resolver and
             # same rule as the audit trail now: the header counts only when the peer is a
             # configured trusted proxy, and the derivation is labelled either way (FR-8).
-            **dict(zip(("remote_addr", "remote_addr_trust"), _common.client_addr())),
+            **dict(zip(("remote_addr", "remote_addr_trust"), _api_common.client_addr())),
             "rack": rack,
         }
         # Scrub before anything leaves. `scrub_record` redacts by key name and by known secret
@@ -1145,7 +1145,6 @@ _api_package.register(app)
 # test_audit_actions.py's job — enforcing it at startup would stop a half-migrated tree booting
 # at all, and the declarations are spread across the whole api package.
 import audit.actions as _audit_actions
-from api import _common
 
 _audit_actions.build_registry(app)
 
