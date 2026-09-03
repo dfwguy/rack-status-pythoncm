@@ -151,6 +151,7 @@ def api_ai_chat_resume():
 
 
 @bp.route("/api/ai/tools", methods=["GET"])
+@action(get="ai:list")
 def api_ai_tools():
     """List the agent tools and their availability (reflects RACK_*_DISABLED gates)."""
     from agent import loop as agent_loop
@@ -167,6 +168,7 @@ def api_ai_tools():
 
 @bp.route("/api/ai/settings", methods=["GET", "PUT"])
 @action("ai:configure")
+@action(get="ai:read")
 def api_ai_settings():
     """GET returns masked settings; PUT updates endpoint/model/key."""
     if request.method == "GET":

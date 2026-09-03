@@ -326,6 +326,7 @@ def _nvswitch_system_reset_async_worker(job_id: str, log_dir: Path, cmd: list[st
 
 
 @bp.route("/api/nvswitch-hosts", methods=["GET"])
+@action(get="fabric.nvswitch:list")
 def api_nvswitch_hosts():
     """GET query ``rack=pNN-rMM`` — list NV switch hostnames for the system-reset picker (``nodeset`` when available)."""
     try:
@@ -656,6 +657,7 @@ def api_nvlmapper_async():
 
 
 @bp.route("/api/nvlmapper-zip", methods=["GET"])
+@action(get="fabric.nvswitch:read")
 def api_nvlmapper_zip():
     """GET ``?job_id=…`` — legacy zip download (NVLMAPPER no longer builds zips; outputs live under ``nvlmapper_work_dir``)."""
     job_id = (request.args.get("job_id") or "").strip()

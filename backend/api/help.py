@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 
 import help_content
+from audit.actions import action
 from flask import Blueprint, jsonify
 
 _logger = logging.getLogger("rack_web.api.help")
@@ -28,6 +29,7 @@ bp = Blueprint("help", __name__, url_prefix="")
 
 
 @bp.route("/api/help/content", methods=["GET"])
+@action(get="help:list")
 def api_help_content():
     """Return the full app knowledge registry (mirror of the frontend content)."""
     entries = help_content.get_help_content()
@@ -35,6 +37,7 @@ def api_help_content():
 
 
 @bp.route("/api/help/content/<content_id>", methods=["GET"])
+@action(get="help:read")
 def api_help_content_entry(content_id: str):
     """Return a single help entry by id."""
     entry = help_content.get_entry(content_id)

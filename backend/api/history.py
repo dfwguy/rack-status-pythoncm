@@ -26,6 +26,7 @@ import logging
 
 import core
 import results_history
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 
 from api._common import history_unavailable_response
@@ -52,6 +53,7 @@ def _history_filters_from_args() -> dict[str, object]:
 
 
 @bp.route("/api/history/runs")
+@action(get="history:list")
 def api_history_runs():
     """Paged run history. Filters: workload_kind, rack, job_id, status, since, until, search."""
     if not core.history_enabled():
@@ -79,6 +81,7 @@ def api_history_runs():
 
 
 @bp.route("/api/history/runs/<path:run_id>")
+@action(get="history:read")
 def api_history_run(run_id: str):
     """One run with every metric row (series points included)."""
     if not core.history_enabled():
@@ -94,6 +97,7 @@ def api_history_run(run_id: str):
 
 
 @bp.route("/api/history/metrics")
+@action(get="history:read")
 def api_history_metrics():
     """``?metric=<name>`` -> the trend series. Without ``metric`` -> the available names."""
     if not core.history_enabled():
@@ -120,6 +124,7 @@ def api_history_metrics():
 
 
 @bp.route("/api/history/metric-series")
+@action(get="history:read")
 def api_history_metric_series():
     """Alias of ``/api/history/metrics`` that requires ``?metric=``."""
     if not (request.args.get("metric") or request.args.get("name") or "").strip():
@@ -128,6 +133,7 @@ def api_history_metric_series():
 
 
 @bp.route("/api/history/summary")
+@action(get="history:read")
 def api_history_summary():
     """Fleet baseline (count / median / p05 / p95 / latest per metric) + store health."""
     if not core.history_enabled():

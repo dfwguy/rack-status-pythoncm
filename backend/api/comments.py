@@ -34,6 +34,7 @@ bp = Blueprint("comments", __name__, url_prefix="")
 
 
 @bp.route("/api/comments", methods=["GET"])
+@action(get="comments:read")
 def api_comments_list():
     return jsonify({"ok": True, "comments": read_comments()})
 

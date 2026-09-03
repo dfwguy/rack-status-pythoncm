@@ -107,7 +107,9 @@ def _crud_delete(table: str, doc_id: str):
 # ---------------------------------------------------------------------------
 
 
+@action(get="catalog.platform:list")
 @catalog_bp.get("/platforms")
+@action(get="catalog.platform:list")
 def list_platforms():
     return _crud_list(TABLE_PLATFORMS, models.Platform)
 
@@ -118,7 +120,9 @@ def create_platform():
     return _crud_upsert(TABLE_PLATFORMS, models.Platform)
 
 
+@action(get="catalog.platform:read")
 @catalog_bp.get("/platforms/<doc_id>")
+@action(get="catalog.platform:read")
 def get_platform(doc_id: str):
     return _crud_get(TABLE_PLATFORMS, models.Platform, doc_id)
 
@@ -140,7 +144,9 @@ def delete_platform(doc_id: str):
 # ---------------------------------------------------------------------------
 
 
+@action(get="catalog.tool:list")
 @catalog_bp.get("/tools")
+@action(get="catalog.tool:list")
 def list_tools():
     cluster = (request.args.get("cluster") or "").strip()
     surface = (request.args.get("surface") or "").strip() or None
@@ -156,7 +162,9 @@ def create_tool():
     return _crud_upsert(TABLE_TOOLS, models.Tool)
 
 
+@action(get="catalog.tool:read")
 @catalog_bp.get("/tools/<doc_id>")
+@action(get="catalog.tool:read")
 def get_tool(doc_id: str):
     return _crud_get(TABLE_TOOLS, models.Tool, doc_id)
 
@@ -178,7 +186,9 @@ def delete_tool(doc_id: str):
 # ---------------------------------------------------------------------------
 
 
+@action(get="catalog.project:list")
 @catalog_bp.get("/projects")
+@action(get="catalog.project:list")
 def list_projects():
     return _crud_list(TABLE_PROJECTS, models.Project)
 
@@ -189,7 +199,9 @@ def create_project():
     return _crud_upsert(TABLE_PROJECTS, models.Project)
 
 
+@action(get="catalog.project:read")
 @catalog_bp.get("/projects/<doc_id>")
+@action(get="catalog.project:read")
 def get_project(doc_id: str):
     return _crud_get(TABLE_PROJECTS, models.Project, doc_id)
 
@@ -211,7 +223,9 @@ def delete_project(doc_id: str):
 # ---------------------------------------------------------------------------
 
 
+@action(get="catalog.tool:list")
 @catalog_bp.get("/npi-tools")
+@action(get="catalog.tool:list")
 def list_npi_tools():
     """List imported NPI reference tools. Filter with ?role= / ?capability= / ?runnable=1."""
     role = (request.args.get("role") or "").strip()
@@ -229,7 +243,9 @@ def list_npi_tools():
     return jsonify({"ok": True, "items": items, "count": len(items)})
 
 
+@action(get="catalog.tool:read")
 @catalog_bp.get("/npi-tools/<doc_id>")
+@action(get="catalog.tool:read")
 def get_npi_tool(doc_id: str):
     raw = get_repo().get(TABLE_NPI_TOOLS, doc_id)
     if raw is None:
@@ -270,7 +286,9 @@ def import_npi_tools():
 # ---------------------------------------------------------------------------
 
 
+@action(get="catalog:read")
 @catalog_bp.get("/active")
+@action(get="catalog:read")
 def get_active():
     sel = context.get_active()
     project, cluster, platform = context.resolve()
@@ -301,7 +319,9 @@ def set_active():
     return jsonify({"ok": True, "active": sel})
 
 
+@action(get="catalog:read")
 @catalog_bp.get("/topology")
+@action(get="catalog:read")
 def get_topology():
     """The active cluster's connection topology, as declared and as resolved.
 
@@ -377,7 +397,9 @@ def set_topology():
     return jsonify({"ok": True, "cluster": cluster.id, "connection": updated.to_dict()})
 
 
+@action(get="catalog:read")
 @catalog_bp.get("/vocab")
+@action(get="catalog:read")
 def vocab():
     return jsonify(
         {
@@ -400,7 +422,9 @@ def vocab():
     )
 
 
+@action(get="catalog:read")
 @catalog_bp.get("/overview")
+@action(get="catalog:read")
 def overview():
     repo = get_repo()
     platforms = [models.Platform.from_dict(r).to_dict() for r in repo.list(TABLE_PLATFORMS)]

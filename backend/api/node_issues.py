@@ -30,6 +30,7 @@ bp = Blueprint("node_issues", __name__, url_prefix="")
 
 
 @bp.route("/api/node-issues", methods=["GET"])
+@action(get="node.issues:read")
 def api_node_issues():
     """Node issue punchcard rollups and full in-SPA issue history."""
     rack = (request.args.get("rack") or "").strip()

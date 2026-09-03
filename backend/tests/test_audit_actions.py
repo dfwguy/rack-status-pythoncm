@@ -255,8 +255,15 @@ class TestTC17TransportTwins:
         assert reg.resolve("t.api_comment_put", "DELETE").action == "comments:delete"
         assert reg.actions() == ("comments:delete", "comments:update")
 
-    def test_read_methods_are_not_registered(self):
-        """A GET on a mixed-method endpoint carries no action: FR-12 excludes reads by default."""
+    def test_a_route_wide_declaration_does_not_name_a_read(self):
+        """A blanket `@action("x")` covers the route's mutations only (Phase 3).
+
+        This test previously asserted that reads are never registered at all. Reads now *are*
+        registered, so that a policy can govern them — but a route-wide name must not leak onto
+        one. The hazard is concrete: `@action("vault:set_token")` on a GET+PUT endpoint would
+        register the GET as `vault:set_token`, so granting the write would silently grant the read,
+        and an audit row for a read would claim a token had been set.
+        """
 
         @A.action("vault:set_token")
         def api_vault_token():
@@ -264,7 +271,111 @@ class TestTC17TransportTwins:
 
         reg = A.build_registry(_app(("/v", ["GET", "PUT"], api_vault_token)))
         assert reg.resolve("t.api_vault_token", "PUT") is not None
-        assert reg.resolve("t.api_vault_token", "GET") is None
+        assert reg.resolve("t.api_vault_token", "GET") is None, (
+            "the write verb leaked onto the read; a read needs the per-method form"
+        )
+
+    def test_a_read_is_registered_when_named_explicitly(self):
+        """The other half: naming it deliberately is what makes it governable."""
+
+        @A.action(get="vault:read", put="vault:set_token")
+        def api_vault_token():
+            return ""
+
+        reg = A.build_registry(_app(("/v", ["GET", "PUT"], api_vault_token)))
+        assert reg.resolve("t.api_vault_token", "GET").action == "vault:read"
+        assert reg.resolve("t.api_vault_token", "PUT").action == "vault:set_token"
+
+    def test_the_read_coverage_gate_reports_an_undeclared_read(self):
+        """The gate needs a test that it *reports*, not only one that it passes.
+
+        Added after a mutation that emptied its candidate set went uncaught: with nothing to check,
+        the gate reported no gaps and every assertion still passed. A build gate whose only tests
+        assert "no findings" is indistinguishable from a gate that has been switched off — the same
+        hole `attach_policy` had.
+        """
+
+        def api_undeclared_read():
+            return ""
+
+        app = _app(("/api/thing", ["GET"], api_undeclared_read))
+        assert A.undeclared_read_routes(app) == (
+            ("t.api_undeclared_read", "GET", "/api/thing"),
+        )
+
+    def test_the_read_gate_ignores_a_declared_read(self):
+        @A.action(get="thing:read")
+        def api_declared_read():
+            return ""
+
+        app = _app(("/api/thing", ["GET"], api_declared_read))
+        assert A.undeclared_read_routes(app) == ()
+
+    def test_the_read_gate_ignores_bypassed_routes(self, monkeypatch):
+        """A route reached without a principal has nobody for a policy to be about.
+
+        The login page and the OIDC discovery documents are unauthenticated by design. Dropping
+        this exclusion fails safe — it over-reports rather than under-reports — but it would put
+        ~10 permanent false positives in a build gate, and a gate that always fails is a gate
+        people learn to skip.
+        """
+        import web_auth
+
+        def api_login():
+            return ""
+
+        monkeypatch.setattr(
+            web_auth, "AUTH_BYPASS_ENDPOINTS", {"t.api_login"}, raising=False
+        )
+        app = _app(("/api/login", ["GET"], api_login))
+        assert A.undeclared_read_routes(app) == ()
+
+    def test_the_read_gate_ignores_routes_outside_the_api(self):
+        """The SPA catch-alls serve a bundle and never reach the authorization gate, so a
+        declaration on them would be noise that implies a grant could apply."""
+
+        def serve_spa():
+            return ""
+
+        app = _app(("/spa/", ["GET"], serve_spa))
+        assert A.undeclared_read_routes(app) == ()
+
+    def test_two_reads_may_share_an_action(self):
+        """Reads are exempt from the strict-collision rule, and the asymmetry is deliberate.
+
+        Two mutating routes sharing a name usually means two capabilities collided, and the danger
+        is *partial* coverage. For reads, sharing gives *total* coverage and is what an operator
+        means: "may read the platform catalog" is one capability reached by a dozen routes, and
+        forcing a dozen names would leave whoever grants eleven of them with a hole.
+        """
+
+        @A.action(get="catalog.platform:list")
+        def api_platforms():
+            return ""
+
+        @A.action(get="catalog.platform:list")
+        def api_platforms_summary():
+            return ""
+
+        reg = A.build_registry(
+            _app(("/p", ["GET"], api_platforms), ("/p/s", ["GET"], api_platforms_summary))
+        )
+        assert len(reg.entries) == 2
+        assert reg.actions() == ("catalog.platform:list",)
+
+    def test_two_mutations_still_may_not_share_an_action(self):
+        """The guard the exemption above must not have weakened."""
+
+        @A.action("rack.power:on")
+        def one():
+            return ""
+
+        @A.action("rack.power:on")
+        def two():
+            return ""
+
+        with pytest.raises(A.ActionRegistryError, match="both claim action"):
+            A.build_registry(_app(("/a", ["POST"], one), ("/b", ["POST"], two)))
 
     def test_resolve_before_build_is_not_an_error(self):
         """The chokepoint may run before the registry exists; it must degrade, not raise."""

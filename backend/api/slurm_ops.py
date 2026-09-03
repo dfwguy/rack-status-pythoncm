@@ -208,6 +208,7 @@ def api_slurm_undrain():
 
 
 @bp.route("/api/slurm-job-log-path", methods=["GET"])
+@action(get="slurm.job:read")
 def api_slurm_job_log_path():
     """Resolve a finished job's stdout log path (for the Recent-jobs 'open log' action)."""
     job_id = (request.args.get("job_id") or "").strip()
@@ -275,6 +276,7 @@ def api_slurm_scancel():
 
 
 @bp.route("/api/slurm-scontrol-show-job", methods=["GET"])
+@action(get="slurm.job:read")
 def api_slurm_scontrol_show_job():
     """``GET ?job_id=`` — ``module load`` then ``scontrol show job JOBID`` (dashboard host)."""
     if os.environ.get("RACK_SLURM_SCONTROL_SHOW_JOB_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -303,6 +305,7 @@ def api_slurm_scontrol_show_job():
 
 
 @bp.route("/api/slurm-job-stdout-content", methods=["GET"])
+@action(get="slurm.job:read")
 def api_slurm_job_stdout_content():
     """``GET ?path=&log_dir=`` — read job stdout file if path is allowed (from ``scontrol show job``)."""
     path_raw = (request.args.get("path") or "").strip()
@@ -345,6 +348,7 @@ def api_slurm_job_stdout_content():
 
 
 @bp.route("/api/slurm-job-stdout-download", methods=["GET"])
+@action(get="slurm.job:read")
 def api_slurm_job_stdout_download():
     """Download job stdout file (same path rules as ``/api/slurm-job-stdout-content``)."""
     path_raw = (request.args.get("path") or "").strip()

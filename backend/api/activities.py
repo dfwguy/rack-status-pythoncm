@@ -88,6 +88,7 @@ def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
 
 
 @bp.route("/api/multirack-status")
+@action(get="validation.activity:list")
 def api_multirack_status():
     """List multirack NEMO/NCCL logs: async sinfo/scontrol + log probes (same pattern as single-rack native)."""
     try:
@@ -111,6 +112,7 @@ def api_multirack_status():
 
 
 @bp.route("/api/multirack-campaign")
+@action(get="validation.activity:list")
 def api_multirack_campaign():
     try:
         return jsonify(_multirack_campaign_snapshot())
@@ -120,6 +122,7 @@ def api_multirack_campaign():
 
 
 @bp.route("/api/multirack-jobs", methods=["GET"])
+@action(get="validation.activity:list")
 def api_multirack_jobs():
     """List launched multi-rack jobs from the durable state table (newest first).
 
@@ -170,6 +173,7 @@ def _validation_activities_query_filters() -> tuple[str | None, str | None, str 
 
 
 @bp.route("/api/validation-activities", methods=["GET"])
+@action(get="validation.activity:list")
 def api_validation_activities():
     """List validation activities (newest first) with optional rack/log_dir/tool/scope filters."""
     log_dir_filter, rack, tool, scope, limit = _validation_activities_query_filters()
@@ -191,6 +195,7 @@ def api_validation_activities():
 
 
 @bp.route("/api/validation-activities/ledger", methods=["GET"])
+@action(get="validation.activity:list")
 def api_validation_activities_ledger():
     """Human-readable, append-preserving multi-rack run ledger."""
     return Response(
@@ -200,6 +205,7 @@ def api_validation_activities_ledger():
 
 
 @bp.route("/api/validation-activities/<activity_id>", methods=["GET"])
+@action(get="validation.activity:read")
 def api_validation_activity_detail(activity_id: str):
     aid = (activity_id or "").strip()
     if not aid:

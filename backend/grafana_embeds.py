@@ -78,6 +78,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 
 _logger = logging.getLogger(__name__)
@@ -452,7 +453,9 @@ def _config_block(pub_base: str, opts: _UrlOpts) -> dict[str, Any]:
 # --------------------------------------------------------------------------------------
 # routes
 # --------------------------------------------------------------------------------------
+@action(get="observability:list")
 @grafana_embeds_bp.route("/dashboards", methods=["GET"])
+@action(get="observability:list")
 def api_observability_dashboards():
     """Whole map with every panel resolved to an embed URL."""
     try:
@@ -489,7 +492,9 @@ def api_observability_dashboards():
         return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}", "views": {}, "unmapped": []}), 200
 
 
+@action(get="observability:read")
 @grafana_embeds_bp.route("/dashboards/<path:view>", methods=["GET"])
+@action(get="observability:read")
 def api_observability_dashboards_view(view: str):
     """One view's sections. Accepts the map key, the route path, or the SPA viewId."""
     try:
@@ -558,7 +563,9 @@ def _grafana_request(url: str, timeout: float, method: str = "GET") -> tuple[int
         return None, {}, b"", f"{type(exc).__name__}: {exc}"
 
 
+@action(get="observability:read")
 @grafana_embeds_bp.route("/health", methods=["GET"])
+@action(get="observability:read")
 def api_observability_health():
     """Can the BACKEND reach Grafana? Short timeout, never raises."""
     base = server_base_url()

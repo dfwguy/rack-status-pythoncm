@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 from grafana_embed import (
     _grafana_deeplink_dashboards,
@@ -43,6 +44,7 @@ bp = Blueprint("grafana", __name__, url_prefix="")
 
 
 @bp.route("/api/rack-grafana-live-charts", methods=["GET"])
+@action(get="observability:read")
 def api_rack_grafana_live_charts():
     """Grafana solo context for GPU thermal + power, last 5 minutes, hosts = rack CT expand."""
     try:
@@ -72,6 +74,7 @@ def api_rack_grafana_live_charts():
 
 
 @bp.route("/api/grafana/deeplinks")
+@action(get="observability:read")
 def api_grafana_deeplinks():
     """Config for 'Open in Grafana' deep-links (full dashboards scoped by rack/host, opened in a new tab).
 

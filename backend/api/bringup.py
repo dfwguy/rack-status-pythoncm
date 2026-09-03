@@ -38,6 +38,7 @@ bp = Blueprint("bringup", __name__, url_prefix="")
 
 
 @bp.route("/api/bringup/config")
+@action(get="bringup:read")
 def api_bringup_config():
     """Discovery: whether Travis's bring-up automation tree is present, and where."""
     if _truthy_env("RACK_STATUS_DEMO"):
@@ -51,6 +52,7 @@ def api_bringup_config():
 
 
 @bp.route("/api/bringup/node")
+@action(get="bringup:read")
 def api_bringup_node():
     """Per-node bring-up job summary (status+reason from status-check, metric from daily-report)."""
     node = (request.args.get("node") or "").strip()
@@ -72,6 +74,7 @@ def api_bringup_node():
 
 @bp.route("/api/bringup/fleet", methods=["GET", "POST"])
 @action("bringup:run")
+@action(get="bringup:read")
 def api_bringup_fleet():
     """Bring-up state for every node — what a cluster heatmap and the daily report need.
 

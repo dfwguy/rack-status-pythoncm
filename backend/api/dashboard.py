@@ -826,6 +826,7 @@ def build_cluster_overview(
 
 @bp.route("/api/cluster-dashboard-metadata", methods=["GET", "PUT"])
 @action("settings:update_dashboard")
+@action(get="cluster:read")
 def api_cluster_dashboard_metadata():
     """GET/PUT JSON ``product_line``, ``hw_vendor``, ``customer_name`` (saved under REPO_ROOT/var when unset)."""
     if request.method == "GET":
@@ -891,6 +892,7 @@ def _job_environment_settings_payload() -> dict[str, object]:
 
 @bp.route("/api/settings/job-environment", methods=["GET", "PUT"])
 @action("settings:update_job_env")
+@action(get="settings:read")
 def api_settings_job_environment():
     """GET effective job/validation env (with dashboard overrides); PUT merges ``overrides`` (empty value clears)."""
     if request.method == "GET":
@@ -976,6 +978,7 @@ def api_settings_job_environment():
 
 
 @bp.route("/api/cluster-overview", methods=["GET"])
+@action(get="cluster:read")
 def api_cluster_overview():
     """Cluster-wide facts whose inventory fields use the canonical shared snapshot."""
     _ensure_rack_status_background_thread()
@@ -1008,6 +1011,7 @@ def api_cluster_overview():
 
 
 @bp.route("/api/cluster-overview/live", methods=["GET"])
+@action(get="cluster:read")
 def api_cluster_overview_live():
     """Non-blocking BCM / Slurm / queue live probes with per-section cache state."""
     force_refresh = (request.args.get("refresh") or "").strip().lower() in (
@@ -1040,6 +1044,7 @@ def api_cluster_overview_live():
 
 
 @bp.route("/api/app-stats", methods=["GET"])
+@action(get="cluster:read")
 def api_app_stats():
     """Lightweight app metrics: active users, version, and running async commands."""
     client_id = (request.args.get("client_id") or "").strip()
@@ -1086,6 +1091,7 @@ def _merge_cluster_reachable_into_status_payload(out: dict, reachable: bool, det
 
 
 @bp.route("/api/status")
+@action(get="rack:list")
 def api_status():
     """Rack status from the canonical snapshot.
 

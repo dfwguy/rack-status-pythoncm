@@ -379,6 +379,7 @@ def _checker_script_path() -> Path:
 
 
 @bp.route("/api/hw-check-presets", methods=["GET"])
+@action(get="diag:list")
 def api_hw_check_presets():
     """Named checker argument bundles for ``/api/hw-check-async`` (``preset`` vs custom ``checker_args``)."""
     if os.environ.get("RACK_HW_CHECK_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -388,6 +389,7 @@ def api_hw_check_presets():
 
 
 @bp.route("/api/hw-check-help", methods=["GET"])
+@action(get="diag:read")
 def api_hw_check_help():
     """checker.sh --help on the dashboard host (RACK_WEB_PRINT_HELP=1 skips root check)."""
     if os.environ.get("RACK_HW_CHECK_HELP_DISABLED", "").strip().lower() in ("1", "true", "yes"):

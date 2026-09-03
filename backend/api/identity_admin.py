@@ -137,6 +137,7 @@ def _lockout_refusal(store: IdentityStore, login: str, *, verb: str):
 
 @bp.route("/users", methods=["GET"])
 @action("identity.user:list")
+@action(get="identity.user:list")
 def list_users():
     store = _store()
     try:
@@ -239,6 +240,7 @@ def create_user():
 
 @bp.route("/users/<login>", methods=["GET"])
 @action("identity.user:read")
+@action(get="identity.user:read")
 def read_user(login: str):
     store = _store()
     try:
@@ -408,6 +410,7 @@ def delete_user(login: str):
 
 @bp.route("/groups", methods=["GET"])
 @action("identity.group:list")
+@action(get="identity.group:list")
 def list_groups():
     store = _store()
     try:

@@ -85,6 +85,24 @@ class RequestFacts:
 
 SINGLETON = "default"
 
+#: The id of a *collection*, as distinct from any instance in it. A `:list` verb resolves here.
+#:
+#: A collection genuinely is a different resource from its members — `s3:ListBucket` acts on the
+#: bucket, `s3:GetObject` on the object — and pretending otherwise is what makes reads unresolvable:
+#: 103 of the 118 read routes carry no id at all, so a `<type>:<id>` resolver would refuse every
+#: one of them.
+#:
+#: The leading underscore is load-bearing. Cluster ids are site slugs and catalog ids are
+#: operator-chosen names; neither can begin with `_`, so this cannot collide with a real instance.
+#: `<type>:*` does match it, which is correct: "may read all racks" should include listing them.
+#: A grant of one specific rack does **not** confer listing, which is right but worth knowing —
+#: a UI showing the rack table needs `rack:_all` or a wildcard, not `rack:a01`.
+COLLECTION = "_all"
+
+#: Verbs that act on a collection rather than an instance. Verb-driven rather than a per-type flag
+#: because the same type has both — `catalog.platform:list` and `catalog.platform:read`.
+COLLECTION_VERBS = frozenset({"list"})
+
 
 def _singleton(_facts: RequestFacts) -> str:
     return SINGLETON
@@ -148,6 +166,18 @@ _RESOLVERS: dict[str, Extractor] = {
     "settings": _singleton,
     "support": _singleton,
     "vault": _singleton,
+    # -- types introduced with the read vocabulary (Phase 3). Instance reads that carry an id are
+    #    scoped; the rest are one surface per deployment and their `:list` verb resolves to the
+    #    collection regardless.
+    "audit.deep": _by("run_id", "id"),
+    "history": _by("run_id", "id"),
+    "metrics": _by("chart_id", "id", "metric"),
+    "observability": _by("view", "dashboard", "id"),
+    "help": _by("content_id", "id"),
+    "export": _singleton,
+    "job": _singleton,
+    "openapi": _singleton,
+    "slurm.queue": _singleton,
 }
 
 
@@ -166,7 +196,13 @@ def resolve(action: str, facts: RequestFacts) -> str:
     Raises rather than returning a filler, because every filler is matched by the `type:*` grant an
     operator would reasonably write. A refusal is recoverable and legible; a silent grant is not.
     """
-    resource_type = action.split(":", 1)[0]
+    resource_type, _, verb = action.partition(":")
+
+    # A collection read needs no id, and must not be refused for lacking one.
+    if verb in COLLECTION_VERBS:
+        if resource_type not in _RESOLVERS:
+            raise Unresolvable(f"no resource resolver declared for {resource_type!r}")
+        return f"{resource_type}:{COLLECTION}"
 
     extractor = _RESOLVERS.get(resource_type)
     if extractor is None:

@@ -16,6 +16,7 @@ audit workflow ids and projected down to what the rack UI shows. Nothing here ow
 from __future__ import annotations
 
 import workflow_engine
+from audit.actions import action
 from core import DEEP_AUDIT_WORKFLOWS
 from flask import Blueprint, jsonify, request
 
@@ -24,6 +25,7 @@ bp = Blueprint("deep_audits", __name__, url_prefix="")
 
 
 @bp.route("/api/deep-audits", methods=["GET"])
+@action(get="audit.deep:list")
 def api_deep_audits_list():
     """Recent Hardware and NVLink/Network deep-audit runs, optionally for one rack."""
     rack = (request.args.get("rack") or "").strip()
@@ -66,6 +68,7 @@ def api_deep_audits_list():
 
 
 @bp.route("/api/deep-audits/<run_id>", methods=["GET"])
+@action(get="audit.deep:read")
 def api_deep_audit_get(run_id: str):
     """One deep-audit run with per-node results and automatic Slurm actions."""
     run = workflow_engine.get_run_state((run_id or "").strip())

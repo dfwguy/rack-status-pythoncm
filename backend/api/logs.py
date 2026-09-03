@@ -123,6 +123,7 @@ def _rack_log_resolve(
 
 
 @bp.route("/api/rack-log-download")
+@action(get="logs:read")
 def api_rack_log_download():
     """Download the full NEMO rack log file (same pick as parser / tail-log)."""
     out = _rack_log_resolve(
@@ -163,6 +164,7 @@ def api_rack_log_download():
 
 
 @bp.route("/api/rack-log-content")
+@action(get="logs:read")
 def api_rack_log_content():
     """Return full log text as JSON if under size limit; otherwise too_large + metadata."""
     max_inline = max(0, _env_int("RACK_LOG_INLINE_MAX_BYTES", 10 * 1024 * 1024))

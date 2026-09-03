@@ -710,6 +710,7 @@ def _analytics_history_block(since: str | None = None) -> dict[str, object]:
 
 
 @bp.route("/api/analytics/history", methods=["GET"])
+@action(get="analytics:read")
 def api_analytics_history():
     """Fleet baseline over the persisted run history (``?since=`` ISO-8601 or epoch)."""
     if not core.history_enabled():
@@ -723,6 +724,7 @@ def api_analytics_history():
 
 
 @bp.route("/api/analytics/last", methods=["GET"])
+@action(get="analytics:read")
 def api_analytics_last():
     """Return the last saved analytics aggregate for ``log_dir`` (written after a successful POST)."""
     if os.environ.get("RACK_ANALYTICS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -828,6 +830,7 @@ def api_analytics_aggregate_async():
 
 
 @bp.route("/api/analytics/aggregate-status", methods=["GET"])
+@action(get="analytics:read")
 def api_analytics_aggregate_status():
     """Progress for a job started by ``/api/analytics/aggregate-async``.
 

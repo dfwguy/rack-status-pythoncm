@@ -44,9 +44,20 @@ from typing import Any, TypeVar
 #: a prefix to write one rule against everything under ``fabric.nvswitch``.
 ACTION_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?:[a-z][a-z0-9_]*$")
 
-#: HTTP methods whose routes must carry a declaration (FR-14b) and which are audited by default
-#: (FR-12).
+#: Methods that change something. Audited by default (FR-12), and the strict-collision rule below
+#: applies only to these.
 MUTATING_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
+#: Reads. Declared — so a policy can govern them — but **not** audited by default: the dashboard
+#: polls `/api/status`, so auditing reads would bury the signal (that is what `NVIS_AUDIT_READS` is
+#: for). Naming an action and auditing it are now separate questions, and `request_hook` asks them
+#: separately; conflating them would mean adding a read action silently turned on read auditing.
+READ_METHODS = ("GET",)
+
+#: Every method the vocabulary covers. Reads joined in Phase 3: authorization needs to name a read
+#: to govern it, so a vocabulary of mutations only made "may view rack status" inexpressible and a
+#: read-only role unachievable. Auditing's scope did not change.
+GOVERNED_METHODS = (*MUTATING_METHODS, *READ_METHODS)
 
 #: Recognised transports. Validated rather than free-form on purpose: an unrecognised variant would
 #: look like a *different* variant to the duplicate check below, so a typo would silently defeat the
@@ -215,12 +226,20 @@ def resolve(endpoint: str, method: str) -> Entry | None:
     return None if _registry is None else _registry.resolve(endpoint, method)
 
 
-def _iter_mutating_rules(app: Any):
+def _iter_rules(app: Any, methods: tuple[str, ...]):
     for rule in app.url_map.iter_rules():
         if rule.endpoint == "static":
             continue
-        for method in sorted(set(rule.methods or ()) & set(MUTATING_METHODS)):
+        for method in sorted(set(rule.methods or ()) & set(methods)):
             yield rule, method
+
+
+def _iter_mutating_rules(app: Any):
+    yield from _iter_rules(app, MUTATING_METHODS)
+
+
+def _iter_governed_rules(app: Any):
+    yield from _iter_rules(app, GOVERNED_METHODS)
 
 
 def build_registry(app: Any, *, install: bool = True) -> Registry:
@@ -240,12 +259,23 @@ def build_registry(app: Any, *, install: bool = True) -> Registry:
     entries: list[Entry] = []
     claimed: dict[tuple[str, str], Entry] = {}
 
-    for rule, method in _iter_mutating_rules(app):
+    for rule, method in _iter_governed_rules(app):
         view = app.view_functions.get(rule.endpoint)
         if view is None:
             continue
         decls = declarations_of(view)
-        decl = decls.get(method) or decls.get(None)
+        # A route-wide `@action("x")` covers the route's MUTATING methods only. A read has to be
+        # named explicitly, with the per-method form (`@action(get="vault:read")`).
+        #
+        # Found by `test_a_route_wide_declaration_does_not_name_a_read`, which failed the moment
+        # reads entered the registry: `@action("vault:set_token")` on a GET+PUT endpoint registered
+        # the GET as `vault:set_token`. That is the worst available vocabulary error — a policy
+        # granting `vault:set_token` would silently also grant reading it, and an audit row for a
+        # read would claim a token was set. Requiring a deliberate name is the whole cost of
+        # avoiding it, and 101 existing declarations already mean exactly "the mutations here".
+        decl = decls.get(method)
+        if decl is None and method in MUTATING_METHODS:
+            decl = decls.get(None)
         if decl is None:
             continue
 
@@ -262,11 +292,22 @@ def build_registry(app: Any, *, install: bool = True) -> Registry:
         entry = Entry(rule.endpoint, method, str(rule), decl.action, decl.variant)
         key = (decl.action, decl.variant)
         prior = claimed.get(key)
-        if prior is not None and prior.endpoint != entry.endpoint:
+        # Reads are exempt, and the asymmetry is the point rather than a convenience.
+        #
+        # The rule exists because two *mutating* routes sharing a name usually means two different
+        # capabilities collided, and the danger is PARTIAL coverage — granting the sync route while
+        # forgetting its streaming twin is a bypass that reads as a complete policy. Variants are
+        # how a genuine twin declares itself.
+        #
+        # For reads, sharing gives TOTAL coverage and is what an operator means: "may read the
+        # platform catalog" is one capability reached by twelve routes, and one grant covering all
+        # twelve is correct. Forcing twelve distinct names would produce a vocabulary nobody can
+        # write a policy against, and the first person to grant eleven of them would have a hole.
+        if prior is not None and prior.endpoint != entry.endpoint and method in MUTATING_METHODS:
             raise ActionRegistryError(
                 f"{entry.endpoint} and {prior.endpoint} both claim action {decl.action!r} with "
-                f"variant {decl.variant!r}. Two routes may share an action only when their "
-                f"variants differ — that is how a transport twin stays one capability."
+                f"variant {decl.variant!r}. Two mutating routes may share an action only when "
+                f"their variants differ — that is how a transport twin stays one capability."
             )
         claimed.setdefault(key, entry)
         entries.append(entry)
@@ -280,12 +321,50 @@ def build_registry(app: Any, *, install: bool = True) -> Registry:
 def undeclared_mutating_routes(app: Any) -> tuple[tuple[str, str, str], ...]:
     """``(endpoint, method, rule)`` for every mutating route with no declaration.
 
-    The coverage gate of FR-14b. A route added without an action would be invisible to Phase 3
-    policy, so a capability governed on one route would be ungoverned on another — which is a
-    coverage failure rather than an attack on the name schema, and is why it fails the build.
+    The coverage gate of FR-14b. A route added without an action would be invisible to policy, so a
+    capability governed on one route would be ungoverned on another — a coverage failure rather than
+    an attack on the name schema, which is why it fails the build.
     """
+    return _undeclared(app, _iter_mutating_rules(app))
+
+
+def undeclared_read_routes(app: Any) -> tuple[tuple[str, str, str], ...]:
+    """The same gate for reads (Phase 3), scoped to reads a policy could govern.
+
+    Kept as a **separate** function rather than widening the one above, because the two failures
+    want different remedies: an undeclared mutation is an ungoverned privileged operation, while an
+    undeclared read is a read no policy can restrict. Reporting them together would have made the
+    read backlog look like a regression in the mutation gate.
+
+    Two exclusions, both because a declaration there would be meaningless rather than merely
+    unnecessary. **The SPA shell and static assets** never reach the authorization gate at all
+    (`request_hook.is_static`, and the catch-alls serve the bundle). **Routes on the auth bypass
+    list** are reached without a principal, so there is nobody for a policy to be about — the login
+    page and the OIDC discovery documents are unauthenticated by design, and giving them action
+    names would imply a grant could apply to them.
+    """
+    try:
+        import web_auth
+
+        bypass = set(getattr(web_auth, "AUTH_BYPASS_ENDPOINTS", ()) or ())
+    except ImportError:  # pragma: no cover
+        # Narrow on purpose. `audit` must not require the gate to be importable — the unit tests
+        # build a registry over a bare Flask app — but any *other* failure here would mean the
+        # bypass list exists and could not be read, and silently treating that as "nothing is
+        # bypassed" would report ~10 unauthenticated routes as coverage gaps.
+        bypass = set()
+
+    governable = (
+        (rule, method)
+        for rule, method in _iter_rules(app, READ_METHODS)
+        if rule.endpoint not in bypass and str(rule).startswith(("/api/", "/ws/"))
+    )
+    return _undeclared(app, governable)
+
+
+def _undeclared(app: Any, rules: Any) -> tuple[tuple[str, str, str], ...]:
     missing: list[tuple[str, str, str]] = []
-    for rule, method in _iter_mutating_rules(app):
+    for rule, method in rules:
         view = app.view_functions.get(rule.endpoint)
         if view is None:
             continue

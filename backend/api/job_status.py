@@ -25,6 +25,7 @@ already purged, is a 404 rather than an error -- the durable record of a run is
 from __future__ import annotations
 
 import validation_activities
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 from job_registry import (
     _llama_jobs,
@@ -44,6 +45,7 @@ bp = Blueprint("job_status", __name__, url_prefix="")
 
 
 @bp.route("/api/reset-job-status", methods=["GET"])
+@action(get="job:list")
 def api_reset_job_status():
     """Poll async jobs: power, GPU reset, services restart, HW check, bug report, NMXC cycle, NVLink SDN reset, NVLink system reset, IMEX reset, NVLMAPPER, Precheck, NVSWICTH check, or IMEX check."""
     job_id = (request.args.get("job_id") or "").strip()
@@ -59,6 +61,7 @@ def api_reset_job_status():
 
 
 @bp.route("/api/run-validation-status", methods=["GET"])
+@action(get="job:list")
 def api_run_validation_status():
     """Return state for a job started via /api/run-validation-async (phase, stdout, …)."""
     job_id = (request.args.get("job_id") or "").strip()
@@ -74,6 +77,7 @@ def api_run_validation_status():
 
 
 @bp.route("/api/run-nemo-xrack-status", methods=["GET"])
+@action(get="job:list")
 def api_run_nemo_xrack_status():
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
@@ -88,6 +92,7 @@ def api_run_nemo_xrack_status():
 
 
 @bp.route("/api/run-llama-status", methods=["GET"])
+@action(get="job:list")
 def api_run_llama_status():
     job_id = (request.args.get("job_id") or "").strip()
     if not job_id:
@@ -102,6 +107,7 @@ def api_run_llama_status():
 
 
 @bp.route("/api/run-mnubergemm-stress-status", methods=["GET"])
+@action(get="job:list")
 def api_run_mnubergemm_stress_status():
     """Return state for a job started via /api/run-mnubergemm-stress-async."""
     job_id = (request.args.get("job_id") or "").strip()
@@ -117,6 +123,7 @@ def api_run_mnubergemm_stress_status():
 
 
 @bp.route("/api/run-nccl-fullrack-status", methods=["GET"])
+@action(get="job:list")
 def api_run_nccl_fullrack_status():
     """Return state for a job started via /api/run-nccl-fullrack-async (shared stress job store)."""
     job_id = (request.args.get("job_id") or "").strip()
@@ -132,6 +139,7 @@ def api_run_nccl_fullrack_status():
 
 
 @bp.route("/api/run-nvloom-status", methods=["GET"])
+@action(get="job:list")
 def api_run_nvloom_status():
     """Return state for a job started via /api/run-nvloom-async (same store as mnubergemm stress)."""
     job_id = (request.args.get("job_id") or "").strip()
@@ -147,6 +155,7 @@ def api_run_nvloom_status():
 
 
 @bp.route("/api/run-clusterkit-status", methods=["GET"])
+@action(get="job:list")
 def api_run_clusterkit_status():
     """Return state for a job started via /api/run-clusterkit-async."""
     job_id = (request.args.get("job_id") or "").strip()
@@ -162,6 +171,7 @@ def api_run_clusterkit_status():
 
 
 @bp.route("/api/run-llmb-nccl-status", methods=["GET"])
+@action(get="job:list")
 def api_run_llmb_nccl_status():
     """Return state for a job started via /api/run-llmb-nccl-async."""
     job_id = (request.args.get("job_id") or "").strip()

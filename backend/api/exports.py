@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 import host_exec
+from audit.actions import action
 from config_env import _eget, _eget_int, _env_int, _subprocess_env
 from core import rpath as _rpath
 from core import truthy_env as _truthy_env
@@ -472,6 +473,7 @@ def _parser_excel_report_copy_dir() -> Path:
 
 
 @bp.route("/api/parser-export-excel")
+@action(get="export:read")
 def api_parser_export_excel():
     """Run parser.sh --json on export-selected logs (log root only; no ``failed/``; one successful 1Rack log per rack with nemo=done), then .xlsx."""
     if os.environ.get("RACK_PARSER_EXPORT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -585,12 +587,14 @@ def api_parser_export_excel():
 
 
 @bp.route("/api/parser-export-csv")
+@action(get="export:read")
 def api_parser_export_csv_legacy():
     """Backward-compatible redirect; exports are now multi-sheet Excel."""
     return redirect(url_for(".api_parser_export_excel", **request.args), code=307)
 
 
 @bp.route("/api/export-logs-zip")
+@action(get="export:read")
 def api_export_logs_zip():
     """Zip exportable matching .txt (same rules as parser Excel export: root + multirack under failed/)."""
     if os.environ.get("RACK_LOG_EXPORT_DISABLED", "").strip().lower() in ("1", "true", "yes"):

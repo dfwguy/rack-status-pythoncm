@@ -82,6 +82,7 @@ def _iter_active_jobs_for_locks() -> list[dict]:
 
 
 @bp.route("/api/rack-locks", methods=["GET"])
+@action(get="rack.lock:list")
 def api_rack_locks_get():
     """Snapshot of in-flight operations + explicit claims, grouped by rack."""
     snapshot = rack_locks.build_lock_snapshot(

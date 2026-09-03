@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 
+from audit.actions import action
 from flask import Blueprint, jsonify
 
 _logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ bp = Blueprint("ds_diag", __name__, url_prefix="")
 
 
 @bp.route("/api/ds-diag", methods=["GET"])
+@action(get="diag:read")
 def api_ds_diag():
     """Diagnostic: what did `cmsh -c ds` actually return on the last worker pass?"""
     import native_status as _ns

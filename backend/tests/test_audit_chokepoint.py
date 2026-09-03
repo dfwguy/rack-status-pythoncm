@@ -146,12 +146,44 @@ class TestTC23AuditScope:
         assert events[0]["action"] == CANONICAL_ACTION
 
     def test_reads_audited_when_opted_in(self, client, tmp_path, monkeypatch):
-        """AC-24, and the derived name is distinguishable from the declared vocabulary."""
+        """AC-24. Now with the read's *declared* name, not a derived one.
+
+        This asserted `endswith(":read")` — the shape of a name derived from the endpoint — because
+        reads carried no declaration. Phase 3 declares them so policy can govern them, so
+        `/api/status` audits as `rack:list`: the vocabulary, not a guess. The derived path still
+        exists as a fallback and is covered by `test_an_undeclared_read_falls_back_to_a_derived_name`.
+        """
         monkeypatch.setenv("NVIS_AUDIT_READS", "1")
         client.get("/api/status")
         events = _events(tmp_path)
         assert len(events) == 1
-        assert events[0]["action"].endswith(":read")
+        assert events[0]["action"] == "rack:list"
+
+    def test_an_undeclared_read_falls_back_to_a_derived_name(self, client, tmp_path, monkeypatch):
+        """The path the declared vocabulary did not remove.
+
+        Reads on the auth-bypass list carry no declaration on purpose — they are reached without a
+        principal, so there is nobody for a policy to be about, and naming them would imply a grant
+        could apply. With read auditing on they still have to appear in the trail, under a name
+        derived from the endpoint rather than under nothing at all.
+        """
+        monkeypatch.setenv("NVIS_AUDIT_READS", "1")
+        client.get("/api/auth-check")
+        events = _events(tmp_path)
+        assert len(events) == 1
+        assert events[0]["action"].endswith(":read"), events[0]["action"]
+
+    def test_reads_stay_out_of_the_trail_by_default(self, client, tmp_path, monkeypatch):
+        """The counterpart, and the one that would have broken silently.
+
+        Declaring 118 read actions made `entry is not None` true for every read, and that condition
+        used to mean "audit this". Left alone, the dashboard's `/api/status` polling would have
+        started filling the trail and overridden `NVIS_AUDIT_READS=0` — burying the signal the
+        trail exists for. Naming an action and auditing it are now separate questions.
+        """
+        monkeypatch.setenv("NVIS_AUDIT_READS", "0")
+        client.get("/api/status")
+        assert _events(tmp_path) == []
 
     def test_disabling_the_trail_writes_nothing(self, client, tmp_path, monkeypatch):
         monkeypatch.setenv("NVIS_AUDIT_ENABLED", "0")

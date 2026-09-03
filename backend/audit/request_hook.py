@@ -208,18 +208,25 @@ def _record(response) -> bool:
     method = (request.method or "").upper()
     entry = _actions.resolve(request.endpoint or "", method)
 
+    # Two separate questions, and they were one until reads entered the vocabulary in Phase 3.
+    #
+    # `entry is not None` used to imply "audit this", because only mutations were declared. Now that
+    # ~118 read routes are declared so policy can govern them, that implication would make every
+    # `/api/status` poll an audit row and silently override `NVIS_AUDIT_READS=0` — burying the
+    # signal the trail exists to carry. So: the METHOD decides whether to audit, and the registry
+    # only decides what the thing is called.
+    if method not in MUTATING and not sink.AUDIT_READS.resolve():
+        return False  # a read, and read auditing is off (FR-12)
+
     if entry is not None:
         action, variant = entry.action, entry.variant
-    elif method in MUTATING:
-        # A mutating route with no declaration. The build gate (FR-14b) exists so this cannot
-        # happen, but recording it unnamed beats not recording a privileged action at all.
-        action, variant = _read_action(request.endpoint or ""), "sync"
-        _logger.warning("auditing %s %s with a derived name: no @action declaration",
-                        method, path)
-    elif sink.AUDIT_READS.resolve():
-        action, variant = _read_action(request.endpoint or ""), "sync"
     else:
-        return False  # a read, and read auditing is off (FR-12)
+        action, variant = _read_action(request.endpoint or ""), "sync"
+        if method in MUTATING:
+            # A mutating route with no declaration. The build gate (FR-14b) exists so this cannot
+            # happen, but recording it unnamed beats not recording a privileged action at all.
+            _logger.warning("auditing %s %s with a derived name: no @action declaration",
+                            method, path)
 
     from api import _common
 

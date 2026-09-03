@@ -32,12 +32,14 @@ bp = Blueprint("workflows", __name__, url_prefix="")
 
 
 @bp.route("/api/workflows", methods=["GET"])
+@action(get="workflow:list")
 def api_workflows_list():
     """List available workflow templates."""
     return jsonify({"ok": True, "workflows": workflow_engine.list_workflows()})
 
 
 @bp.route("/api/workflows/<workflow_id>", methods=["GET"])
+@action(get="workflow:read")
 def api_workflow_get(workflow_id: str):
     """Get a specific workflow template."""
     wf = workflow_engine.get_workflow(workflow_id)
@@ -104,12 +106,14 @@ def api_workflow_generate_mermaid():
 
 
 @bp.route("/api/workflow-runs", methods=["GET"])
+@action(get="workflow:list")
 def api_workflow_runs_list():
     """List active and recent workflow runs."""
     return jsonify({"ok": True, "runs": workflow_engine.list_runs()})
 
 
 @bp.route("/api/workflow-runs/<run_id>", methods=["GET"])
+@action(get="workflow:read")
 def api_workflow_run_state(run_id: str):
     """Get current state of a workflow run."""
     run = workflow_engine.get_run_state(run_id)
@@ -142,6 +146,7 @@ def api_workflow_run_cancel(run_id: str):
 
 
 @bp.route("/api/workflow-runs/<run_id>/output/<step_id>", methods=["GET"])
+@action(get="workflow:read")
 def api_workflow_run_output(run_id: str, step_id: str):
     """Get the full output log for a specific step in a workflow run."""
     output = workflow_engine.get_step_output(run_id, step_id)

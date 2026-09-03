@@ -1,14 +1,44 @@
 [
  {
+  "endpoint": "activities.api_multirack_campaign",
+  "method": "GET",
+  "action": "validation.activity:list",
+  "variant": "sync"
+ },
+ {
   "endpoint": "activities.api_multirack_job_delete",
   "method": "DELETE",
   "action": "validation.activity:delete",
   "variant": "legacy"
  },
  {
+  "endpoint": "activities.api_multirack_jobs",
+  "method": "GET",
+  "action": "validation.activity:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "activities.api_multirack_status",
+  "method": "GET",
+  "action": "validation.activity:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "activities.api_validation_activities",
+  "method": "GET",
+  "action": "validation.activity:list",
+  "variant": "sync"
+ },
+ {
   "endpoint": "activities.api_validation_activities_adopt",
   "method": "POST",
   "action": "validation.activity:adopt",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "activities.api_validation_activities_ledger",
+  "method": "GET",
+  "action": "validation.activity:list",
   "variant": "sync"
  },
  {
@@ -21,6 +51,12 @@
   "endpoint": "activities.api_validation_activity_delete",
   "method": "DELETE",
   "action": "validation.activity:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "activities.api_validation_activity_detail",
+  "method": "GET",
+  "action": "validation.activity:read",
   "variant": "sync"
  },
  {
@@ -37,6 +73,12 @@
  },
  {
   "endpoint": "ai.api_ai_settings",
+  "method": "GET",
+  "action": "ai:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "ai.api_ai_settings",
   "method": "PUT",
   "action": "ai:configure",
   "variant": "sync"
@@ -45,6 +87,12 @@
   "endpoint": "ai.api_ai_test",
   "method": "POST",
   "action": "ai:test",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "ai.api_ai_tools",
+  "method": "GET",
+  "action": "ai:list",
   "variant": "sync"
  },
  {
@@ -58,6 +106,30 @@
   "method": "POST",
   "action": "analytics:aggregate",
   "variant": "async"
+ },
+ {
+  "endpoint": "analytics.api_analytics_aggregate_status",
+  "method": "GET",
+  "action": "analytics:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "analytics.api_analytics_history",
+  "method": "GET",
+  "action": "analytics:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "analytics.api_analytics_last",
+  "method": "GET",
+  "action": "analytics:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "api_lake_health",
+  "method": "GET",
+  "action": "observability:read",
+  "variant": "sync"
  },
  {
   "endpoint": "auth.api_logout",
@@ -108,9 +180,27 @@
   "variant": "sync"
  },
  {
+  "endpoint": "bringup.api_bringup_config",
+  "method": "GET",
+  "action": "bringup:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "bringup.api_bringup_fleet",
+  "method": "GET",
+  "action": "bringup:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "bringup.api_bringup_fleet",
   "method": "POST",
   "action": "bringup:run",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "bringup.api_bringup_node",
+  "method": "GET",
+  "action": "bringup:read",
   "variant": "sync"
  },
  {
@@ -118,6 +208,24 @@
   "method": "POST",
   "action": "support:bug_report",
   "variant": "async"
+ },
+ {
+  "endpoint": "bug_report.api_bug_report_bundle",
+  "method": "GET",
+  "action": "support:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "bug_report.api_bug_report_file",
+  "method": "GET",
+  "action": "support:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "bug_report.api_bug_report_inventory",
+  "method": "GET",
+  "action": "support:list",
+  "variant": "sync"
  },
  {
   "endpoint": "catalog.create_platform",
@@ -156,9 +264,75 @@
   "variant": "sync"
  },
  {
+  "endpoint": "catalog.get_active",
+  "method": "GET",
+  "action": "catalog:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.get_npi_tool",
+  "method": "GET",
+  "action": "catalog.tool:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.get_platform",
+  "method": "GET",
+  "action": "catalog.platform:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.get_project",
+  "method": "GET",
+  "action": "catalog.project:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.get_tool",
+  "method": "GET",
+  "action": "catalog.tool:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.get_topology",
+  "method": "GET",
+  "action": "catalog:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "catalog.import_npi_tools",
   "method": "POST",
   "action": "catalog.tool:import",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.list_npi_tools",
+  "method": "GET",
+  "action": "catalog.tool:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.list_platforms",
+  "method": "GET",
+  "action": "catalog.platform:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.list_projects",
+  "method": "GET",
+  "action": "catalog.project:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.list_tools",
+  "method": "GET",
+  "action": "catalog.tool:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "catalog.overview",
+  "method": "GET",
+  "action": "catalog:read",
   "variant": "sync"
  },
  {
@@ -192,6 +366,18 @@
   "variant": "sync"
  },
  {
+  "endpoint": "catalog.vocab",
+  "method": "GET",
+  "action": "catalog:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "cluster_health.api_cluster_health",
+  "method": "GET",
+  "action": "cluster:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "cluster_health.api_cluster_health_reconnect",
   "method": "POST",
   "action": "cluster:reconnect",
@@ -210,9 +396,45 @@
   "variant": "sync"
  },
  {
+  "endpoint": "comments.api_comments_list",
+  "method": "GET",
+  "action": "comments:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "dashboard.api_app_stats",
+  "method": "GET",
+  "action": "cluster:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "dashboard.api_cluster_dashboard_metadata",
+  "method": "GET",
+  "action": "cluster:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "dashboard.api_cluster_dashboard_metadata",
   "method": "PUT",
   "action": "settings:update_dashboard",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "dashboard.api_cluster_overview",
+  "method": "GET",
+  "action": "cluster:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "dashboard.api_cluster_overview_live",
+  "method": "GET",
+  "action": "cluster:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "dashboard.api_settings_job_environment",
+  "method": "GET",
+  "action": "settings:read",
   "variant": "sync"
  },
  {
@@ -222,10 +444,40 @@
   "variant": "sync"
  },
  {
+  "endpoint": "dashboard.api_status",
+  "method": "GET",
+  "action": "rack:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "deep_audits.api_deep_audit_get",
+  "method": "GET",
+  "action": "audit.deep:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "deep_audits.api_deep_audits_list",
+  "method": "GET",
+  "action": "audit.deep:list",
+  "variant": "sync"
+ },
+ {
   "endpoint": "diagnostics.api_hw_check_async",
   "method": "POST",
   "action": "diag:hw_check",
   "variant": "async"
+ },
+ {
+  "endpoint": "diagnostics.api_hw_check_help",
+  "method": "GET",
+  "action": "diag:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "diagnostics.api_hw_check_presets",
+  "method": "GET",
+  "action": "diag:list",
+  "variant": "sync"
  },
  {
   "endpoint": "diagnostics.api_precheck_async",
@@ -244,6 +496,30 @@
   "method": "POST",
   "action": "diag:sysinfo",
   "variant": "stream"
+ },
+ {
+  "endpoint": "ds_diag.api_ds_diag",
+  "method": "GET",
+  "action": "diag:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "exports.api_export_logs_zip",
+  "method": "GET",
+  "action": "export:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "exports.api_parser_export_csv_legacy",
+  "method": "GET",
+  "action": "export:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "exports.api_parser_export_excel",
+  "method": "GET",
+  "action": "export:read",
+  "variant": "sync"
  },
  {
   "endpoint": "fabric_ops.api_imex_check_async",
@@ -270,6 +546,12 @@
   "variant": "async"
  },
  {
+  "endpoint": "fabric_ops.api_nvlmapper_zip",
+  "method": "GET",
+  "action": "fabric.nvswitch:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "fabric_ops.api_nvswitch_check_async",
   "method": "POST",
   "action": "fabric.nvswitch:check",
@@ -280,6 +562,12 @@
   "method": "POST",
   "action": "fabric.nvswitch:fix",
   "variant": "async"
+ },
+ {
+  "endpoint": "fabric_ops.api_nvswitch_hosts",
+  "method": "GET",
+  "action": "fabric.nvswitch:list",
+  "variant": "sync"
  },
  {
   "endpoint": "fabric_ops.api_nvswitch_sdn_reset_async",
@@ -298,6 +586,84 @@
   "method": "POST",
   "action": "fabric.nvswitch:audit",
   "variant": "stream"
+ },
+ {
+  "endpoint": "fabric_probe.api_fabric_probe",
+  "method": "GET",
+  "action": "fabric:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "grafana.api_grafana_deeplinks",
+  "method": "GET",
+  "action": "observability:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "grafana.api_rack_grafana_live_charts",
+  "method": "GET",
+  "action": "observability:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "grafana_embeds.api_observability_dashboards",
+  "method": "GET",
+  "action": "observability:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "grafana_embeds.api_observability_dashboards_view",
+  "method": "GET",
+  "action": "observability:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "grafana_embeds.api_observability_health",
+  "method": "GET",
+  "action": "observability:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "help.api_help_content",
+  "method": "GET",
+  "action": "help:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "help.api_help_content_entry",
+  "method": "GET",
+  "action": "help:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "history.api_history_metric_series",
+  "method": "GET",
+  "action": "history:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "history.api_history_metrics",
+  "method": "GET",
+  "action": "history:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "history.api_history_run",
+  "method": "GET",
+  "action": "history:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "history.api_history_runs",
+  "method": "GET",
+  "action": "history:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "history.api_history_summary",
+  "method": "GET",
+  "action": "history:read",
+  "variant": "sync"
  },
  {
   "endpoint": "identity_admin.add_member",
@@ -327,6 +693,24 @@
   "endpoint": "identity_admin.delete_user",
   "method": "DELETE",
   "action": "identity.user:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "identity_admin.list_groups",
+  "method": "GET",
+  "action": "identity.group:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "identity_admin.list_users",
+  "method": "GET",
+  "action": "identity.user:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "identity_admin.read_user",
+  "method": "GET",
+  "action": "identity.user:read",
   "variant": "sync"
  },
  {
@@ -360,6 +744,72 @@
   "variant": "sync"
  },
  {
+  "endpoint": "job_status.api_reset_job_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "job_status.api_run_clusterkit_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "job_status.api_run_llama_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "job_status.api_run_llmb_nccl_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "job_status.api_run_mnubergemm_stress_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "job_status.api_run_nccl_fullrack_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "job_status.api_run_nemo_xrack_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "job_status.api_run_nvloom_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "job_status.api_run_validation_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "logs.api_rack_log_content",
+  "method": "GET",
+  "action": "logs:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "logs.api_rack_log_download",
+  "method": "GET",
+  "action": "logs:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "logs.api_tail_job_stdout_stream",
   "method": "POST",
   "action": "logs:tail_job",
@@ -372,6 +822,42 @@
   "variant": "stream"
  },
  {
+  "endpoint": "metrics_query.api_metrics_catalog",
+  "method": "GET",
+  "action": "metrics:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "metrics_query.api_metrics_chart",
+  "method": "GET",
+  "action": "metrics:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "metrics_query.api_metrics_health",
+  "method": "GET",
+  "action": "metrics:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "metrics_query.api_metrics_query",
+  "method": "GET",
+  "action": "metrics:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "metrics_query.api_metrics_query_range",
+  "method": "GET",
+  "action": "metrics:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "node_issues.api_node_issues",
+  "method": "GET",
+  "action": "node.issues:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "node_issues.api_node_issues_sync_punchcard",
   "method": "POST",
   "action": "node.issues:sync",
@@ -381,6 +867,12 @@
   "endpoint": "nvftp_sync.api_nvftp_sync_run",
   "method": "POST",
   "action": "nvftp:sync",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "nvftp_sync.api_nvftp_sync_status",
+  "method": "GET",
+  "action": "nvftp:read",
   "variant": "sync"
  },
  {
@@ -408,15 +900,57 @@
   "variant": "sync"
  },
  {
+  "endpoint": "openapi_spec.api_openapi_json",
+  "method": "GET",
+  "action": "openapi:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "openapi_spec.api_openapi_yaml",
+  "method": "GET",
+  "action": "openapi:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "parser_results.api_capture_job_attempt",
+  "method": "GET",
+  "action": "results:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "parser_results.api_capture_job_attempt",
   "method": "POST",
   "action": "results:capture",
   "variant": "sync"
  },
  {
+  "endpoint": "parser_results.api_clusterkit_results",
+  "method": "GET",
+  "action": "results:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "parser_results.api_nvloom_heatmaps_log",
+  "method": "GET",
+  "action": "results:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "parser_results.api_parser_results",
+  "method": "GET",
+  "action": "results:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "rack_locks_api.api_rack_locks_claim",
   "method": "POST",
   "action": "rack.lock:claim",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "rack_locks_api.api_rack_locks_get",
+  "method": "GET",
+  "action": "rack.lock:list",
   "variant": "sync"
  },
  {
@@ -481,8 +1015,26 @@
  },
  {
   "endpoint": "reports.api_node_report",
+  "method": "GET",
+  "action": "report.node:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "reports.api_node_report",
   "method": "POST",
   "action": "report.node:generate",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "reports.api_node_report_kinds",
+  "method": "GET",
+  "action": "report.node:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "reports.api_node_report_result",
+  "method": "GET",
+  "action": "report.node:read",
   "variant": "sync"
  },
  {
@@ -492,9 +1044,27 @@
   "variant": "async"
  },
  {
+  "endpoint": "reports.api_node_report_status",
+  "method": "GET",
+  "action": "report.node:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "reports.api_post_run_node_mark",
   "method": "POST",
   "action": "report.node:mark",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "reports.api_post_run_node_report",
+  "method": "GET",
+  "action": "report.node:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "reports.api_reports_generated",
+  "method": "GET",
+  "action": "report:list",
   "variant": "sync"
  },
  {
@@ -504,9 +1074,33 @@
   "variant": "sync"
  },
  {
+  "endpoint": "reports.api_reports_generated_download",
+  "method": "GET",
+  "action": "report:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "slurm_ops.api_slurm_drain",
   "method": "POST",
   "action": "slurm.node:drain",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "slurm_ops.api_slurm_job_log_path",
+  "method": "GET",
+  "action": "slurm.job:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "slurm_ops.api_slurm_job_stdout_content",
+  "method": "GET",
+  "action": "slurm.job:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "slurm_ops.api_slurm_job_stdout_download",
+  "method": "GET",
+  "action": "slurm.job:read",
   "variant": "sync"
  },
  {
@@ -516,15 +1110,57 @@
   "variant": "sync"
  },
  {
+  "endpoint": "slurm_ops.api_slurm_scontrol_show_job",
+  "method": "GET",
+  "action": "slurm.job:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "slurm_ops.api_slurm_undrain",
   "method": "POST",
   "action": "slurm.node:undrain",
   "variant": "sync"
  },
  {
+  "endpoint": "slurm_queries.api_slurm_sacct_recent",
+  "method": "GET",
+  "action": "slurm.queue:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "slurm_queries.api_slurm_sinfo_r",
+  "method": "GET",
+  "action": "slurm.queue:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "slurm_queries.api_slurm_squeue",
+  "method": "GET",
+  "action": "slurm.queue:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "sn_llama_logs.api_sn_llama_logs",
+  "method": "GET",
+  "action": "logs:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "tools.api_tools_available",
+  "method": "GET",
+  "action": "tools:list",
+  "variant": "sync"
+ },
+ {
   "endpoint": "tools.api_tools_download_containers",
   "method": "POST",
   "action": "tools:download_containers",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "tools.api_tools_download_containers_status",
+  "method": "GET",
+  "action": "job:list",
   "variant": "sync"
  },
  {
@@ -606,6 +1242,24 @@
   "variant": "stream"
  },
  {
+  "endpoint": "tools.api_tools_workspace_toolchain_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "universal.api_universal_inventory",
+  "method": "GET",
+  "action": "results:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "universal.api_universal_parse",
+  "method": "GET",
+  "action": "results:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "universal.api_universal_scan",
   "method": "POST",
   "action": "results:scan",
@@ -640,6 +1294,12 @@
   "method": "POST",
   "action": "validation:run_exemplar_sysinfo",
   "variant": "async"
+ },
+ {
+  "endpoint": "validation_runs.api_run_exemplar_sysinfo_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
  },
  {
   "endpoint": "validation_runs.api_run_llama_async",
@@ -696,9 +1356,27 @@
   "variant": "async"
  },
  {
+  "endpoint": "validation_runs.api_run_validation_preset_status",
+  "method": "GET",
+  "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "validation_runs.api_validation_presets",
+  "method": "GET",
+  "action": "validation:list",
+  "variant": "sync"
+ },
+ {
   "endpoint": "vault.api_vault_nvftp_token",
   "method": "DELETE",
   "action": "vault:delete_token",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "vault.api_vault_nvftp_token",
+  "method": "GET",
+  "action": "vault:read",
   "variant": "sync"
  },
  {
@@ -720,6 +1398,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "workflows.api_workflow_get",
+  "method": "GET",
+  "action": "workflow:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "workflows.api_workflow_run",
   "method": "POST",
   "action": "workflow:run",
@@ -738,9 +1422,33 @@
   "variant": "sync"
  },
  {
+  "endpoint": "workflows.api_workflow_run_output",
+  "method": "GET",
+  "action": "workflow:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "workflows.api_workflow_run_state",
+  "method": "GET",
+  "action": "workflow:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "workflows.api_workflow_runs_list",
+  "method": "GET",
+  "action": "workflow:list",
+  "variant": "sync"
+ },
+ {
   "endpoint": "workflows.api_workflow_save",
   "method": "POST",
   "action": "workflow:save",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "workflows.api_workflows_list",
+  "method": "GET",
+  "action": "workflow:list",
   "variant": "sync"
  }
 ]

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 
 import app_version
+from audit.actions import action
 from flask import Blueprint, Response, current_app, jsonify
 
 # Empty prefix: these routes carry the paths they had in app.py, so the move cannot change a URL.
@@ -36,6 +37,7 @@ def _spec() -> dict:
 
 
 @bp.route("/api/openapi.json", methods=["GET"])
+@action(get="openapi:read")
 def api_openapi_json():
     """OpenAPI 3.1 description of this deployment's `/api/*` surface.
 
@@ -54,6 +56,7 @@ def api_openapi_json():
 
 
 @bp.route("/api/openapi.yaml", methods=["GET"])
+@action(get="openapi:read")
 def api_openapi_yaml():
     """The same document as YAML, for tooling that prefers it."""
     try:

@@ -442,6 +442,7 @@ def api_tools_download_containers_stream():
 
 
 @bp.route("/api/tools/download-containers-status", methods=["GET"])
+@action(get="job:list")
 def api_tools_download_containers_status():
     """Return whether a non-empty NEMO ``.sqsh`` is already present for *destination* (same rules as download skip)."""
     if os.environ.get("RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -512,6 +513,7 @@ def _workspace_toolchain_status_payload(ws: Path, cuda_major: str) -> dict[str, 
 
 
 @bp.route("/api/tools/workspace-toolchain-status", methods=["GET"])
+@action(get="job:list")
 def api_tools_workspace_toolchain_status():
     """Return whether CUDA toolkit, HPC-X, NCCL test binary, and nvloom_cli are present under *workspace*."""
     ws_q = (request.args.get("workspace") or "").strip()
@@ -1574,6 +1576,7 @@ _WORKFLOW_TOOL_KEYS = {
 
 
 @bp.route("/api/tools/available", methods=["GET"])
+@action(get="tools:list")
 def api_tools_available():
     """Return predefined scripts/tools available for workflow automation steps."""
     tools = []

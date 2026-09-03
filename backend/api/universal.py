@@ -205,6 +205,7 @@ def _universal_path_under_log_dir(log_dir: Path, raw: str) -> str | None:
 
 
 @bp.route("/api/universal/inventory")
+@action(get="results:list")
 def api_universal_inventory():
     """Every file in the log dir on the exec host — all extensions, sub-dirs included."""
     if not _universal_enabled():
@@ -229,6 +230,7 @@ def api_universal_inventory():
 
 
 @bp.route("/api/universal/parse")
+@action(get="results:read")
 def api_universal_parse():
     """Normalise ONE log of any kind. ``?path=`` (abs or relative to the log dir) or ``?log_file=``."""
     if not _universal_enabled():

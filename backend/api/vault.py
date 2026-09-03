@@ -35,6 +35,7 @@ NVFTP_TOKENS_URL = (
 
 @bp.route("/api/vault/nvftp-token", methods=["GET", "PUT", "DELETE"])
 @action(put="vault:set_token", delete="vault:delete_token")
+@action(get="vault:read")
 def api_vault_nvftp_token():
     """GET status (masked); PUT ``{token}`` to store encrypted; DELETE to clear."""
     if request.method == "GET":

@@ -371,6 +371,7 @@ def _demo_parser_results():
 
 
 @bp.route("/api/parser-results")
+@action(get="results:read")
 def api_parser_results():
     """Run parser.sh --json on the log for rack (same cwd convention as rack_status log_dir).
 
@@ -644,6 +645,7 @@ def api_parser_results():
 
 
 @bp.route("/api/nvloom-heatmaps-log")
+@action(get="results:read")
 def api_nvloom_heatmaps_log():
     """Return the newest Slurm stdout for nvloom singlerack (``nvloom/*NVLOOM-<rack>-*.txt``) for heatmap UI.
 
@@ -800,6 +802,7 @@ def _clusterkit_bandwidth_summary_from_data(data: dict[str, object]) -> dict[str
 
 
 @bp.route("/api/clusterkit-results")
+@action(get="results:read")
 def api_clusterkit_results():
     """List ClusterKit ``bandwidth.json`` runs under ``log_dir/clusterkit/<rack>/``; optional full matrix for one run.
 
@@ -1006,6 +1009,7 @@ def _sn_llama_txt_paths_for_rack(log_dir: Path, rack: str, *, exclude: Path | No
 
 @bp.route("/api/history/capture-job", methods=["GET", "POST"])
 @action("results:capture")
+@action(get="results:read")
 def api_capture_job_attempt():
     """``?job_id=`` — record a Slurm attempt (even one that produced no log) to history + lake."""
     jid = (request.args.get("job_id") or (request.get_json(silent=True) or {}).get("job_id") or "").strip()

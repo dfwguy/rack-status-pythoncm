@@ -380,6 +380,7 @@ def api_bug_report_async():
 
 
 @bp.route("/api/bug-report-bundle", methods=["GET"])
+@action(get="support:read")
 def api_bug_report_bundle():
     """GET ``?job_id=…`` — zip of ``bug_report_files`` from a completed bug_report job (ssh cat per host)."""
     job_id = (request.args.get("job_id") or "").strip()
@@ -430,6 +431,7 @@ def api_bug_report_bundle():
 
 
 @bp.route("/api/bug-report-inventory", methods=["GET"])
+@action(get="support:list")
 def api_bug_report_inventory():
     """List bug-report ``*.log.gz``, NVLMapper ``*.csv`` / ``*.xls``, ``nvlmapper.*.zip``, and ``*.xlsx`` under ``RACK_BUG_REPORT_REMOTE_DIR`` (no pdsh)."""
     if os.environ.get("RACK_BUG_REPORT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -447,6 +449,7 @@ def api_bug_report_inventory():
 
 
 @bp.route("/api/bug-report-file", methods=["GET"])
+@action(get="support:read")
 def api_bug_report_file():
     """Download one local file from reports dir (subdir layout or ``excel-root`` for base-level ``*.xlsx``)."""
     if os.environ.get("RACK_BUG_REPORT_DISABLED", "").strip().lower() in ("1", "true", "yes"):

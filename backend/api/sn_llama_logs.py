@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 
 import host_exec
+from audit.actions import action
 from core import rpath as _rpath
 from flask import Blueprint, jsonify, request
 from paths import _resolve_log_dir
@@ -28,6 +29,7 @@ bp = Blueprint("sn_llama_logs", __name__, url_prefix="")
 
 
 @bp.route("/api/sn-llama-logs", methods=["GET"])
+@action(get="logs:read")
 def api_sn_llama_logs():
     """List ``*.txt`` under ``log_dir/sn-llama/`` (newest first), optional ``rack`` substring filter."""
     try:

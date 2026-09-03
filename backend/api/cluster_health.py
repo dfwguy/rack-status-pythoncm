@@ -29,6 +29,7 @@ bp = Blueprint("cluster_health", __name__, url_prefix="")
 
 
 @bp.route("/api/cluster-health", methods=["GET"])
+@action(get="cluster:read")
 def api_cluster_health():
     """Cheap, cached cluster-link reachability for the SPA connection banner.
 

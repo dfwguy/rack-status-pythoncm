@@ -315,34 +315,38 @@ class TestTheGateDoesNotEatTheRequestBody:
         )
 
 
-class TestReadsAreNotAuthorizedYet:
-    """A scope finding, pinned rather than left to be rediscovered.
+class TestReadsAreGoverned:
+    """Reads entered the vocabulary in Phase 3, so a policy can now restrict them.
 
-    The action vocabulary was built in **Phase 1 for auditing**, where covering mutations is the
-    right call — a read is not a change worth an audit row. Phase 3 then reused that vocabulary as
-    the **authorization** vocabulary, and silently inherited its scope: 124 actions, `POST` 98 /
-    `PUT` 11 / `DELETE` 13 / `PATCH` 2, and **zero** `GET`.
+    This class replaces `TestReadsAreNotAuthorizedYet`, whose whole purpose was to fail when this
+    changed — it did, which is the only reason the swap is a reviewed diff rather than a surprise.
 
-    So a policy cannot express "may view rack status", and a read-only role is not achievable: every
-    authenticated principal can read everything, and only mutations are governed. That may well be
-    the right product decision — but it is a decision, and until now it was an accident of which
-    phase defined the vocabulary.
-
-    These tests assert the *current* behaviour so that closing the gap is a deliberate change that
-    fails here first, rather than something that quietly starts working.
+    The gap it recorded: the action vocabulary was built in Phase 1 for **auditing**, where covering
+    mutations only is right, and Phase 3 reused it for **authorization** and inherited that scope.
+    118 read routes now carry declarations, so "may view rack status" is expressible and a read-only
+    role is achievable.
     """
 
-    def test_a_read_is_permitted_with_no_policy_at_all(self, deployment):
+    def test_a_read_is_refused_with_nothing_attached(self, deployment):
+        """The headline change. This returned 200 before, because no action resolved for a GET and
+        the gate skipped authorization entirely."""
         deployment.write_policies([])
         deployment.sign_in_as("operator")
 
-        assert deployment.get("/api/status").status_code == 200, (
-            "reads are now authorized -- if that is intended, this test should be replaced rather "
-            "than adjusted, and GET actions declared in the audit registry"
-        )
+        assert deployment.get("/api/status").status_code == 403
 
-    def test_a_read_is_permitted_even_under_a_deny_everything_policy(self, deployment):
-        """The sharp end of it: an explicit deny cannot stop a read, because the gate never asks."""
+    def test_a_read_grant_permits_the_read(self, deployment):
+        deployment.write_policies([{
+            "id": "viewer",
+            "statements": [{"effect": "allow", "actions": ["rack:list"], "resources": ["*"]}],
+        }])
+        deployment.attach("user:operator", "viewer")
+        deployment.sign_in_as("operator")
+
+        assert deployment.get("/api/status").status_code == 200
+
+    def test_a_deny_now_stops_a_read(self, deployment):
+        """Previously an explicit `deny *` could not stop a read, because the gate never asked."""
         deployment.write_policies([{
             "id": "deny-all",
             "statements": [{"effect": "deny", "actions": ["*"], "resources": ["*"]}],
@@ -350,17 +354,74 @@ class TestReadsAreNotAuthorizedYet:
         deployment.attach("user:operator", "deny-all")
         deployment.sign_in_as("operator")
 
+        assert deployment.get("/api/status").status_code == 403
+
+    def test_a_read_only_role_cannot_mutate(self, deployment):
+        """The role the old scope made impossible, asserted from both sides — a grant that let a
+        viewer power-cycle a rack would be worse than no read control at all."""
+        deployment.write_policies([{
+            "id": "read-only",
+            "statements": [{"effect": "allow", "actions": ["rack:list"], "resources": ["*"]}],
+        }])
+        deployment.attach("user:operator", "read-only")
+        deployment.sign_in_as("operator")
+
+        assert deployment.get("/api/status").status_code == 200
+        assert _refused(deployment), "a read-only grant permitted a mutation"
+
+    def test_a_write_grant_does_not_confer_the_read(self, deployment):
+        """The inverse leak. It is available by accident: a route-wide `@action("x")` used to name
+        every method on its route, so a GET+PUT endpoint registered its GET under the write verb.
+        `test_a_route_wide_declaration_does_not_name_a_read` guards the mechanism; this guards the
+        outcome.
+        """
+        deployment.write_policies([ALLOW_POWER])
+        deployment.attach("user:operator", "power-a01")
+        deployment.sign_in_as("operator")
+
+        assert _permitted(deployment)
+        assert deployment.get("/api/status").status_code == 403
+
+
+class TestCollectionsAndInstancesAreDifferentResources:
+    """`:list` resolves to the collection, `:read` to an instance (FR-6b).
+
+    Forced by the shape of the routes: 103 of 118 reads carry no id, so a `<type>:<id>` resolver
+    would refuse every one. It is also the IAM model — `ListBucket` acts on the bucket, `GetObject`
+    on the object.
+    """
+
+    def test_a_list_verb_needs_no_id(self, deployment):
+        from authz import resources as R
+
+        assert R.resolve("rack:list", R.RequestFacts({}, {}, {})) == "rack:_all"
+
+    def test_a_wildcard_over_instances_also_grants_listing(self, deployment):
+        """Deliberate: "may read all racks" should include being able to enumerate them."""
+        deployment.write_policies([{
+            "id": "all-racks",
+            "statements": [{"effect": "allow", "actions": ["rack:*"], "resources": ["rack:*"]}],
+        }])
+        deployment.attach("user:operator", "all-racks")
+        deployment.sign_in_as("operator")
+
         assert deployment.get("/api/status").status_code == 200
 
-    def test_the_action_vocabulary_declares_no_read_verbs(self):
-        """The root cause, asserted at the source so the number is not folded into prose."""
-        rows = json.loads(
-            (__import__("pathlib").Path(__file__).parent / "action_snapshot.json").read_text()
-        )
-        rows = rows if isinstance(rows, list) else rows.get("actions", [])
-        methods = {str(row["method"]).upper() for row in rows}
+    def test_a_single_instance_grant_does_not_confer_listing(self, deployment):
+        """The other side of the same choice, and the one to know about: a UI showing the rack
+        table needs `rack:_all` or a wildcard, not `rack:a01`."""
+        deployment.write_policies([{
+            "id": "just-a01",
+            "statements": [{"effect": "allow", "actions": ["rack:*"], "resources": ["rack:a01"]}],
+        }])
+        deployment.attach("user:operator", "just-a01")
+        deployment.sign_in_as("operator")
 
-        assert "GET" not in methods, (
-            "GET actions now exist, so reads reach the authorizer -- update this class and confirm "
-            "authz/resources.py can name the resources those reads target"
-        )
+        assert deployment.get("/api/status").status_code == 403
+
+    def test_the_collection_id_cannot_collide_with_a_real_one(self):
+        """`_all` is reserved by shape: cluster ids are site slugs and catalog ids are
+        operator-chosen names, and neither may begin with an underscore."""
+        from authz import resources as R
+
+        assert R.COLLECTION.startswith("_")

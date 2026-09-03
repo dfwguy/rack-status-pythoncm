@@ -241,7 +241,10 @@ try:
     from metrics_query import metrics_query_bp
     app.register_blueprint(metrics_query_bp)
 
+    from audit.actions import action as _action
+
     @app.route("/api/lake/health")
+    @_action(get="observability:read")
     def api_lake_health():
         """Is the Parquet lake reachable and accepting run provenance writes?"""
         if lake_sink is None:

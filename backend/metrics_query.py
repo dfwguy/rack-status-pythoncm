@@ -49,6 +49,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 
 _logger = logging.getLogger(__name__)
@@ -305,7 +306,9 @@ def _range(expr: str, minutes: int, step: str) -> list[dict[str, Any]]:
     return (_vm("/api/v1/query_range", params).get("data") or {}).get("result") or []
 
 
+@action(get="metrics:list")
 @metrics_query_bp.route("/api/metrics/catalog")
+@action(get="metrics:list")
 def api_metrics_catalog():
     """Optional ?group=gpu|infra|events narrows the catalog so each view asks for its own charts."""
     want = (request.args.get("group") or "").strip()
@@ -322,7 +325,9 @@ def api_metrics_catalog():
     })
 
 
+@action(get="metrics:read")
 @metrics_query_bp.route("/api/metrics/health")
+@action(get="metrics:read")
 def api_metrics_health():
     out: dict[str, Any] = {"ok": False, "upstream": base_url(), "error": None}
     if is_disabled():
@@ -338,7 +343,9 @@ def api_metrics_health():
     return jsonify(out)
 
 
+@action(get="metrics:read")
 @metrics_query_bp.route("/api/metrics/chart/<chart_id>")
+@action(get="metrics:read")
 def api_metrics_chart(chart_id: str):
     """One chart, already shaped for Chart.js: {labels: [...], datasets: [{label, data}]}."""
     chart = CHARTS.get(chart_id)
@@ -445,7 +452,9 @@ def _num(v: Any) -> float | None:
     return f if math.isfinite(f) else None
 
 
+@action(get="metrics:read")
 @metrics_query_bp.route("/api/metrics/query")
+@action(get="metrics:read")
 def api_metrics_query():
     q = (request.args.get("q") or "").strip()
     if not q:
@@ -457,7 +466,9 @@ def api_metrics_query():
         return jsonify({"ok": False, "error": str(exc)}), 502
 
 
+@action(get="metrics:read")
 @metrics_query_bp.route("/api/metrics/query_range")
+@action(get="metrics:read")
 def api_metrics_query_range():
     q = (request.args.get("q") or "").strip()
     if not q:

@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 
+from audit.actions import action
 from flask import Blueprint, jsonify, request
 from slurm_query import _run_sacct_recent, _run_sinfo_r, _run_squeue
 
@@ -37,6 +38,7 @@ bp = Blueprint("slurm_queries", __name__, url_prefix="")
 
 
 @bp.route("/api/slurm-squeue", methods=["GET"])
+@action(get="slurm.queue:list")
 def api_slurm_squeue():
     """Run ``module load slurm && squeue`` (unless ``RACK_SLURM_SKIP_MODULE_LOAD``) for the dashboard host."""
     if os.environ.get("RACK_SLURM_SQUEUE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -49,6 +51,7 @@ def api_slurm_squeue():
 
 
 @bp.route("/api/slurm-sacct-recent", methods=["GET"])
+@action(get="slurm.queue:list")
 def api_slurm_sacct_recent():
     """Recent finished Slurm jobs via ``sacct`` — query ``limit`` (1-50, default 10) and ``state`` (default COMPLETED)."""
     if os.environ.get("RACK_SLURM_SACCT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -67,6 +70,7 @@ def api_slurm_sacct_recent():
 
 
 @bp.route("/api/slurm-sinfo-r", methods=["GET"])
+@action(get="slurm.queue:list")
 def api_slurm_sinfo_r():
     """Run ``module load slurm && sinfo -R --long`` (unless ``RACK_SLURM_SKIP_MODULE_LOAD``) for the dashboard host."""
     if os.environ.get("RACK_SLURM_SINFO_R_DISABLED", "").strip().lower() in ("1", "true", "yes"):

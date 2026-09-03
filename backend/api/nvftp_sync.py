@@ -24,6 +24,7 @@ bp = Blueprint("nvftp_sync", __name__, url_prefix="")
 
 
 @bp.route("/api/nvftp-sync/status", methods=["GET"])
+@action(get="nvftp:read")
 def api_nvftp_sync_status():
     """NVFTP var/cache sync status (no secrets)."""
     nvftp_cache_sync.ensure_background_thread()

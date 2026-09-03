@@ -1448,6 +1448,7 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
 
 
 @bp.route("/api/validation-presets", methods=["GET"])
+@action(get="validation:list")
 def api_validation_presets():
     return jsonify({"ok": True, "presets": validation_presets.catalogue()})
 
@@ -1579,11 +1580,13 @@ def api_run_exemplar_sysinfo_async():
 
 
 @bp.route("/api/run-validation-preset-status", methods=["GET"])
+@action(get="job:list")
 def api_run_validation_preset_status():
     return _validation_preset_status_payload((request.args.get("job_id") or "").strip())
 
 
 @bp.route("/api/run-exemplar-sysinfo-status", methods=["GET"])
+@action(get="job:list")
 def api_run_exemplar_sysinfo_status():
     return _validation_preset_status_payload((request.args.get("job_id") or "").strip())
 

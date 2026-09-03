@@ -21,6 +21,7 @@ import json
 import logging
 
 import host_exec
+from audit.actions import action
 from config_env import _env_int
 from flask import Blueprint, jsonify, request
 from paths import SCRIPTS_DIR
@@ -33,6 +34,7 @@ bp = Blueprint("fabric_probe", __name__, url_prefix="")
 
 
 @bp.route("/api/fabric-probe", methods=["GET"])
+@action(get="fabric:read")
 def api_fabric_probe():
     """Classify a compute node's RDMA fabric (compute rails vs storage/NS plane).
 
