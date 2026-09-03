@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from authz import resources
 
 SNAPSHOT = Path(__file__).resolve().parent / "action_snapshot.json"
@@ -82,3 +83,106 @@ class TestTheSingletonChoicesAreDeliberate:
         """"May delete user bob" must not read as "may delete any user"."""
         assert not resources.is_singleton("identity.user")
         assert not resources.is_singleton("identity.group")
+
+
+class TestEveryDeclaredReadResolves:
+    """Every read route resolves, and to the *right kind* of resource (AC-6b).
+
+    Added after an ad-hoc check found **32 declared read routes that could not resolve at all** —
+    they would have answered 403 to a caller holding a perfectly good grant. Two different causes,
+    and the second is the one worth a build gate:
+
+    - `catalog.platform:read` looked for `id`, while the route's parameter is `doc_id`; likewise
+      `workflow:read` against `/api/workflow-runs/<run_id>`. A plain typo, invisible until someone
+      tried to use a per-document grant.
+    - Many reads take their target from a query parameter, and some have no target at all
+      (`/api/metrics/health`). Those now fall back to the collection.
+
+    **The fallback is what makes a gate necessary.** It fixes the 403, but it also means a
+    forgotten key no longer fails loudly: the read silently resolves to `<type>:_all` instead of
+    `<type>:<id>`, so per-instance grants stop working and nothing complains. So this test does not
+    merely assert "it resolves" — it pins *which* routes resolve to an instance, and a route that
+    stops discriminating shows up as a failure here.
+    """
+
+    def read_entries(self):
+        import audit.actions as A
+
+        rows = json.loads(SNAPSHOT.read_text())
+        rows = rows if isinstance(rows, list) else rows.get("actions", [])
+        return [r for r in rows if str(r["method"]).upper() in A.READ_METHODS]
+
+    def test_every_read_action_resolves(self):
+        """No read may raise `Unresolvable`, with or without an id."""
+        failures = []
+        for row in self.read_entries():
+            try:
+                resources.resolve(row["action"], resources.RequestFacts({}, {}, {}))
+            except resources.Unresolvable as exc:
+                failures.append(f"{row['action']} ({row['endpoint']}): {exc}")
+
+        assert not failures, (
+            "these declared reads cannot resolve, so the gate answers 403 even to a caller with a "
+            "valid grant:\n  " + "\n  ".join(sorted(failures))
+        )
+
+    def test_a_read_with_an_id_resolves_to_that_instance(self):
+        """The granularity half. Each of these regressed to a collection read once already.
+
+        Hard-coded rather than derived from the URL map: the point is to state what the intended
+        granularity *is*, so that losing it is a diff somebody has to approve. Deriving it from the
+        same resolver under test would make the assertion vacuous.
+        """
+        cases = [
+            ("catalog.platform:read", {"doc_id": "gb200-nvl72"}, "catalog.platform:gb200-nvl72"),
+            ("catalog.tool:read", {"doc_id": "sysinfo"}, "catalog.tool:sysinfo"),
+            ("catalog.project:read", {"doc_id": "mayo"}, "catalog.project:mayo"),
+            ("workflow:read", {"run_id": "abc123"}, "workflow:abc123"),
+            ("identity.user:read", {"login": "rkoike"}, "identity.user:rkoike"),
+            ("report:read", {"report_id": "r-7"}, "report:r-7"),
+            ("history:read", {"run_id": "h-1"}, "history:h-1"),
+            ("audit.deep:read", {"run_id": "d-1"}, "audit.deep:d-1"),
+            ("help:read", {"content_id": "racks"}, "help:racks"),
+            ("metrics:read", {"chart_id": "c-1"}, "metrics:c-1"),
+            ("validation.activity:read", {"activity_id": "a-1"}, "validation.activity:a-1"),
+        ]
+        for action, args, expected in cases:
+            got = resources.resolve(action, resources.RequestFacts(args, {}, {}))
+            assert got == expected, (
+                f"{action} with {args} resolved to {got!r}, not {expected!r} — a per-instance "
+                "grant no longer applies to this route"
+            )
+
+    def test_a_list_verb_is_always_the_collection(self):
+        """Even when an id happens to be present: listing is not reading one thing."""
+        for row in self.read_entries():
+            action = row["action"]
+            if not action.endswith(":list"):
+                continue
+            got = resources.resolve(action, resources.RequestFacts({"id": "x", "rack": "a01"}, {}, {}))
+            assert got.endswith(f":{resources.COLLECTION}"), f"{action} -> {got}"
+
+    def test_a_mutation_never_falls_back_to_the_collection(self):
+        """The asymmetry that keeps the fallback safe, and the reason it keys off the verb.
+
+        If a mutation could fall back, `POST /api/power-on` with no rack named would authorize
+        against `rack.power:_all` — so an operator granted the collection could power-cycle the
+        fleet by *omitting* the target. A read resolving to the collection is a description; a
+        mutation resolving to it is an unbounded action.
+        """
+        import audit.actions as A
+
+        rows = json.loads(SNAPSHOT.read_text())
+        rows = rows if isinstance(rows, list) else rows.get("actions", [])
+        checked = 0
+        for row in rows:
+            if str(row["method"]).upper() not in A.MUTATING_METHODS:
+                continue
+            action = row["action"]
+            if resources.is_singleton(action.split(":", 1)[0]):
+                continue  # a singleton has a fixed id and nothing to fall back from
+            checked += 1
+            with pytest.raises(resources.Unresolvable):
+                resources.resolve(action, resources.RequestFacts({}, {}, {}))
+
+        assert checked > 20, f"only {checked} scoped mutations checked; the guard is too narrow"

@@ -103,6 +103,20 @@ COLLECTION = "_all"
 #: because the same type has both — `catalog.platform:list` and `catalog.platform:read`.
 COLLECTION_VERBS = frozenset({"list"})
 
+#: Verbs that may fall back to the collection when no instance is named, and **only** these.
+#:
+#: Many read routes take their target from a query parameter (`?jid=`, `?node=`, `?rack=`) and some
+#: have no target at all — `/api/metrics/health` is a deployment-level probe. Refusing those would
+#: mean 403 on a health check, so an unnamed read is treated as a read *over the collection*, which
+#: is the honest description of the request.
+#:
+#: This is safe because `<type>:_all` is a **separate resource that must be granted separately**: a
+#: grant of `rack:a01` does not match it, so the fallback is strictly narrower than any invented
+#: instance id. It must never extend to a mutation — a power-on with no rack named would become
+#: "power on the collection", which is the single worst thing this file could do. `resolve()`
+#: therefore keys off the verb, and `test_a_mutation_never_falls_back_to_the_collection` pins it.
+COLLECTION_FALLBACK_VERBS = frozenset({"read", "list"})
+
 
 def _singleton(_facts: RequestFacts) -> str:
     return SINGLETON
@@ -134,17 +148,20 @@ _RESOLVERS: dict[str, Extractor] = {
     #    actor is the second (RESOURCE_MODEL.md).
     "identity.user": _by("login", "user"),
     "identity.group": _by("name", "group"),
-    # -- work with its own durable id
-    "workflow": _by("workflow_id", "id"),
+    # -- work with its own durable id. `run_id` included because a workflow *run* is reached at
+    #    /api/workflow-runs/<run_id>: without it the run reads resolved to the collection.
+    "workflow": _by("workflow_id", "run_id", "id"),
     "validation.activity": _by("activity_id", "id"),
     "slurm.job": _by("jid", "job_id"),
     "slurm.node": _by("node", "nodes", "host"),
     "report": _by("report_id", "id"),
     "report.node": _by("node", "host"),
-    # -- catalog documents, keyed by operator-chosen slug
-    "catalog.platform": _by("id", "name", "platform"),
-    "catalog.project": _by("id", "name", "project"),
-    "catalog.tool": _by("id", "name", "tool"),
+    # -- catalog documents, keyed by operator-chosen slug. `doc_id` is the URL parameter the
+    #    catalog routes actually use; omitting it made every per-document read resolve to the
+    #    collection instead of the instance, silently disabling per-document grants.
+    "catalog.platform": _by("doc_id", "id", "name", "platform"),
+    "catalog.project": _by("doc_id", "id", "name", "project"),
+    "catalog.tool": _by("doc_id", "id", "name", "tool"),
     # -- validation runs are scoped to the rack they occupy: the rack is the contended thing, and a
     #    grant to run validation on rack 7 must not be a grant to run it on rack 8.
     "validation": _by("rack", "rack_id"),
@@ -216,6 +233,10 @@ def resolve(action: str, facts: RequestFacts) -> str:
 
     identifier = extractor(facts)
     if not identifier:
+        if verb in COLLECTION_FALLBACK_VERBS:
+            # A read that names no instance is a read over the collection. See
+            # COLLECTION_FALLBACK_VERBS for why this is narrower, not broader.
+            return f"{resource_type}:{COLLECTION}"
         raise Unresolvable(f"could not determine which {resource_type} this request targets")
 
     return f"{resource_type}:{identifier}"

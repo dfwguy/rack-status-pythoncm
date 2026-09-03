@@ -114,8 +114,15 @@ try:
     import lake_sink
     import results_history
 except Exception as _rh_exc:  # pragma: no cover - defensive
+    # BOTH names must be cleared. The handler used to set only `results_history`, so a failure in
+    # `import lake_sink` — the first line, and therefore the likelier one — left `lake_sink`
+    # unbound entirely, and the four `lake_sink is None` guards below raised `NameError` instead of
+    # degrading. The soft import defeated its own purpose in exactly the case it was written for.
+    lake_sink = None  # type: ignore[assignment]
     results_history = None  # type: ignore[assignment]
-    logging.getLogger(__name__).warning("results_history unavailable: %s", _rh_exc, exc_info=True)
+    logging.getLogger(__name__).warning(
+        "lake_sink/results_history unavailable: %s", _rh_exc, exc_info=True
+    )
 try:
     import universal_parser as _uparse
 except Exception as _up_exc:  # pragma: no cover - defensive
@@ -241,15 +248,6 @@ try:
     from metrics_query import metrics_query_bp
     app.register_blueprint(metrics_query_bp)
 
-    from audit.actions import action as _action
-
-    @app.route("/api/lake/health")
-    @_action(get="observability:read")
-    def api_lake_health():
-        """Is the Parquet lake reachable and accepting run provenance writes?"""
-        if lake_sink is None:
-            return jsonify({"ok": False, "error": "lake_sink not loaded"})
-        return jsonify(lake_sink.health())
 except Exception as _ge_exc:  # pragma: no cover - observability embeds are optional
     _logger.warning("grafana_embeds blueprint unavailable: %s", _ge_exc, exc_info=True)
 

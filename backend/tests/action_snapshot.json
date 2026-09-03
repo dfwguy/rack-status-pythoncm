@@ -126,12 +126,6 @@
   "variant": "sync"
  },
  {
-  "endpoint": "api_lake_health",
-  "method": "GET",
-  "action": "observability:read",
-  "variant": "sync"
- },
- {
   "endpoint": "auth.api_logout",
   "method": "POST",
   "action": "auth:logout",
@@ -795,6 +789,12 @@
   "endpoint": "job_status.api_run_validation_status",
   "method": "GET",
   "action": "job:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "lake.api_lake_health",
+  "method": "GET",
+  "action": "observability:read",
   "variant": "sync"
  },
  {
