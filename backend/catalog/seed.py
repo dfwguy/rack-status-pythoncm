@@ -631,8 +631,18 @@ def migrate(repo: Repo, *, env: dict[str, str] | None = None) -> dict[str, Any]:
         from .npi_import import import_npi_catalog
 
         summary["npi"] = import_npi_catalog(repo)
-    except Exception:  # pragma: no cover - defensive: import must never break boot
-        _logger.debug("migrate: ignoring error", exc_info=True)
+    except Exception:
+        # WARNING, not debug (FR-4c). Staying defensive here is right — a reference catalog must
+        # never stop a boot mid-bring-up — but `_logger.debug` made the failure *invisible*, and
+        # that is what let the real defect run for months: `npi_import` imported `tomllib` at
+        # module level, which does not exist on the container's Python 3.10, so this branch caught
+        # a ModuleNotFoundError on every container start and said nothing at the default level.
+        # NPI import was simply dead, with no symptom to notice.
+        #
+        # The import is fixed (it goes through `toml_compat` now), so this path should be
+        # unreachable in practice. That is exactly why it must be loud if it is ever reached again:
+        # a swallow nobody can see is indistinguishable from working.
+        _logger.warning("migrate: NPI reference catalog import failed", exc_info=True)
         summary["npi"] = {}
 
     repo.set_meta("schema_version", SCHEMA_VERSION)

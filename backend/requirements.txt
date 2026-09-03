@@ -2,6 +2,13 @@ flask>=3.0,<4
 openpyxl>=3.1,<4
 requests>=2.33,<3
 pyyaml>=6.0,<7
+# TOML parsing. `tomllib` is stdlib from Python 3.11, but the runtime image is ubuntu:22.04 whose
+# `python3` is 3.10.12 -- verified by running the image -- while all three CI jobs are
+# python:3.12-slim. So a bare `import tomllib` passes the whole suite and fails only in the
+# container. `tomli` is the upstream backport of that same stdlib module: pure Python, no
+# transitive dependencies, so it installs on an air-gapped site. backend/toml_compat.py is the one
+# place that chooses between them; a marker here would hide the choice from the reader.
+tomli>=2.0,<3
 # Four call sites: HKDF signing-key derivation (identity/tokens.py), the Fernet vault
 # (token_vault.py), x509 generation (bin/gen-tls-cert.py), and transitively paramiko + PyJWT.
 #

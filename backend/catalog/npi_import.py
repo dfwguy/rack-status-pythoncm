@@ -38,9 +38,10 @@ edits are not expected on reference records, so they are intentionally overwritt
 from __future__ import annotations
 
 import os
-import tomllib
 from pathlib import Path
 from typing import Any
+
+import toml_compat
 
 from . import models
 from .store import REPO_ROOT, TABLE_NPI_TOOLS, Repo
@@ -91,8 +92,8 @@ def load_records(source_dir: str | os.PathLike[str]) -> list[dict[str, Any]]:
     for path in sorted(root.glob("*.toml")):
         try:
             with path.open("rb") as stream:
-                data = tomllib.load(stream)
-        except (OSError, tomllib.TOMLDecodeError):
+                data = toml_compat.load(stream)
+        except (OSError, toml_compat.TOMLDecodeError):
             continue
         if not isinstance(data, dict) or not (data.get("id") or "").strip():
             continue
