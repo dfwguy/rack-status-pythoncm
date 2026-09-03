@@ -650,6 +650,30 @@ def _bootstrap_identity_at_startup() -> None:
     # client would cache that empty document for the full hour we ask it to. The read path cannot
     # fix this itself: minting is a write, and a read that writes defeats the cache above it.
     if identity_oidc.enabled():
+        # Validate the ISSUER at startup, before anything tries to mint (FR-18).
+        #
+        # Measured 2026-09-03: with the provider on and no `RACK_WEB_OIDC_ISSUER`, the app booted
+        # perfectly, `GET /login` returned 200, `verify-deploy.sh` passed — and then every sign-in
+        # raised OIDCConfigError from `mint()`. A dashboard that is green by every health check and
+        # in which nobody can log in. After the cutover deletes the HS256 path there is no fallback
+        # either, so on five customer deployments that is an outage no gate would have caught.
+        #
+        # Raising here converts it into the failure a deploy is designed to catch: the container
+        # does not come up, `verify-deploy.sh` fails, and the message names the variable. Compare
+        # the missing signing key below, which is logged rather than raised — that one is
+        # recoverable by fixing permissions on a running box, whereas an unset issuer means the
+        # deployment was never configured for the provider at all.
+        try:
+            issuer = identity_oidc.issuer_url()
+        except identity_oidc.OIDCConfigError:
+            _logger.critical(
+                "identity: %s is on but the issuer is unusable; refusing to start rather than "
+                "serve a deployment where every sign-in fails",
+                identity_oidc.FLAG_ENV,
+            )
+            raise
+        _logger.info("identity: OIDC provider enabled, issuer %s", issuer)
+
         try:
             key = identity_keys.key_set().ensure()
             _logger.info("identity: signing key %s active (OIDC provider enabled)", key.kid)

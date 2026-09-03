@@ -307,3 +307,50 @@ class TestTheGate:
             "oidc_provider.introspect",
             "oidc_provider.revoke",
         }
+
+
+class TestTheProviderRefusesToStartWithoutAnIssuer:
+    """FR-18 cutover safety net.
+
+    Measured before adding this: with `RACK_WEB_OIDC_ENABLED=1` and no `RACK_WEB_OIDC_ISSUER`, the
+    app **booted perfectly** — `GET /login` returned 200 and `verify-deploy.sh` passed — and then
+    every sign-in raised `OIDCConfigError` from `mint()`. A dashboard green by every health check
+    in which nobody can log in.
+
+    That is the failure mode the cutover makes unrecoverable, because deleting the HS256 path
+    removes the fallback. Validating at startup converts it into the failure a deploy is built to
+    catch, on a deployment that was simply never configured for the provider.
+    """
+
+    def test_the_issuer_is_required_when_the_provider_is_on(self, monkeypatch):
+        from identity import oidc as oidc_mod
+
+        monkeypatch.setenv(oidc_mod.FLAG_ENV, "1")
+        monkeypatch.delenv(oidc_mod.ISSUER_ENV, raising=False)
+
+        with pytest.raises(oidc_mod.OIDCConfigError, match=oidc_mod.ISSUER_ENV):
+            oidc_mod.issuer_url()
+
+    def test_the_bootstrap_raises_rather_than_logging(self, monkeypatch):
+        """The distinction that matters: a missing *signing key* is logged and the process still
+        runs, because it is recoverable by fixing permissions on a live box. A missing *issuer*
+        means the deployment was never configured, so it must not serve at all."""
+        import app as app_mod
+        from identity import oidc as oidc_mod
+
+        monkeypatch.setenv(oidc_mod.FLAG_ENV, "1")
+        monkeypatch.delenv(oidc_mod.ISSUER_ENV, raising=False)
+
+        with pytest.raises(oidc_mod.OIDCConfigError):
+            app_mod._bootstrap_identity_at_startup()
+
+    def test_a_valid_issuer_lets_the_bootstrap_through(self, monkeypatch, tmp_path):
+        import app as app_mod
+        from identity import oidc as oidc_mod
+
+        monkeypatch.setenv(oidc_mod.FLAG_ENV, "1")
+        monkeypatch.setenv(oidc_mod.ISSUER_ENV, "https://rack.example.com")
+        monkeypatch.setenv("NVIS_IDENTITY_FILE", str(tmp_path / "identity.json"))
+        monkeypatch.setenv("RACK_WEB_SIGNING_KEY_DIR", str(tmp_path / "keys"))
+
+        app_mod._bootstrap_identity_at_startup()  # must not raise
