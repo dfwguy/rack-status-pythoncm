@@ -370,6 +370,140 @@ RACK_REMOTE_BASE_PATH = register(
 )
 
 
+# -- The settings a real deployment actually sets ------------------------------------------------
+#
+# Mirrors `rack-config.env`, which is what every deployed site edits today. None of these is
+# *required* — each has a working default — but they are declared so that `greenlight.toml.example`
+# documents them, so the loader stops warning "not a declared setting" about the ordinary case, and
+# so their secrecy is resolved explicitly rather than by pattern.
+
+register(
+    Setting(
+        name="RACK_EXEC_MODE",
+        secret=False,
+        example="ssh",
+        section="connection",
+        description=(
+            "How commands reach the cluster: 'ssh' or 'local'. Deprecated in favour of the "
+            "topology-based transport config, and 'ssh' is the default; kept because deployed "
+            "sites still set it."
+        ),
+    )
+)
+
+register(
+    Setting(
+        name="RACK_SSH_USER",
+        secret=False,
+        example="root",
+        section="connection",
+        description="Account for the SSH control connection to the head node.",
+    )
+)
+
+register(
+    Setting(
+        name="RACK_SSH_PORT",
+        toml_type=TOML_INT,
+        secret=False,
+        example="22",
+        section="connection",
+        description="Port for the SSH control connection.",
+    )
+)
+
+register(
+    Setting(
+        name="RACK_SSH_KEY",
+        # A path, not key material. `SENSITIVE_NAME_PATTERN` omits a bare `KEY` for exactly this
+        # reason, but declaring it explicitly means the answer does not depend on that omission
+        # surviving a future edit to the pattern.
+        secret=False,
+        example="/run/secrets/ssh_key",
+        section="connection",
+        description=(
+            "Path to the private key for the control connection. The path, not the key: the key "
+            "itself must never appear in this file."
+        ),
+    )
+)
+
+register(
+    Setting(
+        name="RACK_PLATFORM",
+        secret=False,
+        example="bcm",
+        section="cluster",
+        description="Cluster manager provider: 'bcm' (Base Command Manager) or 'maas'.",
+    )
+)
+
+register(
+    Setting(
+        name="RACK_STATUS_DEMO",
+        toml_type=TOML_BOOL,
+        secret=False,
+        example="false",
+        section="general",
+        description=(
+            "Synthetic data, no cluster contact. True on a developer laptop, and it also exempts "
+            "the connection settings from the required-setting preflight."
+        ),
+    )
+)
+
+register(
+    Setting(
+        name="NVIS_LOG_LEVEL",
+        secret=False,
+        example="INFO",
+        section="general",
+        description=(
+            "Log level. Settable here because the config file is read before logging is "
+            "configured, which is the reason the loader's own records appear slightly late."
+        ),
+    )
+)
+
+register(
+    Setting(
+        name="RACK_WEB_OIDC_ENABLED",
+        toml_type=TOML_BOOL,
+        secret=False,
+        example="false",
+        section="auth",
+        description=(
+            "Turns on asymmetric token signing AND the OIDC provider endpoints together. Enabling "
+            "it ends every live session once, and requires RACK_WEB_OIDC_ISSUER."
+        ),
+    )
+)
+
+register(
+    Setting(
+        name="RACK_SLURM_SKIP_MODULE_LOAD",
+        toml_type=TOML_BOOL,
+        secret=False,
+        example="true",
+        section="cluster",
+        description=(
+            "Skip 'module load slurm' before scheduler commands, for sites where Slurm is already "
+            "on PATH."
+        ),
+    )
+)
+
+register(
+    Setting(
+        name="NEMO_SQSH_SRC",
+        secret=False,
+        example="/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh",
+        section="validation",
+        description="Squashed NeMo container image used by the NeMo validation launchers.",
+    )
+)
+
+
 def _tls_cert_configured() -> bool:
     """A certificate without its key is the asymmetric failure this row exists for.
 
