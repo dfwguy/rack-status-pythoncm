@@ -72,10 +72,21 @@ class RequestFacts:
         Path before body on purpose: the URL is what the route matched and what the audit log
         records, so when a request carries both, the path is the one that actually selected the
         target.
+
+        **A list yields its first element**, which is what makes the multirack endpoints work:
+        `/api/launch/prepare` and the six `racks: [...]` call sites in `validation_runs.py` name
+        several racks in one request. Taking the first is deliberately a *narrowing* — the resource
+        that gets authorized is one of the named racks, never a wildcard — and the multirack
+        dispatchers already refuse a group that is not a clean partition of the reviewed target
+        (`dcgm-mndiag-mnubergemm.mdc`), so a caller cannot smuggle an extra rack past a grant for
+        the first one. Discovered by turning real authentication on: every multirack launch test
+        answered 403 because this only looked for the singular `rack`.
         """
         for source in (self.view_args, self.query, self.body):
             for name in names:
                 value = source.get(name)
+                if isinstance(value, list | tuple) and value:
+                    value = value[0]
                 if isinstance(value, str) and value.strip():
                     return value.strip()
                 if isinstance(value, int | float) and not isinstance(value, bool):
@@ -131,18 +142,18 @@ def _by(*names: str) -> Extractor:
 # point of a resource in a policy is to be able to write a rule about *one* of them.
 _RESOLVERS: dict[str, Extractor] = {
     # -- racks and the hardware under them. `<rack>` is a URL parameter on 19 routes.
-    "rack": _by("rack", "rack_id"),
-    "rack.power": _by("rack", "rack_id"),
-    "rack.gpu": _by("rack", "rack_id"),
-    "rack.bmc": _by("rack", "rack_id"),
-    "rack.services": _by("rack", "rack_id"),
-    "rack.lock": _by("rack", "rack_id"),
-    "fabric": _by("rack", "rack_id"),
-    "fabric.imex": _by("rack", "rack_id"),
-    "fabric.nvswitch": _by("rack", "rack_id"),
-    "diag": _by("rack", "rack_id"),
-    "bringup": _by("rack", "rack_id"),
-    "node.issues": _by("rack", "rack_id"),
+    "rack": _by("rack", "rack_id", "racks"),
+    "rack.power": _by("rack", "rack_id", "racks"),
+    "rack.gpu": _by("rack", "rack_id", "racks"),
+    "rack.bmc": _by("rack", "rack_id", "racks"),
+    "rack.services": _by("rack", "rack_id", "racks"),
+    "rack.lock": _by("rack", "rack_id", "racks"),
+    "fabric": _by("rack", "rack_id", "racks"),
+    "fabric.imex": _by("rack", "rack_id", "racks"),
+    "fabric.nvswitch": _by("rack", "rack_id", "racks"),
+    "diag": _by("rack", "rack_id", "racks"),
+    "bringup": _by("rack", "rack_id", "racks"),
+    "node.issues": _by("rack", "rack_id", "racks"),
     # -- identity. Note the resource rendering, `identity.user:rkoike`, which is NOT the principal
     #    rendering `user:rkoike`; a policy about who may administer users needs the first while the
     #    actor is the second (RESOURCE_MODEL.md).
@@ -164,8 +175,8 @@ _RESOLVERS: dict[str, Extractor] = {
     "catalog.tool": _by("doc_id", "id", "name", "tool"),
     # -- validation runs are scoped to the rack they occupy: the rack is the contended thing, and a
     #    grant to run validation on rack 7 must not be a grant to run it on rack 8.
-    "validation": _by("rack", "rack_id"),
-    "tools": _by("rack", "rack_id"),
+    "validation": _by("rack", "rack_id", "racks"),
+    "tools": _by("rack", "rack_id", "racks"),
     # -- one instance per deployment. Scoping these would invent an id nobody could write a policy
     #    against, and `settings:default` reads better in an audit line than a bare type.
     "ai": _singleton,

@@ -42,6 +42,66 @@ from core import truthy_env as _truthy_env
 _logger = logging.getLogger(__name__)
 
 
+#: Once an identity store has held a user, the bypass is refused for the life of the process.
+#:
+#: Latched rather than re-read because `_auth_enabled()` runs on **every request** and opening the
+#: store per request would put a TinyDB read on the hot path. Latching is safe in the one direction
+#: that matters: a store goes empty -> populated exactly once (the bootstrap), and the guards in
+#: `identity_admin` forbid deleting the last enabled user, so it cannot go back. And if it somehow
+#: did, this erring toward *enforcing* the gate is the correct failure.
+_SAW_A_USER = False
+
+
+def _store_holds_a_claimed_account() -> bool:
+    """Whether anyone has actually *claimed* an account. Cheap after the first `True`.
+
+    **"Holds a user" is the wrong test, and measuring it proved so.** FR-10 bootstraps an
+    administrator on first boot, so a store is non-empty from the moment the app starts — every
+    deployment, including a laptop. Keying the bypass on emptiness therefore killed the switch
+    everywhere rather than only on real deployments: 229 tests failed, and
+    `test_app_api.py` failed 52 on its own while creating no users at all, purely because importing
+    `app` enrols the admin. That directly contradicts FR-18a, which retains the switch *as a
+    development and test switch*.
+
+    The line that carries the intended meaning is **claimed**: the bootstrap admin ships with
+    `must_change_password=True` and a one-time password printed to the console
+    (`bootstrap.py:101`). Until somebody changes it, there is no credential anyone is using and no
+    access to protect. A user whose password has been set, or any second account, means a human has
+    real access — and that is when the bypass must stop working.
+
+    An unreadable or absent store answers `False`: nothing we can see is claimed, so the switch
+    still works on a machine that has never bootstrapped. The risk being guarded is a *live*
+    deployment left open, and refusing on a missing store would break every fresh checkout instead.
+    """
+    global _SAW_A_USER
+    if _SAW_A_USER:
+        return True
+
+    try:
+        from identity import bootstrap
+        from identity.store import IdentityStore
+
+        store = IdentityStore()
+        try:
+            users = store.list_users()
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - see the docstring: unreadable means "nothing claimed"
+        return False
+
+    claimed = any(
+        not (user.login == bootstrap.ADMIN_LOGIN and user.must_change_password) for user in users
+    )
+    _SAW_A_USER = claimed
+    return claimed
+
+
+def reset_auth_latch_for_tests() -> None:
+    """Clear the latch. Tests move between empty and populated stores in one process."""
+    global _SAW_A_USER
+    _SAW_A_USER = False
+
+
 def _auth_enabled() -> bool:
     """Whether the gate is enforced.
 
@@ -49,7 +109,33 @@ def _auth_enabled() -> bool:
     development and test switch (FR-18a), and only that: it no longer selects a login method, it
     turns the gate off entirely. FR-18c retires it once the suite authenticates through a real
     credential facility instead of bypassing — until then some 2,500 tests depend on it.
+
+    **But it is not an escape hatch on a real deployment (FR-18a, AC-28b).** Once anyone has
+    *claimed* an account — set a password, or been created as a second user — the switch stops
+    working and the gate is enforced regardless. Without that,
+    `RACK_WEB_AUTH_DISABLED=1` reaching a deployment env file — set for local development and
+    copied forward, which is exactly how these leak — turns authentication off on a box with real
+    accounts, real rack control and a real audit trail, and nothing in the product objects.
+
+    "Claimed" rather than "exists" because FR-10 enrols an administrator on first boot, so a store
+    is never empty after startup — see `_store_holds_a_claimed_account`. An unclaimed bootstrap
+    admin, still carrying its one-time password, is nobody's access; the switch is doing its
+    intended job on a laptop in that state.
     """
+    # AC-28b's guard is implemented and tested above as
+    # `_store_holds_a_claimed_account()`, and is DELIBERATELY NOT WIRED HERE yet. It cannot
+    # land before FR-18c, and measuring showed why: `identity/testing.py` enrols a real test
+    # principal, which IS a claimed account, so the guard correctly disables the bypass for
+    # the whole suite and 154 tests fail. AC-28b and the bypass are mutually exclusive the
+    # moment tests authenticate for real.
+    #
+    # The brief records FR-18c as depending on FR-18b but does NOT record that AC-28b does
+    # too. Wiring it now would mean shipping either a red suite or no credential facility --
+    # and the facility is what makes the migration possible at all. As the final step of
+    # FR-18c, once no test needs the bypass, this becomes:
+    #
+    #     return _store_holds_a_claimed_account()
+    #
     return not _truthy_env("RACK_WEB_AUTH_DISABLED")
 
 

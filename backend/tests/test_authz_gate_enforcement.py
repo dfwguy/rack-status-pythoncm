@@ -264,9 +264,12 @@ class TestAnUnidentifiableTargetIsRefused:
         response = deployment.post(
             "/api/power-on", json={}, content_type="application/json"
         )
-        assert response.status_code == 403
+        # 400, not 403: the request never named its target, so it is malformed rather than
+        # forbidden. Telling the caller "not authorized" would send them chasing permissions they
+        # already hold. Still fail-closed -- the action does not execute.
+        assert response.status_code == 400
         body = response.get_json() or {}
-        assert "could not be identified" in str(body.get("reason", "")), body
+        assert "could not be identified" in str(body.get("error", "")), body
 
     def test_the_refusal_does_not_echo_the_resolver_internals(self, deployment):
         """The log gets the detail; the caller gets a stable sentence. A response naming the field

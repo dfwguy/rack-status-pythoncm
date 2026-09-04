@@ -22,7 +22,21 @@ import os
 import tempfile
 
 os.environ.setdefault("RACK_STATUS_DEMO", "1")
+# MIGRATING OFF THIS, FILE BY FILE. `identity/testing.py` (FR-18b) now issues real credentials
+# and every test client presents one, so a file can run with the gate genuinely ON by taking the
+# `gated` fixture below. That is the end state: a suite that switches authentication off is not
+# testing the product, it is testing a configuration no deployment uses (SUTP gap G-10).
+#
+# Flipping all ~2,500 at once was measured and is a migration, not a switch: 154 tests fail in
+# three identifiable clusters -- files that reset the revocation checker (fail-closed then refuses
+# every token, correctly), browser routes that redirect rather than 401, and requests whose target
+# the resource resolver cannot name. Each cluster needs its own fix, and landing a red suite would
+# block everyone else meanwhile.
+#
+# So the bypass stays until FR-18c, and migrated files opt IN. Track the remaining clusters in
+# `.plc/briefs/auth-identity-brief.md` FR-18c.
 os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
+os.environ.setdefault("RACK_WEB_SECRET_KEY", "nvis-test-suite-signing-key-not-a-real-secret")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 # Force a fresh, isolated catalog store (seeded on first access -> "default" project
 # with the default demo rack-id convention). Drop any inherited rack-id template.
@@ -116,3 +130,85 @@ def _reset_request_throttle():
     throttle.registry().reset_for_tests()
     yield
     throttle.registry().reset_for_tests()
+
+
+# --- Authenticated by default (FR-18b) -----------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def nvis_test_principal():
+    """One real enrolled account for the session (FR-18b).
+
+    Session-scoped because SRP enrolment is a 4096-bit exponentiation (~50 ms); per-test it would
+    add minutes and no test needs a *different* credential unless it asks. A test that wants its
+    own principal -- different groups, a second identity -- calls `identity.testing.enrol()`.
+
+    NOT autouse, and the test client is NOT globally authenticated. The first version installed an
+    authenticating `app.test_client_class` for the whole suite, and it silently turned **six real
+    401 tests green** in `test_web_auth_gate.py`: a client that always presents a credential cannot
+    test the unauthenticated path. That is the same mistake as the blanket bypass, pointed the
+    other way -- so authentication is opt-IN, per test, and a file that does not ask for it is
+    unchanged.
+    """
+    from identity import testing as identity_testing
+
+    return identity_testing.enrol()
+
+
+@pytest.fixture
+def authed_client(nvis_test_principal, monkeypatch):
+    """A test client that authenticates for real, through the real gate (FR-18b).
+
+    The migration handle: a file moved off the bypass takes this instead of building its own
+    client, and gets the product's actual behaviour -- the gate verifies a genuine token, the
+    authorizer runs, and the resource resolver names the target.
+
+    Installs the revocation checker because `tokens.verify` refuses **everything** until one is
+    registered (FR-6a; `identity-auth-traps.mdc` INV-18). Without it every request 401s and reads
+    like a gate bug rather than a missing wire.
+
+    `identity.testing.unauthenticated()` is how a test using this client asks for the 401 path.
+    """
+    from flask.testing import FlaskClient
+    from identity import revocation
+    from identity import testing as identity_testing
+
+    monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "0")
+    revocation.install()
+
+    class _NvisAuthedClient(identity_testing.AuthenticatedClient, FlaskClient):
+        nvis_bearer = nvis_test_principal.bearer
+
+    import app as app_module
+
+    app_module.app.config["TESTING"] = True
+    monkeypatch.setattr(app_module.app, "test_client_class", _NvisAuthedClient)
+    with app_module.app.test_client() as client:
+        client.nvis_principal = nvis_test_principal
+        yield client
+
+
+@pytest.fixture
+def test_principal(nvis_test_principal):
+    """The session's authenticated identity, for a test that needs its login or password."""
+    return nvis_test_principal
+
+
+@pytest.fixture
+def gated(monkeypatch, nvis_test_principal):
+    """Turn the real authentication gate ON for one test or file (FR-18b).
+
+    The migration handle. A file that has been moved off the bypass takes this and gets the
+    product's actual behaviour: the gate verifies a real token, the authorizer runs, and the
+    resource resolver names the target. `identity.testing.unauthenticated()` is how a test inside
+    such a file asks for the 401 path.
+
+    Installs the revocation checker, because `tokens.verify` refuses **everything** until one is
+    registered (FR-6a, and `identity-auth-traps.mdc` INV-18). A file that resets revocation state
+    and forgets this sees every request 401 and reads it as a gate bug.
+    """
+    from identity import revocation
+
+    monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "0")
+    revocation.install()
+    return nvis_test_principal

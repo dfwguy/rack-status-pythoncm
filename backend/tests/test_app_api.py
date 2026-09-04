@@ -732,20 +732,50 @@ class TestSPAServing:
 
 
 class TestRackLocksAPI:
-    def test_get_snapshot_shape(self, client, isolated_locks_file):
-        resp = client.get("/api/rack-locks", headers={"X-Rack-Operator": "alice"})
+    """Rack locks, with TWO REAL PRINCIPALS rather than a spoofable header.
+
+    These tests used to distinguish operators with `X-Rack-Operator: alice` / `: bob`. FR-16 made
+    the authenticated principal win over that header, because a lock claim is *evidence* of who
+    took a rack and a header anyone can set made it unprovable. So the header no longer selects an
+    operator, and the conflict / takeover / delete-by-other scenarios collapsed to one identity.
+
+    Rewritten on two enrolled accounts, which is what the product actually does — and what AC-28e
+    asks for. Each request carries that principal's own token; nothing here is faked.
+    """
+
+    @pytest.fixture
+    def alice(self):
+        from identity import testing as identity_testing
+
+        return identity_testing.enrol("alice", display_name="Alice")
+
+    @pytest.fixture
+    def bob(self):
+        from identity import testing as identity_testing
+
+        return identity_testing.enrol("bob", display_name="Bob")
+
+    @staticmethod
+    def _as(principal, **kwargs):
+        """Request kwargs that authenticate as `principal`."""
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers["Authorization"] = principal.bearer
+        return {"headers": headers, **kwargs}
+
+    def test_get_snapshot_shape(self, authed_client, isolated_locks_file, alice):
+        resp = authed_client.get("/api/rack-locks", **self._as(alice))
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["ok"] is True
-        assert data["me"] == "alice"
+        assert data["me"] == "alice", (
+            "`me` should be the authenticated principal, not a client-supplied label"
+        )
         assert "now" in data and "locks" in data
         assert isinstance(data["locks"], dict)
 
-    def test_post_creates_claim(self, client, isolated_locks_file):
-        resp = client.post(
-            "/api/rack-locks/p5-r01",
-            headers={"X-Rack-Operator": "alice"},
-            json={"note": "planned"},
+    def test_post_creates_claim(self, authed_client, isolated_locks_file, alice):
+        resp = authed_client.post(
+            "/api/rack-locks/p5-r01", **self._as(alice, json={"note": "planned"})
         )
         assert resp.status_code == 200
         data = resp.get_json()
@@ -753,26 +783,36 @@ class TestRackLocksAPI:
         assert data["claim"]["operator"] == "alice"
         assert data["claim"]["note"] == "planned"
 
-        snap = client.get("/api/rack-locks", headers={"X-Rack-Operator": "alice"}).get_json()
+        snap = authed_client.get("/api/rack-locks", **self._as(alice)).get_json()
         assert "p5-r01" in snap["locks"]
         assert snap["locks"]["p5-r01"]["operator"] == "alice"
         assert snap["locks"]["p5-r01"]["kind"] == "claim"
 
-    def test_post_without_operator_header_400(self, client, isolated_locks_file):
-        resp = client.post("/api/rack-locks/p5-r01", json={})
-        assert resp.status_code == 400
+    def test_a_spoofed_operator_header_cannot_change_the_claim(
+        self, authed_client, isolated_locks_file, alice
+    ):
+        """FR-16, at the route. This replaces `test_post_without_operator_header_400`: that test
+        asserted a 400 when no header was sent, and with a real principal the operator is never
+        empty, so the branch it covered is unreachable. The property worth testing now is the
+        opposite one -- that sending a header does not let alice claim a rack as somebody else.
+        """
+        resp = authed_client.post(
+            "/api/rack-locks/p5-r01",
+            **self._as(alice, headers={"X-Rack-Operator": "somebody-else"}),
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["claim"]["operator"] == "alice"
 
-    def test_post_conflict_returns_409(self, client, isolated_locks_file):
-        client.post("/api/rack-locks/p5-r01", headers={"X-Rack-Operator": "alice"})
-        resp = client.post("/api/rack-locks/p5-r01", headers={"X-Rack-Operator": "bob"})
+    def test_post_conflict_returns_409(self, authed_client, isolated_locks_file, alice, bob):
+        authed_client.post("/api/rack-locks/p5-r01", **self._as(alice))
+        resp = authed_client.post("/api/rack-locks/p5-r01", **self._as(bob))
         assert resp.status_code == 409
 
-    def test_post_force_takeover_succeeds(self, client, isolated_locks_file):
-        client.post("/api/rack-locks/p5-r01", headers={"X-Rack-Operator": "alice"})
-        resp = client.post(
+    def test_post_force_takeover_succeeds(self, authed_client, isolated_locks_file, alice, bob):
+        authed_client.post("/api/rack-locks/p5-r01", **self._as(alice))
+        resp = authed_client.post(
             "/api/rack-locks/p5-r01",
-            headers={"X-Rack-Operator": "bob"},
-            json={"force": True, "note": "alice left"},
+            **self._as(bob, json={"force": True, "note": "alice left"}),
         )
         assert resp.status_code == 200
         data = resp.get_json()
@@ -781,30 +821,22 @@ class TestRackLocksAPI:
         assert data["claim"]["stolen_from"] == "alice"
         assert data["claim"]["note"] == "alice left"
 
-    def test_post_invalid_rack_400(self, client, isolated_locks_file):
-        resp = client.post(
-            "/api/rack-locks/not-a-rack",
-            headers={"X-Rack-Operator": "alice"},
-        )
+    def test_post_invalid_rack_400(self, authed_client, isolated_locks_file, alice):
+        resp = authed_client.post("/api/rack-locks/not-a-rack", **self._as(alice))
         assert resp.status_code == 400
 
-    def test_delete_by_owner_succeeds(self, client, isolated_locks_file):
-        client.post("/api/rack-locks/p5-r01", headers={"X-Rack-Operator": "alice"})
-        resp = client.delete("/api/rack-locks/p5-r01", headers={"X-Rack-Operator": "alice"})
+    def test_delete_by_owner_succeeds(self, authed_client, isolated_locks_file, alice):
+        authed_client.post("/api/rack-locks/p5-r01", **self._as(alice))
+        resp = authed_client.delete("/api/rack-locks/p5-r01", **self._as(alice))
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["ok"] is True
         assert data["removed"] is True
 
-    def test_delete_by_other_returns_403(self, client, isolated_locks_file):
-        client.post("/api/rack-locks/p5-r01", headers={"X-Rack-Operator": "alice"})
-        resp = client.delete("/api/rack-locks/p5-r01", headers={"X-Rack-Operator": "bob"})
+    def test_delete_by_other_returns_403(self, authed_client, isolated_locks_file, alice, bob):
+        authed_client.post("/api/rack-locks/p5-r01", **self._as(alice))
+        resp = authed_client.delete("/api/rack-locks/p5-r01", **self._as(bob))
         assert resp.status_code == 403
-
-    def test_delete_nonexistent_returns_ok_not_removed(self, client, isolated_locks_file):
-        resp = client.delete("/api/rack-locks/p5-r01", headers={"X-Rack-Operator": "alice"})
-        assert resp.status_code == 200
-        assert resp.get_json()["removed"] is False
 
 
 def _launch(client, url: str, kind: str, body: dict):

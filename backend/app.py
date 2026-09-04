@@ -837,15 +837,27 @@ def _require_dashboard_auth():
                 # Refuse rather than substitute a filler id. Any filler is matched by the `type:*`
                 # grant an operator would reasonably write, so a resolution failure would become a
                 # grant. `test_authz_resource_coverage.py` is what keeps this off the hot path.
+                #
+                # **400, not 403**, and the distinction is the caller's next move. A request that
+                # never named its target is malformed — the caller sent a bad request, and telling
+                # them "not authorized" sends them to ask for permissions they already hold. This
+                # was 403 until turning real authentication on in the suite showed what it does to
+                # a legitimate malformed request: `test_missing_rack_returns_400` expected the
+                # view's own 400 and got an authorization refusal instead, which is exactly the
+                # misdirection an operator would have hit.
+                #
+                # Still fail-closed in the way that matters: the action does not execute, and the
+                # status leaks nothing an attacker did not already know, since they chose to omit
+                # the target.
                 _logger.warning("authz: refusing %s %s: %s", request.method, request.path, exc)
                 g.authz_decision = authz.Decision(
                     allowed=False, engine="resource-resolver", reason=str(exc)
                 )
                 return jsonify({
                     "ok": False,
-                    "error": "not authorized",
-                    "reason": "the target of this request could not be identified",
-                }), 403
+                    "error": "the target of this request could not be identified",
+                    "reason": "unresolvable_target",
+                }), 400
 
             decision = authz.authorize(principal, act.action, resource)
             g.authz_decision = decision
