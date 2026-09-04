@@ -33,7 +33,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import jwt
 import pytest
 from identity import keys as keys_mod
-from identity import oidc, revocation
+from identity import oidc, revocation, tokens
 from identity import oidc_clients as clients_mod
 from identity import oidc_codes as codes_mod
 
@@ -505,3 +505,186 @@ class TestTheFlagGovernsEverything:
         app.config["TESTING"] = True
         with app.test_client() as c:
             assert getattr(c, method)(path).status_code == 404
+
+
+class TestScopeIsGrantedAtAuthorization:
+    """`.plc/briefs/oidc-directory-claims-l0.md` R3, R5."""
+
+    def test_the_requested_scope_reaches_the_token_response(self, signed_in):
+        resp, verifier = _authorize(signed_in, scope="openid email")
+        body = _exchange(signed_in, _code_from(resp), verifier).get_json()
+        assert set(body["scope"].split()) == {"openid", "email"}
+
+    def test_an_unsupported_scope_is_dropped_not_refused(self, signed_in):
+        """RFC 6749 §3.3 allows either. Dropping it means one stray scope cannot make a client
+        unable to log in at all."""
+        resp, verifier = _authorize(signed_in, scope="openid profile telepathy")
+        body = _exchange(signed_in, _code_from(resp), verifier).get_json()
+        assert set(body["scope"].split()) == {"openid", "profile"}
+
+    def test_openid_is_always_granted(self, signed_in):
+        resp, verifier = _authorize(signed_in, scope="email")
+        body = _exchange(signed_in, _code_from(resp), verifier).get_json()
+        assert "openid" in body["scope"].split()
+
+    def test_omitting_scope_reproduces_the_pre_scope_response(self, signed_in):
+        """The recorded compatibility choice: `/userinfo` returned `name` and `preferred_username`
+        unconditionally before scope was honoured, and both belong to `profile`."""
+        resp, verifier = _authorize(signed_in, scope=None)
+        body = _exchange(signed_in, _code_from(resp), verifier).get_json()
+        assert set(body["scope"].split()) == {"openid", "profile"}
+
+        info = signed_in.get(
+            "/oidc/userinfo", headers={"Authorization": f"Bearer {body['access_token']}"}
+        ).get_json()
+        assert {"sub", "name", "preferred_username"} <= set(info)
+
+    def test_the_access_token_carries_the_granted_scope(self, signed_in):
+        resp, verifier = _authorize(signed_in, scope="openid phone")
+        body = _exchange(signed_in, _code_from(resp), verifier).get_json()
+        claims = jwt.decode(body["access_token"], options={"verify_signature": False})
+        assert set(str(claims["scope"]).split()) == {"openid", "phone"}
+
+
+class TestUserinfoReleasesOnlyWhatWasGranted:
+    """R3. The point of the scope: an `openid`-only token is not a directory read."""
+
+    def _info(self, client, scope):
+        resp, verifier = _authorize(client, scope=scope)
+        body = _exchange(client, _code_from(resp), verifier).get_json()
+        return client.get(
+            "/oidc/userinfo", headers={"Authorization": f"Bearer {body['access_token']}"}
+        ).get_json()
+
+    def test_openid_alone_releases_only_the_subject(self, signed_in):
+        info = self._info(signed_in, "openid")
+        assert set(info) == {"sub"}
+
+    def test_email_scope_releases_the_address_and_its_verified_flag(self, signed_in):
+        info = self._info(signed_in, "openid email")
+        assert info["email"] == "tester@example.com"
+        # `False` is a real answer here and must survive the empty-value filter.
+        assert info["email_verified"] is False
+        assert "phone_number" not in info
+
+    def test_the_email_scope_does_not_leak_profile_claims(self, signed_in):
+        info = self._info(signed_in, "openid email")
+        assert "name" not in info and "given_name" not in info
+
+    def test_profile_scope_releases_the_profile_claims_that_are_set(self, signed_in):
+        signed_in.patch(
+            "/api/identity/users/tester",
+            json={"given_name": "Ada", "family_name": "Lovelace", "locale": "en-GB",
+                  "zoneinfo": "Europe/London"},
+        )
+        info = self._info(signed_in, "openid profile")
+        assert info["given_name"] == "Ada"
+        assert info["family_name"] == "Lovelace"
+        assert info["locale"] == "en-GB"
+        assert info["zoneinfo"] == "Europe/London"
+        assert "email" not in info
+
+    def test_an_unset_claim_is_omitted_rather_than_sent_empty(self, signed_in):
+        """§5.3.2 permits omission, and a relying party cannot tell "we hold nothing" from "their
+        family name is the empty string".
+
+        Clears the field explicitly rather than relying on it being unset: the identity store is not
+        isolated per test in this module, so a sibling that sets a family name would otherwise decide
+        whether this passes.
+        """
+        signed_in.patch("/api/identity/users/tester", json={"family_name": ""})
+        info = self._info(signed_in, "openid profile")
+        assert "family_name" not in info
+
+    def test_updated_at_is_a_numeric_date(self, signed_in):
+        """§5.1 defines it as seconds since the epoch; the record stores ISO-8601, so returning the
+        stored string under this name would be well-formed and wrong."""
+        signed_in.patch("/api/identity/users/tester", json={"given_name": "Ada"})
+        info = self._info(signed_in, "openid profile")
+        assert isinstance(info["updated_at"], (int, float))
+        assert info["updated_at"] > 1_600_000_000
+
+
+class TestARefreshCannotWidenScope:
+    """R4 — RFC 6749 §6. The escalation this forbids looks like an ordinary renewal in every log."""
+
+    def _refresh(self, client, refresh_token, **extra):
+        return client.post(
+            "/oidc/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": "grafana",
+                "client_secret": SECRET,
+                **extra,
+            },
+        )
+
+    def _granted(self, client, scope):
+        resp, verifier = _authorize(client, scope=scope)
+        return _exchange(client, _code_from(resp), verifier).get_json()
+
+    def test_a_refresh_preserves_the_original_scope(self, signed_in):
+        body = self._granted(signed_in, "openid email")
+        refreshed = self._refresh(signed_in, body["refresh_token"]).get_json()
+        assert set(refreshed["scope"].split()) == {"openid", "email"}
+
+    def test_asking_for_more_on_refresh_does_not_grant_it(self, signed_in):
+        body = self._granted(signed_in, "openid")
+        refreshed = self._refresh(
+            signed_in, body["refresh_token"], scope="openid profile email phone"
+        ).get_json()
+        assert set(refreshed["scope"].split()) == {"openid"}
+
+    def test_the_widened_request_does_not_leak_through_userinfo_either(self, signed_in):
+        """The assertion that matters: the response field could be right while the token was wrong."""
+        body = self._granted(signed_in, "openid")
+        refreshed = self._refresh(
+            signed_in, body["refresh_token"], scope="openid email profile"
+        ).get_json()
+        info = signed_in.get(
+            "/oidc/userinfo", headers={"Authorization": f"Bearer {refreshed['access_token']}"}
+        ).get_json()
+        assert set(info) == {"sub"}
+
+    def test_a_refresh_may_narrow(self, signed_in):
+        body = self._granted(signed_in, "openid profile email")
+        refreshed = self._refresh(signed_in, body["refresh_token"], scope="openid email").get_json()
+        assert set(refreshed["scope"].split()) == {"openid", "email"}
+
+    def test_scope_cannot_be_smuggled_through_the_claims_argument(self, signed_in):
+        """`scope` is reserved precisely so it cannot be set two ways and disagree with itself."""
+        with pytest.raises(tokens.TokenError, match="scope"):
+            tokens.mint("user:tester", tokens.TOKEN_ACCESS, claims={"scope": "openid profile"})
+
+
+class TestATokenWithNoGrantReleasesOnlyTheSubject:
+    """Pinned as a decision, because it is otherwise an easy accident.
+
+    `mint()` defaults `scope` to `openid` -- the narrowest -- since it is called from places that
+    have no authorization grant at all, notably the SRP login path. `parse_scope("")` instead
+    returns `openid profile`, which is the *compatibility shim* for `/authorize` requests that
+    predate scope handling. Two different defaults for two different situations, and this test says
+    so out loud so neither is later "fixed" into the other.
+
+    A first-party session token therefore reads only `sub` from `/userinfo`, which is right: no
+    client asked for anything, so nothing was granted. There is no in-repo consumer of `/userinfo`
+    today, so this changes nothing in practice.
+    """
+
+    def test_an_srp_style_token_gets_only_the_subject(self, signed_in):
+        token = tokens.mint("user:tester", tokens.TOKEN_ACCESS)
+        info = signed_in.get(
+            "/oidc/userinfo", headers={"Authorization": f"Bearer {token}"}
+        ).get_json()
+        assert set(info) == {"sub"}
+
+    def test_the_two_defaults_are_deliberately_different(self, provider):
+        # `provider` is required: outside OIDC mode `mint` emits no `scope` claim at all, so without
+        # it this asserts '' == 'openid' and fails for a reason unrelated to what it checks.
+        assert oidc.DEFAULT_SCOPE == ("openid", "profile")
+        assert _unverified_scope(tokens.mint("user:tester", tokens.TOKEN_ACCESS)) == "openid"
+
+
+def _unverified_scope(token_str: str) -> str:
+    return str(jwt.decode(token_str, options={"verify_signature": False}).get("scope") or "")

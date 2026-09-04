@@ -36,6 +36,7 @@ import base64
 import hashlib
 import hmac
 import logging
+from datetime import datetime
 from urllib.parse import urlencode
 
 import jwt
@@ -127,7 +128,10 @@ def authorize():
             code_challenge_method=(request.args.get("code_challenge_method") or "").strip(),
             nonce=request.args.get("nonce"),
             auth_time=getattr(g, "auth_time", None),
-            scope="openid",
+            # Honoured rather than discarded. The granted set is pinned to the code here, so what
+            # `/userinfo` later releases is decided by this authorization request and not by
+            # whatever a token-endpoint caller asks for afterwards.
+            scope=" ".join(oidc.parse_scope(request.args.get("scope"))),
         )
     except codes_mod.CodeError as exc:
         return _redirect_error("invalid_request", str(exc))
@@ -198,14 +202,18 @@ def _grant_authorization_code(form, client: clients_mod.Client):
         return _oauth_error("invalid_grant", str(exc))
 
     # Access token first: `at_hash` binds the id token to it, so it must already exist.
-    access = tokens.mint(entry.principal, tokens.TOKEN_ACCESS, auth_time=entry.auth_time)
+    access = tokens.mint(
+        entry.principal, tokens.TOKEN_ACCESS, auth_time=entry.auth_time, scope=entry.scope
+    )
     id_token = tokens.mint(
         entry.principal,
         tokens.TOKEN_ID,
         auth_time=entry.auth_time,
         claims=_id_token_claims(entry, client) | {"at_hash": _at_hash(access)},
     )
-    refresh = tokens.mint(entry.principal, tokens.TOKEN_REFRESH, auth_time=entry.auth_time)
+    refresh = tokens.mint(
+        entry.principal, tokens.TOKEN_REFRESH, auth_time=entry.auth_time, scope=entry.scope
+    )
 
     # Recorded so a replay of this code can withdraw them (FR-11a). Done after minting, so a
     # failure part-way leaves nothing claiming to exist that does not.
@@ -234,14 +242,20 @@ def _grant_refresh_token(form, client: clients_mod.Client):
     if not _subject_still_enabled(principal):
         return _oauth_error("invalid_grant", "the subject is no longer able to authenticate")
 
+    # Never wider than the original grant (RFC 6749 §6). The scope comes off the presented refresh
+    # token, so a client asking for more here narrows rather than escalates.
+    granted = oidc.narrow_scope(claims.get("scope"), form.get("scope"))
     access = tokens.mint(
-        principal, tokens.TOKEN_ACCESS, auth_time=claims.get("auth_time")
+        principal,
+        tokens.TOKEN_ACCESS,
+        auth_time=claims.get("auth_time"),
+        scope=" ".join(granted),
     )
     return jsonify({
         "access_token": access,
         "token_type": "Bearer",
         "expires_in": tokens.access_ttl(),
-        "scope": "openid",
+        "scope": " ".join(granted),
     })
 
 
@@ -349,11 +363,62 @@ def userinfo():
     if user is None or user.disabled:
         return jsonify({"error": "invalid_token"}), 401
 
-    return jsonify({
+    return jsonify(_claims_for_scope(principal, user, str(claims.get("scope") or "")))
+
+
+def _claims_for_scope(principal: str, user, scope: str) -> dict:
+    """The claims this token's scope releases, and no others (§5.4).
+
+    Built from `oidc.SCOPE_CLAIMS` rather than an inline list, so the discovery document's
+    `claims_supported` and what this endpoint actually returns are derived from one table and cannot
+    drift apart.
+
+    Empty values are omitted rather than sent as `""`. A relying party cannot distinguish "we hold
+    no family name" from "their family name is the empty string", and §5.3.2 permits omission, so
+    saying nothing is the honest encoding.
+    """
+    available: dict[str, object] = {
         "sub": principal,
         "preferred_username": user.login,
         "name": user.display_name or user.login,
-    })
+        "given_name": user.given_name,
+        "family_name": user.family_name,
+        "zoneinfo": user.zoneinfo,
+        "locale": user.locale,
+        "email": user.email,
+        "email_verified": user.email_verified,
+        "phone_number": user.phone_number,
+        "phone_number_verified": user.phone_number_verified,
+        # §5.1 defines this as a NumericDate -- seconds since the epoch -- while the record stores
+        # an ISO-8601 string. Returning the stored form under this name would be well-formed and
+        # wrong, so it is converted, and dropped entirely if it cannot be parsed.
+        "updated_at": _numeric_date(user.updated_at),
+    }
+
+    granted = {s for s in str(scope or "").split()} or set(oidc.DEFAULT_SCOPE)
+    released: dict[str, object] = {}
+    for name in ("openid", *oidc.SCOPE_CLAIMS):
+        if name != "openid" and name not in granted:
+            continue
+        for claim in oidc.SCOPE_CLAIMS.get(name, ()):
+            value = available.get(claim)
+            # `False` is a real answer for the two `*_verified` booleans and must survive; only
+            # absent strings and unparseable dates are dropped.
+            if value is None or value == "":
+                continue
+            released[claim] = value
+    return released
+
+
+def _numeric_date(iso: str) -> float | None:
+    """An ISO-8601 stamp as OIDC's NumericDate, or ``None`` when it cannot be read."""
+    text = str(iso or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
 
 
 # --- introspection and revocation ---------------------------------------------------------------

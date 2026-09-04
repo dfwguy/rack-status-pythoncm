@@ -322,12 +322,18 @@ def mint(
     ttl_seconds: int | None = None,
     claims: dict[str, Any] | None = None,
     auth_time: float | None = None,
+    scope: str | None = None,
 ) -> str:
     """Sign a token for ``principal`` (a ``user:<login>`` string).
 
     The principal is parsed rather than trusted: :func:`identity.principals.parse_principal` is the
     single grammar (FR-15a), so a caller cannot slip an unparseable ``sub`` into a token that later
     code will try to split by hand.
+
+    ``scope`` is an explicit parameter rather than something passed through ``claims`` because it is
+    load-bearing: `/userinfo` decides what to release from it, so a token whose scope disagreed with
+    what was granted would hand out attributes nobody authorised. It is also a reserved claim name
+    for that reason -- two ways to set one security-relevant value is one way too many.
     """
     if token_type not in TOKEN_TYPES:
         raise TokenError(f"unknown token type {token_type!r}; expected one of {TOKEN_TYPES}")
@@ -381,12 +387,13 @@ def mint(
         # a plausible, well-formed lie. Callers renewing a session must pass the original value
         # through; `mint` cannot recover it.
         payload["auth_time"] = float(auth_time) if auth_time is not None else now
-        if token_type == TOKEN_ACCESS:
-            # `openid` only until Phase 3. A scope that appears in a token and gates nothing is a
-            # claim, not access control, and must not be presented as the latter.
-            payload["scope"] = "openid"
+        if token_type in (TOKEN_ACCESS, TOKEN_REFRESH):
+            # Both, not just the access token: the refresh token is what a renewal reads the
+            # original grant from, and a refresh that cannot recall its scope can only either
+            # guess or widen. RFC 6749 §6 forbids widening, so it has to be recorded here.
+            payload["scope"] = scope or "openid"
 
-    for reserved in (*REQUIRED_CLAIMS, TYPE_CLAIM_OIDC):
+    for reserved in (*REQUIRED_CLAIMS, TYPE_CLAIM_OIDC, "scope"):
         if claims and reserved in claims:
             raise TokenError(f"caller may not override the {reserved!r} claim")
     payload.update(claims or {})

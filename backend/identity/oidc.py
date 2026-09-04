@@ -55,6 +55,76 @@ ISSUER_ENV = "RACK_WEB_OIDC_ISSUER"
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
+#: Which scope releases which claims, per OpenID Connect Core 1.0 §5.4.
+#:
+#: **The single source of truth for both directions.** `claims_supported` in the discovery document
+#: and the release decision in `/userinfo` are both derived from this map, so the document cannot
+#: advertise a claim the endpoint withholds — the same reason the policy JSON Schema is exported from
+#: the pydantic model rather than written twice.
+#:
+#: `address` is absent because the record has no address, and `gender`/`birthdate`/`picture`/
+#: `website`/`nickname` because an internal cluster-operations tool has no use for them and each is
+#: PII the product would then own.
+SCOPE_CLAIMS: dict[str, tuple[str, ...]] = {
+    "openid": ("sub",),
+    "profile": (
+        "name",
+        "given_name",
+        "family_name",
+        "preferred_username",
+        "zoneinfo",
+        "locale",
+        "updated_at",
+    ),
+    "email": ("email", "email_verified"),
+    "phone": ("phone_number", "phone_number_verified"),
+}
+
+#: Scopes a client may ask for. `openid` is mandatory in an OIDC request, so it is always granted.
+SUPPORTED_SCOPES: tuple[str, ...] = tuple(SCOPE_CLAIMS)
+
+#: What a request that names no scope at all is granted.
+#:
+#: A compatibility choice, not a rule. `/authorize` used to discard `scope` entirely and `/userinfo`
+#: returned `name` and `preferred_username` unconditionally — both of which §5.4 assigns to
+#: `profile`. Gating them without this default would silently stop returning them to every caller
+#: that predates scope handling, so an absent `scope` reproduces the previous response exactly. A
+#: request that names its scopes gets precisely those.
+DEFAULT_SCOPE: tuple[str, ...] = ("openid", "profile")
+
+
+def parse_scope(raw: object) -> tuple[str, ...]:
+    """Normalise a space-delimited scope string into the granted set.
+
+    Unsupported scopes are dropped rather than refused (RFC 6749 §3.3 permits either, and a hard
+    refusal makes a client that asks for one harmless extra scope unable to log in at all). `openid`
+    is always present: this endpoint only speaks OIDC.
+    """
+    requested = [s for s in str(raw or "").replace(",", " ").split() if s]
+    if not requested:
+        return DEFAULT_SCOPE
+    granted = [s for s in SUPPORTED_SCOPES if s in requested]
+    if "openid" not in granted:
+        granted.insert(0, "openid")
+    return tuple(granted)
+
+
+def narrow_scope(granted: object, requested: object) -> tuple[str, ...]:
+    """The scope for a refreshed token: never wider than what was originally granted (RFC 6749 §6).
+
+    Without this a client holding an `openid` refresh token could ask for `openid profile email` and
+    be handed attributes its authorization request never covered — a privilege escalation that looks
+    like an ordinary renewal in every log.
+    """
+    have = tuple(s for s in SUPPORTED_SCOPES if s in str(granted or "").split())
+    if not have:
+        have = ("openid",)
+    asked = [s for s in str(requested or "").replace(",", " ").split() if s]
+    if not asked:
+        return have
+    kept = tuple(s for s in have if s in asked)
+    return kept or ("openid",)
+
 
 class OIDCConfigError(Exception):
     """The provider is enabled but cannot be configured coherently."""
@@ -144,18 +214,22 @@ def discovery_document() -> dict[str, object]:
             "revocation_endpoint": f"{issuer}/oidc/revoke",
             "id_token_signing_alg_values_supported": ["ES256"],
             "subject_types_supported": ["public"],
-            # Only `openid` until Phase 3. A scope that appears in a token and gates nothing must
-            # not be advertised as though it did.
-            "scopes_supported": ["openid"],
+            # Every scope here now gates a real claim-release decision at `/userinfo`, which is the
+            # condition for advertising it: a scope that appears in a token and gates nothing must
+            # not be presented as though it did.
+            "scopes_supported": list(SUPPORTED_SCOPES),
             "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code", "refresh_token"],
             # S256 only. `plain` is advertised by many providers and protects nothing against an
             # intercepted code, so declining to offer it is the point rather than an omission.
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
+            # Protocol claims, then every claim some scope can release -- derived from SCOPE_CLAIMS
+            # so the document cannot advertise something `/userinfo` withholds.
             "claims_supported": [
                 "iss", "aud", "sub", "exp", "iat", "jti",
                 "token_use", "auth_time", "azp", "nonce", "scope",
+                *sorted({c for claims in SCOPE_CLAIMS.values() for c in claims} - {"sub"}),
             ],
         }
         _doc_cache = (issuer, document)

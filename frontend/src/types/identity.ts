@@ -34,6 +34,14 @@ export interface IdentityUser {
    */
   email_verified: boolean;
   phone_number_verified: boolean;
+  /**
+   * The rest of the OIDC Core §5.1 profile set. `zoneinfo` is an IANA zone name and `locale` an
+   * RFC 5646 tag stored in conventional casing (`en-US`), both normalised server-side.
+   */
+  given_name: string;
+  family_name: string;
+  zoneinfo: string;
+  locale: string;
   created_at?: string;
   updated_at?: string;
   /** Group names this user belongs to. Server-side join, so the list is one request. */

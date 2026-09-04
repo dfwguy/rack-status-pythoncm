@@ -133,10 +133,27 @@ class TestDiscoveryDocument:
             path = url.replace(ISSUER, "")
             assert path in rules, f"{path} is advertised but is not a route"
 
-    def test_only_the_openid_scope_is_advertised(self, client, provider):
-        """Phase 3 owns authorization. A scope that gates nothing must not be advertised as if it
-        did — that is the difference between a claim and access control."""
-        assert client.get(DISCOVERY).get_json()["scopes_supported"] == ["openid"]
+    def test_every_advertised_scope_gates_something(self, client, provider):
+        """The rule this file has always enforced, now stated as the rule rather than as the one
+        scope that happened to satisfy it.
+
+        Previously `scopes_supported` was pinned to exactly `["openid"]`, because nothing else gated
+        anything and *"a scope that gates nothing must not be advertised as if it did"*. The
+        constraint has not been relaxed — `profile`, `email` and `phone` each now decide claim
+        release at `/userinfo`, so they earn their place. Asserting the rule means adding a scope to
+        the document without wiring it fails here, which pinning the literal list could not catch.
+        """
+        advertised = client.get(DISCOVERY).get_json()["scopes_supported"]
+        assert "openid" in advertised, "an OIDC provider must advertise `openid`"
+        for scope in advertised:
+            assert oidc.SCOPE_CLAIMS.get(scope), f"{scope} is advertised but releases no claim"
+
+    def test_claims_supported_is_not_narrower_than_what_userinfo_can_return(self, client, provider):
+        """A client configures itself from this list, so a claim the endpoint can return and the
+        document omits is a claim nobody asks for."""
+        advertised = set(client.get(DISCOVERY).get_json()["claims_supported"])
+        releasable = {c for claims in oidc.SCOPE_CLAIMS.values() for c in claims}
+        assert releasable <= advertised, f"missing from claims_supported: {sorted(releasable - advertised)}"
 
     def test_the_response_is_cacheable(self, client, provider):
         assert "max-age" in client.get(DISCOVERY).headers.get("Cache-Control", "")

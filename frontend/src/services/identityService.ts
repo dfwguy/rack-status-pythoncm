@@ -62,20 +62,40 @@ export async function listUsers(): Promise<IdentityUser[]> {
  * The returned password exists in that one response and nowhere else — the server keeps only its
  * verifier — so a caller that discards it has created an account nobody can sign in to.
  */
+/**
+ * The profile a new account is created with. An object rather than a positional list because the
+ * server accepts seven attributes now — passing those in order is a transposition waiting to happen,
+ * and two adjacent optional strings are exactly the pair a caller gets backwards.
+ */
+export type NewUserProfile = {
+  /** Required by the server so every new account can be notified. */
+  email: string;
+} & Partial<
+  Pick<
+    IdentityUser,
+    "display_name" | "phone_number" | "given_name" | "family_name" | "zoneinfo" | "locale"
+  >
+>;
+
+function profileBody(profile: NewUserProfile): Record<string, string> {
+  return {
+    display_name: profile.display_name ?? "",
+    email: profile.email,
+    phone_number: profile.phone_number ?? "",
+    given_name: profile.given_name ?? "",
+    family_name: profile.family_name ?? "",
+    zoneinfo: profile.zoneinfo ?? "",
+    locale: profile.locale ?? "",
+  };
+}
+
 export async function createUser(
   login: string,
-  displayName?: string,
-  email?: string,
-  phoneNumber?: string,
+  profile: NewUserProfile,
 ): Promise<IssuedCredential> {
   const data = await apiJson<{ user: { login: string }; password: string }>(
     "/api/identity/users",
-    json({
-      login,
-      display_name: displayName ?? "",
-      email: email ?? "",
-      phone_number: phoneNumber ?? "",
-    }),
+    json({ login, ...profileBody(profile) }),
   );
   return { login: data.user.login, password: data.password };
 }
@@ -93,9 +113,7 @@ export async function createUser(
 export async function createUserWithPassword(
   login: string,
   password: string,
-  displayName?: string,
-  email?: string,
-  phoneNumber?: string,
+  profile: NewUserProfile,
 ): Promise<void> {
   // Derived against the *canonical* login the server will store: SRP hashes the identity into `x`,
   // so deriving against the raw input would produce a verifier that never matches at sign-in — the
@@ -112,9 +130,7 @@ export async function createUserWithPassword(
     "/api/identity/users",
     json({
       login: canonical,
-      display_name: displayName ?? "",
-      email: email ?? "",
-      phone_number: phoneNumber ?? "",
+      ...profileBody(profile),
       salt: saltHex,
       verifier: verifierHex,
     }),
@@ -137,7 +153,18 @@ export async function updateDisplayName(
  */
 export async function updateProfile(
   login: string,
-  changes: Partial<Pick<IdentityUser, "display_name" | "email" | "phone_number">>,
+  changes: Partial<
+    Pick<
+      IdentityUser,
+      | "display_name"
+      | "email"
+      | "phone_number"
+      | "given_name"
+      | "family_name"
+      | "zoneinfo"
+      | "locale"
+    >
+  >,
 ): Promise<IdentityUser> {
   const data = await apiJson<{ user: IdentityUser }>(`/api/identity/users/${encodeURIComponent(login)}`, {
     method: "PATCH",

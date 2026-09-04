@@ -94,6 +94,8 @@ export function UsersView() {
   const [newDisplayName, setNewDisplayName] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [newPhoneNumber, setNewPhoneNumber] = useState("");
+  const [newGivenName, setNewGivenName] = useState("");
+  const [newFamilyName, setNewFamilyName] = useState("");
 
   // Editing an existing user's profile. Held separately from the create form so opening one does
   // not inherit half-typed values from the other.
@@ -101,6 +103,10 @@ export function UsersView() {
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editPhoneNumber, setEditPhoneNumber] = useState("");
+  const [editGivenName, setEditGivenName] = useState("");
+  const [editFamilyName, setEditFamilyName] = useState("");
+  const [editZoneinfo, setEditZoneinfo] = useState("");
+  const [editLocale, setEditLocale] = useState("");
   // Generate by default. It is the safer path — a generated password is high-entropy and nobody
   // has typed it into a second place — so the operator has to opt into choosing one.
   const [credentialMode, setCredentialMode] = useState<"generate" | "choose">("generate");
@@ -164,6 +170,10 @@ export function UsersView() {
     setEditDisplayName(user.display_name);
     setEditEmail(user.email);
     setEditPhoneNumber(user.phone_number);
+    setEditGivenName(user.given_name);
+    setEditFamilyName(user.family_name);
+    setEditZoneinfo(user.zoneinfo);
+    setEditLocale(user.locale);
   };
 
   const saveEdit = async () => {
@@ -172,10 +182,14 @@ export function UsersView() {
     // Send only what moved. A no-op field would still be a write, and the server clears the
     // verified flag whenever an address is *set*, so resending an unchanged address would drop a
     // standing assertion for no reason.
-    const changes: Partial<Pick<IdentityUser, "display_name" | "email" | "phone_number">> = {};
+    const changes: Parameters<typeof identity.updateProfile>[1] = {};
     if (editDisplayName.trim() !== user.display_name) changes.display_name = editDisplayName.trim();
     if (editEmail.trim() !== user.email) changes.email = editEmail.trim();
     if (editPhoneNumber.trim() !== user.phone_number) changes.phone_number = editPhoneNumber.trim();
+    if (editGivenName.trim() !== user.given_name) changes.given_name = editGivenName.trim();
+    if (editFamilyName.trim() !== user.family_name) changes.family_name = editFamilyName.trim();
+    if (editZoneinfo.trim() !== user.zoneinfo) changes.zoneinfo = editZoneinfo.trim();
+    if (editLocale.trim() !== user.locale) changes.locale = editLocale.trim();
 
     setEditing(null);
     if (Object.keys(changes).length === 0) return;
@@ -230,7 +244,17 @@ export function UsersView() {
     setNewPasswordConfirm("");
     setNewEmail("");
     setNewPhoneNumber("");
+    setNewGivenName("");
+    setNewFamilyName("");
   };
+
+  const createProfile = (): identity.NewUserProfile => ({
+    display_name: newDisplayName.trim(),
+    email: newEmail.trim(),
+    phone_number: newPhoneNumber.trim(),
+    given_name: newGivenName.trim(),
+    family_name: newFamilyName.trim(),
+  });
 
   const create = async () => {
     const login = newLogin.trim();
@@ -240,22 +264,11 @@ export function UsersView() {
     try {
       if (credentialMode === "choose") {
         // The password is turned into a salt and verifier in this browser; only those are sent.
-        await identity.createUserWithPassword(
-          login,
-          newPassword,
-          newDisplayName.trim(),
-          newEmail.trim(),
-          newPhoneNumber.trim(),
-        );
+        await identity.createUserWithPassword(login, newPassword, createProfile());
         resetCreateForm();
         setNotice(`${login} was created. Give them the password you chose.`);
       } else {
-        const credential = await identity.createUser(
-          login,
-          newDisplayName.trim(),
-          newEmail.trim(),
-          newPhoneNumber.trim(),
-        );
+        const credential = await identity.createUser(login, createProfile());
         resetCreateForm();
         // Shown before the reload, because this password is the only unrecoverable thing here.
         setIssued(credential);
@@ -545,7 +558,38 @@ export function UsersView() {
             helperText="Stored in international form, e.g. +1 555 010 4477."
             value={editPhoneNumber}
             onChange={(e) => setEditPhoneNumber(e.target.value)}
+            sx={{ mb: 2 }}
           />
+          <Flex gap="2" style={{ marginBottom: 16 }}>
+            <TextField
+              fullWidth
+              label="First name"
+              value={editGivenName}
+              onChange={(e) => setEditGivenName(e.target.value)}
+            />
+            <TextField
+              fullWidth
+              label="Last name"
+              value={editFamilyName}
+              onChange={(e) => setEditFamilyName(e.target.value)}
+            />
+          </Flex>
+          <Flex gap="2">
+            <TextField
+              fullWidth
+              label="Time zone"
+              helperText="IANA name, e.g. America/New_York. Used to render times for this operator."
+              value={editZoneinfo}
+              onChange={(e) => setEditZoneinfo(e.target.value)}
+            />
+            <TextField
+              fullWidth
+              label="Locale"
+              helperText="Language tag, e.g. en-US."
+              value={editLocale}
+              onChange={(e) => setEditLocale(e.target.value)}
+            />
+          </Flex>
         </DialogContent>
         <DialogActions>
           <Button kind="tertiary" onClick={() => setEditing(null)}>Cancel</Button>
@@ -580,6 +624,20 @@ export function UsersView() {
             onChange={(e) => setNewDisplayName(e.target.value)}
             sx={{ mb: 2 }}
           />
+          <Flex gap="2" style={{ marginBottom: 16 }}>
+            <TextField
+              fullWidth
+              label="First name (optional)"
+              value={newGivenName}
+              onChange={(e) => setNewGivenName(e.target.value)}
+            />
+            <TextField
+              fullWidth
+              label="Last name (optional)"
+              value={newFamilyName}
+              onChange={(e) => setNewFamilyName(e.target.value)}
+            />
+          </Flex>
           <TextField
             fullWidth
             required

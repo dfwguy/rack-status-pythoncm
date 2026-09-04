@@ -222,13 +222,27 @@ class TestClaims:
 
         assert carried == origin
 
-    def test_scope_is_on_access_tokens_only(self, oidc_mode):
-        assert _unverified(T.mint("user:admin", T.TOKEN_ACCESS))["scope"] == "openid"
-        assert "scope" not in _unverified(T.mint("user:admin", T.TOKEN_REFRESH))
+    def test_scope_is_on_the_access_and_refresh_tokens_but_not_the_id_token(self, oidc_mode):
+        """The refresh token carries it deliberately, and this test previously asserted it did not.
 
-    def test_scope_is_openid_only_until_phase_3(self, oidc_mode):
-        """A scope that appears in a token and gates nothing is a claim, not access control."""
+        RFC 6749 §6 forbids a refresh from widening scope, and these tokens are self-contained --
+        there is no server-side grant record to consult -- so a refresh token that cannot recall its
+        own grant leaves the endpoint able only to guess or to widen. `scope` stays off the **ID**
+        token because OIDC does not define it there; an ID token describes an authentication, not an
+        authorization.
+        """
+        assert _unverified(T.mint("user:admin", T.TOKEN_ACCESS))["scope"] == "openid"
+        assert _unverified(T.mint("user:admin", T.TOKEN_REFRESH))["scope"] == "openid"
+        assert "scope" not in _unverified(T.mint("user:admin", T.TOKEN_ID))
+
+    def test_scope_defaults_to_openid_when_the_caller_names_none(self, oidc_mode):
+        """`mint` is called from places that have no grant to speak of (the SRP login path), and the
+        narrowest scope is the right default for them."""
         assert _unverified(T.mint("user:admin", T.TOKEN_ACCESS))["scope"].split() == ["openid"]
+
+    def test_a_named_scope_is_carried_verbatim(self, oidc_mode):
+        minted = T.mint("user:admin", T.TOKEN_ACCESS, scope="openid profile email")
+        assert _unverified(minted)["scope"] == "openid profile email"
 
     def test_no_claim_appears_in_legacy_mode_that_did_not_before(self, legacy_mode):
         """AC-28 in claim form: the flag must not leak new claims into the default deployment."""

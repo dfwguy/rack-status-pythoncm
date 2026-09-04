@@ -64,6 +64,10 @@ const user = (login: string, extra: Partial<IdentityUser> = {}) => ({
   phone_number: "",
   email_verified: false,
   phone_number_verified: false,
+  given_name: "",
+  family_name: "",
+  zoneinfo: "",
+  locale: "",
   groups: [],
   ...extra,
 });
@@ -172,9 +176,7 @@ describe("choosing the initial password", () => {
       expect(identity.createUserWithPassword).toHaveBeenCalledWith(
         "chosen",
         password,
-        "",
-        "chosen@example.com",
-        "",
+        expect.objectContaining({ email: "chosen@example.com" }),
       ),
     );
     expect(identity.createUser).not.toHaveBeenCalled();
@@ -364,12 +366,13 @@ describe("contact attributes", () => {
     fireEvent.click(screen.getByRole("button", { name: /create and show password/i }));
 
     await waitFor(() =>
-      expect(identity.createUser).toHaveBeenCalledWith(
-        "newbie",
-        "",
-        "newbie@example.com",
-        "+1 555 010 4477",
-      ),
+      expect(identity.createUser).toHaveBeenCalledWith("newbie", {
+        display_name: "",
+        email: "newbie@example.com",
+        phone_number: "+1 555 010 4477",
+        given_name: "",
+        family_name: "",
+      }),
     );
   });
 
@@ -513,5 +516,64 @@ describe("editing a profile", () => {
       "aria-disabled",
       "true",
     );
+  });
+});
+
+describe("oidc profile fields", () => {
+  /* `.plc/briefs/oidc-directory-claims-l0.md` R1. */
+
+  const openRowMenu = async (login: string) => {
+    const row = (await screen.findByText(login)).closest("tr");
+    fireEvent.click(row!.querySelector("button")!);
+  };
+
+  it("collects the given and family name on create", async () => {
+    vi.mocked(identity.createUser).mockResolvedValue({ login: "ada", password: "pw" });
+    render(asAdmin(<UsersView />));
+    fireEvent.click(await screen.findByRole("button", { name: /add user/i }));
+    fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "ada" } });
+    fireEvent.change(screen.getByLabelText(/^email/i), { target: { value: "ada@example.com" } });
+    fireEvent.change(screen.getByLabelText(/first name/i), { target: { value: "Ada" } });
+    fireEvent.change(screen.getByLabelText(/last name/i), { target: { value: "Lovelace" } });
+    fireEvent.click(screen.getByRole("button", { name: /create and show password/i }));
+
+    await waitFor(() =>
+      expect(identity.createUser).toHaveBeenCalledWith(
+        "ada",
+        expect.objectContaining({ given_name: "Ada", family_name: "Lovelace" }),
+      ),
+    );
+  });
+
+  it("edits the time zone and locale", async () => {
+    vi.mocked(identity.updateProfile).mockResolvedValue(user("operator1"));
+    render(asAdmin(<UsersView />));
+    await openRowMenu("operator1");
+    fireEvent.click(screen.getByText(/edit profile/i));
+    fireEvent.change(screen.getByLabelText(/time zone/i), {
+      target: { value: "Europe/London" },
+    });
+    fireEvent.change(screen.getByLabelText(/^locale/i), { target: { value: "en-GB" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(identity.updateProfile).toHaveBeenCalledWith("operator1", {
+        zoneinfo: "Europe/London",
+        locale: "en-GB",
+      }),
+    );
+  });
+
+  it("seeds the edit dialog from the stored values", async () => {
+    vi.mocked(identity.listUsers).mockResolvedValue([
+      user("admin"),
+      user("operator1", { given_name: "Grace", zoneinfo: "America/New_York" }),
+    ]);
+    render(asAdmin(<UsersView />));
+    await openRowMenu("operator1");
+    fireEvent.click(screen.getByText(/edit profile/i));
+
+    expect(screen.getByLabelText(/first name/i)).toHaveValue("Grace");
+    expect(screen.getByLabelText(/time zone/i)).toHaveValue("America/New_York");
   });
 });

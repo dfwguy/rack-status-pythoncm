@@ -54,8 +54,10 @@ from identity.models import (
     User,
     canonical_email,
     canonical_group_name,
+    canonical_locale,
     canonical_login,
     canonical_phone_number,
+    canonical_zoneinfo,
 )
 from identity.store import IdentityStore
 
@@ -220,6 +222,10 @@ def create_user():
         login = canonical_login(raw_login)
         email = canonical_email(raw_email)
         phone_number = canonical_phone_number(body.get("phone_number"))
+        given_name = str(body.get("given_name") or "").strip()
+        family_name = str(body.get("family_name") or "").strip()
+        zoneinfo = canonical_zoneinfo(body.get("zoneinfo"))
+        locale = canonical_locale(body.get("locale"))
     except IdentityError as exc:
         return _bad(str(exc))
 
@@ -243,6 +249,10 @@ def create_user():
                 must_change_password=True,
                 email=email,
                 phone_number=phone_number,
+                given_name=given_name,
+                family_name=family_name,
+                zoneinfo=zoneinfo,
+                locale=locale,
             )
         )
     except IdentityError as exc:
@@ -307,12 +317,21 @@ def update_user(login: str):
                 f"`{flag}` is not editable here; it is asserted through "
                 "PUT /users/<login>/email-verified so the audit trail records it as its own act"
             )
-    editable = ("display_name", "email", "phone_number")
+    editable = (
+        "display_name",
+        "email",
+        "phone_number",
+        "given_name",
+        "family_name",
+        "zoneinfo",
+        "locale",
+    )
     supplied = {key: body[key] for key in editable if key in body}
     if not supplied:
         return _bad("nothing to update")
-    if "display_name" in supplied:
-        supplied["display_name"] = str(supplied["display_name"]).strip()
+    for text_field in ("display_name", "given_name", "family_name"):
+        if text_field in supplied:
+            supplied[text_field] = str(supplied[text_field]).strip()
 
     store = _store()
     try:

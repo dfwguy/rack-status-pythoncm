@@ -29,6 +29,7 @@ an ambiguous trail, it is a confidently wrong one, about the product's own accep
 from __future__ import annotations
 
 import re
+import zoneinfo as _zoneinfo
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
@@ -58,6 +59,20 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 #: (spaces, dashes, dots, parentheses) is stripped before this is applied rather than rejected.
 _PHONE_RE = re.compile(r"^\+?[0-9]{3,20}$")
 _PHONE_PUNCTUATION = re.compile(r"[\s().\-]")
+
+#: IANA time-zone names are ``Area/Location``, occasionally with a third component
+#: (``America/Argentina/Buenos_Aires``), plus a few bare names (``UTC``). Used as the shape gate
+#: always, and as the *only* check when the time-zone database cannot be consulted -- see
+#: :func:`canonical_zoneinfo`.
+_ZONEINFO_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+){0,2}$")
+
+#: RFC 5646 language tag, the subset that actually occurs: language, optional script, optional
+#: region. Deliberately not the full grammar -- extensions and private-use subtags have no consumer
+#: here, and a tag this does not match is far more likely to be a typo than a valid exotic tag.
+_LOCALE_RE = re.compile(r"^([A-Za-z]{2,3})(?:-([A-Za-z]{4}))?(?:-([A-Za-z]{2}|[0-9]{3}))?$")
+
+MAX_ZONEINFO = 64
+MAX_LOCALE = 35
 
 #: Printable, no whitespace, and explicitly **no colon** -- the principal grammar separates on it, so
 #: a login containing one would parse back as a different kind/id split. Email shapes must pass,
@@ -181,6 +196,77 @@ def canonical_phone_number(raw: object) -> str:
     return digits
 
 
+def canonical_zoneinfo(raw: object) -> str:
+    """Validate an IANA time-zone name, or raise. Empty is permitted and means "none".
+
+    **Accepts what this process can resolve, and degrades rather than refusing.** The zone set is
+    not a constant -- it comes from whichever time-zone database the runtime found. Measured
+    2026-09-04: macOS offers 598 zones, ``python:3.12-slim`` 486, and the 113-zone difference is
+    entirely legacy aliases (``America/Buenos_Aires``, ``America/Indianapolis``) that Debian omits
+    and macOS still ships. Every canonical zone exists in both, so validating against the live
+    database is right; hardcoding a list would rot, and pinning one environment's list would reject
+    values the other accepts.
+
+    If the database is absent altogether the name is checked for shape only. That is the *opposite*
+    of the fail-closed rule governing security controls, and deliberately so: a display preference
+    that cannot be saved because the base image lacks a package is a worse outcome than an
+    unverified zone string, and this value grants nothing.
+    """
+    zone = str(raw or "").strip()
+    if not zone:
+        return ""
+    if len(zone) > MAX_ZONEINFO:
+        raise IdentityError(f"zoneinfo exceeds {MAX_ZONEINFO} characters")
+    if not _ZONEINFO_RE.match(zone):
+        # Runs before any lookup, so a traversal or a null byte never reaches `ZoneInfo`, which
+        # resolves keys against filesystem paths.
+        raise IdentityError(
+            f"invalid zoneinfo {zone!r}: expected an IANA name like 'America/New_York'"
+        )
+
+    try:
+        _zoneinfo.ZoneInfo(zone)
+    except _zoneinfo.ZoneInfoNotFoundError as exc:
+        # Distinguish "this zone is not in the database" from "there is no database at all". The
+        # first is the caller's mistake; the second is the deployment's, and must not be reported
+        # as theirs.
+        try:
+            _zoneinfo.ZoneInfo("UTC")
+        except _zoneinfo.ZoneInfoNotFoundError:
+            return zone
+        raise IdentityError(
+            f"unknown zoneinfo {zone!r}: not in this system's time-zone database"
+        ) from exc
+    except (ValueError, OSError) as exc:
+        raise IdentityError(f"invalid zoneinfo {zone!r}") from exc
+    return zone
+
+
+def canonical_locale(raw: object) -> str:
+    """Validate an RFC 5646 language tag and rewrite it in conventional casing, or raise.
+
+    Tags are case-insensitive per RFC 5646 §2.1.1, but the *conventional* form is lower-case
+    language, title-case script, upper-case region (``en-US``, ``zh-Hant-TW``). Normalising to it
+    means ``EN-us`` and ``en-US`` are one stored value rather than two -- the same reason logins are
+    case-folded: a value that renders two ways is a value that compares wrong.
+    """
+    tag = str(raw or "").strip()
+    if not tag:
+        return ""
+    if len(tag) > MAX_LOCALE:
+        raise IdentityError(f"locale exceeds {MAX_LOCALE} characters")
+    match = _LOCALE_RE.match(tag)
+    if not match:
+        raise IdentityError(f"invalid locale {tag!r}: expected a language tag like 'en-US'")
+    language, script, region = match.groups()
+    parts = [language.lower()]
+    if script:
+        parts.append(script.capitalize())
+    if region:
+        parts.append(region.upper())
+    return "-".join(parts)
+
+
 def _clean_display_name(raw: object) -> str:
     text = str(raw or "").strip()
     if len(text) > MAX_DISPLAY_NAME:
@@ -218,6 +304,13 @@ class User:
     #: requirement that a **newly created** user supplies an email lives at the API boundary instead.
     email: str = ""
     phone_number: str = ""
+    #: The rest of the OIDC §5.1 profile set worth carrying here. `given_name`/`family_name` exist
+    #: mainly so federation becomes a mapping of identical names rather than a translation layer;
+    #: `zoneinfo` and `locale` earn their place in a product whose every screen is timestamps.
+    given_name: str = ""
+    family_name: str = ""
+    zoneinfo: str = ""
+    locale: str = ""
     #: Whether the provider asserts the address above was verified. Only ever set by an explicit,
     #: audited admin action -- and cleared automatically by :meth:`edited` when the address changes,
     #: because a stale assertion is an account-linking hazard rather than a cosmetic mistake.
@@ -229,6 +322,10 @@ class User:
         object.__setattr__(self, "display_name", _clean_display_name(self.display_name))
         object.__setattr__(self, "email", canonical_email(self.email))
         object.__setattr__(self, "phone_number", canonical_phone_number(self.phone_number))
+        object.__setattr__(self, "given_name", _clean_display_name(self.given_name))
+        object.__setattr__(self, "family_name", _clean_display_name(self.family_name))
+        object.__setattr__(self, "zoneinfo", canonical_zoneinfo(self.zoneinfo))
+        object.__setattr__(self, "locale", canonical_locale(self.locale))
         object.__setattr__(self, "email_verified", bool(self.email_verified) and bool(self.email))
         object.__setattr__(
             self, "phone_number_verified", bool(self.phone_number_verified) and bool(self.phone_number)
@@ -260,6 +357,10 @@ class User:
         phone_number: str | None = None,
         email_verified: bool | None = None,
         phone_number_verified: bool | None = None,
+        given_name: str | None = None,
+        family_name: str | None = None,
+        zoneinfo: str | None = None,
+        locale: str | None = None,
     ) -> User:
         """A copy with the mutable fields changed. **Cannot** change the login (FR-2).
 
@@ -299,6 +400,15 @@ class User:
             changes["email_verified"] = bool(email_verified)
         if phone_number_verified is not None and "phone_number_verified" not in changes:
             changes["phone_number_verified"] = bool(phone_number_verified)
+        # No verified-flag coupling on these four: nothing asserts a locale, so they are plain edits.
+        if given_name is not None:
+            changes["given_name"] = _clean_display_name(given_name)
+        if family_name is not None:
+            changes["family_name"] = _clean_display_name(family_name)
+        if zoneinfo is not None:
+            changes["zoneinfo"] = canonical_zoneinfo(zoneinfo)
+        if locale is not None:
+            changes["locale"] = canonical_locale(locale)
         if disabled is not None:
             changes["disabled"] = bool(disabled)
         if must_change_password is not None:
@@ -324,6 +434,10 @@ class User:
             "phone_number": self.phone_number,
             "email_verified": self.email_verified,
             "phone_number_verified": self.phone_number_verified,
+            "given_name": self.given_name,
+            "family_name": self.family_name,
+            "zoneinfo": self.zoneinfo,
+            "locale": self.locale,
         }
 
     def public_dict(self) -> dict[str, Any]:
