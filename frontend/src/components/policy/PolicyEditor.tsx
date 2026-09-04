@@ -87,7 +87,14 @@ export default function PolicyEditor({
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const completionRef = useRef<monaco.IDisposable | null>(null);
   const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
+  // Updated in an effect, not during render: a ref write during render is what
+  // `react-hooks/set-state-in-effect`'s sibling rule "Cannot access refs during render" refuses,
+  // and it is the one hard eslint error in this project's config. Safe here because the ref is only
+  // ever *read* from the editor's change callback, which cannot fire before the first commit, and
+  // `useRef(onChange)` already seeds it with the initial handler.
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   useEffect(() => {
     if (!hostRef.current) return;
