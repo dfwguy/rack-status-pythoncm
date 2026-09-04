@@ -20,6 +20,20 @@ export interface IdentityUser {
   disabled: boolean;
   must_change_password: boolean;
   auth_source: string;
+  /**
+   * Contact attributes, named for the OpenID Connect Core §5.1 standard claims. Required when
+   * creating a user; empty on the bootstrap admin and on any account predating the field, which is
+   * why the table flags a missing address rather than assuming there is one.
+   */
+  email: string;
+  phone_number: string;
+  /**
+   * Whether this deployment asserts the address was verified. Set only by an explicit admin action,
+   * and cleared automatically when the address changes — a stale assertion is what lets a relying
+   * party link the wrong accounts.
+   */
+  email_verified: boolean;
+  phone_number_verified: boolean;
   created_at?: string;
   updated_at?: string;
   /** Group names this user belongs to. Server-side join, so the list is one request. */

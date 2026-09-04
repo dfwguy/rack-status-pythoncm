@@ -110,7 +110,9 @@ def signed_in(client, monkeypatch):
     from api import oidc_provider
 
     monkeypatch.setattr(oidc_provider, "_current_principal", lambda: "user:tester", raising=True)
-    client.post("/api/identity/users", json={"login": "tester"})
+    client.post(
+        "/api/identity/users", json={"login": "tester", "email": "tester@example.com"}
+    )
     return client
 
 

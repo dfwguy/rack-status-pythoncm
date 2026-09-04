@@ -726,6 +726,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "identity_admin.set_user_email_verified",
+  "method": "PUT",
+  "action": "identity.user:set_email_verified",
+  "variant": "sync"
+ },
+ {
   "endpoint": "identity_admin.update_group",
   "method": "PATCH",
   "action": "identity.group:update",

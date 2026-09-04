@@ -63,7 +63,12 @@ def admin_api(monkeypatch, tmp_path):
 
 
 def _create(client, login: str, **extra):
-    return client.post("/api/identity/users", json={"login": login, **extra})
+    """Create a user, defaulting the now-required email so these tests keep asserting their own
+    subject. A caller that wants to exercise the email rules passes `email=` explicitly; the rules
+    themselves live in `test_identity_contact_attributes.py`."""
+    body = {"login": login, "email": f"{login}@example.com"}
+    body.update(extra)
+    return client.post("/api/identity/users", json=body)
 
 
 class TestACreatedUserCanActuallyLogIn:
@@ -357,7 +362,12 @@ class TestCreatingWithAChosenPassword:
 
         created = admin_api.post(
             "/api/identity/users",
-            json={"login": "chosen", "salt": salt, "verifier": verifier},
+            json={
+                "login": "chosen",
+                "email": "chosen@example.com",
+                "salt": salt,
+                "verifier": verifier,
+            },
         )
         assert created.status_code == 201
 

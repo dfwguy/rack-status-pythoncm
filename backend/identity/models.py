@@ -40,6 +40,25 @@ from identity.principals import ANONYMOUS, SEPARATOR, group_principal, user_prin
 MAX_LOGIN = 128
 MAX_DISPLAY_NAME = 256
 
+#: RFC 5321 §4.5.3.1.3 caps a reverse-path at 256 octets including the angle brackets, so 254 is the
+#: longest address that can actually be delivered. A bound, like MAX_LOGIN, not a security boundary.
+MAX_EMAIL = 254
+
+#: Generous for E.164 (15 digits max) plus a ``+`` and the punctuation people type.
+MAX_PHONE_NUMBER = 32
+
+#: Deliberately permissive: exactly one ``@`` (both sides exclude it), non-empty local part, and a
+#: dotted domain with non-empty labels either side of the final dot. Full RFC 5322 is a famous trap
+#: -- it permits quoted strings, comments and bare IP literals -- and an over-strict pattern that
+#: rejects a deliverable address is a worse failure here than accepting an odd one, because the
+#: consequence of a false rejection is an operator who cannot be created at all.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+#: What survives normalisation: an optional leading ``+`` then digits. Punctuation people type
+#: (spaces, dashes, dots, parentheses) is stripped before this is applied rather than rejected.
+_PHONE_RE = re.compile(r"^\+?[0-9]{3,20}$")
+_PHONE_PUNCTUATION = re.compile(r"[\s().\-]")
+
 #: Printable, no whitespace, and explicitly **no colon** -- the principal grammar separates on it, so
 #: a login containing one would parse back as a different kind/id split. Email shapes must pass,
 #: because federation will supply them (`rkoike@nvidia.com`).
@@ -56,6 +75,15 @@ AUTH_SOURCES = (AUTH_LOCAL, AUTH_FEDERATED)
 
 class IdentityError(ValueError):
     """A record that cannot exist as described."""
+
+
+class DuplicateEmailError(IdentityError):
+    """Two users cannot hold one email address.
+
+    Its own type so the API can answer ``409 Conflict`` for it while a malformed address stays a
+    ``400``. Both arrive as an :class:`IdentityError` from the store, and telling them apart by
+    matching on the message text would make an error string load-bearing.
+    """
 
 
 def _utcnow() -> str:
@@ -106,6 +134,53 @@ def canonical_group_name(raw: object) -> str:
     return name.casefold()
 
 
+def canonical_email(raw: object) -> str:
+    """Validate and normalise an email address, or raise. Empty is permitted and means "none".
+
+    Lower-cased, **not** case-folded -- and that difference from :func:`canonical_login` is
+    deliberate. ``casefold`` maps ``\u00df`` to ``ss``, which for a login is the point (two spellings
+    must not become two principals) but for an address would silently rewrite it into a *different*
+    mailbox. Lower-casing is the conventional normalisation for email and cannot change where a
+    message is delivered: the domain is case-insensitive per RFC 5321 §2.4, and while the local part
+    is formally case-sensitive, no mail provider in practice treats it as such.
+
+    Normalising here rather than at each caller is what makes the store's uniqueness check
+    (``Alice@x.com`` and ``alice@x.com`` are one address) work without every call site remembering.
+    """
+    email = str(raw or "").strip()
+    if not email:
+        return ""
+    if len(email) > MAX_EMAIL:
+        raise IdentityError(f"email exceeds {MAX_EMAIL} characters")
+    if not _EMAIL_RE.match(email):
+        raise IdentityError(
+            f"invalid email {email!r}: expected one local part, an @, and a dotted domain"
+        )
+    return email.lower()
+
+
+def canonical_phone_number(raw: object) -> str:
+    """Validate and normalise a phone number, or raise. Empty is permitted and means "none".
+
+    Stored in E.164 shape (optional ``+`` then digits) because that is the one representation that
+    is unambiguous internationally -- but the punctuation people actually type is stripped rather
+    than refused, so ``+1 (555) 010-4477`` is accepted and stored as ``+15550104477``. No country
+    or length-per-country validation: that needs a maintained numbering-plan database, and getting
+    it wrong rejects a real number.
+    """
+    raw_text = str(raw or "").strip()
+    if not raw_text:
+        return ""
+    if len(raw_text) > MAX_PHONE_NUMBER:
+        raise IdentityError(f"phone number exceeds {MAX_PHONE_NUMBER} characters")
+    digits = _PHONE_PUNCTUATION.sub("", raw_text)
+    if not _PHONE_RE.match(digits):
+        raise IdentityError(
+            f"invalid phone number {raw_text!r}: expected digits, optionally starting with +"
+        )
+    return digits
+
+
 def _clean_display_name(raw: object) -> str:
     text = str(raw or "").strip()
     if len(text) > MAX_DISPLAY_NAME:
@@ -136,10 +211,28 @@ class User:
     must_change_password: bool = False
     created_at: str = field(default_factory=_utcnow)
     updated_at: str = ""
+    #: Contact attributes, named for the OpenID Connect Core 1.0 §5.1 standard claims so a future
+    #: ``/userinfo`` can return them without a mapping layer. Both default to absent: the first-boot
+    #: bootstrap admin has no address, and neither does any account created before this field
+    #: existed, so requiring one *here* would invalidate records that are legitimately valid. The
+    #: requirement that a **newly created** user supplies an email lives at the API boundary instead.
+    email: str = ""
+    phone_number: str = ""
+    #: Whether the provider asserts the address above was verified. Only ever set by an explicit,
+    #: audited admin action -- and cleared automatically by :meth:`edited` when the address changes,
+    #: because a stale assertion is an account-linking hazard rather than a cosmetic mistake.
+    email_verified: bool = False
+    phone_number_verified: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "login", canonical_login(self.login))
         object.__setattr__(self, "display_name", _clean_display_name(self.display_name))
+        object.__setattr__(self, "email", canonical_email(self.email))
+        object.__setattr__(self, "phone_number", canonical_phone_number(self.phone_number))
+        object.__setattr__(self, "email_verified", bool(self.email_verified) and bool(self.email))
+        object.__setattr__(
+            self, "phone_number_verified", bool(self.phone_number_verified) and bool(self.phone_number)
+        )
         if self.auth_source not in AUTH_SOURCES:
             raise IdentityError(f"auth_source must be one of {AUTH_SOURCES}, got {self.auth_source!r}")
         # A local user with no verifier cannot authenticate. Permitted at construction because
@@ -163,16 +256,49 @@ class User:
         must_change_password: bool | None = None,
         srp_salt: str | None = None,
         srp_verifier: str | None = None,
+        email: str | None = None,
+        phone_number: str | None = None,
+        email_verified: bool | None = None,
+        phone_number_verified: bool | None = None,
     ) -> User:
         """A copy with the mutable fields changed. **Cannot** change the login (FR-2).
 
         Note what is absent from the signature: there is no ``login`` parameter and no
         ``auth_source`` parameter. Immutability enforced by the API rather than by a check, so a
         caller cannot get it wrong and be told at runtime.
+
+        **Changing an address clears its verified flag**, and that rule lives here for the same
+        reason the login has no parameter: a caller cannot forget it. OpenID Connect Core §5.1
+        defines ``email_verified`` as this provider asserting the address was verified, and relying
+        parties use it to *link accounts* -- so a ``true`` carried over onto a newly-set address is
+        an account-takeover primitive, not an untidy field. Setting an address and asserting it
+        verified in one call is refused rather than silently resolved in either direction, because
+        whichever way it resolved, one of the two arguments would have been quietly ignored.
         """
         changes: dict[str, Any] = {"updated_at": _utcnow()}
         if display_name is not None:
             changes["display_name"] = _clean_display_name(display_name)
+        for value, address_key, flag_key, requested_flag in (
+            (email, "email", "email_verified", email_verified),
+            (phone_number, "phone_number", "phone_number_verified", phone_number_verified),
+        ):
+            if value is None:
+                continue
+            canonical = canonical_email(value) if address_key == "email" else canonical_phone_number(value)
+            changes[address_key] = canonical
+            if canonical == getattr(self, address_key):
+                continue
+            if requested_flag:
+                raise IdentityError(
+                    f"cannot change {address_key} and assert {flag_key} in one call: verification "
+                    "describes a specific address, so assert it after the change lands"
+                )
+            # The address moved, so any standing assertion about it no longer describes anything.
+            changes[flag_key] = False
+        if email_verified is not None and "email_verified" not in changes:
+            changes["email_verified"] = bool(email_verified)
+        if phone_number_verified is not None and "phone_number_verified" not in changes:
+            changes["phone_number_verified"] = bool(phone_number_verified)
         if disabled is not None:
             changes["disabled"] = bool(disabled)
         if must_change_password is not None:
@@ -194,6 +320,10 @@ class User:
             "must_change_password": self.must_change_password,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "email": self.email,
+            "phone_number": self.phone_number,
+            "email_verified": self.email_verified,
+            "phone_number_verified": self.phone_number_verified,
         }
 
     def public_dict(self) -> dict[str, Any]:

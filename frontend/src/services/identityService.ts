@@ -65,10 +65,17 @@ export async function listUsers(): Promise<IdentityUser[]> {
 export async function createUser(
   login: string,
   displayName?: string,
+  email?: string,
+  phoneNumber?: string,
 ): Promise<IssuedCredential> {
   const data = await apiJson<{ user: { login: string }; password: string }>(
     "/api/identity/users",
-    json({ login, display_name: displayName ?? "" }),
+    json({
+      login,
+      display_name: displayName ?? "",
+      email: email ?? "",
+      phone_number: phoneNumber ?? "",
+    }),
   );
   return { login: data.user.login, password: data.password };
 }
@@ -87,6 +94,8 @@ export async function createUserWithPassword(
   login: string,
   password: string,
   displayName?: string,
+  email?: string,
+  phoneNumber?: string,
 ): Promise<void> {
   // Derived against the *canonical* login the server will store: SRP hashes the identity into `x`,
   // so deriving against the raw input would produce a verifier that never matches at sign-in — the
@@ -104,6 +113,8 @@ export async function createUserWithPassword(
     json({
       login: canonical,
       display_name: displayName ?? "",
+      email: email ?? "",
+      phone_number: phoneNumber ?? "",
       salt: saltHex,
       verifier: verifierHex,
     }),
@@ -114,11 +125,41 @@ export async function updateDisplayName(
   login: string,
   displayName: string,
 ): Promise<IdentityUser> {
+  return updateProfile(login, { display_name: displayName });
+}
+
+/**
+ * Change any subset of the editable profile fields.
+ *
+ * Note what cannot be sent here: `email_verified`. The server refuses it, because asserting an
+ * address was verified is a claim relying parties trust for account linking and so gets its own
+ * audited action — see {@link setEmailVerified}. Setting a new `email` clears that flag server-side.
+ */
+export async function updateProfile(
+  login: string,
+  changes: Partial<Pick<IdentityUser, "display_name" | "email" | "phone_number">>,
+): Promise<IdentityUser> {
   const data = await apiJson<{ user: IdentityUser }>(`/api/identity/users/${encodeURIComponent(login)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ display_name: displayName }),
+    body: JSON.stringify(changes),
   });
+  return data.user;
+}
+
+/** Record (or withdraw) this deployment's assertion that the user's email was verified. */
+export async function setEmailVerified(
+  login: string,
+  verified: boolean,
+): Promise<IdentityUser> {
+  const data = await apiJson<{ user: IdentityUser }>(
+    `/api/identity/users/${encodeURIComponent(login)}/email-verified`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ verified }),
+    },
+  );
   return data.user;
 }
 

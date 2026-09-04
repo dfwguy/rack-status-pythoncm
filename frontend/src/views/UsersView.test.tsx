@@ -60,6 +60,10 @@ const user = (login: string, extra: Partial<IdentityUser> = {}) => ({
   disabled: false,
   must_change_password: false,
   auth_source: "local",
+  email: `${login}@example.com`,
+  phone_number: "",
+  email_verified: false,
+  phone_number_verified: false,
   groups: [],
   ...extra,
 });
@@ -84,6 +88,9 @@ describe("the one-time password", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /add user/i }));
     fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "newbie" } });
+    fireEvent.change(screen.getByLabelText(/^email/i), {
+      target: { value: "newbie@example.com" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /create and show password/i }));
 
     expect(await screen.findByText("SHOWN-ONLY-ONCE-abc123")).toBeInTheDocument();
@@ -96,6 +103,9 @@ describe("the one-time password", () => {
     await screen.findByText("operator1");
     fireEvent.click(screen.getByRole("button", { name: /add user/i }));
     fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "n" } });
+    fireEvent.change(screen.getByLabelText(/^email/i), {
+      target: { value: "n@example.com" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /create and show password/i }));
 
     await screen.findByText("pw-xyz");
@@ -109,6 +119,9 @@ describe("the one-time password", () => {
     await screen.findByText("operator1");
     fireEvent.click(screen.getByRole("button", { name: /add user/i }));
     fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "n" } });
+    fireEvent.change(screen.getByLabelText(/^email/i), {
+      target: { value: "n@example.com" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /create and show password/i }));
     await screen.findByText("pw-keepme");
 
@@ -129,6 +142,9 @@ describe("choosing the initial password", () => {
     await screen.findByText("operator1");
     fireEvent.click(screen.getByRole("button", { name: /add user/i }));
     fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "n" } });
+    fireEvent.change(screen.getByLabelText(/^email/i), {
+      target: { value: "n@example.com" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /create and show password/i }));
 
     await waitFor(() => expect(identity.createUser).toHaveBeenCalled());
@@ -142,6 +158,9 @@ describe("choosing the initial password", () => {
     await screen.findByText("operator1");
     fireEvent.click(screen.getByRole("button", { name: /add user/i }));
     fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "chosen" } });
+    fireEvent.change(screen.getByLabelText(/^email/i), {
+      target: { value: "chosen@example.com" },
+    });
     fireEvent.click(screen.getByLabelText(/set a password now/i));
 
     const password = "a-long-enough-password";
@@ -150,7 +169,13 @@ describe("choosing the initial password", () => {
     fireEvent.click(screen.getByRole("button", { name: /^create user$/i }));
 
     await waitFor(() =>
-      expect(identity.createUserWithPassword).toHaveBeenCalledWith("chosen", password, ""),
+      expect(identity.createUserWithPassword).toHaveBeenCalledWith(
+        "chosen",
+        password,
+        "",
+        "chosen@example.com",
+        "",
+      ),
     );
     expect(identity.createUser).not.toHaveBeenCalled();
   });
@@ -164,6 +189,9 @@ describe("choosing the initial password", () => {
     await screen.findByText("operator1");
     fireEvent.click(screen.getByRole("button", { name: /add user/i }));
     fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "chosen" } });
+    fireEvent.change(screen.getByLabelText(/^email/i), {
+      target: { value: "chosen@example.com" },
+    });
     fireEvent.click(screen.getByLabelText(/set a password now/i));
     const pw = "a-long-enough-password";
     fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: pw } });
@@ -179,6 +207,9 @@ describe("choosing the initial password", () => {
     await screen.findByText("operator1");
     fireEvent.click(screen.getByRole("button", { name: /add user/i }));
     fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "chosen" } });
+    fireEvent.change(screen.getByLabelText(/^email/i), {
+      target: { value: "chosen@example.com" },
+    });
     fireEvent.click(screen.getByLabelText(/set a password now/i));
 
     fireEvent.change(screen.getByLabelText(/^password/i), { target: { value: "short" } });
@@ -289,5 +320,198 @@ describe("the server's refusal is what the operator reads", () => {
     expect(
       await screen.findByText(/refusing to delete the last account/i),
     ).toBeInTheDocument();
+  });
+});
+
+describe("contact attributes", () => {
+  /* `.plc/briefs/user-contact-attributes-l0.md` R5. */
+
+  it("requires an email before a user can be created", async () => {
+    /* Mirrors the server rule at the point the operator can still fix it, rather than letting the
+       request go and rendering a refusal. */
+    render(asAdmin(<UsersView />));
+    fireEvent.click(await screen.findByRole("button", { name: /add user/i }));
+    fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "newbie" } });
+
+    expect(screen.getByRole("button", { name: /create and show password/i })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/^email/i), {
+      target: { value: "newbie@example.com" },
+    });
+    expect(screen.getByRole("button", { name: /create and show password/i })).toBeEnabled();
+  });
+
+  it("keeps the create button disabled for an address that is obviously malformed", async () => {
+    render(asAdmin(<UsersView />));
+    fireEvent.click(await screen.findByRole("button", { name: /add user/i }));
+    fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "newbie" } });
+    fireEvent.change(screen.getByLabelText(/^email/i), { target: { value: "not-an-address" } });
+
+    expect(screen.getByRole("button", { name: /create and show password/i })).toBeDisabled();
+  });
+
+  it("passes the address and phone number through to the create call", async () => {
+    vi.mocked(identity.createUser).mockResolvedValue({ login: "newbie", password: "pw" });
+    render(asAdmin(<UsersView />));
+    fireEvent.click(await screen.findByRole("button", { name: /add user/i }));
+    fireEvent.change(screen.getByLabelText(/^login/i), { target: { value: "newbie" } });
+    fireEvent.change(screen.getByLabelText(/^email/i), {
+      target: { value: "newbie@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText(/phone number/i), {
+      target: { value: "+1 555 010 4477" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create and show password/i }));
+
+    await waitFor(() =>
+      expect(identity.createUser).toHaveBeenCalledWith(
+        "newbie",
+        "",
+        "newbie@example.com",
+        "+1 555 010 4477",
+      ),
+    );
+  });
+
+  it("shows each user's address in the table", async () => {
+    render(asAdmin(<UsersView />));
+    expect(await screen.findByText("admin@example.com")).toBeInTheDocument();
+    expect(screen.getByText("operator1@example.com")).toBeInTheDocument();
+  });
+
+  it("flags an account that has no address rather than leaving the cell blank", async () => {
+    /* Accounts predating this field — the bootstrap admin among them — cannot be notified, and
+       that gap should be visible in the table rather than reading as an empty column. */
+    vi.mocked(identity.listUsers).mockResolvedValue([
+      user("admin", { email: "" }),
+      user("operator1"),
+    ]);
+    render(asAdmin(<UsersView />));
+
+    expect(await screen.findByText("none")).toBeInTheDocument();
+  });
+
+  it("marks a verified address and leaves an unverified one unmarked", async () => {
+    vi.mocked(identity.listUsers).mockResolvedValue([
+      user("admin", { email_verified: true }),
+      user("operator1"),
+    ]);
+    render(asAdmin(<UsersView />));
+
+    expect(await screen.findByText("verified")).toBeInTheDocument();
+    // One tag, not two: only the verified row carries it.
+    expect(screen.getAllByText("verified")).toHaveLength(1);
+  });
+
+  it("finds a user by address as well as by login", async () => {
+    render(asAdmin(<UsersView />));
+    await screen.findByText("admin@example.com");
+    fireEvent.change(screen.getByPlaceholderText(/search/i), {
+      target: { value: "operator1@example" },
+    });
+
+    expect(screen.queryByText("admin@example.com")).not.toBeInTheDocument();
+    expect(screen.getByText("operator1@example.com")).toBeInTheDocument();
+  });
+});
+
+describe("editing a profile", () => {
+  /* `.plc/briefs/user-contact-attributes-l0.md` R5. Without this path an address can never be
+     corrected, and the bootstrap admin — which has none — could never be notified at all. */
+
+  const openRowMenu = async (login: string) => {
+    const row = (await screen.findByText(login)).closest("tr");
+    fireEvent.click(row!.querySelector("button")!);
+  };
+
+  it("gives the address-less bootstrap admin a way to get one", async () => {
+    vi.mocked(identity.listUsers).mockResolvedValue([
+      user("admin", { email: "" }),
+      user("operator1"),
+    ]);
+    vi.mocked(identity.updateProfile).mockResolvedValue(user("admin", { email: "a@b.com" }));
+    render(asAdmin(<UsersView />));
+
+    await openRowMenu("admin");
+    fireEvent.click(screen.getByText(/edit profile/i));
+    fireEvent.change(screen.getByLabelText(/^email/i), { target: { value: "admin@example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(identity.updateProfile).toHaveBeenCalledWith("admin", {
+        email: "admin@example.com",
+      }),
+    );
+  });
+
+  it("sends only the fields that actually moved", async () => {
+    /* Resending an unchanged address would clear a standing verified mark for no reason, because
+       the server clears it whenever an address is set. */
+    vi.mocked(identity.listUsers).mockResolvedValue([user("admin"), user("operator1")]);
+    vi.mocked(identity.updateProfile).mockResolvedValue(user("operator1"));
+    render(asAdmin(<UsersView />));
+
+    await openRowMenu("operator1");
+    fireEvent.click(screen.getByText(/edit profile/i));
+    fireEvent.change(screen.getByLabelText(/display name/i), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(identity.updateProfile).toHaveBeenCalledWith("operator1", {
+        display_name: "Renamed",
+      }),
+    );
+  });
+
+  it("writes nothing when nothing changed", async () => {
+    render(asAdmin(<UsersView />));
+    await openRowMenu("operator1");
+    fireEvent.click(screen.getByText(/edit profile/i));
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(screen.queryByText(/edit operator1/i)).not.toBeInTheDocument());
+    expect(identity.updateProfile).not.toHaveBeenCalled();
+  });
+
+  it("warns that changing a verified address drops the mark", async () => {
+    vi.mocked(identity.listUsers).mockResolvedValue([
+      user("admin"),
+      user("operator1", { email_verified: true }),
+    ]);
+    render(asAdmin(<UsersView />));
+
+    await openRowMenu("operator1");
+    fireEvent.click(screen.getByText(/edit profile/i));
+    fireEvent.change(screen.getByLabelText(/^email/i), { target: { value: "moved@example.com" } });
+
+    expect(screen.getByText(/clears its verified mark/i)).toBeInTheDocument();
+  });
+
+  it("asserts verification through its own action, not the edit dialog", async () => {
+    /* R4: the claim is audited separately from a profile edit, so it is a separate menu item and
+       the edit dialog offers no checkbox for it. */
+    vi.mocked(identity.setEmailVerified).mockResolvedValue(
+      user("operator1", { email_verified: true }),
+    );
+    render(asAdmin(<UsersView />));
+
+    await openRowMenu("operator1");
+    fireEvent.click(screen.getByText(/mark email verified/i));
+
+    await waitFor(() => expect(identity.setEmailVerified).toHaveBeenCalledWith("operator1", true));
+  });
+
+  it("cannot assert verification for a user with no address", async () => {
+    vi.mocked(identity.listUsers).mockResolvedValue([
+      user("admin", { email: "" }),
+      user("operator1"),
+    ]);
+    render(asAdmin(<UsersView />));
+
+    await openRowMenu("admin");
+    expect(screen.getByText(/mark email verified/i).closest("li")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 });

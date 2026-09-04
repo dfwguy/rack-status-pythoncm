@@ -46,6 +46,7 @@ from tinydb import Query, TinyDB
 from tinydb.storages import touch
 
 from identity.models import (
+    DuplicateEmailError,
     Group,
     IdentityError,
     Membership,
@@ -178,6 +179,7 @@ class IdentityStore:
                     f"login {user.login!r} has been used before and cannot be reused; "
                     "choose another (identifiers are retired permanently, FR-2b)"
                 )
+            self._refuse_duplicate_email(table, user)
             table.insert(user.to_dict())
             _bump()
         return user
@@ -189,6 +191,7 @@ class IdentityStore:
             table = self._db.table(_TABLE_USERS)
             if not table.get(Query().login == user.login):
                 raise IdentityError(f"no such user {user.login!r}")
+            self._refuse_duplicate_email(table, user)
             table.update(user.to_dict(), Query().login == user.login)
             _bump()
         return user
@@ -372,6 +375,33 @@ class IdentityStore:
         table = self._db.table(_TABLE_RETIRED)
         if not table.get((Query().kind == kind) & (Query().id == identifier)):
             table.insert({"kind": kind, "id": identifier})
+
+    @staticmethod
+    def _refuse_duplicate_email(table: Any, user: User) -> None:
+        """An email may identify at most one user. **Call with ``_lock`` held.**
+
+        Inside the caller's lock for the same reason the duplicate-login check is: two threads
+        racing to claim one address must not both win, and a check taken outside the lock is a
+        check that can be true when read and false when written.
+
+        **An absent address is exempt.** This is the distinction the obvious implementation gets
+        wrong: every account predating this field has ``email == ""``, so a plain "is anyone using
+        this value" test would let the first such user through and then refuse every other one,
+        reporting a duplicate address to an operator who supplied no address at all. Uniqueness is a
+        statement about addresses that exist -- the same reason a SQL unique index tolerates many
+        NULLs.
+
+        Comparison needs no case-folding here because :func:`canonical_email` already lower-cased
+        both sides on construction; that normalisation is what makes one stored form comparable.
+        """
+        if not user.email:
+            return
+        clash = table.get(Query().email == user.email)
+        if clash and str(clash.get("login") or "") != user.login:
+            raise DuplicateEmailError(
+                f"email {user.email!r} is already used by {clash.get('login')!r}; "
+                "an address may identify at most one user"
+            )
 
     def _is_retired(self, kind: str, identifier: str) -> bool:
         return bool(

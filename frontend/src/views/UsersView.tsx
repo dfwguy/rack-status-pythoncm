@@ -50,8 +50,18 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
-import { Banner, Button, Card, Skeleton, Tag, Text } from "@nvidia/foundations-react-core";
-import { Ellipsis, KeyRound, Search, Trash2, UserCheck, UserPlus, UserX } from "lucide-react";
+import { Banner, Button, Card, Flex, Skeleton, Tag, Text } from "@nvidia/foundations-react-core";
+import {
+  Ellipsis,
+  KeyRound,
+  MailCheck,
+  Pencil,
+  Search,
+  Trash2,
+  UserCheck,
+  UserPlus,
+  UserX,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { IssuedCredentialDialog } from "../components/identity/IssuedCredentialDialog";
@@ -82,6 +92,15 @@ export function UsersView() {
   const [creating, setCreating] = useState(false);
   const [newLogin, setNewLogin] = useState("");
   const [newDisplayName, setNewDisplayName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newPhoneNumber, setNewPhoneNumber] = useState("");
+
+  // Editing an existing user's profile. Held separately from the create form so opening one does
+  // not inherit half-typed values from the other.
+  const [editing, setEditing] = useState<IdentityUser | null>(null);
+  const [editDisplayName, setEditDisplayName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editPhoneNumber, setEditPhoneNumber] = useState("");
   // Generate by default. It is the safer path — a generated password is high-entropy and nobody
   // has typed it into a second place — so the operator has to opt into choosing one.
   const [credentialMode, setCredentialMode] = useState<"generate" | "choose">("generate");
@@ -114,6 +133,7 @@ export function UsersView() {
       (u) =>
         u.login.toLowerCase().includes(q) ||
         u.display_name.toLowerCase().includes(q) ||
+        (u.email ?? "").toLowerCase().includes(q) ||
         u.groups.some((g) => g.toLowerCase().includes(q)),
     );
   }, [users, search]);
@@ -138,6 +158,39 @@ export function UsersView() {
       setBusyLogin(null);
     }
   };
+
+  const openEdit = (user: IdentityUser) => {
+    setEditing(user);
+    setEditDisplayName(user.display_name);
+    setEditEmail(user.email);
+    setEditPhoneNumber(user.phone_number);
+  };
+
+  const saveEdit = async () => {
+    if (editing === null) return;
+    const user = editing;
+    // Send only what moved. A no-op field would still be a write, and the server clears the
+    // verified flag whenever an address is *set*, so resending an unchanged address would drop a
+    // standing assertion for no reason.
+    const changes: Partial<Pick<IdentityUser, "display_name" | "email" | "phone_number">> = {};
+    if (editDisplayName.trim() !== user.display_name) changes.display_name = editDisplayName.trim();
+    if (editEmail.trim() !== user.email) changes.email = editEmail.trim();
+    if (editPhoneNumber.trim() !== user.phone_number) changes.phone_number = editPhoneNumber.trim();
+
+    setEditing(null);
+    if (Object.keys(changes).length === 0) return;
+    const addressMoved = changes.email !== undefined;
+    await run(
+      () => identity.updateProfile(user.login, changes).then(() => undefined),
+      user.login,
+      addressMoved && user.email_verified
+        ? `${user.login} was updated. The new address is no longer marked verified.`
+        : `${user.login} was updated.`,
+    );
+  };
+
+  const editEmailLooksWellFormed =
+    editEmail.trim().length === 0 || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(editEmail.trim());
 
   const confirm = async () => {
     if (pending === null) return;
@@ -175,6 +228,8 @@ export function UsersView() {
     setCredentialMode("generate");
     setNewPassword("");
     setNewPasswordConfirm("");
+    setNewEmail("");
+    setNewPhoneNumber("");
   };
 
   const create = async () => {
@@ -185,11 +240,22 @@ export function UsersView() {
     try {
       if (credentialMode === "choose") {
         // The password is turned into a salt and verifier in this browser; only those are sent.
-        await identity.createUserWithPassword(login, newPassword, newDisplayName.trim());
+        await identity.createUserWithPassword(
+          login,
+          newPassword,
+          newDisplayName.trim(),
+          newEmail.trim(),
+          newPhoneNumber.trim(),
+        );
         resetCreateForm();
         setNotice(`${login} was created. Give them the password you chose.`);
       } else {
-        const credential = await identity.createUser(login, newDisplayName.trim());
+        const credential = await identity.createUser(
+          login,
+          newDisplayName.trim(),
+          newEmail.trim(),
+          newPhoneNumber.trim(),
+        );
         resetCreateForm();
         // Shown before the reload, because this password is the only unrecoverable thing here.
         setIssued(credential);
@@ -204,8 +270,13 @@ export function UsersView() {
 
   const chosenTooShort = newPassword.length > 0 && newPassword.length < 12;
   const chosenMismatch = newPasswordConfirm.length > 0 && newPassword !== newPasswordConfirm;
+  // Mirrors the server's shape check rather than trying to out-guess it: the button stays
+  // disabled for an obviously incomplete address, and anything subtler is the server's call, whose
+  // refusal surfaces in the error banner. Duplicating the full rule here would let the two drift.
+  const emailLooksWellFormed = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(newEmail.trim());
   const canCreate =
     newLogin.trim().length > 0 &&
+    emailLooksWellFormed &&
     (credentialMode === "generate" ||
       (newPassword.length >= 12 && newPassword === newPasswordConfirm));
 
@@ -245,7 +316,7 @@ export function UsersView() {
       <Box sx={{ display: "flex", gap: 2, mb: 2, alignItems: "center", flexWrap: "wrap" }}>
         <TextField
           size="small"
-          placeholder="Search by login, name or group…"
+          placeholder="Search by login, name, email or group…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           slotProps={{
@@ -271,6 +342,7 @@ export function UsersView() {
               <TableRow>
                 <TableCell>Login</TableCell>
                 <TableCell>Display name</TableCell>
+                <TableCell>Email</TableCell>
                 <TableCell>Groups</TableCell>
                 <TableCell>Status</TableCell>
                 <TableCell align="right" />
@@ -279,7 +351,7 @@ export function UsersView() {
             <TableBody>
               {filtered.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5}>
+                  <TableCell colSpan={6}>
                     <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
                       {users.length === 0
                         ? "No users yet."
@@ -306,6 +378,24 @@ export function UsersView() {
                       )}
                     </TableCell>
                     <TableCell>{u.display_name || "—"}</TableCell>
+                    <TableCell>
+                      {u.email ? (
+                        <Flex align="center" gap="1">
+                          <Text kind="body/regular/sm">{u.email}</Text>
+                          {u.email_verified && (
+                            <Tag color="green" kind="outline" readOnly density="compact">
+                              verified
+                            </Tag>
+                          )}
+                        </Flex>
+                      ) : (
+                        // Flagged rather than blank: accounts predating this field have no address
+                        // and so cannot be notified, and that gap should be visible.
+                        <Tag color="yellow" kind="outline" readOnly density="compact">
+                          none
+                        </Tag>
+                      )}
+                    </TableCell>
                     <TableCell>
                       {u.groups.length === 0
                         ? "—"
@@ -351,6 +441,40 @@ export function UsersView() {
       <Menu anchorEl={menuAnchor} open={menuAnchor !== null} onClose={closeMenu}>
         <MenuItem
           onClick={() => {
+            if (menuUser) openEdit(menuUser);
+            closeMenu();
+          }}
+        >
+          <ListItemIcon><Pencil size={18} /></ListItemIcon>
+          <ListItemText>Edit profile…</ListItemText>
+        </MenuItem>
+        <MenuItem
+          // Its own item, not a checkbox in the edit dialog, because it is a different kind of act:
+          // relying parties trust this claim for account linking, and it is audited separately.
+          disabled={menuUser !== null && !menuUser.email}
+          onClick={() => {
+            const target = menuUser;
+            closeMenu();
+            if (!target) return;
+            void run(
+              () =>
+                identity
+                  .setEmailVerified(target.login, !target.email_verified)
+                  .then(() => undefined),
+              target.login,
+              target.email_verified
+                ? `${target.login}'s address is no longer marked verified.`
+                : `${target.login}'s address is now marked verified.`,
+            );
+          }}
+        >
+          <ListItemIcon><MailCheck size={18} /></ListItemIcon>
+          <ListItemText>
+            {menuUser?.email_verified ? "Unmark email verified" : "Mark email verified"}
+          </ListItemText>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
             if (menuUser) setPending({ kind: "reset", user: menuUser });
             closeMenu();
           }}
@@ -388,6 +512,53 @@ export function UsersView() {
         </MenuItem>
       </Menu>
 
+      {/* Edit profile */}
+      <Dialog open={editing !== null} onClose={() => setEditing(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Edit {editing?.login}</DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth
+            autoFocus
+            label="Display name"
+            helperText="For presentation only. The login itself can never change."
+            value={editDisplayName}
+            onChange={(e) => setEditDisplayName(e.target.value)}
+            sx={{ mb: 2, mt: 1 }}
+          />
+          <TextField
+            fullWidth
+            type="email"
+            label="Email"
+            helperText={
+              editing?.email_verified && editEmail.trim() !== editing?.email
+                ? "Changing the address clears its verified mark."
+                : "Unique across users — where notifications will be sent."
+            }
+            value={editEmail}
+            onChange={(e) => setEditEmail(e.target.value)}
+            error={!editEmailLooksWellFormed}
+            sx={{ mb: 2 }}
+          />
+          <TextField
+            fullWidth
+            label="Phone number (optional)"
+            helperText="Stored in international form, e.g. +1 555 010 4477."
+            value={editPhoneNumber}
+            onChange={(e) => setEditPhoneNumber(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button kind="tertiary" onClick={() => setEditing(null)}>Cancel</Button>
+          <Button
+            kind="primary"
+            disabled={!editEmailLooksWellFormed}
+            onClick={() => void saveEdit()}
+          >
+            Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Add user */}
       <Dialog open={creating} onClose={resetCreateForm} maxWidth="sm" fullWidth>
         <DialogTitle>Add user</DialogTitle>
@@ -407,6 +578,25 @@ export function UsersView() {
             helperText="For presentation only. Freely editable later."
             value={newDisplayName}
             onChange={(e) => setNewDisplayName(e.target.value)}
+            sx={{ mb: 2 }}
+          />
+          <TextField
+            fullWidth
+            required
+            type="email"
+            label="Email"
+            helperText="Required, and unique across users — where notifications will be sent."
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            error={newEmail.trim().length > 0 && !emailLooksWellFormed}
+            sx={{ mb: 2 }}
+          />
+          <TextField
+            fullWidth
+            label="Phone number (optional)"
+            helperText="Stored in international form, e.g. +1 555 010 4477."
+            value={newPhoneNumber}
+            onChange={(e) => setNewPhoneNumber(e.target.value)}
             sx={{ mb: 3 }}
           />
 

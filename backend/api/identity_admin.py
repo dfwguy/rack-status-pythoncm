@@ -47,7 +47,16 @@ from audit.actions import action
 from flask import Blueprint, g, jsonify, request
 from identity import bootstrap, principals, revocation
 from identity import srp as srp_mod
-from identity.models import Group, IdentityError, User, canonical_group_name, canonical_login
+from identity.models import (
+    DuplicateEmailError,
+    Group,
+    IdentityError,
+    User,
+    canonical_email,
+    canonical_group_name,
+    canonical_login,
+    canonical_phone_number,
+)
 from identity.store import IdentityStore
 
 _logger = logging.getLogger("rack_web.api.identity_admin")
@@ -181,11 +190,6 @@ def create_user():
     if not raw_login:
         return _bad("a login is required")
 
-    try:
-        login = canonical_login(raw_login)
-    except IdentityError as exc:
-        return _bad(str(exc))
-
     if body.get("password"):
         # Named explicitly rather than ignored, so a caller that tries it learns why instead of
         # wondering which password the account ended up with.
@@ -198,6 +202,26 @@ def create_user():
     supplied_verifier = str(body.get("verifier") or "").strip()
     if bool(supplied_salt) != bool(supplied_verifier):
         return _bad("`salt` and `verifier` must be supplied together")
+
+    # An email is required *here* rather than on the record type. The type has to keep permitting an
+    # empty one -- the first-boot bootstrap admin has no address, and neither does any account
+    # created before the field existed -- so this boundary is the only place where "a new user" is a
+    # meaningful notion to attach the requirement to.
+    #
+    # Checked after the credential rules deliberately. Sending a plaintext password to an SRP store
+    # is a dangerous thing the caller *did*; a missing email is a field they omitted. Reporting the
+    # omission first would hide the more serious message behind the lesser one, so the caller fixes
+    # the email, resubmits, and only then discovers what was actually wrong.
+    raw_email = str(body.get("email") or "").strip()
+    if not raw_email:
+        return _bad("an email is required so the account can be notified")
+
+    try:
+        login = canonical_login(raw_login)
+        email = canonical_email(raw_email)
+        phone_number = canonical_phone_number(body.get("phone_number"))
+    except IdentityError as exc:
+        return _bad(str(exc))
 
     password: str | None = None
     if supplied_salt:
@@ -217,6 +241,8 @@ def create_user():
                 srp_salt=salt,
                 srp_verifier=verifier,
                 must_change_password=True,
+                email=email,
+                phone_number=phone_number,
             )
         )
     except IdentityError as exc:
@@ -228,7 +254,7 @@ def create_user():
 
     payload: dict[str, object] = {
         "ok": True,
-        "user": {"login": login, "display_name": display_name or login},
+        "user": {"login": login, "display_name": display_name or login, "email": email},
     }
     if password is not None:
         # Only present when the server generated it. Omitted rather than sent as null for a chosen
@@ -259,24 +285,80 @@ def read_user(login: str):
 @bp.route("/users/<login>", methods=["PATCH"])
 @action("identity.user:update")
 def update_user(login: str):
-    """Change the display name. **Not** the login — that is immutable (FR-2).
+    """Change the profile — display name and contact attributes. **Not** the login (FR-2).
 
     Enabling and disabling is a separate action and a separate route, because disabling an account
     is a security operation and renaming one is housekeeping. Sharing an action name between them
-    would make them equally privileged in whatever policy Phase 3 writes.
+    would make them equally privileged in whatever policy Phase 3 writes. Asserting an address
+    *verified* is separate for the same reason, and a stronger one: relying parties trust that claim
+    for account linking, so it does not belong in the same action as editing a display name.
+
+    Setting a new address here silently clears its verified flag. That is deliberate and it happens
+    in ``User.edited`` rather than in this handler, so a second caller cannot forget it.
     """
     body = request.get_json(silent=True) or {}
     if "login" in body:
         return _bad("a login cannot be changed; it is the principal (FR-2)")
-    if "display_name" not in body:
+    # Before "nothing to update", so a caller that tries to assert verification here is told where
+    # the assertion actually lives instead of being told it sent an empty request.
+    for flag in ("email_verified", "phone_number_verified"):
+        if flag in body:
+            return _bad(
+                f"`{flag}` is not editable here; it is asserted through "
+                "PUT /users/<login>/email-verified so the audit trail records it as its own act"
+            )
+    editable = ("display_name", "email", "phone_number")
+    supplied = {key: body[key] for key in editable if key in body}
+    if not supplied:
         return _bad("nothing to update")
+    if "display_name" in supplied:
+        supplied["display_name"] = str(supplied["display_name"]).strip()
 
     store = _store()
     try:
         user = store.get_user(login)
         if user is None:
             return _not_found("user")
-        updated = store.update_user(user.edited(display_name=str(body["display_name"]).strip()))
+        updated = store.update_user(user.edited(**supplied))
+    except DuplicateEmailError as exc:
+        # A conflict with another record, not a malformed request — same status the create route
+        # answers for the same condition, so a client does not need two code paths for one problem.
+        return _bad(str(exc), 409)
+    except IdentityError as exc:
+        return _bad(str(exc))
+    finally:
+        store.close()
+    return jsonify({"ok": True, "user": updated.public_dict()})
+
+
+@bp.route("/users/<login>/email-verified", methods=["PUT"])
+@action("identity.user:set_email_verified")
+def set_user_email_verified(login: str):
+    """Record that this deployment asserts the user's email address was verified.
+
+    Its own route and its own action because of what the claim is *for*. OpenID Connect Core §5.1
+    defines ``email_verified`` as the provider asserting the address was verified, and relying
+    parties use it to decide whether two accounts are the same person — so this is closer in kind to
+    resetting a credential than to editing a profile, and the trail should read "this admin asserted
+    this address" rather than being folded into a generic update.
+
+    There is no self-service or mail-based verification flow, so an admin who confirmed the address
+    out of band is the only verification this product can honestly make today. The flag is not a
+    claim that *we* proved anything; it is a record of who said so and when.
+    """
+    body = request.get_json(silent=True) or {}
+    if "verified" not in body:
+        return _bad("`verified` is required")
+    verified = bool(body["verified"])
+
+    store = _store()
+    try:
+        user = store.get_user(login)
+        if user is None:
+            return _not_found("user")
+        if verified and not user.email:
+            return _bad("this user has no email address to verify")
+        updated = store.update_user(user.edited(email_verified=verified))
     except IdentityError as exc:
         return _bad(str(exc))
     finally:
