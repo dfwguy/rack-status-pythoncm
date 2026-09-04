@@ -119,6 +119,33 @@ else
   SCHEME_LABEL="plain HTTP"
 fi
 
+# ---- OIDC issuer ------------------------------------------------------------------------------
+#
+# Derived from the scheme and port this script is actually about to serve on, because those are the
+# two things it knows and an exported value cannot. `iss` is compared by conforming clients as an
+# exact string against the URL they fetched discovery from, so an `http://` issuer in front of an
+# HTTPS listener produces tokens a discovery-driven client refuses -- while the app itself boots
+# perfectly and logs the wrong issuer as though it were fine. Seen exactly that way on 2026-09-04:
+# `issuer http://localhost:5050` logged by a run serving TLS on 5050.
+#
+# `setdefault`, not an override: a run pointing at a real issuer for interop testing keeps it. Note
+# this is a *local development* default only -- a deployment must configure it, and the launch
+# preflight refuses to start without it whenever the provider is enabled.
+if [[ -z "${RACK_WEB_OIDC_ISSUER:-}" ]]; then
+  export RACK_WEB_OIDC_ISSUER="${SCHEME}://localhost:${PORT:-5050}"
+  ISSUER_NOTE="derived"
+else
+  ISSUER_NOTE="from the environment"
+  case "$RACK_WEB_OIDC_ISSUER" in
+    "${SCHEME}://"*) ;;
+    *)
+      echo "[run-local-auth] WARNING: RACK_WEB_OIDC_ISSUER is ${RACK_WEB_OIDC_ISSUER} but this run" >&2
+      echo "[run-local-auth]          serves ${SCHEME}. Clients compare the issuer exactly, so they" >&2
+      echo "[run-local-auth]          will reject these tokens. Unset it to have it derived." >&2
+      ;;
+  esac
+fi
+
 cat <<BANNER
 
   ─────────────────────────────────────────────────────────────────────
@@ -130,6 +157,7 @@ cat <<BANNER
 
    Log in as: admin
    URL:       ${SCHEME}://localhost:${PORT:-5050}
+   Issuer:    ${RACK_WEB_OIDC_ISSUER} (${ISSUER_NOTE})
 $(
   if [[ "$SCHEME" == "https" ]]; then
     cat <<'TLSNOTE'
