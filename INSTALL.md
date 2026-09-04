@@ -22,6 +22,32 @@ Open **http://localhost:5000/spa/** in your browser.
 
 ## Production Deployment
 
+### Which file configures what — three files, three jobs
+
+Worth reading once before editing anything, because each is read by a different thing and a
+setting in the wrong one fails silently:
+
+| File | Read by | Holds |
+|---|---|---|
+| `greenlight.toml` | the application, at launch | everything the app itself reads. Copy `greenlight.toml.example`. **Start here.** |
+| `rack-config.env` | Docker, as `env_file` | settings passed into the container |
+| `.env` | Docker Compose, for `${...}` | only the six it interpolates for ports and bind mounts. Copy `.env.example`. |
+
+The application reads `greenlight.toml` and treats it as the **baseline**: a real environment
+variable, or a `docker run -e` flag, overrides anything in it. So the file can hold a site's
+settled configuration while an operator still overrides one value for a single run.
+
+A few settings cannot be guessed, and for those **Greenlight refuses to start** rather than boot
+into a state where it cannot work — reporting every missing one at once, with an example value, so
+one restart fixes all of them. Today that is the OIDC issuer (when the provider is enabled), the
+SSH host (unless in demo mode or a local execution target), and the TLS key (whenever a
+certificate is set). A setting that has a working default is deliberately *not* on that list.
+
+```bash
+cp greenlight.toml.example greenlight.toml
+# then uncomment and edit what your site needs
+```
+
 ### Option A: Config file (recommended)
 
 1. Edit `rack-config.env` with your site settings:
