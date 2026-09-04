@@ -197,6 +197,11 @@ _RESOLVERS: dict[str, Extractor] = {
     # -- types introduced with the read vocabulary (Phase 3). Instance reads that carry an id are
     #    scoped; the rest are one surface per deployment and their `:list` verb resolves to the
     #    collection regardless.
+    # A policy is itself a governable resource: "may edit the rack-operator policy" has to be
+    # expressible, and it is the one resource where a grant is meta -- whoever can edit policies
+    # can grant themselves anything, so it needs to be nameable individually rather than only as
+    # `policy:*`.
+    "policy": _by("policy_id", "id", "subject"),
     "audit.deep": _by("run_id", "id"),
     "history": _by("run_id", "id"),
     "metrics": _by("chart_id", "id", "metric"),

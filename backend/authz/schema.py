@@ -205,7 +205,25 @@ def json_schema() -> dict:
     this is a translation of one rule it cannot emit, and
     ``test_authz_schema.py::TestTheExportAgreesWithPydantic`` is what keeps the translation honest.
     """
-    schema = PolicyFile.model_json_schema(mode="validation")
+    schema = _bridge_bare_star(PolicyFile.model_json_schema(mode="validation"))
+    return schema
+
+
+def document_json_schema() -> dict:
+    """JSON Schema for ONE policy document — what the editor actually edits.
+
+    Separate from `json_schema()` because the two describe different things and conflating them
+    breaks the editor: `json_schema()` describes the whole *file* (`{"version": 1, "policies":
+    [...]}`), so validating a single document against it fails with "additional properties are not
+    allowed ('id', 'statements' were unexpected)". Found by validating the real document the API
+    accepts against the schema the API served — which is the assertion worth keeping, since a
+    served schema that rejects valid input is worse than none.
+    """
+    return _bridge_bare_star(PolicyDocument.model_json_schema(mode="validation"))
+
+
+def _bridge_bare_star(schema: dict) -> dict:
+    """Inject the one rule pydantic cannot emit. See `json_schema`."""
     statement = schema.get("$defs", {}).get("Statement")
     if statement is not None:
         statement["if"] = {"properties": {"effect": {"const": Effect.allow.value}}}

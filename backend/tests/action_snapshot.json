@@ -942,6 +942,72 @@
   "variant": "sync"
  },
  {
+  "endpoint": "policies.attach_policy",
+  "method": "POST",
+  "action": "policy:attach",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "policies.create_policy",
+  "method": "POST",
+  "action": "policy:create",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "policies.delete_policy",
+  "method": "DELETE",
+  "action": "policy:delete",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "policies.detach_policy",
+  "method": "DELETE",
+  "action": "policy:detach",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "policies.get_policy",
+  "method": "GET",
+  "action": "policy:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "policies.list_attachments",
+  "method": "GET",
+  "action": "policy:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "policies.list_policies",
+  "method": "GET",
+  "action": "policy:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "policies.policies_for_subject",
+  "method": "GET",
+  "action": "policy:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "policies.policy_schema",
+  "method": "GET",
+  "action": "policy:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "policies.policy_vocabulary",
+  "method": "GET",
+  "action": "policy:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "policies.update_policy",
+  "method": "PUT",
+  "action": "policy:update",
+  "variant": "sync"
+ },
+ {
   "endpoint": "rack_locks_api.api_rack_locks_claim",
   "method": "POST",
   "action": "rack.lock:claim",
