@@ -1,6 +1,6 @@
 {
   "generated_by": "frontend/scripts/gen-help-content.mjs",
-  "count": 80,
+  "count": 81,
   "entries": [
     {
       "id": "dashboard",
@@ -2812,6 +2812,68 @@
         "description": "Organise users into groups and manage membership."
       },
       "aiContext": "Groups are flat collections of users for authorization: a group contains users and never another group, so membership is not transitive. Group names are identifiers and cannot be renamed. Membership confers no access yet — the authorization engine is permissive for any signed-in user until the policy engine is wired — so groups recorded now take effect then. Editing membership is the highest-privilege operation on this surface, because it is how grants will be conferred."
+    },
+    {
+      "id": "identityPolicies",
+      "kind": "view",
+      "title": "Policies",
+      "domain": "Identity",
+      "routePath": "/identity/policies",
+      "summary": "Write authorization policies and attach them to users and groups.",
+      "description": "Policies decide what a signed-in operator may do. Evaluation starts at an implicit deny: a request is refused unless some attached policy allows it, and any matching deny wins outright — a deny cannot be outvoted by any number of allows, at any specificity, in any file order. Policies never name principals; they are attached to users and groups as a separate relation, so granting someone access never means editing a document other people depend on. A policy that is not attached to anyone grants nothing. With no policies at all, every authenticated request is permitted and the audit trail records the engine as permissive, so writing the first policy is what starts enforcement.",
+      "features": [
+        "Author policies in a JSON editor that validates against the server's own schema as you type.",
+        "Completion over the real action vocabulary, so an action name cannot be mistyped silently.",
+        "Attach a policy to a user or a group; attaching to a group reaches every member.",
+        "See which subjects hold each policy before changing or deleting it."
+      ],
+      "howTo": [
+        {
+          "task": "Grant a team the ability to power-cycle racks",
+          "steps": [
+            "Click 'New policy'. The template shows an allow plus a deny, which is the usual shape.",
+            "Name the actions (for example rack.power:*) and the resources (rack.power:a01, or rack.power:* for all).",
+            "Save. The server validates again and refuses a bare '*' in an allow statement.",
+            "Click 'Attach' and pick a group. Until then the policy grants nothing."
+          ]
+        },
+        {
+          "task": "Protect a rack from an existing grant",
+          "steps": [
+            "Add a deny statement naming that rack, in the same policy or a separate one.",
+            "Attach it to the same subjects. A deny beats every allow, so ordering does not matter."
+          ]
+        }
+      ],
+      "related": [
+        "identityUsers",
+        "identityGroups"
+      ],
+      "keywords": [
+        "policy",
+        "policies",
+        "authorization",
+        "authorisation",
+        "rbac",
+        "permission",
+        "permissions",
+        "grant",
+        "deny",
+        "allow",
+        "attach",
+        "attachment",
+        "access control",
+        "statement",
+        "effect",
+        "action",
+        "resource",
+        "role"
+      ],
+      "aria": {
+        "label": "Policies page",
+        "description": "Write authorization policies and attach them to users and groups."
+      },
+      "aiContext": "Policies are the authorization layer. Evaluation is default-deny, deny-overrides-allow, and allow-only-on-explicit-match. Policies do not name principals: they are attached to users and groups, so cost grows with what is attached to the requesting principal rather than with the size of the whole policy set, and 'attach a policy to a user' never means editing a shared document. An unattached policy grants nothing, and with no policy file at all the engine is permissive and says so in the audit record. Actions are 'service[.subservice]:verb' (rack.power:on) and resources are '<type>:<id>' (rack.power:a01), with '<type>:_all' meaning the collection — so a grant of one rack does not confer the ability to list them. A bare '*' is refused in an allow statement because it would grant every action the product will ever have; it is permitted in a deny. Both the JSON schema and the action vocabulary are served by the API so the editor cannot accept a document the server would reject."
     },
     {
       "id": "projects",

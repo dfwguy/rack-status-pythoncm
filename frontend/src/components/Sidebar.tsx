@@ -46,6 +46,7 @@ import {
   Activity,
   CalendarClock,
   Gauge,
+  Scale,
   ScrollText,
   Bell,
   Boxes,
@@ -79,6 +80,7 @@ export type ViewId =
   | "projects"
   | "identityUsers"
   | "identityGroups"
+  | "identityPolicies"
   | "platformCatalog"
   | "toolRegistry"
   | "apiReference"
@@ -184,6 +186,7 @@ const navEntries: NavEntry[] = [
     leaves: [
       { id: "identityUsers", label: "Users", icon: <Users size={ICON_SIZE} /> },
       { id: "identityGroups", label: "Groups", icon: <UsersRound size={ICON_SIZE} /> },
+      { id: "identityPolicies", label: "Policies", icon: <Scale size={ICON_SIZE} /> },
     ],
   },
   {

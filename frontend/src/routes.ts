@@ -56,6 +56,7 @@ export const ROUTES: RouteDef[] = [
   { viewId: "reports", path: "/analytics/reports", domain: "Analytics & Benchmarks", label: "Reports" },
   { viewId: "identityUsers", path: "/identity/users", domain: "Identity", label: "Users" },
   { viewId: "identityGroups", path: "/identity/groups", domain: "Identity", label: "Groups" },
+  { viewId: "identityPolicies", path: "/identity/policies", domain: "Identity", label: "Policies" },
   { viewId: "projects", path: "/platform/projects", domain: "Platform", label: "Projects & Clusters" },
   { viewId: "platformCatalog", path: "/platform/catalog", domain: "Platform", label: "Platform Catalog" },
   { viewId: "toolRegistry", path: "/platform/tools", domain: "Platform", label: "Tool Registry" },

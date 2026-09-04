@@ -48,6 +48,10 @@ const InfrastructureView = lazy(() => import("./views/InfrastructureView").then(
 const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ default: m.SettingsView })));
 const UsersView = lazy(() => import("./views/UsersView").then((m) => ({ default: m.UsersView })));
 const GroupsView = lazy(() => import("./views/GroupsView").then((m) => ({ default: m.GroupsView })));
+// Lazy like the rest, and here it matters more than usual: this view pulls in Monaco, which is
+// several megabytes. Eagerly imported it would land in the initial bundle and slow every page load
+// for a screen most operators never open.
+const PoliciesView = lazy(() => import("./views/PoliciesView"));
 const ProjectsView = lazy(() => import("./views/ProjectsView").then((m) => ({ default: m.ProjectsView })));
 const PlatformCatalogView = lazy(() => import("./views/PlatformCatalogView").then((m) => ({ default: m.PlatformCatalogView })));
 const ToolRegistryView = lazy(() => import("./views/ToolRegistryView").then((m) => ({ default: m.ToolRegistryView })));
@@ -90,6 +94,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   projects: "Projects & Clusters",
   identityUsers: "Users",
   identityGroups: "Groups",
+  identityPolicies: "Policies",
   platformCatalog: "Platform Catalog",
   toolRegistry: "Tool Registry",
   apiReference: "API Reference",
@@ -369,6 +374,7 @@ function AppContent() {
           <Route path="/analytics/reports" element={<ReportsView />} />
             <Route path="/identity/users" element={<UsersView />} />
             <Route path="/identity/groups" element={<GroupsView />} />
+            <Route path="/identity/policies" element={<PoliciesView />} />
             <Route path="/platform/projects" element={<ProjectsView />} />
           <Route path="/platform/catalog" element={<PlatformCatalogView />} />
           <Route path="/platform/tools" element={<ToolRegistryView />} />
