@@ -97,7 +97,26 @@ A single number quoted to three decimals would imply a precision this method doe
 | `mint` ES256 (provider on) | 0.040 ms | 0.043 ms | 0.049 ms | ~23,000 /s |
 | `verify` ES256 (provider on) | 0.079 ms | 0.079 ms | 0.094 ms | ~12,600 /s |
 | JWKS render | 0.010 ms | 0.010 ms | 0.010 ms | ~100,000 /s |
-| Policy evaluation, 50 statements | 0.056 ms | 0.073 ms | 0.084 ms | ~14,000 /s |
+| Policy evaluation, 50 statements | 0.023 ms | 0.023 ms | 0.028 ms | ~44,000 /s |
+| Resource resolution (`rack.power:off`) | 0.001 ms | 0.001 ms | 0.001 ms | ~900,000 /s |
+
+> **Correction, 2026-09-08 — the previous policy figure measured an error path.**
+>
+> The row above read **0.056 ms / p95 0.084 ms**, and it was not measuring policy evaluation.
+> `bin/bench-auth.py` wrote its 50 policies in the *retired inline schema* (document-level
+> `effect`/`principals`/`actions`/`resources`), which the current `PolicyFile` refuses. Every
+> iteration therefore returned `allowed=False, reason="the policy file could not be loaded; all
+> requests are refused"` — the benchmark was timing the parse-failure denial path and reporting it
+> as the cost of authorization.
+>
+> Two things worth taking from it. The false number was **pessimistic**, not optimistic: real
+> evaluation is 0.023 ms, so the conclusion "authorization is free" happened to survive — by luck,
+> and with no ability to detect a regression, which is what NFR-1 asked the row to provide. And the
+> failure was silent because the benchmark never checked its own verdict; it now refuses to report a
+> number unless the evaluation it timed returned `allow`.
+>
+> `resources.resolve` is measured for the first time here. It runs on every governed request ahead
+> of the engine and had never been benchmarked — at 0.001 ms it is the cheapest thing in the table.
 
 ### What the table actually says
 

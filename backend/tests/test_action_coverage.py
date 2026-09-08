@@ -65,6 +65,30 @@ def test_every_mutating_route_declares_an_action(registry):
     )
 
 
+def test_every_read_route_declares_an_action(registry):
+    """AC-10, the half that was never wired: the same gate, against the REAL app.
+
+    `undeclared_read_routes` existed and worked, but every call to it was against a synthetic Flask
+    app built inside `test_audit_actions.py`. The real application was checked for *mutating* routes
+    only, so the read surface was complete by hand rather than by construction, and the next added
+    `GET` would have joined it ungoverned with nothing failing — which is precisely the fail-open
+    FR-9 exists to prevent.
+
+    Reads matter here because the vocabulary was extended to cover them so a read-only role could be
+    expressed. An undeclared read is not merely unaudited; it is unauthorizable, because the gate
+    has no action to ask the engine about and lets it through.
+    """
+    app, _ = registry
+    missing = A.undeclared_read_routes(app)
+    assert missing == (), (
+        f"{len(missing)} GET route(s) declare no action, so they cannot be authorized:\n  "
+        + "\n  ".join(missing[:20])
+        + "\n\nDeclare one with `@action(get=\"<type>:<verb>\")`. If the route is genuinely public "
+        "(an unauthenticated login step, a static asset), add its endpoint to the bypass list "
+        "instead, which is the declaration that says so."
+    )
+
+
 def test_action_map_matches_snapshot(registry):
     """AC-30a. A changed action string must be a reviewed diff, not a side effect.
 

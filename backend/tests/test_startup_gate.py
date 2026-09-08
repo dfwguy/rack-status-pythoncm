@@ -212,3 +212,47 @@ class TestTheCliCheckAgreesWithTheGate:
         assert payload["would_create_admin"] is True
         assert payload["would_create_policy"] is True
         assert payload["tls"] is False
+
+
+class TestAMultiWorkerServeIsRefused:
+    """NFR-5. `srp.assert_single_worker_safe()` was defined, documented in three places and unit
+    tested — and called from nowhere, so the dependency was pinned only by `--workers 1` appearing
+    in the Dockerfile and the CLI. That is the assumption NFR-5 exists to forbid.
+
+    Two per-process tables depend on it: the SRP challenge table, where round trip 2 must reach the
+    worker that served round trip 1, and the OIDC authorization-code store. Split either and logins
+    fail about half the time, which reads as a client bug.
+    """
+
+    def test_a_second_worker_refuses_the_launch(self, monkeypatch, deployment):
+        monkeypatch.setenv("WEB_CONCURRENCY", "4")
+        with pytest.raises(SystemExit) as caught:
+            startup_gate.prepare(exit_on_fault=False)
+        assert caught.value.code == 78
+
+    def test_one_worker_is_fine(self, monkeypatch, deployment):
+        monkeypatch.setenv("WEB_CONCURRENCY", "1")
+        startup_gate.prepare(exit_on_fault=False)
+
+    def test_an_absent_count_is_one_worker(self, monkeypatch, deployment):
+        """The default and the pin. Refusing here would break every launch that does not set it."""
+        monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
+        monkeypatch.delenv("GUNICORN_WORKERS", raising=False)
+        startup_gate.prepare(exit_on_fault=False)
+
+    def test_a_typo_does_not_become_an_authentication_error(self, monkeypatch, deployment):
+        """A non-numeric count is gunicorn's to report. Refusing it here would turn a typo into a
+        confusing message about SRP state."""
+        monkeypatch.setenv("WEB_CONCURRENCY", "lots")
+        startup_gate.prepare(exit_on_fault=False)
+
+    def test_the_refusal_names_the_cause_and_the_remedy(self, monkeypatch, deployment):
+        """An operator who hits this needs to know it is not a bug in their config syntax."""
+        from identity import srp
+
+        with pytest.raises(srp.SrpError) as caught:
+            srp.assert_single_worker_safe(2)
+        message = str(caught.value)
+        assert "cannot span" in message
+        assert "--workers 1" in message
+

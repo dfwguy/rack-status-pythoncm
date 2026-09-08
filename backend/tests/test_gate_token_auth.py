@@ -322,14 +322,17 @@ class TestFR18TheLegacyCredentialsAreGone:
         assert not stale, f"bypass entries with no matching route: {stale}"
 
 
-class TestTheDisableSwitchStillWorks:
-    def test_auth_disabled_bypasses_the_gate(self, monkeypatch, tmp_path):
-        """FR-18a. ~2,500 tests depend on this, and FR-18c retires it once they authenticate."""
-        from app import app
+# Removed 2026-09-08: `TestTheDisableSwitchStillWorks::test_auth_disabled_bypasses_the_gate`.
+#
+# It asserted `c.get(PROTECTED).status_code == 200` under the heading "the disable switch still
+# works" — and by the end it passed for the opposite reason: `app.test_client()` is the suite's
+# *authenticated* client, so the 200 proved authentication working, not a bypass. A test whose name
+# and docstring claim an authentication bypass exists, passing green for an unrelated reason, is
+# worse than no test: the next reader either believes the bypass is real or "fixes" the wrong thing.
+# There is no switch (FR-18c), and `test_gate_is_actually_on` asserts the refusal directly.
 
-        with app.test_client() as c:
-            assert c.get(PROTECTED).status_code == 200
 
+class TestTheLoginRoutesAreReachableWithoutACredential:
     def test_the_login_routes_stay_reachable_without_a_credential(self, gated):
         """They are how a caller obtains one; gating them would make login impossible.
 

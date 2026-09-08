@@ -166,6 +166,21 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # An ephemeral signing key when the caller supplied none, so the script runs standalone.
+    #
+    # It measured `srp.begin` and then crashed on the first `mint` with "RACK_WEB_SECRET_KEY is not
+    # set" — the token section only ever worked because `test_bench_auth.py` passes a key into the
+    # child environment. A benchmark that cannot be run by hand does not get run.
+    #
+    # Generated rather than a fixed literal, and not persisted: the derivation cost is what is being
+    # measured, and HKDF does not care what the input is. A deployment's real key is bootstrapped by
+    # `app.py` into `var/secrets/`; this process never touches it.
+    if not (os.environ.get("RACK_WEB_SECRET_KEY") or "").strip():
+        import secrets as _secrets
+
+        os.environ["RACK_WEB_SECRET_KEY"] = _secrets.token_hex(32)
+        print("note: generated an ephemeral RACK_WEB_SECRET_KEY for this run\n")
+
     import srp as srp_lib
     from authz import policy as authz_policy
     from identity import keys as keys_mod
@@ -237,14 +252,45 @@ def main() -> int:
         # Fifty statements, and the query is aimed at the LAST one so the walk is not short-
         # circuited by an early match — otherwise this measures the best case and reports it as
         # typical.
-        policy_file.write_text(json.dumps({"policies": [
-            {"id": f"p{i}", "effect": "allow", "principals": ["group:ops"],
-             "actions": [f"svc{i}.act:*"], "resources": ["rack:*"]}
-            for i in range(50)
-        ]}))
-        engine = authz_policy.PolicyEngine(policy_file, group_lookup=lambda _p: ("ops",))
+        #
+        # **The document is in the attachment schema, and this used to be wrong in a way that
+        # invalidated the published number.** It wrote the retired inline shape (document-level
+        # `effect`/`principals`/`actions`/`resources`), which the current `PolicyFile` refuses with
+        # 250 validation errors — so `evaluate` returned `allowed=False, reason="the policy file
+        # could not be loaded"` and the benchmark timed the *parse-failure denial path*. The figure
+        # it produced went into docs/PERFORMANCE_BASELINE.md as evidence that authorization is
+        # free. A benchmark that silently measures an error path is worse than none, so assert the
+        # verdict before timing it.
+        policy_file.write_text(json.dumps({"policies": [{
+            "id": "bench",
+            "statements": [
+                {"sid": f"s{i}", "effect": "allow",
+                 "actions": [f"svc{i}.act:*"], "resources": ["rack:*"]}
+                for i in range(50)
+            ],
+        }]}))
+        engine = authz_policy.PolicyEngine(
+            policy_file,
+            group_lookup=lambda _p: ("ops",),
+            # Attachment-based since Phase 3: a document nobody is attached to is never examined,
+            # so without this the walk has nothing to walk and the number is meaningless again.
+            attachment_lookup=lambda _subject: ("bench",),
+        )
+        verdict = engine.evaluate("user:bench", "svc49.act:do", "rack:a01")
+        if not verdict.allowed:
+            raise SystemExit(
+                f"bench-auth: the policy benchmark is not measuring evaluation — "
+                f"{verdict.reason!r}. Fix the document before trusting any number below."
+            )
         bench("policy eval (50 statements)",
               lambda: engine.evaluate("user:bench", "svc49.act:do", "rack:a01"), fast_iterations)
+
+        # The resolver runs on every governed request, ahead of the engine, and was never measured.
+        import authz.resources as authz_resources
+
+        facts = authz_resources.RequestFacts({}, {"rack": "a01"}, {})
+        bench("resource resolve",
+              lambda: authz_resources.resolve("rack.power:off", facts), fast_iterations)
 
     print()
     print(f"=== summary: srp.begin is {begin_p50:.1f} ms, so the login ceiling is "

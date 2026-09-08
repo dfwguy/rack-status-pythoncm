@@ -182,13 +182,52 @@ def prepare(*, bootstrap: bool = True, exit_on_fault: bool = True) -> list[Fault
 
     `bootstrap=False` turns all of that off, for a deployment that provisions these out of band and
     wants a missing one to be an error rather than a silent creation.
+
+    It also refuses a worker count the login path cannot survive — see `_assert_worker_count`.
     """
+    _assert_worker_count()
     if not bootstrap:
         return require(exit_on_fault=exit_on_fault)
 
     _ensure_tls()
     _ensure_identity()
     return require(exit_on_fault=exit_on_fault)
+
+
+def _assert_worker_count() -> None:
+    """Refuse a multi-worker serve, because two pieces of login state are per-process.
+
+    **`srp.assert_single_worker_safe()` existed, was documented in three places and had a unit test
+    — and was called from nowhere.** So the dependency it names was pinned only by `--workers 1`
+    appearing in the Dockerfile and the CLI, which is precisely the assumption NFR-5 was written to
+    stop anyone making. A `gunicorn -w 4` outside those two entrypoints produced logins that failed
+    roughly half the time, and OIDC code redemptions likewise, both looking like client bugs.
+
+    Two tables depend on it: the SRP challenge table (round trip 2 must land on the worker that
+    served round trip 1) and the authorization-code store. Neither is shared.
+
+    The count is read from the environment rather than from gunicorn's config, because this runs in
+    the arbiter *before* the config object is available to us, and `cli.py serve` sets `WEB_CONCURRENCY`
+    on its way to `os.execv`. An absent value means one worker, which is the default and the pin.
+    """
+    raw = (os.environ.get("WEB_CONCURRENCY") or os.environ.get("GUNICORN_WORKERS") or "").strip()
+    if not raw:
+        return
+    try:
+        workers = int(raw)
+    except ValueError:
+        # Not a number is gunicorn's problem to report, not ours; refusing here would turn a typo
+        # into a confusing authentication error.
+        logging.getLogger("startup").warning("ignoring non-numeric worker count %r", raw)
+        return
+
+    from identity import srp
+
+    try:
+        srp.assert_single_worker_safe(workers)
+    except srp.SrpError as exc:
+        logging.getLogger("startup").critical("%s", exc)
+        raise SystemExit(EXIT_CONFIG) from exc
 
 
 def _ensure_tls() -> None:
