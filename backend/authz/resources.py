@@ -41,6 +41,7 @@ applying. A build failure naming the type is a five-minute fix; a silent one is 
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
@@ -214,6 +215,58 @@ _RESOLVERS: dict[str, Extractor] = {
 }
 
 
+#: Resource types whose handlers canonicalise the id to lower case before acting on it, so the
+#: resolver must too (FR-4, AC-5).
+#:
+#: **This is a real bypass, not hygiene.** The gate judges the string the caller sent; the handler
+#: then folds it. Measured 2026-09-08 against `rack.power`: with the commonest policy shape — a
+#: broad allow plus a narrow deny — a request for `P17-R01` is judged as `rack.power:P17-R01`,
+#: which `fnmatchcase` does not match against `deny rack.power:p17-r01`, and is then acted on by
+#: `_normalize_rack_id` as `p17-r01`. The deny is evaded and the denied rack is powered off.
+#:
+#: Folded here rather than refused because the handler provably folds, so folding makes the two
+#: agree exactly. The types *absent* from this set keep their case deliberately: `help` content ids
+#: are camelCase (`singleRack`, `rackTable`), and lower-casing them would refuse every help read
+#: while fixing nothing — their handlers do not fold either, so gate and handler already agree.
+_FOLDED_TYPES = frozenset({
+    # `_normalize_rack_id` -> `canonical_rack_id`, which lower-cases.
+    "rack", "rack.power", "rack.gpu", "rack.bmc", "rack.services", "rack.lock",
+    "fabric", "fabric.imex", "fabric.nvswitch", "diag", "bringup", "node.issues",
+    "validation", "tools",
+    # `canonical_login` / `canonical_group_name`, which case-fold.
+    "identity.user", "identity.group",
+    # Hostnames. DNS is case-insensitive, so two nodes cannot differ only in case and folding
+    # cannot collapse two distinct resources into one.
+    "slurm.node", "report.node",
+})
+
+#: Characters a resource id may never contain, and the reason each one is here.
+#:
+#: `*?[]` are `fnmatch` metacharacters: a caller-supplied `*` is matched *literally* against a
+#: policy pattern rather than acting as a wildcard, so it cannot widen a grant by itself — but an
+#: id that matches a pattern by accident is a grant nobody wrote, and there is no legitimate id
+#: containing one. `:` would re-split the `<type>:<id>` rendering into a different type. `/`, `\`
+#: and `..` are path shapes, and several ids reach a filesystem or an `scp` target downstream.
+#: Whitespace cannot appear mid-identifier in any of our namespaces, and a control character in an
+#: audit line is a log-injection primitive.
+_FORBIDDEN_IN_ID = re.compile(r"[*?\[\]:/\\\s]|\.\.|[\x00-\x1f\x7f]")
+
+
+def clean_identifier(resource_type: str, raw: str) -> str:
+    """Validate a caller-supplied id, and canonicalise it the way its handler will (FR-4).
+
+    Raises :class:`Unresolvable`, which the gate answers as a 400 — the same treatment as an id it
+    could not find at all, because in both cases we cannot name the resource the request targets
+    and must not guess.
+    """
+    if _FORBIDDEN_IN_ID.search(raw):
+        raise Unresolvable(
+            f"invalid {resource_type} identifier: a resource id may not contain "
+            "whitespace, ':', '/', '\\\\', '..', or the wildcard characters * ? [ ]"
+        )
+    return raw.lower() if resource_type in _FOLDED_TYPES else raw
+
+
 def declared_types() -> frozenset[str]:
     """What the build gate compares the action registry against."""
     return frozenset(_RESOLVERS)
@@ -255,4 +308,4 @@ def resolve(action: str, facts: RequestFacts) -> str:
             return f"{resource_type}:{COLLECTION}"
         raise Unresolvable(f"could not determine which {resource_type} this request targets")
 
-    return f"{resource_type}:{identifier}"
+    return f"{resource_type}:{clean_identifier(resource_type, identifier)}"

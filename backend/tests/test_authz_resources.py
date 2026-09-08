@@ -186,3 +186,104 @@ class TestTheResourceIsNotTheUrlPath:
 
         assert engine.evaluate("user:alice", "rack.power:on", permitted).allowed
         assert not engine.evaluate("user:alice", "rack.power:on", other).allowed
+
+
+class TestCallerSuppliedIdsAreValidated:
+    """FR-4 / AC-5 — and the bypass they exist to prevent, pinned shut.
+
+    The defect was a **normalisation differential**: the gate judged the string the caller sent
+    while the handler folded it first, so the two disagreed about which resource was being touched.
+    Measured 2026-09-08 on the commonest policy shape there is — a broad allow with a narrow deny.
+    """
+
+    @staticmethod
+    def _engine(tmp_path):
+        """Allow every rack power action, except on `p17-r01`."""
+        path = tmp_path / "policies.json"
+        path.write_text(json.dumps({"policies": [{
+            "id": "operator",
+            "statements": [
+                {"effect": "allow", "actions": ["rack.power:*"], "resources": ["*"]},
+                {"effect": "deny", "actions": ["rack.power:*"],
+                 "resources": ["rack.power:p17-r01"]},
+            ],
+        }]}))
+        return P.PolicyEngine(path, group_lookup=lambda p: (),
+                              attachment_lookup=lambda s: ("operator",))
+
+    @pytest.mark.parametrize("sent", ["p17-r01", "P17-R01", "P17-r01", "p17-R01"])
+    def test_a_case_variant_cannot_evade_the_deny(self, tmp_path, sent):
+        """The bug, in one assertion.
+
+        `_normalize_rack_id` lower-cases, so every spelling here reaches the *same* rack. Before the
+        fix the gate judged `rack.power:P17-R01`, which `fnmatchcase` does not match against
+        `deny rack.power:p17-r01` — so the deny was skipped, the broad allow applied, and the denied
+        rack was powered off by a caller who only had to hold shift.
+        """
+        engine = self._engine(tmp_path)
+        resolved = R.resolve("rack.power:off", facts(body={"rack": sent}))
+        assert not engine.evaluate("user:alice", "rack.power:off", resolved).allowed
+
+    def test_the_gate_judges_what_the_handler_will_act_on(self, tmp_path):
+        """The property underneath the test above, stated directly.
+
+        Asserted against `naming._normalize_rack_id` rather than a hardcoded string, so if the
+        handler's canonicalisation ever changes, this fails instead of the two silently diverging
+        again.
+        """
+        import naming
+
+        for sent in ("P17-R01", "p17-r01", "  P17-r01  "):
+            resolved = R.resolve("rack.power:off", facts(body={"rack": sent}))
+            assert resolved == f"rack.power:{naming._normalize_rack_id(sent.strip())}"
+
+    @pytest.mark.parametrize(
+        "sent",
+        [
+            "a*",          # fnmatch wildcard
+            "a?b",         # fnmatch single-character wildcard
+            "a[0-9]",      # fnmatch character class
+            "a:b",         # would re-split the <type>:<id> rendering
+            "../etc/passwd",
+            "a/b",
+            "a\\b",
+            "a b",         # internal whitespace
+            "a\x00b",      # control character: a log-injection primitive in an audit line
+            "a\nb",
+        ],
+    )
+    def test_an_id_outside_the_grammar_is_refused(self, sent):
+        with pytest.raises(R.Unresolvable):
+            R.resolve("rack.power:off", facts(body={"rack": sent}))
+
+    def test_a_refused_id_is_a_bad_request_not_a_silent_grant(self, tmp_path):
+        """`Unresolvable` is what the gate answers as 400. The alternative — passing the id through
+        — is the failure mode `TestUnresolvableIsRefusedNotGuessed` already guards for missing ids:
+        a wildcard grant matches anything, so a tolerated malformed id becomes a grant."""
+        with pytest.raises(R.Unresolvable, match="may not contain"):
+            R.resolve("rack.power:off", facts(body={"rack": "p17-*"}))
+
+    def test_types_whose_ids_are_mixed_case_keep_their_case(self):
+        """Folding is per-type on purpose. `help` content ids are camelCase (`singleRack`,
+        `rackTable`) and their handler does not fold, so lower-casing them here would refuse every
+        help read while fixing nothing — the gate and handler already agree for those types."""
+        assert R.resolve("help:read", facts(view_args={"content_id": "singleRack"})) == "help:singleRack"
+
+    def test_every_folded_type_is_a_declared_type(self):
+        """A typo in `_FOLDED_TYPES` would silently stop folding a type that needs it."""
+        assert R._FOLDED_TYPES <= R.declared_types()
+
+    def test_the_folded_set_covers_the_rack_family(self):
+        """The rack family is where the measured bypass lived, and it is easy to add a new
+        rack-scoped type without noticing it needs folding too."""
+        rack_scoped = set()
+        for rtype, extractor in R._RESOLVERS.items():
+            if extractor is R._singleton:
+                continue
+            # Types keyed on something other than `rack` simply do not resolve from this body, and
+            # are not what this test is about.
+            if extractor(facts(body={"rack": "p17-r01"})) == "p17-r01":
+                rack_scoped.add(rtype)
+
+        assert rack_scoped, "the probe found no rack-scoped types, so it is asserting nothing"
+        assert rack_scoped <= R._FOLDED_TYPES
