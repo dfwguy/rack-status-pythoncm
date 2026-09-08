@@ -63,6 +63,12 @@ def gated(monkeypatch, tmp_path):
         user = store.get_user(bootstrap.ADMIN_LOGIN)
         salt, verifier = srp_mod.enroll(bootstrap.ADMIN_LOGIN, PASSWORD)
         store.update_user(user.edited(srp_salt=salt, srp_verifier=verifier))
+        # This fixture owns its identity store but shares the session's policy file, so the
+        # documents exist while *this* administrator has no attachment — default-deny, and every
+        # authenticated request here would be a 403 about authorization in a file about
+        # authentication. Attached directly rather than through `ensure_admin_policy`, which
+        # deliberately does nothing once a policy set exists.
+        store.attach_policy(f"user:{bootstrap.ADMIN_LOGIN}", bootstrap.ADMIN_POLICY_ID)
     finally:
         store.close()
 
@@ -162,8 +168,11 @@ class TestAuthorizationIsSeparateFromAuthentication:
         assert resp.get_json().get("reason") == "policy"
 
     def test_the_permissive_engine_allows(self, gated):
+        """Installs it by name. `install_default()` would hand back the *enforcing* engine whenever
+        a policy file exists, which is the state the suite runs in — so this would then assert
+        permissiveness against an engine correctly refusing an unattached principal."""
         _log_in(gated)
-        authz.install_default()
+        authz.set_engine(authz.AllowAllEngine())
         assert gated.post("/api/rack-uptime", json={"rack": "p5-r01"}).status_code != 403
 
     def test_an_unregistered_engine_refuses_rather_than_opens(self, gated):
@@ -220,7 +229,11 @@ class TestFR16ThePrincipalComesFromTheToken:
                 "audit hook disagree about who the caller was"
             )
             assert audited[-1]["decision"] == "allow"
-            assert audited[-1]["policy_engine"] == "allow-all", (
+            # Against the engine that is actually installed, not a literal. The intent is that the
+            # record names *which* engine decided — `allow` is only as strong as the engine beside
+            # it — and hardcoding `allow-all` asserted the suite's configuration instead, so the
+            # test failed the moment the suite began enforcing policy.
+            assert audited[-1]["policy_engine"] == authz.engine_name(), (
                 "`allow` is only as strong as the engine beside it; the record must say which"
             )
         finally:

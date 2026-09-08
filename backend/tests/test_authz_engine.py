@@ -70,8 +70,17 @@ class TestAnUnregisteredEngineRefuses:
 
 
 class TestTheAllowAllEngine:
+    """Constructs the engine directly rather than calling `install_default()`.
+
+    `install_default()` chooses by environment — `AllowAllEngine` when no policy file exists,
+    `PolicyEngine` when one does — so a suite that enforces policy gets the enforcing engine and
+    these tests would be asserting permissiveness against an engine that is correctly refusing.
+    That choice is a contract in its own right and has its own test below; this class is about what
+    the permissive engine *does* once installed.
+    """
+
     def test_it_permits_and_names_itself(self):
-        authz.install_default()
+        authz.set_engine(authz.AllowAllEngine())
         decision = authz.authorize("user:admin", "rack.power:on", "rack:p5-r01")
         assert decision.allowed is True
         assert decision.engine == "allow-all"
@@ -88,7 +97,7 @@ class TestTheAllowAllEngine:
 
     def test_it_permits_regardless_of_the_arguments(self):
         """It is a stub, and the test says so rather than implying a policy that is not there."""
-        authz.install_default()
+        authz.set_engine(authz.AllowAllEngine())
         for principal, action, resource in [
             ("user:admin", "rack.power:off", "rack:p5-r01"),
             ("user:nobody", "terminal:open", "node:whatever"),

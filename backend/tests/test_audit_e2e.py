@@ -75,8 +75,20 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _seed_admin(identity_file: Path) -> None:
-    """Create the administrator with a password this test knows."""
+def _seed_admin(identity_file: Path, policy_file: Path) -> None:
+    """Create the administrator with a password this test knows, and the policy that grants them.
+
+    The policy half arrived when first boot began writing one. Without it the child authenticates
+    and is then refused everything by default-deny, so the trail fills with 403s and the NFR-8
+    claim this case exists to prove — that a deployment enabling nothing still produces a readable
+    trail — fails for a reason that has nothing to do with auditing.
+
+    Written here rather than left to the child's own bootstrap because the store is pre-seeded with
+    a known credential, so `ensure_admin` correctly finds an administrator already present and the
+    seeding beside it does not fire.
+    """
+    import json as _json
+
     from identity import bootstrap
     from identity import srp as srp_mod
     from identity.store import IdentityStore
@@ -88,8 +100,16 @@ def _seed_admin(identity_file: Path) -> None:
         user = store.get_user(ADMIN_LOGIN)
         salt, verifier = srp_mod.enroll(ADMIN_LOGIN, ADMIN_PASSWORD)
         store.update_user(user.edited(srp_salt=salt, srp_verifier=verifier))
+        store.attach_policy(f"user:{ADMIN_LOGIN}", bootstrap.ADMIN_POLICY_ID)
     finally:
         store.close()
+
+    # The child gets its own policy set, so this case stays a self-contained deployment rather than
+    # borrowing the session's. The document is the product's own, not a hand-written stand-in.
+    policy_file.parent.mkdir(parents=True, exist_ok=True)
+    policy_file.write_text(
+        _json.dumps({"version": 1, "policies": [bootstrap.admin_policy_document()]}) + "\n"
+    )
 
 
 def _set_cookies(headers: list[tuple[str, str]]) -> list[str]:
@@ -227,11 +247,12 @@ def live_server(tmp_path):
     port = _free_port()
     audit_file = tmp_path / "audit" / "audit.jsonl"
     identity_file = tmp_path / "identity" / "identity.json"
+    policy_file = tmp_path / "store" / "policies.json"
 
     # Enrol a known credential BEFORE the child starts. The child's own bootstrap would mint a
     # random password and keep only the verifier, so there would be no way to log in; doing it here
     # means the test drives the same SRP exchange a real operator does.
-    _seed_admin(identity_file)
+    _seed_admin(identity_file, policy_file)
 
     env = dict(os.environ)
     env.update(
@@ -243,6 +264,7 @@ def live_server(tmp_path):
             # the identity store below instead, which is the real deployment shape.
             "RACK_WEB_SECRET_KEY": "tc31-token-signing-key",
             "NVIS_IDENTITY_FILE": str(identity_file),
+            "RACK_WEB_POLICY_FILE": str(policy_file),
             "RACK_EXEC_MODE": "local",
             # Only the audit *path* is overridden, so the test can read it. Sinks, format, level,
             # rotation, retention and the flood guard are all left at their defaults -- that is
