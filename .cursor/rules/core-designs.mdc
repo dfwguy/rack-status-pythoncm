@@ -43,6 +43,8 @@ already owns this concern".
 | A **long-running job** | `workflow_engine` — and if it lacks progress, artifacts or idempotency, add those *to the engine* (citizen 4) | A fifth in-memory job dict |
 | A **background worker's phase reporting** | `job_registry.reset_job_progress` | A hand-rolled `_patch` closure |
 | A **config knob** | The settings registry, read via `_eget` / `_eget_int` / `config_env` accessors (citizen 5) | `os.environ.get(...)` in new code |
+| A **launch flag** | `backend/cli.py`, whose flags write `os.environ` and let the config ladder resolve precedence | Resolving precedence in the CLI, or a new `click` option with `envvar=` |
+| A **prerequisite the app must not serve without** | `backend/startup_gate.py`, as a `Fault` with a `fix` (citizen 13) | A check at `import app`, which breaks every tool that inspects the app without running it |
 | A **cluster manager or scheduler** | A provider under `platforms/` or `schedulers/` (citizen 6) | A branch in a caller |
 | A **parser for new tool output** | The results pipeline: prefer structured output, then the single-pass scanner (citizen 7) | A multi-pass shell scan, or head/tail sampling |
 | An **export or report format** | A renderer over the existing dataset (citizen 10) | A second generator |
@@ -288,6 +290,30 @@ resolution is how two panes come to disagree about what is running. KUI first fo
   one-off chat or shell path.
 
 ---
+
+### 13. The startup gate — what the app refuses to serve without
+
+`backend/startup_gate.py`. An administrator, an authorization policy, and TLS. `prepare()` creates
+what a first boot is entitled to create and *then* `require()` refuses anything still missing,
+reporting **every** fault at once with the action that fixes each — the same rule
+`config_preflight` follows, and for the same reason: bringing up a deployment should take one
+attempt rather than one restart per missing prerequisite.
+
+**It gates serving, not importing**, and that scoping is the design. `check-tracked-tree.sh`,
+`verify-deploy.sh` and the route/action snapshots all import `app` without accepting a request, so
+refusing them buys no safety. The three serving entry points each call `prepare()` and none trusts
+another to have done it.
+
+**A new prerequisite goes here as a `Fault`, not as a check at import time**, and it needs a `fix`
+string — a gate that says what is wrong without saying what to do is a gate operators learn to
+disable. Full reasoning and the two ordering mistakes this shipped with first:
+`identity-auth-traps.mdc` §11.
+
+Related: **first boot is now an enforcing deployment.** `identity.bootstrap.ensure_admin_policy`
+writes the `administrators` policy beside the administrator it creates, so a fresh install lands on
+default-deny rather than `AllowAllEngine`. It is deliberately *not* called from `ensure_admin` —
+dozens of fixtures call that for a realistic store, and seeding inside it would flip them all to
+default-deny as a side effect of creating a user.
 
 ## Deployment invariants
 

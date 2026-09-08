@@ -185,3 +185,123 @@ valid; **Type** = ours, being misused; **Revocation/Implicit** = was valid, with
  the same change, so re-run the SRP interop tests if it happens. And because the deployment is
  `--workers 1` with a GIL, **this ceiling does not improve with more cores** — full numbers and the
  scaling table in `docs/PERFORMANCE_BASELINE.md`.
+
+## 10. The gate must judge the string the handler acts on — or a deny is evadable
+
+Found and fixed 2026-09-08. This is a **class**, not one bug: any transformation a handler applies
+*after* authorization is a way to reach a resource the gate did not judge.
+
+The instance measured here. `_normalize_rack_id` lower-cases, and the authorization gate judged the
+case the caller sent. So with the commonest policy shape there is — a broad allow plus a narrow
+deny — `P17-R01` was judged as `rack.power:P17-R01`, which `fnmatchcase` does **not** match against
+`deny rack.power:p17-r01`. The broad allow applied, the handler folded the id, and the denied rack
+was powered off by a caller who only had to hold shift.
+
+- **Fix the value, not the comparison.** `authz/resources.clean_identifier` folds case for the types
+  whose handlers fold, so the two agree exactly. Making the *engine* match case-insensitively would
+  have been the wrong repair: for a type whose handler is case-*sensitive*, an allow on `foo` would
+  then permit acting on `Foo` — a different resource. Same lesson as trap 1.
+- **Folding is per-type on purpose.** `help` content ids are camelCase (`singleRack`, `rackTable`)
+  and their handler does not fold, so lower-casing them would refuse every help read while fixing
+  nothing. `_FOLDED_TYPES` names the ones that fold; adding a rack-scoped type without adding it
+  there is caught by `test_the_folded_set_covers_the_rack_family`.
+- **`RequestFacts.first()` already strips**, so whitespace was never a vector. A repro that used a
+  hand-rolled `RequestFacts` "proved" it was — if you are demonstrating a gate bug, drive the real
+  extractor, not a stub that reimplements it.
+- **Before adding a resolver, ask what the handler does to the id afterwards.** Trailing dots and
+  traversal shapes are refused by `canonical_rack_id`, so they were never exploitable; case was,
+  because both sides accepted it and disagreed about its meaning.
+
+## 11. Bootstrap before the gate, and gate serving rather than importing
+
+Both halves shipped wrong in the first draft of `backend/startup_gate.py`, and both are ordering
+mistakes rather than logic ones.
+
+**Gate-then-bootstrap refuses a brand-new deployment for lacking exactly what starting would have
+created.** The gate requires an administrator, a policy and TLS; `prepare()` creates all three on a
+fresh system and only then calls `require()`. Reversed, a first boot can never succeed — and the
+error message is maximally confusing, because it names prerequisites the product knows how to make.
+
+**The gate hangs off *serving*, not `import app`.** `bin/check-tracked-tree.sh` imports all 164
+modules to prove the committed tree stands alone, `verify-deploy.sh` imports them in the container,
+and the route and action snapshots import `app` to enumerate its URL map. None of them serves a
+request, so none can leak a credential or accept traffic: refusing them buys no safety and breaks
+every tool that inspects the app without running it. The three real entry points each call
+`prepare()` and none trusts another to have done it — gunicorn's `on_starting` (container and
+`start.sh`), `cli.py serve`, and `app.py`'s development-server `__main__`. `on_starting` is a fixed
+gunicorn name, so `test_the_gunicorn_hook_is_the_one_gunicorn_calls` asserts it rather than trusting
+the spelling; a typo there is a gate that silently is not there.
+
+**A certificate is generated, not demanded.** Phase 0.5 already decided "self-signed by default", so
+refusing to start for want of a certificate the product can make is a gate that teaches operators to
+route around it. `_ensure_tls` shells out to `bin/gen-tls-cert.py` rather than growing a second
+generator, because the SAN rules there (`localhost`, `127.0.0.1`, `::1` added unconditionally) are
+load-bearing and would be reimplemented from memory.
+
+**An existing deployment with no policy is refused, deliberately.** On a store that already holds
+accounts we cannot know which of them should hold full access, so inventing a policy either locks
+the operators out or hands somebody everything. Bootstrap therefore covers only the brand-new case,
+and `cli.py check` reports the refusal before a restart discovers it.
+
+## 12. Authentication has no off switch — and the switch's real damage was to our own tests
+
+`RACK_WEB_AUTH_DISABLED` is **gone** (2026-09-08), with `_auth_enabled()`, the `_SAW_A_USER` latch,
+`_store_holds_a_claimed_account()`, `_auth_user()` and `RACK_WEB_AUTH_USER`. Nothing disables the
+gate. `conftest.py` installs an authenticated client as `app.test_client_class`, so **opting out is
+the explicit act** — `identity.testing.unauthenticated_client(app)` for a suite whose subject is the
+refusal.
+
+**The lesson is about measurement, not about the flag.** AC-28b's guard was built to stop the switch
+reaching a customer deployment, which was the right instinct aimed at the wrong target: the switch
+was already off *here*. `start.sh` exported it on macOS and 25 test modules hard-assigned `="1"`, and
+because the environment is process-global and pytest imports every test module during **collection**,
+one assignment turned the gate off for the whole session. So an earlier measurement of "17 failures
+with the gate on" was really 17 gated *fixtures* meeting the enforcing policy; the true cost was
+**304**. Removing the flag is what made the state unambiguous — no guard fixes a switch whose problem
+is that it works.
+
+Assert the state, do not infer it. One probe settles it and would have caught the wrong claim
+immediately:
+
+```python
+with app.test_client() as c: assert c.get("/api/status").status_code == 200
+with testing.unauthenticated_client(app) as a: assert a.get("/api/status").status_code == 401
+```
+
+**Two mechanisms the migration needed, both non-obvious:**
+
+- **The test client mints per request, not once.** Dozens of fixtures set their own
+  `RACK_WEB_SECRET_KEY`; the signing key is derived from it, so a bearer captured when the client was
+  built stops verifying the moment a fixture repoints the secret. That is INV-17 arriving as a 401 in
+  a test that never mentions authentication.
+- **The authorization engine must be restored after every test, by capture.** It is module state, so
+  `monkeypatch` cannot: a test proving the unregistered engine fails closed leaves that engine
+  installed for everything after it — putting `test_authz_engine.py` before `test_endpoint_smoke.py`
+  turned 491 passes into 14 failures. Restore the captured value; calling `install_default()` reads
+  the *test's* policy file and made it worse (29 → 62 failures).
+
+**Policy enforcement is deliberately not suite-wide.** A verdict needs an attachment in whichever
+identity store the test built, and dozens build their own, so seeding made 49 tests fail on
+authorization inside files about something else. Authentication is enforced everywhere;
+authorization is tested in `test_authz_*` and `test_policies_api`.
+
+When a test does fail on authorization, the shape to look for is **a test asserting its own
+configuration rather than its subject**:
+
+- `install_default()` chooses by environment — `AllowAllEngine` when no policy file exists,
+  `PolicyEngine` when one does. A test that wants the permissive engine must construct it by name;
+  calling `install_default()` and expecting permissiveness asserts the suite's configuration.
+- A fixture that owns its identity store but shares the session's policy file has documents without
+  attachments, so every authenticated request is a 403 — authorization failing inside a test about
+  authentication. Attach explicitly; `ensure_admin_policy` deliberately does nothing once a policy
+  set exists.
+- Hardcoding `policy_engine == "allow-all"` in an audit assertion pins the configuration. Assert
+  against `authz.engine_name()`; the intent is that the record names *which* engine decided.
+
+`enrol(authorize=False)` exists for the tests whose point is a refusal, and
+`unauthenticated_client(app)` for those that must carry no credential at all. There is no longer a
+bypass to reach for instead — which was the point.
+
+Also retired with the flag: `RACK_WEB_AUTH_MODE` and `RACK_WEB_AUTH_TOKEN`. Several fixtures still
+set them to "enable auth", which had been configuring names nothing reads since FR-18. A fixture
+that appears to arrange authentication and does nothing is worse than one that arranges nothing.

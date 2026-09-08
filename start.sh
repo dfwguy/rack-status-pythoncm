@@ -21,22 +21,22 @@ set -euo pipefail
 
 export PORT="${PORT:-5050}"
 
-# ---- Auto-detect mode based on OS ----
-# macOS = local development (demo mode by default)
-# Linux = HPC cluster (real mode by default)
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  export RACK_STATUS_DEMO="${RACK_STATUS_DEMO:-1}"
-  export RACK_WEB_AUTH_DISABLED="${RACK_WEB_AUTH_DISABLED:-1}"
-else
-  export RACK_STATUS_DEMO="${RACK_STATUS_DEMO:-0}"
-fi
-
-# ---- Cluster defaults (only applied when NOT in demo mode) ----
-if [[ "${RACK_STATUS_DEMO}" != "1" ]]; then
-  export VALIDATION_TEST="${VALIDATION_TEST:-nccl_allreduce,llm}"
-  export NEMO_SQSH_SRC="${NEMO_SQSH_SRC:-/home/cmsupport/nemo-25.11.01.sqsh}"
-  export RACK_STATUS_LOG_DIR="${RACK_STATUS_LOG_DIR:-/home/cmsupport/aihpc_val-main/validation/nemo}" 
-fi
+# ---- Runtime settings now belong to the app, not to this script ----
+#
+# Demo-vs-cluster mode and the three cluster-only defaults moved into
+# `backend/cli.py::apply_runtime_defaults` on 2026-09-08. A decision made here was invisible to the
+# app that depends on it, untestable by the suite that verifies the app, and re-derived by every
+# other launcher; the app now infers mode from the platform itself, with the same `setdefault`
+# semantics, so `RACK_STATUS_DEMO=1 ./start.sh` still works exactly as before.
+#
+# `RACK_WEB_AUTH_DISABLED=1` on macOS is GONE and must not come back. A developer running with
+# authentication off is not running the product, and it was the reason the suite and the local run
+# both skipped the gate for months. First boot creates an administrator, prints a one-time
+# password, and writes the policy that grants them — so a local run is a real, authenticated,
+# policy-enforcing deployment. `bin/run-local-auth.sh` is the same thing with an isolated store.
+#
+# This script keeps what genuinely precedes Python: the virtualenv, the Node toolchain, the frontend
+# build, and `module load` on a BCM head node.
 # =============================================================================
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -72,7 +72,10 @@ if [[ "$OS" == "Linux" ]] && command -v module &>/dev/null; then
 fi
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-NODE_VERSION="${NODE_VERSION:-22.12.0}"
+# Node.js to fetch when the system has none we accept. Keep this on the current **Active LTS**
+# line and pin it exactly -- the URL below is a literal tarball, so a version that does not exist
+# is a 404 and a dead bootstrap rather than a warning. `.nvmrc` names the same major.
+NODE_VERSION="${NODE_VERSION:-24.20.0}"
 LOCAL_DIR="${ROOT_DIR}/.local"
 
 mkdir -p "$LOCAL_DIR"
@@ -111,7 +114,12 @@ if [[ "$BUILD_FRONTEND" == "1" ]]; then
   if command -v node &>/dev/null; then
     SYSTEM_NODE_VERSION="$(node -v | sed 's/v//')"
     SYSTEM_NODE_MAJOR="${SYSTEM_NODE_VERSION%%.*}"
-    if [[ "$SYSTEM_NODE_MAJOR" -ge 20 ]]; then
+    # 22, not 24, and not the 20 this used to accept. The floor is "oldest line still receiving
+    # security fixes", which is a different question from "which line do we build on": Node 20
+    # went end-of-life in April 2026, so accepting it was shipping an unpatched toolchain, while
+    # requiring 24 would make every developer already on 22 download a second Node for no gain
+    # (Vite needs >=22.12). CI, Docker and the download above all use the Active LTS.
+    if [[ "$SYSTEM_NODE_MAJOR" -ge 22 ]]; then
       echo "[start.sh] using system Node.js $(node -v)"
       USE_SYSTEM_NODE=1
     fi
@@ -145,6 +153,11 @@ fi
 # Run from the repo root (cwd) so backend modules resolve repo-root assets
 # (bin/, static/spa, var/, help_content.json); app.py adds backend/ to sys.path itself.
 #
+# Handed to `backend/cli.py serve`, which owns the gunicorn invocation, the TLS wiring and the
+# startup gate (an administrator, a policy and a certificate — created on a first run, refused if
+# this is an existing deployment that has never been given a policy). One launch path, so a fix to
+# the server's flags cannot land in one launcher and miss the other.
+#
 # TLS runs under gunicorn, NOT the Werkzeug development server.
 #
 # The dev server closes the connection after every response (no keep-alive) while streaming
@@ -157,19 +170,5 @@ fi
 #
 # Gunicorn is what the container runs, supports keep-alive, and does not do this. Same
 # gunicorn.conf.py, so the local run gets the same TLS floor as production.
-if [[ -n "${RACK_WEB_TLS_CERT:-}" ]]; then
-  if [[ -z "${RACK_WEB_TLS_KEY:-}" ]]; then
-    echo "[start.sh] STOP: RACK_WEB_TLS_CERT is set but RACK_WEB_TLS_KEY is not." >&2
-    exit 1
-  fi
-  echo "[start.sh] starting gunicorn with TLS on port ${PORT} (https://localhost:${PORT})"
-  exec python -m gunicorn -c gunicorn.conf.py \
-    --workers 1 --threads "${GUNICORN_THREADS:-24}" --worker-class gthread \
-    --timeout "${GUNICORN_TIMEOUT:-600}" --graceful-timeout 30 --keep-alive 5 \
-    --access-logfile - --pythonpath backend --bind "0.0.0.0:${PORT}" \
-    --certfile "${RACK_WEB_TLS_CERT}" --keyfile "${RACK_WEB_TLS_KEY}" \
-    app:app
-fi
-
-echo "[start.sh] starting Flask on port ${PORT}"
-exec python backend/app.py
+echo "[start.sh] handing off to backend/cli.py serve on port ${PORT}"
+exec python backend/cli.py serve --port "${PORT}"

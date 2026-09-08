@@ -5,6 +5,42 @@ alwaysApply: true
 
 # Local Development & Deployment
 
+## Three prerequisites, or it will not serve
+
+Since 2026-09-08 the app **refuses to start** without an administrator, an authorization policy and
+TLS. On a brand-new deployment it creates all three itself — the administrator with a one-time
+password, the `administrators` policy attached to them, and a self-signed certificate — so a first
+run needs nothing. What it will not do is invent a policy for a store that *already* holds accounts,
+because nothing tells it which of them should hold full access; that case is refused with the fix
+named. Reasoning and the ordering traps: `identity-auth-traps.mdc` §11.
+
+**Find out before you start anything:**
+
+```bash
+python backend/cli.py check          # what a serve would create; exits 78 on a fault
+python backend/cli.py check --json   # same, for a deploy gate
+```
+
+`check` creates no administrator, credential or policy. It *may* seed the catalog, because the
+required-setting preflight resolves the active cluster — pinned as a documented exception in
+`test_cli.py`, not an oversight.
+
+`serve` takes the same path overrides and hands off to gunicorn with `gunicorn.conf.py`, so a local
+run gets the same TLS floor as production:
+
+```bash
+python backend/cli.py serve --port 5050
+python backend/cli.py serve --identity-file … --policy-file … --catalog-file … --config …
+python backend/cli.py serve --no-bootstrap   # refuse instead of creating anything
+```
+
+**It is argparse, and the flags only write `os.environ`.** Precedence has one owner — the
+`config_registry` / `config_launch` / `config_env` ladder — and `click`'s `envvar=` treats an empty
+variable as absent, the opposite of this product's rule that an empty string is a deliberate value
+(`TestTC19EmptyStringWins`). Wiring it would fork the contract, so the CLI resolves nothing and the
+ladder decides everything. `backend/cli.py` also imports no first-party module at module scope,
+because `config_launch.load()` runs during `import app`.
+
 ## Local Dev
 
 Use `./start.sh` to build and run locally. It handles:
