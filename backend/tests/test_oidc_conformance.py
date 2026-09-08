@@ -176,13 +176,16 @@ class TestAStrangerCanVerifyOurTokens:
         The left-most **half** of the digest. A full digest is a plausible-looking value that every
         conforming client rejects, with nothing visibly wrong on our side.
         """
-        from api import oidc_provider
-
         access = T.mint("user:admin", T.TOKEN_ACCESS)
         digest = hashlib.sha256(access.encode("ascii")).digest()
         expected = base64.urlsafe_b64encode(digest[:16]).decode().rstrip("=")
 
-        assert oidc_provider._at_hash(access) == expected
+        # `at_hash` moved to `identity/oidc.py` when the local SRP login began issuing an id token
+        # too: two `api/` modules need it now, and one importing the other would invert the
+        # dependency direction (core-designs.mdc §0).
+        from identity import oidc as oidc_mod
+
+        assert oidc_mod.at_hash(access) == expected
         assert len(b64u_decode(expected)) == 16
 
 

@@ -43,7 +43,7 @@ import throttle
 import web_auth
 from audit.actions import action
 from flask import Blueprint, g, jsonify, make_response, request
-from identity import principals, revocation, srp, tokens
+from identity import oidc, principals, revocation, srp, tokens
 from identity.models import IdentityError, canonical_login
 from identity.store import IdentityStore
 
@@ -267,16 +267,63 @@ def srp_finish():
     access = tokens.mint(principal, tokens.TOKEN_ACCESS, auth_time=authenticated_at)
     refresh = tokens.mint(principal, tokens.TOKEN_REFRESH, auth_time=authenticated_at)
 
-    resp = make_response(jsonify({
+    body = {
         "ok": True,
         # The server's own proof. A client that does not check it has authenticated itself to an
         # unauthenticated server, which is half of what mutual authentication is for.
         "HAMK": hamk_hex,
         "user": {"login": login, "display_name": display, "principal": principal},
         "must_change_password": must_change,
-    }))
+    }
+
+    id_token = _mint_id_token(principal, access, authenticated_at)
+    if id_token is not None:
+        body["id_token"] = id_token
+
+    resp = make_response(jsonify(body))
     _set_token_cookies(resp, access, refresh)
     return resp
+
+
+def _mint_id_token(principal: str, access: str, authenticated_at: float) -> str | None:
+    """The id token for a local login (FR-5), or ``None`` in legacy mode.
+
+    **Three tokens, which is what the requirement asked for and what a Cognito-shaped client
+    expects.** The login used to mint only access and refresh, so FR-5's "id token and access token"
+    was unmet while `tokens.py` supported `TOKEN_ID` perfectly well — the login handler simply never
+    called it.
+
+    **It goes in the response body, not a cookie, and that is the standard's intent.** An id token
+    is a statement *to the client* about who signed in; a client that cannot read it has been sent
+    nothing. The access and refresh tokens are the opposite — they are credentials, so they stay
+    `HttpOnly` where script cannot reach them.
+
+    That split is only safe because an id token authorizes nothing here: `verify` demands an exact
+    token type and the gate asks for `TOKEN_ACCESS`, so presenting this as a bearer is refused.
+    `test_id_token_is_not_a_credential.py` asserts exactly that, and it is what makes readable
+    delivery a considered choice rather than a leak.
+
+    `at_hash` binds it to the access token issued in the same breath (OIDC Core §3.1.3.6), so a
+    client can tell the pair apart from an id token replayed beside a different access token.
+
+    Returns ``None`` in legacy HS256 mode rather than raising: an id token that no `kid` identifies
+    and no JWKS describes is not usable by a conforming client, and a first-party SPA reads its user
+    from the `user` object above regardless. Callers must treat the field as optional.
+    """
+    if not oidc.enabled():
+        return None
+    try:
+        return tokens.mint(
+            principal,
+            tokens.TOKEN_ID,
+            auth_time=authenticated_at,
+            claims={"at_hash": oidc.at_hash(access)},
+        )
+    except tokens.TokenError:
+        # A login that succeeded must not fail because an *optional* token could not be minted —
+        # the session cookies are already the credential. Logged, not raised.
+        _logger.warning("srp finish: could not mint an id token", exc_info=True)
+        return None
 
 
 @bp.route("/refresh", methods=["POST"])

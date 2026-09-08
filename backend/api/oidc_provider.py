@@ -32,8 +32,6 @@ consent belongs here and its absence becomes a defect rather than a simplificati
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import hmac
 import logging
 from datetime import datetime
@@ -209,7 +207,7 @@ def _grant_authorization_code(form, client: clients_mod.Client):
         entry.principal,
         tokens.TOKEN_ID,
         auth_time=entry.auth_time,
-        claims=_id_token_claims(entry, client) | {"at_hash": _at_hash(access)},
+        claims=_id_token_claims(entry, client) | {"at_hash": oidc.at_hash(access)},
     )
     refresh = tokens.mint(
         entry.principal, tokens.TOKEN_REFRESH, auth_time=entry.auth_time, scope=entry.scope
@@ -267,20 +265,6 @@ def _id_token_claims(entry, client: clients_mod.Client) -> dict:
         # works if it comes back exactly as sent.
         extra["nonce"] = entry.nonce
     return extra
-
-
-def _at_hash(access_token: str) -> str:
-    """OIDC Core 1.0 §3.1.3.6: the **left-most half** of the SHA-256 of the access token.
-
-    The half is the part that gets missed — the full digest is a plausible-looking value that no
-    conforming client will accept, and the mismatch surfaces at the client as a rejected id token
-    with nothing wrong on our side.
-
-    SHA-256 because the id token is signed with ES256; the hash tracks the signing algorithm, so
-    this must move if that ever does.
-    """
-    digest = hashlib.sha256(access_token.encode("ascii")).digest()
-    return base64.urlsafe_b64encode(digest[: len(digest) // 2]).decode("ascii").rstrip("=")
 
 
 def _peek(token_str: str) -> dict:

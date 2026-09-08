@@ -19,8 +19,9 @@ source of truth and the ticket is stale.
 | 0 | [NVRACKSTAT-54](https://jirasw.nvidia.com/browse/NVRACKSTAT-54) | defect fixes | delivered |
 | 0.5 | [NVRACKSTAT-55](https://jirasw.nvidia.com/browse/NVRACKSTAT-55) | HTTPS | delivered |
 | 1 | [NVRACKSTAT-52](https://jirasw.nvidia.com/browse/NVRACKSTAT-52) | audit trail | delivered |
-| 2 | [NVRACKSTAT-56](https://jirasw.nvidia.com/browse/NVRACKSTAT-56) | identity | delivered, federation open |
+| 2 | [NVRACKSTAT-56](https://jirasw.nvidia.com/browse/NVRACKSTAT-56) | identity | delivered; federation deferred to 2.6 |
 | 2.5 | [NVRACKSTAT-57](https://jirasw.nvidia.com/browse/NVRACKSTAT-57) | OIDC provider | delivered, acceptance audit outstanding |
+| 2.6 | *(ticket to be raised)* | OIDC **federation** — consuming another issuer's tokens | not started; scoped below |
 | 3 | [NVRACKSTAT-58](https://jirasw.nvidia.com/browse/NVRACKSTAT-58) | authorization | delivered, acceptance audit outstanding |
 
 Every one of them sits in **Backlog**, including the phases that are finished. That is deliberate,
@@ -33,8 +34,8 @@ human action.
 | 0 | Defect fixes: the unauthenticated `/ws/terminal`, `target` command injection, `0.0.0.0` exposure | done |
 | 0.5 | HTTPS: self-signed by default, internal CA opt-in, TLS 1.2 floor, CSP/HSTS, Origin policy | done |
 | 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | **closed** — 7/7 work items merged to `main` 2026-08-25; the four closing V-model steps completed 2026-08-28, acceptance verdict **PASS** on all 34 criteria, no open findings |
-| 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | **delivered**, acceptance audit outstanding. Store, SRP login, groups, both tokens, first-boot credential, admin-initiated reset and the Users/Groups UI are all in. *Federation* (verifying another issuer's tokens) is NOT started and is the phase's remaining scope |
-| 2.5 | **OIDC Provider**: asymmetric signing + JWKS, discovery, standard claim names, authorization-code flow with PKCE, `/token`, `/userinfo`, introspection and revocation endpoints | **delivered**, acceptance audit outstanding. All seven endpoints are live: `/.well-known/openid-configuration`, `/.well-known/jwks.json`, `/oidc/authorize`, `/oidc/token`, `/oidc/userinfo`, `/oidc/introspect`, `/oidc/revoke` |
+| 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | **delivered except federation.** Store, SRP login, groups and membership, all three tokens, first-boot credential, admin-initiated reset and the Users/Groups UI are in; acceptance audit 47/74 PASS. **Federation is deferred to Phase 2.6** and is the only open scope — FR-7, FR-7a, FR-19, FR-19a with AC-13, AC-14, AC-15, AC-29b, AC-29c |
+| 2.5 | **OIDC Provider**: asymmetric signing + JWKS, discovery, standard claim names, authorization-code flow with PKCE, `/token`, `/userinfo`, introspection and revocation endpoints | **delivered and working for local users.** ES256 with a rotating key set and RFC 7638 `kid`; discovery and JWKS; authorization-code flow with mandatory PKCE S256; `/token` for both grants; `/userinfo` releasing only the granted scope; introspection and revocation. Acceptance audit 41/54 PASS. It is an OIDC **Provider** — it issues tokens for accounts in the local store. Consuming *another* issuer's tokens is federation, which is Phase 2.6 |
 | 3 | **Authorization**: policy engine, policy documents, attach-to-principal, enforcement before dispatch | **delivered**, acceptance audit outstanding. Attachment-based engine (deny-overrides-allow, default-deny), `/api/policies` CRUD + attach, resource resolver, read governance, and the Monaco policy editor. The test-credential gate below is **lifted** |
 
 ## Phase 1 — implementation work items
@@ -261,6 +262,32 @@ set cookies for its own first-party UI and serve Bearer tokens to API clients. T
 After Phase 2 closes, before Phase 3. Phase 3 binds policy to principals and will want `scope`, so
 the claim vocabulary should settle first — but Phase 2's remaining work does not depend on any of
 this, and the OP surface is a coherent slice on its own.
+
+## Phase 2.6 — federation, and why it is its own increment
+
+**The distinction that made this look done when it was not.** `backend/identity/oidc.py` is the
+OIDC **Provider**: it mints tokens for accounts in the local store, publishes JWKS, answers
+discovery and `/userinfo`, and runs the authorization-code flow. Federation is the mirror image —
+accepting an ID token *another* issuer minted — and shares almost no code with it. On a filename
+scan the two are indistinguishable, which is how four requirements sat inside a phase reported as
+delivered with nothing implementing them.
+
+Open scope, carried over from Phase 2: **FR-7** (federation as a configurable alternative,
+disabled by default), **FR-7a** (a federated subject resolves to a local record so groups, policy
+attachment and the audit trail behave identically), **FR-19** (a labelled button per configured
+provider), **FR-19a** (a configured-but-unreachable provider leaves local login usable). Criteria:
+AC-13, AC-14, AC-15, AC-29b, AC-29c.
+
+**The one trap to design against before writing any of it.** PyJWT does not check `iss` at all
+unless `issuer=` is passed (`identity-auth-traps.mdc` §6). Today that is survivable because there
+is exactly one issuer and the signing key is the real boundary. With federation there are **two
+issuers on one verify path**, and accepting a token from the wrong one is a full authentication
+bypass — an attacker who can get any token from any issuer we trust becomes any user. So the
+verify path must take the issuer as a required argument rather than a default, and the test that
+matters is the negative one: a well-formed token from issuer B presented where issuer A is expected.
+
+`AUTH_FEDERATED` already exists in `identity/models.py` as a constant with nothing resolving it,
+which is the shape to watch: a placeholder that makes a scan look complete.
 
 ## Phase 3's test-credential gate — LIFTED 2026-09-08
 

@@ -42,6 +42,8 @@ the client and looks like the client's fault.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import os
 import threading
@@ -251,3 +253,21 @@ def reset_for_tests() -> None:
     with _doc_lock:
         _doc_cache = None
         _doc_hits = 0
+
+
+def at_hash(access_token: str) -> str:
+    """OIDC Core 1.0 §3.1.3.6: the **left-most half** of the SHA-256 of the access token.
+
+    The half is the part that gets missed — a full digest is a plausible-looking value that no
+    conforming client accepts, and the mismatch surfaces at the client as a rejected id token with
+    nothing visibly wrong on our side.
+
+    SHA-256 because the id token is signed with ES256: the hash tracks the signing algorithm, so
+    this must move if that does.
+
+    Lives here rather than in `api/oidc_provider.py`, where it started, because the local SRP login
+    issues an id token too and the dependency runs `app.py -> api/<domain>.py -> core.py` in one
+    direction only (core-designs.mdc §0) — one `api/` module importing another would invert it.
+    """
+    digest = hashlib.sha256(access_token.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest[: len(digest) // 2]).decode("ascii").rstrip("=")
