@@ -116,13 +116,34 @@ def _authz() -> tuple[str, str]:
 
 
 def _resource(path: str) -> str:
-    """The path, without its query string (NFR-11).
+    """The resource the authorization gate judged, falling back to the request path.
 
-    A credential travelling as ``?token=...`` is invisible to key-name redaction, so the query
-    string is dropped rather than filtered — there is nothing in it the trail needs that the path
-    and the action do not already carry.
+    **Prefer the resolved resource, because the path is not the thing acted on.** The gate resolves
+    a `RESOURCE_MODEL` identifier — `rack.power:p17-r01` — and until now computed it and threw it
+    away, so the trail recorded `/api/power-off` for every rack in the fleet. A reader asking "what
+    ran on p17-r01" had to infer the answer from a body the trail does not keep, and a policy
+    attachment recorded `/api/policies/ops/attachments` without naming the principal it granted.
+
+    A fan-out records the target the verdict was about: the refused one when refused, else the
+    first, with the full set alongside it. Recording only one member of a multi-target request was
+    the *reason* the all-of bypass was invisible for so long.
+
+    The path remains the fallback for a route the resolver does not cover — reads outside the
+    governed set, the SPA shell — and the query string is still dropped rather than filtered
+    (NFR-11): a credential travelling as `?token=...` is invisible to key-name redaction, and there
+    is nothing in a query the trail needs that the path and the action do not already carry.
     """
-    return path
+    resolved = str(getattr(g, "authz_resource", "") or "").strip()
+    if not resolved:
+        return path
+
+    targets = getattr(g, "authz_resources", ()) or ()
+    if len(targets) > 1:
+        # `+N more` rather than the whole list: the trail is one line per event, and a 64-rack
+        # campaign would otherwise bury every other field. The count is what tells a reader this
+        # was a fan-out at all.
+        return f"{resolved} (+{len(targets) - 1} more)"
+    return resolved
 
 
 #: Cluster label, keyed on the catalog store's generation counter. See _cluster().

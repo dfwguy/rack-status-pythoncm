@@ -574,6 +574,9 @@ class TestLatencyBudget:
         audit.flush()
         rows = _lines(tmp_path)
         assert rows, "no audit event was written, so the latency delta above measures nothing"
-        assert any(r.get("resource") == "/api/rack-uptime" for r in rows), [
+        # The resource is now the RESOLVED identifier (`rack:p5-r01`) rather than the URL path.
+        # This asserted the path, which is exactly what changed: the gate computed the identifier
+        # and then discarded it, so every rack in the fleet recorded the same resource.
+        assert any(str(r.get("resource", "")).startswith("rack") for r in rows), [
             r.get("resource") for r in rows
         ]

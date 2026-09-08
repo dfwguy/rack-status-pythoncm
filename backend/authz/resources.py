@@ -83,16 +83,40 @@ class RequestFacts:
         the first one. Discovered by turning real authentication on: every multirack launch test
         answered 403 because this only looked for the singular `rack`.
         """
+        values = self.all_of(*names)
+        return values[0] if values else None
+
+    def all_of(self, *names: str) -> tuple[str, ...]:
+        """**Every** target this request names, in order, de-duplicated.
+
+        `first()` exists for the single-target case and for a caller that only needs a label. This
+        is what authorization must use, because judging a fan-out by its first element is an
+        authorization bypass: an operator granted `rack.power:p17-r01` could post
+        `racks: ["p17-r01", "p17-r02"]` and act on both, with the gate having examined only the
+        first. Measured, not theorised — the verdict came back `allow`.
+
+        The previous defence was that the multirack dispatchers refuse a group that is not a clean
+        partition of the reviewed target. That is a real control and it is not this one: it checks
+        the *selection* is coherent, never that the caller holds a grant for each member.
+
+        Order is preserved and duplicates dropped so a refusal can name the offending target
+        without repeating it, and so `["a01", "a01"]` costs one evaluation rather than two.
+        """
         for source in (self.view_args, self.query, self.body):
             for name in names:
-                value = source.get(name)
-                if isinstance(value, list | tuple) and value:
-                    value = value[0]
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-                if isinstance(value, int | float) and not isinstance(value, bool):
-                    return str(value)
-        return None
+                values = _as_identifiers(source.get(name))
+                if values:
+                    # **The FIRST matching key only, expanded.** `names` is a fallback chain, not a
+                    # set of aliases for one thing, and treating it as a set was a real bug: the
+                    # `policy` resolver reads `("policy_id", "id", "subject")`, so sweeping every
+                    # key turned a detach request into two targets — the policy and the principal
+                    # `user:alice`, whose colon the id grammar then refused. Every detach 400ed.
+                    #
+                    # Expanding one key is still exactly what closes the fan-out bypass, because a
+                    # multi-target request names its targets in ONE key (`racks: [a01, a02]`), not
+                    # by spreading them across the chain.
+                    return values
+        return ()
 
 
 SINGLETON = "default"
@@ -169,12 +193,43 @@ COLLECTION_FALLBACK_ACTIONS: frozenset[str] = frozenset({
 })
 
 
+def _as_identifiers(raw: object) -> tuple[str, ...]:
+    """The usable identifiers in one request value, in order, de-duplicated.
+
+    Shared by `first()` and `all_of()` so the two cannot disagree about what counts as an id — a
+    divergence there would mean the gate authorized a different set than it reported.
+    """
+    candidates = raw if isinstance(raw, list | tuple) else [raw]
+    found: list[str] = []
+    for value in candidates:
+        if isinstance(value, str) and value.strip():
+            cleaned = value.strip()
+        elif isinstance(value, int | float) and not isinstance(value, bool):
+            cleaned = str(value)
+        else:
+            continue
+        if cleaned not in found:
+            found.append(cleaned)
+    return tuple(found)
+
+
 def _singleton(_facts: RequestFacts) -> str:
     return SINGLETON
 
 
 def _by(*names: str) -> Extractor:
-    return lambda facts: facts.first(*names)
+    """An extractor reading the first of `names` that the request supplies.
+
+    The names are recorded on the returned callable as `.keys`, so `resolve_all` can ask the *same*
+    declaration which keys to sweep for multiple targets. The alternative — a second table mapping
+    type to keys — is two sources of truth for one fact, and the copy that drifts is the one that
+    decides authorization.
+    """
+    def extract(facts: RequestFacts) -> str | None:
+        return facts.first(*names)
+
+    extract.keys = names  # type: ignore[attr-defined]
+    return extract
 
 
 # The declaration. One row per resource type in `audit.actions`, which is what the build gate
@@ -358,3 +413,64 @@ def resolve(action: str, facts: RequestFacts) -> str:
         raise Unresolvable(f"could not determine which {resource_type} this request targets")
 
     return f"{resource_type}:{clean_identifier(resource_type, identifier)}"
+
+
+#: A request may not name more targets than this.
+#:
+#: All-of evaluation is linear in the number of targets, so an unbounded list is a way to spend the
+#: server's CPU from an authenticated session — 2,000 racks is 2,000 evaluations before the handler
+#: is even reached. The ceiling is well above any real launch: the largest reviewed campaign in this
+#: product is a few dozen racks, and a fleet-wide operation names nothing and resolves to the
+#: collection instead. Exceeding it is refused as a malformed request, not silently truncated,
+#: because truncation is how the bypass this bound protects would come back.
+MAX_TARGETS = 256
+
+
+def resolve_all(action: str, facts: RequestFacts) -> tuple[str, ...]:
+    """Every resource this request acts on. **This is what the gate must authorize against.**
+
+    `resolve()` returns one resource, which is right for a label and wrong for a decision: a
+    request naming several targets was judged by its first, so a grant for one rack authorized an
+    operation on two. Verified before fixing — the verdict was `allow` and the second rack had no
+    grant at all.
+
+    All-of, deliberately: every named target must be permitted, and one refusal refuses the
+    request. Any-of would be the same bypass with extra steps, and "authorize the first and let the
+    handler sort it out" is what was already happening.
+
+    A collection resolution (`<type>:_all`) is returned as a single element, because a request that
+    names nothing has exactly one target — the set — and multiplying that out would be meaningless.
+    """
+    resource_type, _, verb = action.partition(":")
+
+    if verb in COLLECTION_VERBS:
+        # Unchanged: the collection is one resource however many members it has.
+        return (resolve(action, facts),)
+
+    extractor = _RESOLVERS.get(resource_type)
+    if extractor is None or extractor is _singleton:
+        # A singleton has a fixed id, and a missing resolver must refuse — `resolve` says both
+        # better than a duplicate of its logic would.
+        return (resolve(action, facts),)
+
+    keys = getattr(extractor, "keys", ())
+    if not keys:
+        # A hand-written extractor with no declared keys cannot be swept for multiple targets.
+        # Falling back to the single resolution is correct rather than lax: such an extractor reads
+        # one specific place, so there is no list for it to have missed.
+        return (resolve(action, facts),)
+
+    identifiers = facts.all_of(*keys)
+    if len(identifiers) > MAX_TARGETS:
+        raise Unresolvable(
+            f"this request names {len(identifiers)} targets; the limit is {MAX_TARGETS}. "
+            f"Split it, or omit the target to act on the collection if the action supports it."
+        )
+    if len(identifiers) <= 1:
+        # Nothing named, or exactly one: `resolve` already handles the fallbacks and the refusal.
+        return (resolve(action, facts),)
+
+    return tuple(
+        f"{resource_type}:{clean_identifier(resource_type, identifier)}"
+        for identifier in identifiers
+    )

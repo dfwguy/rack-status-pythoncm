@@ -382,3 +382,45 @@ class TestClusterLabelCache:
         events = _events(tmp_path)
         assert events, "no event written"
         assert events[0]["cluster"], "the cluster field is empty, so the cache may be masking it"
+
+
+class TestTheResourceIsWhatWasActedOn:
+    """FR-18/AC-15g. The trail recorded the URL path, not the resource the gate judged.
+
+    The gate resolves a `RESOURCE_MODEL` identifier and used to compute it and discard it, so every
+    rack in the fleet produced the same `resource: /api/power-off` and a reader asking "what ran on
+    p17-r01" had to infer it from a body the trail does not keep. A policy attachment was worse: it
+    recorded `/api/policies/ops/attachments` and never named the principal it granted.
+    """
+
+    def test_it_records_the_resolved_identifier(self, authed_client, tmp_path):
+        authed_client.post(CANONICAL_ENDPOINT, json={"rack": "p17-r01"})
+        (event,) = _events(tmp_path)
+        assert event["resource"].startswith("rack"), (
+            f"expected a resource identifier, got {event['resource']!r} — the path again"
+        )
+        assert "p17-r01" in event["resource"]
+
+    def test_a_fan_out_says_how_many_targets_there_were(self, authed_client, tmp_path):
+        """Recording one member of a multi-target request silently is what kept the all-of
+        authorization bypass invisible: the trail showed a single rack either way."""
+        authed_client.post(CANONICAL_ENDPOINT, json={"racks": ["p17-r01", "p17-r02"]})
+        (event,) = _events(tmp_path)
+        assert "+1 more" in event["resource"], event["resource"]
+
+    def test_an_ungoverned_route_still_records_its_path(self, authed_client, tmp_path):
+        """The fallback has to hold, or a route the resolver does not cover records nothing."""
+        authed_client.get("/api/status")
+        events = _events(tmp_path)
+        if events:  # reads are not audited by default; only assert if this one was
+            assert events[0]["resource"]
+
+    def test_the_query_string_is_never_recorded(self, authed_client, tmp_path):
+        """NFR-11 survives the change. A credential in `?token=` is invisible to key-name
+        redaction, so the query is dropped rather than filtered."""
+        authed_client.post(
+            f"{CANONICAL_ENDPOINT}?token=super-secret", json={"rack": "p17-r01"}
+        )
+        (event,) = _events(tmp_path)
+        assert "super-secret" not in json.dumps(event)
+

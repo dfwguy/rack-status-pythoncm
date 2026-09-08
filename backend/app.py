@@ -851,7 +851,10 @@ def _require_dashboard_auth():
             # matched nothing and fell through to default-deny, silently, because with no policy
             # file the engine is permissive and nothing looked wrong. See authz/resources.py.
             try:
-                resource = _authz_resources.resolve(act.action, _request_facts())
+                # **Every** target, not the first. A request naming `racks: [a01, a02]` used to be
+                # judged on `a01` alone, so a grant for one rack authorized an operation on both —
+                # measured, and the verdict was `allow`. See `resolve_all`.
+                resources = _authz_resources.resolve_all(act.action, _request_facts())
             except _authz_resources.Unresolvable as exc:
                 # Refuse rather than substitute a filler id. Any filler is matched by the `type:*`
                 # grant an operator would reasonably write, so a resolution failure would become a
@@ -878,9 +881,21 @@ def _require_dashboard_auth():
                     "reason": "unresolvable_target",
                 }), 400
 
-            decision = authz.authorize(principal, act.action, resource)
+            # All-of: the first refusal refuses the request. One evaluation in the common case,
+            # since `resolve_all` returns a single element unless the caller named several.
+            decision = authz.Decision(allowed=True, engine=authz.engine_name(), reason="")
+            refused_resource = ""
+            for resource in resources:
+                decision = authz.authorize(principal, act.action, resource)
+                if not decision.allowed:
+                    refused_resource = resource
+                    break
+
             g.authz_decision = decision
-            g.authz_resource = resource
+            # The resource the verdict was about: the refused one when refused, else the first.
+            # A fan-out records what it was stopped on rather than an arbitrary member.
+            g.authz_resource = refused_resource or (resources[0] if resources else "")
+            g.authz_resources = resources
             if not decision.allowed:
                 # 403, not 401: the caller IS authenticated and simply may not do this. Returning
                 # 401 would tell a client to re-authenticate, which cannot help and produces a
