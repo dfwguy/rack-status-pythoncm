@@ -205,13 +205,17 @@ class TestTC37HookOrdering:
             yield c
 
     @pytest.fixture
-    def gated_client(self, monkeypatch):
-        """Auth on, so the gate produces a real 401. `_auth_enabled` reads env per call."""
-        monkeypatch.delenv("RACK_WEB_AUTH_DISABLED", raising=False)
-        monkeypatch.setenv("RACK_WEB_AUTH_MODE", "token")
-        monkeypatch.setenv("RACK_WEB_AUTH_TOKEN", "tc37-token")
-        app_module.app.config["TESTING"] = True
-        with app_module.app.test_client() as c:
+    def gated_client(self):
+        """A client with no credential, so the gate produces a real 401.
+
+        It used to configure token mode — `RACK_WEB_AUTH_MODE` and `RACK_WEB_AUTH_TOKEN`, both
+        removed by FR-18 — and its docstring said `_auth_enabled` read the environment per call.
+        Neither is true: authentication can no longer be switched off, so a 401 comes from
+        presenting nothing rather than from configuring anything.
+        """
+        from identity import testing as identity_testing
+
+        with identity_testing.unauthenticated_client(app_module.app) as c:
             yield c
 
     HARDENING = ("X-Content-Type-Options", "Referrer-Policy", "Content-Security-Policy")

@@ -16,7 +16,6 @@ import os
 import pytest
 
 os.environ.setdefault("RACK_STATUS_DEMO", "1")
-os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import api.terminal as terminal_module  # the middleware moved out of app.py
@@ -39,6 +38,16 @@ def test_werkzeug_websocket_calls_start_response(terminal_middleware, monkeypatc
 
     monkeypatch.setattr(terminal_middleware, "_handle_terminal", fake_handle)
     monkeypatch.setattr(terminal_module, "_TERMINAL_ENABLED", True)
+
+    # The credential check is satisfied explicitly, because the subject here is the WSGI contract
+    # (Werkzeug finalizes with `write(b'')`, so the middleware must call `start_response`) and not
+    # authentication — `test_ws_terminal_auth.py` owns that. It used to pass because the suite ran
+    # with the gate off and `wsgi_environ_authenticated` short-circuited; with no way to disable
+    # authentication, an unauthenticated upgrade is refused and `_handle_terminal` is never
+    # reached, which is the correct behaviour and made this assert 0 == 1.
+    import web_auth
+
+    monkeypatch.setattr(web_auth, "_wsgi_authenticator", lambda _environ: True)
 
     def start_response(status, headers, exc_info=None):
         called["status"] = status

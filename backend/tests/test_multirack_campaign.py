@@ -15,7 +15,6 @@ import subprocess
 from pathlib import Path
 
 os.environ.setdefault("RACK_STATUS_DEMO", "1")
-os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 # The launch component moved to validation_launch.py; patch/call the owning module.

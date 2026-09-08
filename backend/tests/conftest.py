@@ -35,7 +35,6 @@ os.environ.setdefault("RACK_STATUS_DEMO", "1")
 #
 # So the bypass stays until FR-18c, and migrated files opt IN. Track the remaining clusters in
 # `.plc/briefs/auth-identity-brief.md` FR-18c.
-os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "0")
 os.environ.setdefault("RACK_WEB_SECRET_KEY", "nvis-test-suite-signing-key-not-a-real-secret")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 # Force a fresh, isolated catalog store (seeded on first access -> "default" project
@@ -128,18 +127,81 @@ finally:
 
 import identity.testing as _identity_testing  # noqa: E402
 
-# Two documents, because there are two kinds of principal in the suite. The administrator gets
-# `administrators` through the product's own first-boot path, so the suite exercises the code a real
-# deployment runs rather than a harness substitute. Everyone `enrol` creates gets `test-principals`,
-# which is what their attachment already names.
-_enforce_store = _IdentityStore(os.environ["NVIS_IDENTITY_FILE"])
-try:
-    _identity_bootstrap.ensure_admin_policy(_enforce_store)
-finally:
-    _enforce_store.close()
-_identity_testing.enforce_policies()
+# NO policy documents are seeded, so the engine stays `AllowAllEngine` for the suite at large.
+#
+# That is a deliberate boundary between two migrations. Removing the authentication bypass is done:
+# every client presents a real credential and the gate verifies it. Making the *whole* suite run
+# under default-deny is a different and much larger job, because a policy decision needs an
+# attachment in whichever identity store the test is using — and dozens of fixtures build their own.
+# Seeding here made 49 tests fail on authorization inside files that are about something else.
+#
+# Authorization is therefore tested where it belongs: `test_authz_*.py` and `test_policies_api.py`
+# build a real policy file and assert real verdicts. Track the suite-wide enforcement separately
+# from FR-18c.
 
 import pytest  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _every_test_client_authenticates():
+    """Install the authenticated client globally, so authentication is the default (FR-18c).
+
+    **Opting out is now the explicit act, which is the right way round.** Previously opting *in* was
+    explicit and almost nobody did: 25 modules hard-assigned `RACK_WEB_AUTH_DISABLED=1`, and because
+    the environment is process-global and pytest imports every module during collection, one of them
+    switched the gate off for the whole session. The suite reported 3,400 passes against a product
+    with authentication disabled.
+
+    `app.test_client()` already routes through `test_client_class`, which is why this reaches the
+    ~50 places that build their own client without editing any of them.
+
+    A test that wants the 401 path asks for it: `headers=identity.testing.unauthenticated()`.
+    """
+    from flask.testing import FlaskClient
+    from identity import revocation
+    from identity import testing as identity_testing
+
+    # `tokens.verify` refuses everything until a checker is registered (FR-6a, INV-18), and without
+    # this every request 401s in a way that reads like a gate bug rather than a missing wire.
+    revocation.install()
+    principal = identity_testing.enrol("suite-operator", display_name="Suite Operator")
+
+    class _SuiteClient(identity_testing.AuthenticatedClient, FlaskClient):
+        nvis_bearer = principal.bearer
+
+    import app as app_module
+
+    app_module.app.config["TESTING"] = True
+    previous = app_module.app.test_client_class
+    app_module.app.test_client_class = _SuiteClient
+    try:
+        yield principal
+    finally:
+        app_module.app.test_client_class = previous
+
+
+@pytest.fixture(autouse=True)
+def _restore_the_authorization_engine():
+    """Put a known engine back after every test.
+
+    The engine is **module state**, so `monkeypatch` cannot restore it: a test that installs
+    `DenyAllEngine`, or calls `reset_for_tests()` to prove the unregistered case fails closed,
+    leaves that engine installed for everything that runs afterwards. The symptom is a 403 in an
+    unrelated file, only in a full run — reproduced by putting `test_authz_engine.py` before
+    `test_endpoint_smoke.py`, which turned 491 passes into 14 failures.
+
+    **Captured and put back, not re-derived.** Calling `install_default()` instead was measured and
+    is worse: it reads whichever policy file the *test* had configured, so a file whose fixture
+    writes documents got an enforcing engine installed between its own cases and 403ed itself. That
+    took the suite from 29 failures to 62.
+    """
+    import authz
+
+    before = authz.current_engine()
+    try:
+        yield
+    finally:
+        authz.set_engine(before)
 
 
 @pytest.fixture(autouse=True)
@@ -219,8 +281,6 @@ def authed_client(nvis_test_principal, monkeypatch):
     from flask.testing import FlaskClient
     from identity import revocation
     from identity import testing as identity_testing
-
-    monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "0")
     revocation.install()
 
     class _NvisAuthedClient(identity_testing.AuthenticatedClient, FlaskClient):
@@ -255,7 +315,5 @@ def gated(monkeypatch, nvis_test_principal):
     and forgets this sees every request 401 and reads it as a gate bug.
     """
     from identity import revocation
-
-    monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "0")
     revocation.install()
     return nvis_test_principal

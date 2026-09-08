@@ -280,7 +280,7 @@ def live_server(tmp_path):
     for leaked in (
         "NVIS_AUDIT_ENABLED", "NVIS_AUDIT_LONG_RETENTION", "NVIS_LOG_SINKS", "NVIS_LOG_FORMAT",
         "NVIS_LOG_LEVEL", "NVIS_LOG_SYSLOG_HOST", "NVIS_LOG_FILE",
-        "RACK_WEB_TLS_CERT", "RACK_WEB_TLS_KEY", "RACK_WEB_AUTH_DISABLED",
+        "RACK_WEB_TLS_CERT", "RACK_WEB_TLS_KEY",
         "RACK_WEB_ALLOWED_ORIGINS", "RACK_WEB_TRUSTED_PROXIES",
     ):
         env.pop(leaked, None)

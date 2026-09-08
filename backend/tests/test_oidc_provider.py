@@ -87,10 +87,28 @@ def provider(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(provider):
+    """Authenticated, because `/authorize` goes through the dashboard gate like any other route.
+
+    The two cases whose subject *is* the absence of a credential take `anonymous_client` instead.
+    Making this fixture anonymous was tried and is wrong: it also removes the session `/authorize`
+    requires, so the whole authorization-code flow stops producing codes and every test that
+    exchanges one fails on a missing `code`.
+    """
     from app import app
 
     app.config["TESTING"] = True
     with app.test_client() as c:
+        yield c
+
+
+@pytest.fixture
+def anonymous_client(provider):
+    """A client presenting no credential at all, for the refusal cases."""
+    from app import app
+
+    from identity import testing as identity_testing
+
+    with identity_testing.unauthenticated_client(app) as c:
         yield c
 
 
@@ -311,9 +329,9 @@ class TestRedirectUriIsExact:
 
 
 class TestAuthorizeRequiresASignedInOperator:
-    def test_without_a_session_no_code_is_issued(self, client):
+    def test_without_a_session_no_code_is_issued(self, anonymous_client):
         """`/authorize` is deliberately *not* on the bypass list."""
-        resp, _ = _authorize(client)
+        resp, _ = _authorize(anonymous_client)
         assert resp.status_code in (401, 302)
         if resp.status_code == 302:
             assert "code=" not in resp.headers.get("Location", "")
@@ -334,8 +352,8 @@ class TestTheBypassingRoutesAuthenticateThemselves:
         })
         assert resp.status_code == 401
 
-    def test_userinfo_requires_a_bearer_token(self, client):
-        resp = client.get("/oidc/userinfo")
+    def test_userinfo_requires_a_bearer_token(self, anonymous_client):
+        resp = anonymous_client.get("/oidc/userinfo")
         assert resp.status_code == 401
         assert "WWW-Authenticate" in resp.headers
 

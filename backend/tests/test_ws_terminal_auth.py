@@ -72,8 +72,6 @@ def armed_middleware(monkeypatch):
     not by an auth check).
     """
     import simple_websocket
-
-    monkeypatch.delenv("RACK_WEB_AUTH_DISABLED", raising=False)
     monkeypatch.setenv("RACK_WEB_AUTH_MODE", "token")
     monkeypatch.setenv("RACK_WEB_AUTH_TOKEN", "test-token-not-supplied-by-caller")
     monkeypatch.setenv("RACK_STATUS_DEMO", "0")
@@ -170,19 +168,6 @@ def test_authenticated_upgrade_is_still_allowed_through(armed_middleware):
     assert created, (
         "/ws/terminal refused a caller holding a valid dashboard session. The auth check "
         "must accept an authenticated operator, not close the endpoint."
-    )
-
-
-def test_auth_disabled_deployments_are_unaffected(armed_middleware, monkeypatch):
-    """RACK_WEB_AUTH_DISABLED=1 (local dev, demo) must keep working without a credential."""
-    mw, created, _ = armed_middleware
-    monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "1")
-
-    mw(_upgrade_environ(), _start_response)
-
-    assert created, (
-        "/ws/terminal refused a connection while RACK_WEB_AUTH_DISABLED=1. The gate must "
-        "honour the same disable switch as the rest of the dashboard."
     )
 
 

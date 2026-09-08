@@ -14,7 +14,6 @@ import os
 import pytest
 
 os.environ["RACK_STATUS_DEMO"] = "1"
-os.environ["RACK_WEB_AUTH_DISABLED"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
 from app import app

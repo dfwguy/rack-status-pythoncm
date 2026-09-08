@@ -38,15 +38,8 @@ def test_app_registers_its_wsgi_authenticator():
     assert web_auth._wsgi_authenticator is app_module._wsgi_environ_authenticated
 
 
-def test_disabled_auth_lets_every_wsgi_request_through(monkeypatch):
-    """``RACK_WEB_AUTH_DISABLED=1`` is how local dev and demo run; the gate must honour it."""
-    monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "1")
-    assert web_auth.wsgi_environ_authenticated({}) is True
-
-
 def test_missing_authenticator_denies_rather_than_falls_open(monkeypatch):
     """Fail closed. The alternative is an anonymous PTY plus ssh with the cluster key."""
-    monkeypatch.delenv("RACK_WEB_AUTH_DISABLED", raising=False)
     previous = web_auth._wsgi_authenticator
     try:
         web_auth.set_wsgi_authenticator(None)
@@ -57,7 +50,6 @@ def test_missing_authenticator_denies_rather_than_falls_open(monkeypatch):
 
 def test_a_raising_authenticator_denies(monkeypatch):
     """A malformed environ must not become an accidental bypass via an escaping exception."""
-    monkeypatch.delenv("RACK_WEB_AUTH_DISABLED", raising=False)
     previous = web_auth._wsgi_authenticator
     try:
         web_auth.set_wsgi_authenticator(lambda environ: (_ for _ in ()).throw(RuntimeError("boom")))

@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import openapi
 import web_auth
+from identity import testing as identity_testing
 
 DOC = Path(__file__).resolve().parents[2] / "docs" / "API_RESPONSE_CODES.md"
 
@@ -141,10 +142,9 @@ class TestTheGatesActualResponse:
     """Behaviour, not just the document."""
 
     def test_an_unauthenticated_api_call_is_a_json_401_with_a_challenge(self, monkeypatch, app_module):
-        monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "0")
         monkeypatch.setenv("RACK_WEB_AUTH_MODE", "token")
         monkeypatch.setenv("RACK_WEB_AUTH_TOKEN", "x" * 24)
-        client = app_module.app.test_client()
+        client = identity_testing.unauthenticated_client(app_module.app)
         resp = client.get("/api/status")
         assert resp.status_code == 401
         assert resp.headers.get("Content-Type", "").startswith("application/json")
@@ -169,10 +169,9 @@ class TestTheGatesActualResponse:
 
     def test_an_html_route_redirects_rather_than_401ing(self, monkeypatch, app_module):
         """A 401 on an HTML route triggers a browser auth dialog for a scheme we do not use."""
-        monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "0")
         monkeypatch.setenv("RACK_WEB_AUTH_MODE", "token")
         monkeypatch.setenv("RACK_WEB_AUTH_TOKEN", "x" * 24)
-        resp = app_module.app.test_client().get("/analytics")
+        resp = identity_testing.unauthenticated_client(app_module.app).get("/analytics")
         assert resp.status_code in (301, 302, 303, 307, 308)
         assert "/login" in resp.headers.get("Location", "")
 

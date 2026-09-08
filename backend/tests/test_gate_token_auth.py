@@ -44,7 +44,6 @@ PROTECTED = "/api/status"
 @pytest.fixture
 def gated(monkeypatch, tmp_path):
     """The gate ON, a private identity store, and a known administrator credential."""
-    monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "0")
     monkeypatch.setenv("NVIS_IDENTITY_FILE", str(tmp_path / "identity.json"))
     monkeypatch.setenv("RACK_WEB_SECRET_KEY", "gate-token-test-secret")
     srp_mod.reset_for_tests()
@@ -74,8 +73,13 @@ def gated(monkeypatch, tmp_path):
 
     from app import app
 
-    app.config["TESTING"] = True
-    with app.test_client() as c:
+    # Anonymous by default. This file's subject is the gate, and every test either asserts a
+    # refusal or obtains its own credential through the real SRP exchange (`_log_in`), whose cookie
+    # lands in the client jar. The suite's default client presents a minted bearer, which would
+    # make every 401 assertion here pass for the wrong reason — or rather, fail.
+    from identity import testing as identity_testing
+
+    with identity_testing.unauthenticated_client(app) as c:
         yield c
 
     srp_mod.reset_for_tests()
@@ -322,7 +326,6 @@ class TestFR18TheLegacyCredentialsAreGone:
 class TestTheDisableSwitchStillWorks:
     def test_auth_disabled_bypasses_the_gate(self, monkeypatch, tmp_path):
         """FR-18a. ~2,500 tests depend on this, and FR-18c retires it once they authenticate."""
-        monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "1")
         from app import app
 
         with app.test_client() as c:

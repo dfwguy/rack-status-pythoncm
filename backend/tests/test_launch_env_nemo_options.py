@@ -21,7 +21,6 @@ only the first makes a 50-step run complete successfully and still show up as no
 import os
 
 os.environ["RACK_STATUS_DEMO"] = "1"
-os.environ["RACK_WEB_AUTH_DISABLED"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
 import app as app_module

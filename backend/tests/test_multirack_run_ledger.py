@@ -20,7 +20,6 @@ from pathlib import Path
 import pytest
 
 os.environ.setdefault("RACK_STATUS_DEMO", "1")
-os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import lake_sink

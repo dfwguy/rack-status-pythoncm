@@ -55,19 +55,28 @@ def spa_index():
 
 
 @pytest.fixture
-def auth_client(monkeypatch):
-    """A test client with auth ON, in token mode, and a known token."""
-    monkeypatch.delenv("RACK_WEB_AUTH_DISABLED", raising=False)
-    monkeypatch.setenv("RACK_WEB_AUTH_MODE", "token")
-    monkeypatch.setenv("RACK_WEB_AUTH_TOKEN", TOKEN)
-    app_module.app.config["TESTING"] = True
-    with app_module.app.test_client() as client:
+def auth_client():
+    """A client that presents **no** credential, which is this whole file's subject.
+
+    It used to configure token mode — `RACK_WEB_AUTH_MODE` and `RACK_WEB_AUTH_TOKEN`, both removed
+    by FR-18 — and then relied on the suite-wide bypass, so "the gate is on" was never actually the
+    state under test. Now the suite authenticates by default and refusal is the thing that has to be
+    asked for, so this is an explicitly anonymous client.
+    """
+    from identity import testing as identity_testing
+
+    with identity_testing.unauthenticated_client(app_module.app) as client:
         yield client
 
 
 def test_gate_is_actually_on(auth_client):
-    """Sanity: without this, every assertion below would pass for the wrong reason."""
-    assert app_module._auth_enabled() is True
+    """Sanity: without this, every assertion below would pass for the wrong reason.
+
+    Asserted by *behaviour* rather than by reading a flag. It used to check
+    `app._auth_enabled() is True`, which stopped meaning anything when the switch was deleted —
+    there is no longer a state in which the gate is off, so a refused request is the only evidence
+    that says so.
+    """
     resp = auth_client.get("/api/status")
     assert resp.status_code == 401, "an unauthenticated API call must be refused"
     assert (resp.get_json() or {}).get("ok") is False
@@ -106,32 +115,6 @@ def test_auth_check_reports_unauthenticated_rather_than_blocking(auth_client):
     assert (resp.get_json() or {}).get("authenticated") is False
 
 
-def test_login_endpoint_is_reachable_without_a_session(auth_client):
-    """/api/login must bypass the gate -- it is how a session is obtained in the first place."""
-    resp = auth_client.post("/api/login", json={"password": "wrong-token"})
-    assert resp.status_code == 401, "reachable but refusing a bad token"
-    assert (resp.get_json() or {}).get("ok") is False
-
-
-def test_the_shared_token_no_longer_grants_access(auth_client):
-    """FR-18, and it is the breaking change: the shared token is *removed*, not deprecated.
-
-    This test previously asserted the opposite — that `/api/login` with the token reached a
-    protected endpoint. Inverting it is the point. Two credential paths means the weaker one decides
-    the product's security, and a shared secret that every operator knows and nobody can rotate
-    individually is strictly weaker than a per-user token bound to a revocable identity.
-
-    Whether `/api/login` still *responds* is not asserted; the route is scheduled for deletion. What
-    matters is that whatever it returns, the gate is not opened by it. AC-22.
-    """
-    auth_client.post("/api/login", json={"password": TOKEN})
-
-    assert auth_client.get("/api/status").status_code == 401, (
-        "the shared token opened the gate. FR-18 removes it: only a signed access token from the "
-        "SRP exchange authenticates, and a legacy credential must not be a second way in."
-    )
-
-
 def test_a_flask_session_cookie_is_not_a_credential(auth_client):
     """Even a validly signed session cookie must not authenticate (FR-12, FR-18).
 
@@ -162,16 +145,20 @@ def test_spa_assets_stay_public(auth_client):
         assert code not in (401, 302), f"{path} was blocked by the auth gate ({code})"
 
 
-def test_auth_disabled_short_circuits(monkeypatch):
-    """With the flag set, the gate must not touch sessions at all -- the mode the rest of the suite runs in."""
-    monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "1")
-    assert app_module._auth_enabled() is False
-    with app_module.app.test_client() as client:
-        assert client.get("/api/auth-check").status_code == 200
 
 
-def test_environment_is_restored():
-    """Guards the leak that once failed 1-to-80 tests at random (see 10d6186)."""
-    assert os.environ.get("RACK_WEB_AUTH_DISABLED") == "1", (
-        "conftest's auth-disabled default must survive this module, or unrelated tests start failing"
-    )
+def test_the_legacy_login_route_does_not_exist(auth_client):
+    """Replaces two tests that POSTed to `/api/login` expecting a 401.
+
+    FR-18 removed the route, so they were asserting the refusal of something absent — which passes
+    for the wrong reason and would keep passing if it came back as a 500. The structural claim is
+    the one worth making: there is no second way in.
+    """
+    known = {rule.rule for rule in app_module.app.url_map.iter_rules()}
+    assert "/api/login" not in known
+
+    # 401 rather than 404, and that is correct: the gate runs before routing resolves, so an unknown
+    # `/api/*` path is refused as unauthenticated rather than reported as absent. Asserting "not
+    # 200" is the claim that matters — the old token must not open anything, however the path is
+    # answered.
+    assert auth_client.post("/api/login", json={"password": TOKEN}).status_code != 200

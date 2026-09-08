@@ -77,7 +77,11 @@ class TestARealHandshake:
         resp = requests.get(
             f"{https_server}/api/auth-check", verify=str(ca_certs / "ca.crt"), timeout=15
         )
-        assert resp.status_code == 200
+        # 401, not 200: the child serves with the gate on and this request carries no credential.
+        # The subject here is TLS — that the handshake completed and the app answered over it — so a
+        # refusal is as good a proof of that as a success, and asserting 200 would only mean the
+        # request had been let through unauthenticated.
+        assert resp.status_code == 401
 
     def test_the_leaf_is_served_with_its_issuer(self, https_server, ca_certs):
         """A CA-issued leaf sent alone fails to verify even where the CA is trusted.
@@ -218,7 +222,11 @@ class TestTheNegotiatedFloor:
         resp = sess.get(
             f"{https_server}/api/auth-check", verify=str(ca_certs / "ca.crt"), timeout=15
         )
-        assert resp.status_code == 200
+        # 401, not 200: the child serves with the gate on and this request carries no credential.
+        # The subject here is TLS — that the handshake completed and the app answered over it — so a
+        # refusal is as good a proof of that as a success, and asserting 200 would only mean the
+        # request had been let through unauthenticated.
+        assert resp.status_code == 401
         # raw.version is the http.client constant; the TLS version comes from the socket.
         sock = getattr(resp.raw, "_connection", None) or getattr(resp.raw, "_original_response", None)
         assert sock is not None  # sanity: we can reach the connection object
@@ -287,14 +295,17 @@ class TestThePolicyIsSharedWithGunicorn:
         which reads as a UI bug rather than a server one. Gunicorn answers ``keep-alive`` and
         does not. Verified side by side on 2026-08-20.
         """
+        # Asserted against `backend/cli.py`, which owns the gunicorn invocation since the launch
+        # settings moved out of bash on 2026-09-08. `start.sh` now delegates, so checking the script
+        # for `--certfile` would check the wrong file and pass or fail for the wrong reason. Both
+        # halves are asserted: the script hands off, and the CLI carries the flags.
         script = (REPO_ROOT / "start.sh").read_text(encoding="utf-8")
-        assert 'if [[ -n "${RACK_WEB_TLS_CERT:-}" ]]' in script, (
-            "start.sh must branch on a configured certificate"
-        )
-        gunicorn_branch = script.split('if [[ -n "${RACK_WEB_TLS_CERT:-}" ]]', 1)[1]
-        assert "gunicorn" in gunicorn_branch
-        assert "-c gunicorn.conf.py" in gunicorn_branch, "the TLS floor comes from the hook"
-        assert "--certfile" in gunicorn_branch and "--keyfile" in gunicorn_branch
+        assert "cli.py serve" in script, "start.sh must hand off to the launcher"
+
+        cli = (REPO_ROOT / "backend" / "cli.py").read_text(encoding="utf-8")
+        assert "gunicorn" in cli
+        assert '"-c", "gunicorn.conf.py"' in cli, "the TLS floor comes from the hook"
+        assert "--certfile" in cli and "--keyfile" in cli
 
 
 def test_openssl_is_not_required_to_run_these(monkeypatch):

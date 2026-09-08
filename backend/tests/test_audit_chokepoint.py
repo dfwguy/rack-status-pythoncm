@@ -76,8 +76,16 @@ def _events(tmp_path) -> list[dict]:
 
 @pytest.fixture()
 def client(app_module, monkeypatch):
-    monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "1")
-    return app_module.app.test_client()
+    """Anonymous, because this file is about the trail an *unrefused* request leaves.
+
+    Several cases assert `principal: anonymous`, `decision: not-evaluated` and
+    `policy_engine: none` — the shape a request with no credential produces, which is precisely
+    what the chokepoint must record rather than omit. The suite's default client presents a bearer,
+    which would make those three assert the authenticated shape instead.
+    """
+    from identity import testing as identity_testing
+
+    return identity_testing.unauthenticated_client(app_module.app)
 
 
 # --------------------------------------------------------------------------- TC-22
@@ -197,10 +205,12 @@ class TestTC23AuditScope:
 class TestTC24Refusals:
     def test_refusal_records_result_and_decision(self, app_module, tmp_path, monkeypatch):
         """AC-14: a gate-refused request is audited, immediately, with no flush step."""
-        monkeypatch.delenv("RACK_WEB_AUTH_DISABLED", raising=False)
-        monkeypatch.setenv("RACK_WEB_AUTH_MODE", "token")
-        monkeypatch.setenv("RACK_WEB_AUTH_TOKEN", "not-a-real-token")
-        c = app_module.app.test_client()
+        from identity import testing as identity_testing
+
+        # No credential configuration to set any more: FR-18 removed `RACK_WEB_AUTH_MODE` and
+        # `RACK_WEB_AUTH_TOKEN`, so the previous setenv pair named variables nothing reads. A
+        # refusal is now produced by presenting nothing.
+        c = identity_testing.unauthenticated_client(app_module.app)
 
         resp = c.post(CANONICAL_ENDPOINT, json={"rack": "demo"})
         assert resp.status_code in (401, 403), "the gate must refuse an unauthenticated request"
@@ -212,7 +222,6 @@ class TestTC24Refusals:
 
     def test_after_request_runs_for_a_gate_refusal(self, app_module, tmp_path, monkeypatch):
         """The verified assumption Decision 1 rests on: a refusal costs the same path."""
-        monkeypatch.delenv("RACK_WEB_AUTH_DISABLED", raising=False)
         monkeypatch.setenv("RACK_WEB_AUTH_MODE", "token")
         monkeypatch.setenv("RACK_WEB_AUTH_TOKEN", "not-a-real-token")
         c = app_module.app.test_client()

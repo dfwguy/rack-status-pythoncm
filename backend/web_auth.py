@@ -18,10 +18,9 @@ app decide who you are", which is the question the coming authorization work has
 One mechanism, not two. :func:`authenticated_principal` verifies a signed access token -- the
 ``nvis_access`` cookie first, then an ``Authorization: Bearer`` header -- and nothing else. The
 shared-token and PAM paths were **deleted** on 2026-09-01 (FR-18), not deprecated; the note above
-:func:`_auth_user` records which names went with them and why a credential path that succeeds while
 granting nothing was the worse option to leave standing.
 
-``RACK_WEB_AUTH_DISABLED`` is the only remaining configuration input that affects authentication,
+Authentication has no off switch. There is no configuration input that disables it,
 and it turns the gate off entirely rather than selecting a weaker credential.
 
 Not an endpoint module and not under ``api/``: it imports Flask only for ``session``, and nothing here
@@ -37,106 +36,8 @@ from datetime import timedelta
 from urllib.parse import urlsplit
 
 from config_env import _env_int
-from core import truthy_env as _truthy_env
 
 _logger = logging.getLogger(__name__)
-
-
-#: Once an identity store has held a user, the bypass is refused for the life of the process.
-#:
-#: Latched rather than re-read because `_auth_enabled()` runs on **every request** and opening the
-#: store per request would put a TinyDB read on the hot path. Latching is safe in the one direction
-#: that matters: a store goes empty -> populated exactly once (the bootstrap), and the guards in
-#: `identity_admin` forbid deleting the last enabled user, so it cannot go back. And if it somehow
-#: did, this erring toward *enforcing* the gate is the correct failure.
-_SAW_A_USER = False
-
-
-def _store_holds_a_claimed_account() -> bool:
-    """Whether anyone has actually *claimed* an account. Cheap after the first `True`.
-
-    **"Holds a user" is the wrong test, and measuring it proved so.** FR-10 bootstraps an
-    administrator on first boot, so a store is non-empty from the moment the app starts — every
-    deployment, including a laptop. Keying the bypass on emptiness therefore killed the switch
-    everywhere rather than only on real deployments: 229 tests failed, and
-    `test_app_api.py` failed 52 on its own while creating no users at all, purely because importing
-    `app` enrols the admin. That directly contradicts FR-18a, which retains the switch *as a
-    development and test switch*.
-
-    The line that carries the intended meaning is **claimed**: the bootstrap admin ships with
-    `must_change_password=True` and a one-time password printed to the console
-    (`bootstrap.py:101`). Until somebody changes it, there is no credential anyone is using and no
-    access to protect. A user whose password has been set, or any second account, means a human has
-    real access — and that is when the bypass must stop working.
-
-    An unreadable or absent store answers `False`: nothing we can see is claimed, so the switch
-    still works on a machine that has never bootstrapped. The risk being guarded is a *live*
-    deployment left open, and refusing on a missing store would break every fresh checkout instead.
-    """
-    global _SAW_A_USER
-    if _SAW_A_USER:
-        return True
-
-    try:
-        from identity import bootstrap
-        from identity.store import IdentityStore
-
-        store = IdentityStore()
-        try:
-            users = store.list_users()
-        finally:
-            store.close()
-    except Exception:  # noqa: BLE001 - see the docstring: unreadable means "nothing claimed"
-        return False
-
-    claimed = any(
-        not (user.login == bootstrap.ADMIN_LOGIN and user.must_change_password) for user in users
-    )
-    _SAW_A_USER = claimed
-    return claimed
-
-
-def reset_auth_latch_for_tests() -> None:
-    """Clear the latch. Tests move between empty and populated stores in one process."""
-    global _SAW_A_USER
-    _SAW_A_USER = False
-
-
-def _auth_enabled() -> bool:
-    """Whether the gate is enforced.
-
-    ``RACK_WEB_AUTH_DISABLED`` survives FR-18's removal of the legacy credentials as an explicit
-    development and test switch (FR-18a), and only that: it no longer selects a login method, it
-    turns the gate off entirely. FR-18c retires it once the suite authenticates through a real
-    credential facility instead of bypassing — until then some 2,500 tests depend on it.
-
-    **But it is not an escape hatch on a real deployment (FR-18a, AC-28b).** Once anyone has
-    *claimed* an account — set a password, or been created as a second user — the switch stops
-    working and the gate is enforced regardless. Without that,
-    `RACK_WEB_AUTH_DISABLED=1` reaching a deployment env file — set for local development and
-    copied forward, which is exactly how these leak — turns authentication off on a box with real
-    accounts, real rack control and a real audit trail, and nothing in the product objects.
-
-    "Claimed" rather than "exists" because FR-10 enrols an administrator on first boot, so a store
-    is never empty after startup — see `_store_holds_a_claimed_account`. An unclaimed bootstrap
-    admin, still carrying its one-time password, is nobody's access; the switch is doing its
-    intended job on a laptop in that state.
-    """
-    # AC-28b's guard is implemented and tested above as
-    # `_store_holds_a_claimed_account()`, and is DELIBERATELY NOT WIRED HERE yet. It cannot
-    # land before FR-18c, and measuring showed why: `identity/testing.py` enrols a real test
-    # principal, which IS a claimed account, so the guard correctly disables the bypass for
-    # the whole suite and 154 tests fail. AC-28b and the bypass are mutually exclusive the
-    # moment tests authenticate for real.
-    #
-    # The brief records FR-18c as depending on FR-18b but does NOT record that AC-28b does
-    # too. Wiring it now would mean shipping either a red suite or no credential facility --
-    # and the facility is what makes the migration possible at all. As the final step of
-    # FR-18c, once no test needs the bypass, this becomes:
-    #
-    #     return _store_holds_a_claimed_account()
-    #
-    return not _truthy_env("RACK_WEB_AUTH_DISABLED")
 
 
 #: The cookie a browser carries the access token in. Duplicated from ``api/auth_srp`` rather than
@@ -219,20 +120,12 @@ def authenticated_principal(headers: object, cookies: object = None) -> str:
 # with nothing on screen explaining why. A credential path that succeeds and grants nothing is worse
 # than an absent one, because the failure surfaces far from its cause.
 #
-# `RACK_WEB_AUTH_DISABLED` survives as a development and test switch (FR-18a) and is the *only*
-# remaining configuration input that affects authentication — it turns the gate off entirely rather
-# than selecting a weaker credential. FR-18c retires it once the suite authenticates for real.
-#
-# `RACK_WEB_AUTH_USER` also survives, narrowed to what it always actually was: a display default.
-
-
-def _auth_user() -> str:
-    """Fallback display name when there is no authenticated principal.
-
-    Not a credential and never was — it named who a PAM login would authenticate *as*. Kept only so
-    the auth-disabled development path has something to show.
-    """
-    return (os.environ.get("RACK_WEB_AUTH_USER") or "root").strip() or "root"
+# Authentication cannot be switched off. `RACK_WEB_AUTH_DISABLED` and the latch that kept it off
+# real deployments were both removed on 2026-09-08: it was exported by `start.sh` on macOS and
+# hard-assigned by 25 test modules, and since the environment is process-global and pytest imports
+# every test module during collection, one assignment turned the gate off for the whole suite. The
+# product's own tests never authenticated (SUTP G-10). No guard fixes a switch whose problem is
+# that it works; `identity/testing.py` replaces it by issuing real credentials.
 
 
 def _session_lifetime() -> timedelta:
@@ -386,8 +279,6 @@ def wsgi_environ_authenticated(environ: dict) -> bool:
     reaches ``pty.openpty()`` and then ``ssh`` with the app's cluster key. ``test_wsgi_auth_hook``
     asserts the wire exists so the closed default is never what production relies on.
     """
-    if not _auth_enabled():
-        return True
     fn = _wsgi_authenticator
     if fn is None:
         _logger.error("no WSGI authenticator registered; denying (app.py should register one)")

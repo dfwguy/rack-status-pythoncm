@@ -169,20 +169,63 @@ class TestEveryDeclaredReadResolves:
         against `rack.power:_all` — so an operator granted the collection could power-cycle the
         fleet by *omitting* the target. A read resolving to the collection is a description; a
         mutation resolving to it is an unbounded action.
+
+        **`create` is the single exception, and it is exempted here explicitly rather than by
+        loosening the assertion.** A create that names its target still resolves to the instance
+        (`identity.group:create` with `name: ops` gives `identity.group:ops`); only one that names
+        nothing falls back, and for that request the collection is the honest answer, because the id
+        is derived server-side. Acting on "the collection" adds one member — it does not act on
+        every member, which is what makes it unlike a power-off.
         """
         import audit.actions as A
 
         rows = json.loads(SNAPSHOT.read_text())
         rows = rows if isinstance(rows, list) else rows.get("actions", [])
         checked = 0
+        exempt = 0
         for row in rows:
             if str(row["method"]).upper() not in A.MUTATING_METHODS:
                 continue
             action = row["action"]
             if resources.is_singleton(action.split(":", 1)[0]):
                 continue  # a singleton has a fixed id and nothing to fall back from
+            if (
+                action.split(":", 1)[1] in resources.COLLECTION_FALLBACK_VERBS
+                or action in resources.COLLECTION_FALLBACK_ACTIONS
+            ):
+                # Asserted the other way round, so the exemption cannot silently widen: a `create`
+                # naming nothing must resolve to the collection and to nothing else.
+                assert resources.resolve(
+                    action, resources.RequestFacts({}, {}, {})
+                ).endswith(f":{resources.COLLECTION}"), action
+                exempt += 1
+                continue
             checked += 1
             with pytest.raises(resources.Unresolvable):
                 resources.resolve(action, resources.RequestFacts({}, {}, {}))
 
+        # A floor, not just non-zero: this guard is the one that would go quiet if the exemption
+        # logic ever swallowed the whole set, and a quiet guard reads exactly like a passing one.
         assert checked > 20, f"only {checked} scoped mutations checked; the guard is too narrow"
+        assert exempt, "no exemption was exercised; the allowlist is untested"
+
+    def test_every_allowlisted_action_exists(self):
+        """An entry naming an action that no longer exists is a dead exemption, and it reads as an
+        intentional one to whoever audits the list next."""
+        import audit.actions as A
+
+        rows = json.loads(SNAPSHOT.read_text())
+        rows = rows if isinstance(rows, list) else rows.get("actions", [])
+        declared = {r["action"] for r in rows}
+        assert resources.COLLECTION_FALLBACK_ACTIONS <= declared, (
+            f"not declared anywhere: "
+            f"{sorted(resources.COLLECTION_FALLBACK_ACTIONS - declared)}"
+        )
+
+    def test_no_destructive_action_is_allowlisted(self):
+        """The bar in one assertion. Acting on "the collection" must mean the set as one object,
+        never each member in turn — so a power, reset or delete verb may never appear."""
+        forbidden = {"off", "on", "cycle", "reset", "delete", "drain", "power"}
+        for action in resources.COLLECTION_FALLBACK_ACTIONS:
+            verb = action.split(":", 1)[1]
+            assert verb not in forbidden, f"{action} acts on every member, not on the set"

@@ -45,8 +45,6 @@ def deployment(monkeypatch, tmp_path):
     """The gate on, a private identity store, a real policy file, and a signed-in operator."""
     identity_file = tmp_path / "identity.json"
     policy_file = tmp_path / "policies.json"
-
-    monkeypatch.setenv("RACK_WEB_AUTH_DISABLED", "0")
     monkeypatch.setenv("NVIS_IDENTITY_FILE", str(identity_file))
     monkeypatch.setenv("RACK_WEB_POLICY_FILE", str(policy_file))
     monkeypatch.setenv("RACK_WEB_SECRET_KEY", "gate-enforcement-secret")

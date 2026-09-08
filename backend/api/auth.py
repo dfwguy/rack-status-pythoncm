@@ -31,7 +31,6 @@ import logging
 import throttle
 from audit.actions import action
 from flask import Blueprint, jsonify, redirect, request, session
-from web_auth import _auth_enabled, _auth_user
 
 from ._common import serve_spa_asset as _serve_spa_asset
 
@@ -53,7 +52,7 @@ def login():
     """
     import web_auth
 
-    if not _auth_enabled() or web_auth.authenticated_principal(request.headers, request.cookies):
+    if web_auth.authenticated_principal(request.headers, request.cookies):
         return redirect("/")
     return _serve_spa_asset("index.html")
 
@@ -77,8 +76,6 @@ def api_auth_check():
     """
     import web_auth
 
-    if not _auth_enabled():
-        return jsonify({"authenticated": True, "user": _auth_user(), "auth_disabled": True})
     principal = web_auth.authenticated_principal(request.headers, request.cookies)
     if not principal:
         return jsonify({"authenticated": False}), 401

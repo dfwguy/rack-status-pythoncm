@@ -22,7 +22,6 @@ from types import SimpleNamespace
 import pytest
 
 os.environ.setdefault("RACK_STATUS_DEMO", "1")
-os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
@@ -109,9 +108,19 @@ def _wait(client, job_id, timeout=10.0):
 
 
 def test_rack_is_required(client):
+    """A request naming no rack is a 400, and the body says why.
+
+    Two layers can produce that now and the test accepts either. With authentication on, the
+    authorization gate resolves the target *before* dispatch and refuses an unnameable one with
+    `unresolvable_target`; the view's own check answers when the gate has already been satisfied.
+    Both are 400 and both name the problem, which is what a caller needs — asserting the view's
+    exact wording asserted which layer got there first.
+    """
     r = client.post("/api/nvlink-preflight-async", json={})
     assert r.status_code == 400
-    assert "rack" in (r.get_json().get("error") or "")
+    body = r.get_json() or {}
+    message = f"{body.get('error') or ''} {body.get('reason') or ''}"
+    assert "rack" in message or "target" in message, body
 
 
 def test_ready_rack_finishes_done(client, stub_pdsh):

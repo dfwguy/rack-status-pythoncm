@@ -38,7 +38,7 @@ Cap with RACK_LOG_ANALYSIS_CACHE_MAX_FILES (default 200).
 HTTP login (enabled by default) authenticates an identity-store principal over SRP and issues a
 signed access token; the gate below verifies that token and nothing else. The older PAM and
 shared-token paths were deleted on 2026-09-01 (FR-18) -- ``web_auth.py`` records what went with
-them. Disable the gate entirely with RACK_WEB_AUTH_DISABLED=1. Set RACK_WEB_SECRET_KEY for stable
+them. Authentication cannot be disabled. Set RACK_WEB_SECRET_KEY for stable
 sessions and stable token signatures across restarts. HTTPS: RACK_WEB_COOKIE_SECURE=1.
 
 Parser results dialog: optional embedded Grafana solo panels (GPU thermal / power) use
@@ -457,7 +457,7 @@ from activity_hydration import (
     _task_needs_slurm_hydration,
 )
 from security_headers import grafana_frame_origin, security_headers
-from web_auth import _auth_enabled, _safe_next, _session_lifetime
+from web_auth import _safe_next, _session_lifetime
 
 _RACK_WEB_SECRET_FILE = (REPO_ROOT / "var" / "secrets" / ".rack_web_secret_key").resolve()
 
@@ -791,8 +791,6 @@ def _require_dashboard_auth():
             _logger.exception("bootstrap job env overrides load failed")
         else:
             _JOB_ENV_BOOTSTRAP_DONE = True
-    if not _auth_enabled():
-        return None
     if request.endpoint in _AUTH_BYPASS_ENDPOINTS:
         return None
     if _is_public_spa_static_path():

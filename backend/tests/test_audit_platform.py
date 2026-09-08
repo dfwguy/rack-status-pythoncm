@@ -159,7 +159,6 @@ def gunicorn_server(tmp_path):
     env.update(
         {
             "RACK_STATUS_DEMO": "1",
-            "RACK_WEB_AUTH_DISABLED": "1",
             "RACK_EXEC_MODE": "local",
             # Both sinks on, so the two assertions below can fail independently (AC-3).
             "NVIS_LOG_SINKS": "stdout",
@@ -169,6 +168,14 @@ def gunicorn_server(tmp_path):
             # A dry run keeps the handler off the wire; the audited path is unchanged.
             "RACK_UPTIME_DRY_RUN": "1",
             "NVIS_CATALOG_FILE": str(tmp_path / "catalog.json"),
+            # The child is a real server, so `startup_gate.prepare()` runs in gunicorn's arbiter
+            # and refuses to serve without an administrator, a policy and TLS. Pointed at this
+            # test's own tmp paths, all three are bootstrapped on the spot — which is the behaviour
+            # a first boot gets. Without them the child exited 1 before binding, and the failure
+            # read as "gunicorn exited during startup" rather than as a missing prerequisite.
+            "NVIS_IDENTITY_FILE": str(tmp_path / "identity" / "identity.json"),
+            "RACK_WEB_POLICY_FILE": str(tmp_path / "store" / "policies.json"),
+            "RACK_WEB_TLS_DIR": str(tmp_path / "tls"),
             "PYTHONUNBUFFERED": "1",
         }
     )
@@ -304,7 +311,6 @@ def test_the_audit_file_holds_the_event_with_stdout_off(tmp_path):
     env.update(
         {
             "RACK_STATUS_DEMO": "1",
-            "RACK_WEB_AUTH_DISABLED": "1",
             "RACK_EXEC_MODE": "local",
             "NVIS_LOG_SINKS": "file",
             "NVIS_LOG_FILE": str(tmp_path / "app.log"),
@@ -312,6 +318,14 @@ def test_the_audit_file_holds_the_event_with_stdout_off(tmp_path):
             "NVIS_AUDIT_ENABLED": "1",
             "RACK_UPTIME_DRY_RUN": "1",
             "NVIS_CATALOG_FILE": str(tmp_path / "catalog.json"),
+            # The child is a real server, so `startup_gate.prepare()` runs in gunicorn's arbiter
+            # and refuses to serve without an administrator, a policy and TLS. Pointed at this
+            # test's own tmp paths, all three are bootstrapped on the spot — which is the behaviour
+            # a first boot gets. Without them the child exited 1 before binding, and the failure
+            # read as "gunicorn exited during startup" rather than as a missing prerequisite.
+            "NVIS_IDENTITY_FILE": str(tmp_path / "identity" / "identity.json"),
+            "RACK_WEB_POLICY_FILE": str(tmp_path / "store" / "policies.json"),
+            "RACK_WEB_TLS_DIR": str(tmp_path / "tls"),
             "PYTHONUNBUFFERED": "1",
         }
     )

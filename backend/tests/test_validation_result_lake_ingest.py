@@ -13,7 +13,6 @@ import os
 
 os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
-os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
 
 # Activity hydration moved out of app.py; patch the module that owns these names.
 import activity_hydration

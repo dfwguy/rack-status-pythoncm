@@ -131,13 +131,51 @@ def _add_path_options(cmd: argparse.ArgumentParser) -> None:
         group.add_argument(flag, metavar="PATH", help=f"Sets {env}.")
 
 
+#: Defaults `start.sh` used to export, moved here so the app owns its own runtime decisions.
+#:
+#: They were invisible to the app that depends on them, untestable by the suite that verifies it,
+#: and re-derived by every other launcher. `setdefault` semantics throughout: a real environment
+#: variable, a `greenlight.toml` entry or a flag still wins, exactly as before.
+CLUSTER_DEFAULTS: dict[str, str] = {
+    "VALIDATION_TEST": "nccl_allreduce,llm",
+    "NEMO_SQSH_SRC": "/home/cmsupport/nemo-25.11.01.sqsh",
+    "RACK_STATUS_LOG_DIR": "/home/cmsupport/aihpc_val-main/validation/nemo",
+}
+
+
+def apply_runtime_defaults(platform: str | None = None) -> dict[str, str]:
+    """Demo-vs-cluster mode and the cluster-only defaults. Returns what it set.
+
+    **Mode is inferred from the platform, which is what `start.sh` did and why it belonged here.**
+    macOS is a developer's laptop with no head node to talk to, so demo; anything else is assumed to
+    be a cluster host. Inference only sets a *default* — `RACK_STATUS_DEMO=0` on a Mac is honoured,
+    which is how someone tests against a real cluster over SSH from their desk.
+
+    The three cluster defaults are applied only outside demo mode, because they name absolute paths
+    on a head node's filesystem and a demo run has no head node for them to be wrong about.
+    """
+    applied: dict[str, str] = {}
+    system = platform or sys.platform
+    demo_default = "1" if system == "darwin" else "0"
+    if not (os.environ.get("RACK_STATUS_DEMO") or "").strip():
+        os.environ["RACK_STATUS_DEMO"] = demo_default
+        applied["RACK_STATUS_DEMO"] = demo_default
+
+    if (os.environ.get("RACK_STATUS_DEMO") or "").strip() != "1":
+        for name, value in CLUSTER_DEFAULTS.items():
+            if not (os.environ.get(name) or "").strip():
+                os.environ[name] = value
+                applied[name] = value
+    return applied
+
+
 def _apply(args: argparse.Namespace) -> dict[str, str]:
     """Put the supplied flags into the environment. Returns what it set, for the report.
 
     Absolute paths, because the server may be started from anywhere and several of these are read
     long after startup by code with no memory of the original working directory.
     """
-    applied: dict[str, str] = {}
+    applied: dict[str, str] = dict(apply_runtime_defaults())
     for attr, env in PATH_SETTINGS.items():
         value = getattr(args, attr, None)
         if value:

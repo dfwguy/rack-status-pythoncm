@@ -38,6 +38,7 @@ from dataclasses import dataclass
 
 from identity import srp, tokens
 from identity.models import Group, User
+from identity.principals import user_principal
 from identity.store import IdentityStore
 
 #: The principal the suite runs as unless a test asks for another. A named account rather than the
@@ -196,8 +197,38 @@ class AuthenticatedClient:
     which is the right way round: previously opting *in* was explicit and almost nobody did.
     """
 
-    #: Set by the conftest fixture once the principal exists.
+    #: Set by the conftest fixture once the principal exists. A *fallback*: `open` prefers a token
+    #: minted for the current process state, for the reason below.
     nvis_bearer: str = ""
+
+    #: The principal to mint for. Overridden by a fixture wanting a different subject.
+    nvis_principal_login: str = DEFAULT_LOGIN
+
+    #: Set `False` for a client whose whole purpose is to be refused — the gate's own tests, the
+    #: 401 contract, the endpoint smoke sweep. Clearer at the fixture than repeating
+    #: `headers=unauthenticated()` on every call, and greppable when the 401 paths need auditing.
+    nvis_authenticate: bool = True
+
+    def nvis_credential(self) -> str:
+        """A `Bearer …` header value valid for **this request**, minted now.
+
+        **Minted per request rather than captured once**, and that is not an optimisation — it is
+        INV-17. Dozens of fixtures set their own `RACK_WEB_SECRET_KEY`, and the signing key is
+        HKDF-derived from it, so a token minted when the client was built stops verifying the moment
+        a fixture repoints the secret. The symptom is a 401 that looks exactly like a gate bug, in a
+        test that never mentions authentication.
+
+        Also installs the revocation checker when none is registered: `tokens.verify` fail-closes
+        and refuses everything until one is (FR-6a, INV-18), and a fixture that calls
+        `revocation.reset_for_tests()` would otherwise leave every later request unauthenticated.
+        """
+        from identity import revocation  # `tokens` is already imported at module level
+
+        # Unconditional: `install()` is a registration, so re-registering is free, and a fixture
+        # that called `reset_for_tests()` would otherwise leave `verify` fail-closed (INV-18).
+        revocation.install()
+        token = tokens.mint(user_principal(self.nvis_principal_login), tokens.TOKEN_ACCESS)
+        return f"Bearer {token}"
 
     def open(self, *args, **kwargs):  # type: ignore[override]
         headers = kwargs.get("headers") or {}
@@ -210,11 +241,39 @@ class AuthenticatedClient:
         # so the gate sees no credential at all rather than a malformed one.
         if "Authorization" in headers and not headers["Authorization"]:
             headers.pop("Authorization")
-        elif "Authorization" not in headers and self.nvis_bearer:
-            headers["Authorization"] = self.nvis_bearer
+        elif "Authorization" not in headers and self.nvis_authenticate:
+            try:
+                headers["Authorization"] = self.nvis_credential()
+            except Exception:  # noqa: BLE001 - see below
+                # A process with no signing secret cannot mint, and that is a legitimate state for
+                # the tests that assert exactly that. Falling back to the captured bearer, then to
+                # nothing, keeps this mixin from turning an unrelated failure into a mint error.
+                if self.nvis_bearer:
+                    headers["Authorization"] = self.nvis_bearer
 
         kwargs["headers"] = headers
         return super().open(*args, **kwargs)  # type: ignore[misc]
+
+
+def unauthenticated_client(app: object) -> object:
+    """A test client that never presents a credential.
+
+    For the suites whose subject *is* the refusal. Building one is explicit because the default is
+    now authenticated — the reverse of how it used to be, when opting in was explicit and almost
+    nobody did.
+    """
+    from flask.testing import FlaskClient
+
+    class _Anonymous(AuthenticatedClient, FlaskClient):
+        nvis_authenticate = False
+
+    app.config["TESTING"] = True  # type: ignore[attr-defined]
+    previous = app.test_client_class  # type: ignore[attr-defined]
+    app.test_client_class = _Anonymous  # type: ignore[attr-defined]
+    try:
+        return app.test_client()  # type: ignore[attr-defined]
+    finally:
+        app.test_client_class = previous  # type: ignore[attr-defined]
 
 
 def unauthenticated() -> dict[str, str]:

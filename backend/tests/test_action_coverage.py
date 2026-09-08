@@ -23,7 +23,7 @@ string shows up as a reviewed diff:
 
     NVIS_LOG_SINKS=file NVIS_LOG_FILE=/tmp/x.log python - <<'PY'
     import os, sys, json; sys.path.insert(0, "backend")
-    os.environ.update({"RACK_STATUS_DEMO": "1", "RACK_WEB_AUTH_DISABLED": "1"})
+    os.environ.update({"RACK_STATUS_DEMO": "1"})
     import app; from audit import actions as A
     rows = [{"endpoint": e.endpoint, "method": e.method, "action": e.action, "variant": e.variant}
             for e in sorted(A.registry().entries, key=lambda e: (e.endpoint, e.method))]
