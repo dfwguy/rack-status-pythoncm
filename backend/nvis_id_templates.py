@@ -800,7 +800,11 @@ class NvisNaming:
             "ct_id": self.ct_template.raw,
             "nvsw_id": self.nvsw_template.raw if self.nvsw_template else "",
             "ct_joiner": self.ct_joiner,
-            "node_id_mode": "rack_ct_suffix" if self.ct_joiner == "-ct" else "full_hostname",
+            "node_id_mode": (
+                "rack_ct_suffix"
+                if self.ct_template.slot_count > self.rack_template.slot_count
+                else "full_hostname"
+            ),
         }
 
     def canonical_rack_id(self, rid: str) -> str | None:
