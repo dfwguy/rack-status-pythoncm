@@ -54,6 +54,16 @@ os.environ["NVIS_IDENTITY_FILE"] = os.path.join(
     tempfile.mkdtemp(prefix="nvis-identity-test-"), "identity.json"
 )
 
+# The policy file needs the same isolation as the identity store, and for a sharper reason than
+# tidiness: first boot now writes an administrator policy beside the administrator it creates, and
+# `_bootstrap_identity_at_startup` runs when `app` is *imported*. Unset, that wrote a real
+# `var/store/policies.json` into the worktree on the first test that imported the app — which then
+# switched the whole suite from the permissive engine to default-deny and failed ten gate tests.
+# Isolating the path is not enough on its own; see `_pre_bootstrapped_admin` below.
+os.environ["RACK_WEB_POLICY_FILE"] = os.path.join(
+    tempfile.mkdtemp(prefix="nvis-policy-test-"), "policies.json"
+)
+
 # Validation-activity writes also maintain the append-only multi-rack ledger. Keep its
 # generated document/outbox out of the worktree and never let unit tests call lakewriter.
 _ledger_test_root = tempfile.mkdtemp(prefix="nvis-multirack-ledger-test-")
@@ -91,6 +101,30 @@ os.environ["RACK_AI_SETTINGS_FILE"] = os.path.join(
 import nvftp_cache_sync  # noqa: E402
 
 nvftp_cache_sync._background_loop = lambda: None
+
+# Put an administrator in the isolated store *before* anything imports ``app``.
+#
+# Two things follow from it, and the second is the load-bearing one. It makes the suite's store
+# realistic — a deployed system always has an administrator, so a test running against an empty
+# one is testing a state that only exists for a few milliseconds on first boot. And because
+# ``ensure_admin`` is idempotent on a populated store, the import-time bootstrap now returns
+# ``None`` and the *policy* seeding beside it never fires, so the suite keeps the permissive
+# engine.
+#
+# That is deliberately a consequence of the store being populated rather than a switch that turns
+# seeding off under test. A "skip this when testing" flag would mean the seeding path the product
+# depends on is the one path the suite never takes; here it is skipped for exactly the reason a
+# second real boot skips it. The seeding itself is covered by
+# ``test_identity_bootstrap.py::TestABrandNewDeploymentEnforcesFromTheFirstBoot``, which points
+# both paths at its own tmp files.
+import identity.bootstrap as _identity_bootstrap  # noqa: E402
+from identity.store import IdentityStore as _IdentityStore  # noqa: E402
+
+_bootstrap_store = _IdentityStore(os.environ["NVIS_IDENTITY_FILE"])
+try:
+    _identity_bootstrap.ensure_admin(_bootstrap_store, emit=False)
+finally:
+    _bootstrap_store.close()
 
 import pytest  # noqa: E402
 

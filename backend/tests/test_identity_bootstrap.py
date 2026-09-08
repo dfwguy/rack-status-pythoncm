@@ -306,3 +306,133 @@ class TestTheEmission:
         assert password
         assert not caplog.records
         assert len(store.list_users()) == 1
+
+
+@pytest.fixture
+def policy_file(tmp_path, monkeypatch):
+    """Point the policy store at a file this test owns.
+
+    Never the real `var/store/policies.json` — seeding writes one, and a test that wrote the repo's
+    own policy file would flip every other suite from the permissive engine to default-deny.
+    """
+    target = tmp_path / "store" / "policies.json"
+    monkeypatch.setenv("RACK_WEB_POLICY_FILE", str(target))
+    return target
+
+
+class TestABrandNewDeploymentEnforcesFromTheFirstBoot:
+    """The administrator policy written alongside the administrator.
+
+    Without it, a fresh install falls back to `AllowAllEngine` and every request is permitted while
+    the audit trail says `policy_engine: allow-all`. Honest, but it means the product ships with
+    authorization switched off and nothing in the UI saying so.
+    """
+
+    def test_it_writes_the_policy_and_attaches_it(self, store, policy_file):
+        from authz import store as policy_store
+
+        bootstrap.ensure_admin(store, emit=False)
+        assert bootstrap.ensure_admin_policy(store) is True
+
+        assert [d.id for d in policy_store.read_all()] == [bootstrap.ADMIN_POLICY_ID]
+        assert store.policies_for("user:admin") == [bootstrap.ADMIN_POLICY_ID]
+
+    def test_the_seeded_policy_actually_grants_the_administrator(self, store, policy_file):
+        """The failure this guards is the worse one: seeding a policy that denies the admin turns
+        first boot into a lockout, and there is no reset endpoint to recover through."""
+        from authz.policy import PolicyEngine
+        from authz.resources import RequestFacts, resolve
+
+        bootstrap.ensure_admin(store, emit=False)
+        bootstrap.ensure_admin_policy(store)
+
+        engine = PolicyEngine(
+            policy_file,
+            group_lookup=lambda p: (),
+            attachment_lookup=lambda s: store.policies_for(s),
+        )
+        for action, body in (
+            ("rack.power:off", {"rack": "p17-r01"}),
+            ("identity.user:create", {"login": "bob"}),
+            ("policy:attach", {"policy_id": "administrators"}),
+            ("vault:write", {}),
+        ):
+            resource = resolve(action, RequestFacts(view_args={}, query={}, body=body))
+            assert engine.evaluate("user:admin", action, resource).allowed, action
+
+    def test_everyone_else_is_still_denied(self, store, policy_file):
+        """Default-deny is the point. A seeded policy that leaked to unattached principals would be
+        allow-all with extra steps."""
+        from authz.policy import PolicyEngine
+        from authz.resources import RequestFacts, resolve
+
+        bootstrap.ensure_admin(store, emit=False)
+        bootstrap.ensure_admin_policy(store)
+        engine = PolicyEngine(
+            policy_file,
+            group_lookup=lambda p: (),
+            attachment_lookup=lambda s: store.policies_for(s),
+        )
+        resource = resolve("rack.power:off", RequestFacts(view_args={}, query={}, body={"rack": "p17-r01"}))
+        assert not engine.evaluate("user:bob", "rack.power:off", resource).allowed
+
+    def test_it_leaves_an_existing_policy_set_alone(self, store, policy_file):
+        """A deployment that has written a policy has made a decision this must not overrule."""
+        from authz import store as policy_store
+
+        policy_file.parent.mkdir(parents=True, exist_ok=True)
+        policy_file.write_text(json.dumps({"version": 1, "policies": [{
+            "id": "site-rules",
+            "statements": [{"effect": "deny", "actions": ["*"], "resources": ["*"]}],
+        }]}))
+
+        bootstrap.ensure_admin(store, emit=False)
+        assert bootstrap.ensure_admin_policy(store) is False
+        assert [d.id for d in policy_store.read_all()] == ["site-rules"]
+
+    def test_ensure_admin_alone_writes_no_policy(self, store, policy_file):
+        """The isolation property that keeps this out of every test fixture.
+
+        Dozens of fixtures call `ensure_admin` to get a realistic store. If seeding lived inside it,
+        all of them would silently acquire a policy file and switch from the permissive engine to
+        default-deny as a side effect of creating a user.
+        """
+        from authz import store as policy_store
+
+        bootstrap.ensure_admin(store, emit=False)
+        assert policy_store.read_all() == []
+        assert not policy_file.exists()
+
+
+class TestTheAdminPolicyDocumentStaysValid:
+    """Build gates. The document is generated, so it can outgrow the schema without anyone editing
+    it — a new resource type is enough."""
+
+    def test_it_covers_every_declared_resource_type(self):
+        """A type absent here is an action the administrator cannot perform on a fresh install, and
+        the symptom would be a 403 on a brand-new deployment for a feature that just shipped."""
+        from authz.resources import declared_types
+
+        actions = bootstrap.admin_policy_document()["statements"][0]["actions"]
+        assert {a.split(":")[0] for a in actions} == set(declared_types())
+
+    def test_it_fits_the_schema_pattern_cap(self):
+        """`MAX_PATTERNS_PER_FIELD` is 64 and there are 50 types. This fails while there is still
+        headroom to split the statement, rather than at the boot that first exceeds it."""
+        from authz.schema import MAX_PATTERNS_PER_FIELD
+
+        actions = bootstrap.admin_policy_document()["statements"][0]["actions"]
+        assert len(actions) <= MAX_PATTERNS_PER_FIELD
+
+    def test_it_validates_against_the_real_schema(self):
+        """Written through `policy_store.create`, which validates — so an invalid document would
+        fail at first boot, on a deployment, with the administrator not yet able to log in."""
+        from authz.schema import PolicyDocument
+
+        PolicyDocument.model_validate(bootstrap.admin_policy_document())
+
+    def test_it_uses_no_bare_star_action(self):
+        """`_no_bare_star_in_allow` refuses it, and the reason is worth preserving: a blanket grant
+        buried in a policy file tells an auditor less than the allow-all engine does."""
+        actions = bootstrap.admin_policy_document()["statements"][0]["actions"]
+        assert "*" not in actions

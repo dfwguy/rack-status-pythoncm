@@ -132,3 +132,75 @@ def _emit(password: str) -> None:
         ADMIN_LOGIN,
         password,
     )
+
+
+#: Id of the policy the first boot writes. Referenced by the startup preflight and by the tests
+#: that assert a brand-new deployment enforces rather than falling back to allow-all.
+ADMIN_POLICY_ID = "administrators"
+
+
+def admin_policy_document() -> dict:
+    """The policy a brand-new deployment starts with: the administrator may do anything.
+
+    **Enumerated per resource type rather than written as a bare ``*``**, because
+    ``Statement._no_bare_star_in_allow`` refuses `actions: ["*"]` in an allow — deliberately, since
+    a blanket grant hidden in a policy file tells an auditor less than the allow-all engine, which
+    at least records `policy_engine: allow-all` in the trail. Enumerating keeps the document
+    readable: an auditor sees exactly which services the administrator may act on.
+
+    Derived from :func:`authz.resources.declared_types` rather than a hand-written list, so the
+    document cannot fall behind the product. A new resource type joins it automatically, and
+    ``test_admin_policy_covers_every_declared_type`` fails the build if the enumeration ever
+    outgrows the schema's pattern cap.
+    """
+    from authz.resources import declared_types
+
+    return {
+        "id": ADMIN_POLICY_ID,
+        "description": (
+            "Full administrative access. Written on first boot so the deployment enforces policy "
+            "from the start instead of running permissively. Narrow or replace it once real roles "
+            "exist; detaching it from the last administrator locks everyone out."
+        ),
+        "statements": [
+            {
+                "sid": "administer-everything",
+                "effect": "allow",
+                "actions": sorted(f"{t}:*" for t in declared_types()),
+                "resources": ["*"],
+            }
+        ],
+    }
+
+
+def ensure_admin_policy(store: IdentityStore, *, login: str = ADMIN_LOGIN) -> bool:
+    """Write the administrator policy and attach it to `login`. Returns whether it wrote anything.
+
+    **Only ever called for a brand-new deployment**, and deliberately not from
+    :func:`ensure_admin`. Seeding inside that function would give a policy file to every test
+    fixture that bootstraps an administrator — flipping those suites from the permissive engine to
+    default-deny as a side effect of creating a user, and writing into the repo's real
+    ``var/store`` while doing it.
+
+    Why a brand-new system is the only safe moment: on an existing deployment we cannot know which
+    of its accounts should hold this policy, and guessing wrong either locks the operators out or
+    hands somebody full access. So an upgrade is asked for a policy explicitly by the startup
+    preflight rather than having one invented for it.
+
+    Idempotent. An existing policy set is left exactly as it is, because a deployment that has
+    written a policy has made a decision this function must not overrule.
+    """
+    from authz import store as policy_store
+
+    if policy_store.read_all():
+        return False
+
+    policy_store.create(admin_policy_document())
+    store.attach_policy(f"user:{canonical_login(login)}", ADMIN_POLICY_ID)
+    _logger.warning(
+        "identity: wrote the '%s' policy and attached it to %s. This deployment now ENFORCES "
+        "policy (default-deny); every other principal is refused until a policy grants it.",
+        ADMIN_POLICY_ID,
+        login,
+    )
+    return True

@@ -730,7 +730,14 @@ def _bootstrap_identity_at_startup() -> None:
     try:
         # `ensure_admin` is idempotent on a populated store and emits nothing there, so this is a
         # no-op on every start after the first (AC-19).
-        identity_bootstrap.ensure_admin(store)
+        created = identity_bootstrap.ensure_admin(store)
+        if created is not None:
+            # Brand-new deployment: give the administrator a policy in the same breath that creates
+            # them, so the very first boot enforces instead of falling back to the permissive
+            # engine. Gated on `created` rather than on "is there a policy file", because on an
+            # existing deployment we cannot know which account should hold it — that one is asked
+            # for explicitly by the startup preflight.
+            identity_bootstrap.ensure_admin_policy(store)
     except Exception:
         _logger.exception("identity: administrator bootstrap failed")
     finally:
