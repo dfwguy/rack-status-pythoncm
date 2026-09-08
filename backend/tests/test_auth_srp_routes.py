@@ -50,7 +50,6 @@ pytestmark = pytest.mark.usefixtures("srp_client_env")
 def srp_client_env(monkeypatch, tmp_path):
     """A private identity store with a known administrator, and clean protocol state."""
     monkeypatch.setenv("NVIS_IDENTITY_FILE", str(tmp_path / "identity.json"))
-    monkeypatch.setenv("RACK_WEB_SECRET_KEY", "srp-route-test-secret")
     srp_mod.reset_for_tests()
     revocation.reset_for_tests()
     revocation.install()

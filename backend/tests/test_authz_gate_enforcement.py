@@ -47,7 +47,6 @@ def deployment(monkeypatch, tmp_path):
     policy_file = tmp_path / "policies.json"
     monkeypatch.setenv("NVIS_IDENTITY_FILE", str(identity_file))
     monkeypatch.setenv("RACK_WEB_POLICY_FILE", str(policy_file))
-    monkeypatch.setenv("RACK_WEB_SECRET_KEY", "gate-enforcement-secret")
     monkeypatch.setenv("RACK_STATUS_DEMO", "1")  # no cluster to talk to
 
     srp_mod.reset_for_tests()

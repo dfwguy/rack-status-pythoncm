@@ -101,6 +101,15 @@ def enforce_policies() -> None:
     policy_store.create(grant_all_document())
 
 
+#: Passwords `enrol` generated, so `log_in(client)` needs no argument in the ordinary case. Keyed by
+#: login and overwritten on re-enrolment, which matches `enrol`'s own idempotency.
+_PASSWORDS: dict[str, str] = {}
+
+#: The cookie the login route delivers the access token in. Duplicated from `api/auth_srp` rather
+#: than imported, for the same reason `web_auth` duplicates it: the dependency runs one way only.
+ACCESS_COOKIE = "nvis_access"
+
+
 def enrol(
     login: str = DEFAULT_LOGIN,
     *,
@@ -165,6 +174,7 @@ def enrol(
         if owns_store:
             store.close()
 
+    _PASSWORDS[login] = secret
     principal = f"user:{login}"
     return TestPrincipal(
         login=login,
@@ -176,13 +186,84 @@ def enrol(
 
 
 def token_for(login: str = DEFAULT_LOGIN) -> str:
-    """A fresh access token for an already-enrolled login.
+    """A fresh access token for an already-enrolled login, minted directly.
 
-    Separate from `enrol` because a test that needs a *second* token for the same principal — to
-    check that revoking one does not revoke the other — must not re-enrol and change the password
-    underneath itself.
+    **Prefer `log_in` where the test can afford an HTTP round trip.** This mints rather than
+    authenticates, so it proves nothing about the login path and it cannot notice a change that
+    breaks it. It stays for the cases that genuinely cannot go through a request: a *second* token
+    for one principal (to check that revoking one leaves the other alone — re-enrolling would
+    change the password underneath the test), and the token-layer unit tests whose subject is
+    `mint`/`verify` themselves.
     """
     return tokens.mint(f"user:{login}", token_type=tokens.TOKEN_ACCESS)
+
+
+def log_in(client: object, login: str = DEFAULT_LOGIN, password: str = "") -> str:
+    """Authenticate for real over HTTP, the way the browser does. Returns the access token.
+
+    **This is the factory to reach for.** It drives the actual SRP exchange against
+    `/api/auth/srp/begin` and `/finish`, so the credential it yields was *issued by the product* —
+    signed by whatever key the deployment bootstrapped, carrying the claims the route decided, and
+    landing in the cookie jar exactly as an operator's does. A minted token is a fake that happens
+    to verify; this one is the real thing, and it fails if the login path breaks.
+
+    Two consequences worth knowing. It needs no `RACK_WEB_SECRET_KEY` — the running app already
+    bootstrapped one, and a test that sets its own is how INV-17 arrives (the signing key is derived
+    from it, so repointing it invalidates every token issued before). And because the tokens arrive
+    as `HttpOnly` cookies (`nvis_access`, `nvis_refresh`), the returned string is a convenience for
+    assertions: the client is authenticated by its jar, so subsequent calls need no header.
+
+    `password` defaults to the one `enrol` generated for this login, looked up from the registry
+    that `enrol` writes, so the ordinary case is `log_in(client)`.
+    """
+    # The two names, not the module: `srp` is already bound at module scope to `identity.srp`, so
+    # `import srp as ...` here is a reimport of that name (pylint W0404) and — worse for a reader —
+    # two different modules called `srp` in one function.
+    from srp import User as SrpUser
+    from srp import rfc5054_enable
+
+    secret = password or _PASSWORDS.get(login, "")
+    if not secret:
+        raise ValueError(
+            f"no password known for {login!r}. Call `enrol({login!r})` first, or pass the "
+            f"password explicitly."
+        )
+
+    # The library's padding mode is per-backend and the wrong one produces a proof that fails to
+    # verify — which looks exactly like a wrong password (trap 4). Set it the way the server does.
+    rfc5054_enable(srp.RFC5054_COMPAT)
+    user = SrpUser(login, secret, hash_alg=srp.HASH_ALG, ng_type=srp.NG_TYPE)
+    _name, a = user.start_authentication()
+
+    begin = client.post(  # type: ignore[attr-defined]
+        "/api/auth/srp/begin", json={"login": login, "A": a.hex()}
+    )
+    if begin.status_code != 200:
+        raise AssertionError(
+            f"SRP begin failed for {login!r}: {begin.status_code} "
+            f"{begin.get_data(as_text=True)[:200]}"
+        )
+    challenge = begin.get_json()
+    proof = user.process_challenge(
+        bytes.fromhex(challenge["salt"]), bytes.fromhex(challenge["B"])
+    )
+
+    finish = client.post(  # type: ignore[attr-defined]
+        "/api/auth/srp/finish", json={"token": challenge["token"], "M": proof.hex()}
+    )
+    if finish.status_code != 200:
+        raise AssertionError(
+            f"SRP finish failed for {login!r}: {finish.status_code} "
+            f"{finish.get_data(as_text=True)[:200]}"
+        )
+
+    cookie = client.get_cookie(ACCESS_COOKIE)  # type: ignore[attr-defined]
+    if cookie is None:
+        raise AssertionError(
+            f"login succeeded but no {ACCESS_COOKIE!r} cookie was set. The route is supposed to "
+            f"deliver the token as an HttpOnly cookie."
+        )
+    return cookie.value
 
 
 class AuthenticatedClient:

@@ -128,7 +128,6 @@ class TestFR6aTheRevocationCheckerIsRegistered:
         The signing secret is set explicitly because this module deliberately does not import `app`
         — it reads app.py as source — so app.py's own secret bootstrap has not run.
         """
-        monkeypatch.setenv("RACK_WEB_SECRET_KEY", "startup-wiring-test-secret")
         from identity import revocation, tokens
 
         revocation.reset_for_tests()

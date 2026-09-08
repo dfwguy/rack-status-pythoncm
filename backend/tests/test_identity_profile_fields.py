@@ -34,7 +34,6 @@ from identity.store import IdentityStore
 @pytest.fixture()
 def admin_api(monkeypatch, tmp_path):
     monkeypatch.setenv("NVIS_IDENTITY_FILE", str(tmp_path / "identity.json"))
-    monkeypatch.setenv("RACK_WEB_SECRET_KEY", "profile-fields-test-secret")
     srp_mod.reset_for_tests()
     s = IdentityStore(str(tmp_path / "identity.json"))
     try:

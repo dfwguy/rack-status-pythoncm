@@ -20,7 +20,6 @@ import pytest
 
 os.environ["RACK_STATUS_DEMO"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
-os.environ["RACK_WEB_SECRET_KEY"] = "test-secret"
 
 import nvftp_cache_sync as sync
 import token_vault
@@ -31,7 +30,6 @@ import token_vault
 _SETTINGS = {
     "RACK_PROJECT_TOKEN": "proj-alpha",
     "RACK_NVFTP_SFTP_USER": "nv-test-user",
-    "RACK_WEB_SECRET_KEY": "test-secret",
 }
 
 

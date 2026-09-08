@@ -45,7 +45,6 @@ def admin_api(monkeypatch, tmp_path):
     refuses to remove. The tests below would then fail for a reason unrelated to what they assert.
     """
     monkeypatch.setenv("NVIS_IDENTITY_FILE", str(tmp_path / "identity.json"))
-    monkeypatch.setenv("RACK_WEB_SECRET_KEY", "identity-admin-test-secret")
     srp_mod.reset_for_tests()
 
     store = IdentityStore(str(tmp_path / "identity.json"))

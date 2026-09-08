@@ -18,7 +18,6 @@ import pytest
 
 os.environ["RACK_STATUS_DEMO"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
-os.environ["RACK_WEB_SECRET_KEY"] = "test-vault-master-key"
 
 import token_vault
 from app import app

@@ -68,7 +68,6 @@ def pkce(seed: bytes = b"seed") -> tuple[str, str]:
 def provider(tmp_path, monkeypatch):
     clients_file = tmp_path / "clients.json"
     clients_file.write_text(json.dumps(CLIENTS))
-    monkeypatch.setenv("RACK_WEB_SECRET_KEY", "test-secret")
     monkeypatch.setenv("RACK_WEB_SIGNING_KEY_DIR", str(tmp_path / "oidc"))
     monkeypatch.setenv("RACK_WEB_OIDC_CLIENTS_FILE", str(clients_file))
     monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")

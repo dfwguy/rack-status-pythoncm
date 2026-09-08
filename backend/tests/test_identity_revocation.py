@@ -37,7 +37,6 @@ from identity.models import User
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("NVIS_IDENTITY_FILE", str(tmp_path / "identity.json"))
-    monkeypatch.setenv("RACK_WEB_SECRET_KEY", "0" * 64)
     monkeypatch.delenv("RACK_WEB_TOKEN_ISSUER", raising=False)
     identity_store.reset_for_tests()
     T.reset_for_tests()

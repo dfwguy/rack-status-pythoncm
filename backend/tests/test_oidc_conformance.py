@@ -48,7 +48,6 @@ ISSUER = "https://rack.example.com"
 
 @pytest.fixture
 def provider(tmp_path, monkeypatch):
-    monkeypatch.setenv("RACK_WEB_SECRET_KEY", "test-secret")
     monkeypatch.setenv("RACK_WEB_SIGNING_KEY_DIR", str(tmp_path / "oidc"))
     monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
     monkeypatch.setenv("RACK_WEB_OIDC_ISSUER", ISSUER)

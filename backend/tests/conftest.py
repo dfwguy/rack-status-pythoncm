@@ -22,20 +22,17 @@ import os
 import tempfile
 
 os.environ.setdefault("RACK_STATUS_DEMO", "1")
-# MIGRATING OFF THIS, FILE BY FILE. `identity/testing.py` (FR-18b) now issues real credentials
-# and every test client presents one, so a file can run with the gate genuinely ON by taking the
-# `gated` fixture below. That is the end state: a suite that switches authentication off is not
-# testing the product, it is testing a configuration no deployment uses (SUTP gap G-10).
+# NO `RACK_WEB_SECRET_KEY` is set here, deliberately. `app.py` bootstraps a real one on import —
+# loading or creating `var/secrets/.rack_web_secret_key` — so a suite-wide fake was never supplying
+# something missing. It was *repointing* the signing key, which is derived from it by HKDF, and that
+# is INV-17: every token issued before the repoint stops verifying. Twelve files then invented their
+# own per-file secret on top, so the key changed repeatedly within one run and a credential built by
+# a session fixture could be dead by the time a test used it. That is the whole reason the test
+# client had to start minting per request.
 #
-# Flipping all ~2,500 at once was measured and is a migration, not a switch: 154 tests fail in
-# three identifiable clusters -- files that reset the revocation checker (fail-closed then refuses
-# every token, correctly), browser routes that redirect rather than 401, and requests whose target
-# the resource resolver cannot name. Each cluster needs its own fix, and landing a red suite would
-# block everyone else meanwhile.
-#
-# So the bypass stays until FR-18c, and migrated files opt IN. Track the remaining clusters in
-# `.plc/briefs/auth-identity-brief.md` FR-18c.
-os.environ.setdefault("RACK_WEB_SECRET_KEY", "nvis-test-suite-signing-key-not-a-real-secret")
+# The suite authenticates instead: `identity.testing.log_in(client)` drives the real SRP exchange
+# and the token arrives in the cookie jar signed by whatever key this deployment bootstrapped, which
+# is what an operator gets. `test_no_faked_signing_key.py` keeps the fakes from creeping back.
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 # Force a fresh, isolated catalog store (seeded on first access -> "default" project
 # with the default demo rack-id convention). Drop any inherited rack-id template.
@@ -161,6 +158,13 @@ def _every_test_client_authenticates():
     from identity import revocation
     from identity import testing as identity_testing
 
+    # `app` FIRST, and the order is load-bearing: importing it runs
+    # `_bootstrap_rack_web_secret_key()`, which loads or creates `var/secrets/.rack_web_secret_key`
+    # and puts it in the environment. Enrolling before that point tries to derive a signing key from
+    # a secret that does not exist yet and raises `TokenError`. This used to be hidden by a faked
+    # key set at module scope, which is exactly what INV-17 punishes.
+    import app as app_module
+
     # `tokens.verify` refuses everything until a checker is registered (FR-6a, INV-18), and without
     # this every request 401s in a way that reads like a gate bug rather than a missing wire.
     revocation.install()
@@ -168,8 +172,6 @@ def _every_test_client_authenticates():
 
     class _SuiteClient(identity_testing.AuthenticatedClient, FlaskClient):
         nvis_bearer = principal.bearer
-
-    import app as app_module
 
     app_module.app.config["TESTING"] = True
     previous = app_module.app.test_client_class

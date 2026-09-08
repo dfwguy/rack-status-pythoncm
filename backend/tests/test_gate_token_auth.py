@@ -45,7 +45,6 @@ PROTECTED = "/api/status"
 def gated(monkeypatch, tmp_path):
     """The gate ON, a private identity store, and a known administrator credential."""
     monkeypatch.setenv("NVIS_IDENTITY_FILE", str(tmp_path / "identity.json"))
-    monkeypatch.setenv("RACK_WEB_SECRET_KEY", "gate-token-test-secret")
     srp_mod.reset_for_tests()
     revocation.reset_for_tests()
     revocation.install()
