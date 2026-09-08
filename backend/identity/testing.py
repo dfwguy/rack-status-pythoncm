@@ -62,6 +62,44 @@ class TestPrincipal:
         return f"Bearer {self.access_token}"
 
 
+#: Id of the policy a test principal is attached to. One shared name, so a suite that turns
+#: enforcement on grants every enrolled principal through a single document.
+GRANT_ALL_POLICY_ID = "test-principals"
+
+
+def grant_all_document() -> dict:
+    """A policy granting everything, for test principals.
+
+    Reuses the administrator document's shape — enumerated `<type>:*` rather than a bare `*`, which
+    `_no_bare_star_in_allow` refuses — so it cannot fall behind the resource types the product
+    declares. Its own id, because a test asserting something about the `administrators` policy
+    should not be reading a document the harness happened to write.
+    """
+    from identity.bootstrap import admin_policy_document
+
+    document = dict(admin_policy_document())
+    document["id"] = GRANT_ALL_POLICY_ID
+    document["description"] = "Grants test principals every action. Written by identity.testing."
+    return document
+
+
+def enforce_policies() -> None:
+    """Write :func:`grant_all_document`, turning the attachments :func:`enrol` makes into grants.
+
+    **Writing any policy document is what switches a deployment from the permissive engine to
+    default-deny**, which is why this is a separate, explicit call rather than something `enrol`
+    does. A suite that has not asked for enforcement keeps `AllowAllEngine` and the attachments sit
+    inert, naming a document that does not exist — which the engine logs and skips.
+
+    Idempotent, so a session fixture and an individual test can both ask.
+    """
+    from authz import store as policy_store
+
+    if any(d.id == GRANT_ALL_POLICY_ID for d in policy_store.read_all()):
+        return
+    policy_store.create(grant_all_document())
+
+
 def enrol(
     login: str = DEFAULT_LOGIN,
     *,
@@ -69,6 +107,7 @@ def enrol(
     groups: tuple[str, ...] = (),
     password: str | None = None,
     must_change_password: bool = False,
+    authorize: bool = True,
     store: IdentityStore | None = None,
 ) -> TestPrincipal:
     """Create (or refresh) a real account and return a working credential.
@@ -111,6 +150,16 @@ def enrol(
             if store.get_group(group) is None:
                 store.create_group(Group(name=group, description=f"test group {group}"))
             store.add_member(group, login)
+
+        if authorize:
+            # The attachment, not the document. Harmless while no policy file exists — the engine
+            # is permissive, and an attachment naming an absent policy is logged and skipped — and
+            # it becomes a real grant the moment a suite calls `enforce_policies`.
+            #
+            # Default-on because a credential that authenticates and is then refused everything is
+            # not what an operator holds, so a test using one asserts against a state the product
+            # does not ship. Pass `authorize=False` where the refusal is the point.
+            store.attach_policy(f"user:{login}", GRANT_ALL_POLICY_ID)
     finally:
         if owns_store:
             store.close()
