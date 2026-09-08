@@ -143,16 +143,8 @@ def client(app_module):
         yield c
 
 
-def _login(client, app_module):
-    """Bypass auth the same way the other API tests do."""
-    if getattr(app_module, "_auth_mode", lambda: "none")() == "none":
-        return
-    client.post("/api/login", json={"password": os.environ.get("RACK_WEB_AUTH_TOKEN", "")})
-
-
 def test_async_start_returns_a_job_id_and_status_reports_done(client, app_module):
     """Demo mode short-circuits the compute, so this exercises the job lifecycle itself."""
-    _login(client, app_module)
     started = client.post("/api/analytics/aggregate-async", json={"rows": []}).get_json()
     assert started["ok"] is True
     job_id = started["job_id"]
@@ -171,14 +163,12 @@ def test_async_start_returns_a_job_id_and_status_reports_done(client, app_module
 
 
 def test_status_for_an_unknown_job_is_404(client, app_module):
-    _login(client, app_module)
     res = client.get("/api/analytics/aggregate-status?job_id=nope")
     assert res.status_code == 404
 
 
 def test_the_payload_is_handed_over_once(client, app_module):
     """Polling must not pin a full aggregate in memory for every abandoned tab."""
-    _login(client, app_module)
     job_id = client.post("/api/analytics/aggregate-async", json={"rows": []}).get_json()["job_id"]
     for _ in range(100):
         body = client.get(f"/api/analytics/aggregate-status?job_id={job_id}").get_json()
@@ -193,7 +183,6 @@ def test_the_payload_is_handed_over_once(client, app_module):
 
 
 def test_bad_body_is_rejected_before_a_job_is_created(client, app_module):
-    _login(client, app_module)
     res = client.post("/api/analytics/aggregate-async", json={"rows": "not-a-list"})
     assert res.status_code == 400
     assert "rows" in (res.get_json().get("error") or "")
@@ -201,7 +190,6 @@ def test_bad_body_is_rejected_before_a_job_is_created(client, app_module):
 
 def test_the_blocking_route_still_works(client, app_module):
     """API callers that never learned about the job endpoints must be unaffected."""
-    _login(client, app_module)
     body = client.post("/api/analytics/aggregate", json={"rows": []}).get_json()
     assert body.get("ok") is not False
 

@@ -116,20 +116,17 @@ export RACK_PLATFORM=bcm
 # in the backend.
 export RACK_CMSH=/cm/local/apps/cmd/bin/cmsh
 export RACK_STATUS_DEMO=0
-# Local dev defaults to no login; the OVA uses token auth. Overridable (unlike RACK_STATUS_DEMO,
-# which is the whole point of this script) because the auth gate is the one thing a local run
-# CANNOT exercise with the default -- `_auth_enabled()` short-circuits, so the /ws/terminal check
-# and the Origin guard never run. Pass RACK_WEB_AUTH_DISABLED=0 to test them.
-export RACK_WEB_AUTH_DISABLED="${RACK_WEB_AUTH_DISABLED:-1}"
-if [[ "${RACK_WEB_AUTH_DISABLED}" != "1" ]]; then
-  # Shared-token and PAM login were removed in FR-18, so there is no token to hand out and nothing
-  # to configure here. Authentication is SRP against the local identity store: the first start with
-  # an empty store prints a one-time `admin` password to this terminal.
-  echo "[auth] ENABLED — sign in as 'admin' with the one-time password printed at startup."
-  echo "[auth] It is shown once and is not recoverable; bin/run-local-auth.sh gives you a"
-  echo "[auth] private store and a fresh password on every run if you would rather not use"
-  echo "[auth] this cluster's."
-fi
+# Authentication is always on and there is nothing to configure. This block used to default to no
+# login and let you opt in with `RACK_WEB_AUTH_DISABLED=0`; the switch was removed on 2026-09-08,
+# along with the shared-token and PAM paths (FR-18). So the /ws/terminal check and the Origin guard
+# are now exercised by every local run, which is what the old comment wanted and could not have.
+#
+# Login is SRP against the local identity store, and the first start with an empty store prints a
+# one-time `admin` password to this terminal.
+echo "[auth] Sign in as 'admin' with the one-time password printed at startup."
+echo "[auth] It is shown once and is not recoverable; bin/run-local-auth.sh gives you a"
+echo "[auth] private store and a fresh password on every run if you would rather not use"
+echo "[auth] this cluster's."
 
 # --- Paths on the HEAD NODE (not this Mac) -------------------------------------------------------
 export RACK_REMOTE_BASE_PATH=/home/cmods/nvis-rack-status

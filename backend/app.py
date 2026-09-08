@@ -823,10 +823,24 @@ def _require_dashboard_auth():
             body=body if isinstance(body, dict) else {},
         )
 
-    principal = web_auth.authenticated_principal(request.headers, request.cookies)
+    # The claims, not just the subject, and verified ONCE. `authenticated_principal` is a thin
+    # wrapper over this, so calling both would verify the same token twice.
+    claims = web_auth.verified_claims(request.headers, request.cookies)
+    principal = str(claims.get("sub") or "")
     if principal:
         g.auth_principal = principal
         g.auth_method = "token"
+
+        # **When the operator authenticated, which is not now.** `/oidc/authorize` stamps this onto
+        # the code it issues, and it was reading `g.auth_time` from a gate that never set it — so
+        # `CodeStore.issue` fell back to the authorization moment and every id token from the code
+        # flow asserted the user had just signed in. `auth_time` is exactly the claim a relying party
+        # answers a `max_age` check with, and the wrong value is well-formed and plausible, so
+        # nothing complains. The SRP login has always sampled it correctly (`auth_srp.py`); this is
+        # the one line that carried it forward.
+        auth_time = claims.get("auth_time")
+        if auth_time is not None:
+            g.auth_time = auth_time
 
         # Authorization. The verdict and the engine that produced it land in the audit record, so a
         # reader can tell how much an `allow` is worth.

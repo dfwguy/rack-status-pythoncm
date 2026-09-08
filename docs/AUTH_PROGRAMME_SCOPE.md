@@ -20,8 +20,8 @@ source of truth and the ticket is stale.
 | 0.5 | [NVRACKSTAT-55](https://jirasw.nvidia.com/browse/NVRACKSTAT-55) | HTTPS | delivered |
 | 1 | [NVRACKSTAT-52](https://jirasw.nvidia.com/browse/NVRACKSTAT-52) | audit trail | delivered |
 | 2 | [NVRACKSTAT-56](https://jirasw.nvidia.com/browse/NVRACKSTAT-56) | identity | delivered, federation open |
-| 2.5 | [NVRACKSTAT-57](https://jirasw.nvidia.com/browse/NVRACKSTAT-57) | OIDC provider | in progress |
-| 3 | [NVRACKSTAT-58](https://jirasw.nvidia.com/browse/NVRACKSTAT-58) | authorization | not started |
+| 2.5 | [NVRACKSTAT-57](https://jirasw.nvidia.com/browse/NVRACKSTAT-57) | OIDC provider | delivered, acceptance audit outstanding |
+| 3 | [NVRACKSTAT-58](https://jirasw.nvidia.com/browse/NVRACKSTAT-58) | authorization | delivered, acceptance audit outstanding |
 
 Every one of them sits in **Backlog**, including the phases that are finished. That is deliberate,
 not an oversight: under PLC a workflow transition *is* the release owner's attestation, so the
@@ -33,9 +33,9 @@ human action.
 | 0 | Defect fixes: the unauthenticated `/ws/terminal`, `target` command injection, `0.0.0.0` exposure | done |
 | 0.5 | HTTPS: self-signed by default, internal CA opt-in, TLS 1.2 floor, CSP/HSTS, Origin policy | done |
 | 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | **closed** — 7/7 work items merged to `main` 2026-08-25; the four closing V-model steps completed 2026-08-28, acceptance verdict **PASS** on all 34 criteria, no open findings |
-| 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | requirements in progress |
-| 2.5 | **OIDC Provider**: asymmetric signing + JWKS, discovery, standard claim names, authorization-code flow with PKCE, `/token`, `/userinfo`, introspection and revocation endpoints | not started; scoped below. Directed 2026-09-01 |
-| 3 | **Authorization**: policy engine, policy documents, attach-to-principal, enforcement before dispatch | not started; `docs/PHASE3_POLICY_ENGINE_SPIKE.md` is the decision-support draft. **Gated on a test credential facility** — see below |
+| 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | **delivered**, acceptance audit outstanding. Store, SRP login, groups, both tokens, first-boot credential, admin-initiated reset and the Users/Groups UI are all in. *Federation* (verifying another issuer's tokens) is NOT started and is the phase's remaining scope |
+| 2.5 | **OIDC Provider**: asymmetric signing + JWKS, discovery, standard claim names, authorization-code flow with PKCE, `/token`, `/userinfo`, introspection and revocation endpoints | **delivered**, acceptance audit outstanding. All seven endpoints are live: `/.well-known/openid-configuration`, `/.well-known/jwks.json`, `/oidc/authorize`, `/oidc/token`, `/oidc/userinfo`, `/oidc/introspect`, `/oidc/revoke` |
+| 3 | **Authorization**: policy engine, policy documents, attach-to-principal, enforcement before dispatch | **delivered**, acceptance audit outstanding. Attachment-based engine (deny-overrides-allow, default-deny), `/api/policies` CRUD + attach, resource resolver, read governance, and the Monaco policy editor. The test-credential gate below is **lifted** |
 
 ## Phase 1 — implementation work items
 
@@ -262,15 +262,27 @@ After Phase 2 closes, before Phase 3. Phase 3 binds policy to principals and wil
 the claim vocabulary should settle first — but Phase 2's remaining work does not depend on any of
 this, and the OP surface is a coherent slice on its own.
 
-## Phase 3 is gated on tests that actually authenticate
+## Phase 3's test-credential gate — LIFTED 2026-09-08
 
-Recorded as a gate rather than a task, because it is the kind of prerequisite that gets discovered
-half-way through the phase that needs it.
+**Kept rather than deleted, because the measurement in it is the reason the gate was right.** The
+prerequisite is met: `backend/identity/testing.py` issues real credentials, `conftest.py` installs an
+authenticated client for every test, and `RACK_WEB_AUTH_DISABLED` no longer exists (commit 86b4b4b).
+The suite runs 3,474 tests with the gate enforcing.
 
-**Today the suite bypasses authentication.** `backend/tests/conftest.py` sets
-`RACK_WEB_AUTH_DISABLED=1`, so **2,286 of 2,339 tests reach every endpoint unauthenticated**; the 53
-that do exercise the gate use the shared-token mode Phase 2 removes. The product's own test suite has
-therefore never authenticated as anybody.
+One correction to the numbers below, which matters more than the gate itself. They said 53 tests
+exercised the gate and 2,286 did not. The real figure was worse: because the environment is
+process-global and pytest imports every test module during **collection**, 25 modules that
+hard-assigned `RACK_WEB_AUTH_DISABLED=1` switched the gate off for the *entire session* — including
+for the 53. Removing the switch cost **304 failing tests** to repair, against the 154 this brief
+predicted and the 17 an intermediate measurement claimed. A flag readable at any point in a session
+cannot be measured by reading `conftest.py`; it has to be probed at run time.
+
+**The original entry, as written:**
+
+> **Today the suite bypasses authentication.** `backend/tests/conftest.py` sets
+> `RACK_WEB_AUTH_DISABLED=1`, so **2,286 of 2,339 tests reach every endpoint unauthenticated**; the 53
+> that do exercise the gate use the shared-token mode Phase 2 removes. The product's own test suite has
+> therefore never authenticated as anybody.
 
 **That is survivable for Phase 2 and fatal for Phase 3.** An authorization assertion has the shape
 *user A may do this and user B may not*, which needs two authenticated principals with different
@@ -284,7 +296,7 @@ uses it: a concern the product exercises, not one it switches off so its own tes
 authentication gate that no test authenticates through is a gate whose behaviour is asserted 53 times
 and assumed 2,286 times.
 
-Tracked as SUTP gap **G-10** (High).
+Tracked as SUTP gap **G-10** (High) — **closed 2026-09-08**.
 
 ## The admin UI — named, so it stops being invisible
 

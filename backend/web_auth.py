@@ -77,6 +77,24 @@ def authenticated_principal(headers: object, cookies: object = None) -> str:
     Cookie before header. The order matters only for a client sending both, and preferring the
     cookie means a stale ``Authorization`` left by a fetch wrapper cannot displace a live session.
     """
+    return str(verified_claims(headers, cookies).get("sub") or "").strip()
+
+
+def verified_claims(headers: object, cookies: object = None) -> dict:
+    """Every claim from this request's verified access token, or ``{}`` when there is none.
+
+    **A dict, and specifically not a tuple.** ``authenticated_principal`` returns a bare string
+    because a ``(principal, method)`` tuple is *always truthy*, so the natural ``if principal:`` at
+    a call site would admit every anonymous request. An empty dict is falsy, so ``if claims:``
+    carries the same protection while giving the caller the rest of the token.
+
+    That matters because a claim other than ``sub`` is sometimes load-bearing. ``auth_time`` is the
+    case that forced this to exist: the OIDC authorization endpoint has to stamp an issued code with
+    **when the operator actually authenticated**, and it was reading ``g.auth_time``, which nothing
+    ever set — so `CodeStore.issue` fell back to "now" and every id token from the code flow claimed
+    the user had just signed in. A relying party's ``max_age`` check was then answered with a
+    plausible, well-formed lie. Discarding the claims here is what made that unavoidable.
+    """
     from identity import tokens  # local: keeps identity off the import path of a bare web_auth
 
     candidates: list[str] = []
@@ -101,10 +119,9 @@ def authenticated_principal(headers: object, cookies: object = None) -> str:
         except Exception:
             _logger.exception("token verification raised; treating as unauthenticated")
             continue
-        subject = str(claims.get("sub") or "").strip()
-        if subject:
-            return subject
-    return ""
+        if str(claims.get("sub") or "").strip():
+            return dict(claims)
+    return {}
 
 
 # --- Removed 2026-09-01: shared-token and PAM authentication (FR-18) ------------------------------

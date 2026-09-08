@@ -136,10 +136,13 @@ Transfer the files below to the air-gapped host, then load and run them:
   sha256sum -c $(basename "$tar_path").sha256      # verify integrity
   docker load -i $(basename "$tar_path")           # import the image (gz auto-detected)
   docker run -d --name rack-status -p 5000:5000 \\
-    -e RACK_STATUS_DEMO=1 -e RACK_WEB_AUTH_DISABLED=1 \\
+    -e RACK_STATUS_DEMO=1 \\
     -v rack-data:/app/var ${image_ref}
 
-Then open http://<host>:5000/spa/
+Then open https://<host>:5000/spa/ and sign in as 'admin'. The first start bootstraps an
+administrator, a policy and a self-signed certificate — read the one-time password with:
+
+  docker logs rack-status 2>&1 | grep -A6 "ONE-TIME ADMINISTRATOR"
 EOF
 }
 
@@ -162,7 +165,7 @@ load_image() {
   echo "==> Loading image from ${tar_path} (docker load) …"
   docker load -i "$tar_path"
   echo "==> Done. Run it with e.g.:"
-  echo "    docker run -d --name ${CONTAINER} -p 5000:5000 -e RACK_STATUS_DEMO=1 -e RACK_WEB_AUTH_DISABLED=1 -v rack-data:/app/var nvis-rack-status:latest"
+  echo "    docker run -d --name ${CONTAINER} -p 5000:5000 -e RACK_STATUS_DEMO=1 -v rack-data:/app/var nvis-rack-status:latest"
 }
 
 stop_container() {
@@ -208,10 +211,11 @@ verify_deploy() {
 run_dev() {
   local port="${RACK_WEB_PORT:-5050}"
   stop_container
-  echo "==> Starting in DEV mode (demo data, no auth, port ${port}) …"
+  # Not "no auth" any more: the gate cannot be switched off, so this container bootstraps an
+  # administrator and prints a one-time password to its log.
+  echo "==> Starting in DEV mode (demo data, authenticated, port ${port}) …"
   docker run -d --name "$CONTAINER" -p "${port}:5000" \
     -e RACK_STATUS_DEMO=1 \
-    -e RACK_WEB_AUTH_DISABLED=1 \
     -e RACK_EXEC_MODE=local \
     -v rack-data:/app/var \
     "$IMAGE"

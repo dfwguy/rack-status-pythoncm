@@ -58,16 +58,18 @@ export NVIS_IDENTITY_FILE="$PWD/$IDENTITY_FILE"
 # the private file, not the repo's.
 export RACK_WEB_POLICY_FILE="${RACK_WEB_POLICY_FILE:-$PWD/$STORE_DIR/policies.json}"
 
-# The gate ON. This is the whole point of the script, so it is not overrideable by accident —
-# use start.sh if you want it off.
-export RACK_WEB_AUTH_DISABLED=0
+# The gate is always on — there is no switch to set. This script predates that: it used to export
+# `RACK_WEB_AUTH_DISABLED=0` to opt in, and said "use start.sh if you want it off", which is no
+# longer true of start.sh either.
 
 # The signing key must be stable across restarts or every token minted before a restart is refused
 # (INV-17). app.py bootstraps one into var/secrets and that persists, so nothing is set here.
 
 # Legacy variables are deliberately NOT set. They no longer authenticate anything, and exporting
-# them would suggest otherwise.
-unset RACK_WEB_AUTH_TOKEN RACK_WEB_AUTH_MODE RACK_WEB_PAM_SERVICE 2>/dev/null || true
+# them would suggest otherwise. Unset rather than merely omitted, because a developer's shell may
+# still carry them from an older checkout.
+unset RACK_WEB_AUTH_TOKEN RACK_WEB_AUTH_MODE RACK_WEB_PAM_SERVICE RACK_WEB_AUTH_DISABLED \
+      RACK_WEB_AUTH_USER 2>/dev/null || true
 
 # ---- TLS -------------------------------------------------------------------------------------
 #

@@ -104,7 +104,6 @@ fi
 # adds over the test suite, and it holds in both modes above.
 cd "$ROOT"
 RACK_STATUS_DEMO=1 \
-RACK_WEB_AUTH_DISABLED=1 \
 NVIS_LOG_LEVEL=ERROR \
 "$PYTHON" - <<'PY'
 import importlib
