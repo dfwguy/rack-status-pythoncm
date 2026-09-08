@@ -127,7 +127,46 @@ COLLECTION_VERBS = frozenset({"list"})
 #: instance id. It must never extend to a mutation — a power-on with no rack named would become
 #: "power on the collection", which is the single worst thing this file could do. `resolve()`
 #: therefore keys off the verb, and `test_a_mutation_never_falls_back_to_the_collection` pins it.
-COLLECTION_FALLBACK_VERBS = frozenset({"read", "list"})
+#: **`create` is the one mutation in this set, and it is a deliberate exception rather than a
+#: loosening of the rule above.** A create that *names* its target still resolves to the instance —
+#: `identity.group:create` with `name: ops` gives `identity.group:ops`, so "may create the ops
+#: group" stays expressible. Only a create that names nothing falls back, and for that request the
+#: collection is the honest answer: asking which platform a "create a platform" call targets has no
+#: answer, because the id is derived server-side from the display name. `s3:CreateBucket` names the
+#: bucket for the same reason.
+#:
+#: It does not weaken the warning above. `rack.power:off` is absent from this set, so a power-off
+#: naming no rack is still refused — a create acting on "the collection" adds one member, whereas a
+#: power-off on "the collection" would act on the fleet.
+#:
+#: Masked until 2026-09-08: the catalog resolvers read `name` from the body, so a create resolved to
+#: `catalog.platform:Test Plat` — a display name used as an identifier. Removing `name` turned that
+#: into a 400 and surfaced the gap.
+COLLECTION_FALLBACK_VERBS = frozenset({"read", "list", "create"})
+
+#: Exact `<type>:<verb>` pairs whose target genuinely IS the whole set, listed one at a time.
+#:
+#: **An allowlist of exact actions rather than more verbs**, because the question is never "is
+#: `generate` safe" — it is "does *this* operation have an instance to name". Widening a verb answers
+#: for every type that shares it, and the entry that matters is the one nobody thought about. Every
+#: member here cites the reason it has no target, taken from the view rather than assumed.
+#:
+#: The bar: acting on "the collection" must mean *the set as one object* — one new member, one
+#: document about all of them — and never *each member in turn*. `rack.power:off` can never appear
+#: here: powering off the collection is powering off the fleet.
+COLLECTION_FALLBACK_ACTIONS: frozenset[str] = frozenset({
+    # `/api/node-report/start` is a fleet sweep by construction — its own docstring says "a second
+    # fleet-wide sweep" over "~2000 nodes". There is no per-node target to name.
+    "report.node:generate",
+    # `/api/workflows/generate-mermaid` is a pure transformation: it turns a step list from the
+    # request body into mermaid text and reads or writes no stored workflow, so there is no
+    # instance for it to name. Checked against the view, which touches only `body["steps"]`.
+    "workflow:generate",
+    # `POST /api/workflows` creates a workflow whose id the server assigns — the test reads it back
+    # from the response — so the request cannot name it. An *update* carries its id in the path and
+    # still resolves to that instance, because the fallback only fires when nothing is nameable.
+    "workflow:save",
+})
 
 
 def _singleton(_facts: RequestFacts) -> str:
@@ -171,12 +210,22 @@ _RESOLVERS: dict[str, Extractor] = {
     # -- catalog documents, keyed by operator-chosen slug. `doc_id` is the URL parameter the
     #    catalog routes actually use; omitting it made every per-document read resolve to the
     #    collection instead of the instance, silently disabling per-document grants.
-    "catalog.platform": _by("doc_id", "id", "name", "platform"),
-    "catalog.project": _by("doc_id", "id", "name", "project"),
-    "catalog.tool": _by("doc_id", "id", "name", "tool"),
+    # `name` is deliberately NOT a key here. It is a human display name — "Test Plat", spaces and
+    # all — and using it as a resource id meant a policy would have to name
+    # `catalog.platform:Test Plat`, which is not an identifier. It also made a *create* resolve to
+    # the name in the request body, when a create has no instance yet and belongs to the
+    # collection. Surfaced by the FR-4 grammar refusing the space; the modelling error predates it.
+    "catalog.platform": _by("doc_id", "id", "platform"),
+    "catalog.project": _by("doc_id", "id", "project"),
+    "catalog.tool": _by("doc_id", "id", "tool"),
     # -- validation runs are scoped to the rack they occupy: the rack is the contended thing, and a
     #    grant to run validation on rack 7 must not be a grant to run it on rack 8.
-    "validation": _by("rack", "rack_id", "racks"),
+    # `nodes` and `node` are read as well as the rack keys: a preset launched with
+    # `scope: "node"` names its target in `nodes` and nothing else, so without them a legitimate
+    # node-scoped launch was refused as unnameable. `first()` takes the head of a list, so a
+    # multi-node launch authorizes against its first node — narrower than the collection, and the
+    # dispatcher already refuses a target that is not a clean partition of the reviewed selection.
+    "validation": _by("rack", "rack_id", "racks", "nodes", "node"),
     "tools": _by("rack", "rack_id", "racks"),
     # -- one instance per deployment. Scoping these would invent an id nobody could write a policy
     #    against, and `settings:default` reads better in an audit line than a bare type.
@@ -302,7 +351,7 @@ def resolve(action: str, facts: RequestFacts) -> str:
 
     identifier = extractor(facts)
     if not identifier:
-        if verb in COLLECTION_FALLBACK_VERBS:
+        if verb in COLLECTION_FALLBACK_VERBS or action in COLLECTION_FALLBACK_ACTIONS:
             # A read that names no instance is a read over the collection. See
             # COLLECTION_FALLBACK_VERBS for why this is narrower, not broader.
             return f"{resource_type}:{COLLECTION}"
