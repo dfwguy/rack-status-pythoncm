@@ -47,7 +47,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 #: Actions look like ``service.sub:verb`` — the Phase 1 vocabulary grammar. A trailing ``*`` is
 #: permitted so a policy can name a family (``rack.power:*``) without enumerating it, which is what
 #: keeps a policy file maintainable at 236 actions.
-ACTION_PATTERN = r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*:([a-z][a-z0-9_]*|\*)$|^\*$"
+#:
+#: **A leading ``*`` is permitted only with a concrete verb** — ``*:read``, ``*:list`` — which is how
+#: a read-only role becomes one clause. Before this it was unwritable: the type had to be a literal
+#: name, a bare ``*`` is refused in an allow (correctly), and enumerating 50 types × 2 read verbs is
+#: 100 patterns against a cap of 64. So the narrow role the whole phase exists to encourage was the
+#: one thing an operator could not express, and the available answer was ``["*"]`` — the opposite.
+#:
+#: ``*:*`` is deliberately NOT matched. It is a bare ``*`` spelled differently, and refusing it in
+#: the pattern means pydantic and the exported JSON Schema agree without a bridge, unlike the
+#: bare-``*`` rule that needed one.
+ACTION_PATTERN = (
+    r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*:([a-z][a-z0-9_]*|\*)$"
+    r"|^\*:[a-z][a-z0-9_]*$"
+    r"|^\*$"
+)
 
 #: Resources look like ``type:id`` per ``docs/RESOURCE_MODEL.md``, with ``*`` allowed in the id and
 #: an optional cluster qualifier (``slurm.job:mayo:127391``).

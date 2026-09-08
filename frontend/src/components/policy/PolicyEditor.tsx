@@ -184,6 +184,100 @@ export default function PolicyEditor({
     return () => completionRef.current?.dispose();
   }, [actions]);
 
+  // Semantic markers for the two things JSON Schema cannot express, and both are real gaps rather
+  // than polish:
+  //
+  //  * an **unknown action** validates structurally and grants nothing, so a typo in
+  //    `rack.power:of` produces a policy that looks correct, saves cleanly, and quietly denies.
+  //    The vocabulary was already loaded for completion — and completion is not validation: it
+  //    helps someone who types a prefix and does nothing for someone who pastes (AC-15g2).
+  //  * a **duplicate `sid`** is refused by the server and accepted by the schema, because JSON
+  //    Schema has `uniqueItems` for whole items and no keyword for uniqueness by property. Without
+  //    a check here the operator only finds out on save.
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!model) return;
+
+    const known = new Set(actions);
+
+    const mark = () => {
+      const text = model.getValue();
+      const markers: monaco.editor.IMarkerData[] = [];
+
+      // Parsed, not regex-scanned: a string or comment containing `"actions"` would fool a scan,
+      // and a marker in the wrong place is worse than no marker. Malformed JSON is already
+      // reported by the schema validator, so this simply stays quiet for it.
+      type PolicyShape = { statements?: { sid?: string; actions?: string[] }[] };
+      const parse = (): PolicyShape | null => {
+        try {
+          return JSON.parse(text) as PolicyShape;
+        } catch {
+          return null;
+        }
+      };
+      const doc = parse();
+
+      const rangeOf = (needle: string) => {
+        const at = text.indexOf(`"${needle}"`);
+        if (at < 0) return null;
+        const start = model.getPositionAt(at);
+        const end = model.getPositionAt(at + needle.length + 2);
+        return {
+          startLineNumber: start.lineNumber,
+          startColumn: start.column,
+          endLineNumber: end.lineNumber,
+          endColumn: end.column,
+        };
+      };
+
+      const statements = doc?.statements ?? [];
+      const seen = new Set<string>();
+
+      for (const statement of statements) {
+        const sid = statement?.sid;
+        if (typeof sid === 'string' && sid) {
+          if (seen.has(sid)) {
+            const range = rangeOf(sid);
+            if (range) {
+              markers.push({
+                ...range,
+                severity: monaco.MarkerSeverity.Error,
+                message: `Duplicate statement id "${sid}". The server refuses this on save.`,
+              });
+            }
+          }
+          seen.add(sid);
+        }
+
+        for (const action of statement?.actions ?? []) {
+          if (typeof action !== 'string' || !action) continue;
+          // A wildcard cannot be checked against the vocabulary; that is what it is for.
+          if (action.includes('*')) continue;
+          if (known.size > 0 && !known.has(action)) {
+            const range = rangeOf(action);
+            if (range) {
+              markers.push({
+                ...range,
+                severity: monaco.MarkerSeverity.Warning,
+                message: `Unknown action "${action}". It matches nothing, so this statement grants nothing.`,
+              });
+            }
+          }
+        }
+      }
+
+      monaco.editor.setModelMarkers(model, 'greenlight-policy', markers);
+    };
+
+    mark();
+    const subscription = model.onDidChangeContent(mark);
+    return () => {
+      subscription.dispose();
+      monaco.editor.setModelMarkers(model, 'greenlight-policy', []);
+    };
+  }, [actions]);
+
   return (
     <div
       ref={hostRef}

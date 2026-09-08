@@ -219,3 +219,87 @@ class TestActionPatternHelper:
         list would be stale from the next merge (FR-19a).
         """
         assert S.action_pattern_is_valid("nosuch.service:verb")
+
+
+class TestTheSchemaTheEditorActuallyGets:
+    """The suite above validates `json_schema()` — the whole-**file** schema. Monaco is served
+    `document_json_schema()`, a single document, by `GET /api/policies/schema`.
+
+    Testing the wrong one is a subtle way for FR-17b to pass while failing: the two are generated
+    from different models, so a rule bridged into one is not necessarily in the other, and the
+    editor is the artifact whose disagreement operators actually experience.
+    """
+
+    @pytest.fixture
+    def served(self):
+        return jsonschema.Draft202012Validator(S.document_json_schema())
+
+    @pytest.mark.parametrize(("label", "document", "valid"), [
+        ("a good document", doc(), True),
+        ("unknown effect", doc(statements=[{"effect": "permit", "actions": ["a:b"]}]), False),
+        ("no statements", doc(statements=[]), False),
+        ("malformed action", doc(statements=[{"effect": "allow", "actions": ["Rack Power"]}]), False),
+        ("unknown field", doc(nope=1), False),
+        ("retired principals", doc(principals=["user:a"]), False),
+        ("malformed policy id", doc(id="Ops Policy!"), False),
+        ("bare * in an allow", doc(statements=[{"effect": "allow", "actions": ["*"]}]), False),
+        ("bare * in a deny", doc(statements=[{"effect": "deny", "actions": ["*"]}]), True),
+        # The read-only role, which the grammar refused until 2026-09-08.
+        ("a type wildcard with a pinned verb",
+         doc(statements=[{"effect": "allow", "actions": ["*:read", "*:list"]}]), True),
+        ("*:* — a bare star spelled differently",
+         doc(statements=[{"effect": "allow", "actions": ["*:*"]}]), False),
+    ])
+    def test_the_served_schema_agrees_with_the_server(self, served, label, document, valid):
+        by_schema = not list(served.iter_errors(document))
+        try:
+            S.parse_document(document)
+            by_pydantic = True
+        except ValueError:
+            by_pydantic = False
+
+        assert by_schema == valid, f"the SERVED schema disagreed on {label!r}"
+        assert by_pydantic == valid, f"pydantic disagreed on {label!r}"
+
+    def test_the_served_schema_is_self_consistent(self):
+        jsonschema.Draft202012Validator.check_schema(S.document_json_schema())
+
+
+class TestTheOneDivergenceJsonSchemaCannotExpress:
+    """A duplicate `sid` is refused by the server and accepted by the editor — **on purpose**, and
+    recorded here so nobody mistakes the editor for authoritative.
+
+    JSON Schema has `uniqueItems`, which compares whole array items, and no keyword for "unique by
+    property". So `_unique_sids` cannot be bridged the way `_no_bare_star_in_allow` was; expressing
+    it would mean changing the document shape to key statements by `sid`, which is a format change
+    for a validation nicety.
+
+    The consequence is a real one and belongs in the UI rather than in the schema: the editor must
+    check for duplicate sids before submitting, so the operator learns at the keyboard instead of on
+    save. Asserting the divergence here means that gap is *known* — the alternative is a suite that
+    silently implies parity FR-17b never achieved.
+    """
+
+    def _duplicate_sid(self) -> dict:
+        return doc(statements=[
+            {"sid": "same", "effect": "allow", "actions": ["rack:read"]},
+            {"sid": "same", "effect": "allow", "actions": ["rack:list"]},
+        ])
+
+    def test_the_server_refuses_it(self):
+        with pytest.raises(ValueError):
+            S.parse_document(self._duplicate_sid())
+
+    def test_the_editor_schema_accepts_it_and_that_is_the_known_gap(self):
+        served = jsonschema.Draft202012Validator(S.document_json_schema())
+        assert not list(served.iter_errors(self._duplicate_sid())), (
+            "the served schema now catches a duplicate sid. That is an improvement — bridge it "
+            "properly and delete this test rather than inverting it."
+        )
+
+    def test_the_servers_refusal_names_the_offending_sid(self):
+        """Since the editor cannot pre-empt it, the save-time message is the operator's only
+        signal, so it has to say which sid rather than that something is wrong."""
+        with pytest.raises(ValueError, match="same"):
+            S.parse_document(self._duplicate_sid())
+
