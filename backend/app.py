@@ -1251,6 +1251,12 @@ _bootstrap_validation_activities_refresh_at_startup()
 
 
 if __name__ == "__main__":
+    # The development server is still a server. Gated here rather than at import, so the tools
+    # that import this module to enumerate routes or prove the tree imports are unaffected.
+    import startup_gate
+
+    startup_gate.prepare()
+
     port = int(os.environ.get("PORT", "5000"))
     # TLS when a certificate is configured. The same two variables drive gunicorn's
     # --certfile/--keyfile in the container entrypoint, so a deployment configures TLS in one

@@ -29,6 +29,22 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend"))
 
 
+def on_starting(server):  # noqa: ARG001 - gunicorn passes the arbiter; we need none of it
+    """Refuse to serve without an administrator, a policy and TLS.
+
+    Here because this hook is the narrowest place that means *starting*. The container's
+    ENTRYPOINT, `start.sh` and `bin/run-local-auth.sh` all reach gunicorn through this config, so
+    one hook covers every real serving path — while the tools that merely *import* `app` to
+    enumerate routes or prove the tree imports keep working, since importing serves nothing.
+
+    Runs in the arbiter before any worker is forked, so a refusal is a single clear message rather
+    than one per worker.
+    """
+    import startup_gate
+
+    startup_gate.prepare()
+
+
 def ssl_context(conf, default_ssl_context_factory):
     """Apply the shared TLS policy to gunicorn's own context.
 

@@ -35,7 +35,7 @@ os.environ.setdefault("RACK_STATUS_DEMO", "1")
 #
 # So the bypass stays until FR-18c, and migrated files opt IN. Track the remaining clusters in
 # `.plc/briefs/auth-identity-brief.md` FR-18c.
-os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "1")
+os.environ.setdefault("RACK_WEB_AUTH_DISABLED", "0")
 os.environ.setdefault("RACK_WEB_SECRET_KEY", "nvis-test-suite-signing-key-not-a-real-secret")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 # Force a fresh, isolated catalog store (seeded on first access -> "default" project
@@ -125,6 +125,19 @@ try:
     _identity_bootstrap.ensure_admin(_bootstrap_store, emit=False)
 finally:
     _bootstrap_store.close()
+
+import identity.testing as _identity_testing  # noqa: E402
+
+# Two documents, because there are two kinds of principal in the suite. The administrator gets
+# `administrators` through the product's own first-boot path, so the suite exercises the code a real
+# deployment runs rather than a harness substitute. Everyone `enrol` creates gets `test-principals`,
+# which is what their attachment already names.
+_enforce_store = _IdentityStore(os.environ["NVIS_IDENTITY_FILE"])
+try:
+    _identity_bootstrap.ensure_admin_policy(_enforce_store)
+finally:
+    _enforce_store.close()
+_identity_testing.enforce_policies()
 
 import pytest  # noqa: E402
 

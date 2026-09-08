@@ -302,23 +302,12 @@ def _serve(args: argparse.Namespace) -> int:
     responses and Chrome reports a truncated stream (`start.sh` carries the full account). Reusing
     `gunicorn.conf.py` is what keeps a local run on the same TLS floor as production.
     """
-    if args.no_bootstrap:
-        plan = _plan()
-        missing = [
-            what
-            for what, absent in (
-                ("administrator", plan["would_create_admin"]),
-                ("policy", plan["would_create_policy"]),
-            )
-            if absent
-        ]
-        if missing:
-            print(
-                f"greenlight: refusing to start: no {' and no '.join(missing)}, and "
-                "--no-bootstrap was given",
-                file=sys.stderr,
-            )
-            return EXIT_FAULT
+    # Before exec, so the refusal comes from the command the operator ran. Gunicorn's own
+    # `on_starting` hook checks the same thing for the container and `start.sh`, which do not come
+    # through here — one gate, two entry points, and neither trusting the other to have run it.
+    import startup_gate
+
+    startup_gate.prepare(bootstrap=not args.no_bootstrap)
 
     port = os.environ.get("RACK_WEB_PORT") or "5050"
     bind = f"{os.environ.get('RACK_WEB_BIND_ADDR') or '0.0.0.0'}:{port}"
