@@ -55,6 +55,15 @@ ABSENT_TOOLS = ("git", "curl", "make")
 NOT_A_JOB = {"include", "default", "stages", "variables", "workflow"}
 
 
+#: `bin/check-tracked-tree.sh` exports tracked files *excluding dotfiles*, so `.gitlab-ci.yml` is
+#: absent in that tree and every assertion here would fail on a file that is simply not there —
+#: a false alarm about CI raised by the tool that checks CI. A real runner does a full clone and
+#: always has it, so skipping is the honest answer in the one tree that does not.
+pytestmark = pytest.mark.skipif(
+    not CI_FILE.is_file(), reason=f"{CI_FILE.name} absent (dotfile-stripped tree)"
+)
+
+
 def _pipeline() -> dict:
     """`yaml.safe_load` chokes on GitLab's `!reference` tag, which is not standard YAML."""
     class _Loader(yaml.SafeLoader):
