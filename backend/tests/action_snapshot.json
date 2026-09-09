@@ -1008,6 +1008,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "policies.preview_grants",
+  "method": "GET",
+  "action": "policy:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "policies.update_policy",
   "method": "PUT",
   "action": "policy:update",

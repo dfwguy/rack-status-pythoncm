@@ -127,7 +127,7 @@ exactly two reachable states: **grant globally, or grant nothing.**
 | AC-3 | FR-2 | A route declares its resource beside its action; the registry resolves it. | automated |
 | AC-4 | FR-3 | A route with no declared resource yields a type-only id, and a policy naming `type:*` still matches while one naming an instance does not. | automated |
 | AC-5 | FR-4 | A caller-supplied id containing a wildcard, a separator or a traversal sequence is refused rather than matched. | automated, parametrised — the escalation path |
-| AC-6 | FR-5 | The same Slurm job id under two active clusters produces two different resource ids. | automated |
+| AC-6 | FR-5 | The same Slurm job id under two active clusters produces two different resource ids. | automated **ACCEPTED AS AMBIGUOUS, 2026-09-08 (feature-lead decision).** `slurm.job:127391` denotes a different job on each cluster and looks identical to a policy. Not closed by qualifying the id, because the right answer is a **condition** on the statement — `cluster: "Mayo"` and other metadata attributes evaluated at decision time — rather than a compound identifier. A qualifier would also mean relaxing `clean_identifier` to admit `:`, and that grammar is what closed the case-folding evasion (traps §10), so widening it for a display concern is the wrong trade. Deferred to a conditions feature; the ambiguity is a recorded acceptance, not an oversight. |
 | AC-7 | FR-6 | A rack-scoped grant does **not** permit an action on a node in that rack. | automated |
 | AC-8 | FR-6a | A fan-out over three nodes where one is denied refuses the whole request. | automated |
 | AC-9 | FR-7 | A deny beats an allow regardless of order and specificity. | automated (exists) |

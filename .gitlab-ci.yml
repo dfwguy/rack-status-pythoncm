@@ -87,7 +87,7 @@ python-lint:
 
 typescript-check:
   stage: lint
-  image: node:22-slim
+  image: node:24-slim
   cache:
     key: npm-${CI_COMMIT_REF_SLUG}
     paths:
@@ -126,6 +126,9 @@ python-test:
     # nobody regenerates is worse than a hand-written one, because it claims to be derived from
     # the code -- so this fails the build when a setting was declared without regenerating.
     - python bin/gen-greenlight-example.py --check
+    # The action vocabulary is a published document, so a renamed action fails here rather
+    # than being discovered by a policy that silently matches nothing.
+    - python bin/gen-action-vocabulary.py --check
     # Run from the repo root so backend modules resolve repo-root assets (var/, etc.);
     # pytest adds backend/ to sys.path via the backend/tests package.
     # --cov-config picks up .coveragerc, which measures ALL of backend/ with branch coverage. The
@@ -186,7 +189,7 @@ auth-benchmark:
 
 frontend-test:
   stage: test
-  image: node:22-slim
+  image: node:24-slim
   cache:
     key: npm-${CI_COMMIT_REF_SLUG}
     paths:

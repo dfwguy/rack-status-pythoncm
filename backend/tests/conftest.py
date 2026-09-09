@@ -187,6 +187,64 @@ def _every_test_client_authenticates():
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+#: The published action vocabulary — `docs/action-vocabulary.json`, generated from the live registry
+#: by `bin/gen-action-vocabulary.py` and gated in CI.
+VOCABULARY = Path(__file__).resolve().parents[2] / "docs" / "action-vocabulary.json"
+
+
+@pytest.fixture(scope="session")
+def vocabulary() -> dict:
+    """Services and actions, read from the document rather than named by hand.
+
+    **A test should not spell an action name from memory.** One did — `rack:read`, which has never
+    existed; the real action is `rack:list` — and it passed review because nothing checks a string
+    literal against the vocabulary. The registry was always the runtime authority, but it was not
+    written down anywhere a test could read without starting the application, so the alternative to
+    guessing was importing `app`.
+
+    Use `an_allowed_read` / `a_mutation` below for the common case: a test that needs "some read"
+    and "some mutation" should not care which, and picking one from the document means a renamed
+    action changes the fixture rather than breaking an unrelated assertion.
+    """
+    import json
+
+    assert VOCABULARY.is_file(), (
+        f"{VOCABULARY} is missing. Run bin/gen-action-vocabulary.py — it is generated from the "
+        f"action registry and gated in CI."
+    )
+    return json.loads(VOCABULARY.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="session")
+def an_allowed_read(vocabulary) -> str:
+    """A read action that genuinely exists, chosen deterministically.
+
+    Sorted and first, not random: a test that picks a different action per run reports a different
+    failure per run, and the first thing anyone does with that is disbelieve the test.
+    """
+    reads = sorted(
+        entry["action"]
+        for service in vocabulary["services"]
+        for entry in service["actions"]
+        if entry["kind"] == "read"
+    )
+    assert reads, "the vocabulary declares no read actions"
+    return reads[0]
+
+
+@pytest.fixture(scope="session")
+def a_mutation(vocabulary) -> str:
+    """A mutating action that genuinely exists, chosen the same way."""
+    mutations = sorted(
+        entry["action"]
+        for service in vocabulary["services"]
+        for entry in service["actions"]
+        if entry["kind"] == "mutate"
+    )
+    assert mutations, "the vocabulary declares no mutating actions"
+    return mutations[0]
+
+
 @pytest.fixture
 def catalog_from_fixture(tmp_path, monkeypatch):
     """Point the catalog at a committed fixture, copied so the tracked file stays pristine.
