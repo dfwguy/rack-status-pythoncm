@@ -281,6 +281,35 @@ resolution is how two panes come to disagree about what is running. KUI first fo
 
 ---
 
+### 14. Generated sources of truth — derived documents, never hand-edited
+
+Some facts live in code and are *needed* outside it: by a test, by an operator writing a policy, by
+a document. Those are **generated and tracked**, by a script under `bin/`, and rebuilt by the
+`sources-of-truth` job in CI's `lint` stage before anything consumes them.
+
+| Document | Generated from | By |
+|---|---|---|
+| `docs/action-vocabulary.json`, `docs/ACTION_VOCABULARY.md` | the live action registry | `bin/gen-action-vocabulary.py` |
+| `backend/tests/action_snapshot.json` | the same registry, as endpoint/method pairs | `bin/gen-action-snapshot.py` |
+| `greenlight.toml.example` | `config_registry` | `bin/gen-greenlight-example.py` |
+
+**The rule: if a test needs to know a name the code defines, it reads the generated document.** Not
+a literal, and not by importing the app. A test asserting `rack:read` reached review and failed —
+the action is `rack:list` — because nothing checks a hand-typed string against the vocabulary, and
+the vocabulary was not written down anywhere a test could read. `conftest` exposes `vocabulary`,
+`an_allowed_read` and `a_mutation` for exactly this.
+
+**Build *and* gate, and both halves matter.** Building in `lint` means a stale document fails before
+the suite spends four minutes, and publishes an artifact. Gating (`git diff --exit-code`, so the
+diff is printed) is what preserves the point of tracking the file: adding or renaming an API route
+is a routine change made by someone with no reason to know these documents exist, and the rename
+must appear as a **reviewed diff in the merge request** rather than being silently regenerated
+inside CI where nobody sees that `rack:power` became `rack.power:on`.
+
+**A new generator goes in that job**, not into `python-test`. Checking the same thing in two places
+is two places to forget when a third generator arrives — which is why the vocabulary check was
+removed from `python-test` when this job landed.
+
 ## Planned citizens
 
 - **Terminals integrated with AI.** The WebSocket PTY (`flask-sock`, xterm.js) and `ai_chat.py`

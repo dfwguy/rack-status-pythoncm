@@ -249,6 +249,31 @@ Recorded here so it is scoped rather than discovered:
    estimated). Reading is where most of the sensitive disclosure lives — validation results, node
    reports, the audit trail itself — so this is not a tidy-up after the mutating rules work.
 
+## The action vocabulary is a generated document
+
+This file describes the **resource** half of a policy statement. The **action** half is generated,
+because it is derived from the code and changes whenever an API route does:
+
+| Document | Contents |
+|---|---|
+| `docs/ACTION_VOCABULARY.md` | every action, by service, with its verb, read/mutate kind, resource scope and routes — for a human choosing actions for a policy |
+| `docs/action-vocabulary.json` | the same dataset, machine-readable, for tests and tooling |
+
+Both come from `bin/gen-action-vocabulary.py`, which reads the live action registry, and CI's
+`sources-of-truth` job rebuilds them in the **lint** stage — before any test runs — then fails if the
+tracked copies differ. Adding, removing or renaming a route therefore shows up as a reviewed diff
+rather than as drift.
+
+**Read the document; do not type an action from memory.** It was published because a test asserting
+`rack:read` reached review and then failed — the action is `rack:list`, and nothing checks a
+hand-written string against the vocabulary. `backend/tests/conftest.py` exposes `vocabulary`,
+`an_allowed_read` and `a_mutation` so a test can ask for "some read" without naming one.
+
+Two facts worth having to hand, current at the time of writing and re-derived on every pipeline:
+**173 actions across 50 services — 59 reads and 114 mutations.** That ratio is why a read-only role
+is `["*:read", "*:list"]` rather than an enumeration, and why `GET /api/policies/preview` reports
+the whole matrix rather than expecting an operator to check actions one at a time.
+
 ## Related
 
 - `AUTH_PROGRAMME_SCOPE.md` — phases, and why groups are Phase 2

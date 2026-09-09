@@ -56,6 +56,52 @@ workflow:
 
 # ─── Lint ────────────────────────────────────────────────────────────────────
 
+# The generated sources of truth, BUILT BEFORE ANYTHING CONSUMES THEM.
+#
+# `docs/action-vocabulary.json` is derived from the live action registry, so it goes stale the moment
+# anyone adds, removes or renames an API route — a routine change, made by people who have no reason
+# to know this file exists. Left to rot it becomes the worst kind of document: one that claims to be
+# derived from the code and is not.
+#
+# **It builds AND gates, and both halves are load-bearing.** Building makes the artifact available
+# to later stages, and running in `lint` means a stale document fails before the suite spends four
+# minutes on it. Gating is what preserves the reason the file is tracked at all: a renamed action
+# shows up as a reviewed diff in the merge request, rather than being silently regenerated inside CI
+# where nobody would notice that `rack:power` had become `rack.power:on`.
+#
+# So the failure is an instruction rather than a diagnosis: regenerate, read the diff, commit it.
+sources-of-truth:
+  stage: lint
+  image: python:3.12-slim
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .pip-cache/
+  script:
+    # The generators import `app` to read the live registry, so they need the runtime dependencies.
+    # That is why this is its own job rather than another line in python-lint.
+    - pip install -q -r backend/requirements.txt
+    # Build first, so a later job or a developer downloading artifacts has the current document.
+    - python bin/gen-action-vocabulary.py
+    - python bin/gen-action-snapshot.py
+    # Then gate. `git diff --exit-code` rather than the scripts' own `--check`, because it prints
+    # the diff: a contributor needs to see WHICH action changed, not only that one did.
+    - |
+      if ! git diff --exit-code -- docs/action-vocabulary.json docs/ACTION_VOCABULARY.md backend/tests/action_snapshot.json; then
+        echo ""
+        echo "A generated source of truth is stale — an API route was added, removed or renamed."
+        echo "Run these locally, review the diff, and commit it:"
+        echo "    bin/gen-action-vocabulary.py"
+        echo "    bin/gen-action-snapshot.py"
+        exit 1
+      fi
+  artifacts:
+    when: always
+    paths:
+      - docs/action-vocabulary.json
+      - docs/ACTION_VOCABULARY.md
+      - backend/tests/action_snapshot.json
+
 python-lint:
   stage: lint
   image: python:3.12-slim
@@ -126,9 +172,9 @@ python-test:
     # nobody regenerates is worse than a hand-written one, because it claims to be derived from
     # the code -- so this fails the build when a setting was declared without regenerating.
     - python bin/gen-greenlight-example.py --check
-    # The action vocabulary is a published document, so a renamed action fails here rather
-    # than being discovered by a policy that silently matches nothing.
-    - python bin/gen-action-vocabulary.py --check
+    # The action vocabulary is NOT re-checked here: `sources-of-truth` in the lint stage builds and
+    # gates it, and a failed stage stops the pipeline before this job starts. Two places to check
+    # one thing is two places to forget when a third generator arrives.
     # Run from the repo root so backend modules resolve repo-root assets (var/, etc.);
     # pytest adds backend/ to sys.path via the backend/tests package.
     # --cov-config picks up .coveragerc, which measures ALL of backend/ with branch coverage. The

@@ -103,10 +103,20 @@ prescriptive detail — and the cost of each wrong choice — in **`core-designs
 
 - **Backend**: pytest (`backend/tests/`). Run from repo root: `python -m pytest backend/tests/ -v`
 - **Frontend**: Vitest + Testing Library (`src/**/*.test.{ts,tsx}`). Run: `cd frontend && npm test`
-- **CI/CD**: `.gitlab-ci.yml` — lint (ruff + tsc), test (pytest + vitest), build (Docker)
+- **CI/CD**: `.gitlab-ci.yml` — lint (**sources-of-truth**, ruff + tsc), test (pytest + vitest),
+  build (Docker). `sources-of-truth` runs FIRST and rebuilds the generated documents
+  (`docs/action-vocabulary.json`, `backend/tests/action_snapshot.json`,
+  `greenlight.toml.example`), then fails if the tracked copies differ — so adding or renaming
+  an API route surfaces as a reviewed diff instead of drifting. See `core-designs.mdc` §14.
 - **Lint**: `ruff check` for Python, `tsc -b --noEmit` for TypeScript. Both must pass.
 
 ## Key Files
+
+**Generated documents — never hand-edit, and read these rather than guessing a name:**
+`docs/ACTION_VOCABULARY.md` and `docs/action-vocabulary.json` are the source of truth for which
+services and actions exist (173 actions across 50 services), generated from the live registry by
+`bin/gen-action-vocabulary.py`. A policy's `actions` field may name only what is in there, and a
+test should read it rather than typing an action string — see `core-designs.mdc` §14.
 
 The Python backend lives under `backend/`; runtime assets (`bin/`, `static/`, `var/`, `help_content.json`) stay at the repo root. Backend modules resolve those via `REPO_ROOT = APP_DIR.parent` (parent of `backend/`); keep `APP_DIR` only for `sys.path` and the `rack_web/` helper. **`version.py` must stay at the repo root** — it is release metadata read by the ci-toolkit release jobs (`grep VERSION = version.py`) and the JFrog image build, and it is the only place the version actually lives (everything else derives from it).
 
