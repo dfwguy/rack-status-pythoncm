@@ -38,6 +38,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import sys
@@ -147,6 +148,26 @@ def render_json(data: dict) -> str:
     return json.dumps(data, indent=2, sort_keys=False) + "\n"
 
 
+def _diff(path: Path, generated: str) -> str:
+    """A unified diff of the tracked file against what the registry now produces.
+
+    `--check` used to report only *which* files were stale, so the CI gate shelled out to
+    `git diff` to show the contributor which action had changed. That cost the job a `git` binary
+    — which `python:3.12-slim` does not have — so it failed with `git: command not found` and then
+    reported "a generated source of truth is stale", blaming the documents for a missing tool.
+    Printing the diff here keeps what git was there for and needs nothing but the stdlib.
+    """
+    tracked = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    name = str(path.relative_to(REPO_ROOT))
+    return "\n".join(difflib.unified_diff(
+        tracked,
+        generated.splitlines(),
+        fromfile=f"{name} (tracked)",
+        tofile=f"{name} (regenerated)",
+        lineterm="",
+    ))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -165,6 +186,8 @@ def main() -> int:
             if not path.exists() or path.read_text(encoding="utf-8") != text
         ]
         if stale:
+            for path in stale:
+                print(_diff(path, rendered[path]), file=sys.stderr)
             print(
                 "stale: "
                 + ", ".join(str(p.relative_to(REPO_ROOT)) for p in stale)

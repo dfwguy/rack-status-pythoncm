@@ -71,6 +71,23 @@ number came from your own working tree.
 that shelled out to `git archive` died with `git: command not found`. Check `command -v <tool>`
 before depending on anything that is not Python or the stdlib.
 
+**It happened again on 2026-09-09, and the second time taught the more important half.** The
+`sources-of-truth` gate ran `git diff --exit-code` to show a contributor *which* action had
+changed. It never passed once — six pipelines — and because it sits in `lint`, every downstream job
+was skipped, so the whole pipeline was red on a gate that could not run.
+
+The real damage was not the failure but the **diagnosis**. The call was inside `if ! git diff …`,
+so the missing binary's non-zero exit took the same branch as a real difference: every run printed
+*"a generated source of truth is stale — an API route was added, removed or renamed"* and blamed
+the documents. The documents were never stale. **An absent tool and a genuine failure must not be
+indistinguishable** — that is what turns a five-minute fix into a hunt for a route nobody changed.
+
+So: prefer the stdlib over the binary. The repair was to teach the generators' own `--check` mode
+to print a `difflib` unified diff, which was the only thing git was there for, and drop git
+entirely. `backend/tests/test_ci_job_tooling.py` now fails the build if any job on a slim image
+invokes `git`, `curl` or `make` — the check a developer's shell can never perform, because git is
+always on *their* PATH.
+
 The reverse also happens. macOS ships **bash 3.2** as `/bin/bash`, while CI images carry bash 5, so
 `mapfile`, `declare -A` and `${var,,}` are all fine on a runner and fail on the workstation. For
 anything under `bin/` that a developer runs, prefer constructs both shells have — `tar --exclude`

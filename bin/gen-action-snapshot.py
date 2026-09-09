@@ -32,6 +32,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import sys
@@ -72,6 +73,15 @@ def main() -> int:
     rendered = render()
     if args.check:
         if not OUT.exists() or OUT.read_text(encoding="utf-8") != rendered:
+            # The diff, not just the verdict: a contributor needs to see WHICH endpoint moved.
+            # This is what the CI gate used `git diff` for, and `python:3.12-slim` ships no git —
+            # see the note in gen-action-vocabulary.py::_diff.
+            tracked = OUT.read_text(encoding="utf-8").splitlines() if OUT.exists() else []
+            name = str(OUT.relative_to(REPO_ROOT))
+            print("\n".join(difflib.unified_diff(
+                tracked, rendered.splitlines(),
+                fromfile=f"{name} (tracked)", tofile=f"{name} (regenerated)", lineterm="",
+            )), file=sys.stderr)
             print(
                 f"{OUT.relative_to(REPO_ROOT)} is stale.\nRun: bin/gen-action-snapshot.py",
                 file=sys.stderr,
