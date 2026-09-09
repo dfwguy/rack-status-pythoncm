@@ -56,6 +56,48 @@ MUTATING = frozenset(_actions.MUTATING_METHODS)
 
 _TIMER = "_nvis_audit_t0"
 _REQID = "_nvis_audit_reqid"
+_TARGET = "_nvis_audit_target"
+
+
+def name_target(target: str) -> None:
+    """Record the *object* this action was about, when the URL cannot express it.
+
+    For almost every route the resolved resource is the whole story: `POST /api/power-off` with
+    `rack=p17-r01` acts on `rack.power:p17-r01` and the trail says so. Attachment is the exception,
+    and it is the one place where the missing half matters most. `POST /api/policies/ops/attachments`
+    resolves to `policy:ops` — the policy — while the principal being granted it arrives in the
+    body. So the trail recorded *which policy was attached* and never *to whom*, which is the only
+    question an attachment audit exists to answer (AC-15g).
+
+    Deliberately not solved by making the resolver return the subject as a second target. That
+    reads tidier and would be a silent authorization change: `resolve_all` authorizes **every**
+    target, so naming the principal there would start requiring the caller to hold authority over
+    that principal as well as over the policy. That may even be the better rule — granting somebody
+    a policy is arguably acting on them — but it is a policy decision that would refuse callers who
+    are permitted today, and it must be made deliberately rather than as a side effect of improving
+    an audit field.
+
+    The field is **absent unless a handler names one**, rather than an empty string on every event.
+    `EVENT_FIELDS` is a pinned contract (`test_audit_event.py::TestTC6EventSchema`) and `target` is
+    not part of it; an optional extra is exactly what `build_event(**extra)` is for. Same reasoning
+    as the OIDC claim release, where an unset claim is omitted rather than sent blank.
+    """
+    cleaned = str(target or "").strip()
+    if not cleaned:
+        return
+    try:
+        setattr(g, _TARGET, cleaned)
+    except RuntimeError:  # outside a request context; nothing to annotate
+        pass
+
+
+def _target() -> dict[str, str]:
+    """The `target` extra, or nothing at all."""
+    try:
+        named = str(getattr(g, _TARGET, "") or "").strip()
+    except RuntimeError:
+        return {}
+    return {"target": named} if named else {}
 
 
 def is_static(path: str) -> bool:
@@ -271,4 +313,5 @@ def _record(response) -> bool:
         request_id=getattr(g, _REQID, ""),
         cluster=_cluster(),
         latency_ms=None if t0 is None else round((time.perf_counter() - t0) * 1000, 2),
+        **_target(),
     )

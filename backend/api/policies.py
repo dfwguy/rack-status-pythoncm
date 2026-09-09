@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 
 from audit.actions import action
+from audit.request_hook import name_target
 from authz import schema as authz_schema
 from authz import store as policy_store
 from authz.policy import _glob_any
@@ -432,6 +433,10 @@ def attach_policy(policy_id: str):
     finally:
         store.close()
 
+    # The durable record, not just the application log: the resolved resource names the policy,
+    # so without this the trail cannot say who was granted it (AC-15g). Set after the store call
+    # succeeds, so a refused or failed attachment does not claim a grant that never happened.
+    name_target(subject)
     _logger.info("authz: attached %s to %s", policy_id, subject)
     return jsonify({"ok": True, "policy": policy_id, "subject": subject}), 201
 
@@ -450,6 +455,7 @@ def detach_policy(policy_id: str, subject: str):
         store.detach_policy(subject, policy_id)
     finally:
         store.close()
+    name_target(subject)
     return jsonify({"ok": True, "policy": policy_id, "subject": subject, "detached": True})
 
 

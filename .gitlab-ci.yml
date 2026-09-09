@@ -259,6 +259,15 @@ frontend-test:
     - cd frontend
     - npm ci --ignore-scripts
     - npx vitest run --reporter=default --reporter=junit --outputFile=../report-frontend.xml --coverage --coverage.reporter=text-summary
+    # FR-19b / AC-15i: the built bundle must fetch nothing from the internet. Operators reach this
+    # over an SSH tunnel and some deployments are air-gapped, where an external reference does not
+    # error -- it hangs, so the page merely looks slow and a control may never render. It needs a
+    # real build: Vite inlines and rewrites, so a dependency can introduce a CDN URL that appears
+    # nowhere in our source. This was a `grep` recipe in a README, i.e. a check nobody ran, on the
+    # one axis where a regression is invisible on every developer's machine (a workstation just
+    # fetches the asset).
+    - npm run build
+    - cd .. && bash bin/check-frontend-offline.sh
   coverage: '/Statements\s*:\s*(\d+\.?\d*%)/'
   artifacts:
     when: always

@@ -286,10 +286,16 @@ export default function PoliciesView() {
                         <Button kind="tertiary" size="tiny" onClick={() => setAttaching(row)}>
                           Attach
                         </Button>
+                        {/* `aria-label` + `title`: the only icon-only control on this row, and
+                            it is the destructive one. Without a label a screen reader announces
+                            it as "button" and a hover reveals nothing, so the single action that
+                            can revoke somebody's access is the single action with no name. */}
                         <Button
                           kind="tertiary"
                           size="tiny"
                           color="danger"
+                          aria-label={`Delete policy ${row.id}`}
+                          title={`Delete policy ${row.id}`}
                           onClick={() => setDeleting(row)}
                         >
                           <Trash2 size={12} />
