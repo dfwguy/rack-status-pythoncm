@@ -112,12 +112,24 @@ class TestTimeAndCrypto:
         other = _forged(_claims(sub="user:root")).split(".")[1]
         assert not _honoured(f"{header}.{other}.{signature}")
 
-    def test_inv03_signed_by_another_deployment(self, monkeypatch):
-        """Different deployment secret → different derived key. This, not `iss`, is the boundary
-        between two installs, since `iss`/`aud` are product constants."""
+    def test_inv03_signed_by_another_deployment(self, tmp_path, monkeypatch):
+        """Still the boundary between two installs — but the **key set** is now what draws it.
+
+        It was the deployment secret while HS256 signed. Since the provider became unconditional
+        (2026-09-08) tokens are ES256, signed by the key set under `RACK_WEB_SIGNING_KEY_DIR`, so
+        repointing the secret no longer invalidates anything. `iss` is still not the boundary: it is
+        configured and two installs could coincide on it.
+        """
+        from identity import keys as keys_mod
+
         foreign = _access()
-        monkeypatch.setenv("RACK_WEB_SECRET_KEY", OTHER_SECRET)
-        assert not _honoured(foreign)
+        monkeypatch.setenv("RACK_WEB_SIGNING_KEY_DIR", str(tmp_path / "other-deployment"))
+        keys_mod.reset_for_tests()
+        keys_mod.key_set().ensure()
+        try:
+            assert not _honoured(foreign)
+        finally:
+            keys_mod.reset_for_tests()
 
     def test_inv04_algorithm_is_not_the_pinned_one(self):
         unsigned = jwt.encode(_claims(), key=None, algorithm=None)
@@ -206,14 +218,24 @@ class TestImplicitRevocation:
 class TestOperationalCauses:
     """The ones a fixture or a deploy trips without meaning to."""
 
-    def test_inv17_deployment_secret_rotated(self, monkeypatch):
-        """Rotating the secret invalidates every outstanding token — deliberate, and the reason the
-        signing key is not cached. Also what a test does by accident when it sets a different
-        `RACK_WEB_SECRET_KEY` after minting."""
+    def test_inv17_the_deployment_secret_no_longer_invalidates_tokens(self, monkeypatch):
+        """**INV-17 stopped applying to JWTs on 2026-09-08, and that is worth an explicit test.**
+
+        While HS256 signed, repointing `RACK_WEB_SECRET_KEY` invalidated every outstanding token —
+        which is what made a fixture setting its own secret a mystery 401, and why the test client
+        mints per request. Tokens are ES256 now, so the secret does not sign them and rotating it
+        changes nothing here.
+
+        Asserted rather than deleted because the *expectation* is what changed: a reader who
+        remembers INV-17 needs to see that this direction is now a non-event. The secret still
+        protects the Flask session and the token vault, so it is not free to rotate — it simply is
+        not a JWT invalidator. Key-set rotation is append-only and also does not invalidate; only
+        revocation and expiry do.
+        """
         token = _access()
         assert _honoured(token)
         monkeypatch.setenv("RACK_WEB_SECRET_KEY", OTHER_SECRET)
-        assert not _honoured(token)
+        assert _honoured(token), "the secret is signing JWTs again; INV-17 would be back"
 
     def test_inv18_no_revocation_checker_registered(self):
         """Fail-closed (FR-6a): every token is refused, not just revoked ones. A test that forgets

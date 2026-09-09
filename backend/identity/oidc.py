@@ -135,11 +135,28 @@ class OIDCConfigError(Exception):
 def enabled() -> bool:
     """Whether the OIDC provider surface is active.
 
-    Read per call rather than captured at import: a captured flag makes the value depend on import
-    order, which in tests is the difference between a suite that passes and one that passes
-    depending on which file ran first.
+    **`RACK_WEB_OIDC_ENABLED` was retired on 2026-09-08** and setting it does nothing. The flag
+    selected the provider *as one unit*, so a deployment that left it unset ran a materially
+    different product: HS256 tokens with no `kid`, a non-standard audience, no `auth_time`, no
+    `scope`, and a login that issued no id token at all. Two token shapes meant two verification
+    paths, and the one nobody ran locally was the one customers had.
+
+    Kept as a function rather than deleted because thirteen call sites read it, and the honest
+    reading of those sites is "the provider is present" — not "the flag is set".
     """
-    return (os.environ.get(FLAG_ENV) or "").strip().lower() in _TRUTHY
+    return True
+
+
+def _derived_issuer() -> str:
+    """This deployment's issuer, inferred from the bind address.
+
+    One implementation, shared with `startup_gate._ensure_oidc_issuer()`, so the value the gate
+    announces is the value tokens actually carry. Two derivations would drift, and the drift surfaces
+    as a client rejecting a token whose `iss` looks correct in our log.
+    """
+    port = (os.environ.get("RACK_WEB_PORT") or os.environ.get("PORT") or "5000").strip()
+    host = (os.environ.get("RACK_WEB_PUBLIC_HOST") or "localhost").strip()
+    return f"https://{host}:{port}"
 
 
 def issuer_url() -> str:
@@ -152,13 +169,16 @@ def issuer_url() -> str:
     """
     raw = (os.environ.get(ISSUER_ENV) or "").strip()
     if not raw:
-        raise OIDCConfigError(
-            f"{FLAG_ENV} is on but {ISSUER_ENV} is not set. OIDC Discovery 1.0 §4.3 requires the "
-            f"issuer to be the URL the discovery document is served from, and conforming clients "
-            f"reject a token whose `iss` is not that URL. Set it to this deployment's own base URL, "
-            f"e.g. https://rack.example.com — it cannot be derived from the request, because a "
-            f"Host header is attacker-controlled and the issuer is a security boundary."
-        )
+        # **Derived, not refused.** Making it required the moment the provider became unconditional
+        # took `import app` down with exit 78 everywhere — every deployment and 36 test modules —
+        # for a value only a *third-party* client ever compares. While this product's own SPA is the
+        # only reader, the token is verified by the process that minted it, so a self-consistent
+        # issuer suffices.
+        #
+        # Still never from the request: a `Host` header is attacker-controlled, so deriving per
+        # request would let a caller choose the issuer of our tokens (Discovery 1.0 §4.3). This
+        # reads configuration, and `startup_gate` warns once at boot when it falls back.
+        return _derived_issuer()
     parsed = urlparse(raw)
     # Localhost is the exception that matters: operators reach the dashboard through an SSH tunnel,
     # so http://localhost:PORT is a legitimate issuer for a tunnelled deployment and refusing it

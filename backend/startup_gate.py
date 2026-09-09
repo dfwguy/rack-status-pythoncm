@@ -190,8 +190,41 @@ def prepare(*, bootstrap: bool = True, exit_on_fault: bool = True) -> list[Fault
         return require(exit_on_fault=exit_on_fault)
 
     _ensure_tls()
+    _ensure_oidc_issuer()
     _ensure_identity()
     return require(exit_on_fault=exit_on_fault)
+
+
+def _ensure_oidc_issuer() -> None:
+    """Derive an OIDC issuer from the bind address when none is configured.
+
+    The provider is unconditional as of 2026-09-08, so something has to answer `iss`. Requiring the
+    operator to supply it was tried first and is the wrong trade: it took `import app` down with
+    exit 78 on every deployment and across 36 test modules, for a value only a **third-party** client
+    ever compares.
+
+    Derived from configuration, never from a request — a `Host` header is attacker-controlled, so
+    deriving per request would let a caller choose the issuer of our own tokens.
+
+    WARNING rather than INFO, because a derived issuer is exactly wrong for the next thing an
+    operator is likely to do — point Grafana or another conforming client at this deployment — and
+    the symptom there is a rejected token with nothing visibly wrong on our side.
+    """
+    from identity import oidc
+
+    if (os.environ.get(oidc.ISSUER_ENV) or "").strip():
+        return
+
+    # `oidc._derived_issuer()` is the single implementation, so the value announced here is the one
+    # tokens carry. Two derivations would drift, and the drift surfaces at a client.
+    derived = oidc._derived_issuer()
+    os.environ[oidc.ISSUER_ENV] = derived
+    logging.getLogger("startup").warning(
+        "no %s configured; derived %r from the bind address. Set it explicitly before pointing a "
+        "third-party OIDC client at this deployment — a conforming client compares iss byte-for-byte "
+        "against the URL it fetched discovery from.",
+        oidc.ISSUER_ENV, derived,
+    )
 
 
 def _assert_worker_count() -> None:

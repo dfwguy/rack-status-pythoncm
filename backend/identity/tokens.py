@@ -181,62 +181,72 @@ REQUIRED_CLAIMS = ("iss", "aud", "sub", "exp", "iat", "jti", "typ")
 
 #: The claim naming the token's kind. Renamed rather than duplicated — carrying both would let a
 #: verifier check whichever it happened to know about, which is how a type confusion survives.
+#: Retired 2026-09-08 with the HS256 path. Kept as a name because the *string* still appears in
+#: tokens minted before the cutover, and a reader of an old audit line needs to recognise it.
 TYPE_CLAIM_LEGACY = "typ"
+
+#: The token-type claim. `token_use` is the name AWS Cognito uses and the one a reader of an OIDC
+#: token expects; `typ` is a JOSE *header* parameter, so putting a payload claim there was the kind
+#: of near-miss that interoperates with nothing.
 TYPE_CLAIM_OIDC = "token_use"
+TYPE_CLAIM = TYPE_CLAIM_OIDC
 
 
 def _oidc_mode() -> bool:
-    """Whether to mint and verify as an OIDC provider. Read per call, never captured."""
-    from identity import oidc
+    """Always true. There is one token shape.
 
-    return oidc.enabled()
+    Kept because nine call sites read it and the honest reading of those sites is "we are an OIDC
+    provider". `RACK_WEB_OIDC_ENABLED` was retired on 2026-09-08 — see `identity.oidc.enabled`.
+    """
+    return True
 
 
 def _type_claim() -> str:
-    return TYPE_CLAIM_OIDC if _oidc_mode() else TYPE_CLAIM_LEGACY
+    return TYPE_CLAIM
 
 
 def _required_claims() -> list[str]:
-    return [c for c in REQUIRED_CLAIMS if c != TYPE_CLAIM_LEGACY] + [_type_claim()]
+    return [c for c in REQUIRED_CLAIMS if c != TYPE_CLAIM_LEGACY] + [TYPE_CLAIM]
 
 
 def _effective_issuer() -> str:
-    if _oidc_mode():
-        from identity import oidc
+    from identity import oidc
 
-        return oidc.issuer_url()
-    return issuer()
+    return oidc.issuer_url()
 
 
 #: No clock-skew allowance. One process mints and verifies against one clock, so leeway would only
 #: extend the life of an expired token and loosen the FR-6 bound for nothing.
 LEEWAY_SECONDS = 0
 
-#: Legacy audience. Frozen at the old product name **on purpose**: every HS256 token in existence
-#: carries `aud: nvis-rack-status`, so renaming this would refuse them all. It dies with the HS256
-#: path at FR-19b rather than being migrated.
+#: The pre-cutover audience. Retired 2026-09-08 and kept only so the string is recognisable in an
+#: old token or audit line; nothing mints or accepts it.
 AUDIENCE_LEGACY = "nvis-rack-status"
 
-#: The audience under the OIDC provider. Renamed to the launch name, which costs nothing because
-#: the cutover to ES256 already invalidates every outstanding token — one logout, not two.
+#: The audience this deployment mints and demands.
 AUDIENCE_OIDC = "nvis-greenlight"
 
 
 def audience() -> str:
     """The `aud` this deployment mints and demands.
 
-    Tied to the provider flag rather than to a rename commit, which is what makes the product rename
-    free: the flag day already ends every session, so a token that used the old audience is gone by
-    the time the new one is in force. Renaming it independently would have meant a *second* mass
-    logout for a change no operator can see.
+    **This is where the product rename actually took effect**, and it was deliberately bundled with
+    the ES256 cutover rather than shipped on its own. Changing `aud` refuses every token carrying the
+    old value, so doing it separately would have cost a second mass logout for a change no operator
+    can see. Making the provider unconditional ended every outstanding session once; the rename rode
+    along in that same moment.
     """
-    return AUDIENCE_OIDC if _oidc_mode() else AUDIENCE_LEGACY
+    return AUDIENCE
 
 
-#: Kept as a module constant because a lot of existing code and tests read `tokens.AUDIENCE`. It
-#: resolves to the legacy value, which is correct for every caller that is not inside a request
-#: under the provider flag; the flag-aware path uses `audience()`.
-AUDIENCE = AUDIENCE_LEGACY
+#: Kept as a module constant because a lot of existing code and tests read `tokens.AUDIENCE`.
+#:
+#: It resolved to the LEGACY value while the provider was a flag, which was correct then and became
+#: a live defect the moment the provider went unconditional: `audience()` returns this, so a stale
+#: binding here means every token is minted with an audience the verifier no longer expects. Caught
+#: by `test_the_audience_is_the_launch_name` — the mint and the verify disagreed and the error was
+#: `InvalidAudienceError`, which reads like a forged token rather than a constant left behind.
+AUDIENCE = AUDIENCE_OIDC
 
 
 class TokenError(Exception):
@@ -428,9 +438,11 @@ def _verification_material(token: str) -> tuple[Any, str]:
     ``alg: HS256``. A verifier that trusts the header's algorithm then validates it against a value
     we handed out. Passing ``algorithms=[ES256]`` refuses it — but only because it is written.
     """
-    if not _oidc_mode():
-        return signing_key(), ALGORITHM
-
+    # The HS256 branch that stood here is gone with the flag (2026-09-08). It mattered: while it
+    # existed, `RACK_WEB_SECRET_KEY` signed JWTs, which is what made INV-17 a JWT hazard — repoint
+    # the secret and every outstanding token stops verifying. **That no longer applies to JWTs.**
+    # The signing key is now the ES256 key set under `RACK_WEB_SIGNING_KEY_DIR`, and the secret
+    # still protects the Flask session and the token vault, so it is not free to change either.
     from identity import keys as keys_mod
 
     try:

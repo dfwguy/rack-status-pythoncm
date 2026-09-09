@@ -20,6 +20,7 @@ This module is imported by pytest before any test module (and thus before
 """
 import os
 import tempfile
+from pathlib import Path
 
 os.environ.setdefault("RACK_STATUS_DEMO", "1")
 # NO `RACK_WEB_SECRET_KEY` is set here, deliberately. `app.py` bootstraps a real one on import —
@@ -180,6 +181,59 @@ def _every_test_client_authenticates():
         yield principal
     finally:
         app_module.app.test_client_class = previous
+
+
+#: Committed catalogs for unit tests, so a test never reads the developer's own `var/store`.
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+@pytest.fixture
+def catalog_from_fixture(tmp_path, monkeypatch):
+    """Point the catalog at a committed fixture, copied so the tracked file stays pristine.
+
+    **A unit test must not depend on a file outside the tests.** Several did, invisibly: the
+    required-setting predicates resolve the *active cluster's* connection — correctly, so a cluster
+    supplying a value through its overlay is not refused — which meant they were reading whatever
+    `var/store/catalog.json` happened to hold. Running the app locally activated a cluster with a
+    real `ssh_host`, and tests asserting that `RACK_SSH_HOST` is required began failing on that
+    machine and only that machine.
+
+    Copied rather than used in place because the store *seeds* platforms and tools into whichever
+    file it opens; pointing at the fixture directly would have a test rewrite a tracked input.
+
+    The generation bump is the non-obvious half. `catalog/context.overlays_for_active()` caches the
+    overlays keyed on the store's generation counter, so repointing `NVIS_CATALOG_FILE` alone
+    changes nothing that has already been resolved — which is why isolating the path looked like it
+    had no effect at all.
+
+    Integration tests that validate a real deployment should NOT take this fixture: exercising the
+    deployment's own configuration is their entire purpose.
+    """
+    def use(name: str) -> Path:
+        source = FIXTURES / name
+        assert source.is_file(), f"no such catalog fixture: {name}"
+        target = tmp_path / "catalog.json"
+        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        monkeypatch.setenv("NVIS_CATALOG_FILE", str(target))
+
+        from catalog import store as catalog_store
+
+        # Drop the open repo, or nothing reopens. The store is a module-level singleton, so
+        # repointing `NVIS_CATALOG_FILE` alone leaves the *previous* file open and the active
+        # project is whatever was seeded when the session started — which is why isolating the path
+        # appeared to have no effect at all.
+        catalog_store.set_repo(None)
+        catalog_store._bump_generation()
+        return target
+
+    yield use
+
+    from catalog import store as catalog_store
+
+    # Dropped again on the way out, so the next test does not inherit a repo pointing at a tmp file
+    # that is about to be deleted.
+    catalog_store.set_repo(None)
+    catalog_store._bump_generation()
 
 
 @pytest.fixture(autouse=True)

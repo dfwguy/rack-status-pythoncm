@@ -182,6 +182,20 @@ def register(setting: Setting) -> Setting:
     return setting
 
 
+def unregister(name: str) -> None:
+    """Remove a declaration. **For tests only.**
+
+    The registry is module state, so a test that registers a setting to provoke a fault would leave
+    it behind for every later test in the session — and a stray always-required setting makes the
+    preflight refuse a launch it should permit. `register` deliberately refuses a differing
+    duplicate, which means a leaked declaration also breaks re-registration.
+
+    Silent on an unknown name: a fixture tearing down should not have to know whether its `register`
+    got as far as running.
+    """
+    _SETTINGS.pop(name, None)
+
+
 def declared() -> dict[str, Setting]:
     """Every declared setting. A copy, so a caller cannot mutate the registry by accident."""
     return dict(_SETTINGS)
@@ -245,17 +259,6 @@ def reset_for_tests() -> None:
 # the first is a fault.
 
 
-def _oidc_provider_enabled() -> bool:
-    """Imported lazily: `identity.oidc` must not be on this module's import graph.
-
-    DC-3 loads before the first first-party import (DD-1), and this module is on that path, so a
-    module-level import here would drag `identity/` into the pre-load phase.
-    """
-    from identity import oidc
-
-    return oidc.enabled()
-
-
 def _ssh_control_connection_in_use() -> bool:
     """Whether this deployment actually reaches its cluster over SSH.
 
@@ -277,7 +280,7 @@ def _ssh_control_connection_in_use() -> bool:
     macOS laptop (demo mode) and every genuinely-fresh first boot at all five sites is refused,
     because `catalog/seed.py:577` stores an empty `ssh_host` when the variable is unset.
 
-    Both imports are function-level, following `_oidc_provider_enabled` above: DC-3 loads before the
+    Both imports are function-level: DC-3 loads before the
     first first-party import, this module sits on that path, and `config_env` is precisely what
     DD-1 rule 2 forbids on it at module scope.
     """
@@ -296,7 +299,11 @@ RACK_WEB_OIDC_ISSUER = register(
     Setting(
         name="RACK_WEB_OIDC_ISSUER",
         secret=False,
-        required_when=_oidc_provider_enabled,
+        # Not required: `startup_gate._ensure_oidc_issuer()` derives one when unset, the same
+        # way it generates a self-signed certificate rather than refusing to start for want of
+        # something the product can make. The predicate this replaced asked whether the OIDC
+        # provider was enabled — a question with only one answer since 2026-09-08.
+        required_when=None,
         example="https://greenlight.example.com",
         section="auth",
         description=(
@@ -461,20 +468,6 @@ register(
         description=(
             "Log level. Settable here because the config file is read before logging is "
             "configured, which is the reason the loader's own records appear slightly late."
-        ),
-    )
-)
-
-register(
-    Setting(
-        name="RACK_WEB_OIDC_ENABLED",
-        toml_type=TOML_BOOL,
-        secret=False,
-        example="false",
-        section="auth",
-        description=(
-            "Turns on asymmetric token signing AND the OIDC provider endpoints together. Enabling "
-            "it ends every live session once, and requires RACK_WEB_OIDC_ISSUER."
         ),
     )
 )

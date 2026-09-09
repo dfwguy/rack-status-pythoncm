@@ -97,7 +97,7 @@ class TestTheRequiredSetDoesNotRefuseAFreshDeployment:
         monkeypatch.setenv("RACK_EXEC_MODE", "local")
         assert R.required_now() == ()
 
-    def test_a_real_ssh_deployment_does_require_the_host(self, monkeypatch):
+    def test_a_real_ssh_deployment_does_require_the_host(self, monkeypatch, catalog_from_fixture):
         """The other half — the predicate must still fire where it matters, or the feature is
         decoration.
 
@@ -107,28 +107,37 @@ class TestTheRequiredSetDoesNotRefuseAFreshDeployment:
         required-set membership was asserting the divergence rather than reporting it, which is
         why the parity test below now exists.
         """
+        catalog_from_fixture("catalog-ssh-without-host.json")
+        monkeypatch.setenv("RACK_STATUS_DEMO", "0")
         monkeypatch.setenv("RACK_EXEC_MODE", "ssh")
+        monkeypatch.delenv("RACK_SSH_HOST", raising=False)
+
         names = {s.name for s in R.required_now()}
         assert "RACK_SSH_HOST" in names
         assert "RACK_REMOTE_BASE_PATH" not in names, (
             "a setting with a working default is in the required set"
         )
 
-    def test_ssh_is_the_default_when_nothing_is_set(self, monkeypatch):
+    def test_ssh_is_the_default_when_nothing_is_set(self, monkeypatch, catalog_from_fixture):
         """`RACK_EXEC_MODE` is deprecated and SSH is the default, so an unset value must NOT read
-        as 'no SSH' — that would silently drop the check on every deployment."""
+        as 'no SSH' — that would silently drop the check on every deployment.
+
+        The catalog is fixtured for the same reason as its neighbour: the predicate resolves the
+        active cluster's connection, so without isolation this read the developer's own store and
+        the answer depended on whether the app had been run locally.
+        """
+        catalog_from_fixture("catalog-ssh-without-host.json")
+        monkeypatch.setenv("RACK_STATUS_DEMO", "0")
+        monkeypatch.delenv("RACK_EXEC_MODE", raising=False)
+        monkeypatch.delenv("RACK_SSH_HOST", raising=False)
+
         names = {s.name for s in R.required_now()}
         assert "RACK_SSH_HOST" in names
 
 
-class TestTheOidcIssuerPredicate:
-    def test_it_is_required_only_when_the_provider_is_enabled(self, monkeypatch):
-        monkeypatch.setenv("RACK_EXEC_MODE", "local")  # isolate from the SSH predicate
-
-        assert "RACK_WEB_OIDC_ISSUER" not in {s.name for s in R.required_now()}
-
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
-        assert "RACK_WEB_OIDC_ISSUER" in {s.name for s in R.required_now()}
+# `TestTheOidcIssuerPredicate` removed 2026-09-08: its subject was
+# `_oidc_provider_enabled`, which asked whether the OIDC provider was on — a question with only one
+# answer now. The issuer is no longer conditionally required; it is derived when unset.
 
 
 class TestAPredicateThatRaisesIsReportedNotSwallowed:
@@ -229,7 +238,10 @@ class TestTC10TheRequiredSetMatchesTheReviewedTable:
     #: The brief's *Initial required-setting set*, by name. Adding a row here without adding it to
     #: the brief (with file:line evidence for why its absence is undiagnosable) is the drift this
     #: guards; so is the reverse.
-    REVIEWED: ClassVar[set[str]] = {"RACK_WEB_OIDC_ISSUER", "RACK_SSH_HOST", "RACK_WEB_TLS_KEY"}
+    #: `RACK_WEB_OIDC_ISSUER` left this set on 2026-09-08. It was conditionally required while the
+    #: OIDC provider was a flag; the provider is unconditional now and the issuer is *derived* from
+    #: the bind address when unset, so it carries no predicate and cannot refuse a launch.
+    REVIEWED: ClassVar[set[str]] = {"RACK_SSH_HOST", "RACK_WEB_TLS_KEY"}
 
     def test_every_predicate_carrying_setting_is_in_the_reviewed_table(self):
         carrying = {s.name for s in R.declared().values() if s.required_when is not None}

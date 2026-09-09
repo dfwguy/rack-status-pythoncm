@@ -1,0 +1,59 @@
+{
+  "_comment": [
+    "A catalog for UNIT tests, committed so it is identical on every machine.",
+    "",
+    "Why it exists: `config_registry._ssh_control_connection_in_use()` resolves the ACTIVE",
+    "CLUSTER'S connection, deliberately, so a cluster supplying `RACK_SSH_HOST` through its",
+    "overlay is not refused at startup. The consequence is that any test asserting whether that",
+    "setting is required was reading the developer's own `var/store/catalog.json` — and once the",
+    "app had been run locally, the active cluster carried a real `ssh_host` and the fault the test",
+    "was written to observe silently disappeared. The suite passed or failed by machine.",
+    "",
+    "This cluster declares `exec_mode: ssh` with an EMPTY `ssh_host`, which is the exact state that",
+    "makes `RACK_SSH_HOST` genuinely required. Nothing here points at a real host, so no test",
+    "depends on anything outside the repository.",
+    "",
+    "Copy it to a tmp path before use (`catalog_from_fixture` in conftest). The store seeds",
+    "platforms and tools into whatever file it opens, so pointing at this one directly would have",
+    "a test rewrite a tracked fixture.",
+    "",
+    "INTEGRATION tests that verify a real deployment should NOT use this — they are supposed to",
+    "exercise the deployment's own configuration."
+  ],
+  "meta": {
+    "1": {"key": "schema_version", "value": 1},
+    "2": {"key": "active", "value": {"project": "unit-test", "cluster": "unit-test-ssh"}}
+  },
+  "platforms": {},
+  "tools": {},
+  "npi_tools": {},
+  "projects": {
+    "1": {
+      "id": "unit-test",
+      "name": "Unit Test Project",
+      "customer": "UNIT-TEST",
+      "description": "Fixture project. Not a real deployment.",
+      "source": "test-fixture",
+      "clusters": [
+        {
+          "id": "unit-test-ssh",
+          "name": "Unit Test SSH Cluster",
+          "cluster_manager": "bcm",
+          "platform_id": "",
+          "site_prefix": "ut",
+          "naming": {},
+          "geometry": {},
+          "connection": {
+            "endpoints": [],
+            "roles": [],
+            "exec_mode": "ssh",
+            "ssh_host": "",
+            "ssh_user": "",
+            "ssh_key": "",
+            "remote_base_path": "/opt/unit-test"
+          }
+        }
+      ]
+    }
+  }
+}

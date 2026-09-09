@@ -120,11 +120,18 @@ class TestItNeedsNoFakeSigningKey:
         identity_testing.enrol("factory-frank")
         assert identity_testing.log_in(anon, "factory-frank")
 
-    def test_repointing_the_secret_invalidates_an_earlier_token(self, anon, monkeypatch):
-        """INV-17 demonstrated, so the reason for the removal is pinned rather than described.
+    def test_repointing_the_secret_no_longer_invalidates_a_token(self, anon, monkeypatch):
+        """**This test asserted the opposite this morning, and the inversion is the record.**
 
-        This is what a fixture setting `RACK_WEB_SECRET_KEY` does to every credential obtained
-        before it — including a session-scoped one built once for the whole run.
+        It demonstrated INV-17: repointing `RACK_WEB_SECRET_KEY` killed every token issued earlier,
+        which is why 13 files faking a secret were a hazard and why the test client mints per
+        request. Making the OIDC provider unconditional moved signing to the ES256 key set, so the
+        secret no longer signs JWTs and this direction is now a non-event.
+
+        The reason for removing the fakes is unchanged and still good — a test should authenticate
+        rather than invent key material — but it now rests on honesty rather than on breakage. The
+        per-request minting stays as belt-and-braces; it costs microseconds and it would matter again
+        the moment anything reintroduces a symmetric path.
         """
         from identity import tokens
 
@@ -133,5 +140,4 @@ class TestItNeedsNoFakeSigningKey:
         assert tokens.verify(token, tokens.TOKEN_ACCESS)["sub"] == "user:factory-grace"
 
         monkeypatch.setenv("RACK_WEB_SECRET_KEY", "a-different-secret-entirely")
-        with pytest.raises(tokens.TokenError):
-            tokens.verify(token, tokens.TOKEN_ACCESS)
+        assert tokens.verify(token, tokens.TOKEN_ACCESS)["sub"] == "user:factory-grace"

@@ -508,22 +508,6 @@ class TestIntrospectionAndRevocation:
         ).status_code == 200
 
 
-class TestTheFlagGovernsEverything:
-    @pytest.mark.parametrize(
-        ("method", "path"),
-        [("get", "/oidc/authorize"), ("post", "/oidc/token"), ("get", "/oidc/userinfo"),
-         ("post", "/oidc/introspect"), ("post", "/oidc/revoke")],
-    )
-    def test_every_provider_route_404s_when_disabled(self, tmp_path, monkeypatch, method, path):
-        monkeypatch.delenv("RACK_WEB_OIDC_ENABLED", raising=False)
-        oidc.reset_for_tests()
-        from app import app
-
-        app.config["TESTING"] = True
-        with app.test_client() as c:
-            assert getattr(c, method)(path).status_code == 404
-
-
 class TestScopeIsGrantedAtAuthorization:
     """`.plc/briefs/oidc-directory-claims-l0.md` R3, R5."""
 

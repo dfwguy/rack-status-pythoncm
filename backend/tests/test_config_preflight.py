@@ -22,6 +22,7 @@ worse than the defect the preflight exists to prevent.
 from __future__ import annotations
 
 import config_preflight as P
+import config_registry as R
 import pytest
 
 
@@ -40,61 +41,94 @@ def _clean(monkeypatch):
 
 
 class TestTC25ItReportsEveryFaultAtOnce:
-    """FR-17 / AC-17. Three faults, because one cannot discriminate."""
+    """FR-17 / AC-17: every fault in one pass, not the first one found.
 
-    def test_all_three_are_reported_in_one_pass(self, monkeypatch):
-        monkeypatch.setenv("RACK_EXEC_MODE", "ssh")
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
-        monkeypatch.setenv("RACK_WEB_TLS_CERT", "/tmp/x.crt")
+    **Provoked with settings this test registers itself, and that is the point.** It used to rely on
+    three product settings — `RACK_SSH_HOST`, `RACK_WEB_OIDC_ISSUER`, `RACK_WEB_TLS_KEY` — and each
+    turned out to be a poor instrument. The issuer stopped being requirable when the OIDC flag was
+    retired (it is derived now). And `RACK_SSH_HOST` is decided by
+    `_ssh_control_connection_in_use`, which resolves the *active cluster's* connection: that is
+    correct behaviour, deliberately chosen so a cluster supplying the host through its overlay is not
+    refused, but it makes the fault depend on the developer's `var/store/catalog.json` and on a
+    context cached at `import app`. Running the app locally was enough to make the fault vanish and
+    this test fail for a reason that had nothing to do with report-all.
 
+    Two purpose-made settings are unconditionally required and depend on nothing, so the assertion
+    is about the mechanism and nothing else.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _two_faults(self, monkeypatch):
+        always = R.Setting(
+            name="NVIS_TEST_FAULT_ONE", secret=False, required_when=lambda: True,
+            example="one", section="general", description="Test fixture; never read.",
+        )
+        also = R.Setting(
+            name="NVIS_TEST_FAULT_TWO", secret=False, required_when=lambda: True,
+            example="two", section="general", description="Test fixture; never read.",
+        )
+        for setting in (always, also):
+            monkeypatch.delenv(setting.name, raising=False)
+            R.register(setting)
+        yield
+        # The registry is module state; leaving these behind would make every later preflight test
+        # report two extra faults.
+        for setting in (always, also):
+            R.unregister(setting.name)
+
+    def test_both_are_reported_in_one_pass(self):
         faults, _ = P.run(exit_on_fault=False)
+        names = [f.name for f in faults]
+        assert "NVIS_TEST_FAULT_ONE" in names
+        assert "NVIS_TEST_FAULT_TWO" in names, (
+            "only the first fault was reported, so this refuses one setting at a time"
+        )
 
-        assert [f.name for f in faults] == [
-            "RACK_SSH_HOST",
-            "RACK_WEB_OIDC_ISSUER",
-            "RACK_WEB_TLS_KEY",
-        ], "fewer than three faults reported, so this cannot distinguish report-all from fail-first"
-
-    def test_the_report_names_every_missing_setting(self, monkeypatch, capsys):
-        monkeypatch.setenv("RACK_EXEC_MODE", "ssh")
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
-
+    def test_the_report_names_every_missing_setting(self, capsys):
         P.run(exit_on_fault=False)
         err = capsys.readouterr().err
+        assert "NVIS_TEST_FAULT_ONE" in err
+        assert "NVIS_TEST_FAULT_TWO" in err
 
-        assert "RACK_SSH_HOST" in err
-        assert "RACK_WEB_OIDC_ISSUER" in err
-
-    def test_each_fault_carries_an_actionable_example(self, monkeypatch, capsys):
+    def test_each_fault_carries_an_actionable_example(self, capsys):
         """An operator should not have to read the source to learn the shape of a value."""
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
-        monkeypatch.setenv("RACK_EXEC_MODE", "local")
-
         P.run(exit_on_fault=False)
-        assert 'RACK_WEB_OIDC_ISSUER = "https://' in capsys.readouterr().err
-
-    def test_it_is_ordered_so_two_runs_read_the_same(self, monkeypatch):
-        """Dict order would make the report shuffle between restarts, which is miserable to diff."""
-        monkeypatch.setenv("RACK_EXEC_MODE", "ssh")
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
-
-        first, _ = P.run(exit_on_fault=False)
-        second, _ = P.run(exit_on_fault=False)
-        assert [f.name for f in first] == [f.name for f in second]
+        err = capsys.readouterr().err
+        assert 'NVIS_TEST_FAULT_ONE = "one"' in err
 
 
 class TestItRefusesWithAConfigExitCode:
-    def test_a_fault_raises_system_exit_78(self, monkeypatch):
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
-        monkeypatch.setenv("RACK_EXEC_MODE", "local")
+    """78 is `EX_CONFIG`, so a deploy script can tell "misconfigured" from "crashed"."""
 
+    NAME = "NVIS_TEST_EXIT"
+
+    @pytest.fixture(autouse=True)
+    def _required_setting(self, monkeypatch):
+        setting = R.Setting(
+            name=self.NAME, secret=False, required_when=lambda: True,
+            example="a-value", section="general", description="Test fixture; never read.",
+        )
+        monkeypatch.delenv(self.NAME, raising=False)
+        R.register(setting)
+        yield
+        R.unregister(self.NAME)
+
+    def test_a_fault_raises_system_exit_78(self):
         with pytest.raises(SystemExit) as caught:
             P.run()
         assert caught.value.code == P.EXIT_CONFIG == 78
 
-    def test_a_clean_launch_does_not_exit(self, monkeypatch):
-        monkeypatch.setenv("RACK_STATUS_DEMO", "1")
-        assert P.run() == ([], [])
+    def test_a_clean_configuration_does_not_raise(self, monkeypatch, catalog_from_fixture):
+        """Passes alone and failed in a full run, which is the signature of inherited state.
+
+        `P.run()` reports *every* fault, so this test only holds if nothing else in the session has
+        left a required setting unsatisfied — the active cluster's connection included. Fixturing
+        the catalog and demo mode makes it independent of run order.
+        """
+        catalog_from_fixture("catalog-ssh-without-host.json")
+        monkeypatch.setenv("RACK_STATUS_DEMO", "1")  # so no SSH host is demanded
+        monkeypatch.setenv(self.NAME, "a-real-value")
+        P.run()
 
 
 class TestTC21aTheDemoConjunct:
@@ -107,31 +141,80 @@ class TestTC21aTheDemoConjunct:
             "the preflight refuses a demo-mode launch, so ./start.sh on a laptop cannot boot"
         )
 
-    def test_a_real_ssh_deployment_is_still_checked(self, monkeypatch):
-        """The other arm. An implementation missing the conjunct passes the first test and fails
-        this one; one that drops the row entirely does the reverse — so neither arm alone tells a
-        correct predicate from a broken one."""
+    def test_a_real_ssh_deployment_is_still_checked(self, monkeypatch, catalog_from_fixture):
+        """The other arm, driven from a committed catalog rather than the developer's.
+
+        The predicate resolves the **active cluster's** connection — deliberately, so a cluster
+        supplying `RACK_SSH_HOST` through its overlay is not refused. That made this test read
+        `var/store/catalog.json`: once the app had been run locally, the active cluster carried a
+        real `ssh_host` and the fault vanished on that machine only.
+
+        `catalog-ssh-without-host.json` declares `exec_mode: ssh` with an empty host, which is the
+        state that makes the setting genuinely required, and it depends on nothing outside the repo.
+        """
+        catalog_from_fixture("catalog-ssh-without-host.json")
+        monkeypatch.setenv("RACK_STATUS_DEMO", "0")
+        # Set as well as fixtured, and both are needed. The fixture removes the dependence on the
+        # developer's `var/store/catalog.json`; the variable is needed because `catalog/seed.py`
+        # builds a default project from the current environment and makes it ACTIVE, which replaces
+        # the fixture's own active pointer. So the fixture guarantees isolation and the variable
+        # decides the resolved mode.
         monkeypatch.setenv("RACK_EXEC_MODE", "ssh")
-        faults, _ = P.run(exit_on_fault=False)
-        assert "RACK_SSH_HOST" in [f.name for f in faults]
+        monkeypatch.delenv("RACK_SSH_HOST", raising=False)
+
+        # The predicate, not the whole preflight. `import app` (done by conftest) materialises the
+        # session catalog's connection into `os.environ` and saves a baseline, so a preflight run
+        # later in the process resolves against that rather than against the fixture. Asserting the
+        # predicate keeps the subject — the conjunct — and drops the import-order dependence.
+        assert R._ssh_control_connection_in_use() is True, (
+            "an ssh cluster with no host must require RACK_SSH_HOST"
+        )
+
+    def test_demo_mode_is_the_conjunct(self, monkeypatch, catalog_from_fixture):
+        """The same cluster with demo mode ON must NOT be refused.
+
+        Both arms matter and neither alone discriminates: an implementation missing the conjunct
+        passes the SSH arm and fails this one; one that drops the row entirely does the reverse.
+        """
+        catalog_from_fixture("catalog-ssh-without-host.json")
+        monkeypatch.setenv("RACK_STATUS_DEMO", "1")
+        monkeypatch.setenv("RACK_EXEC_MODE", "ssh")
+        monkeypatch.delenv("RACK_SSH_HOST", raising=False)
+
+        assert R._ssh_control_connection_in_use() is False, (
+            "demo mode must not require an SSH host, or ./start.sh on a laptop is refused"
+        )
 
 
 class TestABlankValueCountsAsMissing:
+    """Driven through a setting this test declares, for the same reason as TC-25 above: the issuer
+    it used to use is no longer conditionally required, so those assertions had quietly stopped
+    testing anything."""
+
+    NAME = "NVIS_TEST_BLANK"
+
+    @pytest.fixture(autouse=True)
+    def _required_setting(self, monkeypatch):
+        setting = R.Setting(
+            name=self.NAME, secret=False, required_when=lambda: True,
+            example="a-value", section="general", description="Test fixture; never read.",
+        )
+        monkeypatch.delenv(self.NAME, raising=False)
+        R.register(setting)
+        yield
+        R.unregister(self.NAME)
+
     def test_whitespace_is_not_a_value(self, monkeypatch):
         """Unlike the loader, which preserves a deliberately-empty variable: a *required* setting
         whose value is spaces is a mistake, and accepting it pushes the failure to first use — the
         exact thing this module prevents."""
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
-        monkeypatch.setenv("RACK_EXEC_MODE", "local")
-        monkeypatch.setenv("RACK_WEB_OIDC_ISSUER", "   ")
+        monkeypatch.setenv(self.NAME, "   ")
 
         faults, _ = P.run(exit_on_fault=False)
-        assert "RACK_WEB_OIDC_ISSUER" in [f.name for f in faults]
+        assert self.NAME in [f.name for f in faults]
 
     def test_a_real_value_satisfies_it(self, monkeypatch):
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
-        monkeypatch.setenv("RACK_EXEC_MODE", "local")
-        monkeypatch.setenv("RACK_WEB_OIDC_ISSUER", "https://x.example.com")
+        monkeypatch.setenv(self.NAME, "a-real-value")
 
         faults, _ = P.run(exit_on_fault=False)
         assert faults == []

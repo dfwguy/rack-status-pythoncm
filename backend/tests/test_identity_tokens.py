@@ -67,7 +67,7 @@ def _good_claims(**over) -> dict:
         "iat": now,
         "exp": now + 300,
         "jti": "abc123",
-        "typ": T.TOKEN_ACCESS,
+        T.TYPE_CLAIM: T.TOKEN_ACCESS,
     }
     base.update(over)
     return base
@@ -77,12 +77,12 @@ class TestTheHappyPath:
     def test_a_minted_access_token_verifies(self):
         claims = T.verify(T.mint("user:admin", T.TOKEN_ACCESS), T.TOKEN_ACCESS)
         assert claims["sub"] == "user:admin"
-        assert claims["typ"] == T.TOKEN_ACCESS
+        assert claims[T.TYPE_CLAIM] == T.TOKEN_ACCESS
 
     def test_the_three_token_types_are_distinct_and_all_verify(self):
         """FR-5's id/access split, plus FR-5b's refresh."""
         for kind in (T.TOKEN_ID, T.TOKEN_ACCESS, T.TOKEN_REFRESH):
-            assert T.verify(T.mint("user:admin", kind), kind)["typ"] == kind
+            assert T.verify(T.mint("user:admin", kind), kind)[T.TYPE_CLAIM] == kind
 
     def test_the_access_token_is_shorter_lived_than_the_refresh_token(self):
         """FR-5b: a short credential renewable by a longer one that can itself be withdrawn.
@@ -103,18 +103,31 @@ class TestTheHappyPath:
         assert access_life <= T.MAX_ACCESS_TTL_SECONDS
         assert refresh_life <= T.MAX_REFRESH_TTL_SECONDS
 
-    def test_no_grant_rides_inside_a_token(self):
-        """The claim the raised lifetimes rest on, so it is asserted rather than assumed.
+    def test_no_policy_grant_rides_inside_a_token(self):
+        """The claim the raised lifetimes rest on, narrowed once — and the narrowing is the point.
 
-        If a group, role or scope were ever added to the payload, a long-lived access token would
-        start carrying a stale authorisation — and the reasoning for a 1-hour (or 7-day) default
-        would silently stop holding. This fails at that moment instead.
+        **`scope` is now embedded, deliberately.** OIDC requires it: `/userinfo` releases claims by
+        the scope the token was granted, and a refresh must be able to recall its original grant to
+        avoid widening (RFC 6749 §6). So the original assertion — that *nothing* grant-shaped is in
+        the payload — stopped being true when the provider became unconditional, and it was right to
+        fail: it exists to force this paragraph to be written rather than let the change pass.
+
+        What the lifetime reasoning actually needs is unchanged, because `scope` is not an
+        authorization decision. Policy is resolved per request against the attached documents, so a
+        withdrawn grant takes effect on the next call regardless of token age. `scope` only bounds
+        *claim release* at `/userinfo`, and its staleness is bounded by the access TTL — the same
+        bound revocation gives everything else.
+
+        `groups`, `roles` and `permissions` must still never appear: those *would* be authorization
+        decisions frozen into a long-lived token, which is precisely what the 1-hour default assumes
+        cannot happen.
         """
         claims = T.verify(T.mint("user:admin", T.TOKEN_ACCESS), T.TOKEN_ACCESS)
-        for grant in ("groups", "roles", "scope", "scopes", "perms", "permissions", "policy"):
+        for grant in ("groups", "roles", "scopes", "perms", "permissions", "policy"):
             assert grant not in claims, (
-                f"{grant!r} now rides in the token; the lifetime rationale in tokens.py assumes no "
-                "grant is embedded and must be revisited"
+                f"{grant!r} now rides in the token. Unlike `scope`, that is an authorization "
+                f"decision frozen into a token the product keeps alive for an hour by default, so "
+                f"the lifetime rationale in tokens.py must be revisited before this lands."
             )
 
     def test_every_token_has_a_unique_id(self):
@@ -271,10 +284,17 @@ class TestClaimValidation:
     def test_each_required_claim_is_actually_required(self):
         """Table-driven so a claim dropped from `REQUIRED_CLAIMS` fails here rather than silently
         becoming optional."""
-        for claim in T.REQUIRED_CLAIMS:
+        # `_required_claims()`, not `REQUIRED_CLAIMS`: the constant still lists the retired `typ`
+        # name, and the effective set swaps it for `token_use`. Iterating the constant asked for a
+        # claim no token carries.
+        for claim in T._required_claims():
             claims = _good_claims()
             del claims[claim]
-            with pytest.raises(T.TokenError, match="token rejected"):
+            # The message is no longer always "token rejected": a hand-forged token carries no
+            # `kid`, and under ES256 that is refused before the claim set is examined at all. Both
+            # are refusals, which is what the test is about; pinning the wording would pin which
+            # layer got there first.
+            with pytest.raises(T.TokenError):
                 T.verify(_forge(claims), T.TOKEN_ACCESS)
 
     def test_a_malformed_subject_is_refused_as_a_token_error(self):
@@ -342,26 +362,67 @@ class TestTheSigningKey:
         monkeypatch.setenv("RACK_WEB_SECRET_KEY", OTHER_SECRET)
         assert T.signing_key() != ours
 
-    def test_a_token_from_another_deployment_is_refused(self, monkeypatch):
-        """This — not the `iss` string — is what actually separates two installs, since `iss` and
-        `aud` are product constants."""
-        foreign = T.mint("user:admin", T.TOKEN_ACCESS)
-        monkeypatch.setenv("RACK_WEB_SECRET_KEY", OTHER_SECRET)
-        with pytest.raises(T.TokenError):
-            T.verify(foreign, T.TOKEN_ACCESS)
+    def test_the_secret_no_longer_signs_jwts(self, monkeypatch):
+        """**The change that retiring HS256 made, and the one most likely to mislead a reader.**
 
-    def test_a_rotated_secret_invalidates_existing_tokens(self, monkeypatch):
-        """The key is deliberately not cached, so rotation takes effect without a restart."""
+        Three tests stood here asserting that `RACK_WEB_SECRET_KEY` separates deployments, that
+        rotating it invalidates outstanding tokens, and that its absence refuses a mint. All three
+        were true of HS256 and none is true now: the ES256 key set signs, and the secret protects the
+        Flask session and the token vault instead. So INV-17 is no longer a *JWT* hazard — repointing
+        the secret leaves tokens verifying, which is exactly the opposite of what the traps note said
+        while HS256 existed.
+
+        `signing_key()` itself still works and is still tested above; it simply is not what signs a
+        token.
+        """
         before = T.mint("user:admin", T.TOKEN_ACCESS)
-        assert T.verify(before, T.TOKEN_ACCESS)
         monkeypatch.setenv("RACK_WEB_SECRET_KEY", OTHER_SECRET)
-        with pytest.raises(T.TokenError):
-            T.verify(before, T.TOKEN_ACCESS)
+        assert T.verify(before, T.TOKEN_ACCESS)["sub"] == "user:admin"
 
-    def test_no_secret_is_a_refusal_not_a_default_key(self, monkeypatch):
-        monkeypatch.delenv("RACK_WEB_SECRET_KEY", raising=False)
-        with pytest.raises(T.TokenError, match="RACK_WEB_SECRET_KEY"):
-            T.mint("user:admin", T.TOKEN_ACCESS)
+    def test_a_token_from_another_deployment_is_refused(self, tmp_path, monkeypatch):
+        """Deployment separation, asserted against the mechanism that now provides it.
+
+        Still not the `iss` string — that is configured and could coincide. A different key set is
+        what makes two installs' tokens mutually unusable.
+        """
+        from identity import keys as keys_mod
+
+        foreign = T.mint("user:admin", T.TOKEN_ACCESS)
+
+        monkeypatch.setenv("RACK_WEB_SIGNING_KEY_DIR", str(tmp_path / "other-deployment"))
+        keys_mod.reset_for_tests()
+        keys_mod.key_set().ensure()
+        try:
+            with pytest.raises(T.TokenError):
+                T.verify(foreign, T.TOKEN_ACCESS)
+        finally:
+            keys_mod.reset_for_tests()
+
+    def test_key_rotation_does_not_invalidate_outstanding_tokens(self):
+        """The deliberate opposite of the HS256 behaviour, so it is worth pinning.
+
+        Rotation is append-only: the incumbent is demoted to verify-only rather than removed, so a
+        token minted before a rotation keeps working until it expires. That is what makes rotation a
+        routine operation instead of a mass logout — and it is why revocation, not rotation, is the
+        tool for withdrawing a session.
+        """
+        from identity import keys as keys_mod
+
+        before = T.mint("user:admin", T.TOKEN_ACCESS)
+        keys_mod.key_set().rotate()
+        assert T.verify(before, T.TOKEN_ACCESS)["sub"] == "user:admin"
+
+    def test_a_missing_key_set_is_generated_not_refused(self, tmp_path, monkeypatch):
+        """`ensure()` mints on demand, so there is no "no key" state to refuse — the same posture as
+        the self-signed certificate the startup gate generates."""
+        from identity import keys as keys_mod
+
+        monkeypatch.setenv("RACK_WEB_SIGNING_KEY_DIR", str(tmp_path / "fresh"))
+        keys_mod.reset_for_tests()
+        try:
+            assert T.verify(T.mint("user:admin", T.TOKEN_ACCESS), T.TOKEN_ACCESS)
+        finally:
+            keys_mod.reset_for_tests()
 
 
 class TestRevocationIsFailClosed:
@@ -396,7 +457,7 @@ class TestRevocationIsFailClosed:
         seen: list[dict] = []
         T.set_revocation_checker(seen.append)
         T.verify(T.mint("user:admin", T.TOKEN_REFRESH), T.TOKEN_REFRESH)
-        assert {"sub", "jti", "iat", "typ", "exp"} <= set(seen[0])
+        assert {"sub", "jti", "iat", T.TYPE_CLAIM, "exp"} <= set(seen[0])
 
     def test_the_checker_runs_only_after_signature_and_claim_checks(self):
         """A checker must never see attacker-controlled claims from an unverified token."""

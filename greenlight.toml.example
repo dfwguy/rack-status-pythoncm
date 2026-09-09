@@ -80,16 +80,10 @@
 
 
 [auth]
-# Turns on asymmetric token signing AND the OIDC provider endpoints together. Enabling it ends
-# every live session once, and requires RACK_WEB_OIDC_ISSUER.
-# RACK_WEB_OIDC_ENABLED = false
-
 # This deployment's own base URL, used as the OIDC `iss` claim. Required when the OIDC provider
 # is enabled. Cannot be derived from the request: OIDC Discovery 1.0 §4.3 requires it to be the
 # URL discovery is served from, and a Host header is attacker-controlled. http is accepted only
 # for localhost, which is how an operator reaches a tunnelled deployment.
-# REQUIRED under the condition above — startup refuses, naming this setting, rather than failing
-# later.
 # RACK_WEB_OIDC_ISSUER = "https://greenlight.example.com"
 
 

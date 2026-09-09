@@ -189,27 +189,3 @@ class TestItAuthorizesNothing:
         assert resp.status_code == 200
 
 
-class TestLegacyModeOmitsIt:
-    def test_no_id_token_without_the_provider(self, monkeypatch):
-        """An id token signed HS256 with no `kid` and no JWKS entry cannot be validated by a
-        conforming client, so the login omits it rather than shipping an unusable claim.
-
-        A caller must therefore treat `id_token` as optional — which is why this is asserted rather
-        than left to be discovered by whoever writes the first client.
-        """
-        from app import app
-        from identity import keys as keys_mod
-        from identity import oidc as oidc_mod
-
-        monkeypatch.delenv("RACK_WEB_OIDC_ENABLED", raising=False)
-        keys_mod.reset_for_tests()
-        oidc_mod.reset_for_tests()
-        try:
-            with identity_testing.unauthenticated_client(app) as client:
-                body = _login(client, "idtok-legacy")
-            assert "id_token" not in body
-            # And the session still works, because the credential is the cookie pair.
-            assert body["ok"] is True
-        finally:
-            keys_mod.reset_for_tests()
-            oidc_mod.reset_for_tests()

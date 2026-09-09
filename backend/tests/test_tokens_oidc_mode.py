@@ -73,14 +73,13 @@ def _unverified(token: str) -> dict:
     return jwt.decode(token, options={"verify_signature": False})
 
 
-class TestTheTwoModesAreDistinct:
-    """FR-19. Off is today; on is the provider. Nothing in between."""
+class TestTheTokenShape:
+    """Was `TestTheTwoModesAreDistinct`. There is one mode as of 2026-09-08, so the six tests that
+    described the HS256 side — no `kid`, the `typ` claim, the old audience, the opaque issuer, and
+    cross-mode refusal — asserted a state the product can no longer be in. What remains is the shape
+    every token now has."""
 
-    def test_legacy_mode_signs_hs256_with_no_kid(self, legacy_mode):
-        token = T.mint("user:admin", T.TOKEN_ACCESS)
-        header = jwt.get_unverified_header(token)
-        assert header["alg"] == "HS256"
-        assert "kid" not in header
+    """FR-19. Off is today; on is the provider. Nothing in between."""
 
     def test_oidc_mode_signs_es256_with_a_kid(self, oidc_mode):
         token = T.mint("user:admin", T.TOKEN_ACCESS)
@@ -88,22 +87,12 @@ class TestTheTwoModesAreDistinct:
         assert header["alg"] == "ES256"
         assert header["kid"] == keys_mod.key_set().ensure().kid
 
-    def test_legacy_mode_uses_typ_and_oidc_mode_uses_token_use(self, legacy_mode):
-        """Renamed, not duplicated.
-
-        Carrying both would let a verifier check whichever it happened to know about, which is how
-        a type confusion survives a rename.
-        """
-        legacy = _unverified(T.mint("user:admin", T.TOKEN_ACCESS))
-        assert legacy["typ"] == "access"
-        assert "token_use" not in legacy
-
     def test_oidc_mode_carries_token_use_and_not_typ(self, oidc_mode):
         claims = _unverified(T.mint("user:admin", T.TOKEN_ACCESS))
         assert claims["token_use"] == "access"
         assert "typ" not in claims
 
-    def test_the_audience_is_renamed_only_under_the_flag(self, oidc_mode):
+    def test_the_audience_is_the_launch_name(self, oidc_mode):
         """The product rename rides the cutover, which is what makes it free.
 
         `aud` is a protocol constant: renaming it refuses every token carrying the old value. The
@@ -113,43 +102,8 @@ class TestTheTwoModesAreDistinct:
         """
         assert _unverified(T.mint("user:admin", T.TOKEN_ACCESS))["aud"] == "nvis-greenlight"
 
-    def test_the_legacy_audience_is_left_alone(self, legacy_mode):
-        """Frozen at the old name deliberately — every HS256 token in existence carries it. It dies
-        with the HS256 path at FR-19b rather than being migrated."""
-        assert _unverified(T.mint("user:admin", T.TOKEN_ACCESS))["aud"] == "nvis-rack-status"
-
     def test_the_issuer_becomes_a_url_in_oidc_mode(self, oidc_mode):
         assert _unverified(T.mint("user:admin", T.TOKEN_ACCESS))["iss"] == ISSUER
-
-    def test_the_issuer_stays_the_opaque_string_in_legacy_mode(self, legacy_mode):
-        assert _unverified(T.mint("user:admin", T.TOKEN_ACCESS))["iss"] == "nvis-rack-status"
-
-    def test_a_token_from_one_mode_is_refused_by_the_other(self, tmp_path, monkeypatch):
-        """FR-19a. The cutover is one-way, and flipping the flag back does not restore service.
-
-        Worth pinning because "there is a flag" invites someone to flip it back during an incident,
-        which signs everyone out a *second* time rather than recovering.
-        """
-        monkeypatch.setenv("RACK_WEB_SECRET_KEY", "test-secret-for-the-legacy-path")
-        monkeypatch.setenv("RACK_WEB_SIGNING_KEY_DIR", str(tmp_path / "oidc"))
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
-        monkeypatch.setenv("RACK_WEB_OIDC_ISSUER", ISSUER)
-        keys_mod.reset_for_tests()
-        oidc.reset_for_tests()
-        revocation.install()
-        oidc_token = T.mint("user:admin", T.TOKEN_ACCESS)
-
-        monkeypatch.delenv("RACK_WEB_OIDC_ENABLED", raising=False)
-        oidc.reset_for_tests()
-        legacy_token = T.mint("user:admin", T.TOKEN_ACCESS)
-        with pytest.raises(T.TokenError):
-            T.verify(oidc_token, T.TOKEN_ACCESS)
-
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
-        oidc.reset_for_tests()
-        with pytest.raises(T.TokenError):
-            T.verify(legacy_token, T.TOKEN_ACCESS)
-
 
 class TestRoundTrip:
     def test_a_minted_token_verifies(self, oidc_mode):
@@ -243,11 +197,6 @@ class TestClaims:
     def test_a_named_scope_is_carried_verbatim(self, oidc_mode):
         minted = T.mint("user:admin", T.TOKEN_ACCESS, scope="openid profile email")
         assert _unverified(minted)["scope"] == "openid profile email"
-
-    def test_no_claim_appears_in_legacy_mode_that_did_not_before(self, legacy_mode):
-        """AC-28 in claim form: the flag must not leak new claims into the default deployment."""
-        claims = _unverified(T.mint("user:admin", T.TOKEN_ACCESS))
-        assert set(claims) == {"iss", "aud", "sub", "iat", "exp", "jti", "typ"}
 
     def test_a_caller_cannot_override_token_use(self, oidc_mode):
         with pytest.raises(T.TokenError, match="token_use"):

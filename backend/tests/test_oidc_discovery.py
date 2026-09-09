@@ -63,31 +63,6 @@ def provider_off(tmp_path, monkeypatch):
     oidc.reset_for_tests()
 
 
-class TestNoHalfSwitchedState:
-    """AC-30, FR-19. The state that would strand every external consumer."""
-
-    @pytest.mark.parametrize("path", [DISCOVERY, JWKS])
-    def test_both_endpoints_are_absent_when_the_provider_is_off(self, client, provider_off, path):
-        """404, not an empty document.
-
-        An empty JWKS is a *positive* claim — "this issuer has no keys" — which a client caches.
-        "No such endpoint" is simply true.
-        """
-        assert client.get(path).status_code == 404
-
-    @pytest.mark.parametrize("path", [DISCOVERY, JWKS])
-    def test_both_endpoints_are_present_when_the_provider_is_on(self, client, provider, path):
-        assert client.get(path).status_code == 200
-
-    def test_the_two_endpoints_agree_about_whether_the_provider_exists(self, client, provider_off):
-        """Neither can be enabled without the other; one switch governs both.
-
-        Separate switches would permit discovery advertising a `jwks_uri` that 404s, or a JWKS
-        nothing points at. There is deliberately no configuration that produces either.
-        """
-        assert client.get(DISCOVERY).status_code == client.get(JWKS).status_code == 404
-
-
 class TestDiscoveryDocument:
     """FR-5. Advertises only what is implemented."""
 
@@ -160,26 +135,25 @@ class TestDiscoveryDocument:
 
 
 class TestTheIssuerMustBeConfigured:
-    """The issuer is a security boundary, so it is configured rather than derived."""
+    """The issuer is a security boundary, so it never comes from the request.
 
-    def test_enabling_without_an_issuer_is_an_error_that_names_the_variable(
-        self, client, tmp_path, monkeypatch
-    ):
-        monkeypatch.setenv("RACK_WEB_SIGNING_KEY_DIR", str(tmp_path / "oidc"))
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
-        monkeypatch.delenv("RACK_WEB_OIDC_ISSUER", raising=False)
-        oidc.reset_for_tests()
-
-        resp = client.get(DISCOVERY)
-        assert resp.status_code == 500
-        assert "RACK_WEB_OIDC_ISSUER" in resp.get_json()["error"]
+    It may be *derived* from the bind address when unset — `startup_gate._ensure_oidc_issuer()`,
+    warning as it does so — but a configured value is validated strictly, and neither path ever
+    reads a `Host` header, which is attacker-controlled.
+    """
 
     @pytest.mark.parametrize(
         "bad",
         ["http://rack.example.com", "ftp://x", "notaurl", "https://x.com?a=1", "https://x.com#f"],
     )
     def test_an_unusable_issuer_is_refused(self, monkeypatch, bad):
-        monkeypatch.setenv("RACK_WEB_OIDC_ENABLED", "1")
+        """An issuer that is *configured* is still validated strictly.
+
+        Only the absent case became lenient: the gate derives one rather than refusing to boot. A
+        value an operator typed is a statement of intent, and a malformed one is refused, because a
+        client compares `iss` byte-for-byte and the mismatch surfaces at the client with nothing
+        visibly wrong here.
+        """
         monkeypatch.setenv("RACK_WEB_OIDC_ISSUER", bad)
         oidc.reset_for_tests()
         with pytest.raises(oidc.OIDCConfigError):
@@ -326,48 +300,3 @@ class TestTheGate:
         }
 
 
-class TestTheProviderRefusesToStartWithoutAnIssuer:
-    """FR-18 cutover safety net.
-
-    Measured before adding this: with `RACK_WEB_OIDC_ENABLED=1` and no `RACK_WEB_OIDC_ISSUER`, the
-    app **booted perfectly** — `GET /login` returned 200 and `verify-deploy.sh` passed — and then
-    every sign-in raised `OIDCConfigError` from `mint()`. A dashboard green by every health check
-    in which nobody can log in.
-
-    That is the failure mode the cutover makes unrecoverable, because deleting the HS256 path
-    removes the fallback. Validating at startup converts it into the failure a deploy is built to
-    catch, on a deployment that was simply never configured for the provider.
-    """
-
-    def test_the_issuer_is_required_when_the_provider_is_on(self, monkeypatch):
-        from identity import oidc as oidc_mod
-
-        monkeypatch.setenv(oidc_mod.FLAG_ENV, "1")
-        monkeypatch.delenv(oidc_mod.ISSUER_ENV, raising=False)
-
-        with pytest.raises(oidc_mod.OIDCConfigError, match=oidc_mod.ISSUER_ENV):
-            oidc_mod.issuer_url()
-
-    def test_the_bootstrap_raises_rather_than_logging(self, monkeypatch):
-        """The distinction that matters: a missing *signing key* is logged and the process still
-        runs, because it is recoverable by fixing permissions on a live box. A missing *issuer*
-        means the deployment was never configured, so it must not serve at all."""
-        import app as app_mod
-        from identity import oidc as oidc_mod
-
-        monkeypatch.setenv(oidc_mod.FLAG_ENV, "1")
-        monkeypatch.delenv(oidc_mod.ISSUER_ENV, raising=False)
-
-        with pytest.raises(oidc_mod.OIDCConfigError):
-            app_mod._bootstrap_identity_at_startup()
-
-    def test_a_valid_issuer_lets_the_bootstrap_through(self, monkeypatch, tmp_path):
-        import app as app_mod
-        from identity import oidc as oidc_mod
-
-        monkeypatch.setenv(oidc_mod.FLAG_ENV, "1")
-        monkeypatch.setenv(oidc_mod.ISSUER_ENV, "https://rack.example.com")
-        monkeypatch.setenv("NVIS_IDENTITY_FILE", str(tmp_path / "identity.json"))
-        monkeypatch.setenv("RACK_WEB_SIGNING_KEY_DIR", str(tmp_path / "keys"))
-
-        app_mod._bootstrap_identity_at_startup()  # must not raise
