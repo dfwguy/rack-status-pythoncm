@@ -75,38 +75,85 @@ def needed(store: IdentityStore) -> bool:
     return store.is_empty()
 
 
-def ensure_admin(store: IdentityStore, *, emit: bool = True) -> str | None:
-    """Create `admin` if and only if the store holds no users. Returns the password, or None.
+def unclaimed_admin(store: IdentityStore) -> User | None:
+    """The bootstrap administrator, if it exists and nobody has claimed the deployment yet.
 
-    Idempotent by the condition above, which is what AC-19 pins: a credential re-printed on every
-    restart would be a shared password sitting in the deployment's logs, so "did we already
-    bootstrap" must be answered from the store and never from a marker file or an env var.
+    "Claimed" is the distinction that matters, and it is not "does a user exist": FR-10 enrols an
+    administrator on first boot, so a store is non-empty from the moment the product starts. What
+    tells a *provisioned* deployment from a *pristine* one is whether anyone has set a password —
+    the bootstrap admin ships with ``must_change_password=True`` and a one-time credential, and
+    until that is changed there is no credential anyone is using and no access to protect.
 
-    Returning the password is for tests and for callers that want to present it themselves; the
-    default `emit=True` also writes it to the log, because the operator reading startup output is
-    the actual audience.
+    Answers ``None`` the moment a second account exists, even an unclaimed one. Somebody
+    administering this deployment created it, which makes the deployment provisioned regardless of
+    the admin's own state.
     """
-    if not needed(store):
+    users = store.list_users()
+    if len(users) != 1:
+        return None
+    only = users[0]
+    if only.login != canonical_login(ADMIN_LOGIN) or not only.must_change_password:
+        return None
+    return only
+
+
+def ensure_admin(store: IdentityStore, *, emit: bool = True) -> str | None:
+    """Make sure a usable administrator credential exists, and return it when one was issued.
+
+    Two cases issue a password, and the second is new:
+
+    * **no users at all** — create `admin`, as FR-10 requires;
+    * **an administrator nobody has claimed** — issue a *fresh* password for it.
+
+    **The second case looks like it contradicts AC-19 and in fact serves it.** AC-19's concern is a
+    shared password sitting in the deployment's logs, and the reason it forbade re-printing was that
+    the printed value stayed *valid*. That was the worse arrangement: one credential, printed once,
+    accepted indefinitely, and recoverable by anyone who reads a log from any point in the
+    deployment's life. Re-issuing invalidates every earlier copy, so a stale log line is worthless
+    — the standing shared secret is what disappears.
+
+    It is also what makes a deployment recoverable. The password is shown once and stored nowhere,
+    so an operator who missed it — a scrolled-past console, a container started detached, a restart
+    while nobody was watching — previously had a deployment nobody could sign into and no supported
+    way back in. A restart now issues a new one.
+
+    **Nothing is re-issued once the deployment is claimed.** A changed password, or any second
+    account, means somebody has real access; regenerating then would be a lockout of a live
+    operator and a back door for anyone who can restart the process. `unclaimed_admin` draws that
+    line, and it is the whole safety argument for this function.
+    """
+    admin = unclaimed_admin(store)
+    if not needed(store) and admin is None:
         return None
 
     password = generate_password()
     salt, verifier = srp.enroll(ADMIN_LOGIN, password)
-    store.create_user(
-        User(
-            login=canonical_login(ADMIN_LOGIN),
-            display_name="Administrator",
-            srp_salt=salt,
-            srp_verifier=verifier,
-            # FR-10a. A bootstrap credential that lives forever is a shared password.
-            must_change_password=True,
+
+    if admin is None:
+        store.create_user(
+            User(
+                login=canonical_login(ADMIN_LOGIN),
+                display_name="Administrator",
+                srp_salt=salt,
+                srp_verifier=verifier,
+                # FR-10a. A bootstrap credential that lives forever is a shared password.
+                must_change_password=True,
+            )
         )
-    )
+    else:
+        # `edited` rather than a fresh User, so nothing else on the record is silently reset — and
+        # `must_change_password` stays True, because a re-issued credential is still a bootstrap
+        # credential and still has to be replaced by its holder.
+        store.update_user(
+            admin.edited(srp_salt=salt, srp_verifier=verifier, must_change_password=True)
+        )
+
     if emit:
-        _emit(password)
+        _emit(password, reissued=admin is not None)
     return password
 
 
-def _emit(password: str) -> None:
+def _emit(password: str, *, reissued: bool = False) -> None:
     """Write the credential to the startup output, once, impossible to miss.
 
     Deliberately `logging.warning` and not `info`: a deployment running at WARNING would otherwise
@@ -116,21 +163,41 @@ def _emit(password: str) -> None:
 
     The banner exists because this competes with a few hundred startup lines for attention.
     """
+    # The two headings differ so an operator can tell which situation they are in, and the
+    # re-issue case says what happened to the previous value: an earlier password copied from an
+    # older log line no longer works, and finding that out at the login screen would be worse than
+    # never having seen it.
+    heading = (
+        "  ADMINISTRATOR CREDENTIAL RE-ISSUED - PREVIOUS PASSWORD NO LONGER VALID"
+        if reissued
+        else "  IDENTITY STORE INITIALISED - ONE-TIME ADMINISTRATOR CREDENTIAL"
+    )
+    why = (
+        "  Re-issued because nobody has signed in yet. Every restart replaces it\n"
+        "  until the password is changed, which is what makes a missed credential\n"
+        "  recoverable - and what stops the printed one being a standing secret.\n"
+        if reissued
+        else "  You will be asked to change it at first login.\n"
+    )
     _logger.warning(
         "\n"
         "=========================================================================\n"
-        "  IDENTITY STORE INITIALISED - ONE-TIME ADMINISTRATOR CREDENTIAL\n"
+        "%s\n"
         "=========================================================================\n"
         "    login:    %s\n"
         "    password: %s\n"
         "\n"
         "  Copy this now. It is not stored and cannot be shown again - only its\n"
-        "  SRP verifier is kept. You will be asked to change it at first login.\n"
-        "  Losing every administrator credential means redeploying the identity\n"
-        "  store; there is no reset endpoint and no recovery code.\n"
+        "  SRP verifier is kept.\n"
+        "%s"
+        "  Once it IS changed, nothing is re-issued: losing every administrator\n"
+        "  credential then means redeploying the identity store, because there is\n"
+        "  no reset endpoint and no recovery code.\n"
         "=========================================================================",
+        heading,
         ADMIN_LOGIN,
         password,
+        why,
     )
 
 

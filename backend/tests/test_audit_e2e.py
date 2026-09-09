@@ -99,7 +99,14 @@ def _seed_admin(identity_file: Path, policy_file: Path) -> None:
         bootstrap.ensure_admin(store, emit=False)
         user = store.get_user(ADMIN_LOGIN)
         salt, verifier = srp_mod.enroll(ADMIN_LOGIN, ADMIN_PASSWORD)
-        store.update_user(user.edited(srp_salt=salt, srp_verifier=verifier))
+        # `must_change_password=False` matters here, and leaving it True was a real defect once the
+        # bootstrap began re-issuing an *unclaimed* credential (2026-09-08): the child server booted,
+        # found an administrator nobody had claimed, issued a fresh password, and the known one this
+        # test logs in with stopped working — a 401 on the permitted request. Choosing a password IS
+        # claiming the account, so saying so is also the honest record.
+        store.update_user(
+            user.edited(srp_salt=salt, srp_verifier=verifier, must_change_password=False)
+        )
         store.attach_policy(f"user:{ADMIN_LOGIN}", bootstrap.ADMIN_POLICY_ID)
     finally:
         store.close()

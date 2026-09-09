@@ -134,25 +134,47 @@ class TestFR3ThePasswordIsNotRecoverable:
 
 
 class TestAC19ASecondBootChangesNothing:
-    def test_it_returns_none_and_does_not_re_emit(self, store, caplog):
+    """**AC-19 amended 2026-09-08: a second boot changes nothing once the deployment is CLAIMED.**
+
+    It previously meant "on any second boot", and two tests here pinned that. The reason given was
+    that re-printing turns a one-time password into a shared one sitting in the deployment's logs —
+    but the arrangement it protected was worse than that: one credential, printed once, accepted
+    *indefinitely*, recoverable from any log written at any point in the deployment's life.
+
+    Re-issuing while nobody has claimed the deployment invalidates every earlier copy, so the
+    standing shared secret is what disappears; and it makes a deployment recoverable when the
+    operator missed the console, which is a real failure that happened during this work — the
+    password is stored nowhere, so there was no supported way back in.
+
+    The half of AC-19 that mattered is intact and is asserted below: nothing is re-issued once
+    somebody holds real access. `test_identity_admin_reissue.py` holds the full boundary.
+    """
+
+    def test_it_re_issues_while_the_deployment_is_unclaimed(self, store, caplog):
         first = bootstrap.ensure_admin(store, emit=False)
         assert first
 
         with caplog.at_level(logging.WARNING, logger="identity.bootstrap"):
             second = bootstrap.ensure_admin(store)  # emit=True on purpose
 
-        assert second is None, "a second bootstrap must not mint a second credential"
-        assert not caplog.records, (
-            "a credential was emitted on a restart. Re-printing it on every start turns a one-time "
-            "password into a shared one sitting in the deployment's logs."
+        assert second and second != first
+        assert caplog.records, "a re-issued credential must be printed, or nobody can use it"
+        assert "RE-ISSUED" in caplog.text, (
+            "the banner must say the previous password is dead, or an operator holding one from an "
+            "older log line discovers it at the login screen"
         )
 
-    def test_the_existing_admin_is_untouched(self, store):
+    def test_the_claimed_admin_is_untouched(self, store):
+        """The property AC-19 exists for, asserted against a *claimed* administrator."""
         bootstrap.ensure_admin(store, emit=False)
+        admin = store.get_user(bootstrap.ADMIN_LOGIN)
+        assert admin is not None
+        store.update_user(admin.edited(must_change_password=False))
+
         before = store.get_user(bootstrap.ADMIN_LOGIN)
         assert before is not None
 
-        bootstrap.ensure_admin(store, emit=False)
+        assert bootstrap.ensure_admin(store, emit=False) is None
 
         after = store.get_user(bootstrap.ADMIN_LOGIN)
         assert after is not None
