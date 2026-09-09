@@ -66,7 +66,10 @@ EXCEPTIONS: dict[str, float] = {
     "backend/api/logs.py": 32.7,
     "backend/agent/registrations.py": 37.4,
     "backend/metrics_query.py": 45.4,
-    "backend/api/diagnostics.py": 46.5,
+    # backend/api/diagnostics.py removed 2026-09-09: covered to 55.7% by test_hw_check_argv.py,
+    # confirmed in a tracked-files-only export (the tree this gate runs in). It clears the floor by
+    # 5.7 points, comfortably outside both the 1.5 tolerance and the 3.0-point maximum
+    # working-tree-vs-clean-checkout variance measured when this list was seeded.
     "backend/universal_parser.py": 48.1,      # 986 statements; the NCCL/NeMo result scrapers
     "backend/api/tools.py": 48.3,             # G-2, and bypasses the exec chokepoint (G-6)
     "backend/api/bringup.py": 48.5,
