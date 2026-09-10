@@ -37,37 +37,15 @@ from app import app
 
 #: The bundle is a gitignored build artifact, so this suite runs against real files locally and
 #: against the absent-bundle path in CI. Both are correct; what must never happen is HTML.
+#:
+#: **These cases briefly tolerated a 503 and no longer need to.** With no bundle they used to fall
+#: through to `serve_spa_asset`'s "Frontend not built" page — deliberate for a *client route*,
+#: where the audience is a human in a browser, and wrong for an install asset, where the audience
+#: is a browser's manifest fetcher that reports nothing and simply drops the icon. The install
+#: assets are now classified as build artifacts (`_SPA_ARTIFACT_PREFIXES` / `_SPA_ARTIFACT_NAMES`
+#: in `api/_common.py`), so a miss is a 404 whether or not a bundle exists — which makes the
+#: original contract here true unconditionally, and a 503-tolerant assertion strictly weaker.
 INSTALL_ASSETS = ("/manifest.webmanifest", "/icons/greenlight-192.png", "/icons/greenlight-512.png")
-
-
-def _bundle_is_built() -> bool:
-    """Whether `static/spa/` holds a build.
-
-    This file's comment above already said it runs "against the absent-bundle path in CI", but the
-    assertions only accepted 200 or 404 — and an unbuilt tree answers **503 with an HTML body**,
-    deliberately, because the audience is a human in a browser and an unbuilt frontend is
-    unavailability rather than a fault (`api/_common.serve_spa_asset`, pinned by
-    `test_app_api.py::test_missing_shell_503s_instead_of_raising`). So all four cases failed in
-    every CI run and in any tracked-only checkout, while passing for every developer.
-
-    That is exactly the local/CI gap in `local-vs-ci-tree.mdc` §1, including its remedy: tolerate
-    *both* states, the way `test_endpoint_smoke.py::_assert_did_not_crash` does. The contract this
-    file exists for — never HTML — is only meaningful when there is a bundle to serve; with no
-    frontend at all, nothing is installable and saying so in HTML is the correct answer.
-    """
-    # Read the module's own constant rather than recomputing `REPO_ROOT / "static" / "spa"` here,
-    # so a test cannot disagree with the code about where the bundle lives.
-    from api._common import _SPA_DIR
-
-    return (Path(_SPA_DIR) / "index.html").is_file()
-
-
-def _unavailable_because_unbuilt(resp) -> bool:
-    """A 503 naming the missing build, and nothing else. Narrow on purpose: a 503 from any other
-    cause is still a failure this suite should report."""
-    if resp.status_code != 503:
-        return False
-    return b"Frontend not built" in resp.data
 
 
 @pytest.mark.parametrize("path", INSTALL_ASSETS)
@@ -82,17 +60,6 @@ def test_install_asset_is_served_or_404s_but_is_never_html(authed_client, path):
     it broke here in under an hour. ``authed_client`` is the supported handle and moves with them.
     """
     resp = authed_client.get(path)
-
-    if not _bundle_is_built():
-        # No frontend: the product answers 503 in HTML by design. Assert that precisely rather
-        # than skipping, so this branch still pins behaviour instead of going untested in CI —
-        # which is the only place it is ever exercised.
-        assert _unavailable_because_unbuilt(resp), (
-            f"{path} answered {resp.status_code} with no bundle present; expected the deliberate "
-            f'503 "Frontend not built" page'
-        )
-        return
-
     assert resp.status_code in (200, 404), f"{path} answered {resp.status_code}"
     if resp.status_code == 200:
         expected = "image/png" if path.endswith(".png") else "application/manifest+json"
@@ -110,13 +77,6 @@ def test_a_missing_icon_directory_entry_does_not_serve_the_shell(authed_client):
     deploy, so it must 404.
     """
     resp = authed_client.get("/icons/greenlight-does-not-exist.png")
-
-    if not _bundle_is_built():
-        assert _unavailable_because_unbuilt(resp), (
-            f"answered {resp.status_code} with no bundle present"
-        )
-        return
-
     assert resp.status_code == 404
     assert "text/html" not in (resp.content_type or "")
     assert resp.get_json()["ok"] is False
