@@ -83,7 +83,13 @@ APP_NAME=$(basename "$APP" .app)
 # re-submits it. It also has to carry the version and arch, because `latest-mac.yml` addresses the
 # file by name and two arches otherwise collide in the same registry directory. Matches the
 # `artifactName` convention in electron-builder.yml so the signed and unsigned names agree.
-VERSION=$(node -p "require('$DESKTOP_DIR/package.json').version")
+# Read from the BUILT app's Info.plist, not package.json. `npm run pack:mac` injects a stamped
+# version via `--config.extraMetadata.version`, deliberately leaving the source file alone — so
+# package.json says "0.3.0" while the bundle says "0.3.0-260910184000". Trusting the source would
+# name the artifact after a version the app does not report, which is precisely the confusion the
+# stamp exists to remove. The plist is what was actually built.
+VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist" 2>/dev/null \
+  || node -p "require('$DESKTOP_DIR/package.json').version")
 # Multi-line: macOS ships bash 3.2, which will not parse a single-line `case` with `;;` inside a
 # command substitution (local-vs-ci-tree.mdc §4 — prefer constructs both shells have).
 case "$APP" in
