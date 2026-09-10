@@ -23,6 +23,7 @@ import MenuItem from "@mui/material/MenuItem";
 import FormHelperText from "@mui/material/FormHelperText";
 import Alert from "@mui/material/Alert";
 import Stack from "@mui/material/Stack";
+import { apiFetch } from "../../lib/apiFetch";
 
 export type HwCheckConfirmOpts = { preset?: string; checker_args?: string };
 
@@ -64,7 +65,7 @@ export function HwCheckRunDialog({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/hw-check-presets", { credentials: "same-origin" });
+        const res = await apiFetch("/api/hw-check-presets", { credentials: "same-origin" });
         const data = (await res.json()) as { ok?: boolean; presets?: Record<string, string[]>; error?: string };
         if (!res.ok || !data?.ok || !data.presets) {
           throw new Error(data?.error || res.statusText || "failed to load presets");
@@ -176,7 +177,7 @@ export function HwCheckRunDialog({
             onClick={() => {
               void (async () => {
                 try {
-                  const res = await fetch("/api/hw-check-help", { credentials: "same-origin" });
+                  const res = await apiFetch("/api/hw-check-help", { credentials: "same-origin" });
                   const data = (await res.json()) as { ok?: boolean; help?: string; error?: string };
                   const text = data.help || data.error || "(empty)";
                   const w = window.open("", "_blank", "noopener,noreferrer");

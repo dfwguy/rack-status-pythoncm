@@ -37,12 +37,18 @@ import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
 import TableHead from '@mui/material/TableHead';
+import TablePagination from '@mui/material/TablePagination';
 import TableRow from '@mui/material/TableRow';
 import TextField from '@mui/material/TextField';
 import { Banner, Button, Card, Flex, Skeleton, Tag, Text } from '@nvidia/foundations-react-core';
-import { RefreshCw } from 'lucide-react';
+import { Download, RefreshCw } from 'lucide-react';
 
-import { defaultSince, readTrail } from '../services/auditTrailService';
+import {
+  ROWS_PER_PAGE_OPTIONS,
+  defaultSince,
+  downloadExport,
+  readTrail,
+} from '../services/auditTrailService';
 import type { AuditEvent, AuditFilter, AuditPage } from '../types/auditTrail';
 
 const FILTERS: { key: keyof AuditFilter; label: string; placeholder: string }[] = [
@@ -70,18 +76,26 @@ export default function AuditTrailView() {
   const [filter, setFilter] = useState<AuditFilter>({ since: defaultSince() });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [rowsPerPage, setRowsPerPage] = useState(50);
+  const [pageIndex, setPageIndex] = useState(0);
+  /**
+   * One cursor per page boundary already crossed, so **Previous** can go back.
+   *
+   * This is what pagination over an append-only record costs. The other tables hold the whole
+   * filtered array and slice it, so a page number is just an offset. The trail is appended at the
+   * newest end — exactly where page 1 starts — so an offset shifts between requests and would
+   * both repeat and *skip* events. The server therefore pages by `event_id`, and going backwards
+   * means remembering the anchors rather than decrementing a number.
+   */
+  const [cursors, setCursors] = useState<string[]>([]);
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(
-    async (cursor = '') => {
+    async (cursor = '', limit = rowsPerPage) => {
       setLoading(true);
       setError('');
       try {
-        const next = await readTrail(filter, { cursor, limit: 50 });
-        setPage((previous) =>
-          cursor && previous
-            ? { ...next, events: [...previous.events, ...next.events] }
-            : next,
-        );
+        setPage(await readTrail(filter, { cursor, limit }));
       } catch (caught) {
         // Surfaced, never swallowed: an empty table and a failed request look identical to an
         // operator, and the wrong conclusion — "nothing happened" — is the dangerous one.
@@ -90,27 +104,84 @@ export default function AuditTrailView() {
         setLoading(false);
       }
     },
-    [filter],
+    [filter, rowsPerPage],
   );
 
+  // A filter or page-size change resets to the newest page: any cursor held was an anchor into the
+  // *previous* result set, and resuming from it would page through an answer nobody asked for.
   useEffect(() => {
-    void load();
+    setCursors([]);
+    setPageIndex(0);
+    void load('');
   }, [load]);
 
   const events = page?.events ?? [];
+  /* A full page plus a cursor is the only evidence that more exists. A short page is the end, and
+   * `truncated` is a different thing entirely -- the scan cap, reported separately, because
+   * "there is more we did not look at" is not "there is a next page". */
+  const hasMore = Boolean(page?.cursor) && events.length >= rowsPerPage;
+
+  const goToPage = (next: number) => {
+    if (next > pageIndex && page?.cursor) {
+      setCursors((held) => [...held, page.cursor]);
+      setPageIndex(next);
+      void load(page.cursor);
+      return;
+    }
+    if (next < pageIndex) {
+      const held = cursors.slice(0, next);
+      setCursors(held);
+      setPageIndex(next);
+      void load(held[held.length - 1] ?? '');
+    }
+  };
+
+  const runExport = async (format: 'json' | 'csv') => {
+    setExporting(true);
+    setError('');
+    try {
+      await downloadExport(filter, format);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <Flex style={{ flexDirection: "column", gap: 16, padding: 16 }}>
       <Flex style={{ justifyContent: "space-between", alignItems: "center" }}>
         <Text kind="title/lg">Audit Trail</Text>
-        <Button
-          kind="secondary"
-          size="small"
-          onClick={() => void load()}
-          aria-label="Refresh the audit trail"
-        >
-          <RefreshCw size={14} /> Refresh
-        </Button>
+        <Flex style={{ gap: 8 }}>
+          {/* Exports the FILTER, not the visible page -- the server re-runs the query, so a
+              filtered download is the whole answer rather than the 50 rows on screen. */}
+          <Button
+            kind="tertiary"
+            size="small"
+            disabled={exporting}
+            onClick={() => void runExport('csv')}
+            aria-label="Export the audit trail as CSV"
+          >
+            <Download size={14} /> CSV
+          </Button>
+          <Button
+            kind="tertiary"
+            size="small"
+            disabled={exporting}
+            onClick={() => void runExport('json')}
+            aria-label="Export the audit trail as JSON"
+          >
+            <Download size={14} /> JSON
+          </Button>
+          <Button
+            kind="secondary"
+            size="small"
+            onClick={() => void load(cursors[cursors.length - 1] ?? '')}
+            aria-label="Refresh the audit trail"
+          >
+            <RefreshCw size={14} /> Refresh
+          </Button>
+        </Flex>
       </Flex>
 
       <Text kind="body/regular/sm" style={{ opacity: 0.75 }}>
@@ -239,20 +310,32 @@ export default function AuditTrailView() {
         </Card>
       )}
 
-      {page && page.cursor && events.length > 0 && (
-        <Flex style={{ justifyContent: "space-between", alignItems: "center" }}>
+      {page && events.length > 0 && (
+        <Flex style={{ justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
           <Text kind="body/regular/sm" style={{ opacity: 0.7 }}>
-            {events.length} event(s) shown
-            {page.oldest_held ? ` · trail reaches back to ${when(page.oldest_held)}` : ''}
+            {page.oldest_held ? `Trail reaches back to ${when(page.oldest_held)}` : ''}
           </Text>
-          <Button
-            kind="tertiary"
-            size="small"
-            disabled={loading}
-            onClick={() => void load(page.cursor)}
-          >
-            Load older
-          </Button>
+          {/* `count={-1}` means "total unknown", which is the honest value: counting would mean
+              scanning the whole 125 MiB trail on every page turn. MUI then renders "1–50 of more
+              than 50" and hides the jump-to-last control -- which is correct rather than a
+              limitation, since a page number cannot be an offset into an append-only record. */}
+          <TablePagination
+            component="div"
+            /* `-1` while more may follow, an exact total once we are on the last page.
+             *
+             * MUI derives both arrows' disabled state from `count`, so encoding "is there more"
+             * here is all that is needed -- no slot overrides, and no second source of truth for
+             * whether Next should work. It is also the honest value: a real total would mean
+             * scanning the whole 125 MiB trail on every page turn, and it becomes knowable
+             * precisely when the last page arrives. MUI renders "1–50 of more than 50" until
+             * then. */
+            count={hasMore ? -1 : pageIndex * rowsPerPage + events.length}
+            page={pageIndex}
+            onPageChange={(_, next) => goToPage(next)}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={(e) => setRowsPerPage(parseInt(e.target.value, 10))}
+            rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS}
+          />
         </Flex>
       )}
     </Flex>

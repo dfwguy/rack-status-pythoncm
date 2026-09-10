@@ -217,9 +217,15 @@ class TestTC14AndTC15TheNamesArePinned:
 
     def test_the_always_audited_set_is_exactly_the_trail_reads(self):
         """Exhaustive on purpose. A set that grows quietly is how an unrelated read starts being
-        recorded regardless of configuration; one that shrinks is how this read stops being."""
+        recorded regardless of configuration; one that shrinks is how this read stops being.
+
+        It did its job on 2026-09-10: adding the export action failed this case, which is the
+        review step the exhaustive form exists to force. `audit.trail:export` belongs because
+        taking a file is extraction rather than looking — every operator's activity, off the
+        machine, outliving the session.
+        """
         assert audit_actions.ALWAYS_AUDITED == frozenset(
-            {"audit.trail:list", "audit.trail:read"}
+            {"audit.trail:list", "audit.trail:read", "audit.trail:export"}
         )
 
     def test_every_always_audited_name_is_a_real_action(self):

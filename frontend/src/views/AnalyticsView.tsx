@@ -49,6 +49,7 @@ import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
 import type { BringupFleet } from "../types/bringup";
 import type { RackRow, RackStatusResponse } from "../types/api";
+import { apiFetch } from "../lib/apiFetch";
 
 /** Stable empty array: a fresh `[]` per render would re-slice the pager's memo every time. */
 const EMPTY_ROWS: never[] = [];
@@ -303,7 +304,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
     setError("");
     setProgress(null);
     try {
-      const start = await fetch("/api/analytics/aggregate-async", {
+      const start = await apiFetch("/api/analytics/aggregate-async", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
@@ -321,7 +322,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
 
       for (;;) {
         await new Promise((r) => setTimeout(r, ANALYTICS_POLL_MS));
-        const res = await fetch(
+        const res = await apiFetch(
           `/api/analytics/aggregate-status?job_id=${encodeURIComponent(started.job_id)}`,
           { credentials: "same-origin", cache: "no-store" },
         );
@@ -354,7 +355,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
     try {
       const params = new URLSearchParams();
       if (logDir) params.set("log_dir", logDir);
-      const res = await fetch(`/api/analytics/last?${params}`, {
+      const res = await apiFetch(`/api/analytics/last?${params}`, {
         credentials: "same-origin",
         cache: "no-store",
       });

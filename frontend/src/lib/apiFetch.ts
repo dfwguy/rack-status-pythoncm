@@ -37,8 +37,24 @@ export function getClientId(): string {
   return _clientId;
 }
 
-/** Paths that must never trigger a refresh attempt, or a failure here becomes a loop. */
-const NO_REFRESH = ["/api/auth/refresh", "/api/auth/srp/", "/api/auth-check", "/api/auth/logout"];
+/**
+ * Paths that must never trigger a refresh attempt.
+ *
+ * Each for its own reason, and the reasons are not interchangeable:
+ *
+ * * `/api/auth/refresh` — renewing in response to a failed renewal is an infinite regress.
+ * * `/api/auth/srp/` — the exchange that *obtains* a session; there is nothing yet to renew.
+ * * `/api/auth/logout` — renewing a session in order to end it is the wrong direction.
+ *
+ * **`/api/auth-check` used to be on this list and its removal is a bug fix.** It cannot loop: it
+ * is not the refresh route, so refresh-then-retry terminates. Listing it meant the one place that
+ * asks "am I signed in?" was the one place that could not renew — so on a page load with an
+ * expired access cookie and a perfectly valid refresh token, `AuthProvider` saw a 401, concluded
+ * "not authenticated" and showed the login screen. The refresh token was never tried. That made
+ * the session length effectively the *access* TTL (one hour) on every reload, no matter how long
+ * `RACK_WEB_REFRESH_TTL_SECONDS` was set to.
+ */
+const NO_REFRESH = ["/api/auth/refresh", "/api/auth/srp/", "/api/auth/logout"];
 
 /**
  * One shared in-flight refresh.

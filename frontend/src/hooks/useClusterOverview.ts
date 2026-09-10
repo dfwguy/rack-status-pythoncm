@@ -18,6 +18,7 @@ const emptyClusterDashboardMetadata = (): ClusterOverviewResponse["cluster_dashb
   customer_name: "",
 });
 import { getClientId } from "./useRackStatus";
+import { apiFetch } from "../lib/apiFetch";
 
 const POLL_MS = 30_000;
 
@@ -36,7 +37,7 @@ export function useClusterOverview(logDir: string) {
       if (logDir) params.set("log_dir", logDir);
       params.set("client_id", getClientId());
       if (forceRefresh) params.set("refresh", "1");
-      const res = await fetch(`/api/cluster-overview?${params}`, { cache: "no-store" });
+      const res = await apiFetch(`/api/cluster-overview?${params}`, { cache: "no-store" });
       const json = (await res.json()) as ClusterOverviewResponse | { ok: false; error?: string };
       if (!res.ok) {
         const msg =

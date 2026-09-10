@@ -20,6 +20,7 @@ import Box from "@mui/material/Box";
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import { Terminal, FileText, CheckCircle, XCircle } from "lucide-react";
+import { apiFetch } from "../../lib/apiFetch";
 
 interface StepHistoryEntry {
   step_id: string;
@@ -67,7 +68,7 @@ export default function StepOutputDialog({
       setLoadingOutput(true);
       setFullOutput("");
       try {
-        const res = await fetch(`/api/workflow-runs/${runId}/output/${stepId}`, {
+        const res = await apiFetch(`/api/workflow-runs/${runId}/output/${stepId}`, {
           credentials: "same-origin",
           signal,
         });

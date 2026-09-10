@@ -49,6 +49,7 @@ import { NvloomHeatmapsSection } from "./NvloomHeatmapsSection";
 import { ClusterkitResultsSection, type ClusterkitRunRow } from "./ClusterkitResultsSection";
 import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
+import { apiFetch } from "../lib/apiFetch";
 
 ChartJS.register(
   CategoryScale,
@@ -983,7 +984,7 @@ export function ParserResultsDialog({
     const tzApi = chartsTzForApi(chartsTz);
     if (tzApi) params.set("display_timezone", tzApi);
 
-    fetch(`/api/parser-results?${params}`)
+    apiFetch(`/api/parser-results?${params}`)
       .then((res) => res.json())
       .then((json: ParserResponse & { ok?: boolean; error?: string }) => {
         if (json.ok) {
@@ -1027,7 +1028,7 @@ export function ParserResultsDialog({
     const params = new URLSearchParams();
     params.set("log_dir", logDir!.trim());
     params.set("rack", rack.trim());
-    fetch(`/api/nvloom-heatmaps-log?${params}`, { signal: ac.signal })
+    apiFetch(`/api/nvloom-heatmaps-log?${params}`, { signal: ac.signal })
       .then(async (res) => {
         const j = (await res.json()) as { ok?: boolean; error?: string; path?: string; content?: string };
         if (!res.ok) {
@@ -1076,7 +1077,7 @@ export function ParserResultsDialog({
     const params = new URLSearchParams();
     params.set("log_dir", logDir!.trim());
     params.set("rack", rack.trim());
-    fetch(`/api/clusterkit-results?${params}`, { signal: ac.signal })
+    apiFetch(`/api/clusterkit-results?${params}`, { signal: ac.signal })
       .then(async (res) => {
         const j = (await res.json()) as { ok?: boolean; error?: string; runs?: ClusterkitRunRow[] };
         if (!res.ok || !j.ok) {

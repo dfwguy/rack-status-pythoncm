@@ -69,3 +69,54 @@ export async function fetchTrailFields(): Promise<AuditTrailFields> {
   const resp = await apiFetch('/api/audit-trail/fields');
   return json<AuditTrailFields>(resp, 'loading the trail fields');
 }
+
+/** Rows-per-page choices, matching the other tables in the product. */
+export const ROWS_PER_PAGE_OPTIONS = [25, 50, 100, 250];
+
+/**
+ * Download the current filter as JSON or CSV.
+ *
+ * **Server-side, not a serialisation of what is on screen.** The screen holds one page, so
+ * exporting it would hand somebody 50 rows of a 3,000-row answer and look entirely right. The
+ * export is also a *separate* action (`audit.trail:export`) that a deployment can grant
+ * independently and that the trail records — building the file in the browser would make an
+ * extraction indistinguishable from ordinary browsing.
+ *
+ * **Fetched into a blob rather than opened as a link.** A bare `<a href>` would authenticate fine
+ * (the cookie is same-origin), but a refusal would *download the 403 body as a file* — an
+ * operator ending up with `audit-trail.json` containing `{"ok":false}` and no idea why. Fetching
+ * lets the refusal surface as an error where the click happened.
+ */
+export async function downloadExport(
+  filter: AuditFilter,
+  format: 'json' | 'csv',
+): Promise<void> {
+  const params = new URLSearchParams({ format });
+  for (const [key, value] of Object.entries(filter)) {
+    if (value) params.set(key, value);
+  }
+
+  const resp = await apiFetch(`/api/audit-trail/export?${params.toString()}`);
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}) as Record<string, unknown>);
+    throw new Error(
+      String((body as { error?: string })?.error ?? `export failed (${resp.status})`),
+    );
+  }
+
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    // The server already sets a timestamped filename in Content-Disposition; this is the fallback
+    // for the blob URL, which has no name of its own.
+    anchor.download = `audit-trail.${format}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    // Revoked, or every export leaks the whole file until the tab closes.
+    URL.revokeObjectURL(url);
+  }
+}

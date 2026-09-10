@@ -35,6 +35,7 @@ import { parseNodesFromRack } from "../../lib/parseNodesFromRack";
 import type { NodeInfo } from "../rack/NodeSelector";
 import type { RackStatusResponse, RackRow } from "../../types/api";
 import type { NvisNamingSchema } from "../../types/naming";
+import { apiFetch } from "../../lib/apiFetch";
 
 /** How many rows to render at once. A 2000-node fleet would otherwise build 2000 DOM nodes. */
 const MAX_ROWS = 60;
@@ -76,7 +77,7 @@ export function AddTerminalDialog({
       try {
         const params = new URLSearchParams();
         if (logDir) params.set("log_dir", logDir);
-        const res = await fetch(`/api/status?${params}`, { cache: "no-store" });
+        const res = await apiFetch(`/api/status?${params}`, { cache: "no-store" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: RackStatusResponse = await res.json();
         if (cancelled) return;

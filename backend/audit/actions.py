@@ -138,7 +138,14 @@ def verb_of(action: str) -> str:
 #: Reading the security trail qualifies because it exposes every other operator's activity, so the
 #: read is itself a privileged act. `test_audit_trail_api.py` pins these contents — a set that grows
 #: quietly is how an unrelated read starts being recorded, or how this one stops.
-ALWAYS_AUDITED = frozenset({"audit.trail:list", "audit.trail:read"})
+ALWAYS_AUDITED = frozenset({
+    "audit.trail:list",
+    "audit.trail:read",
+    # Taking a file is extraction rather than looking: every operator's activity, off the
+    # machine, outliving the session. If any read must be recorded regardless of
+    # configuration, it is this one.
+    "audit.trail:export",
+})
 
 
 def action(name: str | None = None, *, variant: str = VARIANT_SYNC, **per_method: str) -> Callable[[F], F]:

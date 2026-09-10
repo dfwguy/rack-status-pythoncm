@@ -93,6 +93,7 @@ import {
   hwCheckOptionsBody,
   validationFamilyBody,
 } from "../lib/rackCommandBodies";
+import { apiFetch } from "../lib/apiFetch";
 
 const ICON_SIZE = 14;
 
@@ -704,7 +705,7 @@ export function RackTable({
           fireBulkParallel("NVSwitch system reset", (rack) => {
             void (async () => {
               try {
-                const res = await fetch(`/api/nvswitch-hosts?rack=${encodeURIComponent(rack)}`, { credentials: "same-origin" });
+                const res = await apiFetch(`/api/nvswitch-hosts?rack=${encodeURIComponent(rack)}`, { credentials: "same-origin" });
                 const data = (await res.json()) as { ok?: boolean; hosts?: string[]; error?: string };
                 if (!res.ok || !data.ok || !data.hosts?.length) {
                   store.openText(`NVSwitch system reset — ${rack}`, data.error || "No NVSwitch hosts", true);
@@ -796,7 +797,7 @@ export function RackTable({
     const rack = menuRow.rack;
     closeMenu();
     try {
-      await fetch(`/api/comments/${encodeURIComponent(rack)}`, { method: "DELETE" });
+      await apiFetch(`/api/comments/${encodeURIComponent(rack)}`, { method: "DELETE" });
       onCommentChange?.(rack, null);
       setSnackbar({ open: true, message: `Comment removed for ${rack}`, severity: "success" });
     } catch {
@@ -807,7 +808,7 @@ export function RackTable({
   const handleSaveComment = useCallback(async () => {
     setCommentSaving(true);
     try {
-      const res = await fetch(`/api/comments/${encodeURIComponent(commentDialogRack)}`, {
+      const res = await apiFetch(`/api/comments/${encodeURIComponent(commentDialogRack)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ comment: commentDialogText }),

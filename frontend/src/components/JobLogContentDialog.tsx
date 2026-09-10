@@ -17,6 +17,7 @@ import DialogActions from "@mui/material/DialogActions";
 import MuiButton from "@mui/material/Button";
 import Box from "@mui/material/Box";
 import LinearProgress from "@mui/material/LinearProgress";
+import { apiFetch } from "../lib/apiFetch";
 
 interface StdoutContentResponse {
   ok: boolean;
@@ -73,7 +74,7 @@ export function JobLogContentDialog({ open, onClose, title, path, logDir }: JobL
         const params = new URLSearchParams({ path });
         const d = (logDir ?? "").trim();
         if (d) params.set("log_dir", d);
-        const res = await fetch(`/api/slurm-job-stdout-content?${params}`, {
+        const res = await apiFetch(`/api/slurm-job-stdout-content?${params}`, {
           credentials: "same-origin",
           signal: ac.signal,
         });

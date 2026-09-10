@@ -32,9 +32,17 @@ its own response.
 
 from __future__ import annotations
 
+import csv
+import io
+import json
+import time
+from dataclasses import asdict
+from datetime import datetime, timezone
+
+import audit
 from audit import reader
 from audit.actions import action
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, make_response, request
 
 bp = Blueprint("audit_trail", __name__, url_prefix="")
 
@@ -84,6 +92,86 @@ def api_audit_trail():
         "oldest_held": page.oldest_held,
         "files": page.files,
     })
+
+
+#: Column order for the CSV. `EVENT_FIELDS` is the pinned schema, and the three optional extras
+#: follow it: `count`/`collapsed` because a flood summary stands for many events and a spreadsheet
+#: that omitted the count would under-report a burst, and `target` because an attachment event's
+#: subject is the whole point of recording it.
+CSV_COLUMNS = (*audit.EVENT_FIELDS, "count", "collapsed", "target")
+
+
+@bp.route("/api/audit-trail/export", methods=["GET"])
+@action(get="audit.trail:export")
+def api_audit_trail_export():
+    """Download everything the current filter matches, as JSON or CSV.
+
+    **A distinct action from `audit.trail:list`, deliberately.** Reading a page is looking; taking
+    a file is extraction — every operator's activity, leaving the machine, in a form that outlives
+    the session. A deployment should be able to grant one without the other, and the trail should
+    record which of the two happened. Both go through the chokepoint, and `ALWAYS_AUDITED` covers
+    this action too, so an export is recorded even with read auditing off.
+
+    Bounded by the same scan cap as a page, and **the truncation travels with the file**: a
+    partial export that looked complete would be evidence of the wrong thing. JSON carries it in a
+    `meta` object; CSV carries it in leading `#` comment lines, which spreadsheets show as text and
+    `pandas.read_csv(comment='#')` skips -- the convention `cluster_report.to_csv` already uses.
+    """
+    fmt = (request.args.get("format") or "json").strip().lower()
+    if fmt not in ("json", "csv"):
+        return jsonify({"ok": False, "error": "format must be 'json' or 'csv'"}), 400
+
+    flt = _filter_from_query()
+    page = reader.export(flt)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    meta = {
+        "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "events": len(page.events),
+        "truncated": page.truncated,
+        "scanned_events": page.scanned_events,
+        "skipped_lines": page.skipped_lines,
+        "oldest_held": page.oldest_held,
+        "filter": {k: v for k, v in asdict(flt).items() if v},
+    }
+
+    if fmt == "json":
+        body = json.dumps({"meta": meta, "events": page.events}, indent=2)
+        mimetype = "application/json"
+    else:
+        body = _to_csv(page.events, meta)
+        mimetype = "text/csv"
+
+    response = make_response(body)
+    response.headers["Content-Type"] = f"{mimetype}; charset=utf-8"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="audit-trail-{stamp}.{fmt}"'
+    )
+    # The trail is not cacheable by anything in front of us: it is per-principal authorised and it
+    # changes constantly.
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _to_csv(events: list[dict], meta: dict) -> str:
+    """One event per row, with the export's own metadata as leading `#` comments."""
+    buf = io.StringIO()
+    buf.write("# NVIS Greenlight audit trail export\n")
+    for key in ("exported_at", "events", "truncated", "scanned_events", "skipped_lines",
+                "oldest_held"):
+        buf.write(f"# {key},{meta[key]}\n")
+    for key, value in (meta.get("filter") or {}).items():
+        buf.write(f"# filter.{key},{value}\n")
+    if meta["truncated"]:
+        buf.write("# WARNING: the scan cap was reached; this export is PARTIAL\n")
+    buf.write("#\n")
+
+    writer = csv.DictWriter(
+        buf, fieldnames=list(CSV_COLUMNS), extrasaction="ignore", lineterminator="\n"
+    )
+    writer.writeheader()
+    for event in events:
+        writer.writerow(event)
+    return buf.getvalue()
 
 
 @bp.route("/api/audit-trail/fields", methods=["GET"])

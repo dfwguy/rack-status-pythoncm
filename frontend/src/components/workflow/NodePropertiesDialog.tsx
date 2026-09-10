@@ -24,6 +24,7 @@ import Box from "@mui/material/Box";
 import IconButton from "@mui/material/IconButton";
 import { Settings2, Plus, Trash2 } from "lucide-react";
 import type { NodeMetadata } from "./editor/frontmatter";
+import { apiFetch } from "../../lib/apiFetch";
 
 interface AvailableTool {
   id: string;
@@ -116,7 +117,7 @@ export default function NodePropertiesDialog({
 
   // Fetch available tools on mount
   useEffect(() => {
-    fetch("/api/tools/available", { credentials: "same-origin" })
+    apiFetch("/api/tools/available", { credentials: "same-origin" })
       .then((r) => r.json())
       .then((data) => {
         if (data.ok) setAvailableTools(data.tools || []);

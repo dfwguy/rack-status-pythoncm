@@ -369,7 +369,7 @@ export function ClusterDashboardView({
     setLabelsSaving(true);
     setLabelsError(null);
     try {
-      const res = await fetch("/api/cluster-dashboard-metadata", {
+      const res = await apiFetch("/api/cluster-dashboard-metadata", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClusterOverviewLiveResponse } from "../types/api";
 import { getClientId } from "./useRackStatus";
+import { apiFetch } from "../lib/apiFetch";
 
 const POLL_MS = 30_000;
 const INIT_POLL_MS = 3_000;
@@ -41,7 +42,7 @@ export function useClusterOverviewLive(logDir: string) {
       if (logDir) params.set("log_dir", logDir);
       params.set("client_id", getClientId());
       if (forceRefresh) params.set("refresh", "1");
-      const res = await fetch(`/api/cluster-overview/live?${params}`, { cache: "no-store" });
+      const res = await apiFetch(`/api/cluster-overview/live?${params}`, { cache: "no-store" });
       const json = (await res.json()) as
         | ClusterOverviewLiveResponse
         | { ok: false; error?: string };

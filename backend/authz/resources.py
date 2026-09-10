@@ -190,6 +190,12 @@ COLLECTION_FALLBACK_ACTIONS: frozenset[str] = frozenset({
     # from the response — so the request cannot name it. An *update* carries its id in the path and
     # still resolves to that instance, because the fallback only fires when nothing is nameable.
     "workflow:save",
+    # `GET /api/audit-trail/export` serialises whatever the *filter* matched. There is no instance
+    # to name -- the export IS the collection, narrowed -- so it takes the collection resource.
+    # Listed here rather than by adding `export` to COLLECTION_FALLBACK_VERBS, because that would
+    # make every future `<type>:export` collection-level by default, including on a type where an
+    # export of one instance is the sensible reading.
+    "audit.trail:export",
 })
 
 

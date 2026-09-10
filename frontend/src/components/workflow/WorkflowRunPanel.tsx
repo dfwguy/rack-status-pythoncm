@@ -35,6 +35,7 @@ import {
   type WorkflowRunHistoryEntry,
   type Workflow,
 } from "../../services/workflowService";
+import { apiFetch } from "../../lib/apiFetch";
 
 interface WorkflowRunPanelProps {
   runId: string;
@@ -154,7 +155,7 @@ export default function WorkflowRunPanel({ runId, onClose }: WorkflowRunPanelPro
         const step = workflow.steps?.find((s) => s.id === entry.step_id);
         let output = entry.output_snippet || "";
         try {
-          const res = await fetch(`/api/workflow-runs/${runId}/output/${entry.step_id}`, { credentials: "same-origin" });
+          const res = await apiFetch(`/api/workflow-runs/${runId}/output/${entry.step_id}`, { credentials: "same-origin" });
           const data = await res.json();
           if (data.ok && data.output) output = data.output;
         } catch { /* use snippet as fallback */ }

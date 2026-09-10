@@ -6,7 +6,7 @@ Every action the product declares, which is what a policy's `actions` field may 
 **Generated from the live registry** — a route without a declaration cannot appear here,
 and the build gate in `backend/tests/test_action_coverage.py` fails if one exists.
 
-175 actions across 51 services: 61 reads and 114 mutations.
+176 actions across 51 services: 61 reads and 115 mutations.
 
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
@@ -40,6 +40,7 @@ enumeration of the reads below.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
+| `audit.trail:export` | mutate | instance | `GET audit_trail.api_audit_trail_export` |
 | `audit.trail:list` | read | instance | `GET audit_trail.api_audit_trail` |
 | `audit.trail:read` | read | instance | `GET audit_trail.api_audit_trail_fields` |
 

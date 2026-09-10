@@ -30,6 +30,7 @@ import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { ToolsLiveOutputDialog } from "../components/ToolsLiveOutputDialog";
 import { CollapsibleLog } from "../components/CollapsibleLog";
 import { launchWithReview } from "../lib/launchReview";
+import { apiFetch } from "../lib/apiFetch";
 type LiveKind = "nemo" | "hpcx" | "cudaNccl" | "nvloom" | "dgxc" | "dcgm" | "grafana";
 
 type ExemplarMode = "record" | "install";
@@ -441,7 +442,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const res = await fetch(
+          const res = await apiFetch(
             `/api/tools/download-containers-status?destination=${encodeURIComponent(dest)}`,
             { credentials: "same-origin", signal: ac.signal },
           );
@@ -506,7 +507,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
 
         const fetchStatus = async (workspace: string, cuda_m: CudaMajorChoice): Promise<ToolchainStatusResult | null> => {
           const q = new URLSearchParams({ workspace, cuda_major: cuda_m });
-          const res = await fetch(`/api/tools/workspace-toolchain-status?${q.toString()}`, {
+          const res = await apiFetch(`/api/tools/workspace-toolchain-status?${q.toString()}`, {
             credentials: "same-origin",
             signal: ac.signal,
           });
@@ -614,7 +615,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     setLiveRunning((r) => ({ ...r, nemo: true }));
     setLiveLogs((p) => ({ ...p, nemo: "" }));
     try {
-      const res = await fetch("/api/tools/download-containers-stream", {
+      const res = await apiFetch("/api/tools/download-containers-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
@@ -695,7 +696,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     setLiveRunning((r) => ({ ...r, hpcx: true }));
     setLiveLogs((p) => ({ ...p, hpcx: "" }));
     try {
-      const res = await fetch("/api/tools/install-hpcx-workspace-stream", {
+      const res = await apiFetch("/api/tools/install-hpcx-workspace-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
@@ -770,7 +771,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     setLiveRunning((r) => ({ ...r, cudaNccl: true }));
     setLiveLogs((p) => ({ ...p, cudaNccl: "" }));
     try {
-      const res = await fetch("/api/tools/install-cuda-nccl-workspace-stream", {
+      const res = await apiFetch("/api/tools/install-cuda-nccl-workspace-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
@@ -839,7 +840,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     setLiveRunning((r) => ({ ...r, dcgm: true }));
     setLiveLogs((p) => ({ ...p, dcgm: "" }));
     try {
-      const res = await fetch("/api/tools/install-dcgm-workspace-stream", {
+      const res = await apiFetch("/api/tools/install-dcgm-workspace-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
@@ -929,7 +930,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
       // Poll until terminal.
       for (;;) {
         await new Promise((r) => setTimeout(r, 4000));
-        const sRes = await fetch(`/api/run-llmb-nccl-status?job_id=${encodeURIComponent(jobId)}`, {
+        const sRes = await apiFetch(`/api/run-llmb-nccl-status?job_id=${encodeURIComponent(jobId)}`, {
           credentials: "same-origin",
         });
         const sJson = (await sRes.json()) as {
@@ -983,7 +984,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     setLiveRunning((r) => ({ ...r, nvloom: true }));
     setLiveLogs((p) => ({ ...p, nvloom: "" }));
     try {
-      const res = await fetch("/api/tools/install-nvloom-workspace-stream", {
+      const res = await apiFetch("/api/tools/install-nvloom-workspace-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
@@ -1050,7 +1051,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     setLiveLogs((p) => ({ ...p, dgxc: "" }));
     if (dgxcMode === "install") openLive("dgxc");
     try {
-      const res = await fetch("/api/tools/install-dgxc-benchmarking-workspace-stream", {
+      const res = await apiFetch("/api/tools/install-dgxc-benchmarking-workspace-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
@@ -1113,7 +1114,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
     setLiveRunning((r) => ({ ...r, grafana: true }));
     setLiveLogs((p) => ({ ...p, grafana: "" }));
     try {
-      const res = await fetch("/api/tools/launch-grafana-bright-prometheus-stream", {
+      const res = await apiFetch("/api/tools/launch-grafana-bright-prometheus-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",

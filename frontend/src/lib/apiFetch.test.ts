@@ -136,7 +136,6 @@ describe("the auth routes never trigger a refresh", () => {
     "/api/auth/refresh",
     "/api/auth/srp/begin",
     "/api/auth/srp/finish",
-    "/api/auth-check",
     "/api/auth/logout",
   ])("%s", async (path) => {
     const calls: string[] = [];
@@ -150,5 +149,51 @@ describe("the auth routes never trigger a refresh", () => {
     expect(resp.status).toBe(401);
     // Exactly one call: refreshing here is either a loop or a pointless retry of a failed login.
     expect(calls).toEqual([path]);
+  });
+});
+
+describe("/api/auth-check", () => {
+  /**
+   * This route was on the no-refresh list, and taking it off is the fix for a real defect: the
+   * one call that asks "am I signed in?" was the one call that could not renew. The access
+   * cookie expires hourly while the refresh cookie lasts days, so on almost any page load the
+   * access token is dead and the session is still alive — and `AuthProvider` would show the
+   * login screen without ever presenting the refresh token. Session length collapsed to the
+   * access TTL on every reload, whatever `RACK_WEB_REFRESH_TTL_SECONDS` said.
+   */
+  it("renews and retries, so a live session survives a reload", async () => {
+    const calls: string[] = [];
+    let checked = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/api/auth/refresh")) return json({ ok: true });
+      // Expired access cookie on the first ask, renewed by the second.
+      checked += 1;
+      return checked === 1
+        ? json({ authenticated: false }, 401)
+        : json({ authenticated: true, user: "user:admin" });
+    }) as typeof fetch;
+
+    const resp = await apiFetch("/api/auth-check");
+
+    expect(resp.status).toBe(200);
+    expect(await resp.json()).toMatchObject({ authenticated: true });
+    expect(calls).toEqual(["/api/auth-check", "/api/auth/refresh", "/api/auth-check"]);
+  });
+
+  it("still reports a sign-out when the refresh token is also dead", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return json({ authenticated: false }, 401);
+    }) as typeof fetch;
+
+    const resp = await apiFetch("/api/auth-check");
+
+    // The original 401 is returned untouched, which is what `AuthProvider` reads as signed out.
+    expect(resp.status).toBe(401);
+    // One renewal attempt, not a loop: the refresh route is itself on the no-refresh list.
+    expect(calls).toEqual(["/api/auth-check", "/api/auth/refresh"]);
   });
 });

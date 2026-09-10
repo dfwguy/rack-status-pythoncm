@@ -13,10 +13,18 @@
  * Auth provider: checks the session once on mount, then exposes login/logout.
  *
  * Components only; the context object and `useAuth` live in AuthContext.ts.
+ *
+ * **The mount check goes through `apiFetch`, not `fetch`, and that is load-bearing.** The access
+ * cookie expires hourly while the refresh cookie lasts days, so on most page loads the access
+ * token is already dead and the session is still perfectly alive. A raw `fetch` sees the 401 and
+ * lands in the `.catch` below — signing the operator out of a live session on every reload. Going
+ * through the wrapper renews first and only reports a sign-out when the *refresh* also fails,
+ * which is the only 401 that actually means "log in again".
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { srpLogin } from "../lib/srpClient";
 import { AuthContext, type AuthState } from "./AuthContext";
+import { apiFetch } from "../lib/apiFetch";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({
@@ -26,7 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
-    fetch("/api/auth-check")
+    apiFetch("/api/auth-check")
       .then((res) => {
         if (res.ok) return res.json();
         throw new Error("not authenticated");
@@ -77,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     // The new endpoint revokes the tokens by `jti` as well as clearing the cookies. Clearing alone
     // would leave a copy taken beforehand valid until it expired.
-    await fetch("/api/auth/logout", { method: "POST" });
+    await apiFetch("/api/auth/logout", { method: "POST" });
     setState({ authenticated: false, user: null, userLogin: null, loading: false });
   }, []);
 

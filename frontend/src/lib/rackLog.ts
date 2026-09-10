@@ -1,3 +1,4 @@
+import { apiFetch } from "./apiFetch";
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: LicenseRef-NvidiaProprietary
@@ -38,7 +39,7 @@ export async function openRackLogInNewTab(
     if (j && j !== "-") qs.set("job_id", j);
   }
 
-  const res = await fetch(`/api/rack-log-download?${qs.toString()}`, { credentials: "same-origin" });
+  const res = await apiFetch(`/api/rack-log-download?${qs.toString()}`, { credentials: "same-origin" });
   if (res.status === 401) {
     window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
     return { ok: false, error: "Authentication required." };

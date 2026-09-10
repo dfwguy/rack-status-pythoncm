@@ -132,6 +132,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "audit_trail.api_audit_trail_export",
+  "method": "GET",
+  "action": "audit.trail:export",
+  "variant": "sync"
+ },
+ {
   "endpoint": "audit_trail.api_audit_trail_fields",
   "method": "GET",
   "action": "audit.trail:read",

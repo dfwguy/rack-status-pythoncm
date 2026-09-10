@@ -177,8 +177,44 @@ def read(
     correctness under concurrent append — and a `since` bound is the cheap way to reach far back,
     because it *terminates* the walk rather than merely excluding rows.
     """
+    return _collect(flt, limit=max(1, min(int(limit), MAX_PAGE)), cursor=cursor, path=path)
+
+
+def export(flt: Filter | None = None, *, path: Path | None = None) -> Page:
+    """Everything matching *flt*, up to the scan cap, in one walk.
+
+    Separate from `read` because the bound differs and only the bound differs. A browsing request is
+    clamped to `MAX_PAGE` (500) so one careless caller cannot ask for the whole trail; an export
+    *is* the request for the whole trail, bounded instead by `MAX_SCAN_EVENTS`.
+
+    **Expressed as its own entry point rather than a `limit=` a caller may raise.** If `read` took
+    the ceiling as an argument, the paging endpoint would inherit the ability to return 20,000 rows
+    from a query parameter, and the clamp would be advisory. Two functions over one shared walk
+    keeps each bound where it belongs and keeps them from drifting apart.
+
+    Truncation is reported exactly as it is for a page: an export that hit the cap is a *partial*
+    answer, and a file that does not say so is worse than a slow download.
+    """
+    page = _collect(flt, limit=MAX_SCAN_EVENTS, cursor="", path=path)
+    if len(page.events) >= MAX_SCAN_EVENTS:
+        # Filling the bound is truncation *for an export*, and `_collect` cannot know that: for a
+        # page, a full result is ordinary and the cursor says where to resume. An export has no
+        # "next", so a full one has silently dropped whatever came before -- and a file claiming to
+        # be complete is evidence of the wrong thing. Caught by the export tests, which asserted
+        # truncation and got `False`.
+        page.truncated = True
+    return page
+
+
+def _collect(
+    flt: Filter | None,
+    *,
+    limit: int,
+    cursor: str,
+    path: Path | None,
+) -> Page:
+    """The shared walk. Callers set the bound; this enforces the scan cap regardless."""
     flt = flt or Filter()
-    limit = max(1, min(int(limit), MAX_PAGE))
     page = Page()
     files = trail_files(path)
     page.files = len(files)
@@ -242,7 +278,9 @@ def read(
     if seeking:
         # Walked the whole trail without finding the anchor: it has been rotated away. Restart from
         # the newest page rather than return nothing, and say so (FR-1a).
-        expired = read(flt, limit=limit, cursor="", path=path)
+        # `_collect`, not `read`: re-entering the wrapper would re-clamp to MAX_PAGE, so an export
+        # whose anchor had been rotated away would silently return 500 rows and look complete.
+        expired = _collect(flt, limit=limit, cursor="", path=path)
         expired.cursor_expired = True
         return expired
 

@@ -27,7 +27,7 @@
  * `fireEvent` rather than `user-event`, matching the other 29 files in this suite.
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as service from "../services/auditTrailService";
@@ -35,10 +35,11 @@ import type { AuditEvent, AuditPage } from "../types/auditTrail";
 import AuditTrailView from "./AuditTrailView";
 
 vi.mock("../services/auditTrailService", async (importOriginal) => {
-  // `defaultSince` is real: it is pure, and the component's initial filter depends on it. Mocking
-  // it would test the mock's idea of the default window rather than the product's.
+  // `defaultSince` and ROWS_PER_PAGE_OPTIONS stay real: both are pure, and the component's
+  // initial filter and page-size choices depend on them. Mocking them would test the mock's
+  // idea of the defaults rather than the product's.
   const actual = await importOriginal<typeof service>();
-  return { ...actual, readTrail: vi.fn() };
+  return { ...actual, readTrail: vi.fn(), downloadExport: vi.fn() };
 });
 
 const event = (over: Partial<AuditEvent> = {}): AuditEvent => ({
@@ -78,6 +79,8 @@ const page = (over: Partial<AuditPage> = {}): AuditPage => ({
 
 beforeEach(() => {
   vi.mocked(service.readTrail).mockReset();
+  vi.mocked(service.downloadExport).mockReset();
+  vi.mocked(service.downloadExport).mockResolvedValue(undefined);
 });
 
 describe("rendering the trail", () => {
@@ -197,5 +200,110 @@ describe("an attachment event", () => {
     );
     render(<AuditTrailView />);
     expect(await screen.findByText(/user:bob/)).toBeTruthy();
+  });
+});
+
+describe("pagination", () => {
+  /** A full page plus a cursor is what tells the view more exists. */
+  const fullPage = (ids: string[], cursor: string) =>
+    page({ events: ids.map((id) => event({ event_id: id })), cursor });
+
+  it("asks for the next page by cursor, not by offset", async () => {
+    // The property the whole design rests on. An offset over an append-only trail shifts between
+    // requests and would both repeat and SKIP events; the server pages by `event_id` instead.
+    const first = fullPage(Array.from({ length: 50 }, (_, i) => `id-${i}`), "cursor-50");
+    vi.mocked(service.readTrail).mockResolvedValue(first);
+    render(<AuditTrailView />);
+    await screen.findByRole("table");
+
+    fireEvent.click(screen.getByRole("button", { name: /next page/i }));
+
+    await waitFor(() => expect(service.readTrail).toHaveBeenCalledTimes(2));
+    const [, options] = vi.mocked(service.readTrail).mock.calls[1]!;
+    expect(options?.cursor).toBe("cursor-50");
+  });
+
+  it("returns to the newest page with no cursor when going back", async () => {
+    const first = fullPage(Array.from({ length: 50 }, (_, i) => `a-${i}`), "cursor-a");
+    vi.mocked(service.readTrail).mockResolvedValue(first);
+    render(<AuditTrailView />);
+    await screen.findByRole("table");
+
+    fireEvent.click(screen.getByRole("button", { name: /next page/i }));
+    await waitFor(() => expect(service.readTrail).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: /previous page/i }));
+
+    await waitFor(() => expect(service.readTrail).toHaveBeenCalledTimes(3));
+    const [, options] = vi.mocked(service.readTrail).mock.calls[2]!;
+    expect(options?.cursor).toBe("");
+  });
+
+  it("disables Next on the last page", async () => {
+    // A short page is the end. Leaving Next enabled would send an operator to an empty page and
+    // leave them unsure whether that meant "no more" or "something failed".
+    vi.mocked(service.readTrail).mockResolvedValue(page({ cursor: "" }));
+    render(<AuditTrailView />);
+    await screen.findByRole("table");
+    expect(screen.getByRole("button", { name: /next page/i })).toHaveProperty("disabled", true);
+  });
+
+  it("changing the page size returns to the newest page", async () => {
+    // A held cursor anchors into the PREVIOUS result set; resuming from it after a size change
+    // would page through an answer nobody asked for.
+    const first = fullPage(Array.from({ length: 50 }, (_, i) => `b-${i}`), "cursor-b");
+    vi.mocked(service.readTrail).mockResolvedValue(first);
+    render(<AuditTrailView />);
+    await screen.findByRole("table");
+
+    fireEvent.click(screen.getByRole("button", { name: /next page/i }));
+    await waitFor(() => expect(service.readTrail).toHaveBeenCalledTimes(2));
+
+    fireEvent.mouseDown(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: "100" }));
+
+    await waitFor(() => {
+      const last = vi.mocked(service.readTrail).mock.calls.at(-1)!;
+      expect(last[1]?.cursor).toBe("");
+      expect(last[1]?.limit).toBe(100);
+    });
+  });
+});
+
+describe("export", () => {
+  it("exports the filter rather than the visible page", async () => {
+    // The screen holds one page. Exporting that would hand somebody 50 rows of a 3,000-row answer
+    // and look entirely right, so the filter is what travels to the server.
+    vi.mocked(service.readTrail).mockResolvedValue(page());
+    render(<AuditTrailView />);
+    await screen.findByRole("table");
+
+    fireEvent.click(screen.getByRole("button", { name: /export the audit trail as csv/i }));
+
+    await waitFor(() => expect(service.downloadExport).toHaveBeenCalled());
+    const [filter, format] = vi.mocked(service.downloadExport).mock.calls[0]!;
+    expect(format).toBe("csv");
+    expect(filter.since, "the export dropped the active filter").toBeTruthy();
+  });
+
+  it("offers both formats", async () => {
+    vi.mocked(service.readTrail).mockResolvedValue(page());
+    render(<AuditTrailView />);
+    await screen.findByRole("table");
+
+    fireEvent.click(screen.getByRole("button", { name: /export the audit trail as json/i }));
+    await waitFor(() => expect(service.downloadExport).toHaveBeenCalled());
+    expect(vi.mocked(service.downloadExport).mock.calls[0]![1]).toBe("json");
+  });
+
+  it("reports a refused export instead of failing silently", async () => {
+    // A refusal must not be a file: `downloadExport` fetches rather than following a link so a 403
+    // surfaces here, instead of the operator receiving `audit-trail.json` containing an error.
+    vi.mocked(service.readTrail).mockResolvedValue(page());
+    vi.mocked(service.downloadExport).mockRejectedValue(new Error("not authorized"));
+    render(<AuditTrailView />);
+    await screen.findByRole("table");
+
+    fireEvent.click(screen.getByRole("button", { name: /export the audit trail as csv/i }));
+    expect(await screen.findByText(/not authorized/)).toBeTruthy();
   });
 });

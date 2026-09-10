@@ -11,6 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RackStatusResponse } from "../types/api";
+import { apiFetch } from "../lib/apiFetch";
 
 const DEFAULT_POLL_MS = 15_000;
 const CLIENT_ID_KEY = "nvis-rack-client-id";
@@ -47,7 +48,7 @@ export function useRackStatus(logDir: string, pollMs = DEFAULT_POLL_MS) {
       if (logDir) params.set("log_dir", logDir);
       params.set("client_id", getClientId());
       if (forceRefresh) params.set("refresh", "1");
-      const res = await fetch(`/api/status?${params}`, { cache: "no-store" });
+      const res = await apiFetch(`/api/status?${params}`, { cache: "no-store" });
       const json: RackStatusResponse & { active_clients?: number; error?: string } = await res.json();
       // We got a response from the Flask backend (even a degraded one).
       setBackendConnected(true);

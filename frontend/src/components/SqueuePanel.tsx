@@ -37,6 +37,7 @@ import { TailLogDialog } from "./TailLogDialog";
 import { useSortedPagedRows } from "../hooks/useSortedPagedRows";
 import { TablePager } from "./TablePager";
 import { SortableHeaderCell } from "./SortableHeaderCell";
+import { apiFetch } from "../lib/apiFetch";
 
 const NVIDIA_GREEN = "#76B900";
 
@@ -185,7 +186,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
     async (jobId: string) => {
       setScancelBusy(true);
       try {
-        const res = await fetch("/api/slurm-scancel", {
+        const res = await apiFetch("/api/slurm-scancel", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",

@@ -31,6 +31,7 @@ import {
 import { Bar, Line } from "react-chartjs-2";
 import { Text, Card, Flex, Tag } from "@nvidia/foundations-react-core";
 import { textColorForYlGnNorm, ylGnColor } from "../lib/ylGnHeatmap";
+import { apiFetch } from "../lib/apiFetch";
 
 ChartJS.register(
   CategoryScale,
@@ -356,7 +357,7 @@ export function ClusterkitResultsSection({ logDir, rack, runs, listLoading, list
     params.set("log_dir", logDir.trim());
     params.set("rack", rack.trim());
     params.set("run", selectedDir);
-    fetch(`/api/clusterkit-results?${params}`, { signal: ac.signal })
+    apiFetch(`/api/clusterkit-results?${params}`, { signal: ac.signal })
       .then(async (res) => {
         const j = (await res.json()) as ClusterkitDetailResponse;
         if (!res.ok || !j.ok) {

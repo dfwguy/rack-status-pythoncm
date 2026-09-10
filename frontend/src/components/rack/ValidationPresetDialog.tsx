@@ -41,6 +41,7 @@ import {
   type ValidationScope,
   type ValidationStorage,
 } from "../../lib/validationPresets";
+import { apiFetch } from "../../lib/apiFetch";
 
 const STORAGE_ITEMS = [
   { value: "nfs", children: "Shared NFS" },
@@ -121,7 +122,7 @@ export function ValidationPresetDialog({
     setCatalogError("");
     setCatalogLoading(true);
     let cancelled = false;
-    void fetch("/api/validation-presets")
+    void apiFetch("/api/validation-presets")
       .then(async (response) => {
         const body = (await response.json()) as ValidationPresetsResponse;
         if (!response.ok || !body.ok || !Array.isArray(body.presets)) {
@@ -158,7 +159,7 @@ export function ValidationPresetDialog({
     setPrepareError("");
     setPlan(null);
     try {
-      const response = await fetch("/api/validation-presets/prepare", {
+      const response = await apiFetch("/api/validation-presets/prepare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),

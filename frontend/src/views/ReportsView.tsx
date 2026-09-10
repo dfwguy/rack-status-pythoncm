@@ -30,6 +30,7 @@ import {
   fetchGeneratedReports,
 } from "../services/generatedReportsService";
 import type { GeneratedReport } from "../types/api";
+import { apiFetch } from "../lib/apiFetch";
 
 type BugReportItem = { host: string; name: string };
 
@@ -123,7 +124,7 @@ export function ReportsView() {
     setItems([]);
     setBaseDir("");
     try {
-      const res = await fetch("/api/bug-report-inventory", { credentials: "same-origin" });
+      const res = await apiFetch("/api/bug-report-inventory", { credentials: "same-origin" });
       if (res.status === 401) {
         window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
         return;
@@ -191,7 +192,7 @@ export function ReportsView() {
     setDownloadingKey(key);
     try {
       const params = new URLSearchParams({ host, name });
-      const res = await fetch(`/api/bug-report-file?${params}`, { credentials: "same-origin" });
+      const res = await apiFetch(`/api/bug-report-file?${params}`, { credentials: "same-origin" });
       if (res.status === 401) {
         window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
         return;

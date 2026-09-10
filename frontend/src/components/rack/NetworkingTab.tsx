@@ -16,6 +16,7 @@ import { useRackCommands } from "../../context/RackCommandContext";
 import { attachLogDir } from "../../lib/rackCommandBodies";
 import { DeepAuditCard } from "./DeepAuditCard";
 import type { NvisNamingSchema } from "../../types/naming";
+import { apiFetch } from "../../lib/apiFetch";
 
 interface NetworkingTabProps {
   rack: string;
@@ -31,7 +32,7 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
   const rackLogBody = () => attachLogDir({ rack }, logDir);
 
   const runSystemReset = async () => {
-    const res = await fetch(`/api/nvswitch-hosts?rack=${encodeURIComponent(rack)}`, { credentials: "same-origin" });
+    const res = await apiFetch(`/api/nvswitch-hosts?rack=${encodeURIComponent(rack)}`, { credentials: "same-origin" });
     let data: { ok?: boolean; hosts?: string[]; error?: string } = {};
     try {
       data = (await res.json()) as typeof data;

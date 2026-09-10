@@ -56,6 +56,7 @@ import {
   type ValidationPresetId,
   type ValidationPresetRequest,
 } from "../lib/validationPresets";
+import { apiFetch } from "../lib/apiFetch";
 
 interface MultirackViewProps {
   data: RackStatusResponse | null;
@@ -239,7 +240,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     setMrLoading(true);
     setMrError("");
     try {
-      const res = await fetch(`/api/multirack-status?log_dir=${encodeURIComponent(logDir)}`);
+      const res = await apiFetch(`/api/multirack-status?log_dir=${encodeURIComponent(logDir)}`);
       const body = await res.text();
       let json: { ok?: boolean; rows?: Record<string, string>[]; error?: string };
       try {
@@ -408,7 +409,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   // Fetch the durable launched-jobs table (shared across users/sessions).
   const fetchJobs = useCallback(async () => {
     try {
-      const res = await fetch(`/api/multirack-jobs?log_dir=${encodeURIComponent(logDir)}`);
+      const res = await apiFetch(`/api/multirack-jobs?log_dir=${encodeURIComponent(logDir)}`);
       const json = await res.json();
       if (json.ok && Array.isArray(json.jobs)) {
         setJobs(json.jobs as MultirackJob[]);
@@ -420,7 +421,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
 
   const fetchCampaign = useCallback(async () => {
     try {
-      const response = await fetch("/api/multirack-campaign");
+      const response = await apiFetch("/api/multirack-campaign");
       const body = (await response.json()) as MultirackCampaignResponse;
       if (body.ok) {
         setCampaign(body);
@@ -488,7 +489,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     const presetId = request.preset_id;
     setLaunchingPreset(presetId);
     try {
-      const response = await fetch("/api/run-validation-preset-async", {
+      const response = await apiFetch("/api/run-validation-preset-async", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
