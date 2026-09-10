@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    // node16 rather than the deprecated node10: emits CommonJS (this package declares no
+    // "type": "module"), which is what the Electron main process loads.
+    "module": "node16",
+    "lib": ["ES2022", "DOM"],
+    "rootDir": "src",
+    "outDir": "out",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    // Comments are stripped from the emitted JS, and this is a disclosure control rather than a
+    // size optimisation. `out/` is packaged into `app.asar`, which is readable on any machine the
+    // app is installed on — and the comments in `tunnel.ts` and `deployments.ts` name internal
+    // jumphosts, address ranges and authentication arrangements. One binary ships to every
+    // customer, so that commentary would travel to all of them. It stays in the source, where it
+    // is worth having, and out of the artifact.
+    "removeComments": true,
+    "types": ["node"]
+  },
+  // The launcher renderer is built by `tsconfig.launcher.json` instead -- it needs a classic
+  // script rather than the CommonJS this project emits. See that file for why.
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/launcher/**"]
+}

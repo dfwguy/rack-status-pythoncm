@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.2",
   "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "dev": "vite",
     "gen:help": "node scripts/gen-help-content.mjs",

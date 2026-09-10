@@ -1,0 +1,115 @@
+<!doctype html>
+<!--
+  SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+  SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+  NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+  property and proprietary rights in and to this material, related
+  documentation and any modifications thereto. Any use, reproduction,
+  disclosure or distribution of this material and related documentation
+  without an express license agreement from NVIDIA CORPORATION or
+  its affiliates is strictly prohibited.
+
+  Author: Rafael M. Koike & Cursor Agent ("Ada")
+
+  The deployment picker. Deliberately plain HTML rather than the React/KUI stack the SPA uses:
+  this window must render with no backend reachable and no bundle downloaded, which is the one
+  thing the SPA cannot do. It is also the reason it is small enough not to want a framework.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      A CSP on a local page, because this window is the one with an IPC bridge. `script-src 'self'`
+      with no `unsafe-inline` means the renderer below cannot be extended by injected markup, and
+      `connect-src 'none'` means it cannot talk to the network at all — everything it needs comes
+      over `contextBridge`.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'"
+    />
+    <title>NVIS Greenlight — Deployments</title>
+    <link rel="stylesheet" href="launcher.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Deployments</h1>
+      <button id="add" class="secondary">Add deployment</button>
+    </header>
+
+    <p id="warning" class="warning" hidden></p>
+
+    <ul id="list" aria-live="polite"></ul>
+    <p id="empty" class="empty" hidden>
+      No deployments yet. Add one with its <code>~/.ssh/config</code> alias and the port the
+      dashboard listens on.
+    </p>
+
+    <dialog id="editor">
+      <form id="form" method="dialog">
+        <h2 id="editor-title">Add deployment</h2>
+
+        <!--
+          Placeholders are deliberately generic. They previously showed a real cluster's name and
+          jumphost alias, which put one customer's infrastructure on screen for operators at every
+          other site — and read like a working default rather than an example.
+        -->
+        <label>Label <input name="label" required placeholder="Production cluster" /></label>
+        <label>Customer <input name="customer" required placeholder="Customer name" /></label>
+
+        <label>
+          Connection
+          <select name="kind">
+            <option value="ssh-tunnel">SSH tunnel</option>
+            <option value="direct">Direct URL</option>
+          </select>
+        </label>
+
+        <fieldset id="tunnel-fields">
+          <legend>Tunnel</legend>
+          <label>
+            SSH alias
+            <input name="sshAlias" placeholder="my-cluster-host" />
+            <small>From your <code>~/.ssh/config</code>. Never a bare IP — the alias pins the jumphost.</small>
+          </label>
+          <label>Remote host <input name="remoteHost" value="localhost" /></label>
+          <label>Remote port <input name="remotePort" type="number" min="1" max="65535" /></label>
+          <label>
+            Local port
+            <input name="localPort" type="number" min="1" max="65535" />
+            <small>Fixed per deployment — the origin is your session identity.</small>
+          </label>
+          <label>
+            Scheme
+            <select name="scheme">
+              <option value="https">https</option>
+              <option value="http">http</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <fieldset id="direct-fields" hidden>
+          <legend>Direct</legend>
+          <label>URL <input name="url" placeholder="https://greenlight.example:8443" /></label>
+        </fieldset>
+
+        <label>Notes <textarea name="notes" rows="2"></textarea></label>
+
+        <p id="form-problems" class="problems" hidden></p>
+
+        <menu>
+          <button value="cancel" type="button" id="cancel" class="secondary">Cancel</button>
+          <button value="save" id="save">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <footer>
+      <span id="about"></span>
+      <button id="check-updates" class="link">Check for updates</button>
+    </footer>
+
+    <script src="launcher.js"></script>
+  </body>
+</html>

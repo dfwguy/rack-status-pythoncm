@@ -87,6 +87,19 @@ frontend/node_modules/
 frontend/dist/
 static/spa/
 
+# ---- Desktop shell (Electron) ----
+# `release/` holds packaged installers -- a single macOS bundle is ~255 MB, so this is the one
+# entry here that matters. `out/` is the tsc output the app actually runs. Neither is covered by
+# the `dist/`-style patterns above, which is worth stating because the names differ deliberately:
+# electron-builder's default output dir is `dist`, and it was pointed at `release` so that the
+# 255 MB never lands in a directory the rest of this repo treats as disposable-but-tracked.
+desktop/node_modules/
+desktop/out/
+desktop/release/
+# tsc's incremental cache. Machine-specific absolute paths, so committing one makes another
+# checkout's first build either wrong or a no-op.
+*.tsbuildinfo
+
 # ---- Manual snapshots taken before edits (foo.py.bak.<tag>) ----
 *.bak
 *.bak.*
