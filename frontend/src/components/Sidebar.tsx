@@ -70,6 +70,7 @@ export type ViewId =
   | "obsMetrics"
   | "obsLogs"
   | "obsEvents"
+  | "obsAuditTrail"
   | "multirack"
   | "reports"
   | "analytics"
@@ -154,6 +155,7 @@ const navEntries: NavEntry[] = [
       { id: "obsMetrics", label: "Metrics", icon: <Gauge size={ICON_SIZE} /> },
       { id: "obsLogs", label: "Logs", icon: <ScrollText size={ICON_SIZE} /> },
       { id: "obsEvents", label: "Events", icon: <Bell size={ICON_SIZE} /> },
+      { id: "obsAuditTrail", label: "Audit Trail", icon: <ScrollText size={ICON_SIZE} /> },
     ],
   },
   {

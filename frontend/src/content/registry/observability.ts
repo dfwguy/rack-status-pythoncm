@@ -97,6 +97,47 @@ export const observabilityContent: HelpContent[] = [
       "The Events page shows cluster events/alerts scoped by cluster/rack/host via the scope explorer. Currently a preview backed by mock data.",
   },
   {
+    id: "obsAuditTrail",
+    kind: "view",
+    title: "Audit Trail",
+    domain: "Observability",
+    routePath: "/observability/audit-trail",
+    summary: "The security record: who did what, to which rack, when, and what came of it.",
+    description:
+      "The Audit Trail page reads the product's own durable audit record \u2014 every audited action with its principal, action, resource, authorization decision and outcome, newest first. Unlike the Events page it is not cluster telemetry and not a preview: it is the record the product writes for itself, and it is the only source that attributes an action to a person. Reading it requires an explicit grant, and each read is itself recorded.",
+    features: [
+      "Newest-first, with filters for principal, action, resource, decision, result and time range.",
+      "Repeated refusals are folded into one row showing the number of occurrences.",
+      "States how far back the record reaches, so an empty result is not mistaken for nothing having happened.",
+      "Says when a search stopped early, so a short page is not mistaken for a complete answer.",
+    ],
+    howTo: [
+      {
+        task: "Find who powered off a rack",
+        steps: [
+          "Open Observability > Audit Trail.",
+          "Enter the rack in Resource (for example p17-r01).",
+          "Widen Since if the action was more than a week ago.",
+        ],
+      },
+      {
+        task: "Review refused actions",
+        steps: [
+          "Enter deny in Decision.",
+          "Check the occurrence count on any folded row \u2014 one line can stand for many attempts.",
+        ],
+      },
+    ],
+    related: ["obsEvents", "identityPolicies", "identityUsers"],
+    keywords: ["audit", "trail", "security", "who did what", "accountability", "compliance", "forensics"],
+    aria: {
+      label: "Audit trail page",
+      description: "The security audit record of who performed which action on which resource, with the authorization decision and outcome.",
+    },
+    aiContext:
+      "The Audit Trail page reads the durable security audit record (principal, action, resource, decision, result, newest first) with filters and a stated retention boundary. It is the only source that attributes an action to a person. Reading it needs the audit.trail:list grant and is itself audited.",
+  },
+  {
     id: "scopeExplorer",
     kind: "component",
     title: "Scope explorer",

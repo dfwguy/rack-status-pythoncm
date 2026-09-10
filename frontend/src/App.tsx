@@ -44,6 +44,7 @@ const WorkflowsView = lazy(() => import("./views/WorkflowsView").then((m) => ({ 
 const MetricsView = lazy(() => import("./views/MetricsView").then((m) => ({ default: m.MetricsView })));
 const LogsView = lazy(() => import("./views/LogsView").then((m) => ({ default: m.LogsView })));
 const EventsView = lazy(() => import("./views/EventsView").then((m) => ({ default: m.EventsView })));
+const AuditTrailView = lazy(() => import("./views/AuditTrailView"));
 const InfrastructureView = lazy(() => import("./views/InfrastructureView").then((m) => ({ default: m.InfrastructureView })));
 const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ default: m.SettingsView })));
 const UsersView = lazy(() => import("./views/UsersView").then((m) => ({ default: m.UsersView })));
@@ -70,6 +71,7 @@ import { HelpPanelProvider } from "./context/HelpPanelProvider";
 import HelpPanel from "./components/help/HelpPanel";
 import { DEFAULT_PATH, RACKS_PATH, rackDetailPath, pathToRoute, rackIdFromPath, viewIdToPath } from "./routes";
 import { buildAIContext } from "./content";
+import { apiFetch } from "./lib/apiFetch";
 
 const SIDEBAR_STORAGE_KEY = "nvis-sidebar-open";
 
@@ -84,6 +86,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   obsMetrics: "Metrics",
   obsLogs: "Logs",
   obsEvents: "Events",
+  obsAuditTrail: "Audit Trail",
   multirack: "Multirack operations",
   reports: "Reports",
   analytics: "Analytics",
@@ -205,7 +208,7 @@ function AppContent() {
   const handleReconnect = useCallback(async () => {
     setReconnecting(true);
     try {
-      await fetch("/api/cluster-health/reconnect", { method: "POST" });
+      await apiFetch("/api/cluster-health/reconnect", { method: "POST" });
     } catch {
       /* ignore; refreshAll below will reflect the new state */
     }
@@ -366,6 +369,7 @@ function AppContent() {
           <Route path="/observability/metrics" element={<MetricsView />} />
           <Route path="/observability/logs" element={<LogsView />} />
           <Route path="/observability/events" element={<EventsView />} />
+          <Route path="/observability/audit-trail" element={<AuditTrailView />} />
           <Route path="/tools/operations" element={<ToolsView logDir={logDir} />} />
           <Route path="/tools/workflows" element={<WorkflowsView rackData={data} />} />
           <Route path="/tools/terminal" element={<TerminalWorkspaceView logDir={logDir} />} />

@@ -48,6 +48,7 @@ export const ROUTES: RouteDef[] = [
   { viewId: "obsMetrics", path: "/observability/metrics", domain: "Observability", label: "Metrics" },
   { viewId: "obsLogs", path: "/observability/logs", domain: "Observability", label: "Logs" },
   { viewId: "obsEvents", path: "/observability/events", domain: "Observability", label: "Events" },
+  { viewId: "obsAuditTrail", path: "/observability/audit-trail", domain: "Observability", label: "Audit Trail" },
   { viewId: "tools", path: "/tools/operations", domain: "Tools", label: "Operations & Scripts" },
   { viewId: "workflows", path: "/tools/workflows", domain: "Tools", label: "Workflows" },
   { viewId: "terminal", path: "/tools/terminal", domain: "Tools", label: "Terminal" },
