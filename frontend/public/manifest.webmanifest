@@ -1,0 +1,45 @@
+{
+  "id": "/",
+  "name": "NVIS Greenlight",
+  "short_name": "Greenlight",
+  "description": "Observability, validation and automation console for NVIDIA AI factory clusters.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0d0d0d",
+  "theme_color": "#0d0d0d",
+  "prefer_related_applications": false,
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/greenlight-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/greenlight-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Cluster overview",
+      "url": "/compute/overview"
+    },
+    {
+      "name": "Scheduler queue",
+      "url": "/compute/scheduler"
+    },
+    {
+      "name": "Terminal",
+      "url": "/tools/terminal"
+    },
+    {
+      "name": "Reports",
+      "url": "/analytics/reports"
+    }
+  ]
+}

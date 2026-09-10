@@ -1,7 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24">
   <!-- Single-rack mark. A favicon renders with no CSS context, so currentColor would
        resolve to black and vanish against a dark tab strip: the cabinet is a fixed
-       mid-grey that holds on both. In-app placements use brand/greenlight-mark-floor.svg. -->
+       mid-grey that holds on both. In-app placements use brand/greenlight-mark-signal.svg;
+       this rack mark owns the small, out-of-app contexts, so the installed app icons in
+       icons/ are rasterised from the same geometry (bin/gen-pwa-icons.py). -->
   <rect x="4.6" y="2.6" width="14.8" height="18.8" rx="2.6"
         fill="none" stroke="#8C8C8C" stroke-width="1.5"/>
   <g fill="#76B900">
