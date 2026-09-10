@@ -40,7 +40,6 @@ import time
 
 import core
 import throttle
-import web_auth
 from audit.actions import action
 from flask import Blueprint, g, jsonify, make_response, request
 from identity import oidc, principals, revocation, srp, tokens
@@ -69,20 +68,23 @@ REFRESH_COOKIE_PATH = "/api/auth"
 
 
 def _current_login() -> str:
-    """The signed-in user's login, or empty.
+    """The signed-in user's login, or empty. Read from the gate, never re-verified here.
 
-    Prefers what the gate already verified and stashed on ``g``, and falls back to verifying the
-    credential here. The fallback is not redundancy for its own sake: with
-    ``RACK_WEB_AUTH_DISABLED`` set the gate does not run at all, and a route that read only ``g``
-    would be unusable in every development deployment and untestable in a suite that runs with the
-    switch on — while *appearing* correct, because refusing is also what it does when there is
-    genuinely no caller.
+    This used to fall back to ``web_auth.authenticated_principal(...)`` when ``g`` was empty, and
+    the fallback existed for one reason: ``RACK_WEB_AUTH_DISABLED``, where the gate did not run.
+    That switch was removed on 2026-09-08, and the fallback became unreachable — the only callers
+    are ``/password/begin`` and ``/password/finish``, neither of which is in
+    ``web_auth.AUTH_BYPASS_ENDPOINTS``, so the gate has always populated ``g`` before they execute.
 
-    Still fail-closed. No verifiable token means no login, and the password routes refuse.
+    Removed rather than re-explained, because a second verification path is not merely dead weight:
+    it contradicts a rule the product states elsewhere. ``audit.request_hook._principal`` reads the
+    subject the gate *already verified* and says why — "one verification per request means the trail
+    cannot disagree with the gate about who the caller was". A route that verifies again could
+    disagree, and the one that changes passwords is a poor place to find out.
+
+    Still fail-closed: no principal on ``g`` means no login, and the password routes refuse.
     """
     principal = str(getattr(g, "auth_principal", "") or "")
-    if not principal:
-        principal = web_auth.authenticated_principal(request.headers, request.cookies)
     if not principal:
         return ""
     try:

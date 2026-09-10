@@ -97,7 +97,7 @@ class TestTC22EveryMutatingRouteAudits:
     def test_the_chokepoint_is_the_registry_not_a_path_prefix(self, app_module):
         """FR-6's actual mechanism: scope comes from the declaration, so it cannot drift.
 
-        Driving all 103 mutating endpoints for real would execute privileged cluster operations,
+        Driving every mutating endpoint for real would execute privileged cluster operations,
         so the property is asserted where it lives — every declared route resolves to an action the
         hook will use — rather than by firing 103 requests at a stubbed cluster.
         """

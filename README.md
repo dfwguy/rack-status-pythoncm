@@ -645,7 +645,6 @@ Per-binary variables are authoritative for backend provider calls. Shell launche
 | Variable | Purpose |
 |---|---|
 | *(no auth variables)* | Shared-token and PAM login were removed (FR-18). The app authenticates over SRP against its own identity store; the first start with an empty store prints a one-time `admin` password to the log. |
-| `RACK_WEB_AUTH_DISABLED` | Demo/development only. Do not use for an operational deployment. |
 | `RACK_WEB_SECRET_KEY` | Stable session-signing key across restarts. |
 | `RACK_AI_ENDPOINT`, `RACK_AI_MODEL`, `RACK_AI_API_KEY` | Optional OpenAI-compatible model configuration. |
 

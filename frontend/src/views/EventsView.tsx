@@ -22,8 +22,12 @@
  *
  * 2. **Operator activity** — ``GET /api/rack-locks`` (via ``RackLocksContext``) is the tool's
  *    own record of in-flight operations and explicit rack claims, with operator attribution
- *    and a ``since`` timestamp. This is the only source in the estate that knows *who* did
- *    something; no exporter writes it to VictoriaMetrics.
+ *    and a ``since`` timestamp. No exporter writes it to VictoriaMetrics.
+ *
+ *    This used to say it was "the only source in the estate that knows *who* did something". That
+ *    stopped being true when Phase 1 landed the audit trail, and is now plainly false: see
+ *    Observability > Audit Trail, which is the authoritative attribution record. Rack locks show
+ *    what is *in flight*; the audit trail shows what *happened*.
  *
  * 3. **Alerts (vmalert ``ALERTS`` on VictoriaMetrics :8429)** — NOT wired. No backend route
  *    serves them to this app, so the section renders an explicit placeholder plus a link to

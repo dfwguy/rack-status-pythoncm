@@ -22,7 +22,7 @@ Routes (registered under ``/api/observability``)::
     GET  /api/observability/health              can the backend reach Grafana?
 
 All three are covered by the app-level ``_require_dashboard_auth`` before_request hook in
-``app.py`` (any ``/api/`` path requires a session unless ``RACK_WEB_AUTH_DISABLED=1``), so
+``app.py`` (every ``/api/`` path requires a session -- there is no way to disable the gate), so
 this module adds no auth of its own.
 
 Why there are TWO base URLs

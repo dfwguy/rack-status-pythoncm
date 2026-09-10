@@ -1,5 +1,11 @@
 # NVIS Rack Status — Container Build & Run Guide
 
+> **Authentication is not configurable, and this guide used to say otherwise.** Shared-token and
+> PAM login were removed on 2026-09-01 along with `POST /api/login`; the off switch went on
+> 2026-09-08. `RACK_WEB_AUTH_MODE`, `RACK_WEB_AUTH_TOKEN` and `RACK_WEB_AUTH_DISABLED` no longer
+> do anything. A first boot creates an `admin` account, prints a one-time password to the
+> container log and writes the policy that grants it — read the log, sign in, change it.
+
 How to **build**, **package**, and **run** the NVIS Rack Status Docker container, and
 the full set of parameters used to configure it.
 
@@ -15,7 +21,7 @@ for runtime assets).
 ```bash
 # Demo (no cluster, no auth) — great for a local look
 docker run -d --name rack-status -p 5050:5000 \
-  -e RACK_STATUS_DEMO=1 -e RACK_WEB_AUTH_DISABLED=1 \
+  -e RACK_STATUS_DEMO=1 \
   -v rack-data:/app/var nvis-rack-status:latest
 # → http://localhost:5050/spa/
 
@@ -23,7 +29,6 @@ docker run -d --name rack-status -p 5050:5000 \
 docker run -d --name rack-status -p 5000:5000 \
   --env-file rack-config.env \
   -e RACK_SSH_HOST=10.0.0.1 \
-  -e RACK_WEB_AUTH_TOKEN=<password> \
   -v ~/.ssh/rack_status_key:/run/secrets/ssh_key:ro \
   --restart unless-stopped \
   nvis-rack-status:latest
@@ -62,14 +67,14 @@ it on the **GitLab Release** page. See [`INSTALL.md`](../INSTALL.md#air-gapped-d
 
 | Mode | When | Key flags |
 |---|---|---|
-| **Demo / dev** | Local demo, no cluster | `RACK_STATUS_DEMO=1`, `RACK_WEB_AUTH_DISABLED=1`, `RACK_EXEC_MODE=local` |
+| **Demo / dev** | Local demo, no cluster | `RACK_STATUS_DEMO=1`, `RACK_EXEC_MODE=local` |
 | **Production** | Real GB200/GB300 cluster | `RACK_EXEC_MODE=ssh`, `RACK_SSH_HOST=…`, token auth, SSH key mount |
 
 The simplest way to launch either is the helper from the repo root:
 
 ```bash
 ./build-docker.sh             # dev mode (demo, no auth, port 5050)
-RACK_SSH_HOST=10.0.0.1 RACK_WEB_AUTH_TOKEN=secret ./build-docker.sh prod
+RACK_SSH_HOST=10.0.0.1 ./build-docker.sh prod
 ```
 
 ---
@@ -113,9 +118,6 @@ flags, Slurm/Grafana knobs) see [`docs/ENVIRONMENT.md`](../docs/ENVIRONMENT.md).
 
 | Variable | Default | Description |
 |---|---|---|
-| `RACK_WEB_AUTH_MODE` | auto | `token` (shared password) or `pam` (system PAM). Auto-selects `token` in ssh mode. |
-| `RACK_WEB_AUTH_TOKEN` | — | Login password for token mode. |
-| `RACK_WEB_AUTH_DISABLED` | `0` | `1` = no login at all (use only for demo). |
 | `RACK_WEB_SECRET_KEY` | random | Set a fixed value for stable sessions across restarts. |
 
 ### AI assistant (optional)
@@ -156,14 +158,13 @@ The container listens on **5000**. Map it to any host port: `-p 5050:5000`.
 ```bash
 # 1) Demo on port 5050
 docker run -d --name rack-status -p 5050:5000 \
-  -e RACK_STATUS_DEMO=1 -e RACK_WEB_AUTH_DISABLED=1 \
+  -e RACK_STATUS_DEMO=1 \
   -v rack-data:/app/var nvis-rack-status:latest
 
 # 2) Production with a config file (edit rack-config.env first)
 docker run -d --name rack-status -p 5000:5000 \
   --env-file rack-config.env \
   -e RACK_SSH_HOST=10.0.0.1 \
-  -e RACK_WEB_AUTH_TOKEN=changeme \
   -v ~/.ssh/rack_status_key:/run/secrets/ssh_key:ro \
   --restart unless-stopped \
   nvis-rack-status:latest
@@ -174,7 +175,6 @@ docker run -d --name rack-status -p 5000:5000 \
   --env-file rack-config.env \
   -e RACK_SSH_HOST=host.docker.internal \
   -e RACK_SSH_PORT=2222 \
-  -e RACK_WEB_AUTH_TOKEN=changeme \
   -v ~/.ssh/key:/run/secrets/ssh_key:ro \
   --add-host=host.docker.internal:host-gateway \
   nvis-rack-status:latest

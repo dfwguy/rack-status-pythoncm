@@ -240,6 +240,52 @@ def admin_policy_document() -> dict:
     }
 
 
+def admin_policy_gaps() -> list[str]:
+    """Declared resource types the **stored** administrators policy does not cover.
+
+    **The gap this exists for is a real defect, found from the UI on 2026-09-10.** The policy
+    enumerates `<type>:*` for every type in `declared_types()` — but it is written *once*, at first
+    boot, from whatever types existed at that moment. `ensure_admin_policy` then returns early
+    forever, because an existing policy set is a decision it must not overrule. So every resource
+    type added afterwards is missing from every deployment that was installed before it, and the
+    symptom is an administrator getting `not authorized` on a feature that just shipped, with
+    nothing in the logs to connect the two. `audit.trail` was simply the first new type since the
+    policy was seeded; the next one would have gone the same way.
+
+    **The existing test could not have caught it.** `test_it_covers_every_declared_resource_type`
+    compares `admin_policy_document()` with `declared_types()` — two values computed live, from the
+    same source, in the same process. It is honest about its scope ("on a fresh install") and that
+    is exactly the case that works. Drift lives in the *persisted* artifact, so a test that never
+    reads the stored document cannot see it.
+
+    Reporting rather than repairing, and that is deliberate. The obvious fix — top the policy up on
+    boot — cannot distinguish "this type did not exist when we seeded" from "an operator removed
+    it", and the document's own description invites the latter ("Narrow or replace it once real
+    roles exist"). Silently re-widening a narrowed administrators policy would be a privilege
+    escalation performed by a housekeeping routine. So the gap is surfaced and
+    `cli.py reconcile-admin-policy` applies it as an explicit act.
+    """
+    from authz import resources as authz_resources
+    from authz import store as policy_store
+
+    try:
+        document = policy_store.get(ADMIN_POLICY_ID)
+    except Exception:  # noqa: BLE001 - an unreadable policy set is the preflight's business
+        return []
+    if document is None:
+        return []
+
+    granted: set[str] = set()
+    for statement in getattr(document, "statements", []) or []:
+        for pattern in getattr(statement, "actions", []) or []:
+            if str(pattern).endswith(":*"):
+                granted.add(str(pattern)[:-2])
+            elif pattern == "*":
+                return []  # a bare wildcard covers everything; nothing to report
+
+    return sorted(authz_resources.declared_types() - granted)
+
+
 def ensure_admin_policy(store: IdentityStore, *, login: str = ADMIN_LOGIN) -> bool:
     """Write the administrator policy and attach it to `login`. Returns whether it wrote anything.
 

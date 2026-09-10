@@ -71,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     for name, help_text in (
         ("serve", "Bootstrap what is missing and start the server."),
         ("check", "Report what `serve` would do, without creating an admin or a policy."),
+        ("reconcile-admin-policy",
+         "Add resource types newer than the administrators policy to it."),
     ):
         cmd = sub.add_parser(name, help=help_text, description=help_text)
         _add_path_options(cmd)
@@ -94,6 +96,13 @@ def build_parser() -> argparse.ArgumentParser:
             "Refuse to start rather than creating a missing administrator or policy. For a "
             "deployment that provisions both out of band and wants a missing one to be an error."
         ),
+    )
+
+    reconcile = sub.choices["reconcile-admin-policy"]
+    reconcile.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be added and change nothing.",
     )
 
     check = sub.choices["check"]
@@ -370,12 +379,73 @@ def _serve(args: argparse.Namespace) -> int:
     return EXIT_FAULT  # unreachable: execv replaces this process
 
 
+def _reconcile_admin_policy(args: argparse.Namespace) -> int:
+    """Add declared resource types the stored administrators policy predates.
+
+    **Why this is a command and not something a boot does.** The policy enumerates `<type>:*` for
+    every resource type, and it is written once at first boot; a type added later is missing from
+    every deployment installed before it, and the only symptom is an administrator being refused on
+    a feature that just shipped. Repairing that automatically would mean guessing, on every start,
+    whether a missing entry is a type newer than the policy or one an operator deliberately removed
+    — and the document's own description invites removal ("Narrow or replace it once real roles
+    exist"). Guessing wrong re-widens a narrowed administrators policy, which is privilege
+    escalation carried out by a housekeeping routine. So a human asks for it.
+
+    It only ever **adds**, and it prints what it added: an operator who has narrowed the policy on
+    purpose can see that this would undo part of that and decline.
+    """
+    from authz import store as policy_store
+    from identity import bootstrap as identity_bootstrap
+
+    gaps = identity_bootstrap.admin_policy_gaps()
+    if not gaps:
+        print(f"the '{identity_bootstrap.ADMIN_POLICY_ID}' policy already covers every declared "
+              f"resource type; nothing to do")
+        return EXIT_OK
+
+    print(f"the '{identity_bootstrap.ADMIN_POLICY_ID}' policy does not cover "
+          f"{len(gaps)} resource type(s):")
+    for resource_type in gaps:
+        print(f"    + {resource_type}:*")
+
+    if args.dry_run:
+        print("\n--dry-run: nothing was changed")
+        return EXIT_OK
+
+    document = policy_store.get(identity_bootstrap.ADMIN_POLICY_ID)
+    if document is None:
+        print(f"no '{identity_bootstrap.ADMIN_POLICY_ID}' policy exists to reconcile", flush=True)
+        return EXIT_FAULT
+
+    raw = document.model_dump() if hasattr(document, "model_dump") else dict(document)
+    statements = raw.get("statements") or []
+    if not statements:
+        print("the policy has no statements to extend", flush=True)
+        return EXIT_FAULT
+
+    # The first statement is the generated grant. Extending it rather than appending a new one
+    # keeps the document readable, which is the whole reason the types are enumerated.
+    actions = list(statements[0].get("actions") or [])
+    statements[0]["actions"] = sorted({*actions, *(f"{t}:*" for t in gaps)})
+
+    try:
+        policy_store.update(identity_bootstrap.ADMIN_POLICY_ID, raw)
+    except Exception as exc:  # noqa: BLE001 - the message is for an operator, not a traceback
+        print(f"could not write the policy: {exc}", flush=True)
+        return EXIT_FAULT
+
+    print(f"\nadded {len(gaps)} pattern(s). Administrators can now act on those services.")
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     applied = _apply(args)
 
     if args.command == "check":
         return _report(_plan(), applied, args.as_json)
+    if args.command == "reconcile-admin-policy":
+        return _reconcile_admin_policy(args)
     return _serve(args)
 
 

@@ -43,7 +43,14 @@ _SPA_DIR = REPO_ROOT / "static" / "spa"
 # blank page, pointing at the SPA instead of at the deploy that dropped the file. These are
 # requests for a hashed filename nobody types, so a miss is always a broken deploy.
 # Both the `/<path>` and `/spa/<path>` routes arrive here with a leading "assets/".
-_SPA_ARTIFACT_PREFIX = "assets/"
+#
+# `icons/` is here for the same reason but a worse failure: a browser that gets HTML for a
+# manifest icon does not report anything, it just drops the icon, and dropping an icon makes the
+# app quietly non-installable. Loud beats silent even though nothing renders blank.
+_SPA_ARTIFACT_PREFIXES = ("assets/", "icons/")
+# The web manifest is the same class of never-typed install asset, but an exact filename rather
+# than a directory.
+_SPA_ARTIFACT_NAMES = ("manifest.webmanifest",)
 # An /api/ path that reached the catch-all has no route: the endpoint does not exist in THIS
 # build. Answering it with index.html gives the caller HTML at status 200, so a half-deployed
 # backend looks like a feature returning no data instead of a missing endpoint. Verified
@@ -62,7 +69,7 @@ def serve_spa_asset(path: str = "index.html"):
     spa_file = _SPA_DIR / path
     if spa_file.is_file():
         return send_file(spa_file)
-    if path.startswith(_SPA_ARTIFACT_PREFIX):
+    if path.startswith(_SPA_ARTIFACT_PREFIXES) or path in _SPA_ARTIFACT_NAMES:
         _logger.error("SPA artifact missing: %s — index.html and assets/ are out of sync", path)
         return jsonify({"ok": False, "error": f"SPA asset not found: {path}"}), 404
     if path.startswith(_SPA_API_PREFIX):
@@ -141,10 +148,12 @@ def operator_from_request() -> str:
     Now that the gate verifies a token and publishes the subject on ``g``, the label comes from
     there and is unforgeable while the gate is on.
 
-    The header survives as a fallback for exactly one case: ``RACK_WEB_AUTH_DISABLED``, where there
-    is no principal to be had. Nothing recorded in that mode is evidence anyway, so keeping it
-    costs nothing and keeps local development working. It is a *fallback*, never a precedence — a
-    request carrying both gets the principal.
+    **The header fallback is gone too, as of 2026-09-10.** It survived for exactly one case,
+    ``RACK_WEB_AUTH_DISABLED``, where there was no principal to be had — and that switch was removed
+    on 2026-09-08, which made the fallback unreachable on any gated route while leaving a
+    client-supplied string able to name the operator in a durable record if it ever became reachable
+    again. Keeping a forgeable path alive for a mode that no longer exists is the opposite of what
+    FR-16 asked for.
 
     All 47 call sites across 12 api modules route through here, so this is the one place the rule
     lives. Returns a bare login (``rkoike``), not the ``user:rkoike`` principal rendering: the label
@@ -161,12 +170,15 @@ def operator_from_request() -> str:
         _, _, login = principal.partition(":")
         return rack_locks.sanitize_operator(login or principal)
 
-    try:
-        raw = request.headers.get("X-Rack-Operator", "")
-    except RuntimeError:
-        # Outside a request context (worker thread): fall back to an empty label.
-        raw = ""
-    return rack_locks.sanitize_operator(raw)
+    # No principal. Two ways to get here, and neither should produce a label:
+    #
+    #   * a worker thread, which has no request context at all -- this used to be a `RuntimeError`
+    #     branch around the header read, and the header was the only reason the try/except existed;
+    #   * a gated route somehow reaching this without `g.auth_principal`, which would be a defect.
+    #
+    # An empty label is the honest answer for both. It is also what makes the record evidence: a
+    # blank operator says "we do not know", where `X-Rack-Operator` said whatever the caller typed.
+    return ""
 
 
 def client_id_from_request() -> str:

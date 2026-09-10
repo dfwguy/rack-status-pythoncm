@@ -497,15 +497,22 @@ class TestTheOperatorLabelIsEvidence:
 
         assert all(not s.startswith("user:") for s in self._stored_operators(deployment))
 
-    def test_the_header_still_works_when_there_is_no_principal(self):
-        """The one case the fallback exists for: `RACK_WEB_AUTH_DISABLED`, where no principal can
-        be had. Nothing recorded in that mode is evidence, so local development keeps working —
-        and this is a *fallback*, never a precedence, which the spoof test above pins."""
+    def test_the_header_is_ignored_even_with_no_principal(self):
+        """**Inverted on 2026-09-10.** This asserted the opposite: that `X-Rack-Operator` was
+        honoured when `g` held no principal, which was the fallback's one purpose under
+        `RACK_WEB_AUTH_DISABLED`.
+
+        That switch was removed on 2026-09-08, which made the fallback unreachable on any gated
+        route — and left a client-supplied string able to name the operator in a durable record if
+        it ever became reachable again. So the fallback is gone, and this now pins its absence: the
+        header names nobody, ever. An empty label says "we do not know", which is what makes the
+        record evidence rather than a field the caller filled in.
+        """
         from api import _common
         from app import app
 
         with app.test_request_context("/api/status", headers={"X-Rack-Operator": "dev-laptop"}):
-            assert _common.operator_from_request() == "dev-laptop"
+            assert _common.operator_from_request() == ""
 
     def test_it_returns_empty_outside_a_request(self):
         """Worker threads call this too, and must not raise."""

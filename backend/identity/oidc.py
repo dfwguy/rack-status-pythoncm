@@ -52,7 +52,10 @@ from urllib.parse import urlparse
 _logger = logging.getLogger(__name__)
 
 #: Everything the provider surface needs, in one switch. See the module docstring.
-FLAG_ENV = "RACK_WEB_OIDC_ENABLED"
+# `FLAG_ENV = "RACK_WEB_OIDC_ENABLED"` was removed on 2026-09-10. It survived the flag itself
+# by two days, read only to interpolate the variable name into two startup log messages -- so a
+# failed start told the operator to check something that no longer exists. A named constant for
+# a retired switch is also an invitation to branch on it again.
 ISSUER_ENV = "RACK_WEB_OIDC_ISSUER"
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})

@@ -295,13 +295,31 @@ ssh nscale-tx-ova 'cd /opt/observability/nvis-rack-status-v3 && rsync -avc --exc
 
 ### Auth
 
-Token mode (`RACK_WEB_AUTH_MODE=token`). For scripted checks, log in for a session cookie:
+**SRP against the local identity store.** Token mode and `POST /api/login` were both removed on
+2026-09-01, so the `curl` recipe that used to sit here cannot work — and it cannot simply be
+rewritten, which is the part worth stating.
+
+**There is no single-request login, by design.** SRP never sends the password, so authenticating
+means a two-round exchange against `/api/auth/srp/begin` and `/api/auth/srp/finish` with a
+modular-exponentiation step in between. `curl` cannot do that in one call, and nothing in the repo
+drives it against a *remote* deployment: `identity.testing.log_in()` takes a Flask **test client**,
+not a URL, so it works in the suite and not against the OVA.
+
+For a scripted check against this deployment, either:
+
+- **sign in with a browser and reuse the cookie** — the tokens arrive as `HttpOnly` cookies
+  (`nvis_access`, `nvis_refresh`), so exporting the jar and passing `-b` works; or
+- **take the access token out of the cookie** and present it as `Authorization: Bearer <token>`.
+  Note the token is **only** in the cookie: `/api/auth/srp/finish` returns `HAMK`, the user record
+  and an `id_token` in its body, and the id token is deliberately *not* a credential — the gate
+  refuses it (`test_id_token_is_not_a_credential.py`), so passing it as a bearer will 401.
 
 ```bash
-curl -sS -c /tmp/ck.txt -X POST -H 'Content-Type: application/json' \
-     -d '{"password":"<RACK_WEB_AUTH_TOKEN>"}' http://127.0.0.1:5056/api/login
-curl -sS -b /tmp/ck.txt http://127.0.0.1:5056/api/bringup/config
+curl -sS -H "Authorization: Bearer $TOKEN" https://127.0.0.1:5056/api/bringup/config
 ```
+
+A CLI that performs the SRP exchange would be a genuinely useful addition and does not exist yet;
+until it does, a scripted check needs a token obtained interactively.
 
 A bare `GET /` returning **302** is healthy — it is the login redirect, not an error.
 

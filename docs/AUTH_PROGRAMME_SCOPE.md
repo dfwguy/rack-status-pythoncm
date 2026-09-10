@@ -20,9 +20,11 @@ source of truth and the ticket is stale.
 | 0.5 | [NVRACKSTAT-55](https://jirasw.nvidia.com/browse/NVRACKSTAT-55) | HTTPS | delivered |
 | 1 | [NVRACKSTAT-52](https://jirasw.nvidia.com/browse/NVRACKSTAT-52) | audit trail | delivered |
 | 2 | [NVRACKSTAT-56](https://jirasw.nvidia.com/browse/NVRACKSTAT-56) | identity | delivered; federation deferred to 2.6 |
-| 2.5 | [NVRACKSTAT-57](https://jirasw.nvidia.com/browse/NVRACKSTAT-57) | OIDC provider | delivered, acceptance audit outstanding |
-| 2.6 | *(ticket to be raised)* | OIDC **federation** — consuming another issuer's tokens | not started; scoped below |
-| 3 | [NVRACKSTAT-58](https://jirasw.nvidia.com/browse/NVRACKSTAT-58) | authorization | delivered, acceptance audit outstanding |
+| 2.5 | [NVRACKSTAT-57](https://jirasw.nvidia.com/browse/NVRACKSTAT-57) | OIDC provider | delivered; unconditional since 2026-09-08 (`RACK_WEB_OIDC_ENABLED` retired) |
+| 2.6 | [NVRACKSTAT-60](https://jirasw.nvidia.com/browse/NVRACKSTAT-60) | OIDC **federation** — consuming another issuer's tokens | not started; scoped below |
+| 3 | [NVRACKSTAT-58](https://jirasw.nvidia.com/browse/NVRACKSTAT-58) | authorization | **delivered and audited** 2026-09-09. All 32 acceptance criteria satisfied, amended or accepted; AC-6 (per-cluster job ids) accepted as ambiguous and carried to [NVRACKSTAT-61](https://jirasw.nvidia.com/browse/NVRACKSTAT-61) |
+
+Since then, two things have landed that the table above does not have a row for, both on `feat/auth-identity`: the **audit trail reader** (`GET /api/audit-trail` and Observability > Audit Trail), which closes Phase 1's one deferred work item — the record was written from the start and could not be read — and **policy conditions** scoped as [NVRACKSTAT-61](https://jirasw.nvidia.com/browse/NVRACKSTAT-61).
 
 Every one of them sits in **Backlog**, including the phases that are finished. That is deliberate,
 not an oversight: under PLC a workflow transition *is* the release owner's attestation, so the
@@ -33,7 +35,7 @@ human action.
 |---|---|---|
 | 0 | Defect fixes: the unauthenticated `/ws/terminal`, `target` command injection, `0.0.0.0` exposure | done |
 | 0.5 | HTTPS: self-signed by default, internal CA opt-in, TLS 1.2 floor, CSP/HSTS, Origin policy | done |
-| 1 | Central logging configuration; durable JSONL audit trail; the 89-action vocabulary Phase 3 binds to | **closed** — 7/7 work items merged to `main` 2026-08-25; the four closing V-model steps completed 2026-08-28, acceptance verdict **PASS** on all 34 criteria, no open findings |
+| 1 | Central logging configuration; durable JSONL audit trail; the action vocabulary Phase 3 binds to (89 at the time, 175 today — the current count is a generated fact in `docs/action-vocabulary.json`, not a number to restate here) | **closed** — 7/7 work items merged to `main` 2026-08-25; the four closing V-model steps completed 2026-08-28, acceptance verdict **PASS** on all 34 criteria, no open findings |
 | 2 | **Identity**: local user store (SRP), **groups and membership**, JWT id/access tokens, OIDC federation, first-boot admin credential | **delivered except federation.** Store, SRP login, groups and membership, all three tokens, first-boot credential, admin-initiated reset and the Users/Groups UI are in; acceptance audit 47/74 PASS. **Federation is deferred to Phase 2.6** and is the only open scope — FR-7, FR-7a, FR-19, FR-19a with AC-13, AC-14, AC-15, AC-29b, AC-29c |
 | 2.5 | **OIDC Provider**: asymmetric signing + JWKS, discovery, standard claim names, authorization-code flow with PKCE, `/token`, `/userinfo`, introspection and revocation endpoints | **delivered and working for local users.** ES256 with a rotating key set and RFC 7638 `kid`; discovery and JWKS; authorization-code flow with mandatory PKCE S256; `/token` for both grants; `/userinfo` releasing only the granted scope; introspection and revocation. Acceptance audit 41/54 PASS. It is an OIDC **Provider** — it issues tokens for accounts in the local store. Consuming *another* issuer's tokens is federation, which is Phase 2.6 |
 | 3 | **Authorization**: policy engine, policy documents, attach-to-principal, enforcement before dispatch | **delivered**, acceptance audit outstanding. Attachment-based engine (deny-overrides-allow, default-deny), `/api/policies` CRUD + attach, resource resolver, read governance, and the Monaco policy editor. The test-credential gate below is **lifted** |
@@ -53,7 +55,7 @@ design references are to `.plc/briefs/auth-audit-logging-brief.md`; TC numbers a
 |---|---|---|---|
 | 1 | `backend/logging_config.py` — sinks, level, format, redaction filter, settings registry | TC-1…TC-5, TC-21 | **done**, 24 tests |
 | 2 | `backend/audit/actions.py` — the `@action` decorator, grammar, `build_registry` startup validation | TC-15…TC-17 | **done**, 27 tests |
-| 3 | The 103 `@action` declarations across 25 modules, plus the committed `action_snapshot.json` | TC-18 | **done**, 6 tests; gate live |
+| 3 | The `@action` declarations (103 mutating routes at the time; reads joined in Phase 3, so the registry now holds 175 across 51 services) plus the committed `action_snapshot.json` | TC-18 | **done**, 6 tests; gate live |
 | 4 | `backend/audit/sink.py` + `audit/__init__.py` — event schema, bounded rotating JSONL, flood guard | TC-6…TC-14, TC-32, TC-33 | **done** |
 | 5 | Client-address resolver + trusted-proxy validation (`core.py`, `api/_common.py`) | TC-19, TC-20 | **done** |
 | 6 | The `after_request` chokepoint + the WSGI terminal refusal hook | TC-22…TC-31 | **done** |

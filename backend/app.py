@@ -702,9 +702,9 @@ def _bootstrap_identity_at_startup() -> None:
             issuer = identity_oidc.issuer_url()
         except identity_oidc.OIDCConfigError:
             _logger.critical(
-                "identity: %s is on but the issuer is unusable; refusing to start rather than "
-                "serve a deployment where every sign-in fails",
-                identity_oidc.FLAG_ENV,
+                "identity: the OIDC issuer is unusable; refusing to start rather than serve a "
+                "deployment where every sign-in fails. Set RACK_WEB_OIDC_ISSUER, or leave it "
+                "unset to derive it from the bind address."
             )
             raise
         _logger.info("identity: OIDC provider enabled, issuer %s", issuer)
@@ -717,9 +717,8 @@ def _bootstrap_identity_at_startup() -> None:
             # be signed. Logged loudly rather than raised so the rest of the bootstrap still runs and
             # the operator gets a diagnosable process instead of a crash loop.
             _logger.exception(
-                "identity: no signing key could be established while %s is on; "
-                "token minting will fail until this is resolved",
-                identity_oidc.FLAG_ENV,
+                "identity: no signing key could be established; token minting will fail until "
+                "this is resolved. Check permissions on the signing-key directory."
             )
 
     try:
@@ -738,6 +737,27 @@ def _bootstrap_identity_at_startup() -> None:
             # existing deployment we cannot know which account should hold it — that one is asked
             # for explicitly by the startup preflight.
             identity_bootstrap.ensure_admin_policy(store)
+
+        # The policy is enumerated and written once, so a resource type added after this deployment
+        # was installed is absent from it — and the only symptom is an administrator getting
+        # `not authorized` on a feature that just shipped, with nothing tying the two together.
+        # Found exactly that way on 2026-09-10, with `audit.trail`.
+        #
+        # Reported, not repaired: topping it up here could not tell "this type is newer than the
+        # policy" from "an operator narrowed it deliberately", and the document's own description
+        # invites narrowing. A boot-time routine that silently re-widens an administrators policy
+        # would be privilege escalation with good intentions.
+        gaps = identity_bootstrap.admin_policy_gaps()
+        if gaps:
+            _logger.warning(
+                "authz: the '%s' policy does not cover %d newer resource type(s): %s. "
+                "Administrators will be refused on those services. Review with "
+                "`python backend/cli.py check`, apply with "
+                "`python backend/cli.py reconcile-admin-policy`.",
+                identity_bootstrap.ADMIN_POLICY_ID,
+                len(gaps),
+                ", ".join(gaps),
+            )
     except Exception:
         _logger.exception("identity: administrator bootstrap failed")
     finally:

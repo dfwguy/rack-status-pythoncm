@@ -12,13 +12,12 @@
 Run the dashboard with synthetic data — no cluster access required:
 
 ```bash
-docker run -d --name rack-status -p 5000:5000 \
+docker run -d --name rack-status -p 5050:5000 \
   -e RACK_STATUS_DEMO=1 \
-  -e RACK_WEB_AUTH_DISABLED=1 \
   nvcr.io/your-org/nvis-rack-status:latest
 ```
 
-Open **http://localhost:5000/spa/** in your browser.
+Open **https://localhost:5050/spa/** in your browser.
 
 ## Production Deployment
 
@@ -65,7 +64,7 @@ NEMO_SQSH_SRC=/path/to/nemo.sqsh   # NeMo container image on head node
 2. Launch:
 
 ```bash
-docker run -d --name rack-status -p 5000:5000 \
+docker run -d --name rack-status -p 5050:5000 \
   --env-file rack-config.env \
   -e RACK_SSH_HOST=<head-node-ip> \
   -v ~/.ssh/id_rsa:/run/secrets/ssh_key:ro \
@@ -112,9 +111,9 @@ Then set `RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status` in `rack-confi
 
 | URL | Description |
 |---|---|
-| `http://<host>:5000/spa/` | React SPA (primary UI) |
-| `http://<host>:5000/` | Legacy HTML dashboard |
-| `http://<host>:5000/api/status` | JSON API |
+| `https://<host>:5050/spa/` | React SPA (primary UI) |
+| `https://<host>:5050/` | The same SPA — `/` serves it too, so either URL works |
+| `https://<host>:5050/api/status` | JSON API |
 
 After the container starts, read the one-time administrator password from its log:
 
@@ -125,8 +124,9 @@ docker logs <container> 2>&1 | grep -A6 "ONE-TIME ADMINISTRATOR"
 Sign in as `admin` with that password; the UI will require you to choose your own. It is shown once
 and only its verifier is stored, so capture it before anyone needs to sign in.
 
-If authentication is
-disabled (`RACK_WEB_AUTH_DISABLED=1`), no login is required.
+There is no way to run without authentication: the switch that used to do that was removed on
+2026-09-08, and a first boot creates the administrator and the policy granting them rather than
+leaving the gate open.
 
 ## Configuration Reference
 
@@ -150,7 +150,6 @@ disabled (`RACK_WEB_AUTH_DISABLED=1`), no login is required.
 
 | Variable | Default | Description |
 |---|---|---|
-| `RACK_WEB_AUTH_DISABLED` | `0` | Set to `1` to disable login entirely |
 | `RACK_WEB_SECRET_KEY` | random | Set a fixed value for stable sessions across container restarts |
 
 ### Cluster-Specific
@@ -175,7 +174,7 @@ disabled (`RACK_WEB_AUTH_DISABLED=1`), no login is required.
 | Variable | Default | Description |
 |---|---|---|
 | `RACK_STATUS_DEMO` | `0` | `1` = synthetic demo data, no cluster access needed |
-| `PORT` | `5000` | Flask listen port inside the container |
+| `PORT` | `5000` | Listen port **inside** the container (`EXPOSE 5000`). Publish it on a different host port — `-p 5050:5000` — because host `:5000` is the AirPlay Receiver on macOS and answers 403. Note `./start.sh` defaults to 5050 instead, since it binds the host directly. |
 
 ## SSH Key Setup
 
@@ -202,7 +201,7 @@ If the head node requires a jump host, set up an SSH tunnel first:
 ssh -f -N -L 2222:<head-node-internal-ip>:22 user@jump-host
 
 # Run container pointing to the tunnel
-docker run -d --name rack-status -p 5000:5000 \
+docker run -d --name rack-status -p 5050:5000 \
   --env-file rack-config.env \
   -e RACK_SSH_HOST=host.docker.internal \
   -e RACK_SSH_PORT=2222 \
@@ -260,9 +259,10 @@ sha256sum -c nvis-rack-status-<version>.tar.gz.sha256   # verify integrity
 
 docker load -i nvis-rack-status-<version>.tar.gz        # import (gz auto-detected)
 
-# Demo (no cluster, no auth):
-docker run -d --name rack-status -p 5000:5000 \
-  -e RACK_STATUS_DEMO=1 -e RACK_WEB_AUTH_DISABLED=1 \
+# Demo (no cluster). Authentication is always on: read the one-time `admin`
+# password from `docker logs rack-status` on first start.
+docker run -d --name rack-status -p 5050:5000 \
+  -e RACK_STATUS_DEMO=1 \
   -v rack-data:/app/var nvis-rack-status:<version>
 
 # Or load with the helper (verifies the checksum if present):
@@ -318,7 +318,8 @@ docker stop rack-status && docker rm rack-status
 **Login page appears but password is rejected:**
 - Read the one-time `admin` password from the container log (see above); if the identity
   store already has users, no password is printed and you must use an existing account
-- Or set `RACK_WEB_AUTH_DISABLED=1` to bypass login
+- If every administrator credential is lost, the store must be redeployed — there is
+  deliberately no reset endpoint, no recovery code and no bypass flag
 
 **NEMO container fails to start (pyxis/enroot errors):**
 - Ensure `enroot` and `pyxis` are installed on compute nodes

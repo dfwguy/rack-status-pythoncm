@@ -32,7 +32,7 @@ pattern but is an NVFTP folder name, so it is declared non-secret.
 
 | Setting | Required when | Why it cannot be defaulted |
 |---|---|---|
-| `RACK_WEB_OIDC_ISSUER` | `RACK_WEB_OIDC_ENABLED` is truthy | OIDC Discovery §4.3 requires it to be the URL discovery is served from; deriving it from `Host` would let a caller choose our token issuer |
+| `RACK_WEB_OIDC_ISSUER` | *(always read; derived from the bind address when unset)* | OIDC Discovery §4.3 requires it to be the URL discovery is served from; deriving it from `Host` would let a caller choose our token issuer |
 | `RACK_SSH_HOST` | the resolved control connection is SSH and `RACK_STATUS_DEMO` is falsy | no default can reach a customer's head node |
 | `RACK_WEB_TLS_KEY` | `RACK_WEB_TLS_CERT` is set | a cert with no key downgrades one path silently and crashes the other |
 
@@ -146,8 +146,6 @@ Used by **`bin/scripts/launch-grafana-bright-prometheus.sh`** (not by Flask). Af
 | **`FLASK_DEBUG`** | *(unset)* | `1` → Flask debug (**not** for production). |
 | **`PROJECT_NAME`**, **`RACK_WEB_PROJECT_NAME`** | *(unset)* | Optional page title suffix. |
 | **`RACK_WEB_VERSION`** | `dev` | `/api/app-stats`. |
-| **`RACK_WEB_AUTH_DISABLED`** | *(unset)* | Truthy → the gate is off entirely. **Development and test only** (FR-18a). It does not select a weaker credential — it removes authentication, so every request is anonymous and every action unattributable. It is also the *only* remaining configuration input that affects authentication, which is what FR-12 requires. |
-| **`RACK_WEB_AUTH_USER`** | `root` | Display name shown when the gate is disabled. Not a credential. |
 | **`RACK_WEB_SECRET_KEY`** | *(auto on first start)* | Flask session signing and NVFTP vault encryption. If unset, the app creates `var/secrets/.rack_web_secret_key` on first launch (gitignored, persisted on the `var/` volume in Docker). Set this env var explicitly to use your own key. |
 | **`NVIS_VAULT_MASTER_KEY`** | *(empty)* | Optional override for vault encryption instead of `RACK_WEB_SECRET_KEY`. |
 | **`NVIS_TOKEN_VAULT_DIR`** | `var/secrets/` | Directory for encrypted token vault files (**never commit** — see `.gitignore` and `scripts/check_no_vault_in_git.sh`). |
@@ -182,7 +180,6 @@ day and, until the SPA gained automatic renewal, presented as the product loggin
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| **`RACK_WEB_OIDC_ENABLED`** | *(off)* | Truthy → asymmetric signing **and** the provider endpoints, together. |
 | **`RACK_WEB_OIDC_ISSUER`** | *(none)* | **Required when enabled.** This deployment's own base URL, e.g. `https://rack.example.com`. `http://localhost:PORT` is accepted, since that is how an operator reaches a tunnelled deployment. |
 | **`RACK_WEB_SIGNING_KEY_DIR`** | `var/secrets/oidc/` | Where the ES256 key pair lives. Generated on first boot. |
 | **`RACK_WEB_SIGNING_KEY_VALIDITY_SECONDS`** | `46656000` (18 months) | Key validity. Signing stops at `not_after − T_max`, so at the 30-day refresh ceiling a key signs for ~17 months. |
@@ -231,6 +228,10 @@ it is two in steady state and three during a rotation, and an emergency rotation
 any time.
 
 ### Authentication: there is nothing to configure
+
+**Removed 2026-09-08: `RACK_WEB_AUTH_DISABLED` and `RACK_WEB_AUTH_USER`.** Authentication has no off switch. The gate runs for every request, `start.sh` no longer exports the flag on macOS, and a first boot creates an administrator and the policy that grants them — so a local run is a real, authenticated, policy-enforcing deployment. Tests opt out explicitly with `identity.testing.unauthenticated_client(app)`; nothing else can.
+
+**Removed 2026-09-08: `RACK_WEB_OIDC_ENABLED`.** The OIDC provider is unconditional — asymmetric signing, JWKS, discovery and the provider endpoints are always present, and there is no legacy token shape to fall back to. `RACK_WEB_OIDC_ISSUER` is still read, and is now derived from the bind address when unset rather than being required.
 
 **Removed 2026-09-01 (FR-18): `RACK_WEB_AUTH_MODE`, `RACK_WEB_AUTH_TOKEN`, `RACK_WEB_PAM_SERVICE`
 and `RACK_WEB_PAM_HELPER_PYTHON`.** Shared-token and PAM login are gone, along with the vendored
@@ -854,8 +855,6 @@ RACK_VALIDATION_DISABLED
 RACK_VALIDATION_SCRIPT
 RACK_VALIDATION_TIMEOUT
 RACK_WEB_ACTIVE_CLIENT_TTL_SEC
-RACK_WEB_AUTH_DISABLED
-RACK_WEB_AUTH_USER
 RACK_WEB_COOKIE_SECURE
 RACK_WEB_GRAFANA_DASH_SLUG
 RACK_WEB_GRAFANA_DASH_UID
