@@ -65,6 +65,60 @@ def engine(tmp_path, documents, *, groups=None, attach=None):
     )
 
 
+#: A grant scoped to ONE rack, which is the shape AC-1 is about. `POWER` above grants
+#: `rack.power:*` and so cannot express the criterion at all.
+ONE_RACK = {
+    "id": "rack-a01-only",
+    "statements": [
+        {"sid": "just-a01", "effect": "allow", "actions": ["rack.power:*"],
+         "resources": ["rack.power:a01"]},
+    ],
+}
+
+
+class TestAC1AGrantIsScopedToItsRack:
+    """**The criterion the whole phase existed to satisfy**, asserted directly at last.
+
+    Phase 3 opened because the gate passed `request.path` to `authorize()`, so a policy naming
+    `resources: ["rack.power:a01"]` matched nothing and every resource-scoped grant silently
+    collapsed to default-deny. AC-1 was written with "**This fails today**" against it.
+
+    It has passed for a while — but nothing asserted *this* property. The nearest cases were a
+    grant of `rack.power:*` (which cannot express a per-rack scope), a refusal of `cluster:prod`
+    (a different resource *type*, which a type-level bug would also refuse), and, incidentally,
+    the fixture of an unrelated AC-16a test. So the headline criterion was satisfied by accident
+    of other tests' setups: a resolver that dropped the identifier and matched on type alone
+    would have kept every one of them green.
+
+    Same action, two racks, one grant. That is the whole criterion and it needs its own test.
+    """
+
+    def test_the_granted_rack_is_permitted(self, tmp_path):
+        e = engine(tmp_path, [ONE_RACK], attach={ALICE: ["rack-a01-only"]})
+        assert e.evaluate(ALICE, "rack.power:cycle", "rack.power:a01").allowed
+
+    def test_the_same_action_on_another_rack_is_refused(self, tmp_path):
+        """The half that was broken. Identical action, identical policy, different instance."""
+        e = engine(tmp_path, [ONE_RACK], attach={ALICE: ["rack-a01-only"]})
+        assert not e.evaluate(ALICE, "rack.power:cycle", "rack.power:b02").allowed
+
+    @pytest.mark.parametrize("verb", ["on", "off", "cycle"])
+    def test_the_scope_holds_for_every_verb_the_grant_covers(self, tmp_path, verb):
+        """`actions: ["rack.power:*"]` covers all three, so a resource bug would show on any of
+        them — and a fix that only handled the verb the first test happened to use would not."""
+        e = engine(tmp_path, [ONE_RACK], attach={ALICE: ["rack-a01-only"]})
+        assert e.evaluate(ALICE, f"rack.power:{verb}", "rack.power:a01").allowed
+        assert not e.evaluate(ALICE, f"rack.power:{verb}", "rack.power:b02").allowed
+
+    def test_a_url_path_is_not_a_resource(self, tmp_path):
+        """The original defect in its exact form. The gate used to pass `request.path`; if that
+        ever regressed, this is what it would look like from the engine's side.
+        """
+        e = engine(tmp_path, [ONE_RACK], attach={ALICE: ["rack-a01-only"]})
+        for path in ("/api/power-on", "/api/power-off", "rack.power:/api/power-on"):
+            assert not e.evaluate(ALICE, "rack.power:cycle", path).allowed
+
+
 class TestDefaultDeny:
     """The property that makes every grant meaningful."""
 

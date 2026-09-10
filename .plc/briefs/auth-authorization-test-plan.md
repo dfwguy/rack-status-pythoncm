@@ -122,6 +122,16 @@ scaffolding around them:
 |---|---|---|---|
 | TC-32 | NFR-1, AC-17 | Measure resolve + evaluate | ≤ 1 ms p95, against a **recorded** baseline. Budget is ~14× today's 0.056–0.073 ms because the resolver adds per-request work |
 | TC-33 | NFR-2, AC-18 | Repeated authorization | no write, no outbound connection |
+| TC-34 | AC-1, FR-1 | A one-rack grant, same action on two racks | permits `rack.power:a01`, refuses `rack.power:b02`; parametrised over on/off/cycle; a URL path is never a resource. `test_authz_policy.py::TestAC1AGrantIsScopedToItsRack` |
+| TC-35 | AC-15g, FR-18 | Attach and detach audit events | the event names the policy **and** the target principal; a failed attach names no target; ordinary events carry no `target` field. `test_authz_acceptance_gaps.py::TestAC15gAttachmentIsAudited` |
+| TC-36 | AC-16a, NFR-3 | Two refusals compared with each other | byte-identical reason, engine and HTTP body, for a forbidden vs a non-existent resource. `test_authz_acceptance_gaps.py::TestAC16aTheRefusalIsNotAnExistenceOracle` |
+| TC-37 | AC-18, NFR-2 | Purity across both verdicts | no socket, no filesystem write, over 50 iterations of an allowed *and* a denied evaluation. `test_authz_acceptance_gaps.py::TestAC18AuthorizationIsPureAndLocal` |
+| TC-38 | AC-15j, FR-20 | Policy table render | lists policies, names attached subjects, distinguishes unattached, reports a load failure, and the delete confirmation names who loses access. `frontend/src/views/PoliciesView.test.tsx` |
+| TC-39 | AC-15i, FR-19b | The built bundle fetches nothing external | `bin/check-frontend-offline.sh` in the `frontend-test` job, after a real build. HTML/CSS strictly; JS against an asset-CDN denylist |
+| TC-40 | FR-3, FR-4 | The collection-fallback verb set is pinned | membership asserted exhaustively and as a "no destructive verb" property; every `:create` action confirmed collection-level from the live registry. `test_authz_verification_gaps.py::TestTheFallbackVerbSetIsPinned` |
+| TC-41 | AC-7, FR-6 | A rack grant does not reach its nodes | asserted against the **declared** node types (`slurm.node`, `report.node`) and at the resolver, across both the single- and multi-target resolution paths. `test_authz_verification_gaps.py::TestARackGrantDoesNotCoverItsNodes` |
+| TC-42 | NFR-4 | A served deployment cannot silently go permissive | an empty policy set does select `AllowAllEngine`, and `startup_gate` refuses to serve in that state, naming the consequence. `test_authz_verification_gaps.py::TestAServedDeploymentCannotSilentlyGoPermissive` |
+| TC-43 | FR-4 | `checker_args` reaching a pdsh fan-out is validated | shell metacharacters, path separators and whitespace refused; quotes stripped by `shlex` before the allowlist; presets returned as copies. `test_hw_check_argv.py` |
 
 ## Coverage
 
@@ -134,7 +144,9 @@ scaffolding around them:
 | FR-14..FR-16 | TC-19, TC-24, and the existing reload tests |
 | FR-17..FR-18a (API) | TC-7..TC-9, TC-16..TC-18 |
 | FR-19..FR-20 (UI) | TC-28..TC-31 |
-| NFR-1..NFR-5 | TC-15, TC-25, TC-32, TC-33, and AC-16b |
+| NFR-1..NFR-5 | TC-15, TC-25, TC-32, TC-33, TC-36, TC-37, TC-42, and AC-16b |
+| The six criteria closed 2026-09-09 | TC-34 (AC-1), TC-35 (AC-15g), TC-36 (AC-16a), TC-37 (AC-18), TC-38 (AC-15j), TC-39 (AC-15i). AC-3 was **amended** rather than implemented — see the brief; the central resolver is what makes TC-40's exhaustiveness check possible, which a per-route declaration could not support. |
+| Weak tests replaced 2026-09-09 | TC-40, TC-41, TC-42 — three cases that passed while asserting nothing (an unpinned verb set, a refusal against an undeclared resource type, and an untested engine transition) |
 
 ## Known risks in this plan
 
