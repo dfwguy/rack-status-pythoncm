@@ -126,6 +126,18 @@
   "variant": "sync"
  },
  {
+  "endpoint": "audit_trail.api_audit_trail",
+  "method": "GET",
+  "action": "audit.trail:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "audit_trail.api_audit_trail_fields",
+  "method": "GET",
+  "action": "audit.trail:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "auth.api_logout",
   "method": "POST",
   "action": "auth:logout",

@@ -278,7 +278,8 @@ def _record(response) -> bool:
     # `/api/status` poll an audit row and silently override `NVIS_AUDIT_READS=0` — burying the
     # signal the trail exists to carry. So: the METHOD decides whether to audit, and the registry
     # only decides what the thing is called.
-    if method not in MUTATING and not sink.AUDIT_READS.resolve():
+    always = entry is not None and entry.action in _actions.ALWAYS_AUDITED
+    if method not in MUTATING and not sink.AUDIT_READS.resolve() and not always:
         return False  # a read, and read auditing is off (FR-12)
 
     if entry is not None:

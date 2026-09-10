@@ -124,6 +124,23 @@ def verb_of(action: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: Reads that are recorded even when `NVIS_AUDIT_READS` is off.
+#:
+#: **Why a set and not a decorator argument.** The obvious spelling is
+#: `@action(get="audit.trail:list", always_audit=True)`, and it cannot work: `action()` takes
+#: `**per_method: str`, so an unrecognised keyword is swallowed as a per-method declaration for an
+#: HTTP method named `always_audit`, with a non-string value. Silently wrong rather than rejected.
+#:
+#: It is also the better shape. *Which reads are recorded regardless of configuration* is a security
+#: decision, and a reader should see the whole answer in one place instead of assembling it by
+#: grepping decorators across 38 modules. Same reasoning as `COLLECTION_FALLBACK_ACTIONS`.
+#:
+#: Reading the security trail qualifies because it exposes every other operator's activity, so the
+#: read is itself a privileged act. `test_audit_trail_api.py` pins these contents — a set that grows
+#: quietly is how an unrelated read starts being recorded, or how this one stops.
+ALWAYS_AUDITED = frozenset({"audit.trail:list", "audit.trail:read"})
+
+
 def action(name: str | None = None, *, variant: str = VARIANT_SYNC, **per_method: str) -> Callable[[F], F]:
     """Declare the action a route performs.
 

@@ -308,6 +308,10 @@ _RESOLVERS: dict[str, Extractor] = {
     # `policy:*`.
     "policy": _by("policy_id", "id", "subject"),
     "audit.deep": _by("run_id", "id"),
+    # The security trail. Distinct from `audit.deep`, which is NVSwitch hardware auditing and
+    # shares nothing with it — two unrelated meanings under one prefix, so the names must not
+    # be allowed to converge (see the reasoning on the `audit.trail:*` action names).
+    "audit.trail": _by("event_id", "id"),
     "history": _by("run_id", "id"),
     "metrics": _by("chart_id", "id", "metric"),
     "observability": _by("view", "dashboard", "id"),

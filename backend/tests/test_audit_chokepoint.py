@@ -118,20 +118,55 @@ class TestTC22EveryMutatingRouteAudits:
     def test_no_endpoint_specific_audit_code_exists(self):
         """The negative half of FR-6: adding an endpoint must need no audit code.
 
-        If a route ever has to opt in, this grep starts finding call sites and the chokepoint has
-        stopped being one.
+        If a route ever has to opt in, this finds the call site and the chokepoint has stopped
+        being one.
+
+        **Parsed, not grepped.** The original form was a regex over the file text, which matched
+        `audit.emit` *anywhere* — including a docstring explaining why a module deliberately does
+        not call it. `api/audit_trail.py` tripped it on exactly that: prose about routing through
+        the chokepoint instead. A guard that cannot tell a call from a comment fails on the notes
+        written to prevent the thing it guards against, which is the same defect
+        `test_ci_job_tooling.py` was fixed for. The AST sees calls only.
         """
+        import ast
         import pathlib
-        import re
 
         api_dir = pathlib.Path(request_hook.__file__).resolve().parents[1] / "api"
-        callers = [
-            p.name for p in api_dir.glob("*.py")
-            if re.search(r"\baudit\.emit\(", p.read_text(encoding="utf-8"))
-        ]
+        callers = []
+        for module in sorted(api_dir.glob("*.py")):
+            tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if (isinstance(func, ast.Attribute) and func.attr == "emit"
+                        and isinstance(func.value, ast.Name) and func.value.id == "audit"):
+                    callers.append(module.name)
+                    break
         assert callers == ["terminal.py"], (
             f"only the WSGI terminal may call audit.emit directly (FR-10b); found {callers}"
         )
+
+    def test_the_guard_would_catch_a_real_call(self, tmp_path):
+        """Guards the guard: an AST walk that matched nothing would pass this file trivially, and
+        the switch from regex to AST is exactly the change that could have broken it."""
+        import ast
+
+        tree = ast.parse("import audit\ndef f():\n    audit.emit(action='x', result='y')\n")
+        found = [
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "emit" and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == "audit"
+        ]
+        assert len(found) == 1
+
+    def test_the_guard_ignores_the_name_in_prose(self):
+        """The false positive that prompted the rewrite, pinned so a revert to grepping fails."""
+        import ast
+
+        tree = ast.parse('"""We route through the chokepoint rather than call audit.emit() here."""\n')
+        assert not [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
 
 
 # --------------------------------------------------------------------------- TC-23
