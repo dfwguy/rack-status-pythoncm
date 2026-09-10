@@ -77,6 +77,21 @@ fi
 [ -f "$ENTITLEMENTS" ] || { echo "sign-3s.sh: entitlements not found: $ENTITLEMENTS" >&2; exit 1; }
 
 APP_NAME=$(basename "$APP" .app)
+
+# The published artifact's name, which must NOT be derived from the .app basename: that is
+# "NVIS Greenlight", and a space in the filename is refused outright by 3S the moment anyone
+# re-submits it. It also has to carry the version and arch, because `latest-mac.yml` addresses the
+# file by name and two arches otherwise collide in the same registry directory. Matches the
+# `artifactName` convention in electron-builder.yml so the signed and unsigned names agree.
+VERSION=$(node -p "require('$DESKTOP_DIR/package.json').version")
+# Multi-line: macOS ships bash 3.2, which will not parse a single-line `case` with `;;` inside a
+# command substitution (local-vs-ci-tree.mdc §4 — prefer constructs both shells have).
+case "$APP" in
+  *mac-arm64*) ARCH=arm64 ;;
+  *mac-x64*|*mac/*) ARCH=x64 ;;
+  *) ARCH=$(uname -m | sed 's/x86_64/x64/') ;;
+esac
+ARTIFACT_BASE="nvis-greenlight-${VERSION}-${ARCH}"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/sign3s.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$OUT_DIR"
@@ -174,7 +189,7 @@ done
 echo "    ok: signed, hardened, entitled"
 
 # ── 4. Notarize + staple ───────────────────────────────────────────────────────────────────────
-FINAL_ZIP="$OUT_DIR/$APP_NAME-notarized.zip"
+FINAL_ZIP="$OUT_DIR/$ARTIFACT_BASE-notarized.zip"
 if [ "$NOTARIZE" -eq 1 ]; then
   if [ -n "${APPLE_API_KEY:-}" ]; then
     NOTARY_ARGS="--key $APPLE_API_KEY --key-id $APPLE_API_KEY_ID --issuer $APPLE_API_ISSUER"
@@ -198,7 +213,7 @@ if [ "$NOTARIZE" -eq 1 ]; then
   xcrun stapler validate "$SIGNED_APP"
   spctl -a -vv -t exec "$SIGNED_APP"
 else
-  FINAL_ZIP="$OUT_DIR/$APP_NAME-signed.zip"
+  FINAL_ZIP="$OUT_DIR/$ARTIFACT_BASE-signed.zip"
 fi
 
 # ── 5. Repackage, and rewrite the updater manifest ─────────────────────────────────────────────
@@ -209,22 +224,28 @@ ditto -c -k --sequesterRsrc --keepParent "$SIGNED_APP" "$FINAL_ZIP"
 # electron-builder wrote latest-mac.yml against the UNSIGNED zip, and signing changes the bytes --
 # so publishing without this makes electron-updater reject every update on a hash mismatch. It is
 # the least visible step here and the one that breaks auto-update in production.
+#
+# Written unconditionally, NOT only when electron-builder happened to leave one behind. The
+# recommended build here is `--mac --dir`, which produces no manifest at all — so an
+# `if [ -f ... ]` guard meant this step silently did nothing on the normal path, and
+# `publish-release.sh` would then refuse for want of a manifest. Generating it is also strictly
+# more correct: electron-builder's version describes the *unsigned* zip, and signing changes the
+# bytes, so the only manifest worth having is one computed here.
 MANIFEST="$DESKTOP_DIR/release/latest-mac.yml"
-if [ -f "$MANIFEST" ]; then
-  echo "==> rewriting $(basename "$MANIFEST") against the signed artifact"
-  sha=$(shasum -a 512 "$FINAL_ZIP" | cut -d' ' -f1 | xxd -r -p | base64)
-  size=$(stat -f %z "$FINAL_ZIP")
-  {
-    echo "version: $(node -p "require('$DESKTOP_DIR/package.json').version")"
-    echo "files:"
-    echo "  - url: $(basename "$FINAL_ZIP")"
-    echo "    sha512: $sha"
-    echo "    size: $size"
-    echo "path: $(basename "$FINAL_ZIP")"
-    echo "sha512: $sha"
-    echo "releaseDate: '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
-  } > "$MANIFEST"
-fi
+echo "==> writing $(basename "$MANIFEST") against the signed artifact"
+mkdir -p "$(dirname "$MANIFEST")"
+sha=$(shasum -a 512 "$FINAL_ZIP" | cut -d' ' -f1 | xxd -r -p | base64)
+size=$(stat -f %z "$FINAL_ZIP")
+{
+  echo "version: $VERSION"
+  echo "files:"
+  echo "  - url: $(basename "$FINAL_ZIP")"
+  echo "    sha512: $sha"
+  echo "    size: $size"
+  echo "path: $(basename "$FINAL_ZIP")"
+  echo "sha512: $sha"
+  echo "releaseDate: '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
+} > "$MANIFEST"
 
 echo
 echo "==> done: $FINAL_ZIP"
