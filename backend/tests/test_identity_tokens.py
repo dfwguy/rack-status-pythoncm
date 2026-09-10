@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 
 import jwt
+import json
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -48,14 +49,35 @@ def _env(monkeypatch):
     T.reset_for_tests()
 
 
-def _forge(claims: dict, key: str | None = SECRET, algorithm: str | None = T.ALGORITHM) -> str:
+#: Sentinel meaning "sign this the way the product does". Distinct from an explicit key, which the
+#: algorithm-confusion cases pass deliberately.
+REAL_KEY = object()
+
+
+def _forge(claims: dict, key: object = REAL_KEY, algorithm: str | None = None) -> str:
     """Hand-build a token, bypassing `mint`, to test what `verify` refuses.
 
-    Uses the derived key so a forgery differs from a real token *only* in the property under test —
-    signing with the raw secret would make every case fail for the wrong reason.
+    **Defaults to the product's real ES256 key and `kid`, which it did not until 2026-09-10.** It
+    used to sign HS256 with the HKDF secret — correct while that signed JWTs, and wrong ever since
+    the provider became unconditional: `verify` refuses an HS256 token for having no `kid` before it
+    reads any claim, so a case asserting "the wrong audience is refused" was really asserting "a
+    token with no kid is refused".
+
+    Pass `key=` and `algorithm=` explicitly to build a genuinely wrong-key or wrong-algorithm
+    token — that is what the algorithm-confusion cases want, and they should say so rather than
+    getting it as a side effect of the default.
     """
-    signing = None if algorithm is None else (T.signing_key() if key == SECRET else key)
-    return jwt.encode(claims, signing, algorithm=algorithm)
+    from identity import keys as keys_mod
+
+    if key is REAL_KEY:
+        real = keys_mod.key_set().ensure()
+        return jwt.encode(
+            claims,
+            real.private,
+            algorithm=algorithm or keys_mod.ALGORITHM,
+            headers={"kid": real.kid},
+        )
+    return jwt.encode(claims, key, algorithm=algorithm)
 
 
 def _good_claims(**over) -> dict:
@@ -237,16 +259,56 @@ class TestAlgorithmConfusion:
         with pytest.raises(T.TokenError):
             T.verify(unsigned, T.TOKEN_ACCESS)
 
-    # Forging an HS512 token with our HS256-sized key is the point of the test; PyJWT rightly warns
-    # that 32 bytes is short for SHA-512. Silenced here only so a deliberate forgery does not train
-    # anyone to ignore that warning elsewhere.
-    @pytest.mark.filterwarnings("ignore::jwt.warnings.InsecureKeyLengthWarning")
-    def test_a_different_algorithm_is_refused(self):
-        with pytest.raises(T.TokenError):
-            T.verify(_forge(_good_claims(), algorithm="HS512"), T.TOKEN_ACCESS)
+    def test_our_own_public_key_as_an_hmac_secret_is_refused(self):
+        """**The attack publishing a JWKS creates**, and the reason `algorithms=` is pinned.
 
-    def test_the_pinned_algorithm_is_symmetric_and_named(self):
-        assert T.ALGORITHM == "HS256"
+        An attacker takes our *public* ES256 key — which we serve deliberately at
+        `/.well-known/jwks.json` — signs a token with it as an HMAC secret, and sets `alg: HS256`.
+        A verifier that trusts the header's algorithm then validates a forgery against a value we
+        handed out ourselves. Pinning `algorithms=[ES256]` refuses it, but only because it is
+        written down.
+
+        Previously spelled as `algorithm="HS512"` against a symmetric default, which tested PyJWT's
+        algorithm list rather than this attack.
+        """
+        from cryptography.hazmat.primitives import serialization
+
+        from identity import keys as keys_mod
+
+        # Serialised from the key pair, because `SigningKey` exposes `private` and `public_jwk`
+        # but no PEM. This is the exact byte string a client would take from our JWKS and is what
+        # makes the attack real rather than notional.
+        public_pem = keys_mod.key_set().ensure().private.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        # Hand-rolled, because PyJWT refuses to *encode* with an asymmetric key as an HMAC secret
+        # ("should not be used as an HMAC secret"). That guard is welcome but it is PyJWT's, and
+        # asserting it would test the library rather than our verifier — an attacker writes the
+        # bytes themselves. So we do too, and what is under test is our `algorithms=[ES256]` pin.
+        import base64
+        import hashlib
+        import hmac
+
+        def b64(raw: bytes) -> bytes:
+            return base64.urlsafe_b64encode(raw).rstrip(b"=")
+
+        ours = keys_mod.key_set().ensure()
+        header = b64(json.dumps({"alg": "HS256", "typ": "JWT", "kid": ours.kid}).encode())
+        payload = b64(json.dumps(_good_claims()).encode())
+        signing_input = header + b"." + payload
+        signature = b64(hmac.new(public_pem, signing_input, hashlib.sha256).digest())
+        forged = (signing_input + b"." + signature).decode()
+
+        with pytest.raises(T.TokenError):
+            T.verify(forged, T.TOKEN_ACCESS)
+
+    def test_the_pinned_algorithm_is_asymmetric_and_named(self):
+        """ES256, and asserted because the pin is the whole defence above. `T.ALGORITHM` is the
+        retired HS256 constant and is deliberately not what verification uses."""
+        from identity import keys as keys_mod
+
+        assert keys_mod.ALGORITHM == "ES256"
 
     def test_an_unsigned_token_is_not_readable_as_valid(self):
         """Belt and braces: even a syntactically fine token with an empty signature fails."""
@@ -463,8 +525,26 @@ class TestRevocationIsFailClosed:
         """A checker must never see attacker-controlled claims from an unverified token."""
         seen: list[dict] = []
         T.set_revocation_checker(seen.append)
+        # A different key pair, not a different HMAC secret: the point is a *valid-looking* token
+        # whose signature does not verify, and since the product signs ES256 that means another
+        # private key. Signed with our real `kid` so it gets past key lookup and fails at the
+        # signature -- which is precisely the boundary this case is about.
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        from identity import keys as keys_mod
+
+        stranger = ec.generate_private_key(ec.SECP256R1()).private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        ours = keys_mod.key_set().ensure()
+        forged = jwt.encode(
+            _good_claims(), stranger, algorithm=keys_mod.ALGORITHM, headers={"kid": ours.kid}
+        )
         with pytest.raises(T.TokenError):
-            T.verify(_forge(_good_claims(), key=OTHER_SECRET), T.TOKEN_ACCESS)
+            T.verify(forged, T.TOKEN_ACCESS)
         assert seen == [], "revocation checker was handed claims from a token that failed validation"
 
     def test_a_revoked_token_raises_a_distinguishable_error(self):

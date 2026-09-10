@@ -93,8 +93,24 @@ def _claims(**over) -> dict:
 
 
 def _forged(claims: dict) -> str:
-    """Signed with the real derived key, so only the claim under test differs from a valid token."""
-    return jwt.encode(claims, T.signing_key(), algorithm=T.ALGORITHM)
+    """Signed with the deployment's real ES256 key and `kid`, so only the claim under test differs.
+
+    **This signed HS256 with the HKDF secret until 2026-09-10, and every case built on it passed
+    for the wrong reason.** That was right while `RACK_WEB_SECRET_KEY` signed JWTs; once the OIDC
+    provider became unconditional the product signs ES256 with a key set, and `verify` refuses an
+    HS256 token with ``token has no `kid` `` — *before* reading a single claim. So "an expired token
+    is not honoured" was really "a token without a kid is not honoured", which proves nothing about
+    `exp`.
+
+    Signing with the real key and a real `kid` is what makes the token reach the claim checks, which
+    is the only way these assertions mean anything.
+    """
+    from identity import keys as keys_mod
+
+    key = keys_mod.key_set().ensure()
+    return jwt.encode(
+        claims, key.private, algorithm=keys_mod.ALGORITHM, headers={"kid": key.kid}
+    )
 
 
 # --- INV-01..INV-04  Time and cryptography -------------------------------------------------------
