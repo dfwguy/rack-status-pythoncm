@@ -305,3 +305,39 @@ bypass to reach for instead — which was the point.
 Also retired with the flag: `RACK_WEB_AUTH_MODE` and `RACK_WEB_AUTH_TOKEN`. Several fixtures still
 set them to "enable auth", which had been configuring names nothing reads since FR-18. A fixture
 that appears to arrange authentication and does nothing is worse than one that arranges nothing.
+
+## 13. A token claim may say how you authenticated, never what you may do
+
+Written down before the mistake rather than after it, because policy **conditions**
+(NVRACKSTAT-61) will make it tempting and the wrong version looks like a feature.
+
+Phase 2 keeps grants out of tokens on purpose — `test_no_policy_grant_rides_inside_a_token`
+pins it — so a withdrawn grant takes effect on the *next request* rather than at token expiry.
+That is the whole reason a one-hour access token is safe. `scope` is the one deliberate
+exception, and only because it bounds claim release at `/userinfo`, not access.
+
+So when a condition needs an attribute, the line is what the attribute *describes*:
+
+| Reads a fact about | Example | Sound? |
+|---|---|---|
+| the **authentication event** | `auth_time`, `azp`, `amr`, an address bound at login | **Yes** — historical by nature, so a snapshot is the correct semantics |
+| **current entitlement** | groups, roles, permissions | **No** — reintroduces the staleness keeping grants out of the token exists to avoid |
+
+An entitlement claim would also be an attractive *performance* fix — the store read disappears
+from the hot path — which is exactly why it needs to be refused in writing. Read entitlement
+live; the measured cost is 0.023 ms.
+
+**Two consequences worth knowing before designing a condition:**
+
+- **`auth_time` is already on the access token** and its provenance is pinned
+  (`test_oidc_auth_time_provenance.py`: sampled once at login, zero drift across refresh). Step-up
+  authentication — "a destructive action requires having authenticated in the last N seconds" — is
+  therefore available with no new plumbing, and it closes a real gap: with an hour-long access token
+  and a day-long refresh, a session can be many hours old when somebody powers off a rack.
+- **An address condition must be relative, not absolute.** Operators reach these deployments through
+  `ssh -L`, so `src_ip` is the tunnel endpoint (`127.0.0.1`) for everyone. `source_ip in 10.0.0.0/8`
+  is then uniformly true or uniformly false *while looking like access control*. Comparing the
+  request address against an address **bound into the token at login** instead degrades to a
+  harmless no-op on a tunnel and still refuses a token replayed from somewhere else. Prefer the form
+  that becomes inert when its input is uninformative over the one that becomes a lie — and consult
+  `src_ip_trust`, not just `src_ip`, or the comparison is between two values nobody vouches for.
