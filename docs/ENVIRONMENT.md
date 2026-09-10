@@ -358,7 +358,7 @@ that has to be switched on is one that is off.
 | **`NVIS_AUDIT_ENABLED`** | `1` | Falsy disables the trail entirely. |
 | **`NVIS_AUDIT_FILE`** | `var/logs/audit/audit.jsonl` | The trail. Created `0600` inside a `0700` directory regardless of the process umask. |
 | **`NVIS_AUDIT_MAX_BYTES`** | `5242880` | Per-file size cap — one half of the budget. |
-| **`NVIS_AUDIT_BACKUPS`** | `3` | Rotation backups. `3` keeps **four** files including the active one, so the ceiling is 20 MiB, not 15. |
+| **`NVIS_AUDIT_BACKUPS`** | `24` | Rotation backups. The count excludes the active file, so `24` keeps **25** files and the ceiling is **125 MiB**, not 120. Raised from `3` on 2026-09-10: at a measured 1.15 MB/day, three backups held about 17 days, so a review asking about last month found it gone. 125 MiB is roughly 90 days at that rate. Lower it only if disk is genuinely scarce — the trail is the only record of who did what. |
 | **`NVIS_AUDIT_RETENTION_DAYS`** | `30` | The other half: a retention target in days. The sink holds whichever of the two binds first and records which one it is. |
 | **`NVIS_AUDIT_LONG_RETENTION`** | `0` | Truthy multiplies the backup count, keeping history beyond the default budget. Deliberate, operator-accepted growth — still bounded. |
 | **`NVIS_AUDIT_READS`** | `0` | Truthy audits read-only requests too. Off by default because `/api/status` polling would bury the signal. |

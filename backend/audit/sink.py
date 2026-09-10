@@ -72,7 +72,12 @@ BIND_CEILING = "byte-ceiling"
 AUDIT_ENABLED = lc.register_setting(lc.Setting("NVIS_AUDIT_ENABLED", True, lambda v: v not in ("0", "false", "no")))
 AUDIT_FILE = lc.register_setting(lc.Setting("NVIS_AUDIT_FILE", "var/logs/audit/audit.jsonl"))
 AUDIT_MAX_BYTES = lc.register_setting(lc.Setting("NVIS_AUDIT_MAX_BYTES", 5 * 1024 * 1024, int))
-AUDIT_BACKUPS = lc.register_setting(lc.Setting("NVIS_AUDIT_BACKUPS", 3, int))
+AUDIT_BACKUPS = lc.register_setting(lc.Setting("NVIS_AUDIT_BACKUPS", 24, int))
+#: 24 rather than the original 3, decided 2026-09-10 when the trail became readable. Measured
+#: 1.15 MB/day (~2,460 events/day) over 13 days, so 3 backups held roughly 17 days: a security
+#: review asking about last month would have found it gone. 24 keeps 25 files x 5 MiB = 125 MiB,
+#: about 90 days at that rate. A trail nobody can read has no reason to be long; one with a
+#: reader does.
 AUDIT_RETENTION_DAYS = lc.register_setting(lc.Setting("NVIS_AUDIT_RETENTION_DAYS", 30, int))
 AUDIT_READS = lc.register_setting(lc.Setting("NVIS_AUDIT_READS", False, lambda v: v not in ("0", "false", "no")))
 AUDIT_LONG_RETENTION = lc.register_setting(

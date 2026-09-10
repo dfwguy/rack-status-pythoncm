@@ -230,7 +230,10 @@ class TestTC10RetentionVariants:
 
         ids = {e["resource"] for e in _lines(tmp_path)}
         rotated = list(_audit_path(tmp_path).parent.glob("audit.jsonl.*"))
-        assert sink.sizing().backups == 3 * sink.LONG_RETENTION_FACTOR
+        # The base count is read from the setting, not written as a literal: this asserted
+        # `3 * FACTOR` and broke when the default was raised to 24, which is a test failing
+        # on its own hardcoded copy of a value rather than on the property it cares about.
+        assert sink.sizing().backups == int(sink.AUDIT_BACKUPS.resolve()) * sink.LONG_RETENTION_FACTOR
         assert ids or rotated, "history exists across the rotated set"
 
     def test_budgets_are_independent(self, tmp_path, monkeypatch):
@@ -305,7 +308,12 @@ class TestTC38RetentionSizing:
         p = _audit_path(tmp_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(b'{"x":1}\n' * 50)
-        monkeypatch.setattr(sink, "_observed_events_per_day", lambda *_a: 500_000.0)
+        # Derived from the ceiling, not a literal. This injected 500,000 events/day, which filled
+        # the old 20 MiB budget in well under 30 days and stopped doing so when the ceiling rose to
+        # 125 MiB -- so the case broke without the behaviour changing. The rate that makes the
+        # ceiling bind is a function of the ceiling, so compute it.
+        one_day_of_events = sink.sizing(p).total_bytes / len(b'{"x":1}\n')
+        monkeypatch.setattr(sink, "_observed_events_per_day", lambda *_a: one_day_of_events * 2)
 
         plan = sink.sizing(p)
         assert plan.binding == sink.BIND_CEILING
@@ -447,17 +455,31 @@ class TestRetentionBudget:
             f"({plan.total_bytes} bytes / {event_bytes} B per event); FR-7b floor is 30"
         )
 
-    def test_the_default_budget_is_four_files_not_three(self, tmp_path):
-        """AC-10g: ``backupCount=3`` keeps the active file too, so the budget is 20 MiB not 15.
+    def test_the_backup_count_excludes_the_active_file(self, tmp_path):
+        """AC-10g: ``backupCount=N`` keeps the active file too, so the budget is (N+1) files.
 
         The brief's sizing table originally said "15 MB (3 x 5 MB)". The error was conservative,
         but a retention claim that disagrees with the code is the kind of thing an auditor finds.
+
+        **Stated as a property rather than as byte totals.** The original form asserted 3 backups
+        and exactly 20 MiB, so raising the default to 24 broke it — a test failing on its own copy
+        of a default instead of on the off-by-one it exists to catch.
         """
         audit.configure(force=True)
         plan = sink.sizing(_audit_path(tmp_path))
-        assert plan.backups == 3
-        assert plan.total_bytes == plan.max_bytes * 4
-        assert plan.total_bytes == 20 * 1024 * 1024
+        assert plan.total_bytes == plan.max_bytes * (plan.backups + 1)
+
+    def test_the_shipped_default_is_ninety_days_of_history(self, tmp_path):
+        """The current figures, pinned separately so a change to them is a deliberate act.
+
+        24 backups, 125 MiB, chosen on 2026-09-10 when the trail became readable: at a measured
+        1.15 MB/day the previous 3 backups held about 17 days, so a review asking about last month
+        found it gone.
+        """
+        audit.configure(force=True)
+        plan = sink.sizing(_audit_path(tmp_path))
+        assert plan.backups == 24
+        assert plan.total_bytes == 125 * 1024 * 1024
 
     def test_a_fresh_file_reports_the_ceiling_as_binding(self, tmp_path):
         """With no history there is no observed rate, so implied_days is unknown, not zero.
