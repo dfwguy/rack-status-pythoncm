@@ -307,3 +307,38 @@ describe("export", () => {
     expect(await screen.findByText(/not authorized/)).toBeTruthy();
   });
 });
+
+describe("the panel", () => {
+  it("keeps the pager inside the table's panel, not in a row beneath it", async () => {
+    // Requested to match NodesView: the table and its footer should read as one panel. Asserted
+    // structurally, because "looks integrated" is otherwise only checkable by eye -- the pager has
+    // to be a descendant of the same container as the table.
+    vi.mocked(service.readTrail).mockResolvedValue(page());
+    render(<AuditTrailView />);
+    const table = await screen.findByRole("table");
+
+    const panel = table.closest(".MuiTableContainer-root");
+    expect(panel, "the table is not inside a TableContainer").toBeTruthy();
+    expect(
+      panel!.querySelector(".MuiTablePagination-root"),
+      "the pager sits outside the table's panel",
+    ).toBeTruthy();
+  });
+
+  it("states the retention bound beside the pager", async () => {
+    // FR-10, and it had no test until now: the view must name the oldest event actually HELD, so
+    // an empty page a month back reads as "we no longer hold that" rather than "nothing happened".
+    vi.mocked(service.readTrail).mockResolvedValue(
+      page({ oldest_held: "2026-06-12T08:00:00.000+00:00" }),
+    );
+    render(<AuditTrailView />);
+    expect(await screen.findByText(/Trail reaches back to/)).toBeTruthy();
+  });
+
+  it("says nothing about retention when the server reports none", async () => {
+    vi.mocked(service.readTrail).mockResolvedValue(page({ oldest_held: "" }));
+    render(<AuditTrailView />);
+    await screen.findByRole("table");
+    expect(screen.queryByText(/Trail reaches back to/)).toBeNull();
+  });
+});

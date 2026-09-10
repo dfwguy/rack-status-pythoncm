@@ -36,6 +36,8 @@ import { useCallback, useEffect, useState } from 'react';
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
+import Paper from '@mui/material/Paper';
+import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TablePagination from '@mui/material/TablePagination';
 import TableRow from '@mui/material/TableRow';
@@ -257,8 +259,11 @@ export default function AuditTrailView() {
       )}
 
       {events.length > 0 && (
-        <Card>
-          <Table size="small">
+        /* `TableContainer` over an outlined `Paper`, the same shell NodesView and RackTable use,
+           with the pagination *inside* it. It was a KUI `Card` with the controls in a sibling row,
+           which read as a panel and a separate strip of buttons rather than one table. */
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small" aria-label="Audit trail">
             <TableHead>
               <TableRow>
                 <TableCell>When</TableCell>
@@ -307,37 +312,45 @@ export default function AuditTrailView() {
               ))}
             </TableBody>
           </Table>
-        </Card>
+
+          <Flex
+            style={{
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              paddingLeft: 16,
+            }}
+          >
+            {/* The retention bound sits in the footer beside the pager rather than above the
+                table, because it qualifies the rows on screen: an empty page a month back means
+                "we no longer hold that", not "nothing happened". FR-10 asks for the oldest event
+                actually held, which is a fact the server sends -- a period computed here would be
+                a guess, since how far back the trail reaches depends on event rate. */}
+            <Text kind="body/regular/sm" style={{ opacity: 0.7 }}>
+              {page?.oldest_held ? `Trail reaches back to ${when(page.oldest_held)}` : ''}
+            </Text>
+            <TablePagination
+              component="div"
+              /* `-1` while more may follow, an exact total once we are on the last page.
+               *
+               * MUI derives both arrows' disabled state from `count`, so encoding "is there more"
+               * here is all that is needed -- no slot overrides, and no second source of truth for
+               * whether Next should work. It is also the honest value: a real total would mean
+               * scanning the whole 125 MiB trail on every page turn, and it becomes knowable
+               * precisely when the last page arrives. MUI renders "1-50 of more than 50" until
+               * then. */
+              count={hasMore ? -1 : pageIndex * rowsPerPage + events.length}
+              page={pageIndex}
+              onPageChange={(_, next) => goToPage(next)}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(e) => setRowsPerPage(parseInt(e.target.value, 10))}
+              rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS}
+            />
+          </Flex>
+        </TableContainer>
       )}
 
-      {page && events.length > 0 && (
-        <Flex style={{ justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
-          <Text kind="body/regular/sm" style={{ opacity: 0.7 }}>
-            {page.oldest_held ? `Trail reaches back to ${when(page.oldest_held)}` : ''}
-          </Text>
-          {/* `count={-1}` means "total unknown", which is the honest value: counting would mean
-              scanning the whole 125 MiB trail on every page turn. MUI then renders "1–50 of more
-              than 50" and hides the jump-to-last control -- which is correct rather than a
-              limitation, since a page number cannot be an offset into an append-only record. */}
-          <TablePagination
-            component="div"
-            /* `-1` while more may follow, an exact total once we are on the last page.
-             *
-             * MUI derives both arrows' disabled state from `count`, so encoding "is there more"
-             * here is all that is needed -- no slot overrides, and no second source of truth for
-             * whether Next should work. It is also the honest value: a real total would mean
-             * scanning the whole 125 MiB trail on every page turn, and it becomes knowable
-             * precisely when the last page arrives. MUI renders "1–50 of more than 50" until
-             * then. */
-            count={hasMore ? -1 : pageIndex * rowsPerPage + events.length}
-            page={pageIndex}
-            onPageChange={(_, next) => goToPage(next)}
-            rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={(e) => setRowsPerPage(parseInt(e.target.value, 10))}
-            rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS}
-          />
-        </Flex>
-      )}
+
     </Flex>
   );
 }
