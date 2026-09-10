@@ -1,0 +1,40 @@
+{
+  // The launcher renderer is compiled separately, and the `module` setting is the whole reason.
+  //
+  // It is loaded by a plain `<script src>` tag, so it must emit a *classic script*. The main
+  // project uses `"module": "node16"`, which stamps
+  // `Object.defineProperty(exports, "__esModule", ...)` onto every file it emits -- even one with
+  // no imports or exports. In a classic script `exports` is undefined, so that line throws
+  // `TypeError` before any of the renderer runs and the window comes up blank, with the error
+  // visible only in DevTools. Verified by building it both ways.
+  //
+  // Plain `"commonjs"` emits no marker for an import-free file, which is what makes this work.
+  // `"none"` would say the intent more directly but is deprecated in TypeScript 6 and stops
+  // functioning in 7.
+  //
+  // `<script type="module">` is the other way out and does not work here: Electron loads this page
+  // over `file://`, and ES modules from a `file://` origin are blocked as cross-origin. Moving the
+  // launcher behind a custom `app://` protocol would lift that, and is the upgrade path if this
+  // ever needs real imports.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["ES2022", "DOM"],
+    "rootDir": "src",
+    "outDir": "out",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    // See tsconfig.json: internal commentary must not ride into app.asar.
+    "removeComments": true,
+    // No `"types": ["node"]`: the renderer is sandboxed with no Node integration, so pulling in
+    // Node's globals here would let a mistake typecheck and then fail at runtime.
+    "types": []
+  },
+  "include": ["src/launcher/**/*.ts"]
+}

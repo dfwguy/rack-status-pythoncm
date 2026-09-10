@@ -1,0 +1,42 @@
+{
+  "name": "nvis-greenlight-desktop",
+  "productName": "NVIS Greenlight",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Desktop shell for the NVIS Greenlight cluster console: deployment picker, SSH tunnel supervision, and signed auto-updates.",
+  "author": {
+    "name": "Rafael M. Koike & Cursor Agent (\"Ada\")",
+    "email": "rkoike@nvidia.com"
+  },
+  "homepage": "https://gitlab-master.nvidia.com/nvis/nvis-rack-status",
+  "desktopName": "nvis-greenlight.desktop",
+  "license": "LicenseRef-NvidiaProprietary",
+  "main": "out/main/main.js",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.launcher.json && node scripts/copy-launcher.mjs",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.launcher.json --noEmit",
+    "lint": "eslint .",
+    "smoke": "npm run build && node scripts/smoke.mjs",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:linux": "bash scripts/build-in-docker.sh --linux --x64",
+    "dist:win": "BUILDER_IMAGE=electronuserland/builder:24-wine bash scripts/build-in-docker.sh --win --x64",
+    "dist:mac": "npm run build && CUSTOM_DMGBUILD_PATH=scripts/dmgbuild-patient.sh electron-builder --mac --publish never",
+    "dist:local": "npm run build && electron-builder --mac zip --publish never",
+    "dist:all": "npm run build && electron-builder -mwl --publish never",
+    "dist:publish": "npm run build && electron-builder --publish always"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.2",
+    "electron": "^38.4.0",
+    "electron-builder": "^26.0.20",
+    "typescript": "~6.0.2"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  }
+}
