@@ -63,6 +63,44 @@ import MuiButton from "@mui/material/Button";
 import { Button } from "@nvidia/foundations-react-core";
 ```
 
+## Every call to `/api/*` goes through `apiFetch` — never bare `fetch`
+
+`src/lib/apiFetch.ts`, not `fetch`. This is not a style preference; a bare `fetch` opts the call
+site out of session renewal, and since the identity work the session is **two** tokens with very
+different lifetimes:
+
+| Token | Lives in | Default TTL |
+|---|---|---|
+| access | `nvis_access` cookie, `HttpOnly` | 1 hour (7-day ceiling) |
+| refresh | `nvis_refresh` cookie, `HttpOnly`, path `/api/auth` | 1 day (30-day ceiling) |
+
+Both are `HttpOnly`, so **JavaScript never holds a token and cannot see when one expires.** The
+only signal is a `401`, and `apiFetch` is what acts on it: it POSTs `/api/auth/refresh` once,
+replays the original request, and returns the untouched `401` if the *refresh* also failed — which
+is the only 401 that means "log in again". It also de-duplicates, because a dashboard firing a
+dozen requests at an expired token produces a dozen simultaneous 401s and one shared renewal.
+
+A bare `fetch("/api/...")` therefore works for an hour and then that panel starts failing, and
+recovers only if some *other* call happens to renew first. It presents as one flaky pane, which is
+why it survived: **58 call sites across 28 files** had drifted onto raw `fetch` before
+`bin/codemod-apifetch.py` moved them (re-runnable; `--dry-run` shows a diff).
+
+```tsx
+import { apiFetch } from "../lib/apiFetch";        // depth varies: ./lib, ../lib, ../../lib
+
+const res = await apiFetch(`/api/status?${params}`, { cache: "no-store" });
+```
+
+`credentials` and the `X-Rack-Operator` / `X-Rack-Client-Id` headers are set for you, so a call
+site does not need to restate them.
+
+**Two deliberate exceptions, and only these two.** `apiFetch.ts` itself, whose own
+`fetch("/api/auth/refresh")` must stay raw or renewal recurses; and `srpClient.ts`, which *obtains*
+the session and so has nothing to renew. Anything else using raw `fetch` on an `/api` path is a
+bug. `/api/auth/refresh`, `/api/auth/srp/` and `/api/auth/logout` are on `NO_REFRESH` inside the
+wrapper — **`/api/auth-check` is deliberately not**, and putting it back reintroduces a defect
+where a page reload signed the operator out of a live session (see that constant's comment).
+
 ## TypeScript & Lint
 
 - Build: `tsc -b && vite build`. All code must pass strict TypeScript.
