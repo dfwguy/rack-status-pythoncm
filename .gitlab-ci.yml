@@ -392,6 +392,64 @@ release:publish-bundle:
   after_script:
     - !reference [.pipeline_post_job_hooks, after_script]
 
+# ─── macOS desktop: build → 3S sign → notarize → staple ────────────────────────
+#
+# DISABLED. The job is only created when `NVIS_ENABLE_MACOS_SIGNING` is "true", and even then it
+# is manual — so until someone sets that variable this contributes nothing to a pipeline. Written
+# now, while the procedure is fresh and proven, rather than reconstructed at release time.
+#
+# It is defined rather than commented out on purpose: commented YAML is never linted, drifts
+# silently, and cannot be dry-run. This form is parsed by `gitlab-ci lint` on every push.
+#
+# ── Before enabling, three things must exist ──
+#
+# 1. A **macOS runner**, tagged, with Xcode 13+ and Node 24. Not optional and not substitutable:
+#    `codesign`, `ditto`, `xcrun notarytool` and `stapler` are macOS-only, and there is no
+#    container image that can stand in — Docker on macOS is a Linux VM. See desktop/README.md.
+#    Set `MACOS_RUNNER_TAG` to that runner's tag.
+#
+# 2. **3S service-account credentials.** The interactive `nvsec` browser login used on a
+#    workstation cannot work here. Add as masked CI variables:
+#      NVSEC_SSA_CLIENT_ID, NVSEC_SSA_CLIENT_SECRET, NVSEC_SSA_SCOPE (= SIGNING_MACOS)
+#    `nvsec 3s submit` reads all three from the environment, so `sign-3s.sh` needs no changes.
+#    Requires an SSA client with the scope granted — a separate request from the signer DL.
+#
+# 3. **Apple notarization credentials.** Use an App Store Connect API key, not an app-specific
+#    password: a personal Apple ID ties every release to one person and cannot be shared with a
+#    runner. Add `APPLE_API_KEY` as a *file*-type variable (the .p8) plus `APPLE_API_KEY_ID` and
+#    `APPLE_API_ISSUER`. An App Store Connect Admin issues these.
+#
+# Everything else is already proven: `desktop/scripts/sign-3s.sh` carries the whole sequence and
+# the traps behind it, and runs identically on a workstation.
+macos-sign:
+  stage: build
+  tags:
+    - $MACOS_RUNNER_TAG
+  variables:
+    # The signed bundle is the deliverable; a shallow clone is all that is needed to build it.
+    GIT_DEPTH: "1"
+  script:
+    - cd desktop
+    - npm ci --no-audit --no-fund
+    - npm run build
+    # `--dir` only: electron-builder must NOT produce the dmg/zip yet. The .app has to be signed
+    # first, then packaged — signing a finished dmg leaves the .app inside it unsigned and
+    # invalidates the hashes already written into latest-mac.yml.
+    - npx electron-builder --mac --dir --publish never
+    - scripts/sign-3s.sh
+  artifacts:
+    name: "nvis-greenlight-macos-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - desktop/release/signed/*.zip
+      - desktop/release/latest-mac.yml
+    expire_in: 2 weeks
+  rules:
+    # Absent from the pipeline entirely unless explicitly switched on, and manual even then.
+    - if: $NVIS_ENABLE_MACOS_SIGNING == "true"
+      when: manual
+      allow_failure: true
+    - when: never
+
 # Push to NVCR (uncomment when registry is configured)
 # docker-push:
 #   stage: build
