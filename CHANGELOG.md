@@ -1,3 +1,6 @@
+### [0.3.1 (Tuesday, August 25, 2026)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/merge_requests/22)
+### Features/Bug Fixes
+---
 ### [0.1.2 (Thursday, May 28, 2026)](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/merge_requests/16)
 ### Features/Bug Fixes
 * fix: bump dependencies to resolve nSpect vulnerabilities ([ccfeeb74](https://gitlab-master.nvidia.com/nvis/nvis-rack-status/-/commit/ccfeeb74515c780e54e29de4beadbdfb75b70d9a))
