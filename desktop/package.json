@@ -20,7 +20,7 @@
     "start": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.launcher.json --noEmit",
     "lint": "eslint .",
-    "smoke": "npm run build && node scripts/smoke.mjs",
+    "smoke": "npm run build && node scripts/smoke.mjs && node scripts/menu-check.mjs",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder --publish never",
     "dist:linux": "bash scripts/build-in-docker.sh --linux --x64",

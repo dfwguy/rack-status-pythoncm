@@ -91,6 +91,13 @@ function buildMenu(): void {
           isMac ? { role: "close" as const } : { role: "quit" as const },
         ],
       },
+      // **Do not remove this while "simplifying the menu".** On every platform Electron wires the
+      // clipboard accelerators (Cmd/Ctrl+C, V, X, A, Z) through the Edit menu's *roles* — there is
+      // no separate keyboard layer. Replacing the default menu without an Edit menu therefore
+      // disables copy and paste everywhere: the launcher's form, the dashboard's inputs, and the
+      // xterm terminal. It looks like the app is deliberately blocking paste, and nothing logs an
+      // error, which is why this comment is longer than the line it guards.
+      { role: "editMenu" as const },
       {
         label: "View",
         submenu: [
