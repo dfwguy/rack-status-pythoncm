@@ -61,6 +61,16 @@ ARTIFACT=$(grep '^path:' "$MANIFEST" | head -1 | sed 's/^path:[[:space:]]*//')
 CLAIMED_SHA=$(grep '^sha512:' "$MANIFEST" | head -1 | sed 's/^sha512:[[:space:]]*//')
 VERSION=$(grep '^version:' "$MANIFEST" | head -1 | sed 's/^version:[[:space:]]*//')
 
+# The GitLab Release to attach the download to, which is NOT the package version.
+#
+# Builds carry a timestamp stamp (0.3.0-260910185147), so each gets its own immutable package
+# directory -- good for history. But releases are tagged with the plain version, so linking the
+# asset to "0.3.0-260910185147" targets a release that does not exist: the POST fails, the
+# best-effort warning scrolls past, and the download never appears on the release page. Since the
+# release page is the surface users actually visit, that silent miss is the whole feature lost.
+# Strip the prerelease stamp for the link; keep it for the package path.
+RELEASE_TAG="${VERSION%%-*}"
+
 ARTIFACT_PATH="$RELEASE_DIR/$ARTIFACT"
 [ -f "$ARTIFACT_PATH" ] || ARTIFACT_PATH="$DESKTOP_DIR/release/$ARTIFACT"
 [ -f "$ARTIFACT_PATH" ] || { echo "publish: manifest names '$ARTIFACT' but it is not in release/ or release/signed/" >&2; exit 1; }
@@ -123,14 +133,14 @@ done
 # Best-effort, exactly as `release:publish-bundle` treats it: the release tag may not exist yet,
 # and the package upload above is the part that actually matters.
 if [ "$DRY_RUN" -eq 0 ]; then
-  echo "==> attaching asset link to release $VERSION (best-effort)"
+  echo "==> attaching asset link to release $RELEASE_TAG (best-effort)"
   curl --fail-with-body --silent --show-error --request POST \
     --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
     --data-urlencode "name=$ARTIFACT (macOS, signed + notarized)" \
     --data-urlencode "url=$BASE/$VERSION/$ARTIFACT" \
     --data "link_type=package" \
-    "$HOST/api/v4/projects/$PROJECT/releases/$VERSION/assets/links" >/dev/null \
-    || echo "    WARN: could not attach (release $VERSION may not exist yet); the package is uploaded regardless."
+    "$HOST/api/v4/projects/$PROJECT/releases/$RELEASE_TAG/assets/links" >/dev/null \
+    || echo "    WARN: could not attach (release $RELEASE_TAG may not exist yet); the package is uploaded regardless."
 fi
 
 echo
