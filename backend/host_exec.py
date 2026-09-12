@@ -48,6 +48,7 @@ from transport import (
     DEFAULT_TAIL_BYTES,
     Connection,
     FileStat,
+    NotConfigured,
     Process,
     RoutingConnection,
     SSHConfig,
@@ -395,9 +396,67 @@ def read_text(
     )
 
 
+def execution_host_configured(role: str = DEFAULT_ROLE) -> bool:
+    """Is there anywhere to execute for *role*?
+
+    A configuration question, answered without touching the network — distinct from
+    :func:`reachability_state`, which probes. Callers that want to *verify* something on the
+    execution host need this first: on a deployment with no head node there is nothing to
+    verify, and treating that as a verification failure blames the wrong thing.
+    """
+    _ensure_init()
+    try:
+        conn = target(role)
+    except NotConfigured:
+        return False
+    # Walk the decorator chain rather than reading the outer executor: env forwarding and sudo
+    # are wrappers that delegate through `.inner`, so `ssh_argv` is never on the object
+    # `Connection.executor` hands back. Reading only the outer one reported every SSH
+    # deployment as "configured" — which is how this helper was wrong the first time.
+    executor = getattr(conn, "executor", None)
+    argv_builder = None
+    seen = 0
+    while executor is not None and seen < 10:  # bounded: a cycle must not hang a polled path
+        argv_builder = getattr(executor, "ssh_argv", None)
+        if argv_builder is not None:
+            break
+        executor = getattr(executor, "inner", None)
+        seen += 1
+    if argv_builder is None:
+        return True  # a local target always has somewhere to run
+    try:
+        argv_builder()
+    except NotConfigured:
+        return False
+    return True
+
+
+def _probe_or_false(what: str, probe) -> bool:
+    """Run a filesystem predicate, answering ``False`` when there is no host to ask.
+
+    The predicates below are used as guards on continuously-polled endpoints, so an
+    unconfigured deployment used to turn each one into an unhandled ``RuntimeError`` — 65 call
+    sites across 20 modules, every one a 500. ``_probe_reachable`` already treats this exact
+    condition as a reportable state rather than an error; this makes the predicates agree with
+    it, which is what lets ``/api/status`` answer 200 with ``cluster_reachable: false`` and let
+    the dashboard render the reason.
+
+    Scoped to :class:`NotConfigured`. A genuine SSH failure still raises, because "the head
+    node refused us" is a real fault that must not be flattened into "the file is absent".
+    """
+    try:
+        return bool(probe())
+    except NotConfigured as e:
+        _logger.debug("%s: no execution host configured (%s)", what, e)
+        return False
+
+
 def is_file(path: object, *, role: str = DEFAULT_ROLE) -> bool:
-    """True when *path* is an existing file on the role's host."""
-    return target(role).is_file(path)
+    """True when *path* is an existing file on the role's host.
+
+    ``False`` when nothing is configured to ask — see :func:`_probe_or_false`.
+    """
+    return _probe_or_false("is_file", lambda: target(role).is_file(path))
 
 
 def is_dir(path: object, *, role: str = DEFAULT_ROLE) -> bool:
@@ -415,7 +474,7 @@ def is_dir(path: object, *, role: str = DEFAULT_ROLE) -> bool:
         hit = _isdir_cache.get(key)
         if hit is not None and (now - hit[0]) < _dir_cache_ttl():
             return hit[1]
-    found = target(role).is_dir(path)
+    found = _probe_or_false("is_dir", lambda: target(role).is_dir(path))
     with _isdir_lock:
         _isdir_cache[key] = (time.monotonic(), found)
     return found
@@ -427,12 +486,19 @@ def which(name: str, *, role: str = DEFAULT_ROLE) -> str | None:
     Memoised: for a remote target this is an SSH round trip, and callers use it as
     a cheap "is this tool installed?" guard on polled endpoints. The cache is
     dropped by :func:`invalidate_connection`.
+
+    ``None`` when nothing is configured to ask, for the same reason as the predicates above:
+    a guard that raises turns an unconfigured deployment into a 500 on every polled endpoint.
     """
     key = (role, name)
     with _which_lock:
         if key in _which_cache:
             return _which_cache[key]
-    found = target(role).which(name)
+    try:
+        found = target(role).which(name)
+    except NotConfigured as e:
+        _logger.debug("which(%s): no execution host configured (%s)", name, e)
+        found = None
     with _which_lock:
         _which_cache[key] = found
     return found

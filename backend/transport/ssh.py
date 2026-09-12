@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from transport.base import (
     Connection,
     Executor,
+    NotConfigured,
     Process,
     as_shell_str,
     env_export_prefix,
@@ -78,7 +79,9 @@ class SSHExecutor(ShellFilesystem, Executor):
     def ssh_argv(self, connect_timeout: str | None = None) -> list[str]:
         cfg = self.config
         if not cfg.host:
-            raise RuntimeError(
+            # Typed so a polled predicate can tell "nowhere to ask" apart from "asked and
+            # failed"; still a RuntimeError, so every existing catch keeps working.
+            raise NotConfigured(
                 "No SSH host is configured. Point RACK_SSH_HOST at the head-node "
                 "hostname or IP."
             )

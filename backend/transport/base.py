@@ -116,6 +116,20 @@ def interactive_timeout_opts(connect_timeout: str | int | None = None) -> list[s
     ]
 
 
+class NotConfigured(RuntimeError):
+    """This deployment has not been told where to execute — there is no host to reach.
+
+    A *configuration* state, not a failure: a deployment with no head node cannot be asked
+    whether a remote directory exists, and that is different from asking and being refused.
+    Separating the two is what lets a polled predicate answer "no, I cannot see it" while the
+    reachability probe reports *why*, instead of every endpoint raising.
+
+    Subclasses ``RuntimeError`` deliberately. This condition was a bare ``RuntimeError`` for
+    most of the transport's life and callers catch it that way -- ``host_exec._probe_reachable``
+    among them -- so widening the type would have silently stopped those catches working.
+    """
+
+
 @dataclass
 class Process:
     """Uniform wrapper over a local ``Popen`` or an SSH-tunnelled process.

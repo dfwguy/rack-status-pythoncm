@@ -151,6 +151,25 @@ def sensitive_values(extra_names: tuple[str, ...] = ()) -> tuple[str, ...]:
     return tuple(sorted(values, key=len, reverse=True))
 
 
+def scrub_text(text: str, values: tuple[str, ...] | None = None, placeholder: str | None = None) -> str:
+    """Replace known secret values in *text*.
+
+    Public because redaction is needed outside logging now: the JSON error handler
+    (``api/json_errors.py``) puts an exception's message in an HTTP response, and that message is
+    arbitrary text from anywhere in the process. Resolving the value list here rather than at the
+    call site is the point -- this module already decides which env names look sensitive, already
+    refuses values under ``MIN_REDACTABLE_LEN``, and already sorts longest-first so a secret
+    containing another does not leave a recognisable tail.
+    """
+    if values is None:
+        values = sensitive_values(tuple(LOG_SENSITIVE_KEYS.resolve()))
+    if placeholder is None:
+        placeholder = str(LOG_REDACT_PLACEHOLDER.resolve())
+    for secret in values:
+        text = text.replace(secret, placeholder)
+    return text
+
+
 class RedactionFilter(logging.Filter):
     """Replace known secret values with a placeholder before a record reaches a sink.
 
@@ -166,9 +185,9 @@ class RedactionFilter(logging.Filter):
         self._placeholder = placeholder
 
     def _scrub(self, text: str) -> str:
-        for secret in self._values:
-            text = text.replace(secret, self._placeholder)
-        return text
+        # Values and placeholder are resolved once at construction, so they are passed in rather
+        # than re-resolved per record.
+        return scrub_text(text, self._values, self._placeholder)
 
     def filter(self, record: logging.LogRecord) -> bool:
         if not self._values:

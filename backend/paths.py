@@ -44,6 +44,11 @@ else:
 
 DEFAULT_SCRIPT = SCRIPTS_DIR / "rack_status.sh"
 
+#: The built Sphinx site, served at /docs/ by `api/docs_site.py`. A *local* path, unlike almost
+#: everything else in this module: it is an artifact inside this container, not a file on the
+#: execution host, so it is a `Path` and `is_dir()` on it is meaningful.
+DOCS_DIR = REPO_ROOT / "static" / "docs"
+
 
 def _scripts_dir() -> str:
     """Directory holding ``bin/scripts`` on the host that actually runs them.
@@ -91,7 +96,12 @@ def _resolve_log_dir(raw: str | None) -> PurePosixPath:
         ok = any(str(log_dir).startswith(str(r) + os.sep) or log_dir == r for r in roots)
         if not ok:
             raise ValueError(f"log_dir must be under one of: {[str(r) for r in roots]}")
-    if not host_exec.is_dir(log_dir):
+    # Only *verify* when there is a host to verify against. With no execution host configured
+    # there is nothing to stat, and answering "not a directory" would blame the path for a
+    # deployment problem — on the polled endpoints that call this, that reads as a broken
+    # dashboard rather than an unconfigured one. `/api/status` already reports the real cause
+    # through `host_exec.reachability_state()`, so let it.
+    if host_exec.execution_host_configured() and not host_exec.is_dir(log_dir):
         raise ValueError(f"not a directory: {log_dir}")
     return log_dir
 
