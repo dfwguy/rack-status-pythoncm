@@ -475,6 +475,18 @@ macos-sign:
 # Pass the macOS build's stamp when adding to an existing release; leave it empty for a fresh one.
 .desktop-installer:
   stage: build
+  # Deliberately independent of lint and test, which is not the usual shape for a build job.
+  #
+  # The desktop shell does not contain the frontend: it opens the SPA that the deployment serves
+  # over the tunnel, so `files:` in electron-builder.yml ships only out/ and package.json. A
+  # frontend lint error therefore says nothing about whether this installer is correct, and
+  # inheriting the stage gate means an unrelated eslint rule change blocks the release build —
+  # which is exactly what happened the first time these jobs existed: four react-refresh errors in
+  # a feature branch's new components made the Windows installer unbuildable, on a commit that had
+  # not touched the desktop shell at all.
+  #
+  # Manual and opt-in, so this cannot ship anything by accident.
+  needs: []
   variables:
     GIT_DEPTH: "1"
     # Set when adding a platform to an existing release, e.g. 260910185147. Empty = stamp now.
