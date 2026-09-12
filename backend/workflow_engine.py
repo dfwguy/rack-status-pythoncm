@@ -1534,14 +1534,27 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
         # Broaden defaults from the catalog Tool registry (env_key -> script basename),
         # so any registered tool is runnable from a workflow, not just the seven above.
         try:
+            from catalog.models import safe_script_ref
             from catalog.store import TABLE_TOOLS
             from catalog.store import get_repo as _get_repo
 
             for _t in _get_repo().list(TABLE_TOOLS):
                 ek = (_t.get("env_key") or "").strip()
                 sc = (_t.get("script") or "").strip()
-                if ek and sc:
-                    _SCRIPT_DEFAULTS.setdefault(ek, sc)
+                if not (ek and sc):
+                    continue
+                # Re-checked here, not trusted from the store. `host_cmd` below becomes
+                # `bash <scripts_dir>/<script>` and is interpreted by a shell on the execution
+                # host, so a value carrying `..` or a shell metacharacter is traversal or
+                # command injection. The API refuses such a document, but `catalog.json` can be
+                # edited by hand on the box, which never passes through the API at all.
+                if not safe_script_ref(sc):
+                    _logger.warning(
+                        "workflow: ignoring tool %r — unsafe script reference %r",
+                        _t.get("id"), sc,
+                    )
+                    continue
+                _SCRIPT_DEFAULTS.setdefault(ek, sc)
         except Exception:
             _logger.debug("_execute_automated_step: ignoring error", exc_info=True)
         resolved = os.environ.get(command, "").strip()

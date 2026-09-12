@@ -53,7 +53,6 @@ import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
 import {
   VALIDATION_PRESET_LABELS,
-  type ValidationPresetId,
   type ValidationPresetRequest,
 } from "../lib/validationPresets";
 import { apiFetch } from "../lib/apiFetch";
@@ -158,7 +157,8 @@ const EMPTY_RACK_ROWS: RackRow[] = [];
 export function MultirackView({ data, logDir }: MultirackViewProps) {
   const [dryRun, setDryRun] = useState(false);
   const [pendingKind, setPendingKind] = useState<MultirackLaunchKind | null>(null);
-  const [pendingPreset, setPendingPreset] = useState<ValidationPresetId | null>(null);
+  // Plain string, not the frozen union: recipe ids now come from the catalog at runtime.
+  const [pendingPreset, setPendingPreset] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [campaign, setCampaign] = useState<MultirackCampaignResponse | null>(null);
   const [campaignError, setCampaignError] = useState("");
@@ -169,7 +169,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   const [validationFilters, setValidationFilters] = useState<string[]>([]);
   const [eligibleOnly, setEligibleOnly] = useState(false);
   const [launchingKind, setLaunchingKind] = useState<MultirackLaunchKind | null>(null);
-  const [launchingPreset, setLaunchingPreset] = useState<ValidationPresetId | null>(null);
+  const [launchingPreset, setLaunchingPreset] = useState<string | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: "success" | "error" | "info" }>({
     open: false, message: "", severity: "info",
   });

@@ -21,12 +21,14 @@ import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
-import { Banner, Button, Card, Flex, Tag, Text } from "@nvidia/foundations-react-core";
-import { ClipboardList, Play, RefreshCw, type LucideIcon } from "lucide-react";
+import { Banner, Button, Flex, Tag, Text } from "@nvidia/foundations-react-core";
+import { Play, RefreshCw, type LucideIcon } from "lucide-react";
 import { validationTargetFromNodes } from "../../lib/validationTargetFromNodes";
 import { fetchDeepAuditOutput, fetchDeepAudits, startDeepAudit } from "../../services/nodeIssuesService";
 import type { DeepAuditRun, DeepAuditSummary } from "../../types/api";
 import type { NvisNamingSchema } from "../../types/naming";
+import { ActionCardFace, withoutBubbling } from "../widgets/ActionCardFace";
+import { useOrientationFromGrid } from "../widgets/ActionCardGrid";
 
 type AuditKind = "hardware" | "network";
 type WorkflowId = "hardware-deep-audit" | "nvlink-network-deep-audit";
@@ -81,6 +83,7 @@ export function DeepAuditCard({
   icon: Icon,
 }: DeepAuditCardProps) {
   const workflowId: WorkflowId = kind === "hardware" ? "hardware-deep-audit" : "nvlink-network-deep-audit";
+  const fromGrid = useOrientationFromGrid();
   const [runs, setRuns] = useState<DeepAuditRun[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -149,51 +152,49 @@ export function DeepAuditCard({
 
   return (
     <>
-      <Card style={{ padding: 20 }}>
-        <Flex gap="3" align="start">
-          <div style={{ color: "var(--text-color-secondary)", marginTop: 2 }}>
-            <Icon size={20} />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Flex gap="2" align="center" wrap="wrap" style={{ marginBottom: 4 }}>
-              <Text kind="body/bold/md">{title}</Text>
-              {latest && (
-                <Tag color={stateColor(latest.state)} kind="outline" readOnly density="compact">
-                  {latest.state}
-                </Tag>
-              )}
-              {latestSummary && latestSummary.failed > 0 && (
-                <Tag color="red" kind="solid" readOnly density="compact">
-                  {latestSummary.failed} failed · {latestSummary.drained} drained
-                </Tag>
-              )}
-            </Flex>
-            <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-              {description}
-            </Text>
-            {error && (
-              <Text kind="body/regular/sm" style={{ display: "block", color: "#d32f2f", marginTop: 6 }}>
-                {error}
-              </Text>
+      <ActionCardFace
+        title={title}
+        category={kind === "hardware" ? "hardware" : "networking"}
+        description={description}
+        orientation={fromGrid}
+        selected={loading || active}
+        // The error goes in the description's slot, in warning colour: the card has one line
+        // for prose, and "the last refresh failed" is more useful than a description the
+        // operator has already read. Purely presentational — the run button's own `disabled`
+        // below is what actually gates the launch.
+        blockedReason={error || null}
+        status={
+          <>
+            {latest && (
+              <Tag color={stateColor(latest.state)} kind="outline" readOnly density="compact">
+                {latest.state}
+              </Tag>
             )}
-          </div>
-          <Flex gap="2" align="center">
-            <Button kind="secondary" size="small" onClick={() => setResultsOpen(true)}>
-              <ClipboardList size={15} />
-              Results
-            </Button>
-            <Button
-              kind="primary"
-              size="small"
-              disabled={disabled || loading || active || !target}
-              onClick={() => setConfirmOpen(true)}
-            >
-              <Play size={15} />
-              {loading || active ? "Running…" : "Start Tests"}
-            </Button>
-          </Flex>
-        </Flex>
-      </Card>
+            {latestSummary && latestSummary.failed > 0 && (
+              <Tag color="red" kind="solid" readOnly density="compact">
+                {latestSummary.failed} failed · {latestSummary.drained} drained
+              </Tag>
+            )}
+          </>
+        }
+        // Details *is* Results here, so the card's click opens the run history rather than a
+        // paragraph nobody needs twice. Non-destructive, which is what makes a card-sized
+        // click target acceptable on a control that drains nodes.
+        onDetails={() => setResultsOpen(true)}
+        detailsLabel="Results"
+        actions={
+          <Button
+            kind="secondary"
+            color="brand"
+            size="small"
+            disabled={disabled || loading || active || !target}
+            onClick={withoutBubbling(() => setConfirmOpen(true))}
+          >
+            <Play size={15} style={{ marginRight: 6 }} />
+            {loading || active ? "Running…" : "Start Tests"}
+          </Button>
+        }
+      />
 
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>{title}</DialogTitle>
@@ -215,6 +216,7 @@ export function DeepAuditCard({
       <Dialog open={resultsOpen && !outputOpen} onClose={() => setResultsOpen(false)} maxWidth="xl" fullWidth>
         <DialogTitle>
           <Flex align="center" gap="2">
+            <Icon size={18} />
             <span style={{ flex: 1 }}>{title} results — {rack}</span>
             <Button kind="secondary" size="small" onClick={() => void refresh()}>
               <RefreshCw size={14} /> Refresh

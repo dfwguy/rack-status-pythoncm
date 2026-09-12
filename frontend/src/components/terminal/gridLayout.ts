@@ -126,25 +126,9 @@ export function appendToLayout(
   ];
 }
 
-/**
- * Whether two layouts describe the same arrangement.
- *
- * react-grid-layout emits onLayoutChange when it mounts, and again whenever it re-normalises,
- * handing back a layout that is frequently identical to the one it was given. The grid's consumer
- * stores that in state and persists it, so echoing it back unchanged means a pointless state
- * update and a localStorage write on every mount -- and, because each update is a fresh object,
- * a standing invitation to a render loop.
- */
-export function sameLayout(a: LayoutItem[], b: LayoutItem[]): boolean {
-  if (a.length !== b.length) return false;
-  const byId = new Map(a.map((l) => [l.i, l]));
-  return b.every((item) => {
-    const prev = byId.get(item.i);
-    return (
-      !!prev && prev.x === item.x && prev.y === item.y && prev.w === item.w && prev.h === item.h
-    );
-  });
-}
+// Shared with the tool-widget board: the echo behaviour it guards against is the library's,
+// not the terminal's. Re-exported so this module stays the one import for pane placement.
+export { sameLayout } from "../../lib/gridLayoutCore";
 
 /**
  * Drop a pane and close the vertical gap it leaves.

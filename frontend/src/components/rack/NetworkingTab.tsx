@@ -9,8 +9,8 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import Box from "@mui/material/Box";
 import { ActionCard } from "./ActionCard";
+import { ActionCardGrid } from "../widgets/ActionCardGrid";
 import { Network, RotateCcw, ShieldCheck, ScanSearch, Map, Radio } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
 import { attachLogDir } from "../../lib/rackCommandBodies";
@@ -52,7 +52,7 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
   };
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+    <ActionCardGrid>
       <DeepAuditCard
         rack={rack}
         selectedNodes={selectedNodes}
@@ -65,6 +65,7 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
       />
       <ActionCard
         title="NVSwitch Fix"
+        category="networking"
         description={`Run NVSwitch recovery (NMXC cycle) for ${rack}.`}
         icon={<Network size={20} />}
         buttonLabel="Fix"
@@ -74,6 +75,7 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
       />
       <ActionCard
         title="NVSwitch SDN Reset"
+        category="networking"
         description={`Reset NVSwitch SDN controller for ${rack}.`}
         icon={<RotateCcw size={20} />}
         buttonLabel="SDN Reset"
@@ -83,6 +85,7 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
       />
       <ActionCard
         title="NVSwitch System Reset"
+        category="networking"
         description={`Full NVLink system reset for ${rack} (first NVSwitch host from inventory).`}
         icon={<Radio size={20} />}
         buttonLabel="System Reset"
@@ -93,6 +96,7 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
       />
       <ActionCard
         title="NVSwitch Audit"
+        category="networking"
         description={`Stream live NVSwitch audit for ${rack} (check-only).`}
         icon={<ShieldCheck size={20} />}
         buttonLabel="Audit"
@@ -104,6 +108,7 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
       />
       <ActionCard
         title="NVSwitch Check"
+        category="networking"
         description={`Async NVSwitch health check for ${rack}.`}
         icon={<ScanSearch size={20} />}
         buttonLabel="Check"
@@ -113,6 +118,7 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
       />
       <ActionCard
         title="NVLMapper"
+        category="networking"
         description={`Run NVLMapper topology analysis on ${rack}.`}
         icon={<Map size={20} />}
         buttonLabel="Run NVLMapper"
@@ -120,6 +126,6 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("NVLMapper", "nmxc", "/api/nvlmapper-async", { rack })}
       />
-    </Box>
+    </ActionCardGrid>
   );
 }

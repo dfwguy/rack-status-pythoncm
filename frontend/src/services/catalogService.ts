@@ -100,3 +100,27 @@ export async function saveProject(p: Partial<Project>): Promise<Project> {
 
 export const deleteProject = (id: string) =>
   apiJson<{ deleted: string }>(`/api/catalog/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+// ---- Board bundles -------------------------------------------------------
+
+/** One item's outcome from an import. `skipped` is usually a missing permission. */
+export interface BoardImportResult {
+  key: string;
+  status: "applied" | "skipped" | "failed";
+  detail: string;
+}
+
+/**
+ * Apply the approved items of a board bundle.
+ *
+ * One request rather than a `saveTool` per item, because the permission to *import* a shared
+ * board is its own thing (`catalog.board:import`) and the server decides per item whether the
+ * caller may create or overwrite. Writing item-by-item from here would gate on tool-editing
+ * permissions alone and leave no record of the import as a single act.
+ */
+export async function importBoardBundle(
+  bundle: unknown,
+  approve: string[],
+): Promise<{ applied: number; results: BoardImportResult[] }> {
+  return apiJson("/api/boards/import", jsonInit("POST", { bundle, approve }));
+}

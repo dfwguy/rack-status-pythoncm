@@ -80,3 +80,68 @@ body {
   display: flex;
   flex-direction: column;
 }
+
+/*
+ * Horizontal action cards size their own media column.
+ *
+ * KUI's default is `.nv-card-media { flex: 1; aspect-ratio: 400/234 }`. In a *vertical* card
+ * that is exactly right and is left alone — `flex: 1` fills the column and the ratio scales the
+ * banner as a CSS grid widens the card.
+ *
+ * In a horizontal card the same two rules are wrong together, and only at full width: `flex: 1`
+ * gives the media an equal share of the ROW, so a 1450px-wide card puts a ~700px media column
+ * beside the text, and the aspect ratio then derives a ~410px height from that width — a card
+ * four times taller than its contents, with the artwork stranded at one end. Styling the inner
+ * <img> cannot fix either half: KUI absolutely positions it inside this wrapper, so the wrapper
+ * is what has to be pinned.
+ *
+ * The width comes from `widgetLayout.HORIZONTAL_CARD_METRICS` via a custom property, so the
+ * number the card draws and the number the height budget assumes cannot drift apart.
+ *
+ * Specificity note: KUI's selector is `.nv-card-root .nv-card-media` (two classes), so this
+ * matches it and wins on import order — index.css is imported after styles/kaizen/components.css.
+ */
+/*
+ * A vertical card's banner is a fixed height, not a fixed proportion.
+ *
+ * KUI's `flex: 1` + `aspect-ratio: 400/234` sizes the banner from the card's width, which is
+ * right for a hero card and wrong for a grid whose columns are 340px in Customise mode and
+ * ~475px three-across on a wide pane: the same rule draws a 199px banner in one and a 278px
+ * banner in the other, so widening the window grows the whole board instead of the picture.
+ *
+ * It also leaves the height indeterminate, and that is what produced the void under the
+ * buttons: `.nv-card-media` and `.nv-card-content` both carry `flex: 1`, so slack goes to the
+ * content box, which is `align-items: flex-start` and parks its child at the top.
+ */
+.nvis-action-card--vertical.nv-card-root .nv-card-media {
+  flex: 0 0 var(--nvis-card-media-h);
+  aspect-ratio: auto;
+}
+
+/*
+ * ...and the content block fills what is left, so any residual slack sits *above* the button
+ * row rather than below it. `.nv-card-content` is a grid with `align-items: flex-start`, hence
+ * the explicit stretch: without it the block is shrink-to-fit and top-aligned no matter what
+ * the row height turns out to be.
+ */
+.nvis-action-card.nv-card-root .nv-card-content > * {
+  align-self: stretch;
+  height: 100%;
+}
+
+.nvis-action-card--horizontal.nv-card-root .nv-card-media {
+  /*
+   * Scaled rather than fixed, because "horizontal" covers two very different cards: a stacked
+   * card on a phone (~360px, where the floor is what keeps the text column usable) and a
+   * standalone full-width card like the NVLink preflight (~1450px, where the same floor would
+   * be a 9% sliver that reads as an accent bar rather than a picture). The ceiling stops the
+   * artwork from crowding out prose on an ultrawide window.
+   *
+   * 18% lands near the artwork's own 400/234 ratio at desktop width, so the crop stays light.
+   */
+  flex: 0 0 clamp(var(--nvis-card-media-w), 18%, var(--nvis-card-media-w-max));
+  aspect-ratio: auto;
+  /* align-self rather than a height: the row's height is set by the text column, and the
+     artwork crops to whatever that comes to. */
+  align-self: stretch;
+}

@@ -210,12 +210,19 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
     <>
       <ActionCard
         title="NVLink Preflight — run this first"
+        category="validation"
         description={
           `Per-node NVLink / NVLS readiness gate on ${selectedNodes.size} selected node(s) in ${rack}. ` +
           "Checks GPU enumeration, 18 NVLinks, the P2P matrix, fabric registration, IMEX domain and dmesg, " +
           "and (full mode) forces an NVLink all_reduce under timeout with a RoCE control leg — the only check " +
           "that detects a wedged NVSwitch route, which otherwise makes NCCL and NeMo hang. Run before Stage 1."
         }
+        // Horizontal, and the only card in the app that asks for it by name: this is one
+        // prominent full-width card above the board, not a cell in a grid, and its description
+        // is a paragraph. KUI documents `horizontal` for exactly that — content-led cards that
+        // stand alone — and the wide text column is what keeps the summary line readable.
+        orientation="horizontal"
+        subtitle={`${selectedNodes.size} node(s) · ${quick ? "quick" : "full"} mode`}
         icon={<ShieldCheck size={20} />}
         buttonLabel={running ? "Checking…" : "Run Preflight"}
         status={running ? "running" : summary ? (summary.ready ? "success" : "error") : "idle"}

@@ -9,9 +9,16 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
+// The tab's launch actions now come from the Tool catalog, so these assertions moved with
+// them: they used to read strings out of hand-written ActionCards, and they now drive the
+// widget board with catalog documents. The *properties* being pinned are unchanged, because
+// they are operational rather than cosmetic — GPT-OSS stays single-node on this surface, and
+// the cross-rack Llama profile stays discoverable from here even though it runs elsewhere.
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ValidationTab } from "./ValidationTab";
+import type { Tool } from "../../types/catalog";
+import { fromTool } from "../widgets/boardActions";
 
 vi.mock("../../context/RackCommandContext", () => ({
   useRackCommands: () => ({
@@ -23,35 +30,128 @@ vi.mock("../../context/RackCommandContext", () => ({
 }));
 vi.mock("./NvlinkPreflightPanel", () => ({ NvlinkPreflightPanel: () => null }));
 vi.mock("./ValidationActivitiesTable", () => ({ ValidationActivitiesTable: () => null }));
+vi.mock("../../context/ActiveClusterContext", () => ({
+  useActiveCluster: () => ({ activeCluster: { id: "test-cluster" }, version: 0 }),
+}));
+
+const { boardActionsMock } = vi.hoisted(() => ({ boardActionsMock: vi.fn() }));
+vi.mock("../../hooks/useBoardActions", () => ({ useBoardActions: boardActionsMock }));
+
+beforeAll(() => {
+  if (!("ResizeObserver" in globalThis)) {
+    (globalThis as Record<string, unknown>).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  }
+});
+
+/** Mirrors the documents `backend/catalog/seed.py` puts on this surface. */
+function preset(id: string, over: Partial<Tool> = {}): Tool {
+  return {
+    id,
+    name: id,
+    category: "performance",
+    script: "run-validation-preset.sh",
+    env_key: "RACK_VALIDATION_PRESET_SCRIPT",
+    params: [],
+    compatible: { match: "all", capabilities: [], platform_ids: [] },
+    surfaces: ["rackDetail.validation"],
+    execution: { mode: "async", target: "rack" },
+    description: `${id} description`,
+    ai_context: "",
+    status: "ga",
+    source: "seed",
+    subtitle: "",
+    button_label: "Plan",
+    icon: "",
+    image: "",
+    destructive: false,
+    order: 100,
+    launch: {
+      kind: "validation-preset",
+      endpoint: "",
+      preset_id: id,
+      dialog: "",
+      scopes: ["rack"],
+      body: {},
+      confirm: false,
+      min_nodes: 0,
+      max_nodes: 0,
+    },
+    ...over,
+  };
+}
+
+const GPT_OSS_SINGLE_NODE = preset("preset-gpt-oss-node", {
+  name: "GPT-OSS CPU Microbenchmark",
+  subtitle: "Exactly one node",
+  button_label: "Plan GPT-OSS",
+  launch: {
+    ...preset("x").launch,
+    preset_id: "gpt-oss-cpu",
+    scopes: ["node"],
+    min_nodes: 1,
+    max_nodes: 1,
+  },
+});
+
+beforeEach(() => {
+  boardActionsMock.mockReset();
+  boardActionsMock.mockReturnValue({
+    // Adapted through `fromTool`, the way the real hook builds them.
+    actions: [
+      GPT_OSS_SINGLE_NODE,
+      preset("preset-nemo", { name: "NeMo Validation", subtitle: "NeMo 26.04.01 · 50 steps" }),
+      preset("preset-mnubergemm", {
+        name: "MNUberGEMM",
+        subtitle: "26.03-v1.17 · 60-minute ceiling",
+      }),
+    ].map(fromTool),
+    loading: false,
+    error: null,
+    workflowError: null,
+    reload: vi.fn(),
+  });
+});
+
+function renderTab(nodes: string[]) {
+  return render(
+    <ValidationTab rack="d01" selectedNodes={new Set(nodes)} disabled={false} />,
+  );
+}
 
 describe("ValidationTab pinned recipes", () => {
-  it("labels the proven Llama run as fixed at 50 steps and shows exact image inventory", () => {
-    render(
-      <ValidationTab
-        rack="d01"
-        selectedNodes={new Set(["d01-01"])}
-        disabled={false}
-      />,
-    );
-
-    expect(screen.getByText("Llama 3.1 405B FP8 — 1024 GPUs / 50 Steps")).toBeInTheDocument();
-    expect(screen.getByText(/256-node \/ 1024-GPU multirack validation/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Multirack Only" })).toBeDisabled();
-    expect(screen.getByText("NeMo 26.04.01 Validation")).toBeInTheDocument();
-    expect(screen.getByText("MNUberGEMM 26.03-v1.17 Validation")).toBeInTheDocument();
+  it("shows the pinned versions from the catalog, not from component source", () => {
+    renderTab(["d01-01"]);
+    expect(screen.getByText("NeMo 26.04.01 · 50 steps")).toBeInTheDocument();
+    expect(screen.getByText("26.03-v1.17 · 60-minute ceiling")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Plan GPT-OSS" })).toBeEnabled();
   });
 
-  it("does not permit the single-node GPT-OSS overhead benchmark on multiple nodes", () => {
-    render(
-      <ValidationTab
-        rack="d01"
-        selectedNodes={new Set(["d01-01", "d01-02"])}
-        disabled={false}
-      />,
-    );
+  it("keeps the cross-rack Llama profile discoverable from this tab", () => {
+    // It runs from Multirack, but an operator standing on a rack still has to be told where.
+    renderTab(["d01-01"]);
+    expect(screen.getByText(/Llama 3\.1 405B FP8/)).toBeInTheDocument();
+    expect(screen.getByText(/256-node \/ 1024-GPU/)).toBeInTheDocument();
+  });
 
+  it("does not permit the single-node GPT-OSS overhead benchmark on multiple nodes", () => {
+    renderTab(["d01-01", "d01-02"]);
     expect(screen.getByRole("button", { name: "Plan GPT-OSS" })).toBeDisabled();
-    expect(screen.getByText(/exactly one selected node/i)).toBeInTheDocument();
+    expect(screen.getByText(/exactly 1 node/i)).toBeInTheDocument();
+  });
+
+  it("reports a catalog it could not load instead of showing an empty tab", () => {
+    boardActionsMock.mockReturnValue({
+      actions: [],
+      loading: false,
+      error: "503 Service Unavailable",
+      workflowError: null,
+      reload: vi.fn(),
+    });
+    renderTab(["d01-01"]);
+    expect(screen.getByText(/Could not load the tool catalog/)).toBeInTheDocument();
   });
 });

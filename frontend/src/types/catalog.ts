@@ -57,6 +57,31 @@ export interface ToolCompatibility {
   platform_ids: string[];
 }
 
+/**
+ * Which launcher a widget's button uses. The backend owns this set
+ * (`catalog.models.LAUNCH_KINDS`) so a document can name a launcher but never a URL we do
+ * not serve; `planToolLaunch` in `lib/toolLaunch.ts` is the frontend half.
+ */
+export type ToolLaunchKind = "validation-preset" | "async-job" | "stream" | "dialog" | "none";
+
+export interface ToolLaunch {
+  kind: ToolLaunchKind;
+  /** Same-origin `/api/...` path, for `async-job` and `stream`. */
+  endpoint: string;
+  /** Recipe id in the preset engine, for `validation-preset`. */
+  preset_id: string;
+  /** Required for `dialog`; elsewhere an options dialog shown before the request goes out. */
+  dialog: string;
+  /** Target scopes this widget offers; empty means the tool's own `execution.target`. */
+  scopes: string[];
+  /** Merged into the request the launcher builds. */
+  body: Record<string, unknown>;
+  confirm: boolean;
+  /** Selection size this widget accepts; 0 means unbounded. A surface rule, not the recipe's. */
+  min_nodes: number;
+  max_nodes: number;
+}
+
 /** A runnable script described as a document, mapped to compatible platforms. */
 export interface Tool {
   id: string;
@@ -72,6 +97,18 @@ export interface Tool {
   ai_context: string;
   status: string;
   source: string;
+  /** Short qualifier under the title — version, scope, duration. */
+  subtitle: string;
+  /** Button text; empty falls back to the surface default. */
+  button_label: string;
+  /** Lucide icon name; unknown names fall back to the category default. */
+  icon: string;
+  /** Card banner override; empty uses the per-category artwork. */
+  image: string;
+  destructive: boolean;
+  /** Default board position. Ties break on name. */
+  order: number;
+  launch: ToolLaunch;
   /** Present only when fetched via `?cluster=` compatibility filter. */
   compatible_with_platform?: boolean;
 }

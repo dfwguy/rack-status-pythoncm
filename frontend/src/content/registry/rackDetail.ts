@@ -215,17 +215,36 @@ export const rackDetailContent: HelpContent[] = [
     kind: "component",
     title: "Action card",
     domain: "Compute",
-    summary: "Reusable run-action card with confirm dialog and status.",
+    summary: "Reusable run-action card with an Info panel, confirm dialog, and status.",
     description:
-      "ActionCard is the reusable building block for rack commands. It shows the action, the node scope, a confirmation dialog before running, a status tag, and surfaces the streamed result.",
-    features: ["Confirmation before running.", "Shows node scope and status.", "Streams the command result."],
+      "ActionCard is the reusable building block for rack commands. Each card carries a category badge, artwork for that category, the action's name and a one-line summary, and two buttons: Info, which opens the full description, and the action itself, which confirms before running. Clicking anywhere on the card opens Info — never the action — so a mis-click on a destructive control such as Drain or BMC Recovery costs nothing. Where nodes are selected, the confirmation lists every hostname before anything runs. A status tag reports Running, Done or Error, and the card is highlighted while its run is in flight. The cards share their appearance with the catalog-driven widgets on the Validation board.",
+    features: [
+      "Info button and card click open the full description; only the action button runs it.",
+      "Confirmation lists every selected node by name before running.",
+      "Category badge and artwork, matching the tool catalog's categories.",
+      "Status tag (Running / Done / Error) and a highlight while in flight.",
+      "Destructive actions are styled in the danger palette and say so in the confirmation.",
+      "Streams the command result.",
+    ],
     howTo: [
-      { task: "Run an action", steps: ["Click the action card.", "Confirm in the dialog.", "Watch the status tag and streamed output."] },
+      {
+        task: "Read what an action does before running it",
+        steps: ["Click the card, or its Info button.", "Read the full description.", "Close the panel."],
+      },
+      {
+        task: "Run an action",
+        steps: [
+          "Select nodes if the action is node-scoped.",
+          "Press the action's own button (Run, Drain, Reset BMC, ...).",
+          "Check the node list in the confirmation, then confirm.",
+          "Watch the status tag and streamed output.",
+        ],
+      },
     ],
     related: ["validationTab", "hardwareTab", "networkingTab", "servicesTab", "commandStreamDialog"],
-    keywords: ["action", "card", "run", "command", "confirm", "status"],
-    aria: { label: "Action card", description: "Run-action card with a confirmation dialog, node scope, and status, that streams the command result." },
-    aiContext: "ActionCard is the reusable rack-command card: shows node scope, confirms before running, shows a status tag, and streams the result.",
+    keywords: ["action", "card", "run", "command", "confirm", "status", "info", "details", "category"],
+    aria: { label: "Action card", description: "Run-action card with an Info panel, a confirmation dialog listing the selected nodes, node scope, and status, that streams the command result." },
+    aiContext: "ActionCard is the reusable rack-command card: a category badge and artwork, a one-line summary with the full text behind Info, and an action button that confirms (listing every selected node) before running. Clicking the card body opens Info, not the action, because these controls are destructive. It shows a status tag and streams the result, and shares its appearance with the catalog-driven Validation board widgets.",
   },
   {
     id: "commandStreamDialog",

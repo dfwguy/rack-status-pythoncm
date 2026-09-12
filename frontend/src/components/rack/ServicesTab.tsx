@@ -9,8 +9,8 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import Box from "@mui/material/Box";
 import { ActionCard } from "./ActionCard";
+import { ActionCardGrid } from "../widgets/ActionCardGrid";
 import { RefreshCw, Info, FileText } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
 import { specsCommandBody, validationFamilyBody } from "../../lib/rackCommandBodies";
@@ -29,9 +29,10 @@ export function ServicesTab({ rack, logDir, naming, selectedNodes, disabled }: S
   const nodeCount = selectedNodes.size;
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+    <ActionCardGrid>
       <ActionCard
         title="Restart Services"
+        category="maintenance"
         description={`Restart services on ${nodeCount} selected node(s): mount -a, munge, slurmd, nvidia-imex, nvidia-dcgm.`}
         icon={<RefreshCw size={20} />}
         buttonLabel="Restart"
@@ -43,6 +44,7 @@ export function ServicesTab({ rack, logDir, naming, selectedNodes, disabled }: S
       />
       <ActionCard
         title="System Info"
+        category="hardware"
         description={`Stream live system info from ${nodeCount} selected node(s). GPU status, driver, fabric manager.`}
         icon={<Info size={20} />}
         buttonLabel="View Sysinfo"
@@ -58,11 +60,12 @@ export function ServicesTab({ rack, logDir, naming, selectedNodes, disabled }: S
       />
       <ActionCard
         title="Tail Log"
+        category="maintenance"
         description={`Live tail the latest NEMO validation log for ${rack}. Streams output in real time.`}
         icon={<FileText size={20} />}
         buttonLabel="Tail Log"
         onRun={() => openTailLogNemo()}
       />
-    </Box>
+    </ActionCardGrid>
   );
 }

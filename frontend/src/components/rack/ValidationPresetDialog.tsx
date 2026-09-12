@@ -33,7 +33,6 @@ import {
   buildValidationPresetRequest,
   formatPresetRequirements,
   type ValidationPreset,
-  type ValidationPresetId,
   type ValidationPresetPlan,
   type ValidationPresetPrepareResponse,
   type ValidationPresetRequest,
@@ -51,7 +50,14 @@ const STORAGE_ITEMS = [
 interface ValidationPresetDialogProps {
   open: boolean;
   onClose: () => void;
-  presetId: ValidationPresetId;
+  /**
+   * Recipe id. A plain string, not the `ValidationPresetId` union: a widget's id comes from
+   * the catalog at runtime, so a union compiled into this bundle cannot be the gate. The
+   * server refuses an unknown id in `resolve_preset`.
+   */
+  presetId: string;
+  /** Title while the server catalogue loads; the fetched label wins once it arrives. */
+  fallbackLabel?: string;
   scope: ValidationScope;
   nodes?: Iterable<string>;
   racks?: Iterable<string>;
@@ -70,6 +76,7 @@ export function ValidationPresetDialog({
   open,
   onClose,
   presetId,
+  fallbackLabel,
   scope,
   nodes,
   racks,
@@ -90,9 +97,12 @@ export function ValidationPresetDialog({
   const [preparing, setPreparing] = useState(false);
   const [launching, setLaunching] = useState(false);
 
-  const preset = presets.find((item) => item.id === presetId) ?? {
+  // Typed as a full ValidationPreset so the placeholder and the fetched record are the same
+  // shape: with catalog-supplied ids the placeholder is now reachable for recipes this bundle
+  // has never heard of, and a narrower fallback would make every optional field a union.
+  const preset: ValidationPreset = presets.find((item) => item.id === presetId) ?? {
     id: presetId,
-    label: VALIDATION_PRESET_LABELS[presetId],
+    label: VALIDATION_PRESET_LABELS[presetId] ?? fallbackLabel ?? presetId,
     description: "Validated cluster recipe. Server defaults and requirements load from the active cluster.",
     kind: presetId,
   };

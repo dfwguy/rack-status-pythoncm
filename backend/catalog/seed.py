@@ -331,6 +331,12 @@ def _tool(
     capabilities: list[str] | None = None,
     description: str = "",
     ai_context: str = "",
+    subtitle: str = "",
+    button_label: str = "",
+    icon: str = "",
+    destructive: bool = False,
+    order: int = 100,
+    launch: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     compatible: dict[str, Any]
     if capabilities:
@@ -351,7 +357,69 @@ def _tool(
         "ai_context": ai_context,
         "status": "ga",
         "source": "seed",
+        "subtitle": subtitle,
+        "button_label": button_label,
+        "icon": icon,
+        "destructive": destructive,
+        "order": order,
+        # A tool with no launch binding is catalogued but has no widget button. Binding is
+        # opt-in per tool so seeding this field cannot turn a reference entry into something
+        # an operator can fire by accident.
+        "launch": launch or {"kind": "none"},
     }
+
+
+def _preset_tool(
+    tool_id: str,
+    name: str,
+    subtitle: str,
+    description: str,
+    preset_id: str,
+    surfaces: list[str],
+    target: str,
+    order: int,
+    *,
+    category: str = "validation",
+    capabilities: list[str] | None = None,
+    scopes: list[str] | None = None,
+    min_nodes: int = 0,
+    max_nodes: int = 0,
+) -> dict[str, Any]:
+    """A vetted recipe from the preset engine, as a catalog document.
+
+    The *recipe* (pins, image digests, node eligibility, plan hash) stays in
+    ``validation_presets.py`` where it is code-owned and cannot be weakened from a browser.
+    What moves here is everything the UI was hard-coding anyway: that the button exists, what
+    it is called, which surface it belongs on, and what it says. That is the split the version
+    drift came from -- ``run-validation-preset.sh`` moved to NCCL 2.31.2 while three
+    components still read 2.30.7 out of their own source.
+    """
+    return _tool(
+        tool_id,
+        name,
+        category,
+        "run-validation-preset.sh",
+        "RACK_VALIDATION_PRESET_SCRIPT",
+        surfaces,
+        "async",
+        target,
+        capabilities=capabilities,
+        description=description,
+        subtitle=subtitle,
+        button_label="Plan",
+        icon="ClipboardCheck",
+        order=order,
+        launch={
+            "kind": "validation-preset",
+            "preset_id": preset_id,
+            "scopes": scopes or [target],
+            # MNUberGEMM is a soak, not an acceptance result; everything else files as
+            # validation. See the note on mnubergemm-stress.
+            "body": {"family": "stress"} if preset_id.startswith("mnubergemm") else {},
+            "min_nodes": min_nodes,
+            "max_nodes": max_nodes,
+        },
+    )
 
 
 SEED_TOOLS: list[dict[str, Any]] = [
@@ -411,15 +479,37 @@ SEED_TOOLS: list[dict[str, Any]] = [
         ),
     ),
     _tool(
-        "validation-singlerack", "Singlerack Validation (NCCL + NEMO)", "validation",
+        "validation-singlerack", "Stage 2 — NEMO Training", "validation",
         "run_singlerack.sh", "RACK_VALIDATION_SCRIPT", ["rackDetail.validation"], "async", "rack",
         description="NCCL collectives + Nemotron training validation for one rack.",
         ai_context="run_singlerack runs NCCL all-reduce and a Nemotron training step per rack.",
+        subtitle="NCCL + LLMB, all trays",
+        button_label="Run NEMO",
+        icon="Brain",
+        order=30,
+        launch={
+            "kind": "async-job",
+            "endpoint": "/api/run-validation-async",
+            "dialog": "launch-options",
+        },
     ),
     _tool(
         "nccl-fullrack-rounds", "NCCL Benchmark (Stage-1)", "validation",
         "nccl_fullrack_rounds.sh", "RACK_NCCL_FULLRACK_SCRIPT", ["rackDetail.validation"], "async", "rack",
         capabilities=["nvlink"],
+        subtitle="5 rounds all_reduce, 1K–16G",
+        button_label="Run NCCL",
+        icon="Activity",
+        order=20,
+        launch={
+            "kind": "async-job",
+            "endpoint": "/api/run-nccl-fullrack-async",
+            "dialog": "launch-options",
+            # Which controls the options dialog offers. Only the direct NCCL paths resolve
+            # libnccl via LD_LIBRARY_PATH, so only they can honour a version choice; a
+            # container launch would show a selector that does nothing.
+            "body": {"show_nccl_version": True, "show_iters": True},
+        },
         description="Standalone Stage-1 NCCL acceptance: N rounds of all_reduce (1K..16G) via the working portable launcher.",
         ai_context=(
             "nccl_fullrack_rounds runs the Stage-1 NCCL acceptance test (default 5 rounds of "
@@ -433,31 +523,58 @@ SEED_TOOLS: list[dict[str, Any]] = [
         ["multirack"], "async", "multirack",
         description="Cross-rack Nemotron training validation.",
     ),
+    # Catalogued, deliberately not bound: the rack Validation tab has only ever shown a
+    # *disabled* Llama card pointing at multirack, so giving it a working button here would be
+    # a behaviour change smuggled in under a refactor. No binding means no widget, which is
+    # its status quo on a fresh install and on an upgrade alike. Bind it in the Tool Registry
+    # if a site wants it.
     _tool(
         "llama", "Llama Training", "performance", "run-llama.sh", "RACK_LLAMA_SCRIPT",
         ["rackDetail.validation"], "async", "rack",
         description="Llama training workload.",
+        order=60,
     ),
     _tool(
         "clusterkit", "ClusterKit Bandwidth/Latency", "performance", "run_clusterkit.sh",
-        "RACK_CLUSTERKIT_SCRIPT", ["rackDetail.networking"], "async", "rack",
+        "RACK_CLUSTERKIT_SCRIPT", ["rackDetail.networking", "rackDetail.validation"], "async", "rack",
         capabilities=["nvlink"],
         description="ClusterKit interconnect bandwidth/latency sweep (CPU->HCA affinity aware).",
+        subtitle="IB bandwidth per HCA",
+        button_label="Run ClusterKit",
+        icon="Network",
+        order=80,
+        launch={"kind": "async-job", "endpoint": "/api/run-clusterkit-async"},
     ),
     _tool(
         "nvloom", "NVLoom Singlerack", "performance", "run_nvloom_singlerack.sh",
-        "RACK_NVLOOM_SINGLERACK_SCRIPT", ["rackDetail.networking"], "async", "rack",
+        "RACK_NVLOOM_SINGLERACK_SCRIPT", ["rackDetail.networking", "rackDetail.validation"], "async", "rack",
         capabilities=["nvlink"],
         description="NVLoom NVLink bandwidth heatmaps for one rack.",
+        subtitle="GPU-to-rack fabric heatmaps",
+        button_label="Run nvloom",
+        icon="Boxes",
+        order=75,
+        launch={"kind": "async-job", "endpoint": "/api/run-nvloom-async"},
     ),
     _tool(
         "llmb-nccl", "NCCL Microbenchmark (LLMB)", "performance", "run_llmb_nccl.sh",
-        "RACK_LLMB_NCCL_SCRIPT", ["rackDetail.networking", "tools"], "async", "rack",
+        "RACK_LLMB_NCCL_SCRIPT",
+        ["rackDetail.networking", "rackDetail.validation", "tools"], "async", "rack",
         capabilities=["nvlink"],
         description=(
             "NCCL microbenchmark via dgxc-benchmarking llmb-run (microbenchmark_nccl, fp8). "
             "Resolves NVIS rack ids to real Slurm nodes and computes GPU scale (nodes*4)."
         ),
+        subtitle="llmb-run microbenchmark_nccl, fp8",
+        button_label="Run LLMB NCCL",
+        icon="Gauge",
+        order=85,
+        launch={
+            "kind": "async-job",
+            "endpoint": "/api/run-llmb-nccl-async",
+            "dialog": "launch-options",
+            "body": {"show_nccl_version": True, "show_iters": True},
+        },
         ai_context=(
             "run_llmb_nccl wraps llmb-run submit -w microbenchmark_nccl -d fp8 (MOP §7.3). "
             "Single-rack GB300 NVL72 = scale 72 (18 nodes * 4 GPUs). It resolves the real "
@@ -483,6 +600,17 @@ SEED_TOOLS: list[dict[str, Any]] = [
         "RACK_MNUBERGEMM_STRESS_SCRIPT", ["rackDetail.validation"], "async", "rack",
         capabilities=["mnnvl"],
         description="Multi-node NVLink GEMM stress (NVL72 MNNVL domains).",
+        subtitle="Single-node soak, not the multi-node test",
+        button_label="Run Stress",
+        icon="Flame",
+        order=70,
+        # "stress" rather than "validation": the command store files activities by family, and
+        # a soak run listed as a validation result is a result nobody asked for.
+        launch={
+            "kind": "async-job",
+            "endpoint": "/api/run-mnubergemm-stress-async",
+            "body": {"family": "stress"},
+        },
     ),
     _tool(
         "gpu-reset", "GPU Reset", "maintenance", "gpu_reset.sh", "RACK_GPU_RESET_SCRIPT",
@@ -521,6 +649,81 @@ SEED_TOOLS: list[dict[str, Any]] = [
         "parser", "Log Parser (NCCL/NEMO charts)", "validation", "parser.sh", "RACK_PARSER_SCRIPT",
         ["parserDialog"], "sync", "rack",
         description="Parse NCCL/Nemotron logs into chartable JSON.",
+    ),
+    # No surface, for the same reason as `llama` above: the Validation tab already devotes a
+    # dedicated panel to preflight, because this is the one action whose *verdict* is the
+    # output. A widget would render a second button for it beside a richer one.
+    _tool(
+        "nvlink-preflight", "NVLink Preflight — run this first", "validation",
+        "nvlink_preflight.sh", "RACK_NVLINK_PREFLIGHT_SCRIPT",
+        [], "async", "rack",
+        capabilities=["nvlink"],
+        description=(
+            "Per-node NVLink/IMEX/fabric readiness check. A rack that fails here will fail "
+            "Stage 1 in a way that looks like a benchmark problem."
+        ),
+        subtitle="Run before Stage 1",
+        button_label="Run Preflight",
+        icon="ShieldCheck",
+        order=10,
+        launch={"kind": "async-job", "endpoint": "/api/nvlink-preflight-async"},
+    ),
+    # --- vetted recipes, folded in from validation_presets.PRESETS -----------------------
+    # These were a second frozen registry: a Python tuple, a mirrored TypeScript union, and a
+    # hard-coded button row in each view. The recipe stays code-owned; the catalogue entry is
+    # now a document, so adding one is an edit rather than a release.
+    _preset_tool(
+        "preset-nccl", "NCCL Acceptance Sweep", "NCCL 2.31.2 · CUDA 13.3+",
+        "Direct host NCCL acceptance sweep. Fails closed unless the selected runtime really "
+        "is CUDA 13.3+ with NCCL 2.31.2.",
+        "nccl-2.31.2", ["rackDetail.validation", "multirack"], "rack", 15,
+        capabilities=["nvlink"], scopes=["node", "rack", "multirack"],
+    ),
+    _preset_tool(
+        "preset-llama405b", "Llama 3.1 405B FP8", "1024 GPUs · 50 steps · NCCL 2.30.7",
+        "The fixed 256-node profile: TP4/PP8/CP1/VP4, MBS1, GBS6144, FP8, NVLS disabled.",
+        "llama31-405b-fp8", ["multirack"], "multirack", 40,
+        category="performance", scopes=["multirack"],
+    ),
+    # Two documents for one recipe, because the two surfaces offer it on different terms. The
+    # rack tab has always gated it to exactly one node ("no GPU training workload or rack
+    # fanout is included"); the multirack view fans it out across the selection. That was an
+    # `if nodeCount !== 1` in a component, which is the kind of per-surface rule the catalog
+    # can hold now that a binding carries selection bounds.
+    _preset_tool(
+        "preset-gpt-oss-node", "GPT-OSS CPU Microbenchmark", "Exactly one node",
+        "CPU-overhead validation (kernel-launch latency and tokenizer path) on a single "
+        "selected node. No GPU training workload and no rack fan-out.",
+        "gpt-oss-cpu", ["rackDetail.validation"], "node", 45,
+        category="performance", scopes=["node"], min_nodes=1, max_nodes=1,
+    ),
+    _preset_tool(
+        "preset-gpt-oss", "GPT-OSS CPU Microbenchmark", "One job per selected node",
+        "CPU-overhead validation (kernel-launch latency and tokenizer path). No training "
+        "workload; each node is independently attributable.",
+        "gpt-oss-cpu", ["multirack"], "multirack", 45,
+        category="performance", scopes=["node", "rack", "multirack"],
+    ),
+    _preset_tool(
+        "preset-exemplar-sysinfo", "DGXC Exemplar system_info", "dgxc-benchmarking v26.06.01",
+        "Runs microbenchmark_system_info once per selected node and preserves each Slurm "
+        "stdout.",
+        "exemplar-system-info", ["rackDetail.hardware", "multirack"], "rack", 50,
+        category="hardware", scopes=["node", "rack", "multirack"],
+    ),
+    _preset_tool(
+        "preset-nemo", "NeMo Validation", "NeMo 26.04.01 · 50 steps",
+        "NeMo-only rack or multi-rack validation with the staged 26.04.01 ARM image.",
+        "nemo-26.04.01", ["rackDetail.validation", "multirack"], "rack", 35,
+        scopes=["rack", "multirack"],
+    ),
+    _preset_tool(
+        "preset-mnubergemm", "MNUberGEMM", "26.03-v1.17 · 60-minute ceiling",
+        "Node, rack or multi-rack MNUberGEMM using the container actually staged on the "
+        "fleet. Multirack fans out one job per rack — a single allocation spanning two racks "
+        "joins two NVLink domains and hangs.",
+        "mnubergemm-26.03-v1.17", ["rackDetail.validation", "multirack"], "rack", 55,
+        capabilities=["mnnvl"], scopes=["node", "rack", "multirack"],
     ),
 ]
 
@@ -596,11 +799,65 @@ def build_default_project_from_env(env: dict[str, str] | None = None) -> models.
 # ---------------------------------------------------------------------------
 
 
+# Fields the widget work added to ``Tool``. A document written before it has none of these
+# keys at all, which is what makes the backfill below safe: absent is unambiguous, whereas a
+# present-but-default value could be a deliberate operator choice.
+_WIDGET_FIELDS = ("subtitle", "button_label", "icon", "destructive", "order", "launch")
+
+# Surfaces to ADD to an existing document, never to remove.
+#
+# These three tools have always been rendered on the rack Validation tab while their seed
+# documents only claimed `rackDetail.networking` -- the placement lived in the component, so
+# nothing kept the two honest. Now that the board reads `surfaces`, an already-seeded
+# deployment would lose three buttons it has today unless the old documents are told. Keyed
+# by tool id and additive, so an operator who curated their own surface list keeps it.
+_SURFACE_BACKFILL = {
+    "clusterkit": ["rackDetail.validation"],
+    "nvloom": ["rackDetail.validation"],
+    "llmb-nccl": ["rackDetail.validation"],
+}
+
+
+def _backfill_tool_widgets(repo: Repo) -> int:
+    """Teach pre-widget Tool documents about launch bindings, without clobbering edits.
+
+    ``migrate`` only ever *inserts* seed tools, so operator edits survive a boot. The same
+    property means a schema addition never reaches an existing deployment: every already-
+    seeded cluster -- which is all of them -- would keep launch-less documents and render an
+    empty board, silently losing every button on the Validation tab.
+
+    So this fills in **only keys the stored document does not have**. An old document has no
+    ``launch`` key whatsoever, so there is nothing to overwrite; a document saved since has
+    one, and is left exactly as the operator left it. That is why the check is
+    ``key not in raw`` rather than a comparison against the default -- ``order: 100`` or
+    ``launch.kind == "none"`` are legitimate operator choices and must survive.
+    """
+    changed = 0
+    by_id = {t["id"]: t for t in SEED_TOOLS}
+    for raw in repo.list(TABLE_TOOLS):
+        seed_doc = by_id.get(raw.get("id"))
+        if seed_doc is None:
+            continue  # an operator's own tool; we have no opinion about it
+        patch = {k: seed_doc[k] for k in _WIDGET_FIELDS if k not in raw and k in seed_doc}
+        wanted = _SURFACE_BACKFILL.get(raw.get("id"), [])
+        have = raw.get("surfaces")
+        if wanted and isinstance(have, list):
+            missing = [s for s in wanted if s not in have]
+            if missing:
+                patch["surfaces"] = [*have, *missing]
+        if not patch:
+            continue
+        repo.upsert(TABLE_TOOLS, models.Tool.from_dict({**raw, **patch}).to_dict())
+        changed += 1
+    return changed
+
+
 def migrate(repo: Repo, *, env: dict[str, str] | None = None) -> dict[str, Any]:
     """Idempotently seed/migrate the catalog. Returns a small summary for logging."""
     summary: dict[str, Any] = {
         "platforms_added": 0,
         "tools_added": 0,
+        "tools_backfilled": 0,
         "default_project_created": False,
     }
 
@@ -613,6 +870,7 @@ def migrate(repo: Repo, *, env: dict[str, str] | None = None) -> dict[str, Any]:
         if repo.get(TABLE_TOOLS, t["id"]) is None:
             repo.upsert(TABLE_TOOLS, models.Tool.from_dict(t).to_dict())
             summary["tools_added"] += 1
+    summary["tools_backfilled"] = _backfill_tool_widgets(repo)
 
     # On first run, create a default project from the environment and make it active.
     if not repo.list(TABLE_PROJECTS):

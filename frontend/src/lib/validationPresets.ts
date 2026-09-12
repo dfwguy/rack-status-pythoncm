@@ -9,7 +9,15 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-/** Validated recipe ids exposed by GET /api/validation-presets. */
+/**
+ * Validated recipe ids exposed by GET /api/validation-presets.
+ *
+ * Advisory since the Tool catalog started carrying recipe ids: a widget's
+ * `launch.preset_id` arrives as a plain string from the server, and a union compiled into
+ * last week's bundle cannot be the gate on what today's catalog offers. The real check is
+ * `validation_presets.resolve_preset`, which is server-side and refuses an unknown id. Keep
+ * this for the hand-written call sites that still name a recipe in code.
+ */
 export type ValidationPresetId =
   | "nccl-2.31.2"
   | "llama31-405b-fp8"
@@ -22,7 +30,8 @@ export type ValidationScope = "nodes" | "rack" | "multirack";
 export type ValidationStorage = "nfs" | "local";
 
 export interface ValidationPreset {
-  id: ValidationPresetId;
+  /** Server-supplied recipe id; a plain string since the catalog carries these (see above). */
+  id: string;
   label: string;
   description: string;
   kind: string;
@@ -37,7 +46,7 @@ export interface ValidationPresetsResponse {
 }
 
 export interface ValidationPresetRequest extends Record<string, unknown> {
-  preset_id: ValidationPresetId;
+  preset_id: string;
   scope: ValidationScope;
   nodes?: string[];
   racks?: string[];
@@ -52,7 +61,7 @@ export interface ValidationPresetRequest extends Record<string, unknown> {
 }
 
 export interface ValidationPresetPlan {
-  preset_id: ValidationPresetId;
+  preset_id: string;
   validation?: string;
   summary: string;
   scope: ValidationScope | "node";
@@ -80,7 +89,7 @@ export interface ValidationPresetPrepareResponse {
 }
 
 /** Labels remain available while the server catalog is loading or unavailable. */
-export const VALIDATION_PRESET_LABELS: Record<ValidationPresetId, string> = {
+export const VALIDATION_PRESET_LABELS: Record<string, string> = {
   "nccl-2.31.2": "NCCL 2.31.2 / CUDA 13.3+",
   "llama31-405b-fp8": "Llama 3.1 405B FP8 — 1024 GPUs / 50 steps",
   "gpt-oss-cpu": "GPT-OSS CPU overhead microbenchmark — one independent job per selected node",
@@ -92,7 +101,7 @@ export const VALIDATION_PRESET_LABELS: Record<ValidationPresetId, string> = {
 export const LOCAL_CONTAINER_DIR = "/tmp/containers" as const;
 
 export function buildValidationPresetRequest(args: {
-  presetId: ValidationPresetId;
+  presetId: string;
   scope: ValidationScope;
   nodes?: Iterable<string>;
   racks?: Iterable<string>;

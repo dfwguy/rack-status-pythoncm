@@ -65,6 +65,57 @@ EXEC_MODES = ("async", "sync", "stream")
 EXEC_TARGETS = ("rack", "multirack", "cluster", "node")
 STATUSES = ("ga", "preview", "future", "deprecated")
 
+# How a widget on a launch surface actually starts a tool.
+#
+# Code owns this set; a document only *names* one and supplies its arguments. That is the
+# whole point: an operator adds a button by writing a Tool document, and the frontend gains
+# no new code path -- and cannot be pointed at an arbitrary URL, because the launcher decides
+# what it is allowed to call.
+#
+#   validation-preset  the audited recipe path (ValidationPresetDialog -> prepare -> launch)
+#   async-job          POST <endpoint>, then poll <endpoint minus -async> + "-status"
+#   stream             a streaming endpoint rendered in the live output dialog
+#   dialog             hands off to a named frontend dialog that builds its own body
+#   none               catalogued but not launchable from a widget (reference entries)
+LAUNCH_KINDS = ("validation-preset", "async-job", "stream", "dialog", "none")
+
+# Endpoints are same-origin API paths only. A document is operator-editable, so an absolute
+# URL here would let a catalog edit aim a button at another host; the shape is pinned rather
+# than trusted.
+_ENDPOINT_RE = re.compile(r"^/api/[A-Za-z0-9][A-Za-z0-9._~/-]*$")
+
+# ``script`` is a path *relative to* the scripts directory, and it reaches a shell.
+#
+# `workflow_engine` resolves a registered tool as ``bash <scripts_dir>/<script>`` and hands the
+# string to the execution host, where a remote shell interprets it. So this field is not
+# metadata: an unconstrained value is command injection (``a.sh; curl …|sh``) or traversal
+# (``../../..``), and an *absolute* value escapes silently because ``Path("/dir") / "/abs"``
+# discards the left side entirely.
+#
+# Hence a deliberately narrow alphabet: no whitespace, no shell metacharacters, no leading
+# slash. Sub-directories are allowed because a site may group its scripts; ``.`` and ``..``
+# segments are not. A site that keeps a script *outside* the scripts directory uses
+# ``env_key``, which is the documented mechanism for relocating one.
+_SCRIPT_RE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
+
+# An env var name, because ``env_key`` is looked up in the process environment.
+_ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def safe_script_ref(script: str) -> bool:
+    """Is *script* safe to interpolate into ``bash <scripts_dir>/<script>``?
+
+    Public so the *consumption* site can re-check rather than trust the store: a catalog file
+    can be edited by hand on the box, which skips the write-path validation entirely. Same
+    reasoning as ``toolLaunch.isOwnApiPath`` on the frontend — cheap to check, and the failure
+    it prevents is arbitrary command execution on the head node.
+    """
+    s = (script or "").strip()
+    if not s or not _SCRIPT_RE.match(s):
+        return False
+    return not any(part in (".", "..") for part in s.split("/"))
+
+
 # --- NPI Knowledge Portal vocabulary (mirrors reports/site/portal_model.py) ---
 # These drive the imported reference catalog (see catalog.npi_import). Kept as tuples
 # for UI hints; unknown values are tolerated (the upstream catalog may add more).
@@ -146,6 +197,16 @@ def _as_bool(v: Any) -> bool:
 
 def _as_dict(v: Any) -> dict[str, Any]:
     return dict(v) if isinstance(v, dict) else {}
+
+
+def _as_int(v: Any, default: int) -> int:
+    # bool is an int subclass; True would silently become 1 and look like a position.
+    if isinstance(v, bool):
+        return default
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def _as_dict_list(v: Any) -> list[dict[str, Any]]:
@@ -317,6 +378,81 @@ class ToolParam:
 
 
 @dataclass
+class ToolLaunch:
+    """What happens when an operator presses a tool's widget button.
+
+    ``kind`` selects a launcher the frontend implements (see :data:`LAUNCH_KINDS`); the
+    remaining fields are that launcher's arguments. ``body`` is merged into the request the
+    launcher builds, so per-cluster knobs (a container tag, an iteration count) live on the
+    document instead of in a component.
+
+    ``dialog`` is *required* for ``kind="dialog"`` and *optional* everywhere else, where it
+    names an options dialog to collect operator input before the request goes out -- which is
+    how Stage 1 and Stage 2 keep their existing launch-review step.
+
+    ``kind="none"`` means the tool is catalogued but has no button -- the default, so an
+    existing document keeps rendering as reference material until someone binds it.
+    """
+
+    kind: str = "none"
+    endpoint: str = ""  # async-job | stream
+    preset_id: str = ""  # validation-preset
+    dialog: str = ""  # dialog
+    scopes: list[str] = field(default_factory=list)  # subset of EXEC_TARGETS; [] == the tool's own
+    body: dict[str, Any] = field(default_factory=dict)
+    confirm: bool = False  # force the confirm step even without a node selection
+    # Selection size this widget accepts; 0 == unbounded. This is a *surface* constraint, not
+    # the recipe's -- the engine still enforces its own. GPT-OSS is the worked example: the
+    # rack tab has always offered it as a single-node benchmark while the multirack view fans
+    # it out across hundreds, so the two are two documents with different bounds rather than
+    # one document with an `if` in a component.
+    min_nodes: int = 0
+    max_nodes: int = 0
+
+    @classmethod
+    def from_dict(cls, d: Any) -> ToolLaunch:
+        d = _as_dict(d)
+        return cls(
+            kind=_as_str(d.get("kind")).lower() or "none",
+            endpoint=_as_str(d.get("endpoint")),
+            preset_id=_as_str(d.get("preset_id")),
+            dialog=_as_str(d.get("dialog")),
+            scopes=[s.lower() for s in _as_str_list(d.get("scopes"))],
+            body=_as_dict(d.get("body")),
+            confirm=_as_bool(d.get("confirm")),
+            min_nodes=_as_int(d.get("min_nodes"), 0),
+            max_nodes=_as_int(d.get("max_nodes"), 0),
+        )
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        if self.kind not in LAUNCH_KINDS:
+            problems.append(f"unknown launch.kind {self.kind!r} (expected one of {LAUNCH_KINDS})")
+            return problems
+        if self.kind in ("async-job", "stream"):
+            if not self.endpoint:
+                problems.append(f"launch.kind={self.kind!r} requires launch.endpoint")
+            elif not _ENDPOINT_RE.match(self.endpoint) or ".." in self.endpoint:
+                problems.append(
+                    f"launch.endpoint {self.endpoint!r} must be a same-origin /api/... path"
+                )
+        if self.kind == "validation-preset" and not self.preset_id:
+            problems.append("launch.kind='validation-preset' requires launch.preset_id")
+        if self.kind == "dialog" and not self.dialog:
+            problems.append("launch.kind='dialog' requires launch.dialog")
+        for scope in self.scopes:
+            if scope not in EXEC_TARGETS:
+                problems.append(f"unknown launch.scope {scope!r} (expected one of {EXEC_TARGETS})")
+        if self.min_nodes < 0 or self.max_nodes < 0:
+            problems.append("launch.min_nodes / launch.max_nodes cannot be negative")
+        elif self.max_nodes and self.min_nodes > self.max_nodes:
+            problems.append(
+                f"launch.min_nodes ({self.min_nodes}) exceeds launch.max_nodes ({self.max_nodes})"
+            )
+        return problems
+
+
+@dataclass
 class ToolCompatibility:
     """How a tool is matched to platforms.
 
@@ -360,6 +496,21 @@ class Tool:
     ai_context: str = ""
     status: str = "ga"
     source: str = "user"
+    # --- widget presentation -------------------------------------------------
+    # What the operator reads on the button. ``name`` is the title and ``description`` the
+    # body, both already present; these are the parts a card needs that a registry entry did
+    # not have. Keeping them on the document is what makes "we now ship NCCL 2.31.2" one edit
+    # instead of a code change in every component that names the version.
+    subtitle: str = ""  # short qualifier under the title (version, scope, duration)
+    button_label: str = ""  # "" == the surface's default ("Run")
+    icon: str = ""  # lucide icon name; unknown names fall back to the category default
+    # Card banner. "" == the frontend's per-category artwork, which is the normal case: the
+    # shipped set covers every category, so a document only names one to override it. A URL or
+    # an app-relative path; the frontend does not fetch anything cross-origin for it.
+    image: str = ""
+    destructive: bool = False  # renders the danger variant and forces a confirm
+    order: int = 100  # default board position; ties break on name
+    launch: ToolLaunch = field(default_factory=ToolLaunch)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Tool:
@@ -380,6 +531,13 @@ class Tool:
             ai_context=_as_str(d.get("ai_context")),
             status=_as_str(d.get("status")) or "ga",
             source=_as_str(d.get("source")) or "user",
+            subtitle=_as_str(d.get("subtitle")),
+            button_label=_as_str(d.get("button_label")),
+            icon=_as_str(d.get("icon")),
+            image=_as_str(d.get("image")),
+            destructive=_as_bool(d.get("destructive")),
+            order=_as_int(d.get("order"), 100),
+            launch=ToolLaunch.from_dict(d.get("launch")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -393,6 +551,18 @@ class Tool:
             problems.append("tool name is required")
         if not self.script:
             problems.append("tool script (basename) is required")
+        elif not safe_script_ref(self.script):
+            problems.append(
+                f"invalid tool script {self.script!r}: expected a path relative to the scripts "
+                "directory using letters, digits, '.', '_', '-' and '/' only (no '..', no "
+                "leading '/'). To run a script kept elsewhere, set env_key instead."
+            )
+        if self.env_key and not _ENV_KEY_RE.match(self.env_key):
+            problems.append(
+                f"invalid tool env_key {self.env_key!r}: expected an environment variable name "
+                "(upper-case letters, digits and underscores)"
+            )
+        problems.extend(self.launch.validate())
         if self.category and self.category not in TOOL_CATEGORIES:
             problems.append(f"unknown category {self.category!r} (expected one of {TOOL_CATEGORIES})")
         mode = self.execution.get("mode")

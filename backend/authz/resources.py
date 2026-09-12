@@ -296,8 +296,16 @@ _RESOLVERS: dict[str, Extractor] = {
     "auth.password": _singleton,
     "auth.srp": _singleton,
     "catalog": _singleton,
+    # Importing a shared board is an instance-level act: the question is "may this principal
+    # apply a peer's board here", not "may they apply it to board X". The per-item questions
+    # *are* scoped, but they are asked against the resource being written
+    # (`catalog.tool:<id>`, `workflow:<id>`) inside the handler, so they reuse those types
+    # rather than needing one of their own.
+    "catalog.board": _singleton,
     "cluster": _singleton,
     "comments": _singleton,
+    # One documentation site per deployment; there is no id to narrow a grant to.
+    "docs": _singleton,
     "logs": _singleton,
     "nvftp": _singleton,
     "oidc.token": _singleton,

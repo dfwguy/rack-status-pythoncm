@@ -11,17 +11,29 @@
  */
 import { useState } from "react";
 import Box from "@mui/material/Box";
-import { Text, Divider } from "@nvidia/foundations-react-core";
+import { Banner, Text, Divider } from "@nvidia/foundations-react-core";
 import { ActionCard } from "./ActionCard";
+import { ActionCardGrid } from "../widgets/ActionCardGrid";
 import { NvlinkPreflightPanel } from "./NvlinkPreflightPanel";
 import { LaunchOptionsDialog } from "./LaunchOptionsDialog";
 import { ValidationActivitiesTable } from "./ValidationActivitiesTable";
-import { Play, Flame, Zap, Boxes, FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine, Network, Gauge, Activity, Cpu, Database } from "lucide-react";
+import { FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
+import { useActiveCluster } from "../../context/ActiveClusterContext";
+import { useBoardActions } from "../../hooks/useBoardActions";
+import { ToolWidgetBoard } from "../widgets/ToolWidgetBoard";
+import WorkflowRunPanel from "../workflow/WorkflowRunPanel";
+import { startWorkflowRun } from "../../services/workflowService";
+import { nodeSelectionProblem, planToolLaunch, statusUrlFor } from "../../lib/toolLaunch";
 import { slurmTargetBody, validationFamilyBody, type LaunchOptions } from "../../lib/rackCommandBodies";
+import { asNodeCmdKind, type NodeCmdKind } from "../../lib/rackCommandTypes";
 import { ValidationPresetDialog } from "./ValidationPresetDialog";
-import { VALIDATION_PRESET_LABELS, type ValidationPresetId, type ValidationPresetRequest } from "../../lib/validationPresets";
+import type { ValidationScope } from "../../lib/validationPresets";
+import type { BoardAction } from "../widgets/boardActions";
 import type { NvisNamingSchema } from "../../types/naming";
+
+/** The board this tab renders. Tools are seeded onto it in `backend/catalog/seed.py`. */
+const SURFACE = "rackDetail.validation";
 
 interface ValidationTabProps {
   rack: string;
@@ -40,6 +52,8 @@ interface PendingLaunch {
   statusUrl: (jobId: string) => string;
   /** Modal title/subtitle for context. */
   title: string;
+  /** Which activity family the run is filed under — "validation" unless a tool says "stress". */
+  family: NodeCmdKind;
   /**
    * Show the NCCL library-version selector — only for the direct NCCL path
    * (run-llmb-nccl-async → nccl_allreduce.sbatch), which resolves libnccl via
@@ -50,11 +64,29 @@ interface PendingLaunch {
   showIters?: boolean;
 }
 
+/** A preset launch awaiting the prepare/review gate, plus the widget that asked for it. */
+interface PendingPreset {
+  presetId: string;
+  label: string;
+  family: NodeCmdKind;
+  scope: ValidationScope;
+}
+
+/** The activity family a tool's launch body asks for, narrowed to the palette's union. */
+function familyOf(body: Record<string, unknown>): NodeCmdKind {
+  const value = body.family;
+  return asNodeCmdKind(typeof value === "string" ? value : undefined);
+}
+
 export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, jobId, onViewResults }: ValidationTabProps) {
   const { runAsyncValidationFamily, launchAsyncValidationFamily, runSyncJson, openText } = useRackCommands();
+  const { activeCluster, activeProject, activePlatform } = useActiveCluster();
+  const { actions, loading: toolsLoading, error: toolsError, reload: reloadActions } =
+    useBoardActions();
   const nodeCount = selectedNodes.size;
   const [pendingLaunch, setPendingLaunch] = useState<PendingLaunch | null>(null);
-  const [presetDialog, setPresetDialog] = useState<ValidationPresetId | null>(null);
+  const [pendingPreset, setPendingPreset] = useState<PendingPreset | null>(null);
+  const [workflowRunId, setWorkflowRunId] = useState<string | null>(null);
 
   const validationBody = () => validationFamilyBody(rack, logDir, selectedNodes, naming);
 
@@ -64,11 +96,90 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
     if (!p) return;
     void runAsyncValidationFamily(
       p.label,
-      "validation",
+      p.family,
       p.postUrl,
       p.statusUrl,
       validationFamilyBody(rack, logDir, selectedNodes, naming, opts),
     );
+  };
+
+  /**
+   * Turn a widget press into a launch, using the machinery this tab already owns.
+   *
+   * The widget itself never POSTs. Everything still goes through the options dialog, the
+   * preset prepare/review gate and the command store, so a catalog-driven button and a
+   * hand-written one are the same launch with the same audit trail — the document only
+   * decides which of them runs.
+   */
+  const runTool = (action: BoardAction) => {
+    // A workflow is not a catalog tool: the engine owns its run surface, and the board's rack
+    // context is passed as parameters so a flow authored generically lands on the right rack.
+    if (action.kind === "workflow") {
+      void startWorkflowRun(action.id, {
+        rack,
+        target: [...selectedNodes].sort().join(","),
+      })
+        .then((res) => setWorkflowRunId(res.run_id))
+        .catch((err: unknown) =>
+          openText(
+            action.name,
+            `Could not start the workflow: ${err instanceof Error ? err.message : String(err)}`,
+            true,
+          ),
+        );
+      return;
+    }
+    const tool = action.tool;
+    if (!tool) return;
+    const plan = planToolLaunch(tool);
+    switch (plan.kind) {
+      case "validation-preset": {
+        // A recipe that accepts single nodes launches per-node when exactly one is picked;
+        // otherwise the whole rack. The scope list is the catalog's, not a hard-coded id check.
+        const perNode = plan.scopes.includes("node") && nodeCount === 1;
+        setPendingPreset({
+          presetId: plan.presetId,
+          label: tool.name,
+          family: familyOf(tool.launch.body ?? {}),
+          scope: perNode ? "nodes" : "rack",
+        });
+        return;
+      }
+      case "async-job": {
+        const family = familyOf(plan.body);
+        if (plan.dialog === "launch-options") {
+          setPendingLaunch({
+            label: tool.name,
+            postUrl: plan.endpoint,
+            statusUrl: (jid) => statusUrlFor(plan.endpoint, jid),
+            title: `Launch ${tool.name}`,
+            family,
+            showNcclVersion: plan.body.show_nccl_version === true,
+            showIters: plan.body.show_iters === true,
+          });
+          return;
+        }
+        void runAsyncValidationFamily(
+          tool.name,
+          family,
+          plan.endpoint,
+          (jid) => statusUrlFor(plan.endpoint, jid),
+          validationBody(),
+        );
+        return;
+      }
+      default:
+        // `stream`, `dialog` and `unsupported` have no handler on this surface yet. Say so
+        // rather than no-op: a button that does nothing when pressed is indistinguishable
+        // from a stalled cluster.
+        openText(
+          tool.name,
+          `This action cannot be launched from the Validation tab: ${
+            plan.kind === "unsupported" ? plan.reason : `unsupported launch kind "${plan.kind}"`
+          }.`,
+          true,
+        );
+    }
   };
 
   return (
@@ -89,52 +200,46 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       <Divider />
 
       <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)" }}>
-        Validation Stages
+        Validation Actions
+      </Text>
+      <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginTop: -8 }}>
+        These come from the Tool catalog for this cluster, so a new script or a version bump
+        appears here without a release. Cross-rack work — Stage 3 and the Llama 3.1 405B FP8
+        256-node / 1024-GPU profile — runs from Multirack Validation.
       </Text>
 
-      <ActionCard
-        title="NCCL 2.31.2 Validation"
-        description={`Run the pinned NCCL-only acceptance recipe on ${nodeCount} selected node(s). Requires CUDA 13.3+, mounts /dev/infiniband, and verifies NCCL 2.31.2 before testing.`}
-        icon={<Gauge size={20} />}
-        buttonLabel="Plan NCCL"
-        disabled={disabled}
-        onRun={() => setPresetDialog("nccl-2.31.2")}
-      />
+      {toolsError ? (
+        <Banner status="warning" kind="inline">
+          Could not load the tool catalog ({toolsError}). Validation actions are unavailable
+          until it loads.
+        </Banner>
+      ) : null}
 
-      <ActionCard
-        title="Stage 1 — NCCL Benchmark"
-        description={`Stage-1 NCCL acceptance on ${nodeCount} selected node(s) in ${rack}, submitted via llmb-run (workload microbenchmark_nccl): the full 24-test sweep across all_reduce / all_gather / reduce_scatter / alltoall / sendrecv up to 16G, including the NVLS variants. Writes an NCCL-1Rack log to log_dir so it appears on the dashboard + parser results.`}
-        icon={<Activity size={20} />}
-        buttonLabel="Run NCCL"
-        disabled={disabled}
-        selectedNodes={selectedNodes}
-        onRun={() =>
-          setPendingLaunch({
-            label: "NCCL Benchmark (Stage-1)",
-            postUrl: "/api/run-nccl-fullrack-async",
-            statusUrl: (jid) => `/api/run-nccl-fullrack-status?job_id=${encodeURIComponent(jid)}`,
-            title: "Launch Stage-1 NCCL Benchmark",
-            showNcclVersion: true,
-            showIters: true,
-          })
-        }
-      />
-      <ActionCard
-        title="Stage 2 — NEMO Training (NCCL + LLMB)"
-        description={`Stage-2 single-rack validation on ${nodeCount} selected node(s) in ${rack}, both halves submitted via llmb-run: the NCCL sweep (microbenchmark_nccl) followed by Nemotron-H 56B fp8 pretraining (pretrain_nemotron-h). Slurm serialises the two jobs on the rack.`}
-        icon={<Play size={20} />}
-        buttonLabel="Run NEMO"
-        disabled={disabled}
-        selectedNodes={selectedNodes}
-        onRun={() =>
-          setPendingLaunch({
-            label: "NEMO validation",
-            postUrl: "/api/run-validation-async",
-            statusUrl: (jid) => `/api/run-validation-status?job_id=${encodeURIComponent(jid)}`,
-            title: "Launch Stage-2 NEMO Training",
-          })
-        }
-      />
+      {toolsLoading ? (
+        <Text kind="body/regular/sm" style={{ color: "var(--text-color-subtle)" }}>
+          Loading actions…
+        </Text>
+      ) : (
+        <ToolWidgetBoard
+          surface={SURFACE}
+          actions={actions}
+          clusterId={activeCluster?.id}
+          disabled={disabled}
+          blockedReason={(action) =>
+            action.tool ? nodeSelectionProblem(action.tool, nodeCount) : null
+          }
+          onRun={runTool}
+          // Stamped into an exported bundle and compared on import, so a board shared between
+          // deployments says where it came from and warns on a platform mismatch.
+          bundleSource={{
+            product_version: "",
+            cluster: activeCluster?.id ?? "",
+            platform: activePlatform?.id ?? "",
+            customer: activeProject?.customer ?? "",
+          }}
+          onCatalogChanged={reloadActions}
+        />
+      )}
 
       {logDir?.trim() ? (
         <>
@@ -149,162 +254,56 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         <Divider />
       </div>
       <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)" }}>
-        Optional Tests &amp; Diagnostics
-      </Text>
-      <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginTop: -8 }}>
-        Stage 3 (cross-rack) runs from the multi-rack action menu.
-      </Text>
-
-      <ActionCard
-        title="Llama 3.1 405B FP8 — 1024 GPUs / 50 Steps"
-        description="The proven Llama 3.1 405B FP8 recipe is a 256-node / 1024-GPU multirack validation pinned to TP4 PP8 CP1 VP4, 50 steps, NeMo 26.04.01, NCCL 2.30.7, and NVLS disabled. Launch it from Multirack Validation."
-        icon={<Flame size={20} />}
-        buttonLabel="Multirack Only"
-        disabled
-      />
-      <ActionCard
-        title="GPT-OSS CPU Overhead Microbenchmark — Single Node"
-        description="Run only the GPT-OSS CPU overhead microbenchmark on exactly one selected node. No GPU training workload or rack fanout is included."
-        icon={<Cpu size={20} />}
-        buttonLabel="Plan GPT-OSS"
-        disabled={disabled || nodeCount !== 1}
-        onRun={() => setPresetDialog("gpt-oss-cpu")}
-      />
-      <ActionCard
-        title="NeMo 26.04.01 Validation"
-        description={`Run only the pinned NeMo 26.04.01 validation recipe on ${nodeCount} selected node(s), with NFS or node-local container staging.`}
-        icon={<Database size={20} />}
-        buttonLabel="Plan NeMo"
-        disabled={disabled}
-        onRun={() => setPresetDialog("nemo-26.04.01")}
-      />
-      <ActionCard
-        title="MNUberGEMM 26.03-v1.17 Validation"
-        description={`Run only the available MNUberGEMM 26.03-v1.17 image on ${nodeCount} selected node(s), with optional rsync staging to /tmp/containers.`}
-        icon={<Zap size={20} />}
-        buttonLabel="Plan MNUberGEMM"
-        disabled={disabled}
-        onRun={() => setPresetDialog("mnubergemm-26.03-v1.17")}
-      />
-      <ActionCard
-        title="Run Stress"
-        description={`Launch MNUBERGEMM stress test on ${nodeCount} selected node(s) in ${rack}. Sustained GPU compute load for burn-in and thermal validation.`}
-        icon={<Zap size={20} />}
-        buttonLabel="Run Stress"
-        disabled={disabled}
-        selectedNodes={selectedNodes}
-        onRun={() =>
-          runAsyncValidationFamily(
-            "MNUBERGEMM stress",
-            "stress",
-            "/api/run-mnubergemm-stress-async",
-            (jid) => `/api/run-mnubergemm-stress-status?job_id=${encodeURIComponent(jid)}`,
-            validationBody(),
-          )
-        }
-      />
-      <ActionCard
-        title="Run nvloom"
-        description={`Launch nvloom (gpu-to-rack / fabric) on ${nodeCount} selected node(s) in ${rack} via Slurm. Slurm stdout: log_dir/nvloom/$USER-NVLOOM-${rack}-<jobid>.txt (NEMO-style naming).`}
-        icon={<Boxes size={20} />}
-        buttonLabel="Run nvloom"
-        disabled={disabled}
-        selectedNodes={selectedNodes}
-        onRun={() =>
-          runAsyncValidationFamily(
-            "nvloom",
-            "validation",
-            "/api/run-nvloom-async",
-            (jid) => `/api/run-nvloom-status?job_id=${encodeURIComponent(jid)}`,
-            validationBody(),
-          )
-        }
-      />
-      <ActionCard
-        title="Run ClusterKit"
-        description={`Launch HPC-X ClusterKit (IB bandwidth per HCA) on ${nodeCount} selected node(s) in ${rack}. Slurm stdout: log_dir/clusterkit/$USER-CK-${rack}-<jobid>.txt; artifacts under log_dir/clusterkit/${rack}/.`}
-        icon={<Network size={20} />}
-        buttonLabel="Run ClusterKit"
-        disabled={disabled}
-        selectedNodes={selectedNodes}
-        onRun={() =>
-          runAsyncValidationFamily(
-            "ClusterKit",
-            "validation",
-            "/api/run-clusterkit-async",
-            (jid) => `/api/run-clusterkit-status?job_id=${encodeURIComponent(jid)}`,
-            validationBody(),
-          )
-        }
-      />
-
-      <ActionCard
-        title="Run NCCL Microbenchmark (LLMB)"
-        description={`Launch the NCCL microbenchmark (llmb-run microbenchmark_nccl, fp8) on ${rack}. Resolves NVIS rack ids to real Slurm nodes and computes GPU scale (nodes*4); single rack = scale 72 on GB300 NVL72.`}
-        icon={<Gauge size={20} />}
-        buttonLabel="Run LLMB NCCL"
-        disabled={disabled}
-        selectedNodes={selectedNodes}
-        onRun={() =>
-          setPendingLaunch({
-            label: "NCCL Microbenchmark (LLMB)",
-            postUrl: "/api/run-llmb-nccl-async",
-            statusUrl: (jid) => `/api/run-llmb-nccl-status?job_id=${encodeURIComponent(jid)}`,
-            title: "Launch NCCL Microbenchmark (LLMB)",
-            showNcclVersion: true,
-            showIters: true,
-          })
-        }
-      />
-
-      <div style={{ margin: "8px 0" }}>
-        <Divider />
-      </div>
-      <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)" }}>
         Results &amp; Controls
       </Text>
 
-      <ActionCard
-        title="View Parser Results"
-        description="Parse the latest validation log and show NCCL bandwidth summary, step-time charts, and key metrics."
-        icon={<FileSearch size={20} />}
-        buttonLabel="View"
-        onRun={onViewResults}
-      />
-      <ActionCard
-        title="Cancel Running Job"
-        description="Cancel the currently running Slurm job for this rack (scancel)."
-        icon={<XCircle size={20} />}
-        buttonLabel="Cancel"
-        destructive
-        selectedNodes={selectedNodes}
-        onRun={async () => {
-          const jid = (jobId ?? "").trim();
-          if (!jid || jid === "-") {
-            openText("Slurm scancel", "No active job id for this rack (last_job missing or placeholder).", true);
-            return;
-          }
-          await runSyncJson("Slurm scancel", "/api/slurm-scancel", { rack, job_id: jid });
-        }}
-      />
-      <ActionCard
-        title="Drain Nodes"
-        description={`Drain ${nodeCount} selected node(s) — prevents new Slurm jobs from scheduling on them.`}
-        icon={<ArrowDownToLine size={20} />}
-        buttonLabel="Drain"
-        disabled={disabled}
-        selectedNodes={selectedNodes}
-        onRun={() => runSyncJson("Slurm drain", "/api/slurm-drain", slurmTargetBody(rack, selectedNodes, naming))}
-      />
-      <ActionCard
-        title="Undrain Nodes"
-        description={`Resume ${nodeCount} selected node(s) — re-enables Slurm job scheduling.`}
-        icon={<ArrowUpFromLine size={20} />}
-        buttonLabel="Undrain"
-        disabled={disabled}
-        selectedNodes={selectedNodes}
-        onRun={() => runSyncJson("Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, selectedNodes, naming))}
-      />
+      <ActionCardGrid>
+        <ActionCard
+          title="View Parser Results"
+          category="validation"
+          description="Parse the latest validation log and show NCCL bandwidth summary, step-time charts, and key metrics."
+          icon={<FileSearch size={20} />}
+          buttonLabel="View"
+          onRun={onViewResults}
+        />
+        <ActionCard
+          title="Cancel Running Job"
+          category="maintenance"
+          description="Cancel the currently running Slurm job for this rack (scancel)."
+          icon={<XCircle size={20} />}
+          buttonLabel="Cancel"
+          destructive
+          selectedNodes={selectedNodes}
+          onRun={async () => {
+            const jid = (jobId ?? "").trim();
+            if (!jid || jid === "-") {
+              openText("Slurm scancel", "No active job id for this rack (last_job missing or placeholder).", true);
+              return;
+            }
+            await runSyncJson("Slurm scancel", "/api/slurm-scancel", { rack, job_id: jid });
+          }}
+        />
+        <ActionCard
+          title="Drain Nodes"
+          category="maintenance"
+          description={`Drain ${nodeCount} selected node(s) — prevents new Slurm jobs from scheduling on them.`}
+          icon={<ArrowDownToLine size={20} />}
+          buttonLabel="Drain"
+          disabled={disabled}
+          selectedNodes={selectedNodes}
+          onRun={() => runSyncJson("Slurm drain", "/api/slurm-drain", slurmTargetBody(rack, selectedNodes, naming))}
+        />
+        <ActionCard
+          title="Undrain Nodes"
+          category="maintenance"
+          description={`Resume ${nodeCount} selected node(s) — re-enables Slurm job scheduling.`}
+          icon={<ArrowUpFromLine size={20} />}
+          buttonLabel="Undrain"
+          disabled={disabled}
+          selectedNodes={selectedNodes}
+          onRun={() => runSyncJson("Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, selectedNodes, naming))}
+        />
+      </ActionCardGrid>
 
       <LaunchOptionsDialog
         open={pendingLaunch !== null}
@@ -317,19 +316,24 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         showIters={pendingLaunch?.showIters ?? false}
       />
 
-      {presetDialog ? (
+      {workflowRunId ? (
+        <WorkflowRunPanel runId={workflowRunId} onClose={() => setWorkflowRunId(null)} />
+      ) : null}
+
+      {pendingPreset ? (
         <ValidationPresetDialog
           open
-          onClose={() => setPresetDialog(null)}
-          presetId={presetDialog}
-          scope={presetDialog === "nemo-26.04.01" ? "rack" : nodeCount === 1 ? "nodes" : "rack"}
+          onClose={() => setPendingPreset(null)}
+          presetId={pendingPreset.presetId}
+          fallbackLabel={pendingPreset.label}
+          scope={pendingPreset.scope}
           nodes={selectedNodes}
           racks={[rack]}
           logDir={logDir}
-          onLaunch={(request: ValidationPresetRequest) =>
+          onLaunch={(request) =>
             launchAsyncValidationFamily(
-              VALIDATION_PRESET_LABELS[presetDialog],
-              presetDialog === "mnubergemm-26.03-v1.17" ? "stress" : "validation",
+              pendingPreset.label,
+              pendingPreset.family,
               "/api/run-validation-preset-async",
               (jid) => `/api/run-validation-preset-status?job_id=${encodeURIComponent(jid)}`,
               request,
