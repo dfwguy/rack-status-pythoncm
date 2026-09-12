@@ -101,27 +101,35 @@ The `deb` and `rpm` targets also need metadata the AppImage does not: `fpm` refu
 `linux.maintainer` and a `homepage`. Getting that wrong fails *halfway* — the AppImage is already
 written when the deb step aborts — so it reads as a partial success rather than a config error.
 
-### Windows in Docker fails on Apple Silicon
+### Windows cannot be built on this laptop — use the `desktop-windows` CI job
 
-`npm run dist:win` uses `electronuserland/builder:24-wine` and gets ~95% of the way: both NSIS
-payloads are produced (`*-x64.nsis.7z` and `*-arm64.nsis.7z`, 96 MB each). It then dies on the last
-step, where NSIS runs the installer stub under Wine:
+`npm run dist:win` gets ~95% of the way: both NSIS payloads are produced (`*-x64.nsis.7z` and
+`*-arm64.nsis.7z`, 96 MB each). It then dies on the last step, where NSIS runs the installer stub
+under Wine to generate the uninstaller:
 
 ```
+qemu: uncaught target signal 6 (Aborted) - core dumped
 wine: dlls/ntdll/unix/virtual.c:267: anon_mmap_fixed:
 Assertion `!((UINT_PTR)start & host_page_mask)' failed.
 ```
 
-**Cause: Docker Desktop uses Rosetta for x86_64 emulation** — `docker run --privileged
-tonistiigi/binfmt` lists `rosetta` and `rosetta-wrapper` as the handlers — and Rosetta does not
-implement the `MAP_FIXED` mmap semantics Wine needs. (It is *not* a page-size mismatch, which was
-the obvious guess: the emulated container reports 4096 like any x86 Linux, even though the macOS
-host is 16384.)
+**Cause: host page size.** Wine's fixed-address mappings require 4 KB host pages, and Apple
+Silicon's 16 KB pages leak through the emulator — hence the assertion on `start & host_page_mask`.
+Two earlier readings of this were wrong in ways worth recording, because both cost time:
 
-Two ways out, in order of effort: turn off **Settings → General → "Use Rosetta for x86_64/amd64
-emulation"** in Docker Desktop, which falls back to QEMU — slower, but a full x86 CPU that
-generally runs Wine; or build Windows on an x86_64 Linux runner, where this same image works, or a
-Windows runner. The npm script is kept because it is correct anywhere but here.
+- *"It is not a page-size mismatch"* — it is. The emulated container **reports** 4096, which is
+  what made this look like something else; the assertion is about the **host's** page size, which
+  the guest cannot see.
+- *"Rosetta does not implement the `MAP_FIXED` semantics Wine needs"* — the binfmt handler is not
+  the variable. This failure now reproduces under **QEMU** (note the `qemu:` prefix above, from a
+  2026-09-11 run), so switching emulation backends does not help. `wine --version` runs fine either
+  way, which is exactly why it keeps looking like a solvable configuration problem.
+
+**The fix is not to emulate.** On a native amd64 runner there is no emulation and no assertion:
+the `desktop-windows` CI job builds all three installers in **116 seconds** (x64 90 MB, arm64
+84 MB, and a combined 173 MB one that `latest.yml` names as the update payload). Trigger it
+manually, passing the release's `BUILD_STAMP`, then download the job artifact into
+`desktop/release/` and run `scripts/publish-release.sh`.
 
 ## DMG builds on a Defender-managed Mac — use `npm run dist:mac`
 
@@ -377,18 +385,67 @@ Note `nvsec sign` (the "lighter path" in the runbook) returns `Access Denied` fo
 with the DL synced — it authenticates from `~/.nvsec.cfg`, while the `3s` subcommands use their
 own browser-OAuth token in `~/.3s/`. **Use `nvsec 3s submit`.**
 
-## Releasing a macOS build — `scripts/publish-release.sh`
+## Releasing — `scripts/publish-release.sh`
 
-Three commands, on a Mac, on VPN:
+Three platforms, three machines, **one version**. macOS must be signed on a Mac; Linux and Windows
+are built by CI on amd64 runners. The stamp is what ties them together:
 
 ```bash
 cd desktop
+
+# 1. macOS, on a Mac, on VPN. This is what decides the release's version.
 npx electron-builder --mac --dir --publish never
-scripts/sign-3s.sh
+scripts/sign-3s.sh                       # prints the stamped version, e.g. 0.3.0-260910185147
+
+# 2. Linux and Windows, in CI. Play desktop-linux / desktop-windows with
+#    BUILD_STAMP=260910185147, then download each job artifact into release/.
+#    Linux can also be built locally:  BUILD_STAMP=… npm run dist:linux
+
+# 3. Publish everything that is present.
 GITLAB_TOKEN=<pat-with-api-scope> scripts/publish-release.sh
 ```
 
 `--dry-run` prints every upload without performing one.
+
+### It publishes every platform present, and refuses a set that disagrees
+
+All three manifests (`latest-mac.yml`, `latest-linux.yml`, `latest.yml`) go to the **same**
+`latest/` feed, because that is the one URL every build was compiled to poll. So the script checks
+that they name the same version and aborts if not.
+
+That guard is not bureaucracy. Left to read the clock, each platform stamps itself with its own
+build time, and a release called `0.3.0-<stamp>` then means a different build on each platform.
+Nothing would look wrong: a client reads only its own manifest, so every platform would be
+individually satisfied while the release as a whole was incoherent. Pass `BUILD_STAMP` to every
+build of one release.
+
+Re-runs are cheap — a file already in the registry at the same size is skipped (one `HEAD` each).
+That matters because macOS is signed and published days before the containers build Linux and
+Windows, so the second and third runs would otherwise re-send a gigabyte that is already there.
+
+### What each platform ships
+
+| Platform | Artifacts | Signed? |
+|---|---|---|
+| macOS arm64 | `-arm64-notarized.zip` | Developer ID + notarized + stapled |
+| macOS x64 | *not yet built* | would need a second 3S round |
+| Linux x64 | `.AppImage` (self-updating), `.deb`, `.rpm` | n/a |
+| Windows x64 / arm64 | `-x64.exe`, `-arm64.exe`, combined `.exe` | **no** — see below |
+
+**The Windows installers are not Authenticode-signed**, so Windows shows a "Windows protected your
+PC" SmartScreen panel on first run and the user must choose *More info → Run anyway*. 3S does sign
+Windows — `nvsec sign --job-name "Windows Authenticode"` — but this account is entitled to one job
+type only:
+
+```console
+$ nvsec 3s user-jobtypes --jobtype_specifier submit
+|   Id | Name  | Display Name      | Submit Group                  |
+|  912 | MACOS | MacOS Application | access-cloudsec-3s-sign-macos |
+```
+
+Request membership of the Windows signing submit group, then add a signing step to
+`desktop-windows` mirroring `scripts/sign-3s.sh`. `publish-release.sh` prints a NOTE for every
+unsigned `.exe` rather than refusing, because an unsigned internal build is still installable.
 
 **Artifacts are never committed to git.** `release/` is gitignored deliberately: a 112 MB binary in
 history is a permanent tax on every clone, and git has no good story for large binaries. The
@@ -412,18 +469,39 @@ refused.
 
 ### It refuses to publish a stale pair
 
-The script cross-checks the artifact's SHA-512 against `latest-mac.yml` before uploading anything,
-and aborts on a mismatch. This is not a formality — electron-builder writes that manifest against
-the *unsigned* artifact, and signing changes the bytes. Publishing the mismatched pair gives you an
-auto-update that downloads, fails its integrity check and refuses, for every user, discovered only
-in the field. It also warns when the artifact carries no stapled notarization ticket, because a
-recipient sees Gatekeeper's refusal as "the download is corrupt".
+The script cross-checks every artifact's SHA-512 against the manifest that names it before
+uploading anything, and aborts on a mismatch. This is not a formality — electron-builder writes
+the manifest against the *unsigned* artifact, and signing changes the bytes. Publishing the
+mismatched pair gives you an auto-update that downloads, fails its integrity check and refuses, for
+every user, discovered only in the field. It also warns when a macOS artifact carries no stapled
+notarization ticket, because a recipient sees Gatekeeper's refusal as "the download is corrupt".
 
-## The CI job is written but disabled
+**It has already earned its keep on a defect nothing else would have caught.** The first Linux
+build wrote `NVIS Greenlight-<version>.AppImage` to disk while `latest-linux.yml` recorded the
+payload as `Greenlight-<version>.AppImage` — electron-builder does not agree with itself about
+what the space in `productName` means. The updater resolves that name against the feed URL, so
+every Linux client would have fetched a 404 and reported itself up to date forever, with the real
+update one filename away. The build looked completely clean. `linux.artifactName` now pins a
+space-free name, as `mac` and `nsis` already did.
 
-`macos-sign` in `.gitlab-ci.yml` runs the above. It is defined rather than commented out, so
-`gitlab-ci lint` parses it on every push and it cannot drift — but its rules make it *absent from
-the pipeline* unless `NVIS_ENABLE_MACOS_SIGNING` is `"true"`, and manual even then.
+## The CI jobs
+
+| Job | Runner | State |
+|---|---|---|
+| `desktop-linux` | any amd64 Docker | **manual**, ready — verified 190 s |
+| `desktop-windows` | any amd64 Docker | **manual**, ready — verified 116 s |
+| `macos-sign` | needs a macOS runner | absent unless `NVIS_ENABLE_MACOS_SIGNING=true` |
+
+`desktop-linux` and `desktop-windows` need no credential and no special runner, so they are plain
+manual jobs. Both carry `needs: []` — deliberately independent of `lint` and `test`. The desktop
+shell does not bundle the frontend (it opens the SPA the deployment serves), so a frontend lint
+error says nothing about whether the installer is correct; inheriting the stage gate meant four
+`react-refresh` errors in unrelated new components left the Windows installer unbuildable on a
+commit that had never touched `desktop/`.
+
+`macos-sign` is defined rather than commented out, so `gitlab-ci lint` parses it on every push and
+it cannot drift — but its rules make it *absent from the pipeline* unless
+`NVIS_ENABLE_MACOS_SIGNING` is `"true"`, and manual even then.
 
 Three things must exist before enabling it:
 
