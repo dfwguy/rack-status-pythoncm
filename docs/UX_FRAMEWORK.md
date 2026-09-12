@@ -164,6 +164,27 @@ flowchart TB
 | **Tools** | The scripts and programs we run today — installers (HPC-X, CUDA/NCCL, NEMO sqsh, nvloom, Grafana), workflows, the head-node/compute terminal. | "How do I run the operations and automation that act on the cluster?" |
 | **Analytics & Benchmarks** | Performance tests from infrastructure through compute (NCCL, NEMO/Nemotron, sn-llama, ClusterKit, nvloom), baseline comparison, the deviation analysis that drives troubleshooting, and the report/export surface that shares those results. | "How does this cluster perform against a known-good baseline, where is the gap, and how do I report it?" |
 
+### Note on navigation order: Tools leads
+
+The domains above are listed in the order the product is *described* — the compute hierarchy is
+the spine, and everything else attaches to it. **The sidebar does not use that order.** It puts
+**Tools first**, ahead of Compute:
+
+```text
+Tools -> Compute -> Infrastructure -> Observability -> Analytics & Benchmarks
+```
+
+This came from the Nscale TX deployment, where it was arrived at in practice rather than on
+paper, and was ported back here because it is simply better to use. The reasoning is that
+describing a product and operating one want different orders: the conceptual hierarchy explains
+what the thing *is*, but an operator mid-bring-up is not browsing a hierarchy — they are
+reaching for a script, a workflow or a terminal, many times an hour. The rail is ordered by how
+often it is reached, not by how the domains nest.
+
+The domain *definitions* are unchanged; only the ordering of the nav differs. `Sidebar.tsx`
+carries the same note at `navEntries`, so the deviation is visible from the code as well as
+from here.
+
 ### Note on Benchmarks, Analytics, and Reports
 
 The earlier draft listed "Benchmarks & Tests" as a separate domain. On reflection it belongs **under Analytics**, not Reports:

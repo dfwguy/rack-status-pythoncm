@@ -39,7 +39,7 @@ export const shellContent: HelpContent[] = [
     domain: "Shell",
     summary: "Left navigation grouped by domain, with Settings, Docs, and Help.",
     description:
-      "The Sidebar is the left navigation. It groups destinations by domain (Compute, Infrastructure, Observability, Tools, Analytics & Benchmarks) and has bottom items for Settings, Documentation, and Help. It can collapse to an icon rail.",
+      "The Sidebar is the left navigation. It groups destinations by domain (Tools, Compute, Infrastructure, Observability, Analytics & Benchmarks) and has bottom items for Settings, Documentation, and Help. Tools leads because it is what an operator reaches for most often. It can collapse to an icon rail.",
     features: ["Domain-grouped navigation.", "Collapsible to an icon rail.", "Settings, Documentation, and Help links."],
     howTo: [
       { task: "Navigate to a page", steps: ["Open the relevant domain group in the sidebar.", "Click the destination."] },
@@ -49,7 +49,7 @@ export const shellContent: HelpContent[] = [
     keywords: ["sidebar", "navigation", "menu", "nav", "drawer", "collapse"],
     aria: { label: "Sidebar navigation", description: "Left navigation grouped by domain with Settings, Documentation, and Help." },
     aiContext:
-      "The Sidebar is the left navigation grouped by domain (Compute, Infrastructure, Observability, Tools, Analytics & Benchmarks) with bottom links to Settings, Documentation, and Help; collapsible to an icon rail.",
+      "The Sidebar is the left navigation grouped by domain, in order: Tools, Compute, Infrastructure, Observability, Analytics & Benchmarks, with bottom links to Settings, Documentation, and Help; collapsible to an icon rail.",
   },
   {
     id: "toolbar",

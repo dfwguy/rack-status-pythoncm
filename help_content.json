@@ -1,6 +1,6 @@
 {
   "generated_by": "frontend/scripts/gen-help-content.mjs",
-  "count": 81,
+  "count": 82,
   "entries": [
     {
       "id": "dashboard",
@@ -1092,19 +1092,31 @@
       "kind": "component",
       "title": "Action card",
       "domain": "Compute",
-      "summary": "Reusable run-action card with confirm dialog and status.",
-      "description": "ActionCard is the reusable building block for rack commands. It shows the action, the node scope, a confirmation dialog before running, a status tag, and surfaces the streamed result.",
+      "summary": "Reusable run-action card with an Info panel, confirm dialog, and status.",
+      "description": "ActionCard is the reusable building block for rack commands. Each card carries a category badge, artwork for that category, the action's name and a one-line summary, and two buttons: Info, which opens the full description, and the action itself, which confirms before running. Clicking anywhere on the card opens Info — never the action — so a mis-click on a destructive control such as Drain or BMC Recovery costs nothing. Where nodes are selected, the confirmation lists every hostname before anything runs. A status tag reports Running, Done or Error, and the card is highlighted while its run is in flight. The cards share their appearance with the catalog-driven widgets on the Validation board.",
       "features": [
-        "Confirmation before running.",
-        "Shows node scope and status.",
+        "Info button and card click open the full description; only the action button runs it.",
+        "Confirmation lists every selected node by name before running.",
+        "Category badge and artwork, matching the tool catalog's categories.",
+        "Status tag (Running / Done / Error) and a highlight while in flight.",
+        "Destructive actions are styled in the danger palette and say so in the confirmation.",
         "Streams the command result."
       ],
       "howTo": [
         {
+          "task": "Read what an action does before running it",
+          "steps": [
+            "Click the card, or its Info button.",
+            "Read the full description.",
+            "Close the panel."
+          ]
+        },
+        {
           "task": "Run an action",
           "steps": [
-            "Click the action card.",
-            "Confirm in the dialog.",
+            "Select nodes if the action is node-scoped.",
+            "Press the action's own button (Run, Drain, Reset BMC, ...).",
+            "Check the node list in the confirmation, then confirm.",
             "Watch the status tag and streamed output."
           ]
         }
@@ -1122,13 +1134,16 @@
         "run",
         "command",
         "confirm",
-        "status"
+        "status",
+        "info",
+        "details",
+        "category"
       ],
       "aria": {
         "label": "Action card",
-        "description": "Run-action card with a confirmation dialog, node scope, and status, that streams the command result."
+        "description": "Run-action card with an Info panel, a confirmation dialog listing the selected nodes, node scope, and status, that streams the command result."
       },
-      "aiContext": "ActionCard is the reusable rack-command card: shows node scope, confirms before running, shows a status tag, and streams the result."
+      "aiContext": "ActionCard is the reusable rack-command card: a category badge and artwork, a one-line summary with the full text behind Info, and an action button that confirms (listing every selected node) before running. Clicking the card body opens Info, not the action, because these controls are destructive. It shows a status tag and streams the result, and shares its appearance with the catalog-driven Validation board widgets."
     },
     {
       "id": "commandStreamDialog",
@@ -1819,6 +1834,57 @@
         "description": "Cluster events and alerts scoped by cluster, rack, or host using the scope explorer (currently mock data)."
       },
       "aiContext": "The Events page shows cluster events/alerts scoped by cluster/rack/host via the scope explorer. Currently a preview backed by mock data."
+    },
+    {
+      "id": "obsAuditTrail",
+      "kind": "view",
+      "title": "Audit Trail",
+      "domain": "Observability",
+      "routePath": "/observability/audit-trail",
+      "summary": "The security record: who did what, to which rack, when, and what came of it.",
+      "description": "The Audit Trail page reads the product's own durable audit record — every audited action with its principal, action, resource, authorization decision and outcome, newest first. Unlike the Events page it is not cluster telemetry and not a preview: it is the record the product writes for itself, and it is the only source that attributes an action to a person. Reading it requires an explicit grant, and each read is itself recorded.",
+      "features": [
+        "Newest-first, with filters for principal, action, resource, decision, result and time range.",
+        "Repeated refusals are folded into one row showing the number of occurrences.",
+        "States how far back the record reaches, so an empty result is not mistaken for nothing having happened.",
+        "Says when a search stopped early, so a short page is not mistaken for a complete answer."
+      ],
+      "howTo": [
+        {
+          "task": "Find who powered off a rack",
+          "steps": [
+            "Open Observability > Audit Trail.",
+            "Enter the rack in Resource (for example p17-r01).",
+            "Widen Since if the action was more than a week ago."
+          ]
+        },
+        {
+          "task": "Review refused actions",
+          "steps": [
+            "Enter deny in Decision.",
+            "Check the occurrence count on any folded row — one line can stand for many attempts."
+          ]
+        }
+      ],
+      "related": [
+        "obsEvents",
+        "identityPolicies",
+        "identityUsers"
+      ],
+      "keywords": [
+        "audit",
+        "trail",
+        "security",
+        "who did what",
+        "accountability",
+        "compliance",
+        "forensics"
+      ],
+      "aria": {
+        "label": "Audit trail page",
+        "description": "The security audit record of who performed which action on which resource, with the authorization decision and outcome."
+      },
+      "aiContext": "The Audit Trail page reads the durable security audit record (principal, action, resource, decision, result, newest first) with filters and a stated retention boundary. It is the only source that attributes an action to a person. Reading it needs the audit.trail:list grant and is itself audited."
     },
     {
       "id": "scopeExplorer",
@@ -2843,7 +2909,47 @@
             "Add a deny statement naming that rack, in the same policy or a separate one.",
             "Attach it to the same subjects. A deny beats every allow, so ordering does not matter."
           ]
+        },
+        {
+          "task": "Check what a policy actually grants, before trusting it",
+          "steps": [
+            "Open GET /api/policies/preview (add ?format=table for a readable grid).",
+            "It walks the whole action vocabulary, marks everything denied, then applies the policies attached to that principal exactly as the engine does — denies last and not flippable.",
+            "Each allowed entry names the resource patterns that qualify it and the policy and statement that decided, so the answer is 'yes, for these racks' rather than a bare true."
+          ]
+        },
+        {
+          "task": "Let a team adopt shared boards without overwriting your tools",
+          "steps": [
+            "Allow catalog.board:import together with catalog.tool:create and workflow:save.",
+            "Deny catalog.tool:update in the same policy.",
+            "Importing a shared board then creates actions the instance lacks and refuses any item that would replace one of yours; the refused item is reported as skipped and the rest still apply."
+          ]
         }
+      ],
+      "faqs": [
+        {
+          "q": "Why am I getting 403 when I am signed in?",
+          "a": "403 means authorization, not authentication: you are who you say you are and may not do this. Most often no attached policy grants the action. Check the audit event — it carries the deciding reason — or open GET /api/policies/preview for the whole picture for that principal. A 401 instead means the credential itself was refused, which is a different problem."
+        },
+        {
+          "q": "A deny is refusing me and I cannot see which rule.",
+          "a": "Give every statement a 'sid'. The audit reason is then 'denied by <policy>/<sid>', which names the exact rule. Without a sid the verdict can only name the document."
+        },
+        {
+          "q": "A brand-new feature returns 403 for an administrator.",
+          "a": "The administrators policy can be narrower than the product after an upgrade that adds actions. Run 'python backend/cli.py reconcile-admin-policy' to add the newer resource types to it."
+        },
+        {
+          "q": "My grant on one rack does not let the table load.",
+          "a": "A list verb resolves to the collection sentinel '<type>:_all', and a grant on a single instance does not cover it — deliberately, because listing reveals what exists. Grant '<type>:*', which does match _all, or name _all explicitly."
+        }
+      ],
+      "tips": [
+        "Attach to a group rather than to each person: one write per role, and adding someone to the team grants it by membership.",
+        "Write rack ids in lower case. Handlers that fold case have their resources folded to match, so a deny on 'rack.power:p17-r01' is what matches a request for 'P17-R01'.",
+        "Unknown fields in a policy are rejected, not ignored — a misspelled key is a typo you want to hear about rather than a rule that silently does nothing.",
+        "Full reference, with the schema field by field and worked examples: the Documentation site this deployment serves at /docs/ (Identity and authorization). The live schema and action list are also served at /api/policies/schema and /api/policies/vocabulary."
       ],
       "related": [
         "identityUsers",
@@ -3271,7 +3377,7 @@
       "title": "Sidebar navigation",
       "domain": "Shell",
       "summary": "Left navigation grouped by domain, with Settings, Docs, and Help.",
-      "description": "The Sidebar is the left navigation. It groups destinations by domain (Compute, Infrastructure, Observability, Tools, Analytics & Benchmarks) and has bottom items for Settings, Documentation, and Help. It can collapse to an icon rail.",
+      "description": "The Sidebar is the left navigation. It groups destinations by domain (Tools, Compute, Infrastructure, Observability, Analytics & Benchmarks) and has bottom items for Settings, Documentation, and Help. Tools leads because it is what an operator reaches for most often. It can collapse to an icon rail.",
       "features": [
         "Domain-grouped navigation.",
         "Collapsible to an icon rail.",
@@ -3309,7 +3415,7 @@
         "label": "Sidebar navigation",
         "description": "Left navigation grouped by domain with Settings, Documentation, and Help."
       },
-      "aiContext": "The Sidebar is the left navigation grouped by domain (Compute, Infrastructure, Observability, Tools, Analytics & Benchmarks) with bottom links to Settings, Documentation, and Help; collapsible to an icon rail."
+      "aiContext": "The Sidebar is the left navigation grouped by domain, in order: Tools, Compute, Infrastructure, Observability, Analytics & Benchmarks, with bottom links to Settings, Documentation, and Help; collapsible to an icon rail."
     },
     {
       "id": "toolbar",

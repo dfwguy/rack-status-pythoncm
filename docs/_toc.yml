@@ -1,0 +1,39 @@
+# The site structure, and the only place it is declared.
+#
+# sphinx-external-toc rather than per-page toctrees: with `external_toc_exclude_missing: false`
+# in conf.py, a page that exists but is listed nowhere is a build failure. That is the check that
+# stops a docs site accumulating pages reachable only by search.
+#
+# The captioned groups are the Diataxis modes, and they are not a naming convention -- a page in
+# the wrong one answers a question the reader was not asking. See https://diataxis.fr/ and
+# .cursor/rules/docs-diataxis.mdc.
+#
+# There is deliberately no Tutorials group yet. Diataxis is explicit that empty categories are
+# worse than absent ones, so the caption appears when the first tutorial does.
+
+root: index
+
+subtrees:
+  - caption: How-to guides — getting something done
+    entries:
+      - file: how-to/grant-a-team-access
+        title: How to grant a team access
+      - file: how-to/diagnose-a-refused-request
+        title: How to diagnose a refused request
+
+  - caption: Reference — the machinery, described
+    entries:
+      - file: reference/identity/index
+        title: Identity and authorization
+        entries:
+          - file: reference/identity/actions-and-resources
+            title: Actions and resources
+          - file: reference/identity/policy-schema
+            title: Policy schema
+          - file: reference/identity/evaluation
+            title: How a decision is made
+
+  - caption: Explanation — why it is like this
+    entries:
+      - file: explanation/why-authorization-is-default-deny
+        title: Why authorization is default-deny

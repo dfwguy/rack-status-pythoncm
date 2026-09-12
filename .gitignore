@@ -86,6 +86,8 @@ nvis-rack-status-*.tar.gz.sha256
 frontend/node_modules/
 frontend/dist/
 static/spa/
+static/docs/
+docs/_build/
 
 # ---- Desktop shell (Electron) ----
 # `release/` holds packaged installers -- a single macOS bundle is ~255 MB, so this is the one

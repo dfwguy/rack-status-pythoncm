@@ -23,6 +23,26 @@ RUN npm run build
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 2: Runtime — Flask app on Ubuntu 22.04
 # ──────────────────────────────────────────────────────────────────────────────
+# ---- docs -------------------------------------------------------------------------------------
+# Sphinx HTML, built into the image so the documentation a deployment serves at /docs/ is always
+# the documentation for the code running there. Operators reach these clusters through an SSH
+# tunnel and often cannot reach an internet docs site at all -- the same constraint that made the
+# Kaizen CSS vendored.
+#
+# `-W`: a warning here is a broken cross-reference or a page missing from `_toc.yml`, and both are
+# 404s for a reader. Failing the image build is the right response.
+FROM python:3.12-slim AS docs-build
+WORKDIR /build
+COPY docs/requirements.txt docs/requirements.txt
+RUN pip install --no-cache-dir -r docs/requirements.txt
+# `version.py` because conf.py parses the version out of it. No `.git`: conf.py already tolerates
+# git being absent and reports the version without a commit, which is worth more than shipping the
+# repository into a build stage.
+COPY version.py ./
+COPY docs/ docs/
+RUN sphinx-build -W --keep-going -b html docs static/docs
+
+
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -69,6 +89,7 @@ RUN cat backend/build-info.json 2>/dev/null \
     || echo "note: backend/build-info.json absent - this image reports <version>-dev"
 
 COPY --from=frontend-build /build/static/spa/ ./static/spa/
+COPY --from=docs-build /build/static/docs/ ./static/docs/
 
 EXPOSE 5000
 

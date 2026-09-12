@@ -192,6 +192,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "boards.api_board_import",
+  "method": "POST",
+  "action": "catalog.board:import",
+  "variant": "sync"
+ },
+ {
   "endpoint": "bringup.api_bringup_config",
   "method": "GET",
   "action": "bringup:read",
@@ -508,6 +514,18 @@
   "method": "POST",
   "action": "diag:sysinfo",
   "variant": "stream"
+ },
+ {
+  "endpoint": "docs_site.serve_docs",
+  "method": "GET",
+  "action": "docs:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "docs_site.serve_docs",
+  "method": "GET",
+  "action": "docs:read",
+  "variant": "sync"
  },
  {
   "endpoint": "ds_diag.api_ds_diag",

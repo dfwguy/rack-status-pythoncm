@@ -144,6 +144,46 @@ export const identityContent: HelpContent[] = [
           "Attach it to the same subjects. A deny beats every allow, so ordering does not matter.",
         ],
       },
+      {
+        task: "Check what a policy actually grants, before trusting it",
+        steps: [
+          "Open GET /api/policies/preview (add ?format=table for a readable grid).",
+          "It walks the whole action vocabulary, marks everything denied, then applies the policies attached to that principal exactly as the engine does — denies last and not flippable.",
+          "Each allowed entry names the resource patterns that qualify it and the policy and statement that decided, so the answer is 'yes, for these racks' rather than a bare true.",
+        ],
+      },
+      {
+        task: "Let a team adopt shared boards without overwriting your tools",
+        steps: [
+          "Allow catalog.board:import together with catalog.tool:create and workflow:save.",
+          "Deny catalog.tool:update in the same policy.",
+          "Importing a shared board then creates actions the instance lacks and refuses any item that would replace one of yours; the refused item is reported as skipped and the rest still apply.",
+        ],
+      },
+    ],
+    faqs: [
+      {
+        q: "Why am I getting 403 when I am signed in?",
+        a: "403 means authorization, not authentication: you are who you say you are and may not do this. Most often no attached policy grants the action. Check the audit event — it carries the deciding reason — or open GET /api/policies/preview for the whole picture for that principal. A 401 instead means the credential itself was refused, which is a different problem.",
+      },
+      {
+        q: "A deny is refusing me and I cannot see which rule.",
+        a: "Give every statement a 'sid'. The audit reason is then 'denied by <policy>/<sid>', which names the exact rule. Without a sid the verdict can only name the document.",
+      },
+      {
+        q: "A brand-new feature returns 403 for an administrator.",
+        a: "The administrators policy can be narrower than the product after an upgrade that adds actions. Run 'python backend/cli.py reconcile-admin-policy' to add the newer resource types to it.",
+      },
+      {
+        q: "My grant on one rack does not let the table load.",
+        a: "A list verb resolves to the collection sentinel '<type>:_all', and a grant on a single instance does not cover it — deliberately, because listing reveals what exists. Grant '<type>:*', which does match _all, or name _all explicitly.",
+      },
+    ],
+    tips: [
+      "Attach to a group rather than to each person: one write per role, and adding someone to the team grants it by membership.",
+      "Write rack ids in lower case. Handlers that fold case have their resources folded to match, so a deny on 'rack.power:p17-r01' is what matches a request for 'P17-R01'.",
+      "Unknown fields in a policy are rejected, not ignored — a misspelled key is a typo you want to hear about rather than a rule that silently does nothing.",
+      "Full reference, with the schema field by field and worked examples: the Documentation site this deployment serves at /docs/ (Identity and authorization). The live schema and action list are also served at /api/policies/schema and /api/policies/vocabulary.",
     ],
     related: ["identityUsers", "identityGroups"],
     keywords: [

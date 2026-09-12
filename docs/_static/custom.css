@@ -1,0 +1,138 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+ *
+ * NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+ * property and proprietary rights in and to this material, related
+ * documentation and any modifications thereto. Any use, reproduction,
+ * disclosure or distribution of this material and related documentation
+ * without an express license agreement from NVIDIA CORPORATION or
+ * its affiliates is strictly prohibited.
+ */
+
+/*
+ * Ported from nvws-documentation's custom.css, plus the two additions this site needs:
+ * a Diataxis page-type badge and a severity scale matching the application's own.
+ */
+
+:root {
+  --nv-green: #76b900;
+  --nv-green-dark: #5c9200;
+}
+
+html[data-theme="light"] {
+  --pst-color-primary: var(--nv-green);
+  --pst-color-link: var(--nv-green-dark);
+  --pst-color-link-hover: var(--nv-green);
+}
+
+html[data-theme="dark"] {
+  --pst-color-primary: var(--nv-green);
+  --pst-color-link: var(--nv-green);
+  --pst-color-link-hover: #8fd400;
+}
+
+.bd-sidebar-primary .current > a,
+.bd-sidebar-primary a:hover {
+  color: var(--nv-green);
+}
+
+.btn-primary,
+.sd-btn-primary {
+  background-color: var(--nv-green);
+  border-color: var(--nv-green);
+}
+
+.btn-primary:hover,
+.sd-btn-primary:hover {
+  background-color: var(--nv-green-dark);
+  border-color: var(--nv-green-dark);
+}
+
+.sd-card {
+  border-radius: 8px;
+}
+
+.admonition.note {
+  border-left-color: var(--nv-green);
+}
+
+.admonition.tip {
+  border-left-color: var(--nv-green);
+}
+
+.highlight {
+  border-radius: 6px;
+}
+
+.copybtn {
+  background: transparent;
+}
+
+.navbar-brand img {
+  max-height: 40px;
+}
+
+.bd-footer {
+  border-top: 1px solid var(--pst-color-border);
+}
+
+/*
+ * Diataxis page type, injected from each page's frontmatter by conf.py.
+ *
+ * Visible on purpose. Diataxis works when a reader can tell what kind of page they are on before
+ * they start reading it, and most readers arrive from a search engine rather than from the
+ * sidebar -- so the section they are in is not something they ever saw. Quiet styling: this is
+ * orientation, not a warning.
+ */
+.nvis-diataxis {
+  font-size: 0.85rem;
+  color: var(--pst-color-text-muted);
+  border-left: 3px solid var(--pst-color-border);
+  padding: 0.15rem 0 0.15rem 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.nvis-diataxis p:last-child {
+  margin-bottom: 0;
+}
+
+/* One accent per mode, so the four are distinguishable at a glance without reading the label. */
+.nvis-diataxis-tutorial {
+  border-left-color: var(--nv-green);
+}
+
+.nvis-diataxis-how-to {
+  border-left-color: #1976d2;
+}
+
+.nvis-diataxis-reference {
+  border-left-color: #7b1fa2;
+}
+
+.nvis-diataxis-explanation {
+  border-left-color: #ed6c02;
+}
+
+/* The severity scale, matching the tags in the application so a screenshot and a docs page do
+   not disagree about what "blocker" looks like. */
+.nvsf-blocker {
+  color: #d32f2f;
+  font-weight: 600;
+}
+
+.nvsf-major {
+  color: #ed6c02;
+  font-weight: 600;
+}
+
+.nvsf-minor {
+  color: #1976d2;
+}
+
+/* Generated reference pages carry a banner. Toned down rather than alarming: the point is to
+   redirect an editor to the source file, not to shout at a reader. */
+.admonition.generated-page {
+  border-left-color: var(--pst-color-text-muted);
+  font-size: 0.9rem;
+}

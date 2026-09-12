@@ -6,7 +6,7 @@ Every action the product declares, which is what a policy's `actions` field may 
 **Generated from the live registry** — a route without a declaration cannot appear here,
 and the build gate in `backend/tests/test_action_coverage.py` fails if one exists.
 
-176 actions across 51 services: 61 reads and 115 mutations.
+178 actions across 53 services: 62 reads and 116 mutations.
 
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
@@ -81,6 +81,12 @@ enumeration of the reads below.
 | `catalog:set_active` | mutate | singleton | `PUT catalog.set_active` |
 | `catalog:set_topology` | mutate | singleton | `PUT catalog.set_topology` |
 
+## `catalog.board`
+
+| Action | Kind | Scope | Routes |
+|---|---|---|---|
+| `catalog.board:import` | mutate | singleton | `POST boards.api_board_import` |
+
 ## `catalog.platform`
 
 | Action | Kind | Scope | Routes |
@@ -136,6 +142,12 @@ enumeration of the reads below.
 | `diag:precheck` | mutate | instance | `POST diagnostics.api_precheck_async` |
 | `diag:read` | read | instance | `GET diagnostics.api_hw_check_help`<br>`GET ds_diag.api_ds_diag` |
 | `diag:sysinfo` | mutate | instance | `POST diagnostics.api_run_sysinfo`<br>`POST diagnostics.api_run_sysinfo_stream` |
+
+## `docs`
+
+| Action | Kind | Scope | Routes |
+|---|---|---|---|
+| `docs:read` | read | singleton | `GET docs_site.serve_docs` |
 
 ## `export`
 

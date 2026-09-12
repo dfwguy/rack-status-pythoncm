@@ -1,0 +1,19 @@
+# Documentation build dependencies.
+#
+# Pinned to compatible ranges rather than exact versions, matching nvws-documentation, with one
+# addition: nvidia-sphinx-theme is listed explicitly. The reference project gets it from the
+# bundled nvws CLI, so its requirements file omits it and a plain `pip install -r` build there
+# fails on a missing theme. This file is the whole story.
+
+sphinx>=7.0,<9.0
+myst-parser>=2.0.0,<5.0.0
+# conf.py enables the myst "linkify" extension, which imports this at parse time and raises if it
+# is absent. myst-parser does not pull it in, so an omission here is a hard build failure rather
+# than a bare URL rendering as text.
+linkify-it-py>=2.0,<3.0
+sphinx-external-toc>=1.0.0
+sphinx-design>=0.5.0
+sphinx-copybutton>=0.5.0
+sphinxcontrib-mermaid>=0.9.0
+nvidia-sphinx-theme>=0.0.9
+pydata-sphinx-theme>=0.15.0,<0.17.0

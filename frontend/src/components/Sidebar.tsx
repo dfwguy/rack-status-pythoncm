@@ -118,10 +118,28 @@ type NavEntry = NavGroup | NavStandalone;
 const ICON_SIZE = 20;
 
 /**
- * Domain navigation per the UX framework (docs/UX_FRAMEWORK.md, Sections 5 & 8.2).
- * Compute → Infrastructure → Observability → Tools → Analytics, macro to micro.
+ * Domain navigation per the UX framework (docs/UX_FRAMEWORK.md, Sections 5 & 8.2):
+ * Compute → Infrastructure → Observability → Analytics, macro to micro.
+ *
+ * **Tools leads, ahead of the macro-to-micro spine.** A deliberate departure from the
+ * framework's own ordering, ported from the Nscale TX deployment where it was arrived at in
+ * practice: the framework orders domains by how the product is *described* (the compute
+ * hierarchy is the spine), but an operator mid-bring-up is not browsing the hierarchy — they
+ * are reaching for a script, a workflow or a terminal, many times an hour. Ordering by reach
+ * frequency rather than by conceptual hierarchy is what makes the rail feel right.
  */
 const navEntries: NavEntry[] = [
+  {
+    kind: "group",
+    id: "grp-tools",
+    label: "Tools",
+    icon: <Wrench size={ICON_SIZE} />,
+    leaves: [
+      { id: "tools", label: "Operations & Scripts", icon: <Wrench size={ICON_SIZE} /> },
+      { id: "workflows", label: "Workflows", icon: <Workflow size={ICON_SIZE} /> },
+      { id: "terminal", label: "Terminal", icon: <Terminal size={ICON_SIZE} /> },
+    ],
+  },
   {
     kind: "group",
     id: "grp-compute",
@@ -156,17 +174,6 @@ const navEntries: NavEntry[] = [
       { id: "obsLogs", label: "Logs", icon: <ScrollText size={ICON_SIZE} /> },
       { id: "obsEvents", label: "Events", icon: <Bell size={ICON_SIZE} /> },
       { id: "obsAuditTrail", label: "Audit Trail", icon: <ScrollText size={ICON_SIZE} /> },
-    ],
-  },
-  {
-    kind: "group",
-    id: "grp-tools",
-    label: "Tools",
-    icon: <Wrench size={ICON_SIZE} />,
-    leaves: [
-      { id: "tools", label: "Operations & Scripts", icon: <Wrench size={ICON_SIZE} /> },
-      { id: "workflows", label: "Workflows", icon: <Workflow size={ICON_SIZE} /> },
-      { id: "terminal", label: "Terminal", icon: <Terminal size={ICON_SIZE} /> },
     ],
   },
   {
@@ -306,21 +313,22 @@ function ExpandedNav({
       ),
     },
     {
-      // Points at the in-app, browsable API reference rather than the git repo. A link to a
-      // repository is not documentation an operator can use: it needs a clone, a checkout and
-      // a reader. The generated reference is the same information, current for *this*
-      // deployment, and the repo is still one click away from inside that page.
+      // The documentation site this deployment serves at /docs/, not a link to the git repo. A
+      // repository is not documentation an operator can use — it needs a clone, a checkout and
+      // a reader — and an internet docs site is unreachable from a customer cluster behind an
+      // SSH tunnel. Serving it from the app means the documentation always matches the code
+      // running here.
+      //
+      // A real link, not `onNavigate`: /docs/ is a server route serving Sphinx HTML, outside
+      // the SPA's hash router entirely. New tab, so an operator reading a procedure does not
+      // lose the screen they were working on.
+      //
+      // The API reference is still a nav destination of its own under Platform.
       id: "documentation",
       slotIcon: <BookOpen size={ICON_SIZE} />,
       asChild: true,
       children: (
-        <a
-          href="#/platform/api"
-          onClick={(e) => {
-            e.preventDefault();
-            onNavigate("apiReference");
-          }}
-        >
+        <a href="/docs/" target="_blank" rel="noopener noreferrer">
           Documentation
         </a>
       ),
@@ -448,10 +456,16 @@ function CollapsedRail({
           </Tooltip>
         </ListItem>
         <ListItem disablePadding sx={{ display: "block" }}>
-          <Tooltip title="Documentation — API reference" placement="right" arrow>
+          {/* Same destination as the expanded rail's Documentation entry — the site this
+              deployment serves at /docs/. A component, not onNavigate, because it leaves the
+              SPA. */}
+          <Tooltip title="Documentation" placement="right" arrow>
             <ListItemButton
-              onClick={() => onNavigate("apiReference")}
-              aria-label="Open the API reference"
+              component="a"
+              href="/docs/"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Open the documentation"
               sx={{ minHeight: 44, px: 0, justifyContent: "center", "&:hover": { bgcolor: "action.hover" } }}
             >
               <ListItemIcon sx={{ minWidth: 0, justifyContent: "center", color: "text.secondary" }}>

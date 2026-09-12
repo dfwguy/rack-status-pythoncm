@@ -70,6 +70,29 @@ workflow:
 # where nobody would notice that `rack:power` had become `rack.power:on`.
 #
 # So the failure is an instruction rather than a diagnosis: regenerate, read the diff, commit it.
+docs-build:
+  stage: lint
+  image: python:3.12-slim
+  cache:
+    key: pip-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .pip-cache/
+  script:
+    # Only the docs dependencies: conf.py parses the version out of `version.py` rather than
+    # importing anything from `backend/`, so a docs build needs no runtime deps. That is the whole
+    # reason this is a cheap job in `lint` rather than waiting on `test`.
+    - pip install -q -r docs/requirements.txt
+    # Structure first, and it is a separate check because Sphinx cannot see it: a page whose
+    # declared Diataxis mode disagrees with its directory builds perfectly and lies to the reader.
+    - python bin/check-docs-diataxis.py
+    # -W: a warning is a broken cross-reference or a page missing from `_toc.yml`, both of which
+    # are 404s for a reader. --keep-going so one run lists every problem.
+    - sphinx-build -W --keep-going -b html docs static/docs
+  artifacts:
+    paths:
+      - static/docs/
+    expire_in: 1 week
+
 sources-of-truth:
   stage: lint
   image: python:3.12-slim
