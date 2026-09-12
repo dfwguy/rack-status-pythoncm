@@ -72,6 +72,15 @@ nsis:
 
 linux:
   category: Development
+  # Space-free, for the third time in this file — and here it was actually load-bearing rather
+  # than precautionary. Left at the default `${productName}-${version}.${ext}`, the build produced
+  # `NVIS Greenlight-0.3.0-260910185147.AppImage` on disk while latest-linux.yml recorded the
+  # payload as `Greenlight-0.3.0-260910185147.AppImage` — electron-builder does not agree with
+  # itself about what the space means. The updater resolves that name against the feed URL, so
+  # every Linux client would have fetched a 404 and reported "up to date" forever, with the real
+  # update sitting one filename away. Nothing about the build looked wrong; publish-release.sh
+  # caught it only because it cross-checks each manifest entry against a real file.
+  artifactName: nvis-greenlight-${version}-${arch}.${ext}
   # `fpm` refuses to build a .deb or .rpm without a maintainer, and the AppImage does not need one
   # — so a Linux build appears to work and then fails halfway, with the AppImage already produced.
   maintainer: Rafael M. Koike <rkoike@nvidia.com>

@@ -450,6 +450,80 @@ macos-sign:
       allow_failure: true
     - when: never
 
+# ─── Linux and Windows desktop installers ──────────────────────────────────────
+#
+# Manual, but NOT gated behind an enable-flag like macos-sign, because unlike that one these need
+# no credential and no special runner: an ordinary linux/amd64 Docker runner is the *right* place
+# to build them, and is in fact better than a workstation here.
+#
+# **Why CI is the only practical home for the Windows installer.** electron-builder finishes an
+# NSIS build by running the installer stub under Wine to generate the uninstaller. On an Apple
+# Silicon workstation that step dies inside emulation:
+#
+#   wine: dlls/ntdll/unix/virtual.c:267: anon_mmap_fixed:
+#         Assertion `!((UINT_PTR)start & host_page_mask)' failed.
+#
+# Wine requires 4 KB host pages for its fixed-address mappings and Apple Silicon's 16 KB pages
+# leak through the emulator, so the assertion fires no matter which image or emulation backend is
+# used — `wine --version` runs fine, which makes it look like a solvable configuration problem for
+# much longer than it should. On a native amd64 runner there is no emulation and no assertion.
+#
+# Both jobs pin the version through `BUILD_STAMP`. A release is ONE version across every platform,
+# and these are built on different machines at different times from the signed macOS bundle — left
+# to read the clock, each would stamp itself differently and the shared `latest/` update feed would
+# then hold three mutually inconsistent answers, each individually satisfying its own platform.
+# Pass the macOS build's stamp when adding to an existing release; leave it empty for a fresh one.
+.desktop-installer:
+  stage: build
+  variables:
+    GIT_DEPTH: "1"
+    # Set when adding a platform to an existing release, e.g. 260910185147. Empty = stamp now.
+    BUILD_STAMP: ""
+  before_script:
+    - cd desktop
+    - npm ci --no-audit --no-fund
+    - npm run build
+    - export APP_VERSION=$(node scripts/build-version.mjs)
+    - echo "building $APP_VERSION"
+  artifacts:
+    expire_in: 2 weeks
+  rules:
+    - when: manual
+      allow_failure: true
+
+desktop-linux:
+  extends: .desktop-installer
+  image: electronuserland/builder:latest
+  script:
+    - npx electron-builder --linux --x64 --publish never
+      --config.extraMetadata.version="$APP_VERSION"
+    - ls -lh release/*.AppImage release/*.deb release/*.rpm
+  artifacts:
+    name: "nvis-greenlight-linux-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - desktop/release/*.AppImage
+      - desktop/release/*.deb
+      - desktop/release/*.rpm
+      - desktop/release/latest-linux.yml
+
+# The installer is NOT Authenticode-signed, so Windows shows a SmartScreen "Windows protected your
+# PC" panel on first run. Signing also goes through 3S, but the account that signs the macOS app is
+# entitled to job type MACOS only (`nvsec 3s user-jobtypes --jobtype_specifier submit` lists one
+# row) — Windows Authenticode needs membership of its own submit group. Request that, then add a
+# signing step here mirroring desktop/scripts/sign-3s.sh.
+desktop-windows:
+  extends: .desktop-installer
+  image: electronuserland/builder:wine
+  script:
+    - npx electron-builder --win --x64 --publish never
+      --config.extraMetadata.version="$APP_VERSION"
+    - ls -lh release/*.exe
+  artifacts:
+    name: "nvis-greenlight-windows-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - desktop/release/*.exe
+      - desktop/release/latest.yml
+
 # Push to NVCR (uncomment when registry is configured)
 # docker-push:
 #   stage: build
