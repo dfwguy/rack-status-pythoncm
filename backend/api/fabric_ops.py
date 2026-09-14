@@ -41,6 +41,7 @@ from pathlib import Path, PurePosixPath
 
 import host_exec
 import nvlink_preflight
+import script_tree
 from audit.actions import action
 from config_env import _eget, _env_int, _job_env_int, _subprocess_env
 from core import rpath as _rpath
@@ -61,7 +62,6 @@ from naming import (
 from node_targets import _expand_pdsh_w_slurm_nodenames, validation_target_for_rack
 from paths import (
     _REMOTE_BASE,
-    SCRIPTS_DIR,
     _imex_check_script_path,
     _imex_reset_script_path,
     _nvlmapper_reports_base,
@@ -468,7 +468,7 @@ def _prepare_nvlmapper_async(body: dict) -> tuple[dict[str, object] | None, tupl
         rack = _normalize_rack_id((body.get("rack") or "").strip())
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
-    nvlmapper_bin = SCRIPTS_DIR / "nvlmapper"
+    nvlmapper_bin = script_tree.resolve_path("nvlmapper")
     if not _script_exists(nvlmapper_bin):
         return None, (
             jsonify(
@@ -482,7 +482,7 @@ def _prepare_nvlmapper_async(body: dict) -> tuple[dict[str, object] | None, tupl
             ),
             500,
         )
-    runner = SCRIPTS_DIR / "run_nvlmapper.sh"
+    runner = script_tree.resolve_path("run_nvlmapper.sh")
     if not _script_exists(runner):
         return None, (jsonify({"ok": False, "error": f"run_nvlmapper.sh not found ({runner})"}), 500)
     return {"rack": rack}, None
@@ -836,7 +836,7 @@ def _nvlink_preflight_script_path() -> Path:
     raw = (_eget("RACK_NVLINK_PREFLIGHT_SCRIPT") or "").strip()
     if raw:
         return _rpath(Path(raw))
-    return _rpath(SCRIPTS_DIR / "nvlink_preflight.sh")
+    return script_tree.resolve_path("nvlink_preflight.sh")
 
 
 def run_nvlink_preflight_pdsh(pdsh_w: str, *, quick: bool) -> dict:

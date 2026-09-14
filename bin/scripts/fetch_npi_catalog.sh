@@ -38,7 +38,9 @@ SSH_PORT="${NPI_GITLAB_SSH_PORT:-12051}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
-dest="${NVIS_NPI_CATALOG_DIR:-${repo_root}/var/cache/npi_catalog/tools}"
+# NVIS_VAR_DIR when the app exported it; the relative root otherwise (see rack_status.sh).
+_var_dir="${NVIS_VAR_DIR:-${repo_root}/var}"
+dest="${NVIS_NPI_CATALOG_DIR:-${_var_dir}/cache/npi_catalog/tools}"
 
 if [[ -n "${NPI_GITLAB_TOKEN:-}" ]]; then
   clone_url="https://oauth2:${NPI_GITLAB_TOKEN}@${GITLAB_HOST}/${PROJECT}.git"

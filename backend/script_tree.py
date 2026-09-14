@@ -1,0 +1,255 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+"""Which copy of a script runs -- the project's, the platform's, or the shared default.
+
+Author: Rafael M. Koike & Cursor Agent ("Ada")
+
+One server runs several customers' projects. Until now it ran them all from one directory, so
+editing a script to fix one site edited it for every site, and the blast radius of a typo was
+every project on the box. The layered tree fixes the isolation:
+
+    {base}/scripts/multi-platform/        the shared default set
+    {base}/scripts/gb200/  gb300/ ...     platform-specific overrides
+    {base}/scripts/project-<id>/          one project's copy, plus its custom scripts
+    {base}/var/                           unchanged
+
+A script resolves through those **most specific first**, so a project directory need only hold
+what it overrides -- and `bootstrap-project-scripts.sh` fills it with a full copy anyway, which
+is what makes a project's execution independent of edits made for another.
+
+Two things this module is deliberately not:
+
+**It does not import the catalog.** The active project and platform arrive as environment
+(`NVIS_PROJECT_ID`, `NVIS_PLATFORM_ID`, written by `catalog.context.high_overlay`), the same way
+every other per-cluster value reaches the code that needs it. Importing `catalog` here would put
+a store read under every script-path resolution and invert the dependency direction that
+`core-designs.mdc` §5 exists to protect.
+
+**It does not assume the tree exists.** Every deployment today has a flat `{base}/bin/scripts`,
+and a resolver that silently pointed at a directory nobody created would break all of them. The
+layout is detected (`_has_tree`), and without it every answer is exactly what `paths` answered
+before -- so the migration is "create the tree on the head node", not "upgrade and hope".
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import PurePosixPath
+
+import host_exec
+from config_env import _eget
+from core import rpath as _rpath
+
+#: The shared default set: what every project starts from, and where a script with no platform
+#: or project opinion lives. Named rather than "default" because `multi-platform` is what it
+#: means -- a script that runs anywhere -- and the deployed directory is the operator's to read.
+MULTI_PLATFORM = "multi-platform"
+
+#: Prefix for a project's own directory. **Flat, not `project/<id>/`**, and that is load-bearing:
+#: scripts reach sibling trees relatively (`rack_status.sh` reads
+#: `"${_RACK_SCRIPTS_DIR}/../../var/cache/cmsh_rack_list.txt"`), which resolves to `{base}/var`
+#: only while the script directory sits exactly two levels under the base. `scripts/gb200/` keeps
+#: that depth; `scripts/project/<id>/` would be three and would read `{base}/scripts/var`
+#: instead -- silently, on a cache file. `NVIS_VAR_DIR` (below) is the real fix and the scripts
+#: are moving to it, but the layout should not depend on every script having been converted.
+PROJECT_PREFIX = "project-"
+
+#: Directory-probe results are cached for this long. A layer either exists or it does not, and
+#: for a remote target each miss is an SSH round trip on a path resolved on every launch.
+_CACHE_TTL_SEC = 30.0
+
+_cache: dict[tuple, tuple[float, object]] = {}
+
+
+def clear_cache() -> None:
+    """Forget the layout probes.
+
+    Registered as a catalog change hook: switching the active project changes which layers
+    apply, and a stale answer would run the previous project's copy of a script.
+    """
+    _cache.clear()
+
+
+def _cached(key: tuple, produce):
+    now = time.monotonic()
+    hit = _cache.get(key)
+    if hit is not None and now - hit[0] < _CACHE_TTL_SEC:
+        return hit[1]
+    value = produce()
+    _cache[key] = (now, value)
+    return value
+
+
+def _repo_root() -> PurePosixPath:
+    # Imported lazily: `paths` imports this module, so importing it back at module scope would
+    # be a cycle. Only the local-development fallback needs it.
+    from paths import REPO_ROOT
+
+    return PurePosixPath(str(REPO_ROOT))
+
+
+def remote_base() -> str:
+    """The deployment root on the execution host, or "" when running from the repo."""
+    return (_eget("RACK_REMOTE_BASE_PATH", "") or "").strip()
+
+
+def var_dir() -> str:
+    """The `var/` tree that scripts read caches and write logs under.
+
+    Exported to scripts as `NVIS_VAR_DIR` so they stop deriving it as `../..` from their own
+    directory. That derivation is correct for exactly one layout and wrong for any other, and it
+    fails by reading the wrong file rather than by erroring.
+    """
+    override = (_eget("NVIS_VAR_DIR", "") or "").strip()
+    if override:
+        return override
+    base = remote_base()
+    return f"{base}/var" if base else str(_repo_root() / "var")
+
+
+def tree_root() -> str:
+    """Root of the layered tree, whether or not it has been created yet."""
+    override = (_eget("NVIS_SCRIPTS_TREE", "") or "").strip()
+    if override:
+        return override
+    base = remote_base()
+    return f"{base}/scripts" if base else str(_repo_root() / "bin" / "scripts-tree")
+
+
+def legacy_dir() -> str:
+    """Today's single flat directory: the answer for every deployment not yet migrated.
+
+    Honours the topology `scripts` role first, so a deployment that keeps its script tree on a
+    different host from the app keeps working -- that is the behaviour `paths._scripts_dir()`
+    had, and the reason `workflow_engine` having its own copy that ignored roles was a bug.
+    """
+    role = host_exec.role_root("scripts")
+    if role:
+        return role
+    base = remote_base()
+    return f"{base}/bin/scripts" if base else str(_repo_root() / "bin" / "scripts")
+
+
+def _has_tree() -> bool:
+    """Whether the layered tree has been bootstrapped on the execution host."""
+
+    def probe() -> bool:
+        return host_exec.is_dir(f"{tree_root()}/{MULTI_PLATFORM}", role="scripts")
+
+    return bool(_cached(("has_tree", tree_root()), probe))
+
+
+def active_project_id() -> str:
+    return (_eget("NVIS_PROJECT_ID", "") or "").strip()
+
+
+def active_platform_id() -> str:
+    return (_eget("NVIS_PLATFORM_ID", "") or "").strip()
+
+
+def project_dir(project_id: str = "") -> str:
+    """Where a project's own copy of the scripts lives."""
+    pid = (project_id or active_project_id()).strip()
+    if not pid:
+        return ""
+    return f"{tree_root()}/{PROJECT_PREFIX}{pid}"
+
+
+def platform_dir(platform_id: str = "") -> str:
+    plat = (platform_id or active_platform_id()).strip()
+    if not plat:
+        return ""
+    return f"{tree_root()}/{plat}"
+
+
+def multi_platform_dir() -> str:
+    return f"{tree_root()}/{MULTI_PLATFORM}"
+
+
+def layers(project_id: str = "", platform_id: str = "") -> list[str]:
+    """Directories to search, most specific first.
+
+    In legacy mode this is the single flat directory, which is what makes every existing
+    deployment behave exactly as it did.
+    """
+    if not _has_tree():
+        return [legacy_dir()]
+    out = [d for d in (project_dir(project_id), platform_dir(platform_id)) if d]
+    out.append(multi_platform_dir())
+    return out
+
+
+def scripts_dir(project_id: str = "", platform_id: str = "") -> str:
+    """The directory a launcher should treat as "the scripts directory".
+
+    The most specific layer that exists, because that is the one whose `lib/` a batch script
+    will source once this is exported as `NVIS_SCRIPTS_DIR`. A project directory holds a full
+    copy, so in practice this is the project's own tree.
+    """
+    for layer in layers(project_id, platform_id):
+        if _cached(("dir", layer), lambda layer=layer: host_exec.is_dir(layer, role="scripts")):
+            return layer
+    return layers(project_id, platform_id)[-1]
+
+
+def resolve(basename: str, project_id: str = "", platform_id: str = "") -> str:
+    """Absolute path to *basename*, from the most specific layer that has it.
+
+    Falls back to the least specific layer when no layer has the file, so the path in an error
+    message names where the script was expected rather than an empty string. Callers that care
+    check `paths._script_exists` separately, exactly as they did before.
+    """
+    name = (basename or "").strip().lstrip("/")
+    if not name:
+        return ""
+    searched = layers(project_id, platform_id)
+    for layer in searched:
+        candidate = f"{layer}/{name}"
+        if _cached(
+            ("file", candidate),
+            lambda candidate=candidate: host_exec.is_file(candidate, role="scripts"),
+        ):
+            return candidate
+    return f"{searched[-1]}/{name}"
+
+
+def resolve_path(basename: str, project_id: str = "", platform_id: str = ""):
+    """`resolve`, as the `PurePosixPath` the path resolvers hand out."""
+    return _rpath(resolve(basename, project_id, platform_id))
+
+
+def script_env(project_id: str = "", platform_id: str = "") -> dict[str, str]:
+    """What a launcher must export so a batch script can find its siblings.
+
+    Slurm copies a batch script to a spool directory, so `${BASH_SOURCE[0]}` inside it points at
+    the spool and not at the script tree -- `NVIS_SCRIPTS_DIR` is the only way `lib/*.inc.sh` is
+    found. `NVIS_VAR_DIR` is here for the same class of reason: relative escapes out of the tree
+    are correct for one layout only.
+    """
+    root = scripts_dir(project_id, platform_id)
+    return {
+        "NVIS_SCRIPTS_DIR": root,
+        "NVIS_BIN_SCRIPTS": root,
+        "NVIS_VAR_DIR": var_dir(),
+    }
+
+
+def describe() -> dict[str, object]:
+    """The resolved layout, for the settings page and the bootstrap API."""
+    return {
+        "tree_root": tree_root(),
+        "layered": _has_tree(),
+        "layers": layers(),
+        "scripts_dir": scripts_dir(),
+        "var_dir": var_dir(),
+        "project": active_project_id(),
+        "platform": active_platform_id(),
+        "legacy_dir": legacy_dir(),
+    }

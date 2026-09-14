@@ -6,7 +6,7 @@ Every action the product declares, which is what a policy's `actions` field may 
 **Generated from the live registry** — a route without a declaration cannot appear here,
 and the build gate in `backend/tests/test_action_coverage.py` fails if one exists.
 
-178 actions across 53 services: 62 reads and 116 mutations.
+180 actions across 53 services: 62 reads and 118 mutations.
 
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
@@ -101,10 +101,12 @@ enumeration of the reads below.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
+| `catalog.project:bootstrap_scripts` | mutate | instance | `POST project_scripts.api_project_scripts_bootstrap` |
 | `catalog.project:create` | mutate | instance | `POST catalog.create_project` |
 | `catalog.project:delete` | mutate | instance | `DELETE catalog.delete_project` |
 | `catalog.project:list` | read | instance | `GET catalog.list_projects` |
 | `catalog.project:read` | read | instance | `GET catalog.get_project` |
+| `catalog.project:read_scripts` | mutate | instance | `GET project_scripts.api_project_scripts_status` |
 | `catalog.project:update` | mutate | instance | `PUT catalog.update_project` |
 
 ## `catalog.tool`

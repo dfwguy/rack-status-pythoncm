@@ -54,6 +54,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import host_exec
+import script_tree
 from audit.actions import action
 from config_env import _eget, _env_int
 from core import rpath as _rpath
@@ -69,7 +70,7 @@ from node_targets import (
     _expand_pdsh_w_slurm_nodenames,
     _validation_ct_inner,
 )
-from paths import SCRIPTS_DIR, _script_exists
+from paths import _script_exists
 from platforms import get_platform as _get_platform
 from results_ingest import _lake_push_job
 from validation_launch import merge_ct_individuals_for_power
@@ -537,7 +538,7 @@ def _gpu_reset_script_path() -> Path:
     raw = (_eget("RACK_GPU_RESET_SCRIPT") or "").strip()
     if raw:
         return _rpath(Path(raw))
-    return _rpath(SCRIPTS_DIR / "gpu_reset.sh")
+    return script_tree.resolve_path("gpu_reset.sh")
 
 
 def run_gpu_reset(pdsh_w: str) -> dict:
@@ -673,14 +674,14 @@ def _bmc_recovery_script_path() -> Path:
     raw = (_eget("RACK_BMC_RECOVERY_SCRIPT") or "").strip()
     if raw:
         return _rpath(Path(raw))
-    return _rpath(SCRIPTS_DIR / "bmc-recovery.sh")
+    return script_tree.resolve_path("bmc-recovery.sh")
 
 
 def _macswap_script_path() -> Path:
     raw = (_eget("RACK_MACSWAP_SCRIPT") or "").strip()
     if raw:
         return _rpath(Path(raw))
-    return _rpath(SCRIPTS_DIR / "macswap" / "macswap")
+    return script_tree.resolve_path("macswap/macswap")
 
 
 def _macswap_python_module() -> str:

@@ -128,7 +128,7 @@ sbatch \
  -t 03:00:00 \
  --job-name=NEMO-1R \
  --output="${JOB_LOG_DIR%/}/${USER}-NEMO-1Rack-${rack}-${n}N-%j.txt" \
- --export=ALL,single_rack,NVIS_SCRIPTS_DIR=${_SCRIPT_DIR},NVIS_NEMO_CONT=/raid/data/${_sqsh_b},NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-} \
+ --export=ALL,single_rack,NVIS_SCRIPTS_DIR=${_SCRIPT_DIR},NVIS_VAR_DIR=${NVIS_VAR_DIR:-},NVIS_NEMO_CONT=/raid/data/${_sqsh_b},NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-} \
  "$_SCRIPT_DIR/nemo-nemotron5h_56b-mbridge-fp8.sh"
 
 done

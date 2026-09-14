@@ -12,7 +12,8 @@
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
 #
 # The repo's bin/scripts/ is the SOURCE OF TRUTH; the head node (NFS) holds a deployed copy
-# under RACK_REMOTE_BASE_PATH/bin/scripts. This wraps a checksum-based rsync so "sync scripts
+# under RACK_REMOTE_BASE_PATH/scripts/multi-platform (or the legacy bin/scripts on a deployment
+# that has not been migrated -- detected, not guessed). This wraps a checksum-based rsync so "sync scripts
 # to the head" is ONE idempotent command instead of per-file scp (which silently drifts).
 # Checksum (-c) pushes only real content changes; Python build artifacts are excluded; no
 # --delete by default, so head-only files (e.g. customer additions) are preserved.
@@ -34,7 +35,14 @@
 # Examples:
 #   bin/deploy-scripts.sh boston-slogin              # via an ~/.ssh/config alias
 #   bin/deploy-scripts.sh --dry-run boston-slogin    # preview what would change
+#   bin/deploy-scripts.sh --tree nscale-tx-node      # force the layered layout
+#   bin/deploy-scripts.sh --legacy mbcm01            # force the flat bin/scripts
 #   RACK_SSH_HOST=10.0.0.5 RACK_SSH_KEY=~/.ssh/id bin/deploy-scripts.sh
+#
+# Layout:
+#   --tree    <base>/scripts/multi-platform/  plus bin/scripts/platform/<id>/ -> <base>/scripts/<id>/
+#   --legacy  <base>/bin/scripts/
+#   (default) whichever the head node already has
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -43,10 +51,16 @@ SRC="${REPO_ROOT}/bin/scripts/"
 DRY=""
 DELETE=""
 TARGET=""
+# auto: the tree when the head node already has one, the flat directory otherwise. That way the
+# first `bootstrap-project-scripts.sh` migrates a deployment and every deploy after it lands in
+# the right place with no flag to remember -- and a site that has not migrated is untouched.
+LAYOUT="auto"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -n|--dry-run) DRY="-n"; shift ;;
     --delete)     DELETE="--delete"; shift ;;
+    --tree)       LAYOUT="tree"; shift ;;
+    --legacy)     LAYOUT="legacy"; shift ;;
     -h|--help)    grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)           echo "deploy-scripts: unknown option: $1" >&2; exit 2 ;;
     *)            TARGET="$1"; shift ;;
@@ -62,7 +76,7 @@ if [[ -z "${TARGET}" ]]; then
 fi
 
 BASE="${RACK_REMOTE_BASE_PATH:-/home/cmsupport/nvis-rack-status}"
-DEST="${TARGET}:${BASE%/}/bin/scripts/"
+TREE="${NVIS_SCRIPTS_TREE:-${BASE%/}/scripts}"
 
 # SSH transport for rsync. Key/port only when explicitly set (an ssh-alias supplies its own).
 SSH_CMD="ssh -o StrictHostKeyChecking=no"
@@ -71,11 +85,38 @@ SSH_CMD="ssh -o StrictHostKeyChecking=no"
 
 [[ -d "${SRC}" ]] || { echo "deploy-scripts: source not found: ${SRC}" >&2; exit 1; }
 
-echo "deploy-scripts: ${SRC} -> ${DEST}${DRY:+  [dry-run]}${DELETE:+  [--delete]}"
+if [[ "${LAYOUT}" == "auto" ]]; then
+  if ${SSH_CMD} "${TARGET}" "test -d ${TREE}/multi-platform" 2>/dev/null; then
+    LAYOUT="tree"
+  else
+    LAYOUT="legacy"
+  fi
+fi
+
+if [[ "${LAYOUT}" == "tree" ]]; then
+  DEST="${TARGET}:${TREE}/multi-platform/"
+else
+  DEST="${TARGET}:${BASE%/}/bin/scripts/"
+fi
+
 # -r recursive, -l links, -p perms (keep +x), -t times, -c checksum (content-based), -i itemize.
-rsync -rlptc ${DRY} ${DELETE} -i \
-  --exclude='__pycache__/' --exclude='*.pyc' --exclude='*.bak*' \
-  -e "${SSH_CMD}" \
-  "${SRC}" "${DEST}"
+RSYNC_COMMON=(-rlptc -i --exclude='__pycache__/' --exclude='*.pyc' --exclude='*.bak*')
+# `platform/` is a source-tree convention, not a deployed directory: its contents become
+# per-platform layers beside multi-platform/, so it must not be copied *into* the default set.
+RSYNC_COMMON+=(--exclude='platform/')
+
+echo "deploy-scripts: ${SRC} -> ${DEST}  [${LAYOUT}]${DRY:+  [dry-run]}${DELETE:+  [--delete]}"
+rsync "${RSYNC_COMMON[@]}" ${DRY} ${DELETE} -e "${SSH_CMD}" "${SRC}" "${DEST}"
+
+# Platform layers: bin/scripts/platform/<id>/ -> <tree>/<id>/. Only in tree mode; in legacy mode
+# there is nowhere for them to go, and `script_tree` would not look for them anyway.
+if [[ "${LAYOUT}" == "tree" && -d "${REPO_ROOT}/bin/scripts/platform" ]]; then
+  for dir in "${REPO_ROOT}"/bin/scripts/platform/*/; do
+    [[ -d "${dir}" ]] || continue
+    id="$(basename "${dir}")"
+    echo "deploy-scripts: ${dir} -> ${TARGET}:${TREE}/${id}/"
+    rsync "${RSYNC_COMMON[@]}" ${DRY} -e "${SSH_CMD}" "${dir}" "${TARGET}:${TREE}/${id}/"
+  done
+fi
 
 echo "deploy-scripts: done${DRY:+ (dry-run — nothing written)}"

@@ -1056,6 +1056,18 @@
   "variant": "sync"
  },
  {
+  "endpoint": "project_scripts.api_project_scripts_bootstrap",
+  "method": "POST",
+  "action": "catalog.project:bootstrap_scripts",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "project_scripts.api_project_scripts_status",
+  "method": "GET",
+  "action": "catalog.project:read_scripts",
+  "variant": "sync"
+ },
+ {
   "endpoint": "rack_locks_api.api_rack_locks_claim",
   "method": "POST",
   "action": "rack.lock:claim",

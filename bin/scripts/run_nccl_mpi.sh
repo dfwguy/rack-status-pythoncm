@@ -127,7 +127,7 @@ export NVIS_SCRIPTS_DIR="${_D}"
 [[ -n "${NCCL_VERSION_OVERRIDE}" ]] && export NVIS_NCCL_VERSION="${NCCL_VERSION_OVERRIDE}"
 # Sweep rounds: --rounds wins; else inherit NVIS_NCCL_ROUNDS from the env; else sbatch default (1).
 [[ -n "${ROUNDS_OVERRIDE}" ]] && export NVIS_NCCL_ROUNDS="${ROUNDS_OVERRIDE}"
-_export="ALL,NVIS_SCRIPTS_DIR=${_D},GPUS_PER_NODE=${GPUS_PER_NODE}"
+_export="ALL,NVIS_SCRIPTS_DIR=${_D},NVIS_VAR_DIR=${NVIS_VAR_DIR:-},GPUS_PER_NODE=${GPUS_PER_NODE}"
 [[ -n "${NVIS_NCCL_VERSION:-}" ]] && _export="${_export},NVIS_NCCL_VERSION=${NVIS_NCCL_VERSION}"
 [[ -n "${NVIS_NCCL_ROUNDS:-}" ]] && _export="${_export},NVIS_NCCL_ROUNDS=${NVIS_NCCL_ROUNDS}"
 [[ -n "${NVIS_NCCL_RUNTIME_PREFLIGHT:-}" ]] && _export="${_export},NVIS_NCCL_RUNTIME_PREFLIGHT=${NVIS_NCCL_RUNTIME_PREFLIGHT}"

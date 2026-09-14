@@ -34,6 +34,7 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 import host_exec
+import script_tree
 from audit.actions import action
 from config_env import (
     JOB_ENV_UI_DEFINITIONS,
@@ -45,7 +46,7 @@ from config_env import (
 from core import rpath as _rpath
 from core import truthy_env as _truthy_env
 from flask import Blueprint, Response, jsonify, request, stream_with_context
-from paths import REPO_ROOT, SCRIPTS_DIR, _allowed_roots, _script_exists
+from paths import REPO_ROOT, _allowed_roots, _script_exists
 from stream_exec import _STREAM_NO_CACHE_HEADERS, _merged_stdout_stream_generator
 
 _logger = logging.getLogger(__name__)
@@ -316,7 +317,7 @@ def api_tools_download_containers():
         return jsonify({"ok": False, "error": "arch must be aarch64, x86_64, or arm64"}), 400
     if arch == "arm64":
         arch = "aarch64"
-    script = SCRIPTS_DIR / "05-download-containers.sh"
+    script = script_tree.resolve_path("05-download-containers.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(60, _env_int("RACK_TOOLS_DOWNLOAD_CONTAINERS_TIMEOUT", 14400))
@@ -401,7 +402,7 @@ def api_tools_download_containers_stream():
         return jsonify({"ok": False, "error": "arch must be aarch64, x86_64, or arm64"}), 400
     if arch == "arm64":
         arch = "aarch64"
-    script = SCRIPTS_DIR / "05-download-containers.sh"
+    script = script_tree.resolve_path("05-download-containers.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(60, _env_int("RACK_TOOLS_DOWNLOAD_CONTAINERS_TIMEOUT", 14400))
@@ -575,7 +576,7 @@ def api_tools_launch_grafana_bright_prometheus():
         "yes",
     ):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED)"}), 403
-    script = SCRIPTS_DIR / "launch-grafana-bright-prometheus.sh"
+    script = script_tree.resolve_path("launch-grafana-bright-prometheus.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     user = (_eget("RACK_PROMETHEUS_BASIC_AUTH_USER") or "").strip()
@@ -651,7 +652,7 @@ def api_tools_launch_grafana_bright_prometheus_stream():
         "yes",
     ):
         return jsonify({"ok": False, "error": "disabled (RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED)"}), 403
-    script = SCRIPTS_DIR / "launch-grafana-bright-prometheus.sh"
+    script = script_tree.resolve_path("launch-grafana-bright-prometheus.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     user = (_eget("RACK_PROMETHEUS_BASIC_AUTH_USER") or "").strip()
@@ -767,7 +768,7 @@ def api_tools_install_hpcx_workspace():
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    script = SCRIPTS_DIR / "install-hpcx-workspace.sh"
+    script = script_tree.resolve_path("install-hpcx-workspace.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_HPCX_WORKSPACE_TIMEOUT", 28800))
@@ -831,7 +832,7 @@ def api_tools_install_hpcx_workspace_stream():
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    script = SCRIPTS_DIR / "install-hpcx-workspace.sh"
+    script = script_tree.resolve_path("install-hpcx-workspace.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_HPCX_WORKSPACE_TIMEOUT", 28800))
@@ -943,7 +944,7 @@ def api_tools_install_dcgm_workspace():
     if err is not None:
         return jsonify({"ok": False, "error": err}), 400
     assert parsed is not None
-    script = SCRIPTS_DIR / "install-dcgm-workspace.sh"
+    script = script_tree.resolve_path("install-dcgm-workspace.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_DCGM_WORKSPACE_TIMEOUT", 7200))
@@ -994,7 +995,7 @@ def api_tools_install_dcgm_workspace_stream():
     if err is not None:
         return jsonify({"ok": False, "error": err}), 400
     assert parsed is not None
-    script = SCRIPTS_DIR / "install-dcgm-workspace.sh"
+    script = script_tree.resolve_path("install-dcgm-workspace.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_DCGM_WORKSPACE_TIMEOUT", 7200))
@@ -1084,7 +1085,7 @@ def api_tools_install_cuda_nccl_workspace():
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    script = SCRIPTS_DIR / "install-cuda-nccl-workspace.sh"
+    script = script_tree.resolve_path("install-cuda-nccl-workspace.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_TIMEOUT", 28800))
@@ -1169,7 +1170,7 @@ def api_tools_install_cuda_nccl_workspace_stream():
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    script = SCRIPTS_DIR / "install-cuda-nccl-workspace.sh"
+    script = script_tree.resolve_path("install-cuda-nccl-workspace.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_TIMEOUT", 28800))
@@ -1241,7 +1242,7 @@ def api_tools_install_nvloom_workspace():
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    script = SCRIPTS_DIR / "install-nvloom-workspace.sh"
+    script = script_tree.resolve_path("install-nvloom-workspace.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_TIMEOUT", 28800))
@@ -1304,7 +1305,7 @@ def api_tools_install_nvloom_workspace_stream():
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    script = SCRIPTS_DIR / "install-nvloom-workspace.sh"
+    script = script_tree.resolve_path("install-nvloom-workspace.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     timeout = max(300, _env_int("RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_TIMEOUT", 28800))
@@ -1451,7 +1452,7 @@ def api_tools_install_dgxc_benchmarking_workspace():
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    script = SCRIPTS_DIR / "install-dgxc-benchmarking-workspace.sh"
+    script = script_tree.resolve_path("install-dgxc-benchmarking-workspace.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     # install mode downloads the NeMo container via SLURM and can run for hours; record is fast.
@@ -1512,7 +1513,7 @@ def api_tools_install_dgxc_benchmarking_workspace_stream():
         ws = _resolve_tools_destination(ws_raw)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    script = SCRIPTS_DIR / "install-dgxc-benchmarking-workspace.sh"
+    script = script_tree.resolve_path("install-dgxc-benchmarking-workspace.sh")
     if not _script_exists(script):
         return jsonify({"ok": False, "error": f"script missing: {script}"}), 500
     default_to = 28800 if meta["mode"] == "install" else 1800

@@ -43,9 +43,9 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 import host_exec
+import script_tree
 from audit.actions import action
 from config_env import _env_int, _job_env_int, _subprocess_env
-from core import rpath as _rpath
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 from job_registry import (
     _reset_job_purge_later,
@@ -58,7 +58,6 @@ from naming import _normalize_rack_id
 from node_targets import _expand_pdsh_w_slurm_nodenames
 from paths import (
     _REMOTE_BASE,
-    SCRIPTS_DIR,
     _hw_check_pdsh_script_path,
     _script_exists,
     _scripts_dir,
@@ -375,7 +374,7 @@ def api_hw_check_async():
 
 def _checker_script_path() -> Path:
     """Bundled checker.sh (same directory as hw_check_pdsh.sh)."""
-    return _rpath(SCRIPTS_DIR / "checker.sh")
+    return script_tree.resolve_path("checker.sh")
 
 
 @bp.route("/api/hw-check-presets", methods=["GET"])

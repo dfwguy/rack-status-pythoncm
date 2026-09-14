@@ -54,6 +54,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import host_exec
+import script_tree
 import validation_presets
 from activity_hydration import _record_validation_activity
 from audit.actions import action
@@ -65,7 +66,6 @@ from config_env import (
     _nvis_workspace_dir_effective,
     _subprocess_env,
 )
-from core import rpath as _rpath
 from core import truthy_env as _truthy_env
 from flask import Blueprint, jsonify, request
 from job_registry import (
@@ -86,7 +86,6 @@ from node_targets import (
     validation_target_for_rack,
 )
 from paths import (
-    SCRIPTS_DIR,
     _clusterkit_script_path,
     _mnubergemm_stress_script_path,
     _nemo_xrack_script_path,
@@ -894,10 +893,10 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
         "WORKSPACE_DIR": ws,
         "NVIS_WORKSPACE_DIR": ws,
         "TOPDIR": ws,
-        "NVIS_BIN_SCRIPTS": str(_rpath(SCRIPTS_DIR)),
+        "NVIS_BIN_SCRIPTS": script_tree.scripts_dir(),
         "CUDA_MAJ": cuda_m,
         "NVIS_SYSINFO_SH": str(_sysinfo_script_path()),
-        "NVIS_CHECKER_SH": str(_rpath(SCRIPTS_DIR / "checker.sh")),
+        "NVIS_CHECKER_SH": script_tree.resolve("checker.sh"),
     }
     for k in ("NVIS_HPCX_ROOT", "NVIS_NCCL_PATH", "RACK_MNUBERGEMM_PARTITION"):
         v = (_eget(k) or "").strip()
@@ -1090,7 +1089,7 @@ def _prepare_run_nvloom_singlerack(body: dict) -> tuple[dict | None, tuple[objec
         "WORKSPACE_DIR": ws,
         "NVIS_WORKSPACE_DIR": ws,
         "TOPDIR": ws,
-        "NVIS_BIN_SCRIPTS": str(_rpath(SCRIPTS_DIR)),
+        "NVIS_BIN_SCRIPTS": script_tree.scripts_dir(),
         "CUDA_MAJ": cuda_m,
     }
     for k in ("NVIS_NVLOOM_HPCX_INIT", "NVIS_NVLOOM_CLI", "NVIS_NVLOOM_UCX_TLS", "RACK_NVLOOM_PARTITION"):
@@ -1149,7 +1148,7 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
         "WORKSPACE_DIR": ws,
         "NVIS_WORKSPACE_DIR": ws,
         "TOPDIR": ws,
-        "NVIS_BIN_SCRIPTS": str(_rpath(SCRIPTS_DIR)),
+        "NVIS_BIN_SCRIPTS": script_tree.scripts_dir(),
         "CUDA_MAJ": cuda_m,
         "RACK_CLUSTERKIT_RACK": rk,
     }

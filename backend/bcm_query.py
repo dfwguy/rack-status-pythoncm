@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 import host_exec
-from paths import SCRIPTS_DIR
+import script_tree
 
 _logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def _script_path() -> str:
     base = host_exec.role_root("scripts") or ""
     if base:
         return str(Path(base) / "nvis_bcm_query.py")
-    return str(Path(SCRIPTS_DIR) / "nvis_bcm_query.py")
+    return script_tree.resolve("nvis_bcm_query.py")
 
 
 def build_command(query: str, *, entity_type: str | None = None) -> list[str]:

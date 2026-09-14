@@ -21,10 +21,10 @@ import json
 import logging
 
 import host_exec
+import script_tree
 from audit.actions import action
 from config_env import _env_int
 from flask import Blueprint, jsonify, request
-from paths import SCRIPTS_DIR
 from platforms import get_platform as _get_platform
 
 _logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ def api_fabric_probe():
             node = lines[0] if lines else ""
         if not node:
             return jsonify({"ok": False, "error": "no compute node found; pass ?node=<hostname>"}), 400
-        script = str(SCRIPTS_DIR / "fabric_probe.sh")
+        script = script_tree.resolve("fabric_probe.sh")
         proc = host_exec.run_on_host(
             ["bash", script, node],
             timeout=max(30, _env_int("RACK_FABRIC_PROBE_TIMEOUT", 60)),

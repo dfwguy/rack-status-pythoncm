@@ -196,6 +196,17 @@ COLLECTION_FALLBACK_ACTIONS: frozenset[str] = frozenset({
     # make every future `<type>:export` collection-level by default, including on a type where an
     # export of one instance is the sensible reading.
     "audit.trail:export",
+    # `GET /api/catalog/projects/<doc_id>/scripts` answers two things at once: which layer of the
+    # script tree each of *this project's* scripts resolves from, and the deployment-wide layout
+    # (tree root, layers, var dir) that decides it. The second half is the collection as one
+    # object, which is what a request naming no project is asking for.
+    #
+    # In practice the fallback does not fire -- `doc_id` is in the path on the only route that
+    # declares this action -- so it is a safety net for the case the parameter is ever renamed,
+    # which is precisely the regression `test_every_read_action_resolves` was written after. The
+    # *write* (`catalog.project:bootstrap_scripts`) is deliberately absent: composing a directory
+    # acts on one project, and "all of them in turn" is exactly what this list must never permit.
+    "catalog.project:read_scripts",
 })
 
 

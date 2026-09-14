@@ -199,6 +199,15 @@ def high_overlay(
     _put(out, "RACK_SSH_KEY", c.ssh_key)
     _put(out, "RACK_REMOTE_BASE_PATH", c.remote_base_path)
     _put(out, "RACK_CLUSTER_NAME", cluster.name)
+    # The active ids, so `script_tree` can pick a project's own copy of a script without
+    # importing the catalog. Every other per-cluster value already reaches its consumer this
+    # way; a store read under each script-path resolution would invert the dependency
+    # direction (`core-designs.mdc` §5) and put a file read on every launch.
+    _put(out, "NVIS_CLUSTER_ID", cluster.id)
+    if project is not None:
+        _put(out, "NVIS_PROJECT_ID", project.id)
+    if platform is not None:
+        _put(out, "NVIS_PLATFORM_ID", platform.id)
     if project is not None:
         _put(out, "RACK_CLUSTER_CUSTOMER_NAME", project.customer)
     if platform is not None:

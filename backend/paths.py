@@ -27,6 +27,7 @@ import os
 from pathlib import Path, PurePosixPath
 
 import host_exec
+import script_tree
 from config_env import _eget
 from core import rpath as _rpath
 
@@ -34,6 +35,11 @@ APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
 
 # One env var places the whole tree on the head node; role roots can override per role.
+#
+# `SCRIPTS_DIR` is now only the *legacy single-directory* answer, kept because it is computed at
+# import and so can never know which project is active. Nothing chooses a script through it any
+# more -- `script_tree` does, and falls back to this shape when a deployment has no layered tree.
+# It survives as the fallback's definition and as `DEFAULT_SCRIPT`'s base.
 _REMOTE_BASE = os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
 if _REMOTE_BASE:
     SCRIPTS_DIR = Path(_REMOTE_BASE) / "bin" / "scripts"
@@ -51,14 +57,30 @@ DOCS_DIR = REPO_ROOT / "static" / "docs"
 
 
 def _scripts_dir() -> str:
-    """Directory holding ``bin/scripts`` on the host that actually runs them.
+    """Directory holding the scripts on the host that actually runs them.
 
-    Prefers the ``scripts`` role's declared root, so a deployment can keep the
-    script tree on a different machine from the app (or from the logs). Falls back
-    to the module-level ``SCRIPTS_DIR``, which is the single-host answer derived
-    from ``RACK_REMOTE_BASE_PATH``.
+    Delegates to :mod:`script_tree`, which layers the active project's own copy over its
+    platform's over the shared default set -- and answers with today's single flat directory on
+    any deployment where that tree has not been created. Prefers the ``scripts`` role's declared
+    root, so a deployment can keep the script tree on a different machine from the logs.
     """
-    return host_exec.role_root("scripts") or str(SCRIPTS_DIR)
+    return script_tree.scripts_dir()
+
+
+def _script(basename: str, env_key: str = "") -> Path:
+    """Resolve one script: the env override if set, else the layered tree.
+
+    The override still wins, and still wins absolutely -- a site that points
+    ``RACK_SYSINFO_SCRIPT`` at a path of its own gets that path, layering or not. This is the
+    single place the nineteen per-tool resolvers below now share; each used to inline the same
+    ``_eget(key, SCRIPTS_DIR / name)`` against the *module-level* ``SCRIPTS_DIR``, which is
+    computed once at import and therefore cannot know which project is active.
+    """
+    if env_key:
+        override = (_eget(env_key, "") or "").strip()
+        if override:
+            return _rpath(Path(override))
+    return _rpath(Path(script_tree.resolve(basename)))
 
 
 def _logs_dir_default() -> str:
@@ -107,60 +129,45 @@ def _resolve_log_dir(raw: str | None) -> PurePosixPath:
 
 
 # --- Per-tool script paths on the execution host ------------------------------------------------
-# Each is "the env override, else the repo's copy under SCRIPTS_DIR", resolved against the EXECUTION
-# host. They live here rather than beside the routes that run them because several tools are invoked
-# from more than one place, and because a site that relocates one script should find every resolver in
-# one file.
+# Each is "the env override, else whichever layer of the script tree has this file" -- the active
+# project's own copy, then its platform's, then the shared default set (see `script_tree`). They live
+# here rather than beside the routes that run them because several tools are invoked from more than
+# one place, and because a site that relocates one script should find every resolver in one file.
+#
+# They were nineteen near-identical bodies inlining `SCRIPTS_DIR`, which is computed once at import
+# and so could never answer "which project is active". Sharing `_script` is what made the tree
+# possible without editing nineteen functions again the next time the layout changes.
 #
 # _rpath, not Path.resolve(): these name files on the head node, so resolving locally would answer with
 # this container's filesystem.
 
 
 def _sysinfo_script_path() -> Path:
-    p = _eget("RACK_SYSINFO_SCRIPT", str(SCRIPTS_DIR / "sysinfo.sh")) or str(SCRIPTS_DIR / "sysinfo.sh")
-    return _rpath(Path(p))
+    return _script("sysinfo.sh", "RACK_SYSINFO_SCRIPT")
 
 
 def _nvswitches_rack_audit_script_path() -> Path:
-    p = _eget("RACK_NVSWITCH_AUDIT_SCRIPT", str(SCRIPTS_DIR / "nvswitches_rack_audit.sh")) or str(
-        SCRIPTS_DIR / "nvswitches_rack_audit.sh"
-    )
-    return _rpath(Path(p))
+    return _script("nvswitches_rack_audit.sh", "RACK_NVSWITCH_AUDIT_SCRIPT")
 
 
 def _nvswitch_sdn_reset_script_path() -> Path:
-    p = _eget("RACK_NVSWITCH_SDN_RESET_SCRIPT", str(SCRIPTS_DIR / "nvswitch_sdn_reset.sh")) or str(
-        SCRIPTS_DIR / "nvswitch_sdn_reset.sh"
-    )
-    return _rpath(Path(p))
+    return _script("nvswitch_sdn_reset.sh", "RACK_NVSWITCH_SDN_RESET_SCRIPT")
 
 
 def _nvswitch_system_reset_script_path() -> Path:
-    p = _eget("RACK_NVSWITCH_SYSTEM_RESET_SCRIPT", str(SCRIPTS_DIR / "nvswitch_system_reset.sh")) or str(
-        SCRIPTS_DIR / "nvswitch_system_reset.sh"
-    )
-    return _rpath(Path(p))
+    return _script("nvswitch_system_reset.sh", "RACK_NVSWITCH_SYSTEM_RESET_SCRIPT")
 
 
 def _imex_reset_script_path() -> Path:
-    p = _eget("RACK_IMEX_RESET_SCRIPT", str(SCRIPTS_DIR / "imex_reset.sh")) or str(
-        SCRIPTS_DIR / "imex_reset.sh"
-    )
-    return _rpath(Path(p))
+    return _script("imex_reset.sh", "RACK_IMEX_RESET_SCRIPT")
 
 
 def _imex_check_script_path() -> Path:
-    p = _eget("RACK_IMEX_CHECK_SCRIPT", str(SCRIPTS_DIR / "imex_check.sh")) or str(
-        SCRIPTS_DIR / "imex_check.sh"
-    )
-    return _rpath(Path(p))
+    return _script("imex_check.sh", "RACK_IMEX_CHECK_SCRIPT")
 
 
 def _hw_check_pdsh_script_path() -> Path:
-    raw = (_eget("RACK_HW_CHECK_SCRIPT") or "").strip()
-    if raw:
-        return _rpath(Path(raw))
-    return _rpath(SCRIPTS_DIR / "hw_check_pdsh.sh")
+    return _script("hw_check_pdsh.sh", "RACK_HW_CHECK_SCRIPT")
 
 
 def _nvlmapper_reports_base() -> Path:
@@ -171,13 +178,11 @@ def _nvlmapper_reports_base() -> Path:
 
 
 def _parser_path() -> Path:
-    p = _eget("RACK_PARSER_SCRIPT", str(SCRIPTS_DIR / "parser.sh")) or str(SCRIPTS_DIR / "parser.sh")
-    return _rpath(Path(p))
+    return _script("parser.sh", "RACK_PARSER_SCRIPT")
 
 
 def _rack_status_script_path() -> Path:
-    p = _eget("RACK_STATUS_SCRIPT", str(DEFAULT_SCRIPT)) or str(DEFAULT_SCRIPT)
-    return _rpath(Path(p))
+    return _script("rack_status.sh", "RACK_STATUS_SCRIPT")
 
 # Kept as the old spelling for a moment? No: renamed on the move. `_script_path` said nothing about
 # WHICH script, which is fine in a 20k-line module where there was only one, and useless in a shared
@@ -218,65 +223,42 @@ def _bug_report_local_base_path() -> Path:
 
 
 def _validation_script_path() -> Path:
-    p = _eget("RACK_VALIDATION_SCRIPT", str(SCRIPTS_DIR / "run_singlerack.sh")) or str(
-        SCRIPTS_DIR / "run_singlerack.sh"
-    )
-    return _rpath(Path(p))
+    return _script("run_singlerack.sh", "RACK_VALIDATION_SCRIPT")
 
 
 def _mnubergemm_stress_script_path() -> Path:
-    p = _eget("RACK_MNUBERGEMM_STRESS_SCRIPT", str(SCRIPTS_DIR / "run_mnubergemm_stress.sh")) or str(
-        SCRIPTS_DIR / "run_mnubergemm_stress.sh"
-    )
-    return _rpath(Path(p))
+    return _script("run_mnubergemm_stress.sh", "RACK_MNUBERGEMM_STRESS_SCRIPT")
 
 
 def _nvloom_singlerack_script_path() -> Path:
-    p = _eget("RACK_NVLOOM_SINGLERACK_SCRIPT", str(SCRIPTS_DIR / "run_nvloom_singlerack.sh")) or str(
-        SCRIPTS_DIR / "run_nvloom_singlerack.sh"
-    )
-    return _rpath(Path(p))
+    return _script("run_nvloom_singlerack.sh", "RACK_NVLOOM_SINGLERACK_SCRIPT")
 
 
 def _clusterkit_script_path() -> Path:
-    p = _eget("RACK_CLUSTERKIT_SCRIPT", str(SCRIPTS_DIR / "run_clusterkit.sh")) or str(SCRIPTS_DIR / "run_clusterkit.sh")
-    return _rpath(Path(p))
+    return _script("run_clusterkit.sh", "RACK_CLUSTERKIT_SCRIPT")
 
 
 def _run_llmb_nccl_script_path() -> Path:
-    p = _eget("RACK_LLMB_NCCL_SCRIPT", str(SCRIPTS_DIR / "run_llmb_nccl.sh")) or str(SCRIPTS_DIR / "run_llmb_nccl.sh")
-    return _rpath(Path(p))
+    return _script("run_llmb_nccl.sh", "RACK_LLMB_NCCL_SCRIPT")
 
 
 def _run_nccl_mpi_script_path() -> Path:
     """Direct-NCCL launcher: resolves racks → nodes → submits nccl_allreduce.sbatch
     (host nccl-tests + mpirun over IB; no llmb-run/container/UCX-verbs guesswork)."""
-    p = _eget("RACK_NCCL_MPI_SCRIPT", str(SCRIPTS_DIR / "run_nccl_mpi.sh")) or str(SCRIPTS_DIR / "run_nccl_mpi.sh")
-    return _rpath(Path(p))
+    return _script("run_nccl_mpi.sh", "RACK_NCCL_MPI_SCRIPT")
 
 
 def _nemo_xrack_script_path() -> Path:
-    p = _eget("RACK_NEMO_XRACK_SCRIPT", str(SCRIPTS_DIR / "run-nemo-xrack.sh")) or str(
-        SCRIPTS_DIR / "run-nemo-xrack.sh"
-    )
-    return _rpath(Path(p))
+    return _script("run-nemo-xrack.sh", "RACK_NEMO_XRACK_SCRIPT")
 
 
 def _run_llama_script_path() -> Path:
-    p = _eget("RACK_LLAMA_SCRIPT", str(SCRIPTS_DIR / "run-llama.sh")) or str(SCRIPTS_DIR / "run-llama.sh")
-    return _rpath(Path(p))
+    return _script("run-llama.sh", "RACK_LLAMA_SCRIPT")
 
 
 def _run_exemplar_llama_script_path() -> Path:
-    p = _eget(
-        "RACK_EXEMPLAR_LLAMA_SCRIPT",
-        str(SCRIPTS_DIR / "run-exemplar-llama.sh"),
-    ) or str(SCRIPTS_DIR / "run-exemplar-llama.sh")
-    return _rpath(Path(p))
+    return _script("run-exemplar-llama.sh", "RACK_EXEMPLAR_LLAMA_SCRIPT")
 
 
 def _nccl_fullrack_script_path() -> Path:
-    p = _eget("RACK_NCCL_FULLRACK_SCRIPT", str(SCRIPTS_DIR / "nccl_fullrack_rounds.sh")) or str(
-        SCRIPTS_DIR / "nccl_fullrack_rounds.sh"
-    )
-    return _rpath(Path(p))
+    return _script("nccl_fullrack_rounds.sh", "RACK_NCCL_FULLRACK_SCRIPT")

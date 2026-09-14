@@ -29,6 +29,7 @@ from typing import Any
 
 import host_exec
 import rack_locks
+import script_tree
 import workflow_models
 import yaml
 from node_targets import validation_target_for_rack
@@ -658,9 +659,14 @@ def _apply_evaluation(run: dict, step: dict, returncode: int, stdout: str, stder
 
 
 def _scripts_dir() -> str:
-    """Resolve the scripts dir (remote base when in SSH mode, else repo bin/scripts)."""
-    base = os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
-    return f"{base}/bin/scripts" if base else str(REPO_ROOT / "bin" / "scripts")
+    """Resolve the scripts dir, through the one module that owns the layout.
+
+    This used to read `RACK_REMOTE_BASE_PATH` itself and return `{base}/bin/scripts`, which made
+    it disagree with `paths._scripts_dir()` on any deployment that declared a topology `scripts`
+    role: the API ran one copy of a script and a workflow step ran another. Now both ask
+    `script_tree`, so a project's own copy is what runs either way.
+    """
+    return script_tree.scripts_dir()
 
 
 def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
@@ -704,8 +710,10 @@ def _execute_scheduler_step(run: dict, step: dict) -> tuple[bool, str]:
 
     # nccl_allreduce.sbatch (and peers) resolve lib/ via NVIS_SCRIPTS_DIR; forward it +
     # GPUS_PER_NODE through sbatch --export so the batch script finds lib/fabric.inc.sh.
+    # NVIS_VAR_DIR rides along for the same reason: Slurm spools the batch script, so nothing
+    # inside it can derive either directory from its own location.
     extra = list(block.get("extra_args") or [])
-    exports = ["ALL", f"NVIS_SCRIPTS_DIR={_scripts_dir()}"]
+    exports = ["ALL"] + [f"{k}={v}" for k, v in script_tree.script_env().items()]
     if ntasks:
         exports.append(f"GPUS_PER_NODE={ntasks}")
     extra.append(f"--export={','.join(exports)}")

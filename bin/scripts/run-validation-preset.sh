@@ -146,7 +146,7 @@ stage_image() {
   fi
   local stage_script="${script_dir}/validation_container_stage.sbatch"
   [[ -r "$stage_script" ]] || { echo "ERROR: stage script missing: $stage_script" >&2; exit 2; }
-  local export_set="ALL,NVIS_STAGE_SOURCE=${source_image},NVIS_STAGE_DEST=${run_image},NVIS_STAGE_RSYNC=${rsync_enabled},NVIS_STAGE_CONTAINER_PREFLIGHT=${needs_ib},NVIS_STAGE_EXPECTED_SIZE=${expected_size},NVIS_STAGE_EXPECTED_SHA256=${expected_sha},NVIS_SCRIPTS_DIR=${script_dir}"
+  local export_set="ALL,NVIS_STAGE_SOURCE=${source_image},NVIS_STAGE_DEST=${run_image},NVIS_STAGE_RSYNC=${rsync_enabled},NVIS_STAGE_CONTAINER_PREFLIGHT=${needs_ib},NVIS_STAGE_EXPECTED_SIZE=${expected_size},NVIS_STAGE_EXPECTED_SHA256=${expected_sha},NVIS_SCRIPTS_DIR=${script_dir},NVIS_VAR_DIR=${NVIS_VAR_DIR:-}"
   local output="${log_dir%/}/validation-container-stage-%j.out"
   local cmd=(sbatch --parsable --wait --nodes="$node_count" --nodelist="$nodelist" --ntasks-per-node=1 --gpus-per-node=4
     --output="$output" --export="$export_set" "$stage_script")
@@ -258,7 +258,7 @@ case "$preset" in
     if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
     stage_image "$source_image" "$local_image" 42245001216 55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc 1
     nemo_xrack="${NVIS_PRESET_SCOPE_MULTIRACK:-0}"
-    export_set="ALL,NVIS_NEMO_CONT=${image},NVIS_SCRIPTS_DIR=${script_dir},NVIS_NEMO_XRACK=${nemo_xrack},NVIS_NEMO_MAX_STEPS=50"
+    export_set="ALL,NVIS_NEMO_CONT=${image},NVIS_SCRIPTS_DIR=${script_dir},NVIS_VAR_DIR=${NVIS_VAR_DIR:-},NVIS_NEMO_XRACK=${nemo_xrack},NVIS_NEMO_MAX_STEPS=50"
     run_cmd sbatch --wait --no-requeue "${STAGE_DEPENDENCY[@]}" --nodes="$node_count" --nodelist="$nodelist" --ntasks-per-node=4 --gpus-per-node=4 --cpus-per-task=36 \
       --chdir="$script_dir" --output="${log_dir%/}/nemo-26.04.01-%j.out" --export="$export_set" "${script_dir}/nemo-nemotron5h_56b-mbridge-fp8.sh"
     ;;

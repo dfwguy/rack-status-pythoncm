@@ -55,8 +55,8 @@ from pathlib import Path
 
 import host_exec
 import native_status
+import script_tree
 from core import rpath as _rpath
-from paths import SCRIPTS_DIR
 
 _logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ def _logscan_batch(
     out: dict[str, dict] = {}
     if not paths:
         return out
-    script = str(Path(SCRIPTS_DIR) / "nvis_logscan.py")
+    script = script_tree.resolve("nvis_logscan.py")
     total = len(paths)
 
     # The list goes in a file on the host, not on the command line and not down stdin:
@@ -179,7 +179,7 @@ def _logscan_record(path, *, timeout: int = 300) -> dict | None:
         return _LOGSCAN_CACHE[key]
 
     rec: dict | None = None
-    script = str(Path(SCRIPTS_DIR) / "nvis_logscan.py")
+    script = script_tree.resolve("nvis_logscan.py")
     try:
         proc = host_exec.run_on_host(
             ["python3", script, "--ndjson", "--no-inventory", lp], timeout=timeout

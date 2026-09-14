@@ -496,7 +496,11 @@ fi
 
 # Default rack list snapshot (nvis-rack-status writes var/cache/cmsh_rack_list.txt).
 if [[ -z "${RACK_CMSH_RACK_LIST_FILE:-}" ]]; then
-  _def_cmsh_rl="${_RACK_SCRIPTS_DIR}/../../var/cache/cmsh_rack_list.txt"
+  # NVIS_VAR_DIR is exported by the app (script_tree.script_env). The relative fallback is the
+  # old behaviour and is correct only while this script sits exactly two levels under the
+  # deployment root -- true for bin/scripts and for scripts/<platform>, not for a deeper layout.
+  _def_var="${NVIS_VAR_DIR:-${_RACK_SCRIPTS_DIR}/../../var}"
+  _def_cmsh_rl="${_def_var}/cache/cmsh_rack_list.txt"
   if [[ -r "$_def_cmsh_rl" ]]; then
     RACK_CMSH_RACK_LIST_FILE=$_def_cmsh_rl
   fi

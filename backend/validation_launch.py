@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Any
 
 import host_exec
+import script_tree
 import validation_activities
 import validation_presets
 from activity_hydration import _update_validation_activity
@@ -84,7 +85,6 @@ from node_targets import (
 from paths import (
     _resolve_log_dir,
     _script_exists,
-    _scripts_dir,
 )
 from platforms import get_platform as _get_platform
 from results_ingest import _lake_push_job
@@ -708,7 +708,7 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         suffix = f" (+{len(ineligible) - 12} more)" if len(ineligible) > 12 else ""
         return None, (jsonify({"ok": False, "error": f"exact target is not idle/eligible: {shown}{suffix}"}), 409)
 
-    script = Path(_scripts_dir()) / "run-validation-preset.sh"
+    script = script_tree.resolve_path("run-validation-preset.sh")
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"validation preset launcher not found: {script}"}), 500)
     node_spec = ",".join(nodes)
