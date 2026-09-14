@@ -53,8 +53,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 DESKTOP_DIR=$(pwd)
 
-PROJECT="${GITLAB_PROJECT:-nvis%2Fnvis-rack-status}"
+PROJECT="${GITLAB_PROJECT:-${CI_PROJECT_ID:-nvis%2Fnvis-rack-status}}"
 HOST="${GITLAB_HOST:-https://gitlab-master.nvidia.com}"
+API="${CI_API_V4_URL:-$HOST/api/v4}"
 PACKAGE="${PACKAGE_NAME:-nvis-greenlight-desktop}"
 RELEASE_DIR="$DESKTOP_DIR/release"
 SIGNED_DIR="$RELEASE_DIR/signed"
@@ -62,10 +63,39 @@ DRY_RUN=0
 
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 
-if [ "$DRY_RUN" -eq 0 ] && [ -z "${GITLAB_TOKEN:-}" ]; then
-  echo "publish: set GITLAB_TOKEN to a PAT with 'api' scope" >&2
+# ── One script, two callers: a workstation and a CI job ────────────────────────────────────────
+# `release:publish-desktop` runs this rather than reimplementing the upload in YAML, because the
+# valuable part is not the `curl` — it is the version-coherence check, the per-file sha512
+# cross-check and the idempotent skip. A second copy in the pipeline would be the copy that
+# silently loses one of them.
+#
+# The tokens are not interchangeable. `CI_JOB_TOKEN` exists only inside a job and is scoped to it;
+# a PAT is what a workstation has. They even use different headers, which is the sort of detail
+# that produces a 401 reading as "wrong password".
+if [ -n "${GITLAB_TOKEN:-}" ]; then
+  AUTH_HEADER="PRIVATE-TOKEN: $GITLAB_TOKEN"
+elif [ -n "${CI_JOB_TOKEN:-}" ]; then
+  AUTH_HEADER="JOB-TOKEN: $CI_JOB_TOKEN"
+elif [ "$DRY_RUN" -eq 1 ]; then
+  AUTH_HEADER="PRIVATE-TOKEN: dry-run"
+else
+  echo "publish: set GITLAB_TOKEN to a PAT with 'api' scope (or run inside CI)" >&2
   exit 1
 fi
+
+# ── Portable SHA-512, because the two callers are different operating systems ──────────────────
+# macOS has `shasum` and an unwrapped `base64`; a Debian CI image has `sha512sum` and a GNU
+# `base64` that wraps at 76 columns. A wrapped digest compares unequal to the manifest's, so the
+# publish would refuse every file with a mismatch that is purely formatting — hence `tr -d`.
+sha512_of() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha512 -binary "$1" | base64 | tr -d '\n'
+  elif command -v sha512sum >/dev/null 2>&1; then
+    sha512sum "$1" | cut -d' ' -f1 | xxd -r -p | base64 | tr -d '\n'
+  else
+    shasum -a 512 "$1" | cut -d' ' -f1 | xxd -r -p | base64 | tr -d '\n'
+  fi
+}
 
 # ── Locate a file by name ──────────────────────────────────────────────────────────────────────
 # `signed/` first: for macOS the signed, notarized artifact is the one the manifest describes, and
@@ -78,8 +108,6 @@ locate() {
   done
   return 1
 }
-
-sha512_of() { shasum -a 512 "$1" | cut -d' ' -f1 | xxd -r -p | base64; }
 
 # ── Collect the manifests ──────────────────────────────────────────────────────────────────────
 # `latest.yml` is Windows; the name has no platform in it because it is electron-updater's default
@@ -223,6 +251,9 @@ ALL=(${FEED[@]+"${FEED[@]}"} ${ARCHIVE[@]+"${ARCHIVE[@]}"})
 for f in "${ALL[@]}"; do
   case "$f" in
     *.zip|*.dmg)
+      # Only meaningful where the tooling exists. In a Linux CI job `xcrun` is absent, and a
+      # "command not found" spat out per artifact would read as a signing failure.
+      command -v xcrun >/dev/null 2>&1 || continue
       xcrun stapler validate "$f" >/dev/null 2>&1 && continue
       case "$f" in
         *.zip) : ;;  # a zipped .app cannot carry a staple; the .app inside it does
@@ -238,7 +269,7 @@ for f in "${ALL[@]}"; do
   esac
 done
 
-BASE="$HOST/api/v4/projects/$PROJECT/packages/generic/$PACKAGE"
+BASE="$API/projects/$PROJECT/packages/generic/$PACKAGE"
 echo "==> version:   $VERSION"
 echo "==> manifests: ${MANIFESTS[*]}"
 echo "==> feed:      $BASE/latest/        (${#FEED[@]} file(s): manifests + update payloads)"
@@ -260,7 +291,7 @@ done
 # same-name/same-size remote file being different bytes would require someone to have uploaded a
 # distinct artifact under our exact name and length.
 remote_size() { # remote_size <url>
-  curl -sI --header "PRIVATE-TOKEN: ${GITLAB_TOKEN:-}" "$1" 2>/dev/null \
+  curl -sI --header "$AUTH_HEADER" "$1" 2>/dev/null \
     | awk 'BEGIN{IGNORECASE=1} /^content-length:/ {print $2+0; exit}'
 }
 
@@ -289,7 +320,7 @@ upload() { # upload <file> <destdir>
   esac
   echo "    uploading $name -> $dest/"
   curl --fail-with-body --silent --show-error \
-    --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+    --header "$AUTH_HEADER" \
     --upload-file "$file" "$dest/$name"
   echo
 }
@@ -309,11 +340,11 @@ done
 if [ "$DRY_RUN" -eq 0 ]; then
   echo "==> attaching asset links to release $RELEASE_TAG"
   if ! curl --fail --silent --output /dev/null \
-       --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-       "$HOST/api/v4/projects/$PROJECT/releases/$RELEASE_TAG"; then
+       --header "$AUTH_HEADER" \
+       "$API/projects/$PROJECT/releases/$RELEASE_TAG"; then
     echo "    no release tagged '$RELEASE_TAG' — nothing attached. Existing releases:"
-    curl --silent --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-      "$HOST/api/v4/projects/$PROJECT/releases?per_page=5" \
+    curl --silent --header "$AUTH_HEADER" \
+      "$API/projects/$PROJECT/releases?per_page=5" \
       | tr ',' '\n' | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^/      /'
     echo "    Re-run with RELEASE_TAG=<one of those>, or create the release first."
     echo "    The packages are published either way; only the release-page links are missing."
@@ -335,11 +366,11 @@ if [ "$DRY_RUN" -eq 0 ]; then
         *)                    label="download" ;;
       esac
       if curl --fail-with-body --silent --show-error --request POST \
-           --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+           --header "$AUTH_HEADER" \
            --data-urlencode "name=$label — $name" \
            --data-urlencode "url=$BASE/$VERSION/$name" \
            --data "link_type=package" \
-           "$HOST/api/v4/projects/$PROJECT/releases/$RELEASE_TAG/assets/links" >/dev/null 2>&1; then
+           "$API/projects/$PROJECT/releases/$RELEASE_TAG/assets/links" >/dev/null 2>&1; then
         echo "    linked $label"
       else
         echo "    WARN: could not link $name (a link of that name may already exist)"

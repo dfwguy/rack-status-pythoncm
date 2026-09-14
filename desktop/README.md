@@ -413,14 +413,17 @@ The Package Registry is where the bytes live, but nobody browses it. `RELEASE_TA
 installer to a GitLab Release as a labelled asset link, so a colleague sees *"Windows (x64)"*
 rather than a filename, and the platform they need is one click from the Releases page.
 
-**The desktop client has its own `desktop-<version>` tag, not the product's semver line.** Two
-reasons, and the first is the hard one: the ci-toolkit release job owns `X.Y.Z` and computes the
-next number itself from conventional commits, so a hand-made `0.3.0` release either collides with
-it or gets recomputed. It had in fact already cut `0.3.1` while `version.py` still said `0.3.0` —
-which is why the tag cannot simply be derived from the version, and why the first publish attached
-nothing at all. The second: these installers are built from a branch, so attaching them to the
-product release of the same number would advertise binaries that cannot be reproduced from that
-release's commit.
+**While the desktop lives on a branch it releases under its own `desktop-<version>` tag**, not the
+product's semver line. Two reasons, and the first is the hard one: the ci-toolkit release job owns
+`X.Y.Z` and computes the next number itself from conventional commits, so a hand-made `0.3.0`
+release either collides with it or gets recomputed. It had in fact already cut `0.3.1` while
+`version.py` still said `0.3.0` — which is why the tag cannot simply be derived from the version,
+and why the first publish attached nothing at all. The second: installers built from a branch
+would, on the product release of the same number, advertise binaries nobody can reproduce from
+that release's commit.
+
+**Once the desktop merges to `main` that distinction disappears** and the installers belong on the
+product's release, which is what `release:publish-desktop` does — see below.
 
 Creating the release is a one-time step per version (`POST /releases` with `tag_name`); after that
 `publish-release.sh` fills in the assets, and re-running it is cheap because every already-uploaded
@@ -505,11 +508,63 @@ space-free name, as `mac` and `nsis` already did.
 
 ## The CI jobs
 
-| Job | Runner | State |
+| Job | Runner | When |
 |---|---|---|
-| `desktop-linux` | any amd64 Docker | **manual**, ready — verified 190 s |
-| `desktop-windows` | any amd64 Docker | **manual**, ready — verified 116 s |
+| `desktop-linux` | any amd64 Docker | **automatic on the release commit**, manual otherwise — 190 s |
+| `desktop-windows` | any amd64 Docker | **automatic on the release commit**, manual otherwise — 116 s |
+| `release:publish-desktop` | any Docker | automatic on the release commit |
 | `macos-sign` | needs a macOS runner | absent unless `NVIS_ENABLE_MACOS_SIGNING=true` |
+
+### Where the binaries live, since they are not in git
+
+`release/` is gitignored — a 100 MB binary in history is a permanent tax on every clone — so the
+installers travel a different path from the source, and never enter the repository at all:
+
+```
+build job (ephemeral container)  →  job artifacts  →  generic Package Registry  →  GitLab Release
+                                    (expire in 2w)     (permanent, version-addressed)   (links)
+```
+
+`needs: [… artifacts: true]` is what hands the built files from the build jobs to the publish job.
+That job uploads them to the Package Registry and then attaches **links** to the Release — a
+release asset link is a URL, not a blob, so the Release page can offer "Windows (x64)" while the
+bytes sit in the registry. This is the same path `release:publish-bundle` already uses for the
+air-gapped Docker image.
+
+`release:publish-desktop` runs `scripts/publish-release.sh` rather than reimplementing the upload
+in YAML, so the version-coherence check, the per-file sha512 cross-check and the idempotent skip
+exist once. The script picks its credential from the environment: `GITLAB_TOKEN` (a PAT, on a
+workstation) or `CI_JOB_TOKEN` (inside a job) — different headers, which is the sort of detail
+that otherwise surfaces as a 401 reading like a wrong password.
+
+### What a release does automatically, and the one manual step
+
+On the `chore(main): release X.Y.Z` commit the ci-toolkit job creates, Linux and Windows are built
+at **`X.Y.Z` with no build stamp** and published against the product's own release tag.
+
+The stamp is dropped deliberately on that path. It is a semver *prerelease* identifier, so
+`0.3.1-260914…` ranks **below** plain `0.3.1`: stamp a release and `electron-updater` would never
+offer it to anyone already on `0.3.1` — the release would exist and reach nobody. Off the release
+line the stamp is exactly right, because two builds of the same version on one day have to be
+distinguishable.
+
+Building is decoupled from `lint` and `test` (`needs: []`); **publishing is not**. The gate sits on
+`release:publish-desktop`, which needs `python-test` and `frontend-test` — so an ad-hoc installer
+can still be built from a branch with unrelated lint noise, while nothing reaches the registry
+from a commit whose tests fail.
+
+**macOS remains manual**, because signing and notarization need `codesign`, `ditto` and
+`notarytool`. After the release pipeline finishes, on a Mac:
+
+```bash
+npx electron-builder --mac --dir --publish never
+scripts/sign-3s.sh
+GITLAB_TOKEN=<pat> RELEASE_TAG=X.Y.Z scripts/publish-release.sh
+```
+
+That adds the macOS artifact and its release link beside what CI published; every file already
+uploaded is skipped, so the run costs seconds. Stand up a macOS runner and `macos-sign` closes the
+gap entirely.
 
 `desktop-linux` and `desktop-windows` need no credential and no special runner, so they are plain
 manual jobs. Both carry `needs: []` — deliberately independent of `lint` and `test`. The desktop

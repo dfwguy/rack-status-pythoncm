@@ -495,11 +495,36 @@ macos-sign:
     - cd desktop
     - npm ci --no-audit --no-fund
     - npm run build
-    - export APP_VERSION=$(node scripts/build-version.mjs)
-    - echo "building $APP_VERSION"
+    # A release build carries the product's version from version.py, with NO build stamp; every
+    # other build is stamped.
+    #
+    # The distinction is not cosmetic. The stamp is a semver *prerelease* identifier, so
+    # `0.3.1-260914...` ranks BELOW plain `0.3.1`. Stamp a release and electron-updater would
+    # never offer it to anyone already on `0.3.1` — the release would exist and silently reach
+    # nobody. Conversely the stamp is exactly right off the release line, where two builds of the
+    # same version on the same day must be distinguishable.
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        APP_VERSION=$(grep -Eo '"[0-9]+\.[0-9]+\.[0-9]+[^"]*"' ../version.py | head -1 | tr -d '"')
+      else
+        APP_VERSION=$(node scripts/build-version.mjs)
+      fi
+      export APP_VERSION
+      echo "building $APP_VERSION"
+    # Passed to release:publish-desktop, which runs with GIT_STRATEGY none and so cannot read
+    # version.py for itself. Both build jobs write this key and GitLab merges the dotenv reports,
+    # so a disagreement would resolve silently to whichever landed last — that is caught one level
+    # down instead, where it is unambiguous: each platform's manifest records the version it was
+    # built with, and publish-release.sh refuses a set that does not agree.
+    - echo "DESKTOP_VERSION=$APP_VERSION" > ../desktop.env
   artifacts:
     expire_in: 2 weeks
+    reports:
+      dotenv: desktop.env
   rules:
+    # Automatic on the release (finalize) commit, so installers ship with every release without
+    # anyone remembering to press a button; manual everywhere else for ad-hoc builds.
+    - !reference [.rules:on_main_finalize_commit, rules]
     - when: manual
       allow_failure: true
 
@@ -535,6 +560,67 @@ desktop-windows:
     paths:
       - desktop/release/*.exe
       - desktop/release/latest.yml
+
+# ─── Publish the desktop installers to the Package Registry + the GitLab Release ───────────────
+#
+# **The installers never enter git, and they never need to.** `release/` is gitignored — a 100 MB
+# binary in history is a permanent tax on every clone — so the bytes travel a different path than
+# the source:
+#
+#   build job (ephemeral container)  ->  job artifacts  ->  generic Package Registry  ->  Release
+#                                        (expire in 2w)     (permanent, version-addressed)
+#
+# `needs: artifacts: true` is what hands the built files from one job to the next; this job then
+# uploads them and attaches *links* to the Release. A release asset link is a URL, not a blob, so
+# the Release page can show "Windows (x64)" while the file itself lives in the registry. Same
+# shape as release:publish-bundle above, which does this for the air-gapped Docker image.
+#
+# It runs `desktop/scripts/publish-release.sh` instead of reimplementing the upload in YAML. The
+# valuable part of that script is not the curl: it refuses manifests that disagree about the
+# version, cross-checks every payload's sha512 against the manifest that names it, and skips what
+# is already published. A second copy here would be the copy that quietly loses one of those.
+#
+# **macOS is not here, and cannot be.** Signing and notarization need `codesign`, `ditto` and
+# `notarytool`, so the .zip is produced on a workstation by `scripts/sign-3s.sh` and published by
+# running the same script by hand. It is idempotent, so doing that after this job has run adds the
+# macOS artifact and its release link without touching what is already there. Stand up a macOS
+# runner and `macos-sign` closes the gap.
+release:publish-desktop:
+  stage: ci_toolkit_release
+  image:
+    name: dockerhub.nvidia.com/python:3.12
+    pull_policy: ["if-not-present", "always"]
+  tags:
+    - $GITLAB_RUNNER_DOCKER_TAG
+  variables:
+    # The artifacts are the input; the source is not needed. This is also why the version arrives
+    # by dotenv rather than being read from version.py here.
+    GIT_STRATEGY: none
+  needs:
+    - job: desktop-linux
+      artifacts: true
+    - job: desktop-windows
+      artifacts: true
+    # Building on a red branch is fine and deliberate (see .desktop-installer); *publishing* one
+    # is not. The builds are decoupled from the test stage, so the gate belongs here instead.
+    - job: python-test
+      artifacts: false
+    - job: frontend-test
+      artifacts: false
+    - job: "release:finalize"
+      artifacts: false
+      optional: true
+  rules:
+    - !reference [.rules:on_main_finalize_commit, rules]
+  script:
+    - |
+      set -e
+      test -n "${DESKTOP_VERSION:-}"
+      echo "publishing desktop ${DESKTOP_VERSION}"
+      # The release tag is the product version: once the desktop ships with the product, the
+      # installers belong on the product's own release rather than a desktop-* tag of their own.
+      cd desktop
+      RELEASE_TAG="${DESKTOP_VERSION}" bash scripts/publish-release.sh
 
 # Push to NVCR (uncomment when registry is configured)
 # docker-push:
