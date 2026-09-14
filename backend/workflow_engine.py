@@ -1528,8 +1528,6 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
 
     # Known tool env key (e.g. RACK_SYSINFO_SCRIPT) — resolve path and execute
     if command.startswith("RACK_") and command.endswith("_SCRIPT"):
-        script_dir = os.environ.get("RACK_REMOTE_BASE_PATH", "").strip()
-        default_scripts = (Path(script_dir) / "bin" / "scripts") if script_dir else None
         _SCRIPT_DEFAULTS = {
             "RACK_SYSINFO_SCRIPT": "sysinfo.sh",
             "RACK_VALIDATION_SCRIPT": "run_singlerack.sh",
@@ -1566,8 +1564,13 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
         except Exception:
             _logger.debug("_execute_automated_step: ignoring error", exc_info=True)
         resolved = os.environ.get(command, "").strip()
-        if not resolved and default_scripts and command in _SCRIPT_DEFAULTS:
-            resolved = str(default_scripts / _SCRIPT_DEFAULTS[command])
+        if not resolved and command in _SCRIPT_DEFAULTS:
+            # Through `script_tree`, so a workflow step running a registered tool uses the
+            # active project's own copy of the script. This built `{base}/bin/scripts/<name>`
+            # itself, which is the same bug as the duplicate `_scripts_dir()` two functions up:
+            # the API would run the project's copy and a workflow step the shared default, and
+            # nothing would report the disagreement.
+            resolved = script_tree.resolve(_SCRIPT_DEFAULTS[command])
         if not resolved:
             output = f"[Tool: {command}]\nResolved path: (not configured: {command})\nStatus: SKIPPED"
             _save_step_output(run_id, step_id, output)
