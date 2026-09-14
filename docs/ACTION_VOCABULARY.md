@@ -6,7 +6,7 @@ Every action the product declares, which is what a policy's `actions` field may 
 **Generated from the live registry** — a route without a declaration cannot appear here,
 and the build gate in `backend/tests/test_action_coverage.py` fails if one exists.
 
-180 actions across 53 services: 62 reads and 118 mutations.
+184 actions across 53 services: 62 reads and 122 mutations.
 
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
@@ -77,9 +77,13 @@ enumeration of the reads below.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
-| `catalog:read` | read | singleton | `GET catalog.get_active`<br>`GET catalog.get_topology`<br>`GET catalog.overview`<br>`GET catalog.vocab` |
+| `catalog:complete_setup` | mutate | singleton | `POST setup.api_setup_complete` |
+| `catalog:propose_naming` | mutate | singleton | `POST setup.api_setup_naming_propose` |
+| `catalog:read` | read | singleton | `GET catalog.get_active`<br>`GET catalog.get_topology`<br>`GET catalog.overview`<br>`GET catalog.vocab`<br>`GET setup.api_setup_status` |
+| `catalog:reopen_setup` | mutate | singleton | `POST setup.api_setup_reopen` |
 | `catalog:set_active` | mutate | singleton | `PUT catalog.set_active` |
 | `catalog:set_topology` | mutate | singleton | `PUT catalog.set_topology` |
+| `catalog:write_ssh_key` | mutate | singleton | `POST setup.api_setup_ssh_key` |
 
 ## `catalog.board`
 

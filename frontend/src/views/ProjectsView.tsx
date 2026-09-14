@@ -9,10 +9,10 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, lazy, Suspense } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import { Plus, Pencil, Trash2, CheckCircle2, Server, FolderKanban } from "lucide-react";
+import { Plus, Pencil, Trash2, CheckCircle2, Server, FolderKanban, Wand2, FileCode2 } from "lucide-react";
 import {
   Banner,
   Button as KuiButton,
@@ -39,6 +39,14 @@ import {
 import { useActiveCluster } from "../context/ActiveClusterContext";
 import type { CatalogVocab, Cluster, Platform, Project } from "../types/catalog";
 import { intOr } from "../lib/catalogForm";
+import { bootstrapProjectScripts } from "../services/setupService";
+
+// Lazy AND conditionally rendered: the wizard is a whole second form, and this screen is on the
+// initial route. Loading it for everyone to serve the rare "set up another cluster" click is
+// exactly the regression `initialBundle.test.ts` exists to catch.
+const SetupWizard = lazy(() =>
+  import("../components/setup/SetupWizard").then((m) => ({ default: m.SetupWizard })),
+);
 
 function emptyCluster(): Cluster {
   return {
@@ -60,6 +68,8 @@ function slugify(s: string): string {
 export function ProjectsView() {
   const { projects, active, setActive, refresh: refreshActive } = useActiveCluster();
   const [platforms, setPlatforms] = useState<Platform[]>([]);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [scriptNote, setScriptNote] = useState("");
   const [vocab, setVocab] = useState<CatalogVocab | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -153,6 +163,43 @@ export function ProjectsView() {
   const setConn = (patch: Partial<Cluster["connection"]>) =>
     setClusterDraft((d) => (d ? { ...d, cluster: { ...d.cluster, connection: { ...d.cluster.connection, ...patch } } } : d));
 
+  /**
+   * Re-copy the shared defaults into this project's script directory.
+   *
+   * The counterpart to the per-project copy: isolation means a fix to a default script does not
+   * reach a project that was bootstrapped before it, so there has to be a way to pull one
+   * forward. Never forced from here — a file the operator edited is reported, not replaced,
+   * because discarding a site's own fix silently is worse than leaving it behind.
+   */
+  const onUpdateScripts = async (p: Project) => {
+    setError("");
+    setScriptNote("");
+    try {
+      const result = await bootstrapProjectScripts(p.id, false, p.clusters[0]?.id || "");
+      const kept =
+        result.differs_from_defaults > 0
+          ? ` ${result.differs_from_defaults} file(s) differ from the defaults and were left as they are.`
+          : "";
+      setScriptNote(`${p.name}: copied ${result.copied} file(s) into ${result.dest}.${kept}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  if (wizardOpen) {
+    return (
+      <Suspense fallback={<Box sx={{ p: 4 }} />}>
+        <SetupWizard
+          onCancel={() => setWizardOpen(false)}
+          onFinished={() => {
+            setWizardOpen(false);
+            void refreshActive();
+          }}
+        />
+      </Suspense>
+    );
+  }
+
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.comfortable, mx: "auto", p: 4 }}>
       <PageHeader
@@ -160,15 +207,28 @@ export function ProjectsView() {
         description="Customer projects and their clusters: naming convention, geometry, platform, and connection. Set the active cluster to re-scope the whole app."
         contentId="projects"
         actions={
-          <Button variant="contained" size="small" startIcon={<Plus size={16} />} onClick={() => setProjectDraft({ name: "", customer: "", description: "" })}>
-            New project
-          </Button>
+          <Flex gap="2">
+            {/* The same wizard the first login runs. A second cluster is the same job as the
+                first one, and an operator who has done it once already knows this screen. */}
+            <Button variant="outlined" size="small" startIcon={<Wand2 size={16} />} onClick={() => setWizardOpen(true)}>
+              Setup wizard
+            </Button>
+            <Button variant="contained" size="small" startIcon={<Plus size={16} />} onClick={() => setProjectDraft({ name: "", customer: "", description: "" })}>
+              New project
+            </Button>
+          </Flex>
         }
       />
 
       {error && (
         <Banner status="error" kind="inline" style={{ marginBottom: 16 }}>
           {error}
+        </Banner>
+      )}
+
+      {scriptNote && (
+        <Banner status="success" kind="inline" style={{ marginBottom: 16 }}>
+          {scriptNote}
         </Banner>
       )}
 
@@ -203,6 +263,9 @@ export function ProjectsView() {
                   </Button>
                   <Button variant="outlined" size="small" startIcon={<Plus size={14} />} onClick={() => setClusterDraft({ projectId: p.id, cluster: emptyCluster(), isNew: true })}>
                     Cluster
+                  </Button>
+                  <Button variant="outlined" size="small" startIcon={<FileCode2 size={14} />} onClick={() => void onUpdateScripts(p)}>
+                    Update scripts
                   </Button>
                   <Button variant="outlined" color="error" size="small" startIcon={<Trash2 size={14} />} onClick={() => void onDeleteProject(p)}>
                     Delete

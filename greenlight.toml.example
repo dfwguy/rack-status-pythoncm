@@ -35,6 +35,11 @@
 # name the path to itself. Keep those in rack-config.env.
 
 [general]
+# Re-open the first-run setup wizard even though a project is already configured. What `cli.py
+# serve --setup-wizard` sets; normally left unset, since the wizard offers itself when no
+# operator-created project exists.
+# NVIS_FORCE_SETUP_WIZARD = false
+
 # Log level. Settable here because the config file is read before logging is configured, which
 # is the reason the loader's own records appear slightly late.
 # NVIS_LOG_LEVEL = "INFO"

@@ -1206,6 +1206,36 @@
   "variant": "sync"
  },
  {
+  "endpoint": "setup.api_setup_complete",
+  "method": "POST",
+  "action": "catalog:complete_setup",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "setup.api_setup_naming_propose",
+  "method": "POST",
+  "action": "catalog:propose_naming",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "setup.api_setup_reopen",
+  "method": "POST",
+  "action": "catalog:reopen_setup",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "setup.api_setup_ssh_key",
+  "method": "POST",
+  "action": "catalog:write_ssh_key",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "setup.api_setup_status",
+  "method": "GET",
+  "action": "catalog:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "slurm_ops.api_slurm_drain",
   "method": "POST",
   "action": "slurm.node:drain",

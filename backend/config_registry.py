@@ -447,6 +447,22 @@ register(
 
 register(
     Setting(
+        name="NVIS_FORCE_SETUP_WIZARD",
+        toml_type=TOML_BOOL,
+        secret=False,
+        example="false",
+        section="general",
+        description=(
+            "Re-open the first-run setup wizard even though a project is already configured. "
+            "What `cli.py serve --setup-wizard` sets; normally left unset, since the wizard "
+            "offers itself when no operator-created project exists."
+        ),
+    )
+)
+
+
+register(
+    Setting(
         name="RACK_STATUS_DEMO",
         toml_type=TOML_BOOL,
         secret=False,

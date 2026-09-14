@@ -39,6 +39,14 @@ export interface AuthState {
   loading: boolean;
   /** The bootstrap credential is flagged for change (FR-10a); the UI should insist on it. */
   mustChangePassword?: boolean;
+  /**
+   * No project has been configured, so the setup wizard should run.
+   *
+   * Carried on the auth state rather than fetched by the view that needs it, for the same
+   * reason `mustChangePassword` is: the gate has to decide what to render *before* any view
+   * mounts, and a second request at that point is a blank screen with a spinner on every load.
+   */
+  setupRequired?: boolean;
 }
 
 export interface AuthContextValue extends AuthState {
@@ -51,6 +59,13 @@ export interface AuthContextValue extends AuthState {
     password: string,
   ) => Promise<{ ok: boolean; error?: string; mustChangePassword?: boolean }>;
   logout: () => Promise<void>;
+  /**
+   * The wizard finished; stop gating on it.
+   *
+   * Local, because the server flag was already written by `/api/setup/complete` — re-reading
+   * it would be a round trip to learn what we just caused.
+   */
+  markSetupComplete: () => void;
 }
 
 export const AuthContext = createContext<AuthContextValue>({
@@ -59,6 +74,7 @@ export const AuthContext = createContext<AuthContextValue>({
   loading: true,
   login: async () => ({ ok: false }),
   logout: async () => {},
+  markSetupComplete: () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);

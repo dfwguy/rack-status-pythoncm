@@ -101,10 +101,25 @@ def api_auth_check():
         # is one missed prompt, and the next login re-reports it.
         _logger.exception("auth-check: could not read the password-change flag")
 
+    # Same shape and the same reason as `must_change_password`: the SPA gates on it in
+    # `AuthGate`, and a separate endpoint would be a second round trip on every page load to
+    # answer a question this one already had to open the store for.
+    setup = {"required": False, "reason": "unknown"}
+    try:
+        import setup_state
+
+        setup = setup_state.status()
+    except Exception:
+        # Never fatal, for the reason above it: a catalog hiccup must not lock out a caller
+        # whose token is perfectly valid. The worst case is a wizard not offered.
+        _logger.exception("auth-check: could not read the setup state")
+
     return jsonify({
         "authenticated": True,
         "user": principal,
         "must_change_password": must_change,
+        "setup_required": bool(setup.get("required")),
+        "setup_reason": setup.get("reason", ""),
     })
 
 

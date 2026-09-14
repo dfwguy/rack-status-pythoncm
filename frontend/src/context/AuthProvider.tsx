@@ -50,6 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Carried through the mount check as well as login, so a page reload cannot walk past
           // the change-password prompt (FR-10a).
           mustChangePassword: Boolean(data.must_change_password),
+          setupRequired: Boolean(data.setup_required),
         });
       })
       .catch(() => {
@@ -68,6 +69,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (username: string, password: string) => {
     const result = await srpLogin(username, password);
     if (result.ok) {
+      // The SRP exchange answers about credentials, so it cannot know whether this deployment
+      // has been configured. Ask the same endpoint the mount check uses rather than inventing a
+      // second source: without this the wizard would appear only after a page reload, which is
+      // exactly the path a first-time operator does not take.
+      let setupRequired = false;
+      try {
+        const res = await apiFetch("/api/auth-check");
+        if (res.ok) setupRequired = Boolean((await res.json()).setup_required);
+      } catch {
+        // A missed wizard prompt is recoverable — it is offered again on the next load, and
+        // from the Projects screen. Failing the login over it would not be.
+      }
       setState({
         authenticated: true,
         user: result.user?.display_name || result.user?.login || username,
@@ -76,10 +89,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         userLogin: result.user?.login || username,
         loading: false,
         mustChangePassword: Boolean(result.mustChangePassword),
+        setupRequired,
       });
       return { ok: true, mustChangePassword: Boolean(result.mustChangePassword) };
     }
     return { ok: false, error: result.error || "Login failed" };
+  }, []);
+
+  const markSetupComplete = useCallback(() => {
+    setState((s) => ({ ...s, setupRequired: false }));
   }, []);
 
   const logout = useCallback(async () => {
@@ -90,7 +108,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ ...state, login, logout }}>
+    <AuthContext.Provider value={{ ...state, login, logout, markSetupComplete }}>
       {children}
     </AuthContext.Provider>
   );

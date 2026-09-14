@@ -170,12 +170,28 @@ class TestDerivedContent:
 
 class TestTagging:
     def test_tags_group_rather_than_naming_every_endpoint(self, spec):
-        """Grouping by raw path segment gave 106 tags for 201 operations — no grouping at all."""
+        """Grouping by raw path segment gave 106 tags for 201 operations — no grouping at all.
+
+        Stated as a **ratio**, not as a tag ceiling. The original `len(counts) < 50` was a proxy
+        for the same property and held for a year, then failed the day a genuinely new domain
+        (`/api/setup`, five endpoints under one tag) was added — which is correct grouping, not
+        the failure the test was written for. A ceiling on domains makes every new domain look
+        like a regression and gets raised by one each time, which is a gate that has stopped
+        deciding anything.
+
+        Measured 2026-09-14: 263 operations across 50 tags, mean 5.3. The regression this
+        guards against sat at 1.9.
+        """
         counts: dict[str, int] = {}
         for methods in spec["paths"].values():
             for op in methods.values():
                 counts[op["tags"][0]] = counts.get(op["tags"][0], 0) + 1
-        assert len(counts) < 50
+        operations = sum(counts.values())
+        mean = operations / len(counts)
+        assert mean >= 3.0, (
+            f"tags have stopped grouping: {len(counts)} tags for {operations} operations "
+            f"(mean {mean:.1f}); a tag per endpoint measures 1.0"
+        )
         assert not [t for t, n in counts.items() if n == 1], "a tag holding one operation"
 
     def test_an_endpoint_family_shares_a_tag(self, spec):

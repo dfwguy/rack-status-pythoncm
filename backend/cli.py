@@ -90,6 +90,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = sub.choices["serve"]
     serve.add_argument(
+        "--setup-wizard",
+        action="store_true",
+        help=(
+            "Re-open the first-run setup wizard for the next login, even if a project is already "
+            "configured. Sets NVIS_FORCE_SETUP_WIZARD."
+        ),
+    )
+    serve.add_argument(
         "--no-bootstrap",
         action="store_true",
         help=(
@@ -197,6 +205,12 @@ def _apply(args: argparse.Namespace) -> dict[str, str]:
     if getattr(args, "port", None):
         os.environ["RACK_WEB_PORT"] = str(args.port)
         applied["RACK_WEB_PORT"] = str(args.port)
+    # Only set when asked. Writing "false" for an absent flag would make the CLI override a
+    # `greenlight.toml` that turned it on -- the flags write the environment and let the
+    # `config_registry` ladder decide precedence, rather than resolving anything themselves.
+    if getattr(args, "setup_wizard", False):
+        os.environ["NVIS_FORCE_SETUP_WIZARD"] = "1"
+        applied["NVIS_FORCE_SETUP_WIZARD"] = "1"
     return applied
 
 

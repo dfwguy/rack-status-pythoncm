@@ -45,6 +45,7 @@ const asAdmin = (ui: React.ReactNode) => (
       loading: false,
       login: async () => ({ ok: true }),
       logout: async () => {},
+      markSetupComplete: () => {},
     }}
   >
     {ui}

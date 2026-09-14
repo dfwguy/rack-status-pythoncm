@@ -52,6 +52,11 @@ import { RackDetailView } from "./views/RackDetailView";
 // null}` instead. The cost of getting it wrong is invisible locally — the dev server is fast and
 // the bundle is never measured — so it is enforced by `src/initialBundle.test.ts`, which walks
 // this import graph and names the chain when a heavy package gets back in.
+// Lazy AND conditionally rendered, per the rule above: the wizard runs once per deployment, so
+// shipping it in the initial bundle would cost every page load for a screen almost nobody sees.
+const SetupWizard = lazy(() =>
+  import("./components/setup/SetupWizard").then((m) => ({ default: m.SetupWizard })),
+);
 const NodesView = lazy(() => import("./views/NodesView").then((m) => ({ default: m.NodesView })));
 const MultirackView = lazy(() => import("./views/MultirackView").then((m) => ({ default: m.MultirackView })));
 const SlurmView = lazy(() => import("./views/SlurmView").then((m) => ({ default: m.SlurmView })));
@@ -423,7 +428,8 @@ function AppContent() {
 }
 
 function AuthGate() {
-  const { authenticated, loading, mustChangePassword, userLogin, logout } = useAuth();
+  const { authenticated, loading, mustChangePassword, setupRequired, userLogin, logout, markSetupComplete } =
+    useAuth();
 
   if (loading) {
     return (
@@ -445,6 +451,17 @@ function AuthGate() {
 
   if (!authenticated) {
     return <LoginPage />;
+  }
+
+  // After the password branch, never before it. The bootstrap password was printed to a log, so
+  // an operator who has not changed it is not yet the only person who could be sitting here —
+  // and a wizard reached with that credential would configure the cluster under it.
+  if (setupRequired) {
+    return (
+      <Suspense fallback={<Box sx={{ minHeight: "100vh" }} />}>
+        <SetupWizard onFinished={markSetupComplete} />
+      </Suspense>
+    );
   }
 
   return (
