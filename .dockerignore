@@ -14,8 +14,31 @@ var/secrets/
 **/.vault_master_key
 **/.rack_web_secret_key
 demo-reports
-docs
+
+# ---- docs ------------------------------------------------------------------------------------
+# `docs/` can no longer be excluded wholesale: the `docs-build` stage runs Sphinx over it, and an
+# excluded path is simply absent from the context, so `COPY docs/requirements.txt` copied nothing
+# and pip failed with "Could not open requirements file" — a missing *file* error for what is
+# really a missing *context*.
+#
+# The docs still never reach the image as source. The final stage copies only the built HTML
+# (`COPY --from=docs-build /build/static/docs/`), so this widens the build context and not the
+# shipped artifact.
+#
+# What stays out is the 2.9 MB Sphinx does not read: `conf.py` already excludes `screenshots` and
+# the operational runbooks (`[A-Z]*.md`), so shipping them into the context would cost build time
+# and cache invalidation for nothing.
+docs/screenshots
+docs/_build
+docs/*.pdf
+docs/*.csv
+docs/*.png
+
 *.md
+
+# Built docs, for the same reason `static/spa` is here: the image gets them from `docs-build`, so
+# a stale local build must not be copied in by `COPY static/`.
+static/docs
 .cursor
 .env
 .env.*
