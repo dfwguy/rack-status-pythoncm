@@ -17,8 +17,13 @@
 // cards do NOT resize and only drag in Customise mode, and only mounting proves it.
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { ToolWidgetBoard, boardStorageKey } from "./ToolWidgetBoard";
-import { WIDGET_CARD_HEIGHT, WIDGET_CARD_WIDTH, parseCustomization } from "./widgetLayout";
+import { ToolWidgetBoard } from "./ToolWidgetBoard";
+import {
+  WIDGET_CARD_HEIGHT,
+  WIDGET_CARD_WIDTH,
+  boardStorageKey,
+  parseCustomization,
+} from "./widgetLayout";
 import { fromTool, fromWorkflow } from "./boardActions";
 import type { Tool } from "../../types/catalog";
 import type { BoardAction } from "./boardActions";

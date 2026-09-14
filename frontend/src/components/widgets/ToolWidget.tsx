@@ -33,7 +33,8 @@ import Tooltip from "@mui/material/Tooltip";
 import IconButton from "@mui/material/IconButton";
 import { planToolLaunch } from "../../lib/toolLaunch";
 import type { BoardAction } from "./boardActions";
-import { ActionCardFace, withoutBubbling } from "./ActionCardFace";
+import { ActionCardFace } from "./ActionCardFace";
+import { withoutBubbling } from "./cardInteraction";
 import type { CardOrientation } from "./widgetLayout";
 
 /** Class the grid uses as its drag handle. Only this grip moves a card. */

@@ -42,8 +42,10 @@ import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
 import ListItemText from "@mui/material/ListItemText";
 import Box from "@mui/material/Box";
-import { ActionCardFace, CATEGORY_COLORS, withoutBubbling } from "../widgets/ActionCardFace";
-import { useOrientationFromGrid } from "../widgets/ActionCardGrid";
+import { ActionCardFace } from "../widgets/ActionCardFace";
+import { CATEGORY_COLORS } from "../widgets/toolImages";
+import { withoutBubbling } from "../widgets/cardInteraction";
+import { useOrientationFromGrid } from "../widgets/useCardOrientation";
 import type { CardOrientation } from "../widgets/widgetLayout";
 
 export type ActionStatus = "idle" | "running" | "success" | "error";

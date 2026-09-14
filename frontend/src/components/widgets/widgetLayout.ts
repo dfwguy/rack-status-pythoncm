@@ -520,3 +520,21 @@ function migrateLayoutRecord(
     order: orderFromPositions(positions),
   };
 }
+
+// --- where a customisation is stored ----------------------------------------------------
+
+const STORAGE_PREFIX = "nvis-widget-board";
+
+/**
+ * The localStorage key for one surface's board.
+ *
+ * Here rather than in `ToolWidgetBoard` because that file exports a component and may not also
+ * export a function without breaking fast refresh — and because this module already owns the
+ * rest of the persistence: the schema, its migrations and the diff that gets written.
+ *
+ * Scoped per cluster as well as per surface: the same board on another cluster would offer
+ * tools that platform is not compatible with, and a position saved against them is noise.
+ */
+export function boardStorageKey(clusterId: string | undefined, surface: string): string {
+  return `${STORAGE_PREFIX}:${clusterId ?? "default"}:${surface}`;
+}

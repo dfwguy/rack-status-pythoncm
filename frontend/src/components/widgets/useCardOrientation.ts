@@ -23,7 +23,7 @@
 // **100** — a plausible-looking number that is not a width, which is exactly how a 1440px
 // board came to render as a single stacked card. `usableWidth` is still applied as a second
 // guard, so an unmeasurable container falls back to the desktop grid rather than to a stack.
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { cardOrientation, usableWidth, type CardOrientation } from "./widgetLayout";
 
 export function useCardOrientation(): {
@@ -52,4 +52,18 @@ export function useCardOrientation(): {
   }, []);
 
   return { ref, orientation };
+}
+
+// --- reading it further down the tree ---------------------------------------------------
+//
+// The context and its reader live here rather than in `ActionCardGrid` because that file
+// exports a component, and a component file may not also export a hook or a context without
+// breaking Vite's fast refresh (`react-refresh/only-export-components`). Keeping all three
+// together — measure it, provide it, read it — is also the clearer home.
+
+/** Vertical outside a grid: a lone card on a page is a grid of one. */
+export const CardOrientationContext = createContext<CardOrientation>("vertical");
+
+export function useOrientationFromGrid(): CardOrientation {
+  return useContext(CardOrientationContext);
 }

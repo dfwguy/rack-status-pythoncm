@@ -108,7 +108,15 @@ prescriptive detail — and the cost of each wrong choice — in **`core-designs
   (`docs/action-vocabulary.json`, `backend/tests/action_snapshot.json`,
   `greenlight.toml.example`), then fails if the tracked copies differ — so adding or renaming
   an API route surfaces as a reviewed diff instead of drifting. See `core-designs.mdc` §14.
-- **Lint**: `ruff check` for Python, `tsc -b --noEmit` for TypeScript. Both must pass.
+- **Lint**: `ruff check backend/ --exclude tests` for Python. For TypeScript the CI job is called
+  `typescript-check` and runs **two** commands — `npx tsc -b --noEmit` *and* `npm run lint`
+  (eslint). Run both; this line used to name only `tsc`, and a green `tsc` shipped four eslint
+  errors to CI. The rule that caught them is `react-refresh/only-export-components`: a file
+  exporting a component may not also export an object, function or hook, because Vite cannot then
+  hot-replace it (a `const` holding a literal is allowed, which is why `WIDGET_DRAG_HANDLE` passes
+  and `CATEGORY_COLORS` does not). `eslint.config.js` states the policy for the whole config —
+  every rule except `react-hooks/set-state-in-effect` is at zero, so **any** error fails the gate,
+  and the fix is the code rather than a second downgraded rule.
 
 ## Key Files
 

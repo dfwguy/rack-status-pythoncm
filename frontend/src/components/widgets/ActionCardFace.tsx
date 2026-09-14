@@ -35,39 +35,9 @@ import type { CSSProperties, ReactNode } from "react";
 import { Info } from "lucide-react";
 import { Badge, Button, Card, Flex, Text } from "@nvidia/foundations-react-core";
 import Tooltip from "@mui/material/Tooltip";
-import { CATEGORY_IMAGES } from "./toolImages";
 import { CARD_METRICS, HORIZONTAL_CARD_METRICS, type CardOrientation } from "./widgetLayout";
-
-/**
- * Badge colour per category, so the group is recognisable before the word is read.
- *
- * Mirrors `catalog.models.TOOL_CATEGORIES`, plus `workflow`, which is synthetic.
- */
-export const CATEGORY_COLORS: Record<
-  string,
-  "green" | "blue" | "teal" | "purple" | "yellow" | "gray"
-> = {
-  validation: "green",
-  performance: "blue",
-  hardware: "teal",
-  networking: "purple",
-  maintenance: "yellow",
-  setup: "gray",
-  workflow: "teal",
-};
-
-/**
- * Run a handler without letting the click reach the card.
- *
- * The card itself is clickable (see `onDetails`), so every control drawn on top of it has to
- * stop the bubble or pressing Run would also open the modal behind it.
- */
-export function withoutBubbling(fn: () => void) {
-  return (e: { stopPropagation: () => void }) => {
-    e.stopPropagation();
-    fn();
-  };
-}
+import { CATEGORY_COLORS, CATEGORY_IMAGES } from "./toolImages";
+import { withoutBubbling } from "./cardInteraction";
 
 export interface ActionCardFaceProps {
   title: string;

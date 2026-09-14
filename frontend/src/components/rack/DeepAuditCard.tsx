@@ -27,8 +27,9 @@ import { validationTargetFromNodes } from "../../lib/validationTargetFromNodes";
 import { fetchDeepAuditOutput, fetchDeepAudits, startDeepAudit } from "../../services/nodeIssuesService";
 import type { DeepAuditRun, DeepAuditSummary } from "../../types/api";
 import type { NvisNamingSchema } from "../../types/naming";
-import { ActionCardFace, withoutBubbling } from "../widgets/ActionCardFace";
-import { useOrientationFromGrid } from "../widgets/ActionCardGrid";
+import { ActionCardFace } from "../widgets/ActionCardFace";
+import { withoutBubbling } from "../widgets/cardInteraction";
+import { useOrientationFromGrid } from "../widgets/useCardOrientation";
 
 type AuditKind = "hardware" | "network";
 type WorkflowId = "hardware-deep-audit" | "nvlink-network-deep-audit";

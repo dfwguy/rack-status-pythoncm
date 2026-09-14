@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-// toolImages — the card banner for an action.
+// toolImages — how a category looks: the card's banner, and its badge colour.
 // Author: Rafael M. Koike & Cursor Agent ("Ada")
 //
 // Keyed on `category`, the same field the card's badge shows, so the picture and the label
@@ -28,6 +28,12 @@ import setup from "../../assets/tool-categories/setup.jpg";
 import workflow from "../../assets/tool-categories/workflow.jpg";
 import validation from "../../assets/tool-categories/validation.jpg";
 import type { BoardAction } from "./boardActions";
+
+// `CATEGORY_COLORS` lives beside the images rather than in `ActionCardFace` for two reasons.
+// The practical one is `react-refresh/only-export-components`: a file that exports a component
+// may not also export an object, or Vite cannot hot-replace it. The better one is that both maps
+// answer the same question in the same key space, so adding a category is one edit to one file
+// instead of two that can disagree about which categories exist.
 
 /** Mirrors `catalog.models.TOOL_CATEGORIES`. */
 export const CATEGORY_IMAGES: Record<string, string> = {
@@ -53,3 +59,21 @@ export function actionImage(action: BoardAction): string {
   if (override) return override;
   return CATEGORY_IMAGES[action.category] ?? CATEGORY_IMAGES.validation;
 }
+
+/**
+ * Badge colour per category, so the group is recognisable before the word is read.
+ *
+ * Mirrors `catalog.models.TOOL_CATEGORIES`, plus `workflow`, which is synthetic.
+ */
+export const CATEGORY_COLORS: Record<
+  string,
+  "green" | "blue" | "teal" | "purple" | "yellow" | "gray"
+> = {
+  validation: "green",
+  performance: "blue",
+  hardware: "teal",
+  networking: "purple",
+  maintenance: "yellow",
+  setup: "gray",
+  workflow: "teal",
+};

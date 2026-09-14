@@ -20,17 +20,10 @@
 // shape is a fact about the container it landed in, not about the action — twenty-two call
 // sites threading the same value through would be twenty-two chances to forget one, and a
 // single card in the wrong orientation is a visibly broken row.
-import { createContext, useContext, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Grid } from "@nvidia/foundations-react-core";
-import { useCardOrientation } from "./useCardOrientation";
-import { WIDGET_CARD_WIDTH, type CardOrientation } from "./widgetLayout";
-
-/** Vertical outside a grid: a lone card on a page is a grid of one. */
-const CardOrientationContext = createContext<CardOrientation>("vertical");
-
-export function useOrientationFromGrid(): CardOrientation {
-  return useContext(CardOrientationContext);
-}
+import { CardOrientationContext, useCardOrientation } from "./useCardOrientation";
+import { WIDGET_CARD_WIDTH } from "./widgetLayout";
 
 export function ActionCardGrid({ children }: { children: ReactNode }) {
   const { ref, orientation } = useCardOrientation();

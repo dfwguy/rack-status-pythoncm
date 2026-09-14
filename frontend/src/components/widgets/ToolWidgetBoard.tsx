@@ -51,6 +51,7 @@ import {
   WIDGET_CARD_WIDTH,
   WIDGET_MARGIN,
   addableActions,
+  boardStorageKey,
   boardWidthFor,
   cardOrientation,
   cardsAcross,
@@ -69,16 +70,6 @@ import {
   type BoardCustomization,
 } from "./widgetLayout";
 import "react-grid-layout/css/styles.css";
-
-const STORAGE_PREFIX = "nvis-widget-board";
-
-/**
- * Scoped per cluster as well as per surface: the same board on another cluster would offer
- * tools that platform is not compatible with, and a position saved against them is noise.
- */
-export function boardStorageKey(clusterId: string | undefined, surface: string): string {
-  return `${STORAGE_PREFIX}:${clusterId ?? "default"}:${surface}`;
-}
 
 interface ToolWidgetBoardProps {
   surface: string;
