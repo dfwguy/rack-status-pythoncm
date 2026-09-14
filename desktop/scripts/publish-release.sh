@@ -126,7 +126,18 @@ done
 # asset to "0.3.0-260910185147" targets a release that does not exist: the POST fails, the
 # best-effort warning scrolls past, and the download never appears on the release page. Since the
 # release page is the surface users actually visit, that silent miss is the whole feature lost.
-RELEASE_TAG="${VERSION%%-*}"
+#
+# Stripping the stamp is only a *guess* at the tag, and it was wrong the first time it mattered:
+# the product's releases are cut by the ci-toolkit job from conventional commits, which had
+# already moved to 0.3.1 while version.py still said 0.3.0. So `RELEASE_TAG` is overridable, and
+# a miss now prints the tags that do exist instead of the bare "may not exist yet" that let seven
+# downloads go missing without anyone noticing.
+#
+# The desktop client is released under its own `desktop-<version>` tag rather than the product's
+# semver line, for two reasons: the ci-toolkit job owns `X.Y.Z` and computes the next one itself,
+# and the installers are built from a branch whose code is not in the product release of the same
+# number — attaching them there would advertise binaries nobody can reproduce from that commit.
+RELEASE_TAG="${RELEASE_TAG:-${VERSION%%-*}}"
 
 # ── Resolve every file to upload ───────────────────────────────────────────────────────────────
 # Two kinds, which differ both in how they are verified and in where they go:
@@ -296,26 +307,45 @@ done
 # Only installers get a link. A manifest on the release page is noise to a human — it is a machine
 # file the app fetches for itself — and four extra rows would bury the three downloads that matter.
 if [ "$DRY_RUN" -eq 0 ]; then
-  echo "==> attaching asset links to release $RELEASE_TAG (best-effort)"
-  for f in "${ALL[@]}"; do
-    name=$(basename "$f")
-    case "$name" in
-      *.yml) continue ;;
-      *.zip|*.dmg) label="macOS" ;;
-      *.exe)       label="Windows" ;;
-      *.AppImage)  label="Linux (AppImage, self-updating)" ;;
-      *.deb)       label="Linux (Debian/Ubuntu)" ;;
-      *.rpm)       label="Linux (RHEL/Fedora)" ;;
-      *)           label="download" ;;
-    esac
-    curl --fail-with-body --silent --show-error --request POST \
-      --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-      --data-urlencode "name=$name ($label)" \
-      --data-urlencode "url=$BASE/$VERSION/$name" \
-      --data "link_type=package" \
-      "$HOST/api/v4/projects/$PROJECT/releases/$RELEASE_TAG/assets/links" >/dev/null 2>&1 \
-      || echo "    WARN: could not attach $name (release $RELEASE_TAG may not exist yet)"
-  done
+  echo "==> attaching asset links to release $RELEASE_TAG"
+  if ! curl --fail --silent --output /dev/null \
+       --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+       "$HOST/api/v4/projects/$PROJECT/releases/$RELEASE_TAG"; then
+    echo "    no release tagged '$RELEASE_TAG' — nothing attached. Existing releases:"
+    curl --silent --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+      "$HOST/api/v4/projects/$PROJECT/releases?per_page=5" \
+      | tr ',' '\n' | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^/      /'
+    echo "    Re-run with RELEASE_TAG=<one of those>, or create the release first."
+    echo "    The packages are published either way; only the release-page links are missing."
+  else
+    # Labelled by platform AND architecture. The filename alone does not tell a Windows user
+    # whether they want `-x64.exe`, `-arm64.exe` or the unsuffixed one that contains both.
+    for f in "${ALL[@]}"; do
+      name=$(basename "$f")
+      case "$name" in
+        *.yml) continue ;;
+        *arm64-notarized.zip) label="macOS (Apple Silicon)" ;;
+        *.zip|*.dmg)          label="macOS" ;;
+        *-x64.exe)            label="Windows (x64)" ;;
+        *-arm64.exe)          label="Windows (ARM64)" ;;
+        *.exe)                label="Windows (x64 + ARM64 installer)" ;;
+        *.AppImage)           label="Linux (AppImage, self-updating)" ;;
+        *.deb)                label="Linux (Debian/Ubuntu)" ;;
+        *.rpm)                label="Linux (RHEL/Fedora)" ;;
+        *)                    label="download" ;;
+      esac
+      if curl --fail-with-body --silent --show-error --request POST \
+           --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+           --data-urlencode "name=$label — $name" \
+           --data-urlencode "url=$BASE/$VERSION/$name" \
+           --data "link_type=package" \
+           "$HOST/api/v4/projects/$PROJECT/releases/$RELEASE_TAG/assets/links" >/dev/null 2>&1; then
+        echo "    linked $label"
+      else
+        echo "    WARN: could not link $name (a link of that name may already exist)"
+      fi
+    done
+  fi
 fi
 
 echo

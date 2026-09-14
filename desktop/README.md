@@ -401,11 +401,30 @@ scripts/sign-3s.sh                       # prints the stamped version, e.g. 0.3.
 #    BUILD_STAMP=260910185147, then download each job artifact into release/.
 #    Linux can also be built locally:  BUILD_STAMP=… npm run dist:linux
 
-# 3. Publish everything that is present.
-GITLAB_TOKEN=<pat-with-api-scope> scripts/publish-release.sh
+# 3. Publish everything that is present, and link it on the release page.
+GITLAB_TOKEN=<pat> RELEASE_TAG=desktop-0.3.0 scripts/publish-release.sh
 ```
 
 `--dry-run` prints every upload without performing one.
+
+### The release page is the surface people actually visit
+
+The Package Registry is where the bytes live, but nobody browses it. `RELEASE_TAG` attaches every
+installer to a GitLab Release as a labelled asset link, so a colleague sees *"Windows (x64)"*
+rather than a filename, and the platform they need is one click from the Releases page.
+
+**The desktop client has its own `desktop-<version>` tag, not the product's semver line.** Two
+reasons, and the first is the hard one: the ci-toolkit release job owns `X.Y.Z` and computes the
+next number itself from conventional commits, so a hand-made `0.3.0` release either collides with
+it or gets recomputed. It had in fact already cut `0.3.1` while `version.py` still said `0.3.0` —
+which is why the tag cannot simply be derived from the version, and why the first publish attached
+nothing at all. The second: these installers are built from a branch, so attaching them to the
+product release of the same number would advertise binaries that cannot be reproduced from that
+release's commit.
+
+Creating the release is a one-time step per version (`POST /releases` with `tag_name`); after that
+`publish-release.sh` fills in the assets, and re-running it is cheap because every already-uploaded
+file is skipped.
 
 ### It publishes every platform present, and refuses a set that disagrees
 
