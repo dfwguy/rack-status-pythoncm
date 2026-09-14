@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { useState, useMemo } from "react";
+import { useState, useMemo, lazy, Suspense } from "react";
 import AppBar from "@mui/material/AppBar";
 import MuiToolbar from "@mui/material/Toolbar";
 import IconButton from "@mui/material/IconButton";
@@ -36,7 +36,14 @@ import {
 import { ConnectionStatusIndicator } from "./ConnectionStatusIndicator";
 import { SqueueDialog } from "./SqueueDialog";
 import { SinfoDialog } from "./SinfoDialog";
-import WebTerminalDialog from "./rack/WebTerminalDialog";
+// Heavy dialogs are loaded on demand, and the *gating* below is as load-bearing as the
+// `lazy()`. A conditionally rendered component is still statically imported unless it is
+// lazy, and a lazy component fetches its chunk the moment it is first rendered -- so
+// `<Lazy open={false} />` would download everything at first paint and gain nothing. Both
+// halves are required: `lazy()` to split the chunk, and `flag && ...` so it stays unfetched
+// until the operator asks. See the note in App.tsx.
+// xterm + its WebGL addon (~461 kB), for the head-node console.
+const WebTerminalDialog = lazy(() => import("./rack/WebTerminalDialog"));
 import { useAuth } from "../context/AuthContext";
 import { useRackLocksContext } from "../context/RackLocksContext";
 import { ProjectSwitcher } from "./ProjectSwitcher";
@@ -334,13 +341,17 @@ export function Toolbar({
 
       <SqueueDialog open={squeueOpen} onClose={() => setSqueueOpen(false)} logDir={logDir} />
       <SinfoDialog open={sinfoOpen} onClose={() => setSinfoOpen(false)} />
-      <WebTerminalDialog
-        open={headTerminalOpen}
-        onClose={() => setHeadTerminalOpen(false)}
-        target="headnode"
-        label="Head Node"
-        mode="headnode"
-      />
+      {headTerminalOpen ? (
+        <Suspense fallback={null}>
+          <WebTerminalDialog
+            open
+            onClose={() => setHeadTerminalOpen(false)}
+            target="headnode"
+            label="Head Node"
+            mode="headnode"
+          />
+        </Suspense>
+      ) : null}
     </>
   );
 }

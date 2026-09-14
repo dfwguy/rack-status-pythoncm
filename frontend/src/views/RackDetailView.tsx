@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import Box from "@mui/material/Box";
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
@@ -24,8 +24,18 @@ import { ValidationTab } from "../components/rack/ValidationTab";
 import { HardwareTab } from "../components/rack/HardwareTab";
 import { NetworkingTab } from "../components/rack/NetworkingTab";
 import { ServicesTab } from "../components/rack/ServicesTab";
-import { ParserResultsDialog } from "../components/ParserResultsDialog";
-import WebTerminalDialog from "../components/rack/WebTerminalDialog";
+// Heavy dialogs are loaded on demand, and the *gating* below is as load-bearing as the
+// `lazy()`. A conditionally rendered component is still statically imported unless it is
+// lazy, and a lazy component fetches its chunk the moment it is first rendered -- so
+// `<Lazy open={false} />` would download everything at first paint and gain nothing. Both
+// halves are required: `lazy()` to split the chunk, and `flag && ...` so it stays unfetched
+// until the operator asks. See the note in App.tsx.
+// chart.js (~493 kB of source) rides in with the parser charts.
+const ParserResultsDialog = lazy(() =>
+  import("../components/ParserResultsDialog").then((m) => ({ default: m.ParserResultsDialog })),
+);
+// xterm + its WebGL addon (~461 kB).
+const WebTerminalDialog = lazy(() => import("../components/rack/WebTerminalDialog"));
 import { RackCommandProvider } from "../context/RackCommandProvider";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { VisuallyHidden } from "../components/a11y/VisuallyHidden";
@@ -257,20 +267,28 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
         </Box>
       </Box>
 
-      <ParserResultsDialog
-        open={parserOpen}
-        onClose={() => setParserOpen(false)}
-        rack={rack}
-        jobId={row?.last_job !== "-" ? row?.last_job : undefined}
-        logDir={logDir}
-      />
+      {parserOpen ? (
+        <Suspense fallback={null}>
+          <ParserResultsDialog
+            open
+            onClose={() => setParserOpen(false)}
+            rack={rack}
+            jobId={row?.last_job !== "-" ? row?.last_job : undefined}
+            logDir={logDir}
+          />
+        </Suspense>
+      ) : null}
 
-      <WebTerminalDialog
-        open={!!terminalNode}
-        onClose={() => setTerminalNode("")}
-        target={terminalNode}
-        mode="node"
-      />
+      {terminalNode ? (
+        <Suspense fallback={null}>
+          <WebTerminalDialog
+            open
+            onClose={() => setTerminalNode("")}
+            target={terminalNode}
+            mode="node"
+          />
+        </Suspense>
+      ) : null}
 
       <NodeIssueHistoryDialog
         open={!!issueNode}

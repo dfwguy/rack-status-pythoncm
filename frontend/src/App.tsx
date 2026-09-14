@@ -33,6 +33,25 @@ import { RackDetailView } from "./views/RackDetailView";
 // Lazy-loaded routes: keep the initial (index) bundle small by code-splitting each view. Heavy
 // deps move into their own on-demand chunks (reactflow -> Workflows, chart.js -> Analytics/Metrics,
 // the large ToolsView -> Tools). ClusterDashboard + SingleRack stay eager for fast first paint.
+//
+// **Routes are not the whole rule, and assuming they were cost 45% of this bundle.** The three
+// eager views render heavy *dialogs* — parser charts, the web terminal, the workflow run panel —
+// and a conditionally rendered component is still statically imported. The bundler does not care
+// that React will never mount it: chart.js, xterm and react-flow were all in the initial chunk
+// while their routes were dutifully split, ~1.2 MB of source, downloaded before the dashboard
+// painted by every operator on an air-gapped cluster over an SSH tunnel.
+//
+// So the rule is about *weight and optionality*, not about routes:
+//
+//   A component that pulls a heavy dependency and is not needed for first paint must be
+//   `lazy()`, AND must not be rendered until it is open.
+//
+// Both halves are required, and the second is the one that is easy to miss: `lazy()` fetches the
+// chunk the moment the component first renders, so `<LazyDialog open={false} />` downloads
+// everything and saves nothing. Write `{isOpen ? <Suspense><LazyDialog open … /></Suspense> :
+// null}` instead. The cost of getting it wrong is invisible locally — the dev server is fast and
+// the bundle is never measured — so it is enforced by `src/initialBundle.test.ts`, which walks
+// this import graph and names the chain when a heavy package gets back in.
 const NodesView = lazy(() => import("./views/NodesView").then((m) => ({ default: m.NodesView })));
 const MultirackView = lazy(() => import("./views/MultirackView").then((m) => ({ default: m.MultirackView })));
 const SlurmView = lazy(() => import("./views/SlurmView").then((m) => ({ default: m.SlurmView })));

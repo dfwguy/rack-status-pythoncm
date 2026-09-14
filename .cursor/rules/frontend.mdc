@@ -101,9 +101,57 @@ bug. `/api/auth/refresh`, `/api/auth/srp/` and `/api/auth/logout` are on `NO_REF
 wrapper — **`/api/auth-check` is deliberately not**, and putting it back reintroduces a defect
 where a page reload signed the operator out of a live session (see that constant's comment).
 
+## Code splitting: a lazy route is not enough, and a lazy dialog is not enough either
+
+Every route in `App.tsx` is `lazy()`, with `ClusterDashboard`, `SingleRack` and `RackDetail` eager
+for first paint. That was written down and then quietly broken, because the rule was about
+**routes** and the leak came through **dialogs**.
+
+**A conditionally rendered component is still statically imported.** The bundler does not care
+that React will never mount it. The three eager views each opened a heavy dialog — parser charts
+(`chart.js`), the web terminal (`xterm` + WebGL addon), the workflow run panel (`react-flow` +
+`dagre`) — so ~1.2 MB of source sat in the initial chunk, downloaded before the dashboard painted
+by every operator on an air-gapped cluster over an SSH tunnel. Fixing it took the initial chunk
+from **2,199 kB to 1,212 kB** (gzip 658 → 370).
+
+So the rule is weight and optionality, not routes:
+
+> A component that pulls a heavy dependency and is not needed for first paint must be `lazy()`,
+> **and** must not be rendered until it is open.
+
+```tsx
+// ✅ both halves
+const ParserResultsDialog = lazy(() =>
+  import("./ParserResultsDialog").then((m) => ({ default: m.ParserResultsDialog })),
+);
+{parserOpen ? <Suspense fallback={null}><ParserResultsDialog open … /></Suspense> : null}
+
+// ❌ lazy, and still downloaded at first paint: `lazy()` fetches on first RENDER, and this
+//    renders immediately — it just renders as nothing.
+<ParserResultsDialog open={parserOpen} … />
+```
+
+Gating also changes one thing worth knowing: the dialog unmounts on close, so MUI's exit
+transition is skipped and its internal state resets. For these dialogs that is an improvement.
+
+**`src/initialBundle.test.ts` enforces it** by walking the static import graph from `main.tsx` and
+`App.tsx` and failing with the exact import chain. It is a static check, not a size threshold, so
+it needs no build, runs in the existing `frontend-test` job, and points at a cause rather than a
+symptom. Add a package to its `HEAVY` map when you introduce one.
+
+**Do not read Vite's "chunks are larger than 500 kB" warning as the signal.** It fires per chunk
+with no idea which chunks are in the initial graph, so its loudest complaints are Monaco (2.7 MB)
+and its JSON mode (1.2 MB) — both already on demand and correctly split. The limit is raised to
+2800 in `vite.config.ts` for exactly that reason; the test above is the real gate.
+
 ## TypeScript & Lint
 
 - Build: `tsc -b && vite build`. All code must pass strict TypeScript.
+- **`npm run lint` (eslint) is part of the gate, not optional.** CI's job is *called*
+  `typescript-check` and runs `tsc -b --noEmit` **and** `npm run lint`. A green typecheck has
+  shipped eslint errors to CI. Watch `react-refresh/only-export-components` in particular: a file
+  exporting a component may not also export an object, function or hook (a `const` holding a
+  literal is fine), because Vite cannot hot-replace such a module.
 - MUI 9: Move `fontWeight`/`fontFamily`/`fontSize` into `sx`. Use `slotProps` not `primaryTypographyProps`.
 - `noUnusedLocals` enabled. Remove all unused imports.
 - Python lint: `ruff check`. Remove unused imports, no extraneous f-string prefixes.

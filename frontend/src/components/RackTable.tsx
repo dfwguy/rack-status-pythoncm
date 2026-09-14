@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, lazy, Suspense } from "react";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
@@ -63,7 +63,12 @@ import {
 } from "lucide-react";
 import { useRackCommandsStore } from "../context/RackCommandsStoreContext";
 import { RackTableCommandIndicator } from "./RackTableCommandIndicator";
-import { ParserResultsDialog } from "./ParserResultsDialog";
+// chart.js (~493 kB of source) rides in with the parser charts, and this table is on the
+// dashboard -- the first screen every operator sees. Lazy *and* gated on `parserOpen`
+// below; see the note in App.tsx for why one without the other buys nothing.
+const ParserResultsDialog = lazy(() =>
+  import("./ParserResultsDialog").then((m) => ({ default: m.ParserResultsDialog })),
+);
 import { GrafanaLinksMenu } from "./GrafanaLinksMenu";
 import { TailLogDialog } from "./TailLogDialog";
 import { HwCheckRunDialog } from "./rack/HwCheckRunDialog";
@@ -1496,17 +1501,21 @@ export function RackTable({
       />
 
       {/* Parser results dialog */}
-      <ParserResultsDialog
-        open={parserOpen}
-        onClose={() => {
-          setParserOpen(false);
-          setParserInitialTab(0);
-        }}
-        rack={parserRack}
-        jobId={parserJobId}
-        logDir={logDir}
-        initialTabIndex={parserInitialTab}
-      />
+      {parserOpen ? (
+        <Suspense fallback={null}>
+          <ParserResultsDialog
+            open
+            onClose={() => {
+              setParserOpen(false);
+              setParserInitialTab(0);
+            }}
+            rack={parserRack}
+            jobId={parserJobId}
+            logDir={logDir}
+            initialTabIndex={parserInitialTab}
+          />
+        </Suspense>
+      ) : null}
 
       <HwCheckRunDialog
         open={hwBulkDialogOpen}

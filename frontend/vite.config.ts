@@ -33,5 +33,19 @@ export default defineConfig({
   build: {
     outDir: "../static/spa",
     emptyOutDir: true,
+    /*
+     * Raised from the 500 kB default because the warning was crying wolf and had stopped being
+     * read. It fires per chunk with no idea whether a chunk is in the initial graph, so the three
+     * loudest offenders were Monaco (2.7 MB) and its JSON language mode (1.2 MB) — which are
+     * *already* on demand, loaded only when someone opens the policy editor. Three lines of alarm
+     * on every build about code that is correctly split, which is how a real regression in the
+     * initial chunk went unnoticed for weeks.
+     *
+     * 2800 clears the known on-demand giants and still fires if one of them doubles. What guards
+     * the number that actually matters — the initial chunk — is `src/initialBundle.test.ts`,
+     * which fails when a heavy dependency becomes statically reachable from `App.tsx`. That is a
+     * cause, not a symptom, so it can say which import to break.
+     */
+    chunkSizeWarningLimit: 2800,
   },
 });

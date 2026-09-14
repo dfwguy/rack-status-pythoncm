@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { useState } from "react";
+import { useState, lazy, Suspense } from "react";
 import Box from "@mui/material/Box";
 import { Banner, Text, Divider } from "@nvidia/foundations-react-core";
 import { ActionCard } from "./ActionCard";
@@ -22,7 +22,10 @@ import { useRackCommands } from "../../context/RackCommandContext";
 import { useActiveCluster } from "../../context/ActiveClusterContext";
 import { useBoardActions } from "../../hooks/useBoardActions";
 import { ToolWidgetBoard } from "../widgets/ToolWidgetBoard";
-import WorkflowRunPanel from "../workflow/WorkflowRunPanel";
+// react-flow + dagre (~279 kB of source) ride in with the run diagram. This panel is
+// already rendered only while a run is open, so `lazy()` alone finishes the job --
+// see the note in App.tsx for why both halves usually matter.
+const WorkflowRunPanel = lazy(() => import("../workflow/WorkflowRunPanel"));
 import { startWorkflowRun } from "../../services/workflowService";
 import { nodeSelectionProblem, planToolLaunch, statusUrlFor } from "../../lib/toolLaunch";
 import { slurmTargetBody, validationFamilyBody, type LaunchOptions } from "../../lib/rackCommandBodies";
@@ -317,7 +320,9 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
       />
 
       {workflowRunId ? (
-        <WorkflowRunPanel runId={workflowRunId} onClose={() => setWorkflowRunId(null)} />
+        <Suspense fallback={null}>
+          <WorkflowRunPanel runId={workflowRunId} onClose={() => setWorkflowRunId(null)} />
+        </Suspense>
       ) : null}
 
       {pendingPreset ? (
