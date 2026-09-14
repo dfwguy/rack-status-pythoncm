@@ -315,9 +315,48 @@ docker-build:
     # on main, so skip the redundant verify-only build there.
     - if: $CI_COMMIT_BRANCH == "main"
       when: never
+
+    # BLOCKING when the change touched how the image is built.
+    #
+    # This job used to be advisory in every case, which made it a gate that could not fail —
+    # and on 2026-09-14 that is exactly what happened: a new `docs-build` stage was added whose
+    # inputs were excluded by `.dockerignore`, Kaniko failed, and the pipeline still reported
+    # success. Nobody would have noticed from the pipeline; the break was found by reading the
+    # log by hand, and it would have surfaced next on **main**, where this job is skipped and
+    # the image comes from ci-toolkit's JFrog push, which is not advisory and ships the
+    # artifact customers install.
+    #
+    # Scoped to the build inputs rather than made unconditional on purpose. An image build on a
+    # shared Kaniko runner fails for reasons that have nothing to do with the commit (runner
+    # capacity, a registry timeout), and a gate that blocks unrelated work is a gate people
+    # learn to retry past. If you changed the Dockerfile or what it installs, a broken image is
+    # your change; otherwise it is information.
+    #
+    # `changes:` on a branch push compares against the previous commit, so this bites in the
+    # pipeline where the edit lands — which is the one that matters. A later commit that does
+    # not touch these files drops back to advisory, and the MR pipeline re-evaluates against
+    # the whole MR diff.
+    - if: $CI_COMMIT_BRANCH || $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - Dockerfile
+        - .dockerignore
+        - backend/requirements.txt
+        - docs/requirements.txt
+        - gunicorn.conf.py
+        - bin/write-build-info.sh
+        - frontend/package.json
+        - frontend/package-lock.json
+        # This file too: it holds the Kaniko invocation above, so a change here can break the
+        # build as surely as the Dockerfile can — and it means the gate verifies itself the
+        # moment somebody edits it, including this commit.
+        - .gitlab-ci.yml
+      allow_failure: false
+
+    # Otherwise: still runs, still visible, but does not block.
     - if: $CI_COMMIT_BRANCH
+      allow_failure: true
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-  allow_failure: true
+      allow_failure: true
 
 # ─── Air-gapped image bundle (docker save → downloadable .tar artifact) ─────────
 # Produces a self-contained image tarball that can be downloaded from the pipeline,
