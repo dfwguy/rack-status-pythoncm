@@ -38,7 +38,8 @@ already owns this concern".
 | A **helper used by one domain** | Beside its routes, private to that api module | A "utils" module |
 | A **helper a second domain now needs** | Move it to the module that owns the *concern* (`rack_status_engine`, `results_ingest`, `node_targets`, `naming`, `paths`, `job_registry`, `grafana_embed`, `slurm_query`) and import it from both | Importing one api module from another |
 | A **new tool, test or preset** | A `Tool` document in the catalog, with pins and step counts as `tool_param_defaults` on the `Platform` (citizen 2) | A constant, dict or frozen list in Python |
-| A **script path** | `paths.py`, named `_<tool>_script_path` like its nineteen siblings | A literal path at the call site |
+| A **script path** | `paths.py`, via `_script("name.sh", "ENV_KEY")` like its nineteen siblings | A literal path, or a second `SCRIPTS_DIR` |
+| A **per-project or per-platform script** | A file in that project's or platform's layer of the script tree (citizen 2b) | An `if` on cluster name inside a shared script |
 | Anything **cluster-, site- or customer-specific** | The `Project`/`Cluster` record (citizen 3) | An `if` on cluster name; a new env var |
 | A **long-running job** | `workflow_engine` — and if it lacks progress, artifacts or idempotency, add those *to the engine* (citizen 4) | A fifth in-memory job dict |
 | A **background worker's phase reporting** | `job_registry.reset_job_progress` | A hand-rolled `_patch` closure |
@@ -163,6 +164,39 @@ counts and thresholds are `tool_param_defaults` — not constants in a new modul
 presets in Python is precisely the hard-wired `RACK_*_SCRIPT` registry the catalog replaced: no
 operator can edit it, it ships one site's absolute paths to every other site, and adding a test
 needs a code change and a deploy.
+
+### 2b. The script tree — which *copy* of a script runs
+
+`backend/script_tree.py`. One server runs several customers' projects, so "which script" and
+"whose copy of it" are different questions. A script resolves through layers, most specific
+first:
+
+```
+{base}/scripts/project-<id>/     one project's copy, plus its custom scripts
+{base}/scripts/<platform>/       platform-specific overrides
+{base}/scripts/multi-platform/   the shared default set
+```
+
+**Ask this module, never `RACK_REMOTE_BASE_PATH` yourself.** That is not advice, it is the bug
+this replaced: `paths._scripts_dir()` honoured the topology `scripts` role while
+`workflow_engine._scripts_dir()` read the environment variable directly, so on a deployment that
+declared a scripts role the API and a workflow step ran *different copies of the same script*.
+Two resolvers that agree today diverge the first time one of them learns something.
+
+The active project arrives as environment (`NVIS_PROJECT_ID` / `NVIS_PLATFORM_ID`, written by
+`catalog.context.high_overlay`) rather than by importing the catalog, which would put a store
+read under every script-path resolution.
+
+**Layering applies only where the tree exists.** Without it every answer is the flat
+`{base}/bin/scripts` of before, so migrating a deployment is "create the tree on the head node"
+rather than "upgrade and hope"; `bin/deploy-scripts.sh` detects which layout the head has.
+
+Two things to preserve. `bin/bootstrap-project-scripts.sh` composes the layers **in a staging
+directory** because the two rules fight each other otherwise: the platform layer must overwrite
+a default, and an operator's edit in the project directory must survive — copying
+defaults-then-platform straight into the project protects the edit *and* skips the override it
+should have installed. And **`NVIS_VAR_DIR`, never `../..`**: deriving `var/` relative to a
+script's own directory is correct for exactly one layout and fails by reading the wrong file.
 
 ### 3. Project / Cluster — which site, which nodes
 

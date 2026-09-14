@@ -77,6 +77,17 @@ RACK_SSH_HOST=<head-ip> RACK_SSH_USER=root RACK_SSH_KEY=~/.ssh/<key> \
   RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status bin/deploy-scripts.sh
 ```
 
+**Where it lands depends on which layout the head node has, and it checks rather than guesses.**
+A head with `<base>/scripts/multi-platform/` gets the layered tree (plus
+`bin/scripts/platform/<id>/` → `<base>/scripts/<id>/`); one without it gets today's flat
+`<base>/bin/scripts`. So an unmigrated cluster is untouched, and after the first
+`bootstrap-project-scripts.sh` every later deploy lands in the right place with no flag to
+remember. `--tree` and `--legacy` force it either way.
+
+Re-running the deploy does **not** update a project's own copy of the scripts: that is the point
+of the copy. Pull a fixed default forward with "Update scripts" on the Projects screen, which
+reports -- and declines to overwrite -- any file the site has edited.
+
 After editing anything under `bin/scripts/`, re-run `bin/deploy-scripts.sh` so local↔head stay
 in sync; a `--dry-run` returning no lines means they match. (Scripts are executed on the head
 whenever the target endpoint is remote — an unsynced edit means the app runs the old version.)
