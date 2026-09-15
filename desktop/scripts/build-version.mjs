@@ -58,14 +58,24 @@ const here = dirname(fileURLToPath(import.meta.url));
  * Python dependency for one string, and this is a Node script.
  */
 function productVersion() {
+  const root = join(here, "..", "..", "version.py");
   try {
-    const src = readFileSync(join(here, "..", "..", "version.py"), "utf8");
-    const m = src.match(/^VERSION\s*=\s*["']([^"']+)["']/m);
+    const m = readFileSync(root, "utf8").match(/^VERSION\s*=\s*["']([^"']+)["']/m);
     if (m) return m[1];
+    process.stderr.write(`build-version: ${root} has no VERSION assignment\n`);
   } catch {
-    // Fall through: a desktop-only checkout has no version.py.
+    process.stderr.write(`build-version: cannot read ${root}\n`);
   }
-  return JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version;
+  // The fallback exists for a desktop-only checkout, but it MUST announce itself. Silent, it
+  // produced a wrong answer that looked right: the container build mounts `desktop/` as /project,
+  // so version.py was out of reach and the build shipped 0.3.0 while the product was on 0.3.1 —
+  // a lower semver than the release it followed, discovered only by reading a filename.
+  const fallback = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version;
+  process.stderr.write(
+    `build-version: falling back to package.json version ${fallback}; ` +
+      `this is only correct in a checkout with no version.py\n`,
+  );
+  return fallback;
 }
 
 const version = productVersion();

@@ -1549,7 +1549,10 @@ def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
         # Broaden defaults from the catalog Tool registry (env_key -> script basename),
         # so any registered tool is runnable from a workflow, not just the seven above.
         try:
-            from catalog.models import safe_script_ref
+            # `safe_script_ref` is imported at module scope (it is needed by
+            # `_resolve_capability` too); importing it again here is what pylint's W0404 caught.
+            # The `catalog.store` imports stay local: they open the store, and this block is
+            # deliberately best-effort.
             from catalog.store import TABLE_TOOLS
             from catalog.store import get_repo as _get_repo
 

@@ -113,7 +113,13 @@ prescriptive detail — and the cost of each wrong choice — in **`core-designs
   (`docs/action-vocabulary.json`, `backend/tests/action_snapshot.json`,
   `greenlight.toml.example`), then fails if the tracked copies differ — so adding or renaming
   an API route surfaces as a reviewed diff instead of drifting. See `core-designs.mdc` §14.
-- **Lint**: `ruff check backend/ --exclude tests` for Python. For TypeScript the CI job is called
+- **Lint**: the `python-lint` job runs **two** commands, and this line used to name only the
+ first — `ruff check backend/ --exclude tests` **and** `pylint --recursive=y backend`. A green
+ ruff shipped a red pipeline on 2026-09-15: hoisting an import to module scope left the original
+ local one in place, which ruff does not flag and pylint does (`W0404 reimported`). The two rule
+ sets genuinely differ, so running one is not evidence about the other — exactly the mistake
+ this file already records for `tsc` versus `eslint` below. `pylint==4.0.7`, the same pin as
+ `backend/requirements-dev.txt`. For TypeScript the CI job is called
   `typescript-check` and runs **two** commands — `npx tsc -b --noEmit` *and* `npm run lint`
   (eslint). Run both; this line used to name only `tsc`, and a green `tsc` shipped four eslint
   errors to CI. The rule that caught them is `react-refresh/only-export-components`: a file
