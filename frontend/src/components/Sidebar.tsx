@@ -85,6 +85,7 @@ export type ViewId =
   | "platformCatalog"
   | "toolRegistry"
   | "apiReference"
+  | "documentation"
   | "settings";
 
 export const DRAWER_WIDTH_OPEN = 248;
@@ -319,16 +320,29 @@ function ExpandedNav({
       // SSH tunnel. Serving it from the app means the documentation always matches the code
       // running here.
       //
-      // A real link, not `onNavigate`: /docs/ is a server route serving Sphinx HTML, outside
-      // the SPA's hash router entirely. New tab, so an operator reading a procedure does not
-      // lose the screen they were working on.
+      // An in-app destination, not `<a href="/docs/" target="_blank">`, which is what this was.
       //
-      // The API reference is still a nav destination of its own under Platform.
+      // Two reasons it had to change. The desktop shell has no browser tab to open, so
+      // `_blank` walked the operator out of the app entirely. And `/docs/` is a *server* route
+      // behind the authorization gate: a plain navigation skips `apiFetch`, so it never gets
+      // the transparent refresh that keeps the rest of the app signed in, and once the hour-long
+      // access cookie expired the link showed the login screen instead of the documentation.
+      //
+      // `DocumentationView` renews the session first and then frames the same site, so the
+      // credential is fresh before anything asks for it. "Open in a new window" is still there,
+      // as a choice rather than the only way in.
       id: "documentation",
       slotIcon: <BookOpen size={ICON_SIZE} />,
+      active: activeView === "documentation",
       asChild: true,
       children: (
-        <a href="/docs/" target="_blank" rel="noopener noreferrer">
+        <a
+          href="/documentation"
+          onClick={(e) => {
+            e.preventDefault();
+            onNavigate("documentation");
+          }}
+        >
           Documentation
         </a>
       ),

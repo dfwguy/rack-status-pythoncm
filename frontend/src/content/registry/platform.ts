@@ -121,6 +121,44 @@ export const platformContent: HelpContent[] = [
       "The Tool Registry describes scripts as documents (script basename, compatibility by capability/platform, surfaces, execution mode/target). Tools are filtered to the active platform. The `script` field is a BASENAME resolved through four layers, most specific first: {base}/scripts/project-<project-id>/, then custom/ (operator-added, shared, writable), then <platform-id>/, then multi-platform/ (both shipped and read-only). An env-key override beats all four. Platform compatibility decides which clusters are OFFERED a tool and never which folder the script comes from. Operators add their own scripts to custom/; changing a shipped script for everyone is a merge request.",
   },
   {
+    id: "documentation",
+    kind: "view",
+    title: "Documentation",
+    domain: "Platform",
+    routePath: "/documentation",
+    summary: "The documentation for the version running here, served by this deployment.",
+    description:
+      "Documentation shows the Sphinx documentation site built from this repository, served by this deployment at /docs/ and framed inside the app. It is served locally rather than linked to the internet because an operator reaches Greenlight through an SSH tunnel on a customer cluster and often cannot reach an external docs site at all — and because the documentation then always matches the code running here.",
+    features: [
+      "The full documentation site, inside the app rather than a separate browser tab.",
+      "Renews your session before loading, and while the page stays open.",
+      "Reload, and an explicit 'Open in a new window' for reading it beside the app.",
+    ],
+    howTo: [
+      { task: "Read the documentation", steps: ["Click Documentation in the sidebar.", "Navigate inside the framed site as normal."] },
+      { task: "Read it beside the app", steps: ["Open Documentation.", "Click 'Open in a new window'."] },
+    ],
+    faqs: [
+      {
+        q: "Why did Documentation used to show the login screen?",
+        a: "It was a plain link to /docs/, which is a server route behind the authorization gate. A plain navigation does not go through the app's fetch layer, so it never got the transparent session renewal that keeps the rest of the app signed in — and once the hour-long access cookie expired, the gate redirected to the login page. The view now renews the session before loading the site, and every ten minutes while it is open.",
+      },
+      {
+        q: "Why is it not a new browser tab any more?",
+        a: "The desktop shell has no browser tab to open, so a new tab walked you out of the application entirely. 'Open in a new window' is still there when you want it.",
+      },
+      {
+        q: "The page says the documentation has not been built. What now?",
+        a: "static/docs is a build artifact, so a developer tree or a backend-only deployment can genuinely lack it. Build it with sphinx-build -W --keep-going -b html docs static/docs; the container image builds it already.",
+      },
+    ],
+    related: ["apiReference", "help", "sidebar"],
+    keywords: ["documentation", "docs", "sphinx", "manual", "guide", "help", "reference", "reading"],
+    aria: { label: "Documentation page", description: "The deployment's own documentation site, shown inside the app." },
+    aiContext:
+      "Documentation frames the Sphinx site served by this deployment at /docs/ inside the app. Served locally so it matches the running code and works on an air-gapped cluster behind an SSH tunnel. It renews the session before loading and every ten minutes while open, because /docs/ is a gated server route and a plain navigation does not benefit from the SPA's refresh-on-401 — which is why the old new-tab link showed the login screen after an hour. 'Open in a new window' remains as a choice.",
+  },
+  {
     id: "settings",
     kind: "view",
     title: "Settings",
