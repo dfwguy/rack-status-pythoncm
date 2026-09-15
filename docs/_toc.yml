@@ -16,15 +16,27 @@ root: index
 subtrees:
   - caption: How-to guides — getting something done
     entries:
+      - file: how-to/configure-a-deployment
+        title: How to configure a deployment
       - file: how-to/grant-a-team-access
         title: How to grant a team access
       - file: how-to/diagnose-a-refused-request
         title: How to diagnose a refused request
       - file: how-to/add-your-own-script
         title: How to add your own script and register it as a tool
+      - file: how-to/use-the-terminal
+        title: How to use the terminal
 
   - caption: Reference — the machinery, described
     entries:
+      - file: reference/configuration/settings
+        title: Configuration settings — every setting, generated
+      - file: reference/catalog/projects-and-clusters
+        title: Projects and clusters
+      - file: reference/catalog/tools
+        title: Tool documents
+      - file: reference/actions-by-scope
+        title: Actions by scope — node, rack, multirack
       - file: reference/identity/index
         title: Identity and authorization
         entries:
@@ -46,5 +58,7 @@ subtrees:
         title: Why authorization is default-deny
       - file: explanation/how-a-script-path-is-chosen
         title: How a script path is chosen
+      - file: explanation/geometry-and-hostnames
+        title: Geometry and hostnames
       - file: explanation/which-storage-engine
         title: Which storage engine, and why

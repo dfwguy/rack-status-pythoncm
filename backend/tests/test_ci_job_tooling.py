@@ -142,14 +142,34 @@ class TestNoJobCallsAToolItsImageLacks:
             "the sources-of-truth gate no longer runs the generators' --check mode"
         )
 
-    def test_the_gate_reports_both_documents_rather_than_short_circuiting(self):
+    def test_the_gate_reports_every_document_rather_than_short_circuiting(self):
         """`! A || ! B` stops at the first failure, so a stale vocabulary would hide a stale
         snapshot and the second fault would only appear on the next push. Same 'report every fault
-        at once' rule the startup gate and config preflight follow."""
+        at once' rule the startup gate and config preflight follow.
+
+        The expected count is **derived from the job**, not written here. This assertion used to
+        say `== 2` and broke when a third generator landed — which trains the next person to bump
+        a number rather than to ask whether the new generator is gated. Every generator the job
+        runs must also be checked, and that is what this compares.
+        """
         job = _pipeline()["sources-of-truth"]
         lines = _command_lines(job)
+        # A regex, because the job's own failure message echoes the generator names back at the
+        # contributor and a naive split leaves the closing quote attached.
+        name = re.compile(r"bin/(gen-[\w.-]+\.py)")
+        generated = {
+            m.group(1)
+            for line in lines
+            if "--check" not in line
+            for m in [name.search(line)]
+            if m
+        }
         checks = [line for line in lines if "--check" in line]
-        assert len(checks) == 2, f"expected both generators checked, got {checks}"
+        checked = {m.group(1) for line in checks for m in [name.search(line)] if m}
+        assert generated == checked, (
+            f"every generator the job runs must also be checked; built but ungated: "
+            f"{sorted(generated - checked)}, checked but never built: {sorted(checked - generated)}"
+        )
         assert all("|| stale=1" in line for line in checks), (
-            f"the checks short-circuit instead of collecting both verdicts: {checks}"
+            f"the checks short-circuit instead of collecting every verdict: {checks}"
         )

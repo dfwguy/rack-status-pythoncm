@@ -121,23 +121,27 @@ sources-of-truth:
       stale=0
       python bin/gen-action-vocabulary.py --check || stale=1
       python bin/gen-action-snapshot.py --check || stale=1
+      python bin/gen-settings-reference.py --check || stale=1
       if [ "$stale" -ne 0 ]; then
         echo ""
         echo "A generated source of truth is stale — an API route was added, removed or renamed."
         echo "Run these locally, review the diff, and commit it:"
         echo "    bin/gen-action-vocabulary.py"
         echo "    bin/gen-action-snapshot.py"
+        echo "    bin/gen-settings-reference.py"
         exit 1
       fi
     # Build after the gate, so a later job or a developer downloading artifacts has the document.
     - python bin/gen-action-vocabulary.py
     - python bin/gen-action-snapshot.py
+    - python bin/gen-settings-reference.py
   artifacts:
     when: always
     paths:
       - docs/action-vocabulary.json
       - docs/ACTION_VOCABULARY.md
       - docs/reference/identity/action-vocabulary.md
+      - docs/reference/configuration/settings.md
       - backend/tests/action_snapshot.json
 
 python-lint:
