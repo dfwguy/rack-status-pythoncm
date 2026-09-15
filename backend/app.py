@@ -178,7 +178,9 @@ import ai_chat
 import core
 import host_exec
 import nvftp_cache_sync
+import script_tree
 import validation_activities
+from json_db import atomic_write
 
 # Catalog (platforms/tools/projects). Optional at import time so the app still boots if
 # the store is unavailable; all call sites degrade to the legacy env behavior.
@@ -608,6 +610,24 @@ def _apply_catalog_active_to_environ() -> None:
             and fingerprint != _catalog_status_context_fingerprint
         ):
             _rack_status_cache_clear_all()
+            # The connection and the script layout are cached too, and they were NOT being
+            # dropped here. Measured: after switching to a cluster whose `remote_base_path` is
+            # different, `_eget` returned the new base while `host_exec.role_root("scripts")`
+            # still returned the old one — so scripts resolved against the *previous* customer's
+            # paths until something else happened to invalidate the connection. That is the one
+            # failure `cluster-deployments.mdc` exists to prevent.
+            #
+            # Inside the fingerprint branch on purpose: this hook also runs on every settings
+            # materialise, and rebuilding the connection each time would pay for a change that
+            # did not happen.
+            try:
+                host_exec.invalidate_connection()
+            except Exception:
+                _logger.debug("_apply_catalog_active_to_environ: ignoring error", exc_info=True)
+            try:
+                script_tree.clear_cache()
+            except Exception:
+                _logger.debug("_apply_catalog_active_to_environ: ignoring error", exc_info=True)
         _catalog_status_context_fingerprint = fingerprint
     except Exception:
         _logger.exception("catalog: applying active context to environ failed")
@@ -1286,7 +1306,6 @@ _bootstrap_catalog_at_startup()
 # Before identity, because that bootstrap is the first consumer of a required setting: it is where
 # a missing OIDC issuer used to surface, as a green deployment nobody could log in to.
 import config_preflight
-from json_db import atomic_write
 
 config_preflight.run()
 

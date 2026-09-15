@@ -241,6 +241,79 @@ def script_env(project_id: str = "", platform_id: str = "") -> dict[str, str]:
     }
 
 
+class ImmutableLayer(PermissionError):
+    """A write was aimed at a layer the product owns. The message names what to do instead."""
+
+
+def layer_of(path: str) -> str:
+    """Which layer *path* belongs to: ``project``, ``platform``, ``multi-platform``, ``legacy``
+    or ``""`` when it is outside the tree entirely.
+    """
+    p = str(path or "").rstrip("/")
+    if not p:
+        return ""
+    root = tree_root().rstrip("/")
+    if p == legacy_dir().rstrip("/") or p.startswith(legacy_dir().rstrip("/") + "/"):
+        return "legacy"
+    if not (p == root or p.startswith(root + "/")):
+        return ""
+    rest = p[len(root) :].lstrip("/")
+    first = rest.split("/", 1)[0] if rest else ""
+    if not first:
+        return ""
+    if first.startswith(PROJECT_PREFIX):
+        return "project"
+    if first == MULTI_PLATFORM:
+        return "multi-platform"
+    return "platform"
+
+
+def is_writable(path: str) -> bool:
+    """Whether the **app** may write *path*.
+
+    Only a project's own directory. The shared default set and the platform overrides are the
+    product's: they are shipped, they are upgradeable, and they are shared by every project on
+    the box, so editing one in place changes another customer's run -- which is the whole reason
+    the per-project copy exists.
+
+    **This is a property of the layer, not a flag on a record.** A `protected` field on the
+    Platform document would let an operator clear it and start editing the shared files, which
+    is precisely the outcome being prevented; there is nothing here to toggle. Platform
+    *records* stay editable, because tuning `tool_param_defaults` per site is a legitimate and
+    common thing to do.
+
+    The legacy flat directory counts as product-owned too, and that is the safe direction: on an
+    unmigrated deployment it is shared by every project, so a write there has the widest blast
+    radius of all. The fix is to create the tree, which `bootstrap-project-scripts.sh` does.
+    """
+    return layer_of(path) == "project"
+
+
+def assert_writable(path: str) -> None:
+    """Raise :class:`ImmutableLayer` unless the app may write *path*.
+
+    The chokepoint. Nothing in the app writes into the script tree today except the bootstrap,
+    which composes a project directory -- so this exists to be called by whatever comes next (an
+    in-UI script editor, an upload, a generated preset) rather than to guard code that is
+    already here. `test_script_immutability.py` pins the rule so the next writer inherits it.
+    """
+    layer = layer_of(path)
+    if layer == "project":
+        return
+    if not layer:
+        raise ImmutableLayer(
+            f"{path} is outside the script tree ({tree_root()}); the app only writes a "
+            "project's own script directory"
+        )
+    where = "the shared default set" if layer == "multi-platform" else f"the {layer} layer"
+    raise ImmutableLayer(
+        f"refusing to write {path}: {where} belongs to the product and is shared by every "
+        f"project on this server. Copy it into {project_dir() or 'the project directory'} and "
+        "edit it there -- 'Update scripts' on the Projects screen does exactly that, and will "
+        "not overwrite what you change."
+    )
+
+
 def describe() -> dict[str, object]:
     """The resolved layout, for the settings page and the bootstrap API."""
     return {
@@ -252,4 +325,7 @@ def describe() -> dict[str, object]:
         "project": active_project_id(),
         "platform": active_platform_id(),
         "legacy_dir": legacy_dir(),
+        # The one directory the app may write, so a UI can say which files are editable rather
+        # than discovering it from a refusal.
+        "writable_dir": project_dir(),
     }

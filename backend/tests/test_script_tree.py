@@ -48,10 +48,21 @@ def _clear_cache():
 
 
 def _env(monkeypatch, **kw):
-    """Point script_tree at a local tree and make the "execution host" this machine."""
+    """Point script_tree at a local tree and make the "execution host" this machine.
+
+    `host_exec.invalidate_connection()` as well as `script_tree.clear_cache()`, because
+    `legacy_dir()` asks `host_exec.role_root("scripts")` and that answer is cached behind its
+    own init. Leaving it out made this file pass alone and fail after any other test that set a
+    base path -- and chasing that is what turned up the product bug: a cluster switch did not
+    invalidate it either, so scripts resolved against the previous cluster's paths.
+    """
+    import host_exec
+
     monkeypatch.setenv("RACK_EXEC_MODE", "local")
     for k, v in kw.items():
         monkeypatch.setenv(k, str(v))
+    host_exec.invalidate_connection()
+    script_tree.clear_cache()
 
 
 # --- resolution ---------------------------------------------------------------------------------

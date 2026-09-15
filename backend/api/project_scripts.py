@@ -187,6 +187,15 @@ def api_project_scripts_bootstrap(doc_id: str):
     force = bool(body.get("force"))
     platform_id = _platform_for(project, str(body.get("cluster") or "").strip())
 
+    # The destination is computed, not supplied, so this cannot currently fail -- which is the
+    # point of asserting it. It states the contract at the one place that writes the tree, so a
+    # later change that makes the destination configurable meets the rule instead of quietly
+    # gaining the ability to overwrite the shared default set.
+    try:
+        script_tree.assert_writable(script_tree.project_dir(doc_id))
+    except script_tree.ImmutableLayer as exc:
+        return _err(str(exc), 409)
+
     summary, problem = _run_bootstrap(doc_id, platform_id, dry_run=False, force=force)
     if summary is None:
         return _err(problem, 502)
