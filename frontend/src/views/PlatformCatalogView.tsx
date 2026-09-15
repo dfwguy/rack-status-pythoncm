@@ -79,7 +79,7 @@ function emptyDraft(): DraftState {
 }
 
 export function PlatformCatalogView() {
-  const { refresh: refreshActive } = useActiveCluster();
+  const { refresh: refreshActive, catalogChanged } = useActiveCluster();
   const [items, setItems] = useState<Platform[]>([]);
   const [vocab, setVocab] = useState<CatalogVocab | null>(null);
   const [loading, setLoading] = useState(true);
@@ -123,6 +123,7 @@ export function PlatformCatalogView() {
         capabilities: csvToList(draft.capabilities),
         tool_param_defaults: textToMap(draft.params),
       });
+      catalogChanged();
       setDraft(null);
       await load();
       await refreshActive();
@@ -137,6 +138,7 @@ export function PlatformCatalogView() {
     if (!window.confirm(`Delete platform "${p.name}"?`)) return;
     try {
       await deletePlatform(p.id);
+      catalogChanged();
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete platform");

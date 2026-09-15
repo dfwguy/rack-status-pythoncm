@@ -33,6 +33,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as catalogService from "../services/catalogService";
+import { ActiveClusterContext, type ActiveClusterState } from "../context/ActiveClusterContext";
 import type { CatalogVocab, Platform, Tool } from "../types/catalog";
 import { ToolRegistryView } from "./ToolRegistryView";
 
@@ -77,12 +78,45 @@ const PLATFORMS = [
   platform("gb300-nvl72", "GB300 NVL72", ["nvlink", "mnnvl"]),
 ];
 
+/**
+ * The view announces its writes through the active-cluster context, so the tests supply one.
+ *
+ * A stub rather than a real `ActiveClusterProvider`: the provider fetches the active context on
+ * mount, and this file's subject is the compatibility editor, not catalog loading. `spyOn` on
+ * `catalogChanged` is what lets a test assert the announcement happened.
+ */
+const clusterStub = (): ActiveClusterState => ({
+  projects: [],
+  active: { project: "", cluster: "" },
+  activeProject: null,
+  activeCluster: null,
+  activePlatform: null,
+  aiContext: "",
+  loading: false,
+  error: null,
+  version: 0,
+  refresh: async () => {},
+  setActive: async () => {},
+  catalogChanged: vi.fn(),
+});
+
+let cluster: ActiveClusterState;
+
+function renderView() {
+  cluster = clusterStub();
+  return render(
+    <ActiveClusterContext.Provider value={cluster}>
+      <ToolRegistryView />
+    </ActiveClusterContext.Provider>,
+  );
+}
+
 /** Open the editor for the one listed tool and wait for the catalog to have loaded. */
 async function openEditor(t: Tool = tool()) {
   vi.mocked(catalogService.listTools).mockResolvedValue([t]);
   vi.mocked(catalogService.getVocab).mockResolvedValue(VOCAB);
   vi.mocked(catalogService.listPlatforms).mockResolvedValue(PLATFORMS);
-  render(<ToolRegistryView />);
+  renderView();
   const edit = await screen.findByRole("button", { name: /Edit NVLoom|Edit/ });
   fireEvent.click(edit);
   await waitFor(() => expect(screen.getByText("Platform compatibility")).toBeTruthy());
@@ -234,5 +268,37 @@ describe("scoping a tool to platforms", () => {
       "nvlink",
       "nvswitch",
     ]);
+  });
+});
+
+describe("keeping the boards in step", () => {
+  it("announces a saved tool so the action boards refetch", async () => {
+    /**
+     * The bug this pins: a tool registered for the active platform did not appear in "Add
+     * action" until a full page reload.
+     *
+     * `useBoardActions` fetches on mount and refetches on the context's `version`, which bumped
+     * only when the active cluster changed — so nothing told the board its list was stale.
+     * Registering a tool is precisely the moment it becomes stale.
+     */
+    await openEditor();
+    vi.mocked(catalogService.saveTool).mockResolvedValue(tool());
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(vi.mocked(catalogService.saveTool)).toHaveBeenCalled());
+    await waitFor(() => expect(cluster.catalogChanged).toHaveBeenCalled());
+  });
+
+  it("announces a deleted tool too", async () => {
+    // Otherwise a board keeps offering an action whose launch now 404s.
+    vi.mocked(catalogService.deleteTool).mockResolvedValue(undefined as never);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(catalogService.listTools).mockResolvedValue([tool()]);
+    vi.mocked(catalogService.getVocab).mockResolvedValue(VOCAB);
+    vi.mocked(catalogService.listPlatforms).mockResolvedValue(PLATFORMS);
+    renderView();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Delete/ }));
+    await waitFor(() => expect(cluster.catalogChanged).toHaveBeenCalled());
   });
 });

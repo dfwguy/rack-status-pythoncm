@@ -97,6 +97,11 @@ prescriptive detail — and the cost of each wrong choice — in **`core-designs
 - **Docker**: Multi-stage Dockerfile. `rack-config.env` centralizes deployment settings. `build-docker.sh` for dev/prod/build/stop/logs.
 - **Command contexts**: `RackCommandContext` and `RackCommandsStoreContext` track async job state across views.
 - **Workflow editor**: Mermaid source text is the single source of truth. React Flow canvas reads from and writes back to mermaid via `mermaidToReactFlow.ts` parser and `handleCodeAction` in `WorkflowDesigner.tsx`. Node types: automated (green rect), manual/event (blue stadium), decision (yellow diamond). The parser infers `stepType` from mermaid shape — this must be preserved during save (`handleSave`) so nodes retain their visual style on reload. Edge deletion must preserve inline node definitions (e.g., `step1 --> done(["Done"])` — removing the edge must re-insert `done(["Done"])` as a standalone line). Connections use React Flow handles: Top=target, Bottom=source, Left=target, Right=source. Edge delete buttons appear on node hover (not on the edge line).
+- **Script resolution**: a Tool's `script` is a **basename**, resolved most-specific-first through
+ `project-<id>/` -> `custom/` -> `<platform-id>/` -> `multi-platform/` by `backend/script_tree.py`
+ (an env-key override beats all four). The first two are writable, the shipped two are not; a
+ Tool's platform compatibility decides which clusters are *offered* it and never which folder
+ runs. Decision record: `docs/explanation/how-a-script-path-is-chosen.md`.
 - **Remote cluster deployment**: The repo's `bin/scripts/` is the source of truth; sync it to the head node at `RACK_REMOTE_BASE_PATH/bin/scripts/` with `bin/deploy-scripts.sh` (checksum-based `rsync`, not per-file `scp` — see `local-dev.mdc`). Re-run it after editing any script (in SSH mode the app executes the head's copy). Run locally with `RACK_EXEC_MODE=ssh` and the SSH env vars pointing to the head node.
 
 ## Testing

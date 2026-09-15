@@ -172,10 +172,24 @@ needs a code change and a deploy.
 first:
 
 ```
-{base}/scripts/project-<id>/     one project's copy, plus its custom scripts
-{base}/scripts/<platform>/       platform-specific overrides
-{base}/scripts/multi-platform/   the shared default set
+{base}/scripts/project-<id>/     one project's copy, plus its own edits   (app may write)
+{base}/scripts/custom/           scripts operators added, shared          (app may write)
+{base}/scripts/<platform>/       platform-specific overrides, shipped     (read-only)
+{base}/scripts/multi-platform/   the shared default set, shipped          (read-only)
 ```
+
+**`custom/` is where a script somebody registers goes**, and it exists to resolve a real
+conflict: the shipped layers must not be edited in place (they are shared by every project), but
+registering a Tool records only a *basename*, so the file has to live somewhere writable — and
+the only such place was a project directory, which would make a cross-platform script the
+property of whichever project happened to be active. Changing what *ships* is a merge request.
+
+**Immutability is a property of the layer, never a flag on a record.** `is_writable()` answers
+from the path; a `protected` field on a Platform document could be cleared, and then the shared
+platform scripts would be editable for every project on the box. Platform *records* stay
+editable — tuning `tool_param_defaults` per site is routine. And the rule is that *the app*
+never writes a shipped layer: `bin/deploy-scripts.sh` writes them deliberately, which is what a
+deploy is. Full decision record: `docs/explanation/how-a-script-path-is-chosen.md`.
 
 **Ask this module, never `RACK_REMOTE_BASE_PATH` yourself.** That is not advice, it is the bug
 this replaced: `paths._scripts_dir()` honoured the topology `scripts` role while

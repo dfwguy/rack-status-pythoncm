@@ -15,9 +15,10 @@ One server runs several customers' projects. Until now it ran them all from one 
 editing a script to fix one site edited it for every site, and the blast radius of a typo was
 every project on the box. The layered tree fixes the isolation:
 
-    {base}/scripts/multi-platform/        the shared default set
-    {base}/scripts/gb200/  gb300/ ...     platform-specific overrides
-    {base}/scripts/project-<id>/          one project's copy, plus its custom scripts
+    {base}/scripts/project-<id>/          one project's copy, plus its own edits   (writable)
+    {base}/scripts/custom/                scripts operators added, shared           (writable)
+    {base}/scripts/gb200/  gb300/ ...     platform-specific overrides, shipped      (read-only)
+    {base}/scripts/multi-platform/        the shared default set, shipped           (read-only)
     {base}/var/                           unchanged
 
 A script resolves through those **most specific first**, so a project directory need only hold
@@ -51,6 +52,23 @@ from core import rpath as _rpath
 #: or project opinion lives. Named rather than "default" because `multi-platform` is what it
 #: means -- a script that runs anywhere -- and the deployed directory is the operator's to read.
 MULTI_PLATFORM = "multi-platform"
+
+#: Where a script that did not ship with the app lands.
+#:
+#: This layer exists to resolve a contradiction between two rules that are each correct. The
+#: platform layers are the product's and must not be edited in place, because they are shared by
+#: every project on the server. But registering a Tool only records a *basename* -- somebody has
+#: to put the file on the head node, and the only writable place was a project directory, which
+#: would make a genuinely cross-platform script belong to one project by accident.
+#:
+#: So: `custom/` is operator-owned and shared, `multi-platform/` and `<platform>/` are the
+#: product's. A script that should ship with the app goes through a merge request instead, and
+#: then it arrives in the default set like everything else.
+#:
+#: It sits *above* the product layers in the search order, so an operator can shadow a shipped
+#: script without editing it -- which is the same relationship a project directory has, one
+#: scope wider.
+CUSTOM = "custom"
 
 #: Prefix for a project's own directory. **Flat, not `project/<id>/`**, and that is load-bearing:
 #: scripts reach sibling trees relatively (`rack_status.sh` reads
@@ -173,6 +191,11 @@ def multi_platform_dir() -> str:
     return f"{tree_root()}/{MULTI_PLATFORM}"
 
 
+def custom_dir() -> str:
+    """Where operator-added scripts live: shared across projects, not shipped with the app."""
+    return f"{tree_root()}/{CUSTOM}"
+
+
 def layers(project_id: str = "", platform_id: str = "") -> list[str]:
     """Directories to search, most specific first.
 
@@ -181,7 +204,7 @@ def layers(project_id: str = "", platform_id: str = "") -> list[str]:
     """
     if not _has_tree():
         return [legacy_dir()]
-    out = [d for d in (project_dir(project_id), platform_dir(platform_id)) if d]
+    out = [d for d in (project_dir(project_id), custom_dir(), platform_dir(platform_id)) if d]
     out.append(multi_platform_dir())
     return out
 
@@ -263,6 +286,8 @@ def layer_of(path: str) -> str:
         return ""
     if first.startswith(PROJECT_PREFIX):
         return "project"
+    if first == CUSTOM:
+        return "custom"
     if first == MULTI_PLATFORM:
         return "multi-platform"
     return "platform"
@@ -271,10 +296,16 @@ def layer_of(path: str) -> str:
 def is_writable(path: str) -> bool:
     """Whether the **app** may write *path*.
 
-    Only a project's own directory. The shared default set and the platform overrides are the
-    product's: they are shipped, they are upgradeable, and they are shared by every project on
-    the box, so editing one in place changes another customer's run -- which is the whole reason
-    the per-project copy exists.
+    A project's own directory, and `custom/`. The shared default set and the platform overrides
+    are the product's: they are shipped, they are upgradeable, and they are shared by every
+    project on the box, so editing one in place changes another customer's run -- which is the
+    whole reason the per-project copy exists.
+
+    `custom/` is writable because it is the answer to "where does a script somebody registers
+    go?". Registering a Tool records a basename; the file has to exist somewhere, and before
+    this layer the only writable place was a project directory -- which would make a genuinely
+    cross-platform script the property of whichever project happened to be active. A script that
+    should ship with the app goes through a merge request instead.
 
     **This is a property of the layer, not a flag on a record.** A `protected` field on the
     Platform document would let an operator clear it and start editing the shared files, which
@@ -286,7 +317,7 @@ def is_writable(path: str) -> bool:
     unmigrated deployment it is shared by every project, so a write there has the widest blast
     radius of all. The fix is to create the tree, which `bootstrap-project-scripts.sh` does.
     """
-    return layer_of(path) == "project"
+    return layer_of(path) in {"project", "custom"}
 
 
 def assert_writable(path: str) -> None:
@@ -298,7 +329,7 @@ def assert_writable(path: str) -> None:
     already here. `test_script_immutability.py` pins the rule so the next writer inherits it.
     """
     layer = layer_of(path)
-    if layer == "project":
+    if layer in {"project", "custom"}:
         return
     if not layer:
         raise ImmutableLayer(
@@ -307,10 +338,11 @@ def assert_writable(path: str) -> None:
         )
     where = "the shared default set" if layer == "multi-platform" else f"the {layer} layer"
     raise ImmutableLayer(
-        f"refusing to write {path}: {where} belongs to the product and is shared by every "
-        f"project on this server. Copy it into {project_dir() or 'the project directory'} and "
-        "edit it there -- 'Update scripts' on the Projects screen does exactly that, and will "
-        "not overwrite what you change."
+        f"refusing to write {path}: {where} ships with the app and is shared by every project "
+        f"on this server. Put an operator-added script in {custom_dir()}, or copy this one into "
+        f"{project_dir() or 'the project directory'} and change it there -- 'Update scripts' on "
+        "the Projects screen does exactly that, and will not overwrite what you change. To "
+        "change the shipped copy for everyone, open a merge request."
     )
 
 
@@ -320,6 +352,7 @@ def describe() -> dict[str, object]:
         "tree_root": tree_root(),
         "layered": _has_tree(),
         "layers": layers(),
+        "custom_dir": custom_dir(),
         "scripts_dir": scripts_dir(),
         "var_dir": var_dir(),
         "project": active_project_id(),

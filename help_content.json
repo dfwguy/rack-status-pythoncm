@@ -3095,7 +3095,8 @@
       "features": [
         "Register a tool with its script and execution mode/target.",
         "Set platform compatibility by capability or platform id.",
-        "Declare UI surfaces (e.g. rackDetail.hardware)."
+        "Declare UI surfaces (e.g. rackDetail.hardware).",
+        "Script is a basename, not a path: it resolves through the project's own copy, then custom/, then the platform layer, then the shared defaults."
       ],
       "howTo": [
         {
@@ -3105,7 +3106,40 @@
             "Click 'New tool'.",
             "Set script, compatibility, surfaces, execution, and save."
           ]
+        },
+        {
+          "task": "Add a script of your own",
+          "steps": [
+            "Copy the file to {base}/scripts/custom/ on the head node (shared across projects, untouched by deploys).",
+            "Register it here with the basename only — no path.",
+            "It appears in 'Add action' on the rack boards straight away."
+          ]
+        },
+        {
+          "task": "Work out which copy of a script will run",
+          "steps": [
+            "Search order is: project-<id>/, then custom/, then <platform-id>/, then multi-platform/ — first match wins.",
+            "An env-key override beats all four.",
+            "GET /api/catalog/projects/<id>/scripts reports the resolved layout for a project."
+          ]
         }
+      ],
+      "faqs": [
+        {
+          "q": "Do I put the script in the platform folder if the tool supports GB200 and GB300?",
+          "a": "Only if the script itself differs per platform. The compatibility list decides which clusters are offered the tool; it does not choose the folder. A script that runs on both belongs in the shared defaults (via a merge request) or in custom/ if you wrote it for this deployment."
+        },
+        {
+          "q": "Why can I not edit multi-platform/ or the platform folders?",
+          "a": "They ship with the app and every project on this server shares them, so an edit changes another customer's run — and the next deploy overwrites it. Put your own script in custom/, change a project's copy in project-<id>/, or open a merge request to change what ships."
+        },
+        {
+          "q": "My tool fails with 'no such file'. Where should the script be?",
+          "a": "On the head node, under one of the four layers, with exactly the basename you registered. Copying it to the machine running the dashboard is the usual mistake."
+        }
+      ],
+      "tips": [
+        "A compiled binary (a nccl-tests build, say) does not live in the script tree: wrap it in a script, or point an env-key override at its absolute path."
       ],
       "related": [
         "projects",
@@ -3122,13 +3156,18 @@
         "compatibility",
         "surface",
         "execution",
-        "platform"
+        "platform",
+        "custom",
+        "basename",
+        "path",
+        "folder",
+        "multi-platform"
       ],
       "aria": {
         "label": "Tool registry page",
         "description": "Define tools, their platform compatibility, surfaces, and execution."
       },
-      "aiContext": "The Tool Registry describes scripts as documents (script, compatibility by capability/platform, surfaces, execution mode/target). Tools are filtered to the active platform."
+      "aiContext": "The Tool Registry describes scripts as documents (script basename, compatibility by capability/platform, surfaces, execution mode/target). Tools are filtered to the active platform. The `script` field is a BASENAME resolved through four layers, most specific first: {base}/scripts/project-<project-id>/, then custom/ (operator-added, shared, writable), then <platform-id>/, then multi-platform/ (both shipped and read-only). An env-key override beats all four. Platform compatibility decides which clusters are OFFERED a tool and never which folder the script comes from. Operators add their own scripts to custom/; changing a shipped script for everyone is a merge request."
     },
     {
       "id": "settings",

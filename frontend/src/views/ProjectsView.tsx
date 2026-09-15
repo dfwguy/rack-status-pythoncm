@@ -66,7 +66,7 @@ function slugify(s: string): string {
 }
 
 export function ProjectsView() {
-  const { projects, active, setActive, refresh: refreshActive } = useActiveCluster();
+  const { projects, active, setActive, refresh: refreshActive, catalogChanged } = useActiveCluster();
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [scriptNote, setScriptNote] = useState("");
@@ -108,6 +108,7 @@ export function ProjectsView() {
       });
       setProjectDraft(null);
       await refreshActive();
+      catalogChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save project");
     } finally {
@@ -120,6 +121,7 @@ export function ProjectsView() {
     try {
       await deleteProject(p.id);
       await refreshActive();
+      catalogChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete project");
     }
@@ -138,6 +140,7 @@ export function ProjectsView() {
       await saveProject({ ...project, clusters });
       setClusterDraft(null);
       await refreshActive();
+      catalogChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save cluster");
     } finally {
@@ -150,6 +153,7 @@ export function ProjectsView() {
     try {
       await saveProject({ ...project, clusters: project.clusters.filter((c) => c.id !== cluster.id) });
       await refreshActive();
+      catalogChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to remove cluster");
     }

@@ -99,9 +99,12 @@ def test_the_project_layer_wins_over_platform_and_defaults(monkeypatch, tmp_path
     resolved = script_tree.resolve("sysinfo.sh", "nscale-tx", "gb300-nvl72")
     assert resolved == f"{tree}/project-nscale-tx/sysinfo.sh"
     assert Path(resolved).read_text().strip() == "project"
-    # Most specific first, so a reader can see the precedence rather than infer it.
+    # Most specific first, so a reader can see the precedence rather than infer it. `custom/`
+    # sits above the shipped layers: an operator can shadow a shipped script without editing
+    # it, which is the same relationship a project directory has, one scope wider.
     assert script_tree.layers("nscale-tx", "gb300-nvl72") == [
         f"{tree}/project-nscale-tx",
+        f"{tree}/custom",
         f"{tree}/gb300-nvl72",
         f"{tree}/multi-platform",
     ]
@@ -295,3 +298,38 @@ def test_bootstrap_refuses_a_project_id_that_is_a_path(tmp_path):
         )
         assert proc.returncode == 2, f"{bad!r} was accepted"
         assert "invalid project id" in proc.stderr
+
+
+def test_a_custom_script_shadows_a_shipped_one_without_editing_it(monkeypatch, tmp_path):
+    """The layer that makes registering a Tool possible without writing a product directory.
+
+    Registering a Tool records a *basename*; the file has to exist somewhere. Before `custom/`
+    the only writable place was a project directory, which would make a genuinely
+    cross-platform script the property of whichever project happened to be active.
+    """
+    base = tmp_path / "deploy"
+    tree = base / "scripts"
+    for layer, body in (("multi-platform", "shipped"), ("custom", "operator's")):
+        (tree / layer).mkdir(parents=True)
+        (tree / layer / "probe.sh").write_text(body + "\n")
+    _env(monkeypatch, RACK_REMOTE_BASE_PATH=base)
+
+    resolved = script_tree.resolve("probe.sh")
+    assert resolved == f"{tree}/custom/probe.sh"
+    assert Path(resolved).read_text().strip() == "operator's"
+
+
+def test_a_project_copy_still_beats_a_custom_script(monkeypatch, tmp_path):
+    """Order matters both ways: a site's own edit stays the most specific answer."""
+    base = tmp_path / "deploy"
+    tree = base / "scripts"
+    for layer, body in (
+        ("multi-platform", "shipped"),
+        ("custom", "operator's"),
+        ("project-p1", "this project's"),
+    ):
+        (tree / layer).mkdir(parents=True)
+        (tree / layer / "probe.sh").write_text(body + "\n")
+    _env(monkeypatch, RACK_REMOTE_BASE_PATH=base)
+
+    assert Path(script_tree.resolve("probe.sh", "p1")).read_text().strip() == "this project's"

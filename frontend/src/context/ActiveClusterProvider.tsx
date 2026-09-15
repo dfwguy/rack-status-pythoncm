@@ -51,6 +51,8 @@ export function ActiveClusterProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
+  const catalogChanged = useCallback(() => setVersion((v) => v + 1), []);
+
   const setActive = useCallback(
     async (projectId: string, clusterId: string) => {
       await setActiveContext({ project: projectId, cluster: clusterId });
@@ -73,8 +75,9 @@ export function ActiveClusterProvider({ children }: { children: ReactNode }) {
       version,
       refresh,
       setActive,
+      catalogChanged,
     }),
-    [projects, active, activeProject, activeCluster, activePlatform, aiContext, loading, error, version, refresh, setActive],
+    [projects, active, activeProject, activeCluster, activePlatform, aiContext, loading, error, version, refresh, setActive, catalogChanged],
   );
 
   return <ActiveClusterContext.Provider value={value}>{children}</ActiveClusterContext.Provider>;

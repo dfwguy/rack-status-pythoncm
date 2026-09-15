@@ -20,6 +20,8 @@ subtrees:
         title: How to grant a team access
       - file: how-to/diagnose-a-refused-request
         title: How to diagnose a refused request
+      - file: how-to/add-your-own-script
+        title: How to add your own script and register it as a tool
 
   - caption: Reference — the machinery, described
     entries:
@@ -37,5 +39,7 @@ subtrees:
     entries:
       - file: explanation/why-authorization-is-default-deny
         title: Why authorization is default-deny
+      - file: explanation/how-a-script-path-is-chosen
+        title: How a script path is chosen
       - file: explanation/which-storage-engine
         title: Which storage engine, and why

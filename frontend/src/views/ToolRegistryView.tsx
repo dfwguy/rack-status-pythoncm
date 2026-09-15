@@ -35,6 +35,7 @@ import { deleteTool, getVocab, listPlatforms, listTools, saveTool } from "../ser
 import { MultiSelectCombobox } from "../components/MultiSelectCombobox";
 import type { CatalogVocab, Platform, Tool } from "../types/catalog";
 import { csvToList, listToCsv } from "../lib/catalogForm";
+import { useActiveCluster } from "../context/ActiveClusterContext";
 
 /**
  * How this tool picks its platforms, as one choice.
@@ -103,6 +104,9 @@ function toDraft(t?: Tool): DraftState {
 }
 
 export function ToolRegistryView() {
+  // Announced on every write: the boards fetch their action list on mount, so without
+  // this a tool registered here does not appear in "Add action" until a page reload.
+  const { catalogChanged } = useActiveCluster();
   const [items, setItems] = useState<Tool[]>([]);
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [vocab, setVocab] = useState<CatalogVocab | null>(null);
@@ -211,6 +215,7 @@ export function ToolRegistryView() {
       });
       setDraft(null);
       await load();
+      catalogChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save tool");
     } finally {
@@ -223,6 +228,7 @@ export function ToolRegistryView() {
     try {
       await deleteTool(t.id);
       await load();
+      catalogChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete tool");
     }

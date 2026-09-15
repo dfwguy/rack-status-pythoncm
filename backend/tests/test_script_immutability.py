@@ -38,7 +38,7 @@ def _tree(monkeypatch, tmp_path):
     """A tree on this machine, with all four kinds of layer present."""
     base = tmp_path / "deploy"
     tree = base / "scripts"
-    for layer in ("multi-platform", "gb300-nvl72", "project-nscale-tx"):
+    for layer in ("multi-platform", "gb300-nvl72", "project-nscale-tx", "custom"):
         (tree / layer).mkdir(parents=True)
     (base / "bin" / "scripts").mkdir(parents=True)
     import host_exec
@@ -54,10 +54,17 @@ def _tree(monkeypatch, tmp_path):
     script_tree.clear_cache()
 
 
-def test_only_a_project_directory_is_writable(_tree):
+def test_the_app_writes_the_project_and_custom_layers_only(_tree):
+    """Two writable layers, and the split is about *ownership*, not convenience.
+
+    `project-<id>/` is one site's copy; `custom/` is where a script an operator registers
+    lands, shared across projects. The shipped layers are the product's -- changing one for
+    everyone is a merge request, not a file write.
+    """
     tree = f"{_tree}/scripts"
     assert script_tree.is_writable(f"{tree}/project-nscale-tx")
     assert script_tree.is_writable(f"{tree}/project-nscale-tx/sysinfo.sh")
+    assert script_tree.is_writable(f"{tree}/custom/my_probe.sh")
     assert not script_tree.is_writable(f"{tree}/multi-platform/sysinfo.sh")
     assert not script_tree.is_writable(f"{tree}/gb300-nvl72/sysinfo.sh")
 
@@ -77,6 +84,7 @@ def test_the_legacy_flat_directory_counts_as_the_product_s(_tree):
         ("project-nscale-tx", "project"),
         ("multi-platform", "multi-platform"),
         ("gb300-nvl72", "platform"),
+        ("custom", "custom"),
     ],
 )
 def test_a_path_is_attributed_to_its_layer(_tree, layer, expected):
@@ -96,6 +104,9 @@ def test_the_refusal_says_what_to_do_instead(_tree):
     message = str(exc.value)
     assert "shared by every project" in message
     assert "Update scripts" in message, "the refusal must name the action that does work"
+    # And where an operator-added script belongs, which is the question that produced `custom/`.
+    assert "custom" in message
+    assert "merge request" in message, "changing the shipped copy for everyone has a route too"
 
 
 def test_assert_writable_permits_the_project_directory(_tree):

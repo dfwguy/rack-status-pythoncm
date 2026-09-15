@@ -43,6 +43,9 @@
 #   --tree    <base>/scripts/multi-platform/  plus bin/scripts/platform/<id>/ -> <base>/scripts/<id>/
 #   --legacy  <base>/bin/scripts/
 #   (default) whichever the head node already has
+#
+# Never touched by a deploy: <base>/scripts/custom/ (operator-added scripts) and
+# <base>/scripts/project-*/ (per-project copies). This script updates what ships with the app.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -104,6 +107,10 @@ RSYNC_COMMON=(-rlptc -i --exclude='__pycache__/' --exclude='*.pyc' --exclude='*.
 # `platform/` is a source-tree convention, not a deployed directory: its contents become
 # per-platform layers beside multi-platform/, so it must not be copied *into* the default set.
 RSYNC_COMMON+=(--exclude='platform/')
+# `custom/` belongs to the deployment, not to the repo. A deploy must never create, overwrite
+# or delete it -- it holds scripts operators added on that head node, and this script is how the
+# *shipped* set is updated.
+RSYNC_COMMON+=(--exclude='custom/')
 
 echo "deploy-scripts: ${SRC} -> ${DEST}  [${LAYOUT}]${DRY:+  [dry-run]}${DELETE:+  [--delete]}"
 rsync "${RSYNC_COMMON[@]}" ${DRY} ${DELETE} -e "${SSH_CMD}" "${SRC}" "${DEST}"

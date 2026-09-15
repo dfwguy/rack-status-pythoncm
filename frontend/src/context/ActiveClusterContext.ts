@@ -27,10 +27,28 @@ export interface ActiveClusterState {
   aiContext: string;
   loading: boolean;
   error: string | null;
-  /** Bumps whenever the active project/cluster changes (use as a refetch dep). */
+  /**
+   * Bumps whenever the catalog changes — the active project/cluster, *or* its contents.
+   *
+   * Use as a refetch dep. Contents count because compatibility is computed from them: a tool
+   * registered for the active platform, a platform whose capabilities changed, a cluster moved
+   * to a different platform all change which tools a board may offer.
+   */
   version: number;
   refresh: () => Promise<void>;
   setActive: (projectId: string, clusterId: string) => Promise<void>;
+  /**
+   * Announce a write to the catalog, so every consumer of `version` refetches.
+   *
+   * Called by the screens that write it. Without this, `version` bumped only on a cluster
+   * switch, so a tool registered in the Tool Registry did not appear in "Add action" until a
+   * full page reload — the board had fetched its list on mount and had no reason to ask again.
+   *
+   * Explicit at each write site rather than folded into `refresh()`: `refresh` also runs on
+   * mount, and bumping there would make all three catalog consumers fetch twice on every load
+   * to serve a change that did not happen.
+   */
+  catalogChanged: () => void;
 }
 
 export const ActiveClusterContext = createContext<ActiveClusterState | undefined>(undefined);

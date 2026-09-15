@@ -17,7 +17,12 @@
 #
 #     <tree>/multi-platform/     the shared default set        (copied first)
 #     <tree>/<platform>/         platform-specific overrides   (copied over the top)
-#     <tree>/project-<id>/       the result, plus custom scripts
+#     <tree>/project-<id>/       the result, plus this project's own scripts
+#
+# <tree>/custom/ is deliberately NOT copied. It holds scripts operators added, shared across
+# projects, and it is already ahead of the shipped layers in the resolver -- copying it in would
+# fork every custom script per project, so fixing one would mean fixing it N times. A project
+# that wants its own version of a custom script copies that one file itself.
 #
 # Runs ON THE EXECUTION HOST. The app invokes it through `host_exec`, so it must not assume it
 # is on the machine hosting the dashboard, and it uses only tools a BCM/MAAS head node has.
