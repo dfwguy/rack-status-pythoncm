@@ -16,6 +16,8 @@ import os
 import shutil
 import subprocess
 
+from json_db import atomic_write
+
 from transport.base import (
     DEFAULT_HEAD_BYTES,
     DEFAULT_TAIL_BYTES,
@@ -155,11 +157,9 @@ class LocalExecutor(Executor):
             parent = os.path.dirname(target)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-            # Write-then-rename so a reader never sees a half-written artifact.
-            tmp = f"{target}.tmp"
-            with open(tmp, "wb") as fh:
-                fh.write(data)
-            os.replace(tmp, target)
+            # Write-then-rename so a reader never sees a half-written artifact, with a temp
+            # name unique to this writer so two of them cannot collide on it.
+            atomic_write(target, data)
         except OSError as e:
             return f"{type(e).__name__}: {e}"
         return None

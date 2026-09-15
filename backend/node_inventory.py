@@ -43,6 +43,8 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
+from json_db import atomic_write_json
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _log = logging.getLogger(__name__)
@@ -178,9 +180,7 @@ def save_cache(records: list[dict[str, Any]], *, captured_at: str,
             merged[str(hostname)] = {**record, "_captured_at": captured_at}
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"nodes": merged}), encoding="utf-8")
-        tmp.replace(target)
+        atomic_write_json(target, {"nodes": merged}, indent=None)
     except OSError:
         _log.warning("could not persist the inventory cache at %s", target, exc_info=True)
     return merged

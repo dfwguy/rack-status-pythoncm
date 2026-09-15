@@ -59,6 +59,7 @@ from comments_store import read_comments
 from config_env import _eget, _eget_int, _env_int, _job_env_int, _subprocess_env
 from core import rpath as _rpath
 from core import truthy_env as _truthy_env
+from json_db import atomic_write, exclusive_lock
 from naming import (
     _is_multirack_log_basename,
     _jobid_from_nemo_log_basename,
@@ -325,9 +326,7 @@ def _try_populate_cmsh_rack_list_file() -> None:
         body = "\n".join(ids) + ("\n" if ids else "")
         try:
             _CMSH_RACK_LIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-            tmp = _CMSH_RACK_LIST_PATH.with_name(_CMSH_RACK_LIST_PATH.name + ".tmp")
-            tmp.write_text(body, encoding="utf-8")
-            os.replace(str(tmp), str(_CMSH_RACK_LIST_PATH))
+            atomic_write(_CMSH_RACK_LIST_PATH, body)
         except OSError:
             _CMSH_RACK_LIST_STATE = "failed"
             return
@@ -637,31 +636,14 @@ def _save_log_analysis_cache_entries(entries: dict[str, dict[str, object]]) -> N
         indent=2,
         sort_keys=True,
     ) + "\n"
-    tmp = p.with_name(p.name + ".tmp")
+    # The lock covers the read-modify-write, not the temp file. The previous version locked the
+    # temp -- a file no other writer could ever open, since its name was unique to this call --
+    # so it serialised nothing while looking like it did.
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            try:
-                fcntl.flock(f, fcntl.LOCK_EX)
-            except OSError:
-                pass
-            try:
-                f.write(blob)
-                f.flush()
-                try:
-                    os.fsync(f.fileno())
-                except OSError:
-                    pass
-            finally:
-                try:
-                    fcntl.flock(f, fcntl.LOCK_UN)
-                except OSError:
-                    pass
-        os.replace(str(tmp), str(p))
+        with exclusive_lock(p):
+            atomic_write(p, blob)
     except OSError:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        pass
 
 
 def _slurm_running_job_ids_for_rack_status() -> set[str]:

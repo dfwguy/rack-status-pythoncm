@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
+from json_db import atomic_write_json
 
 _logger = logging.getLogger(__name__)
 
@@ -136,16 +137,9 @@ def store_nvftp_token(plaintext: str) -> dict[str, object]:
         **enc,
     }
     VAULT_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = NVFTP_VAULT_FILE.with_suffix(".tmp")
     with _vault_flock(shared=False):
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(doc, f, indent=2)
-            f.write("\n")
-        os.replace(tmp, NVFTP_VAULT_FILE)
-        try:
-            os.chmod(NVFTP_VAULT_FILE, 0o600)
-        except OSError:
-            pass
+        # 0600 at creation rather than after the replace -- this file holds an NVFTP token.
+        atomic_write_json(NVFTP_VAULT_FILE, doc, mode=0o600)
     return nvftp_token_status()
 
 

@@ -322,14 +322,46 @@ class TestUnknownLoginsAreIndistinguishable:
         assert _exchange("rkoike", "wrong", (salt_hex, ver_hex)) == "refused"
 
     def test_an_unknown_login_still_gets_a_salt_and_b_of_the_same_shape(self):
-        """The response shape must not differ, or the refusal is unnecessary."""
+        """The response shape must not differ, or the refusal is unnecessary.
+
+        **`len(fake_b) == len(real_b)` is the wrong comparison, and it failed about one run in
+        256.** ``B`` is hex-encoded from a minimal big-endian integer encoding, so a value whose
+        top byte happens to be zero is two hex characters shorter -- measured at 1022 against
+        1024. Both paths compute ``B`` with the same code, so the variation carries no
+        information about whether the login exists; only the assertion was reading a coin flip
+        as a security property.
+
+        Fixed here rather than in the product, deliberately. Zero-padding ``B`` on the wire
+        would make the lengths exactly equal, but the browser client uses **unpadded** ``B`` in
+        the proof ``M`` (`srpClient.ts`), so widening the encoding would change every client's
+        proof -- and per `identity-auth-traps.mdc` §4 that failure does not raise, it makes
+        every login report a wrong password.
+
+        What the test protects against is a decoy path with a *different* shape -- an empty
+        salt, a truncated ``B``, a missing field. Those are wrong by hundreds of characters, not
+        by one byte, so asserting the modulus width catches them and the coin flip does not
+        matter.
+        """
         salt_hex, ver_hex = S.enroll("rkoike", "pw")
         usr = _client("x", "y")
         _, big_a = usr.start_authentication()
         _, real_s, real_b = S.begin("rkoike", big_a.hex(), salt_hex, ver_hex)
         _, fake_s, fake_b = S.begin("ghost", big_a.hex())
+
+        # The salt is a fixed-width random value, so this one is exact.
         assert len(fake_s) == len(real_s)
-        assert len(fake_b) == len(real_b)
+
+        # Derived from the configured group rather than hardcoded, so moving groups again
+        # (2048 -> 4096 happened once already) updates the expectation instead of failing.
+        from srp import _pysrp
+
+        n, _g = _pysrp.get_ng(S.NG_TYPE, None, None)
+        modulus_bytes = (n.bit_length() + 7) // 8
+        for label, value in (("real", real_b), ("decoy", fake_b)):
+            assert len(value) % 2 == 0, f"{label} B is not whole bytes of hex"
+            assert (len(value) // 2) in {modulus_bytes, modulus_bytes - 1}, (
+                f"{label} B is {len(value) // 2} bytes, not the {modulus_bytes}-byte modulus width"
+            )
 
     def test_the_decoy_salt_is_stable_for_a_login(self):
         """The subtle one. A fresh random salt per probe would reveal non-existence by asking

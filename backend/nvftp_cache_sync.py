@@ -40,6 +40,7 @@ from pathlib import Path, PurePosixPath
 
 import config_env
 import token_vault
+from json_db import atomic_write_json
 
 _logger = logging.getLogger(__name__)
 
@@ -281,11 +282,7 @@ def _load_state() -> dict:
 
 def _save_state(state: dict) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = SYNC_STATE_FILE.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2, sort_keys=True)
-        f.write("\n")
-    os.replace(tmp, SYNC_STATE_FILE)
+    atomic_write_json(SYNC_STATE_FILE, state, sort_keys=True)
 
 
 def _should_upload(local: Path, rel: str, state: dict) -> bool:

@@ -26,6 +26,7 @@ import binascii
 import os
 import shlex
 import subprocess
+from uuid import uuid4
 
 from transport.base import DEFAULT_HEAD_BYTES, DEFAULT_TAIL_BYTES, FileStat
 
@@ -181,7 +182,12 @@ class ShellFilesystem:
         b64 = base64.b64encode(data).decode("ascii")
         # Decode to a temp file and rename, so a concurrent reader never sees a
         # partial artifact (mirrors the local executor's write-then-replace).
-        tmp = f"{target}.tmp"
+        #
+        # The name carries a uuid because this one is REMOTE: two dashboards, or two workers,
+        # writing the same artifact would otherwise share `<target>.tmp` on the head node and
+        # the second `mv` would fail after the first had already moved it. `json_db`'s helper
+        # cannot be used here -- the file is created by a shell on another machine.
+        tmp = f"{target}.{uuid4().hex[:8]}.tmp"
         script = (
             (f"mkdir -p {shlex.quote(parent)} && " if parent else "")
             + f"printf %s {b64} | base64 -d > {shlex.quote(tmp)} "

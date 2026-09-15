@@ -32,6 +32,7 @@ import rack_locks
 import script_tree
 import workflow_models
 import yaml
+from json_db import atomic_write_json
 from node_targets import validation_target_for_rack
 from slurm_admin import _run_scontrol_node_update
 
@@ -163,10 +164,9 @@ def _save_run(run: dict) -> None:
     run_path = _run_dir(run_id)
     run_path.mkdir(parents=True, exist_ok=True)
     path = run_path / "state.json"
-    tmp = path.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(run, f, indent=2, default=str)
-    tmp.replace(path)
+    # `default=str` because a run holds datetimes; without it a save raises rather than
+    # persisting, and a run that cannot be saved is a run that vanishes on restart.
+    atomic_write_json(path, run, default=str)
 
 
 def _load_run(run_id: str) -> dict | None:

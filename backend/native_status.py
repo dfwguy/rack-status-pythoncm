@@ -48,6 +48,7 @@ import config_env
 import host_exec
 import nvis_id_templates as _nvis_ids
 import results_history
+from json_db import atomic_write_json
 from platforms import get_platform as _get_platform
 
 _logger = logging.getLogger(__name__)
@@ -1242,10 +1243,11 @@ def _save_log_cache(path: Path, local: dict[str, Any], alive: set[str]) -> None:
         if alive:
             merged = {k: v for k, v in merged.items() if k in alive}
         path.parent.mkdir(parents=True, exist_ok=True)
-        blob = json.dumps({"version": _NATIVE_LOG_CACHE_VERSION, "entries": merged}, indent=2, sort_keys=True) + "\n"
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(blob, encoding="utf-8")
-        os.replace(str(tmp), str(path))
+        atomic_write_json(
+            path,
+            {"version": _NATIVE_LOG_CACHE_VERSION, "entries": merged},
+            sort_keys=True,
+        )
 
 
 def _multirack_node_count_suffix_from_basename(name: str) -> str:

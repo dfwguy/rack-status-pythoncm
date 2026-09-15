@@ -113,15 +113,22 @@ def _run_bootstrap(project_id: str, platform_id: str, *, dry_run: bool, force: b
 
     # profile="script": the script tree belongs to the scripts role's host, which on a split
     # deployment (Boston) is not the one that answers cmsh.
-    rc, out, err = host_exec.run_on_host(argv, profile="script")
-    if rc != 0:
+    #
+    # A `CompletedProcess`, not a tuple. The first version unpacked three values and every call
+    # raised `TypeError: cannot unpack non-iterable CompletedProcess object` -- caught by
+    # `test_endpoint_smoke`, which is exactly what that test is for: a handler nobody has called
+    # yet still has to not crash.
+    proc = host_exec.run_on_host(argv, profile="script", timeout=600)
+    out = proc.stdout or ""
+    if proc.returncode != 0:
         # The script's own stderr is the useful part -- it names the directory it could not
         # read. Truncated because a failed rsync can be verbose and this reaches a browser.
-        return None, (err or out or "bootstrap failed").strip()[:2000]
+        detail = (proc.stderr or out or "bootstrap failed").strip()
+        return None, detail[:2000]
     try:
-        return json.loads((out or "").strip().splitlines()[-1]), ""
+        return json.loads(out.strip().splitlines()[-1]), ""
     except (ValueError, IndexError):
-        return None, f"could not parse bootstrap output: {(out or '')[:500]}"
+        return None, f"could not parse bootstrap output: {out[:500]}"
 
 
 @bp.route("/<doc_id>/scripts", methods=["GET"])

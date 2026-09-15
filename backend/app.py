@@ -477,11 +477,9 @@ def _bootstrap_rack_web_secret_key() -> None:
             pass
     key = secrets.token_hex(32)
     try:
-        tmp = _RACK_WEB_SECRET_FILE.with_suffix(".tmp")
-        tmp.write_text(key + "\n", encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, _RACK_WEB_SECRET_FILE)
-        os.chmod(_RACK_WEB_SECRET_FILE, 0o600)
+        # 0600 given at creation: `os.replace` installs the temp file's mode, so chmod-ing
+        # afterwards is a correction applied once a readable inode already exists.
+        atomic_write(_RACK_WEB_SECRET_FILE, key + "\n", mode=0o600)
     except OSError as exc:
         warnings.warn(
             f"RACK_WEB_SECRET_KEY not persisted ({exc}); using an ephemeral key for this process only.",
@@ -1288,6 +1286,7 @@ _bootstrap_catalog_at_startup()
 # Before identity, because that bootstrap is the first consumer of a required setting: it is where
 # a missing OIDC issuer used to surface, as a green deployment nobody could log in to.
 import config_preflight
+from json_db import atomic_write
 
 config_preflight.run()
 

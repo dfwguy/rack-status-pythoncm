@@ -97,6 +97,7 @@ def test_concurrent_processes_neither_crash_nor_lose_writes(tmp_path):
 @pytest.mark.skipif(os.name == "nt", reason="fcntl-based locking is POSIX-only")
 def test_a_failed_write_leaves_no_temp_file_behind(tmp_path, monkeypatch):
     """One file per failed write would litter `var/store`, and none of them is named usefully."""
+    import json_db
     from catalog import store as catalog_store
 
     target = tmp_path / "catalog.json"
@@ -106,7 +107,10 @@ def test_a_failed_write_leaves_no_temp_file_behind(tmp_path, monkeypatch):
     def explode(*_a, **_k):
         raise RuntimeError("serialisation failed")
 
-    monkeypatch.setattr(catalog_store.json, "dump", explode)
+    # Patched where the serialisation actually happens. `json_db.atomic_write_json` encodes the
+    # whole document *before* opening anything, so a document that cannot be encoded has not
+    # already replaced the previous file -- which is what the assertions below check.
+    monkeypatch.setattr(json_db.json, "dumps", explode)
     with pytest.raises(RuntimeError):
         repo.upsert("tools", {"id": "doomed"})
 

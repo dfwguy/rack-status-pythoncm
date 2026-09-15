@@ -25,9 +25,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import threading
 
+from json_db import atomic_write_json
 from paths import REPO_ROOT
 
 _logger = logging.getLogger(__name__)
@@ -97,8 +97,4 @@ def _analytics_aggregate_cache_put(log_dir_key: str, payload: dict[str, object])
             ent = dict(prev_entries)
         doc["entries"] = ent
         ent[log_dir_key] = store
-        tmp = _ANALYTICS_AGG_CACHE_PATH.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(doc, f, indent=2, sort_keys=True)
-            f.write("\n")
-        os.replace(tmp, _ANALYTICS_AGG_CACHE_PATH)
+        atomic_write_json(_ANALYTICS_AGG_CACHE_PATH, doc, sort_keys=True)

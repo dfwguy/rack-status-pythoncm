@@ -31,6 +31,7 @@ a retired login stays resolvable so prior audit events keep their subject (AC-2b
 
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
 import time
@@ -42,6 +43,7 @@ from typing import Any
 # catalog.store, which merely re-exports it — importing a name a module happens to have imported
 # breaks the day it stops needing it.
 from catalog.store import _AtomicJSONStorage
+from json_db import drop_caches, exclusive_lock
 from tinydb import Query, TinyDB
 from tinydb.storages import touch
 
@@ -91,17 +93,28 @@ class _OwnerOnlyAtomicStorage(_AtomicJSONStorage):
     change to a shared component.
 
     The bug this exists to prevent, found by a test rather than by reasoning: the parent writes to a
-    sibling `.tmp` and `os.replace`s it, so **every write installs a new inode carrying the process
-    umask** — typically `0o644`. A `chmod` in the store's constructor is therefore undone by the
-    first save, and the file holding SRP verifiers quietly becomes world-readable. `audit/sink.py`
-    hit the identical trap with log rotation and solves it the same way: re-apply the mode after the
-    file is replaced, not once when it is created.
+    sibling temp file and `os.replace`s it, so **every write installs a new inode carrying whatever
+    mode that temp file had** — the process umask, typically `0o644`, unless the mode is given at
+    creation. A `chmod` in the store's constructor is therefore undone by the first save, and the
+    file holding SRP verifiers quietly becomes world-readable.
+
+    **The fix is now the mode, not a correction after the fact.** `file_mode` is passed to the
+    `os.open` that creates the temp, so the inode is never anything but `0o600` — where the previous
+    version replaced a `0o644` file and then narrowed it, leaving a window open on every single
+    write. That is the second half of `identity-auth-traps.mdc` §3: create with the mode you want
+    rather than shrinking the margin around the defect. `audit/sink.py` still has the older shape.
+
+    The `chmod` below is kept as belt and braces for a file that already exists with the wrong mode
+    from an earlier version or a restore — it cannot open a window, because by the time it runs the
+    replaced inode is already `0o600`.
     """
+
+    file_mode = 0o600
 
     def write(self, data: dict[str, Any]) -> None:
         super().write(data)
         try:
-            os.chmod(self._path, 0o600)
+            os.chmod(self._path, self.file_mode)
         except OSError:
             # A mounted volume may refuse chmod. Losing the tightening is worth reporting but not
             # worth failing a write that has already landed.
@@ -151,6 +164,26 @@ class IdentityStore:
             pass
         self._db = TinyDB(self._path, storage=_OwnerOnlyAtomicStorage)
 
+    @contextlib.contextmanager
+    def _exclusive(self):
+        """Serialise a whole read-modify-write against other *processes*.
+
+        `_lock` is a `threading.RLock`, so it only ever covered threads inside one interpreter --
+        and more than one process writes this file: a `cli.py` command run while the server is up,
+        two local instances, a container restarting while the old one drains.
+
+        Here the stakes are higher than in the catalog. TinyDB computes each write from a
+        whole-file read, so an interleaved write silently discards the other process's rows --
+        measured at 63 of 240 documents surviving, on the file holding SRP verifiers and the
+        revocation table. A dropped revocation row is INV-19 in `identity-auth-traps.mdc` §8: the
+        one failure mode that *grants* access rather than denying it.
+        """
+        with exclusive_lock(self._path):
+            # Inside the lock, or the re-read that follows sees a file another writer is about to
+            # replace. `json_db` has the measurements and the two failures this prevents.
+            drop_caches(self._db)
+            yield
+
     # -- users ---------------------------------------------------------------------------------
 
     def get_user(self, login: str) -> User | None:
@@ -170,7 +203,7 @@ class IdentityStore:
         Both checks are inside the lock with the insert, so two threads racing to create the same
         login cannot both win.
         """
-        with _lock:
+        with _lock, self._exclusive():
             table = self._db.table(_TABLE_USERS)
             if table.get(Query().login == user.login):
                 raise IdentityError(f"login {user.login!r} already exists")
@@ -187,7 +220,7 @@ class IdentityStore:
     def update_user(self, user: User) -> User:
         """Replaces a user's mutable fields. The login is the key, and :meth:`User.edited` cannot
         change it, so this cannot become a rename by accident."""
-        with _lock:
+        with _lock, self._exclusive():
             table = self._db.table(_TABLE_USERS)
             if not table.get(Query().login == user.login):
                 raise IdentityError(f"no such user {user.login!r}")
@@ -204,7 +237,7 @@ class IdentityStore:
         at nothing.
         """
         key = canonical_login(login)
-        with _lock:
+        with _lock, self._exclusive():
             table = self._db.table(_TABLE_USERS)
             if not table.get(Query().login == key):
                 raise IdentityError(f"no such user {key!r}")
@@ -227,7 +260,7 @@ class IdentityStore:
         return sorted((Group.from_dict(dict(r)) for r in rows), key=lambda g: g.name)
 
     def create_group(self, group: Group) -> Group:
-        with _lock:
+        with _lock, self._exclusive():
             table = self._db.table(_TABLE_GROUPS)
             if table.get(Query().name == group.name):
                 raise IdentityError(f"group {group.name!r} already exists")
@@ -241,7 +274,7 @@ class IdentityStore:
         return group
 
     def update_group(self, group: Group) -> Group:
-        with _lock:
+        with _lock, self._exclusive():
             table = self._db.table(_TABLE_GROUPS)
             if not table.get(Query().name == group.name):
                 raise IdentityError(f"no such group {group.name!r}")
@@ -251,7 +284,7 @@ class IdentityStore:
 
     def delete_group(self, name: str) -> None:
         key = canonical_group_name(name)
-        with _lock:
+        with _lock, self._exclusive():
             table = self._db.table(_TABLE_GROUPS)
             if not table.get(Query().name == key):
                 raise IdentityError(f"no such group {key!r}")
@@ -266,7 +299,7 @@ class IdentityStore:
         """Both ends must exist. A membership naming a group or user that does not exist is a
         silent no-op grant waiting to become a real one when the name is created."""
         edge = Membership(group=group, login=login)
-        with _lock:
+        with _lock, self._exclusive():
             if not self._db.table(_TABLE_GROUPS).get(Query().name == edge.group):
                 raise IdentityError(f"no such group {edge.group!r}")
             if not self._db.table(_TABLE_USERS).get(Query().login == edge.login):
@@ -281,7 +314,7 @@ class IdentityStore:
 
     def remove_member(self, group: str, login: str) -> None:
         g, u = canonical_group_name(group), canonical_login(login)
-        with _lock:
+        with _lock, self._exclusive():
             removed = self._db.table(_TABLE_MEMBERS).remove(
                 (Query().group == g) & (Query().login == u)
             )
@@ -327,7 +360,7 @@ class IdentityStore:
             raise IdentityError(
                 f"attachment subject must be 'user:<login>' or 'group:<name>', got {subject!r}"
             )
-        with _lock:
+        with _lock, self._exclusive():
             if kind == "user":
                 if not self._db.table(_TABLE_USERS).get(Query().login == canonical_login(name)):
                     raise IdentityError(f"no such user {name!r}")
@@ -346,7 +379,7 @@ class IdentityStore:
             _bump()
 
     def detach_policy(self, subject: str, policy_id: str) -> None:
-        with _lock:
+        with _lock, self._exclusive():
             removed = self._db.table(_TABLE_POLICY_ATTACHMENTS).remove(
                 (Query().subject == subject) & (Query().policy == policy_id)
             )
@@ -423,7 +456,7 @@ class IdentityStore:
 
     def revoke_subject(self, principal: str, reason: str = "") -> None:
         """Deny every token for a principal until explicitly restored."""
-        with _lock:
+        with _lock, self._exclusive():
             table = self._db.table(_TABLE_REVOKED_SUBJECTS)
             row = {"principal": principal, "reason": reason, "at": time.time()}
             if table.get(Query().principal == principal):
@@ -433,7 +466,7 @@ class IdentityStore:
             _bump()
 
     def restore_subject(self, principal: str) -> None:
-        with _lock:
+        with _lock, self._exclusive():
             if self._db.table(_TABLE_REVOKED_SUBJECTS).remove(Query().principal == principal):
                 _bump()
 
@@ -443,7 +476,7 @@ class IdentityStore:
         ``expires_at`` is stored so the row can be dropped once the token would have expired anyway.
         Without it this table grows for the life of the deployment, and it sits on the hot path.
         """
-        with _lock:
+        with _lock, self._exclusive():
             table = self._db.table(_TABLE_REVOKED_TOKENS)
             if not table.get(Query().jti == jti):
                 table.insert(
@@ -463,7 +496,7 @@ class IdentityStore:
         The mechanism behind "log out everywhere" and "revoke on password change". Needed because
         outstanding token ids cannot be enumerated — only their issue time can be compared.
         """
-        with _lock:
+        with _lock, self._exclusive():
             table = self._db.table(_TABLE_NOT_BEFORE)
             row = {"principal": principal, "at": float(moment)}
             if table.get(Query().principal == principal):

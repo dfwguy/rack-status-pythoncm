@@ -26,6 +26,7 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 
 import requests
+from json_db import atomic_write_json
 
 _logger = logging.getLogger(__name__)
 
@@ -64,10 +65,7 @@ def _load_settings() -> dict:
 
 def _save_settings(data: dict) -> None:
     AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = AI_SETTINGS_FILE.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    tmp.replace(AI_SETTINGS_FILE)
+    atomic_write_json(AI_SETTINGS_FILE, data)
 
 
 def get_ai_settings() -> dict:

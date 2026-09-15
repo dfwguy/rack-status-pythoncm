@@ -45,6 +45,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from json_db import atomic_write, atomic_write_json
+
 _logger = logging.getLogger("rack_web.report_store")
 
 #: Oldest reports are pruned beyond this count. A JSON report for 2000 nodes runs to several MB,
@@ -132,13 +134,8 @@ def save(
 
     with _lock:
         target = _payload(entry_id, ext)
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_bytes(payload)
-        os.replace(tmp, target)
-
-        side_tmp = reports_dir() / f"{entry_id}.meta.json.tmp"
-        side_tmp.write_text(json.dumps(entry, indent=2), encoding="utf-8")
-        os.replace(side_tmp, _sidecar(entry_id))
+        atomic_write(target, payload)
+        atomic_write_json(_sidecar(entry_id), entry)
 
         _prune()
 

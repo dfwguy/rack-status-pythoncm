@@ -94,6 +94,7 @@ from job_registry import (
     _validation_jobs,
     _validation_jobs_lock,
 )
+from json_db import atomic_write_json
 from naming import _multirack_site_prefix, _nvis_naming
 from node_targets import _CT_RANGE_INNER_RE, _validation_ct_inner
 from paths import (
@@ -172,12 +173,8 @@ def _job_env_overrides_write(data: dict[str, str], *, bust_status_cache: bool = 
     os.environ["NVIS_JOB_ENV_OVERRIDES_FILE"] = str(p)
     p.parent.mkdir(parents=True, exist_ok=True)
     clean = {k: v[:8192] for k, v in data.items() if k in _JOB_ENV_ALLOWED_KEYS and v.strip()}
-    tmp = p.with_suffix(".tmp")
     with _job_env_flock(shared=False):
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(clean, f, indent=2, sort_keys=True)
-            f.write("\n")
-        os.replace(tmp, p)
+        atomic_write_json(p, clean, sort_keys=True)
         _job_env_overrides_invalidate_cache()
     # Materialize into os.environ *after* releasing the exclusive lock. Materialization
     # calls _apply_catalog_active_to_environ() -> _job_env_overrides_load(), which acquires a
