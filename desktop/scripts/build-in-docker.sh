@@ -66,6 +66,12 @@ docker run --rm \
   --platform "$PLATFORM" \
   -e BUILD_STAMP="${BUILD_STAMP:-}" \
   -v "$PROJECT_DIR":/project \
+  `# The repo root's version.py, which is where the product's version lives. Only desktop/ is` \
+  `# mounted as /project, so build-version.mjs -- which looks one level up -- would otherwise not` \
+  `# find it and would fall back to package.json's stale copy. It did: a container build stamped` \
+  `# itself 0.3.0 while the product was 0.3.1, a LOWER semver than the release it followed, and` \
+  `# nothing failed. /project is desktop/, so one level up is the container root.` \
+  -v "$PROJECT_DIR/../version.py":/version.py:ro \
   `# An ANONYMOUS volume over node_modules, and this line is the important one. A bind-mounted` \
   `# node_modules would have Linux packages installed into it by the npm ci below, replacing the` \
   `# darwin-arm64 native bindings the host needs -- which is exactly what happened when an earlier` \
