@@ -226,10 +226,22 @@ done
 
 # Installers no manifest mentions. signed/ first, so a signed copy shadows the unsigned original
 # of the same name rather than both being published.
+#
+# **Only files carrying this release's version.** `release/` is a working directory that nobody
+# empties between builds, so it accumulates: a previous release's deb and rpm, and — the case that
+# prompted this — an unstamped `0.3.0-arm64.dmg` left over from a build made before the version
+# came from version.py. The manifests are rewritten per build and so are always current, which is
+# exactly why the coherence guard above cannot see these: no manifest mentions them. Publishing
+# them anyway would attach a months-old installer to a new release, under a name a human reading
+# the release page has no reason to question.
 for dir in "$SIGNED_DIR" "$RELEASE_DIR"; do
   [ -d "$dir" ] || continue
   for f in "$dir"/*.dmg "$dir"/*.deb "$dir"/*.rpm; do
     [ -f "$f" ] || continue
+    case "$(basename "$f")" in
+      *"$VERSION"*) ;;
+      *) echo "    skipping $(basename "$f") — not part of $VERSION" >&2; continue ;;
+    esac
     already_listed "$f" || ARCHIVE+=("$f")
   done
 done
