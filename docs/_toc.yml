@@ -34,6 +34,11 @@ subtrees:
             title: Policy schema
           - file: reference/identity/evaluation
             title: How a decision is made
+          # The generated vocabulary. It existed all along and was not in this file, so a reader
+          # looking for "which services and actions are there" found the grammar on the page
+          # above and never the list itself.
+          - file: reference/identity/action-vocabulary
+            title: Action vocabulary — every service and action
 
   - caption: Explanation — why it is like this
     entries:

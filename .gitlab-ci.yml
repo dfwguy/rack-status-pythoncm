@@ -137,6 +137,7 @@ sources-of-truth:
     paths:
       - docs/action-vocabulary.json
       - docs/ACTION_VOCABULARY.md
+      - docs/reference/identity/action-vocabulary.md
       - backend/tests/action_snapshot.json
 
 python-lint:

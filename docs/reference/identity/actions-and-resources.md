@@ -11,6 +11,17 @@ The full lists live elsewhere and are generated from the code: `docs/ACTION_VOCA
 actions, `docs/RESOURCE_MODEL.md` for resource types. Live copies:
 `GET /api/policies/vocabulary`.
 
+## Where the complete list is
+
+This page is the **grammar** — what a verb means, how scope works, when a wildcard applies. It
+deliberately does not enumerate the services, because a hand-written list of 53 of them drifts
+from the code on the first rename.
+
+[Action vocabulary](action-vocabulary.md) is the enumeration, generated from the live
+registry on every build: every service with what it governs, its actions, and the request keys a
+policy names one instance by. A route that declares no action cannot appear in it, and
+`backend/tests/test_action_coverage.py` fails the build if one exists.
+
 ## Actions
 
 An action names *what is being done to what kind of thing*:

@@ -38,15 +38,25 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import ast
 import difflib
 import json
 import os
+import pathlib
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 JSON_OUT = REPO_ROOT / "docs" / "action-vocabulary.json"
 MD_OUT = REPO_ROOT / "docs" / "ACTION_VOCABULARY.md"
+#: The same content as a page *inside* the documentation site.
+#:
+#: A third output rather than a move, which `docs/README.md` asks for explicitly: the flat file is
+#: a CI-gated artifact that eleven places reference, while this is a rendering of it. The site
+#: excludes `[A-Z]*.md` by design, so the list existed for months and was not in `_toc.yml` --
+#: a reader looking for "which services and actions are there" found the grammar page and never
+#: the vocabulary. Both files come from one `render_markdown`, so they cannot disagree.
+SITE_OUT = REPO_ROOT / "docs" / "reference" / "identity" / "action-vocabulary.md"
 
 
 def _load_registry():
@@ -64,6 +74,65 @@ def _load_registry():
     from audit import actions as audit_actions
 
     return audit_actions
+
+
+def _owning_module(routes: list[str]) -> str:
+    """The `api/` module behind a service's routes, from the blueprint prefix of an endpoint.
+
+    Endpoints read `blueprint.view`, and `backend/api/<blueprint>.py` is where the loader found
+    it, so this is a lookup rather than a guess. A service whose routes span two blueprints
+    resolves to the first with a docstring, which is the one that named the action.
+    """
+    for route in routes:
+        endpoint = route.split()[-1]
+        if "." not in endpoint:
+            continue
+        module = endpoint.split(".", 1)[0]
+        candidate = REPO_ROOT / "backend" / "api" / f"{module}.py"
+        if candidate.is_file():
+            return str(candidate)
+    return ""
+
+
+def _module_summary(path: str) -> str:
+    """The first line of a module's docstring.
+
+    **Descriptions are read from the code rather than written here**, which is the only way 53 of
+    them stay true: the docstring is already written, already reviewed, and changes in the same
+    commit as the behaviour it describes. A hand-kept list beside the generated one is the drift
+    this whole file exists to prevent.
+    """
+    if not path:
+        return ""
+    try:
+        tree = ast.parse(pathlib.Path(path).read_text(errors="replace"))
+    except (OSError, SyntaxError):
+        return ""
+    doc = (ast.get_docstring(tree) or "").strip()
+    if not doc:
+        return ""
+    first = doc.split("\n", 1)[0].strip()
+    # Drop a trailing colon: several docstrings open with "X: the endpoints only." and the colon
+    # reads as a broken sentence in a table cell.
+    return first.rstrip(":")
+
+
+def _resource_attributes(resource_type: str, resources) -> dict:
+    """How a policy names *one* of these, which is what `resources` in a policy needs.
+
+    Everything here is read from `authz/resources.py` rather than described: the keys a request
+    is searched for, whether the identifier is case-folded (the difference between
+    `deny rack.power:p17-r01` working and silently not), and whether an unnamed target falls
+    back to the collection.
+    """
+    extractor = resources._RESOLVERS.get(resource_type)
+    keys = list(getattr(extractor, "keys", ()) or ())
+    folded = resource_type in getattr(resources, "_FOLDED_TYPES", frozenset())
+    return {
+        "identified_by": keys,
+        "case_folded": folded,
+        "collection_fallback_verbs": sorted(resources.COLLECTION_FALLBACK_VERBS),
+    }
 
 
 def build() -> dict:
@@ -91,6 +160,18 @@ def build() -> dict:
                 {f"{entry.method} {entry.endpoint}" for entry in entries}
             ),
         })
+
+    # Per-service prose and resource attributes, both derived. See `_module_summary` for why the
+    # description is read out of the owning module rather than maintained here.
+    for service in services.values():
+        all_routes = [r for a in service["actions"] for r in a["routes"]]
+        module = _owning_module(all_routes)
+        service["module"] = module.replace(str(REPO_ROOT) + "/", "") if module else ""
+        service["summary"] = _module_summary(module)
+        service["scope"] = (
+            "singleton" if resources.is_singleton(service["service"]) else "instance"
+        )
+        service["resource"] = _resource_attributes(service["service"], resources)
 
     actions = [a for s in services.values() for a in s["actions"]]
     return {
@@ -127,11 +208,49 @@ def render_markdown(data: dict) -> str:
         "A read-only role is `[\"*:read\", \"*:list\"]` — the two read verbs — rather than an",
         "enumeration of the reads below.",
         "",
+        "Each service's description is the first line of the module that owns it, so it is written",
+        "and reviewed in the same commit as the behaviour. `Identified by` is the request keys a",
+        "policy's target is read from; `case-folded` matters because a `deny` written in the other",
+        "case does not match.",
+        "",
+        "## Services at a glance",
+        "",
+        "| Service | Scope | Actions | What it governs |",
+        "|---|---|---|---|",
     ]
     for service in data["services"]:
+        summary = service.get("summary") or "—"
+        lines.append(
+            f"| [`{service['service']}`](#{_anchor(service['service'])}) "
+            f"| {service.get('scope', '')} | {len(service['actions'])} | {summary} |"
+        )
+    lines.append("")
+
+    for service in data["services"]:
+        res = service.get("resource") or {}
+        keys = res.get("identified_by") or []
         lines += [
             f"## `{service['service']}`",
             "",
+        ]
+        if service.get("summary"):
+            lines += [service["summary"], ""]
+        if service.get("module"):
+            lines += [f"Owned by `{service['module']}`.", ""]
+        if service.get("scope") == "singleton":
+            lines += [
+                "**One instance per deployment.** A policy names it as "
+                f"`{service['service']}:default`; there is no id to narrow a grant to.",
+                "",
+            ]
+        elif keys:
+            folded = " The identifier is **case-folded**, so a `deny` must be written in lower case." if res.get("case_folded") else ""
+            lines += [
+                "Identified by " + ", ".join(f"`{k}`" for k in keys) + " on the request."
+                + folded,
+                "",
+            ]
+        lines += [
             "| Action | Kind | Scope | Routes |",
             "|---|---|---|---|",
         ]
@@ -142,6 +261,25 @@ def render_markdown(data: dict) -> str:
             )
         lines.append("")
     return "\n".join(lines) + "\n"
+
+
+SITE_FRONTMATTER = "\n".join([
+    "---",
+    "diataxis: reference",
+    "description: Every service, what it governs, its actions, and how a policy names one instance.",
+    "---",
+    "",
+])
+
+
+def render_site_page(data: dict) -> str:
+    """The same markdown, with the frontmatter the site's structure gate requires."""
+    return SITE_FRONTMATTER + render_markdown(data)
+
+
+def _anchor(service: str) -> str:
+    """The in-page anchor Sphinx gives a service heading."""
+    return service.replace(".", "").replace("_", "-")
 
 
 def render_json(data: dict) -> str:
@@ -178,7 +316,11 @@ def main() -> int:
     args = parser.parse_args()
 
     data = build()
-    rendered = {JSON_OUT: render_json(data), MD_OUT: render_markdown(data)}
+    rendered = {
+        JSON_OUT: render_json(data),
+        MD_OUT: render_markdown(data),
+        SITE_OUT: render_site_page(data),
+    }
 
     if args.check:
         stale = [

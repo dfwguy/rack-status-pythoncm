@@ -11,7 +11,76 @@ and the build gate in `backend/tests/test_action_coverage.py` fails if one exist
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
 
+Each service's description is the first line of the module that owns it, so it is written
+and reviewed in the same commit as the behaviour. `Identified by` is the request keys a
+policy's target is read from; `case-folded` matters because a `deny` written in the other
+case does not match.
+
+## Services at a glance
+
+| Service | Scope | Actions | What it governs |
+|---|---|---|---|
+| [`ai`](#ai) | singleton | 6 | The in-app AI assistant: settings, a connectivity test, the streaming chat and the agent loop. |
+| [`analytics`](#analytics) | singleton | 2 | Cross-rack analytics: the fleet aggregate, its history, and the scaling series. |
+| [`audit.deep`](#auditdeep) | instance | 2 | Hardware and NVLink/Network deep-audit runs. |
+| [`audit.trail`](#audittrail) | instance | 3 | `GET /api/audit-trail` — read the security audit trail. |
+| [`auth`](#auth) | singleton | 3 | Login, logout and session state -- the endpoints only. |
+| [`auth.password`](#authpassword) | singleton | 2 | SRP login, session renewal and logout — FR-4, FR-4g, FR-5, FR-5a, FR-5b, FR-6. |
+| [`auth.srp`](#authsrp) | singleton | 2 | SRP login, session renewal and logout — FR-4, FR-4g, FR-5, FR-5a, FR-5b, FR-6. |
+| [`bringup`](#bringup) | instance | 2 | Node bring-up status, read from the bring-up automation tree when it is present. |
+| [`catalog`](#catalog) | singleton | 7 | The first-run setup wizard's own endpoints. |
+| [`catalog.board`](#catalogboard) | singleton | 1 | Importing a shared board bundle — the one gated half of board sharing. |
+| [`catalog.platform`](#catalogplatform) | instance | 5 | — |
+| [`catalog.project`](#catalogproject) | instance | 7 | Giving a project its own copy of the scripts, and telling it apart from the defaults. |
+| [`catalog.tool`](#catalogtool) | instance | 6 | — |
+| [`cluster`](#cluster) | singleton | 2 | Cluster-link reachability for the SPA connection banner. |
+| [`comments`](#comments) | singleton | 3 | Reading and writing operator comments on racks and multirack runs. |
+| [`diag`](#diag) | instance | 5 | Read-only rack diagnostics: sysinfo, hardware check, and the pre-validation precheck. |
+| [`docs`](#docs) | singleton | 1 | Serve the Sphinx documentation site at ``/docs/``. |
+| [`export`](#export) | singleton | 1 | Exports: the same results dataset as CSV, as a styled Excel workbook, and as a zip of raw logs. |
+| [`fabric`](#fabric) | instance | 3 | NVLink fabric operations: NVSwitch audit/reset, IMEX check/reset, NVLink preflight, nvlmapper. |
+| [`fabric.imex`](#fabricimex) | instance | 2 | NVLink fabric operations: NVSwitch audit/reset, IMEX check/reset, NVLink preflight, nvlmapper. |
+| [`fabric.nvswitch`](#fabricnvswitch) | instance | 7 | NVLink fabric operations: NVSwitch audit/reset, IMEX check/reset, NVLink preflight, nvlmapper. |
+| [`help`](#help) | instance | 2 | Help content: the knowledge registry served to the SPA and the AI. |
+| [`history`](#history) | instance | 2 | Durable run and metric history: queries over the SQLite/Parquet store. |
+| [`identity.group`](#identitygroup) | instance | 6 | User, group and membership administration — FR-11, FR-13, FR-8, FR-9, NFR-8. |
+| [`identity.user`](#identityuser) | instance | 8 | User, group and membership administration — FR-11, FR-13, FR-8, FR-9, NFR-8. |
+| [`job`](#job) | singleton | 1 | Status of a launched async job, one endpoint per tool family. |
+| [`logs`](#logs) | singleton | 3 | Reading validation logs: download, fetch content, and tail a live one. |
+| [`metrics`](#metrics) | instance | 2 | — |
+| [`node.issues`](#nodeissues) | instance | 2 | Node issue punchcard rollups and in-SPA issue history. |
+| [`nvftp`](#nvftp) | singleton | 3 | NVFTP ``var/cache`` sync status, manual runs and SFTP probes. |
+| [`observability`](#observability) | instance | 2 | Grafana surfaces: the deeplinks catalogue and the live 5-minute rack charts. |
+| [`oidc.token`](#oidctoken) | singleton | 3 | The OIDC provider endpoints (FR-10 .. FR-14). |
+| [`openapi`](#openapi) | singleton | 1 | The deployment's own OpenAPI 3.1 description, in JSON and YAML. |
+| [`policy`](#policy) | instance | 7 | Policy CRUD, attachment, and the vocabulary the editor validates against (FR-19, FR-20, FR-21). |
+| [`rack`](#rack) | instance | 2 | The dashboard core: rack status, cluster overview, app stats, and the settings writer. |
+| [`rack.bmc`](#rackbmc) | instance | 2 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
+| [`rack.gpu`](#rackgpu) | instance | 1 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
+| [`rack.lock`](#racklock) | instance | 3 | — |
+| [`rack.power`](#rackpower) | instance | 1 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
+| [`rack.services`](#rackservices) | instance | 1 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
+| [`report`](#report) | instance | 3 | Generated reports: the archive, per-node reports, and the post-run acceptance report. |
+| [`report.node`](#reportnode) | instance | 4 | Generated reports: the archive, per-node reports, and the post-run acceptance report. |
+| [`results`](#results) | singleton | 4 | Parser results: what a finished run measured, per rack, as the dashboard charts it. |
+| [`settings`](#settings) | singleton | 3 | The dashboard core: rack status, cluster overview, app stats, and the settings writer. |
+| [`slurm.job`](#slurmjob) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
+| [`slurm.node`](#slurmnode) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
+| [`slurm.queue`](#slurmqueue) | singleton | 1 | Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct. |
+| [`support`](#support) | singleton | 3 | nvidia-bug-report collection: run it across a rack, then list and serve what landed. |
+| [`tools`](#tools) | instance | 8 | The Tools page: workspace installers, container downloads, Grafana launch. |
+| [`validation`](#validation) | instance | 14 | Launching validation: every run-* endpoint, and the preset path that is replacing them. |
+| [`validation.activity`](#validationactivity) | instance | 5 | Validation activities: the durable answer to "what ran on this rack, and what came of it". |
+| [`vault`](#vault) | singleton | 3 | NVFTP token vault: read-only access to the stored credential. |
+| [`workflow`](#workflow) | instance | 8 | Workflow templates and workflow runs. |
+
 ## `ai`
+
+The in-app AI assistant: settings, a connectivity test, the streaming chat and the agent loop.
+
+Owned by `backend/api/ai.py`.
+
+**One instance per deployment.** A policy names it as `ai:default`; there is no id to narrow a grant to.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -24,6 +93,12 @@ enumeration of the reads below.
 
 ## `analytics`
 
+Cross-rack analytics: the fleet aggregate, its history, and the scaling series.
+
+Owned by `backend/api/analytics.py`.
+
+**One instance per deployment.** A policy names it as `analytics:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `analytics:aggregate` | mutate | singleton | `POST analytics.api_analytics_aggregate`<br>`POST analytics.api_analytics_aggregate_async` |
@@ -31,12 +106,24 @@ enumeration of the reads below.
 
 ## `audit.deep`
 
+Hardware and NVLink/Network deep-audit runs.
+
+Owned by `backend/api/deep_audits.py`.
+
+Identified by `run_id`, `id` on the request.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `audit.deep:list` | read | instance | `GET deep_audits.api_deep_audits_list` |
 | `audit.deep:read` | read | instance | `GET deep_audits.api_deep_audit_get` |
 
 ## `audit.trail`
+
+`GET /api/audit-trail` — read the security audit trail.
+
+Owned by `backend/api/audit_trail.py`.
+
+Identified by `event_id`, `id` on the request.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -46,6 +133,12 @@ enumeration of the reads below.
 
 ## `auth`
 
+Login, logout and session state -- the endpoints only.
+
+Owned by `backend/api/auth.py`.
+
+**One instance per deployment.** A policy names it as `auth:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `auth:logout` | mutate | singleton | `POST auth.api_logout`<br>`POST auth.logout` |
@@ -54,12 +147,24 @@ enumeration of the reads below.
 
 ## `auth.password`
 
+SRP login, session renewal and logout — FR-4, FR-4g, FR-5, FR-5a, FR-5b, FR-6.
+
+Owned by `backend/api/auth_srp.py`.
+
+**One instance per deployment.** A policy names it as `auth.password:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `auth.password:begin` | mutate | singleton | `POST auth_srp.password_change_begin` |
 | `auth.password:change` | mutate | singleton | `POST auth_srp.password_change_finish` |
 
 ## `auth.srp`
+
+SRP login, session renewal and logout — FR-4, FR-4g, FR-5, FR-5a, FR-5b, FR-6.
+
+Owned by `backend/api/auth_srp.py`.
+
+**One instance per deployment.** A policy names it as `auth.srp:default`; there is no id to narrow a grant to.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -68,12 +173,24 @@ enumeration of the reads below.
 
 ## `bringup`
 
+Node bring-up status, read from the bring-up automation tree when it is present.
+
+Owned by `backend/api/bringup.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `bringup:read` | read | instance | `GET bringup.api_bringup_config`<br>`GET bringup.api_bringup_fleet`<br>`GET bringup.api_bringup_node` |
 | `bringup:run` | mutate | instance | `POST bringup.api_bringup_fleet` |
 
 ## `catalog`
+
+The first-run setup wizard's own endpoints.
+
+Owned by `backend/api/setup.py`.
+
+**One instance per deployment.** A policy names it as `catalog:default`; there is no id to narrow a grant to.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -87,11 +204,19 @@ enumeration of the reads below.
 
 ## `catalog.board`
 
+Importing a shared board bundle — the one gated half of board sharing.
+
+Owned by `backend/api/boards.py`.
+
+**One instance per deployment.** A policy names it as `catalog.board:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `catalog.board:import` | mutate | singleton | `POST boards.api_board_import` |
 
 ## `catalog.platform`
+
+Identified by `doc_id`, `id`, `platform` on the request.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -102,6 +227,12 @@ enumeration of the reads below.
 | `catalog.platform:update` | mutate | instance | `PUT catalog.update_platform` |
 
 ## `catalog.project`
+
+Giving a project its own copy of the scripts, and telling it apart from the defaults.
+
+Owned by `backend/api/project_scripts.py`.
+
+Identified by `doc_id`, `id`, `project` on the request.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -115,6 +246,8 @@ enumeration of the reads below.
 
 ## `catalog.tool`
 
+Identified by `doc_id`, `id`, `tool` on the request.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `catalog.tool:create` | mutate | instance | `POST catalog.create_tool` |
@@ -126,12 +259,24 @@ enumeration of the reads below.
 
 ## `cluster`
 
+Cluster-link reachability for the SPA connection banner.
+
+Owned by `backend/api/cluster_health.py`.
+
+**One instance per deployment.** A policy names it as `cluster:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `cluster:read` | read | singleton | `GET cluster_health.api_cluster_health`<br>`GET dashboard.api_app_stats`<br>`GET dashboard.api_cluster_dashboard_metadata`<br>`GET dashboard.api_cluster_overview`<br>`GET dashboard.api_cluster_overview_live` |
 | `cluster:reconnect` | mutate | singleton | `POST cluster_health.api_cluster_health_reconnect` |
 
 ## `comments`
+
+Reading and writing operator comments on racks and multirack runs.
+
+Owned by `backend/api/comments.py`.
+
+**One instance per deployment.** A policy names it as `comments:default`; there is no id to narrow a grant to.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -140,6 +285,12 @@ enumeration of the reads below.
 | `comments:update` | mutate | singleton | `PUT comments.api_comment_put` |
 
 ## `diag`
+
+Read-only rack diagnostics: sysinfo, hardware check, and the pre-validation precheck.
+
+Owned by `backend/api/diagnostics.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -151,17 +302,35 @@ enumeration of the reads below.
 
 ## `docs`
 
+Serve the Sphinx documentation site at ``/docs/``.
+
+Owned by `backend/api/docs_site.py`.
+
+**One instance per deployment.** A policy names it as `docs:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `docs:read` | read | singleton | `GET docs_site.serve_docs` |
 
 ## `export`
 
+Exports: the same results dataset as CSV, as a styled Excel workbook, and as a zip of raw logs.
+
+Owned by `backend/api/exports.py`.
+
+**One instance per deployment.** A policy names it as `export:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `export:read` | read | singleton | `GET exports.api_export_logs_zip`<br>`GET exports.api_parser_export_csv_legacy`<br>`GET exports.api_parser_export_excel` |
 
 ## `fabric`
+
+NVLink fabric operations: NVSwitch audit/reset, IMEX check/reset, NVLink preflight, nvlmapper.
+
+Owned by `backend/api/fabric_ops.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -171,12 +340,24 @@ enumeration of the reads below.
 
 ## `fabric.imex`
 
+NVLink fabric operations: NVSwitch audit/reset, IMEX check/reset, NVLink preflight, nvlmapper.
+
+Owned by `backend/api/fabric_ops.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `fabric.imex:check` | mutate | instance | `POST fabric_ops.api_imex_check_async` |
 | `fabric.imex:reset` | mutate | instance | `POST fabric_ops.api_imex_reset_async` |
 
 ## `fabric.nvswitch`
+
+NVLink fabric operations: NVSwitch audit/reset, IMEX check/reset, NVLink preflight, nvlmapper.
+
+Owned by `backend/api/fabric_ops.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -190,6 +371,12 @@ enumeration of the reads below.
 
 ## `help`
 
+Help content: the knowledge registry served to the SPA and the AI.
+
+Owned by `backend/api/help.py`.
+
+Identified by `content_id`, `id` on the request.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `help:list` | read | instance | `GET help.api_help_content` |
@@ -197,12 +384,24 @@ enumeration of the reads below.
 
 ## `history`
 
+Durable run and metric history: queries over the SQLite/Parquet store.
+
+Owned by `backend/api/history.py`.
+
+Identified by `run_id`, `id` on the request.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `history:list` | read | instance | `GET history.api_history_runs` |
 | `history:read` | read | instance | `GET history.api_history_metric_series`<br>`GET history.api_history_metrics`<br>`GET history.api_history_run`<br>`GET history.api_history_summary` |
 
 ## `identity.group`
+
+User, group and membership administration — FR-11, FR-13, FR-8, FR-9, NFR-8.
+
+Owned by `backend/api/identity_admin.py`.
+
+Identified by `name`, `group` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -214,6 +413,12 @@ enumeration of the reads below.
 | `identity.group:update` | mutate | instance | `PATCH identity_admin.update_group` |
 
 ## `identity.user`
+
+User, group and membership administration — FR-11, FR-13, FR-8, FR-9, NFR-8.
+
+Owned by `backend/api/identity_admin.py`.
+
+Identified by `login`, `user` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -228,11 +433,23 @@ enumeration of the reads below.
 
 ## `job`
 
+Status of a launched async job, one endpoint per tool family.
+
+Owned by `backend/api/job_status.py`.
+
+**One instance per deployment.** A policy names it as `job:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `job:list` | read | singleton | `GET job_status.api_reset_job_status`<br>`GET job_status.api_run_clusterkit_status`<br>`GET job_status.api_run_llama_status`<br>`GET job_status.api_run_llmb_nccl_status`<br>`GET job_status.api_run_mnubergemm_stress_status`<br>`GET job_status.api_run_nccl_fullrack_status`<br>`GET job_status.api_run_nemo_xrack_status`<br>`GET job_status.api_run_nvloom_status`<br>`GET job_status.api_run_validation_status`<br>`GET tools.api_tools_download_containers_status`<br>`GET tools.api_tools_workspace_toolchain_status`<br>`GET validation_runs.api_run_exemplar_sysinfo_status`<br>`GET validation_runs.api_run_validation_preset_status` |
 
 ## `logs`
+
+Reading validation logs: download, fetch content, and tail a live one.
+
+Owned by `backend/api/logs.py`.
+
+**One instance per deployment.** A policy names it as `logs:default`; there is no id to narrow a grant to.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -242,6 +459,8 @@ enumeration of the reads below.
 
 ## `metrics`
 
+Identified by `chart_id`, `id`, `metric` on the request.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `metrics:list` | read | instance | `GET metrics_query.api_metrics_catalog` |
@@ -249,12 +468,24 @@ enumeration of the reads below.
 
 ## `node.issues`
 
+Node issue punchcard rollups and in-SPA issue history.
+
+Owned by `backend/api/node_issues.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `node.issues:read` | read | instance | `GET node_issues.api_node_issues` |
 | `node.issues:sync` | mutate | instance | `POST node_issues.api_node_issues_sync_punchcard` |
 
 ## `nvftp`
+
+NVFTP ``var/cache`` sync status, manual runs and SFTP probes.
+
+Owned by `backend/api/nvftp_sync.py`.
+
+**One instance per deployment.** A policy names it as `nvftp:default`; there is no id to narrow a grant to.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -264,12 +495,24 @@ enumeration of the reads below.
 
 ## `observability`
 
+Grafana surfaces: the deeplinks catalogue and the live 5-minute rack charts.
+
+Owned by `backend/api/grafana.py`.
+
+Identified by `view`, `dashboard`, `id` on the request.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `observability:list` | read | instance | `GET grafana_embeds.api_observability_dashboards` |
 | `observability:read` | read | instance | `GET grafana.api_grafana_deeplinks`<br>`GET grafana.api_rack_grafana_live_charts`<br>`GET grafana_embeds.api_observability_dashboards_view`<br>`GET grafana_embeds.api_observability_health`<br>`GET lake.api_lake_health` |
 
 ## `oidc.token`
+
+The OIDC provider endpoints (FR-10 .. FR-14).
+
+Owned by `backend/api/oidc_provider.py`.
+
+**One instance per deployment.** A policy names it as `oidc.token:default`; there is no id to narrow a grant to.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -279,11 +522,23 @@ enumeration of the reads below.
 
 ## `openapi`
 
+The deployment's own OpenAPI 3.1 description, in JSON and YAML.
+
+Owned by `backend/api/openapi_spec.py`.
+
+**One instance per deployment.** A policy names it as `openapi:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `openapi:read` | read | singleton | `GET openapi_spec.api_openapi_json`<br>`GET openapi_spec.api_openapi_yaml` |
 
 ## `policy`
+
+Policy CRUD, attachment, and the vocabulary the editor validates against (FR-19, FR-20, FR-21).
+
+Owned by `backend/api/policies.py`.
+
+Identified by `policy_id`, `id`, `subject` on the request.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -297,12 +552,24 @@ enumeration of the reads below.
 
 ## `rack`
 
+The dashboard core: rack status, cluster overview, app stats, and the settings writer.
+
+Owned by `backend/api/dashboard.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `rack:list` | read | instance | `GET dashboard.api_status` |
 | `rack:uptime` | mutate | instance | `POST rack_power.api_rack_uptime` |
 
 ## `rack.bmc`
+
+Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts.
+
+Owned by `backend/api/rack_power.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -311,11 +578,19 @@ enumeration of the reads below.
 
 ## `rack.gpu`
 
+Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts.
+
+Owned by `backend/api/rack_power.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `rack.gpu:reset` | mutate | instance | `POST rack_power.api_gpu_reset`<br>`POST rack_power.api_gpu_reset_async` |
 
 ## `rack.lock`
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -325,17 +600,35 @@ enumeration of the reads below.
 
 ## `rack.power`
 
+Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts.
+
+Owned by `backend/api/rack_power.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `rack.power:on` | mutate | instance | `POST rack_power.api_power_on`<br>`POST rack_power.api_power_on_async` |
 
 ## `rack.services`
 
+Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts.
+
+Owned by `backend/api/rack_power.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `rack.services:restart` | mutate | instance | `POST rack_power.api_services_restart`<br>`POST rack_power.api_services_restart_async` |
 
 ## `report`
+
+Generated reports: the archive, per-node reports, and the post-run acceptance report.
+
+Owned by `backend/api/reports.py`.
+
+Identified by `report_id`, `id` on the request.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -344,6 +637,12 @@ enumeration of the reads below.
 | `report:read` | read | instance | `GET reports.api_reports_generated_download` |
 
 ## `report.node`
+
+Generated reports: the archive, per-node reports, and the post-run acceptance report.
+
+Owned by `backend/api/reports.py`.
+
+Identified by `node`, `host` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -354,6 +653,12 @@ enumeration of the reads below.
 
 ## `results`
 
+Parser results: what a finished run measured, per rack, as the dashboard charts it.
+
+Owned by `backend/api/parser_results.py`.
+
+**One instance per deployment.** A policy names it as `results:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `results:capture` | mutate | singleton | `POST parser_results.api_capture_job_attempt` |
@@ -363,6 +668,12 @@ enumeration of the reads below.
 
 ## `settings`
 
+The dashboard core: rack status, cluster overview, app stats, and the settings writer.
+
+Owned by `backend/api/dashboard.py`.
+
+**One instance per deployment.** A policy names it as `settings:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `settings:read` | read | singleton | `GET dashboard.api_settings_job_environment` |
@@ -371,12 +682,24 @@ enumeration of the reads below.
 
 ## `slurm.job`
 
+Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log.
+
+Owned by `backend/api/slurm_ops.py`.
+
+Identified by `jid`, `job_id` on the request.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `slurm.job:cancel` | mutate | instance | `POST slurm_ops.api_slurm_scancel` |
 | `slurm.job:read` | read | instance | `GET slurm_ops.api_slurm_job_log_path`<br>`GET slurm_ops.api_slurm_job_stdout_content`<br>`GET slurm_ops.api_slurm_job_stdout_download`<br>`GET slurm_ops.api_slurm_scontrol_show_job` |
 
 ## `slurm.node`
+
+Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log.
+
+Owned by `backend/api/slurm_ops.py`.
+
+Identified by `node`, `nodes`, `host` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -385,11 +708,23 @@ enumeration of the reads below.
 
 ## `slurm.queue`
 
+Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct.
+
+Owned by `backend/api/slurm_queries.py`.
+
+**One instance per deployment.** A policy names it as `slurm.queue:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `slurm.queue:list` | read | singleton | `GET slurm_queries.api_slurm_sacct_recent`<br>`GET slurm_queries.api_slurm_sinfo_r`<br>`GET slurm_queries.api_slurm_squeue` |
 
 ## `support`
+
+nvidia-bug-report collection: run it across a rack, then list and serve what landed.
+
+Owned by `backend/api/bug_report.py`.
+
+**One instance per deployment.** A policy names it as `support:default`; there is no id to narrow a grant to.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -398,6 +733,12 @@ enumeration of the reads below.
 | `support:read` | read | singleton | `GET bug_report.api_bug_report_bundle`<br>`GET bug_report.api_bug_report_file` |
 
 ## `tools`
+
+The Tools page: workspace installers, container downloads, Grafana launch.
+
+Owned by `backend/api/tools.py`.
+
+Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -411,6 +752,12 @@ enumeration of the reads below.
 | `tools:list` | read | instance | `GET tools.api_tools_available` |
 
 ## `validation`
+
+Launching validation: every run-* endpoint, and the preset path that is replacing them.
+
+Owned by `backend/api/validation_runs.py`.
+
+Identified by `rack`, `rack_id`, `racks`, `nodes`, `node` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -431,6 +778,12 @@ enumeration of the reads below.
 
 ## `validation.activity`
 
+Validation activities: the durable answer to "what ran on this rack, and what came of it".
+
+Owned by `backend/api/activities.py`.
+
+Identified by `activity_id`, `id` on the request.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `validation.activity:adopt` | mutate | instance | `POST activities.api_validation_activities_adopt` |
@@ -441,6 +794,12 @@ enumeration of the reads below.
 
 ## `vault`
 
+NVFTP token vault: read-only access to the stored credential.
+
+Owned by `backend/api/vault.py`.
+
+**One instance per deployment.** A policy names it as `vault:default`; there is no id to narrow a grant to.
+
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `vault:delete_token` | mutate | singleton | `DELETE vault.api_vault_nvftp_token` |
@@ -448,6 +807,12 @@ enumeration of the reads below.
 | `vault:set_token` | mutate | singleton | `PUT vault.api_vault_nvftp_token` |
 
 ## `workflow`
+
+Workflow templates and workflow runs.
+
+Owned by `backend/api/workflows.py`.
+
+Identified by `workflow_id`, `run_id`, `id` on the request.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
