@@ -92,15 +92,38 @@ class TestGrafanaFraming:
         assert got == "https://nvis.example:3001", "the page's PORT must not leak into the Grafana origin"
 
     def test_frame_src_is_none_rather_than_empty_when_grafana_is_unknown(self):
-        """An empty directive is treated as *allow* by some browsers -- the opposite of intended."""
+        """An empty directive is treated as *allow* by some browsers -- the opposite of intended.
+
+        With no Grafana configured the value is `'self'`, not empty and no longer `'none'`: the
+        app frames its own documentation. That is the narrowest value that works, since every
+        other embed target is a separate origin which still has to be named.
+        """
         d = _directives(content_security_policy(page_host="localhost:5050", grafana_origin=""))
-        assert d["frame-src"] == ["'none'"]
+        assert d["frame-src"] == ["'self'"]
 
     def test_the_grafana_origin_reaches_frame_src(self):
         d = _directives(
             content_security_policy(page_host="localhost:5050", grafana_origin="http://localhost:3000")
         )
-        assert d["frame-src"] == ["http://localhost:3000"]
+        assert d["frame-src"] == ["'self'", "http://localhost:3000"]
+
+    def test_all_three_framing_directives_agree_for_the_documentation(self):
+        """The bug this pins, and it is a *set* of three rather than a pair.
+
+        An iframe renders only if the parent may embed it (`frame-src` on the app page) **and**
+        the child may be embedded (`frame-ancestors` plus `X-Frame-Options` on the docs
+        response). I fixed the two on the child and left `frame-src 'none'` on the parent, so
+        the in-app documentation was a white rectangle: no console message an operator would
+        see, and two of the three directives perfectly correct.
+        """
+        app_page = _directives(content_security_policy(page_host="localhost:5050"))
+        assert "'self'" in app_page["frame-src"], "the app page may not embed its own docs"
+
+        docs = security_headers(
+            is_secure=False, frame_ancestors="'self'", page_host="localhost:5050"
+        )
+        assert docs["X-Frame-Options"] == "SAMEORIGIN"
+        assert "frame-ancestors 'self'" in docs["Content-Security-Policy"]
 
 
 class TestHstsIsOnlyEverSentOverTls:

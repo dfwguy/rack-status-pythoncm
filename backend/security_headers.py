@@ -107,7 +107,8 @@ def content_security_policy(
       jsdom does not enforce the header. Passing `'self'` for `/docs/` is narrower than dropping
       it: the docs are public static files built from this repository, so same-origin framing of
       them adds no surface, while every other response stays unframeable.
-    * ``frame-src`` is Grafana or nothing; an empty value must render as ``'none'`` rather than
+    * ``frame-src`` is ``'self'`` plus Grafana when configured -- ``'self'`` because the app
+      frames its own documentation, and an unnamed origin must render as a value rather than
       an empty directive, which some browsers treat as "allow".
     """
     ws_scheme = "wss" if page_scheme == "https" else "ws"
@@ -116,7 +117,17 @@ def content_security_policy(
         connect.append(f"{ws_scheme}://{page_host}")
     connect.extend(extra_origins)
 
-    frame_src = grafana_origin or "'none'"
+    # `'self'` **and** the Grafana origin. This read `grafana_origin or "'none'"`, which is the
+    # third directive in a set of three that all have to agree before an iframe renders, and the
+    # one I missed: `frame-ancestors` and `X-Frame-Options` govern who may frame the *docs*,
+    # while `frame-src` governs what the *app page* may embed. With `'none'` here the browser
+    # blocked the in-app documentation silently -- a white rectangle, no console error the
+    # operator would see, and both of the other two directives correct.
+    #
+    # `'self'` is the narrowest value that works: the app may frame its own origin, which is the
+    # documentation and nothing else, since every other embed target is a separate origin that
+    # still has to be named here.
+    frame_src = " ".join(["'self'"] + ([grafana_origin] if grafana_origin else []))
 
     directives = [
         "default-src 'self'",
