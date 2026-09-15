@@ -53,8 +53,11 @@ This site is new. Most of the project's written material is still in hand-writte
 being migrated a page at a time rather than dumped in wholesale. `docs/README.md` describes the
 boundary and how to move a page across.
 
-The generated references remain authoritative and are served by the running product:
+The generated references are authoritative, and the first of them is now **in this site**:
 
-- **every action** the product declares: `docs/ACTION_VOCABULARY.md`, or `GET /api/policies/vocabulary`
-- **every resource type**: `docs/RESOURCE_MODEL.md`
+- **every action** the product declares, with what each service governs and how a policy names
+  one instance: [Action vocabulary](reference/identity/action-vocabulary.md). The same content
+  lives at `docs/ACTION_VOCABULARY.md` for repository readers, and `GET
+  /api/policies/vocabulary` serves it to a client.
+- **every resource type**: `docs/RESOURCE_MODEL.md` — not yet migrated.
 - **the policy schema**: `GET /api/policies/schema`
