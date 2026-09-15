@@ -110,9 +110,17 @@ export function DocumentationView() {
                 <RotateCw size={14} style={{ marginRight: 6 }} />
                 Reload
               </Button>
-              {/* Kept, but no longer the only way in. An operator who wants the docs beside the
-                  app rather than inside it still can; in the desktop shell this opens the
-                  system browser, which is a deliberate choice rather than the default. */}
+              {/* Kept, but no longer the only way in — an operator who wants the docs beside
+                  the app rather than inside it still can.
+
+                  Where this lands depends on the client, and both answers are now right. In a
+                  browser it is a tab. In the desktop shell it is a second Greenlight window (a
+                  native tab on macOS), because `setWindowOpenHandler` allows a *same-origin*
+                  popup: it can only show pages this deployment serves, so the reason off-origin
+                  popups are denied — a chromeless window with no address bar could draw a
+                  convincing login form — does not apply. It used to open Safari, which on an
+                  air-gapped host meant a second certificate prompt and a second sign-in to read
+                  the manual. `desktop/src/main/windowOpenPolicy.ts` has the rule. */}
               <Button
                 kind="tertiary"
                 size="small"

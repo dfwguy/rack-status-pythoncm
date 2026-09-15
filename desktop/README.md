@@ -285,9 +285,33 @@ Two window kinds, and the difference is who wrote the code inside:
 
 A cluster window renders code served over a tunnel from a customer data centre; handing it a
 `contextBridge` API would put "open an SSH tunnel" and "read the deployment list" one XSS away from
-a page we do not build. It needs nothing from us, so it gets nothing. Both windows also send
-`window.open` and off-origin navigation to the system browser, deny `<webview>` attachment, and
-default-deny every permission request.
+a page we do not build. It needs nothing from us, so it gets nothing. Both windows also deny
+`<webview>` attachment and default-deny every permission request.
+
+### What a page may open
+
+Three outcomes, decided by `src/main/windowOpenPolicy.ts` — a module with no Electron import, so
+the rule is testable in plain node (`scripts/window-open-check.mjs`, run by `npm run smoke`).
+
+| The page opens | Outcome | Why |
+|---|---|---|
+| this deployment's own origin | a Greenlight window here (a native tab on macOS) | it can only show pages the deployment already serves — the same pages the window is showing |
+| any other `http(s)` URL | the operator's browser | an Electron popup has no address bar, so a page able to open one pointing anywhere could draw a convincing login form with nothing to contradict it |
+| anything else (`file:`, `data:`, custom schemes) | refused outright | `openExternal` on an arbitrary scheme launches whatever local handler claims it |
+
+Off-origin *navigation* still leaves for the browser too, so a cluster window stays on its
+deployment.
+
+**Same-origin used to be denied along with everything else, and that cost the product its own
+documentation.** "Open in a new window" handed the operator to Safari, which on an air-gapped host
+means a second certificate prompt, a second sign-in, and leaving the application to read its own
+manual. The phishing argument that justifies denying off-origin popups does not apply to an origin
+the window is already pinned to.
+
+macOS groups these windows into native tabs when the operator has "Prefer tabs when opening
+documents" set, via a shared `tabbingIdentifier`. Windows and Linux ignore it and get a window,
+which is the honest outcome — Electron has no cross-platform tab UI, and building one is not worth
+a tab strip we would have to maintain.
 
 ## Auto-update
 

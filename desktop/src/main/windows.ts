@@ -37,6 +37,7 @@ import { BrowserWindow, app, dialog, shell, type Certificate } from "electron";
 import { join } from "node:path";
 
 import { loadDeployments, originFor, saveDeployments, type Deployment } from "./deployments";
+import { windowOpenDecision } from "./windowOpenPolicy";
 
 /** Cluster windows by deployment id, so Connect twice focuses rather than duplicates. */
 const clusterWindows = new Map<string, BrowserWindow>();
@@ -54,12 +55,71 @@ const APP_ICON = join(__dirname, "..", "..", "resources", "icon.png");
 function harden(win: BrowserWindow, allowedOrigin: string | null): void {
   const contents = win.webContents;
 
-  // A target=_blank or window.open goes to the operator's real browser, never a chromeless
-  // Electron window: an Electron popup has no address bar, so a page could draw a convincing
-  // login form with nothing to contradict it.
+  // A target=_blank or window.open to **another origin** goes to the operator's real browser,
+  // never a chromeless Electron window: an Electron popup has no address bar, so a page could
+  // draw a convincing login form with nothing to contradict it.
+  //
+  // **Same-origin is the exception, and the reason is that the phishing argument does not
+  // apply to it.** The window is already pinned to this deployment's origin by `will-navigate`;
+  // a popup that cannot leave that origin can only show pages this deployment serves, which is
+  // exactly what the window is showing anyway. Denying those bought no safety and cost the
+  // product its own documentation: "Open in a new window" handed the operator to Safari, which
+  // on an air-gapped host means a second certificate prompt, a second sign-in, and leaving the
+  // application to read its own manual.
+  //
+  // The child is hardened identically (`did-create-window` below) rather than inheriting
+  // anything, because a window created this way starts with Electron's defaults, not ours.
   contents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/.test(url)) void shell.openExternal(url);
+    const decision = windowOpenDecision(url, allowedOrigin);
+    if (decision === "open-window") {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          width: 1280,
+          height: 900,
+          icon: APP_ICON,
+          backgroundColor: "#0d0d0d",
+          // macOS groups windows sharing an identifier into native tabs when the operator has
+          // "Prefer tabs when opening documents" set — so on a Mac this *is* the new tab, with
+          // no tab strip for us to build and maintain. Elsewhere it is ignored and the window is
+          // a window, which is the honest outcome: Electron has no cross-platform tab UI.
+          tabbingIdentifier: "nvis-greenlight",
+          webPreferences: {
+            // The same posture as the cluster window: no preload, no bridge, sandboxed. This
+            // renders code served from a customer data centre.
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+            webSecurity: true,
+          },
+        },
+      };
+    }
+    // Only http(s) reaches the operating system: `file:`, `data:` and custom schemes are how a
+    // page gets something *else* to open a payload, and `openExternal` on an arbitrary scheme
+    // launches whatever local handler claims it.
+    if (decision === "open-external") void shell.openExternal(url);
     return { action: "deny" };
+  });
+
+  // Harden the child, and keep the deployment named in its title.
+  //
+  // A second window showing a *different* cluster's documentation than the one you think you are
+  // reading is the confusion this whole shell exists to prevent, so the child carries the label
+  // too. Unlike the cluster window, its page title is allowed through — which document you are
+  // on is the useful part — with the deployment appended rather than replaced.
+  contents.on("did-create-window", (child) => {
+    harden(child, allowedOrigin);
+    const label = win.getTitle();
+    const stamp = (title: string) => {
+      const suffix = label ? ` — ${label}` : "";
+      if (!title.endsWith(suffix)) child.setTitle(`${title}${suffix}`);
+    };
+    stamp(child.webContents.getTitle() || "Documentation");
+    child.webContents.on("page-title-updated", (event, title) => {
+      event.preventDefault();
+      stamp(title);
+    });
   });
 
   // Keep a cluster window on its own origin. Grafana links, docs and NVIDIA URLs leave for the
@@ -227,6 +287,10 @@ export function createClusterWindow(dep: Deployment): BrowserWindow {
     title: `${dep.label} — ${dep.customer}`,
     icon: APP_ICON,
     backgroundColor: "#0d0d0d",
+    // Shared with the same-origin child windows, so on macOS a documentation window opens as a
+    // native tab beside the cluster it belongs to instead of a second floating window. Ignored
+    // on Windows and Linux, where Electron has no tab concept.
+    tabbingIdentifier: "nvis-greenlight",
     webPreferences: {
       // No preload. See the module docstring: this window renders code served from a customer
       // data centre and must have no bridge into this process.
