@@ -37,19 +37,21 @@
  * renders an empty box while every jsdom test passes.
  */
 import { useCallback, useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import Box from "@mui/material/Box";
 import { Banner, Button, Flex, Text } from "@nvidia/foundations-react-core";
-import { ExternalLink, RotateCw } from "lucide-react";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 import { apiFetch } from "../lib/apiFetch";
-import { PageHeader } from "../components/layout/PageHeader";
+import { DEFAULT_PATH } from "../routes";
 
 /** Where the Sphinx build is served from. A server route, not an SPA one. */
 const DOCS_URL = "/docs/";
 
 export function DocumentationView() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
-  const [nonce, setNonce] = useState(0);
 
   /**
    * Has the documentation been built into this deployment?
@@ -88,79 +90,84 @@ export function DocumentationView() {
     };
   }, [probe]);
 
-  const reload = () => {
-    void probe().then((ok) => {
-      if (ok) {
-        setReady(true);
-        setNonce((n) => n + 1);
-      }
-    });
-  };
+
+  /**
+   * Where Back goes.
+   *
+   * The route we came from, carried in router state by `handleNavigate`. **Not** browser
+   * history: same-origin iframe navigations push entries onto the *parent's* session history,
+   * so after reading five pages `navigate(-1)` walks back through documentation pages rather
+   * than leaving the documentation — the operator presses Back and appears not to move.
+   *
+   * A deep link or a reload has no state, so it falls back to the dashboard rather than trapping
+   * the reader.
+   */
+  const cameFrom = (location.state as { from?: string } | null)?.from;
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", height: "100%", p: 0 }}>
-      <Box sx={{ px: 4, pt: 4 }}>
-        <PageHeader
-          title="Documentation"
-          description="The documentation for the version running here, served by this deployment."
-          contentId="documentation"
-          actions={
-            <Flex gap="2">
-              <Button kind="tertiary" size="small" onClick={reload}>
-                <RotateCw size={14} style={{ marginRight: 6 }} />
-                Reload
-              </Button>
-              {/* Kept, but no longer the only way in — an operator who wants the docs beside
-                  the app rather than inside it still can.
-
-                  Where this lands depends on the client, and both answers are now right. In a
-                  browser it is a tab. In the desktop shell it is a second Greenlight window (a
-                  native tab on macOS), because `setWindowOpenHandler` allows a *same-origin*
-                  popup: it can only show pages this deployment serves, so the reason off-origin
-                  popups are denied — a chromeless window with no address bar could draw a
-                  convincing login form — does not apply. It used to open Safari, which on an
-                  air-gapped host meant a second certificate prompt and a second sign-in to read
-                  the manual. `desktop/src/main/windowOpenPolicy.ts` has the rule. */}
-              <Button
-                kind="tertiary"
-                size="small"
-                onClick={() => window.open(DOCS_URL, "_blank", "noopener,noreferrer")}
-              >
-                <ExternalLink size={14} style={{ marginRight: 6 }} />
-                Open in a new window
-              </Button>
-            </Flex>
-          }
-        />
-      </Box>
+    <Box
+      sx={{
+        position: "fixed",
+        inset: 0,
+        display: "flex",
+        flexDirection: "column",
+        bgcolor: "#0d0d0d",
+        zIndex: 1250,
+      }}
+    >
+      {/* One slim bar, holding only what the documentation does not provide itself: a way out,
+          and a way to detach it. No Reload (the browser reloads), no search or theme toggle
+          (the Sphinx site has both), no Ask AI or Help — the page you are on *is* the help. */}
+      <Flex
+        align="center"
+        justify="between"
+        style={{
+          padding: "8px 16px",
+          borderBottom: "1px solid var(--kui-color-border-subtle, #2a2a2a)",
+          flexShrink: 0,
+        }}
+      >
+        <Flex align="center" gap="2">
+          <Button kind="tertiary" size="small" onClick={() => navigate(cameFrom || DEFAULT_PATH)}>
+            <ArrowLeft size={14} style={{ marginRight: 6 }} />
+            Back
+          </Button>
+          <Text kind="body/bold/sm">Documentation</Text>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+            for the version running here
+          </Text>
+        </Flex>
+        <Button
+          kind="tertiary"
+          size="small"
+          onClick={() => window.open(DOCS_URL, "_blank", "noopener,noreferrer")}
+        >
+          <ExternalLink size={14} style={{ marginRight: 6 }} />
+          Open in a new window
+        </Button>
+      </Flex>
 
       {error ? (
-        <Box sx={{ px: 4, pb: 2 }}>
+        <Box sx={{ p: 2 }}>
           <Banner status="error" kind="inline">
             {error}
           </Banner>
         </Box>
       ) : null}
 
-      <Box sx={{ flex: 1, minHeight: 0, px: 4, pb: 4 }}>
+      <Box sx={{ flex: 1, minHeight: 0 }}>
         {ready ? (
           <iframe
-            key={nonce}
             src={DOCS_URL}
             title="Greenlight documentation"
-            style={{
-              width: "100%",
-              height: "100%",
-              minHeight: "70vh",
-              border: "1px solid var(--kui-color-border-subtle, #333)",
-              borderRadius: 4,
-              background: "#fff",
-            }}
+            style={{ width: "100%", height: "100%", border: 0, display: "block" }}
           />
         ) : (
-          <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
-            {error ? "" : "Loading documentation…"}
-          </Text>
+          <Box sx={{ p: 3 }}>
+            <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
+              {error ? "" : "Loading documentation…"}
+            </Text>
+          </Box>
         )}
       </Box>
     </Box>

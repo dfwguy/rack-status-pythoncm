@@ -36,6 +36,12 @@ export const RACKS_PATH = "/compute/racks";
 export const rackDetailPath = (rack: string): string =>
   `${RACKS_PATH}/${encodeURIComponent(rack)}`;
 
+/**
+ * The documentation route, named because two places must agree on it: the route table below and
+ * the check in `AppContent` that renders it without the app chrome.
+ */
+export const DOCUMENTATION_PATH = "/documentation";
+
 export const ROUTES: RouteDef[] = [
   { viewId: "dashboard", path: DEFAULT_PATH, domain: "Compute", label: "Cluster overview" },
   { viewId: "nodes", path: "/compute/nodes", domain: "Compute", label: "Nodes" },
@@ -62,7 +68,7 @@ export const ROUTES: RouteDef[] = [
   { viewId: "platformCatalog", path: "/platform/catalog", domain: "Platform", label: "Platform Catalog" },
   { viewId: "toolRegistry", path: "/platform/tools", domain: "Platform", label: "Tool Registry" },
   { viewId: "apiReference", path: "/platform/api", domain: "Platform", label: "API Reference" },
-  { viewId: "documentation", path: "/documentation", domain: "Platform", label: "Documentation" },
+  { viewId: "documentation", path: DOCUMENTATION_PATH, domain: "Platform", label: "Documentation" },
   { viewId: "settings", path: "/settings", domain: "Platform", label: "Settings" },
 ];
 

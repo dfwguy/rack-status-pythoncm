@@ -94,7 +94,7 @@ import { RackCommandsStoreProvider } from "./context/RackCommandsStoreProvider";
 import { RackLocksProvider } from "./context/RackLocksProvider";
 import { HelpPanelProvider } from "./context/HelpPanelProvider";
 import HelpPanel from "./components/help/HelpPanel";
-import { DEFAULT_PATH, RACKS_PATH, rackDetailPath, pathToRoute, rackIdFromPath, viewIdToPath } from "./routes";
+import { DEFAULT_PATH, DOCUMENTATION_PATH, RACKS_PATH, rackDetailPath, pathToRoute, rackIdFromPath, viewIdToPath } from "./routes";
 import { buildAIContext } from "./content";
 import { apiFetch } from "./lib/apiFetch";
 
@@ -266,9 +266,13 @@ function AppContent() {
 
   const handleNavigate = useCallback(
     (view: ViewId) => {
-      navigate(viewIdToPath(view));
+      // `from` is the route being left. The documentation view needs it for its Back button and
+      // cannot use browser history for the job: same-origin iframe navigations push entries onto
+      // the *parent's* session history, so after reading five pages `navigate(-1)` steps back
+      // through docs pages instead of leaving the docs.
+      navigate(viewIdToPath(view), { state: { from: location.pathname } });
     },
-    [navigate]
+    [navigate, location.pathname]
   );
 
   useEffect(() => {
@@ -304,6 +308,22 @@ function AppContent() {
   }, [refresh]);
 
   const toolbarTitle = selectedRack ? selectedRack : VIEW_TITLES[activeView];
+
+  // The documentation renders without the app chrome, for the same reason `/terminal` does: it
+  // is a whole interface of its own. The Sphinx site has its own navigation sidebar, search,
+  // "On this page" rail and light/dark toggle, so nesting it inside ours put two of each on
+  // screen — and the cluster-unreachable banner above a manual is alarming and irrelevant.
+  //
+  // Still a router route rather than a separate document (the shape `/terminal` uses), so
+  // entering and leaving are instant and Back does not reload the SPA. Every hook above has
+  // already run; this only replaces what is rendered.
+  if (location.pathname === DOCUMENTATION_PATH) {
+    return (
+      <Suspense fallback={<Box sx={{ minHeight: "100vh", bgcolor: "#0d0d0d" }} />}>
+        <DocumentationView />
+      </Suspense>
+    );
+  }
 
   return (
     <AppLayout
