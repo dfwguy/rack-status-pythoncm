@@ -24,12 +24,12 @@
     "version:build": "node scripts/build-version.mjs",
     "pack": "npm run build && electron-builder --dir --config.extraMetadata.version=$(node scripts/build-version.mjs)",
     "pack:mac": "npm run build && electron-builder --mac --dir --config.extraMetadata.version=$(node scripts/build-version.mjs)",
-    "dist": "npm run build && electron-builder --publish never",
+    "dist": "npm run build && electron-builder --publish never --config.extraMetadata.version=$(node scripts/build-version.mjs)",
     "dist:linux": "bash scripts/build-in-docker.sh --linux --x64",
     "dist:win": "BUILDER_IMAGE=electronuserland/builder:24-wine bash scripts/build-in-docker.sh --win --x64",
-    "dist:mac": "npm run build && CUSTOM_DMGBUILD_PATH=scripts/dmgbuild-patient.sh electron-builder --mac --publish never",
-    "dist:local": "npm run build && electron-builder --mac zip --publish never",
-    "dist:all": "npm run build && electron-builder -mwl --publish never",
+    "dist:mac": "npm run build && CUSTOM_DMGBUILD_PATH=scripts/dmgbuild-patient.sh electron-builder --mac --publish never --config.extraMetadata.version=$(node scripts/build-version.mjs)",
+    "dist:local": "npm run build && electron-builder --mac zip --publish never --config.extraMetadata.version=$(node scripts/build-version.mjs)",
+    "dist:all": "npm run build && electron-builder -mwl --publish never --config.extraMetadata.version=$(node scripts/build-version.mjs)",
     "dist:publish": "npm run build && electron-builder --publish always"
   },
   "devDependencies": {

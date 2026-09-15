@@ -43,7 +43,32 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const { version } = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
+
+/**
+ * The version comes from the repo root's `version.py`, not from `desktop/package.json`.
+ *
+ * That file is where the product's version actually lives — release metadata the ci-toolkit job
+ * bumps — and the release CI job already reads it directly to stamp a release build. Reading
+ * package.json here made a second copy of the number, and it drifted immediately: the product
+ * moved to 0.3.1 while package.json still said 0.3.0, so a local build produced `0.3.0-<stamp>`,
+ * a *lower* semver than the release it was built after. Shipping that would have offered users an
+ * "update" that ranks below what they already run.
+ *
+ * Parsed, never imported — same reason `backend/app_version.py` parses it: importing drags in a
+ * Python dependency for one string, and this is a Node script.
+ */
+function productVersion() {
+  try {
+    const src = readFileSync(join(here, "..", "..", "version.py"), "utf8");
+    const m = src.match(/^VERSION\s*=\s*["']([^"']+)["']/m);
+    if (m) return m[1];
+  } catch {
+    // Fall through: a desktop-only checkout has no version.py.
+  }
+  return JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version;
+}
+
+const version = productVersion();
 
 // Reuse an existing stamp when one is passed in, so every step of a single release (build, sign,
 // publish) agrees rather than each re-reading the clock and drifting by a second.
