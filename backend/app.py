@@ -798,9 +798,23 @@ def _is_public_spa_static_path() -> bool:
   ``/login``, the browser receives HTML instead of JavaScript and the page stays blank.
     """
     p = request.path
-    if p in ("/login", "/favicon.svg", "/icons.svg"):
+    # `/favicon.ico` and the web manifest belong here for a reason the list did not yet cover.
+    #
+    # **A browser fetches a manifest anonymously** — no cookie — unless the `<link>` carries
+    # `crossorigin="use-credentials"`, so a gated manifest answers the login redirect and the
+    # console reports `Manifest: Line 1, column 1, Syntax error`: the browser parsed an HTML page
+    # as JSON. The icons are worse than cosmetic in the same way, because the login screen needs
+    # them *before* any credential exists, which is exactly when the gate refuses them.
+    #
+    # Adding `crossorigin="use-credentials"` to the tag would fix the manifest and not the
+    # favicon. Neither carries anything: an application name, a theme colour and some PNGs.
+    # `/favicon.ico` is deliberately NOT here: no such file exists (the SPA ships
+    # `favicon.svg`), so listing it would turn a redirect into a 200 of `index.html` served as
+    # an icon — a different console warning rather than a fix. `/icons/` is, because
+    # `index.html` references `greenlight-180.png` from it for Safari's "Add to Dock".
+    if p in ("/login", "/favicon.svg", "/icons.svg", "/manifest.webmanifest"):
         return True
-    return bool(p.startswith(("/assets/", "/spa/")))
+    return bool(p.startswith(("/assets/", "/spa/", "/icons/")))
 
 
 #: Endpoints reachable WITHOUT a session. Every other request needs one.

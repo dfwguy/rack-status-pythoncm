@@ -132,3 +132,46 @@ def test_the_relaxation_is_scoped_to_the_docs_path(anonymous):
         csp = (anonymous.get(path).headers.get("Content-Security-Policy") or "")
         if csp:
             assert re.search(r"frame-ancestors 'none'", csp), f"{path} allows framing"
+
+
+def test_the_branding_a_login_screen_needs_is_public_too(anonymous):
+    """Found in the same console as the framing error, and a different bug.
+
+    `Manifest: Line 1, column 1, Syntax error` with a 401 beside it: **a browser fetches a web
+    manifest anonymously**, with no cookie, unless the `<link>` carries
+    `crossorigin="use-credentials"`. A gated manifest therefore answers the login redirect and
+    the browser parses an HTML page as JSON.
+
+    The icons are the same shape but worse than cosmetic, because the login screen needs them
+    *before* any credential exists — precisely when the gate refuses them. Adding the
+    `crossorigin` attribute would have fixed the manifest and left the icons broken.
+
+    None of these carry anything: an application name, a theme colour, some PNGs.
+    """
+    for path in (
+        "/manifest.webmanifest",
+        "/favicon.svg",
+        "/icons.svg",
+        "/icons/greenlight-180.png",
+    ):
+        response = anonymous.get(path)
+        assert response.status_code == 200, f"{path} -> {response.status_code}"
+        assert response.status_code not in ANY_REDIRECT
+
+    # And the manifest is served as a manifest, which is what the browser refused to parse.
+    manifest = anonymous.get("/manifest.webmanifest")
+    assert "manifest" in (manifest.headers.get("Content-Type") or "")
+
+
+def test_favicon_ico_is_not_pretended_to_exist(anonymous):
+    """The SPA ships `favicon.svg`; there is no `.ico`.
+
+    Listing it as public would answer a browser's automatic request with `index.html` served as
+    an image — a different console warning rather than a fix. Pinned so a later "make all the
+    icons public" edit has to notice.
+    """
+    from pathlib import Path
+
+    import app as app_module
+
+    assert not (Path(app_module.__file__).resolve().parents[1] / "static" / "spa" / "favicon.ico").exists()
