@@ -123,3 +123,40 @@ describe("owning the viewport", () => {
     expect(frame()?.style.height).toBe("100%");
   });
 });
+
+describe("naming the build", () => {
+  it("shows the build version rather than promising it matches", async () => {
+    /**
+     * "for the version running here" stated the guarantee without answering the question it
+     * raises — and that question is the whole reason the docs are served locally rather than
+     * linked: are these the docs for what I am running? A version answers it.
+     */
+    const { apiFetch } = await import("../lib/apiFetch");
+    vi.mocked(apiFetch).mockImplementation(async (input: RequestInfo | URL) =>
+      String(input) === "/api/app-stats"
+        ? new Response(JSON.stringify({ ok: true, app_version: "0.3.0-dev" }), { status: 200 })
+        : new Response("<html></html>", { status: 200 }),
+    );
+
+    show();
+
+    expect(await screen.findByText("0.3.0-dev")).toBeInTheDocument();
+    expect(screen.queryByText(/version running here/i)).toBeNull();
+  });
+
+  it("shows no version rather than an error when the build cannot be read", async () => {
+    // An unreachable stats endpoint is not a reason to withhold the documentation, and an empty
+    // slot reads as "no version" rather than as something broken.
+    const { apiFetch } = await import("../lib/apiFetch");
+    vi.mocked(apiFetch).mockImplementation(async (input: RequestInfo | URL) =>
+      String(input) === "/api/app-stats"
+        ? Promise.reject(new Error("offline"))
+        : new Response("<html></html>", { status: 200 }),
+    );
+
+    show();
+
+    await waitFor(() => expect(frame()).not.toBeNull());
+    expect(screen.getByText("Documentation")).toBeInTheDocument();
+  });
+});

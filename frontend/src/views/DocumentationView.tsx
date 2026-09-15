@@ -52,6 +52,7 @@ export function DocumentationView() {
   const location = useLocation();
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
+  const [version, setVersion] = useState("");
 
   /**
    * Has the documentation been built into this deployment?
@@ -89,6 +90,35 @@ export function DocumentationView() {
       live = false;
     };
   }, [probe]);
+
+  /**
+   * The build this documentation came from, named rather than alluded to.
+   *
+   * The bar used to read "for the version running here", which states the guarantee without
+   * answering the question it raises — and the question is the entire reason the docs are
+   * served locally instead of linked: *are these the docs for what I am running?* A version
+   * answers it; a promise that it matches does not.
+   *
+   * `/api/app-stats` is the lightest endpoint carrying it, and `app_version` there is
+   * `backend/app_version.py` — the one place that answers "what build is this", reading
+   * `build-info.json` and falling back to parsing `version.py` as `<version>-dev`. Deriving it
+   * anywhere else would be a second answer to a question that must have one.
+   *
+   * Failure is silent on purpose: an unreachable stats endpoint is not a reason to withhold the
+   * documentation, and a bar with no version reads as "no version" rather than as an error.
+   */
+  useEffect(() => {
+    let live = true;
+    void apiFetch("/api/app-stats")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (live && data?.app_version) setVersion(String(data.app_version));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
 
 
   /**
@@ -133,9 +163,11 @@ export function DocumentationView() {
             Back
           </Button>
           <Text kind="body/bold/sm">Documentation</Text>
-          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-            for the version running here
-          </Text>
+          {version ? (
+            <Text kind="mono/sm" style={{ color: "var(--text-color-secondary)" }}>
+              {version}
+            </Text>
+          ) : null}
         </Flex>
         <Button
           kind="tertiary"
