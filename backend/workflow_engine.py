@@ -32,6 +32,7 @@ import rack_locks
 import script_tree
 import workflow_models
 import yaml
+from catalog.models import safe_script_ref
 from json_db import atomic_write_json
 from node_targets import validation_target_for_rack
 from slurm_admin import _run_scontrol_node_update
@@ -783,7 +784,15 @@ def _resolve_capability(cap: str, params: dict) -> tuple[str | None, dict, list[
     if env_key:
         return env_key, merged, []
     if script:
-        return f"host:bash {_scripts_dir()}/{script}", merged, []
+        # `resolve`, not `scripts_dir()`. Both answer "the project's copy" when the project has
+        # one, but they differ in the case that matters: a script present only in the shared
+        # default set. `scripts_dir()` returns the most specific *directory* and would build a
+        # path to a file that is not in it, so a tool registered without an `env_key` failed
+        # with "no such file" while the same tool registered *with* one worked -- the two paths
+        # through this function disagreeing about where a script lives.
+        if not safe_script_ref(script):
+            return None, merged, [f"capability '{cap}' has an unsafe script reference: {script!r}"]
+        return f"host:bash {script_tree.resolve(script)}", merged, []
     return None, merged, [f"capability '{cap}' has no env_key or script"]
 
 
