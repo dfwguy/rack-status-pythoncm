@@ -221,7 +221,15 @@ const allLeaves: NavLeaf[] = navEntries.flatMap((entry) =>
 /** Bottom-pinned platform leaf (a view). */
 const settingsLeaf: NavLeaf = { id: "settings", label: "Settings", icon: <Settings size={ICON_SIZE} /> };
 
-/** Project docs and source on GitLab (opens in a new tab from the sidebar). */
+/**
+ * The project on GitLab.
+ *
+ * **Not linked from the UI any more, deliberately.** Every in-app route to documentation now
+ * points at what this deployment serves at `/docs/`: an operator reaches Greenlight through an
+ * SSH tunnel on a customer cluster and frequently cannot reach gitlab-master at all, so a link
+ * there was broken exactly where it was needed most — and it told an external user nothing they
+ * could open. Kept as the canonical repository reference for a bug report or a commit message.
+ */
 export const NVIS_RACK_STATUS_DOC_URL = "https://gitlab-master.nvidia.com/nvis/nvis-rack-status";
 
 interface SidebarProps {

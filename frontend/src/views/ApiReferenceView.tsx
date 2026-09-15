@@ -27,13 +27,13 @@
 // becomes a requirement, swagger-ui-react can replace the body of this view without changing
 // anything else.
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Banner, Button, Card, Tag, Text, TextInput } from "@nvidia/foundations-react-core";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import { ChevronDown, ChevronRight, Download, RefreshCw } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
-import { NVIS_RACK_STATUS_DOC_URL } from "../components/Sidebar";
 import { apiFetch } from "../lib/apiFetch";
 
 interface OpenApiParameter {
@@ -96,6 +96,7 @@ function flatten(spec: OpenApiSpec | null): Operation[] {
 }
 
 export function ApiReferenceView() {
+  const navigate = useNavigate();
   const [spec, setSpec] = useState<OpenApiSpec | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -215,8 +216,19 @@ export function ApiReferenceView() {
             over SRP (<code>POST /api/auth/srp/begin</code> then <code>/finish</code>) and send the
             resulting token as <code>Authorization: Bearer</code>, or hold the cookie the exchange
             sets, before calling anything else.{" "}
-          <a href={NVIS_RACK_STATUS_DOC_URL} target="_blank" rel="noopener noreferrer">
-            Source repository
+          {/* This deployment's own documentation, not the GitLab project. An operator on a
+              customer cluster reaches Greenlight through an SSH tunnel and often cannot reach
+              gitlab-master at all -- the same constraint that made the docs site local, and the
+              reason a link to it was useless precisely where it was most needed. In-app, so it
+              does not leave the desktop shell either. */}
+          <a
+            href="/documentation"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate("/documentation");
+            }}
+          >
+            Full documentation
           </a>
           .
         </Text>

@@ -938,6 +938,15 @@ def _require_dashboard_auth():
                 # 403, not 401: the caller IS authenticated and simply may not do this. Returning
                 # 401 would tell a client to re-authenticate, which cannot help and produces a
                 # credential-prompt loop. See docs/API_RESPONSE_CODES.md.
+                #
+                # JSON, uniformly. There was briefly an HTML variant here for a browser
+                # navigating to a refused *page*, written when `/docs/` was gated and rendered
+                # `{"error":"not authorized",...}` into the viewport. Making the documentation
+                # public removed the only such path: every non-API route is now either the public
+                # SPA shell, `/login`, `/logout` or `/docs/`, so no request can reach a page-shaped
+                # 403 and the HTML branch was unreachable code that looked like a feature. If a
+                # gated page route is ever added, that is when to reintroduce it -- with a test
+                # that can actually exercise it.
                 return jsonify({
                     "ok": False,
                     "error": "not authorized",
@@ -1073,8 +1082,16 @@ def _security_headers(response):
     this only supplies the request-derived inputs.
     """
     scheme = "https" if request.is_secure else "http"
+    # The documentation is the one thing this app frames, and `frame-ancestors 'none'` blocks
+    # *all* framing including same-origin — so the in-app documentation view showed an empty box
+    # in a real browser while the tests passed, because jsdom does not enforce the header. The
+    # docs are public static files built from this repository; allowing this origin to frame them
+    # adds nothing an operator could not already open directly, and every other response stays
+    # unframeable.
+    docs_path = (request.path or "").startswith("/docs")
     hdrs = security_headers(
         is_secure=request.is_secure,
+        frame_ancestors="'self'" if docs_path else "'none'",
         page_scheme=scheme,
         page_host=request.host or "",
         grafana_origin=grafana_frame_origin(

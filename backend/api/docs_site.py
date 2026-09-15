@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 
+import throttle
 from audit.actions import action
 from flask import Blueprint, Response, send_from_directory
 from paths import DOCS_DIR
@@ -60,6 +61,16 @@ _NOT_BUILT = (
 
 @bp.route("/", defaults={"filename": "index.html"})
 @bp.route("/<path:filename>")
+@throttle.throttle(
+    300,
+    rationale=(
+        "static files, anonymous. Generous on purpose: index.html alone references 30 "
+        "subresources (measured), so a first visit is ~30 requests and browsing a few pages is "
+        "a few hundred -- a tight limit would break reading the documentation rather than "
+        "protect anything. Each request is a sendfile of a build artifact, not compute, so the "
+        "limit is here to bound an anonymous flood, not to ration real use."
+    ),
+)
 @action(get="docs:read")
 def serve_docs(filename: str):
     """Serve one file from the built site."""

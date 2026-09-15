@@ -3179,7 +3179,7 @@
       "description": "Documentation shows the Sphinx documentation site built from this repository, served by this deployment at /docs/ and framed inside the app. It is served locally rather than linked to the internet because an operator reaches Greenlight through an SSH tunnel on a customer cluster and often cannot reach an external docs site at all — and because the documentation then always matches the code running here.",
       "features": [
         "The full documentation site, inside the app rather than a separate browser tab.",
-        "Renews your session before loading, and while the page stays open.",
+        "Public: no sign-in needed, so it works for an external reader and on an air-gapped host.",
         "Reload, and an explicit 'Open in a new window' for reading it beside the app."
       ],
       "howTo": [
@@ -3200,8 +3200,12 @@
       ],
       "faqs": [
         {
-          "q": "Why did Documentation used to show the login screen?",
-          "a": "It was a plain link to /docs/, which is a server route behind the authorization gate. A plain navigation does not go through the app's fetch layer, so it never got the transparent session renewal that keeps the rest of the app signed in — and once the hour-long access cookie expired, the gate redirected to the login page. The view now renews the session before loading the site, and every ten minutes while it is open."
+          "q": "Why did Documentation used to show the login screen, or 'not authorized'?",
+          "a": "It was a gated route reached by a plain link, which is two problems. A plain navigation does not go through the app's fetch layer, so it never got the session renewal that keeps the rest of the app signed in, and the link failed about an hour after signing in. Separately, an administrators policy written before the docs service existed refused administrators outright. /docs/ is public now: the documentation is the same text anybody can read in the repository, so gating it protected nothing and broke reading it in two different ways."
+        },
+        {
+          "q": "Is it a problem that the documentation needs no sign-in?",
+          "a": "It is the point: an external reader or an air-gapped operator can read it, and it cannot log anybody out. The route serves only static files from the Sphinx build, sets no cookie, reads no credential and touches no cluster state, and everything else still requires authentication. backend/tests/test_docs_are_public.py holds each of those."
         },
         {
           "q": "Why is it not a new browser tab any more?",
@@ -3231,7 +3235,7 @@
         "label": "Documentation page",
         "description": "The deployment's own documentation site, shown inside the app."
       },
-      "aiContext": "Documentation frames the Sphinx site served by this deployment at /docs/ inside the app. Served locally so it matches the running code and works on an air-gapped cluster behind an SSH tunnel. It renews the session before loading and every ten minutes while open, because /docs/ is a gated server route and a plain navigation does not benefit from the SPA's refresh-on-401 — which is why the old new-tab link showed the login screen after an hour. 'Open in a new window' remains as a choice."
+      "aiContext": "Documentation frames the Sphinx site served by this deployment at /docs/ inside the app. Served locally so it matches the running code and works on an air-gapped cluster behind an SSH tunnel. /docs/ is PUBLIC (in web_auth.AUTH_BYPASS_ENDPOINTS): the documentation is not secret, and gating it caused two failures — a login screen an hour after signing in, because a plain navigation misses the SPA's refresh-on-401, and 'not authorized' for administrators whose policy predated the docs resource type. It serves only static files, sets no cookie and reads no credential; everything else still requires authentication. 'Open in a new window' remains as a choice."
     },
     {
       "id": "settings",

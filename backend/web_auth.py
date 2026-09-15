@@ -195,6 +195,30 @@ AUTH_REALM = "nvis-rack-status"
 #: `api_login` is in it because it is how a credential is obtained in the first place.
 AUTH_BYPASS_ENDPOINTS: tuple[str, ...] = (
     "auth.login",
+    # The documentation site, and this is a **product decision rather than a concession**: the
+    # documentation is public information, it is the same text anybody can read in the
+    # repository, and gating it bought nothing while costing a great deal.
+    #
+    # What it cost is worth recording, because the gated version looked correct at every step.
+    # `/docs/` is a server route, so a plain navigation never passes through the SPA's fetch
+    # layer and never gets its transparent refresh — the link worked immediately after signing
+    # in and showed the login page an hour later. Then, past that, an administrators policy
+    # written before the `docs` resource type existed refused administrators outright, rendering
+    # `{"error":"not authorized","ok":false,"reason":"policy"}` into the viewport. Two failure
+    # modes, both confusing, guarding text that is not secret.
+    #
+    # **The bar for this list is "safe because", not "convenient because".** These two routes
+    # serve bytes from `static/docs`, a Sphinx build artifact: no request body, no query
+    # parameters, no store, no credential read, no `Set-Cookie`, and every path resolved through
+    # `send_from_directory`, which refuses to escape the directory. There is nothing here for an
+    # unauthenticated caller to reach that the documentation does not already tell them.
+    # `test_docs_are_public.py` asserts each of those claims, so the entry cannot outlive them.
+    #
+    # The one risk that *is* real is same-origin content injection — anything served from this
+    # origin can script against it — which is why the answer is "static files built from our own
+    # sources" rather than "user-supplied content", and why the docs responses relax framing to
+    # `SAMEORIGIN` rather than dropping the header.
+    "docs_site.serve_docs",
     # `auth.api_login` is gone with FR-18. Its removal from this tuple matters as much as its
     # removal from the router: an entry naming a route that no longer exists is dead weight that
     # reads as an intentional exemption to the next person auditing this list.

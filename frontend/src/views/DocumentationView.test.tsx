@@ -10,15 +10,19 @@
  * its affiliates is strictly prohibited.
  */
 /**
- * The documentation opens inside the app, with a credential that is fresh when it does.
+ * The documentation opens inside the app, and needs no credential to do it.
  * Author: Rafael M. Koike & Cursor Agent ("Ada")
+ *
+ * `/docs/` is public (see `web_auth.AUTH_BYPASS_ENDPOINTS`), so this view has one job beyond
+ * framing the site: say so when the documentation was never built into the deployment, rather
+ * than framing a paragraph of plain text.
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DocumentationView } from "./DocumentationView";
 
 vi.mock("../lib/apiFetch", () => ({
-  apiFetch: vi.fn(async () => new Response("{}", { status: 200 })),
+  apiFetch: vi.fn(async () => new Response("<html></html>", { status: 200 })),
 }));
 
 const frame = () => document.querySelector("iframe");
@@ -26,33 +30,34 @@ const frame = () => document.querySelector("iframe");
 describe("DocumentationView", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("renews the session before it frames the docs, not after", async () => {
-    /**
-     * The order is the fix. `/docs/` is a server route behind the gate, and an iframe that
-     * loads with an expired cookie renders the *login page inside the frame* — which nothing
-     * out here can detect. So the renewal has to happen first.
-     */
-    const { apiFetch } = await import("../lib/apiFetch");
+  it("frames the documentation this deployment serves", async () => {
     render(<DocumentationView />);
-
-    expect(frame()).toBeNull();
-    await waitFor(() => expect(apiFetch).toHaveBeenCalled());
     await waitFor(() => expect(frame()).not.toBeNull());
     expect(frame()?.getAttribute("src")).toBe("/docs/");
   });
 
-  it("says so when the session cannot be renewed, instead of framing a login page", async () => {
+  it("says the documentation was never built, rather than framing the 503", async () => {
     const { apiFetch } = await import("../lib/apiFetch");
-    vi.mocked(apiFetch).mockResolvedValueOnce(new Response("", { status: 401 }));
+    vi.mocked(apiFetch).mockResolvedValueOnce(new Response("not built", { status: 503 }));
+
     render(<DocumentationView />);
 
-    expect(await screen.findByText(/session could not be renewed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/has not been built/i)).toBeInTheDocument();
     expect(frame()).toBeNull();
   });
 
+  it("frames the docs anyway when the check itself cannot run", async () => {
+    // A transient blip must not become "no documentation".
+    const { apiFetch } = await import("../lib/apiFetch");
+    vi.mocked(apiFetch).mockRejectedValueOnce(new Error("offline"));
+
+    render(<DocumentationView />);
+    await waitFor(() => expect(frame()).not.toBeNull());
+  });
+
   it("keeps offering a new window, but no longer only that", async () => {
-    // The old behaviour was `target="_blank"` and nothing else, which walks a desktop-shell
-    // user out of the app. It stays available as a choice.
+    // The old behaviour was `target="_blank"` and nothing else, which walks a desktop-shell user
+    // out of the app entirely.
     render(<DocumentationView />);
     await waitFor(() => expect(frame()).not.toBeNull());
     expect(screen.getByRole("button", { name: /open in a new window/i })).toBeInTheDocument();

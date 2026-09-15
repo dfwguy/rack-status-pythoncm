@@ -13,27 +13,28 @@
  * DocumentationView — the Sphinx site, inside the app.
  * Author: Rafael M. Koike & Cursor Agent ("Ada")
  *
- * It used to be `<a href="/docs/" target="_blank">`. That is wrong twice over now.
+ * It used to be `<a href="/docs/" target="_blank">`, which was wrong twice over: the desktop
+ * shell has no browser tab to open, and `/docs/` was a gated route that a plain navigation could
+ * not keep a session alive for.
  *
- * **The desktop shell has no browser to open a tab in.** A `target="_blank"` from inside the
- * shell leaves the app entirely and hands the operator to whatever browser the machine happens
- * to have, which is a jarring exit from a tool they are in the middle of using.
+ * **`/docs/` is public now, and that is what makes this simple.** The documentation is the same
+ * text anybody can read in the repository, so gating it bought nothing and cost two confusing
+ * failures — a login screen an hour after signing in, and `not authorized` for administrators
+ * whose policy predated the `docs` resource type. The route serves static files from a Sphinx
+ * build and reads no state, so an unauthenticated reader reaches nothing the documentation does
+ * not already describe (`web_auth.AUTH_BYPASS_ENDPOINTS` records the reasoning;
+ * `test_docs_are_public.py` holds it).
  *
- * **And it had stopped working.** `/docs/` is a *server* route behind the authorization gate,
- * and a plain browser navigation does not go through `apiFetch` — so it never benefits from the
- * transparent refresh-on-401 that keeps the rest of the app signed in. The access cookie lives
- * an hour; after that, clicking Documentation showed the login screen. It worked immediately
- * after signing in and failed later, which is the worst shape a bug can have: it looks
- * intermittent and reads as "the app logged me out".
- *
- * So the fix is not only "same tab" — the credential has to be fresh *before* the iframe asks,
- * and stay fresh while somebody reads. `apiFetch` is what knows how to do that, and calling it
- * renews the `nvis_access` cookie as a side effect, which is what the iframe's own requests
- * (and every asset inside it) then carry.
+ * So this view frames the site and gets out of the way. The one thing still worth checking is
+ * whether the documentation was *built* into this deployment — `static/docs` is a build artifact,
+ * so a developer tree or a backend-only deployment can genuinely lack it, and framing that 503
+ * would show a paragraph of plain text in a box instead of saying so.
  *
  * An iframe rather than fetching and rendering the HTML: Sphinx pages reference their own CSS,
- * search index and relative links, so the alternative is proxying an entire static site through
- * the SPA. Same-origin, so in-page navigation works exactly as it does standalone.
+ * search index and relative links, so the alternative is proxying a static site through the SPA.
+ * Framing needs `frame-ancestors 'self'` on the docs responses, which `app._security_headers`
+ * sets for `/docs` only — the default `'none'` blocks same-origin framing too, and that mistake
+ * renders an empty box while every jsdom test passes.
  */
 import { useCallback, useEffect, useState } from "react";
 import Box from "@mui/material/Box";
@@ -45,70 +46,54 @@ import { PageHeader } from "../components/layout/PageHeader";
 /** Where the Sphinx build is served from. A server route, not an SPA one. */
 const DOCS_URL = "/docs/";
 
-/**
- * How often to renew while the view is open.
- *
- * Well inside the one-hour access lifetime, because the failure it prevents is silent: the
- * cookie expires mid-read and the *next* in-page link click inside the iframe returns the login
- * page, inside the frame, with no way for this component to notice. Ten minutes is cheap — one
- * request — and leaves a wide margin if the deployment shortens the TTL.
- */
-const RENEW_INTERVAL_MS = 10 * 60 * 1000;
-
 export function DocumentationView() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
   const [nonce, setNonce] = useState(0);
 
   /**
-   * Renew the session cookie the iframe will use.
+   * Has the documentation been built into this deployment?
    *
-   * Any authenticated endpoint does: `apiFetch` refreshes on a 401 and retries, and the refresh
-   * response sets a new `nvis_access` for the whole origin. `/api/auth-check` is the cheapest
-   * one and the same call the app already makes on load.
+   * `apiFetch` rather than a bare `fetch` only for its error handling; no credential is needed.
+   * A 503 is the documented answer when `static/docs` is absent, and saying so beats framing a
+   * page of plain text.
    */
-  const renew = useCallback(async (): Promise<boolean> => {
+  const probe = useCallback(async (): Promise<boolean> => {
     try {
-      const res = await apiFetch("/api/auth-check");
-      if (!res.ok) {
+      const res = await apiFetch(DOCS_URL, { headers: { Accept: "text/html" } });
+      if (res.status === 503) {
         setError(
-          "Your session could not be renewed, so the documentation cannot be shown. Sign in again.",
+          "The documentation has not been built into this deployment. Build it with " +
+            "`sphinx-build -W --keep-going -b html docs static/docs`, or rebuild the image.",
         );
         return false;
       }
       setError("");
       return true;
-    } catch (e) {
-      setError(
-        `Could not reach the server to renew the session (${
-          e instanceof Error ? e.message : String(e)
-        }).`,
-      );
-      return false;
+    } catch {
+      // A probe that cannot run is not a reason to withhold the docs: frame them and let the
+      // browser show whatever the server says. Refusing here would turn a transient blip into
+      // "no documentation".
+      return true;
     }
   }, []);
 
-  // Before the first render of the iframe, never after: an iframe that loads with an expired
-  // cookie shows the login page *inside the frame*, and nothing out here can tell.
   useEffect(() => {
     let live = true;
-    void renew().then((ok) => {
+    void probe().then((ok) => {
       if (live && ok) setReady(true);
     });
     return () => {
       live = false;
     };
-  }, [renew]);
-
-  useEffect(() => {
-    if (!ready) return;
-    const timer = window.setInterval(() => void renew(), RENEW_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [ready, renew]);
+  }, [probe]);
 
   const reload = () => {
-    void renew().then((ok) => {
-      if (ok) setNonce((n) => n + 1);
+    void probe().then((ok) => {
+      if (ok) {
+        setReady(true);
+        setNonce((n) => n + 1);
+      }
     });
   };
 

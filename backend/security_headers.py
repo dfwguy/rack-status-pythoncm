@@ -78,6 +78,7 @@ def grafana_frame_origin(
 
 def content_security_policy(
     *,
+    frame_ancestors: str = "'none'",
     page_scheme: str = "http",
     page_host: str = "",
     grafana_origin: str = "",
@@ -99,6 +100,13 @@ def content_security_policy(
       inconsistently for ``ws:``/``wss:`` across browser versions, and getting it wrong breaks
       the terminal rather than anything obvious.
     * ``frame-ancestors 'none'`` -- nothing should frame this dashboard.
+
+      *frame_ancestors* relaxes that for one case: the documentation site, which the app shows in
+      an iframe. `'none'` blocks **all** framing including same-origin, so the in-app
+      documentation view rendered an empty box in a real browser while every test passed --
+      jsdom does not enforce the header. Passing `'self'` for `/docs/` is narrower than dropping
+      it: the docs are public static files built from this repository, so same-origin framing of
+      them adds no surface, while every other response stays unframeable.
     * ``frame-src`` is Grafana or nothing; an empty value must render as ``'none'`` rather than
       an empty directive, which some browsers treat as "allow".
     """
@@ -114,7 +122,7 @@ def content_security_policy(
         "default-src 'self'",
         "base-uri 'self'",
         "object-src 'none'",
-        "frame-ancestors 'none'",
+        f"frame-ancestors {frame_ancestors}",
         "form-action 'self'",
         "script-src 'self'",
         "style-src 'self' 'unsafe-inline'",
@@ -130,6 +138,7 @@ def content_security_policy(
 def security_headers(
     *,
     is_secure: bool,
+    frame_ancestors: str = "'none'",
     page_scheme: str = "http",
     page_host: str = "",
     grafana_origin: str = "",
@@ -151,11 +160,15 @@ def security_headers(
         # Do not leak a dashboard URL (which carries rack and job ids) to another origin.
         "Referrer-Policy": "strict-origin-when-cross-origin",
         # Legacy sibling of frame-ancestors, for browsers that honour only this one.
-        "X-Frame-Options": "DENY",
+        # Legacy sibling of frame-ancestors, for browsers that honour only this one. It has to
+        # move with `frame_ancestors` or the two disagree and the stricter one wins -- which is
+        # how "the iframe is empty and the CSP looks fine" happens.
+        "X-Frame-Options": "SAMEORIGIN" if frame_ancestors != "'none'" else "DENY",
     }
     mode = (csp_mode or "enforce").strip().lower()
     if mode != "off":
         policy = content_security_policy(
+            frame_ancestors=frame_ancestors,
             page_scheme=page_scheme,
             page_host=page_host,
             grafana_origin=grafana_origin,
