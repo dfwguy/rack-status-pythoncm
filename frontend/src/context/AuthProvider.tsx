@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { srpLogin } from "../lib/srpClient";
 import { AuthContext, type AuthState } from "./AuthContext";
-import { apiFetch } from "../lib/apiFetch";
+import { apiFetch, onSessionLost } from "../lib/apiFetch";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({
@@ -98,6 +98,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const markSetupComplete = useCallback(() => {
     setState((s) => ({ ...s, setupRequired: false }));
+  }, []);
+
+  /**
+   * A 401 that survived a refresh means the session is gone, so stop claiming otherwise.
+   *
+   * Without this the mount-time check was the *only* thing that ever set this state, so a window
+   * whose refresh token had expired — 24 hours by default — kept polling 401s every few seconds
+   * while still rendering the dashboard. The operator sees stale data and no explanation; the log
+   * fills with 401s from a client that believes it is signed in.
+   *
+   * Idempotent, and deliberately not a redirect: flipping the state lands on the login screen
+   * through the normal gate, and the route the reader was on stays in the router rather than being
+   * flattened into a `?next=` that a HashRouter cannot reconstruct.
+   */
+  useEffect(() => {
+    onSessionLost(() => {
+      setState((s) =>
+        s.authenticated
+          ? { ...s, authenticated: false, user: null, userLogin: null, loading: false }
+          : s,
+      );
+    });
+    return () => onSessionLost(null);
   }, []);
 
   const logout = useCallback(async () => {

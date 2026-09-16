@@ -34,12 +34,13 @@ import { AuthProvider } from "./AuthProvider";
 vi.mock("../lib/srpClient");
 
 function Probe() {
-  const { user, userLogin, mustChangePassword } = useAuth();
+  const { user, userLogin, mustChangePassword, authenticated } = useAuth();
   return (
     <div>
       <span data-testid="user">{user ?? "(none)"}</span>
       <span data-testid="userLogin">{userLogin ?? "(none)"}</span>
       <span data-testid="mustChange">{String(Boolean(mustChangePassword))}</span>
+      <span data-testid="authenticated">{String(authenticated)}</span>
     </div>
   );
 }
@@ -160,5 +161,49 @@ describe("a fresh sign-in", () => {
     await waitFor(() => expect(screen.getByTestId("userLogin").textContent).toBe("admin"));
     // The display name is what a human sees; it must not be what SRP is given.
     expect(screen.getByTestId("user")).toHaveTextContent("Administrator");
+  });
+});
+
+describe("a session that dies while the window is open", () => {
+  it("stops claiming to be signed in, so the gate shows the login screen", async () => {
+    /**
+     * The other half of the `onSessionLost` wiring, driven through the real `apiFetch` rather
+     * than by calling the handler directly — the two together are the whole fix, and a test that
+     * invoked the callback itself would pass even if the provider never registered it.
+     *
+     * Before this, the mount-time check was the only thing that ever set `authenticated`, so a
+     * window whose refresh token had expired (24 hours by default) never found out: it kept
+     * polling 401s behind a dashboard that looked fine.
+     */
+    let sessionAlive = true;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (!sessionAlive) {
+        // Everything refuses, including the refresh — which is what "the session is gone"
+        // means, as opposed to an access token that merely needs renewing.
+        return new Response(JSON.stringify({ error: "authentication required" }), { status: 401 });
+      }
+      if (String(input).includes("/api/auth-check")) {
+        return new Response(
+          JSON.stringify({ ok: true, principal: "user:admin", display_name: "Admin" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("authenticated")).toHaveTextContent("true"));
+
+    sessionAlive = false;
+    const { apiFetch } = await import("../lib/apiFetch");
+    // Any ordinary call — this is one of the pollers that used to 401 for minutes on end.
+    expect((await apiFetch("/api/status")).status).toBe(401);
+
+    await waitFor(() => expect(screen.getByTestId("authenticated")).toHaveTextContent("false"));
+    expect(screen.getByTestId("userLogin")).toHaveTextContent("(none)");
   });
 });
