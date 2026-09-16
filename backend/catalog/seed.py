@@ -128,6 +128,14 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "RACK_CLUSTER_PRODUCT_LINE": "gb300",
             "CORE_TO_HCA_SCRIPT": "core_to_hca_dgxgb300.sh",
             "CUDA_MAJ": "12",
+            "RACK_VALIDATION_CONTAINER_ROOT": "/cluster/OVA/containers/nvftp-8k-known-good/20260824",
+            "RACK_VALIDATION_NODE_CONTAINER_DIR": "/opt/containers",
+            "RACK_VALIDATION_PROVENANCE_ROOT": "/cluster/OVA/scripts/nscaletx-16k-validation",
+            "RACK_STATUS_LOG_DIR": "/cluster/OVA/logs/nscaletx-16k-validation",
+            # Existing browser sessions may still submit the former dashboard
+            # log root. Keep it read-compatible while all new validation output
+            # is standardized under the OVA root above.
+            "RACK_STATUS_ALLOWED_PREFIXES": "/cluster/OVA/logs,/app/var/logs",
         },
         "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 800, "ns_ifname": "bond0"},
         "status": "ga",

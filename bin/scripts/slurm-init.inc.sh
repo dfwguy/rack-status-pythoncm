@@ -30,7 +30,12 @@ _rk_had_nounset=0
 case "$-" in *u*) _rk_had_nounset=1 ;; esac
 set +u
 
-if ! command -v module >/dev/null 2>&1; then
+_rk_skip_modules=0
+case "${RACK_SLURM_SKIP_MODULE_LOAD:-}" in
+  1|yes|true|on|YES|TRUE|ON) _rk_skip_modules=1 ;;
+esac
+
+if (( ! _rk_skip_modules )) && ! command -v module >/dev/null 2>&1; then
   for _i in /etc/profile.d/modules.sh /etc/profile.d/lmod.sh \
             /usr/share/Modules/init/bash \
             /cm/local/apps/environment-modules/current/init/bash; do
@@ -47,12 +52,18 @@ for _mp in /cm/local/modulefiles /cm/shared/modulefiles; do
   esac
 done
 
-command -v module >/dev/null 2>&1 && module load slurm 2>/dev/null || true
+if (( ! _rk_skip_modules )) && command -v module >/dev/null 2>&1; then
+  module load slurm 2>/dev/null || true
+fi
 
 # An explicit site pin wins even when an older Slurm happens to be on PATH. This
 # keeps launcher scripts on the same client version as the Python platform layer.
-if [ -n "${RACK_SLURM_BIN:-}" ] && [ -x "${RACK_SLURM_BIN}/sbatch" ]; then
-  export PATH="${RACK_SLURM_BIN}:$PATH"
+_rk_slurm_bin="${RACK_SLURM_BIN:-}"
+if [ -z "$_rk_slurm_bin" ] && [ -x "${RACK_SLURM_SBATCH:-}" ]; then
+  _rk_slurm_bin="$(dirname "$RACK_SLURM_SBATCH")"
+fi
+if [ -n "$_rk_slurm_bin" ] && [ -x "${_rk_slurm_bin}/sbatch" ]; then
+  export PATH="${_rk_slurm_bin}:$PATH"
 elif ! command -v sbatch >/dev/null 2>&1; then
   for _d in "${RACK_SLURM_BIN:-}" /cm/local/apps/slurm/current/bin /cm/local/apps/slurm/*/bin; do
     [ -n "$_d" ] && [ -x "$_d/sbatch" ] && { export PATH="$_d:$PATH"; break; }
@@ -77,4 +88,4 @@ if [ -z "${SLURM_CONF:-}" ]; then
   done
 fi
 
-unset _i _mp _d _c 2>/dev/null || true
+unset _i _mp _d _c _rk_skip_modules _rk_slurm_bin 2>/dev/null || true

@@ -17,10 +17,6 @@
 
 set -uo pipefail
 
-# Force ssh transport: this cluster's pdsh defaults to rsh (refused on compute nodes).
-export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -o CheckHostIP=no"
-export PDSH_RCMD_TYPE=ssh
-
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 mkdir -p "${JOB_LOG_DIR}" || { echo "run-nemo-xrack: cannot create log directory: ${JOB_LOG_DIR}" >&2; exit 2; }
@@ -143,7 +139,9 @@ echo "run-nemo-xrack: ${_nracks} distinct rack(s) -> NVIS_NEMO_XRACK=${NVIS_NEMO
 # NCCL_IGNORE_COLLNET_MISMATCH=1 (set below + in the batch script) to tolerate the stale HPC-X SHARP
 # plugin's asymmetric CollNet device count while KEEPING SHARP (job 208 all-pass). See
 # VALIDATION_TRACKER "Cross-rack alltoall". Override the path with NVIS_NEMO_VETTED_SQSH.
-_vetted="${NVIS_NEMO_VETTED_SQSH:-/home/cmods/workspace/images/nemo-nccl2.30.7.sqsh}"
+_shared_cache_dir="${NVIS_NEMO_SHARED_CACHE_DIR:-${RACK_VALIDATION_CONTAINER_ROOT:-/cluster/OVA/containers/nvftp-8k-known-good/20260824}}"
+_node_cache_dir="${NVIS_NEMO_NODE_CACHE_DIR:-${RACK_VALIDATION_NODE_CONTAINER_DIR:-/opt/containers}}"
+_vetted="${NVIS_NEMO_VETTED_SQSH:-${_shared_cache_dir}/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh}"
 if [[ "${NVIS_NEMO_USE_VETTED:-1}" == "1" && -f "${_vetted}" ]]; then
   echo "run-nemo-xrack: using NCCL 2.30.7 image ${_vetted} (matched NCCL baked in; LD_PRELOAD off; IGNORE_COLLNET_MISMATCH keeps HPC-X/SHARP)"
   NEMO_SQSH_SRC="${_vetted}"
@@ -156,17 +154,38 @@ export NVIS_NCCL_IGNORE_COLLNET_MISMATCH="${NVIS_NCCL_IGNORE_COLLNET_MISMATCH:-1
 _sqsh_b=$(basename "$NEMO_SQSH_SRC")
 _hostcsv="$(echo "${hosts[*]}" | tr ' ' ',')"
 _src_size=$(stat -c%s "$NEMO_SQSH_SRC" 2>/dev/null || echo 0)
-if [[ ! "${_src_size}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "run-nemo-xrack: ERROR: configured image is missing or empty: ${NEMO_SQSH_SRC}" >&2
+case "$_sqsh_b" in
+  nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh)
+    _expected_size=42477232128
+    _expected_sha=0829d0c77f38db54848afd095862093a7c62e98778b0b8664b8edff69e273747
+    ;;
+  nvidia+nemo+26.04.01.sqsh)
+    _expected_size=42245001216
+    _expected_sha=e9a68d31832f5575eabaae94d9360e45145a0047110740d80412ec491a247aca
+    ;;
+  nvidia+nemo+26.04.01-arm.sqsh)
+    _expected_size=42245001216
+    _expected_sha=55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc
+    ;;
+  *)
+    echo "run-nemo-xrack: ERROR: image filename is not in the reviewed validation allowlist: $_sqsh_b" >&2
+    exit 1
+    ;;
+esac
+[[ "$_src_size" == "$_expected_size" ]] || {
+  echo "run-nemo-xrack: ERROR: image size mismatch for ${NEMO_SQSH_SRC}: got $_src_size, expected $_expected_size" >&2
   exit 1
-fi
+}
+_src_sha=$(sha256sum "$NEMO_SQSH_SRC" 2>/dev/null | awk '{print $1}')
+[[ "$_src_sha" == "$_expected_sha" ]] || {
+  echo "run-nemo-xrack: ERROR: image SHA256 mismatch for ${NEMO_SQSH_SRC}" >&2
+  exit 1
+}
 
-# Bryan's bringup-agent/FileCopyTrigger keeps every image in the shared container directory
-# warm under /tmp/containers on each compute node. Prefer that copy directly: copying the same
+# The reviewed File Copy Service keeps every allowlisted image in the shared container directory
+# warm under /opt/containers on each compute node. Prefer that copy directly: copying the same
 # 40+ GiB image from the head node at launch defeats the cache and creates a fleet-wide NFS
 # burst before Slurm even sees the job.
-_shared_cache_dir="${NVIS_NEMO_SHARED_CACHE_DIR:-/cluster/containers}"
-_node_cache_dir="${NVIS_NEMO_NODE_CACHE_DIR:-/tmp/containers}"
 _cache_b="${NVIS_NEMO_CACHE_BASENAME:-}"
 
 # build_containers.sh adds an architecture suffix, while the LLMB installer names the same
@@ -194,61 +213,17 @@ if [[ -z "${_cache_b}" || "${_cache_size}" != "${_src_size}" ]]; then
   echo "run-nemo-xrack: stage the image through FileCopyTrigger, or set NVIS_NEMO_CACHE_BASENAME explicitly." >&2
   exit 1
 fi
+_cache_sha=$(sha256sum "$_shared_cache_path" 2>/dev/null | awk '{print $1}')
+[[ "$_cache_sha" == "$_expected_sha" ]] || {
+  echo "run-nemo-xrack: ERROR: cached image SHA256 mismatch at $_shared_cache_path" >&2
+  exit 1
+}
 
 _node_cache_path="${_node_cache_dir}/${_cache_b}"
-echo "run-nemo-xrack: checking pre-cached ${_cache_b} (${_cache_size} bytes) on ${#hosts[@]} node(s)…"
-
-# Verify by counting nodes that POSITIVELY confirm the full readable file, and require all of
-# them. Unreachable nodes and short/absent files cannot accidentally pass. Do not fall back to
-# rsync from /home: a green-button click must never trigger an unbounded 40+ GiB fan-out.
-#
-# This used to count nodes that answered with a WRONG size ("echo BAD") and pass when that count
-# was zero, with pdsh's stderr sent to /dev/null. A node that could not be reached at all never
-# ran the remote command, so it printed no BAD and was silently counted as staged: a run where
-# ssh failed 255 on all 36 nodes still reported "staged OK on all 36 nodes" and went on to
-# submit. Requiring one OK per node inverts that — unreachable or short/missing files fail the
-# same way, because none of them produce CACHE_OK.
-_verify_out=$(pdsh -R ssh -w "$_hostcsv" \
-  "s=\$(stat -c%s '${_node_cache_path}' 2>/dev/null || echo 0); if [ \"\$s\" = '${_cache_size}' ] && [ -r '${_node_cache_path}' ]; then echo CACHE_OK; else echo CACHE_MISS_size=\$s; fi" 2>&1)
-_ok=$(printf '%s\n' "${_verify_out}" | grep -c 'CACHE_OK' || true)
-if [ "${_ok:-0}" -ne "${#hosts[@]}" ]; then
-  echo "run-nemo-xrack: ERROR: local image verified on only ${_ok}/${#hosts[@]} nodes at ${_node_cache_path}." >&2
-  echo "run-nemo-xrack: first cache misses or transport failures:" >&2
-  printf '%s\n' "${_verify_out}" | grep -v 'CACHE_OK' | head -10 | sed 's/^/  /' >&2
-  echo "run-nemo-xrack: aborting before submit; wait for bringup-agent/FileCopyTrigger rather than reading the image from the head node." >&2
-  exit 1
-fi
-echo "run-nemo-xrack: cache ready on all ${#hosts[@]} nodes (verified ${_ok}/${#hosts[@]}); skipping head-node rsync"
 export NVIS_NEMO_CONT="${_node_cache_path}"
-
-# A node can remain IDLE in Slurm and still have every GPU marked reset-required. In that state
-# nvidia-smi inventory queries succeed, but CUDA context creation fails with "device busy or
-# unavailable" and one bad rack cancels the entire multi-rack step. Require all four GB300 GPUs on
-# every target node to report no pending recovery action before consuming a large allocation.
-# Keep the override explicit for emergency diagnosis; normal UI launches fail closed.
-if [[ "${NVIS_NEMO_GPU_RECOVERY_CHECK:-1}" == "1" ]]; then
-  echo "run-nemo-xrack: checking GPU recovery state on ${#hosts[@]} node(s)…"
-  _gpu_out=$(pdsh -R ssh -w "$_hostcsv" \
-    'a=$(nvidia-smi --query-gpu=gpu_recovery_action --format=csv,noheader 2>&1); rc=$?; n=$(printf "%s\n" "$a" | grep -c "^None$"); if [ "$rc" -eq 0 ] && [ "$n" -eq 4 ]; then echo GPU_READY; else printf "GPU_BLOCKED recovery=%s\n" "$(printf "%s" "$a" | tr "\n" ",")"; fi' 2>&1)
-  _gpu_ok=$(printf '%s\n' "${_gpu_out}" | grep -c 'GPU_READY' || true)
-  if [ "${_gpu_ok:-0}" -ne "${#hosts[@]}" ]; then
-    echo "run-nemo-xrack: ERROR: healthy GPU recovery state confirmed on only ${_gpu_ok}/${#hosts[@]} nodes." >&2
-    echo "run-nemo-xrack: first reset-required, query, or transport failures:" >&2
-    printf '%s\n' "${_gpu_out}" | grep -v 'GPU_READY' | head -20 | sed 's/^/  /' >&2
-    echo "run-nemo-xrack: aborting before submit; recover the affected nodes and rerun the preflight." >&2
-    exit 1
-  fi
-  echo "run-nemo-xrack: GPU recovery state ready on all ${#hosts[@]} nodes (verified ${_gpu_ok}/${#hosts[@]})"
-else
-  echo "run-nemo-xrack: WARNING: GPU recovery check disabled by NVIS_NEMO_GPU_RECOVERY_CHECK=0" >&2
-fi
-
-# Safe preflight mode for operators and automation: perform the same target resolution and cache
-# and GPU-recovery verification as the green button, but stop before sbatch.
-if [[ "${NVIS_NEMO_CACHE_CHECK_ONLY:-0}" == "1" ]]; then
-  echo "run-nemo-xrack: cache-check-only complete; no Slurm job submitted"
-  exit 0
-fi
+export NVIS_NEMO_EXPECTED_SIZE="${_cache_size}"
+export NVIS_NEMO_EXPECTED_SHA256="${_expected_sha}"
+echo "run-nemo-xrack: image required at ${NVIS_NEMO_CONT} (${NVIS_NEMO_EXPECTED_SIZE} bytes) on ${#hosts[@]} node(s); verification=allocation"
 
 # Log filename uses just the racks included in the test. The arg may be a full curated nodelist
 # (real hostnames) rather than rack-ct specs; using it verbatim would blow past the 255-byte
@@ -284,19 +259,104 @@ fi
 _out_stem="root-NEMO-${_racktag}-${n}N"
 _out_path="${JOB_LOG_DIR%/}/${_out_stem}-%j.txt"
 
+# Submit Slurm work as the configured cluster operator. Rack Status itself runs as
+# root in a deliberately minimal container; allocation-side checks and Pyxis must
+# use the same identity as production validation, especially for IMEX O_RDWR.
+submit_uid="${NVIS_SLURM_SUBMIT_UID:-${RACK_SLURM_SUBMIT_UID:-}}"
+submit_gid="${NVIS_SLURM_SUBMIT_GID:-${RACK_SLURM_SUBMIT_GID:-}}"
+submit_home="${NVIS_SLURM_SUBMIT_HOME:-${RACK_SLURM_SUBMIT_HOME:-}}"
+slurm_submit_as=()
+if [[ -n "$submit_uid" || -n "$submit_gid" ]]; then
+  if [[ ! "$submit_uid" =~ ^[0-9]+$ || ! "$submit_gid" =~ ^[0-9]+$ ]]; then
+    echo "run-nemo-xrack: ERROR: submit uid/gid must both be numeric" >&2
+    exit 2
+  fi
+  slurm_submit_as=(--uid="$submit_uid" --gid="$submit_gid")
+fi
+if [[ -n "$submit_home" ]]; then
+  if [[ "$submit_home" != /* || "$submit_home" == *","* || "$submit_home" == *$'\n'* ]]; then
+    echo "run-nemo-xrack: ERROR: submit home must be an absolute path without commas/newlines" >&2
+    exit 2
+  fi
+  export HOME="$submit_home"
+fi
+
+_gpu_recovery_check="${NVIS_NEMO_GPU_RECOVERY_CHECK:-1}"
+case "$_gpu_recovery_check" in
+  0|1) ;;
+  *) echo "run-nemo-xrack: ERROR: NVIS_NEMO_GPU_RECOVERY_CHECK must be 0 or 1" >&2; exit 2 ;;
+esac
+_stage_script="${SCRIPT_DIR}/validation_container_stage.sbatch"
+[[ -r "$_stage_script" ]] || {
+  echo "run-nemo-xrack: ERROR: allocation preflight script missing: $_stage_script" >&2
+  exit 2
+}
+# Files passed directly to sbatch are spooled from this launcher, but batch
+# siblings are opened later on compute nodes. /app is private to the web
+# container, so only export the standardized compute-visible runtime tree.
+node_script_dir="${NVIS_VALIDATION_NODE_SCRIPTS_DIR:-${RACK_VALIDATION_PROVENANCE_ROOT:-/cluster/OVA/scripts/nscaletx-16k-validation}/runtime/bin/scripts}"
+if [[ "$node_script_dir" != /* || "$node_script_dir" == /app || "$node_script_dir" == /app/* || \
+      "$node_script_dir" == *","* || "$node_script_dir" == *$'\n'* ]]; then
+  echo "run-nemo-xrack: ERROR: NVIS_VALIDATION_NODE_SCRIPTS_DIR must be a compute-visible absolute path outside /app, without commas/newlines" >&2
+  exit 2
+fi
+_stage_out="${JOB_LOG_DIR%/}/nemo-container-preflight-%j.out"
+_stage_export="ALL,NVIS_STAGE_SOURCE=${_shared_cache_path},NVIS_STAGE_DEST=${NVIS_NEMO_CONT},NVIS_STAGE_RSYNC=0,NVIS_STAGE_CONTAINER_PREFLIGHT=0,NVIS_STAGE_ENSURE_IMEX_CHANNEL0=1,NVIS_STAGE_GPU_RECOVERY_CHECK=${_gpu_recovery_check},NVIS_STAGE_EXPECTED_GPUS=4,NVIS_STAGE_EXPECTED_SIZE=${NVIS_NEMO_EXPECTED_SIZE},NVIS_STAGE_EXPECTED_SHA256=${NVIS_NEMO_EXPECTED_SHA256},NVIS_SCRIPTS_DIR=${node_script_dir}"
+_stage_cmd=(sbatch "${slurm_submit_as[@]}" --parsable --wait --no-requeue
+  --nodes="$n" --nodelist="$_hostcsv" --ntasks-per-node=1 --gpus-per-node=4
+  --output="$_stage_out" --export="$_stage_export" "$_stage_script")
+
 # Export the real scripts dir to the job so the batch script can find lib/fabric.inc.sh
 # (Slurm spools only the batch script, not lib/). Without it the fabric classifier no-ops
 # and NCCL falls back to a naive mlx5_0..3 set that mixes IB + RoCE and fails.
-export NVIS_SCRIPTS_DIR="${SCRIPT_DIR}"
+export NVIS_SCRIPTS_DIR="${node_script_dir}"
 cd "${JOB_LOG_DIR}" || exit 2
 if [[ "${NVIS_NEMO_SUBMIT_DRY_RUN:-0}" == "1" ]]; then
-  echo "run-nemo-xrack: submit-dry-run output=${_out_path} nodes=${n}; no Slurm job submitted"
+  echo "run-nemo-xrack: submit-dry-run preflight=allocation runtime=${node_script_dir} output=${_stage_out} workload_output=${_out_path} nodes=${n}; no Slurm job submitted"
   exit 0
 fi
-sbatch -N "${n}" \
+
+# Compute-node access is allocation-only on this site. Run the established
+# validation-container gate over the exact requested nodelist instead of requiring
+# pdsh/SSH credentials in the web container. --wait plus positive per-node marker
+# counts keeps missing nodes, corrupt images, and reset-required GPUs fail-closed.
+set +e
+_stage_reply="$("${_stage_cmd[@]}" 2>&1)"
+_stage_rc=$?
+set -e
+_stage_id="$(printf '%s\n' "$_stage_reply" | sed -n 's/^\([0-9][0-9]*\)\(;.*\)\{0,1\}$/\1/p' | head -1)"
+if [[ ! "$_stage_id" =~ ^[0-9]+$ ]]; then
+  echo "run-nemo-xrack: ERROR: allocation preflight returned no valid Slurm id (rc=${_stage_rc}): ${_stage_reply}" >&2
+  exit 1
+fi
+_stage_log="${_stage_out//%j/${_stage_id}}"
+_image_ok=$(grep -c '^IMAGE_STAGE_READY ' "$_stage_log" 2>/dev/null || true)
+_gpu_ok=0
+if [[ "$_gpu_recovery_check" == 1 ]]; then
+  _gpu_ok=$(grep -c '^GPU_RECOVERY_READY ' "$_stage_log" 2>/dev/null || true)
+fi
+_complete_ok=$(grep -c "^VALIDATION_CONTAINER_STAGE_COMPLETE nodes=${n} destination=${NVIS_NEMO_CONT}$" "$_stage_log" 2>/dev/null || true)
+if (( _stage_rc != 0 || _image_ok != n || _complete_ok != 1 )) || \
+   [[ "$_gpu_recovery_check" == 1 && "$_gpu_ok" -ne "$n" ]]; then
+  echo "run-nemo-xrack: ERROR: allocation preflight failed: image=${_image_ok}/${n} gpu=${_gpu_ok}/${n} rc=${_stage_rc} log=${_stage_log}" >&2
+  tail -40 "$_stage_log" 2>/dev/null | sed 's/^/  /' >&2 || true
+  echo "run-nemo-xrack: aborting before NeMo workload submission" >&2
+  exit 1
+fi
+echo "run-nemo-xrack: allocation preflight ready on all ${n} nodes (image=${_image_ok}/${n} gpu=${_gpu_ok}/${n} preflight_id=${_stage_id})"
+
+# Operator/automation preflight: exercise the identical exact-node Slurm gate but
+# stop before the NeMo workload allocation. The preflight allocation above is the
+# only job submitted in this mode.
+if [[ "${NVIS_NEMO_CACHE_CHECK_ONLY:-0}" == "1" ]]; then
+  echo "run-nemo-xrack: cache-check-only complete; no NeMo workload submitted"
+  exit 0
+fi
+
+sbatch "${slurm_submit_as[@]}" -N "${n}" \
   -w "$(echo "${hosts[*]}" | tr ' ' ',')" \
   -t "${NVIS_NEMO_WALLTIME:-03:00:00}" \
   --job-name="NEMO-${n}N" \
-  --export="ALL,NVIS_SCRIPTS_DIR=${SCRIPT_DIR},NVIS_NEMO_CONT=${NVIS_NEMO_CONT},NVIS_NEMO_XRACK=${NVIS_NEMO_XRACK},NVIS_NCCL_PRELOAD_DISABLE=${NVIS_NCCL_PRELOAD_DISABLE:-0},NVIS_NCCL_IGNORE_COLLNET_MISMATCH=${NVIS_NCCL_IGNORE_COLLNET_MISMATCH:-1},NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-},NVIS_NEMO_MAX_STEPS=${NVIS_NEMO_MAX_STEPS:-},NVIS_NEMO_DTYPE=${NVIS_NEMO_DTYPE:-},NVIS_NEMO_MODEL_SIZE=${NVIS_NEMO_MODEL_SIZE:-},NVIS_NEMO_GBS=${NVIS_NEMO_GBS:-},NVIS_NEMO_UB_SKIPMC=${NVIS_NEMO_UB_SKIPMC:-},NVIS_NEMO_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-},NVIS_NEMO_RECIPE_DEFAULT=${NVIS_NEMO_RECIPE_DEFAULT:-},NVIS_NCCL_PRELOAD_SRC=${NVIS_NCCL_PRELOAD_SRC:-},NVIS_NCCL_NET_PLUGIN=${NVIS_NCCL_NET_PLUGIN:-},NVIS_NEMO_CLI=${NVIS_NEMO_CLI:-},NVIS_NEMO_GPU=${NVIS_NEMO_GPU:-},NVIS_NEMO_FORCE_BF16_ALIAS=${NVIS_NEMO_FORCE_BF16_ALIAS:-},NVIS_NEMO_RECIPE_NAME=${NVIS_NEMO_RECIPE_NAME:-},NVIS_NEMO_HF_HOME=${NVIS_NEMO_HF_HOME:-},NVIS_HF_HOME_CONT=${NVIS_HF_HOME_CONT:-}" \
+  --export="ALL,NVIS_SCRIPTS_DIR=${node_script_dir},NVIS_NEMO_CONT=${NVIS_NEMO_CONT},NVIS_NEMO_EXPECTED_SIZE=${NVIS_NEMO_EXPECTED_SIZE},NVIS_NEMO_EXPECTED_SHA256=${NVIS_NEMO_EXPECTED_SHA256},NVIS_NEMO_XRACK=${NVIS_NEMO_XRACK},NVIS_NCCL_PRELOAD_DISABLE=${NVIS_NCCL_PRELOAD_DISABLE:-0},NVIS_NCCL_IGNORE_COLLNET_MISMATCH=${NVIS_NCCL_IGNORE_COLLNET_MISMATCH:-1},NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-},NVIS_NEMO_MAX_STEPS=${NVIS_NEMO_MAX_STEPS:-},NVIS_NEMO_DTYPE=${NVIS_NEMO_DTYPE:-},NVIS_NEMO_MODEL_SIZE=${NVIS_NEMO_MODEL_SIZE:-},NVIS_NEMO_GBS=${NVIS_NEMO_GBS:-},NVIS_NEMO_UB_SKIPMC=${NVIS_NEMO_UB_SKIPMC:-},NVIS_NEMO_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-},NVIS_NEMO_RECIPE_DEFAULT=${NVIS_NEMO_RECIPE_DEFAULT:-},NVIS_NCCL_PRELOAD_SRC=${NVIS_NCCL_PRELOAD_SRC:-},NVIS_NCCL_NET_PLUGIN=${NVIS_NCCL_NET_PLUGIN:-},NVIS_NEMO_CLI=${NVIS_NEMO_CLI:-},NVIS_NEMO_GPU=${NVIS_NEMO_GPU:-},NVIS_NEMO_FORCE_BF16_ALIAS=${NVIS_NEMO_FORCE_BF16_ALIAS:-},NVIS_NEMO_RECIPE_NAME=${NVIS_NEMO_RECIPE_NAME:-},NVIS_NEMO_HF_HOME=${NVIS_NEMO_HF_HOME:-},NVIS_HF_HOME_CONT=${NVIS_HF_HOME_CONT:-}" \
   --output="${_out_path}" \
   "$SCRIPT_DIR/${NVIS_NEMO_BATCH_SCRIPT}"

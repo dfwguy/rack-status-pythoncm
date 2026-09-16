@@ -179,10 +179,19 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
         const sres = await apiFetch(
           `/api/reset-job-status?job_id=${encodeURIComponent(started.job_id)}`,
         );
-        const data = (await sres.json()) as JobStatus;
+        const raw = await sres.text();
+        let data: JobStatus;
+        try {
+          data = JSON.parse(raw) as JobStatus;
+        } catch {
+          throw new Error(`invalid preflight status response (HTTP ${sres.status})`);
+        }
+        if (!sres.ok || data.ok === false) {
+          throw new Error(data.error || `preflight status failed (HTTP ${sres.status})`);
+        }
         setStatus(data);
         const phase = String(data.phase || "").toLowerCase();
-        if (phase === "done" || phase === "error") return;
+        if (phase === "done" || phase === "error" || phase === "timeout") return;
       }
       if (!cancelled.current) setError("timed out waiting for the preflight to finish");
     } catch (e) {

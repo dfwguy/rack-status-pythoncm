@@ -32,7 +32,7 @@ describe("buildValidationPresetRequest", () => {
       log_dir: "/cluster/logs",
       storage: "local",
       rsync_to_local: true,
-      local_container_dir: "/tmp/containers",
+      local_container_dir: "/opt/containers",
     });
   });
 

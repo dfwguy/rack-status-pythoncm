@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -909,7 +909,54 @@ class NvisNaming:
             sort_key=self.rack_sort_key(canon),
         )
 
-    def build_hierarchy(self, rack_ids: Iterable[str]) -> dict:
+    def rack_labels_from_node_groups(
+        self,
+        node_groups: Iterable[Mapping[str, object]],
+    ) -> dict[str, str]:
+        """Map canonical rack ids to BCM ``SU<number>`` NodeGroup names.
+
+        BCM's rack entities and hostnames encode physical coordinates such as
+        ``ink50-dh02-a01``; they do not say that row ``a`` is scalable unit
+        ``SU1``. That operator-facing name is authoritative on the NodeGroup.
+        Ignore non-SU groups and reject ambiguous rack membership instead of
+        choosing whichever overlapping group happened to be returned first.
+        """
+        matcher = self.matcher()
+        labels: dict[str, str] = {}
+        ambiguous: set[str] = set()
+        for group in node_groups:
+            name = str(group.get("name") or "").strip().upper()
+            if not re.fullmatch(r"SU\d+", name):
+                continue
+            nodes = group.get("nodes") or []
+            if isinstance(nodes, (str, bytes)):
+                nodes = [nodes]
+            if not isinstance(nodes, Iterable):
+                continue
+            for value in nodes:
+                hostname = str(value or "").strip()
+                match = matcher.match_hostname(hostname)
+                if match is None:
+                    continue
+                rack = match.rack_id
+                previous = labels.get(rack)
+                if previous is not None and previous != name:
+                    ambiguous.add(rack)
+                else:
+                    labels[rack] = name
+        # Retain an internal ambiguity marker so row-level label inference can
+        # distinguish "not present in this NodeGroup snapshot" from "present
+        # in conflicting groups". The latter must always fall back safely.
+        for rack in ambiguous:
+            labels[rack] = "__ambiguous__"
+        return labels
+
+    def build_hierarchy(
+        self,
+        rack_ids: Iterable[str],
+        *,
+        rack_group_labels: Mapping[str, str] | None = None,
+    ) -> dict:
         """Group rack ids into a ``section -> row -> rack`` tree (JSON-serializable).
 
         The single source of truth for datacenter layout: any surface that needs
@@ -948,6 +995,22 @@ class NvisNaming:
             return self.rack_sort_key(row["racks"][0]["rack"]) if row["racks"] else (10**9,)
 
         for row in rows.values():
+            mapped_group_labels = [
+                str((rack_group_labels or {}).get(str(item.get("rack") or "")) or "").strip()
+                for item in row["racks"]
+            ]
+            group_labels = set(mapped_group_labels)
+            group_labels.discard("")
+            has_ambiguous = "__ambiguous__" in group_labels
+            group_labels.discard("__ambiguous__")
+            # A NodeGroup can temporarily omit some nodes/racks while the row's
+            # physical inventory remains valid. One unambiguous SU label from
+            # any peer labels the structural row without dropping its peers.
+            if len(group_labels) == 1 and any(mapped_group_labels) and not has_ambiguous:
+                row["label"] = next(iter(group_labels))
+                row["label_source"] = "pythoncm-node-group"
+            else:
+                row["label_source"] = "rack-id-template"
             row["racks"].sort(key=lambda r: self.rack_sort_key(r["rack"]))
         for sec in sections.values():
             sec["rows"].sort(key=_row_key)

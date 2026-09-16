@@ -67,7 +67,7 @@ function AsyncValidationTrigger({ onAccepted }: { onAccepted: (jobId: string) =>
       "validation",
       "/api/run-validation-preset-async",
       (jobId) => `/api/run-validation-preset-status?job_id=${jobId}`,
-      { preset_id: "nccl-2.31.2" },
+      { preset_id: "nccl-2.29.3" },
     ).then(onAccepted);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

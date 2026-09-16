@@ -289,26 +289,55 @@ render_tsv_box() {
 mnubergemm_stats_tsv() {
   # MNUBERGEMM soak output. Per-rank lines look like:
   #   MNUB [I] G: 0 <host> L: 0  T:G L=32 freq:13.4Hz duty:0.00107 P:74.4 ... GFlops:8.2173e+05
-  # Emits: nodes<TAB>ranks<TAB>gflops_max<TAB>gflops_median<TAB>verdict
-  # Verdict mirrors MOP §7.2: FAIL on abort/Xid/ECC, else DONE when GFlops were produced.
-  local f=$1 nodes ranks gmax gmed verdict
-  grep -q 'MNUB \[' "$f" 2>/dev/null || { printf '%s\t%s\t%s\t%s\t%s\n' '-' '-' '-' '-' '-'; return; }
+  # Emits: nodes<TAB>ranks<TAB>gflops_max<TAB>gflops_median<TAB>verdict<TAB>rank_samples<TAB>qualified_ranks
+  # A sample is progress, not completion.  PASS only after the binary's own
+  # QUAL_OK plus normal teardown, or an expected walltime end with positive
+  # work.  An all-zero completed run is a real failure; an in-flight warmup
+  # zero remains inconclusive.
+  local f=$1 nodes ranks rank_samples gmax gmed verdict qual_ok qualified_ranks qualification_complete normal_complete timed_out positive
+  grep -q 'MNUB \[' "$f" 2>/dev/null || { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' '-' '-' '-' '-' '-' '-' '-'; return; }
   nodes=$(grep -m1 '^HOSTLIST:' "$f" 2>/dev/null | tr ',' '\n' | grep -c . || echo 0)
-  [[ "$nodes" -eq 0 ]] && nodes='-'
-  ranks=$(grep -oE 'GFlops:[0-9.eE+-]+' "$f" 2>/dev/null | wc -l | tr -d ' ')
-  if [[ "${ranks:-0}" -gt 0 ]]; then
+  rank_samples=$(grep -oE 'GFlops:[0-9.eE+-]+' "$f" 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "${rank_samples:-0}" -gt 0 ]]; then
     # sort -g first so awk needs no asort() (gawk-only; the head node may ship mawk).
     read -r gmax gmed < <(grep -oE 'GFlops:[0-9.eE+-]+' "$f" 2>/dev/null | cut -d: -f2 | sort -g | \
       awk '{v[NR]=$1} END{if(NR==0){print "- -";exit} printf "%.4g %.4g\n", v[NR], v[int((NR+1)/2)]}' 2>/dev/null || echo "- -")
   fi
   : "${gmax:=-}" "${gmed:=-}"
-  verdict=DONE
-  if grep -qE 'Aborted \(core dumped\)|srun:.*error:.*Exited|Xid|ECC error|CUDART error' "$f" 2>/dev/null; then
-    verdict=FAIL
-  elif [[ "${ranks:-0}" -eq 0 ]]; then
-    verdict=UNK
+  qual_ok=$(grep -c 'returning QUAL_OK' "$f" 2>/dev/null || true)
+  qualified_ranks=$(awk '
+    /returning QUAL_OK/ {
+      for (i = 1; i < NF; i++) if ($i == "G:" && $(i + 1) ~ /^[0-9]+$/) seen[$(i + 1)] = 1
+    }
+    END { count = 0; for (rank in seen) count++; print count + 0 }
+  ' "$f" 2>/dev/null || echo 0)
+  if [[ "${nodes:-0}" -gt 0 ]]; then
+    ranks=$((nodes * 4))
+  else
+    ranks='-'
+    nodes='-'
   fi
-  printf '%s\t%s\t%s\t%s\t%s\n' "$nodes" "${ranks:-0}" "$gmax" "$gmed" "$verdict"
+  qualification_complete=0
+  if [[ "$ranks" =~ ^[0-9]+$ && "$qualified_ranks" -eq "$ranks" ]]; then
+    qualification_complete=1
+  fi
+  normal_complete=0
+  grep -q 'normal mpi teardown' "$f" 2>/dev/null && normal_complete=1
+  timed_out=0
+  grep -qE 'DUE TO TIME LIMIT|TIMEOUT' "$f" 2>/dev/null && timed_out=1
+  positive=0
+  awk -v value="$gmax" 'BEGIN { exit !((value + 0) > 0) }' </dev/null 2>/dev/null && positive=1
+
+  verdict=UNK
+  if grep -qE 'Aborted \(core dumped\)|srun:.*error:.*Exited|Xid|ECC error|CUDART error|returning QUAL_FAIL|MNUB \[E\]' "$f" 2>/dev/null; then
+    verdict=FAIL
+  elif [[ "$timed_out" -eq 1 ]]; then
+    [[ "$positive" -eq 1 ]] && verdict=DONE || verdict=FAIL
+  elif [[ "$normal_complete" -eq 1 ]]; then
+    [[ "$positive" -eq 1 && "$qual_ok" -gt 0 && "$qualification_complete" -eq 1 ]] && verdict=DONE || verdict=FAIL
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$nodes" "$ranks" "$gmax" "$gmed" "$verdict" "${rank_samples:-0}" "${qualified_ranks:-0}"
 }
 
 # NCCL busbw / oob / series helpers are shared with rack_status.sh via nccl_parse.inc.sh
@@ -805,7 +834,7 @@ if [[ "$OUTPUT_FORMAT" != "human" ]]; then
       # Still emit a syntactically valid, schema-shaped document so the caller's json.loads() does
       # not blow up on an empty body; the non-zero exit + stderr carry the real failure.
       printf '%s\n' '{'
-      printf '%s\n' '  "export_version": 7,'
+      printf '%s\n' '  "export_version": 8,'
       printf '%s\n' '  "nccl_peak_out_of_place_busbw_gbps": [],'
       printf '%s\n' '  "nemotron_5h_56b_train_window": [],'
       printf '%s\n' '  "mnubergemm_stress": [],'
@@ -1037,7 +1066,10 @@ def main() -> None:
         # emitted, so a NEMO/NCCL-only log yields [] and the UI can hide the tab.
         mnub_dicts: List[Dict[str, Any]] = []
         if p_mnub:
-            mnub_fields = ["rack", "job_id", "nodes", "ranks", "gflops_max", "gflops_median", "verdict"]
+            mnub_fields = [
+                "rack", "job_id", "nodes", "ranks", "gflops_max", "gflops_median", "verdict",
+                "rank_samples", "qualified_ranks",
+            ]
             for r in read_tsv(p_mnub):
                 if not r or len(r) < 7:
                     continue
@@ -1053,7 +1085,6 @@ def main() -> None:
 
         # v4 universal ingest. "results" is ADDITIVE: one entry per input file, including files no
         # extractor understood (kind="unknown"), so the UI can list/open everything in the log dir.
-        # The four keys above are byte-for-byte what v7 produced for the same explicit file args.
         results = read_inventory(p_inv)
         kind_counts: Dict[str, int] = {}
         for e in results:
@@ -1073,7 +1104,7 @@ def main() -> None:
         }
 
         obj = {
-            "export_version": 7,
+            "export_version": 8,
             "nccl_peak_out_of_place_busbw_gbps": nccl_dicts,
             "nemotron_5h_56b_train_window": llm_dicts,
             "mnubergemm_stress": mnub_dicts,

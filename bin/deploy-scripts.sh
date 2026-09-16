@@ -26,9 +26,10 @@
 #
 # Env (same names the app uses in SSH mode — see .cursor/rules/local-dev.mdc):
 #   RACK_SSH_HOST          head node hostname/IP (required unless a target arg is given)
-#   RACK_SSH_USER          SSH user (default: root)
+#   RACK_SSH_USER          explicit non-root SSH user (required)
 #   RACK_SSH_KEY           SSH private key path (optional; omit when using an ssh-alias)
 #   RACK_SSH_PORT          SSH port (optional; default from ssh config / 22)
+#   RACK_KNOWN_HOSTS_PATH  pinned known_hosts file (required)
 #   RACK_REMOTE_BASE_PATH  remote install root (default: /home/cmsupport/nvis-rack-status)
 #
 # Examples:
@@ -62,19 +63,68 @@ fi
 
 if [[ -z "${TARGET}" ]]; then
   [[ -n "${RACK_SSH_HOST:-}" ]] || {
-    echo "deploy-scripts: no target — pass user@host / an ssh-alias, or set RACK_SSH_HOST" >&2
+    echo "deploy-scripts: no target — pass user@host / a host, or set RACK_SSH_HOST" >&2
     exit 2
   }
-  TARGET="${RACK_SSH_USER:-root}@${RACK_SSH_HOST}"
+  TARGET="${RACK_SSH_HOST}"
+fi
+
+# A deployment must name its least-privilege identity.  Do not inherit a User
+# directive from an operator's mutable ssh_config and never silently become root.
+if [[ "${TARGET}" == *@* ]]; then
+  TARGET_USER="${TARGET%%@*}"
+  TARGET_HOST="${TARGET#*@}"
+  if [[ -n "${RACK_SSH_USER:-}" && "${RACK_SSH_USER}" != "${TARGET_USER}" ]]; then
+    echo "deploy-scripts: target user and RACK_SSH_USER disagree" >&2
+    exit 2
+  fi
+else
+  [[ -n "${RACK_SSH_USER:-}" ]] || {
+    echo "deploy-scripts: RACK_SSH_USER is required (explicit non-root identity)" >&2
+    exit 2
+  }
+  TARGET_USER="${RACK_SSH_USER}"
+  TARGET_HOST="${TARGET}"
+fi
+[[ -n "${TARGET_USER}" && -n "${TARGET_HOST}" ]] || {
+  echo "deploy-scripts: invalid target: ${TARGET}" >&2
+  exit 2
+}
+[[ "${TARGET_USER}" != "root" && "${TARGET_USER}" != "0" ]] || {
+  echo "deploy-scripts: root SSH deployments are forbidden; use a least-privilege service identity" >&2
+  exit 2
+}
+TARGET="${TARGET_USER}@${TARGET_HOST}"
+
+KNOWN_HOSTS="${RACK_KNOWN_HOSTS_PATH:-}"
+[[ -n "${KNOWN_HOSTS}" ]] || {
+  echo "deploy-scripts: RACK_KNOWN_HOSTS_PATH is required (pinned host keys)" >&2
+  exit 2
+}
+[[ -f "${KNOWN_HOSTS}" && -r "${KNOWN_HOSTS}" && ! -L "${KNOWN_HOSTS}" ]] || {
+  echo "deploy-scripts: known_hosts must be a readable regular non-symlink file: ${KNOWN_HOSTS}" >&2
+  exit 2
+}
+if [[ -n "${RACK_SSH_KEY:-}" && ( ! -f "${RACK_SSH_KEY}" || ! -r "${RACK_SSH_KEY}" || -L "${RACK_SSH_KEY}" ) ]]; then
+  echo "deploy-scripts: SSH key must be a readable regular non-symlink file: ${RACK_SSH_KEY}" >&2
+  exit 2
 fi
 
 BASE="${RACK_REMOTE_BASE_PATH:-/home/cmsupport/nvis-rack-status}"
 DEST="${TARGET}:${BASE%/}/bin/scripts/"
 
-# SSH transport for rsync. Key/port only when explicitly set (an ssh-alias supplies its own).
-SSH_CMD="ssh -o StrictHostKeyChecking=no"
-[[ -n "${RACK_SSH_KEY:-}"  ]] && SSH_CMD+=" -i ${RACK_SSH_KEY}"
-[[ -n "${RACK_SSH_PORT:-}" ]] && SSH_CMD+=" -p ${RACK_SSH_PORT}"
+# Keep transport options as an argv array.  rsync's -e boundary accepts only a
+# string, so serialize each already-separated argument with shell quoting there.
+SSH_ARGS=(
+  ssh
+  -o BatchMode=yes
+  -o StrictHostKeyChecking=yes
+  -o "UserKnownHostsFile=${KNOWN_HOSTS}"
+)
+[[ -n "${RACK_SSH_KEY:-}"  ]] && SSH_ARGS+=( -i "${RACK_SSH_KEY}" )
+[[ -n "${RACK_SSH_PORT:-}" ]] && SSH_ARGS+=( -p "${RACK_SSH_PORT}" )
+printf -v SSH_CMD '%q ' "${SSH_ARGS[@]}"
+SSH_CMD="${SSH_CMD% }"
 
 [[ -d "${SRC}" ]] || { echo "deploy-scripts: source not found: ${SRC}" >&2; exit 1; }
 

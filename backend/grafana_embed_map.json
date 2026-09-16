@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "generated": "2026-09-06T07:45:00Z",
+  "grafana": {
+    "site": "Nscale TX",
+    "source": "http://127.0.0.1:3001/api/dashboards/uid/<uid>",
+    "verified": "2026-09-06"
+  },
+  "views": {
+    "infrastructure": {
+      "route": "/infrastructure",
+      "sections": [
+        {
+          "section": "Ethernet host network",
+          "segment": "ethernet",
+          "uid": "nscaletx-ethernet-host-network",
+          "title": "NscaleTX — Ethernet & Host Network",
+          "confidence": "exact",
+          "panel_ids": [3, 5, 6, 10, 11, 14, 15],
+          "panel_titles": {
+            "3": "Link / carrier DOWN",
+            "5": "RX errors Δ",
+            "6": "RX drops Δ",
+            "10": "Operational interfaces currently down",
+            "11": "Error and drop offenders",
+            "14": "Ethernet throughput by SU",
+            "15": "Interface errors and drops by SU"
+          }
+        },
+        {
+          "section": "NVLink and NVSwitch fabric",
+          "segment": "ib-nvlink",
+          "uid": "nscaletx-nvlink-fabric",
+          "title": "NscaleTX — NVLink & NVSwitch Fabric",
+          "confidence": "exact",
+          "panel_ids": [3, 4, 5, 7, 8, 10, 16, 17],
+          "panel_titles": {
+            "3": "Trays reporting lanes",
+            "4": "Trays not at 72 lanes",
+            "5": "Lanes DOWN",
+            "7": "IMEX inactive",
+            "8": "NVSwitch needs action",
+            "10": "Trays with incomplete lane coverage",
+            "16": "Selected-tray actionable NVLink error rates",
+            "17": "Selected-tray DCGM NVLink bandwidth"
+          }
+        },
+        {
+          "section": "InfiniBand fabric health",
+          "segment": "ib-nvlink",
+          "uid": "nvis-ib-overview",
+          "title": "InfiniBand — Fabric Overview & Health Scorecard",
+          "confidence": "exact",
+          "panel_ids": [3, 4, 5, 6, 7, 10, 17, 21],
+          "panel_titles": {
+            "3": "IB Switches Discovered",
+            "4": "IB Links Mapped",
+            "5": "Switches Scraping OK",
+            "6": "Switch SSH Reachable",
+            "7": "Active Alarms (UFM)",
+            "10": "Health by Component",
+            "17": "IB Switch Reachability — scraping OK vs known",
+            "21": "UFM Events by Category"
+          }
+        },
+        {
+          "section": "Storage and telemetry platform",
+          "segment": "storage",
+          "uid": "nscaletx-platform-root-cause",
+          "title": "NscaleTX — Platform, Storage & Telemetry",
+          "confidence": "exact",
+          "panel_ids": [3, 4, 5, 6, 7, 12, 15],
+          "panel_titles": {
+            "3": "Platform services UP",
+            "4": "Platform services DOWN",
+            "5": "VM free disk",
+            "6": "Lake free",
+            "7": "Lake export lag",
+            "12": "Lake filesystems and admission state",
+            "15": "Lake write and export freshness"
+          }
+        }
+      ]
+    },
+    "logs": {
+      "route": "/observability/logs",
+      "sections": [
+        {
+          "section": "Cluster logs and events",
+          "segment": "logs",
+          "uid": "nscaletx-logs-events",
+          "title": "NscaleTX — Logs & Events",
+          "confidence": "exact",
+          "panel_ids": [3, 4, 5, 6, 7, 8, 10, 11, 13, 14],
+          "panel_titles": {
+            "3": "GPU / XID events · 1h",
+            "4": "NVLink / fabric events · 1h",
+            "5": "IB / RDMA events · 1h",
+            "6": "Storage / OOM events · 1h",
+            "7": "Slurm terminal failures · 1h",
+            "8": "Platform / agent failures · 1h",
+            "10": "Selected tray GPU, XID, ECC and NVLink incidents",
+            "11": "Selected tray host, storage and network incidents",
+            "13": "Selected tray",
+            "14": "Selected job"
+          }
+        }
+      ]
+    },
+    "metrics": {
+      "route": "/observability/metrics",
+      "sections": [
+        {
+          "section": "Thermal and power",
+          "segment": "metrics",
+          "uid": "nscaletx-thermal-power",
+          "title": "NscaleTX — Thermal & Power",
+          "confidence": "exact",
+          "panel_ids": [3, 4, 5, 7, 8, 14, 16, 17],
+          "panel_titles": {
+            "3": "Trays near critical",
+            "4": "Temperature alarms",
+            "5": "Hottest hwmon sensor",
+            "7": "Power alarms",
+            "8": "Highest module power",
+            "14": "Hwmon temperature envelope by SU",
+            "16": "Highest module power by SU",
+            "17": "GPU board power and temperature correlation"
+          }
+        },
+        {
+          "section": "GPU and NVLink",
+          "segment": "metrics",
+          "uid": "nscaletx-accelerators",
+          "title": "NscaleTX — GPU & NVLink",
+          "confidence": "exact",
+          "panel_ids": [3, 4, 5, 6, 8, 13, 14, 15, 17],
+          "panel_titles": {
+            "3": "Trays reporting DCGM",
+            "4": "DCGM exporters DOWN",
+            "5": "Hottest GPU core",
+            "6": "Hottest HBM",
+            "8": "GPU power draw",
+            "13": "GPU core temperature — max and average by SU",
+            "14": "GPU utilisation — max and average by SU",
+            "15": "GPU power by SU",
+            "17": "DCGM NVLink bandwidth total by SU"
+          }
+        }
+      ]
+    }
+  },
+  "unmapped": [],
+  "keep_as_is": []
+}

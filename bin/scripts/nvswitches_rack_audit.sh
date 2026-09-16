@@ -35,10 +35,10 @@ CMSH=${RACK_CMSH:-cmsh}
 set +e
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=bin/scripts/lib/nvswitch_credentials.sh
+source "${HERE}/lib/nvswitch_credentials.sh"
 
-NEW_PASSWORD='WelcomeDell1!'
 ACCOUNT_PATH='/redfish/v1/AccountService/Accounts/root'
-SSH_PASS='WelcomeDell1!'
 
 PRINT_HEADER=1
 USE_COLOR=1
@@ -89,6 +89,11 @@ done
 
 export VERBOSE
 
+nvis_secret_file NVSWITCH_BMC_TARGET_PASSWORD_FILE /etc/nvis-rack-status/secrets/nvswitch-bmc-target.password
+NEW_PASSWORD_FILE=$REPLY
+nvis_secret_file NVSWITCH_SSH_PASSWORD_FILE /etc/nvis-rack-status/secrets/nvswitch-ssh.password
+SSH_PASSWORD_FILE=$REPLY
+
 password_change_required_true() {
 	local json_file=$1
 	if command -v jq >/dev/null 2>&1; then
@@ -125,7 +130,7 @@ check_bmc_one() {
 	local nvsw=$1
 	local outf=$2
 	local ip
-	local tmp
+	local tmp netrc
 	local http_code
 	local detail
 
@@ -138,10 +143,13 @@ check_bmc_one() {
 	fi
 	ip=$(printf '%s' "$ip" | tr -d '\r\n')
 	tmp=$(mktemp)
-	trap 'rm -f "$tmp"' EXIT
+	netrc=$(mktemp)
+	chmod 0600 "$tmp" "$netrc"
+	trap 'rm -f "$tmp" "$netrc"' RETURN
+	nvis_make_netrc "$ip" root "$NEW_PASSWORD_FILE" "$netrc"
 	local url="https://${ip}${ACCOUNT_PATH}"
 	http_code=$(curl -k -sS -o "$tmp" -w '%{http_code}' \
-		-u "root:${NEW_PASSWORD}" \
+		--netrc-file "$netrc" \
 		--connect-timeout 5 --max-time 10 \
 		-H 'Content-Type: application/json' \
 		"$url" 2>/dev/null)
@@ -217,7 +225,7 @@ check_nmx_c_host() {
 		echo "sshpass not in PATH" >&2
 		return 1
 	fi
-	sshpass -p "$SSH_PASS" ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=15 \
+	sshpass -f "$SSH_PASSWORD_FILE" ssh -o BatchMode=no -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
 		"admin@${host}" "nv show cluster apps nmx-controller | grep -F 'status            ok'" \
 		>/dev/null 2>&1
 	local ec=$?
@@ -277,7 +285,7 @@ check_uphy_rack() {
 	fi
 	# Was: seq|xargs -I{} with default -n1 → 144 sequential nv show per switch (very slow).
 	# GNU xargs -P runs many nv show in parallel on each switch (NVOS images ship GNU xargs).
-	out=$(SSHPASS="$SSH_PASS" sshpass -e pdsh -w "$folded" -R ssh \
+	out=$(sshpass -f "$SSH_PASSWORD_FILE" pdsh -w "$folded" -R ssh \
 		"seq 1 144 | xargs -n 1 -P ${par} -I{} nv show fae int acp{} link phy-recovery" 2>&1)
 	local ec=$?
 	if echo "$out" | grep -qiE ':[[:space:]]*serdes-eq-mode[[:space:]]+disabled\b|:[[:space:]]*serdes-eq-mode[[:space:]]+[^[:space:]]+[[:space:]]+disabled\b'; then

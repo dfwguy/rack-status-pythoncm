@@ -35,12 +35,13 @@
 #   NGC_API_KEY                 NGC key (nvapi-…). Settings -> External connections.
 #   RACK_MNUBERGEMM_CONT        override the container path
 #   RACK_MNUBERGEMM_TAG         image tag        (default tensorrt-26.03-v1.17-arm)
-#   RACK_MNUBERGEMM_IMAGE_DIR   staging dir      (default /home/cmods/bringup/containers)
+#   RACK_MNUBERGEMM_IMAGE_DIR   staging dir      (default RACK_VALIDATION_CONTAINER_ROOT)
 #   RACK_MNUBERGEMM_PARTITION   optional sbatch -p
 #   RACK_MNUBERGEMM_TIME        optional shorter walltime (hard maximum 01:10:00)
 #   NVIS_SLURM_HOSTLIST         explicit comma-separated NodeName list (skips expansion)
 #   RACK_MNUBERGEMM_NO_SUBMIT=1 stage + validate only, do not sbatch (dry run)
 set -uo pipefail
+umask 0002
 
 _ts()  { date -Is; }
 log()  { printf '[%s] %s\n' "$(_ts)" "$*"; }
@@ -70,10 +71,11 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
 
 TAG="${RACK_MNUBERGEMM_TAG:-tensorrt-26.03-v1.17-arm}"
-IMAGE_DIR="${RACK_MNUBERGEMM_IMAGE_DIR:-/home/cmods/bringup/containers}"
+IMAGE_DIR="${RACK_MNUBERGEMM_IMAGE_DIR:-${RACK_VALIDATION_CONTAINER_ROOT:-/cluster/OVA/containers/nvftp-8k-known-good/20260824}}"
 # MOP/AAT naming: the 'tensorrt-' prefix is dropped in the .sqsh filename, i.e.
 #   tag tensorrt-26.03-v1.17-arm  ->  mnubergemm-26.03-v1.17-arm.sqsh
 CONT="${RACK_MNUBERGEMM_CONT:-${IMAGE_DIR}/mnubergemm-${TAG#tensorrt-}.sqsh}"
+NODE_CONTAINER_DIR="${RACK_VALIDATION_NODE_CONTAINER_DIR:-/opt/containers}"
 # The HLT request is a true one-hour payload. Keep the Slurm allocation bounded to
 # 70 minutes so the application receives all 3600 seconds plus measured headroom
 # for prolog, container/NCCL startup, and clean teardown.
@@ -201,7 +203,18 @@ fi
 log "--- container pre-req ---"
 log "expected image: ${CONT}"
 
-if [[ -s "${CONT}" ]]; then
+VERIFY_CONT="${CONT}"
+if [[ "${CONT}" == "${NODE_CONTAINER_DIR}/"* ]]; then
+  # The launcher runs on the app/head node, while /opt/containers belongs to
+  # each selected compute node. Verify the immutable shared release source
+  # here; the checksum-gated File Copy Service publishes the same basename and
+  # digest at CONT on every compute node before validation is enabled.
+  VERIFY_CONT="${IMAGE_DIR}/$(basename "${CONT}")"
+  [[ -s "${VERIFY_CONT}" ]] || \
+    die "node-local runtime image is selected but its reviewed shared source is missing: ${VERIFY_CONT}"
+  log "node-local runtime: ${CONT}"
+  log "shared verification source: ${VERIFY_CONT} ($(du -h "${VERIFY_CONT}" 2>/dev/null | cut -f1))"
+elif [[ -s "${CONT}" ]]; then
   log "image PRESENT ($(du -h "${CONT}" 2>/dev/null | cut -f1)) — no download needed"
 else
   log "image MISSING at ${CONT}"
@@ -244,8 +257,22 @@ else
   log "image STAGED ($(du -h "${CONT}" 2>/dev/null | cut -f1))"
 fi
 
-# The trays mount this over NFS — a local-only path would fail on every rank but one.
+expected_name=mnubergemm-26.03-v1.17-arm.sqsh
+expected_size=13949554688
+expected_sha=9832dda6e80c8719e74f81ce617cac3abb77399e48d5385a38e86a040cad93e6
+[[ "$(basename "$CONT")" == "$expected_name" ]] || \
+  die "container filename is outside the reviewed allowlist: $CONT"
+[[ "$(basename "$VERIFY_CONT")" == "$expected_name" ]] || \
+  die "verification-source filename is outside the reviewed allowlist: $VERIFY_CONT"
+[[ "$(stat -c %s "$VERIFY_CONT" 2>/dev/null || true)" == "$expected_size" ]] || \
+  die "container size does not match the reviewed NVFTP artifact: $VERIFY_CONT"
+[[ "$(sha256sum "$VERIFY_CONT" 2>/dev/null | awk '{print $1}')" == "$expected_sha" ]] || \
+  die "container SHA256 does not match the reviewed NVFTP artifact: $VERIFY_CONT"
+
+# A shared path must be visible on every tray; a node-local path is valid only
+# because the release copy service writes the same verified image to every node.
 case "${CONT}" in
+  "${NODE_CONTAINER_DIR}/"*) log "using verified node-local runtime image on each selected tray" ;;
   /cm/shared/*|/home/*) : ;;
   *) log "WARNING: ${CONT} may not be on a shared filesystem; every tray must be able to read it." ;;
 esac
@@ -261,6 +288,8 @@ esac
 _JOB_NAME="MNUBERGEMM-${_tag}"
 SBATCH_FILE="${_SCRIPT_DIR}/mnubergemm.sbatch"
 [[ -r "${SBATCH_FILE}" ]] || die "sbatch file not found: ${SBATCH_FILE}"
+IMEX_BATCH="${_SCRIPT_DIR}/validation_imex_channel0_prepare.sbatch"
+[[ -r "${IMEX_BATCH}" ]] || die "IMEX channel0 prelaunch batch is missing: ${IMEX_BATCH}"
 
 extra=(-t "${WALLTIME}")
 [[ -n "${RACK_MNUBERGEMM_PARTITION:-}" ]] && extra+=(-p "${RACK_MNUBERGEMM_PARTITION}")
@@ -272,6 +301,22 @@ if [[ "${RACK_MNUBERGEMM_NO_SUBMIT:-0}" == "1" ]]; then
   log "Would run: sbatch ${extra[*]} -N ${NNODES} -w ${WLIST} ${SBATCH_FILE}"
   exit 0
 fi
+
+# Prepare channel0 inside a short allocation on these exact nodes before the
+# workload is submitted.  The operation is idempotent and ephemeral; it does
+# not install any service, timer, udev rule, or persistent reconciler.
+imex_output="${LOG_DIR%/}/validation-imex-channel0-%j.out"
+imex_reply="$(sbatch --parsable --wait --no-requeue \
+  -N "${NNODES}" -w "${WLIST}" --ntasks-per-node=1 \
+  --output="${imex_output}" "${IMEX_BATCH}" 2>&1)"
+imex_rc=$?
+log "${imex_reply}"
+imex_id="$(printf '%s\n' "$imex_reply" | sed -n 's/^\([0-9][0-9]*\)\(;.*\)\{0,1\}$/\1/p' | head -1)"
+[[ "$imex_id" =~ ^[0-9]+$ ]] || \
+  die "IMEX prelaunch returned no valid Slurm id (rc=${imex_rc}): ${imex_reply}"
+(( imex_rc == 0 )) || \
+  die "IMEX prelaunch failed (job=${imex_id} rc=${imex_rc} log=${imex_output//%j/$imex_id})"
+log "IMEX channel0 ready on ${NNODES}/${NNODES} node(s) (job=${imex_id} log=${imex_output//%j/$imex_id})"
 
 mapfile -t _old < <(squeue -h -o '%i %j' 2>/dev/null | awk -v n="${_JOB_NAME}" '$2 == n {print $1}' || true)
 if (( ${#_old[@]} > 0 )); then

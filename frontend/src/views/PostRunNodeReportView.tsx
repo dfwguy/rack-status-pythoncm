@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import Checkbox from "@mui/material/Checkbox";
 import Dialog from "@mui/material/Dialog";
@@ -26,17 +26,14 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
-import { Banner, Button, Card, Flex, Tag, Text } from "@nvidia/foundations-react-core";
+import { Banner, Button, Flex, SegmentedControl, Tag, Text } from "@nvidia/foundations-react-core";
 import {
-  Activity,
+  Download,
   Flag,
-  Minus,
-  Network,
+  FileText,
+  Image,
   Play,
   RefreshCw,
-  ShieldCheck,
-  TrendingDown,
-  TrendingUp,
   Wrench,
 } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
@@ -49,6 +46,28 @@ import {
   startDeepAudit,
 } from "../services/nodeIssuesService";
 import type { PostRunAuditStatus, PostRunNode, PostRunNodeReportResponse } from "../types/api";
+import type { BringupFleet } from "../types/bringup";
+import { getBringupFleet } from "../services/bringupService";
+import { ValidationFloorMap, type FloorNode } from "../components/analytics/ValidationFloorMap";
+import {
+  availableValidationDomains,
+  completionPrediction,
+  groupRacksIntoSus,
+  latestPassTimestamp,
+  nodeValidationState,
+  schedulerStatusColor,
+  validationTagTone,
+  type EtaPrediction,
+} from "../lib/validationStatus";
+import {
+  createValidationCanvas,
+  downloadBlob,
+  fileSlug,
+  jpegDataUrlBytes,
+  setJpegDpi,
+  validationCsv,
+  validationReportPdf,
+} from "../lib/validationExport";
 
 type Section = "history" | "hardware" | "network";
 type ActiveAudit = { runId: string; kind: "hardware" | "network"; node: string };
@@ -66,6 +85,30 @@ const CATEGORY_OPTIONS = [
   "maintenance",
 ];
 
+const SECTION_OPTIONS = [
+  { value: "history", children: "Validation map" },
+  { value: "hardware", children: "Hardware audits" },
+  { value: "network", children: "Network audits" },
+];
+
+const STATUS_SWATCH = {
+  pass: "var(--color-green-500, #2e7d32)",
+  attention: "var(--color-red-500, #c62828)",
+  warning: "var(--color-yellow-500, #f9a825)",
+  running: "var(--color-blue-500, #1565c0)",
+  notRun: "var(--color-yellow-500, #f9a825)",
+  unknown: "var(--color-gray-400, #757575)",
+};
+
+function LegendSwatch({ color, label }: { color: string; label: string }) {
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+      <Box sx={{ width: 9, height: 9, borderRadius: "2px", backgroundColor: color }} />
+      <Text kind="body/regular/sm" style={{ fontSize: 12, color: "var(--text-secondary)" }}>{label}</Text>
+    </Box>
+  );
+}
+
 function formatWhen(value: string): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -73,25 +116,14 @@ function formatWhen(value: string): string {
 }
 
 function stateColor(state: string): "green" | "red" | "yellow" | "blue" | "gray" {
-  const low = state.toLowerCase();
-  if (low === "idle" || low === "completed" || low === "pass") return "green";
-  if (low.includes("drain") || low === "down" || low === "failed" || low === "fail") return "red";
-  if (low === "running" || low === "alloc" || low === "warning") return "yellow";
-  if (low === "inconclusive") return "blue";
-  return "gray";
+  return schedulerStatusColor(state);
 }
 
-function TrendIcon({ trend }: { trend: PostRunNode["trend"] }) {
-  if (trend === "up" || trend === "new") return <TrendingUp size={15} color="#d32f2f" aria-label="failure trend increasing" />;
-  if (trend === "down") return <TrendingDown size={15} color="#2e7d32" aria-label="failure trend decreasing" />;
-  return <Minus size={15} color="var(--text-color-secondary)" aria-label="failure trend flat" />;
-}
-
-function punchColor(node: PostRunNode): string {
-  if (node.flagged) return "rgba(211,47,47,.22)";
-  if (node.failure_count > 0) return "rgba(237,108,2,.18)";
-  if (node.participation_count > 0) return "rgba(46,125,50,.14)";
-  return "var(--surface-color-raised, rgba(127,127,127,.08))";
+function validationTagColor(state: string): "green" | "red" | "yellow" | "gray" {
+  if (state === "pass" || state === "attention" || state === "warning" || state === "not_run" || state === "running" || state === "unknown") {
+    return validationTagTone(state);
+  }
+  return schedulerStatusColor(state);
 }
 
 function AuditCell({ audit, onOutput }: { audit: PostRunAuditStatus | null; onOutput?: (audit: PostRunAuditStatus) => void }) {
@@ -110,9 +142,14 @@ function AuditCell({ audit, onOutput }: { audit: PostRunAuditStatus | null; onOu
 
 export function PostRunNodeReportView() {
   const [data, setData] = useState<PostRunNodeReportResponse | null>(null);
+  const [fleet, setFleet] = useState<BringupFleet | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [fleetError, setFleetError] = useState("");
   const [section, setSection] = useState<Section>("history");
+  const [mode, setMode] = useState("all");
+  const [su, setSu] = useState("all");
+  const [lastRefresh, setLastRefresh] = useState("");
   const [rack, setRack] = useState("all");
   const [search, setSearch] = useState("");
   const [selectedSnapshot, setSelected] = useState<PostRunNode | null>(null);
@@ -125,24 +162,41 @@ export function PostRunNodeReportView() {
   const [outputText, setOutputText] = useState("");
   const [outputOpen, setOutputOpen] = useState(false);
   const [outputLoading, setOutputLoading] = useState(false);
+  const loadingRef = useRef(false);
 
   const load = useCallback(async (refresh = false) => {
+    if (loadingRef.current) return null;
+    loadingRef.current = true;
     setLoading(true);
     setError("");
     try {
-      const next = await fetchPostRunNodeReport({ refresh });
+      const next = await fetchPostRunNodeReport({ refresh, compact: true });
       setData(next);
+      try {
+        const liveFleet = await getBringupFleet(next.nodes.map((row) => row.node));
+        setFleet(liveFleet);
+        setFleetError("");
+      } catch (fleetException) {
+        setFleetError(fleetException instanceof Error ? fleetException.message : String(fleetException));
+      }
+      setLastRefresh(new Date().toISOString());
       return next;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return null;
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void load(false);
+  }, [load]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => void load(true), 30_000);
+    return () => window.clearInterval(timer);
   }, [load]);
 
   useEffect(() => {
@@ -180,27 +234,86 @@ export function PostRunNodeReportView() {
     };
   }, [activeAudit, load]);
 
-  const racks = useMemo(() => (data?.racks || []).map((row) => row.rack), [data]);
-  const selected = useMemo(() => {
-    if (!selectedSnapshot) return null;
-    return data?.nodes.find((row) => row.node === selectedSnapshot.node) || selectedSnapshot;
-  }, [data, selectedSnapshot]);
-  const filteredRacks = useMemo(() => {
+  const domains = useMemo(() => availableValidationDomains(fleet, data?.nodes || []), [data, fleet]);
+  const activeDomain = domains.find((domain) => domain.id === mode) || domains[0];
+  const bringupByNode = useMemo(
+    () => new Map((fleet?.nodes || []).map((row) => [row.node.toLowerCase(), row])),
+    [fleet],
+  );
+  const selected = selectedSnapshot;
+  const reportRacks = useMemo(() => {
+    if (data?.racks?.length) return data.racks;
+    const grouped = new Map<string, PostRunNode[]>();
+    for (const item of data?.nodes || []) grouped.set(item.rack, [...(grouped.get(item.rack) || []), item]);
+    return [...grouped.entries()].map(([rackName, nodes]) => ({ rack: rackName, nodes }));
+  }, [data]);
+  const allSuGroups = useMemo(() => groupRacksIntoSus(reportRacks), [reportRacks]);
+  const racks = useMemo(() => allSuGroups.flatMap((group) => group.racks.map((row) => row.rack)), [allSuGroups]);
+  const topologyNodeCount = useMemo(
+    () => allSuGroups.reduce((total, group) => total + group.racks.reduce((rackTotal, row) => rackTotal + row.nodes.length, 0), 0),
+    [allSuGroups],
+  );
+  const suOptions = useMemo(() => allSuGroups.map((group) => ({ id: group.id, rowKey: group.rowKey })), [allSuGroups]);
+  const filteredSuGroups = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return (data?.racks || [])
-      .filter((row) => rack === "all" || row.rack === rack)
-      .map((row) => ({
-        ...row,
-        nodes: row.nodes.filter((node) => !needle || node.node.toLowerCase().includes(needle)),
+    return allSuGroups
+      .filter((group) => su === "all" || group.id === su)
+      .map((group) => ({
+        ...group,
+        racks: group.racks
+          .filter((row) => rack === "all" || row.rack === rack)
+          .map((row) => ({
+            ...row,
+            nodes: row.nodes.filter((node) => !needle || node.node.toLowerCase().includes(needle)),
+          }))
+          .filter((row) => row.nodes.length > 0),
       }))
-      .filter((row) => row.nodes.length > 0);
-  }, [data, rack, search]);
+      .filter((group) => group.racks.length > 0);
+  }, [allSuGroups, rack, search, su]);
+  const filteredRacks = useMemo(() => filteredSuGroups.flatMap((group) => group.racks), [filteredSuGroups]);
+  const floorGroups = useMemo(() => filteredSuGroups.map((group) => ({
+    ...group,
+    racks: group.racks.map((rackRow) => ({
+      ...rackRow,
+      nodes: rackRow.nodes.map((node) => ({
+        node,
+        state: nodeValidationState(node, bringupByNode.get(node.node.toLowerCase()), mode),
+      })),
+    })),
+  })), [bringupByNode, filteredSuGroups, mode]);
+  const predictionBySu = useMemo(() => {
+    const predictions = new Map<string, EtaPrediction>();
+    const now = lastRefresh ? new Date(lastRefresh) : new Date();
+    for (const group of floorGroups) {
+      const states = group.racks.flatMap((rackRow) => rackRow.nodes).map((entry) => ({
+        state: entry.state,
+        timestamp: latestPassTimestamp(entry.state),
+      }));
+      predictions.set(group.id, completionPrediction(states, now));
+    }
+    return predictions;
+  }, [floorGroups, lastRefresh]);
+  const clusterPrediction = useMemo(() => completionPrediction(
+    floorGroups.flatMap((group) => group.racks.flatMap((rackRow) => rackRow.nodes)).map((entry) => ({
+      state: entry.state,
+      timestamp: latestPassTimestamp(entry.state),
+    })),
+    lastRefresh ? new Date(lastRefresh) : new Date(),
+  ), [floorGroups, lastRefresh]);
+  const sourceFreshness = `post-run ${formatWhen(data?.generated_at || "")} · bring-up ${formatWhen(lastRefresh)} · DCGM index ${formatWhen(data?.refresh.dcgm_observed_at || "")} (${data?.refresh.dcgm_events || 0} attempts) · health-check index ${formatWhen(data?.refresh.healthcheck_observed_at || "")} (${data?.refresh.healthcheck_events || 0} nodes)`;
+  const selectedState = selected
+    ? nodeValidationState(selected, bringupByNode.get(selected.node.toLowerCase()), mode)
+    : null;
 
   const openNode = (node: PostRunNode) => {
     setSelected(node);
     setCategory("validation");
     setReason("");
     setDrain(false);
+    void fetchPostRunNodeReport({ node: node.node }).then((full) => {
+      const exact = full.nodes.find((item) => item.node === node.node);
+      if (exact) setSelected(exact);
+    }).catch((exception) => setError(exception instanceof Error ? exception.message : String(exception)));
   };
 
   const launchAudit = async (kind: "hardware" | "network") => {
@@ -261,12 +374,56 @@ export function PostRunNodeReportView() {
     [filteredRacks],
   );
 
+  const exportItems = useMemo(() => floorGroups.flatMap((group) =>
+    group.racks.flatMap((rackRow) => rackRow.nodes.map((entry) => ({
+      node: entry.node,
+      su: group.id,
+      state: entry.state,
+      prediction: predictionBySu.get(group.id) || clusterPrediction,
+    }))),
+  ), [clusterPrediction, floorGroups, predictionBySu]);
+
+  const exportStamp = () => new Date().toISOString().replace(/[:.]/g, "-");
+  const exportBase = () => `validation-status-${fileSlug(activeDomain.label)}-${exportStamp()}`;
+  const mapOptions = () => ({
+    groups: floorGroups as Array<{
+      id: string;
+      rowKey: string;
+      racks: Array<{ rack: string; nodes: FloorNode[] }>;
+    }>,
+    modeLabel: activeDomain.label,
+    generatedAt: lastRefresh || new Date().toISOString(),
+    freshness: sourceFreshness,
+    clusterPrediction,
+  });
+  const downloadCsv = () => {
+    const csv = validationCsv(exportItems, activeDomain.label, lastRefresh || new Date().toISOString(), sourceFreshness);
+    downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), `${exportBase()}.csv`);
+  };
+  const downloadJpeg = () => {
+    const dataUrl = createValidationCanvas(mapOptions()).toDataURL("image/jpeg", 0.94);
+    const jpeg = setJpegDpi(jpegDataUrlBytes(dataUrl));
+    downloadBlob(new Blob([jpeg.buffer as ArrayBuffer], { type: "image/jpeg" }), `${exportBase()}.jpg`);
+  };
+  const downloadPdf = () => {
+    const dataUrl = createValidationCanvas(mapOptions()).toDataURL("image/jpeg", 0.94);
+    const pdf = validationReportPdf(
+      setJpegDpi(jpegDataUrlBytes(dataUrl)),
+      exportItems,
+      activeDomain.label,
+      lastRefresh || new Date().toISOString(),
+      sourceFreshness,
+      clusterPrediction,
+    );
+    downloadBlob(new Blob([pdf.buffer as ArrayBuffer], { type: "application/pdf" }), `${exportBase()}.pdf`);
+  };
+
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader
         contentId="post-run-node-report"
-        title="Post Run Node Report"
-        description="Validation participation, evidence-attributed failure trends, repeat flags, deep hardware/network reports, and current scheduler state in one floor-style view."
+        title="Validation Status"
+        description="Live node health and validation progress across every SU and rack."
       />
 
       {error ? <Banner status="error" kind="inline" style={{ marginBottom: 16 }}>{error}</Banner> : null}
@@ -275,34 +432,67 @@ export function PostRunNodeReportView() {
           Live scheduler history refresh failed; the durable participation snapshot is still shown: {data.refresh.accounting_error}
         </Banner>
       ) : null}
+      {fleetError ? (
+        <Banner status="warning" kind="inline" style={{ marginBottom: 16 }}>
+          Node-health evidence is unavailable; missing checks remain unknown, never healthy: {fleetError}
+        </Banner>
+      ) : null}
+      {data?.refresh.healthcheck_error ? (
+        <Banner status="warning" kind="inline" style={{ marginBottom: 16 }}>
+          Single-node health-check evidence is unavailable; affected nodes remain unknown: {data.refresh.healthcheck_error}
+        </Banner>
+      ) : null}
 
-      <Box sx={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(150px, 1fr))", gap: 1.5, mb: 2 }}>
+      <Paper variant="outlined" sx={{ px: 1.5, py: 1.25, mb: 2 }}>
+        <Flex gap="0" wrap="wrap" align="center">
         {[
-          ["Nodes", data?.summary.nodes ?? 0],
+          ["Nodes", topologyNodeCount],
           ["Run participations", data?.summary.participations ?? 0],
           ["Attributed failures", data?.summary.attributed_failures ?? 0],
           ["Repeat flags", data?.summary.flagged_nodes ?? 0],
           ["Currently drained", data?.summary.drained_nodes ?? 0],
-        ].map(([label, value]) => (
-          <Card key={String(label)} style={{ padding: 14 }}>
-            <Text kind="body/regular/sm" style={{ display: "block", color: "var(--text-color-secondary)" }}>{label}</Text>
-            <Text kind="title/xs">{value}</Text>
-          </Card>
+        ].map(([label, value], index) => (
+          <Box
+            key={String(label)}
+            sx={{
+              minWidth: 145,
+              px: 1.5,
+              py: 0.25,
+              borderLeft: index ? "1px solid var(--border-subtle)" : "none",
+            }}
+          >
+            <Text kind="body/regular/sm" style={{ color: "var(--text-secondary)" }}>{label}</Text>{" "}
+            <Text kind="body/bold/sm">{value}</Text>
+          </Box>
         ))}
-      </Box>
+        </Flex>
+      </Paper>
 
-      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-        <Flex gap="2" wrap="wrap" align="center">
-          <Button kind={section === "history" ? "primary" : "secondary"} size="small" onClick={() => setSection("history")}>
-            <Activity size={15} /> Post-run history
-          </Button>
-          <Button kind={section === "hardware" ? "primary" : "secondary"} size="small" onClick={() => setSection("hardware")}>
-            <ShieldCheck size={15} /> Node hardware status report
-          </Button>
-          <Button kind={section === "network" ? "primary" : "secondary"} size="small" onClick={() => setSection("network")}>
-            <Network size={15} /> Node network status report
-          </Button>
+      <Paper variant="outlined" sx={{ p: 1.5, mb: 2 }}>
+        <Flex gap="2" wrap="wrap" align="center" style={{ marginBottom: 10 }}>
+          <SegmentedControl
+            size="small"
+            items={SECTION_OPTIONS}
+            value={section}
+            onValueChange={(value) => setSection(value as Section)}
+            aria-label="Validation report section"
+          />
           <Box sx={{ flex: 1 }} />
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+            Auto-refresh 30s · last {formatWhen(lastRefresh)}
+          </Text>
+          <Button kind="secondary" size="small" onClick={() => void load(true)} disabled={loading}>
+            <RefreshCw size={15} /> {loading ? "Refreshing…" : "Refresh"}
+          </Button>
+        </Flex>
+        <Flex gap="2" wrap="wrap" align="center">
+          <TextField select size="small" label="Validation view" value={mode} onChange={(event) => setMode(event.target.value)} sx={{ minWidth: 210 }}>
+            {domains.map((domain) => <MenuItem key={domain.id} value={domain.id}>{domain.label}</MenuItem>)}
+          </TextField>
+          <TextField select size="small" label="SU" value={su} onChange={(event) => setSu(event.target.value)} sx={{ minWidth: 130 }}>
+            <MenuItem value="all">All 14 SUs</MenuItem>
+            {suOptions.map((option) => <MenuItem key={option.id} value={option.id}>{option.id} · {option.rowKey}</MenuItem>)}
+          </TextField>
           <TextField select size="small" label="Rack" value={rack} onChange={(event) => setRack(event.target.value)} sx={{ minWidth: 190 }}>
             <MenuItem value="all">All racks</MenuItem>
             {racks.map((name) => <MenuItem key={name} value={name}>{name}</MenuItem>)}
@@ -313,56 +503,55 @@ export function PostRunNodeReportView() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <Button kind="secondary" size="small" onClick={() => void load(true)} disabled={loading}>
-            <RefreshCw size={15} /> {loading ? "Refreshing…" : "Refresh"}
+          <Button kind="secondary" size="small" onClick={downloadCsv} disabled={!exportItems.length}>
+            <Download size={14} /> CSV
+          </Button>
+          <Button kind="secondary" size="small" onClick={downloadPdf} disabled={!exportItems.length}>
+            <FileText size={14} /> PDF
+          </Button>
+          <Button kind="secondary" size="small" onClick={downloadJpeg} disabled={!exportItems.length}>
+            <Image size={14} /> JPEG 11×8.5
           </Button>
         </Flex>
       </Paper>
 
       {section === "history" ? (
-        <Flex direction="column" gap="4">
-          {filteredRacks.map((rackRow) => (
-            <Paper key={rackRow.rack} variant="outlined" sx={{ p: 2 }}>
-              <Flex align="center" gap="2" style={{ marginBottom: 12 }}>
-                <Text kind="body/bold/md">{rackRow.rack}</Text>
-                <Tag color="gray" kind="outline" readOnly density="compact">{rackRow.nodes.length} nodes</Tag>
-              </Flex>
-              <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(145px, 1fr))", gap: 1 }}>
-                {rackRow.nodes.map((node) => (
-                  <Box
-                    key={node.node}
-                    component="button"
-                    type="button"
-                    onClick={() => openNode(node)}
-                    title={`${node.node}: ${node.participation_count} runs, ${node.failure_count} attributed findings; scheduler ${node.slurm_state}${node.slurm_reason ? ` — ${node.slurm_reason}` : ""}`}
-                    sx={{
-                      textAlign: "left",
-                      border: node.flagged ? "2px solid #d32f2f" : "1px solid var(--border-color-base)",
-                      borderRadius: 1,
-                      bgcolor: punchColor(node),
-                      color: "inherit",
-                      p: 1.25,
-                      cursor: "pointer",
-                      minHeight: 78,
-                      "&:hover": { filter: "brightness(1.08)" },
-                    }}
-                  >
-                    <Flex align="center" gap="1">
-                      <Text kind="mono/sm" style={{ flex: 1 }}>{node.node.split("-").slice(-2).join("-")}</Text>
-                      <TrendIcon trend={node.trend} />
-                      {node.flagged ? <Flag size={14} color="#d32f2f" fill="#d32f2f" /> : null}
-                    </Flex>
-                    <Text kind="body/regular/sm" style={{ display: "block", marginTop: 8 }}>
-                      {node.participation_count} runs · {node.failure_count} failures
-                    </Text>
-                    <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-                      {node.slurm_state}{node.slurm_reason ? " · comment" : ""}
-                    </Text>
-                  </Box>
-                ))}
-              </Box>
-            </Paper>
-          ))}
+        <Flex direction="column" gap="2">
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2, alignItems: "center" }}>
+              <Text kind="body/bold/sm">{activeDomain.label}</Text>
+              <LegendSwatch color={STATUS_SWATCH.pass} label="Passed" />
+              <LegendSwatch color={STATUS_SWATCH.attention} label="Failed / blocked" />
+              <LegendSwatch color={STATUS_SWATCH.warning} label="Incomplete" />
+              <LegendSwatch color={STATUS_SWATCH.running} label="Running" />
+              <LegendSwatch color={STATUS_SWATCH.notRun} label="Not run" />
+              <LegendSwatch color={STATUS_SWATCH.unknown} label="No evidence" />
+              <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                Segments are individual nodes. Hover for evidence; select a rack to open its highest-priority node.
+              </Text>
+          </Box>
+          <Paper
+            variant="outlined"
+            sx={{
+              px: 1.5,
+              py: 1,
+              borderLeft: `4px solid ${clusterPrediction.state === "complete" ? STATUS_SWATCH.pass : clusterPrediction.state === "blocked" ? STATUS_SWATCH.warning : "var(--color-blue-500, #1565c0)"}`,
+            }}
+          >
+            <Flex gap="2" align="center" wrap="wrap">
+              <Text kind="body/bold/sm">Cluster prediction</Text>
+              <Tag color={clusterPrediction.state === "complete" ? "green" : clusterPrediction.state === "blocked" ? "yellow" : "blue"} kind="outline" readOnly density="compact">
+                {clusterPrediction.label}
+              </Tag>
+              <Text kind="body/regular/sm">
+                {clusterPrediction.completed}/{clusterPrediction.total} pass · {clusterPrediction.running} running · {clusterPrediction.confidence} confidence
+              </Text>
+              <Text kind="body/regular/sm" style={{ color: "var(--text-secondary)" }}>{clusterPrediction.methodology}</Text>
+            </Flex>
+          </Paper>
+          <ValidationFloorMap
+            groups={floorGroups}
+            onNode={openNode}
+          />
         </Flex>
       ) : (
         <TableContainer component={Paper} variant="outlined">
@@ -406,6 +595,39 @@ export function PostRunNodeReportView() {
             </DialogTitle>
             <DialogContent dividers>
               <Flex direction="column" gap="4">
+                <Paper variant="outlined" sx={{ p: 2 }}>
+                  <Flex gap="2" align="center" wrap="wrap" style={{ marginBottom: 10 }}>
+                    <Text kind="body/bold/md" style={{ flex: 1 }}>{activeDomain.label} evidence</Text>
+                    <Tag color={validationTagColor(selectedState?.status || "unknown")} kind="solid" readOnly>
+                      {(selectedState?.status || "unknown").replace("_", " ")}
+                    </Tag>
+                    {selectedState?.running ? <Tag color="yellow" kind="outline" readOnly>live job running</Tag> : null}
+                  </Flex>
+                  {selectedState?.points.length ? (
+                    <TableContainer sx={{ maxHeight: 300 }}>
+                      <Table size="small" stickyHeader>
+                        <TableHead><TableRow><TableCell>Test / check</TableCell><TableCell>Status</TableCell><TableCell>Metric</TableCell><TableCell>Job ID</TableCell><TableCell>Evidence / failure reason</TableCell><TableCell>Updated</TableCell></TableRow></TableHead>
+                        <TableBody>
+                          {selectedState.points.map((point) => (
+                            <TableRow key={point.id} hover>
+                              <TableCell>{point.name}<Text kind="body/regular/sm" style={{ display: "block", color: "var(--text-color-secondary)" }}>{point.source}</Text></TableCell>
+                              <TableCell><Tag color={validationTagColor(point.status)} kind="outline" readOnly density="compact">{point.rawStatus || point.status}</Tag></TableCell>
+                              <TableCell>{point.metric ? `${point.metric}${point.metricUnit ? ` ${point.metricUnit}` : ""}` : "—"}</TableCell>
+                              <TableCell sx={{ fontFamily: "monospace" }}>{point.jobId || "—"}</TableCell>
+                              <TableCell>
+                                {point.reason || (point.status === "pass" ? "Passed" : "No reason was reported.")}
+                                {point.provenance ? <Text kind="mono/sm" style={{ display: "block", color: "var(--text-color-secondary)", overflowWrap: "anywhere" }}>{point.provenance}</Text> : null}
+                              </TableCell>
+                              <TableCell>{formatWhen(point.timestamp)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  ) : (
+                    <Banner status="warning" kind="inline">No evidence was reported for this node in the selected view. It is unknown, not healthy.</Banner>
+                  )}
+                </Paper>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 6 }}>Current scheduler comment / reason</Text>
                   <Text kind="mono/sm" style={{ display: "block", whiteSpace: "pre-wrap" }}>

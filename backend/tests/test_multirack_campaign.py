@@ -70,7 +70,7 @@ ink50-dh01-d02-12|drained*"""
     assert rows["ink50-dh01-d01"]["eligible"] is True
     assert rows["ink50-dh01-d02"]["eligible"] is False
     assert rows["ink50-dh01-d02"]["unavailable_nodes"] == [
-        {"node": "ink50-dh01-d02-12", "state": "drained"}
+        {"node": "ink50-dh01-d02-12", "state": "drained*"}
     ]
 
 
@@ -126,10 +126,44 @@ def test_llmb_campaign_launch_rejects_ineligible_rack(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
 
     with app_module.app.app_context():
-        prepared, err = app_module._prepare_run_llmb_nccl({"racks": ["ink50-dh01-d01"]})
+        prepared, err = app_module._prepare_run_llmb_nccl({
+            "racks": ["ink50-dh01-d01"],
+            "campaign": "test-campaign",
+        })
 
     assert prepared is None
     assert err is not None
     response, status = err
     assert status == 409
     assert "drained=1" in response.get_json()["error"]
+
+
+def test_nemo_campaign_launch_passes_exact_nodelist(monkeypatch, tmp_path):
+    exact = ["ink50-dh01-d01-11", "ink50-dh01-d01-12"]
+    monkeypatch.setattr(app_module, "_nvis_naming", _naming)
+    monkeypatch.setattr(naming_mod, "_nvis_naming", _naming)
+    monkeypatch.setattr(
+        app_module,
+        "_multirack_campaign_snapshot",
+        lambda: {
+            "ok": True,
+            "active": True,
+            "id": "test-campaign",
+            "racks": [{"rack": "ink50-dh01-d01", "eligible": True, "reason": "", "nodes": exact}],
+        },
+    )
+    monkeypatch.setattr(app_module, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
+
+    with app_module.app.app_context():
+        prepared, err = app_module._prepare_run_nemo_xrack({
+            "racks": ["ink50-dh01-d01"],
+            "campaign": "test-campaign",
+        })
+
+    assert err is None
+    assert prepared is not None
+    assert prepared["campaign"] == "test-campaign"
+    assert prepared["nodes"] == exact
+    assert prepared["arg"] == ",".join(exact)
+    assert prepared["cmd"][-1] == ",".join(exact)

@@ -990,7 +990,15 @@ _MNUB_DUTY_RE = re.compile(r"duty:([0-9.]+)")
 _MNUB_P_RE = re.compile(r"\bP:([0-9.]+)")
 _MNUB_HOSTLIST_RE = re.compile(r"^HOSTLIST:\s*(.+)$", re.MULTILINE)
 # parser.sh:207 verdict=FAIL set, verbatim.
-_MNUB_FAIL_RE = re.compile(r"Aborted \(core dumped\)|srun:.*error:.*Exited|Xid|ECC error|CUDART error")
+_MNUB_FAIL_RE = re.compile(
+    r"Aborted \(core dumped\)|srun:.*error:.*Exited|Xid|ECC error|CUDART error"
+    r"|returning QUAL_FAIL|MNUB \[E\]"
+)
+_MNUB_QUAL_OK_RE = re.compile(r"returning QUAL_OK")
+_MNUB_QUAL_OK_RANK_RE = re.compile(
+    r"\bG:\s*(\d+)\b[^\r\n]*\breturning QUAL_OK\b"
+)
+_MNUB_NORMAL_TEARDOWN_RE = re.compile(r"normal mpi teardown")
 
 
 def _extract_mnubergemm(text: str, bag: _MetricBag) -> dict[str, Any]:
@@ -1005,18 +1013,25 @@ def _extract_mnubergemm(text: str, bag: _MetricBag) -> dict[str, Any]:
         return {}
 
     gflops = [v for v in (_to_num(m.group(1)) for m in _MNUB_GFLOPS_RE.finditer(text)) if v is not None]
-    ranks = len(gflops)
+    rank_samples = len(gflops)
 
     nodes: list[str] = []
     hm = _MNUB_HOSTLIST_RE.search(text)
     if hm:
         nodes = [h.strip() for h in hm.group(1).split(",") if h.strip()]
 
+    qualified_rank_ids = {int(match.group(1)) for match in _MNUB_QUAL_OK_RANK_RE.finditer(text)}
+    qualified_ranks = len(qualified_rank_ids)
+    expected_ranks = len(nodes) * 4 if nodes else None
+
     if gflops:
         bag.add("mnubergemm_gflops_max", max(gflops), "GFLOP/s")
         bag.add("mnubergemm_gflops_median", statistics.median(gflops), "GFLOP/s")
         bag.add("mnubergemm_gflops_min", min(gflops), "GFLOP/s")
-    bag.add("mnubergemm_ranks", ranks, None)
+    if expected_ranks is not None:
+        bag.add("mnubergemm_ranks", expected_ranks, None)
+    bag.add("mnubergemm_rank_samples", rank_samples, None)
+    bag.add("mnubergemm_qualified_ranks", qualified_ranks, None)
     if nodes:
         bag.add("mnubergemm_nodes", len(nodes), None)
         bag.add("mnubergemm_gpus", len(nodes) * 4, None)  # parser.sh:476: gpus = nodes * 4
@@ -1034,7 +1049,13 @@ def _extract_mnubergemm(text: str, bag: _MetricBag) -> dict[str, Any]:
     if ps:
         bag.add("mnubergemm_p_raw_max", max(ps), None, {"unit": "undocumented"})
 
-    out: dict[str, Any] = {"extra": {"mnubergemm_rank_samples": ranks}}
+    out: dict[str, Any] = {
+        "extra": {
+            "mnubergemm_rank_samples": rank_samples,
+            "mnubergemm_qualified_ranks": qualified_ranks,
+            "mnubergemm_expected_ranks": expected_ranks,
+        }
+    }
     if nodes:
         out["nodes"] = nodes
     if gflops:
@@ -1042,15 +1063,44 @@ def _extract_mnubergemm(text: str, bag: _MetricBag) -> dict[str, Any]:
 
     hard_fail = bool(_MNUB_FAIL_RE.search(text))
     timed_out = bool(_RE_TIME_LIMIT.search(text))
+    positive_work = any(value > 0 for value in gflops)
+    qual_ok = bool(_MNUB_QUAL_OK_RE.search(text))
+    qualification_complete = expected_ranks is not None and qualified_ranks == expected_ranks
+    normal_teardown = bool(_MNUB_NORMAL_TEARDOWN_RE.search(text))
+    out["extra"].update({
+        "mnubergemm_positive_work": positive_work,
+        "mnubergemm_qual_ok": qual_ok,
+        "mnubergemm_qualification_complete": qualification_complete,
+        "mnubergemm_normal_teardown": normal_teardown,
+    })
     if hard_fail:
         out["status"] = "fail"
     elif timed_out:
         # walltime kill on a soak == expected end, provided the soak actually produced work
-        out["status"] = "timeout" if ranks > 0 else "fail"
-        if ranks == 0:
+        out["status"] = "timeout" if positive_work else "fail"
+        if not positive_work:
             out["errors"] = [{"kind": "mnubergemm_no_work",
-                              "line": "job hit the walltime without producing a single GFlops sample"}]
-    elif ranks > 0:
+                              "line": "job hit the walltime without producing positive GFlops work"}]
+    elif normal_teardown:
+        if positive_work and qual_ok and qualification_complete:
+            out["status"] = "pass"
+        else:
+            out["status"] = "fail"
+            kind = (
+                "mnubergemm_no_positive_work"
+                if not positive_work
+                else "mnubergemm_qualification_incomplete"
+            )
+            line = (
+                "MNUberGEMM completed with no positive GFlops work"
+                if not positive_work
+                else (
+                    "MNUberGEMM completed with "
+                    f"{qualified_ranks}/{expected_ranks or '?'} qualified ranks"
+                )
+            )
+            out["errors"] = [{"kind": kind, "line": line}]
+    elif positive_work:
         out["status_hint_pass"] = True
     else:
         out["status"] = "unknown"

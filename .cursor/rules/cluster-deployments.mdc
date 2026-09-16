@@ -44,7 +44,8 @@ mbcm01; reach the UI via an SSH tunnel.
 (`ssh nscale-tx-ova`), then key `id_bcm` to `cmods@192.168.10.2` (BCM head). Because hop 2 is
 password-only, an agent can never open a fresh session — the human runs
 `ssh nscale-tx-ova 'echo ok'` once, then the agent reuses the `ControlMaster`. Dashboard =
-container on the OVA at `:5056`, reached via a local **5156** forward (`~/Documents/code/ns-tun.sh`).
+container on the OVA at remote `:5056`; the 16K Windows tunnel maps local `:5057` to
+`192.168.10.3:5056`. Do not change the application's remote port to match the local port.
 **device1/2/3 are NOT interchangeable** — each bridges its own `192.168.10.0/2x`; this kit is
 behind device2 only. `Connection closed by UNKNOWN port 65535` means the jumphost is offline,
 not a cert problem. Full detail: **[docs/NSCALE_TX_DEPLOYMENT.md](../../docs/NSCALE_TX_DEPLOYMENT.md)**.

@@ -86,21 +86,41 @@ import type { RackRow } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 import {
   attachLogDir,
-  fullRackCt01to18NodeSet,
+  fullRackNodeSetFromInventory,
   llamaNodesBody,
+  powerOnAsyncRequest,
   slurmTargetBody,
   specsCommandBody,
   hwCheckOptionsBody,
   validationFamilyBody,
 } from "../lib/rackCommandBodies";
+import { parseNodesFromRack } from "../lib/parseNodesFromRack";
+import { apiFetch } from "../lib/apiFetch";
 
 const ICON_SIZE = 14;
+
+const NODE_TARGET_BULK_ACTIONS = new Set([
+  "nemo",
+  "llama",
+  "stress",
+  "nvloom",
+  "clusterkit",
+  "llmb",
+  "power_on",
+  "gpu_reset",
+  "bug_report",
+  "services_restart",
+  "drain",
+  "undrain",
+]);
 
 interface RackTableProps {
   rows: RackRow[];
   comments: Record<string, string>;
   logDir?: string;
   naming?: NvisNamingSchema;
+  /** Backend-authoritative compute inventory; bulk actions must never synthesize hostnames. */
+  physicalRf0?: Record<string, string>;
   onRackSelect?: (rack: string) => void;
   onCommentChange?: (rack: string, comment: string | null) => void;
   /** When set with ``onValidationFiltersChange``, validation filter state is controlled by the parent (e.g. summary chips). */
@@ -403,6 +423,7 @@ export function RackTable({
   comments,
   logDir,
   naming,
+  physicalRf0 = {},
   onRackSelect,
   onCommentChange,
   validationFilters: validationFiltersProp,
@@ -500,7 +521,10 @@ export function RackTable({
   const [runMenuAnchor, setRunMenuAnchor] = useState<HTMLElement | null>(null);
   const [hwBulkDialogOpen, setHwBulkDialogOpen] = useState(false);
 
-  const nodesFullRack = useCallback((rack: string) => fullRackCt01to18NodeSet(rack), []);
+  const nodesFullRack = useCallback(
+    (rack: string) => fullRackNodeSetFromInventory(rack, physicalRf0, naming),
+    [physicalRf0, naming],
+  );
 
   const toggleSelectMode = useCallback(() => {
     setSelectMode((m) => {
@@ -534,7 +558,7 @@ export function RackTable({
       }
       setSnackbar({
         open: true,
-        message: `${label}: started on ${selectedRackList.length} rack(s) (ct[01–18] each, parallel)`,
+        message: `${label}: started on ${selectedRackList.length} rack(s) (parallel)`,
         severity: "success",
       });
     },
@@ -549,6 +573,15 @@ export function RackTable({
         setSnackbar({ open: true, message: "Choose at least one rack", severity: "error" });
         return;
       }
+      const missingInventory = selectedRackList.filter((rack) => nodesFullRack(rack).size === 0);
+      if (missingInventory.length > 0) {
+        setSnackbar({
+          open: true,
+          message: `No exact live node inventory for: ${missingInventory.join(", ")}. Refresh Rack Status before launching.`,
+          severity: "error",
+        });
+        return;
+      }
       for (const rack of selectedRackList) {
         void store.runAsyncReset(rack, "Hardware check", "hw", "/api/hw-check-async", {
           ...specsCommandBody(rack, ld, nodesFullRack(rack), naming),
@@ -557,7 +590,7 @@ export function RackTable({
       }
       setSnackbar({
         open: true,
-        message: `Hardware check: started on ${selectedRackList.length} rack(s) (ct[01–18] each, parallel)`,
+        message: `Hardware check: started on ${selectedRackList.length} rack(s) (exact live inventory, parallel)`,
         severity: "success",
       });
     },
@@ -568,6 +601,18 @@ export function RackTable({
     (key: string) => {
       if (!selectedRackList.length) {
         setSnackbar({ open: true, message: "Choose at least one rack", severity: "error" });
+        setRunMenuAnchor(null);
+        return;
+      }
+      const missingInventory = NODE_TARGET_BULK_ACTIONS.has(key)
+        ? selectedRackList.filter((rack) => nodesFullRack(rack).size === 0)
+        : [];
+      if (missingInventory.length > 0) {
+        setSnackbar({
+          open: true,
+          message: `No exact live node inventory for: ${missingInventory.join(", ")}. Refresh Rack Status before launching.`,
+          severity: "error",
+        });
         setRunMenuAnchor(null);
         return;
       }
@@ -655,9 +700,10 @@ export function RackTable({
           );
           break;
         case "power_on":
-          fireBulkParallel("Power on", (rack) =>
-            void store.runAsyncReset(rack, "Power on", "power", "/api/power-on-async", specsCommandBody(rack, ld, nodesFullRack(rack), naming)),
-          );
+          fireBulkParallel("Power on", (rack) => {
+            const request = powerOnAsyncRequest(rack, ld, nodesFullRack(rack), naming);
+            void store.runAsyncReset(rack, "Power on", "power", request.url, request.body);
+          });
           break;
         case "gpu_reset":
           fireBulkParallel("GPU reset", (rack) =>
@@ -704,7 +750,7 @@ export function RackTable({
           fireBulkParallel("NVSwitch system reset", (rack) => {
             void (async () => {
               try {
-                const res = await fetch(`/api/nvswitch-hosts?rack=${encodeURIComponent(rack)}`, { credentials: "same-origin" });
+                const res = await apiFetch(`/api/nvswitch-hosts?rack=${encodeURIComponent(rack)}`, { credentials: "same-origin" });
                 const data = (await res.json()) as { ok?: boolean; hosts?: string[]; error?: string };
                 if (!res.ok || !data.ok || !data.hosts?.length) {
                   store.openText(`NVSwitch system reset — ${rack}`, data.error || "No NVSwitch hosts", true);
@@ -796,7 +842,11 @@ export function RackTable({
     const rack = menuRow.rack;
     closeMenu();
     try {
-      await fetch(`/api/comments/${encodeURIComponent(rack)}`, { method: "DELETE" });
+      const res = await apiFetch(`/api/comments/${encodeURIComponent(rack)}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
       onCommentChange?.(rack, null);
       setSnackbar({ open: true, message: `Comment removed for ${rack}`, severity: "success" });
     } catch {
@@ -807,7 +857,7 @@ export function RackTable({
   const handleSaveComment = useCallback(async () => {
     setCommentSaving(true);
     try {
-      const res = await fetch(`/api/comments/${encodeURIComponent(commentDialogRack)}`, {
+      const res = await apiFetch(`/api/comments/${encodeURIComponent(commentDialogRack)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ comment: commentDialogText }),
@@ -832,6 +882,35 @@ export function RackTable({
     setActionLoading(true);
     const { kind, rack, jobId } = confirmAction;
 
+    if (kind === "power_up") {
+      const row = rows.find((candidate) => candidate.rack === rack);
+      const allNodes = nodesFullRack(rack);
+      const parsed = row
+        ? parseNodesFromRack(rack, row.ct_down_unk, physicalRf0, allNodes.size || 18, naming)
+        : [];
+      const liveNodeIds = new Map([...allNodes].map((node) => [node.toLowerCase(), node]));
+      const affectedNodes = new Set(
+        parsed
+          .filter((node) => node.status === "down" || node.status === "inst")
+          .map((node) => liveNodeIds.get(node.id.toLowerCase()))
+          .filter((node): node is string => Boolean(node)),
+      );
+      const selectedNodes = affectedNodes.size > 0 ? affectedNodes : allNodes;
+      if (selectedNodes.size === 0) {
+        setSnackbar({
+          open: true,
+          message: `No exact live node inventory for ${rack}. Refresh Rack Status before powering nodes.`,
+          severity: "error",
+        });
+      } else {
+        const request = powerOnAsyncRequest(rack, logDir, selectedNodes, naming);
+        void store.runAsyncReset(rack, "Power on", "power", request.url, request.body);
+      }
+      setActionLoading(false);
+      setConfirmAction(null);
+      return;
+    }
+
     try {
       let url: string;
       let body: Record<string, string>;
@@ -849,13 +928,9 @@ export function RackTable({
           url = "/api/scheduler-cancel";
           body = { job_id: jobId ?? "", rack };
           break;
-        case "power_up":
-          url = "/api/power-reset";
-          body = { rack };
-          break;
       }
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -873,7 +948,7 @@ export function RackTable({
       setActionLoading(false);
       setConfirmAction(null);
     }
-  }, [confirmAction]);
+  }, [confirmAction, logDir, naming, nodesFullRack, physicalRf0, rows, store]);
 
   const hasActiveFilters = search !== "" || validationFilters.length > 0 || sinfoFilters.length > 0 || deviceFilters.length > 0;
 
@@ -1059,7 +1134,7 @@ export function RackTable({
             <>
               <Menu anchorEl={runMenuAnchor} open={Boolean(runMenuAnchor)} onClose={() => setRunMenuAnchor(null)}>
                 <MenuItem onClick={() => handleBulkRun("nemo")}>
-                  <ListItemText primary="Run NEMO validation" secondary="Async, all trays ct[01–18]" />
+                  <ListItemText primary="Run NEMO validation" secondary="Async, exact live rack inventory" />
                 </MenuItem>
                 <MenuItem onClick={() => handleBulkRun("llama")}>
                   <ListItemText primary="Run Llama" secondary="Async" />
@@ -1142,8 +1217,8 @@ export function RackTable({
         {selectMode && (
           <Box sx={{ px: 1.5, py: 0.75, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover" }}>
             <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-              Rack selection mode: use checkboxes. Other row actions are disabled. Run uses target{" "}
-              <span style={{ fontFamily: "monospace" }}>ct[01–18]</span> per rack; jobs start in parallel.
+              Rack selection mode: use checkboxes. Other row actions are disabled. Node-targeted runs use the exact
+              live compute inventory for each rack; jobs start in parallel.
               {selectedRacks.size > 0 ? ` Selected: ${selectedRacks.size}.` : ""}
             </Text>
           </Box>
@@ -1513,7 +1588,7 @@ export function RackTable({
         title="Hardware check (bulk)"
         subtitle={
           selectedRackList.length
-            ? `${selectedRackList.length} rack(s): ${selectedRackList.join(", ")} · ct[01–18] per rack`
+            ? `${selectedRackList.length} rack(s): ${selectedRackList.join(", ")} · exact live inventory per rack`
             : undefined
         }
         onConfirm={(opts) => runHwCheckBulk(opts)}

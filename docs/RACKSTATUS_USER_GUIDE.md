@@ -2,7 +2,7 @@
 
 ## Operator and administrator guide
 
-**Release-candidate guide:** 2026-08-13
+**Release-candidate guide:** 2026-09-14
 
 **Application:** `nvis-rack-status-v3`
 
@@ -31,21 +31,25 @@ durable.
 Rack Status is a React single-page application (SPA) backed by Flask. The default
 production container is `nvis-rack-status-v3`; port `5056` on the observability VM
 maps to the service in the container. In the current Nscale deployment, the backend
-connects over SSH to the BCM head node and uses PythonCM inventory, the configured
-direct-execution scheduler, approved scripts, and bounded node fanout.
+uses PythonCM/BCM for physical inventory and control, live Slurm for scheduler state
+and validation admission, approved scripts, and bounded node fanout. These are
+separate authority domains.
 
 Current facts:
 
 - Native Python collectors provide canonical rack status. The canonical snapshot is
   not published until its required log scan has completed at least once.
-- PythonCM plus Rack Status' durable direct-execution registry are the authority for
-  inventory, task state, drain state, node reasons, cancellation, and output.
+- PythonCM/BCM is authoritative for physical inventory and device control. Slurm is
+  authoritative for allocatability, current scheduler state, scheduler reason, and
+  exact validation admission. The durable activity registry preserves launch state,
+  cancellation receipts, and output attribution.
 - Validation and audit histories are stored under the durable application data
   directory (`/app/var` in the container).
 - Remote execution scripts are sourced from `bin/scripts/` in this repository and
   deployed to the configured remote base path on the head node.
-- Slurm remains available only as the explicit `RACK_SCHEDULER=slurm` compatibility
-  fallback. Legacy Slurm-named routes and fields remain stable wire contracts.
+- `RACK_SCHEDULER=pythoncm` remains the primary command-provider setting, while
+  `RACK_NATIVE_SINFO_SOURCE=slurm` independently selects live Slurm availability.
+  Reviewed Slurm/Pyxis recipes remain explicit feature-specific execution paths.
 - Telemetry comes from VictoriaMetrics and Loki. Empty telemetry is displayed as
   empty or unavailable; the UI does not invent replacement data.
 
@@ -89,7 +93,7 @@ browser session after login.
 | Workflows | `#/tools/workflows` | Workflow definitions, runs, diagrams, and results |
 | Terminal launcher | `#/tools/terminal` | Terminal preview and launcher |
 | Analytics overview | `#/analytics/overview` | Rack/node analysis and parser output |
-| Post-run nodes | `#/analytics/post-run-nodes` | Native punch-card-style node reliability report |
+| Validation Status | `#/analytics/post-run-nodes` | 14-SU floor map, current validation evidence, exports, and node history |
 | Reports | `#/analytics/reports` | Generated reports, bug reports, and mapper artifacts |
 | Projects | `#/platform/projects` | Project, cluster, and active-scope administration |
 | Hardware catalog | `#/platform/catalog` | SKU, topology, geometry, and capability catalog |
@@ -124,9 +128,10 @@ Use this sequence for a normal rack campaign.
    fresh. Check the native worker panel; required workers must have completed at
    least once.
 2. Open the rack, for example `#/compute/racks/ink50-dh01-h01`.
-3. Review every node's scheduler state and reason. Exclude known-bad, drained, down,
-   failing, maintenance, or unresolved nodes. Never infer health from a BMC ping
-   alone.
+3. Review the **Slurm Status** column for every node, including its full scheduler
+   reason. This is intentionally independent of adjacent PythonCM device state.
+   Exclude known-bad, drained, down, failing, maintenance, or unresolved nodes.
+   Never infer health from a BMC ping alone.
 4. Confirm the exact selected nodes. Rack detail selects its real inventory by
    default; site trays are non-contiguous, so do not synthesize numeric ranges.
 5. Run **NVLink Preflight** in full mode. Quick mode is useful for triage but does
@@ -140,8 +145,9 @@ Use this sequence for a normal rack campaign.
 9. Open **Results** beside the launch action. Verify that expected ranks/nodes/tests
    reported; a successful scheduler exit without the expected result contract is
    incomplete, not pass.
-10. Open `#/analytics/post-run-nodes`. Review attributed node findings, current
-    scheduler comments, repeated-failure flags, and trend arrows.
+10. Open `#/analytics/post-run-nodes`. Review the Validation Status floor map,
+    attributed node findings, current scheduler reason, repeated-failure flags, and
+    evidence provenance. Export the selected view when a handoff artifact is needed.
 11. For a confirmed issue, preserve evidence, apply an exact scheduler reason, and drain
     only the implicated node. Do not mark every node in a failed collective as bad.
 
@@ -183,6 +189,11 @@ The floor/table labels use memorable rack monikers such as `d01`, `e01`, `f01`, 
 nodes at launch time.
 
 #### Validation tab
+
+The node table includes live Slurm state and reason. Use its refresh control after a
+drain or allocation changes. `UNKNOWN` means the node was not reported by Slurm or
+the bounded query failed; it does not mean healthy. The query is scoped to the
+displayed node names and does not read system journals.
 
 | Action | Scope and result |
 |---|---|
@@ -262,11 +273,11 @@ Pinned presets prevent accidental “almost the same” recipes.
 | Preset ID | Allowed scope | Fixed contract |
 |---|---|---|
 | `nccl-2.31.2` | node, rack, multi-rack | Direct host; CUDA >=13.3; NCCL exactly 2.31.2; IB devices required |
-| `llama31-405b-fp8` | multi-rack | Exactly 256 nodes / 1,024 GB300 GPUs; TP4, PP8, CP1, VP4, MBS1, GBS6144, FP8, 50 steps; vetted NeMo 26.04.01 image; NCCL 2.30.7; NVLS disabled |
+| `llama31-405b-fp8` | multi-rack | Exactly 256 nodes / 1,024 GB300 GPUs; pinned image and exact-node hash; reviewed MNNVL/NVLS/userbuffer contract; allocation preflight |
 | `gpt-oss-cpu` | per node | CPU-only validation; at most 256 per-node jobs; TensorRT-LLM 1.1.0rc5 image |
 | `exemplar-system-info` | node, rack, multi-rack | DGXC benchmarking `v26.06.01`; once per node; IB required |
-| `nemo-26.04.01` | rack, multi-rack | Pinned NeMo image; at most 50 steps; NFS or local storage |
-| `mnubergemm-26.03-v1.17` | node, rack | Supported fleet image and fixed workload contract |
+| `nemo-26.04.01` | rack, multi-rack | Pinned NeMo image; 30-step acceptance target; full single-rack NVLink path or reviewed multi-rack hybrid transport |
+| `mnubergemm-26.03-v1.17` | node, rack, multi-rack | Per-rack fanout, pinned image, positive-work and all-rank qualification contract |
 
 ### Storage and image staging
 
@@ -294,14 +305,20 @@ Open `#/compute/multirack`.
 1. Filter by row, text, validation state, and **eligible only** as needed.
 2. Select the intended racks. Read any warning about selected racks hidden by the
    current filter.
-3. Inspect the exact-node campaign banner. The configured campaign manifest uses
-   the site's real nodes; Llama readiness requires a total of exactly 256 selected
-   nodes.
+3. Inspect the exact-node campaign banner. A reviewed manifest or live Slurm
+   snapshot provides exactly 16 eligible nodes per rack by default. The campaign ID
+   is sent with the launch and stale IDs are rejected. Single-rack validation still
+   uses the complete 18-node rack; Llama readiness requires exactly 256 nodes.
 4. Run the preset dry-run/readiness check.
 5. Review resolved nodes, exclusions, storage, container version, and dependent
    stages.
 6. Launch NCCL, NeMo, or a pinned preset. Track jobs and logs in the same view and
    in Scheduler.
+
+One rack can remain multi-rack eligible when it has 16 idle nodes even if two other
+trays are unavailable. `idle*` is Slurm IDLE plus NOT_RESPONDING and is not eligible.
+Missing live inventory, a rack outside the campaign, or an ineligible selected node
+stops preparation before scheduler submission.
 
 Deep-audit workflows can also accept multiple rack targets. The resolver preserves
 an exact explicit node target only when one rack is selected. For multiple racks it
@@ -387,10 +404,43 @@ the workflow path, not a permanent promise that future hardware is healthy.
 
 ---
 
-## 8. Post-run Node Report
+## 8. Validation Status and post-run evidence
 
-Open `#/analytics/post-run-nodes`. This is a native, durable reliability view—not a
-live import of a Google punch card.
+Open `#/analytics/post-run-nodes`. The default **Validation map** is the current
+14-SU floor view; Hardware audits and Network audits retain the deeper report
+tables. This is a native, durable reliability view—not a live import of a Google
+punch card.
+
+### Floor map controls and status
+
+- Choose All validations or a single evidence domain such as Slurm, Node Health,
+  DCGM/r1/r3, NCCL, NeMo 56B, Llama, or MNUberGEMM. New source names appear as
+  discovered domains rather than disappearing.
+- Filter by SU, rack, or node text. Every filter also scopes exports.
+- A rack tile summarizes up to 18 physical nodes. Click it to open the highest-
+  priority non-pass node, then inspect every current and historical evidence row.
+- Green means all selected current evidence passed. Red means an explicit hard
+  failure. Yellow/orange means active, warning, incomplete, or NOT_RUN. Gray means
+  missing/unknown. Missing evidence is never green.
+- The view refreshes every 30 seconds and prevents overlapping browser requests.
+  The post-run response uses a compact current-state projection; node detail is
+  fetched lazily so superseded history remains available without bloating every
+  refresh.
+- Completion predictions use only real timestamped pass transitions. Blocked,
+  stalled, missing, or under-sampled data produces an explicit withheld ETA.
+
+Use **CSV** for exhaustive machine-readable evidence. It includes source freshness,
+job IDs, timestamps, reasons, metrics, and provenance and protects against formula
+injection. **JPEG** produces a 3,300 x 2,550, 300-DPI floor map. **PDF** produces an
+11 x 8.5 landscape map plus an exception appendix. CSV/PDF/JPEG always represent the
+currently selected validation domain and filters.
+
+DCGM results come from the bounded, atomically published validation index. The
+current attempt determines color; `.prevN` and superseded attempts remain history.
+Missing r1/r3/r4 evidence is NOT_RUN. OVA single-node health results come from the
+read-only health-check mirror. Neither path scans the head-node journal.
+
+### Joined post-run evidence
 
 The report joins:
 
@@ -593,9 +643,14 @@ Important durable feature endpoints include:
 | Endpoint | Purpose |
 |---|---|
 | `/api/status` | Canonical rack-status snapshot |
+| `/api/scheduler-node-status?nodes=...` | Bounded live Slurm state and reason for explicit nodes |
+| `/api/multirack-campaign` | Current exact eligible-node campaign and campaign ID |
+| `/api/bringup/fleet` | Cached authoritative bring-up verdict/metric summary |
+| `/api/validation-activities` | Durable validation parent/task ledger |
 | `/api/deep-audits` | Deep-audit runs |
 | `/api/deep-audits/<run_id>` | One audit and node findings |
-| `/api/post-run-node-report` | Native post-run report |
+| `/api/post-run-node-report?view=map` | Compact current Validation Status projection |
+| `/api/post-run-node-report?node=<exact-node>` | Full current and historical evidence for one node |
 | `/api/post-run-node-report/mark` | Operator finding/drain request |
 | `/api/node-issues` | Node issue/trend data |
 | `/api/reports/generated` | Generated report inventory |
@@ -621,6 +676,12 @@ does not replace result evidence or authorize cluster mutations.
 
 Examples: refresh, status, parser results, logs, system info, IMEX check, NVSwitch
 audit, fabric probe, analytics, report download.
+
+Routine 30-second browser refresh must not invoke `sudo`, `docker ps`, `docker
+exec`, or `journalctl` on the app server or head node. It reads Rack Status APIs,
+which serve bounded/cached evidence. Service monitoring belongs to NHC/Alloy/AIC.
+Node-local diagnostic scripts that explicitly inspect a service or kernel log are
+operator-launched diagnostics and are not background refresh behavior.
 
 ### Workload-changing
 
@@ -715,7 +776,8 @@ combined `nodelist` to fanout. Cancel before further steps if resolution is wron
 ### A source change is not visible
 
 - In SSH mode, editing `bin/scripts/` on the observability VM does not update the
-  head-node copy. Use `bin/deploy-scripts.sh --dry-run <target>`, review, then the
+  head-node copy. Set an explicit non-root `RACK_SSH_USER` and approved
+  `RACK_KNOWN_HOSTS_PATH`; use `bin/deploy-scripts.sh --dry-run <target>`, review, then the
   approved deployment.
 - A Docker restart does not apply a newly added bind mount. Recreate through Compose
   when the deployment change requires it.
@@ -757,7 +819,8 @@ Preview first:
 
 ```bash
 cd /opt/observability/nvis-rack-status-v3
-bin/deploy-scripts.sh --dry-run <approved-ssh-target>
+RACK_SSH_USER=<non-root-user> RACK_KNOWN_HOSTS_PATH=<pinned-file> \
+  bin/deploy-scripts.sh --dry-run <approved-ssh-target>
 ```
 
 The normal sync is checksum-based and does not delete head-only additions. Do not use
@@ -834,6 +897,11 @@ for the current incident.
   native Post-run Node Report is the current product surface and source of ongoing
   run attribution.
 - Pinned presets intentionally reject unsupported image/version/scale changes.
+- Validation Status refreshes every 30 seconds, while the expensive bring-up fleet
+  summary has an independent five-minute cache and at most 16 verdict workers by
+  default. Multiple open browsers must share one refresh, not launch one scan each.
+- Slurm state/reason is scheduler truth; a conflicting PythonCM `up` value proves
+  physical visibility, not allocatability.
 
 ---
 
@@ -843,10 +911,13 @@ Screenshots age quickly, so capture them from the deployed release rather than
 embedding stale cluster state in this guide. A useful packet contains:
 
 1. `#/compute/racks` with snapshot freshness and native workers visible.
-2. Rack Detail Validation tab with the selected-node count and Results buttons.
+2. Rack Detail Validation tab with selected-node count, live Slurm Status/reason,
+   and Results buttons.
 3. Hardware Deep Audit terminal result card.
 4. NVLink/Network Deep Audit terminal result card with forced traffic evidence.
-5. `#/analytics/post-run-nodes` floor view and an expanded repeat-failure node.
+5. `#/analytics/post-run-nodes` showing all 14 SU rows, the status legend, source
+   freshness, one selected validation domain, export controls, and an expanded
+   failure node with Job ID/reason/provenance.
 6. `#/analytics/reports` showing a generated report.
 7. `#/observability/metrics` showing D/E/F/G rack monikers.
 8. `#/platform/api` filtered to `deep-audits` and `post-run`.

@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import re
+import requests
 import shlex
 import subprocess
 import threading
@@ -715,7 +716,9 @@ def pythoncm_ct_column_by_rack(rows: Iterable[dict[str, str]]) -> dict[str, str]
         parsed = _rack_tray_from_hostname_token(hostname)
         if parsed:
             parsed_rack, tray = parsed
-            rack = rack or parsed_rack
+            # PythonCM's Rack entity is a physical EH/WH coordinate on Nscale;
+            # the hostname-derived rack is the logical action/log namespace.
+            rack = parsed_rack
         else:
             tray = hostname
         if not rack or not tray:
@@ -825,18 +828,88 @@ def sinfo_state_trim(s: str) -> str:
     return s
 
 
-def collect_sinfo_counts() -> dict[tuple[str, str], int]:
-    """Map (rack_id, trimmed_state) -> count of nodes (after hostname expansion).
+def _sinfo_source() -> str:
+    """Availability source, independent of the command-submission backend.
 
-    No bare-name ``which("sinfo")`` guard: the Slurm CLI is not on PATH here
-    (``plat.sinfo_cmd()`` supplies the absolute path plus ``SLURM_CONF``), so that probe
-    always returned None and short-circuited this function to ``{}``. Every rack then
-    rendered ``sinfo: "-"``, was treated as a 0-node non-compute rack, and dropped out of
-    the dashboard summary. Matches ``load_squeue_jobs_map()``, which calls
-    ``run_slurm_on_host`` directly with no guard.
+    PythonCM remains the control/submission backend on NscaleTX, but its device
+    status is not a scheduler availability signal.  Sites without Slurm can
+    retain the legacy PythonCM-derived view by leaving this unset.
     """
-    if scheduler_runtime.is_pythoncm():
-        return scheduler_runtime.node_state_counts()
+    configured = (os.environ.get("RACK_NATIVE_SINFO_SOURCE") or "").strip().lower()
+    if configured in {"slurm", "pythoncm"}:
+        return configured
+    return "pythoncm" if scheduler_runtime.is_pythoncm() else "slurm"
+
+
+def _sinfo_state_key(raw: str) -> str:
+    """Preserve Slurm's no-response ``*`` as a parseable ``_nr`` suffix."""
+    value = (raw or "").strip().lower()
+    no_response = value.endswith("*")
+    base = sinfo_state_trim(value)
+    return f"{base}_nr" if base and no_response else base
+
+
+def _slurm_ct_column_by_rack(rows: Iterable[tuple[str, str]]) -> dict[str, str]:
+    """Render the per-tray status column from the same live Slurm snapshot.
+
+    Rack availability and the tray list must never come from different control
+    planes.  PythonCM device status can lag healthy Slurm nodes by minutes (or
+    longer), which previously produced contradictory rows such as
+    ``sinfo=idle=18`` alongside ten red ``DN`` trays.  Keep drained/maintenance
+    nodes distinct as ``INST`` and reserve ``DN`` for a real down/failing or
+    non-responding Slurm state.
+    """
+    by_rack: dict[str, dict[str, list[str]]] = defaultdict(
+        lambda: {"DN": [], "INST": [], "UP": [], "UNK": []}
+    )
+    naming = _nvis_naming()
+    for hostname, state_raw in rows:
+        parsed = naming.sinfo_rack_from_host(hostname.lower().split(".")[0])
+        if not parsed:
+            continue
+        rack, canonical_host = parsed
+        tray_parsed = _rack_tray_from_hostname_token(canonical_host)
+        tray = tray_parsed[1] if tray_parsed else canonical_host
+        state = (state_raw or "unknown").strip().lower()
+        no_response = state.endswith("_nr")
+        base = state[:-3] if no_response else state
+        if no_response or base in {"down", "fail", "failing"}:
+            bucket = "DN"
+        elif base in {"drain", "drained", "draining", "maint", "inval", "invalid"}:
+            bucket = "INST"
+        elif base in {"idle", "alloc", "allocated", "mix", "mixed", "comp", "completing"}:
+            bucket = "UP"
+        else:
+            bucket = "UNK"
+        by_rack[rack][bucket].append(tray)
+
+    result: dict[str, str] = {}
+    for rack, buckets in by_rack.items():
+        parts: list[str] = []
+        for label in ("DN", "INST", "UP", "UNK"):
+            values = buckets[label]
+            if not values:
+                continue
+            inner = _condense_tray_tokens(" ".join(values))
+            blob = naming.ct_blob(rack, inner) if inner else ",".join(values)
+            parts.append(f"{label}:{blob}")
+        result[rack] = ";".join(parts) if parts else "-"
+    return result
+
+
+def collect_sinfo_snapshot() -> tuple[dict[tuple[str, str], int], dict[str, str]]:
+    """Return rack counts and exact-node status from one control-plane read."""
+    if _sinfo_source() == "pythoncm":
+        rows = scheduler_runtime.nodes()
+        counts: dict[tuple[str, str], int] = {}
+        for row in rows:
+            rack = str(row.get("rack") or "").strip()
+            if not rack:
+                continue
+            key = (rack, str(row.get("state") or "unknown"))
+            counts[key] = counts.get(key, 0) + 1
+        return counts, pythoncm_ct_column_by_rack(rows)
+
     plat = _get_platform()
     opts = (os.environ.get("SINFO_OPTS") or "").strip()
     extra = "-N -h -o '%N %t'"
@@ -848,8 +921,11 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
             timeout=max(30, _env_int("RACK_NATIVE_SINFO_TIMEOUT_SEC", 120)),
         )
     except (OSError, subprocess.TimeoutExpired):
-        return {}
+        return {}, {}
+
     counts: dict[tuple[str, str], int] = {}
+    node_rows: list[tuple[str, str]] = []
+    naming = _nvis_naming()
     for line in (proc.stdout or "").splitlines():
         line = line.strip()
         if not line:
@@ -858,7 +934,7 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
         if len(parts) < 2:
             continue
         node, st_raw = parts[0], parts[1]
-        st = sinfo_state_trim(st_raw)
+        st = _sinfo_state_key(st_raw)
         if not st:
             continue
         hosts: list[str] = []
@@ -873,16 +949,28 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
                 hosts = []
         else:
             hosts = [node]
-        naming = _nvis_naming()
-        for h in hosts:
-            hh = h.lower().split(".")[0]
-            parsed = naming.sinfo_rack_from_host(hh)
+        for host in hosts:
+            parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
             if not parsed:
                 continue
-            rr, _host = parsed
-            key = (rr, st)
+            rack, canonical_host = parsed
+            key = (rack, st)
             counts[key] = counts.get(key, 0) + 1
-    return counts
+            node_rows.append((canonical_host, st))
+    return counts, _slurm_ct_column_by_rack(node_rows)
+
+
+def collect_sinfo_counts() -> dict[tuple[str, str], int]:
+    """Map (rack_id, trimmed_state) -> count of nodes (after hostname expansion).
+
+    No bare-name ``which("sinfo")`` guard: the Slurm CLI is not on PATH here
+    (``plat.sinfo_cmd()`` supplies the absolute path plus ``SLURM_CONF``), so that probe
+    always returned None and short-circuited this function to ``{}``. Every rack then
+    rendered ``sinfo: "-"``, was treated as a 0-node non-compute rack, and dropped out of
+    the dashboard summary. Matches ``load_squeue_jobs_map()``, which calls
+    ``run_slurm_on_host`` directly with no guard.
+    """
+    return collect_sinfo_snapshot()[0]
 
 
 def shlex_split_safe(s: str) -> list[str]:
@@ -913,7 +1001,124 @@ def format_sinfo_cell(rack: str, counts: dict[tuple[str, str], int]) -> str:
     if not pairs:
         return "-"
     pairs.sort(key=lambda x: (-x[0], x[1]))
-    return ",".join(f"{st}={cnt}" for cnt, st in pairs)
+    return ",".join(
+        f"{st[:-3] + '*' if st.endswith('_nr') else st}={cnt}"
+        for cnt, st in pairs
+    )
+
+
+_NODE_DOWN_SHEET_ID = "1FQxSyWRvAvK5l0z9vsBP2Wd8j6iIcE5pUGiVjRLahc4"
+_NODE_DOWN_SHEET_RANGE = "Node down status report!A1:B10"
+_NODE_DOWN_SHEET_CACHE_LOCK = threading.Lock()
+_NODE_DOWN_SHEET_CACHE: dict[str, Any] = {}
+_NODE_DOWN_SHEET_CACHE_MONOTONIC = 0.0
+_SHEET_UNAVAILABLE_STATES = {
+    "down", "drain", "drained", "draining", "fail", "failing", "maint", "unknown"
+}
+
+
+def _node_down_sheet_summary() -> dict[str, Any]:
+    """Read the same headline cells operators use in Node down status report.
+
+    The small result is cached because /api/status can have many simultaneous
+    readers.  This is only reconciliation metadata; live Slurm remains the
+    source of the rack colors and live counters.
+    """
+    global _NODE_DOWN_SHEET_CACHE, _NODE_DOWN_SHEET_CACHE_MONOTONIC
+    ttl = max(30, _env_int("RACK_NODE_DOWN_SHEET_TTL_SEC", 120))
+    now = time.monotonic()
+    with _NODE_DOWN_SHEET_CACHE_LOCK:
+        if _NODE_DOWN_SHEET_CACHE and now - _NODE_DOWN_SHEET_CACHE_MONOTONIC < ttl:
+            return dict(_NODE_DOWN_SHEET_CACHE)
+
+        token_path = Path(
+            (os.environ.get("RACK_NODE_DOWN_SHEET_TOKEN_FILE") or "/run/secrets/gsheets-token").strip()
+        )
+        sheet_id = (
+            os.environ.get("RACK_NODE_DOWN_SHEET_ID") or _NODE_DOWN_SHEET_ID
+        ).strip()
+        try:
+            token = token_path.read_text(encoding="utf-8").strip()
+            if not token.startswith("ya29."):
+                raise ValueError("Google Sheets token is missing or invalid")
+            url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{_NODE_DOWN_SHEET_RANGE}"
+            response = requests.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=max(3, _env_int("RACK_NODE_DOWN_SHEET_TIMEOUT_SEC", 10)),
+            )
+            response.raise_for_status()
+            values = response.json().get("values") or []
+            metrics: dict[str, int] = {}
+            for row in values:
+                if not isinstance(row, list) or len(row) < 2:
+                    continue
+                label = str(row[0]).strip()
+                raw_count = str(row[1]).replace(",", "").strip()
+                if raw_count.isdigit():
+                    metrics[label] = int(raw_count)
+            stamp_text = str(values[1][0]) if len(values) > 1 and values[1] else ""
+            stamp_match = re.search(r"Updated by Codex at ([^.]+ UTC)", stamp_text)
+            result: dict[str, Any] = {
+                "ok": True,
+                "spreadsheet_id": sheet_id,
+                "tab": "Node down status report",
+                "updated_at": stamp_match.group(1) if stamp_match else "",
+                "unavailable": metrics.get("Unavailable in Slurm"),
+                "responding": metrics.get("Slurmd responding"),
+                "no_response": metrics.get("Slurmd not responding (*)"),
+                "drained": metrics.get("Drained"),
+                "down_other": metrics.get("Down / fail / maint / unknown"),
+            }
+        except Exception as exc:  # sheet outage must never take down rack status
+            result = {"ok": False, "error": str(exc)[:240]}
+        _NODE_DOWN_SHEET_CACHE = result
+        _NODE_DOWN_SHEET_CACHE_MONOTONIC = now
+        return dict(result)
+
+
+def availability_summary_from_counts(
+    counts: dict[tuple[str, str], int], *, include_sheet: bool = True
+) -> dict[str, Any]:
+    """Build cluster counters using the node-down sheet's exact state policy."""
+    total = ready = unavailable = no_response = drained = down_other = invalid = 0
+    for (_rack, state_key), count in counts.items():
+        nr = state_key.endswith("_nr")
+        base = state_key[:-3] if nr else state_key
+        total += count
+        if nr:
+            no_response += count
+        if base == "idle" and not nr:
+            ready += count
+        if base in {"drain", "drained", "draining"}:
+            drained += count
+        if base in _SHEET_UNAVAILABLE_STATES:
+            unavailable += count
+            if base not in {"drain", "drained", "draining"}:
+                down_other += count
+        if base in {"inval", "invalid"}:
+            invalid += count
+
+    out: dict[str, Any] = {
+        "source": _sinfo_source(),
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "total_nodes": total,
+        "ready_nodes": ready,
+        "unavailable_nodes": unavailable,
+        "no_response_nodes": no_response,
+        "drained_nodes": drained,
+        "down_other_nodes": down_other,
+        "invalid_nodes": invalid,
+        "definition": "Node down status report",
+    }
+    if include_sheet and _sinfo_source() == "slurm":
+        sheet = _node_down_sheet_summary()
+        sheet_count = sheet.get("unavailable")
+        if isinstance(sheet_count, int):
+            sheet["delta"] = unavailable - sheet_count
+            sheet["matches_live"] = unavailable == sheet_count
+        out["sheet"] = sheet
+    return out
 
 
 def _slurm_base_job_id(jid_raw: str) -> str | None:
@@ -989,26 +1194,52 @@ def _durable_completed_stage_logs_by_rack() -> dict[str, dict[str, dict[str, Any
         _logger.warning("could not load durable validation completion evidence", exc_info=True)
         return {}
     out: dict[str, dict[str, dict[str, Any]]] = {}
+
+    def as_probe(kind: str, run: dict[str, Any], *, current: bool) -> dict[str, Any]:
+        status = str(run.get("status") or "unknown").strip().lower()
+        passed = status == "pass"
+        terminal_failure = status in {"fail", "timeout"}
+        job_id = str(run.get("job_id") or "").strip()
+        try:
+            log_mtime = float(run.get("log_mtime") or 0)
+        except (TypeError, ValueError):
+            log_mtime = 0.0
+        probe: dict[str, Any] = {
+            "nemo_state": "done" if passed else "fail" if terminal_failure else "pending",
+            "nccl_ok": (passed if kind == "nccl" else False) if (passed or terminal_failure) else None,
+            "llm_ok": (passed if kind == "nemo" else False) if (passed or terminal_failure) else None,
+            "jid": int(job_id) if job_id.isdigit() else job_id,
+            "_path": str(run.get("source_log_path") or ""),
+            "_mtime": log_mtime,
+            "_durable_completion": passed,
+            "_completed_at": str(run.get("ended_at") or run.get("started_at") or ""),
+        }
+        if current:
+            probe["_authoritative_current"] = True
+        return probe
+
     for kind in ("nccl", "nemo"):
         for rack, run in (completed.get(kind) or {}).items():
             if not isinstance(run, dict):
                 continue
-            job_id = str(run.get("job_id") or "").strip()
-            try:
-                log_mtime = float(run.get("log_mtime") or 0)
-            except (TypeError, ValueError):
-                log_mtime = 0.0
-            probe: dict[str, Any] = {
-                "nemo_state": "done",
-                "nccl_ok": kind == "nccl",
-                "llm_ok": kind == "nemo",
-                "jid": int(job_id) if job_id.isdigit() else job_id,
-                "_path": str(run.get("source_log_path") or ""),
-                "_mtime": log_mtime,
-                "_durable_completion": True,
-                "_completed_at": str(run.get("ended_at") or run.get("started_at") or ""),
-            }
-            out.setdefault(str(rack), {})[kind] = probe
+            out.setdefault(str(rack), {})[kind] = as_probe(kind, run, current=False)
+
+    # The settled table above is intentionally monotonic acceptance history. A
+    # separate collector row represents the *current* attempt for each rack and
+    # must win even when it is a failure or an incomplete run; otherwise an old
+    # pass paints a broken rack green forever. Missing current rows do not erase
+    # settled history, and a history-store error does not break status rendering.
+    try:
+        current = results_history.latest_runs_by_rack(
+            ("nccl", "nemo"), source="nscale16k_current_rack_evidence"
+        )
+    except Exception:
+        _logger.warning("could not load current validation evidence", exc_info=True)
+        current = {}
+    for kind in ("nccl", "nemo"):
+        for rack, run in (current.get(kind) or {}).items():
+            if isinstance(run, dict):
+                out.setdefault(str(rack), {})[kind] = as_probe(kind, run, current=True)
     return out
 
 
@@ -1155,17 +1386,37 @@ def augment_running_set_for_job_ids(
     ``squeue -u $USER`` then misses them while ``squeue -j <id>`` still shows RUNNING/PENDING.
     Disable with ``RACK_SQUEUE_JOB_LOOKUP_DISABLED=1``.
     """
+    requested = [str(item).strip() for item in want if str(item).strip()]
     if scheduler_runtime.is_pythoncm():
-        refs, times = scheduler_runtime.active_job_times(want)
+        # PythonCM is the primary provider on Nscale, but reviewed validation
+        # fallbacks still have numeric Slurm job ids.  The durable activity
+        # registry is an overlay, not live evidence: feeding one of its stale
+        # RUNNING rows back into task hydration creates a circular state that
+        # can never reach sacct.  Trust the registry only for native PythonCM
+        # UUIDs; force explicit numeric fallbacks through the targeted squeue
+        # lookup below.
+        pythoncm_refs = [
+            ref for ref in requested
+            if scheduler_runtime.reference_kind(ref) == "pythoncm"
+        ]
+        refs, times = scheduler_runtime.active_job_times(pythoncm_refs)
         running.update(refs)
         for ref, elapsed in times.items():
             job_times.setdefault(ref, elapsed)
-        return
+        requested = [
+            ref for ref in requested
+            if scheduler_runtime.reference_kind(ref) == "slurm"
+        ]
+        for ref in requested:
+            running.discard(ref)
+            job_times.pop(ref, None)
+        if not requested:
+            return
     if _env_truthy("RACK_SQUEUE_JOB_LOOKUP_DISABLED"):
         return
     need: list[str] = []
     seen: set[str] = set()
-    for j in want:
+    for j in requested:
         if not j or not scheduler_runtime.valid_reference(str(j).strip()):
             continue
         sj = str(j).strip()
@@ -1425,6 +1676,7 @@ class NativeRackTableState:
         "racks",
         "racks_refresh_lock",
         "racks_refreshed_monotonic",
+        "availability_summary",
         "sinfo_counts",
         "sinfo_done",
         "sinfo_thread",
@@ -1439,6 +1691,7 @@ class NativeRackTableState:
         self.racks_refreshed_monotonic = 0.0
         self.ct_by_rack: dict[str, str] = {}
         self.sinfo_counts: dict[tuple[str, str], int] = {}
+        self.availability_summary: dict[str, Any] = {}
         self.per_path_probe: dict[str, dict[str, Any]] = {}
         self.by_rack_log: dict[str, dict[str, Any]] = {}
         # rack -> stage kind ("nccl" | "nemo") -> newest probe record of THAT kind.
@@ -1480,6 +1733,14 @@ class NativeRackTableState:
 
     def _worker_ds(self) -> None:
         try:
+            if _sinfo_source() == "slurm":
+                # The Slurm worker owns both aggregate availability and the
+                # exact tray list.  Letting this concurrent PythonCM worker
+                # write ct_by_rack creates a last-writer-wins race and brings
+                # stale DN trays back after the correct Slurm snapshot lands.
+                with self.lock:
+                    self.ds_done = True
+                return
             if scheduler_runtime.is_pythoncm():
                 col = pythoncm_ct_column_by_rack(scheduler_runtime.nodes())
             else:
@@ -1496,9 +1757,16 @@ class NativeRackTableState:
 
     def _worker_sinfo(self) -> None:
         try:
-            c = collect_sinfo_counts()
+            c, slurm_ct = collect_sinfo_snapshot()
+            availability = availability_summary_from_counts(c)
             with self.lock:
                 self.sinfo_counts = c
+                self.availability_summary = availability
+                if _sinfo_source() == "slurm" and slurm_ct:
+                    # Exact node state and aggregate counts now share one live
+                    # Slurm snapshot; never mix current counts with stale BCM DN.
+                    self.ct_by_rack = slurm_ct
+                    self.ds_done = True
                 self.sinfo_done = True
         except Exception as e:
             _logger.debug("_worker_sinfo: ignoring error", exc_info=True)
@@ -1633,6 +1901,7 @@ class NativeRackTableState:
             errs = list(self.last_errors)
             ds_done = self.ds_done
             sinfo_done = self.sinfo_done
+            sinfo_source = _sinfo_source()
         rows: list[dict[str, str]] = []
         n_done = n_fail = n_on = n_pending = 0
         stage1_summary = empty_stage_summary()
@@ -1691,7 +1960,15 @@ class NativeRackTableState:
             # A rack with 0 Slurm nodes (once sinfo is done) is a non-GB200 rack
             # (switch / mgmt / networking) — keep it in the table/floor but exclude it
             # from the validation statistics so the counts reflect only compute racks.
-            countable = not (sinfo_done and rack_total_sinfo_nodes(rack, sct) == 0)
+            expected_compute = bool(
+                (os.environ.get("RACK_NATIVE_EXPECTED_RACK_NUMBERS") or "").strip()
+            )
+            countable = expected_compute or not (
+                sinfo_done and rack_total_sinfo_nodes(rack, sct) == 0
+            )
+            siv = "?" if not sinfo_done else format_sinfo_cell(rack, sct)
+            if expected_compute and sinfo_done and rack_total_sinfo_nodes(rack, sct) == 0:
+                siv = f"unknown (missing from {sinfo_source.title()})"
             live = live_jobs.get(rack) if isinstance(live_jobs.get(rack), dict) else {}
             live_nccl = str((live or {}).get("nccl") or "").strip()
             live_nemo = str((live or {}).get("nemo") or "").strip()
@@ -1733,7 +2010,8 @@ class NativeRackTableState:
                             "stage1": stage1,
                             "stage2": stage2,
                             "last_job": live_jid,
-                            "sinfo": "?" if not sinfo_done else format_sinfo_cell(rack, sct),
+                            "sinfo": siv,
+                            "availability_source": sinfo_source,
                             "ct_down_unk": "?" if not ds_done else ct.get(rack, "-"),
                             "nemo_hint": validation_status_hint(nemo, live_jid),
                         }
@@ -1750,7 +2028,8 @@ class NativeRackTableState:
                         "stage1": "pending",
                         "stage2": "pending",
                         "last_job": "-",
-                        "sinfo": "?" if not sinfo_done else format_sinfo_cell(rack, sct),
+                        "sinfo": siv,
+                        "availability_source": sinfo_source,
                         "ct_down_unk": "?" if not ds_done else ct.get(rack, "-"),
                         "nemo_hint": validation_status_hint("pending", "-"),
                     }
@@ -1865,7 +2144,6 @@ class NativeRackTableState:
                 else:
                     n_fail += 1
 
-            siv = "?" if not sinfo_done else format_sinfo_cell(rack, sct)
             if not ds_done:
                 ctv = "?"
             else:
@@ -1924,6 +2202,7 @@ class NativeRackTableState:
                     "stage2": stage2,
                     "last_job": live_jid if in_slurm else jid_s,
                     "sinfo": siv,
+                    "availability_source": sinfo_source,
                     "ct_down_unk": ctv,
                     "nemo_hint": nh,
                 }
@@ -1937,7 +2216,9 @@ class NativeRackTableState:
             "stage2": stage2_summary,
         }
         legend = (
-            "PythonCM rack/device inventory — async: PythonCM node state and log probes"
+            "PythonCM rack/device inventory — availability: live Slurm; async device/log probes"
+            if scheduler_runtime.is_pythoncm() and sinfo_source == "slurm"
+            else "PythonCM rack/device inventory — async: PythonCM node state and log probes"
             if scheduler_runtime.is_pythoncm()
             else "rack; list (cmsh) — native table; async: ds, sinfo, log probes"
         )
@@ -1952,13 +2233,16 @@ def _worker_snapshot(st: NativeRackTableState) -> dict[str, Any]:
         return t is not None and t.is_alive()
 
     with st.lock:
-        return {
+        snapshot = {
             "mode": "native",
             "rack_count": len(st.racks),
             "workers": [
                 {
                     "id": "ds",
                     "label": (
+                        "Exact tray state owned by live Slurm"
+                        if _sinfo_source() == "slurm"
+                        else
                         "PythonCM device status"
                         if scheduler_runtime.is_pythoncm()
                         else "cmsh device status (ds)"
@@ -1969,9 +2253,9 @@ def _worker_snapshot(st: NativeRackTableState) -> dict[str, Any]:
                 {
                     "id": "sinfo",
                     "label": (
-                        "PythonCM node availability"
-                        if scheduler_runtime.is_pythoncm()
-                        else "Slurm sinfo / scontrol hostnames"
+                        "Live Slurm node availability"
+                        if _sinfo_source() == "slurm"
+                        else "PythonCM node availability"
                     ),
                     "thread_alive": _alive(st.sinfo_thread),
                     "finished_once": st.sinfo_done,
@@ -1985,6 +2269,9 @@ def _worker_snapshot(st: NativeRackTableState) -> dict[str, Any]:
             ],
             "recent_errors": list(st.last_errors[-8:]),
         }
+        if st.availability_summary:
+            snapshot["availability"] = dict(st.availability_summary)
+        return snapshot
 
 
 def worker_snapshot_for_log_dir(log_dir: Path) -> dict[str, Any] | None:

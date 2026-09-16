@@ -22,8 +22,9 @@ import Link from "@mui/material/Link";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import { Tag, Text, Button } from "@nvidia/foundations-react-core";
-import { Terminal, TrendingUp } from "lucide-react";
+import { RefreshCw, Terminal, TrendingUp } from "lucide-react";
 import type { NodeIssueRollup } from "../../types/api";
+import type { SlurmNodeStatus } from "../../services/schedulerService";
 
 /** Build https URL for BMC / RedFish UI; bracket bare IPv6 literals only. */
 function redfishHttpsHref(host: string): string | null {
@@ -48,6 +49,11 @@ interface NodeSelectorProps {
   onOpenTerminal?: (nodeId: string) => void;
   issueNodes?: Record<string, NodeIssueRollup>;
   onOpenIssues?: (nodeId: string) => void;
+  slurmByNode?: Record<string, SlurmNodeStatus>;
+  slurmLoading?: boolean;
+  slurmError?: string;
+  slurmUpdatedAt?: string;
+  onRefreshSlurm?: () => void;
 }
 
 function statusLabel(status: NodeInfo["status"]) {
@@ -57,6 +63,15 @@ function statusLabel(status: NodeInfo["status"]) {
     case "inst": return "INST";
     default: return "?";
   }
+}
+
+function slurmTagColor(state: string): "green" | "red" | "yellow" | "blue" | "gray" {
+  const value = state.toLowerCase();
+  if (value.startsWith("idle")) return "green";
+  if (value.startsWith("alloc") || value.startsWith("mix")) return "blue";
+  if (value.startsWith("drain") || value.startsWith("down") || value.startsWith("fail")) return "red";
+  if (value.startsWith("maint") || value.startsWith("resv") || value.startsWith("complet")) return "yellow";
+  return "gray";
 }
 
 function RedfishIpCell({ ip }: { ip?: string }) {
@@ -89,7 +104,19 @@ function RedfishIpCell({ ip }: { ip?: string }) {
   );
 }
 
-export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTerminal, issueNodes, onOpenIssues }: NodeSelectorProps) {
+export function NodeSelector({
+  nodes,
+  selected,
+  onSelectionChange,
+  onOpenTerminal,
+  issueNodes,
+  onOpenIssues,
+  slurmByNode = {},
+  slurmLoading = false,
+  slurmError,
+  slurmUpdatedAt,
+  onRefreshSlurm,
+}: NodeSelectorProps) {
   const allSelected = nodes.length > 0 && selected.size === nodes.length;
   const someSelected = selected.size > 0 && selected.size < nodes.length;
 
@@ -151,7 +178,28 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
               <TableCell>Status</TableCell>
               {(issueNodes || onOpenIssues) && <TableCell>Issue trend</TableCell>}
               <TableCell>RedFish IP</TableCell>
-              {onOpenTerminal && <TableCell align="center">Actions</TableCell>}
+              <TableCell sx={{ minWidth: 240 }}>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                  <Text kind="body/bold/sm">Slurm Status</Text>
+                  {onRefreshSlurm && (
+                    <Tooltip title={slurmError || (slurmUpdatedAt ? `Live as of ${slurmUpdatedAt}` : "Refresh live Slurm status")}>
+                      <span>
+                        <IconButton
+                          size="small"
+                          aria-label="Refresh live Slurm status"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onRefreshSlurm();
+                          }}
+                          disabled={slurmLoading}
+                        >
+                          <RefreshCw size={15} />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  )}
+                </Box>
+              </TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -166,9 +214,25 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
                   <Checkbox checked={selected.has(node.id)} />
                 </TableCell>
                 <TableCell>
-                  <Text kind="body/regular/md" style={{ fontFamily: "monospace" }}>
-                    {node.id}
-                  </Text>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                    <Text kind="body/regular/md" style={{ fontFamily: "monospace" }}>
+                      {node.id}
+                    </Text>
+                    {onOpenTerminal && node.status === "up" && (
+                      <Tooltip title={`Open terminal to ${node.id}`}>
+                        <IconButton
+                          size="small"
+                          aria-label={`Open terminal to ${node.id}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onOpenTerminal(node.id);
+                          }}
+                        >
+                          <Terminal size={16} />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </Box>
                 </TableCell>
                 <TableCell>
                   <Tag
@@ -201,17 +265,29 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
                 <TableCell onClick={(e) => e.stopPropagation()}>
                   <RedfishIpCell ip={node.ip} />
                 </TableCell>
-                {onOpenTerminal && (
-                  <TableCell align="center" onClick={(e) => e.stopPropagation()}>
-                    {node.status === "up" && (
-                      <Tooltip title={`Open terminal to ${node.id}`}>
-                        <IconButton size="small" onClick={() => onOpenTerminal(node.id)}>
-                          <Terminal size={16} />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                  </TableCell>
-                )}
+                <TableCell onClick={(e) => e.stopPropagation()}>
+                  {slurmByNode[node.id] ? (
+                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 0.5 }}>
+                      <Tag
+                        color={slurmTagColor(slurmByNode[node.id].state)}
+                        kind="solid"
+                        readOnly
+                        density="compact"
+                      >
+                        {slurmByNode[node.id].state.toUpperCase()}
+                      </Tag>
+                      {slurmByNode[node.id].reason && (
+                        <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                          {slurmByNode[node.id].reason}
+                        </Text>
+                      )}
+                    </Box>
+                  ) : (
+                    <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                      {slurmLoading ? "Loading…" : slurmError ? "Unavailable" : "Unknown"}
+                    </Text>
+                  )}
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -220,4 +296,3 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
     </Box>
   );
 }
-

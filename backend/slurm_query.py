@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+from datetime import datetime, timezone
 
 import host_exec
 import scheduler_runtime
@@ -127,6 +128,71 @@ def _run_sinfo_r() -> dict:
         "stdout": (proc.stdout or "").strip(),
         "stderr": (proc.stderr or "").strip(),
         "command_display": cmd_display,
+    }
+
+
+def _run_sinfo_nodes(node_names: list[str]) -> dict:
+    """Return current Slurm state and reason for an explicit node list.
+
+    This deliberately queries Slurm even when PythonCM is the configured command
+    scheduler.  Rack operators use this view to decide whether a node is actually
+    allocatable in Slurm; PythonCM device state is already shown in the adjacent
+    rack-status column and must not be presented as scheduler ground truth.
+    """
+    requested = list(dict.fromkeys(str(name).strip() for name in node_names if str(name).strip()))
+    plat = _get_platform()
+    nodespec = ",".join(requested)
+    shell_cmd = plat.sinfo_cmd(
+        f"-N -h -o '%N|%T|%E' -n {shlex.quote(nodespec)}"
+    )
+    timeout = max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120))
+    try:
+        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=timeout)
+    except FileNotFoundError:
+        raise OSError(
+            "sinfo executable not found; set RACK_SLURM_SINFO to the full path "
+            "or ensure module load is available"
+        ) from None
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "returncode": -1,
+            "nodes": [],
+            "stderr": f"timeout after {timeout}s",
+            "command_display": shell_cmd,
+            "source": "slurm",
+        }
+
+    parsed: dict[str, dict[str, str]] = {}
+    for line in (proc.stdout or "").splitlines():
+        parts = line.strip().split("|", 2)
+        if len(parts) < 2 or not parts[0].strip():
+            continue
+        name = parts[0].strip()
+        reason = parts[2].strip() if len(parts) > 2 else ""
+        if reason in {"(null)", "none", "None"}:
+            reason = ""
+        parsed[name.casefold()] = {
+            "node": name,
+            "state": parts[1].strip() or "UNKNOWN",
+            "reason": reason,
+        }
+
+    rows = [
+        parsed.get(
+            name.casefold(),
+            {"node": name, "state": "UNKNOWN", "reason": "Not reported by Slurm"},
+        )
+        for name in requested
+    ]
+    return {
+        "ok": proc.returncode == 0,
+        "returncode": proc.returncode,
+        "nodes": rows,
+        "stderr": (proc.stderr or "").strip(),
+        "command_display": shell_cmd,
+        "source": "slurm",
+        "captured_at": datetime.now(timezone.utc).isoformat(),
     }
 
 

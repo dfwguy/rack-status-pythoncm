@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[Unit]
+Description=NVIS persistent PythonCM execution broker
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/cluster /cm /home/hlakshminara/.cm
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=hlakshminara
+Group=cmods
+RuntimeDirectory=nvis-pythoncm
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+EnvironmentFile=-/home/hlakshminara/.cm/pythoncm-broker.env
+ExecStart=/cm/local/apps/python312/bin/python3 /cluster/OVA/hlakshminara/opt/nscaletx-16k-services/rack-status/bin/scripts/nvis_pythoncm_broker.py --socket /run/nvis-pythoncm/exec.sock --services exec --backlog 128 --disconnect-timeout 5
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

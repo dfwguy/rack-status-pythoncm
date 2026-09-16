@@ -10,24 +10,68 @@
  * its affiliates is strictly prohibited.
  */
 /**
- * Turn the BCM/VictoriaMetrics rack label into the operator-facing rack moniker.
+ * Turn the BCM/VictoriaMetrics SU + rack labels into the operator-facing rack moniker.
  *
- * Metrics must still be queried with the raw label (for example `WH1G1`), so this
- * helper is intentionally display-only.  Already-short labels are canonicalised
- * as well because older collectors have emitted both `WH1H2` and `h02`.
+ * Metrics must still be queried with the raw rack label (for example `EH1A1`), so this
+ * helper is intentionally display-only. The metrics series' `su` label provides the
+ * operator-facing scale-unit number: `rack=EH1A1, su=SU1` displays as `SU1A01`.
  */
-export function metricsRackMoniker(raw: string): string {
-  const value = raw.trim();
-  const bcm = /^WH\d+([a-z])(\d+)$/i.exec(value);
-  if (bcm) return `${bcm[1].toLowerCase()}${bcm[2].padStart(2, "0")}`;
+export function metricsRackMoniker(rawRack: string, rawSu = ""): string {
+  const rack = rawRack.trim();
+  const location = /^(?:WH|EH)\d+([a-z])(\d+)$/i.exec(rack);
+  const short = /^([a-z])(\d+)$/i.exec(rack);
+  const coordinates = location ?? short;
 
-  const short = /^([a-z])(\d+)$/i.exec(value);
-  if (short) return `${short[1].toLowerCase()}${short[2].padStart(2, "0")}`;
+  if (!coordinates) return rack;
 
-  return value;
+  const row = coordinates[1].toUpperCase();
+  const ordinal = coordinates[2].padStart(2, "0");
+  const su = /^SU0*(\d+)$/i.exec(rawSu.trim());
+
+  return su ? `SU${su[1]}${row}${ordinal}` : `${row}${ordinal}`;
 }
 
-/** Natural rack ordering (`g02` before `g10`) based on the displayed moniker. */
+export interface MetricsRackOption {
+  /** Raw VictoriaMetrics rack label; this is the backend query value. */
+  rack: string;
+  su: string;
+  /** Operator-facing label, for example `SU1A01`. */
+  label: string;
+}
+
+interface MetricsRackLabels {
+  rack?: string;
+  su?: string;
+}
+
+/**
+ * Build a stable, unique rack menu from VictoriaMetrics series labels.
+ *
+ * A populated SU label wins over an older duplicate series that only has `rack`.
+ */
+export function buildMetricsRackOptions(rows: MetricsRackLabels[]): MetricsRackOption[] {
+  const byRack = new Map<string, MetricsRackOption>();
+
+  for (const row of rows) {
+    const rack = row.rack?.trim() ?? "";
+    const su = row.su?.trim() ?? "";
+    if (!rack) continue;
+
+    const previous = byRack.get(rack);
+    if (!previous || (!previous.su && su)) {
+      byRack.set(rack, { rack, su, label: metricsRackMoniker(rack, su) });
+    }
+  }
+
+  return [...byRack.values()].sort(compareMetricsRackOptions);
+}
+
+/** Natural scale-unit/rack ordering (`SU2A01` before `SU12A01`). */
+export function compareMetricsRackOptions(a: MetricsRackOption, b: MetricsRackOption): number {
+  return a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: "base" });
+}
+
+/** Natural rack ordering retained for callers that only have raw rack labels. */
 export function compareMetricsRacks(a: string, b: string): number {
   return metricsRackMoniker(a).localeCompare(metricsRackMoniker(b), undefined, {
     numeric: true,

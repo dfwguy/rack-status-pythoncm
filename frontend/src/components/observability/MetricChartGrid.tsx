@@ -43,6 +43,11 @@ import { Line, Bar } from "react-chartjs-2";
 import { useThemeMode } from "../../context/ThemeContext";
 import { apiFetch } from "../../lib/apiFetch";
 import { WINDOWS } from "../../lib/metricWindows";
+import {
+  buildMetricsRackOptions,
+  metricsRackMoniker,
+  type MetricsRackOption,
+} from "../../lib/metricsRack";
 
 ChartJS.register(
   CategoryScale,
@@ -69,6 +74,7 @@ interface ChartPayload {
   ok: boolean;
   error?: string;
   title?: string;
+  split_by?: string;
   labels?: string[];
   datasets?: { label: string; data: (number | null)[] }[];
   series_total?: number;
@@ -103,11 +109,13 @@ function hasData(p: ChartPayload | undefined): boolean {
 interface MetricChartCardProps {
   chart: CatalogChart;
   rack: string;
+  rackSu: string;
+  rackLabels: ReadonlyMap<string, string>;
   minutes: number;
   dark: boolean;
 }
 
-export function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardProps) {
+export function MetricChartCard({ chart, rack, rackSu, rackLabels, minutes, dark }: MetricChartCardProps) {
   const [payload, setPayload] = useState<ChartPayload | undefined>();
   const [loading, setLoading] = useState(true);
 
@@ -115,6 +123,7 @@ export function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardP
     setLoading(true);
     const params = new URLSearchParams({ minutes: String(minutes) });
     if (rack) params.set("rack", rack);
+    if (rackSu) params.set("su", rackSu);
     try {
       const res = await apiFetch(`/api/metrics/chart/${encodeURIComponent(chart.id)}?${params}`, {
         cache: "no-store",
@@ -125,7 +134,7 @@ export function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardP
     } finally {
       setLoading(false);
     }
-  }, [chart.id, rack, minutes]);
+  }, [chart.id, rack, rackSu, minutes]);
 
   useEffect(() => {
     void load();
@@ -141,7 +150,10 @@ export function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardP
     () => ({
       labels: (payload?.labels ?? []).map((l) => (chart.range ? timeLabel(l) : l)),
       datasets: (payload?.datasets ?? []).map((d, i) => ({
-        label: d.label,
+        label:
+          payload?.split_by === "rack"
+            ? (rackLabels.get(d.label) ?? metricsRackMoniker(d.label))
+            : d.label,
         data: d.data,
         borderColor: SERIES_COLORS[i % SERIES_COLORS.length],
         backgroundColor: SERIES_COLORS[i % SERIES_COLORS.length] + "22",
@@ -155,7 +167,7 @@ export function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardP
         spanGaps: false,
       })),
     }),
-    [payload, chart.range],
+    [payload, chart.range, rackLabels],
   );
 
   const options = useMemo(
@@ -201,7 +213,7 @@ export function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardP
         <Text kind="body/bold/sm">{payload?.title || chart.title}</Text>
         <Text kind="body/regular/xs" color="secondary">
           {chart.unit}
-          {rack ? ` · ${rack}` : ""}
+          {rack ? ` · ${rackLabels.get(rack) ?? metricsRackMoniker(rack)}` : ""}
           {total > shown ? ` · showing ${shown} of ${total}` : ""}
         </Text>
       </Flex>
@@ -250,7 +262,7 @@ export function MetricChartGrid({ group, showRackFilter = true, note }: MetricCh
 
   const [charts, setCharts] = useState<CatalogChart[]>([]);
   const [health, setHealth] = useState<MetricsHealth | undefined>();
-  const [racks, setRacks] = useState<string[]>([]);
+  const [racks, setRacks] = useState<MetricsRackOption[]>([]);
   const [rack, setRack] = useState("");
   const [minutes, setMinutes] = useState(60);
   const [loading, setLoading] = useState(true);
@@ -286,14 +298,14 @@ export function MetricChartGrid({ group, showRackFilter = true, note }: MetricCh
     void (async () => {
       try {
         const r = await apiFetch(
-          `/api/metrics/query?q=${encodeURIComponent("count by (rack) (DCGM_FI_DEV_GPU_TEMP)")}`,
+          `/api/metrics/query?q=${encodeURIComponent("count by (su,rack) (DCGM_FI_DEV_GPU_TEMP)")}`,
           { cache: "no-store" },
         ).then((x) => x.json());
         if (!alive || !r?.ok) return;
-        const names: string[] = (r.result ?? [])
-          .map((s: { metric?: Record<string, string> }) => s.metric?.rack)
-          .filter((n: string | undefined): n is string => Boolean(n));
-        setRacks(names.sort());
+        const labels = (r.result ?? []).map(
+          (s: { metric?: Record<string, string> }) => s.metric ?? {},
+        );
+        setRacks(buildMetricsRackOptions(labels));
       } catch {
         /* the filter is optional — leave it empty on failure */
       }
@@ -302,6 +314,12 @@ export function MetricChartGrid({ group, showRackFilter = true, note }: MetricCh
       alive = false;
     };
   }, [showRackFilter]);
+
+  const rackLabels = useMemo(
+    () => new Map(racks.map((option) => [option.rack, option.label])),
+    [racks],
+  );
+  const rackSu = racks.find((option) => option.rack === rack)?.su ?? "";
 
   return (
     <>
@@ -335,9 +353,9 @@ export function MetricChartGrid({ group, showRackFilter = true, note }: MetricCh
             sx={{ minWidth: 180 }}
           >
             <MenuItem value="">All racks</MenuItem>
-            {racks.map((r) => (
-              <MenuItem key={r} value={r}>
-                {r}
+            {racks.map((option) => (
+              <MenuItem key={option.rack} value={option.rack}>
+                {option.label}
               </MenuItem>
             ))}
           </TextField>
@@ -380,6 +398,8 @@ export function MetricChartGrid({ group, showRackFilter = true, note }: MetricCh
               key={c.id}
               chart={c}
               rack={showRackFilter ? rack : ""}
+              rackSu={showRackFilter ? rackSu : ""}
+              rackLabels={rackLabels}
               minutes={minutes}
               dark={dark}
             />

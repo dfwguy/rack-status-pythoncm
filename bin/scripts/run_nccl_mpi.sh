@@ -104,6 +104,8 @@ echo "run_nccl_mpi: gpus/node=${GPUS_PER_NODE}"
 
 SBATCH="${_D}/nccl_allreduce.sbatch"
 [[ -f "${SBATCH}" ]] || die "nccl_allreduce.sbatch not found next to this launcher"
+IMEX_BATCH="${_D}/validation_imex_channel0_prepare.sbatch"
+[[ -f "${IMEX_BATCH}" ]] || die "validation_imex_channel0_prepare.sbatch not found next to this launcher"
 OUTPUT=""
 if [[ -n "${JOB_LOG_DIR}" ]]; then
   if [[ -n "${APP_LOG_RACK}" ]]; then
@@ -141,9 +143,23 @@ cmd=( sbatch -N "${NVIS_NNODES}" --nodelist="${NVIS_NODELIST}" --ntasks-per-node
 [[ -n "${SIZE_MAX_OVERRIDE}" ]] && export NCCL_SIZE_MAX="${SIZE_MAX_OVERRIDE}"
 cmd+=( "${SBATCH}" )
 
+imex_output="${JOB_LOG_DIR%/}/validation-imex-channel0-%j.out"
+imex_cmd=( sbatch --parsable --wait --no-requeue -N "${NVIS_NNODES}"
+           --nodelist="${NVIS_NODELIST}" --ntasks-per-node=1
+           --output="${imex_output}" "${IMEX_BATCH}" )
+
+printf 'run_nccl_mpi: imex prelaunch:'; printf ' %q' "${imex_cmd[@]}"; echo
 printf 'run_nccl_mpi: exec:'; printf ' %q' "${cmd[@]}"; echo
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "run_nccl_mpi: --dry-run (not submitting)"
   exit 0
 fi
+
+imex_reply="$("${imex_cmd[@]}" 2>&1)"
+imex_rc=$?
+printf '%s\n' "$imex_reply"
+imex_id="$(printf '%s\n' "$imex_reply" | sed -n 's/^\([0-9][0-9]*\)\(;.*\)\{0,1\}$/\1/p' | head -1)"
+[[ "$imex_id" =~ ^[0-9]+$ ]] || die "IMEX prelaunch returned no valid Slurm id (rc=${imex_rc}): ${imex_reply}"
+(( imex_rc == 0 )) || die "IMEX prelaunch failed (job=${imex_id} rc=${imex_rc} log=${imex_output//%j/$imex_id})"
+echo "run_nccl_mpi: IMEX channel0 ready on ${NVIS_NNODES}/${NVIS_NNODES} node(s) (job=${imex_id} log=${imex_output//%j/$imex_id})"
 "${cmd[@]}"

@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+[Unit]
+Description=Rack Status priority PythonCM broker watchdog
+After=network-online.target nvis-pythoncm-broker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/cm/local/apps/python312/bin/python3 /cluster/OVA/hlakshminara/opt/nscaletx-16k-services/rack-status/bin/scripts/rack_status_watchdog.py
+TimeoutStartSec=60

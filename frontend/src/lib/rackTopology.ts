@@ -167,8 +167,6 @@ const BAD_STATES = new Set([
   "failg",
   "failing",
   "maint",
-  "unk",
-  "unknown",
   "error",
   "err",
   "nr",
@@ -178,12 +176,14 @@ const BAD_STATES = new Set([
   "powering_down",
 ]);
 
-/** Parse ``"idle=17,down=1"`` into ``{idle:17, down:1}``. */
+const UNKNOWN_STATES = new Set(["unk", "unknown"]);
+
+/** Parse ``"idle=17,down*=1"``; ``*`` becomes ``_nr`` (Slurmd not responding). */
 export function parseSinfo(sinfo: string): Record<string, number> {
   const out: Record<string, number> = {};
   for (const part of (sinfo || "").split(/[,\s]+/)) {
-    const m = /^([a-z_]+)=(\d+)$/i.exec(part.trim());
-    if (m) out[m[1].toLowerCase()] = parseInt(m[2], 10);
+    const m = /^([a-z_]+)(\*)?=(\d+)$/i.exec(part.trim());
+    if (m) out[`${m[1].toLowerCase()}${m[2] ? "_nr" : ""}`] = parseInt(m[3], 10);
   }
   return out;
 }
@@ -223,13 +223,15 @@ export function parseTrayState(ctDownUnk: string): TrayState | null {
   if (!s || s === "-") return null;
   const state: TrayState = { up: new Set(), down: new Set(), unk: new Set() };
   let matched = false;
-  const segRe = /(UP|DN|DOWN|UNK|UK)\s*:[^[\]]*\[([^\]]*)\]/gi;
+  // Installer states are neither healthy nor hard-down. Include them in the
+  // population as unknown so DN + INST does not roll up as "all nodes down".
+  const segRe = /(UP|DN|DOWN|UNK|UK|INST)\s*:[^[\]]*\[([^\]]*)\]/gi;
   let m: RegExpExecArray | null;
   while ((m = segRe.exec(s)) !== null) {
     matched = true;
     const kind = m[1].toUpperCase();
     const trays = expandRanges(m[2]);
-    const target = kind === "UP" ? state.up : kind === "UNK" || kind === "UK" ? state.unk : state.down;
+    const target = kind === "UP" ? state.up : kind === "UNK" || kind === "UK" || kind === "INST" ? state.unk : state.down;
     trays.forEach((t) => target.add(t));
   }
   return matched ? state : null;
@@ -242,13 +244,17 @@ export interface RackHealthInfo {
   total: number;
   upCount: number;
   downCount: number;
+  unknownCount: number;
   /** Ordered tray numbers with per-tray status, when tray detail is available. */
   trays: { tray: number; status: "up" | "down" | "unk" }[];
 }
 
 /** Roll a rack row up into a health verdict + (optional) ordered tray list. */
 export function rackHealth(row: RackRow): RackHealthInfo {
-  const tray = parseTrayState(row.ct_down_unk);
+  // Slurm is the workload-availability authority. BCM/PythonCM tray state is
+  // still shown elsewhere as a separate device signal, but must not paint the
+  // floor red when a node is actually scheduler-ready (or green when it is not).
+  const tray = row.availability_source === "slurm" ? null : parseTrayState(row.ct_down_unk);
   if (tray) {
     const all = Array.from(new Set([...tray.up, ...tray.down, ...tray.unk])).sort((a, b) => a - b);
     const trays = all.map((t) => ({
@@ -257,27 +263,37 @@ export function rackHealth(row: RackRow): RackHealthInfo {
     }));
     const downCount = tray.down.size;
     const upCount = tray.up.size;
+    const unknownCount = tray.unk.size;
     const total = all.length;
     const health: RackHealth =
-      downCount === 0 && tray.unk.size === 0
+      total === 0 || (upCount === 0 && downCount === 0)
+        ? "unknown"
+        : downCount === 0 && unknownCount === 0
         ? "healthy"
-        : upCount === 0
+        : downCount === total
           ? "down"
           : "partial";
-    return { health, total, upCount, downCount, trays };
+    return { health, total, upCount, downCount, unknownCount, trays };
   }
 
   // No tray detail — fall back to sinfo counts.
   const counts = parseSinfo(row.sinfo);
   let bad = 0;
+  let unknown = 0;
   let total = 0;
   for (const [k, v] of Object.entries(counts)) {
     total += v;
-    if (BAD_STATES.has(k)) bad += v;
+    const noResponse = k.endsWith("_nr");
+    const base = noResponse ? k.slice(0, -3) : k;
+    if (noResponse || BAD_STATES.has(base)) bad += v;
+    else if (UNKNOWN_STATES.has(base) || base === "inval" || base === "invalid") unknown += v;
   }
-  if (total === 0) return { health: "unknown", total: 0, upCount: 0, downCount: 0, trays: [] };
-  const health: RackHealth = bad === 0 ? "healthy" : bad >= total ? "down" : "partial";
-  return { health, total, upCount: total - bad, downCount: bad, trays: [] };
+  if (total === 0) {
+    return { health: "unknown", total: 0, upCount: 0, downCount: 0, unknownCount: 0, trays: [] };
+  }
+  const health: RackHealth =
+    unknown === total ? "unknown" : bad >= total ? "down" : bad === 0 && unknown === 0 ? "healthy" : "partial";
+  return { health, total, upCount: total - bad - unknown, downCount: bad, unknownCount: unknown, trays: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +317,12 @@ export interface FloorSection {
   label: string;
   rows: FloorRow[];
   rackCount: number;
+}
+
+/** SU is already the operator-facing BCM NodeGroup name; other labels are coordinates. */
+export function floorRowHeading(label: string): string {
+  const clean = String(label || "").trim();
+  return /^SU\d+$/i.test(clean) ? clean.toUpperCase() : `Row ${clean}`;
 }
 
 function slotCmp(a: number[], b: number[]): number {

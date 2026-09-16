@@ -167,7 +167,7 @@ const navEntries: NavEntry[] = [
     icon: <BarChart3 size={ICON_SIZE} />,
     leaves: [
       { id: "analytics", label: "Analytics", icon: <LineChart size={ICON_SIZE} /> },
-      { id: "postRunNodeReport", label: "Post Run Node Report", icon: <ClipboardCheck size={ICON_SIZE} /> },
+      { id: "postRunNodeReport", label: "Validation Status", icon: <ClipboardCheck size={ICON_SIZE} /> },
       { id: "reports", label: "Reports", icon: <FileDown size={ICON_SIZE} /> },
     ],
   },

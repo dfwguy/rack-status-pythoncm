@@ -10,6 +10,7 @@
  * its affiliates is strictly prohibited.
  */
 import type { DeepAuditRun, NodeIssuesResponse, PostRunNodeReportResponse } from "../types/api";
+import { apiFetch } from "../lib/apiFetch";
 
 async function jsonOrError<T>(res: Response): Promise<T> {
   const text = await res.text();
@@ -30,7 +31,7 @@ export async function fetchNodeIssues(params: { rack?: string; node?: string; sy
   if (params.rack) query.set("rack", params.rack);
   if (params.node) query.set("node", params.node);
   if (params.sync) query.set("sync", "1");
-  const res = await fetch(`/api/node-issues?${query}`, { credentials: "same-origin", cache: "no-store" });
+  const res = await apiFetch(`/api/node-issues?${query}`, { credentials: "same-origin", cache: "no-store" });
   return jsonOrError<NodeIssuesResponse>(res);
 }
 
@@ -39,7 +40,7 @@ export async function startDeepAudit(args: {
   rack: string;
   target: string;
 }): Promise<string> {
-  const res = await fetch(`/api/workflows/${encodeURIComponent(args.workflowId)}/run`, {
+  const res = await apiFetch(`/api/workflows/${encodeURIComponent(args.workflowId)}/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
@@ -52,13 +53,13 @@ export async function startDeepAudit(args: {
 export async function fetchDeepAudits(params: { rack: string; kind: "hardware" | "network"; limit?: number }): Promise<DeepAuditRun[]> {
   const query = new URLSearchParams({ rack: params.rack, kind: params.kind });
   if (params.limit) query.set("limit", String(params.limit));
-  const res = await fetch(`/api/deep-audits?${query}`, { credentials: "same-origin", cache: "no-store" });
+  const res = await apiFetch(`/api/deep-audits?${query}`, { credentials: "same-origin", cache: "no-store" });
   const data = await jsonOrError<{ ok: boolean; runs: DeepAuditRun[] }>(res);
   return Array.isArray(data.runs) ? data.runs : [];
 }
 
 export async function fetchDeepAudit(runId: string): Promise<DeepAuditRun> {
-  const res = await fetch(`/api/deep-audits/${encodeURIComponent(runId)}`, {
+  const res = await apiFetch(`/api/deep-audits/${encodeURIComponent(runId)}`, {
     credentials: "same-origin",
     cache: "no-store",
   });
@@ -67,7 +68,7 @@ export async function fetchDeepAudit(runId: string): Promise<DeepAuditRun> {
 }
 
 export async function fetchDeepAuditOutput(runId: string, stepId = "audit"): Promise<string> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/workflow-runs/${encodeURIComponent(runId)}/output/${encodeURIComponent(stepId)}`,
     { credentials: "same-origin", cache: "no-store" },
   );
@@ -75,12 +76,13 @@ export async function fetchDeepAuditOutput(runId: string, stepId = "audit"): Pro
   return typeof data.output === "string" ? data.output : "";
 }
 
-export async function fetchPostRunNodeReport(params: { rack?: string; node?: string; refresh?: boolean } = {}): Promise<PostRunNodeReportResponse> {
+export async function fetchPostRunNodeReport(params: { rack?: string; node?: string; refresh?: boolean; compact?: boolean } = {}): Promise<PostRunNodeReportResponse> {
   const query = new URLSearchParams();
   if (params.rack) query.set("rack", params.rack);
   if (params.node) query.set("node", params.node);
   if (params.refresh) query.set("refresh", "1");
-  const res = await fetch(`/api/post-run-node-report?${query}`, { credentials: "same-origin", cache: "no-store" });
+  if (params.compact) query.set("view", "map");
+  const res = await apiFetch(`/api/post-run-node-report?${query}`, { credentials: "same-origin", cache: "no-store" });
   return jsonOrError<PostRunNodeReportResponse>(res);
 }
 
@@ -93,7 +95,7 @@ export async function markPostRunNode(args: {
   evidence?: string;
   drain: boolean;
 }): Promise<void> {
-  const res = await fetch("/api/post-run-node-report/mark", {
+  const res = await apiFetch("/api/post-run-node-report/mark", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",

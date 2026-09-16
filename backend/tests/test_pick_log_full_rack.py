@@ -22,6 +22,25 @@ os.environ.setdefault("RACK_EXEC_MODE", "local")
 import app as app_module
 
 
+def test_campaign_rack_dir_maps_full_su5_su14_scope(tmp_path):
+    legacy = tmp_path / "nscaletx-16k-validation"
+    expected = {
+        "ink50-dh02-e01": "SU5",
+        "ink50-dh02-f02": "SU6",
+        "ink50-dh02-g03": "SU7",
+        "ink50-dh02-h04": "SU8",
+        "ink50-dh02-i05": "SU9",
+        "ink50-dh02-j06": "SU10",
+        "ink50-dh02-k07": "SU11",
+        "ink50-dh01-a08": "SU12",
+        "ink50-dh01-b17": "SU13",
+        "ink50-dh01-c24": "SU14",
+    }
+    for rack, su in expected.items():
+        got = app_module._nscale_campaign_rack_dir(legacy, rack)
+        assert got == tmp_path / su / f"rack{rack[-2:]}"
+
+
 def test_node_count_from_log_basename():
     assert app_module._node_count_from_log_basename("cmods-NCCL-1Rack-ink50-dh01-h02-1N-75761.txt") == 1
     assert app_module._node_count_from_log_basename("cmods-NCCL-1Rack-ink50-dh01-h02-18N-75270.txt") == 18
@@ -77,6 +96,109 @@ def test_pick_log_full_rack_prefers_matching_18n_job(monkeypatch, tmp_path):
     )
     got = app_module.pick_log_for_rack(log_dir, "r01", "100", full_rack=True)
     assert got is not None and got.name.endswith("-18N-100.txt")
+
+
+def test_campaign_log_discovery_and_job_pin(monkeypatch, tmp_path):
+    """The 16K campaign's deterministic .out layout is first-class alongside legacy .txt."""
+    legacy = tmp_path / "nscaletx-16k-validation"
+    legacy.mkdir()
+    campaign = tmp_path / "SU12" / "rack05" / "multiNodeNCCL"
+    campaign.mkdir(parents=True)
+    log = campaign / "nvftp-nccl-five-collective-28709.out"
+    log.write_text("FIVE_COLLECTIVE_SWEEP_START job=28709 nodes=18\n")
+    monkeypatch.setattr(app_module, "_normalize_rack_id", lambda raw: str(raw).strip())
+
+    got = app_module.pick_log_for_rack(legacy, "ink50-dh01-a05", "28709")
+    assert got is not None and got.name == log.name
+    assert app_module._rack_log_job_id(got) == "28709"
+    assert app_module._rack_log_stage_kind(got) == "nccl"
+
+
+def test_dashboard_activity_attributes_generic_single_rack_logs(monkeypatch, tmp_path):
+    """UI launches keep rack provenance in the activity ledger, not in stdout basenames."""
+    log_dir = tmp_path / "nscaletx-16k-validation"
+    log_dir.mkdir()
+    nccl = log_dir / "nvftp-nccl-five-collective-55421.out"
+    nemo = log_dir / "nemo-26.04.01-55433.out"
+    nccl.write_text("FIVE_COLLECTIVE_SWEEP_START nodes=18\n")
+    nemo.write_text("INFO: nnodes=18 nproc_per_node=4\n")
+    monkeypatch.setattr(app_module, "_normalize_rack_id", lambda raw: str(raw).strip())
+    monkeypatch.setattr(
+        app_module.validation_activities,
+        "list_activities",
+        lambda **_kwargs: [
+            {
+                "rack": "ink50-dh02-h02",
+                "tasks": [
+                    {"scheduler_ref": "55421", "stdout_path": str(nccl)},
+                    {"scheduler_ref": "55433", "stdout_path": str(nemo)},
+                ],
+            }
+        ],
+    )
+
+    got = app_module.pick_logs_for_rack(log_dir, "ink50-dh02-h02", "55421")
+    assert got == {
+        "nccl": PurePosixPath(str(nccl)),
+        "nemo": PurePosixPath(str(nemo)),
+    }
+
+
+def test_campaign_log_full_rack_reads_bounded_node_count(monkeypatch, tmp_path):
+    legacy = tmp_path / "nscaletx-16k-validation"
+    legacy.mkdir()
+    campaign = tmp_path / "SU14" / "rack03" / "multiNodeNCCL"
+    campaign.mkdir(parents=True)
+    log = campaign / "nvftp-nccl-five-collective-17824.out"
+    log.write_text(
+        "NCCL_IB_PREFLIGHT_READY host=n1\n"
+        "FIVE_COLLECTIVE_SWEEP_START job=17824 nodes=18\n"
+        "FIVE_COLLECTIVE_SWEEP_END job=17824 rc=0 detail_rc=0\n"
+    )
+    monkeypatch.setattr(app_module, "_normalize_rack_id", lambda raw: str(raw).strip())
+
+    got = app_module.pick_log_for_rack(
+        legacy, "ink50-dh01-c03", "17824", full_rack=True, full_rack_nodes=18
+    )
+    assert got is not None and got.name == log.name
+
+
+def test_campaign_log_full_rack_rejects_partial(monkeypatch, tmp_path):
+    legacy = tmp_path / "nscaletx-16k-validation"
+    legacy.mkdir()
+    campaign = tmp_path / "SU14" / "rack03" / "multiNodeNeMo"
+    campaign.mkdir(parents=True)
+    log = campaign / "nemo-26.04.01-17825.out"
+    log.write_text("INFO: nnodes=2 nproc_per_node=4\nNEMO_VALIDATION_PASS nodes=2\n")
+    monkeypatch.setattr(app_module, "_normalize_rack_id", lambda raw: str(raw).strip())
+
+    assert (
+        app_module.pick_log_for_rack(
+            legacy, "ink50-dh01-c03", "17825", full_rack=True, full_rack_nodes=18
+        )
+        is None
+    )
+
+
+def test_campaign_stage_pairing(monkeypatch, tmp_path):
+    legacy = tmp_path / "nscaletx-16k-validation"
+    legacy.mkdir()
+    rack_root = tmp_path / "SU12" / "rack05"
+    nccl_dir = rack_root / "multiNodeNCCL"
+    nemo_dir = rack_root / "multiNodeNeMo"
+    nccl_dir.mkdir(parents=True)
+    nemo_dir.mkdir(parents=True)
+    nccl = nccl_dir / "nvftp-nccl-five-collective-28709.out"
+    nemo = nemo_dir / "nemo-26.04.01-28710.out"
+    nccl.write_text("FIVE_COLLECTIVE_SWEEP_START nodes=18\n")
+    nemo.write_text("INFO: nnodes=18 nproc_per_node=4\n")
+    monkeypatch.setattr(app_module, "_normalize_rack_id", lambda raw: str(raw).strip())
+
+    got = app_module.pick_logs_for_rack(
+        legacy, "ink50-dh01-a05", "28709", full_rack=True, full_rack_nodes=18
+    )
+    assert got["nccl"].name == nccl.name
+    assert got["nemo"].name == nemo.name
 
 
 # --- stage-aware selection (NCCL and NeMo are separate jobs since llmb-run) ---------------

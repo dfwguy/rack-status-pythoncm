@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import pythoncm_broker_client
 from schedulers import JobHandle, JobSpec, PythonCMScheduler, build_scheduler
 
 SCRIPT = Path(__file__).resolve().parents[2] / "bin" / "scripts" / "nvis_pythoncm_exec.py"
@@ -61,6 +62,8 @@ class FakeConnection:
             }
         elif action == "cancel":
             body = {"ok": True, "state": "CANCELLED"}
+        elif action == "probe":
+            body = {"ok": True, "ready": True}
         else:  # pragma: no cover - test fake guard
             raise AssertionError(action)
         return subprocess.CompletedProcess(cmd, 0, json.dumps(body) + "\n", "")
@@ -150,6 +153,16 @@ def test_credentials_use_file_paths_not_raw_secret_argv():
     assert "also-must-not-appear" not in argv
 
 
+def test_probe_is_non_mutating_and_uses_the_execution_helper():
+    conn = FakeConnection()
+    scheduler = PythonCMScheduler(conn, env={})
+
+    result = scheduler.probe(timeout=7)
+
+    assert result == {"ok": True, "ready": True}
+    assert [call[2] for call in conn.calls] == ["probe"]
+
+
 def test_submit_error_has_cookie_readiness_hint():
     class DeniedConnection(FakeConnection):
         def run(self, cmd, timeout=120, profile="control"):
@@ -163,6 +176,67 @@ def test_submit_error_has_cookie_readiness_hint():
     scheduler = PythonCMScheduler(DeniedConnection(), env={})
     with pytest.raises(RuntimeError, match="cmproc permission"):
         scheduler.submit(JobSpec(command="hostname"))
+
+
+def test_scheduler_routes_submit_through_persistent_broker(monkeypatch):
+    conn = FakeConnection()
+    seen = {}
+
+    def broker_request(path, service, argv, *, timeout):
+        seen.update(path=path, service=service, argv=argv, timeout=timeout)
+        return {
+            "ok": True,
+            "task_id": "private-task-id",
+            "pythoncm_id": "bd90bf76-82b9-4c43-a792-598648c192ed",
+            "transport": "persistent-pythoncm",
+        }
+
+    monkeypatch.setattr(pythoncm_broker_client, "request", broker_request)
+    scheduler = PythonCMScheduler(
+        conn, env={"NVIS_PYTHONCM_SOCKET": "/run/nvis-pythoncm/query.sock"}
+    )
+    handle = scheduler.submit(JobSpec(command="hostname"))
+
+    assert handle.job_id == "bd90bf76-82b9-4c43-a792-598648c192ed"
+    assert conn.calls == []
+    assert seen["service"] == "exec"
+    assert seen["argv"][0] == "submit"
+
+
+def test_scheduler_prefers_dedicated_exec_broker(monkeypatch):
+    seen = {}
+
+    def broker_request(path, service, argv, *, timeout):
+        seen.update(path=path, service=service)
+        return {
+            "ok": True,
+            "task_id": "private-task-id",
+            "pythoncm_id": "bd90bf76-82b9-4c43-a792-598648c192ed",
+        }
+
+    monkeypatch.setattr(pythoncm_broker_client, "request", broker_request)
+    scheduler = PythonCMScheduler(FakeConnection(), env={
+        "NVIS_PYTHONCM_SOCKET": "/run/nvis-pythoncm/query.sock",
+        "NVIS_PYTHONCM_EXEC_SOCKET": "/run/nvis-pythoncm/exec.sock",
+    })
+    scheduler.submit(JobSpec(command="hostname"))
+
+    assert seen == {"path": "/run/nvis-pythoncm/exec.sock", "service": "exec"}
+
+
+def test_accepted_broker_submit_failure_is_never_replayed(monkeypatch):
+    conn = FakeConnection()
+    monkeypatch.setattr(
+        pythoncm_broker_client,
+        "request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad response")),
+    )
+    scheduler = PythonCMScheduler(
+        conn, env={"NVIS_PYTHONCM_SOCKET": "/run/nvis-pythoncm/query.sock"}
+    )
+    with pytest.raises(RuntimeError, match="persistent PythonCM submit broker failed"):
+        scheduler.submit(JobSpec(command="hostname"))
+    assert conn.calls == []
 
 
 def test_helper_expands_bracketed_exact_nodelists():
@@ -240,6 +314,22 @@ def test_helper_requires_cookie_credentials_for_cmproc(monkeypatch, capsys):
     assert payload["ok"] is False
     assert "cookie" in payload["error"]
     assert "cmproc permission" in payload["hint"]
+
+
+def test_helper_reuses_caller_owned_cluster():
+    class Parallel:
+        @staticmethod
+        def active_command_status():
+            return []
+
+    class Cluster:
+        parallel = Parallel()
+
+        def disconnect(self):
+            raise AssertionError("broker-owned cluster must stay connected")
+
+    args = helper.build_parser().parse_args(["probe"])
+    assert helper.execute(args, cluster=Cluster()) == {"ok": True, "ready": True}
 
 
 def test_helper_reads_secret_file(tmp_path):

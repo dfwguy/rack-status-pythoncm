@@ -222,7 +222,7 @@ def _wrapped_command(command: str, task_dir: Path) -> str:
     )
 
 
-def _submit(payload: dict[str, Any]) -> dict[str, Any]:
+def _submit(payload: dict[str, Any], cluster=None) -> dict[str, Any]:
     command = str(payload.get("command") or "").strip()
     script = str(payload.get("script") or "").strip()
     if not command and script:
@@ -232,7 +232,8 @@ def _submit(payload: dict[str, Any]) -> dict[str, Any]:
     jobs_dir = str(payload.get("jobs_dir") or "/var/tmp/nvis-pythoncm-jobs")
     task_id = str(uuid.uuid4())
     task_dir = Path(jobs_dir) / task_id
-    cluster = _cluster()
+    owns_cluster = cluster is None
+    cluster = cluster or _cluster()
     try:
         nodes, missing = _resolve_nodes(cluster, str(payload.get("nodelist") or ""))
         if missing:
@@ -289,7 +290,8 @@ def _submit(payload: dict[str, Any]) -> dict[str, Any]:
         _atomic_json(_manifest_path(jobs_dir, task_id), manifest)
         return {"task_id": task_id, "pythoncm_id": str(status.uuid), "nodes": manifest["nodes"]}
     finally:
-        cluster.disconnect()
+        if owns_cluster:
+            cluster.disconnect()
 
 
 def _node_results(manifest: dict[str, Any], jobs_dir: str) -> list[dict[str, Any]]:
@@ -305,8 +307,9 @@ def _node_results(manifest: dict[str, Any], jobs_dir: str) -> list[dict[str, Any
     return rows
 
 
-def _active_status(manifest: dict[str, Any]):
-    cluster = _cluster()
+def _active_status(manifest: dict[str, Any], cluster=None):
+    owns_cluster = cluster is None
+    cluster = cluster or _cluster()
     try:
         from uuid import UUID
 
@@ -324,21 +327,25 @@ def _active_status(manifest: dict[str, Any]):
             return "FAILED"
         return "RUNNING" if any(state in BUSY_STATES for state in states) else "PENDING"
     finally:
-        cluster.disconnect()
+        if owns_cluster:
+            cluster.disconnect()
 
 
-def _state(manifest: dict[str, Any], jobs_dir: str) -> tuple[str, list[dict[str, Any]]]:
+def _state(
+    manifest: dict[str, Any], jobs_dir: str, cluster=None
+) -> tuple[str, list[dict[str, Any]]]:
     rows = _node_results(manifest, jobs_dir)
     if manifest.get("cancelled"):
         return "CANCELLED", rows
     if rows and all(row["returncode"] is not None for row in rows):
         return ("COMPLETED" if all(row["returncode"] == 0 for row in rows) else "FAILED"), rows
-    active = _active_status(manifest)
+    active = _active_status(manifest, cluster=cluster)
     return (active or "UNKNOWN"), rows
 
 
-def _cancel(manifest: dict[str, Any], jobs_dir: str) -> None:
-    cluster = _cluster()
+def _cancel(manifest: dict[str, Any], jobs_dir: str, cluster=None) -> None:
+    owns_cluster = cluster is None
+    cluster = cluster or _cluster()
     try:
         from uuid import UUID
 
@@ -346,7 +353,8 @@ def _cancel(manifest: dict[str, Any], jobs_dir: str) -> None:
         for status in statuses:
             status.kill()
     finally:
-        cluster.disconnect()
+        if owns_cluster:
+            cluster.disconnect()
     manifest["cancelled"] = True
     _atomic_json(_manifest_path(jobs_dir, str(manifest["task_id"])), manifest)
 
@@ -366,8 +374,8 @@ def _collect(manifest: dict[str, Any], jobs_dir: str) -> tuple[str, str]:
     return "".join(stdout), "".join(stderr)
 
 
-def main(argv: list[str] | None = None) -> int:
-    global _CONNECTION_OPTIONS
+def build_parser() -> argparse.ArgumentParser:
+    """Return the execution parser shared by the CLI and persistent broker."""
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=("submit", "status", "cancel", "result", "probe"))
     parser.add_argument("--payload", default="")
@@ -382,51 +390,64 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--username", default="")
     parser.add_argument("--password-file", default="")
     parser.add_argument("--cookie-file", default="")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def execute(args: argparse.Namespace, cluster=None) -> dict[str, Any]:
+    """Execute one helper action, optionally through an already-connected cluster."""
+    global _CONNECTION_OPTIONS
     _CONNECTION_OPTIONS = vars(args)
-    cluster = None
+    owned_cluster = None
     try:
         if args.action == "probe":
-            cluster = _cluster()
+            if cluster is None:
+                owned_cluster = _cluster()
+                cluster = owned_cluster
             # This call is intentionally part of readiness: cert-only sessions
             # can query entities but fail cmproc with "No valid cookie".
             cluster.parallel.active_command_status()
-            return _response(True, ready=True)
+            return {"ok": True, "ready": True}
         if args.action == "submit":
-            return _response(True, **_submit(_decode_payload(args.payload)))
+            return {"ok": True, **_submit(_decode_payload(args.payload), cluster=cluster)}
         manifest = _load(args.jobs_dir, args.task_id)
         if args.action == "cancel":
-            _cancel(manifest, args.jobs_dir)
-            return _response(True, task_id=args.task_id, state="CANCELLED")
-        state, rows = _state(manifest, args.jobs_dir)
+            _cancel(manifest, args.jobs_dir, cluster=cluster)
+            return {"ok": True, "task_id": args.task_id, "state": "CANCELLED"}
+        state, rows = _state(manifest, args.jobs_dir, cluster=cluster)
         if args.action == "status":
-            return _response(True, task_id=args.task_id, state=state, nodes=rows)
+            return {"ok": True, "task_id": args.task_id, "state": state, "nodes": rows}
         stdout, stderr = _collect(manifest, args.jobs_dir)
         returncode = 0 if state == "COMPLETED" else 1
-        return _response(
-            True,
-            task_id=args.task_id,
-            state=state,
-            returncode=returncode,
-            stdout_b64=base64.b64encode(stdout.encode()).decode("ascii"),
-            stderr_b64=base64.b64encode(stderr.encode()).decode("ascii"),
-            output=manifest.get("output", ""),
-            nodes=rows,
-        )
+        return {
+            "ok": True,
+            "task_id": args.task_id,
+            "state": state,
+            "returncode": returncode,
+            "stdout_b64": base64.b64encode(stdout.encode()).decode("ascii"),
+            "stderr_b64": base64.b64encode(stderr.encode()).decode("ascii"),
+            "output": manifest.get("output", ""),
+            "nodes": rows,
+        }
     except PermissionError as exc:
-        return _response(
-            False,
-            error=str(exc),
-            hint="configure a BCM login/cookie with cmproc permission",
-        )
+        return {
+            "ok": False,
+            "error": str(exc),
+            "hint": "configure a BCM login/cookie with cmproc permission",
+        }
     except Exception as exc:  # noqa: BLE001 - preserve JSON protocol for every PythonCM failure
-        return _response(False, error=f"{type(exc).__name__}: {exc}")
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     finally:
-        if cluster is not None:
+        if owned_cluster is not None:
             try:
-                cluster.disconnect()
+                owned_cluster.disconnect()
             except Exception:  # noqa: BLE001,S110 - cannot mask the protocol response
                 pass
+
+
+def main(argv: list[str] | None = None) -> int:
+    result = execute(build_parser().parse_args(argv))
+    print(json.dumps(result, separators=(",", ":"), sort_keys=True))
+    return 0 if result.get("ok") else 2
 
 
 if __name__ == "__main__":

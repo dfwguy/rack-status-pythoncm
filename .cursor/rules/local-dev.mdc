@@ -35,10 +35,13 @@ edited `sysinfo.sh`/`*.sbatch` left stale on the head). It reads the same `RACK_
 head-only files.
 
 ```bash
-bin/deploy-scripts.sh boston-slogin              # via an ~/.ssh/config alias
-bin/deploy-scripts.sh --dry-run boston-slogin    # preview what would change (checksum diff)
-RACK_SSH_HOST=<head-ip> RACK_SSH_USER=root RACK_SSH_KEY=~/.ssh/<key> \
-  RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status bin/deploy-scripts.sh
+RACK_SSH_USER=cmods RACK_KNOWN_HOSTS_PATH=~/.ssh/<pinned-known-hosts> \
+  bin/deploy-scripts.sh boston-slogin
+RACK_SSH_USER=cmods RACK_KNOWN_HOSTS_PATH=~/.ssh/<pinned-known-hosts> \
+  bin/deploy-scripts.sh --dry-run boston-slogin
+RACK_SSH_HOST=<head-ip> RACK_SSH_USER=cmods RACK_SSH_KEY=~/.ssh/<key> \
+  RACK_KNOWN_HOSTS_PATH=~/.ssh/<pinned-known-hosts> \
+  RACK_REMOTE_BASE_PATH=/home/cmods/nvis-rack-status bin/deploy-scripts.sh
 ```
 
 After editing anything under `bin/scripts/`, re-run `bin/deploy-scripts.sh` so local↔head stay
@@ -58,7 +61,7 @@ superset of ours, not a stale lineage that was patched locally.
 ```bash
 RACK_EXEC_MODE=ssh \
 RACK_SSH_HOST=<head-node-ip> \
-RACK_SSH_USER=root \
+RACK_SSH_USER=cmods \
 RACK_SSH_KEY=~/.ssh/<key> \
 RACK_PLATFORM=bcm \
 RACK_STATUS_DEMO=0 \
@@ -208,7 +211,8 @@ Use `./build-docker.sh` for Docker workflows:
 ./build-docker.sh logs         # tail logs
 ```
 
-Prod requires `RACK_SSH_HOST` and `RACK_WEB_AUTH_TOKEN` env vars.
+Prod requires `RACK_SSH_HOST` and either `RACK_WEB_AUTH_TOKEN_FILE` (preferred)
+or the legacy `RACK_WEB_AUTH_TOKEN` environment value.
 
 ## Air-Gapped Image Bundle
 

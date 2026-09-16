@@ -11,7 +11,10 @@
 
 import ast
 import re
+from types import SimpleNamespace
 from pathlib import Path
+
+import slurm_query
 
 BACKEND = Path(__file__).resolve().parents[1]
 SLURM_CLI = r"(?:sbatch|srun|sinfo|squeue|sacct|scontrol|scancel)"
@@ -63,3 +66,32 @@ def test_host_execution_calls_do_not_embed_a_bare_slurm_cli():
         "Render Slurm commands with PlatformProvider before executing them: "
         f"{offenders}"
     )
+
+
+def test_live_node_status_queries_slurm_and_preserves_requested_order(monkeypatch):
+    class Platform:
+        @staticmethod
+        def sinfo_cmd(args):
+            return f"sinfo {args}"
+
+    seen = {}
+
+    def run(command, timeout):
+        seen.update(command=command, timeout=timeout)
+        return SimpleNamespace(
+            returncode=0,
+            stdout="node-b|drained|Prolog error\nnode-a|idle|(null)\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(slurm_query, "_get_platform", lambda: Platform())
+    monkeypatch.setattr(slurm_query.host_exec, "run_slurm_on_host", run)
+
+    result = slurm_query._run_sinfo_nodes(["node-a", "node-b", "node-missing"])
+
+    assert result["ok"] is True
+    assert "-N -h -o '%N|%T|%E'" in seen["command"]
+    assert [row["node"] for row in result["nodes"]] == ["node-a", "node-b", "node-missing"]
+    assert result["nodes"][0] == {"node": "node-a", "state": "idle", "reason": ""}
+    assert result["nodes"][1]["reason"] == "Prolog error"
+    assert result["nodes"][2]["state"] == "UNKNOWN"

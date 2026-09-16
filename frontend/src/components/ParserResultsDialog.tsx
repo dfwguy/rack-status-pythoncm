@@ -168,12 +168,28 @@ interface NemotronRow {
   mfu_percent?: string;
 }
 
+interface UniversalParserResult {
+  status?: string;
+  kind?: string;
+  job_id?: string;
+  nodes?: string[];
+  started_at?: string;
+  ended_at?: string;
+  headline?: { label?: string; value?: string | number; unit?: string | null };
+  metrics?: Array<{ name?: string; value?: string | number; unit?: string | null }>;
+  warnings?: string[];
+  errors?: string[];
+}
+
 interface ParserData {
   nccl_peak_out_of_place_busbw_gbps?: NcclRow[];
   nemotron_5h_56b_train_window?: NemotronRow[];
   /** Extra LLAMA rows from ``log_dir/sn-llama/*.txt`` (same rack), merged server-side */
   sn_llama_nemotron?: NemotronRow[];
   parser_flags?: { flag: string; value: string }[];
+  /** Provider-neutral fallback for current wrapper logs that legacy parser.sh cannot reshape. */
+  universal?: UniversalParserResult;
+  universal_stages?: Partial<Record<"nccl" | "nemo", UniversalParserResult>>;
 }
 
 type RawNemotron = Record<string, unknown> & { step_series?: unknown[]; step_time_series?: unknown[] };
@@ -781,6 +797,11 @@ function SummaryTab({
   const nemoRows = data.nemotron_5h_56b_train_window || [];
   const snLlamaRows = data.sn_llama_nemotron || [];
   const flags = data.parser_flags || [];
+  const universalResults: Array<[string, UniversalParserResult]> = data.universal_stages
+    ? Object.entries(data.universal_stages).filter((entry): entry is [string, UniversalParserResult] => Boolean(entry[1]))
+    : data.universal
+      ? [["validation", data.universal]]
+      : [];
   const logIsLlama = /llama3_8b|nemo-llama/i.test((logFile || "").toLowerCase());
   const showLlamaFromPrimary = snLlamaRows.length === 0 && logIsLlama && nemoRows.length > 0;
 
@@ -857,6 +878,61 @@ function SummaryTab({
           )}
         </Flex>
       </Card>
+
+      {universalResults.map(([stage, universal]) => (
+        <Card key={`${stage}-${universal.job_id || "result"}`} style={{ padding: 16, borderLeft: "4px solid #76b900" }}>
+          <Text kind="body/bold/md" style={{ display: "block", marginBottom: 8 }}>
+            Parsed {stage === "validation" ? "validation" : stage.toUpperCase()} result
+          </Text>
+          <Flex gap="4" wrap="wrap">
+            <div>
+              <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block" }}>Status</Text>
+              <Text kind="body/semibold/md">{String(universal.status || "unknown").toUpperCase()}</Text>
+            </div>
+            {universal.job_id && (
+              <div>
+                <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block" }}>Scheduler Job ID</Text>
+                <Text kind="mono/sm">{universal.job_id}</Text>
+              </div>
+            )}
+            {universal.nodes && (
+              <div>
+                <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block" }}>Nodes</Text>
+                <Text kind="body/semibold/md">{universal.nodes.length}</Text>
+              </div>
+            )}
+            {universal.started_at && (
+              <div>
+                <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block" }}>Started</Text>
+                <Text kind="mono/sm">{universal.started_at}</Text>
+              </div>
+            )}
+            {universal.ended_at && (
+              <div>
+                <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block" }}>Ended</Text>
+                <Text kind="mono/sm">{universal.ended_at}</Text>
+              </div>
+            )}
+          </Flex>
+          {(() => {
+            const priority = new Set([
+              "iterations", "gpus", "busbw_gbs", "required_gbs", "rack_mnnvl_accept_bytes",
+              "step_time_s", "tokens_per_second", "tflops_per_gpu",
+            ]);
+            const metrics = (universal.metrics || []).filter((m) => priority.has(String(m.name || "")));
+            if (!metrics.length) return null;
+            return (
+              <Flex gap="2" wrap="wrap" style={{ marginTop: 12 }}>
+                {metrics.map((metric, index) => (
+                  <Tag key={`${metric.name}-${index}`} color="gray" kind="outline" readOnly density="compact">
+                    {String(metric.name || "metric").replaceAll("_", " ")}: {String(metric.value ?? "—")}{metric.unit ? ` ${metric.unit}` : ""}
+                  </Tag>
+                ))}
+              </Flex>
+            );
+          })()}
+        </Card>
+      ))}
 
       {flags.length > 0 && (
         <Card style={{ padding: 16 }}>

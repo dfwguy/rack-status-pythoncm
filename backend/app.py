@@ -68,6 +68,7 @@ import math
 import os
 import queue
 import re
+import runpy
 import secrets
 import shlex
 import socket
@@ -77,6 +78,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import uuid
 import warnings
 import zipfile
@@ -111,6 +113,8 @@ os.environ.setdefault(
 _app_dir_s = str(APP_DIR)
 if _app_dir_s not in sys.path:
     sys.path.insert(0, _app_dir_s)
+
+from auth_token import auth_token as _load_auth_token
 
 import bcm_query
 import cluster_overview_live
@@ -155,9 +159,12 @@ import host_exec
 import nvftp_cache_sync
 import nvlink_preflight
 import post_run_report
+import external_validation_evidence
+import healthcheck_evidence
 import rack_locks
 import validation_activities
 import validation_presets
+import validation_provenance
 import workflow_engine
 from api import _common as _api_common
 from platforms import get_platform as _get_platform
@@ -199,6 +206,15 @@ from paths import (
     _script_exists,
     _scripts_dir,
 )
+
+# The validation scripts and this allowlist are bind-mounted into the long-lived
+# Gunicorn worker. Script deployments therefore become visible immediately, but
+# ordinary Python import caching used to leave the approved hashes stale until the
+# backend was restarted. Keep an atomic source snapshot so provenance checks can
+# refresh the small, dependency-free manifest module before comparing hashes.
+_VALIDATION_PROVENANCE_SOURCE = Path(validation_provenance.__file__).resolve()
+_VALIDATION_PROVENANCE_MTIME_NS = _VALIDATION_PROVENANCE_SOURCE.stat().st_mtime_ns
+_VALIDATION_PROVENANCE_RELOAD_LOCK = threading.Lock()
 
 # Output basename for Tools → 05-download-containers.sh (must match script).
 _TOOLS_NEMO_CONTAINER_SQSH = "nemo-25.11.01.sqsh"
@@ -999,6 +1015,33 @@ def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> No
             task["phase"] = task_phase
 
     rec["work_phase"] = validation_activities.rollup_work_phase(tasks)
+    _reconcile_validation_activity_parent_phase(aid, rec)
+
+
+def _reconcile_validation_activity_parent_phase(activity_id: str, rec: dict) -> None:
+    """Make an all-terminal task rollup terminal at the activity level too."""
+    tasks = [task for task in (rec.get("tasks") or []) if isinstance(task, dict)]
+    if not tasks:
+        return
+    work_phase = validation_activities.rollup_work_phase(tasks)
+    rec["work_phase"] = work_phase
+    phase = str(rec.get("phase") or "").strip().lower()
+    if phase in validation_activities.TERMINAL_PHASES:
+        return
+    if work_phase == "done":
+        terminal_phase = "done"
+    elif work_phase == "failed":
+        terminal_phase = "error"
+    else:
+        return
+    patch: dict[str, object] = {
+        "phase": terminal_phase,
+        "work_phase": work_phase,
+    }
+    if not rec.get("finished_at"):
+        patch["finished_at"] = datetime.now(timezone.utc).isoformat()
+    validation_activities.update_activity(activity_id, **patch)
+    rec.update(patch)
 
 
 def _update_validation_activity(activity_id: str, **kwargs: object) -> None:
@@ -1048,6 +1091,7 @@ def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
         if not aid:
             continue
         tasks = rec.get("tasks") or []
+        _reconcile_validation_activity_parent_phase(aid, rec)
         if not any(_task_needs_slurm_hydration(t) for t in tasks if isinstance(t, dict)):
             # Still refresh rollup for legacy rows missing work_phase.
             if tasks and not rec.get("work_phase"):
@@ -1214,6 +1258,37 @@ def _maybe_adopt_validation_log(log_path: Path, log_dir: Path, rack: str) -> Non
         _logger.debug("validation log adopt skipped for %s: %s", log_path, e, exc_info=True)
 
 
+def _validation_adoption_metadata(
+    log_path: Path, log_dir: Path, rack_hint: str, *, explicit_path: bool
+) -> tuple[Path, str]:
+    """Return fail-closed rack/directory attribution for an adopted validation log.
+
+    An explicit path is stronger than the parser's configured discovery root: its exact parent
+    is the activity directory, while the deterministic campaign path and validated HOSTLIST are
+    independent rack evidence. Conflicting evidence is deliberately left unattributed.
+    """
+    if not explicit_path:
+        rack = (rack_hint or multirack_display_rack_from_basename(log_path.name) or "").strip()
+        if rack:
+            try:
+                rack = _normalize_rack_id(rack)
+            except ValueError:
+                pass
+        return log_dir, rack
+
+    candidates: set[str] = set()
+    if rack_hint.strip():
+        try:
+            candidates.add(_normalize_rack_id(rack_hint))
+        except ValueError:
+            pass
+    path_rack = _rack_from_nscale_campaign_log_path(log_path)
+    if path_rack:
+        candidates.add(path_rack)
+    candidates.update(_racks_from_validated_hostlist(log_path))
+    return log_path.parent, next(iter(candidates)) if len(candidates) == 1 else ""
+
+
 def _validation_job_purge_later(job_id: str, delay_sec: int = 900) -> None:
     """Drop finished job metadata after a delay (avoids unbounded memory)."""
 
@@ -1259,9 +1334,9 @@ def _validation_worker(
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
             return
-        # NeMo/validation launchers run on the privileged "script" target (root@slogin):
-        # they pdsh-rsync the .sqsh into root-owned /raid/data on compute nodes and submit
-        # via sbatch — neither possible as the unprivileged control-plane user on the head.
+        # Route the launcher through the configured script execution boundary. The launcher
+        # itself uses only the Slurm client: exact-node image/GPU checks execute inside an
+        # allocation, so the web container never needs compute-node SSH credentials.
         hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates),
                                      profile="script", env_extra=env_updates)
         _register_validation_launcher(job_id, hp)
@@ -2426,9 +2501,8 @@ def _auth_mode() -> str:
 
 
 def _auth_token() -> str | None:
-    """Token string when RACK_WEB_AUTH_MODE=token."""
-    t = (os.environ.get("RACK_WEB_AUTH_TOKEN") or "").strip()
-    return t or None
+    """Token string when RACK_WEB_AUTH_MODE=token (file first, env compatible)."""
+    return _load_auth_token()
 
 
 def _auth_user() -> str:
@@ -3037,11 +3111,14 @@ def list_log_txt_paths_for_export(
 
 
 def find_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
-    """Paths to single-rack validation logs for *rack* under ``log_dir`` and ``failed/`` (newest first).
+    """Paths to single-rack validation logs for *rack* (newest first).
 
-    Scans ``*.txt`` and keeps files whose basename maps to exactly this rack via
+    Scans the legacy flat ``*.txt`` tree and the deterministic 16K campaign directories. Legacy
+    files are kept when their basename maps to exactly this rack via
     ``rack_id_from_log_basename`` (agnostic to pod/rack zero-padding in filenames, e.g. ``p5-r01``
-    vs dashboard ``p05-r01``). Excludes multirack and Llama Slurm stdout basenames.
+    vs dashboard ``p05-r01``). Campaign lookup lists only this rack's ``multiNodeNCCL`` and
+    ``multiNodeNeMo`` directories; it never recursively scans the fleet log tree. Excludes
+    multirack and Llama Slurm stdout basenames.
     """
     rk = _normalize_rack_id(rack)
     naming = _nvis_naming()
@@ -3065,6 +3142,56 @@ def find_log_paths_for_rack(log_dir: Path, rack: str) -> list[Path]:
                 continue
             seen.add(path)
             scored.append((mtime_ns / 1_000_000_000, native_status._host_path(path)))
+
+    # Dashboard-launched single-rack jobs write scheduler stdout with generic names such as
+    # ``nvftp-nccl-five-collective-55421.out`` and ``nemo-26.04.01-55433.out``.  The filename
+    # deliberately does not contain the rack, so basename-only discovery above cannot attribute
+    # it.  The durable activity ledger *does* carry both the rack and the exact stdout path; use
+    # that provenance rather than guessing from log contents.  This is also what keeps a failed
+    # run's partial parser results attached to the rack after the in-memory job registry is gone.
+    try:
+        activities = validation_activities.list_activities(
+            log_dir=str(_rpath(log_dir)), rack=rk, limit=0
+        )
+        root = _rpath(log_dir)
+        for activity in activities:
+            for task in activity.get("tasks") or []:
+                if not isinstance(task, dict):
+                    continue
+                for key in ("results_log_path", "training_log_path", "stdout_path"):
+                    raw_path = str(task.get(key) or "").strip()
+                    if not raw_path or raw_path in seen:
+                        continue
+                    candidate = PurePosixPath(os.path.normpath(raw_path))
+                    try:
+                        candidate.relative_to(root)
+                    except ValueError:
+                        continue
+                    # Container-stage and other setup logs are not parser evidence.  Only the
+                    # two reviewed single-rack stage basenames are eligible here.
+                    if _rack_log_stage_kind(candidate) is None:
+                        continue
+                    st = host_exec.stat(candidate)
+                    if st is None:
+                        continue
+                    seen.add(raw_path)
+                    scored.append((st.mtime, candidate))  # type: ignore[arg-type]
+    except Exception as e:  # noqa: BLE001 - legacy/campaign discovery must remain available
+        _logger.warning("activity-backed rack log discovery failed for %s: %s", rk, e)
+
+    campaign = _nscale_campaign_rack_dir(log_dir, rk)
+    if campaign is not None:
+        campaign_patterns = (
+            (campaign / "multiNodeNCCL", "nvftp-nccl-five-collective-*.out"),
+            (campaign / "multiNodeNeMo", "nemo-26.04.01-*.out"),
+        )
+        for base, pattern in campaign_patterns:
+            for path_s, st in host_exec.stat_dir(base, patterns=(pattern,)).items():
+                name = PurePosixPath(path_s).name
+                if _campaign_log_job_id(name) is None or path_s in seen:
+                    continue
+                seen.add(path_s)
+                scored.append((st.mtime, PurePosixPath(path_s)))  # type: ignore[arg-type]
     scored.sort(key=lambda t: t[0], reverse=True)
     return [p for _m, p in scored]
 
@@ -3090,6 +3217,59 @@ _NVLOOM_HEATMAPS_LOG_MAX_BYTES = 40 * 1024 * 1024
 
 
 _FULL_RACK_NODES_RE = re.compile(r"-(\d+)N-", re.IGNORECASE)
+_NSCALE_CAMPAIGN_RACK_RE = re.compile(r"^ink50-(dh0[12])-([a-z])(\d{2})$", re.IGNORECASE)
+_NSCALE_CAMPAIGN_SU_BY_ROW = {
+    ("dh02", "e"): "SU5",
+    ("dh02", "f"): "SU6",
+    ("dh02", "g"): "SU7",
+    ("dh02", "h"): "SU8",
+    ("dh02", "i"): "SU9",
+    ("dh02", "j"): "SU10",
+    ("dh02", "k"): "SU11",
+    ("dh01", "a"): "SU12",
+    ("dh01", "b"): "SU13",
+    ("dh01", "c"): "SU14",
+}
+_CAMPAIGN_NCCL_LOG_RE = re.compile(r"^nvftp-nccl-five-collective-(\d+)\.out$")
+_CAMPAIGN_NEMO_LOG_RE = re.compile(r"^nemo-26\.04\.01-(\d+)\.out$")
+_CAMPAIGN_NCCL_NODE_COUNT_RE = re.compile(
+    r"FIVE_COLLECTIVE_SWEEP_START[^\n]*\bnodes=(\d+)", re.IGNORECASE
+)
+_CAMPAIGN_NEMO_NODE_COUNT_RE = re.compile(
+    r"(?:\bnnodes|NEMO_VALIDATION_(?:PASS|FAIL)[^\n]*\bnodes)=(\d+)", re.IGNORECASE
+)
+
+
+def _nscale_campaign_rack_dir(log_dir: Path, rack: str) -> PurePosixPath | None:
+    """Deterministic SU/rack log directory for an Nscale 16K dashboard rack id."""
+    match = _NSCALE_CAMPAIGN_RACK_RE.fullmatch(rack or "")
+    if not match:
+        return None
+    su = _NSCALE_CAMPAIGN_SU_BY_ROW.get((match.group(1).lower(), match.group(2).lower()))
+    if su is None:
+        return None
+    return _rpath(log_dir).parent / su / f"rack{match.group(3)}"
+
+
+def _campaign_log_job_id(name: str) -> str | None:
+    """Job id from an exact 16K campaign NCCL/NeMo stdout basename."""
+    for pattern in (_CAMPAIGN_NCCL_LOG_RE, _CAMPAIGN_NEMO_LOG_RE):
+        match = pattern.fullmatch(name or "")
+        if match:
+            return match.group(1)
+    return None
+
+
+def _rack_log_job_id(path: Path) -> str | None:
+    return _campaign_log_job_id(path.name) or _jobid_from_nemo_log_basename(path.name)
+
+
+def _rack_log_stage_kind(path: Path) -> str | None:
+    if _CAMPAIGN_NCCL_LOG_RE.fullmatch(path.name):
+        return "nccl"
+    if _CAMPAIGN_NEMO_LOG_RE.fullmatch(path.name):
+        return "nemo"
+    return native_status._stage_kind_of_log_bn(path.name)
 
 
 def _node_count_from_log_basename(name: str) -> int | None:
@@ -3101,6 +3281,46 @@ def _node_count_from_log_basename(name: str) -> int | None:
         return int(m.group(1), 10)
     except ValueError:
         return None
+
+
+def _node_count_from_rack_log(path: Path) -> int | None:
+    """Node count from a legacy filename or a bounded campaign-log head/tail read."""
+    encoded = _node_count_from_log_basename(path.name)
+    if encoded is not None:
+        return encoded
+    if _campaign_log_job_id(path.name) is None:
+        return None
+    text, meta = host_exec.read_text(
+        path, head_bytes=65536, tail_bytes=65536, whole_bytes=131072, timeout=30
+    )
+    if meta.get("read_error"):
+        return None
+    pattern = (
+        _CAMPAIGN_NCCL_NODE_COUNT_RE
+        if _CAMPAIGN_NCCL_LOG_RE.fullmatch(path.name)
+        else _CAMPAIGN_NEMO_NODE_COUNT_RE
+    )
+    match = pattern.search(text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1), 10)
+    except ValueError:
+        return None
+
+
+def _rack_log_path_allowed(log_dir: Path, path: Path) -> bool:
+    """True when a selected log is below the configured log dir or an allowlisted root."""
+    candidate = PurePosixPath(os.path.normpath(str(path)))
+    roots = _allowed_roots() or [_rpath(log_dir)]
+    for raw_root in roots:
+        root = PurePosixPath(os.path.normpath(str(raw_root)))
+        try:
+            candidate.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def _full_rack_expected_nodes() -> int:
@@ -3135,14 +3355,13 @@ def pick_log_for_rack(
         return None
     if full_rack:
         need = int(full_rack_nodes) if full_rack_nodes and full_rack_nodes > 0 else _full_rack_expected_nodes()
-        cands = [p for p in cands if _node_count_from_log_basename(p.name) == need]
+        cands = [p for p in cands if _node_count_from_rack_log(p) == need]
         if not cands:
             return None
     j = (job_id or "").strip()
     if scheduler_runtime.valid_reference(j):
-        suf = f"N-{j}.txt"
         for p in cands:
-            if p.name.endswith(suf):
+            if _rack_log_job_id(p) == j:
                 return p
         # full_rack: job_id may be a partial (1N) sweep — fall through to newest full-rack log
         if not full_rack:
@@ -3178,23 +3397,23 @@ def pick_logs_for_rack(
         return {}
     if full_rack:
         need = int(full_rack_nodes) if full_rack_nodes and full_rack_nodes > 0 else _full_rack_expected_nodes()
-        cands = [p for p in cands if _node_count_from_log_basename(p.name) == need]
+        cands = [p for p in cands if _node_count_from_rack_log(p) == need]
         if not cands:
             return {}
 
     j = (job_id or "").strip()
-    suf = f"N-{j}.txt" if scheduler_runtime.valid_reference(j) else None
+    pinned_job = j if scheduler_runtime.valid_reference(j) else None
     out: dict[str, Path] = {}
     # cands is newest-first, so the first hit per stage is that stage's newest log.
     for p in cands:
-        kind = native_status._stage_kind_of_log_bn(p.name)
+        kind = _rack_log_stage_kind(p)
         if kind and kind not in out:
             out[kind] = p
     # An explicit job_id outranks "newest" for its own stage only.
-    if suf:
+    if pinned_job:
         for p in cands:
-            if p.name.endswith(suf):
-                kind = native_status._stage_kind_of_log_bn(p.name)
+            if _rack_log_job_id(p) == pinned_job:
+                kind = _rack_log_stage_kind(p)
                 if kind:
                     out[kind] = p
                 break
@@ -3286,9 +3505,8 @@ def _primary_stage_log(stage_paths: dict[str, Path], job_id: str | None) -> Path
         return None
     j = (job_id or "").strip()
     if scheduler_runtime.valid_reference(j):
-        suf = f"N-{j}.txt"
         for p in stage_paths.values():
-            if p.name.endswith(suf):
+            if _rack_log_job_id(p) == j:
                 return p
     return stage_paths.get("nemo") or stage_paths.get("nccl")
 
@@ -4476,6 +4694,146 @@ def _nemo_xrack_script_path() -> Path:
     return _rpath(Path(p))
 
 
+def _validation_container_root() -> str:
+    return (
+        _eget("RACK_VALIDATION_CONTAINER_ROOT", validation_presets.DEFAULT_SHARED_CONTAINER_ROOT)
+        or validation_presets.DEFAULT_SHARED_CONTAINER_ROOT
+    ).strip().rstrip("/")
+
+
+def _validation_node_container_dir() -> str:
+    return (
+        _eget("RACK_VALIDATION_NODE_CONTAINER_DIR", validation_presets.DEFAULT_LOCAL_CONTAINER_DIR)
+        or validation_presets.DEFAULT_LOCAL_CONTAINER_DIR
+    ).strip().rstrip("/")
+
+
+def _validation_provenance_root() -> str:
+    return (
+        _eget("RACK_VALIDATION_PROVENANCE_ROOT", "/cluster/OVA/scripts/nscaletx-16k-validation")
+        or "/cluster/OVA/scripts/nscaletx-16k-validation"
+    ).strip().rstrip("/")
+
+
+def _validation_runtime_env() -> dict[str, str]:
+    provenance_root = _validation_provenance_root()
+    return {
+        "RACK_VALIDATION_CONTAINER_ROOT": _validation_container_root(),
+        "RACK_VALIDATION_NODE_CONTAINER_DIR": _validation_node_container_dir(),
+        "RACK_VALIDATION_PROVENANCE_ROOT": provenance_root,
+        "NVIS_VALIDATION_NODE_SCRIPTS_DIR": f"{provenance_root}/runtime/bin/scripts",
+        "NVIS_NEMO_SHARED_CACHE_DIR": _validation_container_root(),
+        "NVIS_NEMO_NODE_CACHE_DIR": _validation_node_container_dir(),
+        "NVIS_SLURM_SUBMIT_UID": (_eget("RACK_SLURM_SUBMIT_UID") or "").strip(),
+        "NVIS_SLURM_SUBMIT_GID": (_eget("RACK_SLURM_SUBMIT_GID") or "").strip(),
+        "NVIS_SLURM_SUBMIT_HOME": (_eget("RACK_SLURM_SUBMIT_HOME") or "").strip(),
+    }
+
+
+def _external_validation_preset_availability(
+    preset: validation_presets.Preset,
+) -> dict[str, object]:
+    """Return path-level readiness for presets backed by external LLMB assets.
+
+    These paths are consumed by the dispatcher itself, before any compute-node
+    payload can start. Exposing the same contract in the catalogue and Prepare
+    prevents a missing image, model, or tagged recipe from becoming a generic
+    failed validation activity after Slurm work has already been submitted.
+    """
+    llmb_install = (_eget("LLMB_INSTALL") or "/home/cmods/workspace/llmb").strip()
+    llmb_repo = (_eget("LLMB_REPO") or f"{llmb_install.rstrip('/')}/llmb_repo").strip()
+    requirements: list[tuple[str, str, str]] = []
+    if preset.id == "gpt-oss-cpu":
+        requirements = [
+            ("shared_image", "file", str(preset.shared_image or "")),
+            ("llmb_repository", "directory", llmb_repo),
+            ("launch_script", "file", f"{llmb_repo.rstrip('/')}/microbenchmarks/cpu_overhead/launch.sh"),
+            ("kernel_recipe", "file", f"{llmb_repo.rstrip('/')}/microbenchmarks/cpu_overhead/pytorch_kernel_launch_latency.py"),
+            ("model", "file", f"{llmb_install.rstrip('/')}/workloads/microbenchmark_cpu_overhead/gpt-oss-120b/metal/model.bin"),
+            ("dataset_recipe", "file", f"{llmb_install.rstrip('/')}/workloads/microbenchmark_cpu_overhead/TensorRT-LLM/benchmarks/cpp/prepare_dataset.py"),
+        ]
+    elif preset.id == "exemplar-system-info":
+        recipe = f"{llmb_repo.rstrip('/')}/microbenchmarks/system_info"
+        requirements = [
+            ("shared_image", "file", str(preset.shared_image or "")),
+            ("llmb_repository", "directory", llmb_repo),
+            ("v26.06.01_recipe", "directory", recipe),
+            ("launch_script", "file", f"{recipe}/launch.sh"),
+        ]
+
+    checked: list[dict[str, object]] = []
+    reasons: list[str] = []
+    for name, kind, path in requirements:
+        present = bool(path) and (
+            host_exec.is_dir(PurePosixPath(path))
+            if kind == "directory"
+            else host_exec.is_file(PurePosixPath(path))
+        )
+        checked.append({"name": name, "kind": kind, "path": path, "present": present})
+        if not present:
+            reasons.append(f"missing required {name}: {path}")
+    return {
+        "available": not reasons,
+        "status": "ready" if not reasons else "blocked",
+        "reasons": reasons,
+        "prerequisites": checked,
+    }
+
+
+def _refresh_validation_provenance() -> None:
+    """Atomically reload a changed bind-mounted provenance manifest.
+
+    Execute the source path directly instead of relying on ``importlib.reload``:
+    timestamp-based ``.pyc`` validation can otherwise reuse stale bytecode when a
+    same-sized manifest edit lands within one second. A failed reload leaves the
+    last known module installed but fails this request closed.
+    """
+    global validation_provenance, _VALIDATION_PROVENANCE_MTIME_NS
+
+    try:
+        current_mtime = _VALIDATION_PROVENANCE_SOURCE.stat().st_mtime_ns
+    except OSError as exc:
+        raise ValueError(f"validation provenance manifest unavailable: {exc}") from None
+    if current_mtime == _VALIDATION_PROVENANCE_MTIME_NS:
+        return
+    with _VALIDATION_PROVENANCE_RELOAD_LOCK:
+        try:
+            current_mtime = _VALIDATION_PROVENANCE_SOURCE.stat().st_mtime_ns
+        except OSError as exc:
+            raise ValueError(f"validation provenance manifest unavailable: {exc}") from None
+        if current_mtime == _VALIDATION_PROVENANCE_MTIME_NS:
+            return
+        try:
+            candidate = types.ModuleType("validation_provenance")
+            candidate.__dict__.update(
+                runpy.run_path(
+                    str(_VALIDATION_PROVENANCE_SOURCE),
+                    run_name="validation_provenance_live",
+                )
+            )
+            if not callable(getattr(candidate, "verify", None)) or not isinstance(
+                getattr(candidate, "PROFILES", None), dict
+            ):
+                raise ValueError("manifest does not publish verify() and PROFILES")
+        except Exception as exc:
+            raise ValueError(f"validation provenance manifest reload failed: {exc}") from None
+        validation_provenance = candidate
+        _VALIDATION_PROVENANCE_MTIME_NS = current_mtime
+        _logger.info(
+            "reloaded validation provenance manifest mtime_ns=%s",
+            current_mtime,
+        )
+
+
+def _verified_validation_provenance(profile: str) -> dict[str, object]:
+    _refresh_validation_provenance()
+    return validation_provenance.verify(
+        profile,
+        Path(_scripts_dir()),
+        Path(_validation_provenance_root()),
+    )
+
+
 def _run_llama_script_path() -> Path:
     p = _eget("RACK_LLAMA_SCRIPT", str(SCRIPTS_DIR / "run-llama.sh")) or str(SCRIPTS_DIR / "run-llama.sh")
     return _rpath(Path(p))
@@ -4531,6 +4889,9 @@ def _job_env_effective_values() -> dict[str, str]:
         "NVIS_CT_ID": native_status._nvis_ct_id_template(),
         "NVIS_NVSW_ID": native_status._nvis_nvsw_id_template(),
         "NEMO_SQSH_SRC": (_eget("NEMO_SQSH_SRC") or "").strip(),
+        "RACK_VALIDATION_CONTAINER_ROOT": _validation_container_root(),
+        "RACK_VALIDATION_NODE_CONTAINER_DIR": _validation_node_container_dir(),
+        "RACK_VALIDATION_PROVENANCE_ROOT": _validation_provenance_root(),
         "RACK_NEMO_XRACK_SCRIPT": str(_nemo_xrack_script_path()),
         "RACK_NEMO_XRACK_TIMEOUT": str(max(300, _job_env_int("RACK_NEMO_XRACK_TIMEOUT", 7200))),
         "RACK_LLAMA_SCRIPT": str(_run_llama_script_path()),
@@ -5632,7 +5993,9 @@ def _collect_canonical_rack_status(log_dir: Path) -> dict:
     ``native_workers``. Do not call ``_merge_live_native_workers_into_status``
     here — that rebuilds the table and re-runs ``squeue``.
     """
-    return run_rack_status(log_dir, include_raw=False)
+    payload = run_rack_status(log_dir, include_raw=False)
+    _merge_naming_into_status_payload(payload)
+    return payload
 
 
 def get_cluster_snapshot(
@@ -8580,6 +8943,27 @@ def _nvlink_preflight_script_path() -> Path:
     return _rpath(SCRIPTS_DIR / "nvlink_preflight.sh")
 
 
+def _nvlink_preflight_execution_script_path(script: Path) -> Path:
+    """Return the path compute nodes can read for the preflight payload.
+
+    ``/app`` is the Rack Status container filesystem, not a shared compute-node
+    path.  Nscale publishes the byte-identical runtime bundle on NFS; use that
+    copy whenever the configured control-plane script resolves inside /app.
+    """
+    override = (_eget("RACK_NVLINK_PREFLIGHT_NODE_SCRIPT") or "").strip()
+    if override:
+        return _rpath(Path(override))
+    if str(script).startswith("/app/"):
+        return _rpath(
+            Path(_validation_provenance_root())
+            / "runtime"
+            / "bin"
+            / "scripts"
+            / script.name
+        )
+    return script
+
+
 def run_nvlink_preflight_pdsh(pdsh_w: str, *, quick: bool) -> dict:
     """pdsh ``nvlink_preflight.sh`` across *pdsh_w*; returns per-node rows plus raw output.
 
@@ -8587,7 +8971,7 @@ def run_nvlink_preflight_pdsh(pdsh_w: str, *, quick: bool) -> dict:
     the shared RACK_REMOTE_BASE_PATH, which is NFS on BCM). Unlike hw-check there is no wrapper
     script doing the fan-out, so the pdsh command is built here.
     """
-    script = _nvlink_preflight_script_path()
+    script = _nvlink_preflight_execution_script_path(_nvlink_preflight_script_path())
     if not _script_exists(script):
         raise OSError(f"nvlink_preflight.sh not found: {script}")
     if scheduler_runtime.is_pythoncm():
@@ -8595,13 +8979,36 @@ def run_nvlink_preflight_pdsh(pdsh_w: str, *, quick: bool) -> dict:
         default_timeout = 600 if quick else 1800
         timeout = max(60, _env_int("RACK_NVLINK_PREFLIGHT_TIMEOUT", default_timeout))
         command = f"bash {shlex.quote(str(script))} {'--quick' if quick else '--full'}"
+        pythoncm = build_scheduler(
+            "pythoncm", connection=host_exec.connection("control"), profile="control"
+        )
+        try:
+            # This is intentionally before submit.  A failed/ambiguous submit is never safe
+            # to replay through Slurm because ProgramRunner may already have accepted it.
+            pythoncm.probe(timeout=min(60, timeout))  # type: ignore[attr-defined]
+        except RuntimeError as exc:
+            return _run_nvlink_preflight_slurm_fallback(
+                nodes,
+                script=script,
+                quick=quick,
+                timeout=timeout,
+                fallback_reason=f"PythonCM execution readiness probe failed: {exc}",
+            )
         result = _run_pythoncm_fanout(
             ",".join(nodes), command, name="nvlink-preflight", timeout=timeout
         )
         rows = nvlink_preflight.parse_nvlink_preflight_output(
             str(result.get("stdout") or ""), str(result.get("stderr") or ""), nodes
         )
-        result.update({"quick": quick, "rows": rows, "summary": nvlink_preflight.summarize(rows)})
+        result.update({
+            "quick": quick,
+            "rows": rows,
+            "summary": nvlink_preflight.summarize(rows),
+            "scheduler": "pythoncm",
+            "execution_provider": "pythoncm",
+            "fallback": False,
+            "fallback_reason": "",
+        })
         return result
     w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
@@ -8654,6 +9061,193 @@ def run_nvlink_preflight_pdsh(pdsh_w: str, *, quick: bool) -> dict:
     }
 
 
+def _run_nvlink_preflight_slurm_fallback(
+    nodes: list[str],
+    *,
+    script: Path,
+    quick: bool,
+    timeout: int,
+    fallback_reason: str,
+) -> dict:
+    """Run preflight once per exact node after a failed non-mutating PythonCM probe."""
+    if not nodes:
+        raise ValueError("empty NVLink preflight node list")
+    submit_uid = (_eget("RACK_SLURM_SUBMIT_UID") or "").strip()
+    submit_gid = (_eget("RACK_SLURM_SUBMIT_GID") or "").strip()
+    if not submit_uid or not submit_gid:
+        raise OSError(
+            "NVLink preflight Slurm fallback requires both "
+            "RACK_SLURM_SUBMIT_UID and RACK_SLURM_SUBMIT_GID"
+        )
+    if not submit_uid.isdigit() or not submit_gid.isdigit():
+        raise OSError("NVLink preflight Slurm fallback UID/GID must be numeric")
+
+    node_list = ",".join(nodes)
+    mode = "--quick" if quick else "--full"
+    # Merge each task's stderr into stdout and prefix every line with its actual hostname.
+    # This preserves the same parser input shape as pdsh and ProgramRunner without relying
+    # on srun's rank labels (which are not node names).
+    per_node = (
+        "set -o pipefail; "
+        "node=$(hostname -s); "
+        f"bash {shlex.quote(str(script))} {mode} 2>&1 | "
+        "sed -u \"s/^/${node}: /\""
+    )
+    plat = _get_platform()
+    srun_args = shlex.join([
+        "--nodes", str(len(nodes)),
+        "--ntasks", str(len(nodes)),
+        "--ntasks-per-node=1",
+        "--kill-on-bad-exit=0",
+        "bash", "-lc", per_node,
+    ])
+    command = plat.srun_cmd(srun_args)
+    output = str(_default_log_dir() / "nvlink-preflight-slurm-%j.out")
+    home = (_eget("RACK_SLURM_SUBMIT_HOME") or "").strip()
+    extra_args = [
+        f"--uid={submit_uid}",
+        f"--gid={submit_gid}",
+        # Without an explicit GRES request Slurm's device cgroup hides every
+        # GPU, making the readiness gate report gpu_count=0 on healthy trays.
+        "--gpus-per-node=4",
+        "--exclusive",
+        "--no-requeue",
+        f"--time={max(1, (timeout + 59) // 60)}",
+        f"--error={output}",
+    ]
+    if home:
+        extra_args.append(f"--chdir={home}")
+    scheduler = build_scheduler(
+        "slurm", connection=host_exec.connection("control"), platform=plat, profile="control"
+    )
+    spec = JobSpec(
+        name="nvlink-preflight",
+        nodes=len(nodes),
+        nodelist=node_list,
+        ntasks_per_node=1,
+        command=command,
+        output=output,
+        extra_args=extra_args,
+        timeout=timeout,
+    )
+    activity_id = validation_activities.record_activity(
+        "nvlink-preflight",
+        stage="operation",
+        scope="nodes",
+        scheduler="slurm",
+        execution_provider="slurm",
+        fallback=True,
+        fallback_reason=fallback_reason,
+        source="pythoncm-readiness-fallback",
+        command_display=f"Slurm exact-node preflight: {node_list}",
+        log_dir=str(_default_log_dir()),
+        nodes=nodes,
+    )
+    handle = None
+    try:
+        handle = scheduler.submit(spec)
+        started = datetime.now(timezone.utc).isoformat()
+        validation_activities.add_or_update_task(
+            activity_id,
+            ordinal=1,
+            label="nvlink-preflight",
+            scheduler_ref=handle.job_id,
+            scheduler_state="PENDING",
+            phase="running",
+            work_phase="submitted",
+            evidence="slurm-fallback",
+            stdout_path=output.replace("%j", handle.job_id),
+            started_at=started,
+        )
+        validation_activities.update_activity(
+            activity_id,
+            phase="running",
+            work_phase="running",
+            scheduler_ref=handle.job_id,
+            started_running_at=started,
+        )
+        result = scheduler.wait(handle, timeout=timeout, poll_interval=5)
+        # Slurm opens stdout/stderr before the job shell can apply umask 0002.
+        # Normalize the completed artifact explicitly so every operator in the
+        # shared cmods group can continue the same validation workflow.
+        stdout_path = output.replace("%j", handle.job_id)
+        chmod_result = host_exec.run_on_host(
+            ["chmod", "g+rw", stdout_path], timeout=30, role="logs"
+        )
+        if chmod_result.returncode != 0:
+            detail = (chmod_result.stderr or chmod_result.stdout or "chmod failed").strip()
+            raise OSError(f"unable to make shared preflight log writable: {detail}")
+        if result.state not in {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY", "BOOT_FAIL", "DEADLINE", "PREEMPTED"}:
+            scheduler.cancel(handle)
+            result.state = "TIMEOUT"
+            result.returncode = 1
+            result.stderr = (result.stderr + "\n" if result.stderr else "") + (
+                f"timeout after {timeout}s; Slurm cancellation requested"
+            )
+        finished = datetime.now(timezone.utc).isoformat()
+        completed = result.state == "COMPLETED"
+        validation_activities.add_or_update_task(
+            activity_id,
+            ordinal=1,
+            label="nvlink-preflight",
+            scheduler_ref=handle.job_id,
+            scheduler_state=result.state,
+            phase="done" if completed else "error",
+            work_phase="done" if completed else "failed",
+            evidence="slurm-fallback",
+            returncode=result.returncode,
+            stdout_path=output.replace("%j", handle.job_id),
+            finished_at=finished,
+        )
+        validation_activities.update_activity(
+            activity_id,
+            phase="done" if completed else "error",
+            work_phase="done" if completed else "failed",
+            returncode=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            finished_at=finished,
+        )
+    except Exception as exc:
+        # A Slurm submit exception is not retried either.  If a handle exists, cancel only
+        # that exact native reference before surfacing the error.
+        if handle is not None:
+            try:
+                scheduler.cancel(handle)
+            except Exception:
+                _logger.exception("unable to cancel failed Slurm preflight %s", handle.job_id)
+        validation_activities.update_activity(
+            activity_id,
+            phase="error",
+            work_phase="failed",
+            returncode=-1,
+            error=str(exc),
+            finished_at=datetime.now(timezone.utc).isoformat(),
+        )
+        raise
+
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    rows = nvlink_preflight.parse_nvlink_preflight_output(stdout, stderr, nodes)
+    return {
+        "returncode": result.returncode,
+        "stdout": stdout,
+        "stderr": stderr,
+        "command_display": f"slurm exact-node nvlink-preflight {node_list}",
+        "pdsh_w": node_list,
+        "quick": quick,
+        "rows": rows,
+        "summary": nvlink_preflight.summarize(rows),
+        "scheduler": "slurm",
+        "execution_provider": "slurm",
+        "fallback": True,
+        "fallback_reason": fallback_reason,
+        "scheduler_ref": result.job_id,
+        "scheduler_state": result.state,
+        "activity_id": activity_id,
+    }
+
+
 def _nvlink_preflight_worker(job_id: str, pdsh_w: str, quick: bool, rack: str) -> None:
     """Run the NVLink preflight in a background thread; patches ``_reset_jobs[job_id]``."""
 
@@ -8691,9 +9285,16 @@ def _nvlink_preflight_worker(job_id: str, pdsh_w: str, quick: bool, rack: str) -
             quick=quick,
             rows=result.get("rows", []),
             summary=summary,
+            scheduler=result.get("scheduler", ""),
+            execution_provider=result.get("execution_provider", ""),
+            fallback=bool(result.get("fallback", False)),
+            fallback_reason=result.get("fallback_reason", ""),
+            scheduler_ref=result.get("scheduler_ref", ""),
+            scheduler_state=result.get("scheduler_state", ""),
+            activity_id=result.get("activity_id", ""),
             error=None if ready else _nvlink_preflight_error_text(summary),
         )
-    except (OSError, ValueError) as e:
+    except (OSError, RuntimeError, ValueError) as e:
         _patch(
             phase="error",
             ok=False,
@@ -9584,35 +10185,18 @@ def _rack_log_resolve(
                 {
                     "ok": False,
                     "error": (
-                        f"no matching *.txt for rack {rk!r} under {log_dir} or {log_dir / 'failed'} "
-                        f"(NEMO/NCCL basename, or ClusterKit root-CK-/clusterkit with one rack id)"
+                        f"no matching validation log for rack {rk!r} under the legacy tree at "
+                        f"{log_dir} or its deterministic SU/rack campaign directories"
                     ),
                 }
             ),
             404,
         )
-    # In ssh mode these are REMOTE paths (PurePosixPath): .resolve()/.is_file() touch the local
-    # filesystem and raise AttributeError, which Flask turns into a 500 -> an HTML error page ->
-    # "Unexpected token '<'" in the SPA. Only do filesystem checks for genuinely local paths.
-    if isinstance(log_dir, Path) and isinstance(log_path, Path):
-        root = _rpath(log_dir)
-        lp = _rpath(log_path)
-        try:
-            lp.relative_to(root)
-        except ValueError:
-            return jsonify({"ok": False, "error": "invalid log path"}), 400
-        if not lp.is_file():
-            return jsonify({"ok": False, "error": "log file not found"}), 404
-    else:
-        # PurePath.relative_to does not collapse "..", so normalise textually before the
-        # containment check or "<dir>/../../etc/passwd" would pass it.
-        root = PurePosixPath(os.path.normpath(str(log_dir)))
-        lp = PurePosixPath(os.path.normpath(str(log_path)))
-        try:
-            lp.relative_to(root)
-        except ValueError:
-            return jsonify({"ok": False, "error": "invalid log path"}), 400
-        # Existence is not checkable from here; a missing remote file surfaces as a read error.
+    lp = _rpath(log_path)
+    if not _rack_log_path_allowed(log_dir, lp):
+        return jsonify({"ok": False, "error": "invalid log path"}), 400
+    if not host_exec.is_file(lp):
+        return jsonify({"ok": False, "error": "log file not found"}), 404
     return log_dir, lp, rk
 
 
@@ -10349,6 +10933,10 @@ def _history_ingest_parser_json(
     if not isinstance(parsed, dict) or not core.history_enabled():
         return []
     try:
+        # parser.sh cannot recover a rack from generic scheduler stdout names such as
+        # ``mnubergemm-...-g001-55599.out``. Decorate before SQLite/lake ingestion so
+        # durable history and the immediate API response use the same evidence contract.
+        _annotate_parser_result_racks(parsed, [PurePosixPath(log_path_s)], log_dir)
         mt, sz = _log_stat_for_path(log_dir, log_path_s)
         return list(
             results_history.ingest_parser_json(
@@ -10668,7 +11256,23 @@ def api_bringup_node():
         data = _bringup.demo_node_summary(node) if _bringup else {"node": node, "jobs": []}
         return jsonify({"ok": True, "data": data})
     if _bringup is None or not _bringup.is_enabled():
-        return jsonify({"ok": False, "error": "bring-up integration disabled or unavailable"}), 404
+        # The node panel is part of the normal Nodes view, so an optional integration
+        # being absent is an empty state, not a failed user action.
+        return jsonify({"ok": True, "data": {
+            "node": node, "present": False, "slurm_state": "", "home": "", "jobs": [],
+        }})
+    try:
+        bringup_cfg = _bringup.config()
+    except Exception:  # noqa: BLE001 - discovery failure degrades to an empty panel
+        bringup_cfg = {"present": False, "home": _bringup.bringup_home()}
+    if not bringup_cfg.get("present"):
+        return jsonify({"ok": True, "data": {
+            "node": node,
+            "present": False,
+            "slurm_state": "",
+            "home": str(bringup_cfg.get("home") or ""),
+            "jobs": [],
+        }})
     try:
         data = _bringup.node_summary(node)
     except subprocess.TimeoutExpired:
@@ -10706,7 +11310,20 @@ def api_bringup_fleet():
         data = _bringup.demo_fleet_summary(_requested_nodes()) if _bringup else {"nodes": []}
         return jsonify({"ok": True, "data": data})
     if _bringup is None or not _bringup.is_enabled():
-        return jsonify({"ok": False, "error": "bring-up integration disabled or unavailable"}), 404
+        return jsonify({"ok": True, "data": {
+            "columns": [], "metric_labels": {}, "nodes": [], "home": "",
+        }})
+    try:
+        bringup_cfg = _bringup.config()
+    except Exception:  # noqa: BLE001 - discovery failure degrades to an empty heatmap
+        bringup_cfg = {"present": False, "home": _bringup.bringup_home()}
+    if not bringup_cfg.get("present"):
+        return jsonify({"ok": True, "data": {
+            "columns": [],
+            "metric_labels": {},
+            "nodes": [],
+            "home": str(bringup_cfg.get("home") or ""),
+        }})
     try:
         data = _bringup.fleet_summary()
     except subprocess.TimeoutExpired:
@@ -10951,22 +11568,20 @@ def api_parser_results():
         if log_path is None:
             need_n = full_rack_nodes if full_rack_nodes and full_rack_nodes > 0 else _full_rack_expected_nodes()
             detail = (
-                f"no matching *-{need_n}N-*.txt for rack {rk!r} under {log_dir} "
+                f"no matching {need_n}-node validation log for rack {rk!r} in the legacy or "
+                "deterministic SU/rack campaign trees "
                 f"(full-rack filter on; uncheck Full rack validation to use the latest partial log)"
                 if full_rack
                 else (
-                    f"no matching *.txt for rack {rk!r} under {log_dir} or {log_dir / 'failed'} "
-                    f"(NEMO/NCCL basename, or ClusterKit root-CK-/clusterkit with one rack id)"
+                    f"no matching validation log for rack {rk!r} under the legacy tree at "
+                    f"{log_dir} or its deterministic SU/rack campaign directories"
                 )
             )
             return jsonify({"ok": False, "error": detail}), 404
-    adopt_rk = (rk or rack or multirack_display_rack_from_basename(log_path.name) or "").strip()
-    if adopt_rk:
-        try:
-            adopt_rk = _normalize_rack_id(adopt_rk)
-        except ValueError:
-            pass
-    _maybe_adopt_validation_log(log_path, log_dir, adopt_rk)
+    adopt_log_dir, adopt_rk = _validation_adoption_metadata(
+        log_path, log_dir, rk or rack, explicit_path=bool(path_arg)
+    )
+    _maybe_adopt_validation_log(log_path, adopt_log_dir, adopt_rk)
     parser = _parser_path()
     if not _script_exists(parser):
         return jsonify({"ok": False, "error": f"parser.sh not found: {parser}"}), 500
@@ -11009,6 +11624,11 @@ def api_parser_results():
         ), 502
     if not isinstance(parsed, dict):
         return jsonify({"ok": False, "error": "parser JSON root must be an object"}), 502
+    _annotate_parser_result_racks(parsed, [log_path], log_dir)
+    if not rk:
+        attributed_racks = _parser_result_racks(parsed)
+        if len(attributed_racks) == 1:
+            rk = next(iter(attributed_racks))
     display_cmd = "./parser.sh --json " + shlex.quote(log_path.name)
     sn_nemo: list[object] = []
     # Secondary sn-llama pass. This used to be skipped unless the app ran on the
@@ -11037,6 +11657,7 @@ def api_parser_results():
         except (json.JSONDecodeError, OSError, subprocess.TimeoutExpired, ValueError) as e:
             _logger.warning("parser sn-llama bundle failed: %s", e)
     merged_data: dict[str, object] = {**parsed, "sn_llama_nemotron": sn_nemo}
+    universal_stages: dict[str, object] = {}
 
     # --- second stage (2026-08-03) ----------------------------------------------------
     # Stage 1 (NCCL) and stage 2 (NeMo) are separate jobs writing separate logs, so the file
@@ -11064,12 +11685,17 @@ def api_parser_results():
             parsed_s = json.loads(proc_s.stdout)
             if not isinstance(parsed_s, dict):
                 continue
+            _annotate_parser_result_racks(parsed_s, [spath], log_dir)
             rows_s = parsed_s.get(table)
             if isinstance(rows_s, list) and rows_s:
                 # Replace, not append: parser.sh emits an all-"---" placeholder row for an
                 # explicitly-named file whatever its content, so the primary log contributes a
                 # junk row to the table it is not the authority for. This stage owns the table.
                 merged_data[table] = list(rows_s)
+            if not _parser_json_has_usable_rows(parsed_s):
+                universal_s = _universal_fallback_for_log(log_dir, slp, rack_hint=rk or None)
+                if universal_s is not None:
+                    universal_stages[stage] = universal_s
         except (json.JSONDecodeError, OSError, subprocess.TimeoutExpired, ValueError) as e:
             _logger.warning("parser %s stage failed for %s: %s", stage, slp, e)
 
@@ -11109,6 +11735,9 @@ def api_parser_results():
             universal_res = _universal_fallback_for_log(log_dir, lp, rack_hint=rk or None)
             if universal_res is not None:
                 merged_data = {**merged_data, "universal": universal_res}
+                primary_stage = _rack_log_stage_kind(log_path)
+                if primary_stage:
+                    universal_stages[primary_stage] = universal_res
     except Exception as e:  # noqa: BLE001 - never break the charts for this
         _logger.warning("universal fallback failed for %s: %s", lp, e)
     try:
@@ -11117,6 +11746,8 @@ def api_parser_results():
                                         source="api/parser-results")
     except Exception as e:  # noqa: BLE001 - history is best-effort
         _logger.warning("results_history ingest failed for %s: %s", lp, e)
+    if universal_stages:
+        merged_data["universal_stages"] = universal_stages
 
     return jsonify(
         {
@@ -11126,7 +11757,7 @@ def api_parser_results():
             "log_file": lp,
             # Which file fed each tab. Absent keys mean that stage has no log for this rack yet.
             "stage_logs": stage_logs,
-            "job_id": _jobid_from_nemo_log_basename(Path(lp).name) or job_raw or "",
+            "job_id": _rack_log_job_id(PurePosixPath(lp)) or job_raw or "",
             "full_rack": bool(full_rack) if not (path_arg or log_fn) else False,
             "full_rack_nodes": (
                 (full_rack_nodes if full_rack_nodes and full_rack_nodes > 0 else _full_rack_expected_nodes())
@@ -11497,6 +12128,7 @@ def _parser_json_for_log_path(log_dir: Path, log_path: Path) -> tuple[dict | Non
             rack = _rack_id_from_log_basename(base) or ""
             jid = _jobid_from_nemo_log_basename(base) or "?"
             parsed = _parser_json_from_scan(rec, rack, jid)
+            _annotate_parser_result_racks(parsed, [log_path], log_dir)
             try:
                 if _parser_json_has_usable_rows(parsed):
                     _history_ingest_parser_json(
@@ -11539,6 +12171,7 @@ def _parser_json_for_log_path(log_dir: Path, log_path: Path) -> tuple[dict | Non
         return None, "parser stdout is not valid JSON"
     if not isinstance(parsed, dict):
         return None, None
+    _annotate_parser_result_racks(parsed, [log_path], log_dir)
     # Durable history (2026-07-28). This is the single choke point every analytics /
     # multirack parser call goes through, so hooking it here records a run for each parsed
     # log with no change to the return contract. Best-effort: swallowed on any failure.
@@ -12297,6 +12930,47 @@ def _analytics_last_cached() -> dict:
         return {}
 
 
+def _validation_report_compute_fleet(fleet: dict) -> dict:
+    """Restrict report aggregation to hosts resolved by the active NVIS template.
+
+    Slurm may contain control hosts such as ``appserver`` and bringup output can
+    contain presentation records. When at least one active compute template
+    match exists, only exact matches are validation subjects. Generic sites
+    whose naming template resolves none retain their original fleet unchanged.
+    """
+    source_nodes = [row for row in (fleet.get("nodes") or []) if isinstance(row, dict)]
+    compute: list[dict] = []
+    excluded: list[str] = []
+    naming = _nvis_naming()
+    for row in source_nodes:
+        name = str(row.get("node") or "").strip()
+        # Some bring-up/status script revisions emit visual separators as if
+        # they were CSV/nodeset rows.  A punctuation-only value has no host
+        # identity: omit it entirely instead of reporting it as an excluded
+        # Slurm host.
+        if name and not any(char.isalnum() for char in name):
+            continue
+        rack = None
+        try:
+            rack = naming.sinfo_rack_from_host(name) if name else None
+        except (TypeError, ValueError):
+            rack = None
+        if rack:
+            compute.append(row)
+        elif name:
+            excluded.append(name)
+    if not compute:
+        return fleet
+    result = dict(fleet)
+    result["nodes"] = compute
+    excluded_nodes = sorted(set(excluded))
+    result["excluded_non_compute"] = {
+        "count": len(excluded_nodes),
+        "nodes": excluded_nodes,
+    }
+    return result
+
+
 def _save_generated_report(
     *, kind: str, fmt: str, filename: str, data: bytes | str, meta: dict | None = None
 ) -> str:
@@ -12476,6 +13150,12 @@ def api_node_report_start():
         try:
             _set(phase="reading bring-up results")
             fleet = _bringup.fleet_summary() if _bringup else {"nodes": [], "columns": []}
+            fleet = _validation_report_compute_fleet(fleet)
+            excluded_non_compute = fleet.get("excluded_non_compute") or {
+                "count": 0,
+                "nodes": [],
+            }
+            _set(excluded_non_compute=excluded_non_compute)
             inventory = deviations = None
             if with_inventory:
                 _set(phase="sweeping nodes for hardware inventory",
@@ -12522,7 +13202,8 @@ def api_node_report_start():
                 saved = _save_generated_report(
                     kind="rack-status", fmt=fmt, filename=name, data=body_bytes,
                     meta={"cluster": dataset["meta"].get("cluster") or "",
-                          "nodes": len(dataset.get("nodes") or [])},
+                          "nodes": len(dataset.get("nodes") or []),
+                          "excluded_non_compute": excluded_non_compute},
                 )
                 _set(state="done", phase="complete", document=body_bytes, errors=[],
                      nodes=len(dataset.get("nodes") or []), report_id=name,
@@ -12534,16 +13215,30 @@ def api_node_report_start():
                 )
                 for entry in report.get("test_results") or []:
                     entry.setdefault("deviations", []).extend(deviations or [])
+                    if excluded_non_compute.get("count"):
+                        entry["deviations"].append(
+                            "Excluded non-compute Slurm hosts from validation scope: "
+                            + ", ".join(excluded_non_compute.get("nodes") or [])
+                        )
 
                 _set(phase="validating against the schema")
                 errors = _node_report.validate(report)
                 report_id = report.get("report_metadata", {}).get("report_id", "")
-                node_count = len(report.get("firmware_inventory", {}).get("nodes") or [])
+                # Without a per-node inventory sweep the strict customer schema intentionally
+                # carries one representative firmware placeholder. That is not the validation
+                # scope size: report/status/archive metadata must use the exact compute fleet.
+                node_count = int(
+                    report.get("system_under_test", {})
+                    .get("scope", {})
+                    .get("node_count")
+                    or 0
+                )
                 saved = _save_generated_report(
                     kind="nscale", fmt="json", filename=report_id or "nscale-report",
                     data=json.dumps(report, indent=2),
                     meta={"cluster": str((_as_dict(cluster) or {}).get("name") or ""),
-                          "nodes": node_count, "schema_errors": len(errors)},
+                          "nodes": node_count, "schema_errors": len(errors),
+                          "excluded_non_compute": excluded_non_compute},
                 )
                 _set(state="done", phase="complete", report=report, errors=errors[:20],
                      nodes=node_count, report_id=report_id, saved_id=saved)
@@ -13344,29 +14039,139 @@ def _multirack_campaign_manifest() -> dict[str, object]:
     }
 
 
+def _multirack_scheduler_nodes() -> list[dict[str, str]]:
+    """Return node/rack identity with Slurm admission state for multirack targeting.
+
+    PythonCM's PhysicalNode ``state`` is device lifecycle (for example ``up``), not Slurm
+    allocation state. Nscale validations still submit through the explicit Slurm fallback, so
+    admission must come from ``sinfo`` even while PythonCM owns inventory and rack identity.
+    """
+    proc = host_exec.run_slurm_on_host(
+        _get_platform().sinfo_cmd('-N -h -o "%N|%T"'),
+        timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "sinfo failed").strip())
+    slurm_states: dict[str, tuple[str, str]] = {}
+    for line in (proc.stdout or "").splitlines():
+        node, sep, state = line.partition("|")
+        node = node.strip()
+        if sep and node:
+            # Preserve Slurm's trailing ``*`` (for example ``idle*``): it marks a
+            # non-responding node and must not pass exact-node admission as idle.
+            slurm_states[node.casefold()] = (node, state.strip().lower())
+    if not slurm_states:
+        raise RuntimeError("sinfo returned no compute node admission states")
+
+    rows: list[dict[str, str]] = []
+    if scheduler_runtime.is_pythoncm():
+        for raw in scheduler_runtime.nodes():
+            node = str(raw.get("node") or "").strip()
+            if not node:
+                continue
+            rack = str(raw.get("rack") or "").strip()
+            if not rack:
+                parsed = _nvis_naming().sinfo_rack_from_host(node)
+                rack = str(parsed[0]) if parsed and parsed[1] is not None else ""
+            if not rack:
+                continue
+            try:
+                rack = _normalize_rack_id(rack)
+            except ValueError:
+                continue
+            rows.append({
+                "node": node,
+                "rack": rack,
+                "state": slurm_states.get(node.casefold(), (node, "missing"))[1],
+            })
+    else:
+        for node, state in slurm_states.values():
+            parsed = _nvis_naming().sinfo_rack_from_host(node)
+            if parsed is None or parsed[1] is None:
+                continue
+            try:
+                rack = _normalize_rack_id(parsed[0])
+            except ValueError:
+                continue
+            rows.append({"node": node, "rack": rack, "state": state})
+    if not rows:
+        raise RuntimeError("scheduler returned no rack-addressable compute nodes")
+    return rows
+
+
+def _automatic_multirack_campaign_snapshot() -> dict[str, object]:
+    """Select exactly N idle nodes per rack for the multirack launch surface."""
+    expected = max(1, _eget_int("RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK", 16))
+    excluded = {
+        token.strip().casefold()
+        for token in (_eget("RACK_VALIDATION_EXCLUDED_NODES") or "").split(",")
+        if token.strip()
+    }
+    by_rack: dict[str, list[dict[str, str]]] = {}
+    for row in _multirack_scheduler_nodes():
+        by_rack.setdefault(row["rack"], []).append(row)
+
+    rows: list[dict[str, object]] = []
+    digest_rows: list[tuple[str, list[str]]] = []
+    for rack, rack_rows in sorted(by_rack.items()):
+        ordered = sorted(rack_rows, key=lambda row: row["node"].casefold())
+        usable = [
+            row["node"] for row in ordered
+            if row["state"] == "idle" and row["node"].casefold() not in excluded
+        ]
+        selected = usable[:expected]
+        eligible = len(selected) == expected
+        unavailable = [
+            {
+                "node": row["node"],
+                "state": "known-bad" if row["node"].casefold() in excluded else row["state"],
+            }
+            for row in ordered
+            if row["node"] not in selected
+        ]
+        reason = "" if eligible else f"requires {expected} idle eligible nodes; found {len(usable)}"
+        rows.append({
+            "rack": rack,
+            "nodes": selected,
+            "node_count": len(selected),
+            "eligible": eligible,
+            "reason": reason,
+            "unavailable_nodes": unavailable,
+        })
+        if eligible:
+            digest_rows.append((rack, selected))
+
+    digest = hashlib.sha256(
+        json.dumps(
+            {"nodes_per_rack": expected, "racks": digest_rows},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return {
+        "ok": True,
+        "active": True,
+        "source": "live-scheduler",
+        "id": f"live-{expected}-{digest}",
+        "manifest": "",
+        "nodes_per_rack": expected,
+        "rack_count": len(rows),
+        "node_count": sum(int(row["node_count"]) for row in rows if row["eligible"]),
+        "eligible_count": sum(1 for row in rows if row["eligible"]),
+        "racks": rows,
+    }
+
+
 def _multirack_campaign_snapshot() -> dict[str, object]:
     manifest = _multirack_campaign_manifest()
     if not manifest.get("active"):
-        return manifest
+        return _automatic_multirack_campaign_snapshot()
     rack_nodes = manifest["rack_nodes"]
     assert isinstance(rack_nodes, dict)
-    states: dict[str, str] = {}
-    if scheduler_runtime.is_pythoncm():
-        states = {
-            str(row["node"]).casefold(): str(row.get("state") or "unknown")
-            for row in scheduler_runtime.nodes() if row.get("node")
-        }
-    else:
-        proc = host_exec.run_slurm_on_host(
-            _get_platform().sinfo_cmd('-N -h -o "%N|%T"'),
-            timeout=max(20, _env_int("RACK_SINFO_NODES_TIMEOUT", 60)),
-        )
-        if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or proc.stdout or "sinfo failed").strip())
-        for line in (proc.stdout or "").splitlines():
-            node, sep, state = line.partition("|")
-            if sep and node.strip():
-                states[node.strip().casefold()] = state.strip().lower().rstrip("*")
+    states = {
+        row["node"].casefold(): row["state"]
+        for row in _multirack_scheduler_nodes()
+    }
     allowed = {"idle", "alloc", "allocated"}
     rows: list[dict[str, object]] = []
     for rack, raw_nodes in sorted(rack_nodes.items()):
@@ -13391,6 +14196,7 @@ def _multirack_campaign_snapshot() -> dict[str, object]:
         })
     return {
         **{key: value for key, value in manifest.items() if key != "rack_nodes"},
+        "source": "manifest",
         "rack_count": len(rows),
         "node_count": sum(int(row["node_count"]) for row in rows),
         "eligible_count": sum(1 for row in rows if row["eligible"]),
@@ -13404,10 +14210,13 @@ def api_multirack_campaign():
         return jsonify(_multirack_campaign_snapshot())
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         app.logger.exception("multirack campaign snapshot failed")
-        return jsonify({"ok": False, "active": False, "error": str(exc)}), 503
+        return jsonify({"ok": False, "active": True, "error": str(exc)}), 503
 
 
-_EXPORT_RACK_RE = re.compile(r"^(p\d+-r)(\d+)$", re.IGNORECASE)
+# Any parser-attributed rack with a trailing numeric rack slot. The previous
+# Bright-only ``pNN-rNN`` pattern silently discarded every Nscale rack
+# (``ink50-dh02-e02``) after attribution had succeeded.
+_EXPORT_RACK_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*?)(\d+)$", re.IGNORECASE)
 
 
 def _export_float_cell(v: object) -> float | None:
@@ -13477,13 +14286,199 @@ def _export_llm_coalesce_latest_job(llm: list[dict]) -> dict[str, dict]:
     return {k: v[1] for k, v in best.items()}
 
 
+_NSCALE_CAMPAIGN_ROW_BY_SU = {
+    **{f"SU{index + 1}": ("dh02", chr(ord("a") + index)) for index in range(11)},
+    **{f"SU{index + 12}": ("dh01", chr(ord("a") + index)) for index in range(3)},
+}
+_NSCALE_CAMPAIGN_PATH_RE = re.compile(
+    r"(?:^|/)(SU(?:[1-9]|1[0-4]))/rack(0[1-9]|[12][0-9])(?:/|$)",
+    re.IGNORECASE,
+)
+
+
+def _rack_from_nscale_campaign_log_path(path: Path) -> str | None:
+    """Resolve an exact Nscale rack only from its deterministic campaign directory."""
+    match = _NSCALE_CAMPAIGN_PATH_RE.search(str(path))
+    if not match:
+        return None
+    row = _NSCALE_CAMPAIGN_ROW_BY_SU.get(match.group(1).upper())
+    if row is None:
+        return None
+    return f"ink50-{row[0]}-{row[1]}{match.group(2)}"
+
+
+_PARSER_RESULT_TABLES = (
+    "nccl_peak_out_of_place_busbw_gbps",
+    "nemotron_5h_56b_train_window",
+    "mnubergemm_stress",
+    "sn_llama_nemotron",
+)
+_HOSTLIST_LINE_RE = re.compile(r"(?im)^\s*HOSTLIST:\s*(\S(?:[^\r\n]*\S)?)\s*$")
+
+
+def _parser_result_racks(parsed: Mapping[str, object]) -> set[str]:
+    """Real rack ids already present in parser measurement tables."""
+    racks: set[str] = set()
+    for key in _PARSER_RESULT_TABLES:
+        rows = parsed.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            rack = str(row.get("rack") or "").strip()
+            if rack and rack != "?":
+                racks.add(rack)
+    return racks
+
+
+def _racks_from_validated_hostlist(path: Path) -> set[str]:
+    """Racks proven by a log's bounded ``HOSTLIST:`` header.
+
+    Every expanded token must resolve as a compute host under the active NVIS
+    naming template. A mixed-rack header deliberately returns multiple racks;
+    the caller retains all candidates and therefore abstains from attribution.
+    A missing or malformed header contributes no evidence.
+    """
+    try:
+        text, meta = host_exec.read_text(
+            path,
+            head_bytes=64 * 1024,
+            tail_bytes=0,
+            whole_bytes=64 * 1024,
+            timeout=30,
+        )
+    except Exception:  # noqa: BLE001 - activity/path provenance remains available
+        return set()
+    if meta.get("read_error") and not text:
+        return set()
+    specs = [match.group(1).strip() for match in _HOSTLIST_LINE_RE.finditer(text)]
+    if not specs:
+        return set()
+    nodes: list[str] = []
+    for spec in specs:
+        expanded = post_run_report.split_hostlist(spec)
+        if not expanded:
+            return set()
+        nodes.extend(expanded)
+    naming = _nvis_naming()
+    racks: set[str] = set()
+    for node in nodes:
+        try:
+            resolved = naming.sinfo_rack_from_host(node)
+        except (TypeError, ValueError):
+            return set()
+        # A rack-only template match is not enough: HOSTLIST must name compute hosts.
+        if not resolved or resolved[1] is None:
+            return set()
+        racks.add(str(resolved[0]).strip())
+    return {rack for rack in racks if rack}
+
+
+def _annotate_parser_result_racks(
+    parsed: dict[str, object], paths: list[Path], log_dir: Path
+) -> None:
+    """Fill unknown parser racks from deterministic, mutually-agreeing evidence.
+
+    Eligible sources are an exact SU/rack campaign path, a fully validated
+    ``HOSTLIST:`` for MNUBERGEMM stdout, or a scheduler job uniquely attached to
+    one rack in the activity ledger. A parsed rack is authoritative and is never
+    overwritten. Conflicting/multi-rack/no-match evidence remains ``?``.
+    """
+    unknown_jobs: set[str] = set()
+    mnubergemm_jobs: set[str] = set()
+    for key in _PARSER_RESULT_TABLES:
+        rows = parsed.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict) or str(row.get("rack") or "").strip() not in {"", "?"}:
+                continue
+            job_id = str(row.get("job_id") or "").strip()
+            if not job_id:
+                continue
+            unknown_jobs.add(job_id)
+            if key == "mnubergemm_stress":
+                mnubergemm_jobs.add(job_id)
+
+    if not unknown_jobs:
+        return
+    candidates: dict[str, set[str]] = {}
+    for path in paths:
+        job_id = _rack_log_job_id(path)
+        if not job_id or job_id not in unknown_jobs:
+            continue
+        rack = _rack_from_nscale_campaign_log_path(path)
+        if rack:
+            candidates.setdefault(job_id, set()).add(rack)
+        if job_id in mnubergemm_jobs:
+            candidates.setdefault(job_id, set()).update(_racks_from_validated_hostlist(path))
+
+    try:
+        activities = validation_activities.list_activities(
+            log_dir=str(_rpath(log_dir)), limit=0
+        )
+    except Exception:  # noqa: BLE001 - path provenance remains independently useful
+        activities = []
+    for activity in activities:
+        raw_racks = [str(item).strip() for item in (activity.get("racks") or []) if str(item).strip()]
+        fallback_rack = str(activity.get("rack") or "").strip()
+        if not raw_racks and fallback_rack:
+            raw_racks = [fallback_rack]
+        racks = set(raw_racks)
+        for task in activity.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            job_id = str(task.get("scheduler_ref") or "").strip()
+            if job_id not in unknown_jobs:
+                continue
+            # A task-level exact node set is stronger than the activity's aggregate rack list.
+            task_nodes = [str(node).strip() for node in (task.get("nodes") or []) if str(node).strip()]
+            task_racks: set[str] = set()
+            if task_nodes:
+                naming = _nvis_naming()
+                valid = True
+                for node in task_nodes:
+                    try:
+                        resolved = naming.sinfo_rack_from_host(node)
+                    except (TypeError, ValueError):
+                        resolved = None
+                    if not resolved or resolved[1] is None:
+                        valid = False
+                        break
+                    task_racks.add(str(resolved[0]).strip())
+                if valid:
+                    candidates.setdefault(job_id, set()).update(task_racks)
+            elif len(racks) == 1:
+                candidates.setdefault(job_id, set()).update(racks)
+
+    exact = {job_id: next(iter(racks)) for job_id, racks in candidates.items() if len(racks) == 1}
+    for key in _PARSER_RESULT_TABLES:
+        rows = parsed.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict) or str(row.get("rack") or "").strip() not in {"", "?"}:
+                continue
+            rack = exact.get(str(row.get("job_id") or "").strip())
+            if rack:
+                row["rack"] = rack
+
+
+def _annotate_parser_export_racks(
+    parsed: dict[str, object], paths: list[Path], log_dir: Path
+) -> None:
+    """Compatibility name for the parser workbook/export call site."""
+    _annotate_parser_result_racks(parsed, paths, log_dir)
+
+
 def _export_title_racks_flat(rack_ids: object) -> str:
     """Title listing racks that appear in the export (no synthetic multi-node spans)."""
     seen: set[str] = set()
     ordered: list[str] = []
     for rid in rack_ids:
         s = str(rid).strip()
-        if not s or s in seen:
+        if not s or s in seen or _export_parse_rack(s) is None:
             continue
         seen.add(s)
         ordered.append(s)
@@ -13536,6 +14531,73 @@ def _export_formatted_llm_rows(by_rack: dict[str, dict]) -> list[tuple[str, int,
     return [(rid, npr, t[0], t[1], t[2]) for _a, _b, rid, t in parsed]
 
 
+def _export_formatted_mnubergemm_rows(
+    by_rack: dict[str, dict],
+) -> list[
+    tuple[
+        str,
+        int | None,
+        int | None,
+        int | None,
+        int | None,
+        int | None,
+        float | None,
+        float | None,
+        str,
+    ]
+]:
+    """Latest MNUBERGEMM row per attributed rack, retaining the parser verdict.
+
+    A legacy parser could label an all-zero row DONE. The workbook must never
+    turn that into passing evidence, so a success-like verdict without positive
+    work is exported as FAIL. Incomplete/unknown verdicts remain explicit.
+    """
+    out: list[
+        tuple[
+            str,
+            int | None,
+            int | None,
+            int | None,
+            int | None,
+            int | None,
+            float | None,
+            float | None,
+            str,
+        ]
+    ] = []
+    for rack, row in by_rack.items():
+        parsed_rack = _export_parse_rack(rack)
+        if parsed_rack is None:
+            continue
+
+        def whole(key: str) -> int | None:
+            value = _export_float_cell(row.get(key))
+            return int(value) if value is not None else None
+
+        maximum = _export_float_cell(row.get("gflops_max"))
+        median = _export_float_cell(row.get("gflops_median"))
+        verdict = str(row.get("verdict") or "UNK").strip().upper() or "UNK"
+        if verdict in {"DONE", "PASS", "PASSED", "OK", "QUAL_OK"} and not (
+            (maximum is not None and maximum > 0) or (median is not None and median > 0)
+        ):
+            verdict = "FAIL"
+        out.append(
+            (
+                rack,
+                whole("nodes"),
+                whole("gpus"),
+                whole("ranks"),
+                whole("rank_samples"),
+                whole("qualified_ranks"),
+                maximum,
+                median,
+                verdict,
+            )
+        )
+    out.sort(key=lambda row: (_export_parse_rack(row[0]) or (row[0].casefold(), 0)))
+    return out
+
+
 def _workbook_style_and_write_table(
     ws,
     *,
@@ -13578,7 +14640,7 @@ def _workbook_style_and_write_table(
 
 
 def _workbook_bytes_from_parser_export(parsed: dict) -> bytes:
-    """Build .xlsx: NCCL sheets + llm match rack summary table layout (title + Rack / Nodes / …)."""
+    """Build the attributed NCCL, NeMo and MNUBERGEMM workbook."""
     try:
         from openpyxl import Workbook
         from openpyxl.utils import get_column_letter
@@ -13593,6 +14655,7 @@ def _workbook_bytes_from_parser_export(parsed: dict) -> bytes:
     ws_aa = wb.create_sheet("nccl all_to_all")
     ws_ag = wb.create_sheet("nccl all_gather")
     ws_llm = wb.create_sheet("llm")
+    ws_mnu = wb.create_sheet("mnubergemm")
 
     nccl = parsed.get("nccl_peak_out_of_place_busbw_gbps")
     if not isinstance(nccl, list):
@@ -13657,7 +14720,43 @@ def _workbook_bytes_from_parser_export(parsed: dict) -> bytes:
         merge_to_col=5,
     )
 
-    for ws in (ws_ar, ws_aa, ws_ag, ws_llm):
+    mnu = parsed.get("mnubergemm_stress")
+    if not isinstance(mnu, list):
+        mnu = []
+    mnu_by = _export_llm_coalesce_latest_job(mnu)
+    mnu_rows = _export_formatted_mnubergemm_rows(mnu_by)
+    mnu_data: list[list[object]] = []
+    for rack, nodes, gpus, ranks, rank_samples, qualified_ranks, maximum, median, verdict in mnu_rows:
+        mnu_data.append([
+            rack,
+            nodes,
+            gpus,
+            ranks,
+            rank_samples,
+            qualified_ranks,
+            round(maximum, 2) if maximum is not None else "",
+            round(median, 2) if median is not None else "",
+            verdict,
+        ])
+    _workbook_style_and_write_table(
+        ws_mnu,
+        title=_export_title_racks_flat(mnu_by.keys()),
+        headers=[
+            "Rack",
+            "Nodes",
+            "GPUs",
+            "Ranks",
+            "Rank samples",
+            "Qualified ranks",
+            "Max GFLOP/s",
+            "Median GFLOP/s",
+            "Verdict",
+        ],
+        data_rows=mnu_data,
+        merge_to_col=9,
+    )
+
+    for ws in (ws_ar, ws_aa, ws_ag, ws_llm, ws_mnu):
         for col in range(1, ws.max_column + 1):
             letter = get_column_letter(col)
             maxlen = 10
@@ -13770,6 +14869,7 @@ def api_parser_export_excel():
         ), 502
     if not isinstance(parsed, dict):
         return jsonify({"ok": False, "error": "parser JSON root must be an object"}), 502
+    _annotate_parser_export_racks(parsed, paths, log_dir)
     try:
         body = _workbook_bytes_from_parser_export(parsed)
     except RuntimeError as e:
@@ -14011,10 +15111,17 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"validation script not found: {script}"}), 500)
     # Pass the PythonCM-resolved Nscale rack id as $2 so the script names the
-    # log …-1Rack-<rack>-… without guessing from the node target.
-    cmd = ["bash", str(script), target, rk]
-    display_cmd = "./" + script.name + " " + shlex.quote(target) + " " + shlex.quote(rk)
-    timeout = max(30, _job_env_int("RACK_VALIDATION_TIMEOUT", 600))
+    # log …-1Rack-<rack>-… without guessing from the node target.  The reviewed
+    # compatibility wrapper accepts the resolved, shared log directory as $3;
+    # this keeps a request-specific directory authoritative instead of silently
+    # falling back to the service owner's environment.
+    cmd = ["bash", str(script), target, rk, str(log_dir)]
+    display_cmd = " ".join(
+        ("./" + script.name, shlex.quote(target), shlex.quote(rk), shlex.quote(str(log_dir)))
+    )
+    # The wrapper waits for the 30-step Slurm job.  Ten minutes was short enough
+    # to report a UI failure while the actual workload continued unobserved.
+    timeout = max(30, _job_env_int("RACK_VALIDATION_TIMEOUT", 43200))
     return (
         {
             "log_dir": log_dir,
@@ -14023,11 +15130,11 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
             "cmd": cmd,
             "display_cmd": display_cmd,
             "timeout": timeout,
-            # Settings -> job env values must reach run_llmb_nccl.sh, which otherwise falls back
-            # to its built-in defaults (/home/nvis/dgxc-benchmarking, /home/nvis/llmb_venv) —
-            # the wrong user on this cluster, and paths that do not exist. Mirrors how the
-            # ClusterKit prepare pulls its RACK_CLUSTERKIT_* keys via _eget.
+            # Carry the configured Slurm submit identity and compute-visible
+            # runtime paths into the compatibility wrapper.  Launch-dialog
+            # overrides remain authoritative.
             "env_updates": {
+                **_validation_runtime_env(),
                 **{
                     k: v
                     for k in ("LLMB_INSTALL", "LLMB_REPO", "LLMB_VENV", "NVIS_WORKSPACE_DIR")
@@ -14213,7 +15320,7 @@ def api_run_validation_async():
 
 
 def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
-    """Parse POST body for ``run-nemo-xrack.sh`` (comma-separated rack-ct[inner] specs)."""
+    """Prepare exact-node multirack NeMo targeting for ``run-nemo-xrack.sh``."""
     if os.environ.get("RACK_NEMO_XRACK_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (
             jsonify({"ok": False, "error": "multinode NEMO launch disabled (RACK_NEMO_XRACK_DISABLED)"}),
@@ -14227,27 +15334,45 @@ def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int]
     racks_raw = body.get("racks")
     if not isinstance(racks_raw, list) or len(racks_raw) < 1:
         return None, (jsonify({"ok": False, "error": "racks must be a non-empty array of rack ids"}), 400)
-    inner = _validation_ct_inner()
-    naming = _nvis_naming()
-    specs: list[str] = []
     seen: set[str] = set()
+    racks: list[str] = []
     for item in racks_raw:
         rk = _normalize_rack_id(str(item).strip())
         if rk in seen:
             continue
         seen.add(rk)
-        # Build the tray spec from NVIS_CT_ID, never a literal "-ct". The joiner is a naming
-        # property: Bright is <rack>-ct<NN>, but Nscale TX is <rack>-<NN>, so the hardcoded form
-        # produced ink50-dh01-h02-ct[11-18,...] — hosts that exist in neither DNS nor Slurm.
-        # pdsh then failed ssh 255 on every node and sbatch rejected the list with
-        # "Invalid node name specified". Every other tray-spec site already uses ct_blob.
-        specs.append(naming.ct_blob(rk, inner))
-    if not specs:
+        racks.append(rk)
+    if not racks:
         return None, (jsonify({"ok": False, "error": "no valid rack ids"}), 400)
+    try:
+        campaign = _multirack_campaign_snapshot()
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        return None, (jsonify({"ok": False, "error": f"exact-node campaign unavailable: {exc}"}), 503)
+    campaign_id = str(campaign.get("id") or "")
+    requested_campaign = str(body.get("campaign") or "").strip()
+    if requested_campaign and requested_campaign != campaign_id:
+        return None, (jsonify({"ok": False, "error": "stale or unknown exact-node campaign id"}), 409)
+    indexed = {
+        str(row.get("rack") or ""): row
+        for row in campaign.get("racks", [])
+        if isinstance(row, dict)
+    }
+    exact_nodes: list[str] = []
+    for rack in racks:
+        row = indexed.get(rack)
+        if row is None:
+            return None, (jsonify({"ok": False, "error": f"rack {rack} is outside exact-node campaign {campaign_id}"}), 409)
+        if not row.get("eligible"):
+            return None, (jsonify({"ok": False, "error": f"rack {rack}: {row.get('reason') or 'not eligible'}"}), 409)
+        exact_nodes.extend(str(node) for node in row.get("nodes", []) if str(node).strip())
     script = _nemo_xrack_script_path()
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"run-nemo-xrack script not found: {script}"}), 500)
-    arg = ",".join(specs)
+    try:
+        provenance = _verified_validation_provenance("nemo-xrack")
+    except ValueError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 409)
+    arg = ",".join(exact_nodes)
     cmd = ["bash", str(script), arg]
     display_cmd = "./" + script.name + " " + shlex.quote(arg)
     timeout = max(300, _job_env_int("RACK_NEMO_XRACK_TIMEOUT", 7200))
@@ -14258,8 +15383,11 @@ def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int]
             "display_cmd": display_cmd,
             "timeout": timeout,
             "arg": arg,
-            "racks": sorted(seen),
-            "env_updates": _launch_env_from_body(body),
+            "racks": racks,
+            "nodes": exact_nodes,
+            "campaign": campaign_id,
+            "validation_provenance": provenance,
+            "env_updates": {**_validation_runtime_env(), **_launch_env_from_body(body)},
         },
         None,
     )
@@ -14354,9 +15482,13 @@ def _prepare_run_llama(body: dict) -> tuple[dict | None, tuple[object, int] | No
     script = _run_llama_script_path()
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"run-llama.sh not found: {script}"}), 500)
-    inner = f"module load slurm && exec bash {shlex.quote(str(script))} {shlex.quote(nodes_spec)}"
+    # run-llama.sh sources the pinned slurm-init.inc.sh itself.  Backend workers
+    # are non-login shells and do not provide the environment-modules `module`
+    # function, so prepending `module load slurm` makes every launch fail with
+    # rc=127 before the reviewed wrapper can run.
+    inner = f"exec bash {shlex.quote(str(script))} {shlex.quote(nodes_spec)}"
     cmd = ["bash", "-lc", inner]
-    display_cmd = f"module load slurm && ./{script.name} {shlex.quote(nodes_spec)}"
+    display_cmd = f"bash ./{script.name} {shlex.quote(nodes_spec)}"
     timeout = max(120, _job_env_int("RACK_LLAMA_TIMEOUT", 7200))
     return (
         {
@@ -14431,6 +15563,10 @@ def _prepare_run_exemplar_llama(body: dict) -> tuple[dict | None, tuple[object, 
             jsonify({"ok": False, "error": f"run-exemplar-llama script not found: {script}"}),
             500,
         )
+    try:
+        provenance = _verified_validation_provenance("exemplar-llama")
+    except ValueError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 409)
     dry_run = bool(body.get("dry_run"))
     cmd = [
         "bash",
@@ -14463,6 +15599,8 @@ def _prepare_run_exemplar_llama(body: dict) -> tuple[dict | None, tuple[object, 
             "image_profile": image_profile,
             "tuning": tuning,
             "dry_run": dry_run,
+            "env_updates": _validation_runtime_env(),
+            "validation_provenance": provenance,
         },
         None,
     )
@@ -14517,7 +15655,7 @@ def api_run_exemplar_llama_async():
             "created_at": created,
             **provider,
         }
-    env_updates = {"NVIS_ACTIVITY_ID": job_id}
+    env_updates = {**prep["env_updates"], "NVIS_ACTIVITY_ID": job_id}
     threading.Thread(
         target=_stress_worker,
         args=(job_id, prep["cmd"], str(prep["cwd"]), int(prep["timeout"]), display_cmd),
@@ -14667,6 +15805,10 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
     script = _mnubergemm_stress_script_path()
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"stress script not found: {script}"}), 500)
+    try:
+        provenance = _verified_validation_provenance("mnubergemm-stress")
+    except ValueError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 409)
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
     timeout = max(120, _env_int("RACK_MNUBERGEMM_STRESS_TIMEOUT", 86400))
@@ -14675,6 +15817,7 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
     if cuda_m not in ("12", "13"):
         cuda_m = "13"
     env_updates: dict[str, str] = {
+        **_validation_runtime_env(),
         "WORKSPACE_DIR": ws,
         "NVIS_WORKSPACE_DIR": ws,
         "TOPDIR": ws,
@@ -14735,10 +15878,11 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
         storage = str(storage_raw).strip().lower()
         if storage not in ("local", "nfs"):
             return None, (jsonify({"ok": False, "error": "storage must be local or nfs"}), 400)
+        mnubergemm_filename = "mnubergemm-26.03-v1.17-arm.sqsh"
         env_updates["RACK_MNUBERGEMM_CONT"] = (
-            "/tmp/containers/mnubergemm-26.03-v1.17-arm.sqsh"
+            f"{_validation_node_container_dir()}/{mnubergemm_filename}"
             if storage == "local"
-            else "/cluster/containers/mnubergemm-26.03-v1.17-arm.sqsh"
+            else f"{_validation_container_root()}/{mnubergemm_filename}"
         )
 
     display_prefix = " ".join(
@@ -14761,6 +15905,7 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
             "display_cmd": display_cmd,
             "timeout": timeout,
             "env_updates": env_updates,
+            "validation_provenance": provenance,
         },
         None,
     )
@@ -14819,14 +15964,33 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
         target = validation_target_for_rack(rack, tgt_ov_s or None)
     except ValueError:
         target = rk
-    # Stage-1 runs through llmb-run (run_llmb_nccl.sh), not raw sbatch. Operator ask
-    # 2026-07-28: "fix stage 1 NCCL to use llmb run - no more sbatch - only for MNUberGEMM
-    # everything else is llmbrun". One llmb submit runs the whole pre-generated testset
-    # (24 tests: all_reduce, all_gather, reduce_scatter, alltoall, sendrecv), so the
-    # per-collective knobs below (--size-max / --nccl-version / --rounds) do not apply --
-    # the sweep is defined by llmb_repo/nccl/config/testset.toml and baked into launch.sh.
-    # Set RACK_NCCL_FULLRACK_LAUNCHER=mpi to fall back to run_nccl_mpi.sh + nccl_allreduce.sbatch.
-    launcher = (_eget("RACK_NCCL_FULLRACK_LAUNCHER") or "llmb").strip().lower()
+    # The legacy rack-table button used to invoke run_llmb_nccl.sh directly.  That
+    # launcher requires an operator-specific llmb-run workspace and fails for the
+    # production cmods service account when those paths are absent.  Default the
+    # button to the audited container dispatcher instead: it uses LLMB when a valid
+    # workspace exists and otherwise selects the reviewed NVFTP five-collective
+    # 8K..32G/500-iteration fallback.  Keep the explicit mpi/llmb overrides for
+    # operators who intentionally need the historical paths.
+    launcher = (_eget("RACK_NCCL_FULLRACK_LAUNCHER") or "container").strip().lower()
+    if launcher in ("container", "audited", "nvftp", "preset"):
+        container_body = dict(body)
+        container_body.update({
+            "workflow": "llmb-container-24test",
+            "rack": rk,
+            "target": target,
+            "storage": str(body.get("storage") or "local"),
+        })
+        # Fleet images are pre-staged.  With rsync disabled the dispatcher still
+        # allocates the exact nodes and verifies the local image before workload
+        # submission, avoiding an unnecessary 42-GB copy for every UI click.
+        container_body.setdefault("rsync_to_local", False)
+        prepared, error = _prepare_run_llmb_nccl_container(container_body)
+        if error is not None:
+            return None, error
+        assert prepared is not None
+        prepared.update({"rk": rk, "target": target})
+        return prepared, None
+
     use_llmb = launcher not in ("mpi", "sbatch", "direct", "nccl_mpi")
     script = _run_llmb_nccl_script_path() if use_llmb else _run_nccl_mpi_script_path()
     if not _script_exists(script):
@@ -15045,9 +16209,13 @@ def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[obj
     rsync = body.get("rsync_to_local", body.get("rsync", storage == "local")) is True
     if rsync and storage != "local":
         return None, (jsonify({"ok": False, "error": "rsync requires storage=local"}), 400)
-    local_dir = str(body.get("local_container_dir") or "/tmp/containers").rstrip("/")
-    if local_dir != "/tmp/containers":
-        return None, (jsonify({"ok": False, "error": "local_container_dir is fixed to /tmp/containers"}), 400)
+    local_container_dir = _validation_node_container_dir()
+    local_dir = str(body.get("local_container_dir") or local_container_dir).rstrip("/")
+    if local_dir != local_container_dir:
+        return None, (jsonify({
+            "ok": False,
+            "error": f"local_container_dir is fixed to {local_container_dir}",
+        }), 400)
 
     nodes_raw = body.get("nodes")
     racks_raw = body.get("racks")
@@ -15080,28 +16248,31 @@ def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[obj
             return None, (jsonify({"ok": False, "error": "target did not resolve to any Slurm nodes"}), 400)
 
     campaign_id = ""
-    if not nodes and racks:
+    requested = str(body.get("campaign") or "").strip()
+    use_multirack_campaign = not nodes and bool(racks) and (len(racks) > 1 or bool(requested))
+    if use_multirack_campaign:
         try:
             campaign = _multirack_campaign_snapshot()
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
             return None, (jsonify({"ok": False, "error": f"exact-node campaign unavailable: {exc}"}), 503)
         campaign_id = str(campaign.get("id") or "")
-        requested = str(body.get("campaign") or "").strip()
         if requested and requested != campaign_id:
             return None, (jsonify({"ok": False, "error": "stale or unknown exact-node campaign id"}), 409)
         indexed = {str(row.get("rack") or ""): row for row in campaign.get("racks", []) if isinstance(row, dict)}
         for rack in racks:
-            if campaign.get("active"):
-                row = indexed.get(rack)
-                if row is None or not row.get("eligible"):
-                    reason = row.get("reason") if row else "outside exact-node campaign"
-                    return None, (jsonify({"ok": False, "error": f"rack {rack}: {reason}"}), 409)
-                nodes.extend(str(node) for node in row.get("nodes", []) if str(node).strip())
-            else:
-                resolved = _rack_node_hostnames_from_inventory(rack)
-                if not resolved:
-                    return None, (jsonify({"ok": False, "error": f"no Slurm inventory nodes found for rack {rack}"}), 409)
-                nodes.extend(resolved)
+            row = indexed.get(rack)
+            if row is None or not row.get("eligible"):
+                reason = row.get("reason") if row else "outside exact-node campaign"
+                return None, (jsonify({"ok": False, "error": f"rack {rack}: {reason}"}), 409)
+            nodes.extend(str(node) for node in row.get("nodes", []) if str(node).strip())
+    elif not nodes and racks:
+        # Single-rack launch retains full-rack semantics. Exact 16-node selection is scoped only
+        # to multirack operations.
+        for rack in racks:
+            resolved = _rack_node_hostnames_from_inventory(rack)
+            if not resolved:
+                return None, (jsonify({"ok": False, "error": f"no Slurm inventory nodes found for rack {rack}"}), 409)
+            nodes.extend(resolved)
     nodes = _dedupe_hostnames_preserve_spelling(nodes)
     if not nodes:
         return None, (jsonify({"ok": False, "error": "nodes, target, rack, or racks is required"}), 400)
@@ -15112,7 +16283,10 @@ def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[obj
         if unknown:
             return None, (jsonify({"ok": False, "error": f"nodes not in current Slurm inventory: {', '.join(unknown)}"}), 409)
     try:
-        states, ineligible = _validation_node_eligibility(nodes)
+        # This workflow submits Slurm/Pyxis jobs even when PythonCM is the
+        # control-plane provider.  PhysicalNode power state (for example ``up``)
+        # is not a Slurm admission decision, so eligibility must come from Slurm.
+        states, ineligible = _validation_node_eligibility(nodes, require_slurm=True)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         return None, (jsonify({"ok": False, "error": f"unable to verify exact-node scheduler eligibility: {exc}"}), 503)
     if ineligible:
@@ -15121,6 +16295,10 @@ def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[obj
     script = Path(_scripts_dir()) / "run-llmb-nccl-container.sh"
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"container LLMB NCCL launcher not found: {script}"}), 500)
+    try:
+        provenance = _verified_validation_provenance("llmb-nccl-container")
+    except ValueError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 409)
     cmd = ["bash", str(script), "--nodelist", ",".join(nodes), "--storage", storage,
            "--local-container-dir", local_dir, "--log-dir", str(log_dir)]
     cmd.append("--rsync" if rsync else "--no-rsync")
@@ -15128,27 +16306,51 @@ def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[obj
     if dry_run:
         cmd.append("--dry-run")
     scope = "node" if not racks else ("rack" if len(racks) == 1 else "multirack")
+    llmb_install = (_eget("LLMB_INSTALL") or "").strip()
+    llmb_run = (_eget("LLMB_RUN") or _eget("NVIS_LLMB_RUN") or "").strip()
+    llmb_available = bool(
+        llmb_install
+        and llmb_run
+        and host_exec.is_dir(PurePosixPath(llmb_install))
+        and host_exec.is_file(PurePosixPath(llmb_run))
+    )
+    adapter = "llmb-24test" if llmb_available else "direct-five-collective"
+    workflow = "llmb-container-24test" if llmb_available else "nvftp-nccl-five-collective"
+    recipe_contract = (
+        "job147392-shape (24 tests, 4 ranks/GPUs per node, PMIx)"
+        if llmb_available
+        else "NVFTP 20260824 five-collective sweep (5 tests, 4 ranks/GPUs per node, PMI2)"
+    )
     return ({
-        "workflow": "llmb-container-24test", "log_dir": log_dir, "racks": racks,
+        "workflow": workflow, "adapter": adapter, "log_dir": log_dir, "racks": racks,
         "nodes": nodes, "node_states": states, "target": ",".join(nodes), "scope": scope,
         "storage": storage, "rsync_to_local": rsync, "cmd": cmd,
         "container_runtime": {"nccl": "2.29.3", "cuda": "13.1"},
-        "recipe_contract": "job147392-shape (24 tests, 4 ranks/GPUs per node, PMIx)",
+        "recipe_contract": recipe_contract,
         "image_provenance": {
-            "source": "/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh",
+            "source": f"{_validation_container_root()}/nvidia+nemo+26.04.01.sqsh",
             "size": 42245001216,
-            "sha256": "55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc",
+            "sha256": "e9a68d31832f5575eabaae94d9360e45145a0047110740d80412ec491a247aca",
             "status": (
-                "fleet-staged squashfs differs from the original job 147392 image digest; "
-                "embedded NCCL 2.29.3 matches the proven runtime"
+                "canonical NVFTP 8K-known-good image; embedded NCCL 2.29.3 "
+                "matches the reviewed runtime"
             ),
         },
-        "pmix_gds": {"value": "hash", "status": "requested scale workaround; not a proven result claim"},
+        "mpi_contract": (
+            {"value": "PMIx/gds=hash", "status": "reviewed LLMB 24-test adapter"}
+            if llmb_available
+            else {"value": "PMI2", "status": "NVFTP 20260824 direct five-collective adapter"}
+        ),
         "display_cmd": " ".join(shlex.quote(part) for part in cmd),
         "timeout": max(120, _job_env_int("RACK_LLMB_NCCL_CONTAINER_TIMEOUT", 43200)),
         "dry_run": dry_run,
-        "env_updates": {**_launch_env_from_body(body), "NVIS_PREPARED_NODE_COUNT": str(len(nodes))},
+        "env_updates": {
+            **_validation_runtime_env(),
+            **_llmb_env_updates(body),
+            "NVIS_PREPARED_NODE_COUNT": str(len(nodes)),
+        },
         "campaign": campaign_id,
+        "validation_provenance": provenance,
     }, None)
 
 
@@ -15201,18 +16403,20 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
     if not rack_ids:
         return None, (jsonify({"ok": False, "error": "no valid rack ids"}), 400)
 
-    # When an exact-node campaign is configured it is authoritative: excluded or
-    # unhealthy trays must never be silently reintroduced by rack-name expansion.
-    try:
-        campaign_snapshot = _multirack_campaign_snapshot()
-    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
-        return None, (jsonify({"ok": False, "error": f"exact-node campaign unavailable: {exc}"}), 503)
-    campaign_id = str(campaign_snapshot.get("id") or "")
     requested_campaign = str(body.get("campaign") or "").strip()
-    if requested_campaign and requested_campaign != campaign_id:
-        return None, (jsonify({"ok": False, "error": "stale or unknown exact-node campaign id"}), 409)
+    use_multirack_campaign = len(rack_ids) > 1 or bool(requested_campaign)
+    campaign_id = ""
     exact_nodes: list[str] = []
-    if campaign_snapshot.get("active"):
+    if use_multirack_campaign:
+        # Multirack selection is exact-node and fail-closed. A single ``rack`` request from the
+        # rack-detail view bypasses this block and keeps its full 18-node semantics.
+        try:
+            campaign_snapshot = _multirack_campaign_snapshot()
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            return None, (jsonify({"ok": False, "error": f"exact-node campaign unavailable: {exc}"}), 503)
+        campaign_id = str(campaign_snapshot.get("id") or "")
+        if requested_campaign and requested_campaign != campaign_id:
+            return None, (jsonify({"ok": False, "error": "stale or unknown exact-node campaign id"}), 409)
         indexed = {
             str(row.get("rack") or ""): row
             for row in campaign_snapshot.get("racks", [])
@@ -15296,10 +16500,12 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
     )
 
 
-def _validation_node_eligibility(nodes: list[str]) -> tuple[dict[str, str], list[str]]:
+def _validation_node_eligibility(
+    nodes: list[str], *, require_slurm: bool = False
+) -> tuple[dict[str, str], list[str]]:
     """Return live Slurm states and fail-closed reasons for an exact target set."""
     states: dict[str, str] = {}
-    if scheduler_runtime.is_pythoncm():
+    if scheduler_runtime.is_pythoncm() and not require_slurm:
         result = bcm_query.node_states(",".join(nodes))
         if not result.get("ok"):
             raise RuntimeError(str(
@@ -15324,7 +16530,9 @@ def _validation_node_eligibility(nodes: list[str]) -> tuple[dict[str, str], list
         for line in (proc.stdout or "").splitlines():
             node, sep, state = line.partition("|")
             if sep and node.strip():
-                states[node.strip().casefold()] = state.strip().lower().rstrip("*")
+                # ``idle*`` is Slurm's IDLE+NOT_RESPONDING state, not a node
+                # that can satisfy an exact allocation.
+                states[node.strip().casefold()] = state.strip().lower()
     excluded = {
         token.strip().casefold()
         for token in (_eget("RACK_VALIDATION_EXCLUDED_NODES") or "").split(",")
@@ -15343,12 +16551,31 @@ def _validation_node_eligibility(nodes: list[str]) -> tuple[dict[str, str], list
 def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
     """Resolve an allowlisted preset into an exact-node, shell-free launch plan."""
     try:
-        preset = validation_presets.resolve_preset(body.get("preset_id", body.get("validation")))
-        options = validation_presets.normalize_options(body, preset)
+        preset = validation_presets.resolve_image_paths(
+            validation_presets.resolve_preset(body.get("preset_id", body.get("validation"))),
+            shared_container_root=_validation_container_root(),
+            local_container_dir=_validation_node_container_dir(),
+        )
+        options = validation_presets.normalize_options(
+            body,
+            preset,
+            local_container_dir=_validation_node_container_dir(),
+        )
         log_raw = body.get("log_dir")
         log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
     except ValueError as exc:
         return None, (jsonify({"ok": False, "error": str(exc)}), 400)
+
+    if preset.id in {"gpt-oss-cpu", "exemplar-system-info"}:
+        availability = _external_validation_preset_availability(preset)
+        if not availability["available"]:
+            reasons = availability.get("reasons") or []
+            detail = "; ".join(str(reason) for reason in reasons)
+            return None, (jsonify({
+                "ok": False,
+                "error": f"{preset.id} is unavailable: {detail}",
+                "availability": availability,
+            }), 409)
 
     stage_only = body.get("stage_only") is True
     if stage_only and preset.id != "mnubergemm-26.03-v1.17":
@@ -15396,7 +16623,7 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
 
     campaign_id = ""
     rack_node_groups: list[dict[str, object]] = []
-    if not nodes and racks:
+    if not nodes and racks and scope == "multirack":
         try:
             campaign = _multirack_campaign_snapshot()
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
@@ -15423,6 +16650,15 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
                     return None, (jsonify({"ok": False, "error": f"no Slurm inventory nodes found for rack {rack}"}), 409)
                 rack_node_groups.append({"rack": rack, "nodes": list(resolved)})
                 nodes.extend(resolved)
+    elif not nodes and racks:
+        # Rack-scoped presets continue to resolve the full rack. The 16-node policy belongs only
+        # to the multirack scope, so single-rack acceptance semantics remain exact-full-rack.
+        for rack in racks:
+            resolved = _rack_node_hostnames_from_inventory(rack)
+            if not resolved:
+                return None, (jsonify({"ok": False, "error": f"no Slurm inventory nodes found for rack {rack}"}), 409)
+            rack_node_groups.append({"rack": rack, "nodes": list(resolved)})
+            nodes.extend(resolved)
 
     nodes = _dedupe_hostnames_preserve_spelling(nodes)
     if not nodes:
@@ -15492,7 +16728,21 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
     if preset.exact_nodes is not None and len(nodes) != preset.exact_nodes:
         return None, (jsonify({"ok": False, "error": f"{preset.id} requires exactly {preset.exact_nodes} nodes/1024 GPUs; resolved {len(nodes)}"}), 409)
     try:
-        node_states, ineligible = _validation_node_eligibility(nodes)
+        # These presets execute through the audited Slurm/Pyxis fallback even when
+        # PythonCM is the control-plane provider. PythonCM reports physical power
+        # state (for example ``up``), which is not a scheduler-idle decision and
+        # would reject every otherwise eligible Slurm/Pyxis validation target.
+        if preset.id in {
+            "nccl-2.29.3",
+            "nemo-26.04.01",
+            "mnubergemm-26.03-v1.17",
+            "llama31-405b-fp8",
+            "gpt-oss-cpu",
+            "exemplar-system-info",
+        }:
+            node_states, ineligible = _validation_node_eligibility(nodes, require_slurm=True)
+        else:
+            node_states, ineligible = _validation_node_eligibility(nodes)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         return None, (jsonify({"ok": False, "error": f"unable to verify exact-node scheduler eligibility: {exc}"}), 503)
     if ineligible:
@@ -15503,6 +16753,17 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
     script = Path(_scripts_dir()) / "run-validation-preset.sh"
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"validation preset launcher not found: {script}"}), 500)
+    provenance = None
+    provenance_profile = f"preset:{preset.id}"
+    try:
+        _refresh_validation_provenance()
+    except ValueError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 409)
+    if provenance_profile in validation_provenance.PROFILES:
+        try:
+            provenance = _verified_validation_provenance(provenance_profile)
+        except ValueError as exc:
+            return None, (jsonify({"ok": False, "error": str(exc)}), 409)
     node_spec = ",".join(nodes)
     cmd = ["bash", str(script), "--preset", preset.id, "--nodelist", node_spec,
            "--storage", str(options["storage"]), "--local-container-dir",
@@ -15524,17 +16785,34 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         checks += ["allowlisted image byte size", "allowlisted image SHA256"]
     if preset.requires_infiniband:
         checks += ["/dev/infiniband and /sys/class/infiniband visibility"]
-    if preset.id == "nccl-2.31.2":
-        checks += ["selected CUDA runtime >= 13.3", "ncclGetVersion == 23102"]
+    if preset.id == "nccl-2.29.3":
+        checks += [
+            "pre-staged image SHA256 e9a68d31832f... attested on every exact node",
+            "container runtime CUDA 13.1 and ncclGetVersion == 22903",
+            "five collectives from 8K through 32G at 500 iterations",
+            "NCCL_IB_HCA pinned to the four XDR compute rails mlx5_0..mlx5_3",
+            "NCCL_DEBUG=INFO, NCCL_DEBUG_SUBSYS=ALL, and per-node detail archives",
+        ]
+        if scope == "multirack":
+            checks += [
+                "one exact communicator with MNNVL disabled and NVLS enabled, matching the proven 8K recipe",
+                "NCCL traffic pinned to the four XDR compute rails between racks with HCOLL disabled",
+            ]
+        elif len(nodes) > 1:
+            checks += [
+                "one explicit RACK_MNNVL communicator in a single physical rack",
+                "NCCL INFO proves MNNVL 1 and NVLS multicast availability",
+                "16-GiB and 32-GiB all-reduce BusBW each at least 600 GB/s",
+            ]
     if preset.id == "exemplar-system-info":
         checks += ["DGXC v26.06.01 summary present", "nonfatal findings and warnings classified per node"]
     if preset.id == "mnubergemm-26.03-v1.17":
         checks += [
-            "MNUberGEMM payload duration=3600 seconds",
+            "MNUberGEMM payload duration=1800 seconds",
             (
-                "PythonCM ProgramRunner max_run_time=4200 seconds"
+                "PythonCM ProgramRunner max_run_time=2400 seconds"
                 if scheduler_runtime.is_pythoncm()
-                else "Slurm TimeLimit=01:10:00"
+                else "Slurm TimeLimit=00:40:00"
             ),
         ]
     if stage_only:
@@ -15578,14 +16856,25 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         "cmd": cmd,
         "log_dir": str(log_dir),
         "timeout": max(120, _job_env_int("RACK_VALIDATION_PRESET_TIMEOUT", 28800)),
-        "env_updates": {"NVIS_PREPARED_NODE_COUNT": str(len(nodes)),
-                        "NVIS_PRESET_SCOPE_MULTIRACK": "1" if scope == "multirack" else "0"},
+        "env_updates": {
+            **_validation_runtime_env(),
+            "NVIS_PREPARED_NODE_COUNT": str(len(nodes)),
+            "NVIS_PRESET_SCOPE_MULTIRACK": "1" if scope == "multirack" else "0",
+            **({
+                "NVIS_NCCL_ITERS": "500",
+                "NVIS_LOCAL_STAGE_VERIFIED_SHA256": str(preset.image_sha256),
+                "NCCL_DEBUG": "INFO",
+                "NCCL_DEBUG_SUBSYS": "ALL",
+                "NCCL_IB_HCA": "=mlx5_0,mlx5_1,mlx5_2,mlx5_3",
+            } if preset.id == "nccl-2.29.3" else {}),
+        },
         "image_override_note": ("DGXC recipe v26.06.01 with audited NeMo 26.04.01 image override" if preset.id == "exemplar-system-info" else None),
+        "validation_provenance": provenance,
     }
     hash_fields = {key: plan[key] for key in (
         "preset_id", "stage_only", "scope", "nodes", "node_groups", "racks", "campaign", "storage", "rsync_to_local",
         "local_container_dir", "container_profile", "cuda_version", "nccl_version", "max_steps",
-        "max_runtime_minutes", "artifact", "log_dir",
+        "max_runtime_minutes", "artifact", "log_dir", "validation_provenance",
     )}
     plan["plan_hash"] = hashlib.sha256(
         json.dumps(hash_fields, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -15595,7 +16884,23 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
 
 @app.route("/api/validation-presets", methods=["GET"])
 def api_validation_presets():
-    return jsonify({"ok": True, "presets": validation_presets.catalogue()})
+    try:
+        presets = validation_presets.catalogue(
+            shared_container_root=_validation_container_root(),
+            local_container_dir=_validation_node_container_dir(),
+        )
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    for row in presets:
+        if row.get("id") not in {"gpt-oss-cpu", "exemplar-system-info"}:
+            continue
+        preset = validation_presets.resolve_image_paths(
+            validation_presets.resolve_preset(row["id"]),
+            shared_container_root=_validation_container_root(),
+            local_container_dir=_validation_node_container_dir(),
+        )
+        row["availability"] = _external_validation_preset_availability(preset)
+    return jsonify({"ok": True, "presets": presets})
 
 
 @app.route("/api/validation-presets/prepare", methods=["POST"])
@@ -15956,7 +17261,7 @@ def _validation_preset_fallback(preset_id: str, plan: dict):
     job_id = str(uuid.uuid4())
     operator = _operator_from_request()
     tool = {
-        "nccl-2.31.2": "nccl-fullrack", "llama31-405b-fp8": "llama-exemplar",
+        "nccl-2.29.3": "llmb-nccl", "llama31-405b-fp8": "llama-exemplar",
         "gpt-oss-cpu": "external", "exemplar-system-info": "external",
         "nemo-26.04.01": "nemo-xrack", "mnubergemm-26.03-v1.17": "mnubergemm",
     }[preset_id]
@@ -15970,7 +17275,7 @@ def _validation_preset_fallback(preset_id: str, plan: dict):
                 "gpt-oss-cpu": "gpt-oss-cpu",
                 "exemplar-system-info": "exemplar-system-info",
                 "nemo-26.04.01": "nemo-xrack",
-                "nccl-2.31.2": "nccl-2.31.2",
+                "nccl-2.29.3": "nccl-2.29.3",
                 "mnubergemm-26.03-v1.17": "mnubergemm",
             }[preset_id]
         ) or "no equivalent PythonCM recipe"
@@ -16024,7 +17329,7 @@ def _run_validation_preset_async(body: dict):
     if scheduler_runtime.is_pythoncm():
         preset_id = str(plan["preset_id"])
         direct_kind = {
-            "nccl-2.31.2": "nccl-2.31.2",
+            "nccl-2.29.3": "llmb-nccl",
             "mnubergemm-26.03-v1.17": "mnubergemm",
         }.get(preset_id)
         if not direct_kind or pythoncm_validation.unsupported_reason(direct_kind):
@@ -16053,7 +17358,7 @@ def _run_validation_preset_async(body: dict):
             "timeout": plan["timeout"],
             "env_updates": plan.get("env_updates") or {},
         }
-        tool = "nccl-fullrack" if direct_kind == "nccl-2.31.2" else "mnubergemm"
+        tool = "llmb-nccl" if direct_kind == "llmb-nccl" else "mnubergemm"
         return _start_pythoncm_validation(
             direct_kind,
             prep,
@@ -16065,7 +17370,7 @@ def _run_validation_preset_async(body: dict):
     job_id = str(uuid.uuid4())
     operator = _operator_from_request()
     tool = {
-        "nccl-2.31.2": "nccl-fullrack", "llama31-405b-fp8": "llama-exemplar",
+        "nccl-2.29.3": "llmb-nccl", "llama31-405b-fp8": "llama-exemplar",
         "gpt-oss-cpu": "external", "exemplar-system-info": "external",
         "nemo-26.04.01": "nemo-xrack", "mnubergemm-26.03-v1.17": "mnubergemm",
     }[str(plan["preset_id"])]
@@ -18413,8 +19718,8 @@ def _parse_tail_log_request(body: dict) -> tuple[dict | None, tuple[object, int]
                     {
                         "ok": False,
                         "error": (
-                            f"no matching *.txt for rack {rk!r} under {log_dir} or {log_dir / 'failed'} "
-                        f"(NEMO/NCCL basename, or ClusterKit root-CK-/clusterkit with one rack id)"
+                            f"no matching validation log for rack {rk!r} under the legacy tree at "
+                            f"{log_dir} or its deterministic SU/rack campaign directories"
                         ),
                     }
                 ),
@@ -18424,13 +19729,16 @@ def _parse_tail_log_request(body: dict) -> tuple[dict | None, tuple[object, int]
     # AttributeError -> 500 -> an HTML error page -> "Unexpected token '<'" / "500 Internal Server
     # Error" in the SPA. Fifth site of this same bug class in this file; branch on EXEC MODE, not
     # on the object type (_resolve_log_dir always returns a local Path object either way).
-    root = _rpath(log_dir)
     lp = _rpath(log_path)
-    try:
-        lp.relative_to(root)
-    except ValueError:
+    if not _rack_log_path_allowed(log_dir, lp):
         return None, (jsonify({"ok": False, "error": "invalid log path"}), 400)
-    rel = str(lp.relative_to(root))
+    if not host_exec.is_file(lp):
+        return None, (jsonify({"ok": False, "error": "log file not found"}), 404)
+    root = _rpath(log_dir)
+    try:
+        rel = str(lp.relative_to(root))
+    except ValueError:
+        rel = str(lp)
     n0 = max(0, _env_int("RACK_TAIL_INITIAL_LINES", 400))
     display_cmd = f"tail -n {n0} -f {shlex.quote(rel)}"
     return (
@@ -18443,6 +19751,50 @@ def _parse_tail_log_request(body: dict) -> tuple[dict | None, tuple[object, int]
         },
         None,
     )
+
+
+_TAIL_STREAM_CAPACITY = 8
+_TAIL_STREAM_MAX_LIFETIME_SEC = 2 * 60 * 60
+_tail_stream_slots = threading.BoundedSemaphore(_TAIL_STREAM_CAPACITY)
+
+
+def _release_tail_stream_slot(prep: dict) -> None:
+    """Release a live-tail slot exactly once, including Response.close races."""
+    if prep.pop("_tail_stream_slot", False):
+        _tail_stream_slots.release()
+
+
+def _tail_stream_response(prep: dict) -> Response | tuple[object, int]:
+    """Create a bounded live-tail response without exhausting Gunicorn threads.
+
+    A gthread worker dedicates one request thread to every streaming response.  A browser that
+    disappeared while ``tail -f`` was idle could not be detected until another chunk was written,
+    so abandoned viewers accumulated until all 24 production threads were occupied.  Reserve most
+    threads for ordinary API/UI traffic and cap each stream's lifetime so every lease is reclaimed.
+    """
+    if not _tail_stream_slots.acquire(blocking=False):
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "live-log viewer capacity reached; close another viewer and retry",
+                }
+            ),
+            503,
+        )
+    prep["_tail_stream_slot"] = True
+    response = Response(
+        stream_with_context(_tail_log_stream_generator(prep)),
+        mimetype="text/plain; charset=utf-8",
+        headers={
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "Retry-After": "5",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    response.call_on_close(lambda: _release_tail_stream_slot(prep))
+    return response
 
 
 def _tail_log_stream_generator(prep: dict) -> object:
@@ -18500,12 +19852,16 @@ def _tail_log_stream_generator(prep: dict) -> object:
             outq.put(None)
 
     threading.Thread(target=feeder, daemon=True).start()
+    started = time.monotonic()
     header = (
         f"# {prep['display_cmd']}\n# cwd: {prep['log_dir']}\n# file: {lp}\n\n"
     )
     yield header.encode("utf-8")
     try:
         while True:
+            if time.monotonic() - started >= _TAIL_STREAM_MAX_LIFETIME_SEC:
+                yield b"\n--- live tail reached its two-hour limit; reopen to continue ---\n"
+                break
             try:
                 chunk = outq.get(timeout=0.5)
             except queue.Empty:
@@ -18528,6 +19884,7 @@ def _tail_log_stream_generator(prep: dict) -> object:
                 proc.wait(timeout=15)
             except (subprocess.TimeoutExpired, OSError):
                 pass
+        _release_tail_stream_slot(prep)
 
 
 def _parse_tail_job_stdout_stream_request(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
@@ -18568,15 +19925,7 @@ def api_tail_job_stdout_stream():
     if err is not None:
         return err[0], err[1]
     assert prep is not None
-    return Response(
-        stream_with_context(_tail_log_stream_generator(prep)),
-        mimetype="text/plain; charset=utf-8",
-        headers={
-            "Cache-Control": "no-store",
-            "Pragma": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return _tail_stream_response(prep)
 
 
 @app.route("/api/tail-log-stream", methods=["POST"])
@@ -18588,15 +19937,7 @@ def api_tail_log_stream():
         return err[0], err[1]
     assert prep is not None
 
-    return Response(
-        stream_with_context(_tail_log_stream_generator(prep)),
-        mimetype="text/plain; charset=utf-8",
-        headers={
-            "Cache-Control": "no-store",
-            "Pragma": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return _tail_stream_response(prep)
 
 
 @app.route("/login", methods=["GET"])
@@ -19283,7 +20624,14 @@ def _merge_naming_into_status_payload(payload: dict) -> None:
     try:
         rows = payload.get("rows") or []
         rack_ids = [r.get("rack", "") for r in rows if isinstance(r, dict) and r.get("rack")]
-        payload["hierarchy"] = naming.build_hierarchy(rack_ids)
+        rack_group_labels: dict[str, str] = {}
+        if scheduler_runtime.is_pythoncm():
+            node_groups = scheduler_runtime.node_groups(cached_only=True)
+            rack_group_labels = naming.rack_labels_from_node_groups(node_groups)
+        payload["hierarchy"] = naming.build_hierarchy(
+            rack_ids,
+            rack_group_labels=rack_group_labels,
+        )
     except Exception:  # pragma: no cover - hierarchy is additive, never break status
         _logger.exception("failed to build rack hierarchy for status payload")
 
@@ -19804,8 +21152,22 @@ def _build_post_run_report(*, rack: str = "", node: str = "", force: bool = Fals
         findings = [
             row for row in issue_store.get("issues", []) if isinstance(row, dict)
         ]
+        dcgm_error = ""
+        try:
+            dcgm_events = external_validation_evidence.dcgm_post_run_events()
+        except Exception as exc:  # noqa: BLE001 - base report must remain available
+            dcgm_events = []
+            dcgm_error = str(exc)
+            _logger.warning("DCGM indexed evidence query failed: %s", exc)
+        healthcheck_error = ""
+        try:
+            healthcheck_events = healthcheck_evidence.post_run_events(rack=rack, node=node)
+        except Exception as exc:  # noqa: BLE001 - base report must remain available
+            healthcheck_events = []
+            healthcheck_error = str(exc)
+            _logger.warning("health-check indexed evidence query failed: %s", exc)
         payload = post_run_report.build_report(
-            events=post_run_report.load_events(),
+            events=[*post_run_report.load_events(), *dcgm_events, *healthcheck_events],
             inventory=inventory,
             findings=findings,
             audit_results=_post_run_audits(),
@@ -19817,6 +21179,18 @@ def _build_post_run_report(*, rack: str = "", node: str = "", force: bool = Fals
             "merge": merge,
             "accounting_error": accounting_error,
             "inventory_error": inventory_error,
+            "dcgm_error": dcgm_error,
+            "dcgm_events": len(dcgm_events),
+            "dcgm_observed_at": max(
+                (str(row.get("observed_at") or "") for row in dcgm_events),
+                default="",
+            ),
+            "healthcheck_error": healthcheck_error,
+            "healthcheck_events": len(healthcheck_events),
+            "healthcheck_observed_at": max(
+                (str(row.get("observed_at") or "") for row in healthcheck_events),
+                default="",
+            ),
         }
         if not rack and not node:
             _post_run_report_cache = (time.monotonic(), payload)
@@ -19841,7 +21215,35 @@ def api_post_run_node_report():
     except Exception as exc:
         _logger.exception("post-run node report failed")
         return jsonify({"ok": False, "error": str(exc)}), 503
+    if request.args.get("view") == "map" and not rack and not node:
+        payload = _compact_post_run_report(payload)
     return jsonify({"ok": True, **payload})
+
+
+def _compact_post_run_report(payload: dict) -> dict:
+    """Remove topology duplication/history from the 30-second map payload.
+
+    The default endpoint remains backward compatible. The SPA fetches complete
+    node history lazily through the existing ``?node=`` filter on click.
+    """
+    nodes: list[dict] = []
+    for raw_node in payload.get("nodes") or []:
+        row = dict(raw_node)
+        latest: dict[str, dict] = {}
+        for event in row.get("runs") or []:
+            if event.get("authoritative") is False:
+                continue
+            key = str(event.get("validation_test") or event.get("tool") or event.get("activity_id") or "unknown").casefold()
+            prior = latest.get(key)
+            event_key = (str(event.get("started_at") or ""), str(event.get("job_id") or ""), str(event.get("activity_id") or ""))
+            prior_key = (str(prior.get("started_at") or ""), str(prior.get("job_id") or ""), str(prior.get("activity_id") or "")) if prior else ("", "", "")
+            if prior is None or event_key > prior_key:
+                latest[key] = event
+        row["runs"] = list(latest.values())
+        nodes.append(row)
+    return {
+        key: value for key, value in payload.items() if key != "racks"
+    } | {"nodes": nodes, "compact": True}
 
 
 @app.route("/api/post-run-node-report/mark", methods=["POST"])

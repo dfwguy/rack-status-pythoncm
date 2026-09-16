@@ -30,6 +30,10 @@ nodelist=""
 image_profile="nccl2.30.7"
 tuning="baseline"
 dry_run=0
+node_container_dir="${RACK_VALIDATION_NODE_CONTAINER_DIR:-/opt/containers}"
+[[ "$node_container_dir" == /* && "$node_container_dir" != *".."* ]] || {
+  echo "ERROR: invalid RACK_VALIDATION_NODE_CONTAINER_DIR" >&2; exit 2;
+}
 while (($#)); do
   case "$1" in
     --dtype) dtype="${2:?missing --dtype value}"; shift 2 ;;
@@ -54,10 +58,10 @@ esac
 
 case "$image_profile" in
   nccl2.30.7)
-    run_image="${NVIS_EXEMPLAR_LLAMA_IMAGE_NCCL2307:-/tmp/containers/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh}"
+    run_image="${NVIS_EXEMPLAR_LLAMA_IMAGE_NCCL2307:-${node_container_dir}/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh}"
     ;;
   stock)
-    run_image="${NVIS_EXEMPLAR_LLAMA_IMAGE_STOCK:-/tmp/containers/nvidia+nemo+26.04.01-arm.sqsh}"
+    run_image="${NVIS_EXEMPLAR_LLAMA_IMAGE_STOCK:-${node_container_dir}/nvidia+nemo+26.04.01-arm.sqsh}"
     ;;
   *) echo "ERROR: --image must be nccl2.30.7 or stock" >&2; exit 2 ;;
 esac

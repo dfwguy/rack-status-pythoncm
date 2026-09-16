@@ -17,6 +17,7 @@ import DialogActions from "@mui/material/DialogActions";
 import MuiButton from "@mui/material/Button";
 import Box from "@mui/material/Box";
 import LinearProgress from "@mui/material/LinearProgress";
+import { apiFetch } from "../../lib/apiFetch";
 
 export interface CommandStreamDialogProps {
   open: boolean;
@@ -67,7 +68,7 @@ export function CommandStreamDialog({ open, onClose, title, endpoint, body }: Co
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
       try {
-        const res = await fetch(endpoint, {
+        const res = await apiFetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),

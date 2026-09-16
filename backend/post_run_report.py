@@ -390,7 +390,10 @@ def build_report(
     for rec in by_node.values():
         runs = sorted(rec.pop("runs"), key=lambda row: str(row.get("started_at") or ""), reverse=True)
         findings_rows = sorted(rec.pop("findings"), key=lambda row: str(row.get("created_at") or ""), reverse=True)
-        attributed_runs = [row for row in runs if row.get("attributed_failure")]
+        # Indexed validation sources preserve superseded attempts in ``runs``
+        # for detail/export. They must not inflate current failure flags/trends.
+        current_runs = [row for row in runs if row.get("authoritative") is not False]
+        attributed_runs = [row for row in current_runs if row.get("attributed_failure")]
         distinct_failure_runs = {
             str(row.get("job_id") or row.get("activity_id") or "") for row in attributed_runs
         }
@@ -399,8 +402,8 @@ def build_report(
             for row in findings_rows
         )
         distinct_failure_runs.discard("")
-        recent = runs[:5]
-        prior = runs[5:10]
+        recent = current_runs[:5]
+        prior = current_runs[5:10]
         recent_rate = sum(bool(row.get("attributed_failure")) for row in recent) / max(1, len(recent))
         prior_rate = sum(bool(row.get("attributed_failure")) for row in prior) / max(1, len(prior))
         if not prior:

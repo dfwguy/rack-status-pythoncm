@@ -1752,11 +1752,39 @@ def adopt_log(
 
     existing_id: str | None = None
 
-    def _find(rows: dict[str, dict]) -> None:
+    def _find_and_reconcile(rows: dict[str, dict]) -> None:
         nonlocal existing_id
         existing_id = _find_by_log_path(rows, path)
+        if not existing_id:
+            return
+        rec = rows.get(existing_id)
+        if not isinstance(rec, dict) or str(rec.get("source") or "") != "external":
+            return
+        # An adoption can match by basename or scheduler id for backward compatibility. Only
+        # exact-path evidence is authoritative enough to rewrite persisted attribution.
+        exact_path = any(
+            str(task.get(key) or "") == path
+            for task in rec.get("tasks") or []
+            if isinstance(task, dict)
+            for key in ("stdout_path", "training_log_path", "results_log_path")
+        )
+        if not exact_path:
+            return
+        changed = False
+        if log_dir and str(rec.get("log_dir") or "") != log_dir:
+            rec["log_dir"] = log_dir
+            changed = True
+        if rack and (
+            str(rec.get("rack") or "") != rack or list(rec.get("racks") or []) != [rack]
+        ):
+            rec["rack"] = rack
+            rec["racks"] = [rack]
+            changed = True
+        if changed:
+            rec["updated_at"] = _now_iso()
+            rows[existing_id] = rec
 
-    _with_store(_find)
+    _with_store(_find_and_reconcile)
     if existing_id:
         return existing_id
 

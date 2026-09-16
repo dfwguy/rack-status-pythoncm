@@ -30,6 +30,7 @@ import { SingleRackView } from "./views/SingleRackView";
 import { useClusterOverview } from "./hooks/useClusterOverview";
 import { useClusterOverviewLive } from "./hooks/useClusterOverviewLive";
 import { RackDetailView } from "./views/RackDetailView";
+import { apiFetch } from "./lib/apiFetch";
 // Lazy-loaded routes: keep the initial (index) bundle small by code-splitting each view. Heavy
 // deps move into their own on-demand chunks (chart.js -> Analytics/Metrics, the large ToolsView
 // -> Tools). ClusterDashboard + SingleRack stay eager for fast first paint.
@@ -80,7 +81,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   multirack: "Multirack operations",
   reports: "Reports",
   analytics: "Analytics",
-  postRunNodeReport: "Post Run Node Report",
+  postRunNodeReport: "Validation Status",
   tools: "Operations & Scripts",
   workflows: "Workflows",
   terminal: "Terminal",
@@ -117,9 +118,11 @@ function ViewSuspenseFallback() {
 
 function RackDetailRoute({
   data,
+  refreshToken,
   onBack,
 }: {
   data: RackStatusResponse | null;
+  refreshToken: number | null;
   onBack: () => void;
 }) {
   const { rackId } = useParams<{ rackId: string }>();
@@ -136,6 +139,7 @@ function RackDetailRoute({
       physicalRf0={data?.physical_rf0 || {}}
       naming={data?.naming}
       logDir={data?.log_dir}
+      statusRefreshToken={refreshToken}
       onBack={onBack}
     />
   );
@@ -195,7 +199,7 @@ function AppContent() {
   const handleReconnect = useCallback(async () => {
     setReconnecting(true);
     try {
-      await fetch("/api/cluster-health/reconnect", { method: "POST" });
+      await apiFetch("/api/cluster-health/reconnect", { method: "POST" });
     } catch {
       /* ignore; refreshAll below will reflect the new state */
     }
@@ -343,7 +347,7 @@ function AppContent() {
           />
           <Route
             path="/compute/racks/:rackId"
-            element={<RackDetailRoute data={data} onBack={handleBackToDashboard} />}
+            element={<RackDetailRoute data={data} refreshToken={statusLastUpdated} onBack={handleBackToDashboard} />}
           />
           <Route path="/compute/multirack" element={<MultirackView data={data} logDir={logDir} />} />
           <Route path="/compute/scheduler" element={<SlurmView logDir={logDir} />} />

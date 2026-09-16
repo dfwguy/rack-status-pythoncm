@@ -803,10 +803,33 @@ class TestRunLlmbNccl:
         assert "run_nccl_mpi.sh" in (data.get("command_display") or "")
         assert "--dry-run" in (data.get("command_display") or "")
 
-    def test_multi_rack_starts_job(self, client, log_dir):
+    def test_multi_rack_starts_job(self, client, log_dir, monkeypatch):
+        racks = ["p5-r01", "p5-r02"]
+        monkeypatch.setattr(
+            app_module,
+            "_multirack_campaign_snapshot",
+            lambda: {
+                "ok": True,
+                "active": True,
+                "id": "test-exact-campaign",
+                "racks": [
+                    {
+                        "rack": rack,
+                        "eligible": True,
+                        "reason": "",
+                        "nodes": [f"{rack}-ct01", f"{rack}-ct02"],
+                    }
+                    for rack in racks
+                ],
+            },
+        )
         resp = client.post(
             "/api/run-llmb-nccl-async",
-            json={"racks": ["p5-r01", "p5-r02", "p5-r01"], "log_dir": log_dir},
+            json={
+                "racks": ["p5-r01", "p5-r02", "p5-r01"],
+                "campaign": "test-exact-campaign",
+                "log_dir": log_dir,
+            },
         )
         assert resp.status_code == 200
         data = resp.get_json()
@@ -881,10 +904,36 @@ class TestValidationActivitiesAPI:
         listed = client.get("/api/validation-activities", query_string={"log_dir": log_dir}).get_json()
         assert listed["activities"] == []
 
-    def test_multirack_jobs_compat_alias(self, client, log_dir, isolated_validation_activities):
+    def test_multirack_jobs_compat_alias(
+        self, client, log_dir, isolated_validation_activities, monkeypatch
+    ):
+        racks = ["p5-r01", "p5-r02"]
+        monkeypatch.setattr(
+            app_module,
+            "_multirack_campaign_snapshot",
+            lambda: {
+                "ok": True,
+                "active": True,
+                "id": "test-exact-campaign",
+                "racks": [
+                    {
+                        "rack": rack,
+                        "eligible": True,
+                        "reason": "",
+                        "nodes": [f"{rack}-ct01", f"{rack}-ct02"],
+                    }
+                    for rack in racks
+                ],
+            },
+        )
         start = client.post(
             "/api/run-nemo-xrack-async",
-            json={"racks": ["p5-r01", "p5-r02"], "log_dir": log_dir, "dry_run": True},
+            json={
+                "racks": racks,
+                "campaign": "test-exact-campaign",
+                "log_dir": log_dir,
+                "dry_run": True,
+            },
         ).get_json()
         assert start["ok"] is True
         resp = client.get("/api/multirack-jobs", query_string={"log_dir": log_dir})
@@ -1003,6 +1052,33 @@ class TestValidationActivitySlurmHydration:
             "work_phase": "done",
         }
         assert app_module._task_needs_slurm_hydration(task) is False
+
+    def test_lazy_refresh_reconciles_terminal_task_to_parent(
+        self, isolated_validation_activities
+    ):
+        aid = validation_activities.record_activity(
+            "llmb-nccl", rack="p5-r01", log_dir="/logs"
+        )
+        validation_activities.add_or_update_task(
+            aid,
+            ordinal=1,
+            label="nccl",
+            scheduler_ref="123",
+            scheduler_state="COMPLETED",
+            stdout_path="/logs/nccl-123.out",
+            results_log_path="/logs/nccl-123.out",
+            phase="done",
+            work_phase="done",
+        )
+        validation_activities.update_activity(aid, phase="running", work_phase="done")
+
+        rec = validation_activities.get_activity(aid)
+        app_module._refresh_validation_activities_lazy([rec])
+
+        stored = validation_activities.get_activity(aid)
+        assert stored["phase"] == "done"
+        assert stored["work_phase"] == "done"
+        assert stored["finished_at"]
 
     def test_hydrate_activity_task_logs(self, isolated_validation_activities, monkeypatch):
         aid = validation_activities.record_activity("llmb-nccl", rack="p5-r01", log_dir="/logs")
@@ -1222,4 +1298,6 @@ class TestValidationActivitySlurmHydration:
         task = validation_activities.get_activity(aid)["tasks"][0]
         assert task["results_log_path"] == str(results)
         assert task["work_phase"] == "done"
-        assert validation_activities.get_activity(aid)["work_phase"] == "done"
+        activity = validation_activities.get_activity(aid)
+        assert activity["work_phase"] == "done"
+        assert activity["phase"] == "done"

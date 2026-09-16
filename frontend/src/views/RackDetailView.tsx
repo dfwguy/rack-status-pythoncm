@@ -33,6 +33,7 @@ import { NodeIssueHistoryDialog } from "../components/rack/NodeIssueHistoryDialo
 import { getContent } from "../content";
 import { useActiveCluster } from "../context/ActiveClusterContext";
 import { fetchPostRunNodeReport } from "../services/nodeIssuesService";
+import { fetchSlurmNodeStatus, type SlurmNodeStatus } from "../services/schedulerService";
 import type { NodeIssue, NodeIssueRollup, NodeIssuesResponse, RackRow } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 
@@ -45,16 +46,21 @@ interface RackDetailViewProps {
   physicalRf0: Record<string, string>;
   naming?: NvisNamingSchema;
   logDir?: string;
+  statusRefreshToken?: number | null;
   onBack: () => void;
 }
 
-export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir, onBack }: RackDetailViewProps) {
+export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir, statusRefreshToken, onBack }: RackDetailViewProps) {
   const [tabIndex, setTabIndex] = useState(0);
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
   const [parserOpen, setParserOpen] = useState(false);
   const [terminalNode, setTerminalNode] = useState("");
   const [issueNode, setIssueNode] = useState("");
   const [issueData, setIssueData] = useState<NodeIssuesResponse | null>(null);
+  const [slurmByNode, setSlurmByNode] = useState<Record<string, SlurmNodeStatus>>({});
+  const [slurmLoading, setSlurmLoading] = useState(false);
+  const [slurmError, setSlurmError] = useState("");
+  const [slurmUpdatedAt, setSlurmUpdatedAt] = useState("");
   const { activeCluster, activePlatform } = useActiveCluster();
   const traysPerRack =
     activeCluster?.geometry?.trays_per_rack || activePlatform?.geometry?.trays_per_rack || 18;
@@ -63,6 +69,34 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
     if (!row) return [];
     return parseNodesFromRack(rack, row.ct_down_unk, physicalRf0, traysPerRack, naming);
   }, [rack, row, physicalRf0, naming, traysPerRack]);
+  const nodeKey = useMemo(() => nodes.map((node) => node.id).join(","), [nodes]);
+
+  const loadSlurmStatus = useCallback(async (signal?: AbortSignal) => {
+    const nodeIds = nodeKey.split(",").filter(Boolean);
+    if (nodeIds.length === 0) return;
+    setSlurmLoading(true);
+    setSlurmError("");
+    try {
+      const response = await fetchSlurmNodeStatus(nodeIds, signal);
+      setSlurmByNode(Object.fromEntries(response.nodes.map((node) => [node.node, node])));
+      setSlurmUpdatedAt(new Date(response.captured_at || Date.now()).toLocaleTimeString());
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setSlurmError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (!signal?.aborted) setSlurmLoading(false);
+    }
+  }, [nodeKey]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadSlurmStatus(controller.signal);
+    return () => {
+      controller.abort();
+    };
+  }, [loadSlurmStatus, statusRefreshToken]);
+
+  useEffect(() => setSlurmByNode({}), [nodeKey]);
 
   /** Default selection = all trays; re-seed when rack or the tray id set changes (not on every row poll with same ids). */
   const selectionSeedRef = useRef<string>("");
@@ -192,6 +226,11 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
             onOpenTerminal={(nodeId) => setTerminalNode(nodeId)}
             issueNodes={issueData?.nodes}
             onOpenIssues={(nodeId) => setIssueNode(nodeId)}
+            slurmByNode={slurmByNode}
+            slurmLoading={slurmLoading}
+            slurmError={slurmError}
+            slurmUpdatedAt={slurmUpdatedAt}
+            onRefreshSlurm={() => void loadSlurmStatus()}
           />
         </Box>
 

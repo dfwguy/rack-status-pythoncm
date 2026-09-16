@@ -23,7 +23,7 @@ RUN npm run build
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 2: Runtime — Flask app on Ubuntu 22.04
 # ──────────────────────────────────────────────────────────────────────────────
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -33,8 +33,24 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 \
         python3-pip \
+        python3-venv \
+        libmunge2 \
         openssh-client \
     && rm -rf /var/lib/apt/lists/*
+
+# Match the BCM host identity so the mounted Slurm configuration is accepted.
+RUN groupadd --gid 450 slurm \
+    && useradd --uid 450 --gid 450 --home-dir /cm/local/apps/slurm --shell /bin/sh slurm
+
+# Slurm's root-only --uid/--gid submission path resolves the requested numeric
+# identity through the client's local NSS database before contacting slurmctld.
+# Keep the Nscale TX validation operator present in the image so allocations run
+# as the same account that owns the shared evidence tree instead of as root.
+RUN groupadd --gid 1003 cmods \
+    && useradd --uid 1003 --gid 1003 --home-dir /home/cmods \
+       --shell /bin/bash --no-create-home cmods \
+    && useradd --uid 1024 --gid 1003 --home-dir /home/hlakshminara \
+       --shell /bin/bash --no-create-home hlakshminara
 
 # Container mirrors the repo layout: Python code under /app/backend, runtime
 # assets (bin/, static/, var/, help_content.json) at /app so that backend modules
@@ -42,7 +58,9 @@ RUN apt-get update && \
 WORKDIR /app
 
 COPY backend/requirements.txt ./backend/
-RUN pip3 install --no-cache-dir -r backend/requirements.txt
+RUN python3 -m venv /opt/rack-venv \
+    && /opt/rack-venv/bin/pip install --no-cache-dir -r backend/requirements.txt
+ENV PATH="/opt/rack-venv/bin:${PATH}"
 
 # Python backend package (modules, platforms/, rack_web/; tests excluded via .dockerignore).
 COPY backend/ ./backend/
@@ -55,6 +73,7 @@ COPY rack-config.env ./
 COPY version.py ./
 
 RUN mkdir -p var/logs var/cache var/secrets var/workflows/runs
+RUN chmod 0755 /app/bin/cmsh-readonly-16k
 COPY var/workflows/*.yaml ./var/workflows/
 
 # What build is this? backend/build-info.json answers, and it arrives via the COPY above rather

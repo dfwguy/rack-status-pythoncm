@@ -447,7 +447,7 @@ class Connection:
 
         if (_os.environ.get("RACK_DIRECT_NODE_SSH", "").lower()
                 not in ("", "0", "false", "no")
-                and _re.match(r"^ink50-dh01-[a-z]\d+-\d+$", host or "")):
+                and _re.match(r"^ink50-dh\d{2}-[a-z]\d+-\d+$", host or "")):
             from transport.ssh import SSHConfig, SSHExecutor
 
             return Connection(SSHExecutor(SSHConfig(

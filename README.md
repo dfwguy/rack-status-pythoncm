@@ -372,12 +372,14 @@ Deploy the canonical script tree with the idempotent deploy helper, then start t
 RACK_SSH_HOST=head.example \
 RACK_SSH_USER=rackstatus \
 RACK_SSH_KEY=/secure/path/rack_status_key \
+RACK_KNOWN_HOSTS_PATH=/secure/path/rack_status_known_hosts \
 RACK_REMOTE_BASE_PATH=/home/rackstatus/nvis-rack-status \
   bin/deploy-scripts.sh --dry-run
 
 RACK_SSH_HOST=head.example \
 RACK_SSH_USER=rackstatus \
 RACK_SSH_KEY=/secure/path/rack_status_key \
+RACK_KNOWN_HOSTS_PATH=/secure/path/rack_status_known_hosts \
 RACK_REMOTE_BASE_PATH=/home/rackstatus/nvis-rack-status \
   bin/deploy-scripts.sh
 
@@ -446,8 +448,10 @@ Production incidents have shown that source edits alone are not a deployment. Us
 7. **Deploy the canonical script tree.**
 
    ```bash
-   bin/deploy-scripts.sh --dry-run <ssh-alias-or-user@head>
-   bin/deploy-scripts.sh <ssh-alias-or-user@head>
+   RACK_SSH_USER=<non-root-user> RACK_KNOWN_HOSTS_PATH=<pinned-file> \
+     bin/deploy-scripts.sh --dry-run <ssh-alias-or-host>
+   RACK_SSH_USER=<non-root-user> RACK_KNOWN_HOSTS_PATH=<pinned-file> \
+     bin/deploy-scripts.sh <ssh-alias-or-host>
    ```
 
 8. **Run the deployment gate.**
@@ -592,7 +596,9 @@ Per-binary variables are authoritative for fallback provider calls. Shell launch
 | Variable | Purpose |
 |---|---|
 | `RACK_WEB_AUTH_MODE` | Token or PAM authentication; auto mode selects a deployment-appropriate default. |
-| `RACK_WEB_AUTH_TOKEN` | Shared token-mode password; use secret injection, not source control. |
+| `RACK_WEB_AUTH_TOKEN_FILE` | Preferred in-container path to the read-only shared-token secret. |
+| `RACK_WEB_AUTH_TOKEN_PATH` | Host-side token file supplied to Compose; never stores the value in container configuration. |
+| `RACK_WEB_AUTH_TOKEN` | Legacy compatibility fallback; avoid because container inspectors can read it. |
 | `RACK_WEB_AUTH_DISABLED` | Demo/development only. Do not use for an operational deployment. |
 | `RACK_WEB_SECRET_KEY` | Stable session-signing key across restarts. |
 | `RACK_AI_ENDPOINT`, `RACK_AI_MODEL`, `RACK_AI_API_KEY` | Optional OpenAI-compatible model configuration. |

@@ -323,3 +323,71 @@ def test_hierarchy_unmatched_racks_are_preserved():
     assert any(
         r["rack"] == "bos01-a05" for s in h["sections"] for row in s["rows"] for r in row["racks"]
     )
+
+
+def test_nscale_hierarchy_uses_pythoncm_su_nodegroups_for_both_data_halls():
+    n = nid.NvisNaming.from_templates(
+        r"ink50-dh[01-99]-[a-z][\d+]",
+        r"ink50-dh[01-99]-[a-z][\d+]-[\d+]",
+    )
+    groups = []
+    racks = []
+    for su, hall, row in [
+        (1, 2, "a"), (2, 2, "b"), (3, 2, "c"), (4, 2, "d"),
+        (5, 2, "e"), (6, 2, "f"), (7, 2, "g"), (8, 2, "h"),
+        (9, 2, "i"), (10, 2, "j"), (11, 2, "k"),
+        (12, 1, "a"), (13, 1, "b"), (14, 1, "c"),
+    ]:
+        rack = f"ink50-dh{hall:02d}-{row}01"
+        racks.append(rack)
+        groups.append({"name": f"SU{su}", "nodes": [f"{rack}-11", f"{rack}-18"]})
+    # PythonCM may contain unrelated operational groups; only SU<number> defines this layout.
+    groups.append({"name": "all-compute", "nodes": ["ink50-dh02-a01-11"]})
+
+    labels = n.rack_labels_from_node_groups(groups)
+    hierarchy = n.build_hierarchy(racks, rack_group_labels=labels)
+    sections = {section["key"]: section for section in hierarchy["sections"]}
+
+    assert [row["label"] for row in sections["ink50-dh01"]["rows"]] == [
+        "SU12", "SU13", "SU14",
+    ]
+    assert [row["label"] for row in sections["ink50-dh02"]["rows"]] == [
+        "SU1", "SU2", "SU3", "SU4", "SU5", "SU6", "SU7", "SU8", "SU9", "SU10", "SU11",
+    ]
+    assert all(
+        row["label_source"] == "pythoncm-node-group"
+        for section in hierarchy["sections"]
+        for row in section["rows"]
+    )
+    assert hierarchy["unmatched"] == []
+
+
+def test_ambiguous_su_membership_falls_back_to_coordinate_label():
+    n = nid.NvisNaming.from_templates(
+        r"ink50-dh[01-99]-[a-z][\d+]",
+        r"ink50-dh[01-99]-[a-z][\d+]-[\d+]",
+    )
+    rack = "ink50-dh02-a01"
+    peer = "ink50-dh02-a02"
+    labels = n.rack_labels_from_node_groups([
+        {"name": "SU1", "nodes": [f"{rack}-11", f"{peer}-11"]},
+        {"name": "SU99", "nodes": [f"{rack}-12"]},
+    ])
+    row = n.build_hierarchy([rack, peer], rack_group_labels=labels)["sections"][0]["rows"][0]
+    assert row["label"] == "a"
+    assert row["label_source"] == "rack-id-template"
+
+
+def test_partial_su_membership_labels_the_complete_structural_row():
+    n = nid.NvisNaming.from_templates(
+        r"ink50-dh[01-99]-[a-z][\d+]",
+        r"ink50-dh[01-99]-[a-z][\d+]-[\d+]",
+    )
+    mapped = "ink50-dh02-d01"
+    omitted = "ink50-dh02-d24"
+    labels = n.rack_labels_from_node_groups([
+        {"name": "SU4", "nodes": [f"{mapped}-11"]},
+    ])
+    row = n.build_hierarchy([mapped, omitted], rack_group_labels=labels)["sections"][0]["rows"][0]
+    assert row["label"] == "SU4"
+    assert row["label_source"] == "pythoncm-node-group"

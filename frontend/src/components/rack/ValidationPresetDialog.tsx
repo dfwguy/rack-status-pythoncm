@@ -27,6 +27,7 @@ import {
   Text,
 } from "@nvidia/foundations-react-core";
 import { ClipboardCheck, Database, ShieldCheck } from "lucide-react";
+import { apiFetch } from "../../lib/apiFetch";
 import {
   LOCAL_CONTAINER_DIR,
   VALIDATION_PRESET_LABELS,
@@ -121,7 +122,7 @@ export function ValidationPresetDialog({
     setCatalogError("");
     setCatalogLoading(true);
     let cancelled = false;
-    void fetch("/api/validation-presets")
+    void apiFetch("/api/validation-presets")
       .then(async (response) => {
         const body = (await response.json()) as ValidationPresetsResponse;
         if (!response.ok || !body.ok || !Array.isArray(body.presets)) {
@@ -158,7 +159,7 @@ export function ValidationPresetDialog({
     setPrepareError("");
     setPlan(null);
     try {
-      const response = await fetch("/api/validation-presets/prepare", {
+      const response = await apiFetch("/api/validation-presets/prepare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
@@ -191,13 +192,15 @@ export function ValidationPresetDialog({
   const requirements = formatPresetRequirements(preset.requirements);
   const targetCount = nodeList.length || rackList.length;
   const targetNoun = nodeList.length > 0 ? "node" : "rack";
-  const directHostPreset = presetId === "nccl-2.31.2";
+  const fixedLocalNcclPreset = presetId === "nccl-2.29.3";
   const supportedScopes =
     preset.requirements && !Array.isArray(preset.requirements) && Array.isArray(preset.requirements.scopes)
       ? preset.requirements.scopes.map(String)
       : [];
   const serverScope = scope === "nodes" ? "node" : scope;
   const unsupportedScope = supportedScopes.length > 0 && !supportedScopes.includes(serverScope);
+  const unavailable = preset.availability?.available === false;
+  const unavailableReasons = preset.availability?.reasons ?? [];
 
   return (
     <Dialog open={open} onClose={launching ? undefined : onClose} maxWidth="md" fullWidth>
@@ -233,8 +236,15 @@ export function ValidationPresetDialog({
               This recipe supports {supportedScopes.join(", ")} scope, not {serverScope}. Choose it from a supported target view.
             </Banner>
           ) : null}
-          {directHostPreset ? (
-            <Banner status="info">NCCL 2.31.2 is a fixed direct-host CUDA 13.3+ validation. It does not use or stage a container.</Banner>
+          {unavailable ? (
+            <Banner status="error">
+              This recipe is currently unavailable. {unavailableReasons.length > 0
+                ? unavailableReasons.join("; ")
+                : "A required image, model, or recipe is missing. Ask an administrator to restore the listed prerequisites."}
+            </Banner>
+          ) : null}
+          {fixedLocalNcclPreset ? (
+            <Banner status="info">Proven ARM NVFTP image: NCCL 2.29.3 / CUDA 13.1, five collectives, 8K–32G, 500 iterations, and detailed rank-local NCCL INFO logs. The already verified image is used from /opt/containers without another copy job.</Banner>
           ) : null}
           {catalogError ? <Banner status="warning">Preset catalog: {catalogError}. Prepare remains server-validated.</Banner> : null}
 
@@ -245,8 +255,8 @@ export function ValidationPresetDialog({
             <Tag color="gray" kind="outline" readOnly density="compact">
               {targetCount} selected {targetNoun}{targetCount === 1 ? "" : "s"}
             </Tag>
-            {presetId === "nccl-2.31.2" ? (
-              <Tag color="green" kind="solid" readOnly density="compact">CUDA 13.3+ · NCCL 2.31.2</Tag>
+            {presetId === "nccl-2.29.3" ? (
+              <Tag color="green" kind="solid" readOnly density="compact">CUDA 13.1 · NCCL 2.29.3 · 8K–32G · 500 iterations</Tag>
             ) : null}
             {presetId === "nemo-26.04.01" ? (
               <Tag color="purple" kind="outline" readOnly density="compact">Container 26.04.01</Tag>
@@ -265,7 +275,7 @@ export function ValidationPresetDialog({
             </div>
           ) : null}
 
-          {!directHostPreset ? (
+          {!fixedLocalNcclPreset ? (
             <>
               <Divider />
               <div>
@@ -362,10 +372,10 @@ export function ValidationPresetDialog({
       </DialogContent>
       <DialogActions sx={{ px: 3, py: 2 }}>
         <MuiButton onClick={onClose} color="inherit" disabled={launching}>Cancel</MuiButton>
-        <Button kind="secondary" size="small" onClick={() => void prepare()} disabled={unsupportedScope || catalogLoading || preparing || launching}>
+        <Button kind="secondary" size="small" onClick={() => void prepare()} disabled={unavailable || unsupportedScope || catalogLoading || preparing || launching}>
           {catalogLoading ? "Loading recipe…" : preparing ? "Preparing…" : plan ? "Refresh dry run" : "Review dry run"}
         </Button>
-        <Button kind="primary" color="brand" size="small" onClick={() => void launch()} disabled={!plan || launching}>
+        <Button kind="primary" color="brand" size="small" onClick={() => void launch()} disabled={unavailable || !plan || launching}>
           {launching ? "Launching…" : "Launch validation"}
         </Button>
       </DialogActions>

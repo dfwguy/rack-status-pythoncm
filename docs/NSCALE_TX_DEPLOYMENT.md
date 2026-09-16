@@ -10,14 +10,173 @@ clusters.**
 | | |
 |---|---|
 | Customer / cluster | NscaleTX / `NscaleTX-GB300`, GB300 NVL72 |
-| Rack Status deployment | container `nvis-rack-status-v3` on the OVA, port **5056** |
-| Repo branch | `v3` (push to `origin/v3`) |
-| Deployment tree | `/opt/observability/nvis-rack-status-v3` on the OVA |
+| Rack Status deployment | Compose container `rack-status-rack-status-1` on `appserver.cm.cluster`, port **5056** |
+| Release branch | `16k-port` |
+| Current source tree | `/cluster/OVA/hlakshminara/opt/nscaletx-16k-services/rack-status` |
 | Jira | [NVRACKSTAT-45](https://jirasw.nvidia.com/browse/NVRACKSTAT-45) |
-| Last verified | 2026-07-30 |
+| Guide updated | 2026-09-14 |
 
 No credentials appear in this document. They live in `deploy-secrets/` and
 `docker-compose.override.yml` on the OVA (both git-ignored).
+
+---
+
+## 0. Current 16K release deployment contract
+
+Later sections retain historical `nvis-rack-status-v3` connection and deployment
+incidents because they explain important bind-mount and rollback failures. For the
+2026-09-14 `16k-port` release, the contract in this section is authoritative when it
+differs from those historical examples.
+
+### Authority and access boundaries
+
+- `RACK_SCHEDULER=pythoncm` selects PythonCM for physical inventory/control and its
+  reviewed direct-execution paths.
+- `RACK_NATIVE_SINFO_SOURCE=slurm` independently selects live Slurm as the authority
+  for allocatability, rack counts, per-node state/reason, and validation admission.
+- Slurm/Pyxis remains an explicit execution provider for pinned validation recipes
+  whose semantics require an exact scheduler allocation.
+- Rack Status does not require unrestricted sudo on the BCM head node. Use the
+  existing PythonCM query/exec brokers, pinned Slurm clients, and scoped `cmods`
+  SSH identity.
+- Routine browser refresh must not invoke `sudo`, Docker inspection, or `journalctl`
+  on the app server or head node. NHC/Alloy/AIC owns recurring service monitoring.
+
+### Required host paths and permissions
+
+Verify these before building. Substitute only through the documented environment
+variables; do not patch source paths for one deployment.
+
+| Host path | Container path | Mode/purpose |
+|---|---|---|
+| `/cluster/bringup` | `/cluster/bringup` | Read-only authoritative bring-up reports/scripts |
+| `/cluster/OVA/healthchecks/logs` | same | Read-only OVA mirror of current single-node health-check evidence |
+| `/cluster/OVA/logs` | same | Read/write validation output; exact log directory must be cmods group-writable and setgid |
+| `/cluster/OVA/containers/nvftp-8k-known-good/20260824` | same | Read-only pinned source images |
+| `/cluster/OVA/scripts/nscaletx-16k-validation` | same | Read-only compute-visible reviewed runtime scripts |
+| `/run/nvis-pythoncm` | same | Read-only broker sockets |
+| `/cm` and `/run/munge` | same | Read-only Slurm client/config and Munge socket material |
+| Google token file | `/run/secrets/gsheets-token` | Read-only optional reconciliation token; never package it |
+
+Pre-create the validation log and PythonCM jobs directories with the configured
+submit user/group. The validation launchers reject login-home log directories and
+verify the exact directory's group-write/setgid contract before `sbatch`; do not
+work around this with recursive world-writable permissions.
+
+### Required release environment
+
+At minimum verify the following effective values inside the recreated container:
+
+```text
+RACK_PLATFORM=bcm
+RACK_SCHEDULER=pythoncm
+RACK_NATIVE_SINFO_SOURCE=slurm
+RACK_SSH_USER=cmods
+RACK_BRINGUP_HOME=/cluster/bringup
+RACK_BRINGUP_SCAN_JOBS=16
+RACK_BRINGUP_FLEET_CACHE_TTL_SEC=300
+RACK_STATUS_BACKGROUND_INTERVAL_SEC=30
+RACK_STATUS_LOG_DIR=/cluster/OVA/logs/nscaletx-16k-validation
+RACK_PARSER_EXPORT_GLOB=*.out
+RACK_METRICS_URL=http://127.0.0.1:8428
+```
+
+Also configure the absolute Slurm clients and `SLURM_CONF`, PythonCM query/exec
+sockets, submit UID/GID/home, SSH key/known-hosts, web authentication, allowed log
+prefixes, container roots, and optional Sheet identifiers/token path. Keep secrets
+in the deployment environment or mounted secret files, never in the Git tree.
+
+### Build and deploy from an exact commit
+
+The working tree is not a deployable identity. Commit the reviewed release, record
+its hash, and run the repository gates in this order:
+
+```bash
+cd /cluster/OVA/hlakshminara/opt/nscaletx-16k-services/rack-status
+
+# Detect live bind-mounted and remote-script edits before overwriting anything.
+bin/prod-drift.sh --fetch /tmp/rack-status-prod-drift
+
+# Verify the checked-out ref and write it into the application build metadata.
+git status --short
+git rev-parse --verify HEAD
+bin/write-build-info.sh
+
+# Build and recreate: restart alone does not apply new mounts or environment.
+docker compose build rack-status
+docker compose up -d --force-recreate rack-status
+
+# Verify container, API, mounted modules, build identity, and deployment drift.
+bin/verify-deploy.sh
+```
+
+Use direct Docker commands as the service account. Do **not** prefix browser health
+checks, `docker ps`, `docker inspect`, or evidence ingestion with `sudo` unless AIC
+has approved and installed one exact passwordless command rule. A failed `sudo -n`
+becomes `SECURITY information` mail and is forwarded to the central head-node root
+mailbox even though the command originated on the app server.
+
+### Script and container preparation
+
+`bin/scripts/` is the source of truth. Synchronize it to the compute-visible runtime
+tree with checksum comparison, then run validation-provenance verification against
+the deployed bytes. Pre-stage the pinned SQSH images outside a browser request.
+The launchers still verify image size/SHA, runtime version, GPUs, and IB from the
+exact Slurm allocation; pre-staging removes the 42-GB interactive copy, not the
+verification gate.
+
+Multi-rack campaigns use a manifest or live Slurm snapshot with 16 exact eligible
+nodes per rack by default. Single-rack launches retain full 18-node semantics. A
+stale campaign ID, `idle*`/nonresponding node, missing exact inventory, wrong digest,
+or incomplete per-node readiness marker must fail before workload submission.
+
+### Refresh, cache, and noise acceptance
+
+Validation Status refreshes every 30 seconds. That cadence is a UI requirement, not
+permission to launch an expensive process per browser:
+
+- bring-up fleet results have an independent 300-second cache;
+- a cold cache has one single-flight builder;
+- a stale value is served while one background refresh runs;
+- `SCAN_JOBS_OVERRIDE` is bounded by `RACK_BRINGUP_SCAN_JOBS` (default 16);
+- the compact post-run map returns only current rows; exact-node detail fetches full
+  history on demand;
+- DCGM and health-check integrations consume bounded local indexes/mirrors.
+
+Before acceptance, open multiple auto-refreshing browsers for at least two fleet
+cache TTLs. Confirm one bring-up scan at a time, no app-server CPU burst beyond the
+configured worker cap, no sudo security mail, and no recurring app/head-node
+`journalctl` generated by Rack Status.
+
+The source audit found and resolved two timer hazards. Verify the installed bytes
+before enabling their units:
+
+1. `bin/rack-validation-evidence-refresh.sh` now uses direct `docker exec` through
+   the service account's Docker-group membership and never invokes sudo.
+2. `bin/scripts/rack_status_hourly_audit.py` no longer reads the app-server
+   PythonCM broker journal; bounded recent-error counts use container logs.
+
+The exact reported `sudo docker ps --filter name=rack-status-rack-status-1` command
+does not exist in this source tree. Search deployed/generated units, timer scripts,
+cron, and running commands before declaring the spam fixed.
+
+### Rollback and release evidence
+
+Before recreation, save the current image digest, `docker inspect`, Compose config,
+Git commit, validation-script checksums, and a backup of the `rack-status_rack-data`
+volume. The volume contains durable activities, result history, and ingestion
+checkpoints; never discard it as part of an application rollback. Keep one tested
+rollback image tag and a compatible volume snapshot. After deployment verify:
+
+- full backend/frontend/type/build/static test logs are green;
+- authenticated and unauthenticated API behavior;
+- 224 racks / 4,032 expected nodes and the 14-SU order;
+- Rack Detail shows current Slurm state and reason;
+- Validation Status map, node detail, and CSV/PDF/JPEG exports;
+- exact-node dry runs execute no `sbatch`;
+- activity Job IDs/output survive stage or workload failure;
+- VictoriaMetrics uses `127.0.0.1:8428` and Grafana links resolve from the browser;
+- the container has zero unexpected restarts and `bin/verify-deploy.sh` succeeds.
 
 ---
 
@@ -108,13 +267,13 @@ extension or reboot).
 
 | | |
 |---|---|
-| Nodes | ~864 in Slurm |
-| Racks | `ink50-dh01-h01` … `h22` |
-| Naming | `NVIS_RACK_ID=ink50-dh01-[a-z][\d+]`, `NVIS_CT_ID=ink50-dh01-[a-z][\d+]-[\d+]` |
+| Nodes | 3,942 compute nodes in 14 live PythonCM SU NodeGroups (2026-08-26) |
+| Logical racks | 219: DH01 has SU12–SU14; DH02 has SU1–SU11 |
+| Naming | `NVIS_RACK_ID=ink50-dh[01-99]-[a-z][\d+]`, `NVIS_CT_ID=ink50-dh[01-99]-[a-z][\d+]-[\d+]` |
 | Trays per rack | **18, non-contiguous: `11-18` and `28-37`** |
 | Slurm | 25.05 at `/cm/local/apps/slurm/25.05/bin` |
 | `SLURM_CONF` | `/cm/shared-ubuntu2404-x86_64/apps/slurm/etc/slurm/slurm.conf` |
-| BCM | `cmsh` at `/cm/local/apps/cmd/bin/cmsh` |
+| BCM | 11.x; PythonCM at `/cm/local/apps/cmd/pythoncm` |
 
 Two site-specific traps:
 
@@ -132,7 +291,11 @@ Two site-specific traps:
 
 ---
 
-## 3. Deployment model
+## 3. Historical v3 deployment model (reference only)
+
+The paths/container names below document the 2026-07 deployment and its failure
+modes. They are not the 2026-09 `16k-port` install recipe; use section 0 for current
+deployment commands.
 
 The OVA holds **two trees. Only the v3 one is live:**
 
@@ -295,11 +458,21 @@ ssh nscale-tx-ova 'cd /opt/observability/nvis-rack-status-v3 && rsync -avc --exc
 
 ### Auth
 
-Token mode (`RACK_WEB_AUTH_MODE=token`). For scripted checks, log in for a session cookie:
+Token mode (`RACK_WEB_AUTH_MODE=token`) uses a Compose secret. Create a regular,
+non-symlink, mode-0600 host file, set `RACK_WEB_AUTH_TOKEN_PATH` to that path for
+Compose, and keep `RACK_WEB_AUTH_TOKEN_FILE=/run/secrets/rack-web-auth-token` in
+the container. Do not put the token value in `docker-compose.override.yml`, an
+environment file, shell history, or diagnostic output. Rotate the historical
+environment-backed token after confirming the file-backed login.
+
+For scripted checks, read the host-side file into the request without printing it:
 
 ```bash
+token_file=/secure/nvis/web-auth-token
 curl -sS -c /tmp/ck.txt -X POST -H 'Content-Type: application/json' \
-     -d '{"password":"<RACK_WEB_AUTH_TOKEN>"}' http://127.0.0.1:5056/api/login
+     --data-binary "$(jq -cn --rawfile password "$token_file" \
+       '{password:($password|gsub("\\s+$";""))}')" \
+     http://127.0.0.1:5056/api/login
 curl -sS -b /tmp/ck.txt http://127.0.0.1:5056/api/bringup/config
 ```
 
@@ -313,13 +486,18 @@ Set in `docker-compose.override.yml` on the OVA. The ones that matter here:
 
 | Variable | Why this site needs it |
 |---|---|
-| `RACK_STATUS_ALLOWED_PREFIXES` | Multi-root read allowlist. Operators' job StdOut lands **outside** `RACK_STATUS_LOG_DIR` (e.g. `/home/cmods/bringup/results`), and once this is set it is the *only* gate — every readable root must be listed |
-| `RACK_STATUS_LOG_DIR` | `/home/cmods/benchmark/harish` (a head-node path, not a container path) |
+| `RACK_STATUS_ALLOWED_PREFIXES` | Multi-root read allowlist. Current validation evidence is under `/cluster/OVA/logs`; once this is set it is the only read gate, so list every intended root and no broader parent |
+| `RACK_STATUS_LOG_DIR` | `/cluster/OVA/logs/nscaletx-16k-validation` |
+| `RACK_SCHEDULER` | `pythoncm` for the primary physical/control provider |
+| `RACK_NATIVE_SINFO_SOURCE` | `slurm` for live 4,032-node availability and reasons, independent of the command provider |
 | `RACK_SLURM_{SQUEUE,SINFO,SCONTROL,SCANCEL,SACCT}` | Absolute paths; required with `RACK_SLURM_SKIP_MODULE_LOAD=1` |
 | `RACK_VALIDATION_CT_RANGE=11-18,28-37` | Non-contiguous trays |
-| `RACK_BRINGUP_HOME` | Travis's tree, default `/home/cmods/bringup` (see §5) |
+| `RACK_BRINGUP_HOME` | Read-only host/shared tree `/cluster/bringup` (see §5) |
+| `RACK_BRINGUP_SCAN_JOBS` / `RACK_BRINGUP_FLEET_CACHE_TTL_SEC` | Bound verdict work to 16 and decouple its 300-second cache from 30-second browser refresh |
+| `RACK_PARSER_EXPORT_GLOB` | `*.out`, keeping parser Excel and raw-log ZIP on the same Slurm artifacts |
+| `RACK_METRICS_URL` | Host-network VictoriaMetrics listener `http://127.0.0.1:8428` |
 | `RACK_LAKE_*` | Parquet lake capture — first site to enable it, which exposed finding F5 |
-| `RACK_GRAFANA_*` | Grafana reachable via `host.docker.internal:3001`, not `localhost` |
+| `RACK_GRAFANA_*` | Browser-facing Grafana origin used to resolve section/panel links and embedding |
 
 Full catalogue: [`docs/ENVIRONMENT.md`](ENVIRONMENT.md).
 
@@ -416,7 +594,10 @@ Design principles this engagement reinforced:
 
 ---
 
-## 8. Runbook
+## 8. Historical v3 incident runbook
+
+This runbook is retained to interpret earlier incidents. Use the section 0 build,
+recreate, and verification sequence for the current release.
 
 ```bash
 # BEFORE ANY DEPLOY — has anyone edited the live cluster? (see §3; exit 1 = harvest first)

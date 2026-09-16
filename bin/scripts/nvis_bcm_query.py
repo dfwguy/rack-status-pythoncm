@@ -60,10 +60,12 @@ DEFAULT_MODULE_PATHS = (
 #: (Redfish) and ipmi0 elsewhere; the class name is the reliable signal when present.
 _BMC_NAMES = {"rf0", "ipmi0", "bmc", "ipmi"}
 
-# Queries that invoke a CMDaemon operation rather than reading its entity cache. BCM protects
-# these RPCs with the web/API authentication cookie even when the client certificate is valid.
+# Mutating queries remain gated on a BCM web/API login cookie.  BCM 11 permits the
+# device-status and drain-status read RPCs with the client certificate on this cluster;
+# pre-emptively rejecting those reads made every rack look unknown/down even though the
+# controller would return the physical state.
 _AUTHENTICATED_QUERIES = {
-    "status", "node-states", "power", "drain", "undrain", "drain-status",
+    "power", "drain", "undrain",
 }
 
 
@@ -377,13 +379,14 @@ def _connect(args: argparse.Namespace):
     return cluster
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Return the shared query parser used by the CLI and persistent broker."""
     ap = argparse.ArgumentParser(description="Query BCM CMDaemon via pythoncm; emit JSON.")
     ap.add_argument(
         "--query",
         default="nodes",
         choices=[
-            "nodes", "switches", "devices", "racks", "status", "node-states", "rf0", "version",
+            "nodes", "switches", "devices", "racks", "topology", "status", "node-states", "rf0", "version",
             "capabilities", "attrs", "power", "drain", "undrain", "drain-status",
         ],
     )
@@ -413,7 +416,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="JSON API output or compatibility text for existing Rack Status parsers")
     ap.add_argument("--bootstrap-ca", action="store_true",
                     help="pin the CA chain the head presents, then use it")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     if args.format == "cmsh" and args.query not in {"racks", "status", "rf0"}:
         return _fail("unsupported output format", f"--format cmsh is not supported for {args.query}")
 
@@ -502,6 +509,55 @@ def _racks_by_uuid(cluster) -> dict[str, str]:
         if uuid and name:
             racks[uuid] = name
     return racks
+
+
+def _shape_node_groups(cluster) -> list[dict[str, object]]:
+    """BCM NodeGroup names with their resolved physical-node hostnames.
+
+    ``NodeGroup.nodes`` is a vector of resolved entities on BCM 11, but older
+    generated clients can expose UUID values. Resolve both forms without ever
+    serializing an entity's multi-line JSON representation.
+    """
+    groups: list[dict[str, object]] = []
+    for group in cluster.get_by_type("NodeGroup") or []:
+        name = _scalar(_attr(group, "name"))
+        if not name:
+            continue
+        nodes: set[str] = set()
+        for node in _attr(group, "nodes", default=[]) or []:
+            hostname = _scalar(_attr(node, "hostname", "name")) or _name_for_uuid(
+                cluster, node
+            )
+            if hostname:
+                nodes.add(hostname)
+        groups.append({"name": name, "nodes": sorted(nodes, key=_natural_path_key)})
+    groups.sort(key=lambda group: _natural_path_key(str(group["name"])))
+    return groups
+
+
+def _shape_topology(cluster) -> dict[str, object]:
+    """Slow-changing rack and NodeGroup topology in one CMDaemon session."""
+    racks = [
+        {
+            "name": _scalar(_attr(rack, "name", "hostname")),
+            "uuid": _scalar(_attr(rack, "uuid")),
+            "serial": _scalar(_attr(rack, "serialNumber", "serial")),
+        }
+        for rack in cluster.get_by_type("Rack") or []
+    ]
+    racks.sort(key=lambda item: _natural_path_key(str(item["name"])))
+    # NodeGroup membership is operator-maintained and can temporarily omit a
+    # rack even though its PhysicalNodes still exist. Include the hostname
+    # universe so consumers do not silently drop those racks from inventory.
+    nodes = sorted(
+        {
+            hostname
+            for node in cluster.get_by_type("PhysicalNode") or []
+            if (hostname := _scalar(_attr(node, "hostname", "name")))
+        },
+        key=_natural_path_key,
+    )
+    return {"racks": racks, "node_groups": _shape_node_groups(cluster), "nodes": nodes}
 
 
 def _select_devices(cluster, target: str, *, nodes_only: bool = False) -> list[object]:
@@ -636,6 +692,7 @@ def _scheduler_nodes(cluster, target: str = "") -> list[dict[str, object]]:
     for uuid, device in by_uuid.items():
         hostname = _scalar(_attr(device, "hostname", "name"))
         cm_state = str(device_states.get(uuid, {}).get("status") or "UNDEFINED").upper()
+        has_drain_status = hostname in drain_states
         drain = drain_states.get(hostname, {"state": "UNKNOWN", "reason": ""})
         drain_state = drain["state"]
         running_jobs: list[str] = []
@@ -647,6 +704,11 @@ def _scheduler_nodes(cluster, target: str = "") -> list[dict[str, object]]:
             scheduler_state = "draining"
         elif cm_state == "UP" and drain_state == "UNDRAINED":
             scheduler_state = "idle"
+        elif cm_state == "UP" and not has_drain_status:
+            # Physical health is known even when this BCM/Slurm integration does
+            # not publish a per-node drain result.  "up" is intentionally not
+            # "idle": scheduler_runtime only admits idle nodes to operations.
+            scheduler_state = "up"
         else:
             scheduler_state = "unknown"
         rows.append({
@@ -695,6 +757,8 @@ def _run_query(cluster, args: argparse.Namespace, used: str, started: float) -> 
     elif query == "attrs":
         sample = (cluster.get_by_type(args.type) or [None])[0]
         data = sorted(a for a in dir(sample) if not a.startswith("_")) if sample else []
+    elif query == "topology":
+        data = _shape_topology(cluster)
     elif query == "racks":
         data = [
             {"name": _scalar(_attr(rack, "name", "hostname")),

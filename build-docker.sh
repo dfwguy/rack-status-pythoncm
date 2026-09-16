@@ -223,6 +223,7 @@ run_prod() {
   local ssh_host="${RACK_SSH_HOST:-}"
   local ssh_key="${RACK_SSH_KEY_PATH:-$HOME/.ssh/id_rsa}"
   local auth_token="${RACK_WEB_AUTH_TOKEN:-}"
+  local auth_token_file="${RACK_WEB_AUTH_TOKEN_FILE:-}"
   local config="${RACK_CONFIG_FILE:-rack-config.env}"
 
   if [[ -z "$ssh_host" ]]; then
@@ -230,9 +231,14 @@ run_prod() {
     echo "  RACK_SSH_HOST=10.0.0.1 ./build-docker.sh prod"
     exit 1
   fi
-  if [[ -z "$auth_token" ]]; then
-    echo "Error: RACK_WEB_AUTH_TOKEN is required for prod token auth."
-    echo "  RACK_WEB_AUTH_TOKEN=secret ./build-docker.sh prod"
+  if [[ -n "$auth_token_file" ]]; then
+    if [[ ! -f "$auth_token_file" || ! -r "$auth_token_file" || -L "$auth_token_file" ]]; then
+      echo "Error: RACK_WEB_AUTH_TOKEN_FILE must be a readable regular non-symlink file."
+      exit 1
+    fi
+  elif [[ -z "$auth_token" ]]; then
+    echo "Error: RACK_WEB_AUTH_TOKEN_FILE (preferred) or RACK_WEB_AUTH_TOKEN is required for prod token auth."
+    echo "  RACK_WEB_AUTH_TOKEN_FILE=/secure/path/web-token ./build-docker.sh prod"
     exit 1
   fi
   if [[ ! -f "$ssh_key" ]]; then
@@ -244,10 +250,20 @@ run_prod() {
 
   stop_container
   echo "==> Starting in PROD mode (port ${port}, config: ${config}) …"
+  local auth_args=()
+  if [[ -n "$auth_token_file" ]]; then
+    auth_args+=(
+      --mount "type=bind,src=${auth_token_file},dst=/run/secrets/rack-web-auth-token,readonly"
+      -e RACK_WEB_AUTH_TOKEN_FILE=/run/secrets/rack-web-auth-token
+    )
+  else
+    # Compatibility only; environment values are visible through docker inspect.
+    auth_args+=( -e RACK_WEB_AUTH_TOKEN="$auth_token" )
+  fi
   docker run -d --name "$CONTAINER" -p "${port}:5000" \
     --env-file "$config" \
     -e RACK_SSH_HOST="$ssh_host" \
-    -e RACK_WEB_AUTH_TOKEN="$auth_token" \
+    "${auth_args[@]}" \
     -v "${ssh_key}:/run/secrets/ssh_key:ro" \
     --restart unless-stopped \
     "$IMAGE"

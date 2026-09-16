@@ -10,13 +10,13 @@
 # its affiliates is strictly prohibited.
 #
 # For each NV switch in the nodeset, use Redfish to set the BMC root password
-# to WelcomeDell1! when the account reports PasswordChangeRequired (or the
+# from a protected file when the account reports PasswordChangeRequired (or the
 # property is missing on older BMCs).
 #
 # Authentication order for GET/PATCH:
-#   1) 0penBmc
-#   2) 0penBmcTempPass!
-# If both fail, a GET with the target password (WelcomeDell1!) is tried: if that
+#   1) credential named by NVSWITCH_BMC_PRIMARY_PASSWORD_FILE
+#   2) credential named by NVSWITCH_BMC_SECONDARY_PASSWORD_FILE
+# If both fail, the target credential file is tried; success means already compliant.
 # succeeds, the BMC is treated as already compliant (password already applied).
 #
 # Usage: nvswitches_set_bmc_passwd.sh <nodeset>
@@ -29,10 +29,10 @@ set -euo pipefail
 # BCM installs cmsh at an absolute path and does NOT put it on PATH (Nscale TX: BCM 11 keeps
 # it at /cm/local/apps/cmd/bin/cmsh). RACK_CMSH is the same knob the backend uses.
 CMSH=${RACK_CMSH:-cmsh}
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=bin/scripts/lib/nvswitch_credentials.sh
+source "${HERE}/lib/nvswitch_credentials.sh"
 
-NEW_PASSWORD='WelcomeDell1!'
-PASS_OPENBMC='0penBmc'
-PASS_TEMP='0penBmcTempPass!'
 ACCOUNT_PATH='/redfish/v1/AccountService/Accounts/root'
 
 usage() {
@@ -66,10 +66,10 @@ set_bmc_password_for_node() {
 	local nvsw=$1
 	local result_file=$2
 	local ip
-	local tmp
+	local tmp netrc json_payload
 	local http_code
-	local working_pass=""
-	local try_pass
+	local working_pass_file=""
+	local try_pass_file
 	local patch_code
 	local reachable=0
 
@@ -86,21 +86,25 @@ set_bmc_password_for_node() {
 	ip=$(printf '%s' "$ip" | tr -d '\r\n')
 
 	tmp=$(mktemp)
-	trap 'rm -f "$tmp"' RETURN
+	netrc=$(mktemp)
+	json_payload=$(mktemp)
+	chmod 0600 "$tmp" "$netrc" "$json_payload"
+	trap 'rm -f "$tmp" "$netrc" "$json_payload"' RETURN
 
 	local url="https://${ip}${ACCOUNT_PATH}"
 
-	# Prefer 0penBmc first, then factory temp password (per onboarding flow).
-	for try_pass in "$PASS_OPENBMC" "$PASS_TEMP"; do
+	# Try the configured onboarding credentials in the documented order.
+	for try_pass_file in "$PASS_OPENBMC_FILE" "$PASS_TEMP_FILE"; do
+		nvis_make_netrc "$ip" root "$try_pass_file" "$netrc"
 		set +e
 		http_code=$(curl -k -sS -o "$tmp" -w '%{http_code}' \
-			-u "root:${try_pass}" \
+			--netrc-file "$netrc" \
 			--connect-timeout 5 --max-time 10 \
 			-H 'Content-Type: application/json' \
 			"$url" 2>/dev/null)
 		set -e
 		if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
-			working_pass=$try_pass
+			working_pass_file=$try_pass_file
 			break
 		fi
 		if [[ "$http_code" != "000" && -n "$http_code" ]]; then
@@ -108,11 +112,12 @@ set_bmc_password_for_node() {
 		fi
 	done
 
-	if [[ -z "$working_pass" ]]; then
-		# Factory defaults rejected: root may already be on our standard password.
+	if [[ -z "$working_pass_file" ]]; then
+		# Candidate credentials rejected: root may already use the target credential.
+		nvis_make_netrc "$ip" root "$NEW_PASSWORD_FILE" "$netrc"
 		set +e
 		http_code=$(curl -k -sS -o "$tmp" -w '%{http_code}' \
-			-u "root:${NEW_PASSWORD}" \
+			--netrc-file "$netrc" \
 			--connect-timeout 5 --max-time 10 \
 			-H 'Content-Type: application/json' \
 			"$url" 2>/dev/null)
@@ -129,7 +134,7 @@ set_bmc_password_for_node() {
 			echo "${nvsw} (${ip}): BMC not reachable (HTTPS/Redfish)" >&2
 			record NOT_REACHABLE "$ip" "curl: no HTTP response (timeout/refused/SSL?)"
 		else
-			echo "${nvsw} (${ip}): authentication failed (${PASS_OPENBMC}, ${PASS_TEMP}, and target password)" >&2
+			echo "${nvsw} (${ip}): authentication failed with all configured credential files" >&2
 			record AUTH_FAILED "$ip" "GET ${ACCOUNT_PATH} did not return 2xx with factory or target password"
 		fi
 		return 0
@@ -141,17 +146,19 @@ set_bmc_password_for_node() {
 		return 0
 	fi
 
+	nvis_make_netrc "$ip" root "$working_pass_file" "$netrc"
+	nvis_make_password_json "$NEW_PASSWORD_FILE" "$json_payload"
 	patch_code=$(curl -k -sS -o /dev/null -w '%{http_code}' \
-		-u "root:${working_pass}" \
+		--netrc-file "$netrc" \
 		--connect-timeout 5 --max-time 10 \
 		-H 'Content-Type: application/json' \
 		-X PATCH \
-		-d "{\"Password\": \"${NEW_PASSWORD}\"}" \
+		--data-binary @"$json_payload" \
 		"$url" 2>/dev/null || true)
 
 	if [[ "$patch_code" =~ ^2[0-9][0-9]$ ]]; then
-		echo "${nvsw} (${ip}): password updated (authenticated with ${working_pass})"
-		record PASSWORD_UPDATED "$ip" "auth=${working_pass}"
+		echo "${nvsw} (${ip}): password updated (authenticated with configured credential source)"
+		record PASSWORD_UPDATED "$ip" "auth=configured_credential_source"
 		return 0
 	fi
 
@@ -240,6 +247,13 @@ print_summary() {
 }
 
 [[ $# -ge 1 ]] || usage
+
+nvis_secret_file NVSWITCH_BMC_TARGET_PASSWORD_FILE /etc/nvis-rack-status/secrets/nvswitch-bmc-target.password
+NEW_PASSWORD_FILE=$REPLY
+nvis_secret_file NVSWITCH_BMC_PRIMARY_PASSWORD_FILE /etc/nvis-rack-status/secrets/nvswitch-bmc-primary.password
+PASS_OPENBMC_FILE=$REPLY
+nvis_secret_file NVSWITCH_BMC_SECONDARY_PASSWORD_FILE /etc/nvis-rack-status/secrets/nvswitch-bmc-secondary.password
+PASS_TEMP_FILE=$REPLY
 
 resdir=$(mktemp -d)
 trap 'rm -rf "$resdir"' EXIT

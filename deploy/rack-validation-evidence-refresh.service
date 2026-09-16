@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+[Unit]
+Description=Refresh Rack Status settled NCCL/NeMo acceptance evidence
+After=docker.service rack-status-rack-status-1.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -n /run/rack-validation-evidence-refresh.lock /cluster/OVA/hlakshminara/opt/nscaletx-16k-services/rack-status/bin/rack-validation-evidence-refresh.sh
+TimeoutStartSec=15min

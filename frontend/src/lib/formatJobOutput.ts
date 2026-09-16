@@ -87,6 +87,15 @@ export function formatJobStatusText(st: Record<string, unknown>): string {
   const phase = String(st.phase ?? "?");
   const kind = String(st.kind ?? "").toLowerCase();
   lines.push(`[${phase}] ${kind || "job"}`);
+  const tasks = Array.isArray(st.tasks) ? st.tasks as Array<Record<string, unknown>> : [];
+  const schedulerIds = [...new Set(tasks
+    .map((task) => String(task.scheduler_ref ?? "").trim())
+    .filter(Boolean))];
+  const jobId = String(st.job_id ?? "").trim();
+  if (/^\d+$/.test(jobId) && !schedulerIds.includes(jobId)) schedulerIds.unshift(jobId);
+  if (schedulerIds.length) lines.push(`Scheduler Job ID${schedulerIds.length === 1 ? "" : "s"}: ${schedulerIds.join(", ")}`);
+  const activityId = String(st.activity_id ?? (!/^\d+$/.test(jobId) ? jobId : "")).trim();
+  if (activityId) lines.push(`Activity ID: ${activityId}`);
   if (st.command_display) lines.push(String(st.command_display));
   if (st.returncode != null) lines.push(`exit ${String(st.returncode)}`);
   if (st.target) lines.push(`target: ${String(st.target)}`);
@@ -97,8 +106,10 @@ export function formatJobStatusText(st: Record<string, unknown>): string {
   if (Array.isArray(st.results) && st.results.length) {
     lines.push(formatPowerResults(st.results));
   }
-  if (st.stdout) lines.push(`stdout:\n${String(st.stdout)}`);
-  if (st.stderr) lines.push(`stderr:\n${String(st.stderr)}`);
+  const stdout = st.stdout ?? st.stdout_tail;
+  const stderr = st.stderr ?? st.stderr_tail;
+  if (stdout) lines.push(`stdout:\n${String(stdout)}`);
+  if (stderr) lines.push(`stderr:\n${String(stderr)}`);
   if (st.reset_sleep_sec != null) lines.push(`reset_sleep_sec: ${String(st.reset_sleep_sec)}`);
   if (st.nvlmapper_zip) lines.push(`nvlmapper_zip: ${String(st.nvlmapper_zip)}`);
   if (st.nvlmapper_work_dir) lines.push(`nvlmapper_work_dir (CSV/XLS on disk): ${String(st.nvlmapper_work_dir)}`);

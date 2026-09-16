@@ -21,13 +21,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MultirackView } from "./MultirackView";
 import type { RackRow, RackStatusResponse } from "../types/api";
+import type { ValidationPresetId } from "../lib/validationPresets";
 
 function rack(id: string, nemo: string, opts: Partial<RackRow> = {}): RackRow {
   return {
     rack: id,
     nemo,
     last_job: "-",
-    // Eligibility accepts idle or yieldable allocated sinfo and no DN trays; overridden below.
+    // Multirack selection requires 16 idle scheduler nodes; other rack trays may be unavailable.
     sinfo: "idle=18",
     ct_down_unk: "-",
     ...opts,
@@ -40,15 +41,14 @@ function makeData(): RackStatusResponse {
     ok: true,
     rows: [
       rack("ink50-dh01-d01", "done"),
-      // Bring-up diagnostics may still own trays; the launch-side preflight verifies
-      // that allocated jobs are exclusively yieldable bringup-* jobs.
+      // Fewer than 16 idle nodes is not enough for a 16-node/rack validation.
       rack("ink50-dh01-d02", "done", { sinfo: "alloc=15,idle=1" }),
       rack("ink50-dh01-d03", "pending"),
       rack("ink50-dh01-e01", "done"),
       rack("ink50-dh01-e02", "fail"),
       rack("ink50-dh01-e03", "ongoing [12:34]"),
-      // eligible-looking status but a drained tray -> not eligible
-      rack("ink50-dh01-e04", "done", { sinfo: "idle=17,drain=1" }),
+      // Exactly 16 idle nodes passes even though two other trays are unavailable.
+      rack("ink50-dh01-e04", "done", { sinfo: "idle=16,down=2", ct_down_unk: "DN:e04-17,e04-18" }),
       rack("orphan-rack-99", "done"),
     ],
     hierarchy: {
@@ -247,26 +247,26 @@ describe("MultirackView rack filters", () => {
 
   it("counts only eligible racks inside the current filter", async () => {
     renderView();
-    // Fleet-wide: d01,d02,e01,orphan are eligible (e04 is drained, others not done) -> 4.
+    // Fleet-wide: d01,e01,e04,orphan have at least 16 idle nodes -> 4.
     await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeTruthy());
 
     fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "d0" } });
 
-    // Within "d0": d01 and d02 are eligible, d03 is pending.
-    await waitFor(() => expect(screen.getByText("Select all eligible (2)")).toBeTruthy());
-    expect(screen.getByText(/2 eligible here/)).toBeTruthy();
+    // Within "d0": only d01 is eligible; d02 has just one idle node and d03 is pending.
+    await waitFor(() => expect(screen.getByText("Select all eligible (1)")).toBeTruthy());
+    expect(screen.getByText(/1 eligible here/)).toBeTruthy();
   });
 
   it("select-all-eligible selects only the filtered racks, not the whole fleet", async () => {
     renderView();
     fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "d0" } });
-    await waitFor(() => expect(screen.getByText("Select all eligible (2)")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Select all eligible (1)")).toBeTruthy());
 
-    fireEvent.click(screen.getByText("Select all eligible (2)"));
+    fireEvent.click(screen.getByText("Select all eligible (1)"));
 
-    // The launch buttons must offer 2, not the 4 eligible fleet-wide.
-    await waitFor(() => expect(screen.getByText("Launch Multirack Validation (2)")).toBeTruthy());
-    expect(screen.getByText("2 selected")).toBeTruthy();
+    // The launch buttons must offer 1, not the 4 eligible fleet-wide.
+    await waitFor(() => expect(screen.getByText("Launch Multirack Validation (1)")).toBeTruthy());
+    expect(screen.getByText("1 selected")).toBeTruthy();
   });
 
   it("enables fallback validations while enforcing fixed Llama geometry", async () => {
@@ -319,13 +319,88 @@ describe("MultirackView rack filters", () => {
     renderView();
     await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("checkbox", { name: "Select rack ink50-dh01-d01" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select rack ink50-dh01-d02" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select rack ink50-dh01-e01" }));
 
     const button = screen.getByRole("button", { name: "MNUberGEMM 26.03-v1.17" });
     expect(button).toBeEnabled();
     fireEvent.click(button);
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
+
+  it.each([
+    ["nccl-2.29.3", "NCCL 2.29.3 · 8K–32G · 500 iterations"],
+    ["nemo-26.04.01", "NeMo 26.04.01"],
+    ["mnubergemm-26.03-v1.17", "MNUberGEMM 26.03-v1.17"],
+  ] as Array<[ValidationPresetId, string]>) (
+    "submits one reviewed %s request containing all four selected racks",
+    async (presetId, buttonLabel) => {
+      const emptyBody = { ok: true, rows: [], jobs: [], active: false };
+      const fetchMock = vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+        const url = String(input);
+        if (url === "/api/validation-presets") {
+          return Promise.resolve(new Response(JSON.stringify({
+            ok: true,
+            presets: [{
+              id: presetId,
+              label: buttonLabel,
+              description: "Four-rack acceptance recipe.",
+              kind: presetId,
+              defaults: { storage: "local", rsync: false },
+              requirements: { scopes: ["rack", "multirack"] },
+            }],
+          }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        }
+        if (url === "/api/validation-presets/prepare") {
+          const request = JSON.parse(String(init?.body));
+          return Promise.resolve(new Response(JSON.stringify({
+            ok: true,
+            plan: {
+              ...request,
+              summary: `One coordinated ${presetId} plan for four racks.`,
+              node_count: 72,
+              plan_hash: `reviewed-${presetId}`,
+            },
+          }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        }
+        if (url === "/api/run-validation-preset-async") {
+          return Promise.resolve(new Response(JSON.stringify({ ok: true, job_id: "one-activity" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }));
+        }
+        return Promise.resolve(new Response(JSON.stringify(emptyBody), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }));
+      });
+
+      renderView();
+      await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("Select all eligible (4)"));
+      fireEvent.click(screen.getByRole("button", { name: buttonLabel }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Review dry run" })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: "Review dry run" }));
+      expect(await screen.findByText(`One coordinated ${presetId} plan for four racks.`)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Launch validation" }));
+
+      await waitFor(() => {
+        const launchCalls = fetchMock.mock.calls.filter(([url]) => String(url) === "/api/run-validation-preset-async");
+        expect(launchCalls).toHaveLength(1);
+        const request = JSON.parse(String((launchCalls[0][1] as RequestInit).body));
+        expect(request).toMatchObject({
+          preset_id: presetId,
+          scope: "multirack",
+          plan_hash: `reviewed-${presetId}`,
+        });
+        expect(request.racks).toEqual([
+          "ink50-dh01-d01",
+          "ink50-dh01-e01",
+          "ink50-dh01-e04",
+          "orphan-rack-99",
+        ]);
+      });
+    },
+  );
 
   it("enables fixed Llama when a campaign resolves exactly 256 nodes", async () => {
     const campaignRacks = Array.from({ length: 16 }, (_, index) => `rack-${String(index + 1).padStart(2, "0")}`);
@@ -383,6 +458,54 @@ describe("MultirackView rack filters", () => {
     expect(screen.getByText(/16 selected nodes per rack/i)).toBeInTheDocument();
   });
 
+  it("pins a NeMo launch to the reviewed 16-node campaign snapshot", async () => {
+    const selectedRacks = ["ink50-dh01-d01", "ink50-dh01-e01"];
+    vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      const body = url === "/api/multirack-campaign"
+        ? {
+            ok: true,
+            active: true,
+            source: "live-scheduler",
+            id: "live-16-reviewed",
+            nodes_per_rack: 16,
+            rack_count: 2,
+            eligible_count: 2,
+            racks: selectedRacks.map((rackId) => ({
+              rack: rackId,
+              eligible: true,
+              reason: "",
+              node_count: 16,
+              nodes: Array.from({ length: 16 }, (_, index) => `${rackId}-${index + 1}`),
+            })),
+          }
+        : url === "/api/run-nemo-xrack-async" && init?.method === "POST"
+          ? { ok: true, job_id: "activity-1" }
+          : { ok: true, rows: [], jobs: [] };
+      return Promise.resolve(new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    renderView();
+
+    await waitFor(() => expect(screen.getByText("Select all eligible (2)")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("Select all eligible (2)"));
+    fireEvent.click(screen.getByRole("button", { name: "Launch Multirack Validation (2)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Launch" }));
+
+    await waitFor(() => {
+      const launch = vi.mocked(globalThis.fetch).mock.calls.find(
+        ([input, init]) => String(input) === "/api/run-nemo-xrack-async" && init?.method === "POST",
+      );
+      expect(launch).toBeDefined();
+      expect(JSON.parse(String(launch?.[1]?.body))).toMatchObject({
+        racks: selectedRacks,
+        campaign: "live-16-reviewed",
+      });
+    });
+  });
+
   it("does not infer 256 exact nodes from rack count times campaign geometry", async () => {
     const campaignRacks = Array.from({ length: 16 }, (_, index) => `rack-${String(index + 1).padStart(2, "0")}`);
     vi.mocked(globalThis.fetch).mockImplementation((input) => {
@@ -424,12 +547,12 @@ describe("MultirackView rack filters", () => {
     fireEvent.click(screen.getByText("Select all eligible (4)"));
     await waitFor(() => expect(screen.getByText("4 selected")).toBeTruthy());
 
-    // Narrow to row d: the eligible e01 and orphan-rack-99 stay selected but leave the screen.
+    // Narrow to row d: e01, e04 and orphan-rack-99 stay selected but leave the screen.
     fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "d0" } });
 
     await waitFor(() =>
       expect(
-        screen.getByText(/2 selected racks are hidden by the current filter/)
+        screen.getByText(/3 selected racks are hidden by the current filter/)
       ).toBeTruthy()
     );
     // and the launch count still reflects all 4, which is why the warning exists
@@ -439,9 +562,9 @@ describe("MultirackView rack filters", () => {
   it("no warning when every selected rack is visible", async () => {
     renderView();
     fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "d0" } });
-    await waitFor(() => expect(screen.getByText("Select all eligible (2)")).toBeTruthy());
-    fireEvent.click(screen.getByText("Select all eligible (2)"));
-    await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Select all eligible (1)")).toBeTruthy());
+    fireEvent.click(screen.getByText("Select all eligible (1)"));
+    await waitFor(() => expect(screen.getByText("1 selected")).toBeTruthy());
     expect(screen.queryByText(/hidden by the current filter/)).toBeNull();
   });
 
@@ -452,11 +575,11 @@ describe("MultirackView rack filters", () => {
     await waitFor(() => expect(screen.getByText("4 selected")).toBeTruthy());
 
     fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "d0" } });
-    await waitFor(() => expect(screen.getByText("Clear selection (2)")).toBeTruthy());
-    fireEvent.click(screen.getByText("Clear selection (2)"));
+    await waitFor(() => expect(screen.getByText("Clear selection (1)")).toBeTruthy());
+    fireEvent.click(screen.getByText("Clear selection (1)"));
 
-    // d01+d02 dropped; e01 and orphan-rack-99 (selected, hidden) survive.
-    await waitFor(() => expect(screen.getByText("2 selected")).toBeTruthy());
+    // d01 dropped; e01, e04 and orphan-rack-99 (selected, hidden) survive.
+    await waitFor(() => expect(screen.getByText("3 selected")).toBeTruthy());
   });
 
   it("eligible-only hides racks that cannot be launched", async () => {
@@ -467,15 +590,14 @@ describe("MultirackView rack filters", () => {
 
     await waitFor(() => {
       const shown = visibleRacks();
-      expect(shown).toEqual(["ink50-dh01-d01", "ink50-dh01-d02", "ink50-dh01-e01", "orphan-rack-99"]);
+      expect(shown).toEqual(["ink50-dh01-d01", "ink50-dh01-e01", "ink50-dh01-e04", "orphan-rack-99"]);
     });
   });
 
-  it("eligible-only excludes a rack whose trays are drained", async () => {
+  it("eligible-only keeps a rack with 16 idle nodes despite two unavailable trays", async () => {
     renderView();
     fireEvent.click(screen.getByLabelText("Eligible only"));
-    // e04 is "done" but has drain=1 in sinfo.
-    await waitFor(() => expect(visibleRacks()).not.toContain("ink50-dh01-e04"));
+    await waitFor(() => expect(visibleRacks()).toContain("ink50-dh01-e04"));
   });
 
   it("filters combine rather than replace each other", async () => {
@@ -483,7 +605,7 @@ describe("MultirackView rack filters", () => {
     fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "e0" } });
     fireEvent.click(screen.getByLabelText("Eligible only"));
 
-    // Of e01..e04 only e01 is eligible.
-    await waitFor(() => expect(visibleRacks()).toEqual(["ink50-dh01-e01"]));
+    // Of e01..e04, e01 and e04 have at least 16 idle nodes.
+    await waitFor(() => expect(visibleRacks()).toEqual(["ink50-dh01-e01", "ink50-dh01-e04"]));
   });
 });

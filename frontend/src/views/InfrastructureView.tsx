@@ -26,12 +26,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Box from "@mui/material/Box";
+import Link from "@mui/material/Link";
 import { Banner, Button, Card, Flex, Text } from "@nvidia/foundations-react-core";
+import { ExternalLink } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { MetricChartGrid } from "../components/observability/MetricChartGrid";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { apiFetch } from "../lib/apiFetch";
 import { probeFabric, type FabricProbe } from "../services/fabricService";
+import { resolveGrafanaBase } from "../lib/grafanaLinks";
 
 export type InfraSegment = "ethernet" | "ib-nvlink" | "storage";
 
@@ -64,6 +67,8 @@ interface EmbedSection {
   /** Segment/view hints so a multi-segment view can filter its own sections. */
   segment?: string;
   view?: string;
+  dashboard_open_url?: string;
+  dashboard_open_path?: string;
 }
 
 /** A RECON-B section with no honest Grafana counterpart — rendered as an explicit placeholder. */
@@ -86,6 +91,7 @@ interface ViewEmbeds {
   error?: string;
   sections?: EmbedSection[];
   unmapped?: UnmappedSection[];
+  config?: { public_base?: string; public_port?: string };
 }
 
 interface GrafanaHealth {
@@ -306,6 +312,11 @@ export function InfrastructureView({ segment }: InfrastructureViewProps) {
   const allSections = useMemo<EmbedSection[]>(() => (map && Array.isArray(map.sections) ? map.sections : []), [map]);
   // If the backend already filtered by segment, every section matches and this is a no-op.
   const sections = useMemo(() => allSections.filter((s) => matchesSegment(s, meta)), [allSections, meta]);
+  const grafanaBase = resolveGrafanaBase(map?.config?.public_base || "", map?.config?.public_port || "3001");
+  const grafanaUrl = (value: string | undefined) => {
+    const raw = String(value || "").trim();
+    return raw.startsWith("/") ? `${grafanaBase}${raw}` : raw;
+  };
 
   const mapError = map && map.ok === false ? map.error || "Dashboard map unavailable." : null;
   const grafanaDown = health != null && health.reachable === false;
@@ -347,6 +358,42 @@ export function InfrastructureView({ segment }: InfrastructureViewProps) {
         showRackFilter={false}
         note="Platform inventory and scheduler state. Fabric charts stay empty while the switch scrapers are stopped for the incident."
       />
+
+      {sections.map((section) => (
+        <Card key={`${section.uid}:${section.section}`} style={{ padding: 16, marginTop: 24 }}>
+          <Flex align="center" justify="between" wrap="wrap" gap="2" style={{ marginBottom: 12 }}>
+            <div>
+              <Text kind="body/bold/md" style={{ display: "block" }}>{section.title || section.section}</Text>
+              {section.rationale ? (
+                <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>{section.rationale}</Text>
+              ) : null}
+            </div>
+            {grafanaUrl(section.dashboard_open_url || section.dashboard_open_path) ? (
+              <Link
+                href={grafanaUrl(section.dashboard_open_url || section.dashboard_open_path)}
+                target="_blank"
+                rel="noopener noreferrer"
+                sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, fontSize: 14 }}
+              >
+                Open in Grafana <ExternalLink size={14} />
+              </Link>
+            ) : null}
+          </Flex>
+          <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 2 }}>
+            {(section.panels || []).map((panel) => (
+              <Box key={`${section.uid}:${panel.id}`}>
+                <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 6 }}>{panel.title || `Panel ${panel.id}`}</Text>
+                <iframe
+                  src={grafanaUrl(panel.url)}
+                  title={`${section.title || section.section} — ${panel.title || `Panel ${panel.id}`}`}
+                  loading="lazy"
+                  style={{ width: "100%", height: 300, border: 0, borderRadius: 4 }}
+                />
+              </Box>
+            ))}
+          </Box>
+        </Card>
+      ))}
 
     </Box>
   );
