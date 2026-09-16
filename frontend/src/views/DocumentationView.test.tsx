@@ -80,7 +80,7 @@ describe("DocumentationView", () => {
     ["a protocol-relative URL", "//evil.example/pwn.html"],
     ["traversal out of the docs tree", "../../etc/passwd.html"],
     ["a javascript scheme", "javascript:alert(1)//.html"],
-    ["something that is not a string", { toString: () => "ok.html" }],
+    ["something that is not a string", { toString: (): string => "ok.html" }],
   ])("refuses %s and frames the docs root instead", async (_label, page) => {
     showPage(page);
     await waitFor(() => expect(frame()).not.toBeNull());
