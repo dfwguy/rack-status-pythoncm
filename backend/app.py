@@ -114,8 +114,6 @@ _app_dir_s = str(APP_DIR)
 if _app_dir_s not in sys.path:
     sys.path.insert(0, _app_dir_s)
 
-from auth_token import auth_token as _load_auth_token
-
 import bcm_query
 import cluster_overview_live
 import cluster_snapshot
@@ -123,6 +121,7 @@ import native_status
 import nvis_id_templates
 import pythoncm_validation
 import scheduler_runtime
+from auth_token import auth_token as _load_auth_token
 from schedulers import JobSpec, build_scheduler
 
 # --- optional backend modules (added 2026-07-28) -------------------------------------
@@ -155,12 +154,12 @@ except Exception as _nr_exc:  # pragma: no cover - defensive
 
 import app_version as _app_version_mod
 import core
+import external_validation_evidence
+import healthcheck_evidence
 import host_exec
 import nvftp_cache_sync
 import nvlink_preflight
 import post_run_report
-import external_validation_evidence
-import healthcheck_evidence
 import rack_locks
 import validation_activities
 import validation_presets
@@ -4814,8 +4813,8 @@ def _refresh_validation_provenance() -> None:
             if not callable(getattr(candidate, "verify", None)) or not isinstance(
                 getattr(candidate, "PROFILES", None), dict
             ):
-                raise ValueError("manifest does not publish verify() and PROFILES")
-        except Exception as exc:
+                raise TypeError("manifest does not publish verify() and PROFILES")
+        except Exception as exc:  # noqa: BLE001 - fail closed for any live-manifest load error
             raise ValueError(f"validation provenance manifest reload failed: {exc}") from None
         validation_provenance = candidate
         _VALIDATION_PROVENANCE_MTIME_NS = current_mtime
@@ -14570,8 +14569,8 @@ def _export_formatted_mnubergemm_rows(
         if parsed_rack is None:
             continue
 
-        def whole(key: str) -> int | None:
-            value = _export_float_cell(row.get(key))
+        def whole(key: str, source_row: dict = row) -> int | None:
+            value = _export_float_cell(source_row.get(key))
             return int(value) if value is not None else None
 
         maximum = _export_float_cell(row.get("gflops_max"))

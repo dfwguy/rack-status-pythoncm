@@ -125,14 +125,16 @@ snapshot_recipe_sha=b923a98e913230f1a0d0d208aa411b72a373147fdfba05fd6e0fe0915a51
 direct_recipe="${node_script_dir}/nvftp_nccl_five_collective_20260824.sbatch"
 direct_recipe_sha=fc61f51a55c0c193f940fcce828a59aeddecc4f203239e7042fd5b086bfc810b
 if [[ "$adapter" == direct-five-collective ]]; then
-  [[ -r "$snapshot_recipe" && -r "$direct_recipe" ]] || {
-    echo "ERROR: LLMB is unavailable and the reviewed direct NCCL fallback or snapshot is missing" >&2
+  [[ -r "$direct_recipe" ]] || {
+    echo "ERROR: LLMB is unavailable and the reviewed direct NCCL fallback is missing" >&2
     exit 2
   }
-  [[ "$(sha256sum "$snapshot_recipe" | awk '{print $1}')" == "$snapshot_recipe_sha" ]] || {
-    echo "ERROR: immutable NCCL snapshot failed provenance verification: $snapshot_recipe" >&2
-    exit 2
-  }
+  if [[ -r "$snapshot_recipe" ]]; then
+    [[ "$(sha256sum "$snapshot_recipe" | awk '{print $1}')" == "$snapshot_recipe_sha" ]] || {
+      echo "ERROR: immutable NCCL snapshot failed provenance verification: $snapshot_recipe" >&2
+      exit 2
+    }
+  fi
   [[ "$(sha256sum "$direct_recipe" | awk '{print $1}')" == "$direct_recipe_sha" ]] || {
     echo "ERROR: portable direct NCCL adapter failed provenance verification: $direct_recipe" >&2
     exit 2

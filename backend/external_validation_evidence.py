@@ -3,8 +3,8 @@
 """Import settled 16K NCCL/NeMo/MNUberGEMM evidence into Rack Status history."""
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -43,7 +43,7 @@ def accepted_records(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
         payload = snapshot.get(section)
         rows = payload.get("latest_by_rack") if isinstance(payload, Mapping) else None
         if not isinstance(rows, list):
-            raise ValueError(f"snapshot.{section}.latest_by_rack is missing")
+            raise TypeError(f"snapshot.{section}.latest_by_rack is missing")
         for row in rows:
             if not isinstance(row, Mapping) or str(row.get("outcome") or "").upper() != "PASS":
                 continue
@@ -92,7 +92,7 @@ def current_rack_records(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
         payload = snapshot.get(section)
         rows = payload.get("latest_by_rack") if isinstance(payload, Mapping) else None
         if not isinstance(rows, list):
-            raise ValueError(f"snapshot.{section}.latest_by_rack is missing")
+            raise TypeError(f"snapshot.{section}.latest_by_rack is missing")
         for row in rows:
             if not isinstance(row, Mapping):
                 continue
@@ -132,7 +132,7 @@ def current_rack_records(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
 def ingest_snapshot(path: str | Path) -> list[str]:
     snapshot = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(snapshot, Mapping):
-        raise ValueError("validation evidence snapshot root must be an object")
+        raise TypeError("validation evidence snapshot root must be an object")
     rack_ids = results_history.ingest_runs(
         [*accepted_records(snapshot), *current_rack_records(snapshot)]
     )
@@ -155,7 +155,7 @@ def dcgm_records(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
     lake = snapshot.get("lake")
     attempts = lake.get("validation_attempts") if isinstance(lake, Mapping) else None
     if not isinstance(attempts, list):
-        raise ValueError("snapshot.lake.validation_attempts is missing")
+        raise TypeError("snapshot.lake.validation_attempts is missing")
     observed_at = str(snapshot.get("collected_at") or "").strip()
     records: list[dict[str, Any]] = []
     for attempt_row in attempts:

@@ -140,6 +140,7 @@ def post_run_events(*, rack: str = "", node: str = "") -> list[dict[str, Any]]:
         event = _event(Path(entry.path))
         if event:
             events.append(event)
+    events.sort(key=lambda event: str(event["node"]).casefold())
     return events
 
 

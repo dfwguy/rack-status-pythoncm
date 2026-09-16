@@ -8,8 +8,8 @@ compatibility fallback while deployments migrate.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 _MAX_TOKEN_FILE_BYTES = 64 * 1024
 

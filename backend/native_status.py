@@ -34,7 +34,6 @@ import json
 import logging
 import os
 import re
-import requests
 import shlex
 import subprocess
 import threading
@@ -47,6 +46,7 @@ from typing import Any
 
 import host_exec
 import nvis_id_templates as _nvis_ids
+import requests
 import results_history
 import scheduler_runtime
 from platforms import get_platform as _get_platform
@@ -1070,7 +1070,7 @@ def _node_down_sheet_summary() -> dict[str, Any]:
                 "drained": metrics.get("Drained"),
                 "down_other": metrics.get("Down / fail / maint / unknown"),
             }
-        except Exception as exc:  # sheet outage must never take down rack status
+        except Exception as exc:  # noqa: BLE001 - sheet outage must not take down rack status
             result = {"ok": False, "error": str(exc)[:240]}
         _NODE_DOWN_SHEET_CACHE = result
         _NODE_DOWN_SHEET_CACHE_MONOTONIC = now
@@ -1661,6 +1661,7 @@ def _archive_completed_native_probe(
 
 class NativeRackTableState:
     __slots__ = (
+        "availability_summary",
         "by_rack_log",
         "by_rack_stage_log",
         "ct_by_rack",
@@ -1676,7 +1677,6 @@ class NativeRackTableState:
         "racks",
         "racks_refresh_lock",
         "racks_refreshed_monotonic",
-        "availability_summary",
         "sinfo_counts",
         "sinfo_done",
         "sinfo_thread",
