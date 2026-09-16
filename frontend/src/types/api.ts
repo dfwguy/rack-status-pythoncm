@@ -21,6 +21,8 @@ export interface RackRow {
   stage2?: StageState;
   last_job: string;
   sinfo: string;
+  /** Source used for the availability/health verdict; Slurm is authoritative when present. */
+  availability_source?: "slurm" | "pythoncm" | string;
   ct_down_unk: string;
   /** Why pending / fail / ongoing (from rack_status.sh or native); omit when done or unknown. */
   nemo_hint?: string;
@@ -38,6 +40,8 @@ export interface HierarchyRack {
 export interface HierarchyRow {
   key: string;
   label: string;
+  /** BCM NodeGroup for SU labels; rack-id-template for coordinate-derived labels. */
+  label_source?: "pythoncm-node-group" | "rack-id-template";
   racks: HierarchyRack[];
 }
 
@@ -222,6 +226,14 @@ export interface PostRunEvent {
   source: string;
   output_run_id?: string;
   output_step_id?: string;
+  validation_test?: string;
+  raw_test?: string;
+  authoritative?: boolean;
+  history_only?: boolean;
+  artifact_path?: string;
+  evidence_timestamp?: string;
+  observed_at?: string;
+  map_method?: string;
 }
 
 export interface PostRunAuditStatus extends DeepAuditNodeResult {
@@ -262,13 +274,20 @@ export interface PostRunNodeReportResponse {
     flagged_nodes: number;
     drained_nodes: number;
   };
-  racks: Array<{ rack: string; nodes: PostRunNode[] }>;
+  racks?: Array<{ rack: string; nodes: PostRunNode[] }>;
   nodes: PostRunNode[];
+  compact?: boolean;
   refresh: {
     activities: number;
     merge: Record<string, unknown>;
     accounting_error: string;
     inventory_error: string;
+    dcgm_error?: string;
+    dcgm_events?: number;
+    dcgm_observed_at?: string;
+    healthcheck_error?: string;
+    healthcheck_events?: number;
+    healthcheck_observed_at?: string;
   };
 }
 
@@ -380,6 +399,35 @@ export interface NativeWorkers {
   note?: string;
   rack_count?: number;
   workers?: WorkerStatus[];
+  availability?: AvailabilitySummary;
+}
+
+export interface NodeDownSheetSummary {
+  ok: boolean;
+  tab?: string;
+  updated_at?: string;
+  unavailable?: number | null;
+  responding?: number | null;
+  no_response?: number | null;
+  drained?: number | null;
+  down_other?: number | null;
+  delta?: number;
+  matches_live?: boolean;
+  error?: string;
+}
+
+export interface AvailabilitySummary {
+  source: string;
+  captured_at: string;
+  total_nodes: number;
+  ready_nodes: number;
+  unavailable_nodes: number;
+  no_response_nodes: number;
+  drained_nodes: number;
+  down_other_nodes: number;
+  invalid_nodes: number;
+  definition: string;
+  sheet?: NodeDownSheetSummary;
 }
 
 export interface WorkerStatus {

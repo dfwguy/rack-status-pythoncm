@@ -11,7 +11,7 @@
  */
 /** Validated recipe ids exposed by GET /api/validation-presets. */
 export type ValidationPresetId =
-  | "nccl-2.31.2"
+  | "nccl-2.29.3"
   | "llama31-405b-fp8"
   | "gpt-oss-cpu"
   | "exemplar-system-info"
@@ -28,6 +28,17 @@ export interface ValidationPreset {
   kind: string;
   defaults?: Record<string, unknown>;
   requirements?: Record<string, unknown> | string[];
+  availability?: {
+    available: boolean;
+    status?: string;
+    reasons?: string[];
+    prerequisites?: Array<{
+      name: string;
+      kind: string;
+      path: string;
+      present: boolean;
+    }>;
+  };
 }
 
 export interface ValidationPresetsResponse {
@@ -45,7 +56,7 @@ export interface ValidationPresetRequest extends Record<string, unknown> {
   log_dir?: string;
   storage: ValidationStorage;
   rsync_to_local: boolean;
-  local_container_dir: "/tmp/containers";
+  local_container_dir: "/opt/containers";
   campaign?: string;
   /** Opaque digest returned by prepare; launch uses it to reject reviewed-target drift. */
   plan_hash?: string;
@@ -81,7 +92,7 @@ export interface ValidationPresetPrepareResponse {
 
 /** Labels remain available while the server catalog is loading or unavailable. */
 export const VALIDATION_PRESET_LABELS: Record<ValidationPresetId, string> = {
-  "nccl-2.31.2": "NCCL 2.31.2 / CUDA 13.3+",
+  "nccl-2.29.3": "NCCL 2.29.3 — NVFTP 8K–32G / 500 iterations",
   "llama31-405b-fp8": "Llama 3.1 405B FP8 — 1024 GPUs / 50 steps",
   "gpt-oss-cpu": "GPT-OSS CPU overhead microbenchmark — one independent job per selected node",
   "exemplar-system-info": "NVIDIA DGXC v26.06.01 system_info",
@@ -89,7 +100,7 @@ export const VALIDATION_PRESET_LABELS: Record<ValidationPresetId, string> = {
   "mnubergemm-26.03-v1.17": "MNUberGEMM 26.03-v1.17",
 };
 
-export const LOCAL_CONTAINER_DIR = "/tmp/containers" as const;
+export const LOCAL_CONTAINER_DIR = "/opt/containers" as const;
 
 export function buildValidationPresetRequest(args: {
   presetId: ValidationPresetId;

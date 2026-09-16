@@ -45,6 +45,7 @@ import {
   type TailLogStreamBody,
 } from "../lib/rackLog";
 import { validationStatusTooltip } from "../lib/validationStatusTooltip";
+import { apiFetch } from "../lib/apiFetch";
 import { VALIDATION_CATEGORIES, nemoCategory } from "../lib/validationStages";
 import { buildRackRowMap } from "../lib/rackTopology";
 import type { MultirackJob, RackRow, RackStatusResponse } from "../types/api";
@@ -63,12 +64,13 @@ interface MultirackViewProps {
 
 function isRackEligible(row: RackRow): { eligible: boolean; reason: string } {
   if (row.nemo !== "done") return { eligible: false, reason: "need validation done" };
-  const sinfoStates = row.sinfo.split(",").map((s) => s.trim().split("=")[0].toLowerCase()).filter(Boolean);
-  if (sinfoStates.length === 0) return { eligible: false, reason: "no node availability data" };
-  if (sinfoStates.some((s) => s !== "idle" && s !== "alloc" && s !== "allocated")) {
-    return { eligible: false, reason: `node availability ${row.sinfo}` };
+  const counts = new Map<string, number>();
+  for (const part of row.sinfo.split(",")) {
+    const match = /^\s*([a-z_]+)\s*=\s*(\d+)\s*$/i.exec(part);
+    if (match) counts.set(match[1].toLowerCase(), Number(match[2]));
   }
-  if (row.ct_down_unk.includes("DN:")) return { eligible: false, reason: "has DN nodes" };
+  const idle = counts.get("idle") ?? 0;
+  if (idle < 16) return { eligible: false, reason: `requires 16 idle nodes; found ${idle}` };
   return { eligible: true, reason: "" };
 }
 
@@ -127,6 +129,7 @@ interface MultirackCampaignResponse {
   eligible_count?: number;
   rack_count?: number;
   nodes_per_rack?: number;
+  source?: "manifest" | "live-scheduler";
 }
 
 /** log_file from API is usually a basename; strip any path for parser ?log_file= */
@@ -238,7 +241,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     setMrLoading(true);
     setMrError("");
     try {
-      const res = await fetch(`/api/multirack-status?log_dir=${encodeURIComponent(logDir)}`);
+      const res = await apiFetch(`/api/multirack-status?log_dir=${encodeURIComponent(logDir)}`);
       const body = await res.text();
       let json: { ok?: boolean; rows?: Record<string, string>[]; error?: string };
       try {
@@ -407,7 +410,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
   // Fetch the durable launched-jobs table (shared across users/sessions).
   const fetchJobs = useCallback(async () => {
     try {
-      const res = await fetch(`/api/multirack-jobs?log_dir=${encodeURIComponent(logDir)}`);
+      const res = await apiFetch(`/api/multirack-jobs?log_dir=${encodeURIComponent(logDir)}`);
       const json = await res.json();
       if (json.ok && Array.isArray(json.jobs)) {
         setJobs(json.jobs as MultirackJob[]);
@@ -419,7 +422,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
 
   const fetchCampaign = useCallback(async () => {
     try {
-      const response = await fetch("/api/multirack-campaign");
+      const response = await apiFetch("/api/multirack-campaign");
       const body = (await response.json()) as MultirackCampaignResponse;
       if (body.ok) {
         setCampaign(body);
@@ -457,9 +460,9 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     try {
       const body: Record<string, unknown> = { racks, log_dir: logDir };
       if (kind === "llmb") body.dry_run = dryRun;
-      if (kind === "llmb" && campaign?.active && campaign.id) body.campaign = campaign.id;
+      if (campaign?.active && campaign.id) body.campaign = campaign.id;
       attachLaunchOptions(body, opts);
-      const res = await fetch(meta.asyncUrl, {
+      const res = await apiFetch(meta.asyncUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -489,7 +492,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     const presetId = request.preset_id;
     setLaunchingPreset(presetId);
     try {
-      const response = await fetch("/api/run-validation-preset-async", {
+      const response = await apiFetch("/api/run-validation-preset-async", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
@@ -583,7 +586,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
         {campaign?.active && campaign.ok ? (
           <div style={{ marginBottom: 12 }}>
             <Banner status="info">
-              Exact-node campaign active: {campaign.eligible_count ?? 0} of {campaign.rack_count ?? 0} racks eligible, {campaign.nodes_per_rack ?? 16} selected nodes per rack. NCCL launches use these manifest nodes only.
+              Exact-node multirack selection active: {campaign.eligible_count ?? 0} of {campaign.rack_count ?? 0} racks eligible, {campaign.nodes_per_rack ?? 16} selected nodes per rack. All multirack validations use only these {campaign.source === "manifest" ? "campaign manifest" : "live scheduler"} nodes.
             </Banner>
           </div>
         ) : null}
@@ -720,8 +723,8 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
 
         <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", marginBottom: 12, display: "block" }}>
           {campaign?.active && campaign.ok
-            ? `Campaign eligibility is computed from the exact ${campaign.nodes_per_rack ?? 16} manifest nodes per rack; excluded trays do not disqualify the rack. NCCL receives that exact nodelist.`
-            : "Eligible racks have validation done, no drained/down trays, and the scheduler showing idle or allocated. Launch-side preflight permits allocated trays only when every running job is a yieldable bringup-* diagnostic. NCCL uses all 72 GPUs per rack."}
+            ? `Eligibility is computed from exactly ${campaign.nodes_per_rack ?? 16} idle nodes per rack; extra or unavailable trays do not disqualify the rack. Every multirack launcher receives that exact nodelist.`
+            : "Eligible racks require at least 16 idle nodes. Single-rack validation continues to use the full 18-node rack."}
         </Text>
 
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
@@ -733,7 +736,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
             Server-validated versions and image inventory. PythonCM is used where the recipe has an equivalent; recipes requiring allocation, MPI, Pyxis, or LLMB semantics use the documented Slurm fallback.
           </Text>
           <Flex gap="2" wrap="wrap">
-            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nccl-2.31.2")}>NCCL 2.31.2 / CUDA 13.3+</Button>
+            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nccl-2.29.3")}>NCCL 2.29.3 · 8K–32G · 500 iterations</Button>
             <Button kind="secondary" size="small" disabled={!llama1024Ready || launchingPreset !== null} onClick={() => setPendingPreset("llama31-405b-fp8")}>Llama 405B FP8 — 1024 GPUs / 50 steps</Button>
             <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("gpt-oss-cpu")}>GPT-OSS CPU — per-node fan-out</Button>
             <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("exemplar-system-info")}>DGXC system_info</Button>

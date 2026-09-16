@@ -21,6 +21,7 @@ settings, simulated acceptance matrix, and remaining live gates are in
 | Nscale identity | `RACK_CLUSTER_ID=nscale-tx`, customer `Nscale`, GB300, PythonCM |
 | Persistent catalog | isolated as `/app/var/store/catalog-nscale-tx.json` |
 | Racks browser refresh | 30,000 ms; `/api/status` is PythonCM/local-registry only |
+| Nscale floor topology | live PythonCM NodeGroups: DH01 = SU12–SU14; DH02 = SU1–SU11; 219 logical racks, 0 unmatched |
 | Tracked web/Grafana secrets | none; deployment variables fail closed when absent |
 | Production Python Ruff | passed |
 | Added/changed backend-test Ruff | passed |
@@ -37,8 +38,8 @@ the NCCL campaign requires an explicit approved `ink...` rack list.
 
 | Gate | Exact result |
 |---|---|
-| Complete backend regression | 1,454 passed, 1 skipped in 91.41 s |
-| Complete frontend unit/component suite | 54 files, 380 tests passed |
+| Complete backend regression | 1,458 passed, 1 skipped in 91.71 s |
+| Complete frontend unit/component suite | 54 files, 381 tests passed |
 | TypeScript and Vite production build | passed |
 | Generated help registry | 78 entries |
 | Frontend ESLint | 0 errors, 57 existing warnings |

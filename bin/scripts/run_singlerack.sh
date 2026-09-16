@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 #
@@ -8,65 +8,76 @@
 # disclosure or distribution of this material and related documentation
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
-# Slurm CLI on PATH (non-login SSH shells don't init Modules — see slurm-init.inc.sh).
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
-# Force ssh transport: this cluster's pdsh defaults to rsh (refused on compute nodes).
-export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -o CheckHostIP=no"
-export PDSH_RCMD_TYPE=ssh
-: "${1:?usage: run_singlerack.sh NODELIST RACK_ID}"
-: "${2:?usage: run_singlerack.sh NODELIST RACK_ID}"
-a=( "$1" )
+# Compatibility entry point for the Rack Status single-rack NeMo action.
+#
+# Legacy CLI contract:
+#   run_singlerack.sh NODELIST RACK_ID [LOG_DIR]
+#
+# The rack id is retained for callers and attribution, but execution is owned by
+# the reviewed nemo-26.04.01 preset. That preset pins the image, exact nodes,
+# 30-step recipe, submit identity, fail-closed IMEX/NVLink transport, and compute-visible
+# shared runtime scripts.
+set -euo pipefail
+umask 0002
 
-export single_rack=1
+usage() {
+  echo "Usage: $0 NODELIST RACK_ID [LOG_DIR]" >&2
+}
 
-# Same directory as parser.sh / rack_status.sh. Manual runs use the same shared default.
-_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
-mkdir -p "${JOB_LOG_DIR}" || { echo "run_singlerack: cannot create log directory: ${JOB_LOG_DIR}" >&2; exit 2; }
-cd "${JOB_LOG_DIR}" || exit 2
+[[ $# -ge 2 && $# -le 3 ]] || { usage; exit 2; }
+nodelist="$1"
+rack_id="$2"
+log_dir="${3:-${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/OVA/logs/nscaletx-16k-validation}}}"
 
-## Per rack test
-for r in ${a[*]}
-do
- # Rack id for the log basename (…-NEMO-1Rack-<rack>-…): prefer the id the app passes as $2
- # Nscale rack id is resolved from PythonCM inventory and passed explicitly by the app.
- rack="$2"
- hosts=($(scontrol show hostname $r))
- : "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the head-node path of the nemo .sqsh image to copy under /raid/data/ on compute nodes}"
- _sqsh_b=$(basename "$NEMO_SQSH_SRC")
- _wl=$(echo "${hosts[*]}" | tr ' ' ',')
- # /raid is root-owned on the compute trays, so the staging runs as root ON EACH COMPUTE NODE.
- # If RACK_SUDO_PASSWORD is set, elevate with sudo -S (cmods password, kept OUT of the repo — set via
- # env or the server secret store). Otherwise use sudo -n (works when passwordless sudo is baked into
- # the compute IMAGE by AIC, and also when the script already runs as root). NOTE: a passwordless
- # visudo edit only on the slogin does NOT help here — this sudo runs on the compute trays.
- if [[ -n "${RACK_SUDO_PASSWORD:-}" ]]; then
-   _sudo="printf '%s\n' $(printf %q "$RACK_SUDO_PASSWORD") | sudo -S -p '' "
- else
-   _sudo="sudo -n "
- fi
- pdsh -R ssh -w "$_wl" "${_sudo}mkdir -p /raid/data && ${_sudo}rsync -ah $NEMO_SQSH_SRC /raid/data/$_sqsh_b"
+[[ -n "$nodelist" ]] || { echo "run_singlerack: NODELIST is empty" >&2; exit 2; }
+[[ "$rack_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+  echo "run_singlerack: invalid RACK_ID: $rack_id" >&2
+  exit 2
+}
+[[ "$log_dir" == /* && "$log_dir" != *","* && "$log_dir" != *$'\n'* ]] || {
+  echo "run_singlerack: LOG_DIR must be an absolute path without commas or newlines" >&2
+  exit 2
+}
 
- n=$[${#hosts[*]}/2*2]
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/slurm-init.inc.sh"
+dispatcher="${script_dir}/run-validation-preset.sh"
+[[ -x "$dispatcher" ]] || {
+  echo "run_singlerack: reviewed preset dispatcher is missing or not executable: $dispatcher" >&2
+  exit 2
+}
 
-# NVIS_NEMO_CONT MUST be exported: the batch script defaults to
-# CONT="${NVIS_NEMO_CONT:-/raid/data/nemo-25.11.01.sqsh}", but staging above copies
-# /raid/data/$_sqsh_b -- the basename of NEMO_SQSH_SRC. Without this, pyxis looks for the
-# hardcoded 25.11.01 name, fails with "No such file or directory: /raid/data/nemo-25.11.01.sqsh",
-# and the job dies in ~12s at task_init (spank_pyxis.so). run-nemo-xrack.sh already exports it;
-# this single-rack wrapper did not, so single-rack NEMO only ever worked if the image happened to
-# be named exactly nemo-25.11.01.sqsh.
-# NVIS_SCRIPTS_DIR likewise: without it the batch script cannot find lib/fabric.inc.sh and falls
-# back to a hardcoded mlx5_0..3 list, which "may mix IB/RoCE".
-# NOTE: these comments must stay ABOVE the sbatch line -- a comment between backslash-continued
-# argument lines terminates the command ("sbatch: error: Batch script is empty!").
-sbatch \
- -N ${n} \
- -w $(echo "${hosts[*]}"|tr ' ' ',') \
- -t 03:00:00 \
- --job-name=NEMO-1R \
- --output="${JOB_LOG_DIR%/}/${USER}-NEMO-1Rack-${rack}-${n}N-%j.txt" \
- --export=ALL,single_rack,NVIS_SCRIPTS_DIR=${_SCRIPT_DIR},NVIS_NEMO_CONT=/raid/data/${_sqsh_b},NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-} \
- "$_SCRIPT_DIR/nemo-nemotron5h_56b-mbridge-fp8.sh"
+mkdir -p "$log_dir" || {
+  echo "run_singlerack: cannot create shared log directory: $log_dir" >&2
+  exit 2
+}
+[[ -d "$log_dir" && -w "$log_dir" && -x "$log_dir" ]] || {
+  echo "run_singlerack: shared log directory is not writable/searchable: $log_dir" >&2
+  exit 2
+}
+chmod g+rws "$log_dir" 2>/dev/null || true
 
-done
+# Slurm children cannot see the Rack Status container's /app mount. Pin their
+# helpers to the shared runtime tree that is mounted on every compute node.
+runtime_root="${RACK_VALIDATION_PROVENANCE_ROOT:-/cluster/OVA/scripts/nscaletx-16k-validation}"
+export NVIS_VALIDATION_NODE_SCRIPTS_DIR="${NVIS_VALIDATION_NODE_SCRIPTS_DIR:-${runtime_root%/}/runtime/bin/scripts}"
+[[ "$NVIS_VALIDATION_NODE_SCRIPTS_DIR" == /* && \
+   "$NVIS_VALIDATION_NODE_SCRIPTS_DIR" != /app && \
+   "$NVIS_VALIDATION_NODE_SCRIPTS_DIR" != /app/* ]] || {
+  echo "run_singlerack: compute runtime scripts must use a shared non-/app path" >&2
+  exit 2
+}
+
+export RACK_JOB_LOG_DIR="$log_dir"
+export NVIS_NCCL_MNNVL=1
+export NVIS_NEMO_NVLS_ENABLE=1
+export NVIS_NEMO_UB_SKIPMC=0
+
+echo "NEMO_SINGLE_RACK_START rack=$rack_id nodes=$nodelist log_dir=$log_dir runtime=$NVIS_VALIDATION_NODE_SCRIPTS_DIR"
+exec bash "$dispatcher" \
+  --preset nemo-26.04.01 \
+  --nodelist "$nodelist" \
+  --storage local \
+  --no-rsync \
+  --local-container-dir "${RACK_VALIDATION_NODE_CONTAINER_DIR:-/opt/containers}" \
+  --log-dir "$log_dir"

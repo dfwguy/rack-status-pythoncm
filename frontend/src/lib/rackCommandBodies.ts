@@ -18,7 +18,7 @@ export function sortedSpecs(selected: Set<string>): string[] {
   return [...selected].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
-/** All trays ct01–ct18 for a rack (`pNN-rMM-ct01` … `ct18`) — used for bulk rack-table runs. */
+/** Legacy all-tray fallback for sites whose configured node ids are rack ``-ctNN`` suffixes. */
 export function fullRackCt01to18NodeSet(rack: string): Set<string> {
   const rk = rack.trim();
   const out = new Set<string>();
@@ -27,6 +27,39 @@ export function fullRackCt01to18NodeSet(rack: string): Set<string> {
     out.add(`${rk}-ct${String(i).padStart(2, "0")}`);
   }
   return out;
+}
+
+/**
+ * Exact compute-node ids for one rack from the live ``physical_rf0`` inventory.
+ *
+ * Nscale node names are full hostnames such as ``ink50-dh02-k01-11`` and their
+ * tray numbers are non-contiguous (11–18,28–37).  Fabricating ``-ct01..18`` here
+ * therefore sends every bulk action to hosts that do not exist.  Match the
+ * backend-supplied rack prefix + configured joiner, preserve the inventory's
+ * original spelling, and only retain a numeric tray suffix.
+ *
+ * Older ``rack_ct_suffix`` deployments can fall back to the historical 18-node
+ * shape while their inventory snapshot is starting.  Full-hostname deployments
+ * fail closed instead of inventing target names.
+ */
+export function fullRackNodeSetFromInventory(
+  rack: string,
+  physicalRf0: Record<string, string>,
+  naming?: NvisNamingSchema,
+): Set<string> {
+  const rackCanon = rack.trim();
+  if (!rackCanon) return new Set();
+  const joiner = naming?.ct_joiner ?? "-ct";
+  const prefix = `${rackCanon}${joiner}`.toLowerCase();
+  const exact = Object.keys(physicalRf0)
+    .filter((hostname) => {
+      const lower = hostname.trim().toLowerCase();
+      return lower.startsWith(prefix) && /^\d+$/.test(lower.slice(prefix.length));
+    })
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  if (exact.length > 0) return new Set(exact);
+  if (naming?.node_id_mode === "full_hostname") return new Set();
+  return fullRackCt01to18NodeSet(rackCanon);
 }
 
 /**
@@ -89,6 +122,19 @@ export function specsCommandBody(
   naming?: NvisNamingSchema,
 ): Record<string, unknown> {
   return attachLogDir({ rack, specs: powerSpecTokensFromNodeIds(rack, selected, naming) }, logDir);
+}
+
+/** Correct async power endpoint and payload for the RackTable row action. */
+export function powerOnAsyncRequest(
+  rack: string,
+  logDir: string | undefined,
+  selected: Set<string>,
+  naming?: NvisNamingSchema,
+): { url: "/api/power-on-async"; body: Record<string, unknown> } {
+  return {
+    url: "/api/power-on-async",
+    body: specsCommandBody(rack, logDir, selected, naming),
+  };
 }
 
 /** Bodies with optional Slurm / validation `target` from selected trays. */

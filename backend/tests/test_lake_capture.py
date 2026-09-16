@@ -68,3 +68,24 @@ def test_buffered_response_body_is_still_captured(monkeypatch):
         app_mod._lake_capture_request(Response(b'{"ok": true}', mimetype="application/json"))
 
     assert sink.pushes[0]["log_text"] == '{"ok": true}'
+
+
+def test_live_tail_capacity_preserves_threads_for_normal_requests():
+    """Abandoned tail viewers cannot consume the entire Gunicorn thread pool."""
+    leases = []
+    try:
+        for _ in range(app_mod._TAIL_STREAM_CAPACITY):
+            prep = {}
+            assert app_mod._tail_stream_slots.acquire(blocking=False)
+            prep["_tail_stream_slot"] = True
+            leases.append(prep)
+
+        assert not app_mod._tail_stream_slots.acquire(blocking=False)
+    finally:
+        for prep in leases:
+            app_mod._release_tail_stream_slot(prep)
+
+    # Release is idempotent because Response.close and generator.finally may race.
+    app_mod._release_tail_stream_slot(leases[0])
+    assert app_mod._tail_stream_slots.acquire(blocking=False)
+    app_mod._tail_stream_slots.release()

@@ -20,6 +20,7 @@ import subprocess
 import sys
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 DEFAULT_CONTAINER = "nvis-rack-status-v3"
@@ -77,9 +78,22 @@ def refresh() -> dict:
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
     auth_mode = environment.get("RACK_WEB_AUTH_MODE", "").strip().lower()
     if auth_mode == "token":
-        token = environment.get("RACK_WEB_AUTH_TOKEN", "")
+        # Prefer an explicitly supplied host-side secret file.  Never copy or
+        # print the in-container Compose secret.  The inspected environment is
+        # retained only for rolling-upgrade compatibility.
+        token_path = os.environ.get("RACK_WEB_AUTH_TOKEN_FILE", "").strip()
+        token = ""
+        if token_path:
+            path = Path(token_path)
+            if path.is_symlink() or not path.is_file():
+                raise RuntimeError("RACK_WEB_AUTH_TOKEN_FILE must be a regular non-symlink file")
+            token = path.read_text(encoding="utf-8").strip()
         if not token:
-            raise RuntimeError(f"{container} uses token auth but has no RACK_WEB_AUTH_TOKEN")
+            token = environment.get("RACK_WEB_AUTH_TOKEN", "")
+        if not token:
+            raise RuntimeError(
+                f"{container} uses token auth; set host-side RACK_WEB_AUTH_TOKEN_FILE"
+            )
         login = _request_json(
             opener,
             f"{base_url}/api/login",

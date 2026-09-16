@@ -29,6 +29,7 @@ import { Card, Text } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { getAISettings, updateAISettings, testAIConnection, type AISettings } from "../services/aiService";
+import { apiFetch } from "../lib/apiFetch";
 
 /** Use monospace input for long regex / technical values. */
 const MONOSPACE_JOB_ENV_KEYS = new Set([
@@ -100,7 +101,7 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
     setJobEnvError("");
     setJobEnvLoading(true);
     try {
-      const res = await fetch("/api/settings/job-environment", {
+      const res = await apiFetch("/api/settings/job-environment", {
         credentials: "same-origin",
         cache: "no-store",
       });
@@ -191,7 +192,7 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
           }
         }
       }
-      const res = await fetch("/api/settings/job-environment", {
+      const res = await apiFetch("/api/settings/job-environment", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",

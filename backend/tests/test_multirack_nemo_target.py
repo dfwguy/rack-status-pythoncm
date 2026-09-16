@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
-"""The multirack NeMo launch must build its tray spec from NVIS_CT_ID, not a literal "-ct".
+"""Naming and exact-node regressions for the multirack NeMo launcher.
 
 Regression: ``_prepare_run_nemo_xrack`` hardcoded ``f"{rack}-ct[{inner}]"``. That is only correct
 for Bright naming (``p5-r03-ct12``). On Nscale TX the CT template is ``<rack>-<NN>``, so launching
@@ -43,29 +43,17 @@ NSCALE_TX = ("ink50-dh01-[a-z][\\d+]", "ink50-dh01-[a-z][\\d+]-[\\d+]")
 
 
 @pytest.fixture
-def prepare(monkeypatch, tmp_path):
-    """Call _prepare_run_nemo_xrack under a chosen naming, returning the built argv string.
+def prepare():
+    """Build the legacy rack tray expression through the shared naming contract.
 
-    Naming and the tray range are injected by patching the two accessors rather than by setting
-    NVIS_* env vars. ``_eget`` consults the catalog active-context, which re-materializes
-    ``os.environ`` from the baseline captured when ``app`` was imported — so an env var set after
-    import is silently reverted mid-call. (Not a production concern: there they are container env
-    vars, present at import and therefore part of that baseline.)
+    The API now replaces this expression with an exact campaign node list before
+    launching NeMo. The helper contract remains important to scripts and older
+    integrations, so these tests continue to prevent a literal ``-ct`` joiner.
     """
 
     def _run(rack_tmpl: str, ct_tmpl: str, racks: list[str], ct_range: str = "01-18") -> str:
         naming = nid.get_nvis_naming(rack_tmpl, ct_tmpl)
-        monkeypatch.setattr(app_module, "_nvis_naming", lambda: naming)
-        monkeypatch.setattr(naming_mod, "_nvis_naming", lambda: naming)
-        monkeypatch.setattr(app_module, "_validation_ct_inner", lambda: ct_range)
-        # The script lives on the exec host in SSH mode; here just let the path check pass.
-        monkeypatch.setattr(app_module, "_script_exists", lambda _p: True)
-        prepared, err = app_module._prepare_run_nemo_xrack(
-            {"racks": racks, "log_dir": str(tmp_path)}
-        )
-        assert err is None, f"prepare returned an error: {err}"
-        assert prepared is not None
-        return str(prepared["arg"])
+        return ",".join(naming.ct_blob(rack, ct_range) for rack in dict.fromkeys(racks))
 
     return _run
 
@@ -119,7 +107,7 @@ def test_the_spec_agrees_with_ct_blob(prepare):
 # --- structural guards ---------------------------------------------------------------------
 
 
-def test_prepare_does_not_hardcode_the_ct_joiner():
+def test_prepare_uses_exact_campaign_nodes_without_hardcoded_ct_joiner():
     body = (BACKEND / "app.py").read_text(encoding="utf-8")
     m = re.search(r"def _prepare_run_nemo_xrack\(.*?\n(?=^def )", body, re.S | re.M)
     assert m, "_prepare_run_nemo_xrack not found"
@@ -127,7 +115,9 @@ def test_prepare_does_not_hardcode_the_ct_joiner():
     code = [ln for ln in m.group(0).splitlines() if not ln.lstrip().startswith("#")]
     for ln in code:
         assert not re.search(r'["\']\{?\w*\}?-ct\[', ln), f"the -ct literal is back: {ln.strip()}"
-    assert "ct_blob" in "\n".join(code), "the spec must come from the naming helper"
+    joined = "\n".join(code)
+    assert "exact_nodes" in joined
+    assert "_multirack_campaign_snapshot" in joined
 
 
 def test_xrack_script_derives_rack_ids_from_the_template():
@@ -215,15 +205,75 @@ def test_spec_split_keeps_bracketed_ranges_intact(spec_tag: str, expected: list[
     assert [ln for ln in out.stdout.splitlines() if ln] == expected, out.stdout
 
 
-def test_staging_verify_requires_a_positive_ok_per_node():
-    """Staging must count confirmations, not failures.
-
-    Counting ``BAD`` replies passed when a node was unreachable, because an unreachable node
-    never ran the remote test and so never replied at all — a run where ssh failed on all 36
-    nodes still printed "staged OK on all 36 nodes" and submitted.
-    """
+def test_staging_verify_runs_inside_an_exact_node_slurm_allocation():
+    """The web container must not need pdsh or compute-node SSH credentials."""
     body = (SCRIPTS / "run-nemo-xrack.sh").read_text(encoding="utf-8")
-    assert "CACHE_OK" in body, "verify should count positive per-node confirmations"
-    assert 'grep -c BAD' not in body, "the failure-counting verify is back"
-    # and the count must be compared against the node total
-    assert re.search(r'_ok.*-ne.*\$\{#hosts\[@\]\}', body), "OK count must equal the node count"
+    code = [ln for ln in body.splitlines() if not ln.lstrip().startswith("#")]
+    assert not any(re.search(r"(^|[ (])pdsh([ )]|$)", ln) for ln in code)
+    assert "validation_container_stage.sbatch" in body
+    assert "--parsable --wait --no-requeue" in body
+    assert '--nodelist="$_hostcsv"' in body
+    assert "NVIS_STAGE_RSYNC=0" in body
+    assert "NVIS_STAGE_ENSURE_IMEX_CHANNEL0=1" in body
+    assert "NVIS_STAGE_GPU_RECOVERY_CHECK=${_gpu_recovery_check}" in body
+    assert "NVIS_SCRIPTS_DIR=${node_script_dir}" in body
+    assert "NVIS_SCRIPTS_DIR=${SCRIPT_DIR}" not in body
+    assert '"$node_script_dir" == /app/*' in body
+
+
+def test_staging_verify_requires_positive_markers_from_every_node():
+    """A successful sbatch reply alone cannot hide an absent node or skipped gate."""
+    body = (SCRIPTS / "run-nemo-xrack.sh").read_text(encoding="utf-8")
+    assert "grep -c '^IMAGE_STAGE_READY '" in body
+    assert "grep -c '^GPU_RECOVERY_READY '" in body
+    assert re.search(r"_image_ok != n", body)
+    assert re.search(r'_gpu_ok" -ne "\$n', body)
+    assert "aborting before NeMo workload submission" in body
+
+
+def test_submit_dry_run_precedes_every_sbatch_execution():
+    """Dry-run proof must not allocate preflight nodes or launch the workload."""
+    body = (SCRIPTS / "run-nemo-xrack.sh").read_text(encoding="utf-8")
+    dry_run = body.index('if [[ "${NVIS_NEMO_SUBMIT_DRY_RUN:-0}" == "1" ]]')
+    stage_exec = body.index('_stage_reply="$(')
+    workload_exec = body.index('sbatch "${slurm_submit_as[@]}" -N')
+    assert dry_run < stage_exec < workload_exec
+
+
+def test_allocation_gate_checks_gpu_recovery_fail_closed():
+    stage = (SCRIPTS / "validation_container_stage.sbatch").read_text(encoding="utf-8")
+    assert "NVIS_STAGE_GPU_RECOVERY_CHECK" in stage
+    assert "gpu_recovery_action" in stage
+    assert "GPU_RECOVERY_READY" in stage
+    assert "GPU_RECOVERY_FAIL" in stage
+    assert '--nodes="${nodes}" --ntasks="${nodes}" --ntasks-per-node=1' in stage
+    assert "--kill-on-bad-exit=1" in stage
+
+
+def test_nemo_provenance_includes_the_allocation_gate():
+    import validation_provenance
+
+    bundles, files = validation_provenance.PROFILES["nemo-xrack"]
+    assert bundles == ("mnubergemm", "nemo")
+    assert "validation_container_stage.sbatch" in files
+
+
+def test_allocation_gate_prepares_imex_channel0_without_persistence():
+    stage = (SCRIPTS / "validation_container_stage.sbatch").read_text(encoding="utf-8")
+    assert "NVIS_STAGE_ENSURE_IMEX_CHANNEL0" in stage
+    assert "IMEX_CHANNEL_READY" in stage
+    assert "mknod" in stage and "os.O_RDWR" in stage
+    assert "systemctl" not in stage and "udevadm" not in stage
+
+
+def test_api_forwards_the_compute_visible_runtime_tree(monkeypatch):
+    monkeypatch.setattr(
+        app_module,
+        "_validation_provenance_root",
+        lambda: "/cluster/OVA/scripts/nscaletx-16k-validation",
+    )
+    env = app_module._validation_runtime_env()
+    assert env["NVIS_VALIDATION_NODE_SCRIPTS_DIR"] == (
+        "/cluster/OVA/scripts/nscaletx-16k-validation/runtime/bin/scripts"
+    )
+    assert not env["NVIS_VALIDATION_NODE_SCRIPTS_DIR"].startswith("/app/")

@@ -96,17 +96,8 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         Slurm fallback where allocation, MPI, Pyxis, or LLMB semantics have no PythonCM equivalent.
       </Text>
       <ActionCard
-        title="NCCL 2.31.2 Validation"
-        description={`Run the pinned NCCL-only acceptance recipe on ${nodeCount} selected node(s). Requires CUDA 13.3+, mounts /dev/infiniband, and verifies NCCL 2.31.2 before testing.`}
-        icon={<Gauge size={20} />}
-        buttonLabel="Plan NCCL"
-        disabled={disabled}
-        onRun={() => setPresetDialog("nccl-2.31.2")}
-      />
-
-      <ActionCard
         title="Stage 1 — NCCL Benchmark"
-        description={`Stage-1 NCCL acceptance on ${nodeCount} selected node(s) in ${rack}, submitted through the configured validation fallback: the full 24-test sweep across all_reduce / all_gather / reduce_scatter / alltoall / sendrecv up to 16G, including the NVLS variants.`}
+        description={`Stage-1 single-rack NCCL acceptance on ${nodeCount} selected node(s) in ${rack}: the proven five-collective 8K–32G / 500-iteration recipe with NVLS enabled, automatic MNNVL selection, detailed NCCL INFO logs, and post-run NVLink/MNNVL proof.`}
         icon={<Activity size={20} />}
         buttonLabel="Run NCCL"
         disabled={disabled}
@@ -117,8 +108,6 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
             postUrl: "/api/run-nccl-fullrack-async",
             statusUrl: (jid) => `/api/run-nccl-fullrack-status?job_id=${encodeURIComponent(jid)}`,
             title: "Launch Stage-1 NCCL Benchmark",
-            showNcclVersion: true,
-            showIters: true,
           })
         }
       />

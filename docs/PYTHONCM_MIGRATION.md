@@ -45,6 +45,31 @@ NVIS_BCM_COOKIE_FILE=~/.cm/cookie
 # or NVIS_BCM_USERNAME plus NVIS_BCM_PASSWORD_FILE
 ```
 
+## Persistent connection owner
+
+Production Rack Status must not construct a new PythonCM `Cluster` for every
+inventory refresh or ProgramRunner poll. Install and enable the supplied unit,
+then expose its socket read-only to the container:
+
+```bash
+sudo install -m 0644 deploy/nvis-pythoncm-broker.service \
+  /etc/systemd/system/nvis-pythoncm-broker.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now nvis-pythoncm-broker.service
+```
+
+Set `NVIS_PYTHONCM_SOCKET=/run/nvis-pythoncm/query.sock`. The broker owns one
+BCM-matched `Cluster`, serializes entity and ProgramRunner operations, sends a
+60-second keepalive, reconnects failed reads, and is restarted indefinitely by
+systemd. It is independent of the Rack Status container, so a web deployment
+does not close the BCM session.
+
+Certificate authentication is sufficient for entity/device reads on Nscale TX.
+ProgramRunner, power, drain, and resume require a BCM login cookie. Put those
+settings in the service user's mode-600
+`~/.cm/pythoncm-broker.env` (for example `NVIS_BCM_COOKIE_FILE=...`) and restart
+the broker; never put the cookie itself in the environment file or repository.
+
 ## Read-only preflight
 
 Run from the same user/connection profile used by Rack Status:

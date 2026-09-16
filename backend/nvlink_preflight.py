@@ -177,6 +177,11 @@ def parse_nvlink_preflight_output(
     """
     rows: dict[str, dict[str, Any]] = {}
     order: list[str] = []
+    expected_by_fold = {
+        str(host).strip().casefold(): str(host).strip()
+        for host in (expected_hosts or [])
+        if str(host).strip()
+    }
 
     def _row(host: str) -> dict[str, Any]:
         if host not in rows:
@@ -196,6 +201,15 @@ def parse_nvlink_preflight_output(
         host, rest = m.group(1).strip(), m.group(2).strip()
         if not host:
             continue
+        # Slurm may emit shell diagnostics such as
+        # ``/usr/bin/bash: /root/.bash_profile: Permission denied`` alongside
+        # labelled task output.  The text has the same colon shape as pdsh, but
+        # it is not a node and must never create a false no-response row.
+        if expected_by_fold:
+            canonical = expected_by_fold.get(host.casefold())
+            if canonical is None:
+                continue
+            host = canonical
         row = _row(host)
 
         hm = _HEADER_RE.match(rest)
@@ -244,6 +258,11 @@ def parse_nvlink_preflight_output(
         host, rest = m.group(1).strip(), m.group(2).strip()
         if not host or not _SSH_FAIL_RE.search(rest):
             continue
+        if expected_by_fold:
+            canonical = expected_by_fold.get(host.casefold())
+            if canonical is None:
+                continue
+            host = canonical
         row = _row(host)
         row["transport_error"] = rest
         if row["status"] in ("no_response", "incomplete"):

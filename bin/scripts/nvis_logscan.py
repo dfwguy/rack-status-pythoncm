@@ -118,6 +118,16 @@ _AVG_BW = re.compile(rb"Avg bus bandwidth\s*:\s*([0-9.]+)")
 _OOB = re.compile(rb"Out of bounds values\s*:\s*(\S+)")
 _TESTS = re.compile(rb"\btests=(\d+)\b")
 _DATA_ROW = re.compile(rb"^\s*\d+\s")
+_FIVE_START = re.compile(rb"^FIVE_COLLECTIVE_SWEEP_START\s+job=(\d+)\b")
+_FIVE_END = re.compile(
+    rb"^FIVE_COLLECTIVE_SWEEP_END\s+job=(\d+)\s+rc=(\d+)\s+detail_rc=(\d+)\b"
+)
+_FIVE_TEST_END = re.compile(
+    rb"^TEST_END\s+test=(\d+)\s+"
+    rb"collective=(all_reduce|alltoall|sendrecv|all_gather|reduce_scatter)\s+"
+    rb"rc=(\d+)\s+correctness=(\S+)\s+raw=(\S+)\b"
+)
+_FIVE_COLLECTIVES = ("all_reduce", "alltoall", "sendrecv", "all_gather", "reduce_scatter")
 
 _STEP_TIME = re.compile(rb"Step Time\s*:\s*([0-9.]+)\s*s")
 _STEP_TFLOP = re.compile(rb"([0-9.]+)\s*MODEL_TFLOP/s/GPU")
@@ -276,7 +286,98 @@ class _NcclBlock:
             self.max_bw = bw
 
 
-def scan(path: str, *, inventory: bool = True) -> dict[str, Any]:
+def _five_collective_metrics(
+    wrapper_path: str,
+    job_id: str | None,
+    end_state: tuple[str, int, int] | None,
+    tests: dict[str, tuple[int, int, str, str]],
+) -> dict[str, Any] | None:
+    """Resolve one reviewed five-collective wrapper into verified raw metrics.
+
+    Wrapper PASS-like markers alone are never performance evidence. Every one of
+    the five exact collectives must declare rc=0/correctness=OK, point beneath
+    ``job-<same-id>/`` to its own expected ``.raw`` basename, and the raw file
+    must independently contain a real nccl-tests table, positive numeric peak
+    and average bandwidth, zero out-of-bounds values, and a conclusion marker.
+    """
+    if not job_id or end_state != (job_id, 0, 0) or set(tests) != set(_FIVE_COLLECTIVES):
+        return None
+    wrapper_real = os.path.realpath(wrapper_path)
+    allowed_root = os.path.realpath(os.path.join(os.path.dirname(wrapper_real), f"job-{job_id}"))
+    peaks: dict[str, float] = {}
+    oob: list[str] = []
+    avg: list[float] = []
+    ar_series: list[dict[str, float | int]] = []
+    series_by: dict[str, list[dict[str, float | int]]] = {}
+    for expected_test, collective in enumerate(_FIVE_COLLECTIVES, start=1):
+        test_no, rc, correctness, raw_path = tests[collective]
+        if test_no != expected_test or rc != 0 or correctness.upper() != "OK":
+            return None
+        raw_real = os.path.realpath(raw_path)
+        try:
+            if os.path.commonpath((allowed_root, raw_real)) != allowed_root:
+                return None
+        except ValueError:
+            return None
+        if not re.fullmatch(
+            rf"test-{test_no}-{re.escape(collective)}-[A-Za-z0-9._+-]+\.raw",
+            os.path.basename(raw_real),
+        ):
+            return None
+        raw = scan(raw_real, inventory=False, follow_five_wrapper=False)
+        nccl = raw.get("nccl") if raw.get("ok") else None
+        if not isinstance(nccl, dict) or not nccl.get("armed"):
+            return None
+        raw_peaks = nccl.get("peak_busbw_gbps") or {}
+        code = _SHORT[collective]
+        # Current rank-0 files include a collective marker; older files rely on the
+        # table-header fallback and therefore land under ``ar`` until the wrapper
+        # supplies their exact collective. Accept either, but never a metric from a
+        # different explicitly-labelled collective.
+        peak = raw_peaks.get(code)
+        if peak is None and set(raw_peaks) == {"ar"}:
+            peak = raw_peaks.get("ar")
+        raw_avg = nccl.get("avg_bus_bandwidth") or []
+        raw_oob = nccl.get("out_of_bounds") or []
+        if not isinstance(peak, (int, float)) or peak <= 0:
+            return None
+        if not raw_avg or not all(isinstance(value, (int, float)) and value > 0 for value in raw_avg):
+            return None
+        try:
+            if not raw_oob or any(int(str(value), 10) != 0 for value in raw_oob):
+                return None
+        except ValueError:
+            return None
+        if int(nccl.get("sweep_blocks_concluded") or 0) < 1:
+            return None
+        peaks[code] = float(peak)
+        oob.append("0")
+        avg.extend(float(value) for value in raw_avg)
+        series = list((nccl.get("series_by_collective") or {}).get(collective) or [])
+        if not series and collective == "all_reduce":
+            series = list(nccl.get("all_reduce_series") or [])
+        series_by[collective] = series
+        if collective == "all_reduce":
+            ar_series = series
+    return {
+        "peak_busbw_gbps": peaks,
+        # Legacy parser consumes AR/AA/AG in that order from this field.
+        "out_of_bounds": ["0", "0", "0"],
+        "avg_bus_bandwidth": avg,
+        "sweep_blocks_started": len(_FIVE_COLLECTIVES),
+        "sweep_blocks_concluded": len(_FIVE_COLLECTIVES),
+        "sweep_blocks_observed": len(_FIVE_COLLECTIVES),
+        "sweep_expected_tests": len(_FIVE_COLLECTIVES),
+        "all_reduce_series": ar_series,
+        "series_by_collective": series_by,
+        "armed": True,
+        "five_collective_wrapper_verified": True,
+    }
+
+
+def scan(
+    path: str, *, inventory: bool = True, follow_five_wrapper: bool = True
+) -> dict[str, Any]:
     """One pass over *path*. Returns every metric the shell extractors produced.
 
     The loop is deliberately flat — at eight million iterations a per-line function call is real
@@ -306,6 +407,9 @@ def scan(path: str, *, inventory: bool = True) -> dict[str, Any]:
     # First all_reduce block, kept separately: the legacy chart series is defined as that block.
     ar_first: list[tuple[int, float]] = []
     ar_first_done = False
+    five_job: str | None = None
+    five_end: tuple[str, int, int] | None = None
+    five_tests: dict[str, tuple[int, int, str, str]] = {}
 
     # --- NeMo state ---------------------------------------------------------------------------
     dialect: str | None = None
@@ -330,6 +434,39 @@ def scan(path: str, *, inventory: bool = True) -> dict[str, Any]:
                 head.append(_clean(raw))
 
             chatter = _CHATTER in raw
+
+            # The reviewed five-collective launcher keeps its compact wrapper separate from
+            # rank-0 raw performance tables. Capture only its exact structured contract here;
+            # validation and raw-file parsing happen after the wrapper stream completes.
+            if follow_five_wrapper and (
+                b"FIVE_COLLECTIVE_SWEEP_" in raw or raw.startswith(b"TEST_END ")
+            ):
+                match = _FIVE_START.match(raw)
+                if match:
+                    five_job = match.group(1).decode("ascii")
+                else:
+                    match = _FIVE_END.match(raw)
+                    if match:
+                        five_end = (
+                            match.group(1).decode("ascii"),
+                            int(match.group(2)),
+                            int(match.group(3)),
+                        )
+                    else:
+                        match = _FIVE_TEST_END.match(raw)
+                        if match:
+                            collective = match.group(2).decode("ascii")
+                            record = (
+                                int(match.group(1)),
+                                int(match.group(3)),
+                                match.group(4).decode("ascii", "replace"),
+                                match.group(5).decode("utf-8", "replace"),
+                            )
+                            # Duplicate conflicting declarations invalidate the contract.
+                            if collective in five_tests and five_tests[collective] != record:
+                                five_tests[collective] = (-1, -1, "CONFLICT", "")
+                            else:
+                                five_tests[collective] = record
 
             # Kinds only ever need to fire once each, so stop testing a pattern once it has, and
             # stop entirely when all have. Chatter is excluded by design: "NCCL INFO" is debug
@@ -516,6 +653,17 @@ def scan(path: str, *, inventory: bool = True) -> dict[str, Any]:
             "head": head,
             "tail": _tail_lines(path, size, INV_TAIL_LINES),
         }
+    if follow_five_wrapper and five_job:
+        verified = _five_collective_metrics(path, five_job, five_end, five_tests)
+        result["five_collective_wrapper"] = {
+            "job_id": five_job,
+            "verified": verified is not None,
+            "tests_declared": len(five_tests),
+        }
+        if verified is not None:
+            result["nccl"] = verified
+            if inventory and "nccl" not in result["inventory"]["kinds"]:
+                result["inventory"]["kinds"].append("nccl")
     return result
 
 

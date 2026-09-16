@@ -2578,11 +2578,11 @@
     {
       "id": "postRunNodeReport",
       "kind": "view",
-      "title": "Post Run Node Report",
+      "title": "Validation Status",
       "domain": "Analytics & Benchmarks",
       "routePath": "/analytics/post-run-nodes",
       "summary": "Floor-style node validation participation, failure trends, deep audits, and scheduler status.",
-      "description": "The Post Run Node Report is built from Rack Status validation activities joined to exact scheduler targets. It counts every validation a node participated in, attributes failures only when evidence names that node, flags repeat failures across distinct runs, and preserves the snapshot after scheduler history ages out. Hardware and NVLink/network reports are available as persistent sections. Selecting a node shows Job IDs, categories, findings, current scheduler reason, and controls for immediate deep audits or an explicit operator mark/drain.",
+      "description": "Validation Status combines live bring-up checks, current Slurm state, durable validation activities, exact scheduler targets, and deep-audit findings. The default All view spans every discovered validation domain, while selectors isolate Node Health, DCGM, NCCL, NeMo, Llama, MNUberGEMM, and source-specific jobs. Selecting a node shows Job IDs, checks, metrics, failure reasons, evidence timestamps, and the complete validation history.",
       "features": [
         "Punchcard-style floor view grouped by rack, with run and attributed-failure counts per node.",
         "Increasing, decreasing, flat, and new failure trends; a repeat flag requires at least three findings across three distinct runs.",
@@ -2594,13 +2594,13 @@
       ],
       "howTo": [
         {
-          "task": "Investigate a repeat offender",
+          "task": "Investigate a validation failure",
           "steps": [
-            "Open Analytics & Benchmarks > Post Run Node Report.",
-            "Look for a red flag or increasing trend arrow.",
-            "Select the node.",
-            "Review the Job IDs, attributed failures, and current scheduler comment.",
-            "Launch the relevant hardware or NVLink/network audit and watch its report section refresh."
+            "Open Analytics & Benchmarks > Validation Status.",
+            "Select All or a validation domain.",
+            "Hover a node for current evidence, then select it.",
+            "Review checks, Job IDs, metrics, failure reasons, and current scheduler comment.",
+            "Launch the relevant hardware or NVLink/network audit and watch the 30-second live view refresh."
           ]
         },
         {
@@ -2636,8 +2636,8 @@
         "job id"
       ],
       "aria": {
-        "label": "Post Run Node Report page",
-        "description": "Floor-style validation participation and evidence-attributed node failure history with deep audit reports."
+        "label": "Validation Status page",
+        "description": "Live SU, rack, and node validation map with domain filters, job evidence, predictions, and downloadable reports."
       },
       "aiContext": "This page is the first-class post-run node history, not a Google punchcard import. It joins durable validation activities to exact scheduler targets, snapshots node membership, counts attributed failures only with node-specific evidence, flags repeat offenders across distinct runs, and shows current scheduler state/reason. It has persistent hardware and NVLink/network report sections. A selected node can launch either deep audit or receive an operator mark; draining requires an explicit confirmation."
     },

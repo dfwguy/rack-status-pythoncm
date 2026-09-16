@@ -72,8 +72,10 @@ __all__ = [
     "ingest_parser_json",
     "ingest_run",
     "ingest_runs",
+    "ingest_runs_checkpointed",
     "init_db",
     "latest_run_for_log",
+    "latest_runs_by_rack",
     "latest_successful_runs_by_rack",
     "list_runs",
     "make_run_id",
@@ -85,7 +87,7 @@ __all__ = [
     "summary_stats",
 ]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 #: Canonical workload kinds.  Unknown kinds are still stored verbatim (slugified)
 #: rather than being collapsed to ``unknown`` — nothing is silently lost — but
@@ -301,6 +303,18 @@ _SCHEMA_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_runs_job           ON runs(job_id)",
     "CREATE INDEX IF NOT EXISTS idx_metrics_name       ON run_metrics(metric_name)",
     "CREATE INDEX IF NOT EXISTS idx_metrics_run        ON run_metrics(run_id)",
+    """
+    CREATE TABLE IF NOT EXISTS ingestion_checkpoints (
+        source_id       TEXT PRIMARY KEY,
+        fingerprint     TEXT NOT NULL,
+        source_path     TEXT NOT NULL,
+        source_mtime_ns INTEGER,
+        source_size     INTEGER,
+        collected_at    TEXT,
+        rows_ingested   INTEGER NOT NULL DEFAULT 0,
+        updated_at      TEXT NOT NULL
+    )
+    """,
 )
 
 
@@ -570,14 +584,7 @@ def _normalize_metrics(raw: Any) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def ingest_run(record: Mapping[str, Any]) -> str:
-    """UPSERT one run (+ its metrics).  Returns the ``run_id``.
-
-    Required: ``source_log_path``.  Everything else is optional and defaulted.
-    Re-ingesting the identical log snapshot is a no-op update: the row keeps its
-    original ``first_seen_at`` and the metric rows are replaced wholesale, so
-    the run count never grows.
-    """
+def _prepare_run(record: Mapping[str, Any]) -> tuple[str, tuple[Any, ...], list[dict[str, Any]]]:
     if not isinstance(record, Mapping):
         raise ResultsHistoryError("record must be a mapping")
 
@@ -609,52 +616,121 @@ def ingest_run(record: Mapping[str, Any]) -> str:
     extra_json = _json_dump(record.get("extra")) if record.get("extra") else None
     metrics = _normalize_metrics(record.get("metrics"))
     now = _utcnow()
+    return run_id, (
+        run_id, src, basename, kind, rack, nodes_json, job_id, started_at, ended_at,
+        status, mtime, size, source, extra_json, now, now,
+    ), metrics
 
-    with _connect(write=True) as conn:
-        conn.execute(
-            """
-            INSERT INTO runs (run_id, source_log_path, log_basename, workload_kind, rack, nodes,
-                              job_id, started_at, ended_at, status, log_mtime, log_size, source,
-                              extra, first_seen_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(run_id) DO UPDATE SET
-                source_log_path = excluded.source_log_path,
-                log_basename    = excluded.log_basename,
-                workload_kind   = excluded.workload_kind,
-                rack            = COALESCE(excluded.rack, runs.rack),
-                nodes           = COALESCE(excluded.nodes, runs.nodes),
-                job_id          = COALESCE(excluded.job_id, runs.job_id),
-                started_at      = excluded.started_at,
-                ended_at        = COALESCE(excluded.ended_at, runs.ended_at),
-                status          = excluded.status,
-                log_mtime       = COALESCE(excluded.log_mtime, runs.log_mtime),
-                log_size        = COALESCE(excluded.log_size, runs.log_size),
-                source          = excluded.source,
-                extra           = COALESCE(excluded.extra, runs.extra),
-                updated_at      = excluded.updated_at
-            """,
-            (
-                run_id, src, basename, kind, rack, nodes_json, job_id, started_at, ended_at,
-                status, mtime, size, source, extra_json, now, now,
-            ),
+
+def _upsert_prepared(
+    conn: sqlite3.Connection,
+    prepared: tuple[str, tuple[Any, ...], list[dict[str, Any]]],
+) -> str:
+    run_id, values, metrics = prepared
+    conn.execute(
+        """
+        INSERT INTO runs (run_id, source_log_path, log_basename, workload_kind, rack, nodes,
+                          job_id, started_at, ended_at, status, log_mtime, log_size, source,
+                          extra, first_seen_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(run_id) DO UPDATE SET
+            source_log_path = excluded.source_log_path,
+            log_basename    = excluded.log_basename,
+            workload_kind   = excluded.workload_kind,
+            rack            = COALESCE(excluded.rack, runs.rack),
+            nodes           = COALESCE(excluded.nodes, runs.nodes),
+            job_id          = COALESCE(excluded.job_id, runs.job_id),
+            started_at      = excluded.started_at,
+            ended_at        = COALESCE(excluded.ended_at, runs.ended_at),
+            status          = excluded.status,
+            log_mtime       = COALESCE(excluded.log_mtime, runs.log_mtime),
+            log_size        = COALESCE(excluded.log_size, runs.log_size),
+            source          = excluded.source,
+            extra           = COALESCE(excluded.extra, runs.extra),
+            updated_at      = excluded.updated_at
+        """,
+        values,
+    )
+    if metrics:
+        conn.execute("DELETE FROM run_metrics WHERE run_id = ?", (run_id,))
+        conn.executemany(
+            "INSERT INTO run_metrics (run_id, metric_name, seq, value, unit, labels) "
+            "VALUES (?,?,?,?,?,?)",
+            [(run_id, m["metric_name"], m["seq"], m["value"], m["unit"], m["labels"]) for m in metrics],
         )
-        if metrics:
-            # Replace wholesale: a re-parse is authoritative for this snapshot.
-            conn.execute("DELETE FROM run_metrics WHERE run_id = ?", (run_id,))
-            conn.executemany(
-                "INSERT INTO run_metrics (run_id, metric_name, seq, value, unit, labels) "
-                "VALUES (?,?,?,?,?,?)",
-                [
-                    (run_id, m["metric_name"], m["seq"], m["value"], m["unit"], m["labels"])
-                    for m in metrics
-                ],
-            )
     return run_id
 
 
+def ingest_run(record: Mapping[str, Any]) -> str:
+    """UPSERT one run (+ its metrics).  Returns the ``run_id``.
+
+    Required: ``source_log_path``.  Everything else is optional and defaulted.
+    Re-ingesting the identical log snapshot is a no-op update: the row keeps its
+    original ``first_seen_at`` and the metric rows are replaced wholesale, so
+    the run count never grows.
+    """
+    prepared = _prepare_run(record)
+
+    with _connect(write=True) as conn:
+        return _upsert_prepared(conn, prepared)
+
+
 def ingest_runs(records: Iterable[Mapping[str, Any]]) -> list[str]:
-    """Ingest many records.  Returns the run_ids in input order."""
-    return [ingest_run(rec) for rec in records or []]
+    """Atomically ingest many records. Returns run ids in input order."""
+    prepared = [_prepare_run(rec) for rec in records or []]
+    with _connect(write=True) as conn:
+        return [_upsert_prepared(conn, item) for item in prepared]
+
+
+def ingest_runs_checkpointed(
+    records: Iterable[Mapping[str, Any]],
+    *,
+    source_id: str,
+    fingerprint: str,
+    source_path: str,
+    source_mtime_ns: int | None = None,
+    source_size: int | None = None,
+    collected_at: str | None = None,
+) -> dict[str, Any]:
+    """Atomically ingest an indexed snapshot and its durable checkpoint.
+
+    An unchanged fingerprint performs no writes. A failed record rolls back the
+    complete batch and leaves the prior checkpoint intact, so a partial refresh
+    can never become authoritative.
+    """
+    source_key = _clean_str(source_id)
+    digest = _clean_str(fingerprint)
+    path = _clean_str(source_path)
+    if not source_key or not digest or not path:
+        raise ResultsHistoryError("source_id, fingerprint and source_path are required")
+    prepared = [_prepare_run(rec) for rec in records or []]
+    now = _utcnow()
+    with _connect(write=True) as conn:
+        prior = conn.execute(
+            "SELECT fingerprint, rows_ingested FROM ingestion_checkpoints WHERE source_id = ?",
+            (source_key,),
+        ).fetchone()
+        if prior is not None and str(prior["fingerprint"]) == digest:
+            return {"skipped": True, "run_ids": [], "rows_ingested": int(prior["rows_ingested"] or 0)}
+        run_ids = [_upsert_prepared(conn, item) for item in prepared]
+        conn.execute(
+            """
+            INSERT INTO ingestion_checkpoints
+              (source_id, fingerprint, source_path, source_mtime_ns, source_size,
+               collected_at, rows_ingested, updated_at)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(source_id) DO UPDATE SET
+              fingerprint=excluded.fingerprint,
+              source_path=excluded.source_path,
+              source_mtime_ns=excluded.source_mtime_ns,
+              source_size=excluded.source_size,
+              collected_at=excluded.collected_at,
+              rows_ingested=excluded.rows_ingested,
+              updated_at=excluded.updated_at
+            """,
+            (source_key, digest, path, source_mtime_ns, source_size, collected_at, len(run_ids), now),
+        )
+    return {"skipped": False, "run_ids": run_ids, "rows_ingested": len(run_ids)}
 
 
 # ---------------------------------------------------------------------------
@@ -666,7 +742,7 @@ def _filter_sql(filters: Mapping[str, Any] | None, alias: str = "r") -> tuple[st
     """Build a WHERE clause from a filter mapping.
 
     Supported keys: ``workload_kind``/``kind`` (str or list), ``rack`` (str or
-    list), ``job_id``, ``status`` (str or list), ``run_id``, ``since``/``until``
+    list), ``job_id``, ``status`` (str or list), ``source``, ``run_id``, ``since``/``until``
     (compared against ``started_at``), ``source_log_path``, ``search``
     (substring of the basename), ``has_metric`` (metric_name that must exist).
     """
@@ -693,6 +769,7 @@ def _filter_sql(filters: Mapping[str, Any] | None, alias: str = "r") -> tuple[st
     _in("rack", f.get("rack"))
     _in("job_id", f.get("job_id"))
     _in("status", f.get("status"), normalize_status)
+    _in("source", f.get("source"))
     _in("run_id", f.get("run_id"))
     _in("source_log_path", f.get("source_log_path"))
 
@@ -1024,6 +1101,51 @@ def latest_successful_runs_by_rack(
     return grouped
 
 
+def latest_runs_by_rack(
+    workload_kinds: Sequence[str] = ("nccl", "nemo"),
+    *,
+    source: str | None = None,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Return the newest run of any verdict for each workload/rack.
+
+    This is intentionally separate from the monotonic acceptance query above.
+    Callers use it for a current-state overlay from a named authoritative
+    source while retaining every historical pass and failure in ``runs``.
+    """
+    kinds: list[str] = []
+    for raw in workload_kinds or ():
+        kind = _norm_kind(raw)
+        if kind and kind not in kinds:
+            kinds.append(kind)
+    if not kinds:
+        return {}
+
+    placeholders = ",".join("?" for _ in kinds)
+    args: list[Any] = list(kinds)
+    source_clause = ""
+    source_value = _clean_str(source)
+    if source_value:
+        source_clause = " AND source = ?"
+        args.append(source_value)
+    sql = (
+        "SELECT * FROM runs "
+        "WHERE rack IS NOT NULL AND TRIM(rack) <> '' "
+        f"AND workload_kind IN ({placeholders})"
+        + source_clause
+        + " ORDER BY COALESCE(log_mtime, 0) DESC, started_at DESC, "
+          "updated_at DESC, run_id DESC"
+    )
+    grouped: dict[str, dict[str, dict[str, Any]]] = {kind: {} for kind in kinds}
+    with _connect() as conn:
+        for row in conn.execute(sql, args):
+            kind = str(row["workload_kind"] or "")
+            rack = str(row["rack"] or "").strip()
+            if not rack or kind not in grouped or rack in grouped[kind]:
+                continue
+            grouped[kind][rack] = _row_to_run(row)
+    return grouped
+
+
 def delete_run(run_id: str) -> bool:
     """Delete one run and its metrics.  True if a row was removed."""
     rid = _clean_str(run_id)
@@ -1102,7 +1224,7 @@ def records_from_parser_json(
 ) -> list[dict[str, Any]]:
     """Turn one ``parser.sh --json`` object into ingestable run records.
 
-    Handles export_version 6 and 7 (keys ``nccl_peak_out_of_place_busbw_gbps``,
+    Handles export_version 6 through 8 (keys ``nccl_peak_out_of_place_busbw_gbps``,
     ``nemotron_5h_56b_train_window``, ``mnubergemm_stress``, ``parser_flags``).
 
     Abstention is deliberate: parser.sh emits a fully-formed placeholder row
@@ -1230,6 +1352,8 @@ def records_from_parser_json(
             ("gflops_median", "GFLOP/s"),
             ("nodes", "nodes"),
             ("ranks", "ranks"),
+            ("rank_samples", "samples"),
+            ("qualified_ranks", "ranks"),
             ("gpus", "gpus"),
         ):
             num = _to_float(entry.get(key))

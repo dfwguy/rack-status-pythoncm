@@ -22,6 +22,8 @@
 #
 # For NscaleTX GB300 NVL72, <Total_Rack_Nodes> = 18 (18 trays x 4 GPU = 72 GPU).
 
+umask 0002
+
 # NSCALETX [1/3]: the MOP pins CONT to a 25.08 image under /home/nvis. NscaleTX stages the
 # 26.03 image in the AAT container dir; run_mnubergemm_stress.sh exports NVIS_MNUBERGEMM_CONT
 # after its pre-req check so the driver and a hand-run sbatch resolve identically.
@@ -62,10 +64,10 @@ export NCCL_SOCKET_IFNAME=bond0
 export NCCL_NVLS_ENABLE=0
 
 hosts=($(scontrol show hostnames $SLURM_JOB_NODELIST))
-srun --nodes=1 --ntasks=1 --nodelist="${hosts[0]}" nvidia-imex-ctl -N
-
 export NCCL_MNNVL_ENABLE=0
 [[ ${#hosts[@]} -gt 1 ]] && { export NCCL_MNNVL_ENABLE=1; }
+
+srun --nodes=1 --ntasks=1 --nodelist="${hosts[0]}" nvidia-imex-ctl -N
 
 #setting up variables
 # NSCALETX [4/4]: the MOP hardcodes --time_to_run 86400 (24h burn-in). MNUBERGEMM does not
@@ -86,5 +88,6 @@ export FREQQ="--freq 400 --duty 0.9 --dual_mode --dual_freq 0.0013888889 --dual_
 # so slurmd falls back to /tmp and "./mnubergemm" is not found. In this image the binary is
 # at /opt/mnubergemm/mnubergemm, so pin the workdir there and keep the MOP's ./mnubergemm.
 srun --cpu-bind=none --mpi=pmix --container-image="$CONT" \
+     --container-mounts=/dev:/dev \
      --container-workdir=/opt/mnubergemm \
      ./mnubergemm ${STD} ${FREQQ} ${MM} ${NET} ${CE}

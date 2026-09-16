@@ -8,13 +8,13 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
-"""Structured BCM queries via pythoncm, run out-of-process on the head.
+"""Structured BCM queries via pythoncm, owned out-of-process on the head.
 
-Thin wrapper around ``bin/scripts/nvis_bcm_query.py``. The design decision this encodes is that
-we never import pythoncm into this process: it is version-locked to the cluster's cmdaemon, not
-on PyPI, and one container serves several clusters, so no single pinned copy could be correct
-for all of them. Instead each call runs a short-lived interpreter on the machine whose pythoncm
-matches its own cmdaemon by construction, and we read JSON back.
+The production path sends serialized requests to ``nvis_pythoncm_broker.py``, which keeps exactly
+one cluster connection alive.  Rack Status still never imports pythoncm into this process: it is
+version-locked to the cluster's cmdaemon, not on PyPI, and one container can serve different
+clusters.  When the broker is unavailable during boot or recovery, the original one-shot helper
+remains a slower availability fallback.
 
 That also keeps the credentials where they already are — the client cert, key and cluster CA
 never leave the head — and avoids redistributing BCM's library inside an image we ship elsewhere.
@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 import host_exec
+import pythoncm_broker_client
 
 _logger = logging.getLogger(__name__)
 
@@ -50,7 +51,6 @@ DEFAULT_PYTHON = "/cm/local/apps/python312/bin/python3"
 #: Long enough for a whole-fleet walk (~3000 devices) over a multi-hop connection, short enough
 #: that a wedged cmdaemon does not hold a UI request open.
 DEFAULT_TIMEOUT = 120
-
 
 def _script_path() -> str:
     # role_root("scripts") already points at the scripts directory on the target host; joining
@@ -114,6 +114,22 @@ def query(
 ) -> dict[str, Any]:
     """Run one query on the head and return its JSON, or an ``ok: False`` explanation."""
     cmd = build_command(kind, entity_type=entity_type, extra_args=extra_args)
+    broker_socket = (os.environ.get("NVIS_PYTHONCM_SOCKET") or "").strip()
+    if broker_socket:
+        try:
+            return _query_broker(broker_socket, cmd[2:], timeout=timeout)
+        except (FileNotFoundError, ConnectionRefusedError):
+            # During boot/systemd recovery, retain the proven one-shot path. Once
+            # the broker socket accepts a request, its structured answer is final;
+            # never duplicate a possibly-mutating request through a fallback.
+            _logger.warning("PythonCM broker unavailable; using one-shot helper")
+        except Exception as exc:
+            _logger.warning("PythonCM broker request failed", exc_info=True)
+            return {
+                "ok": False,
+                "error": "persistent PythonCM broker failed",
+                "detail": f"{type(exc).__name__}: {exc}",
+            }
     try:
         proc = host_exec.run_on_host(cmd, timeout=timeout, role="control")
     except Exception as exc:  # transport failures become an unavailable response, not a 500
@@ -140,6 +156,13 @@ def query(
     return {"ok": False, "error": "unparseable output", "detail": stdout[-500:]}
 
 
+def _query_broker(socket_path: str, argv: list[str], *, timeout: int) -> dict[str, Any]:
+    """Send one serialized query to the host-local persistent PythonCM owner."""
+    return pythoncm_broker_client.request(
+        socket_path, "query", argv, timeout=timeout
+    )
+
+
 def nodes(**kw: Any) -> dict[str, Any]:
     """Every compute device with its rack position and BMC address."""
     return query("nodes", **kw)
@@ -148,6 +171,11 @@ def nodes(**kw: Any) -> dict[str, Any]:
 def racks(**kw: Any) -> dict[str, Any]:
     """Every BCM rack entity, including racks that currently contain no compute node."""
     return query("racks", **kw)
+
+
+def topology(**kw: Any) -> dict[str, Any]:
+    """BCM racks and NodeGroups from one cached-entity PythonCM session."""
+    return query("topology", **kw)
 
 
 def rf0(**kw: Any) -> dict[str, Any]:

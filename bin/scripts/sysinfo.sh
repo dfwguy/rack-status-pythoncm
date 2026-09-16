@@ -34,7 +34,7 @@
 # own output; uniformity / platform-count-specific "Expected" notes stay info to
 # avoid false failures (promote to gate once detection is validated per platform).
 export topdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH="${RACK_SLURM_BIN:-/cm/local/apps/slurm/25.05/bin}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 ## Caution: highly depends on pdsh to run commands on all nodes; BCM should be
 ## configured to let pdsh work without a password.
@@ -437,6 +437,25 @@ _list_checks() {
 _require_nodelist() {
   [ -z "${NODELIST}" ] && NODELIST="${SLURM_JOB_NODELIST}"
   [ -z "${NODELIST}" ] && { echo "ERROR: NODELIST is not set. Provide a node list argument or run within a slurm job."; exit 1; }
+
+  # Slurm commonly exposes compact hostlists such as rack-[11-12].  Passing
+  # that expression directly to the Python ssh fanout treats it as one DNS
+  # hostname and silently turns every hardware check into a lookup failure.
+  # Resolve once, before any check runs, and retain the exact expanded nodes.
+  local expanded
+  command -v scontrol >/dev/null 2>&1 || {
+    echo "ERROR: scontrol is required to expand NODELIST=${NODELIST}" >&2
+    exit 1
+  }
+  expanded="$(scontrol show hostnames "${NODELIST}" 2>/dev/null)" || {
+    echo "ERROR: unable to expand NODELIST=${NODELIST} through scontrol" >&2
+    exit 1
+  }
+  NODELIST="$(printf '%s\n' "${expanded}" | awk 'NF' | paste -sd, -)"
+  [ -n "${NODELIST}" ] || {
+    echo "ERROR: scontrol returned no nodes for NODELIST=${POSITIONAL[0]:-${SLURM_JOB_NODELIST}}" >&2
+    exit 1
+  }
 }
 
 # Parse args: --check <name> / --check=<name> / --list, remaining positional = nodelist.

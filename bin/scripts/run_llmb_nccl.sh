@@ -116,6 +116,29 @@ NODELIST="${NVIS_NODELIST}"
 NNODES="${NVIS_NNODES}"
 if [[ -n "${SCALE_OVERRIDE}" ]]; then SCALE="${SCALE_OVERRIDE}"; else SCALE="$(nvis_nodes_scale "${GPUS_PER_NODE}")"; fi
 
+# Materialize the GB300 IMEX channel on the exact reviewed allocation before
+# llmb-run can submit its NCCL workload.  Keep this identical to the direct and
+# containerized Rack Status launchers: derive the registered major locally on
+# every node, fail closed if validation/open fails, and install no persistent
+# service, timer, udev rule, or reconciler.
+IMEX_BATCH="${_SCRIPT_DIR}/validation_imex_channel0_prepare.sbatch"
+[[ -r "${IMEX_BATCH}" ]] || die "IMEX channel0 prelaunch batch is missing: ${IMEX_BATCH}"
+imex_output="${JOB_LOG_DIR%/}/validation-imex-channel0-%j.out"
+imex_cmd=(sbatch --parsable --wait --no-requeue -N "${NNODES}"
+  --nodelist="${NODELIST}" --ntasks-per-node=1 --output="${imex_output}")
+[[ -n "${RESERVATION}" ]] && imex_cmd+=(--reservation="${RESERVATION}")
+imex_cmd+=("${IMEX_BATCH}")
+printf 'run_llmb_nccl: imex prelaunch:'; printf ' %q' "${imex_cmd[@]}"; echo
+if [[ "${DRY_RUN}" -eq 0 ]]; then
+  imex_reply="$("${imex_cmd[@]}" 2>&1)"
+  imex_rc=$?
+  printf '%s\n' "${imex_reply}"
+  imex_id="$(printf '%s\n' "${imex_reply}" | sed -n 's/^\([0-9][0-9]*\)\(;.*\)\{0,1\}$/\1/p' | head -1)"
+  [[ "${imex_id}" =~ ^[0-9]+$ ]] || die "IMEX prelaunch returned no valid Slurm id (rc=${imex_rc}): ${imex_reply}"
+  (( imex_rc == 0 )) || die "IMEX prelaunch failed (job=${imex_id} rc=${imex_rc} log=${imex_output//%j/${imex_id}})"
+  echo "run_llmb_nccl: IMEX channel0 ready on ${NNODES}/${NNODES} node(s) (job=${imex_id} log=${imex_output//%j/${imex_id}})"
+fi
+
 # --- Resolve the llmb-run binary ------------------------------------------------
 if [[ -z "${LLMB_RUN}" ]]; then
   _llmb_parent="$(dirname "${LLMB_INSTALL}")"

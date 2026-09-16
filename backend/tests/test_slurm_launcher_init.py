@@ -16,10 +16,19 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "bin" / "scripts"
 
 def test_explicit_slurm_bin_wins_over_an_existing_path_binary():
     init = (SCRIPTS / "slurm-init.inc.sh").read_text(encoding="utf-8")
-    explicit = init.index('if [ -n "${RACK_SLURM_BIN:-}" ]')
+    explicit = init.index('if [ -n "$_rk_slurm_bin" ]')
     fallback = init.index("elif ! command -v sbatch")
     assert explicit < fallback
-    assert 'export PATH="${RACK_SLURM_BIN}:$PATH"' in init
+    assert 'export PATH="${_rk_slurm_bin}:$PATH"' in init
+    assert 'RACK_SLURM_SBATCH' in init
+
+
+def test_container_module_bypass_is_honored_before_sourcing_modules():
+    init = (SCRIPTS / "slurm-init.inc.sh").read_text(encoding="utf-8")
+    bypass = init.index('case "${RACK_SLURM_SKIP_MODULE_LOAD:-}"')
+    modules = init.index("/cm/local/apps/environment-modules/current/init/bash")
+    assert bypass < modules
+    assert "if (( ! _rk_skip_modules ))" in init
 
 
 def test_control_plane_launchers_source_the_shared_slurm_initialiser():

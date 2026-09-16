@@ -48,6 +48,18 @@ def test_post_run_report_route_returns_frontend_contract(monkeypatch):
     assert payload["refresh"]["accounting_error"] == ""
 
 
+def test_post_run_map_view_removes_rack_duplication_and_superseded_history(monkeypatch):
+    current = {"tool": "dcgmi-r1", "validation_test": "dcgmi-r1", "activity_id": "new", "job_id": "101", "started_at": "2026-09-02", "authoritative": True}
+    old = {"tool": "dcgmi-r1", "validation_test": "dcgmi-r1", "activity_id": "old", "job_id": "100", "started_at": "2026-09-01", "authoritative": False}
+    report = {"generated_at": "now", "summary": {}, "refresh": {}, "nodes": [{"node": "ink50-dh01-a01-11", "rack": "ink50-dh01-a01", "runs": [old, current]}], "racks": [{"rack": "ink50-dh01-a01", "nodes": []}]}
+    monkeypatch.setattr(app_module, "_build_post_run_report", lambda **_kwargs: report)
+    with app_module.app.test_client() as client:
+        payload = client.get("/api/post-run-node-report?view=map").get_json()
+    assert payload["compact"] is True
+    assert "racks" not in payload
+    assert payload["nodes"][0]["runs"] == [current]
+
+
 def test_post_run_report_rejects_invalid_node_filter():
     with app_module.app.test_client() as client:
         response = client.get("/api/post-run-node-report?node=bad%20node")

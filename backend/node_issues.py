@@ -27,6 +27,7 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -214,8 +215,29 @@ def _fetch_sheet_values() -> list[list[str]]:
         f"{PUNCHCARD_SPREADSHEET_ID}/values/{encoded_range}?majorDimension=ROWS"
     )
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=30) as response:
-        body = json.loads(response.read().decode("utf-8"))
+    body: Any = None
+    last_transient: BaseException | None = None
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {429, 500, 502, 503, 504}:
+                raise
+            last_transient = exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_transient = exc
+        if attempt < 3:
+            time.sleep(0.5 * (2**attempt))
+    else:
+        if isinstance(last_transient, urllib.error.HTTPError):
+            detail = f"HTTP {last_transient.code} {last_transient.reason}"
+        else:
+            detail = str(last_transient or "unknown network error")
+        raise RuntimeError(
+            f"punchcard Sheets read failed after 4 attempts: {detail}"
+        ) from last_transient
     rows = body.get("values") if isinstance(body, dict) else None
     if not isinstance(rows, list):
         raise TypeError("punchcard response has no values array")

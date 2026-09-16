@@ -35,6 +35,71 @@ def test_rack_total_sinfo_nodes_sums_states():
     assert rack_total_sinfo_nodes("bos01-a01", counts) == 0
 
 
+def test_availability_summary_matches_node_down_sheet_policy(monkeypatch):
+    monkeypatch.setenv("RACK_NATIVE_SINFO_SOURCE", "slurm")
+    counts = {
+        ("r01", "idle"): 10,
+        ("r01", "idle_nr"): 2,
+        ("r01", "down_nr"): 3,
+        ("r01", "drained"): 1,
+        ("r01", "inval"): 1,
+    }
+    summary = native_status.availability_summary_from_counts(counts, include_sheet=False)
+    assert summary == {
+        "source": "slurm",
+        "captured_at": summary["captured_at"],
+        "total_nodes": 17,
+        "ready_nodes": 10,
+        "unavailable_nodes": 4,
+        "no_response_nodes": 5,
+        "drained_nodes": 1,
+        "down_other_nodes": 3,
+        "invalid_nodes": 1,
+        "definition": "Node down status report",
+    }
+
+
+def test_slurm_tray_column_uses_same_live_states_as_rack_counts(monkeypatch):
+    monkeypatch.setenv("RACK_NATIVE_SINFO_SOURCE", "slurm")
+    monkeypatch.setenv("NVIS_RACK_ID", r"ink50-dh[01-99]-[a-z][\d+]")
+    monkeypatch.setenv("NVIS_CT_ID", r"ink50-dh[01-99]-[a-z][\d+]-[\d+]")
+    native_status.invalidate_job_env_file_cache()
+    rows = [
+        ("ink50-dh02-h01-11", "idle"),
+        ("ink50-dh02-h01-12", "alloc"),
+        ("ink50-dh02-h01-13", "drained"),
+        ("ink50-dh02-h01-14", "down_nr"),
+    ]
+    column = native_status._slurm_ct_column_by_rack(rows)
+    value = column["ink50-dh02-h01"]
+    assert "UP:ink50-dh02-h01-[11-12]" in value
+    assert "INST:ink50-dh02-h01-[13]" in value
+    assert "DN:ink50-dh02-h01-[14]" in value
+
+
+def test_pythoncm_overlay_does_not_keep_numeric_slurm_fallback_running(monkeypatch):
+    """Numeric fallback refs must be refreshed from Slurm, not their own stale row."""
+    class Proc:
+        returncode = 0
+        stdout = ""  # no longer in squeue
+        stderr = ""
+
+    monkeypatch.setattr(native_status.scheduler_runtime, "is_pythoncm", lambda: True)
+    monkeypatch.setattr(
+        native_status.scheduler_runtime,
+        "active_job_times",
+        lambda _wanted=None: ({"9432"}, {"9432": "?"}),
+    )
+    monkeypatch.setattr(native_status.host_exec, "run_slurm_on_host", lambda *_a, **_kw: Proc())
+    running = {"9432"}
+    elapsed = {"9432": "?"}
+
+    native_status.augment_running_set_for_job_ids(running, elapsed, ["9432"])
+
+    assert running == set()
+    assert elapsed == {}
+
+
 def _build(monkeypatch, *, racks, sinfo_counts, by_rack_log, sinfo_done=True):
     # Never touch Slurm in the test.
     monkeypatch.setattr(native_status, "load_squeue_jobs_map", lambda: (set(), {}))
@@ -203,7 +268,11 @@ def test_canonical_build_waits_for_completed_stage_log_scan(monkeypatch, tmp_pat
     monkeypatch.setattr(native_status, "_cmsh_rack_list", lambda: ["r01"])
     monkeypatch.setattr(native_status, "_cmsh_ds_text", lambda: "")
     monkeypatch.setattr(native_status, "parse_cmsh_ds_to_ct_column_by_rack", lambda _text: {})
-    monkeypatch.setattr(native_status, "collect_sinfo_counts", lambda: {("r01", "idle"): 18})
+    monkeypatch.setattr(
+        native_status,
+        "collect_sinfo_snapshot",
+        lambda: ({("r01", "idle"): 18}, {"r01": "UP:r01-[01-18]"}),
+    )
     monkeypatch.setattr(native_status, "_glob_one_rack_logs", lambda _log_dir: entries)
     monkeypatch.setattr(native_status, "_rack_from_1rack_log", lambda _name: "r01")
     monkeypatch.setattr(native_status, "_load_log_cache", lambda _path: {})

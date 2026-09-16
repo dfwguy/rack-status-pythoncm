@@ -47,6 +47,8 @@ import type { SchedulerNodeReason } from "../lib/slurmHelpers";
 import { slurmReasonTone } from "../lib/slurmReasonTone";
 import { resolveGrafanaBase } from "../lib/grafanaLinks";
 import { useGrafanaDeeplinks } from "../lib/useGrafanaDeeplinks";
+import { usePagedRows } from "../hooks/usePagedRows";
+import { TablePager } from "../components/TablePager";
 
 type TagColor = "green" | "blue" | "teal" | "yellow" | "red" | "gray";
 
@@ -226,6 +228,7 @@ export function EventsView() {
     });
     return all;
   }, [slurmRows, operatorEvents, activeSources]);
+  const eventPage = usePagedRows(rows);
 
   const grafanaBase = grafana?.enabled ? resolveGrafanaBase(grafana.base, grafana.port) : "";
 
@@ -327,7 +330,7 @@ export function EventsView() {
           />
         ) : (
           <Flex direction="col" gap="0">
-            {rows.map((row, i) => (
+            {eventPage.visible.map((row, i) => (
               <Flex
                 key={row.key}
                 align="start"
@@ -336,7 +339,7 @@ export function EventsView() {
                 style={{
                   padding: "10px 0",
                   borderBottom:
-                    i < rows.length - 1 ? "1px solid var(--border-color-base, rgba(128,128,128,0.2))" : "none",
+                    i < eventPage.visible.length - 1 ? "1px solid var(--border-color-base, rgba(128,128,128,0.2))" : "none",
                 }}
               >
                 <Text kind="mono/sm" style={{ color: "var(--text-color-secondary)", minWidth: 160 }}>
@@ -361,6 +364,7 @@ export function EventsView() {
             ))}
           </Flex>
         )}
+        <TablePager {...eventPage} noun="events" />
       </Card>
 
       <Card style={{ padding: 16 }}>

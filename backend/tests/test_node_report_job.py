@@ -19,6 +19,7 @@ collected separately so polling never ships several MB.
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import pytest
 from app import app
@@ -58,6 +59,36 @@ def _wait(client, job_id, *, want, timeout=5.0):
     assert body is not None
     assert body.get("state") == want, f"job never reached {want!r}: {body}"
     return body
+
+
+def test_report_fleet_excludes_only_real_hosts_outside_active_compute_template(monkeypatch):
+    import app as A
+
+    monkeypatch.setattr(
+        A,
+        "_nvis_naming",
+        lambda: SimpleNamespace(
+            sinfo_rack_from_host=lambda name: (
+                "ink50-dh02-e06" if name.startswith("ink50-dh02-e06-") else None
+            )
+        ),
+    )
+    fleet = {
+        "columns": ["allreduce"],
+        "nodes": [
+            {"node": "ink50-dh02-e06-11", "jobs": []},
+            {"node": "appserver", "jobs": []},
+            {"node": "************************************************************", "jobs": []},
+        ],
+    }
+
+    filtered = A._validation_report_compute_fleet(fleet)
+
+    assert [row["node"] for row in filtered["nodes"]] == ["ink50-dh02-e06-11"]
+    assert filtered["excluded_non_compute"] == {
+        "count": 1,
+        "nodes": ["appserver"],
+    }
 
 
 @pytest.fixture
@@ -104,6 +135,9 @@ class TestJobLifecycle:
         done = _wait(client, job_id, want="done")
         assert done["ready"] is True
         assert done["phase"] == "complete"
+        # The strict report may contain one representative firmware placeholder;
+        # status still reports the full validation scope, not that placeholder count.
+        assert done["nodes"] == 3
         # The sweep published a count for every node it finished.
         assert fake_generation == [(1, 3), (2, 3), (3, 3)]
 
@@ -421,8 +455,18 @@ class TestFormatRouting:
         assert a["job_id"] != b["job_id"]
         assert not b.get("reused")
 
-    def test_an_identical_request_still_joins_the_running_sweep(self, client, fake_generation,
-                                                               offline_facts):
+    def test_an_identical_request_still_joins_the_running_sweep(
+        self, client, fake_generation, offline_facts, monkeypatch
+    ):
+        import app as A
+
+        original = A._collect_node_inventory
+
+        def _slow_collect(*args, **kwargs):
+            time.sleep(0.2)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(A, "_collect_node_inventory", _slow_collect)
         first = client.post("/api/node-report/start",
                            json={"report": "rack-status", "format": "csv"}).get_json()
         second = client.post("/api/node-report/start",

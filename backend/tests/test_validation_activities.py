@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import uuid
 
 import pytest
@@ -293,6 +294,54 @@ class TestAdoptLog:
 
         # Idempotent — same path returns existing id.
         assert va.adopt_log(path, log_dir="/logs", rack="p5-r01") == aid
+
+    def test_readoption_reconciles_exact_external_metadata_and_archive(self):
+        path = "/cluster/OVA/logs/SU11/rack17/multiNodeMNU/mnubergemm-26.03-v1.17-g001-55952.out"
+        aid = va.adopt_log(
+            path,
+            log_dir="/cluster/OVA/logs/nscaletx-16k-validation",
+            rack="mnubergemm-26.03-v1.17-g001-55952",
+        )
+
+        corrected_dir = "/cluster/OVA/logs/SU11/rack17/multiNodeMNU"
+        assert va.adopt_log(
+            path, log_dir=corrected_dir, rack="ink50-dh02-k17"
+        ) == aid
+
+        rec = va.get_activity(aid)
+        assert rec["activity_id"] == aid
+        assert rec["rack"] == "ink50-dh02-k17"
+        assert rec["racks"] == ["ink50-dh02-k17"]
+        assert rec["log_dir"] == corrected_dir
+        assert len(rec["tasks"]) == 1
+        assert rec["tasks"][0]["scheduler_ref"] == "55952"
+
+        with sqlite3.connect(va.ACTIVITY_ARCHIVE_DB) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM validation_activities").fetchone()[0] == 1
+            archived = json.loads(
+                conn.execute(
+                    "SELECT payload FROM validation_activities WHERE activity_id = ?", (aid,)
+                ).fetchone()[0]
+            )
+        assert archived["rack"] == "ink50-dh02-k17"
+        assert archived["log_dir"] == corrected_dir
+
+    def test_readoption_never_rewrites_non_external_activity(self):
+        path = "/logs/mnubergemm-26.03-v1.17-g001-55952.out"
+        aid = va.record_activity(
+            "mnubergemm",
+            rack="ink50-dh02-i21",
+            racks=["ink50-dh02-i21"],
+            log_dir="/logs/original",
+            source="ui",
+            tasks=[{"stdout_path": path, "results_log_path": path, "scheduler_ref": "55952"}],
+        )
+
+        assert va.adopt_log(path, log_dir="/logs/rewrite", rack="ink50-dh02-k17") == aid
+        rec = va.get_activity(aid)
+        assert rec["rack"] == "ink50-dh02-i21"
+        assert rec["racks"] == ["ink50-dh02-i21"]
+        assert rec["log_dir"] == "/logs/original"
 
 
 class TestLegacyMigration:

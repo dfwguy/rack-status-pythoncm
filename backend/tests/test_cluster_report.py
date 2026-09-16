@@ -115,6 +115,18 @@ class TestDataset:
         assert c["gpu_model"] == "NVIDIA GB300"              # from the inventory baseline
         assert c["driver_version"] == "580.126.20"
 
+    def test_non_compute_exclusions_are_explicit_report_metadata(self):
+        fleet = json.loads(json.dumps(FLEET))
+        fleet["excluded_non_compute"] = {"count": 1, "nodes": ["appserver"]}
+        ds = cluster_report.build_dataset(fleet=fleet)
+        assert ds["meta"]["excluded_non_compute"] == {
+            "count": 1,
+            "nodes": ["appserver"],
+        }
+        csv_text = cluster_report.to_csv(ds)
+        assert "# Excluded non-compute nodes,1" in csv_text
+        assert "# Excluded non-compute hostnames,appserver" in csv_text
+
     def test_ib_versus_roce_is_read_from_the_ports_not_guessed(self, dataset):
         assert dataset["cluster"]["fabric"] == "InfiniBand"
 

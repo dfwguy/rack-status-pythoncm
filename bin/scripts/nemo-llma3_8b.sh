@@ -18,8 +18,11 @@
 #SBATCH --time=00:30:00
 #SBATCH -N 1
 
-#CONT=/home/cmsupport/workspace/nemo-25.11.01.sqsh
-CONT=/raid/data/nemo-25.11.01.sqsh
+# ``run-llama.sh`` stages the configured, allowlisted source image and exports
+# the exact compute-local path. Retain the historical fallback for direct/manual
+# submissions, but never silently validate a different filename than was staged.
+CONT="${NVIS_LLAMA_CONT:-/raid/data/nemo-25.11.01.sqsh}"
+EXPECTED_CONT_SIZE="${NVIS_LLAMA_EXPECTED_SIZE:-}"
 single_rack=1
 
 module load slurm
@@ -46,6 +49,20 @@ nvidia-smi nvlink -s|grep [0-9].*GB|wc -l
 ibstatus|grep -E 'Infiniband|state:'|paste - - -|grep roce|tr -s ' '
 nvidia-imex-ctl -N|awk '/Nodes:/,/Domain State:/{print $0}'|sed -e 's:\*: :g' -e 's:-::g'|tr -s ' '
 EOF
+
+if [[ ! -r "$CONT" ]]; then
+  echo "LLAMA_VALIDATION_FAIL stage=image reason=missing path=$CONT"
+  exit 2
+fi
+actual_cont_size=$(stat -c %s "$CONT") || {
+  echo "LLAMA_VALIDATION_FAIL stage=image reason=stat path=$CONT"
+  exit 2
+}
+if [[ -n "$EXPECTED_CONT_SIZE" && "$actual_cont_size" != "$EXPECTED_CONT_SIZE" ]]; then
+  echo "LLAMA_VALIDATION_FAIL stage=image reason=size path=$CONT expected=$EXPECTED_CONT_SIZE actual=$actual_cont_size"
+  exit 2
+fi
+echo "LLAMA_VALIDATION_IMAGE_READY path=$CONT size=$actual_cont_size"
 
 # Prefer bond0 when it is up, else enP22s22f0np0 when up, else first existing interface, else bond0.
 select_ns_nic() {
@@ -111,7 +128,12 @@ export NCCL_P2P_LEVEL=NVL
 export NCCL_NVLS_ENABLE=1
 export NCCL_CUMEM_ENABLE=1
 export NCCL_MIN_CTAS=16
-export NCCL_MNNVL_ENABLE=1
+# Single-node qualification does not need Multi-Node NVLink. The pinned five-
+# collective recipe and the 56B NeMo launcher both disable this on NscaleTX
+# because CUDA fabric-handle operations are denied on the current fleet.
+export NCCL_MNNVL_ENABLE=0
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=ALL
 
 srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/null
 
@@ -125,6 +147,7 @@ all_reduce_perf_mpi -dfloat -b 8 -f 2 -g 1 -e 16G --iters 20
 exitcode=$?
 if [ $exitcode -ne 0 ]; then
   srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/null
+  echo "LLAMA_VALIDATION_FAIL stage=nccl rc=$exitcode image=$CONT"
   exit 1
 fi
 
@@ -135,7 +158,7 @@ srun -N ${SLURM_NNODES} --ntasks-per-node=1 --gpus-per-node=1 \
 --container-image=$CONT \
 --container-mounts=/dev:/dev \
 bash <<- '__END__'
-set -ex
+set -exo pipefail
 cat > /usr/local/bin/sbatch <<- 'EOF'
 #!/bin/bash
 echo "sbatch $@"
@@ -172,6 +195,7 @@ __END__
 exitcode=$?
 if [ $exitcode -ne 0 ]; then
   srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/null
+  echo "LLAMA_VALIDATION_FAIL stage=config rc=$exitcode image=$CONT"
   exit 1
 fi
 
@@ -182,7 +206,7 @@ srun --export=ALL --cpu-bind=none --mpi=pmix \
 --container-image=$CONT \
 --container-mounts=/dev:/dev \
 bash <<- '__END__'
-set -ex
+set -exo pipefail
 export NEMORUN_HOME=/mnt/nemo
 CASE=$(find ${NEMORUN_HOME} -name '*_fn_or_script' 2>/dev/null | head -1)
 ls -l ${CASE}
@@ -205,9 +229,15 @@ export TORCH_NCCL_HIGH_PRIORITY=1
 export NCCL_DEBUG=INFO
 python -m nemo_run.core.runners.fdl_runner -n $(basename ${CASE}|sed -e 's:_fn_or_script::g') ${CASE} 2>&1 | tee log.txt
 __END__
+exitcode=$?
 
 srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/null
 set +x
 
 e_time=$(date +%s)
 echo "INFO: timelimit=$[(SLURM_JOB_END_TIME-SLURM_JOB_START_TIME)](s), real_took=$[e_time-s_time](s)"
+if [ $exitcode -ne 0 ]; then
+  echo "LLAMA_VALIDATION_FAIL stage=training rc=$exitcode image=$CONT"
+  exit 1
+fi
+echo "LLAMA_VALIDATION_PASS node=${SLURM_JOB_NODELIST} image=$CONT"

@@ -109,6 +109,7 @@ export function SingleRackView({ data, loading, error, onRetry, onRackSelect, on
               comments={data.comments}
               logDir={data.log_dir}
               naming={data.naming}
+              physicalRf0={data.physical_rf0}
               onRackSelect={onRackSelect}
               onCommentChange={onCommentChange}
               validationFilters={validationFilters}

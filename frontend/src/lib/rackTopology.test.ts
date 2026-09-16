@@ -10,7 +10,7 @@
  * its affiliates is strictly prohibited.
  */
 import { describe, expect, it } from "vitest";
-import { buildFloorLayout, floorLayoutFromHierarchy } from "./rackTopology";
+import { buildFloorLayout, floorLayoutFromHierarchy, floorRowHeading, rackHealth } from "./rackTopology";
 import type { RackRow, RackHierarchy } from "../types/api";
 
 function rackRow(rack: string): RackRow {
@@ -18,6 +18,12 @@ function rackRow(rack: string): RackRow {
 }
 
 describe("floorLayoutFromHierarchy (backend-authoritative)", () => {
+  it("renders PythonCM SU labels without the coordinate Row prefix", () => {
+    expect(floorRowHeading("SU12")).toBe("SU12");
+    expect(floorRowHeading("su1")).toBe("SU1");
+    expect(floorRowHeading("a")).toBe("Row a");
+  });
+
   it("groups Boston racks into rows a and b from the backend tree", () => {
     const rows = ["a", "b"].flatMap((r) =>
       [1, 5, 11].map((i) => rackRow(`bos01-${r}${String(i).padStart(2, "0")}`)),
@@ -78,5 +84,51 @@ describe("buildFloorLayout fallback (alpha-aware client parser)", () => {
     // one cluster section with two rows (a, b), not 3 single-rack rows
     const labels = sections.flatMap((s) => s.rows.map((r) => r.label)).sort();
     expect(labels).toEqual(["a", "b"]);
+  });
+});
+
+describe("rackHealth unknown handling", () => {
+  it("uses authoritative Slurm state instead of conflicting BCM tray state", () => {
+    const health = rackHealth({
+      ...rackRow("ink50-dh01-b20"),
+      availability_source: "slurm",
+      sinfo: "drain*=18",
+      ct_down_unk: "UP:ink50-dh01-b20-[11-18,28-37]",
+    });
+    expect(health).toMatchObject({ health: "down", total: 18, upCount: 0, downCount: 18 });
+  });
+
+  it("keeps aggregate unknown nodes gray instead of reporting the rack down", () => {
+    const health = rackHealth({ ...rackRow("ink50-dh02-a01"), sinfo: "unknown=18" });
+    expect(health).toMatchObject({
+      health: "unknown",
+      total: 18,
+      upCount: 0,
+      downCount: 0,
+      unknownCount: 18,
+    });
+  });
+
+  it("keeps per-tray unknown nodes distinct from down nodes", () => {
+    const health = rackHealth({
+      ...rackRow("ink50-dh02-a01"),
+      ct_down_unk: "UNK:ink50-dh02-a01-[11-18,28-37]",
+    });
+    expect(health).toMatchObject({ health: "unknown", total: 18, downCount: 0, unknownCount: 18 });
+  });
+
+  it("counts installer nodes as unknown instead of hard-down", () => {
+    const health = rackHealth({
+      ...rackRow("ink50-dh01-b20"),
+      ct_down_unk:
+        "DN:ink50-dh01-b20-[16,30-31,36];INST:ink50-dh01-b20-[11-15,17-18,28-29,32-35,37]",
+    });
+    expect(health).toMatchObject({
+      health: "partial",
+      total: 18,
+      upCount: 0,
+      downCount: 4,
+      unknownCount: 14,
+    });
   });
 });

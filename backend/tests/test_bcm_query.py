@@ -242,6 +242,50 @@ class _Node:
         return None
 
 
+class _NodeGroup:
+    def __init__(self, name, nodes):
+        self.name = name
+        self.nodes = nodes
+
+
+class _Rack:
+    def __init__(self, name):
+        self.name = name
+        self.uuid = uuid4()
+        self.serialNumber = ""
+
+
+def test_topology_shapes_racks_and_naturally_sorted_node_groups():
+    node_a = _Node("ink50-dh02-a01-11")
+    node_b = _Node("ink50-dh01-a01-11")
+    groups = [
+        _NodeGroup("SU12", [node_b.uuid]),
+        _NodeGroup("SU2", []),
+        _NodeGroup("SU1", [node_a]),
+    ]
+    racks = [_Rack("WH1A1"), _Rack("EH1A1")]
+
+    class Cluster:
+        def get_by_type(self, kind):
+            return {"Rack": racks, "NodeGroup": groups}.get(kind, [])
+
+        def get_by_uuid(self, value):
+            return node_b if value == node_b.uuid else None
+
+    assert nbq._shape_topology(Cluster()) == {
+        "racks": [
+            {"name": "EH1A1", "uuid": str(racks[1].uuid), "serial": ""},
+            {"name": "WH1A1", "uuid": str(racks[0].uuid), "serial": ""},
+        ],
+            "node_groups": [
+            {"name": "SU1", "nodes": ["ink50-dh02-a01-11"]},
+            {"name": "SU2", "nodes": []},
+                {"name": "SU12", "nodes": ["ink50-dh01-a01-11"]},
+            ],
+            "nodes": [],
+        }
+
+
 class _Status:
     def __init__(self, node, state):
         self.device = node
@@ -312,6 +356,26 @@ class TestSchedulerNodeState:
         assert rows["n2"]["reason"] == "maintenance"
         assert rows["n3"]["scheduler_state"] == "down"
         assert rows["n4"]["scheduler_state"] == "unknown"
+
+    def test_missing_drain_result_preserves_physical_up_without_claiming_idle(self):
+        node = _Node("n1")
+
+        class Cluster:
+            parallel = type("Parallel", (), {
+                "device_status": lambda _self, _nodes: [_Status(node, "UP")],
+                "drain_status": lambda _self, _nodes: [],
+            })()
+
+            def get_by_type(self, kind):
+                return [node] if kind == "PhysicalNode" else []
+
+            def get_by_uuid(self, value):
+                return node if value == node.uuid else None
+
+        row = nbq._scheduler_nodes(Cluster())[0]
+        assert row["device_status"] == "UP"
+        assert row["drain_state"] == "UNKNOWN"
+        assert row["scheduler_state"] == "up"
 
     def test_workload_surface_is_never_read(self):
         node = _Node("n1")
@@ -436,6 +500,66 @@ class TestWrapper:
         joined = " ".join(cmd)
         assert "password-secret" not in joined and "cookie-secret" not in joined
         assert "/run/secrets/bcm-password" in cmd and "/run/secrets/bcm-cookie" in cmd
+
+    def test_configured_broker_owns_the_query_without_spawning_a_helper(self, monkeypatch):
+        monkeypatch.setenv("NVIS_PYTHONCM_SOCKET", "/run/nvis-pythoncm/query.sock")
+        monkeypatch.setattr(
+            bcm_query,
+            "_query_broker",
+            lambda path, argv, timeout: {
+                "ok": True,
+                "transport": "persistent-pythoncm",
+                "socket": path,
+                "argv": argv,
+            },
+        )
+        monkeypatch.setattr(
+            bcm_query.host_exec,
+            "run_on_host",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("one-shot helper must not run")
+            ),
+        )
+
+        result = bcm_query.query("node-states", extra_args=["--target", "n1"])
+
+        assert result["ok"] is True
+        assert result["transport"] == "persistent-pythoncm"
+        assert result["argv"][-3:] == ["node-states", "--target", "n1"]
+
+    def test_unavailable_broker_keeps_the_one_shot_availability_fallback(self, monkeypatch):
+        monkeypatch.setenv("NVIS_PYTHONCM_SOCKET", "/run/nvis-pythoncm/query.sock")
+        monkeypatch.setattr(
+            bcm_query,
+            "_query_broker",
+            lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("not ready")),
+        )
+
+        class Proc:
+            stdout = '{"ok": true, "transport": "one-shot"}\n'
+            stderr = ""
+            returncode = 0
+
+        monkeypatch.setattr(bcm_query.host_exec, "run_on_host", lambda *args, **kwargs: Proc())
+        assert bcm_query.query("nodes")["transport"] == "one-shot"
+
+    def test_accepted_broker_failure_never_replays_a_possible_mutation(self, monkeypatch):
+        monkeypatch.setenv("NVIS_PYTHONCM_SOCKET", "/run/nvis-pythoncm/query.sock")
+        monkeypatch.setattr(
+            bcm_query,
+            "_query_broker",
+            lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad response")),
+        )
+        monkeypatch.setattr(
+            bcm_query.host_exec,
+            "run_on_host",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("an accepted request must never be replayed")
+            ),
+        )
+        result = bcm_query.query("power", extra_args=["--target", "n1", "--action", "reset"])
+        assert result["ok"] is False
+        assert result["error"] == "persistent PythonCM broker failed"
 
     def test_unset_knobs_are_simply_absent_so_the_script_keeps_its_defaults(self, monkeypatch):
         for var in ("NVIS_PYTHONCM_PATH", "NVIS_BCM_HOST", "NVIS_BCM_CA", "NVIS_BCM_PYTHON"):

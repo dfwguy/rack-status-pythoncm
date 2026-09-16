@@ -226,6 +226,7 @@ that the Slurm CLI was invoked.
 | **`RACK_SCHEDULER`** | `pythoncm` in the PythonCM package | `pythoncm` selects BCM inventory plus direct execution; `slurm` selects the compatibility fallback. |
 | **`NVIS_BCM_PYTHON`** | `/cm/local/apps/python312/bin/python3` | BCM-head interpreter used to import the matching PythonCM library. |
 | **`NVIS_PYTHONCM_PATH`** | BCM discovery paths | Explicit PythonCM module path for site/version-specific layouts. |
+| **`NVIS_PYTHONCM_SOCKET`** | *(unset)* | Unix socket for the boot-enabled persistent PythonCM owner. Production Nscale uses `/run/nvis-pythoncm/query.sock`; inventory and ProgramRunner calls are serialized through its single connection. |
 | **`NVIS_BCM_HOST`**, **`NVIS_BCM_PORT`** | `127.0.0.1`, `8081` | CMDaemon endpoint as reached from the BCM head. |
 | **`NVIS_BCM_CERT`**, **`NVIS_BCM_KEY`** | `~/.cm/cert.pem`, `~/.cm/cert.key` | PythonCM client identity on the execution host. Never copy private keys into the repository. |
 | **`NVIS_BCM_CA`** | auto-discovered readable PythonCM CA | Override the cluster CA path when needed. The helper prefers PythonCM's readable bundled `pythoncm/etc/cacert.pem`; `/cm/local/apps/cmd/etc/cacert.pem` may be root-only. |

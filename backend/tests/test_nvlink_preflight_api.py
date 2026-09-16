@@ -203,3 +203,21 @@ def test_disabled_by_env(client, stub_pdsh, monkeypatch):
     monkeypatch.setenv("RACK_NVLINK_PREFLIGHT_DISABLED", "1")
     r = client.post("/api/nvlink-preflight-async", json={"rack": "p5-r01", "target": "n01"})
     assert r.status_code == 403
+
+
+def test_scheduler_runtime_error_reaches_terminal_error_instead_of_hanging(
+    client, stub_pdsh, monkeypatch
+):
+    monkeypatch.setattr(
+        app_module,
+        "run_nvlink_preflight_pdsh",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("execution broker cookie expired")),
+    )
+
+    start = client.post(
+        "/api/nvlink-preflight-async", json={"rack": "p5-r01", "target": "n01"}
+    ).get_json()
+    done = _wait(client, start["job_id"])
+
+    assert done["phase"] == "error"
+    assert "cookie expired" in done["error"]

@@ -10,7 +10,7 @@
  * its affiliates is strictly prohibited.
  */
 import { describe, expect, it } from "vitest";
-import { formatSchedulerCommandResult, formatSyncJsonResult } from "./formatJobOutput";
+import { formatJobStatusText, formatSchedulerCommandResult, formatSyncJsonResult } from "./formatJobOutput";
 
 describe("scheduler command output", () => {
   it("formats PythonCM direct-execution drain results", () => {
@@ -39,5 +39,26 @@ describe("scheduler command output", () => {
     expect(formatSchedulerCommandResult({ command_display: "direct node01", returncode: 7, stderr: "failed" })).toBe(
       "direct node01\nexit 7\nstderr:\nfailed",
     );
+  });
+
+  it("keeps scheduler job ids and wrapper tails visible when a validation exits with error", () => {
+    const text = formatJobStatusText({
+      phase: "error",
+      kind: "nccl-fullrack",
+      job_id: "f644d3bc-9f2c-4470-8d49-68a2a5fe287b",
+      activity_id: "f644d3bc-9f2c-4470-8d49-68a2a5fe287b",
+      error: "validation script exited non-zero",
+      tasks: [
+        { scheduler_ref: "55430" },
+        { scheduler_ref: "55432" },
+      ],
+      stdout_tail: "SUBMITTED jobid=55432",
+      stderr_tail: "wrapper rc=143",
+    });
+
+    expect(text).toContain("Scheduler Job IDs: 55430, 55432");
+    expect(text).toContain("Activity ID: f644d3bc-9f2c-4470-8d49-68a2a5fe287b");
+    expect(text).toContain("stdout:\nSUBMITTED jobid=55432");
+    expect(text).toContain("stderr:\nwrapper rc=143");
   });
 });

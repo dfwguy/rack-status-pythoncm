@@ -48,7 +48,11 @@ import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { useThemeMode } from "../context/ThemeContext";
 import { apiFetch } from "../lib/apiFetch";
-import { compareMetricsRacks, metricsRackMoniker } from "../lib/metricsRack";
+import {
+  buildMetricsRackOptions,
+  metricsRackMoniker,
+  type MetricsRackOption,
+} from "../lib/metricsRack";
 
 ChartJS.register(
   CategoryScale,
@@ -115,11 +119,13 @@ function hasData(p: ChartPayload | undefined): boolean {
 interface MetricChartCardProps {
   chart: CatalogChart;
   rack: string;
+  rackSu: string;
+  rackLabels: ReadonlyMap<string, string>;
   minutes: number;
   dark: boolean;
 }
 
-function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardProps) {
+function MetricChartCard({ chart, rack, rackSu, rackLabels, minutes, dark }: MetricChartCardProps) {
   const [payload, setPayload] = useState<ChartPayload | undefined>();
   const [loading, setLoading] = useState(true);
 
@@ -127,6 +133,7 @@ function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardProps) {
     setLoading(true);
     const params = new URLSearchParams({ minutes: String(minutes) });
     if (rack) params.set("rack", rack);
+    if (rackSu) params.set("su", rackSu);
     try {
       const res = await apiFetch(`/api/metrics/chart/${encodeURIComponent(chart.id)}?${params}`, {
         cache: "no-store",
@@ -137,7 +144,7 @@ function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardProps) {
     } finally {
       setLoading(false);
     }
-  }, [chart.id, rack, minutes]);
+  }, [chart.id, rack, rackSu, minutes]);
 
   useEffect(() => {
     void load();
@@ -153,7 +160,10 @@ function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardProps) {
     () => ({
       labels: (payload?.labels ?? []).map((l) => (chart.range ? timeLabel(l) : l)),
       datasets: (payload?.datasets ?? []).map((d, i) => ({
-        label: payload?.split_by === "rack" ? metricsRackMoniker(d.label) : d.label,
+        label:
+          payload?.split_by === "rack"
+            ? (rackLabels.get(d.label) ?? metricsRackMoniker(d.label))
+            : d.label,
         data: d.data,
         borderColor: SERIES_COLORS[i % SERIES_COLORS.length],
         backgroundColor:
@@ -167,7 +177,7 @@ function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardProps) {
         spanGaps: false,
       })),
     }),
-    [payload, chart.kind, chart.range],
+    [payload, chart.kind, chart.range, rackLabels],
   );
 
   const options = useMemo(
@@ -212,7 +222,7 @@ function MetricChartCard({ chart, rack, minutes, dark }: MetricChartCardProps) {
         <Text kind="body/bold/sm">{payload?.title || chart.title}</Text>
         <Text kind="body/regular/xs" color="secondary">
           {chart.unit}
-          {rack ? ` · ${metricsRackMoniker(rack)}` : ""}
+          {rack ? ` · ${rackLabels.get(rack) ?? metricsRackMoniker(rack)}` : ""}
         </Text>
       </Flex>
 
@@ -251,7 +261,7 @@ export function MetricsView() {
 
   const [charts, setCharts] = useState<CatalogChart[]>([]);
   const [health, setHealth] = useState<MetricsHealth | undefined>();
-  const [racks, setRacks] = useState<string[]>([]);
+  const [racks, setRacks] = useState<MetricsRackOption[]>([]);
   const [rack, setRack] = useState("");
   const [minutes, setMinutes] = useState(60);
   const [loading, setLoading] = useState(true);
@@ -285,14 +295,14 @@ export function MetricsView() {
     void (async () => {
       try {
         const r = await apiFetch(
-          `/api/metrics/query?q=${encodeURIComponent("count by (rack) (DCGM_FI_DEV_GPU_TEMP)")}`,
+          `/api/metrics/query?q=${encodeURIComponent("count by (su,rack) (DCGM_FI_DEV_GPU_TEMP)")}`,
           { cache: "no-store" },
         ).then((x) => x.json());
         if (!alive || !r?.ok) return;
-        const names: string[] = (r.result ?? [])
-          .map((s: { metric?: Record<string, string> }) => s.metric?.rack)
-          .filter((n: string | undefined): n is string => Boolean(n));
-        setRacks([...new Set(names)].sort(compareMetricsRacks));
+        const labels = (r.result ?? []).map(
+          (s: { metric?: Record<string, string> }) => s.metric ?? {},
+        );
+        setRacks(buildMetricsRackOptions(labels));
       } catch {
         /* the filter is optional — leave it empty on failure */
       }
@@ -301,6 +311,12 @@ export function MetricsView() {
       alive = false;
     };
   }, []);
+
+  const rackLabels = useMemo(
+    () => new Map(racks.map((option) => [option.rack, option.label])),
+    [racks],
+  );
+  const rackSu = racks.find((option) => option.rack === rack)?.su ?? "";
 
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH, mx: "auto", p: 3 }}>
@@ -339,9 +355,9 @@ export function MetricsView() {
           sx={{ minWidth: 180 }}
         >
           <MenuItem value="">All racks</MenuItem>
-          {racks.map((r) => (
-            <MenuItem key={r} value={r}>
-              {metricsRackMoniker(r)}
+          {racks.map((option) => (
+            <MenuItem key={option.rack} value={option.rack}>
+              {option.label}
             </MenuItem>
           ))}
         </TextField>
@@ -379,7 +395,15 @@ export function MetricsView() {
           }}
         >
           {charts.map((c) => (
-            <MetricChartCard key={c.id} chart={c} rack={rack} minutes={minutes} dark={dark} />
+            <MetricChartCard
+              key={c.id}
+              chart={c}
+              rack={rack}
+              rackSu={rackSu}
+              rackLabels={rackLabels}
+              minutes={minutes}
+              dark={dark}
+            />
           ))}
         </Box>
       )}

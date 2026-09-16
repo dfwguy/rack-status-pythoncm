@@ -26,9 +26,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 from flask import Blueprint, jsonify, request
-from slurm_query import _run_sacct_recent, _run_sinfo_r, _run_squeue
+from slurm_query import _run_sacct_recent, _run_sinfo_nodes, _run_sinfo_r, _run_squeue
 
 _logger = logging.getLogger(__name__)
 
@@ -78,4 +79,23 @@ def api_scheduler_node_reasons():
         result = _run_sinfo_r()
     except OSError as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify(result)
+
+
+@bp.route("/api/scheduler-node-status", methods=["GET"])
+def api_scheduler_node_status():
+    """Return live Slurm state and reason for the requested rack node names."""
+    raw_nodes = (request.args.get("nodes") or "").strip()
+    node_names = list(dict.fromkeys(name.strip() for name in raw_nodes.split(",") if name.strip()))
+    if not node_names:
+        return jsonify({"ok": False, "error": "nodes is required", "nodes": []}), 400
+    if len(node_names) > 512:
+        return jsonify({"ok": False, "error": "at most 512 nodes may be queried", "nodes": []}), 400
+    invalid = [name for name in node_names if not re.fullmatch(r"[A-Za-z0-9._-]+", name)]
+    if invalid:
+        return jsonify({"ok": False, "error": f"invalid node name: {invalid[0]}", "nodes": []}), 400
+    try:
+        result = _run_sinfo_nodes(node_names)
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e), "nodes": []}), 500
     return jsonify(result)

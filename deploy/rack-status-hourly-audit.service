@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+[Unit]
+Description=Detailed hourly Rack Status production audit
+After=docker.service nvis-pythoncm-broker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/cm/local/apps/python312/bin/python3 /cluster/OVA/hlakshminara/opt/nscaletx-16k-services/rack-status/bin/scripts/rack_status_hourly_audit.py
+TimeoutStartSec=10min

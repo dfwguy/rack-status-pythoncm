@@ -23,12 +23,15 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import time
 from pathlib import Path
 from typing import Any
 
 from schedulers.base import TERMINAL_STATES, JobHandle, JobResult, JobSpec, Scheduler
+
+_logger = logging.getLogger(__name__)
 
 
 class PythonCMScheduler(Scheduler):
@@ -108,21 +111,59 @@ class PythonCMScheduler(Scheduler):
         raise RuntimeError("PythonCM helper returned no JSON response")
 
     def _call(self, action: str, *args: str, timeout: int = 120) -> dict[str, Any]:
-        proc = self._run(self._helper_argv(action, *args), timeout=timeout)
-        try:
-            result = self._json_from_output(proc.stdout or "")
-        except RuntimeError as exc:
-            detail = (proc.stderr or proc.stdout or "").strip()[:1000]
-            raise RuntimeError(
-                f"PythonCM {action} failed (rc={proc.returncode}): {detail or exc}"
-            ) from exc
-        if proc.returncode != 0 or not result.get("ok"):
-            error = result.get("error") or (proc.stderr or "").strip() or "unknown error"
+        argv = self._helper_argv(action, *args)
+        # Execution traffic has a dedicated broker so NCCL/NeMo submit/status
+        # calls can never queue ahead of Rack Status control-plane reads.
+        broker_socket = (
+            self.env.get("NVIS_PYTHONCM_EXEC_SOCKET")
+            or self.env.get("NVIS_PYTHONCM_SOCKET")
+            or ""
+        ).strip()
+        proc = None
+        result = None
+        if broker_socket:
+            import pythoncm_broker_client
+
+            try:
+                result = pythoncm_broker_client.request(
+                    broker_socket, "exec", argv[2:], timeout=timeout
+                )
+            except (FileNotFoundError, ConnectionRefusedError):
+                _logger.warning("PythonCM broker unavailable; using one-shot execution helper")
+            except Exception as exc:
+                # The broker accepted or partially handled the request. Submit and
+                # cancel must never be replayed through the one-shot fallback.
+                raise RuntimeError(
+                    f"persistent PythonCM {action} broker failed: {type(exc).__name__}: {exc}"
+                ) from exc
+        if result is None:
+            proc = self._run(argv, timeout=timeout)
+            try:
+                result = self._json_from_output(proc.stdout or "")
+            except RuntimeError as exc:
+                detail = (proc.stderr or proc.stdout or "").strip()[:1000]
+                raise RuntimeError(
+                    f"PythonCM {action} failed (rc={proc.returncode}): {detail or exc}"
+                ) from exc
+        if (proc is not None and proc.returncode != 0) or not result.get("ok"):
+            error = result.get("error") or (
+                (proc.stderr or "").strip() if proc is not None else ""
+            ) or "unknown error"
             hint = result.get("hint")
             raise RuntimeError(
                 f"PythonCM {action} failed: {error}" + (f" ({hint})" if hint else "")
             )
         return result
+
+    def probe(self, *, timeout: int = 30) -> dict[str, Any]:
+        """Verify that the execution path can run ``cmproc`` without submitting work.
+
+        Query-only certificate authentication is insufficient for ProgramRunner.  The
+        helper's ``probe`` action opens the execution-capable PythonCM connection but does
+        not create a command, so callers can choose a reviewed fallback before any submit
+        has been accepted.  Submit failures themselves must never be replayed.
+        """
+        return self._call("probe", timeout=max(1, timeout))
 
     @staticmethod
     def _payload(spec: JobSpec, jobs_dir: str) -> str:

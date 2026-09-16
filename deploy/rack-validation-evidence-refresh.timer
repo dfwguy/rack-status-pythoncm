@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+[Unit]
+Description=Refresh Rack Status validation evidence every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+AccuracySec=30s
+Unit=rack-validation-evidence-refresh.service
+
+[Install]
+WantedBy=timers.target

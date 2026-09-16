@@ -9,12 +9,67 @@
 # its affiliates is strictly prohibited.
 import json
 import sys
+from io import BytesIO
 from types import SimpleNamespace
+from urllib.error import HTTPError, URLError
 from unittest.mock import MagicMock, patch
 
 import node_issues
+import pytest
 import workflow_engine
 from transport.fanout import NodeResult
+
+
+def _sheet_response(payload: dict):
+    return BytesIO(json.dumps(payload).encode("utf-8"))
+
+
+def test_punchcard_read_retries_transient_http_error(monkeypatch, tmp_path):
+    token = tmp_path / "token"
+    token.write_text("ya29.test", encoding="utf-8")
+    monkeypatch.setattr(node_issues, "GSHEETS_TOKEN_FILE", token)
+    responses = [
+        HTTPError("https://sheets.googleapis.test", 503, "backend unavailable", {}, None),
+        _sheet_response({"values": [["Row e · SU5", "06"], ["11", "11 ▲1"]]}),
+    ]
+    urlopen = MagicMock(side_effect=responses)
+    sleep = MagicMock()
+    monkeypatch.setattr(node_issues.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(node_issues.time, "sleep", sleep)
+
+    assert node_issues._fetch_sheet_values()[1][1] == "11 ▲1"
+    assert urlopen.call_count == 2
+    sleep.assert_called_once_with(0.5)
+
+
+def test_punchcard_read_does_not_retry_permission_error(monkeypatch, tmp_path):
+    token = tmp_path / "token"
+    token.write_text("ya29.test", encoding="utf-8")
+    monkeypatch.setattr(node_issues, "GSHEETS_TOKEN_FILE", token)
+    forbidden = HTTPError("https://sheets.googleapis.test", 403, "forbidden", {}, None)
+    urlopen = MagicMock(side_effect=forbidden)
+    sleep = MagicMock()
+    monkeypatch.setattr(node_issues.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(node_issues.time, "sleep", sleep)
+
+    with pytest.raises(HTTPError) as exc_info:
+        node_issues._fetch_sheet_values()
+    assert exc_info.value.code == 403
+    assert urlopen.call_count == 1
+    sleep.assert_not_called()
+
+
+def test_punchcard_read_reports_final_network_failure(monkeypatch, tmp_path):
+    token = tmp_path / "token"
+    token.write_text("ya29.test", encoding="utf-8")
+    monkeypatch.setattr(node_issues, "GSHEETS_TOKEN_FILE", token)
+    urlopen = MagicMock(side_effect=URLError("temporary DNS failure"))
+    monkeypatch.setattr(node_issues.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(node_issues.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(RuntimeError, match="after 4 attempts.*temporary DNS failure"):
+        node_issues._fetch_sheet_values()
+    assert urlopen.call_count == 4
 
 
 def test_punchcard_fixed_cells_become_node_rollups(tmp_path, monkeypatch):

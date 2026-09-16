@@ -43,8 +43,13 @@ _TERMINAL_STATES = frozenset({
 })
 _INVENTORY_LOCK = threading.Lock()
 _INVENTORY_CACHE: tuple[float, list[dict[str, str]]] = (0.0, [])
-_INVENTORY_SOURCE: tuple[int, int] = (0, 0)
-_RACKS_CACHE: tuple[float, list[str]] = (0.0, [])
+_INVENTORY_SOURCE: tuple[object, object] = (None, None)
+_TOPOLOGY_LOCK = threading.Lock()
+_TOPOLOGY_CACHE: tuple[float, dict[str, list[Any]]] = (
+    0.0,
+    {"racks": [], "node_groups": []},
+)
+_TOPOLOGY_SOURCE: tuple[int, int] = (0, 0)
 
 
 def scheduler_kind() -> str:
@@ -244,25 +249,34 @@ def _inventory_ttl() -> float:
 def _load_nodes() -> list[dict[str, str]]:
     """Physical nodes with normalized scheduling state and reason.
 
-    Entity inventory is certificate-readable.  Drain state is an authenticated
-    operation on BCM 11, so failure leaves the state explicitly ``unknown``;
-    it must never be represented as healthy/idle merely because credentials are
-    absent.
+    Entity inventory and physical device status are certificate-readable on the
+    Nscale BCM 11 controller.  A missing drain result may be represented as
+    physical ``up``, but never as scheduler-eligible ``idle``; operation admission
+    therefore remains fail-closed without an explicit UNDRAINED result.
     """
     inventory = bcm_query.nodes()
     if not inventory.get("ok"):
         return []
     rows: dict[str, dict[str, str]] = {}
+    import nvis_id_templates
+
+    naming = nvis_id_templates.get_nvis_naming()
+    matcher = naming.matcher()
     for item in inventory.get("data") or []:
         if not isinstance(item, dict):
             continue
         hostname = str(item.get("hostname") or "").strip()
         if hostname:
+            physical_rack = str(item.get("rack_id") or "").strip()
+            hostname_match = matcher.match_hostname(hostname)
             rows[hostname.casefold()] = {
                 "node": hostname,
                 "state": "unknown",
                 "reason": "",
-                "rack": str(item.get("rack_id") or ""),
+                # PythonCM's Rack entity is the warehouse coordinate (WH/EH),
+                # while Rack Status actions/logs use the logical rack prefix
+                # from the real compute hostname (ink50-dhXX-xNN).
+                "rack": hostname_match.rack_id if hostname_match else physical_rack,
             }
     if not rows:
         return []
@@ -300,15 +314,19 @@ def _load_nodes() -> list[dict[str, str]]:
 def nodes(*, force: bool = False) -> list[dict[str, str]]:
     """Cached PythonCM physical-node status used by every dashboard refresh worker."""
     global _INVENTORY_CACHE, _INVENTORY_SOURCE
-    now = time.monotonic()
-    source = (id(bcm_query.nodes), id(bcm_query.node_states))
-    if source != _INVENTORY_SOURCE:
-        _INVENTORY_CACHE = (0.0, [])
-        _INVENTORY_SOURCE = source
-    cached_at, cached = _INVENTORY_CACHE
-    if not force and cached and now - cached_at < _inventory_ttl():
-        return [dict(row) for row in cached]
+    # Source identity and cached data are one consistency boundary.  Tests swap
+    # the BCM readers, and production can refresh while multiple dashboard
+    # workers call this function; checking the source outside the lock allowed
+    # another thread to repopulate an old idle result after invalidation.
     with _INVENTORY_LOCK:
+        now = time.monotonic()
+        # Keep the callable objects themselves.  Storing only ``id()`` lets a
+        # later replacement reuse a freed object's address and appear unchanged,
+        # which can replay a cached eligible state from a different query source.
+        source = (bcm_query.nodes, bcm_query.node_states)
+        if source != _INVENTORY_SOURCE:
+            _INVENTORY_CACHE = (0.0, [])
+            _INVENTORY_SOURCE = source
         cached_at, cached = _INVENTORY_CACHE
         if not force and cached and now - cached_at < _inventory_ttl():
             return [dict(row) for row in cached]
@@ -329,30 +347,155 @@ def nodes(*, force: bool = False) -> list[dict[str, str]]:
         return stale
 
 
-def rack_names(*, force: bool = False) -> list[str]:
-    """Rack entities from CMDaemon, cached independently of fast node status."""
-    global _RACKS_CACHE
-    now = time.monotonic()
-    cached_at, cached = _RACKS_CACHE
+def _topology_ttl() -> float:
     try:
-        ttl = max(0.0, float(os.environ.get("RACK_NATIVE_RACK_LIST_TTL_SEC", "900")))
+        return max(0.0, float(os.environ.get("RACK_NATIVE_RACK_LIST_TTL_SEC", "900")))
     except ValueError:
-        ttl = 900.0
-    if not force and cached and now - cached_at < ttl:
-        return list(cached)
-    result = bcm_query.racks()
-    names = sorted(
+        return 900.0
+
+
+def _expected_racks_from_node_groups(
+    node_groups: list[dict[str, Any]], naming: Any
+) -> set[str]:
+    """Expand an opt-in site rack-number contract across authoritative SU rows."""
+    raw = (os.environ.get("RACK_NATIVE_EXPECTED_RACK_NUMBERS") or "").strip()
+    if not raw:
+        return set()
+    numbers: set[int] = set()
+    for token in (part.strip() for part in raw.split(",") if part.strip()):
+        if "-" in token:
+            left, right = token.split("-", 1)
+            if not left.isdigit() or not right.isdigit():
+                continue
+            start, end = int(left), int(right)
+            numbers.update(range(min(start, end), max(start, end) + 1))
+        elif token.isdigit():
+            numbers.add(int(token))
+    if not numbers:
+        return set()
+    matcher = naming.matcher()
+    expected: set[str] = set()
+    for group in node_groups:
+        if not re.fullmatch(r"SU\d+", str(group.get("name") or "").strip(), re.IGNORECASE):
+            continue
+        row_key = ""
+        for raw_node in group.get("nodes") or []:
+            matched = matcher.match_hostname(str(raw_node or "").strip())
+            if matched is not None:
+                parts = naming.rack_parts(matched.rack_id)
+                row_key = parts.row_key if parts is not None else ""
+                if row_key:
+                    break
+        if row_key:
+            expected.update(f"{row_key}{number:02d}" for number in numbers if 0 < number < 100)
+    return expected
+
+
+def _load_topology() -> dict[str, list[Any]]:
+    """Read racks and NodeGroups together, with a racks-only compatibility fallback."""
+    result = bcm_query.topology()
+    data = result.get("data") if result.get("ok") else None
+    if isinstance(data, dict):
+        physical_racks = sorted(
+            {
+                str(item.get("name") or "").strip()
+                for item in (data.get("racks") or [])
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            },
+            key=str.casefold,
+        )
+        node_groups = [
+            {
+                "name": str(item.get("name") or "").strip(),
+                "nodes": [
+                    str(node).strip()
+                    for node in (item.get("nodes") or [])
+                    if str(node).strip()
+                ],
+            }
+            for item in (data.get("node_groups") or [])
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        ]
+        import nvis_id_templates
+
+        naming = nvis_id_templates.get_nvis_naming()
+        rack_group_labels = naming.rack_labels_from_node_groups(node_groups)
+        logical_racks_from_nodes: set[str] = set()
+        matcher = naming.matcher()
+        for raw in data.get("nodes") or []:
+            matched = matcher.match_hostname(str(raw or "").strip())
+            if matched is not None:
+                logical_racks_from_nodes.add(matched.rack_id)
+        logical_racks = sorted(
+            set(rack_group_labels)
+            | logical_racks_from_nodes
+            | _expected_racks_from_node_groups(node_groups, naming),
+            key=naming.rack_sort_key,
+        )
+        if logical_racks or physical_racks:
+            return {
+                # Nscale's UI/action namespace is the hostname-derived logical
+                # rack. BCM Rack entities (EH/WH coordinates) remain physical
+                # inventory and must not become validation targets.
+                "racks": logical_racks or physical_racks,
+                "node_groups": node_groups,
+            }
+
+    # Older deployed query helpers do not know ``topology`` yet. Preserve rack
+    # inventory while making the missing SU labels explicit through an empty map.
+    fallback = bcm_query.racks()
+    racks = sorted(
         {
             str(item.get("name") or "").strip()
-            for item in (result.get("data") or [])
+            for item in (fallback.get("data") or [])
             if isinstance(item, dict) and str(item.get("name") or "").strip()
         },
         key=str.casefold,
-    ) if result.get("ok") else []
-    if names:
-        _RACKS_CACHE = (now, names)
-        return list(names)
-    return list(cached)
+    ) if fallback.get("ok") else []
+    return {"racks": racks, "node_groups": []}
+
+
+def _topology(*, force: bool = False, cached_only: bool = False) -> dict[str, list[Any]]:
+    """Slow-changing PythonCM topology, shared by rack and NodeGroup consumers."""
+    global _TOPOLOGY_CACHE, _TOPOLOGY_SOURCE
+    now = time.monotonic()
+    source = (id(bcm_query.topology), id(bcm_query.racks))
+    if source != _TOPOLOGY_SOURCE:
+        _TOPOLOGY_CACHE = (0.0, {"racks": [], "node_groups": []})
+        _TOPOLOGY_SOURCE = source
+    cached_at, cached = _TOPOLOGY_CACHE
+    if cached_only or (
+        not force and cached.get("racks") and now - cached_at < _topology_ttl()
+    ):
+        return {
+            "racks": list(cached.get("racks") or []),
+            "node_groups": [dict(group) for group in cached.get("node_groups") or []],
+        }
+    with _TOPOLOGY_LOCK:
+        cached_at, cached = _TOPOLOGY_CACHE
+        if not force and cached.get("racks") and now - cached_at < _topology_ttl():
+            return {
+                "racks": list(cached.get("racks") or []),
+                "node_groups": [dict(group) for group in cached.get("node_groups") or []],
+            }
+        fresh = _load_topology()
+        if fresh.get("racks"):
+            _TOPOLOGY_CACHE = (time.monotonic(), fresh)
+            cached = fresh
+        return {
+            "racks": list(cached.get("racks") or []),
+            "node_groups": [dict(group) for group in cached.get("node_groups") or []],
+        }
+
+
+def rack_names(*, force: bool = False) -> list[str]:
+    """Rack entities from CMDaemon, cached independently of fast node status."""
+    return [str(name) for name in _topology(force=force)["racks"]]
+
+
+def node_groups(*, force: bool = False, cached_only: bool = False) -> list[dict[str, Any]]:
+    """PythonCM NodeGroups sharing the slow-changing rack-topology cache."""
+    return [dict(group) for group in _topology(force=force, cached_only=cached_only)["node_groups"]]
 
 
 def node_names() -> list[str]:

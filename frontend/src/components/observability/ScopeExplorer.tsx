@@ -41,7 +41,7 @@ const EMPTY_TOPOLOGY: ScopeCluster = { id: "cluster", label: "Cluster", racks: [
 
 /**
  * Cluster display name without a second API call: the literal prefix of the
- * ``NVIS_RACK_ID`` template (``ink50-dh01-[a-z][\d+]`` -> ``ink50-dh01``).
+ * ``NVIS_RACK_ID`` template (``ink50-dh[01-99]-[a-z][\d+]`` -> ``ink50-dh``).
  * /api/cluster-overview carries a nicer ``cluster_name`` but costs a live squeue
  * on the head node every poll, so a view that already has it should pass
  * ``clusterLabel`` instead.
@@ -89,7 +89,11 @@ function buildScopeCluster(status: RackStatusResponse | null, clusterName?: stri
         for (const hr of row.racks) {
           if (seen.has(hr.rack)) continue;
           seen.add(hr.rack);
-          const label = row.label ? `${row.label}${hr.label}` : hr.label || hr.rack;
+          const label = /^SU\d+$/i.test(row.label)
+            ? `${row.label.toUpperCase()} / ${hr.rack}`
+            : row.label
+              ? `${row.label}${hr.label}`
+              : hr.label || hr.rack;
           ordered.push({ id: hr.rack, label });
         }
       }

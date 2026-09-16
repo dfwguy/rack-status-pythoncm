@@ -34,7 +34,12 @@ function nodeIdForTray(
       (h) => h.toLowerCase().startsWith(rkKey) && h.toLowerCase().endsWith(suffix),
     );
     if (hit) return hit;
-    return `${rk}${suffix}`;
+    // PythonCM's live-state feed and its physical_rf0 inventory are refreshed
+    // independently.  A newly visible node can therefore be present in
+    // ct_down_unk before the IP map contains it.  Keep the configured joiner in
+    // the fallback hostname (Nscale: rack `...-a01` + `-` + tray `11`) so Rack
+    // Detail never invents `...-a0111` while those snapshots converge.
+    return `${rk}${joiner}${suffix}`;
   }
   return `${rk}${joiner}${pad}`;
 }

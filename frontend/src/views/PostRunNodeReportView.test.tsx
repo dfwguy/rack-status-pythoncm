@@ -23,6 +23,22 @@ const service = vi.hoisted(() => ({
 }));
 
 vi.mock("../services/nodeIssuesService", () => service);
+vi.mock("../services/bringupService", () => ({
+  getBringupFleet: vi.fn(async (nodes: string[]) => ({
+    home: "/cluster/bringup",
+    columns: ["dcgmi-r4", "llm-pretrain", "llm-pretrain-solo"],
+    metric_labels: {},
+    nodes: nodes.map((name) => ({
+      node: name,
+      slurm_state: "idle",
+      jobs: [
+        { name: "dcgmi-r4", base: "dcgmi-r4", status: "DONE", reason: "", metric: null, metric_label: null },
+        { name: "llm-pretrain", base: "llm-pretrain", status: "DONE", reason: "", metric: null, metric_label: null },
+        { name: "llm-pretrain-solo", base: "llm-pretrain-solo", status: "DONE", reason: "", metric: null, metric_label: null },
+      ],
+    })),
+  })),
+}));
 
 const runId = "ae74eb2d-d38e-4a38-b6e3-0f1dfb474e1e";
 
@@ -103,8 +119,10 @@ describe("PostRunNodeReportView deep-audit launch", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
     render(<PostRunNodeReportView />);
-    const nodeLabel = await screen.findByText("d01-32");
-    fireEvent.click(nodeLabel.closest("button") as HTMLButtonElement);
+    expect(await screen.findByText("Validation Status")).toBeInTheDocument();
+    const nodeCell = await screen.findByRole("button", { name: /Rack ink50-dh01-d01/i });
+    expect(screen.queryByText("d01-32")).not.toBeInTheDocument();
+    fireEvent.click(nodeCell);
     fireEvent.click(screen.getByRole("button", { name: /run hardware audit/i }));
 
     await waitFor(() => expect(service.fetchDeepAudit).toHaveBeenCalledWith(runId));

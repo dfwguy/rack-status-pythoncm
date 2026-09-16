@@ -18,13 +18,15 @@
 #SBATCH --time=03:00:00
 ###SBATCH -N 2
 
+umask 0002
 
 #CONT=/home/cmsupport/workspace/nemo-25.11.01.sqsh
 # Container to run. run-nemo-xrack.sh stages NEMO_SQSH_SRC to /raid/data and passes the staged
 # path via NVIS_NEMO_CONT, so pointing NEMO_SQSH_SRC at the vetted image actually switches the
 # container here. Falls back to the stock image for direct/manual runs.
 CONT="${NVIS_NEMO_CONT:-/raid/data/nemo-25.11.01.sqsh}"
-SYSINFO_SH=${SLURM_SUBMIT_DIR}/sysinfo.sh
+RUNTIME_DIR="${NVIS_SCRIPTS_DIR:-${SLURM_SUBMIT_DIR}}"
+SYSINFO_SH="${RUNTIME_DIR}/sysinfo.sh"
 
 single_rack=1
 [ $SLURM_NNODES -gt 18 ] && single_rack=0
@@ -37,15 +39,28 @@ single_rack=1
 if [ -n "${NVIS_NEMO_XRACK:-}" ]; then
   if [ "${NVIS_NEMO_XRACK}" = 1 ]; then single_rack=0; else single_rack=1; fi
 fi
-echo "INFO: nnodes=${SLURM_NNODES} single_rack=${single_rack} (NVIS_NEMO_XRACK=${NVIS_NEMO_XRACK:-<unset>})"
-if [ $(( ${SLURM_NNODES} % 2 )) != 0 ]
+# MNNVL=0 requires an IB-capable transport even when the allocation fits within
+# one rack. Otherwise the legacy single-rack branch disables IB and the safe
+# IMEX fallback silently degrades to socket transport. Only an explicit MNNVL=1
+# request may retain the NVLink-only branch.
+case "${NVIS_NCCL_MNNVL:-1}" in
+  0) single_rack=0 ;;
+  1) ;;
+  *) echo "ERROR: NVIS_NCCL_MNNVL must be 0 or 1" >&2; exit 2 ;;
+esac
+echo "INFO: nnodes=${SLURM_NNODES} single_rack=${single_rack} (NVIS_NEMO_XRACK=${NVIS_NEMO_XRACK:-<unset>} NVIS_NCCL_MNNVL=${NVIS_NCCL_MNNVL:-1})"
+if [ $(( ${SLURM_NNODES} % 2 )) != 0 ] && \
+   ! { [ "${SLURM_NNODES}" -eq 1 ] && [ "${NVIS_NEMO_ALLOW_SINGLE_NODE:-0}" = 1 ]; }
 then
   echo "ERROR: SLURM_NNODES=$SLURM_NNODES is not multiple of 2!!!"
   exit 1
 fi
+if [ "${SLURM_NNODES}" -eq 1 ]; then
+  echo "INFO: reviewed single-node Nemotron-H path enabled=${NVIS_NEMO_ALLOW_SINGLE_NODE:-0}"
+fi
 
 module load slurm
-cd ${SLURM_SUBMIT_DIR}
+cd "$RUNTIME_DIR"
 
 if [ -n "${SLURM_JOB_SCRIPT:-}" ]; then
   _job_dir="$(cd "$(dirname "$SLURM_JOB_SCRIPT")" && pwd)"
@@ -148,23 +163,14 @@ export OMPI_MCA_btl_openib_warn_default_gid_prefix=0
 export OMPI_MCA_coll_hcoll_enable=0
 export SLURM_CPU_BIND=none
 #
-export NCCL_NVLS_ENABLE=1
+export NCCL_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-1}
 #export NCCL_CUMEM_ENABLE=1
 #export NCCL_CUMEM_HOST_ENABLE=0
-# MNNVL (multi-node NVLink) is only valid WITHIN one NVL72 / IMEX domain (a single rack =
-# one GPU-fabric ClusterUUID). Forcing it ON across a multi-rack job makes NCCL import CUDA
-# fabric handles across the rack (ClusterUUID) boundary -> "Cuda failure 400 'invalid
-# resource handle'" and the collective dies (validated on bos01-b05+b06, job 189).
-# Single-rack: force MNNVL=1 (one domain, optimal NVLink). Multi-rack: let NCCL AUTO-detect
-# per-rack MNNVL cliques (distinct ClusterUUID) and use IB between racks. Override with
-# NVIS_NCCL_MNNVL=0|1 (e.g. NVIS_NCCL_MNNVL=0 forces IB everywhere as a fallback).
-if [ -n "${NVIS_NCCL_MNNVL:-}" ]; then
-  export NCCL_MNNVL_ENABLE=${NVIS_NCCL_MNNVL}
-elif [ $single_rack -eq 1 ]; then
-  export NCCL_MNNVL_ENABLE=1
-else
-  unset NCCL_MNNVL_ENABLE
-fi
+# Canary 54700 proved O_RDWR IMEX access and MNNVL/NVLS collectives from the
+# production submit identity in the pinned container across two rack domains.
+# Default to that reviewed contract; the exact host/container gates below fail
+# closed before collectives if fleet permissions or device exposure regress.
+export NCCL_MNNVL_ENABLE=${NVIS_NCCL_MNNVL:-1}
 export NCCL_MIN_CTAS=16
 #export NCCL_P2P_LEVEL=NVL
 #export NCCL_P2P_LEVEL=C2C
@@ -230,13 +236,27 @@ else
   fi
 fi
 
-# NCCL flight-recorder dump dir on NFS, mounted into the container at /nccl_traces. The training
-# container is ephemeral (enroot remove at job end), so a dump written to the container's /tmp is
-# lost (job 322). Point TORCH_NCCL_DEBUG_INFO_TEMP_FILE at this NFS-backed mount so per-rank traces
-# from a watchdog-timeout survive for post-mortem. $(pwd) is the NFS submit/log dir (same path on all
-# nodes). Override the location with NVIS_NCCL_TRACE_HOST_DIR.
-NVIS_NCCL_TRACE_HOST_DIR="${NVIS_NCCL_TRACE_HOST_DIR:-$(pwd)/nccl_traces/${SLURM_JOB_ID:-0}}"
-mkdir -p "${NVIS_NCCL_TRACE_HOST_DIR}" 2>/dev/null || true
+# NCCL flight-recorder dumps must outlive the ephemeral container.  Do not derive
+# this host mount from $PWD: preset jobs chdir to the read-only shared runtime
+# scripts tree, which made Pyxis try to mount a directory that mkdir had failed to
+# create.  Use the shared validation log tree and fail before Pyxis if it cannot be
+# created.  Override the final location with NVIS_NCCL_TRACE_HOST_DIR.
+NVIS_NCCL_TRACE_ROOT="${NVIS_NCCL_TRACE_ROOT:-${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/OVA/logs/nscaletx-16k-validation}}/nccl_traces}"
+NVIS_NCCL_TRACE_HOST_DIR="${NVIS_NCCL_TRACE_HOST_DIR:-${NVIS_NCCL_TRACE_ROOT%/}/${SLURM_JOB_ID:-manual-$$}}"
+if [[ "$NVIS_NCCL_TRACE_HOST_DIR" != /* || "$NVIS_NCCL_TRACE_HOST_DIR" == *":"* || \
+      "$NVIS_NCCL_TRACE_HOST_DIR" == *","* || "$NVIS_NCCL_TRACE_HOST_DIR" == *$'\n'* ]]; then
+  echo "ERROR: invalid NVIS_NCCL_TRACE_HOST_DIR: $NVIS_NCCL_TRACE_HOST_DIR" >&2
+  exit 2
+fi
+if ! mkdir -p "$NVIS_NCCL_TRACE_HOST_DIR"; then
+  echo "ERROR: cannot create NCCL trace directory: $NVIS_NCCL_TRACE_HOST_DIR" >&2
+  exit 2
+fi
+if [[ ! -d "$NVIS_NCCL_TRACE_HOST_DIR" || ! -w "$NVIS_NCCL_TRACE_HOST_DIR" || ! -x "$NVIS_NCCL_TRACE_HOST_DIR" ]]; then
+  echo "ERROR: NCCL trace directory is not writable/searchable: $NVIS_NCCL_TRACE_HOST_DIR" >&2
+  exit 2
+fi
+chmod g+rws "$NVIS_NCCL_TRACE_HOST_DIR" 2>/dev/null || true
 CONT_MOUNTS="${CONT_MOUNTS},${NVIS_NCCL_TRACE_HOST_DIR}:/nccl_traces"
 echo "INFO: NCCL flight-recorder dumps -> ${NVIS_NCCL_TRACE_HOST_DIR} (container:/nccl_traces)"
 
@@ -252,11 +272,17 @@ fi
 
 srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/null
 
+case "${NCCL_MNNVL_ENABLE}:${NCCL_NVLS_ENABLE}:${NVIS_NEMO_UB_SKIPMC:-0}" in
+  0:[01]:[01]|1:[01]:[01]) ;;
+  *) echo "ERROR: invalid NeMo transport contract" >&2; exit 2 ;;
+esac
+echo "NEMO_TRANSPORT_CONTRACT XRACK=${NVIS_NEMO_XRACK:-<unset>} MNNVL=${NCCL_MNNVL_ENABLE} NVLS=${NCCL_NVLS_ENABLE} UB_SKIPMC=${NVIS_NEMO_UB_SKIPMC:-0}"
+
 ## test nccl
 # NCCL pre-flight verbosity — default WARN (quiet). Override from the UI/launch (NVIS_NCCL_DEBUG=
 # INFO|TRACE) to diagnose a silent cross-rack hang: INFO names the stuck rank/peer connection.
 export NCCL_DEBUG="${NVIS_NCCL_DEBUG:-WARN}"
-export NCCL_NVLS_ENABLE=1
+export NCCL_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-1}
 
 # NCCL pre-flight selector: which collectives to run before NeMo training (space/comma
 # list of: allreduce alltoall allgather). Default = all three (original behavior). The
@@ -407,14 +433,27 @@ export MAX_STEPS=${NVIS_NEMO_MAX_STEPS:-2010}
 export NVIS_NEMO_DTYPE=${NVIS_NEMO_DTYPE:-fp8_cs}
 export NVIS_NEMO_MODEL_SIZE=${NVIS_NEMO_MODEL_SIZE:-56b}
 export NVIS_NEMO_GBS=${NVIS_NEMO_GBS:-$((192*SLURM_NNODES/16))}
-# Parallelism/overlap args. Default: explicit perf config (tp2/pp1/gbs, FSDP off, TE CUDA graphs) —
-# preserves the validated FP8 soak. NVIS_NEMO_RECIPE_DEFAULT=1 drops ALL of these so run_script.py
-# uses the DGXC recipe's built-in optimal parallelism for the model/size/dtype (mirrors the
-# run_nemotronh.sh, which passed no tp/pp/mb/gb) — use for BF16 where the hardcoded config OOMs.
-if [ "${NVIS_NEMO_RECIPE_DEFAULT:-0}" = 1 ]; then
+# Parallelism/overlap args. The four-GPU path must use the canonical successful
+# single-node recipe from the 2026-08-24 handoff: TP4, CUDA graphs disabled,
+# TP overlap disabled, and per-step manual GC. TP2 duplicates optimizer state
+# across a DP=2 group and OOMs all four 276.5-GiB GPUs at the first optimizer
+# step; that is a recipe-capacity error, not node evidence.
+if [ "${SLURM_NNODES}" -eq 1 ] && [ "${NVIS_NEMO_ALLOW_SINGLE_NODE:-0}" = 1 ]; then
+  export NVIS_NEMO_EXTRA_ARGS="--use_megatron_fsdp 0 -tp 4 -pp 1 -cp 1 -ep 1 -mb 1 -gb ${NVIS_NEMO_GBS}"
+  export NVIS_NEMO_CONFIG_OVERRIDES="train.manual_gc=true train.manual_gc_interval=1 model.tensor_model_parallel_size=4 model.cuda_graph_impl=none comm_overlap.tp_comm_overlap=false model.tp_comm_overlap=false"
+  # Keep expandable segments and the delivered Nemotron-H connection setting.
+  # The fleet fan-out showed that forcing 32 connections leaves too little
+  # headroom for NCCL's first training collective on some otherwise clean
+  # four-GPU nodes; the pinned 2026-08-24 engine uses one connection.
+  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+  export PYTORCH_ALLOC_CONF=expandable_segments:True
+  export NVIS_NEMO_CUDA_DEVICE_MAX_CONNECTIONS=${NVIS_NEMO_CUDA_DEVICE_MAX_CONNECTIONS:-1}
+elif [ "${NVIS_NEMO_RECIPE_DEFAULT:-0}" = 1 ]; then
   export NVIS_NEMO_EXTRA_ARGS=""
+  export NVIS_NEMO_CONFIG_OVERRIDES="train.manual_gc=true train.manual_gc_interval=100"
 else
   export NVIS_NEMO_EXTRA_ARGS="--use_megatron_fsdp 0 -tp 2 -pp 1 -cp 1 -ep 1 -mb 1 -gb ${NVIS_NEMO_GBS} --cuda_graph_impl transformer_engine --cuda_graph_scope mamba,attn"
+  export NVIS_NEMO_CONFIG_OVERRIDES="train.manual_gc=true train.manual_gc_interval=100"
 fi
 # Container CLI style + GPU config token. legacy = 25.11.01 (--model_name/--model_size);
 # v2 = 26.02.01+ (--model_family_name/--model_recipe_name/--offline; has the precision-decoupled
@@ -447,7 +486,7 @@ export TORCH_NCCL_AVOID_RECORD_STREAMS=1
 
 export NVTE_FLASH_ATTN=1
 export NVTE_FUSED_ATTN=1
-export CUDA_DEVICE_MAX_CONNECTIONS=1
+export CUDA_DEVICE_MAX_CONNECTIONS=${NVIS_NEMO_CUDA_DEVICE_MAX_CONNECTIONS:-1}
 export NVTE_FWD_LAYERNORM_SM_MARGIN=16
 export NVTE_BWD_LAYERNORM_SM_MARGIN=16
 # delivered NemotronH perf/stability env (DGXC recipe, dgxc-runai/run_nemotronh.sh).
@@ -514,7 +553,7 @@ python /opt/Megatron-Bridge/scripts/performance/run_script.py \
   ${NVIS_NEMO_MODEL_ARGS} \
   ${NVIS_NEMO_EXTRA_ARGS} \
   --max_steps ${MAX_STEPS} \
-  train.manual_gc=true train.manual_gc_interval=100
+  ${NVIS_NEMO_CONFIG_OVERRIDES}
 __END__
 train_rc=$?
 
@@ -534,10 +573,12 @@ else
 fi
 
 if (( train_rc != 0 )); then
+  echo "NEMO_VALIDATION_FAIL stage=training rc=${train_rc} nodes=${SLURM_NNODES} max_steps=${MAX_STEPS}"
   echo "ERROR: NeMo training srun failed rc=${train_rc}" >&2
   exit "$train_rc"
 fi
 if (( postcheck_rc != 0 )); then
+  echo "NEMO_VALIDATION_FAIL stage=postcheck rc=${postcheck_rc} nodes=${SLURM_NNODES} max_steps=${MAX_STEPS}"
   echo "ERROR: NeMo post-run checker failed rc=${postcheck_rc}" >&2
   exit "$postcheck_rc"
 fi

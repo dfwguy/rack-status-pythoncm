@@ -167,6 +167,13 @@ def test_real_interleaved_pdsh_output_parses_per_node():
         assert r["failed"] == 0
 
 
+def test_slurm_shell_diagnostics_do_not_become_phantom_nodes():
+    noisy = "/usr/bin/bash: /root/.bash_profile: Permission denied\n" + GOOD
+    rows = parse_nvlink_preflight_output(noisy, "", ["n01"])
+    assert [row["host"] for row in rows] == ["n01"]
+    assert summarize(rows)["ready"] is True
+
+
 def test_quick_mode_passes_but_reports_the_skipped_probe():
     """Quick mode omits the data-path check; that is recorded, but it does not block the pass.
 

@@ -3,7 +3,8 @@
 ## Prerequisites
 
 - Docker Engine 20.10+ (or Docker Desktop)
-- An SSH key pair that can reach your head node (BCM or MAAS)
+- A dedicated non-root SSH identity that can reach your head node (BCM or MAAS)
+- A pinned `known_hosts` file containing the approved head-node host key
 - The head node must be running `sshd` and have Slurm, cmsh/maas-cli, and pdsh available
 - The nvis-rack-status scripts must be deployed on the head node (see [Deploying Scripts](#deploying-scripts))
 
@@ -31,19 +32,31 @@ Open **http://localhost:5000/spa/** in your browser.
 RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status  # path on head node
 RACK_EXEC_MODE=ssh
 RACK_PLATFORM=bcm
-RACK_SSH_USER=root
+RACK_SSH_USER=cmods                 # explicit non-root service identity
 RACK_SLURM_SKIP_MODULE_LOAD=1      # if sinfo/squeue are on PATH
 NEMO_SQSH_SRC=/path/to/nemo.sqsh   # NeMo container image on head node
 ```
 
-2. Launch:
+2. Create a dashboard token file without putting the token in shell history or
+   the container environment. The file must not be a symlink:
+
+```bash
+install -d -m 0700 deploy-secrets
+umask 077
+openssl rand -base64 32 > deploy-secrets/web-auth-token
+chmod 0600 deploy-secrets/web-auth-token
+```
+
+3. Launch:
 
 ```bash
 docker run -d --name rack-status -p 5000:5000 \
   --env-file rack-config.env \
   -e RACK_SSH_HOST=<head-node-ip> \
-  -e RACK_WEB_AUTH_TOKEN=<password> \
+  --mount type=bind,src="$PWD/deploy-secrets/web-auth-token",dst=/run/secrets/rack-web-auth-token,readonly \
+  -e RACK_WEB_AUTH_TOKEN_FILE=/run/secrets/rack-web-auth-token \
   -v ~/.ssh/id_rsa:/run/secrets/ssh_key:ro \
+  -v ~/.ssh/known_hosts:/run/secrets/known_hosts:ro \
   --restart unless-stopped \
   nvis-rack-status:local
 ```
@@ -56,15 +69,25 @@ resolves as `{RACK_REMOTE_BASE_PATH}/var/logs/`.
 ### Option B: Docker Compose
 
 ```bash
-# Edit rack-config.env, then:
+# Edit rack-config.env, then provide only the host-side secret path to Compose.
+export RACK_WEB_AUTH_TOKEN_PATH="$PWD/deploy-secrets/web-auth-token"
+docker compose config >/tmp/rack-status-compose.rendered.yml
 docker compose up -d
 ```
+
+The secret value is mounted at `/run/secrets/rack-web-auth-token` and is not
+present in `docker inspect` environment output. `RACK_WEB_AUTH_TOKEN` remains a
+legacy rolling-upgrade fallback; remove it from the environment after verifying
+file-backed login and rotate any token previously exposed through container
+configuration.
 
 ### Option C: build-docker.sh helper
 
 ```bash
 # Edit rack-config.env first
-RACK_SSH_HOST=10.0.0.1 RACK_WEB_AUTH_TOKEN=secret ./build-docker.sh prod
+RACK_SSH_HOST=10.0.0.1 \
+RACK_WEB_AUTH_TOKEN_FILE="$PWD/deploy-secrets/web-auth-token" \
+./build-docker.sh prod
 ```
 
 ## Deploying Scripts to the Head Node
@@ -76,9 +99,13 @@ a shared filesystem path accessible by compute nodes:
 # On your workstation
 tar czf nvis-deploy.tar.gz backend/ bin/ static/ help_content.json var/
 
-# Copy to head node
-scp nvis-deploy.tar.gz root@<head-node>:/home/cmsupport/nvis-rack-status/
-ssh root@<head-node> "cd /home/cmsupport/nvis-rack-status && tar xzf nvis-deploy.tar.gz"
+# Pin the verified host key out of band, then use the checksum-based deployer.
+export RACK_SSH_HOST=<head-node>
+export RACK_SSH_USER=cmods
+export RACK_SSH_KEY="$HOME/.ssh/rack_status_key"
+export RACK_KNOWN_HOSTS_PATH="$HOME/.ssh/rack_status_known_hosts"
+bin/deploy-scripts.sh --dry-run
+bin/deploy-scripts.sh
 ```
 
 Then set `RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status` in `rack-config.env`.
@@ -91,7 +118,8 @@ Then set `RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status` in `rack-confi
 | `http://<host>:5000/` | Legacy HTML dashboard |
 | `http://<host>:5000/api/status` | JSON API |
 
-Log in with the password set in `RACK_WEB_AUTH_TOKEN`. If authentication is
+Log in with the password stored in `RACK_WEB_AUTH_TOKEN_FILE` (or the legacy
+`RACK_WEB_AUTH_TOKEN`). If authentication is
 disabled (`RACK_WEB_AUTH_DISABLED=1`), no login is required.
 
 ## Configuration Reference
@@ -109,15 +137,18 @@ disabled (`RACK_WEB_AUTH_DISABLED=1`), no login is required.
 | `RACK_EXEC_MODE` | `local` | `local` = run commands directly, `ssh` = SSH to head node |
 | `RACK_PLATFORM` | `bcm` | `bcm` (Base Command Manager) or `maas` (Canonical MAAS) |
 | `RACK_SSH_HOST` | — | Head-node hostname or IP **(required in ssh mode)** |
-| `RACK_SSH_USER` | `root` | SSH user on the head node |
+| `RACK_SSH_USER` | — | Explicit non-root SSH user on the head node |
 | `RACK_SSH_PORT` | `22` | SSH port |
+| `RACK_KNOWN_HOSTS_PATH` | — | Host-side pinned `known_hosts` file used by deployment tooling |
 
 ### Authentication
 
 | Variable | Default | Description |
 |---|---|---|
 | `RACK_WEB_AUTH_MODE` | auto | `token` (shared password) or `pam` (system PAM). Auto-selects `token` in ssh mode |
-| `RACK_WEB_AUTH_TOKEN` | — | Login password when using token mode |
+| `RACK_WEB_AUTH_TOKEN_FILE` | — | Preferred in-container path to a read-only token secret |
+| `RACK_WEB_AUTH_TOKEN_PATH` | — | Host path supplied to Compose; mode 0400/0600, regular file, not a symlink |
+| `RACK_WEB_AUTH_TOKEN` | — | Legacy environment fallback; visible to container inspectors |
 | `RACK_WEB_AUTH_DISABLED` | `0` | Set to `1` to disable login entirely |
 | `RACK_WEB_SECRET_KEY` | random | Set a fixed value for stable sessions across container restarts |
 
@@ -156,7 +187,7 @@ To generate a dedicated key pair:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/rack_status_key -N "" -C "nvis-rack-status"
-ssh-copy-id -i ~/.ssh/rack_status_key.pub root@<head-node>
+ssh-copy-id -i ~/.ssh/rack_status_key.pub cmods@<head-node>
 ```
 
 Then mount it: `-v ~/.ssh/rack_status_key:/run/secrets/ssh_key:ro`
@@ -174,8 +205,10 @@ docker run -d --name rack-status -p 5000:5000 \
   --env-file rack-config.env \
   -e RACK_SSH_HOST=host.docker.internal \
   -e RACK_SSH_PORT=2222 \
-  -e RACK_WEB_AUTH_TOKEN=<password> \
+  --mount type=bind,src="$PWD/deploy-secrets/web-auth-token",dst=/run/secrets/rack-web-auth-token,readonly \
+  -e RACK_WEB_AUTH_TOKEN_FILE=/run/secrets/rack-web-auth-token \
   -v ~/.ssh/key:/run/secrets/ssh_key:ro \
+  -v ~/.ssh/known_hosts:/run/secrets/known_hosts:ro \
   --add-host=host.docker.internal:host-gateway \
   nvis-rack-status:local
 ```
@@ -240,7 +273,7 @@ docker run -d --name rack-status -p 5000:5000 \
 
 For a real cluster, swap the demo flags for the SSH/auth env described in
 [Configuration Reference](#configuration-reference) (e.g. `--env-file rack-config.env`,
-`RACK_SSH_HOST`, `RACK_WEB_AUTH_TOKEN`, and the SSH key mount).
+`RACK_SSH_HOST`, `RACK_WEB_AUTH_TOKEN_FILE`, and the SSH/known-hosts mounts).
 
 ## Running Tests
 
@@ -270,14 +303,14 @@ docker stop rack-status && docker rm rack-status
 ## Troubleshooting
 
 **Container starts but dashboard shows no racks:**
-- Verify `RACK_SSH_HOST` is reachable: `docker exec rack-status ssh -i /run/secrets/ssh_key root@<host> hostname`
+- Verify `RACK_SSH_HOST` is reachable with the configured non-root identity and pinned host key.
 - Check `RACK_REMOTE_BASE_PATH` points to where scripts are deployed on the head node
 - Check that `cmsh` (BCM) or `maas` (MAAS) is available on the head node
 - Check container logs: `docker logs rack-status`
 
 **Scripts fail with "No such file or directory":**
 - Verify `RACK_REMOTE_BASE_PATH` is set correctly in `rack-config.env`
-- Verify scripts exist on the head node: `ssh root@<host> ls <RACK_REMOTE_BASE_PATH>/bin/scripts/`
+- Verify scripts exist through the approved non-root SSH profile at `<RACK_REMOTE_BASE_PATH>/bin/scripts/`.
 
 **SSH connection refused:**
 - Confirm `sshd` is running on the head node
@@ -285,7 +318,7 @@ docker stop rack-status && docker rm rack-status
 - For jump hosts, verify the SSH tunnel is active: `lsof -i :<tunnel-port>`
 
 **Login page appears but password is rejected:**
-- Ensure `RACK_WEB_AUTH_TOKEN` is set and matches what you type at login
+- Ensure the mounted `RACK_WEB_AUTH_TOKEN_FILE` is non-empty and matches what you type at login
 - Or set `RACK_WEB_AUTH_DISABLED=1` to bypass login
 
 **NEMO container fails to start (pyxis/enroot errors):**

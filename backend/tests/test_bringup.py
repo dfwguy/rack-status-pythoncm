@@ -14,8 +14,22 @@ The runners shell out to Travis's scripts; here ``host_exec.run_on_host`` is stu
 with captured real output so the parsing/merge logic is exercised without a cluster.
 """
 import subprocess
+import threading
+from types import SimpleNamespace
 
+import app as app_module
 import bringup
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clear_bringup_caches():
+    bringup._daily_cache.clear()
+    with bringup._fleet_cache_condition:
+        bringup._fleet_cache.clear()
+        bringup._fleet_errors.clear()
+        bringup._fleet_refreshing.clear()
+    yield
 
 # Captured from the live head node (daily-report.sh -c / status-check.sh <node>).
 DAILY_CSV = (
@@ -71,6 +85,12 @@ def test_parse_daily_report_csv():
     assert r["slurm"] == "down*"
     assert r["cells"]["nvbandwidth"] == "357.23"
     assert r["cells"]["allreduce-nonvlink"] == "2.28"
+
+
+def test_parse_daily_report_rejects_decoration_only_node():
+    decorated = DAILY_CSV + "************************************************************,,,,,,\n"
+    _cols, rows = bringup.parse_daily_report_csv(decorated)
+    assert "************************************************************" not in rows
     assert rows["ink50-dh01-h01-12"]["cells"]["allreduce-nonvlink"] == "NOT_RUN"
 
 
@@ -139,6 +159,82 @@ def test_daily_report_cache(monkeypatch):
     assert calls["n"] == 1  # second call served from cache
 
 
+def test_report_scan_concurrency_is_bounded(monkeypatch):
+    seen = {}
+
+    def run(cmd, **kw):
+        seen.update(kw.get("env_extra") or {})
+        return subprocess.CompletedProcess(cmd, 0, stdout=FLEET_STATUS, stderr="")
+
+    monkeypatch.setattr(bringup.host_exec, "run_on_host", run)
+    monkeypatch.setenv("RACK_BRINGUP_SCAN_JOBS", "12")
+    bringup.run_status_check_all()
+    assert seen["SCAN_JOBS_OVERRIDE"] == "12"
+
+
+def test_fleet_cache_has_independent_ttl(monkeypatch):
+    monkeypatch.setenv("RACK_BRINGUP_CACHE_TTL_SEC", "30")
+    monkeypatch.setenv("RACK_BRINGUP_FLEET_CACHE_TTL_SEC", "300")
+    assert bringup._cache_ttl() == 30
+    assert bringup._fleet_cache_ttl() == 300
+
+
+def test_fleet_summary_single_flight_on_cold_cache(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+    calls = {"n": 0}
+    payload = {"home": "/cluster/bringup", "columns": [], "metric_labels": {}, "nodes": []}
+
+    def build():
+        calls["n"] += 1
+        entered.set()
+        assert release.wait(2)
+        return payload
+
+    monkeypatch.setattr(bringup, "_build_fleet_summary", build)
+    results = []
+    workers = [threading.Thread(target=lambda: results.append(bringup.fleet_summary())) for _ in range(4)]
+    for worker in workers:
+        worker.start()
+    assert entered.wait(1)
+    release.set()
+    for worker in workers:
+        worker.join(2)
+
+    assert calls["n"] == 1
+    assert len(results) == 4
+    assert all(result["nodes"] == [] for result in results)
+
+
+def test_stale_fleet_returns_while_one_refresh_runs(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+    payload = {"home": "/cluster/bringup", "columns": [], "metric_labels": {}, "nodes": []}
+    bringup._fleet_cache[bringup.bringup_home()] = (0.0, payload)
+    calls = {"n": 0}
+
+    def build():
+        calls["n"] += 1
+        entered.set()
+        assert release.wait(2)
+        return payload
+
+    monkeypatch.setattr(bringup, "_build_fleet_summary", build)
+    first = bringup.fleet_summary()
+    second = bringup.fleet_summary()
+
+    assert entered.wait(1)
+    assert first["cache"]["refreshing"] is True
+    assert second["cache"]["refreshing"] is True
+    assert calls["n"] == 1
+    release.set()
+    with bringup._fleet_cache_condition:
+        assert bringup._fleet_cache_condition.wait_for(
+            lambda: bringup.bringup_home() not in bringup._fleet_refreshing,
+            timeout=2,
+        )
+
+
 def test_bringup_home_and_enabled(monkeypatch):
     monkeypatch.delenv("RACK_BRINGUP_HOME", raising=False)
     assert bringup.bringup_home() == "/home/cmods/bringup"
@@ -156,6 +252,31 @@ def test_demo_node_summary():
     assert summary["node"] == "demo-1"
     assert summary["present"] is True
     assert any(j["status"] == "FAIL" for j in summary["jobs"])
+
+
+def test_absent_optional_bringup_is_a_successful_empty_state(monkeypatch):
+    monkeypatch.delenv("RACK_STATUS_DEMO", raising=False)
+    fake = SimpleNamespace(
+        is_enabled=lambda: True,
+        config=lambda: {"enabled": True, "present": False, "home": "/home/cmods/bringup"},
+        bringup_home=lambda: "/home/cmods/bringup",
+    )
+    monkeypatch.setattr(app_module, "_bringup", fake)
+    client = app_module.app.test_client()
+
+    node = client.get("/api/bringup/node?node=ink50-dh01-a01-11")
+    assert node.status_code == 200
+    assert node.get_json()["data"] == {
+        "node": "ink50-dh01-a01-11",
+        "present": False,
+        "slurm_state": "",
+        "home": "/home/cmods/bringup",
+        "jobs": [],
+    }
+
+    fleet = client.post("/api/bringup/fleet", json={"nodes": ["ink50-dh01-a01-11"]})
+    assert fleet.status_code == 200
+    assert fleet.get_json()["data"]["nodes"] == []
 
 
 class TestFleet:

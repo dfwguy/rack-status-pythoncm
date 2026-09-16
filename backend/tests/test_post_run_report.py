@@ -66,6 +66,24 @@ def test_repeat_flag_requires_three_distinct_runs():
     assert report["nodes"][0]["distinct_failure_runs"] == 3
 
 
+def test_superseded_indexed_failures_remain_history_without_inflating_current_flags():
+    node = "ink50-dh01-j21-11"
+    report = post_run_report.build_report(
+        events=[
+            {"node": node, "job_id": "100", "activity_id": "old", "started_at": "2026-09-01T00:00:00Z", "failed_job": True, "attributed_failure": True, "authoritative": False},
+            {"node": node, "job_id": "101", "activity_id": "new", "started_at": "2026-09-02T00:00:00Z", "failed_job": False, "attributed_failure": False, "authoritative": True},
+        ],
+        inventory=[{"node": node, "state": "idle", "reason": ""}],
+        findings=[],
+        audit_results=[],
+    )
+    row = report["nodes"][0]
+    assert row["participation_count"] == 2
+    assert row["failure_count"] == 0
+    assert row["flagged"] is False
+    assert len(row["runs"]) == 2
+
+
 def test_deep_audit_is_visible_as_a_job_participation_with_output_linkage():
     node = "ink50-dh01-d01-32"
     report = post_run_report.build_report(

@@ -17,6 +17,7 @@ import type { RackRow, RackHierarchy } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 import {
   buildFloorLayout,
+  floorRowHeading,
   floorLayoutFromHierarchy,
   HEALTH_COLOR,
   type FloorRack,
@@ -52,22 +53,34 @@ function validationColor(nemo: string): string | null {
 }
 
 function TrayGrid({ rack }: { rack: FloorRack }) {
-  const { trays, downCount, total } = rack.health;
+  const { trays, downCount, unknownCount, total } = rack.health;
 
   if (trays.length === 0) {
-    // No per-tray detail — proportional bar from sinfo counts.
+    // PythonCM can provide only aggregate node counts, without the legacy
+    // ct_down_unk tray list. Keep the same two-row rack shape in that case so
+    // an 18-node rack renders as 2 x 9 instead of one 18-cell strip.
     const cells = total > 0 ? total : 1;
     const downN = Math.min(downCount, cells);
+    const unknownN = Math.min(unknownCount, cells - downN);
+    const upN = cells - downN - unknownN;
+    const cols = Math.min(9, Math.max(1, Math.ceil(cells / 2)));
     return (
-      <Box sx={{ display: "flex", gap: "1px", mt: 0.5 }}>
+      <Box
+        aria-label={`${rack.row.rack} node status grid`}
+        sx={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+          gap: "2px",
+          mt: 0.5,
+        }}
+      >
         {Array.from({ length: cells }).map((_, i) => (
           <Box
             key={i}
             sx={{
-              flex: 1,
-              height: 6,
+              height: 9,
               borderRadius: "1px",
-              backgroundColor: i < cells - downN ? TRAY_UP : TRAY_DOWN,
+              backgroundColor: i < upN ? TRAY_UP : i < upN + downN ? TRAY_DOWN : TRAY_UNK,
             }}
           />
         ))}
@@ -79,9 +92,10 @@ function TrayGrid({ rack }: { rack: FloorRack }) {
   const cols = Math.min(9, Math.max(1, Math.ceil(trays.length / 2)));
   return (
     <Box
+      aria-label={`${rack.row.rack} node status grid`}
       sx={{
         display: "grid",
-        gridTemplateColumns: `repeat(${cols}, 1fr)`,
+        gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
         gap: "2px",
         mt: 0.5,
       }}
@@ -201,7 +215,9 @@ export function RackFloorView({ rows, naming, hierarchy, onRackSelect }: RackFlo
           {section.rows.map((floorRow) => (
             <Box key={floorRow.key} sx={{ display: "flex", alignItems: "flex-start", gap: 1.5 }}>
               <Box sx={{ minWidth: 64, pt: 1 }}>
-                <Text kind="body/bold/sm" style={{ whiteSpace: "nowrap" }}>Row {floorRow.label}</Text>
+                <Text kind="body/bold/sm" style={{ whiteSpace: "nowrap" }}>
+                  {floorRowHeading(floorRow.label)}
+                </Text>
               </Box>
               <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
                 {floorRow.racks.map((r) => (

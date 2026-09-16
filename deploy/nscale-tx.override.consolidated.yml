@@ -1,49 +1,34 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# NVIS Rack Status v3 — ObsVM deploy override (auto-merged by `docker compose`)
+# NVIS Rack Status v3 — Nscale live deployment override.
 #
-# LIVE SSH mode (was: LOCAL, OFFLINE) for NscaleTX-GB300 (281 GB300 nodes, all DOWN =
-# true cluster bring-up state). No network / SSH / credentials are used.
-#
-# The app builds its rack model from `cmsh` on PATH (RACK_EXEC_MODE=local runs it
-# directly inside the container). We mount our own `cmsh` SHIM at /usr/local/bin/cmsh
-# that prints the real inventory in the exact format native_status.py / app.py parse:
-#   - `cmsh -c "rack; list"`   -> 16 canonical rack ids (p1-r01 .. p4-r04; pod = SU)
-#   - `cmsh -c ds`             -> 281 host lines, each with a [DOWN] status bracket
-#   - `cmsh -c "device; foreach -t physicalnode (... use rf0; get ip)"` -> rf0 map
-#     (hostname + BMC IPv4) so /api/cluster-overview reports 281 tray hosts.
-# The shim is generated deterministically from
-#   /opt/observability/.audit2/rack_inventory.json  (regenerate: /tmp/gen_shim.py).
-#
-# Naming uses the app's DEFAULT Bright templates (p[\d+]-r[\d+] / -ct[\d+]) so the
-# 4 SUs surface as pods p1..p4, each with 4 racks. Do NOT set legacy
-# RACK_CMSH_DS_NODE_PATTERN (it would break the free-text rack-list scan).
-#
-# Top overview label = RACK_CLUSTER_NAME.
-#
-# To switch to REAL live cluster data later: set RACK_EXEC_MODE=ssh + RACK_SSH_HOST
-# + RACK_WEB_AUTH_TOKEN + a real RACK_SSH_KEY_PATH, remove the cmsh shim mount and
-# RACK_WEB_AUTH_DISABLED.
+# Inventory, node state, SU topology, power and node-control operations use
+# PythonCM on the BCM 11 head node. The 30-second Rack Status refresh consumes
+# cached PythonCM data; slow rack/NodeGroup topology is refreshed every 15 minutes.
+# Slurm remains available only for validation recipes whose workload submission
+# semantics are not exposed by PythonCM.
 # ──────────────────────────────────────────────────────────────────────────────
 services:
   rack-status:
     container_name: nvis-rack-status-v3
     environment:
-      # Real-data (synthetic demo disabled), local exec, offline cmsh shim.
+      # Real Nscale data (synthetic demo disabled), reached through the BCM head.
       - RACK_STATUS_DEMO=0
       - RACK_EXEC_MODE=ssh
       - RACK_PLATFORM=bcm
+      - RACK_SCHEDULER=pythoncm
+      - RACK_CLUSTER_ID=nscale-tx
       - RACK_REMOTE_BASE_PATH=/home/cmods/nvis-rack-status
       - RACK_SSH_HOST=192.168.10.2
       - RACK_SSH_USER=cmods
       - RACK_SSH_PORT=22
       - RACK_SSH_KEY=/home/nvis/.ssh/id_bcm
       - RACK_CMSH=/cm/local/apps/cmd/bin/cmsh
-      # Rack objects change rarely. Keep live device/Slurm state at the normal
-      # cadence while avoiding a full BCM rack inventory command every 30s.
+      # Rack and NodeGroup objects change rarely. Keep live node state at the
+      # normal cadence without a full topology query every 30 seconds.
       - RACK_NATIVE_RACK_LIST_TTL_SEC=900
-      - NVIS_RACK_ID=ink50-dh01-[a-z][\d+]
-      - NVIS_CT_ID=ink50-dh01-[a-z][\d+]-[\d+]
-      - NVIS_NVSW_ID=ink50-dh01-[a-z][\d+]-[\d+]-nv
+      - NVIS_RACK_ID=ink50-dh[01-99]-[a-z][\d+]
+      - NVIS_CT_ID=ink50-dh[01-99]-[a-z][\d+]-[\d+]
+      - NVIS_NVSW_ID=ink50-dh[01-99]-[a-z][\d+]-[\d+]-nv
       # Tray numbering on this site is NON-CONTIGUOUS: 8 trays 11-18 plus 10 trays 28-37
       # = 18 per NVL72 rack. The built-in default is 01-18, which targets ten nodes that do
       # not exist and misses ten that do. This only bites when an operator launches a rack
@@ -70,7 +55,7 @@ services:
       # (all_reduce + alltoall + allgather + llm) to a SINGLE log, which no log can satisfy
       # now that NCCL and NeMo run as separate jobs writing separate logs.
       - VALIDATION_TEST=nccl_all_reduce,llm
-      # BCM rack objects are WH1H<N>; tray hostnames are ink50-dh01-h<NN>-<slot>.
+      # BCM rack objects use warehouse coordinates; tray hostnames span ink50-dh01 and dh02.
       - RACK_SLURM_SKIP_MODULE_LOAD=1
       - RACK_SLURM_CONF=/cm/shared-ubuntu2404-x86_64/apps/slurm/etc/slurm/slurm.conf
       - RACK_SLURM_BIN=/cm/local/apps/slurm/25.05/bin
@@ -131,7 +116,7 @@ services:
       - RACK_WEB_GRAFANA_VAR_HOST=node
       - 'RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS=[{"id":"gpu","label":"GPU Health","uid":"gpu-health","slug":"gpu-health","scope":"host"},{"id":"pwrcap","label":"GPU Power Cap (699W)","uid":"nvis-gpu-power-cap","slug":"gpu-power-cap","scope":"host"},{"id":"nvlink","label":"GPU Error & NVLink","uid":"gpu-nvlink-health","slug":"gpu-nvlink-health","scope":"host"},{"id":"node","label":"Node Deep Dive","uid":"nvis-node-deep-dive","slug":"node-deep-dive","scope":"host"},{"id":"dcgm","label":"DCGM Diagnostics","uid":"nvis-dcgm-diag","slug":"dcgm-diagnostics","scope":"host"},{"id":"nvswitch","label":"NVSwitch Fleet","uid":"nvis-nvswitch-fleet","slug":"nvswitch-fleet","scope":"rack"},{"id":"bmc","label":"BMC Thermal / Power","uid":"nvis-bmc-thermal","slug":"bmc-thermal","scope":"rack"},{"id":"bms","label":"BMS Coolant / CDU","uid":"nvis-bms-facility","slug":"bms-facility","scope":"rack"},{"id":"home","label":"NVIS Home","uid":"nvis-home","slug":"nvis-home","scope":"cluster"},{"id":"overview","label":"Cluster Overview","uid":"nscaletx-cluster-overview","slug":"cluster-overview","scope":"cluster"},{"id":"nccl","label":"NCCL Validation","uid":"nscaletx-nccl-validation","slug":"nccl-validation","scope":"cluster"},{"id":"jobhealth","label":"Job Health","uid":"nscaletx-job-health","slug":"job-health","scope":"cluster"},{"id":"jobstats","label":"Single Job Stats","uid":"nscaletx-single-job-stats","slug":"single-job-stats","scope":"cluster"},{"id":"exec","label":"Executive Overview","uid":"nvis-executive","slug":"executive","scope":"cluster"},{"id":"ib","label":"InfiniBand Fabric","uid":"nvis-ib-overview","slug":"ib-overview","scope":"cluster"},{"id":"eth","label":"Ethernet Fabric","uid":"nvis-eth-fabric-overview","slug":"eth-fabric-overview","scope":"cluster"}]'
       - RACK_CLUSTER_NAME=NscaleTX-GB300
-      - RACK_CLUSTER_CUSTOMER_NAME=NscaleTX
+      - RACK_CLUSTER_CUSTOMER_NAME=Nscale
       - RACK_CLUSTER_PRODUCT_LINE=GB300 NVL72
       - RACK_CLUSTER_HW_VENDOR=NVIDIA
       # Web concurrency headroom. Keep one Gunicorn worker because workflow,

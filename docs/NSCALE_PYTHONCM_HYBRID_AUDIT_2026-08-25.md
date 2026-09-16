@@ -38,7 +38,29 @@ runtime findings produced these additional changes before packaging:
   native BCM inventory chart;
 - removed non-Nscale examples/default rack pools from active frontend and
   launcher source. The on-demand NCCL campaign now requires explicit approved
-  `ink...` rack ids.
+  `ink...` rack ids;
+- replaced Rack Status' inferred `Row a`/`Row b` headings with authoritative
+  PythonCM `NodeGroup` labels, while retaining hostname-derived logical rack IDs
+  instead of BCM's physical `EH...`/`WH...` coordinates;
+- widened the active Nscale naming template and direct-node selector from
+  `dh01` only to both `dh01` and `dh02`.
+
+## 2026-08-26 live topology acceptance
+
+A read-only BCM 11 PythonCM topology query returned 220 physical Rack entities,
+14 NodeGroups, and the exact Nscale membership supplied by the operator. Mapping
+NodeGroup members through the active Nscale hostname template produced 219
+logical compute racks with zero unmatched racks:
+
+```text
+ink50-dh01: SU12=16 SU13=16 SU14=16
+ink50-dh02: SU1=16 SU2=16 SU3=16 SU4=11 SU5=16 SU6=16
+             SU7=16 SU8=16 SU9=16 SU10=16 SU11=16
+```
+
+The 220th physical Rack entity is not a logical compute rack. The application
+therefore uses the 219 hostname-derived racks for status and action targeting,
+and uses the NodeGroup name only as the operator-facing SU heading.
 
 ## Independent audit inputs
 
@@ -95,6 +117,7 @@ child launcher, and status store. Findings incorporated here:
 | Nscale primary provider is PythonCM | `backend/scheduler_runtime.py` | `test_nscale_primary_scheduler_typo_fails_closed` |
 | Explicit Slurm construction remains possible | `backend/schedulers/factory.py` | `test_nscale_primary_is_pythoncm_but_explicit_slurm_fallback_can_be_built` |
 | Racks cold/warm state does not call Slurm or cmsh | `backend/native_status.py` | `test_cold_and_warm_racks_sources_never_poll_slurm_or_cmsh` |
+| Nscale DH01/DH02 rows use PythonCM SU labels | `bin/scripts/nvis_bcm_query.py`, `backend/nvis_id_templates.py`, `backend/scheduler_runtime.py`, `frontend/src/components/RackFloorView.tsx` | `test_topology_shapes_racks_and_naturally_sorted_node_groups`, `test_nscale_hierarchy_uses_pythoncm_su_nodegroups_for_both_data_halls`, `test_pythoncm_topology_uses_su_membership_and_one_cached_query`, frontend `rackTopology` SU-heading test |
 | Background status does not start cmsh warmer | `backend/app.py` | `test_status_bootstrap_does_not_start_cmsh_warmer` |
 | Fallback jobs remain visible without polling Slurm | `backend/scheduler_runtime.py` | `test_active_overlay_includes_fallback_registry_without_polling_slurm` |
 | UUID/numeric IDs retain provider provenance | `backend/scheduler_runtime.py` | `test_registry_keeps_provider_provenance` |
@@ -146,7 +169,7 @@ in this repository.
 
 ## Automated evidence
 
-The final source state passed 1,454 backend tests with 1 skipped, all 380
+The final source state passed 1,458 backend tests with 1 skipped, all 381
 frontend tests, the production TypeScript/Vite build, production-module Ruff,
 Python byte compilation, shell/`.sbatch` syntax checks, and Git whitespace
 checks. Frontend lint completed with zero errors and 57 existing warnings.

@@ -238,6 +238,10 @@ def build_dataset(
             "customer": (project or {}).get("customer") or "",
             "head": _dig(facts, "head.hostname"),
             "inventory_captured_at": inventory.get("captured_at") or "",
+            "excluded_non_compute": fleet.get("excluded_non_compute") or {
+                "count": 0,
+                "nodes": [],
+            },
         },
         "cluster": {
             "platform": (platform or {}).get("name") or (platform or {}).get("id") or "",
@@ -331,6 +335,10 @@ def to_csv(dataset: dict[str, Any]) -> str:
         value = _dig(dataset, path)
         if value != "":
             buf.write(f"# {label},{value}\n")
+    excluded = dataset.get("meta", {}).get("excluded_non_compute") or {}
+    buf.write(f"# Excluded non-compute nodes,{excluded.get('count', 0)}\n")
+    if excluded.get("nodes"):
+        buf.write(f"# Excluded non-compute hostnames,{' '.join(excluded['nodes'])}\n")
     summary = dataset.get("summary") or {}
     buf.write(f"# Nodes passed,{summary.get('nodes_passed', 0)}\n")
     buf.write(f"# Nodes failed,{summary.get('nodes_failed', 0)}\n")

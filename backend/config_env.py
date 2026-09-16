@@ -190,6 +190,12 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
+        "key": "LLMB_RUN",
+        "label": "LLMB executable (optional)",
+        "description": "Absolute reviewed llmb-run executable. When absent or unreadable, the containerized NCCL adapter uses the hash-pinned NVFTP five-collective fallback.",
+    },
+    {
+        "section": "jobs_cluster",
         "key": "RACK_SCRIPT_SUDO",
         "label": "Run privileged tools with sudo",
         "description": "Set to 1 to escalate root-requiring node tools (sysinfo, hardware checks, switch/IMEX/BMC) with sudo on the privileged 'script' route. Use when the SSH/login user is unprivileged but has sudo (e.g. cmods with passwordless sudo on the compute trays). Auto-enabled when a sudo password is set.",
@@ -323,6 +329,33 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
             "bash-completion errors on the head node)."
         ),
     },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_SLURM_SUBMIT_UID",
+        "label": "Slurm validation submit UID",
+        "description": (
+            "Numeric cluster user ID used for validation allocations submitted by a root "
+            "control-plane container. Must be set together with RACK_SLURM_SUBMIT_GID."
+        ),
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_SLURM_SUBMIT_GID",
+        "label": "Slurm validation submit GID",
+        "description": (
+            "Numeric cluster group ID used for validation allocations submitted by a root "
+            "control-plane container. Must be set together with RACK_SLURM_SUBMIT_UID."
+        ),
+    },
+    {
+        "section": "native_cmsh",
+        "key": "RACK_SLURM_SUBMIT_HOME",
+        "label": "Slurm validation submit home",
+        "description": (
+            "Absolute cluster home directory exported with validation allocations. This must "
+            "match the submit UID so Pyxis/Enroot resolves the existing user configuration."
+        ),
+    },
     *[
         {
             "section": "native_cmsh",
@@ -417,6 +450,36 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
+        "key": "RACK_VALIDATION_CONTAINER_ROOT",
+        "label": "Validation shared container root",
+        "description": "Shared root for code-allowlisted validation image filenames, sizes, and SHA256 digests.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_VALIDATION_NODE_CONTAINER_DIR",
+        "label": "Validation node container cache",
+        "description": "Node-local destination for allowlisted validation images (production default /opt/containers).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_VALIDATION_PROVENANCE_ROOT",
+        "label": "Validation script provenance root",
+        "description": "Read-only archive root recording the reviewed NVFTP scripts used to qualify live wrappers.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_STATUS_LOG_DIR",
+        "label": "Shared validation log root",
+        "description": "Default shared log directory used by validation launchers and result collection.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_STATUS_ALLOWED_PREFIXES",
+        "label": "Allowed validation log prefixes",
+        "description": "Comma-separated absolute roots accepted by validation log path resolution.",
+    },
+    {
+        "section": "jobs_cluster",
         "key": "RACK_NEMO_XRACK_SCRIPT",
         "label": "Multinode NEMO script",
         "description": "Path to run-nemo-xrack.sh.",
@@ -426,6 +489,15 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "key": "RACK_NEMO_XRACK_TIMEOUT",
         "label": "NEMO xrack timeout (seconds)",
         "description": "Background job timeout for multinode NEMO.",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK",
+        "label": "Multirack nodes per rack",
+        "description": (
+            "Exact number of idle eligible nodes selected from each rack for multirack "
+            "operations. Defaults to 16; single-rack validation still uses full rack geometry."
+        ),
     },
     {
         "section": "jobs_cluster",

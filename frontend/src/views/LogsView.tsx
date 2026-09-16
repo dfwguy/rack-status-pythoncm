@@ -59,6 +59,7 @@ import {
 } from "../lib/rackLog";
 import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
+import { resolveGrafanaBase } from "../lib/grafanaLinks";
 
 type TagColor = "green" | "blue" | "teal" | "yellow" | "red" | "gray";
 
@@ -159,6 +160,14 @@ interface ObsLogsPayload {
   embedding_enabled?: boolean;
   panels?: ObsLogsPanelRaw[];
   dashboards?: ObsLogsPanelRaw[];
+  sections?: Array<{
+    uid?: string;
+    title?: string;
+    dashboard_open_url?: string;
+    dashboard_open_path?: string;
+    panels?: ObsLogsPanelRaw[];
+  }>;
+  config?: { public_base?: string; public_port?: string };
 }
 
 interface ObsLogsPanel {
@@ -172,16 +181,24 @@ interface ObsLogsPanel {
 
 /** Tolerant normalizer — accepts ``panels`` or ``dashboards`` and several url field names. */
 function normalizeObsPanels(payload: ObsLogsPayload | null): ObsLogsPanel[] {
-  const raw = payload?.panels ?? payload?.dashboards;
+  const sectionPanels = (payload?.sections ?? []).flatMap((section) =>
+    (section.panels ?? []).map((panel) => ({
+      ...panel,
+      open_url: panel.open_url || section.dashboard_open_url || section.dashboard_open_path,
+    })),
+  );
+  const raw = payload?.panels ?? payload?.dashboards ?? sectionPanels;
   if (!Array.isArray(raw)) return [];
+  const grafanaBase = resolveGrafanaBase(payload?.config?.public_base || "", payload?.config?.public_port || "3001");
+  const absoluteUrl = (value: string) => value.startsWith("/") ? `${grafanaBase}${value}` : value;
   return raw
     .map((p, i) => {
       const title = String(p.title || p.name || p.uid || `Panel ${i + 1}`).trim();
       return {
         key: String(p.id || p.uid || `${title}-${i}`),
         title,
-        embedUrl: String(p.embed_url || p.src || p.url || "").trim(),
-        openUrl: String(p.open_url || p.explore_url || p.url || "").trim(),
+        embedUrl: absoluteUrl(String(p.embed_url || p.src || p.url || "").trim()),
+        openUrl: absoluteUrl(String(p.open_url || p.explore_url || p.url || "").trim()),
         note: String(p.note || "").trim(),
         live: p.live === true,
       };
@@ -298,7 +315,10 @@ export function LogsView({ logDir: logDirProp }: LogsViewProps) {
     setObsLoading(true);
     setObsError("");
     try {
-      const res = await apiFetch("/api/observability/dashboards/logs", { cache: "no-store" });
+      const [res, healthRes] = await Promise.all([
+        apiFetch("/api/observability/dashboards/logs", { cache: "no-store" }),
+        apiFetch("/api/observability/health", { cache: "no-store" }),
+      ]);
       if (res.status === 404) {
         setObs(null);
         setObsError("not-wired");
@@ -310,7 +330,8 @@ export function LogsView({ logDir: logDirProp }: LogsViewProps) {
         setObsError(data.error || `HTTP ${res.status}`);
         return;
       }
-      setObs(data);
+      const health = healthRes.ok ? await healthRes.json() as { embedding_allowed?: boolean } : {};
+      setObs({ ...data, embedding_enabled: health.embedding_allowed === true });
     } catch {
       setObs(null);
       setObsError("not-wired");

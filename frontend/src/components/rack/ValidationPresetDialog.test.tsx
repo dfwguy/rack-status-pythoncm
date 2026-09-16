@@ -27,11 +27,11 @@ const catalog: ValidationPresetsResponse = {
   ok: true,
   presets: [
     {
-      id: "nccl-2.31.2",
-      label: "NCCL 2.31.2 / CUDA 13.3+",
-      description: "Direct-host acceptance.",
+      id: "nccl-2.29.3",
+      label: "NCCL 2.29.3 — NVFTP 8K–32G / 500 iterations",
+      description: "Proven containerized acceptance.",
       kind: "nccl",
-      defaults: { storage: "nfs" },
+      defaults: { storage: "local", rsync: false },
       requirements: { scopes: ["node", "rack", "multirack"] },
     },
     {
@@ -56,20 +56,20 @@ const catalog: ValidationPresetsResponse = {
 afterEach(() => vi.restoreAllMocks());
 
 describe("ValidationPresetDialog", () => {
-  it("does not offer container staging for the direct-host NCCL preset", async () => {
+  it("pins the proven NCCL preset to the already staged local image", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => jsonResponse(catalog));
     render(
       <ValidationPresetDialog
         open
         onClose={() => undefined}
-        presetId="nccl-2.31.2"
+        presetId="nccl-2.29.3"
         scope="nodes"
         nodes={["d01-01"]}
         onLaunch={() => undefined}
       />,
     );
 
-    expect(screen.getByText(/fixed direct-host CUDA 13.3\+ validation/i)).toBeInTheDocument();
+    expect(screen.getByText(/NCCL 2.29.3 \/ CUDA 13.1/i)).toBeInTheDocument();
     expect(screen.queryByText("Container storage")).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: /Rsync container/i })).not.toBeInTheDocument();
   });
@@ -151,7 +151,7 @@ describe("ValidationPresetDialog", () => {
         node_count: 32,
         storage: "local",
         rsync_to_local: true,
-        local_container_dir: "/tmp/containers",
+        local_container_dir: "/opt/containers",
         checks: ["rsync missing images only"],
         command_display: "sysinfo --recipe v26.06.01 d01 d02",
       },
@@ -183,7 +183,7 @@ describe("ValidationPresetDialog", () => {
       racks: ["d01", "d02"],
       storage: "local",
       rsync_to_local: true,
-      local_container_dir: "/tmp/containers",
+      local_container_dir: "/opt/containers",
     });
   });
 
@@ -214,5 +214,45 @@ describe("ValidationPresetDialog", () => {
 
     expect(await screen.findByText(/supports node, rack scope, not multirack/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review dry run" })).toBeDisabled();
+  });
+
+  it("keeps an unavailable preset discoverable while blocking prepare with exact remediation", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() =>
+      jsonResponse({
+        ok: true,
+        presets: [{
+          id: "gpt-oss-cpu",
+          label: "GPT-OSS CPU microbenchmark",
+          description: "One independent job per node.",
+          kind: "gpt_oss",
+          requirements: { scopes: ["node", "rack", "multirack"] },
+          availability: {
+            available: false,
+            status: "blocked",
+            reasons: [
+              "missing required container image: /opt/containers/trtllm.sqsh",
+              "missing required model directory: /models/gpt-oss",
+            ],
+          },
+        }],
+      }),
+    );
+
+    render(
+      <ValidationPresetDialog
+        open
+        onClose={() => undefined}
+        presetId="gpt-oss-cpu"
+        scope="nodes"
+        nodes={["d01-01"]}
+        onLaunch={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText(/This recipe is currently unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/missing required container image: \/opt\/containers\/trtllm.sqsh/i)).toBeInTheDocument();
+    expect(screen.getByText(/missing required model directory: \/models\/gpt-oss/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review dry run" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Launch validation" })).toBeDisabled();
   });
 });

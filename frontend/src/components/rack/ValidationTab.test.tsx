@@ -39,7 +39,8 @@ describe("ValidationTab hybrid provider boundary", () => {
     expect(screen.getByText("NeMo 26.04.01 Validation")).toBeInTheDocument();
     expect(screen.getByText("MNUberGEMM 26.03-v1.17 Validation")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Plan GPT-OSS" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Plan NCCL" })).toBeEnabled();
+    expect(screen.queryByText("NCCL 2.29.3 — NVFTP 8K–32G / 500")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run NCCL" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Run nvloom" })).toBeEnabled();
   });
 

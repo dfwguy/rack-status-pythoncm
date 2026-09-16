@@ -29,6 +29,7 @@ result directory and re-judges each on every call.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -63,9 +64,15 @@ _STATUS_LINE = re.compile(
     r"(?:\s*--\s*(?P<reason>.*\S))?\s*$"
 )
 _NUMERIC = re.compile(r"^-?\d+(?:\.\d+)?$")
+_DECORATION_ONLY_NODE = re.compile(r"^[*=_-]+$")
 
 _cache_lock = threading.Lock()
 _daily_cache: dict[str, tuple[float, str]] = {}
+_fleet_cache_condition = threading.Condition()
+_fleet_cache: dict[str, tuple[float, dict[str, object]]] = {}
+_fleet_refreshing: set[str] = set()
+_fleet_errors: dict[str, Exception] = {}
+_logger = logging.getLogger(__name__)
 
 
 def bringup_home() -> str:
@@ -85,6 +92,21 @@ def _cache_ttl() -> int:
         return 30
 
 
+def _fleet_cache_ttl() -> int:
+    try:
+        return max(0, int(os.environ.get("RACK_BRINGUP_FLEET_CACHE_TTL_SEC", "300")))
+    except ValueError:
+        return 300
+
+
+def _scan_jobs() -> int:
+    """Bound report-side verdict workers launched on behalf of Rack Status."""
+    try:
+        return min(32, max(1, int(os.environ.get("RACK_BRINGUP_SCAN_JOBS", "16"))))
+    except ValueError:
+        return 16
+
+
 def _slurm_env_extra() -> dict[str, str]:
     """Forward ``SLURM_CONF`` so the scripts' bare ``sinfo`` resolves the controller.
 
@@ -93,7 +115,11 @@ def _slurm_env_extra() -> dict[str, str]:
     exported on the remote side by ``run_on_host(env_extra=...)``.
     """
     conf = (os.environ.get("RACK_SLURM_CONF") or "").strip()
-    return {"SLURM_CONF": conf} if conf else {}
+    extra = {"SLURM_CONF": conf} if conf else {}
+    # verdict-scan.sh otherwise defaults to nproc (128 on the appserver).  A web
+    # refresh must never be allowed to consume the entire host.
+    extra["SCAN_JOBS_OVERRIDE"] = str(_scan_jobs())
+    return extra
 
 
 def _base_job(col: str) -> str:
@@ -123,6 +149,11 @@ def parse_daily_report_csv(text: str) -> tuple[list[str], dict[str, dict[str, ob
         if not parts or not parts[0].strip():
             continue
         node = parts[0].strip()
+        # Some reviewed bringup revisions print a banner separator as a CSV
+        # record. It is presentation, never a host, and must not become a fake
+        # node in fleet validation or generated reports.
+        if _DECORATION_ONLY_NODE.fullmatch(node):
+            continue
         slurm = parts[1].strip() if has_slurm and len(parts) > 1 else ""
         cells: dict[str, str] = {}
         for i, col in enumerate(columns):
@@ -254,7 +285,7 @@ def parse_status_check_fleet(text: str) -> dict[str, dict[str, dict[str, str]]]:
     return out
 
 
-def fleet_summary() -> dict[str, object]:
+def _build_fleet_summary() -> dict[str, object]:
     """Bring-up state for every node, in two calls rather than one per node.
 
     Statuses and reasons come from the fleet ``status-check.sh`` (authoritative verdicts);
@@ -297,6 +328,87 @@ def fleet_summary() -> dict[str, object]:
         "metric_labels": {c: METRIC_LABELS[b] for c in cols if (b := _base_job(c)) in METRIC_LABELS},
         "nodes": nodes,
     }
+
+
+def _fleet_result(
+    payload: dict[str, object],
+    cached_at: float,
+    *,
+    refreshing: bool,
+) -> dict[str, object]:
+    """Return a copy with cache state; never mutate the shared cached payload."""
+    result = dict(payload)
+    result["cache"] = {
+        "age_sec": max(0, round(time.monotonic() - cached_at, 3)),
+        "refreshing": refreshing,
+    }
+    return result
+
+
+def _refresh_fleet(home: str) -> None:
+    """Refresh one fleet cache entry and wake any cold-cache waiters."""
+    try:
+        payload = _build_fleet_summary()
+    except Exception as exc:
+        _logger.exception("bring-up fleet cache refresh failed")
+        with _fleet_cache_condition:
+            _fleet_errors[home] = exc
+            _fleet_refreshing.discard(home)
+            _fleet_cache_condition.notify_all()
+        return
+    with _fleet_cache_condition:
+        _fleet_cache[home] = (time.monotonic(), payload)
+        _fleet_errors.pop(home, None)
+        _fleet_refreshing.discard(home)
+        _fleet_cache_condition.notify_all()
+
+
+def fleet_summary() -> dict[str, object]:
+    """Return fleet verdicts with one bounded refresh shared by every client.
+
+    A warm but stale entry is returned immediately while one daemon thread rebuilds it.
+    On a cold cache, one caller performs the build and concurrent callers wait for that
+    same result instead of launching duplicate verdict scans.
+    """
+    home = bringup_home()
+    ttl = _fleet_cache_ttl()
+    with _fleet_cache_condition:
+        hit = _fleet_cache.get(home)
+        now = time.monotonic()
+        if hit and ttl and (now - hit[0]) < ttl:
+            return _fleet_result(hit[1], hit[0], refreshing=False)
+        if hit:
+            if home not in _fleet_refreshing:
+                _fleet_refreshing.add(home)
+                threading.Thread(
+                    target=_refresh_fleet,
+                    args=(home,),
+                    name="bringup-fleet-refresh",
+                    daemon=True,
+                ).start()
+            return _fleet_result(hit[1], hit[0], refreshing=True)
+        if home in _fleet_refreshing:
+            while home in _fleet_refreshing and home not in _fleet_cache:
+                _fleet_cache_condition.wait()
+            hit = _fleet_cache.get(home)
+            if hit:
+                return _fleet_result(hit[1], hit[0], refreshing=False)
+            error = _fleet_errors.get(home)
+            if error:
+                raise RuntimeError(str(error)) from error
+        _fleet_refreshing.add(home)
+
+    # The first request after process startup has no stale value to serve, so it owns
+    # the initial build. All concurrent requests join it through the condition above.
+    _refresh_fleet(home)
+    with _fleet_cache_condition:
+        hit = _fleet_cache.get(home)
+        if hit:
+            return _fleet_result(hit[1], hit[0], refreshing=False)
+        error = _fleet_errors.get(home)
+        if error:
+            raise RuntimeError(str(error)) from error
+    raise RuntimeError("bring-up fleet refresh completed without a result")
 
 
 def _lookup_status(sc: dict[str, dict[str, str]], col: str) -> dict[str, str]:

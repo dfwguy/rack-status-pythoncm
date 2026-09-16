@@ -55,7 +55,7 @@ def test_failed_pythoncm_refresh_marks_cached_state_unknown(monkeypatch):
     monkeypatch.setattr(
         scheduler_runtime,
         "_INVENTORY_SOURCE",
-        (id(scheduler_runtime.bcm_query.nodes), id(scheduler_runtime.bcm_query.node_states)),
+        (scheduler_runtime.bcm_query.nodes, scheduler_runtime.bcm_query.node_states),
     )
     assert scheduler_runtime.nodes(force=True) == [{
         "node": "n1",
@@ -198,11 +198,18 @@ def test_gpu_services_bugreport_hw_and_nvlink_use_programrunner(monkeypatch, tmp
     monkeypatch.setenv("RACK_SCHEDULER", "pythoncm")
     calls = []
 
+    class ReadyPythonCM:
+        @staticmethod
+        def probe(*, timeout):
+            return {"ok": True, "ready": True}
+
     def fanout(target, command, **kwargs):
         calls.append((target, command, kwargs))
         return {"returncode": 0, "stdout": "n1: [PASS]", "stderr": "", "pdsh_w": "n1", "scheduler_ref": UUID}
 
     monkeypatch.setattr(app_module, "_run_pythoncm_fanout", fanout)
+    monkeypatch.setattr(app_module, "build_scheduler", lambda *_a, **_kw: ReadyPythonCM())
+    monkeypatch.setattr(app_module.host_exec, "connection", lambda *_a, **_kw: object())
     monkeypatch.setattr(app_module, "_checker_script_path", lambda: tmp_path / "checker.sh")
     monkeypatch.setattr(app_module, "_nvlink_preflight_script_path", lambda: tmp_path / "nvlink.sh")
     monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
@@ -217,6 +224,130 @@ def test_gpu_services_bugreport_hw_and_nvlink_use_programrunner(monkeypatch, tmp
     assert [row[2]["name"] for row in calls] == [
         "gpu-reset", "services-restart", "nvidia-bug-report", "hardware-check", "nvlink-preflight"
     ]
+
+
+def test_nvlink_preflight_falls_back_to_exact_node_slurm_before_submit(monkeypatch, tmp_path):
+    monkeypatch.setenv("RACK_SCHEDULER", "pythoncm")
+    monkeypatch.setenv("RACK_SLURM_SUBMIT_UID", "1003")
+    monkeypatch.setenv("RACK_SLURM_SUBMIT_GID", "1003")
+    monkeypatch.setenv("RACK_SLURM_SUBMIT_HOME", "/home/cmods")
+    monkeypatch.setenv("RACK_STATUS_LOG_DIR", "/cluster/OVA/logs/nscaletx-16k-validation")
+    submitted: list[JobSpec] = []
+
+    class UnreadyPythonCM:
+        @staticmethod
+        def probe(*, timeout):
+            raise RuntimeError("No valid cookie provided, did your session end?")
+
+    class Slurm:
+        @staticmethod
+        def submit(spec):
+            submitted.append(spec)
+            return JobHandle("47801", "slurm")
+
+        @staticmethod
+        def wait(handle, *, timeout, poll_interval):
+            return JobResult(
+                0,
+                "COMPLETED",
+                stdout=(
+                    "n1: ### nvlink_preflight n1 (quick=1) ###\n"
+                    "n1: [PASS] gpus_enumerate 4/4\n"
+                    "n1: RESULT n1: PASS (NVLS-ready)\n"
+                    "n2: ### nvlink_preflight n2 (quick=1) ###\n"
+                    "n2: [PASS] gpus_enumerate 4/4\n"
+                    "n2: RESULT n2: PASS (NVLS-ready)\n"
+                ),
+                job_id=handle.job_id,
+            )
+
+        @staticmethod
+        def cancel(_handle):
+            pytest.fail("completed fallback must not be cancelled")
+
+    class Platform:
+        @staticmethod
+        def srun_cmd(args):
+            return f"/cm/local/apps/slurm/current/bin/srun {args}"
+
+    def scheduler(kind, **_kwargs):
+        return UnreadyPythonCM() if kind == "pythoncm" else Slurm()
+
+    activity_calls = []
+    host_calls = []
+    monkeypatch.setattr(app_module, "build_scheduler", scheduler)
+    monkeypatch.setattr(app_module, "_get_platform", lambda: Platform())
+    monkeypatch.setattr(app_module.host_exec, "connection", lambda *_a, **_kw: object())
+    monkeypatch.setattr(
+        app_module.host_exec,
+        "run_on_host",
+        lambda *args, **kwargs: host_calls.append((args, kwargs))
+        or subprocess.CompletedProcess(args[0], 0, "", ""),
+    )
+    monkeypatch.setattr(app_module, "_nvlink_preflight_script_path", lambda: tmp_path / "nvlink.sh")
+    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(
+        app_module.pythoncm_validation,
+        "resolve_nodes",
+        lambda **_kw: ["n1", "n2"],
+    )
+    monkeypatch.setattr(
+        app_module.validation_activities,
+        "record_activity",
+        lambda *args, **kwargs: activity_calls.append((args, kwargs)) or "activity-1",
+    )
+    monkeypatch.setattr(app_module.validation_activities, "add_or_update_task", lambda *_a, **_kw: None)
+    monkeypatch.setattr(app_module.validation_activities, "update_activity", lambda *_a, **_kw: None)
+
+    result = app_module.run_nvlink_preflight_pdsh("n1,n2", quick=True)
+
+    assert result["summary"]["ready"] is True
+    assert result["scheduler"] == "slurm"
+    assert result["execution_provider"] == "slurm"
+    assert result["fallback"] is True
+    assert "No valid cookie" in result["fallback_reason"]
+    assert result["scheduler_ref"] == "47801"
+    spec = submitted[0]
+    assert spec.nodelist == "n1,n2"
+    assert spec.nodes == 2 and spec.ntasks_per_node == 1
+    assert "--uid=1003" in spec.extra_args and "--gid=1003" in spec.extra_args
+    assert "--gpus-per-node=4" in spec.extra_args
+    assert "--exclusive" in spec.extra_args
+    assert "hostname -s" in (spec.command or "")
+    assert "${node}: " in (spec.command or "")
+    assert host_calls == [
+        ((["chmod", "g+rw", "/cluster/OVA/logs/nscaletx-16k-validation/nvlink-preflight-slurm-47801.out"],), {"timeout": 30, "role": "logs"})
+    ]
+    assert activity_calls[0][1]["fallback"] is True
+    assert activity_calls[0][1]["execution_provider"] == "slurm"
+
+
+def test_nvlink_preflight_never_replays_a_failed_pythoncm_submit(monkeypatch, tmp_path):
+    monkeypatch.setenv("RACK_SCHEDULER", "pythoncm")
+
+    class ReadyPythonCM:
+        @staticmethod
+        def probe(*, timeout):
+            return {"ok": True, "ready": True}
+
+    monkeypatch.setattr(app_module, "build_scheduler", lambda *_a, **_kw: ReadyPythonCM())
+    monkeypatch.setattr(app_module.host_exec, "connection", lambda *_a, **_kw: object())
+    monkeypatch.setattr(app_module, "_nvlink_preflight_script_path", lambda: tmp_path / "nvlink.sh")
+    monkeypatch.setattr(app_module, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(app_module.pythoncm_validation, "resolve_nodes", lambda **_kw: ["n1"])
+    monkeypatch.setattr(
+        app_module,
+        "_run_pythoncm_fanout",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("ambiguous submit response")),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_run_nvlink_preflight_slurm_fallback",
+        lambda *_a, **_kw: pytest.fail("a failed submit must never be replayed through Slurm"),
+    )
+
+    with pytest.raises(RuntimeError, match="ambiguous submit response"):
+        app_module.run_nvlink_preflight_pdsh("n1", quick=True)
 
 
 def test_neutral_and_legacy_scheduler_urls_are_compatible(monkeypatch):
