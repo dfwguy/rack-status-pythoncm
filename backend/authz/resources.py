@@ -301,6 +301,7 @@ _RESOLVERS: dict[str, Extractor] = {
     "tools": _by("rack", "rack_id", "racks"),
     # -- one instance per deployment. Scoping these would invent an id nobody could write a policy
     #    against, and `settings:default` reads better in an audit line than a bare type.
+    "about": _singleton,
     "ai": _singleton,
     "analytics": _singleton,
     "auth": _singleton,

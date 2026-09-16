@@ -108,34 +108,33 @@ export function DocumentationView() {
   }, [probe]);
 
   /**
-   * The build this documentation came from, named rather than alluded to.
+   * The build this documentation describes, named rather than alluded to.
    *
    * The bar used to read "for the version running here", which states the guarantee without
-   * answering the question it raises — and the question is the entire reason the docs are
-   * served locally instead of linked: *are these the docs for what I am running?* A version
-   * answers it; a promise that it matches does not.
+   * answering the question it raises — and that question is the entire reason the docs are served
+   * locally instead of linked: *are these the docs for what I am running?*
    *
-   * `/api/app-stats` is the lightest endpoint carrying it, and `app_version` there is
-   * `backend/app_version.py` — the one place that answers "what build is this", reading
-   * `build-info.json` and falling back to parsing `version.py` as `<version>-dev`. Deriving it
-   * anywhere else would be a second answer to a question that must have one.
+   * **`/api/about`, not `/api/app-stats`.** The stats endpoint carries the same version and is
+   * gated, so reading it from here made a public page depend on a session. It worked, because
+   * this view only renders for a signed-in operator — which is exactly what made it easy to miss.
+   * `/api/about` is public and returns product and version only; both endpoints get the string
+   * from `app_version`, so there is still one answer to "what build is this".
    *
-   * Failure is silent on purpose: an unreachable stats endpoint is not a reason to withhold the
+   * Failure is silent on purpose: an unreachable endpoint is not a reason to withhold the
    * documentation, and a bar with no version reads as "no version" rather than as an error.
    */
   useEffect(() => {
     let live = true;
-    void apiFetch("/api/app-stats")
+    void apiFetch("/api/about")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (live && data?.app_version) setVersion(String(data.app_version));
+        if (live && data?.version) setVersion(String(data.version));
       })
       .catch(() => {});
     return () => {
       live = false;
     };
   }, []);
-
 
   /**
    * Where Back goes.

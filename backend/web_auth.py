@@ -219,6 +219,18 @@ AUTH_BYPASS_ENDPOINTS: tuple[str, ...] = (
     # sources" rather than "user-supplied content", and why the docs responses relax framing to
     # `SAMEORIGIN` rather than dropping the header.
     "docs_site.serve_docs",
+    # `GET /api/about` — product name and build version, and nothing else. It exists so the
+    # public documentation can name the build it describes without an authenticated call: the
+    # only endpoint carrying the version was `/api/app-stats`, which is gated, so a public page
+    # was reaching into the auth system for one string.
+    #
+    # Against this list's bar: no request body, no query parameters, no store read of any kind
+    # (one pure function), no credential read, no `Set-Cookie`. Every field it returns is already
+    # public on a deployment that serves the documentation. What it must never carry — cluster
+    # identity, customer, project, hostnames, counts, configuration, paths — is enumerated in the
+    # module docstring and asserted by `test_about_is_public.py`, which fails on an added key, so
+    # this entry cannot outlive the claims that justify it.
+    "about.api_about",
     # `auth.api_login` is gone with FR-18. Its removal from this tuple matters as much as its
     # removal from the router: an entry naming a route that no longer exists is dead weight that
     # reads as an intentional exemption to the next person auditing this list.

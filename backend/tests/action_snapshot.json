@@ -1,5 +1,11 @@
 [
  {
+  "endpoint": "about.api_about",
+  "method": "GET",
+  "action": "about:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "activities.api_multirack_campaign",
   "method": "GET",
   "action": "validation.activity:list",

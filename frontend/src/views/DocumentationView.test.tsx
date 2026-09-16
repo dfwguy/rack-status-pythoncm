@@ -80,7 +80,7 @@ describe("DocumentationView", () => {
     ["a protocol-relative URL", "//evil.example/pwn.html"],
     ["traversal out of the docs tree", "../../etc/passwd.html"],
     ["a javascript scheme", "javascript:alert(1)//.html"],
-    ["something that is not a string", { toString: () => "ok.html" }],
+    ["something that is not a string", { toString: (): string => "ok.html" }],
   ])("refuses %s and frames the docs root instead", async (_label, page) => {
     showPage(page);
     await waitFor(() => expect(frame()).not.toBeNull());
@@ -159,17 +159,12 @@ describe("owning the viewport", () => {
   });
 });
 
-describe("naming the build", () => {
-  it("shows the build version rather than promising it matches", async () => {
-    /**
-     * "for the version running here" stated the guarantee without answering the question it
-     * raises — and that question is the whole reason the docs are served locally rather than
-     * linked: are these the docs for what I am running? A version answers it.
-     */
+describe("naming the build, without depending on a session", () => {
+  it("shows the version from the public endpoint", async () => {
     const { apiFetch } = await import("../lib/apiFetch");
     vi.mocked(apiFetch).mockImplementation(async (input: RequestInfo | URL) =>
-      String(input) === "/api/app-stats"
-        ? new Response(JSON.stringify({ ok: true, app_version: "0.3.0-dev" }), { status: 200 })
+      String(input) === "/api/about"
+        ? new Response(JSON.stringify({ ok: true, version: "0.3.0-dev" }), { status: 200 })
         : new Response("<html></html>", { status: 200 }),
     );
 
@@ -179,12 +174,30 @@ describe("naming the build", () => {
     expect(screen.queryByText(/version running here/i)).toBeNull();
   });
 
-  it("shows no version rather than an error when the build cannot be read", async () => {
-    // An unreachable stats endpoint is not a reason to withhold the documentation, and an empty
-    // slot reads as "no version" rather than as something broken.
+  it("asks only endpoints that need no credential", async () => {
+    /**
+     * The regression to prevent. This view used to read the version from `/api/app-stats`, which
+     * is gated, so a page served publicly at `/docs/` depended on a session for one string. It
+     * worked — the view only renders for a signed-in operator — which is precisely what made it
+     * easy to miss. `/api/about` carries the same version from the same `app_version` function
+     * and needs no credential.
+     */
+    const { apiFetch } = await import("../lib/apiFetch");
+    vi.mocked(apiFetch).mockClear();
+
+    show();
+    await waitFor(() => expect(frame()).not.toBeNull());
+
+    const asked = vi.mocked(apiFetch).mock.calls.map(([input]) => String(input)).sort();
+    expect(asked).toEqual(["/api/about", "/docs/"]);
+  });
+
+  it("shows no version rather than an error when the endpoint cannot be read", async () => {
+    // An unreachable endpoint is not a reason to withhold the documentation, and an empty slot
+    // reads as "no version" rather than as something broken.
     const { apiFetch } = await import("../lib/apiFetch");
     vi.mocked(apiFetch).mockImplementation(async (input: RequestInfo | URL) =>
-      String(input) === "/api/app-stats"
+      String(input) === "/api/about"
         ? Promise.reject(new Error("offline"))
         : new Response("<html></html>", { status: 200 }),
     );

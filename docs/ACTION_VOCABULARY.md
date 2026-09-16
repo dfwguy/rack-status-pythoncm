@@ -6,7 +6,7 @@ Every action the product declares, which is what a policy's `actions` field may 
 **Generated from the live registry** — a route without a declaration cannot appear here,
 and the build gate in `backend/tests/test_action_coverage.py` fails if one exists.
 
-184 actions across 53 services: 62 reads and 122 mutations.
+185 actions across 54 services: 63 reads and 122 mutations.
 
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
@@ -20,6 +20,7 @@ case does not match.
 
 | Service | Scope | Actions | What it governs |
 |---|---|---|---|
+| [`about`](#about) | singleton | 1 | `GET /api/about` — what build this is, answerable without a credential. |
 | [`ai`](#ai) | singleton | 6 | The in-app AI assistant: settings, a connectivity test, the streaming chat and the agent loop. |
 | [`analytics`](#analytics) | singleton | 2 | Cross-rack analytics: the fleet aggregate, its history, and the scaling series. |
 | [`audit.deep`](#auditdeep) | instance | 2 | Hardware and NVLink/Network deep-audit runs. |
@@ -73,6 +74,18 @@ case does not match.
 | [`validation.activity`](#validationactivity) | instance | 5 | Validation activities: the durable answer to "what ran on this rack, and what came of it". |
 | [`vault`](#vault) | singleton | 3 | NVFTP token vault: read-only access to the stored credential. |
 | [`workflow`](#workflow) | instance | 8 | Workflow templates and workflow runs. |
+
+## `about`
+
+`GET /api/about` — what build this is, answerable without a credential.
+
+Owned by `backend/api/about.py`.
+
+**One instance per deployment.** A policy names it as `about:default`; there is no id to narrow a grant to.
+
+| Action | Kind | Scope | Routes |
+|---|---|---|---|
+| `about:read` | read | singleton | `GET about.api_about` |
 
 ## `ai`
 
