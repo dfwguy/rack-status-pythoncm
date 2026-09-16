@@ -43,11 +43,46 @@ const show = (from?: string) =>
     </MemoryRouter>,
   );
 
+/** As above, but carrying the page a caller asked to land on. */
+const showPage = (docPage: unknown) =>
+  render(
+    <MemoryRouter initialEntries={[{ pathname: "/documentation", state: { docPage } }]}>
+      <Routes>
+        <Route path="/documentation" element={<DocumentationView />} />
+        <Route path="*" element={<div data-testid="left-the-docs" />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
 describe("DocumentationView", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("frames the documentation this deployment serves", async () => {
     show();
+    await waitFor(() => expect(frame()).not.toBeNull());
+    expect(frame()?.getAttribute("src")).toBe("/docs/");
+  });
+
+  it("lands on the page a caller asked for, so a deep link is worth making", async () => {
+    showPage("how-to/authenticate-to-the-api.html");
+    await waitFor(() => expect(frame()).not.toBeNull());
+    expect(frame()?.getAttribute("src")).toBe("/docs/how-to/authenticate-to-the-api.html");
+  });
+
+  /**
+   * The value is router state today, not a query parameter, so none of these is reachable by a
+   * crafted link. The test is what keeps the validation in place for the day somebody wires this
+   * to the URL — which is the obvious next step, and the point at which an unvalidated page would
+   * frame an arbitrary origin inside our own chrome.
+   */
+  it.each([
+    ["an absolute URL", "https://evil.example/pwn.html"],
+    ["a protocol-relative URL", "//evil.example/pwn.html"],
+    ["traversal out of the docs tree", "../../etc/passwd.html"],
+    ["a javascript scheme", "javascript:alert(1)//.html"],
+    ["something that is not a string", { toString: () => "ok.html" }],
+  ])("refuses %s and frames the docs root instead", async (_label, page) => {
+    showPage(page);
     await waitFor(() => expect(frame()).not.toBeNull());
     expect(frame()?.getAttribute("src")).toBe("/docs/");
   });

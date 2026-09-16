@@ -1,0 +1,170 @@
+# Hints for settings that have no declaration and no prose elsewhere.
+#
+# Read by `bin/gen-settings-reference.py` and joined into the generated
+# `docs/reference/configuration/settings.md`. This file exists so that hints are **reviewed data
+# rather than generator output**: a script cannot know what a setting is for, and one that
+# guessed would produce confident sentences nobody checked. Every line below was written from
+# the call site.
+#
+# Adding one:
+#   * key = the setting name, exactly as the code reads it
+#   * value = one line, present tense, saying what it controls -- not where it is read
+#   * if you cannot tell from the code, leave it out. The generated page lists unhinted settings
+#     as a to-do, which is the honest state; a wrong hint is worse than a missing one.
+#
+# A setting declared in `config_registry.py` needs no entry: its own `description` wins, and
+# duplicating it here would be a second copy to forget.
+
+[hints]
+
+# --- identity of the running cluster -----------------------------------------------------------
+CLUSTER_NAME = "Legacy alias for RACK_CLUSTER_NAME, still consulted when seeding the default project."
+RACK_CLUSTER_NAME = "Display name of the active cluster, shown on the dashboard and stamped into snapshots."
+RACK_CLUSTER_ID = "Stable identifier for the cluster, recorded in fleet snapshots so history survives a rename."
+RACK_CLUSTER_PRODUCT_LINE = "Product-line label such as GB300 NVL72, shown on the overview and in reports."
+RACK_PRODUCT_LINE = "Older alias for RACK_CLUSTER_PRODUCT_LINE; the specific one wins."
+NVIS_PROJECT_ID = "Active project id. Written by the cluster overlay and read to select that project's script layer."
+NVIS_PLATFORM_ID = "Active platform id. Selects the platform layer of the script tree."
+
+# --- geometry and naming -----------------------------------------------------------------------
+GPUS_PER_NODE = "GPUs in one node. Also supplies sbatch --ntasks-per-node for a step that does not set one."
+RACK_CLUSTER_GPU_PER_TRAY = "GPUs per tray for the overview's capacity arithmetic. Default 8."
+RACK_FULL_RACK_NODES = "How many nodes count as a full rack, for target expansion and completeness checks."
+RACK_ID_ALIAS_RULES = "Rewrites a hostname-derived rack id to the BCM rack object's id, as `<regex>=><replacement>` pairs separated by `;`. Needed where the BCM rack name is not a prefix of the tray hostname — Nscale TX has racks `WH1H1..WH1H22` and trays `ink50-dh01-h01-11`, and without a rule no tray attaches to a rack."
+RACK_TARGET_FROM_INVENTORY = "Expand a rack to nodes from live Slurm inventory rather than from the naming template. Default on; set to 0 to force the template path."
+NVIS_RACK_FNAME_RE = "Regex that finds a rack id inside a result-log filename."
+NVIS_LOG_BASENAME_MODE = "`open` (default) accepts any plausible result-log name; `strict` accepts only the legacy marker allowlist."
+
+# --- paths and stores --------------------------------------------------------------------------
+NVIS_VAR_DIR = "The `var/` directory. Exported to scripts and launchers so they never derive it from their own location."
+NVIS_CATALOG_FILE = "Path to the catalog database holding platforms, tools and projects. This is what separates two deployments sharing one checkout."
+NVIS_SCRIPTS_TREE = "Override the root of the layered script tree."
+NVIS_SSH_KEY_DIR = "Where cluster SSH private keys are written, owner-only. Defaults under `var/secrets/ssh`."
+NVIS_REPORTS_DIR = "Where generated reports are stored."
+NVIS_WORKSPACE_DIR = "Shared workspace on the cluster where tools are installed. Defaults to `/home/cmsupport/workspace`."
+RACK_WORKSPACE_DIR = "Older alias for NVIS_WORKSPACE_DIR."
+RACK_WORKFLOWS_DIR = "Where workflow definitions are stored. Defaults under `var/workflows`."
+RACK_WEB_TLS_DIR = "Where the TLS certificate and key live. The startup gate generates a self-signed pair here on a first boot."
+RACK_WEB_POLICY_FILE = "Path to the authorization policy set. Its presence is what selects the enforcing engine over the permissive one."
+RACK_RESULTS_DB = "SQLite database of parsed results history."
+RACK_RESULTS_DB_BUSY_MS = "How long a results-database write waits on a lock before failing."
+RACK_CLUSTER_SNAPSHOT_DB = "SQLite database of fleet status snapshots."
+RACK_CLUSTER_OVERVIEW_LIVE_DB = "SQLite database backing the live cluster overview."
+RACK_CLUSTER_DASHBOARD_METADATA_FILE = "Operator-maintained metadata shown on the cluster dashboard."
+RACK_NODE_ISSUES_FILE = "Persisted per-node issue annotations."
+RACK_POST_RUN_HISTORY_FILE = "Append-only history of post-run report events."
+RACK_POST_RUN_MAX_EVENTS = "Ceiling on retained post-run events. Floors at 1000."
+RACK_PARSER_EXCEL_REPORT_DIR = "Where the parser's spreadsheet report is copied after a run."
+RACK_AI_SETTINGS_FILE = "Persisted assistant settings, so a change survives a restart."
+RACK_AI_TOOL_AUDIT_FILE = "Audit log of the tool calls the assistant made."
+
+# --- execution and Slurm -----------------------------------------------------------------------
+RACK_SLURM_CONF = "An explicit `SLURM_CONF` to export before running Slurm commands. Needed where the scripts host is not the Slurm controller."
+RACK_MODULES_INIT = "Shell snippet that initialises Environment Modules before a Slurm command, replacing the built-in default."
+RACK_SLURM_SACCT_SINCE = "How far back the recent-jobs query looks. Default `now-7days`."
+RACK_SLURM_SACCT_DISABLED = "Stop querying `sacct`, for a cluster with no accounting database."
+RACK_PDSH_W_SKIP_SLURM_EXPAND = "Pass a `pdsh -w` target through verbatim instead of expanding it via Slurm first."
+RACK_SSH_REACHABILITY_CONNECT_TIMEOUT = "Seconds a reachability probe waits for a connection. Default 5."
+RACK_SSH_REACHABILITY_TTL_SEC = "How long a reachability result is cached. Default 15, floors at 3."
+NVIS_BCM_PYTHON = "Interpreter used for BCM `pythoncm` queries on the head node."
+RACK_MAAS_CLI = "The `maas` CLI binary. Default `maas`."
+RACK_MAAS_PROFILE = "The `maas` CLI profile to use. Default `admin`."
+
+# --- gunicorn and serving ----------------------------------------------------------------------
+GUNICORN_WORKERS = "Worker count. Must be 1 — SRP login state is in-process, so a second worker splits it and login succeeds about half the time. The startup gate refuses more."
+WEB_CONCURRENCY = "Gunicorn's own name for the worker count, checked alongside GUNICORN_WORKERS and subject to the same limit of 1."
+GUNICORN_THREADS = "Threads per worker. Default 24."
+GUNICORN_TIMEOUT = "Seconds before a worker is considered hung. Default 600, because a fleet scan legitimately takes minutes."
+RACK_WEB_PORT = "Port to serve on. Default 5050."
+RACK_WEB_PUBLIC_HOST = "Hostname operators reach this deployment by. Used to derive the OIDC issuer when one is not set explicitly."
+RACK_WEB_TOKEN_ISSUER = "The `iss` claim on tokens this deployment mints. Defaults to `nvis-rack-status`."
+RACK_ENABLE_WEB_TERMINAL = "Install the browser terminal. Default on; when off the endpoint does not exist rather than refusing."
+
+# --- inventory ---------------------------------------------------------------------------------
+NVIS_INVENTORY_CACHE = "Path to the collected node-inventory cache."
+NVIS_INVENTORY_WORKERS = "Concurrency for a fleet inventory sweep. Bounded by the head node's SSH session limit, not by this alone."
+NVIS_INVENTORY_VIA_SRUN = "Collect missing node inventory through `srun` instead of an SSH fan-out."
+NVIS_INVENTORY_SRUN_CHUNK = "Nodes per `srun` batch when collecting inventory that way."
+
+# --- credentials for external systems ----------------------------------------------------------
+NGC_API_KEY = "NGC API key used to pull tool containers. The download-containers action refuses without it."
+RACK_GRAFANA_PASSWORD = "Password for Grafana API requests behind the embedded panels."
+RACK_PROMETHEUS_BASIC_AUTH_USER = "Username for the BCM Prometheus endpoint."
+RACK_PROMETHEUS_BASIC_AUTH_PASSWORD = "Password for the BCM Prometheus endpoint."
+NVLMAPPER_USERNAME = "Account for the NVLink mapper appliance."
+NVLMAPPER_PASSWORD = "Password for the NVLink mapper appliance."
+RACK_PUNCHCARD_SPREADSHEET_ID = "Google Sheets id of the node-issue punchcard."
+RACK_PUNCHCARD_RANGE = "Sheet range the punchcard is read from. Default `Sheet2!A1:Z1000`."
+RACK_PUNCHCARD_TOKEN_FILE = "OAuth token file for reading the punchcard sheet."
+RACK_PUNCHCARD_CACHE_SEC = "How long a punchcard read is cached. Default 300, floors at 60."
+
+# --- the assistant -----------------------------------------------------------------------------
+RACK_AI_ENDPOINT = "Base URL of the model endpoint the assistant calls."
+RACK_AI_MODEL = "Model name the assistant requests."
+RACK_AI_API_KEY = "API key for that endpoint."
+RACK_AI_TOOLS_ENABLED = "Whether the assistant may call product tools rather than only answering."
+RACK_AI_TOOLS_MODE = "`auto` lets the assistant decide when to call a tool; `off` disables calling entirely."
+RACK_AI_TOOLS_MAX_STEPS = "Ceiling on tool calls in one exchange, so a loop cannot run away. Default 6."
+
+# --- per-tool version pins ---------------------------------------------------------------------
+CUDA_MAJ = "CUDA major version for selecting a tool's container or module. The last fallback, behind each tool's own RACK_*_CUDA_MAJOR. Default 13."
+RACK_NVLOOM_CUDA_MAJOR = "CUDA major for NVLoom, and the fallback for ClusterKit and mnubergemm."
+RACK_CLUSTERKIT_CUDA_MAJOR = "CUDA major for ClusterKit."
+RACK_MNUBERGEMM_CUDA_MAJOR = "CUDA major for mnubergemm. Must match what DCGM picks, or the MPI launch cannot find the plugin."
+RACK_NCCL_MPI_VERSION = "NCCL version for an MPI NCCL run, when a launch does not name one."
+RACK_NCCL_MPI_SIZE_MAX = "Largest message size an NCCL sweep runs to. Default 16G."
+RACK_NCCL_FULLRACK_END = "End size for the full-rack NCCL sweep. Default 16G."
+RACK_NCCL_FULLRACK_LAUNCHER = "Which launcher the full-rack NCCL run uses. Default `llmb`."
+RACK_LLMB_INSTALL = "LLMB install prefix on the cluster."
+RACK_LLMB_NCCL_RESERVATION = "Slurm reservation to submit the LLMB NCCL run into."
+RACK_EXEMPLAR_LLAMA_CT_RANGE = "Tray ranges the Exemplar Llama run targets. Default `11-18,28-35`."
+NVIS_EXEMPLAR_WORKLOADS = "Default Exemplar workloads when a launch names none."
+
+# --- acceptance campaigns ----------------------------------------------------------------------
+RACK_MULTIRACK_CAMPAIGN_ID = "Identifier of the pinned acceptance campaign, so a stale browser cannot launch against last week's roster."
+RACK_MULTIRACK_CAMPAIGN_MANIFEST = "Path to the campaign manifest listing the exact nodes."
+RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK = "Nodes each rack is expected to contribute to a campaign. Default 16."
+RACK_MULTIRACK_LEDGER_FILE = "The multirack results ledger."
+RACK_MULTIRACK_LEDGER_MARKDOWN_FILE = "Markdown rendering of that ledger."
+RACK_MULTIRACK_LEDGER_EXPORT_STATUS_FILE = "Where the ledger export records its own progress."
+RACK_MULTIRACK_LEDGER_LAKE_DISABLED = "Stop publishing ledger rows to the data lake."
+RACK_VALIDATION_EXCLUDED_NODES = "Comma-list of nodes never eligible for a validation launch, whatever the selection."
+
+# --- scripts a site may relocate ---------------------------------------------------------------
+RACK_BMC_RECOVERY_SCRIPT = "Absolute path to the BMC recovery script, overriding the script tree."
+RACK_NVLINK_PREFLIGHT_SCRIPT = "Absolute path to the NVLink preflight script."
+RACK_MACSWAP_SCRIPT = "Absolute path to the MAC-swap script."
+RACK_MACSWAP_PYTHON_MODULE = "Environment Modules name loaded before invoking macswap. Default `python3`."
+
+# --- rehearsal modes ---------------------------------------------------------------------------
+RACK_BMC_RECOVERY_DRY_RUN = "Run BMC recovery without touching a BMC, to rehearse the targeting."
+RACK_MAC_CHANGE_DRY_RUN = "Run the MAC change without writing, to rehearse the targeting."
+
+# --- kill switches -----------------------------------------------------------------------------
+# One per destructive or expensive action, so a site can withdraw a single capability without
+# editing the catalog or the policy. Each refuses the action at the endpoint.
+RACK_ANALYTICS_DISABLED = "Refuse the analytics endpoints."
+RACK_BMC_RECOVERY_DISABLED = "Refuse BMC recovery."
+RACK_MAC_CHANGE_DISABLED = "Refuse the MAC change action."
+RACK_CLUSTERKIT_DISABLED = "Refuse ClusterKit launches."
+RACK_LLMB_NCCL_DISABLED = "Refuse LLMB NCCL launches."
+RACK_NCCL_FULLRACK_DISABLED = "Refuse full-rack NCCL launches."
+RACK_NVLOOM_SINGLERACK_DISABLED = "Refuse single-rack NVLoom launches."
+RACK_NVLINK_PREFLIGHT_DISABLED = "Refuse the NVLink preflight."
+RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED = "Refuse container downloads."
+RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED = "Refuse the CUDA/NCCL workspace install."
+RACK_TOOLS_INSTALL_DCGM_WORKSPACE_DISABLED = "Refuse the DCGM workspace install."
+RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED = "Refuse the DGXC benchmarking install."
+RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED = "Refuse the HPC-X workspace install."
+RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED = "Refuse the NVLoom workspace install."
+RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED = "Refuse the Grafana/Bright Prometheus launch."
+RACK_VALIDATION_ACTIVITIES_ADOPT_DISABLED = "Stop adopting externally-started runs found in the log directory into the activity registry."
+RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED = "Stop the background reconciliation of stored activities against Slurm."
+RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE = "Lock file that keeps two processes from reconciling activities at once."
+RACK_VALIDATION_ACTIVITIES_ARCHIVE_DB = "Where completed activities are archived."
+RACK_MCP_ENABLED = "Serve the MCP endpoint."
+RACK_MCP_ALLOW_WRITES = "Let MCP callers perform mutations rather than only reads."
+
+# --- parsing -----------------------------------------------------------------------------------
+RACK_UNIVERSAL_SCAN_IGNORE_RE = "Regex of paths the universal log scan skips."
+NVIS_NPI_CATALOG_DIR = "Directory of NPI tool catalog files to import."

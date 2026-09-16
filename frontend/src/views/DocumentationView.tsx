@@ -47,6 +47,22 @@ import { DEFAULT_PATH } from "../routes";
 /** Where the Sphinx build is served from. A server route, not an SPA one. */
 const DOCS_URL = "/docs/";
 
+/**
+ * A page inside the docs site, for a caller that wants to land somewhere specific.
+ *
+ * Validated even though the value arrives in router *state* rather than in the URL, so it is not
+ * attacker-supplied today. The check is what keeps that true: the moment somebody wires this to a
+ * query parameter -- the obvious next step, and the reason a deep link is wanted at all -- an
+ * unvalidated value would frame any origin inside our own page. Relative, one of our own HTML
+ * pages, and no traversal.
+ */
+const SAFE_DOC_PAGE = /^[A-Za-z0-9][A-Za-z0-9._/-]*\.html$/;
+
+function docSrc(page: unknown): string {
+  if (typeof page !== "string" || !page || page.includes("..")) return DOCS_URL;
+  return SAFE_DOC_PAGE.test(page) ? `${DOCS_URL}${page}` : DOCS_URL;
+}
+
 export function DocumentationView() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -190,7 +206,7 @@ export function DocumentationView() {
       <Box sx={{ flex: 1, minHeight: 0 }}>
         {ready ? (
           <iframe
-            src={DOCS_URL}
+            src={docSrc((location.state as { docPage?: string } | null)?.docPage)}
             title="Greenlight documentation"
             style={{ width: "100%", height: "100%", border: 0, display: "block" }}
           />

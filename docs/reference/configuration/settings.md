@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**251 settings.** 15 are *declared* in
+**243 settings.** 15 are *declared* in
 `backend/config_registry.py`, which is the set `greenlight.toml` can carry, the required-
 setting preflight can demand, and `greenlight.toml.example` lists. 119 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -33,13 +33,9 @@ process environment and cannot be set per cluster or from the Settings screen.
 
 ## Undescribed settings
 
-130 settings are read by the code and are not named in any document. They
-are listed here
-because an inventory that hid them would be the reason nobody knew: a generator must not
-invent a description, so each of these is a real to-do rather than a sentence somebody
-guessed.
-
-`CLUSTER_NAME`, `CUDA_MAJ`, `GPUS_PER_NODE`, `GUNICORN_THREADS`, `GUNICORN_TIMEOUT`, `GUNICORN_WORKERS`, `HTTP_HOST`, `HTTP_ORIGIN`, `HTTP_UPGRADE`, `HTTP_USER_AGENT`, `HTTP_X_FORWARDED_FOR`, `NGC_API_KEY`, `NVIS_BCM_PYTHON`, `NVIS_CATALOG_FILE`, `NVIS_EXEMPLAR_WORKLOADS`, `NVIS_INVENTORY_CACHE`, `NVIS_INVENTORY_SRUN_CHUNK`, `NVIS_INVENTORY_VIA_SRUN`, `NVIS_INVENTORY_WORKERS`, `NVIS_LOG_BASENAME_MODE`, `NVIS_NPI_CATALOG_DIR`, `NVIS_PLATFORM_ID`, `NVIS_PROJECT_ID`, `NVIS_RACK_FNAME_RE`, `NVIS_REPORTS_DIR`, `NVIS_SCRIPTS_TREE`, `NVIS_SSH_KEY_DIR`, `NVIS_VAR_DIR`, `NVIS_WORKSPACE_DIR`, `NVLMAPPER_PASSWORD`, `NVLMAPPER_USERNAME`, `PATH_INFO`, `QUERY_STRING`, `RACK_AI_API_KEY`, `RACK_AI_ENDPOINT`, `RACK_AI_MODEL`, `RACK_AI_SETTINGS_FILE`, `RACK_AI_TOOLS_ENABLED`, `RACK_AI_TOOLS_MAX_STEPS`, `RACK_AI_TOOLS_MODE`, `RACK_AI_TOOL_AUDIT_FILE`, `RACK_ANALYTICS_DISABLED`, `RACK_BMC_RECOVERY_DISABLED`, `RACK_BMC_RECOVERY_DRY_RUN`, `RACK_BMC_RECOVERY_SCRIPT`, `RACK_CLUSTERKIT_CUDA_MAJOR`, `RACK_CLUSTERKIT_DISABLED`, `RACK_CLUSTER_DASHBOARD_METADATA_FILE`, `RACK_CLUSTER_GPU_PER_TRAY`, `RACK_CLUSTER_ID`, `RACK_CLUSTER_NAME`, `RACK_CLUSTER_OVERVIEW_LIVE_DB`, `RACK_CLUSTER_PRODUCT_LINE`, `RACK_CLUSTER_SNAPSHOT_DB`, `RACK_ENABLE_WEB_TERMINAL`, `RACK_EXEMPLAR_LLAMA_CT_RANGE`, `RACK_FULL_RACK_NODES`, `RACK_GRAFANA_PASSWORD`, `RACK_ID_ALIAS_RULES`, `RACK_LLMB_INSTALL`, `RACK_LLMB_NCCL_DISABLED`, `RACK_LLMB_NCCL_RESERVATION`, `RACK_MAAS_CLI`, `RACK_MAAS_PROFILE`, `RACK_MACSWAP_PYTHON_MODULE`, `RACK_MACSWAP_SCRIPT`, `RACK_MAC_CHANGE_DISABLED`, `RACK_MAC_CHANGE_DRY_RUN`, `RACK_MCP_ALLOW_WRITES`, `RACK_MCP_ENABLED`, `RACK_MNUBERGEMM_CUDA_MAJOR`, `RACK_MODULES_INIT`, `RACK_MULTIRACK_CAMPAIGN_ID`, `RACK_MULTIRACK_CAMPAIGN_MANIFEST`, `RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK`, `RACK_MULTIRACK_LEDGER_EXPORT_STATUS_FILE`, `RACK_MULTIRACK_LEDGER_FILE`, `RACK_MULTIRACK_LEDGER_LAKE_DISABLED`, `RACK_MULTIRACK_LEDGER_MARKDOWN_FILE`, `RACK_NCCL_FULLRACK_DISABLED`, `RACK_NCCL_FULLRACK_END`, `RACK_NCCL_FULLRACK_LAUNCHER`, `RACK_NCCL_MPI_SIZE_MAX`, `RACK_NCCL_MPI_VERSION`, `RACK_NODE_ISSUES_FILE`, `RACK_NVLINK_PREFLIGHT_DISABLED`, `RACK_NVLINK_PREFLIGHT_SCRIPT`, `RACK_NVLOOM_CUDA_MAJOR`, `RACK_NVLOOM_SINGLERACK_DISABLED`, `RACK_PARSER_EXCEL_REPORT_DIR`, `RACK_PDSH_W_SKIP_SLURM_EXPAND`, `RACK_POST_RUN_HISTORY_FILE`, `RACK_POST_RUN_MAX_EVENTS`, `RACK_PRODUCT_LINE`, `RACK_PROMETHEUS_BASIC_AUTH_PASSWORD`, `RACK_PROMETHEUS_BASIC_AUTH_USER`, `RACK_PUNCHCARD_CACHE_SEC`, `RACK_PUNCHCARD_RANGE`, `RACK_PUNCHCARD_SPREADSHEET_ID`, `RACK_PUNCHCARD_TOKEN_FILE`, `RACK_RESULTS_DB`, `RACK_RESULTS_DB_BUSY_MS`, `RACK_SLURM_CONF`, `RACK_SLURM_SACCT_DISABLED`, `RACK_SLURM_SACCT_SINCE`, `RACK_SSH_REACHABILITY_CONNECT_TIMEOUT`, `RACK_SSH_REACHABILITY_TTL_SEC`, `RACK_TARGET_FROM_INVENTORY`, `RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED`, `RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED`, `RACK_TOOLS_INSTALL_DCGM_WORKSPACE_DISABLED`, `RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED`, `RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED`, `RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED`, `RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED`, `RACK_UNIVERSAL_SCAN_IGNORE_RE`, `RACK_VALIDATION_ACTIVITIES_ADOPT_DISABLED`, `RACK_VALIDATION_ACTIVITIES_ARCHIVE_DB`, `RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED`, `RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE`, `RACK_VALIDATION_EXCLUDED_NODES`, `RACK_WEB_POLICY_FILE`, `RACK_WEB_PORT`, `RACK_WEB_PUBLIC_HOST`, `RACK_WEB_TLS_DIR`, `RACK_WEB_TOKEN_ISSUER`, `RACK_WORKFLOWS_DIR`, `RACK_WORKSPACE_DIR`, `REMOTE_ADDR`, `WEB_CONCURRENCY`
+None: every setting read has either a declaration, prose in `docs/ENVIRONMENT.md` or a
+hint in `docs/settings-hints.toml`. A newly added setting appears here on the next
+build until somebody writes one.
 
 ## Declared, read indirectly
 
@@ -52,12 +48,15 @@ scan simply cannot point at a call site.
 
 ## Read outside the resolution ladder
 
-170 settings are read only via `os.environ`, so a cluster overlay and the
+162 of them are read only via `os.environ`, so a cluster overlay and the
 Settings screen cannot influence them — the setting is process-wide. New code should
 prefer `_eget` (`core-designs.mdc` §5); these are the ones that predate the rule or
 genuinely belong to the process rather than to a cluster.
 
-`CLUSTER_NAME`, `DEFAULT_LOG_DIR`, `FLASK_DEBUG`, `GUNICORN_THREADS`, `GUNICORN_TIMEOUT`, `GUNICORN_WORKERS`, `HTTP_HOST`, `HTTP_ORIGIN`, `HTTP_UPGRADE`, `HTTP_USER_AGENT`, `HTTP_X_FORWARDED_FOR`, `NEMO_TARGET_STEPS`, `NVIS_BCM_PYTHON`, `NVIS_CATALOG_FILE`, `NVIS_CT_ID`, `NVIS_GREENLIGHT_CONFIG`, `NVIS_IDENTITY_FILE`, `NVIS_INVENTORY_CACHE`, `NVIS_INVENTORY_SRUN_CHUNK`, `NVIS_INVENTORY_VIA_SRUN`, `NVIS_INVENTORY_WORKERS`, `NVIS_JOB_ENV_OVERRIDES_FILE`, `NVIS_LOG_BASENAME_MODE`, `NVIS_NPI_CATALOG_DIR`, `NVIS_NVSW_ID`, `NVIS_RACK_FNAME_RE`, `NVIS_RACK_ID`, `NVIS_REPORTS_DIR`, `NVIS_SSH_KEY_DIR`, `NVIS_TOKEN_VAULT_DIR`, `NVIS_VAULT_MASTER_KEY`, `PATH_INFO`, `PORT`, `PROJECT_NAME`, `QUERY_STRING`, `RACK_AI_API_KEY`, `RACK_AI_ENDPOINT`, `RACK_AI_MODEL`, `RACK_AI_SETTINGS_FILE`, `RACK_AI_TOOLS_ENABLED`, `RACK_AI_TOOLS_MAX_STEPS`, `RACK_AI_TOOLS_MODE`, `RACK_AI_TOOL_AUDIT_FILE`, `RACK_ANALYTICS_DISABLED`, `RACK_BMC_RECOVERY_DISABLED`, `RACK_BMC_RECOVERY_DRY_RUN`, `RACK_BRINGUP_CACHE_TTL_SEC`, `RACK_BRINGUP_DISABLED`, `RACK_BRINGUP_HOME`, `RACK_BUG_REPORT_DISABLED`, `RACK_BUG_REPORT_DRY_RUN`, `RACK_BUG_REPORT_REMOTE_DIR`, `RACK_BUG_REPORT_SSH_OPTS`, `RACK_BUG_REPORT_SSH_USER`, `RACK_CLUSTERKIT_DISABLED`, `RACK_CLUSTER_DASHBOARD_METADATA_FILE`, `RACK_CLUSTER_ID`, `RACK_CLUSTER_NAME`, `RACK_CLUSTER_OVERVIEW_LIVE_DB`, `RACK_CLUSTER_SNAPSHOT_DB`, `RACK_CMSH_INCLUDE_R00`, `RACK_DIRECT_NODE_SSH`, `RACK_ENABLE_WEB_TERMINAL`, `RACK_FANOUT_MAX_WORKERS`, `RACK_FS_DIR_CACHE_TTL_SEC`, `RACK_GPU_RESET_DISABLED`, `RACK_GPU_RESET_DRY_RUN`, `RACK_GRAFANA_PASSWORD`, `RACK_HW_CHECK_DISABLED`, `RACK_HW_CHECK_DRY_RUN`, `RACK_HW_CHECK_HELP_DISABLED`, `RACK_ID_ALIAS_RULES`, `RACK_LAKE_CAPTURE`, `RACK_LAUNCH_REVIEW`, `RACK_LLAMA_DISABLED`, `RACK_LLMB_NCCL_DISABLED`, `RACK_LOCKS_FILE`, `RACK_LOG_EXPORT_DISABLED`, `RACK_MAAS_CLI`, `RACK_MAAS_PROFILE`, `RACK_MAC_CHANGE_DISABLED`, `RACK_MAC_CHANGE_DRY_RUN`, `RACK_MCP_ALLOW_WRITES`, `RACK_MCP_ENABLED`, `RACK_MNUBERGEMM_STRESS_DISABLED`, `RACK_MODULES_INIT`, `RACK_MULTIRACK_JOBS_FILE`, `RACK_MULTIRACK_LEDGER_EXPORT_STATUS_FILE`, `RACK_MULTIRACK_LEDGER_FILE`, `RACK_MULTIRACK_LEDGER_LAKE_DISABLED`, `RACK_MULTIRACK_LEDGER_MARKDOWN_FILE`, `RACK_NCCL_FULLRACK_DISABLED`, `RACK_NEMO_XRACK_DISABLED`, `RACK_NODE_ISSUES_FILE`, `RACK_NODE_SSH_KEY`, `RACK_NODE_SSH_USER`, `RACK_NVLINK_PREFLIGHT_DISABLED`, `RACK_NVLMAPPER_DISABLED`, `RACK_NVLOOM_SINGLERACK_DISABLED`, `RACK_NVSWITCH_AUDIT_DISABLED`, `RACK_PARSER_EXPORT_DISABLED`, `RACK_PDSH_W_SKIP_SLURM_EXPAND`, `RACK_PHYSICAL_RF0_LOOSE_HOSTNAMES`, `RACK_PHYSICAL_RF0_MAP_DISABLED`, `RACK_PLATFORM`, `RACK_POST_RUN_HISTORY_FILE`, `RACK_POST_RUN_MAX_EVENTS`, `RACK_POWER_DISABLED`, `RACK_POWER_DRY_RUN`, `RACK_PUNCHCARD_CACHE_SEC`, `RACK_PUNCHCARD_RANGE`, `RACK_PUNCHCARD_SPREADSHEET_ID`, `RACK_PUNCHCARD_TOKEN_FILE`, `RACK_RESULTS_DB`, `RACK_RESULTS_DB_BUSY_MS`, `RACK_SERVICES_RESTART_DISABLED`, `RACK_SERVICES_RESTART_DRY_RUN`, `RACK_SLURM_CONF`, `RACK_SLURM_MODULE`, `RACK_SLURM_NODES_STATE_DISABLED`, `RACK_SLURM_NODES_STATE_DRY_RUN`, `RACK_SLURM_SACCT_DISABLED`, `RACK_SLURM_SCANCEL_DISABLED`, `RACK_SLURM_SCONTROL_SHOW_JOB_DISABLED`, `RACK_SLURM_SINFO_R_DISABLED`, `RACK_SLURM_SKIP_MODULE_LOAD`, `RACK_SLURM_SQUEUE_DISABLED`, `RACK_SSH_HOST`, `RACK_SSH_REACHABILITY_CONNECT_TIMEOUT`, `RACK_SSH_REACHABILITY_TTL_SEC`, `RACK_STATUS_ALLOWED_PREFIXES`, `RACK_STATUS_DEMO`, `RACK_STATUS_LOG_DIR`, `RACK_SYSINFO_DISABLED`, `RACK_TAIL_LOG_DISABLED`, `RACK_TARGET_FROM_INVENTORY`, `RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED`, `RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED`, `RACK_TOOLS_INSTALL_DCGM_WORKSPACE_DISABLED`, `RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED`, `RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED`, `RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED`, `RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED`, `RACK_UNIVERSAL_SCAN_IGNORE_RE`, `RACK_UPTIME_DISABLED`, `RACK_UPTIME_DRY_RUN`, `RACK_VALIDATION_ACTIVITIES_ADOPT_DISABLED`, `RACK_VALIDATION_ACTIVITIES_ARCHIVE_DB`, `RACK_VALIDATION_ACTIVITIES_FILE`, `RACK_VALIDATION_DISABLED`, `RACK_WEB_ALLOWED_ORIGINS`, `RACK_WEB_BIND_ADDR`, `RACK_WEB_CSP_MODE`, `RACK_WEB_OIDC_CLIENTS_FILE`, `RACK_WEB_OIDC_ISSUER`, `RACK_WEB_POLICY_FILE`, `RACK_WEB_PORT`, `RACK_WEB_PUBLIC_HOST`, `RACK_WEB_SECRET_KEY`, `RACK_WEB_SIGNING_KEY_DIR`, `RACK_WEB_SIGNING_KEY_VALIDITY_SECONDS`, `RACK_WEB_TLS_DIR`, `RACK_WEB_TLS_KEY`, `RACK_WEB_TLS_MIN_VERSION`, `RACK_WEB_TOKEN_ISSUER`, `RACK_WORKFLOWS_DIR`, `REMOTE_ADDR`, `SINFO_OPTS`, `SQUEUE_USER`, `WEB_CONCURRENCY`
+They are not listed here — 162 names in a paragraph is not something
+anyone reads.
+The table below marks each one `environment` in its `Reader` column, which answers the
+same question setting by setting, where you are already looking.
 
 ## Declared settings
 
@@ -84,262 +83,258 @@ them. `UI` marks the ones the dashboard Settings screen may override.
 
 ## Every setting
 
+`What it controls` is the registry's own description where a setting has a declaration,
+then a reviewed hint from `docs/settings-hints.toml`, then a pointer to the prose in
+`docs/ENVIRONMENT.md`. A dash means nobody has written one yet.
+
 `Reader` is `ladder` where the value goes through `_eget`, `environment` where it is read
 straight from `os.environ`, and `indirect` for the five consumed by name from a list (the
 connection profile) or through another registry (`logging_config`) rather than by a call
 this scan can see. `Default` is shown only where the call site supplies a literal.
 
-| Setting | Reader | Default | Declared | Described | Read in |
-|---|---|---|---|---|---|
-| `CLUSTER_NAME` | environment |  |  |  | `backend/rack_status_engine.py` |
-| `CUDA_MAJ` | ladder |  |  |  | `backend/api/validation_runs.py` |
-| `DEFAULT_LOG_DIR` | environment |  |  | yes | `backend/workflow_engine.py` |
-| `FLASK_DEBUG` | environment |  |  | yes | `backend/app.py` |
-| `GPUS_PER_NODE` | ladder | `0` |  |  | `backend/rack_status_engine.py`, `backend/workflow_engine.py` |
-| `GUNICORN_THREADS` | environment |  |  |  | `backend/cli.py` |
-| `GUNICORN_TIMEOUT` | environment |  |  |  | `backend/cli.py` |
-| `GUNICORN_WORKERS` | environment |  |  |  | `backend/startup_gate.py` |
-| `HTTP_HOST` | environment |  |  |  | `backend/web_auth.py` |
-| `HTTP_ORIGIN` | environment |  |  |  | `backend/web_auth.py` |
-| `HTTP_UPGRADE` | environment |  |  |  | `backend/api/terminal.py` |
-| `HTTP_USER_AGENT` | environment |  |  |  | `backend/api/terminal.py` |
-| `HTTP_X_FORWARDED_FOR` | environment |  |  |  | `backend/api/terminal.py` |
-| `NEMO_SQSH_SRC` | ladder |  | yes | yes | `backend/api/dashboard.py`, `backend/api/tools.py` |
-| `NEMO_TARGET_STEPS` | environment | `0` |  | yes | `backend/universal_parser.py` |
-| `NGC_API_KEY` | ladder |  |  |  | `backend/api/tools.py` |
-| `NVIS_BCM_PYTHON` | environment |  |  |  | `backend/bcm_query.py` |
-| `NVIS_CATALOG_FILE` | environment |  |  |  | `backend/catalog/store.py` |
-| `NVIS_CT_ID` | environment |  |  | yes | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` |
-| `NVIS_EXEMPLAR_WORKLOADS` | ladder |  |  |  | `backend/api/tools.py` |
-| `NVIS_FORCE_SETUP_WIZARD` | ladder |  | yes |  | `backend/setup_state.py` |
-| `NVIS_GREENLIGHT_CONFIG` | environment |  |  | yes | `backend/config_launch.py` |
-| `NVIS_IDENTITY_FILE` | environment |  |  | yes | `backend/identity/store.py` |
-| `NVIS_INVENTORY_CACHE` | environment |  |  |  | `backend/node_inventory.py` |
-| `NVIS_INVENTORY_SRUN_CHUNK` | environment |  |  |  | `backend/node_inventory.py` |
-| `NVIS_INVENTORY_VIA_SRUN` | environment |  |  |  | `backend/api/reports.py` |
-| `NVIS_INVENTORY_WORKERS` | environment |  |  |  | `backend/node_inventory.py` |
-| `NVIS_JOB_ENV_OVERRIDES_FILE` | environment |  |  | yes | `backend/catalog/seed.py`, `backend/native_status.py` |
-| `NVIS_LOG_BASENAME_MODE` | environment |  |  |  | `backend/nvis_id_templates.py` |
-| `NVIS_LOG_LEVEL` | indirect |  | yes | yes |  |
-| `NVIS_NPI_CATALOG_DIR` | environment |  |  |  | `backend/catalog/npi_import.py` |
-| `NVIS_NVSW_ID` | environment |  |  | yes | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` |
-| `NVIS_PLATFORM_ID` | ladder |  |  |  | `backend/script_tree.py` |
-| `NVIS_PROJECT_ID` | ladder |  |  |  | `backend/script_tree.py` |
-| `NVIS_RACK_FNAME_RE` | environment |  |  |  | `backend/universal_parser.py` |
-| `NVIS_RACK_ID` | environment |  |  | yes | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` +1 |
-| `NVIS_REPORTS_DIR` | environment |  |  |  | `backend/report_store.py` |
-| `NVIS_SCRIPTS_TREE` | ladder |  |  |  | `backend/script_tree.py` |
-| `NVIS_SSH_KEY_DIR` | environment |  |  |  | `backend/ssh_key_store.py` |
-| `NVIS_TOKEN_VAULT_DIR` | environment |  |  | yes | `backend/token_vault.py` |
-| `NVIS_VAR_DIR` | ladder |  |  |  | `backend/script_tree.py` |
-| `NVIS_VAULT_MASTER_KEY` | environment |  |  | yes | `backend/token_vault.py` |
-| `NVIS_WORKSPACE_DIR` | ladder |  |  |  | `backend/config_env.py` |
-| `NVLMAPPER_PASSWORD` | ladder |  |  |  | `backend/api/dashboard.py` |
-| `NVLMAPPER_RC` | ladder |  |  | yes | `backend/api/dashboard.py` |
-| `NVLMAPPER_USERNAME` | ladder |  |  |  | `backend/api/dashboard.py` |
-| `PATH_INFO` | environment |  |  |  | `backend/api/terminal.py` |
-| `PORT` | environment | `5000` |  | yes | `backend/app.py`, `backend/identity/oidc.py` |
-| `PROJECT_NAME` | environment |  |  | yes | `backend/api/dashboard.py` |
-| `QUERY_STRING` | environment |  |  |  | `backend/api/terminal.py` |
-| `RACK_AI_API_KEY` | environment |  |  |  | `backend/ai_chat.py` |
-| `RACK_AI_ENDPOINT` | environment |  |  |  | `backend/ai_chat.py` |
-| `RACK_AI_MODEL` | environment |  |  |  | `backend/ai_chat.py` |
-| `RACK_AI_SETTINGS_FILE` | environment |  |  |  | `backend/ai_chat.py` |
-| `RACK_AI_TOOLS_ENABLED` | environment |  |  |  | `backend/agent/loop.py` |
-| `RACK_AI_TOOLS_MAX_STEPS` | environment | `6` |  |  | `backend/agent/loop.py` |
-| `RACK_AI_TOOLS_MODE` | environment |  |  |  | `backend/agent/loop.py`, `backend/ai_chat.py` |
-| `RACK_AI_TOOL_AUDIT_FILE` | environment |  |  |  | `backend/agent/audit.py` |
-| `RACK_ANALYTICS_DISABLED` | environment |  |  |  | `backend/api/analytics.py` |
-| `RACK_BMC_RECOVERY_DISABLED` | environment |  |  |  | `backend/api/rack_power.py` |
-| `RACK_BMC_RECOVERY_DRY_RUN` | environment |  |  |  | `backend/api/rack_power.py` |
-| `RACK_BMC_RECOVERY_SCRIPT` | ladder |  |  |  | `backend/api/rack_power.py` |
-| `RACK_BRINGUP_CACHE_TTL_SEC` | environment | `30` |  | yes | `backend/bringup.py` |
-| `RACK_BRINGUP_DISABLED` | environment |  |  | yes | `backend/bringup.py` |
-| `RACK_BRINGUP_HOME` | environment |  |  | yes | `backend/bringup.py` |
-| `RACK_BUG_REPORT_DISABLED` | environment |  |  | yes | `backend/api/bug_report.py` |
-| `RACK_BUG_REPORT_DRY_RUN` | environment |  |  | yes | `backend/api/bug_report.py` |
-| `RACK_BUG_REPORT_REMOTE_DIR` | environment |  |  | yes | `backend/paths.py` |
-| `RACK_BUG_REPORT_SSH_OPTS` | environment |  |  | yes | `backend/api/bug_report.py` |
-| `RACK_BUG_REPORT_SSH_USER` | environment |  |  | yes | `backend/api/bug_report.py` |
-| `RACK_CLUSTERKIT_CUDA_MAJOR` | ladder |  |  |  | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
-| `RACK_CLUSTERKIT_DISABLED` | environment |  |  |  | `backend/api/validation_runs.py` |
-| `RACK_CLUSTER_DASHBOARD_METADATA_FILE` | environment |  |  |  | `backend/cluster_metadata.py` |
-| `RACK_CLUSTER_GPU_PER_TRAY` | ladder | `8` |  |  | `backend/api/dashboard.py`, `backend/rack_status_engine.py` |
-| `RACK_CLUSTER_ID` | environment |  |  |  | `backend/rack_status_engine.py` |
-| `RACK_CLUSTER_NAME` | environment |  |  |  | `backend/rack_status_engine.py` |
-| `RACK_CLUSTER_OVERVIEW_LIVE_DB` | environment |  |  |  | `backend/api/dashboard.py` |
-| `RACK_CLUSTER_PRODUCT_LINE` | ladder |  |  |  | `backend/api/validation_runs.py` |
-| `RACK_CLUSTER_SNAPSHOT_DB` | environment |  |  |  | `backend/rack_status_engine.py` |
-| `RACK_CMSH` | ladder | `cmsh` |  | yes | `backend/api/dashboard.py`, `backend/api/rack_power.py` +1 |
-| `RACK_CMSH_INCLUDE_R00` | environment |  |  | yes | `backend/native_status.py` |
-| `RACK_COMMENTS_FILE` | ladder |  |  | yes | `backend/comments_store.py` |
-| `RACK_DIRECT_NODE_SSH` | environment |  |  | yes | `backend/host_exec.py` |
-| `RACK_ENABLE_WEB_TERMINAL` | environment | `1` |  |  | `backend/api/terminal.py` |
-| `RACK_EXEC_MODE` | indirect |  | yes | yes |  |
-| `RACK_EXEMPLAR_LLAMA_CT_RANGE` | ladder | `11-18,28-35` |  |  | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
-| `RACK_EXPORT_NODES_PER_RACK` | ladder | `18` |  | yes | `backend/api/exports.py` |
-| `RACK_FANOUT_MAX_WORKERS` | environment | `8` |  | yes | `backend/workflow_engine.py` |
-| `RACK_FS_DIR_CACHE_TTL_SEC` | environment | `30` |  | yes | `backend/host_exec.py` |
-| `RACK_FULL_RACK_NODES` | ladder |  |  |  | `backend/naming.py` |
-| `RACK_GPU_RESET_DISABLED` | environment |  |  | yes | `backend/api/rack_power.py` |
-| `RACK_GPU_RESET_DRY_RUN` | environment |  |  | yes | `backend/api/rack_power.py` |
-| `RACK_GPU_RESET_SCRIPT` | ladder |  |  | yes | `backend/api/dashboard.py`, `backend/api/rack_power.py` |
-| `RACK_GRAFANA_PASSWORD` | environment |  |  |  | `backend/grafana_embeds.py` |
-| `RACK_HW_CHECK_DISABLED` | environment |  |  | yes | `backend/api/diagnostics.py` |
-| `RACK_HW_CHECK_DRY_RUN` | environment |  |  | yes | `backend/api/diagnostics.py` |
-| `RACK_HW_CHECK_HELP_DISABLED` | environment |  |  | yes | `backend/api/diagnostics.py` |
-| `RACK_ID_ALIAS_RULES` | environment |  |  |  | `backend/native_status.py` |
-| `RACK_LAKE_CAPTURE` | environment |  |  | yes | `backend/app.py` |
-| `RACK_LAUNCH_REVIEW` | environment |  |  | yes | `backend/validation_launch.py` |
-| `RACK_LLAMA_DISABLED` | environment |  |  | yes | `backend/api/validation_runs.py` |
-| `RACK_LLMB_INSTALL` | ladder | `/home/cmods/workspace/llmb` |  |  | `backend/api/validation_runs.py` |
-| `RACK_LLMB_NCCL_DISABLED` | environment |  |  |  | `backend/api/validation_runs.py` |
-| `RACK_LLMB_NCCL_RESERVATION` | ladder |  |  |  | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
-| `RACK_LOCKS_FILE` | environment |  |  | yes | `backend/rack_locks.py` |
-| `RACK_LOG_EXPORT_DISABLED` | environment |  |  | yes | `backend/api/exports.py` |
-| `RACK_MAAS_CLI` | environment |  |  |  | `backend/platforms/maas.py` |
-| `RACK_MAAS_PROFILE` | environment |  |  |  | `backend/platforms/maas.py` |
-| `RACK_MACSWAP_PYTHON_MODULE` | ladder |  |  |  | `backend/api/rack_power.py` |
-| `RACK_MACSWAP_SCRIPT` | ladder |  |  |  | `backend/api/rack_power.py` |
-| `RACK_MAC_CHANGE_DISABLED` | environment |  |  |  | `backend/api/rack_power.py` |
-| `RACK_MAC_CHANGE_DRY_RUN` | environment |  |  |  | `backend/api/rack_power.py` |
-| `RACK_MCP_ALLOW_WRITES` | environment |  |  |  | `backend/agent/mcp_server.py` |
-| `RACK_MCP_ENABLED` | environment |  |  |  | `backend/agent/mcp_server.py` |
-| `RACK_MNUBERGEMM_CUDA_MAJOR` | ladder |  |  |  | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
-| `RACK_MNUBERGEMM_STRESS_DISABLED` | environment |  |  | yes | `backend/api/validation_runs.py` |
-| `RACK_MODULES_INIT` | environment |  |  |  | `backend/host_exec.py` |
-| `RACK_MULTIRACK_CAMPAIGN_ID` | ladder |  |  |  | `backend/validation_launch.py` |
-| `RACK_MULTIRACK_CAMPAIGN_MANIFEST` | ladder |  |  |  | `backend/validation_launch.py` |
-| `RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK` | ladder | `16` |  |  | `backend/validation_launch.py` |
-| `RACK_MULTIRACK_JOBS_FILE` | environment |  |  | yes | `backend/validation_activities.py` |
-| `RACK_MULTIRACK_LEDGER_EXPORT_STATUS_FILE` | environment |  |  |  | `backend/validation_activities.py` |
-| `RACK_MULTIRACK_LEDGER_FILE` | environment |  |  |  | `backend/validation_activities.py` |
-| `RACK_MULTIRACK_LEDGER_LAKE_DISABLED` | environment |  |  |  | `backend/validation_activities.py` |
-| `RACK_MULTIRACK_LEDGER_MARKDOWN_FILE` | environment |  |  |  | `backend/validation_activities.py` |
-| `RACK_MULTIRACK_SITE_PREFIX` | ladder |  |  | yes | `backend/naming.py` |
-| `RACK_MULTIRACK_VALIDATION_TEST` | ladder |  |  | yes | `backend/api/dashboard.py`, `backend/rack_status_engine.py` |
-| `RACK_NCCL_FULLRACK_DISABLED` | environment |  |  |  | `backend/api/validation_runs.py` |
-| `RACK_NCCL_FULLRACK_END` | ladder |  |  |  | `backend/api/validation_runs.py` |
-| `RACK_NCCL_FULLRACK_LAUNCHER` | ladder |  |  |  | `backend/api/validation_runs.py` |
-| `RACK_NCCL_MPI_SIZE_MAX` | ladder |  |  |  | `backend/api/validation_runs.py` |
-| `RACK_NCCL_MPI_VERSION` | ladder |  |  |  | `backend/api/validation_runs.py` |
-| `RACK_NEMO_XRACK_DISABLED` | environment |  |  | yes | `backend/api/validation_runs.py` |
-| `RACK_NODE_ISSUES_FILE` | environment |  |  |  | `backend/node_issues.py` |
-| `RACK_NODE_SSH_KEY` | environment |  |  | yes | `backend/host_exec.py` |
-| `RACK_NODE_SSH_USER` | environment |  |  | yes | `backend/host_exec.py` |
-| `RACK_NVFTP_REMOTE_BASE` | ladder |  |  | yes | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
-| `RACK_NVFTP_SFTP_HOST` | ladder | `transfer.nvftp.nvidia.com` |  | yes | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
-| `RACK_NVFTP_SFTP_PORT` | ladder |  |  | yes | `backend/nvftp_cache_sync.py` |
-| `RACK_NVFTP_SFTP_USER` | ladder |  |  | yes | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
-| `RACK_NVFTP_SYNC_INTERVAL_SEC` | ladder |  |  | yes | `backend/nvftp_cache_sync.py` |
-| `RACK_NVLINK_PREFLIGHT_DISABLED` | environment |  |  |  | `backend/api/fabric_ops.py` |
-| `RACK_NVLINK_PREFLIGHT_SCRIPT` | ladder |  |  |  | `backend/api/fabric_ops.py` |
-| `RACK_NVLMAPPER_DISABLED` | environment |  |  | yes | `backend/api/fabric_ops.py` |
-| `RACK_NVLMAPPER_REPORTS_BASE` | ladder |  |  | yes | `backend/paths.py` |
-| `RACK_NVLOOM_CUDA_MAJOR` | ladder |  |  |  | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
-| `RACK_NVLOOM_SINGLERACK_DISABLED` | environment |  |  |  | `backend/api/validation_runs.py` |
-| `RACK_NVSWITCH_AUDIT_DISABLED` | environment |  |  | yes | `backend/api/fabric_ops.py` |
-| `RACK_PARSER_EXCEL_REPORT_DIR` | ladder |  |  |  | `backend/api/dashboard.py`, `backend/api/exports.py` |
-| `RACK_PARSER_EXPORT_DISABLED` | environment |  |  | yes | `backend/api/exports.py` |
-| `RACK_PARSER_EXPORT_GLOB` | ladder |  |  | yes | `backend/results_ingest.py` |
-| `RACK_PARSER_EXTRA_ARGS` | ladder |  |  | yes | `backend/results_ingest.py` |
-| `RACK_PDSH_W_SKIP_SLURM_EXPAND` | environment |  |  |  | `backend/node_targets.py` |
-| `RACK_PHYSICAL_RF0_LOOSE_HOSTNAMES` | environment |  |  | yes | `backend/rack_status_engine.py` |
-| `RACK_PHYSICAL_RF0_MAP_DISABLED` | environment |  |  | yes | `backend/rack_status_engine.py` |
-| `RACK_PLATFORM` | environment |  | yes |  | `backend/platforms/__init__.py` |
-| `RACK_POST_RUN_HISTORY_FILE` | environment |  |  |  | `backend/post_run_report.py` |
-| `RACK_POST_RUN_MAX_EVENTS` | environment | `100000` |  |  | `backend/post_run_report.py` |
-| `RACK_POWER_DISABLED` | environment |  |  | yes | `backend/api/rack_power.py` |
-| `RACK_POWER_DRY_RUN` | environment |  |  | yes | `backend/api/rack_power.py` |
-| `RACK_PRODUCT_LINE` | ladder |  |  |  | `backend/api/validation_runs.py` |
-| `RACK_PROJECT_TOKEN` | ladder |  | yes | yes | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
-| `RACK_PROMETHEUS_BASIC_AUTH_PASSWORD` | ladder |  |  |  | `backend/api/dashboard.py`, `backend/api/tools.py` |
-| `RACK_PROMETHEUS_BASIC_AUTH_USER` | ladder |  |  |  | `backend/api/dashboard.py`, `backend/api/tools.py` |
-| `RACK_PROMETHEUS_LOG_TIMESTAMP_TZ` | ladder |  |  | yes | `backend/api/dashboard.py`, `backend/grafana_embed.py` +1 |
-| `RACK_PUNCHCARD_CACHE_SEC` | environment | `300` |  |  | `backend/node_issues.py` |
-| `RACK_PUNCHCARD_RANGE` | environment | `Sheet2!A1:Z1000` |  |  | `backend/node_issues.py` |
-| `RACK_PUNCHCARD_SPREADSHEET_ID` | environment | `1NSs3c7v6r5mf5h-GKNZHNekVU9XsAAgJp3KyeeJK-PA` |  |  | `backend/node_issues.py` |
-| `RACK_PUNCHCARD_TOKEN_FILE` | environment |  |  |  | `backend/node_issues.py` |
-| `RACK_REMOTE_BASE_PATH` | ladder |  | yes | yes | `backend/host_exec.py`, `backend/paths.py` +1 |
-| `RACK_RESULTS_DB` | environment |  |  |  | `backend/results_history.py` |
-| `RACK_RESULTS_DB_BUSY_MS` | environment |  |  |  | `backend/results_history.py` |
-| `RACK_SERVICES_RESTART_DISABLED` | environment |  |  | yes | `backend/api/rack_power.py` |
-| `RACK_SERVICES_RESTART_DRY_RUN` | environment |  |  | yes | `backend/api/rack_power.py` |
-| `RACK_SLURM_CONF` | environment |  |  |  | `backend/bringup.py`, `backend/platforms/base.py` |
-| `RACK_SLURM_DRAIN_REASON` | ladder |  |  | yes | `backend/api/dashboard.py`, `backend/api/slurm_ops.py` |
-| `RACK_SLURM_MODULE` | environment |  |  | yes | `backend/platforms/base.py` |
-| `RACK_SLURM_NODES_STATE_DISABLED` | environment |  |  | yes | `backend/api/slurm_ops.py` |
-| `RACK_SLURM_NODES_STATE_DRY_RUN` | environment |  |  | yes | `backend/slurm_admin.py` |
-| `RACK_SLURM_SACCT_DISABLED` | environment |  |  |  | `backend/api/slurm_queries.py` |
-| `RACK_SLURM_SACCT_SINCE` | ladder |  |  |  | `backend/slurm_query.py` |
-| `RACK_SLURM_SCANCEL_DISABLED` | environment |  |  | yes | `backend/api/slurm_ops.py` |
-| `RACK_SLURM_SCONTROL_SHOW_JOB_DISABLED` | environment |  |  | yes | `backend/api/slurm_ops.py` |
-| `RACK_SLURM_SINFO_R_DISABLED` | environment |  |  | yes | `backend/api/slurm_queries.py` |
-| `RACK_SLURM_SKIP_MODULE_LOAD` | environment |  | yes | yes | `backend/platforms/base.py` |
-| `RACK_SLURM_SQUEUE_DISABLED` | environment |  |  | yes | `backend/api/dashboard.py`, `backend/api/slurm_queries.py` |
-| `RACK_SSH_HOST` | environment |  | yes | yes | `backend/rack_status_engine.py` |
-| `RACK_SSH_KEY` | indirect |  | yes | yes |  |
-| `RACK_SSH_PORT` | indirect |  | yes | yes |  |
-| `RACK_SSH_REACHABILITY_CONNECT_TIMEOUT` | environment |  |  |  | `backend/host_exec.py` |
-| `RACK_SSH_REACHABILITY_TTL_SEC` | environment | `15` |  |  | `backend/host_exec.py` |
-| `RACK_SSH_USER` | indirect |  | yes | yes |  |
-| `RACK_STATUS_ALLOWED_PREFIXES` | environment |  |  | yes | `backend/paths.py` |
-| `RACK_STATUS_DEMO` | environment |  | yes | yes | `backend/app.py`, `backend/cli.py` |
-| `RACK_STATUS_EXTRA_ARGS` | ladder |  |  | yes | `backend/rack_status_engine.py` |
-| `RACK_STATUS_LOG_DIR` | environment |  |  | yes | `backend/host_exec.py`, `backend/paths.py` |
-| `RACK_SYSINFO_DISABLED` | environment |  |  | yes | `backend/api/_common.py` |
-| `RACK_TAIL_LINEBUFFER` | ladder | `1` |  | yes | `backend/api/logs.py` |
-| `RACK_TAIL_LOG_DISABLED` | environment |  |  | yes | `backend/api/logs.py` |
-| `RACK_TARGET_FROM_INVENTORY` | environment | `1` |  |  | `backend/node_targets.py` |
-| `RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED` | environment |  |  |  | `backend/api/tools.py` |
-| `RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED` | environment |  |  |  | `backend/api/tools.py` |
-| `RACK_TOOLS_INSTALL_DCGM_WORKSPACE_DISABLED` | environment |  |  |  | `backend/api/tools.py` |
-| `RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED` | environment |  |  |  | `backend/api/tools.py` |
-| `RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED` | environment |  |  |  | `backend/api/tools.py` |
-| `RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED` | environment |  |  |  | `backend/api/tools.py` |
-| `RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED` | environment |  |  |  | `backend/api/tools.py` |
-| `RACK_UNIVERSAL_SCAN_IGNORE_RE` | environment |  |  |  | `backend/api/universal.py` |
-| `RACK_UPTIME_DISABLED` | environment |  |  | yes | `backend/api/rack_power.py` |
-| `RACK_UPTIME_DRY_RUN` | environment |  |  | yes | `backend/api/rack_power.py` |
-| `RACK_VALIDATION_ACTIVITIES_ADOPT_DISABLED` | environment |  |  |  | `backend/api/parser_results.py` |
-| `RACK_VALIDATION_ACTIVITIES_ARCHIVE_DB` | environment |  |  |  | `backend/validation_activities.py` |
-| `RACK_VALIDATION_ACTIVITIES_FILE` | environment |  |  | yes | `backend/validation_activities.py` |
-| `RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED` | ladder |  |  |  | `backend/api/activities.py`, `backend/app.py` |
-| `RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE` | ladder |  |  |  | `backend/app.py` |
-| `RACK_VALIDATION_CT_RANGE` | ladder | `01-18` |  | yes | `backend/node_targets.py`, `backend/workflow_engine.py` |
-| `RACK_VALIDATION_DISABLED` | environment |  |  | yes | `backend/api/validation_runs.py` |
-| `RACK_VALIDATION_EXCLUDED_NODES` | ladder |  |  |  | `backend/validation_launch.py` |
-| `RACK_WEB_ALLOWED_ORIGINS` | environment |  |  | yes | `backend/web_auth.py` |
-| `RACK_WEB_BIND_ADDR` | environment |  |  | yes | `backend/cli.py` |
-| `RACK_WEB_CSP_MODE` | environment |  |  | yes | `backend/app.py` |
-| `RACK_WEB_GRAFANA_DASH_SLUG` | ladder |  |  | yes | `backend/grafana_embed.py` |
-| `RACK_WEB_GRAFANA_DASH_UID` | ladder |  |  | yes | `backend/grafana_embed.py` |
-| `RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS` | ladder |  |  | yes | `backend/api/dashboard.py`, `backend/grafana_embed.py` |
-| `RACK_WEB_GRAFANA_DEEPLINK_DISABLED` | ladder |  |  | yes | `backend/api/dashboard.py` |
-| `RACK_WEB_GRAFANA_PORT` | ladder | `3000` |  | yes | `backend/app.py`, `backend/grafana_embed.py` |
-| `RACK_WEB_GRAFANA_TIMEZONE` | ladder |  |  | yes | `backend/api/dashboard.py`, `backend/grafana_embed.py` |
-| `RACK_WEB_GRAFANA_URI` | ladder |  |  | yes | `backend/app.py`, `backend/grafana_embed.py` |
-| `RACK_WEB_GRAFANA_VAR_HOST` | ladder |  |  | yes | `backend/grafana_embed.py` |
-| `RACK_WEB_GRAFANA_VAR_RACK` | ladder |  |  | yes | `backend/grafana_embed.py` |
-| `RACK_WEB_OIDC_CLIENTS_FILE` | environment |  |  | yes | `backend/identity/oidc_clients.py` |
-| `RACK_WEB_OIDC_ISSUER` | environment |  | yes | yes | `backend/identity/oidc.py` |
-| `RACK_WEB_POLICY_FILE` | environment |  |  |  | `backend/authz/__init__.py`, `backend/authz/policy.py` +1 |
-| `RACK_WEB_PORT` | environment |  |  |  | `backend/cli.py`, `backend/identity/oidc.py` |
-| `RACK_WEB_PROJECT_NAME` | ladder |  |  | yes | `backend/api/dashboard.py` |
-| `RACK_WEB_PUBLIC_HOST` | environment |  |  |  | `backend/identity/oidc.py` |
-| `RACK_WEB_SECRET_KEY` | environment |  |  | yes | `backend/app.py`, `backend/identity/srp.py` +3 |
-| `RACK_WEB_SIGNING_KEY_DIR` | environment |  |  | yes | `backend/identity/keys.py` |
-| `RACK_WEB_SIGNING_KEY_VALIDITY_SECONDS` | environment |  |  | yes | `backend/identity/keys.py` |
-| `RACK_WEB_TLS_CERT` | ladder |  |  | yes | `backend/app.py`, `backend/cli.py` +2 |
-| `RACK_WEB_TLS_DIR` | environment |  |  |  | `backend/startup_gate.py` |
-| `RACK_WEB_TLS_KEY` | environment |  | yes | yes | `backend/app.py`, `backend/cli.py` +1 |
-| `RACK_WEB_TLS_MIN_VERSION` | environment |  |  | yes | `backend/tls_server.py` |
-| `RACK_WEB_TOKEN_ISSUER` | environment |  |  |  | `backend/identity/tokens.py` |
-| `RACK_WORKFLOWS_DIR` | environment |  |  |  | `backend/workflow_engine.py` |
-| `RACK_WORKSPACE_DIR` | ladder |  |  |  | `backend/api/dashboard.py`, `backend/config_env.py` |
-| `REMOTE_ADDR` | environment |  |  |  | `backend/api/terminal.py` |
-| `SINFO_OPTS` | environment |  |  | yes | `backend/native_status.py` |
-| `SQUEUE_USER` | environment |  |  | yes | `backend/native_status.py`, `backend/rack_status_engine.py` |
-| `VALIDATION_TEST` | ladder |  |  | yes | `backend/api/dashboard.py` |
-| `WEB_CONCURRENCY` | environment |  |  |  | `backend/startup_gate.py` |
+| Setting | Reader | Default | What it controls | Read in |
+|---|---|---|---|---|
+| <a id="s-cluster-name"></a>`CLUSTER_NAME` | environment |  | Legacy alias for RACK_CLUSTER_NAME, still consulted when seeding the default project. | `backend/rack_status_engine.py` |
+| <a id="s-cuda-maj"></a>`CUDA_MAJ` | ladder |  | CUDA major version for selecting a tool's container or module. The last fallback, behind each tool's own RACK_*_CUDA_MAJOR. Default 13. | `backend/api/validation_runs.py` |
+| <a id="s-default-log-dir"></a>`DEFAULT_LOG_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/workflow_engine.py` |
+| <a id="s-flask-debug"></a>`FLASK_DEBUG` | environment |  | See `docs/ENVIRONMENT.md` | `backend/app.py` |
+| <a id="s-gpus-per-node"></a>`GPUS_PER_NODE` | ladder | `0` | GPUs in one node. Also supplies sbatch --ntasks-per-node for a step that does not set one. | `backend/rack_status_engine.py`, `backend/workflow_engine.py` |
+| <a id="s-gunicorn-threads"></a>`GUNICORN_THREADS` | environment |  | Threads per worker. Default 24. | `backend/cli.py` |
+| <a id="s-gunicorn-timeout"></a>`GUNICORN_TIMEOUT` | environment |  | Seconds before a worker is considered hung. Default 600, because a fleet scan legitimately takes minutes. | `backend/cli.py` |
+| <a id="s-gunicorn-workers"></a>`GUNICORN_WORKERS` | environment |  | Worker count. Must be 1 — SRP login state is in-process, so a second worker splits it and login succeeds about half the time. The startup gate refuses more. | `backend/startup_gate.py` |
+| <a id="s-nemo-sqsh-src"></a>`NEMO_SQSH_SRC` | ladder |  | Squashed NeMo container image used by the NeMo validation launchers. | `backend/api/dashboard.py`, `backend/api/tools.py` |
+| <a id="s-nemo-target-steps"></a>`NEMO_TARGET_STEPS` | environment | `0` | See `docs/ENVIRONMENT.md` | `backend/universal_parser.py` |
+| <a id="s-ngc-api-key"></a>`NGC_API_KEY` | ladder |  | NGC API key used to pull tool containers. The download-containers action refuses without it. | `backend/api/tools.py` |
+| <a id="s-nvis-bcm-python"></a>`NVIS_BCM_PYTHON` | environment |  | Interpreter used for BCM `pythoncm` queries on the head node. | `backend/bcm_query.py` |
+| <a id="s-nvis-catalog-file"></a>`NVIS_CATALOG_FILE` | environment |  | Path to the catalog database holding platforms, tools and projects. This is what separates two deployments sharing one checkout. | `backend/catalog/store.py` |
+| <a id="s-nvis-ct-id"></a>`NVIS_CT_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` |
+| <a id="s-nvis-exemplar-workloads"></a>`NVIS_EXEMPLAR_WORKLOADS` | ladder |  | Default Exemplar workloads when a launch names none. | `backend/api/tools.py` |
+| <a id="s-nvis-force-setup-wizard"></a>`NVIS_FORCE_SETUP_WIZARD` | ladder |  | Re-open the first-run setup wizard even though a project is already configured. What `cli.py serve --setup-wizard` sets; normally left unset, since the wizard offers itself when no operator-created project exists. | `backend/setup_state.py` |
+| <a id="s-nvis-greenlight-config"></a>`NVIS_GREENLIGHT_CONFIG` | environment |  | See `docs/ENVIRONMENT.md` | `backend/config_launch.py` |
+| <a id="s-nvis-identity-file"></a>`NVIS_IDENTITY_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/identity/store.py` |
+| <a id="s-nvis-inventory-cache"></a>`NVIS_INVENTORY_CACHE` | environment |  | Path to the collected node-inventory cache. | `backend/node_inventory.py` |
+| <a id="s-nvis-inventory-srun-chunk"></a>`NVIS_INVENTORY_SRUN_CHUNK` | environment |  | Nodes per `srun` batch when collecting inventory that way. | `backend/node_inventory.py` |
+| <a id="s-nvis-inventory-via-srun"></a>`NVIS_INVENTORY_VIA_SRUN` | environment |  | Collect missing node inventory through `srun` instead of an SSH fan-out. | `backend/api/reports.py` |
+| <a id="s-nvis-inventory-workers"></a>`NVIS_INVENTORY_WORKERS` | environment |  | Concurrency for a fleet inventory sweep. Bounded by the head node's SSH session limit, not by this alone. | `backend/node_inventory.py` |
+| <a id="s-nvis-job-env-overrides-file"></a>`NVIS_JOB_ENV_OVERRIDES_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/catalog/seed.py`, `backend/native_status.py` |
+| <a id="s-nvis-log-basename-mode"></a>`NVIS_LOG_BASENAME_MODE` | environment |  | `open` (default) accepts any plausible result-log name; `strict` accepts only the legacy marker allowlist. | `backend/nvis_id_templates.py` |
+| <a id="s-nvis-log-level"></a>`NVIS_LOG_LEVEL` | indirect |  | Log level. Settable here because the config file is read before logging is configured, which is the reason the loader's own records appear slightly late. |  |
+| <a id="s-nvis-npi-catalog-dir"></a>`NVIS_NPI_CATALOG_DIR` | environment |  | Directory of NPI tool catalog files to import. | `backend/catalog/npi_import.py` |
+| <a id="s-nvis-nvsw-id"></a>`NVIS_NVSW_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` |
+| <a id="s-nvis-platform-id"></a>`NVIS_PLATFORM_ID` | ladder |  | Active platform id. Selects the platform layer of the script tree. | `backend/script_tree.py` |
+| <a id="s-nvis-project-id"></a>`NVIS_PROJECT_ID` | ladder |  | Active project id. Written by the cluster overlay and read to select that project's script layer. | `backend/script_tree.py` |
+| <a id="s-nvis-rack-fname-re"></a>`NVIS_RACK_FNAME_RE` | environment |  | Regex that finds a rack id inside a result-log filename. | `backend/universal_parser.py` |
+| <a id="s-nvis-rack-id"></a>`NVIS_RACK_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` +1 |
+| <a id="s-nvis-reports-dir"></a>`NVIS_REPORTS_DIR` | environment |  | Where generated reports are stored. | `backend/report_store.py` |
+| <a id="s-nvis-scripts-tree"></a>`NVIS_SCRIPTS_TREE` | ladder |  | Override the root of the layered script tree. | `backend/script_tree.py` |
+| <a id="s-nvis-ssh-key-dir"></a>`NVIS_SSH_KEY_DIR` | environment |  | Where cluster SSH private keys are written, owner-only. Defaults under `var/secrets/ssh`. | `backend/ssh_key_store.py` |
+| <a id="s-nvis-token-vault-dir"></a>`NVIS_TOKEN_VAULT_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/token_vault.py` |
+| <a id="s-nvis-var-dir"></a>`NVIS_VAR_DIR` | ladder |  | The `var/` directory. Exported to scripts and launchers so they never derive it from their own location. | `backend/script_tree.py` |
+| <a id="s-nvis-vault-master-key"></a>`NVIS_VAULT_MASTER_KEY` | environment |  | See `docs/ENVIRONMENT.md` | `backend/token_vault.py` |
+| <a id="s-nvis-workspace-dir"></a>`NVIS_WORKSPACE_DIR` | ladder |  | Shared workspace on the cluster where tools are installed. Defaults to `/home/cmsupport/workspace`. | `backend/config_env.py` |
+| <a id="s-nvlmapper-password"></a>`NVLMAPPER_PASSWORD` | ladder |  | Password for the NVLink mapper appliance. | `backend/api/dashboard.py` |
+| <a id="s-nvlmapper-rc"></a>`NVLMAPPER_RC` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py` |
+| <a id="s-nvlmapper-username"></a>`NVLMAPPER_USERNAME` | ladder |  | Account for the NVLink mapper appliance. | `backend/api/dashboard.py` |
+| <a id="s-port"></a>`PORT` | environment | `5000` | See `docs/ENVIRONMENT.md` | `backend/app.py`, `backend/identity/oidc.py` |
+| <a id="s-project-name"></a>`PROJECT_NAME` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py` |
+| <a id="s-rack-ai-api-key"></a>`RACK_AI_API_KEY` | environment |  | API key for that endpoint. | `backend/ai_chat.py` |
+| <a id="s-rack-ai-endpoint"></a>`RACK_AI_ENDPOINT` | environment |  | Base URL of the model endpoint the assistant calls. | `backend/ai_chat.py` |
+| <a id="s-rack-ai-model"></a>`RACK_AI_MODEL` | environment |  | Model name the assistant requests. | `backend/ai_chat.py` |
+| <a id="s-rack-ai-settings-file"></a>`RACK_AI_SETTINGS_FILE` | environment |  | Persisted assistant settings, so a change survives a restart. | `backend/ai_chat.py` |
+| <a id="s-rack-ai-tools-enabled"></a>`RACK_AI_TOOLS_ENABLED` | environment |  | Whether the assistant may call product tools rather than only answering. | `backend/agent/loop.py` |
+| <a id="s-rack-ai-tools-max-steps"></a>`RACK_AI_TOOLS_MAX_STEPS` | environment | `6` | Ceiling on tool calls in one exchange, so a loop cannot run away. Default 6. | `backend/agent/loop.py` |
+| <a id="s-rack-ai-tools-mode"></a>`RACK_AI_TOOLS_MODE` | environment |  | `auto` lets the assistant decide when to call a tool; `off` disables calling entirely. | `backend/agent/loop.py`, `backend/ai_chat.py` |
+| <a id="s-rack-ai-tool-audit-file"></a>`RACK_AI_TOOL_AUDIT_FILE` | environment |  | Audit log of the tool calls the assistant made. | `backend/agent/audit.py` |
+| <a id="s-rack-analytics-disabled"></a>`RACK_ANALYTICS_DISABLED` | environment |  | Refuse the analytics endpoints. | `backend/api/analytics.py` |
+| <a id="s-rack-bmc-recovery-disabled"></a>`RACK_BMC_RECOVERY_DISABLED` | environment |  | Refuse BMC recovery. | `backend/api/rack_power.py` |
+| <a id="s-rack-bmc-recovery-dry-run"></a>`RACK_BMC_RECOVERY_DRY_RUN` | environment |  | Run BMC recovery without touching a BMC, to rehearse the targeting. | `backend/api/rack_power.py` |
+| <a id="s-rack-bmc-recovery-script"></a>`RACK_BMC_RECOVERY_SCRIPT` | ladder |  | Absolute path to the BMC recovery script, overriding the script tree. | `backend/api/rack_power.py` |
+| <a id="s-rack-bringup-cache-ttl-sec"></a>`RACK_BRINGUP_CACHE_TTL_SEC` | environment | `30` | See `docs/ENVIRONMENT.md` | `backend/bringup.py` |
+| <a id="s-rack-bringup-disabled"></a>`RACK_BRINGUP_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/bringup.py` |
+| <a id="s-rack-bringup-home"></a>`RACK_BRINGUP_HOME` | environment |  | See `docs/ENVIRONMENT.md` | `backend/bringup.py` |
+| <a id="s-rack-bug-report-disabled"></a>`RACK_BUG_REPORT_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
+| <a id="s-rack-bug-report-dry-run"></a>`RACK_BUG_REPORT_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
+| <a id="s-rack-bug-report-remote-dir"></a>`RACK_BUG_REPORT_REMOTE_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/paths.py` |
+| <a id="s-rack-bug-report-ssh-opts"></a>`RACK_BUG_REPORT_SSH_OPTS` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
+| <a id="s-rack-bug-report-ssh-user"></a>`RACK_BUG_REPORT_SSH_USER` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
+| <a id="s-rack-clusterkit-cuda-major"></a>`RACK_CLUSTERKIT_CUDA_MAJOR` | ladder |  | CUDA major for ClusterKit. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
+| <a id="s-rack-clusterkit-disabled"></a>`RACK_CLUSTERKIT_DISABLED` | environment |  | Refuse ClusterKit launches. | `backend/api/validation_runs.py` |
+| <a id="s-rack-cluster-dashboard-metadata-file"></a>`RACK_CLUSTER_DASHBOARD_METADATA_FILE` | environment |  | Operator-maintained metadata shown on the cluster dashboard. | `backend/cluster_metadata.py` |
+| <a id="s-rack-cluster-gpu-per-tray"></a>`RACK_CLUSTER_GPU_PER_TRAY` | ladder | `8` | GPUs per tray for the overview's capacity arithmetic. Default 8. | `backend/api/dashboard.py`, `backend/rack_status_engine.py` |
+| <a id="s-rack-cluster-id"></a>`RACK_CLUSTER_ID` | environment |  | Stable identifier for the cluster, recorded in fleet snapshots so history survives a rename. | `backend/rack_status_engine.py` |
+| <a id="s-rack-cluster-name"></a>`RACK_CLUSTER_NAME` | environment |  | Display name of the active cluster, shown on the dashboard and stamped into snapshots. | `backend/rack_status_engine.py` |
+| <a id="s-rack-cluster-overview-live-db"></a>`RACK_CLUSTER_OVERVIEW_LIVE_DB` | environment |  | SQLite database backing the live cluster overview. | `backend/api/dashboard.py` |
+| <a id="s-rack-cluster-product-line"></a>`RACK_CLUSTER_PRODUCT_LINE` | ladder |  | Product-line label such as GB300 NVL72, shown on the overview and in reports. | `backend/api/validation_runs.py` |
+| <a id="s-rack-cluster-snapshot-db"></a>`RACK_CLUSTER_SNAPSHOT_DB` | environment |  | SQLite database of fleet status snapshots. | `backend/rack_status_engine.py` |
+| <a id="s-rack-cmsh"></a>`RACK_CMSH` | ladder | `cmsh` | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/rack_power.py` +1 |
+| <a id="s-rack-cmsh-include-r00"></a>`RACK_CMSH_INCLUDE_R00` | environment |  | See `docs/ENVIRONMENT.md` | `backend/native_status.py` |
+| <a id="s-rack-comments-file"></a>`RACK_COMMENTS_FILE` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/comments_store.py` |
+| <a id="s-rack-direct-node-ssh"></a>`RACK_DIRECT_NODE_SSH` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py` |
+| <a id="s-rack-enable-web-terminal"></a>`RACK_ENABLE_WEB_TERMINAL` | environment | `1` | Install the browser terminal. Default on; when off the endpoint does not exist rather than refusing. | `backend/api/terminal.py` |
+| <a id="s-rack-exec-mode"></a>`RACK_EXEC_MODE` | indirect |  | How commands reach the cluster: 'ssh' or 'local'. Deprecated in favour of the topology-based transport config, and 'ssh' is the default; kept because deployed sites still set it. |  |
+| <a id="s-rack-exemplar-llama-ct-range"></a>`RACK_EXEMPLAR_LLAMA_CT_RANGE` | ladder | `11-18,28-35` | Tray ranges the Exemplar Llama run targets. Default `11-18,28-35`. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
+| <a id="s-rack-export-nodes-per-rack"></a>`RACK_EXPORT_NODES_PER_RACK` | ladder | `18` | See `docs/ENVIRONMENT.md` | `backend/api/exports.py` |
+| <a id="s-rack-fanout-max-workers"></a>`RACK_FANOUT_MAX_WORKERS` | environment | `8` | See `docs/ENVIRONMENT.md` | `backend/workflow_engine.py` |
+| <a id="s-rack-fs-dir-cache-ttl-sec"></a>`RACK_FS_DIR_CACHE_TTL_SEC` | environment | `30` | See `docs/ENVIRONMENT.md` | `backend/host_exec.py` |
+| <a id="s-rack-full-rack-nodes"></a>`RACK_FULL_RACK_NODES` | ladder |  | How many nodes count as a full rack, for target expansion and completeness checks. | `backend/naming.py` |
+| <a id="s-rack-gpu-reset-disabled"></a>`RACK_GPU_RESET_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-gpu-reset-dry-run"></a>`RACK_GPU_RESET_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-gpu-reset-script"></a>`RACK_GPU_RESET_SCRIPT` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/rack_power.py` |
+| <a id="s-rack-grafana-password"></a>`RACK_GRAFANA_PASSWORD` | environment |  | Password for Grafana API requests behind the embedded panels. | `backend/grafana_embeds.py` |
+| <a id="s-rack-hw-check-disabled"></a>`RACK_HW_CHECK_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/diagnostics.py` |
+| <a id="s-rack-hw-check-dry-run"></a>`RACK_HW_CHECK_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/diagnostics.py` |
+| <a id="s-rack-hw-check-help-disabled"></a>`RACK_HW_CHECK_HELP_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/diagnostics.py` |
+| <a id="s-rack-id-alias-rules"></a>`RACK_ID_ALIAS_RULES` | environment |  | Rewrites a hostname-derived rack id to the BCM rack object's id, as `<regex>=><replacement>` pairs separated by `;`. Needed where the BCM rack name is not a prefix of the tray hostname — Nscale TX has racks `WH1H1..WH1H22` and trays `ink50-dh01-h01-11`, and without a rule no tray attaches to a rack. | `backend/native_status.py` |
+| <a id="s-rack-lake-capture"></a>`RACK_LAKE_CAPTURE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/app.py` |
+| <a id="s-rack-launch-review"></a>`RACK_LAUNCH_REVIEW` | environment |  | See `docs/ENVIRONMENT.md` | `backend/validation_launch.py` |
+| <a id="s-rack-llama-disabled"></a>`RACK_LLAMA_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
+| <a id="s-rack-llmb-install"></a>`RACK_LLMB_INSTALL` | ladder | `/home/cmods/workspace/llmb` | LLMB install prefix on the cluster. | `backend/api/validation_runs.py` |
+| <a id="s-rack-llmb-nccl-disabled"></a>`RACK_LLMB_NCCL_DISABLED` | environment |  | Refuse LLMB NCCL launches. | `backend/api/validation_runs.py` |
+| <a id="s-rack-llmb-nccl-reservation"></a>`RACK_LLMB_NCCL_RESERVATION` | ladder |  | Slurm reservation to submit the LLMB NCCL run into. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
+| <a id="s-rack-locks-file"></a>`RACK_LOCKS_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/rack_locks.py` |
+| <a id="s-rack-log-export-disabled"></a>`RACK_LOG_EXPORT_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/exports.py` |
+| <a id="s-rack-maas-cli"></a>`RACK_MAAS_CLI` | environment |  | The `maas` CLI binary. Default `maas`. | `backend/platforms/maas.py` |
+| <a id="s-rack-maas-profile"></a>`RACK_MAAS_PROFILE` | environment |  | The `maas` CLI profile to use. Default `admin`. | `backend/platforms/maas.py` |
+| <a id="s-rack-macswap-python-module"></a>`RACK_MACSWAP_PYTHON_MODULE` | ladder |  | Environment Modules name loaded before invoking macswap. Default `python3`. | `backend/api/rack_power.py` |
+| <a id="s-rack-macswap-script"></a>`RACK_MACSWAP_SCRIPT` | ladder |  | Absolute path to the MAC-swap script. | `backend/api/rack_power.py` |
+| <a id="s-rack-mac-change-disabled"></a>`RACK_MAC_CHANGE_DISABLED` | environment |  | Refuse the MAC change action. | `backend/api/rack_power.py` |
+| <a id="s-rack-mac-change-dry-run"></a>`RACK_MAC_CHANGE_DRY_RUN` | environment |  | Run the MAC change without writing, to rehearse the targeting. | `backend/api/rack_power.py` |
+| <a id="s-rack-mcp-allow-writes"></a>`RACK_MCP_ALLOW_WRITES` | environment |  | Let MCP callers perform mutations rather than only reads. | `backend/agent/mcp_server.py` |
+| <a id="s-rack-mcp-enabled"></a>`RACK_MCP_ENABLED` | environment |  | Serve the MCP endpoint. | `backend/agent/mcp_server.py` |
+| <a id="s-rack-mnubergemm-cuda-major"></a>`RACK_MNUBERGEMM_CUDA_MAJOR` | ladder |  | CUDA major for mnubergemm. Must match what DCGM picks, or the MPI launch cannot find the plugin. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
+| <a id="s-rack-mnubergemm-stress-disabled"></a>`RACK_MNUBERGEMM_STRESS_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
+| <a id="s-rack-modules-init"></a>`RACK_MODULES_INIT` | environment |  | Shell snippet that initialises Environment Modules before a Slurm command, replacing the built-in default. | `backend/host_exec.py` |
+| <a id="s-rack-multirack-campaign-id"></a>`RACK_MULTIRACK_CAMPAIGN_ID` | ladder |  | Identifier of the pinned acceptance campaign, so a stale browser cannot launch against last week's roster. | `backend/validation_launch.py` |
+| <a id="s-rack-multirack-campaign-manifest"></a>`RACK_MULTIRACK_CAMPAIGN_MANIFEST` | ladder |  | Path to the campaign manifest listing the exact nodes. | `backend/validation_launch.py` |
+| <a id="s-rack-multirack-campaign-nodes-per-rack"></a>`RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK` | ladder | `16` | Nodes each rack is expected to contribute to a campaign. Default 16. | `backend/validation_launch.py` |
+| <a id="s-rack-multirack-jobs-file"></a>`RACK_MULTIRACK_JOBS_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/validation_activities.py` |
+| <a id="s-rack-multirack-ledger-export-status-file"></a>`RACK_MULTIRACK_LEDGER_EXPORT_STATUS_FILE` | environment |  | Where the ledger export records its own progress. | `backend/validation_activities.py` |
+| <a id="s-rack-multirack-ledger-file"></a>`RACK_MULTIRACK_LEDGER_FILE` | environment |  | The multirack results ledger. | `backend/validation_activities.py` |
+| <a id="s-rack-multirack-ledger-lake-disabled"></a>`RACK_MULTIRACK_LEDGER_LAKE_DISABLED` | environment |  | Stop publishing ledger rows to the data lake. | `backend/validation_activities.py` |
+| <a id="s-rack-multirack-ledger-markdown-file"></a>`RACK_MULTIRACK_LEDGER_MARKDOWN_FILE` | environment |  | Markdown rendering of that ledger. | `backend/validation_activities.py` |
+| <a id="s-rack-multirack-site-prefix"></a>`RACK_MULTIRACK_SITE_PREFIX` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/naming.py` |
+| <a id="s-rack-multirack-validation-test"></a>`RACK_MULTIRACK_VALIDATION_TEST` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/rack_status_engine.py` |
+| <a id="s-rack-nccl-fullrack-disabled"></a>`RACK_NCCL_FULLRACK_DISABLED` | environment |  | Refuse full-rack NCCL launches. | `backend/api/validation_runs.py` |
+| <a id="s-rack-nccl-fullrack-end"></a>`RACK_NCCL_FULLRACK_END` | ladder |  | End size for the full-rack NCCL sweep. Default 16G. | `backend/api/validation_runs.py` |
+| <a id="s-rack-nccl-fullrack-launcher"></a>`RACK_NCCL_FULLRACK_LAUNCHER` | ladder |  | Which launcher the full-rack NCCL run uses. Default `llmb`. | `backend/api/validation_runs.py` |
+| <a id="s-rack-nccl-mpi-size-max"></a>`RACK_NCCL_MPI_SIZE_MAX` | ladder |  | Largest message size an NCCL sweep runs to. Default 16G. | `backend/api/validation_runs.py` |
+| <a id="s-rack-nccl-mpi-version"></a>`RACK_NCCL_MPI_VERSION` | ladder |  | NCCL version for an MPI NCCL run, when a launch does not name one. | `backend/api/validation_runs.py` |
+| <a id="s-rack-nemo-xrack-disabled"></a>`RACK_NEMO_XRACK_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
+| <a id="s-rack-node-issues-file"></a>`RACK_NODE_ISSUES_FILE` | environment |  | Persisted per-node issue annotations. | `backend/node_issues.py` |
+| <a id="s-rack-node-ssh-key"></a>`RACK_NODE_SSH_KEY` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py` |
+| <a id="s-rack-node-ssh-user"></a>`RACK_NODE_SSH_USER` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py` |
+| <a id="s-rack-nvftp-remote-base"></a>`RACK_NVFTP_REMOTE_BASE` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
+| <a id="s-rack-nvftp-sftp-host"></a>`RACK_NVFTP_SFTP_HOST` | ladder | `transfer.nvftp.nvidia.com` | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
+| <a id="s-rack-nvftp-sftp-port"></a>`RACK_NVFTP_SFTP_PORT` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/nvftp_cache_sync.py` |
+| <a id="s-rack-nvftp-sftp-user"></a>`RACK_NVFTP_SFTP_USER` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
+| <a id="s-rack-nvftp-sync-interval-sec"></a>`RACK_NVFTP_SYNC_INTERVAL_SEC` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/nvftp_cache_sync.py` |
+| <a id="s-rack-nvlink-preflight-disabled"></a>`RACK_NVLINK_PREFLIGHT_DISABLED` | environment |  | Refuse the NVLink preflight. | `backend/api/fabric_ops.py` |
+| <a id="s-rack-nvlink-preflight-script"></a>`RACK_NVLINK_PREFLIGHT_SCRIPT` | ladder |  | Absolute path to the NVLink preflight script. | `backend/api/fabric_ops.py` |
+| <a id="s-rack-nvlmapper-disabled"></a>`RACK_NVLMAPPER_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/fabric_ops.py` |
+| <a id="s-rack-nvlmapper-reports-base"></a>`RACK_NVLMAPPER_REPORTS_BASE` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/paths.py` |
+| <a id="s-rack-nvloom-cuda-major"></a>`RACK_NVLOOM_CUDA_MAJOR` | ladder |  | CUDA major for NVLoom, and the fallback for ClusterKit and mnubergemm. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
+| <a id="s-rack-nvloom-singlerack-disabled"></a>`RACK_NVLOOM_SINGLERACK_DISABLED` | environment |  | Refuse single-rack NVLoom launches. | `backend/api/validation_runs.py` |
+| <a id="s-rack-nvswitch-audit-disabled"></a>`RACK_NVSWITCH_AUDIT_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/fabric_ops.py` |
+| <a id="s-rack-parser-excel-report-dir"></a>`RACK_PARSER_EXCEL_REPORT_DIR` | ladder |  | Where the parser's spreadsheet report is copied after a run. | `backend/api/dashboard.py`, `backend/api/exports.py` |
+| <a id="s-rack-parser-export-disabled"></a>`RACK_PARSER_EXPORT_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/exports.py` |
+| <a id="s-rack-parser-export-glob"></a>`RACK_PARSER_EXPORT_GLOB` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/results_ingest.py` |
+| <a id="s-rack-parser-extra-args"></a>`RACK_PARSER_EXTRA_ARGS` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/results_ingest.py` |
+| <a id="s-rack-pdsh-w-skip-slurm-expand"></a>`RACK_PDSH_W_SKIP_SLURM_EXPAND` | environment |  | Pass a `pdsh -w` target through verbatim instead of expanding it via Slurm first. | `backend/node_targets.py` |
+| <a id="s-rack-physical-rf0-loose-hostnames"></a>`RACK_PHYSICAL_RF0_LOOSE_HOSTNAMES` | environment |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
+| <a id="s-rack-physical-rf0-map-disabled"></a>`RACK_PHYSICAL_RF0_MAP_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
+| <a id="s-rack-platform"></a>`RACK_PLATFORM` | environment |  | Cluster manager provider: 'bcm' (Base Command Manager) or 'maas'. | `backend/platforms/__init__.py` |
+| <a id="s-rack-post-run-history-file"></a>`RACK_POST_RUN_HISTORY_FILE` | environment |  | Append-only history of post-run report events. | `backend/post_run_report.py` |
+| <a id="s-rack-post-run-max-events"></a>`RACK_POST_RUN_MAX_EVENTS` | environment | `100000` | Ceiling on retained post-run events. Floors at 1000. | `backend/post_run_report.py` |
+| <a id="s-rack-power-disabled"></a>`RACK_POWER_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-power-dry-run"></a>`RACK_POWER_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-product-line"></a>`RACK_PRODUCT_LINE` | ladder |  | Older alias for RACK_CLUSTER_PRODUCT_LINE; the specific one wins. | `backend/api/validation_runs.py` |
+| <a id="s-rack-project-token"></a>`RACK_PROJECT_TOKEN` | ladder |  | NVFTP project folder name. Not a credential, despite matching the sensitive-name pattern on 'TOKEN'. | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
+| <a id="s-rack-prometheus-basic-auth-password"></a>`RACK_PROMETHEUS_BASIC_AUTH_PASSWORD` | ladder |  | Password for the BCM Prometheus endpoint. | `backend/api/dashboard.py`, `backend/api/tools.py` |
+| <a id="s-rack-prometheus-basic-auth-user"></a>`RACK_PROMETHEUS_BASIC_AUTH_USER` | ladder |  | Username for the BCM Prometheus endpoint. | `backend/api/dashboard.py`, `backend/api/tools.py` |
+| <a id="s-rack-prometheus-log-timestamp-tz"></a>`RACK_PROMETHEUS_LOG_TIMESTAMP_TZ` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/grafana_embed.py` +1 |
+| <a id="s-rack-punchcard-cache-sec"></a>`RACK_PUNCHCARD_CACHE_SEC` | environment | `300` | How long a punchcard read is cached. Default 300, floors at 60. | `backend/node_issues.py` |
+| <a id="s-rack-punchcard-range"></a>`RACK_PUNCHCARD_RANGE` | environment | `Sheet2!A1:Z1000` | Sheet range the punchcard is read from. Default `Sheet2!A1:Z1000`. | `backend/node_issues.py` |
+| <a id="s-rack-punchcard-spreadsheet-id"></a>`RACK_PUNCHCARD_SPREADSHEET_ID` | environment | `1NSs3c7v6r5mf5h-GKNZHNekVU9XsAAgJp3KyeeJK-PA` | Google Sheets id of the node-issue punchcard. | `backend/node_issues.py` |
+| <a id="s-rack-punchcard-token-file"></a>`RACK_PUNCHCARD_TOKEN_FILE` | environment |  | OAuth token file for reading the punchcard sheet. | `backend/node_issues.py` |
+| <a id="s-rack-remote-base-path"></a>`RACK_REMOTE_BASE_PATH` | ladder |  | Where the tooling is deployed on the head node. Script paths and the default log directory derive from it. Optional: unset falls back to the repo root, and a declared topology's scripts role root supersedes it. | `backend/host_exec.py`, `backend/paths.py` +1 |
+| <a id="s-rack-results-db"></a>`RACK_RESULTS_DB` | environment |  | SQLite database of parsed results history. | `backend/results_history.py` |
+| <a id="s-rack-results-db-busy-ms"></a>`RACK_RESULTS_DB_BUSY_MS` | environment |  | How long a results-database write waits on a lock before failing. | `backend/results_history.py` |
+| <a id="s-rack-services-restart-disabled"></a>`RACK_SERVICES_RESTART_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-services-restart-dry-run"></a>`RACK_SERVICES_RESTART_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-slurm-conf"></a>`RACK_SLURM_CONF` | environment |  | An explicit `SLURM_CONF` to export before running Slurm commands. Needed where the scripts host is not the Slurm controller. | `backend/bringup.py`, `backend/platforms/base.py` |
+| <a id="s-rack-slurm-drain-reason"></a>`RACK_SLURM_DRAIN_REASON` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/slurm_ops.py` |
+| <a id="s-rack-slurm-module"></a>`RACK_SLURM_MODULE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/platforms/base.py` |
+| <a id="s-rack-slurm-nodes-state-disabled"></a>`RACK_SLURM_NODES_STATE_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_ops.py` |
+| <a id="s-rack-slurm-nodes-state-dry-run"></a>`RACK_SLURM_NODES_STATE_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/slurm_admin.py` |
+| <a id="s-rack-slurm-sacct-disabled"></a>`RACK_SLURM_SACCT_DISABLED` | environment |  | Stop querying `sacct`, for a cluster with no accounting database. | `backend/api/slurm_queries.py` |
+| <a id="s-rack-slurm-sacct-since"></a>`RACK_SLURM_SACCT_SINCE` | ladder |  | How far back the recent-jobs query looks. Default `now-7days`. | `backend/slurm_query.py` |
+| <a id="s-rack-slurm-scancel-disabled"></a>`RACK_SLURM_SCANCEL_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_ops.py` |
+| <a id="s-rack-slurm-scontrol-show-job-disabled"></a>`RACK_SLURM_SCONTROL_SHOW_JOB_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_ops.py` |
+| <a id="s-rack-slurm-sinfo-r-disabled"></a>`RACK_SLURM_SINFO_R_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_queries.py` |
+| <a id="s-rack-slurm-skip-module-load"></a>`RACK_SLURM_SKIP_MODULE_LOAD` | environment |  | Skip 'module load slurm' before scheduler commands, for sites where Slurm is already on PATH. | `backend/platforms/base.py` |
+| <a id="s-rack-slurm-squeue-disabled"></a>`RACK_SLURM_SQUEUE_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/slurm_queries.py` |
+| <a id="s-rack-ssh-host"></a>`RACK_SSH_HOST` | environment |  | Head node for the SSH control connection. Required unless the deployment is in demo mode or RACK_EXEC_MODE=local. | `backend/rack_status_engine.py` |
+| <a id="s-rack-ssh-key"></a>`RACK_SSH_KEY` | indirect |  | Path to the private key for the control connection. The path, not the key: the key itself must never appear in this file. |  |
+| <a id="s-rack-ssh-port"></a>`RACK_SSH_PORT` | indirect |  | Port for the SSH control connection. |  |
+| <a id="s-rack-ssh-reachability-connect-timeout"></a>`RACK_SSH_REACHABILITY_CONNECT_TIMEOUT` | environment |  | Seconds a reachability probe waits for a connection. Default 5. | `backend/host_exec.py` |
+| <a id="s-rack-ssh-reachability-ttl-sec"></a>`RACK_SSH_REACHABILITY_TTL_SEC` | environment | `15` | How long a reachability result is cached. Default 15, floors at 3. | `backend/host_exec.py` |
+| <a id="s-rack-ssh-user"></a>`RACK_SSH_USER` | indirect |  | Account for the SSH control connection to the head node. |  |
+| <a id="s-rack-status-allowed-prefixes"></a>`RACK_STATUS_ALLOWED_PREFIXES` | environment |  | See `docs/ENVIRONMENT.md` | `backend/paths.py` |
+| <a id="s-rack-status-demo"></a>`RACK_STATUS_DEMO` | environment |  | Synthetic data, no cluster contact. True on a developer laptop, and it also exempts the connection settings from the required-setting preflight. | `backend/app.py`, `backend/cli.py` |
+| <a id="s-rack-status-extra-args"></a>`RACK_STATUS_EXTRA_ARGS` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
+| <a id="s-rack-status-log-dir"></a>`RACK_STATUS_LOG_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py`, `backend/paths.py` |
+| <a id="s-rack-sysinfo-disabled"></a>`RACK_SYSINFO_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/_common.py` |
+| <a id="s-rack-tail-linebuffer"></a>`RACK_TAIL_LINEBUFFER` | ladder | `1` | See `docs/ENVIRONMENT.md` | `backend/api/logs.py` |
+| <a id="s-rack-tail-log-disabled"></a>`RACK_TAIL_LOG_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/logs.py` |
+| <a id="s-rack-target-from-inventory"></a>`RACK_TARGET_FROM_INVENTORY` | environment | `1` | Expand a rack to nodes from live Slurm inventory rather than from the naming template. Default on; set to 0 to force the template path. | `backend/node_targets.py` |
+| <a id="s-rack-tools-download-containers-disabled"></a>`RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED` | environment |  | Refuse container downloads. | `backend/api/tools.py` |
+| <a id="s-rack-tools-install-cuda-nccl-workspace-disabled"></a>`RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED` | environment |  | Refuse the CUDA/NCCL workspace install. | `backend/api/tools.py` |
+| <a id="s-rack-tools-install-dcgm-workspace-disabled"></a>`RACK_TOOLS_INSTALL_DCGM_WORKSPACE_DISABLED` | environment |  | Refuse the DCGM workspace install. | `backend/api/tools.py` |
+| <a id="s-rack-tools-install-dgxc-benchmarking-disabled"></a>`RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED` | environment |  | Refuse the DGXC benchmarking install. | `backend/api/tools.py` |
+| <a id="s-rack-tools-install-hpcx-workspace-disabled"></a>`RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED` | environment |  | Refuse the HPC-X workspace install. | `backend/api/tools.py` |
+| <a id="s-rack-tools-install-nvloom-workspace-disabled"></a>`RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED` | environment |  | Refuse the NVLoom workspace install. | `backend/api/tools.py` |
+| <a id="s-rack-tools-launch-grafana-bright-prometheus-disabled"></a>`RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED` | environment |  | Refuse the Grafana/Bright Prometheus launch. | `backend/api/tools.py` |
+| <a id="s-rack-universal-scan-ignore-re"></a>`RACK_UNIVERSAL_SCAN_IGNORE_RE` | environment |  | Regex of paths the universal log scan skips. | `backend/api/universal.py` |
+| <a id="s-rack-uptime-disabled"></a>`RACK_UPTIME_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-uptime-dry-run"></a>`RACK_UPTIME_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-validation-activities-adopt-disabled"></a>`RACK_VALIDATION_ACTIVITIES_ADOPT_DISABLED` | environment |  | Stop adopting externally-started runs found in the log directory into the activity registry. | `backend/api/parser_results.py` |
+| <a id="s-rack-validation-activities-archive-db"></a>`RACK_VALIDATION_ACTIVITIES_ARCHIVE_DB` | environment |  | Where completed activities are archived. | `backend/validation_activities.py` |
+| <a id="s-rack-validation-activities-file"></a>`RACK_VALIDATION_ACTIVITIES_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/validation_activities.py` |
+| <a id="s-rack-validation-activities-refresh-disabled"></a>`RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED` | ladder |  | Stop the background reconciliation of stored activities against Slurm. | `backend/api/activities.py`, `backend/app.py` |
+| <a id="s-rack-validation-activities-refresh-lock-file"></a>`RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE` | ladder |  | Lock file that keeps two processes from reconciling activities at once. | `backend/app.py` |
+| <a id="s-rack-validation-ct-range"></a>`RACK_VALIDATION_CT_RANGE` | ladder | `01-18` | See `docs/ENVIRONMENT.md` | `backend/node_targets.py`, `backend/workflow_engine.py` |
+| <a id="s-rack-validation-disabled"></a>`RACK_VALIDATION_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
+| <a id="s-rack-validation-excluded-nodes"></a>`RACK_VALIDATION_EXCLUDED_NODES` | ladder |  | Comma-list of nodes never eligible for a validation launch, whatever the selection. | `backend/validation_launch.py` |
+| <a id="s-rack-web-allowed-origins"></a>`RACK_WEB_ALLOWED_ORIGINS` | environment |  | See `docs/ENVIRONMENT.md` | `backend/web_auth.py` |
+| <a id="s-rack-web-bind-addr"></a>`RACK_WEB_BIND_ADDR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/cli.py` |
+| <a id="s-rack-web-csp-mode"></a>`RACK_WEB_CSP_MODE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/app.py` |
+| <a id="s-rack-web-grafana-dash-slug"></a>`RACK_WEB_GRAFANA_DASH_SLUG` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/grafana_embed.py` |
+| <a id="s-rack-web-grafana-dash-uid"></a>`RACK_WEB_GRAFANA_DASH_UID` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/grafana_embed.py` |
+| <a id="s-rack-web-grafana-deeplink-dashboards"></a>`RACK_WEB_GRAFANA_DEEPLINK_DASHBOARDS` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/grafana_embed.py` |
+| <a id="s-rack-web-grafana-deeplink-disabled"></a>`RACK_WEB_GRAFANA_DEEPLINK_DISABLED` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py` |
+| <a id="s-rack-web-grafana-port"></a>`RACK_WEB_GRAFANA_PORT` | ladder | `3000` | See `docs/ENVIRONMENT.md` | `backend/app.py`, `backend/grafana_embed.py` |
+| <a id="s-rack-web-grafana-timezone"></a>`RACK_WEB_GRAFANA_TIMEZONE` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/grafana_embed.py` |
+| <a id="s-rack-web-grafana-uri"></a>`RACK_WEB_GRAFANA_URI` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/app.py`, `backend/grafana_embed.py` |
+| <a id="s-rack-web-grafana-var-host"></a>`RACK_WEB_GRAFANA_VAR_HOST` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/grafana_embed.py` |
+| <a id="s-rack-web-grafana-var-rack"></a>`RACK_WEB_GRAFANA_VAR_RACK` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/grafana_embed.py` |
+| <a id="s-rack-web-oidc-clients-file"></a>`RACK_WEB_OIDC_CLIENTS_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/identity/oidc_clients.py` |
+| <a id="s-rack-web-oidc-issuer"></a>`RACK_WEB_OIDC_ISSUER` | environment |  | This deployment's own base URL, used as the OIDC `iss` claim. Required when the OIDC provider is enabled. Cannot be derived from the request: OIDC Discovery 1.0 §4.3 requires it to be the URL discovery is served from, and a Host header is attacker-controlled. http is accepted only for localhost, which is how an operator reaches a tunnelled deployment. | `backend/identity/oidc.py` |
+| <a id="s-rack-web-policy-file"></a>`RACK_WEB_POLICY_FILE` | environment |  | Path to the authorization policy set. Its presence is what selects the enforcing engine over the permissive one. | `backend/authz/__init__.py`, `backend/authz/policy.py` +1 |
+| <a id="s-rack-web-port"></a>`RACK_WEB_PORT` | environment |  | Port to serve on. Default 5050. | `backend/cli.py`, `backend/identity/oidc.py` |
+| <a id="s-rack-web-project-name"></a>`RACK_WEB_PROJECT_NAME` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py` |
+| <a id="s-rack-web-public-host"></a>`RACK_WEB_PUBLIC_HOST` | environment |  | Hostname operators reach this deployment by. Used to derive the OIDC issuer when one is not set explicitly. | `backend/identity/oidc.py` |
+| <a id="s-rack-web-secret-key"></a>`RACK_WEB_SECRET_KEY` | environment |  | See `docs/ENVIRONMENT.md` | `backend/app.py`, `backend/identity/srp.py` +3 |
+| <a id="s-rack-web-signing-key-dir"></a>`RACK_WEB_SIGNING_KEY_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/identity/keys.py` |
+| <a id="s-rack-web-signing-key-validity-seconds"></a>`RACK_WEB_SIGNING_KEY_VALIDITY_SECONDS` | environment |  | See `docs/ENVIRONMENT.md` | `backend/identity/keys.py` |
+| <a id="s-rack-web-tls-cert"></a>`RACK_WEB_TLS_CERT` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/app.py`, `backend/cli.py` +2 |
+| <a id="s-rack-web-tls-dir"></a>`RACK_WEB_TLS_DIR` | environment |  | Where the TLS certificate and key live. The startup gate generates a self-signed pair here on a first boot. | `backend/startup_gate.py` |
+| <a id="s-rack-web-tls-key"></a>`RACK_WEB_TLS_KEY` | environment |  | Private key for the TLS certificate. Required whenever RACK_WEB_TLS_CERT is set: a cert with no key downgrades one path silently and crashes the other. | `backend/app.py`, `backend/cli.py` +1 |
+| <a id="s-rack-web-tls-min-version"></a>`RACK_WEB_TLS_MIN_VERSION` | environment |  | See `docs/ENVIRONMENT.md` | `backend/tls_server.py` |
+| <a id="s-rack-web-token-issuer"></a>`RACK_WEB_TOKEN_ISSUER` | environment |  | The `iss` claim on tokens this deployment mints. Defaults to `nvis-rack-status`. | `backend/identity/tokens.py` |
+| <a id="s-rack-workflows-dir"></a>`RACK_WORKFLOWS_DIR` | environment |  | Where workflow definitions are stored. Defaults under `var/workflows`. | `backend/workflow_engine.py` |
+| <a id="s-rack-workspace-dir"></a>`RACK_WORKSPACE_DIR` | ladder |  | Older alias for NVIS_WORKSPACE_DIR. | `backend/api/dashboard.py`, `backend/config_env.py` |
+| <a id="s-sinfo-opts"></a>`SINFO_OPTS` | environment |  | See `docs/ENVIRONMENT.md` | `backend/native_status.py` |
+| <a id="s-squeue-user"></a>`SQUEUE_USER` | environment |  | See `docs/ENVIRONMENT.md` | `backend/native_status.py`, `backend/rack_status_engine.py` |
+| <a id="s-validation-test"></a>`VALIDATION_TEST` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py` |
+| <a id="s-web-concurrency"></a>`WEB_CONCURRENCY` | environment |  | Gunicorn's own name for the worker count, checked alongside GUNICORN_WORKERS and subject to the same limit of 1. | `backend/startup_gate.py` |
 

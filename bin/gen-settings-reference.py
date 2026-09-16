@@ -44,10 +44,12 @@ import os
 import pathlib
 import re
 import sys
+import tomllib
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = REPO_ROOT / "docs" / "reference" / "configuration" / "settings.md"
 ENVIRONMENT_DOC = REPO_ROOT / "docs" / "ENVIRONMENT.md"
+HINTS = REPO_ROOT / "docs" / "settings-hints.toml"
 
 #: The readers that mean "this is a configuration setting".
 #:
@@ -74,12 +76,18 @@ def _is_env_read(node: ast.Call) -> str | None:
             return "raw"
         return None
     if isinstance(func, ast.Attribute):
-        # `os.environ.get(...)` / `environ.get(...)`
+        # `os.environ.get(...)` only.
+        #
+        # A bare `environ.get(...)` is deliberately NOT accepted, and the first version of this
+        # scan did accept it. Every such call in this codebase reads the **WSGI environ** — the
+        # request dict handed to middleware — so the inventory listed `HTTP_HOST`, `PATH_INFO`,
+        # `QUERY_STRING`, `REMOTE_ADDR` and four more CGI keys as undescribed configuration
+        # settings. Eight entries in a document whose whole claim is completeness, each one an
+        # invitation to go documenting a setting that does not exist. No module here does
+        # `from os import environ`, so requiring the attribute chain loses nothing.
         if func.attr == "get":
             target = func.value
             if isinstance(target, ast.Attribute) and target.attr == "environ":
-                return "raw"
-            if isinstance(target, ast.Name) and target.id == "environ":
                 return "raw"
         if func.attr in {"_eget", "_eget_int"}:
             return "ladder"
@@ -116,9 +124,12 @@ def _module_constants(tree: ast.Module) -> dict[str, str]:
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
         target = node.targets[0]
-        if isinstance(target, ast.Name) and isinstance(node.value, ast.Constant):
-            if isinstance(node.value.value, str):
-                out[target.id] = node.value.value
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            out[target.id] = node.value.value
     return out
 
 
@@ -190,6 +201,25 @@ def registry_metadata() -> dict[str, dict]:
     return out
 
 
+def hints() -> dict[str, str]:
+    """Reviewed one-line hints for settings with no declaration of their own.
+
+    A separate, hand-maintained file rather than anything derived, because a generator cannot
+    know what a setting is *for* — and one that guessed would emit confident sentences nobody
+    checked, which is the failure mode this whole document exists to avoid. Unhinted settings
+    stay on the to-do list.
+    """
+    if not HINTS.is_file():
+        return {}
+    with HINTS.open("rb") as fh:
+        return dict(tomllib.load(fh).get("hints") or {})
+
+
+def anchor(name: str) -> str:
+    """The id a setting's row carries, so the to-do list can link into the table."""
+    return f"s-{name.lower().replace('_', '-')}"
+
+
 def described_names() -> set[str]:
     """Settings that already have prose in `docs/ENVIRONMENT.md`."""
     if not ENVIRONMENT_DOC.is_file():
@@ -198,7 +228,12 @@ def described_names() -> set[str]:
     return set(re.findall(r"\b([A-Z][A-Z0-9_]{3,})\b", text))
 
 
-def render(read: dict[str, dict], declared: dict[str, dict], described: set[str]) -> str:
+def render(
+    read: dict[str, dict],
+    declared: dict[str, dict],
+    described: set[str],
+    hint: dict[str, str],
+) -> str:
     # The population is the **union**, and that matters. Five declared settings never appear in a
     # scannable call: `RACK_SSH_USER`, `RACK_SSH_KEY`, `RACK_SSH_PORT` and `RACK_EXEC_MODE` are
     # consumed by the connection profile from a list of names, and `NVIS_LOG_LEVEL` through
@@ -218,7 +253,9 @@ def render(read: dict[str, dict], declared: dict[str, dict], described: set[str]
     total = len(read)
     n_declared = sum(1 for n in read if n in declared)
     n_described = sum(1 for n in read if n in described)
-    undocumented = sorted(n for n in read if n not in described and n not in declared)
+    undocumented = sorted(
+        n for n in read if n not in described and n not in declared and n not in hint
+    )
     raw_only = sorted(n for n, e in read.items() if e["raw"] and not e["ladder"])
 
     lines = [
@@ -257,17 +294,31 @@ def render(read: dict[str, dict], declared: dict[str, dict], described: set[str]
         "",
     ]
 
+    if not undocumented:
+        lines += [
+            "## Undescribed settings",
+            "",
+            "None: every setting read has either a declaration, prose in `docs/ENVIRONMENT.md` or a",
+            "hint in `docs/settings-hints.toml`. A newly added setting appears here on the next",
+            "build until somebody writes one.",
+            "",
+        ]
+
     if undocumented:
         lines += [
             "## Undescribed settings",
             "",
-            f"{len(undocumented)} settings are read by the code and are not named in any document. They",
-            "are listed here",
-            "because an inventory that hid them would be the reason nobody knew: a generator must not",
-            "invent a description, so each of these is a real to-do rather than a sentence somebody",
-            "guessed.",
+            f"{len(undocumented)} settings have no declaration, no prose in `docs/ENVIRONMENT.md`",
+            "and no hint in `docs/settings-hints.toml`. Each name links to its row in the table",
+            "below, which still gives you its reader, its default and the module that reads it.",
             "",
-            ", ".join(f"`{n}`" for n in undocumented),
+            "They are listed because an inventory that hid them would be the reason nobody knew. A",
+            "generator must not invent a description, so each of these is a real to-do — write one",
+            "into `docs/settings-hints.toml` and it moves out of this list on the next build.",
+            "",
+            ", ".join(
+                f'<a href="#{anchor(n)}"><code>{n}</code></a>' for n in undocumented
+            ),
             "",
         ]
 
@@ -288,12 +339,15 @@ def render(read: dict[str, dict], declared: dict[str, dict], described: set[str]
         lines += [
             "## Read outside the resolution ladder",
             "",
-            f"{len(raw_only)} settings are read only via `os.environ`, so a cluster overlay and the",
+            f"{len(raw_only)} of them are read only via `os.environ`, so a cluster overlay and the",
             "Settings screen cannot influence them — the setting is process-wide. New code should",
             "prefer `_eget` (`core-designs.mdc` §5); these are the ones that predate the rule or",
             "genuinely belong to the process rather than to a cluster.",
             "",
-            ", ".join(f"`{n}`" for n in raw_only),
+            f"They are not listed here — {len(raw_only)} names in a paragraph is not something",
+            "anyone reads.",
+            "The table below marks each one `environment` in its `Reader` column, which answers the",
+            "same question setting by setting, where you are already looking.",
             "",
         ]
 
@@ -318,13 +372,17 @@ def render(read: dict[str, dict], declared: dict[str, dict], described: set[str]
     lines += [
         "## Every setting",
         "",
+        "`What it controls` is the registry's own description where a setting has a declaration,",
+        "then a reviewed hint from `docs/settings-hints.toml`, then a pointer to the prose in",
+        "`docs/ENVIRONMENT.md`. A dash means nobody has written one yet.",
+        "",
         "`Reader` is `ladder` where the value goes through `_eget`, `environment` where it is read",
         "straight from `os.environ`, and `indirect` for the five consumed by name from a list (the",
         "connection profile) or through another registry (`logging_config`) rather than by a call",
         "this scan can see. `Default` is shown only where the call site supplies a literal.",
         "",
-        "| Setting | Reader | Default | Declared | Described | Read in |",
-        "|---|---|---|---|---|---|",
+        "| Setting | Reader | Default | What it controls | Read in |",
+        "|---|---|---|---|---|",
     ]
     for name in sorted(read):
         entry = read[name]
@@ -338,16 +396,21 @@ def render(read: dict[str, dict], declared: dict[str, dict], described: set[str]
         shown = ", ".join(f"`{m}`" for m in modules[:2])
         if len(modules) > 2:
             shown += f" +{len(modules) - 2}"
+        purpose = (
+            declared.get(name, {}).get("description")
+            or hint.get(name)
+            or ("See `docs/ENVIRONMENT.md`" if name in described else "—")
+        )
         lines.append(
-            f"| `{name}` | {reader} | {default} | {'yes' if name in declared else ''} "
-            f"| {'yes' if name in described else ''} | {shown} |"
+            f'| <a id="{anchor(name)}"></a>`{name}` | {reader} | {default} '
+            f"| {purpose} | {shown} |"
         )
     lines.append("")
     return "\n".join(lines) + "\n"
 
 
 def build() -> str:
-    return render(scan(), registry_metadata(), described_names())
+    return render(scan(), registry_metadata(), described_names(), hints())
 
 
 def main() -> int:

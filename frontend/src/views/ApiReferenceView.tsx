@@ -215,7 +215,19 @@ export function ApiReferenceView() {
             free-form JSON by design — the description carries the contract, not a schema. Authenticate
             over SRP (<code>POST /api/auth/srp/begin</code> then <code>/finish</code>) and send the
             resulting token as <code>Authorization: Bearer</code>, or hold the cookie the exchange
-            sets, before calling anything else.{" "}
+            sets, before calling anything else:{" "}
+          <a
+            href="/docs/how-to/authenticate-to-the-api.html"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate("/documentation", {
+                state: { docPage: "how-to/authenticate-to-the-api.html" },
+              });
+            }}
+          >
+            how to authenticate to the API
+          </a>
+          , with a worked example.{" "}
           {/* This deployment's own documentation, not the GitLab project. An operator on a
               customer cluster reaches Greenlight through an SSH tunnel and often cannot reach
               gitlab-master at all -- the same constraint that made the docs site local, and the

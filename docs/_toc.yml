@@ -18,6 +18,8 @@ subtrees:
     entries:
       - file: how-to/configure-a-deployment
         title: How to configure a deployment
+      - file: how-to/authenticate-to-the-api
+        title: How to authenticate to the API
       - file: how-to/grant-a-team-access
         title: How to grant a team access
       - file: how-to/diagnose-a-refused-request
