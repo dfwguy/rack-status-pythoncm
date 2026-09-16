@@ -1103,14 +1103,8 @@ def _security_headers(response):
     # adds nothing an operator could not already open directly, and every other response stays
     # unframeable.
     docs_path = (request.path or "").startswith("/docs")
-    # Set by `docs_site._html_with_nonce`, and only for an HTML page it just rewrote. Read from
-    # `g` rather than minted here so the value in the header is provably the value in the body:
-    # generating one per response in two places would produce two different nonces and refuse
-    # every script. Empty for everything else, which keeps `script-src 'self'` exactly as it was.
-    docs_nonce = str(getattr(g, "docs_script_nonce", "") or "")
     hdrs = security_headers(
         is_secure=request.is_secure,
-        script_nonce=docs_nonce,
         frame_ancestors="'self'" if docs_path else "'none'",
         page_scheme=scheme,
         page_host=request.host or "",

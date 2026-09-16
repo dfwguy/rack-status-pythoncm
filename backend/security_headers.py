@@ -83,7 +83,6 @@ def content_security_policy(
     page_host: str = "",
     grafana_origin: str = "",
     extra_origins: tuple[str, ...] = (),
-    script_nonce: str = "",
 ) -> str:
     """The dashboard's CSP.
 
@@ -136,13 +135,7 @@ def content_security_policy(
         "object-src 'none'",
         f"frame-ancestors {frame_ancestors}",
         "form-action 'self'",
-        # `'nonce-…'` is added only for the documentation pages, which carry two inline scripts
-        # Sphinx generates (the theme's light/dark restore, and the current page name). A nonce
-        # rather than `'unsafe-inline'` because the two are not close relatives: a nonce permits
-        # exactly the tags this response was built with, while `'unsafe-inline'` permits anything
-        # that later reaches the page by any route. It is minted per response and never reused --
-        # a fixed nonce is `'unsafe-inline'` with extra steps.
-        f"script-src 'self' 'nonce-{script_nonce}'" if script_nonce else "script-src 'self'",
+        "script-src 'self'",
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: blob:",
         "font-src 'self'",
@@ -162,7 +155,6 @@ def security_headers(
     grafana_origin: str = "",
     csp_mode: str = "enforce",
     extra_connect_origins: tuple[str, ...] = (),
-    script_nonce: str = "",
 ) -> dict[str, str]:
     """Headers to add to every response.
 
@@ -192,7 +184,6 @@ def security_headers(
             page_host=page_host,
             grafana_origin=grafana_origin,
             extra_origins=extra_connect_origins,
-            script_nonce=script_nonce,
         )
         key = "Content-Security-Policy-Report-Only" if mode == "report" else "Content-Security-Policy"
         out[key] = policy
