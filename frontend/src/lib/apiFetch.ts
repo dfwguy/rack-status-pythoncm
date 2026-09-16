@@ -65,27 +65,6 @@ const NO_REFRESH = ["/api/auth/refresh", "/api/auth/srp/", "/api/auth/logout"];
  */
 let refreshInFlight: Promise<boolean> | null = null;
 
-/**
- * Told when a 401 survives the refresh — i.e. the session is genuinely gone.
- *
- * The docstring below has always said the caller "and ultimately `AuthProvider`" sees a real
- * sign-out. It did not: nothing was wired, so `AuthProvider` learned the answer once at mount and
- * never again. A window whose tokens the server had stopped accepting therefore kept polling —
- * `rack-locks`, `status` and `cluster-overview` every few seconds, 401 every time, indefinitely,
- * while the UI still looked signed in. Observed on a desktop window left open across a server
- * restart, which invalidates every outstanding token (the signing key is derived from
- * `RACK_WEB_SECRET_KEY`).
- *
- * A single module-level handler rather than an event bus: there is exactly one consumer, and the
- * point is that it is impossible to forget to register it — `AuthProvider` does so at mount.
- */
-let sessionLost: (() => void) | null = null;
-
-/** Register the sign-out handler. `AuthProvider` owns this; passing `null` unregisters. */
-export function onSessionLost(handler: (() => void) | null): void {
-  sessionLost = handler;
-}
-
 function refreshSession(): Promise<boolean> {
   if (refreshInFlight === null) {
     refreshInFlight = fetch("/api/auth/refresh", {
@@ -124,14 +103,7 @@ export async function apiFetch(
   const url = typeof input === "string" ? input : input instanceof URL ? input.pathname : input.url;
   if (NO_REFRESH.some((p) => url.includes(p))) return first;
 
-  if (!(await refreshSession())) {
-    // The session is gone, not merely stale. Say so once, here, rather than leaving every caller
-    // to invent its own answer: the ad-hoc `window.location.href = "/login?next=..."` in the
-    // views loses the route (this app is a HashRouter, and those handlers read `pathname +
-    // search`), and the pollers had no handler at all.
-    sessionLost?.();
-    return first;
-  }
+  if (!(await refreshSession())) return first;
   // The body of `init` may be a stream that the first attempt consumed. Callers in this codebase
   // pass strings, which are replayable; a stream body would need cloning before the first send.
   return rawFetch(input, init);

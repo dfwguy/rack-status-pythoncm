@@ -29,7 +29,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { apiFetch, onSessionLost } from "./apiFetch";
+import { apiFetch } from "./apiFetch";
 
 const originalFetch = globalThis.fetch;
 
@@ -83,64 +83,6 @@ describe("an expired session is renewed once and the request retried", () => {
     // The caller must still see a genuine sign-out; swallowing it would leave the UI stuck.
     expect(resp.status).toBe(401);
     expect(calls.filter((c) => c.includes("/api/auth/refresh"))).toHaveLength(1);
-  });
-
-  it("announces the sign-out, so the app stops claiming to be signed in", async () => {
-    /**
-     * The regression this exists for. `apiFetch` refreshed, failed, returned the 401 — and told
-     * nobody. `AuthProvider` had learned the answer once at mount, so a window whose tokens the
-     * server no longer accepted kept polling `rack-locks`, `status` and `cluster-overview` every
-     * few seconds, 401 every time, indefinitely, while still rendering the dashboard.
-     */
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      if (String(input).includes("/api/auth/refresh")) return json({ ok: false }, 401);
-      return json({ error: "authentication required" }, 401);
-    }) as typeof fetch;
-
-    const told = vi.fn();
-    onSessionLost(told);
-    try {
-      expect((await apiFetch("/api/status")).status).toBe(401);
-      expect(told).toHaveBeenCalledTimes(1);
-    } finally {
-      onSessionLost(null);
-    }
-  });
-
-  it("stays quiet while the refresh works, so a renewal is not a sign-out", async () => {
-    let refreshed = false;
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/auth/refresh")) {
-        refreshed = true;
-        return json({ ok: true });
-      }
-      return refreshed ? json({ ok: true }) : json({ error: "expired" }, 401);
-    }) as typeof fetch;
-
-    const told = vi.fn();
-    onSessionLost(told);
-    try {
-      expect((await apiFetch("/api/status")).status).toBe(200);
-      expect(told).not.toHaveBeenCalled();
-    } finally {
-      onSessionLost(null);
-    }
-  });
-
-  it("does not announce a sign-out for the auth routes themselves", async () => {
-    // A failed login must not be reported as a lost session: it would flip state the login page
-    // is already responsible for, mid-attempt.
-    globalThis.fetch = (async () => json({ ok: false }, 401)) as typeof fetch;
-
-    const told = vi.fn();
-    onSessionLost(told);
-    try {
-      expect((await apiFetch("/api/auth/srp/finish", { method: "POST" })).status).toBe(401);
-      expect(told).not.toHaveBeenCalled();
-    } finally {
-      onSessionLost(null);
-    }
   });
 
   it("does not refresh a response that is not a 401", async () => {

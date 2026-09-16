@@ -139,11 +139,7 @@ myst_substitutions = {
 html_theme = "nvidia_sphinx_theme"
 html_title = "NVIS Greenlight"
 html_static_path = ["_static"]
-# `local-fonts.css` first: it re-declares the theme's twelve `@font-face` rules against files in
-# `_static/fonts/` instead of `images.nvidia.com`. Without it a browser refuses all twelve under
-# the app's `font-src 'self'` policy, and an air-gapped cluster could never have fetched them
-# anyway — see the file's own header.
-html_css_files = ["local-fonts.css", "custom.css"]
+html_css_files = ["custom.css"]
 
 html_theme_options = {
     # Operators reach this over an SSH tunnel on a customer cluster, not from the internet.
