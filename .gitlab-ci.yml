@@ -209,6 +209,16 @@ python-test:
     # same versions. pytest/pytest-cov used to be installed unpinned here, which meant CI tracked
     # latest and a green local run was a different claim from a green pipeline.
     - pip install -q -r backend/requirements.txt -r backend/requirements-dev.txt
+    # `rsync`, because part of the suite shells out to `bin/bootstrap-project-scripts.sh`, which
+    # composes a project's script layers with `rsync --ignore-existing` — the flag that protects an
+    # operator's edit. `python:3.12-slim` does not ship it, so four tests failed here with exit 127
+    # while passing on every developer machine (macOS and any cluster head node have it). This is
+    # the `local-vs-ci-tree.mdc` §4 trap: the job image is not your shell.
+    #
+    # Installed rather than skipped. A skip would leave the bootstrap's layer composition — whose
+    # staging-directory ordering is subtle and has been wrong once already — untested in the only
+    # place that runs the whole suite.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends rsync
     # BEFORE the suite, because it answers a different question and answers it clearly: does the
     # COMMITTED tree import, using only files git tracks? On 2026-08-21 an import was committed one
     # commit before the module it named, and the suite reported it as 34 collection errors whose

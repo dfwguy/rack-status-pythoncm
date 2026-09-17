@@ -90,7 +90,15 @@ def test_it_serves_only_from_the_docs_directory(anonymous):
     ):
         response = anonymous.get(attempt)
         body = response.get_data(as_text=True)
-        assert response.status_code in {301, 308, 400, 404}, f"{attempt} -> {response.status_code}"
+        # 503 is the documented answer when `static/docs` has not been built, and that is a real
+        # tree: the documentation is a build artifact, so a tracked-files-only checkout has none
+        # (`local-vs-ci-tree.mdc` §1). Refusing to accept it made this test fail for the one
+        # reason that is not a traversal — while the assertions that matter, below, hold either
+        # way. In CI the docs *are* present, because `docs-build` runs in an earlier stage and its
+        # artifact reaches this job.
+        assert response.status_code in {301, 308, 400, 404, 503}, (
+            f"{attempt} -> {response.status_code}"
+        )
         assert "root:" not in body, f"{attempt} served /etc/passwd"
         assert "from flask import" not in body, f"{attempt} served source"
 
@@ -147,6 +155,13 @@ def test_the_branding_a_login_screen_needs_is_public_too(anonymous):
     `crossorigin` attribute would have fixed the manifest and left the icons broken.
 
     None of these carry anything: an application name, a theme colour, some PNGs.
+
+    **The assertion is about the gate, not about the files existing.** These are all
+    `static/spa/` assets, and that directory is a gitignored build artifact: present in every
+    developer tree, absent from every CI checkout (`local-vs-ci-tree.mdc` §1). Asserting `200`
+    passed locally and failed in CI with `/manifest.webmanifest -> 404`, which says nothing about
+    whether the route is public — a 404 *is* the ungated answer for a file that is not there.
+    So each must be reachable without a credential; whether it has content depends on the tree.
     """
     for path in (
         "/manifest.webmanifest",
@@ -155,12 +170,24 @@ def test_the_branding_a_login_screen_needs_is_public_too(anonymous):
         "/icons/greenlight-180.png",
     ):
         response = anonymous.get(path)
-        assert response.status_code == 200, f"{path} -> {response.status_code}"
-        assert response.status_code not in ANY_REDIRECT
+        assert response.status_code not in ANY_REDIRECT, (
+            f"{path} redirected an anonymous browser to login; a manifest fetch carries no "
+            f"cookie, so it would parse the login page as JSON"
+        )
+        assert response.status_code not in (401, 403), f"{path} -> {response.status_code}"
+        # Three acceptable answers, and which one you get depends on the tree rather than on the
+        # gate: 200 where the bundle is built, 404 where the file is simply absent, and 503 for
+        # the two that fall through to the SPA shell handler — the deliberate "Frontend not
+        # built" page, which is the product's one intentional non-JSON 5xx. Measured, not
+        # guessed: without `static/spa`, the manifest and the PNG answer 404 while `favicon.svg`
+        # and `icons.svg` answer 503.
+        assert response.status_code in (200, 404, 503), f"{path} -> {response.status_code}"
 
-    # And the manifest is served as a manifest, which is what the browser refused to parse.
+    # And where the bundle *is* built, the manifest is served as a manifest — which is the part
+    # the browser refused to parse.
     manifest = anonymous.get("/manifest.webmanifest")
-    assert "manifest" in (manifest.headers.get("Content-Type") or "")
+    if manifest.status_code == 200:
+        assert "manifest" in (manifest.headers.get("Content-Type") or "")
 
 
 def test_favicon_ico_is_not_pretended_to_exist(anonymous):

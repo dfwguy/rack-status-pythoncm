@@ -133,6 +133,22 @@ class TestNoJobCallsAToolItsImageLacks:
             + "\n  ".join(offenders)
         )
 
+    def test_the_test_job_provides_rsync_because_the_suite_shells_out_to_it(self):
+        """`bin/bootstrap-project-scripts.sh` needs `rsync`, and four tests drive it.
+
+        `python:3.12-slim` does not ship rsync, so those tests failed in CI with exit 127 while
+        passing on every developer machine. The script now refuses with a readable message rather
+        than a bare `command not found`, but the tests still need the binary — and if somebody
+        drops this install to speed the job up, the same four tests go red for a reason the
+        failure output does not name. Asserting the install is what stops that being rediscovered.
+        """
+        job = _pipeline()["python-test"]
+        lines = " ".join(_command_lines(job))
+        assert "rsync" in lines, (
+            "python-test no longer installs rsync, but the suite still drives "
+            "bin/bootstrap-project-scripts.sh, which requires it"
+        )
+
     def test_the_gate_uses_the_generators_own_check_mode(self):
         """The specific repair, pinned. `--check` prints a unified diff, which is the only reason
         `git diff` was reached for; going back to git would reintroduce the failure exactly."""

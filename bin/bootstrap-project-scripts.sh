@@ -39,6 +39,27 @@ set -euo pipefail
 # rsync listing and `grep` deterministic regardless of the head node's locale.
 export LC_ALL=C
 
+# `rsync` is the one non-coreutils binary this script needs, and its absence must not look like a
+# bootstrap failure.
+#
+# Without this check the first copy dies as `line 105: rsync: command not found` with exit 127,
+# which surfaces through the API as a failed bootstrap and sends the reader looking at the script
+# tree, the permissions, the project id -- anything but a missing package. That is the same
+# "an absent tool and a genuine failure must not be indistinguishable" lesson `local-vs-ci-tree.mdc`
+# §4 records for `git` in a slim CI image; it cost an afternoon there and turned five tests red
+# here.
+#
+# rsync rather than `cp` is deliberate: `--ignore-existing` is what protects an operator's edit to
+# a project's own copy of a script, and `-c` compares by checksum so a redeploy that changes
+# nothing reports nothing. Every cluster head node has it, and `bin/deploy-scripts.sh` already
+# depends on it.
+if ! command -v rsync >/dev/null 2>&1; then
+  echo "bootstrap-project-scripts.sh: rsync is not installed on this host." >&2
+  echo "  It is required to compose the script layers while protecting local edits." >&2
+  echo "  Install it (apt-get install rsync / dnf install rsync) and re-run." >&2
+  exit 3
+fi
+
 usage() {
   cat >&2 <<'EOF'
 usage: bootstrap-project-scripts.sh --project <id> [options]
