@@ -9,6 +9,7 @@ pyyaml>=6.0,<7
 # transitive dependencies, so it installs on an air-gapped site. backend/toml_compat.py is the one
 # place that chooses between them; a marker here would hide the choice from the reader.
 tomli>=2.0,<3
+StrEnum>=0.4.15,<0.5
 # Four call sites: HKDF signing-key derivation (identity/tokens.py), the Fernet vault
 # (token_vault.py), x509 generation (bin/gen-tls-cert.py), and transitively paramiko + PyJWT.
 #

@@ -39,10 +39,10 @@ outcome.
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from strenum import StrEnum
 
 #: Actions look like ``service.sub:verb`` — the Phase 1 vocabulary grammar. A trailing ``*`` is
 #: permitted so a policy can name a family (``rack.power:*``) without enumerating it, which is what
