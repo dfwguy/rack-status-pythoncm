@@ -139,7 +139,11 @@ myst_substitutions = {
 html_theme = "nvidia_sphinx_theme"
 html_title = "NVIS Greenlight"
 html_static_path = ["_static"]
-html_css_files = ["custom.css"]
+# `local-fonts.css` first: it re-declares the theme's twelve `@font-face` rules against files in
+# `_static/fonts/` instead of `images.nvidia.com`. Without it a browser refuses all twelve under
+# the app's `font-src 'self'` policy, and an air-gapped cluster could never have fetched them
+# anyway — see the file's own header.
+html_css_files = ["local-fonts.css", "custom.css"]
 
 html_theme_options = {
     # Operators reach this over an SSH tunnel on a customer cluster, not from the internet.
@@ -209,9 +213,47 @@ def _diataxis_banner(app, docname, source):
     source[0] = text[:at] + banner + text[at:]
 
 
+#: An `@font-face` block that fetches from the network.
+_REMOTE_FACE = re.compile(r"@font-face\s*\{[^}]*?//[^}]*?\}", re.IGNORECASE)
+
+
+def _strip_remote_fonts(app, exception):
+    """Delete the theme's network `@font-face` rules from the built stylesheet.
+
+    `nvidia-sphinx-theme` declares twelve faces against `images.nvidia.com`. Operators read these
+    pages over an SSH tunnel to an air-gapped cluster, which cannot reach it: the request hangs,
+    then the page renders in a fallback font, and the only evidence is a console nobody is
+    watching. `_static/local-fonts.css` supplies the same faces from files we ship.
+
+    **Overriding alone is not enough, which is why this exists.** Two of the theme's rules are
+    *variable* faces spanning `font-weight: 100 1000`; a static override at 400 does not shadow a
+    range, so any weight outside the four we declare would still be fetched from the CDN. Removing
+    the remote rules outright means there is no cascade subtlety to get wrong — and it lets
+    `bin/check-docs-offline.py` verify the result by looking for network URLs, rather than having
+    to model CSS font matching to decide whether a URL is reachable in practice.
+
+    Same treatment the vendored KUI stylesheet gets (`frontend/src/styles/kaizen/README.md`),
+    applied at build time because this stylesheet arrives from a pip package rather than the tree.
+    """
+    if exception is not None or app.builder.name != "html":
+        return
+    css = Path(app.outdir) / "_static" / "styles" / "nvidia-sphinx-theme.css"
+    if not css.is_file():
+        return
+    before = css.read_text(errors="replace")
+    after = _REMOTE_FACE.sub("", before)
+    if after != before:
+        css.write_text(after)
+        removed = len(_REMOTE_FACE.findall(before))
+        print(f"[local-fonts] removed {removed} network @font-face rule(s) from the theme CSS")
+
+
 def setup(app):
     # source-read rather than a template override: the banner is content, it should appear in
     # any builder's output, and overriding the theme's page template to inject it would couple
     # this site to pydata's block structure.
     app.connect("source-read", _diataxis_banner)
+    # build-finished, because the theme's stylesheet is copied into the output by the theme
+    # itself: there is nothing to rewrite until it is there.
+    app.connect("build-finished", _strip_remote_fonts)
     return {"parallel_read_safe": True, "parallel_write_safe": True}

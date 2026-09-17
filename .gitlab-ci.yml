@@ -88,6 +88,11 @@ docs-build:
     # -W: a warning is a broken cross-reference or a page missing from `_toc.yml`, both of which
     # are 404s for a reader. --keep-going so one run lists every problem.
     - sphinx-build -W --keep-going -b html docs static/docs
+    # Operators read these pages over an SSH tunnel to an air-gapped cluster, so a subresource
+    # hosted elsewhere does not degrade -- it hangs, then the page renders without it, and the
+    # only evidence is a console nobody is watching. That is how the docs shipped in a fallback
+    # font for weeks. Checks the built output, which is the only place the answer exists.
+    - python bin/check-docs-offline.py
   artifacts:
     paths:
       - static/docs/

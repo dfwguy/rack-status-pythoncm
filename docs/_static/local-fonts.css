@@ -1,0 +1,149 @@
+/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+ *
+ * NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+ * property and proprietary rights in and to this material, related
+ * documentation and any modifications thereto. Any use, reproduction,
+ * disclosure or distribution of this material and related documentation
+ * without an express license agreement from NVIDIA CORPORATION or
+ * its affiliates is strictly prohibited.
+ * Author: Rafael M. Koike & Cursor Agent ("Ada")
+ *
+ * Serve the documentation's fonts from this deployment instead of from the NVIDIA CDN.
+ *
+ * `nvidia-sphinx-theme` declares twelve faces across two families, every one of them pointing at
+ * `images.nvidia.com`. Two consequences, and the second is the one that matters:
+ *
+ *   * The app's CSP is `font-src 'self'`, so a browser refuses all twelve and logs a violation
+ *     for each. Noise, and it hides real violations.
+ *   * **Operators browse these docs over an SSH tunnel to an air-gapped cluster**, which cannot
+ *     reach the CDN at all. So the fonts were never going to load where the docs matter most, and
+ *     the page silently fell back to a system font — exactly the failure the vendored KUI CSS
+ *     exists to prevent (`frontend/src/styles/kaizen/README.md` documents the same rewrite, and
+ *     warns that it is easy to miss because the CSS looks fine while the fonts quietly degrade).
+ *
+ * Loaded after the theme's stylesheet via `html_css_files`, so these faces win: for `@font-face`
+ * the last declaration of a given family/weight/style is the one the browser uses, and it does not
+ * fetch the shadowed one.
+ *
+ * The files are the ones the frontend already vendors, so no new asset enters the repository and
+ * both surfaces stay on one copy. `RobotoMono` is mapped to JetBrains Mono — the mono face the
+ * product's own UI uses — because Roboto Mono is not vendored here and matching the application is
+ * better than a third typeface.
+ */
+
+/* NVIDIA Sans — the theme's `NVIDIA` family, at the four weights it declares. */
+@font-face {
+  font-family: NVIDIA;
+  font-style: normal;
+  font-weight: 300;
+  src: url(fonts/NVIDIASans_Lt.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: NVIDIA;
+  font-style: italic;
+  font-weight: 300;
+  src: url(fonts/NVIDIASans_LtIt.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: NVIDIA;
+  font-style: normal;
+  font-weight: 400;
+  src: url(fonts/NVIDIASans_Rg.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: NVIDIA;
+  font-style: italic;
+  font-weight: 400;
+  src: url(fonts/NVIDIASans_It.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: NVIDIA;
+  font-style: normal;
+  font-weight: 500;
+  src: url(fonts/NVIDIASans_Md.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: NVIDIA;
+  font-style: italic;
+  font-weight: 500;
+  src: url(fonts/NVIDIASans_MdIt.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: NVIDIA;
+  font-style: normal;
+  font-weight: 700;
+  src: url(fonts/NVIDIASans_Bd.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: NVIDIA;
+  font-style: italic;
+  font-weight: 700;
+  src: url(fonts/NVIDIASans_BdIt.woff2) format("woff2");
+  font-display: swap;
+}
+
+/* Monospace — the theme's `RobotoMono` family, served as JetBrains Mono. */
+@font-face {
+  font-family: RobotoMono;
+  font-style: normal;
+  font-weight: 300;
+  src: url(fonts/JetBrainsMono-Light.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: RobotoMono;
+  font-style: italic;
+  font-weight: 300;
+  src: url(fonts/JetBrainsMono-LightItalic.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: RobotoMono;
+  font-style: normal;
+  font-weight: 400;
+  src: url(fonts/JetBrainsMono-Regular.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: RobotoMono;
+  font-style: italic;
+  font-weight: 400;
+  src: url(fonts/JetBrainsMono-Italic.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: RobotoMono;
+  font-style: normal;
+  font-weight: 500;
+  src: url(fonts/JetBrainsMono-Medium.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: RobotoMono;
+  font-style: italic;
+  font-weight: 500;
+  src: url(fonts/JetBrainsMono-MediumItalic.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: RobotoMono;
+  font-style: normal;
+  font-weight: 700;
+  src: url(fonts/JetBrainsMono-Bold.woff2) format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: RobotoMono;
+  font-style: italic;
+  font-weight: 700;
+  src: url(fonts/JetBrainsMono-BoldItalic.woff2) format("woff2");
+  font-display: swap;
+}
