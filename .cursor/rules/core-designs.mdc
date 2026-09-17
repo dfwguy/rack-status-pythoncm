@@ -43,6 +43,7 @@ already owns this concern".
 | A **long-running job** | `workflow_engine` — and if it lacks progress, artifacts or idempotency, add those *to the engine* (citizen 4) | A fifth in-memory job dict |
 | A **background worker's phase reporting** | `job_registry.reset_job_progress` | A hand-rolled `_patch` closure |
 | A **config knob** | The settings registry, read via `_eget` / `_eget_int` / `config_env` accessors (citizen 5) | `os.environ.get(...)` in new code |
+| **Persistent state** | Apply the join test and pick an engine (citizen 15): a document goes behind the `Repo` interface, a genuine relation goes in the database that owns that concern | A new `.sqlite3` file; a SQL table for a record nothing joins |
 | A **launch flag** | `backend/cli.py`, whose flags write `os.environ` and let the config ladder resolve precedence | Resolving precedence in the CLI, or a new `click` option with `envvar=` |
 | A **prerequisite the app must not serve without** | `backend/startup_gate.py`, as a `Fault` with a `fix` (citizen 13) | A check at `import app`, which breaks every tool that inspects the app without running it |
 | A **cluster manager or scheduler** | A provider under `platforms/` or `schedulers/` (citizen 6) | A branch in a caller |
@@ -309,6 +310,32 @@ inside CI where nobody sees that `rack:power` became `rack.power:on`.
 **A new generator goes in that job**, not into `python-test`. Checking the same thing in two places
 is two places to forget when a third generator arrives — which is why the vocabulary check was
 removed from `python-test` when this job landed.
+
+### 15. Storage engines — one interface, chosen backends
+
+`backend/catalog/store.py` (the `Repo` protocol and its TinyDB backend), `backend/json_db.py`
+(atomic whole-file documents), and the SQLite databases owned by `results_history`,
+`validation_activities`, `cluster_snapshot` and `cluster_overview_live`.
+
+**Pick the engine with the join test, not by habit.** It is relational — SQLite — if something
+actually relates one row to another: a one-to-many with a parent, a join, an aggregate across rows.
+It is a document — behind `Repo` — if the record is read and written whole by its own id and
+nothing joins it. Both shapes exist here and the answers are opposite: `results_history` has a real
+`ON DELETE CASCADE` parent-child with three joins and nine indexes, while the validation-activity
+archive is a primary key, six denormalised index columns and the whole record in `payload TEXT`
+with zero joins — a document stored relationally.
+
+**`Repo` is the reason this matters.** Its docstring is explicit that a DynamoDB backend can
+implement the same eight methods "without touching callers". A document behind the interface
+inherits that path; a document in a bespoke `.sqlite3` file does not, and we already have four such
+files for a product whose only storage dependency is `tinydb`.
+
+**The failure direction is always the same** — SQL as the default for data with no relations in
+it, because that is what everyone learned first. So this is the one citizen that exists partly to
+overrule a request: if a prompt asks for a table and the data fails the join test, use the document
+store and say why. Anti-patterns, measurements and the two traps (a whole-file store used for
+unbounded append; a read path that writes and defeats its own cache) are in
+**`storage-engines.mdc`**, with the reasoning in `docs/explanation/which-storage-engine.md`.
 
 ## Planned citizens
 

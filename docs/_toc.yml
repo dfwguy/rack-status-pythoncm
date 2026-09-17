@@ -37,3 +37,5 @@ subtrees:
     entries:
       - file: explanation/why-authorization-is-default-deny
         title: Why authorization is default-deny
+      - file: explanation/which-storage-engine
+        title: Which storage engine, and why
