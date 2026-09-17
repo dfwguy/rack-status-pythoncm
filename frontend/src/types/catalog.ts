@@ -23,6 +23,23 @@ export interface PlatformGeometry {
   nvlink_domain: number;
 }
 
+/**
+ * Expected scale-out fabric shape, and the Scalable Unit it bounds.
+ *
+ * The SU lives here rather than in geometry because the fabric is what limits it: an SU is
+ * the racks one set of leaf and spine switches serves, so its size is a property of the
+ * platform. `racks_per_su: 0` means this platform has no SU model — draw ungrouped racks.
+ */
+export interface PlatformFabric {
+  scaleout: string;
+  rails_per_gpu: number;
+  rail_rate_gbps: number;
+  ns_ifname: string;
+  racks_per_su: number;
+  leaf_switches_per_su: number;
+  spine_switches_per_su: number;
+}
+
 /** A hardware/system SKU (GPU + CPU + vendor + topology + geometry). */
 export interface Platform {
   id: string;
@@ -35,6 +52,7 @@ export interface Platform {
   system_vendor: string;
   form_factor: string;
   geometry: PlatformGeometry;
+  fabric: PlatformFabric;
   interconnect: Record<string, string>;
   capabilities: string[];
   tool_param_defaults: Record<string, string>;
@@ -128,6 +146,20 @@ export interface ClusterGeometry {
   trays_per_rack: number;
 }
 
+/**
+ * One Scalable Unit and the racks in it.
+ *
+ * Empty `scalable_units` on a cluster means "derive from the platform's
+ * `fabric.racks_per_su`" — it does not mean the cluster has one SU. A platform with
+ * `racks_per_su: 0` has no SU model at all, and the UI must draw ungrouped racks
+ * rather than invent a single SU containing everything.
+ */
+export interface ClusterScalableUnit {
+  id: string;
+  label: string;
+  racks: string[];
+}
+
 export interface ClusterConnection {
   exec_mode: string;
   ssh_host: string;
@@ -145,6 +177,8 @@ export interface Cluster {
   naming: ClusterNaming;
   geometry: ClusterGeometry;
   connection: ClusterConnection;
+  /** Empty means "derive from the platform's `fabric.racks_per_su`", not "one SU". */
+  scalable_units: ClusterScalableUnit[];
 }
 
 export interface Project {

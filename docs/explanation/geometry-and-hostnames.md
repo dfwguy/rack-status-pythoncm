@@ -107,6 +107,48 @@ enables MNNVL, so a single allocation covering two physical racks joins two sepa
 domains and hangs. The dispatcher groups the selected nodes by rack and fans out independent
 jobs, and refuses if the groups are not a clean partition of the reviewed target.
 
+## The Scalable Unit — the level above a row
+
+A rack is not the largest unit that matters. A **Scalable Unit (SU)** is the group of racks that
+one set of leaf and spine switches serves: the fabric's quantum. It is the number that decides how
+a floor is drawn, how racks are grouped for acceptance, and how much of a cluster a single fabric
+fault can take with it.
+
+**Its size is a property of the platform, not of the site**, because it is the switch count that
+bounds it. A GB300 NVL72 SU and a VR200 SU are different sizes, and a newer generation reaches
+further — VR200 spans more racks per SU than NVL72 does. So SU sizing sits on the platform's
+`fabric`, beside the scale-out fields, rather than in geometry:
+
+| Field | Meaning |
+|---|---|
+| `racks_per_su` | racks one leaf/spine group serves. **`0` means this platform has no SU model** |
+| `leaf_switches_per_su` | expected leaf count in one SU; `0` is unknown |
+| `spine_switches_per_su` | expected spine count in one SU; `0` is unknown |
+
+`gpus_per_su` is deliberately **not** stored — it is `racks_per_su × gpus_per_rack`, and a second
+copy of a derived number is a second thing to keep in step.
+
+The seeded NVL72 platforms carry `racks_per_su: 8`, which is 576 GPUs. That figure is
+corroborated rather than assumed: Nscale TX 16K is 112 racks in 14 SUs. VR200 is deliberately left
+at `0` until its reference architecture settles the number, because an invented value would draw a
+floor plan that is confidently wrong, while `0` makes callers fall back to ungrouped racks.
+
+### Which racks are in which SU
+
+The cluster answers that, and it may answer explicitly. When `scalable_units` is empty the
+mapping is **derived** — racks chunked in inventory order into groups of `racks_per_su`, keeping a
+partial final group, because a half-populated SU is normal mid-bring-up.
+
+Derivation is right for a tidy floor and wrong for a real one, which is why the explicit form
+exists and why it wins. Nscale TX 16K numbers SU1–SU14 across `ink50-dh01` rows a–c *and*
+`ink50-dh02` rows a–k; no chunking of one ordered list reproduces that. A site that has written
+its own mapping down knows something the arithmetic cannot compute.
+
+An explicit map must be a **clean partition**: a rack in two SUs is refused at the record, not
+warned about. The reason is the same one that makes `mnubergemm` one job per rack — a rack counted
+twice double-counts on the floor view, and anything that ever fans out per SU would send two jobs
+to one rack.
+
 ## Where each value ends up
 
 The active cluster's naming and geometry are materialised into the environment every request, so
@@ -114,6 +156,9 @@ scripts and launchers see them without reading the catalog:
 
 - naming → `NVIS_RACK_ID`, `NVIS_CT_ID`, `NVIS_NVSW_ID`, `NVIS_CT_JOINER`
 - geometry → the platform's low overlay, beneath anything an operator set
+- SU shape → `NVIS_SU_RACKS`, `NVIS_SU_GPUS`, `NVIS_SU_LEAF_SWITCHES`, `NVIS_SU_SPINE_SWITCHES`,
+  published **only** when the platform models an SU, so a script can tell "no SU model" from "an
+  SU of one rack"
 - identity → `NVIS_PROJECT_ID`, `NVIS_PLATFORM_ID`, `RACK_CLUSTER_NAME`
 
 That is also why switching the active cluster changes which scripts run: the project id in that

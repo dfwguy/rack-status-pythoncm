@@ -58,6 +58,9 @@ function emptyCluster(): Cluster {
     naming: { rack_id_template: "", ct_id_template: "", nvsw_id_template: "", ct_joiner: "-ct", slurm_hostlist: "" },
     geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },
     connection: { exec_mode: "", ssh_host: "", ssh_user: "", ssh_key: "", remote_base_path: "" },
+    // Empty means "derive SUs from the platform's racks_per_su", which is what a new
+    // cluster wants. A site with a ragged SU map states it explicitly instead.
+    scalable_units: [],
   };
 }
 

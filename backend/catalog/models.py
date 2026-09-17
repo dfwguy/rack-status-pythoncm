@@ -20,6 +20,7 @@ Naming note: a :class:`Platform` here is a *hardware/system SKU*. The cluster ma
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -261,12 +262,24 @@ class PlatformFabric:
     compute rails and to flag detected-vs-expected discrepancies (e.g. an 800G RA
     that comes up 400G). ``scaleout`` == ``ib`` or ``roce``; ``rail_rate_gbps`` is
     the expected per-rail line rate (400 for NDR, 800 for XDR/CX-8).
+
+    **The Scalable Unit (SU) lives here, not in geometry, because the fabric is what
+    bounds it.** An SU is the group of racks one set of leaf and spine switches serves;
+    its size is a property of the *platform*, so a GB300 NVL72 SU and a VR200 SU are
+    different sizes and a newer generation may span more racks per SU. Geometry
+    describes one rack; this describes how racks are grouped above it.
+
+    ``racks_per_su == 0`` means the platform has no SU model yet, and callers must
+    degrade to ungrouped racks rather than inventing a grouping.
     """
 
     scaleout: str = ""  # ib | roce (scale-out technology)
     rails_per_gpu: int = 1  # compute NICs per GPU
     rail_rate_gbps: int = 0  # expected per-rail rate (400, 800); 0 == unknown
     ns_ifname: str = ""  # north-south / bootstrap netdev hint (e.g. bond0)
+    racks_per_su: int = 0  # racks one leaf/spine group serves; 0 == not modelled
+    leaf_switches_per_su: int = 0  # expected leaf count in one SU; 0 == unknown
+    spine_switches_per_su: int = 0  # expected spine count in one SU; 0 == unknown
 
     @classmethod
     def from_dict(cls, d: Any) -> PlatformFabric:
@@ -283,6 +296,9 @@ class PlatformFabric:
             rails_per_gpu=_i("rails_per_gpu", 1),
             rail_rate_gbps=_i("rail_rate_gbps", 0),
             ns_ifname=_as_str(d.get("ns_ifname")),
+            racks_per_su=_i("racks_per_su", 0),
+            leaf_switches_per_su=_i("leaf_switches_per_su", 0),
+            spine_switches_per_su=_i("spine_switches_per_su", 0),
         )
 
 
@@ -345,11 +361,30 @@ class Platform:
         g = self.geometry
         if g.gpus_per_rack <= 0 or g.trays_per_rack <= 0:
             problems.append("geometry must have positive trays_per_rack and gpus_per_rack")
+        f = self.fabric
+        for name in ("racks_per_su", "leaf_switches_per_su", "spine_switches_per_su"):
+            if getattr(f, name) < 0:
+                problems.append(f"fabric.{name} cannot be negative")
+        # Switch counts without a rack count describe a group of unknown size, which reads
+        # like an SU model and is not one. Refuse it rather than draw a wrong diagram.
+        if f.racks_per_su == 0 and (f.leaf_switches_per_su or f.spine_switches_per_su):
+            problems.append(
+                "fabric declares SU switch counts without racks_per_su; set racks_per_su "
+                "or drop the switch counts"
+            )
         return problems
 
     def has_capability(self, cap: str) -> bool:
         c = (cap or "").strip().lower()
         return any(c == x.strip().lower() for x in self.capabilities)
+
+    def gpus_per_su(self) -> int:
+        """GPUs in one Scalable Unit, or 0 when the platform has no SU model.
+
+        Derived rather than stored: it is exactly ``racks_per_su x gpus_per_rack``, and a
+        second stored copy is a second thing to keep in step.
+        """
+        return self.fabric.racks_per_su * self.geometry.gpus_per_rack
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +637,61 @@ class ClusterNaming:
 
 
 @dataclass
+class ClusterScalableUnit:
+    """One Scalable Unit of this cluster, and the racks in it.
+
+    Explicit because derivation alone is wrong on real floors. Nscale TX 16K numbers
+    SU1..SU14 across ``ink50-dh01`` rows a-c *and* ``ink50-dh02`` rows a-k, which no
+    ``rows_per_pod`` arithmetic reproduces, and a bring-up routinely has a final SU that
+    is only partly populated. So a site may state its own mapping; when it does not,
+    :func:`derive_scalable_units` supplies one from the platform's ``racks_per_su``.
+    """
+
+    id: str
+    label: str = ""  # display name; falls back to the id
+    racks: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: Any) -> ClusterScalableUnit:
+        d = _as_dict(d)
+        su_id = _as_str(d.get("id"))
+        return cls(
+            id=su_id,
+            label=_as_str(d.get("label")) or su_id,
+            racks=_as_str_list(d.get("racks")),
+        )
+
+
+def derive_scalable_units(
+    racks: Iterable[str],
+    racks_per_su: int,
+    *,
+    label_prefix: str = "SU",
+) -> list[ClusterScalableUnit]:
+    """Chunk ordered racks into SUs of ``racks_per_su``.
+
+    The default when a cluster states no mapping of its own. Order is the caller's --
+    normally the inventory order -- because this cannot know a site's physical sequence.
+    Returns ``[]`` when the platform has no SU model (``racks_per_su <= 0``) rather than
+    inventing one SU containing everything, which would draw a diagram that is confidently
+    wrong. A trailing partial SU is kept: a half-populated SU is a real thing on a floor.
+    """
+    ordered = [r for r in (str(x).strip() for x in racks) if r]
+    if racks_per_su <= 0 or not ordered:
+        return []
+    out: list[ClusterScalableUnit] = []
+    for index, start in enumerate(range(0, len(ordered), racks_per_su), start=1):
+        out.append(
+            ClusterScalableUnit(
+                id=f"su{index:02d}",
+                label=f"{label_prefix}{index}",
+                racks=ordered[start : start + racks_per_su],
+            )
+        )
+    return out
+
+
+@dataclass
 class ClusterGeometry:
     """Site layout used to place/filter racks. Defaults derive from the platform."""
 
@@ -813,10 +903,13 @@ class Cluster:
     naming: ClusterNaming = field(default_factory=ClusterNaming)
     geometry: ClusterGeometry = field(default_factory=ClusterGeometry)
     connection: ClusterConnection = field(default_factory=ClusterConnection)
+    # Empty means "derive from the platform's racks_per_su"; see scalable_units_for().
+    scalable_units: list[ClusterScalableUnit] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Cluster:
         d = _as_dict(d)
+        sus_raw = d.get("scalable_units")
         return cls(
             id=_as_str(d.get("id")),
             name=_as_str(d.get("name")) or _as_str(d.get("id")),
@@ -826,6 +919,11 @@ class Cluster:
             naming=ClusterNaming.from_dict(d.get("naming")),
             geometry=ClusterGeometry.from_dict(d.get("geometry")),
             connection=ClusterConnection.from_dict(d.get("connection")),
+            scalable_units=(
+                [ClusterScalableUnit.from_dict(s) for s in sus_raw]
+                if isinstance(sus_raw, list)
+                else []
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -842,7 +940,53 @@ class Cluster:
                 f"unknown cluster_manager {self.cluster_manager!r} (expected {CLUSTER_MANAGERS})"
             )
         problems.extend(self.connection.validate())
+        problems.extend(self._validate_scalable_units())
         return problems
+
+    def _validate_scalable_units(self) -> list[str]:
+        """An SU map must be a clean partition, for the same reason a multirack launch is.
+
+        A rack in two SUs is not a warning: it makes the floor view double-count and, if a
+        caller ever fans out per SU, sends two jobs to one rack. Fail closed at the record.
+        """
+        problems: list[str] = []
+        seen_ids: set[str] = set()
+        rack_owner: dict[str, str] = {}
+        for su in self.scalable_units:
+            if not valid_id(su.id):
+                problems.append(f"invalid scalable unit id: {su.id!r} (expected slug like su01)")
+                continue
+            if su.id in seen_ids:
+                problems.append(f"duplicate scalable unit id: {su.id!r}")
+                continue
+            seen_ids.add(su.id)
+            if not su.racks:
+                problems.append(f"scalable unit {su.id!r} lists no racks")
+            for rack in su.racks:
+                owner = rack_owner.get(rack)
+                if owner is not None:
+                    problems.append(
+                        f"rack {rack!r} appears in scalable units {owner!r} and {su.id!r}"
+                    )
+                    continue
+                rack_owner[rack] = su.id
+        return problems
+
+    def scalable_units_for(
+        self,
+        racks: Iterable[str],
+        racks_per_su: int,
+        *,
+        label_prefix: str = "SU",
+    ) -> list[ClusterScalableUnit]:
+        """This cluster's SUs: its own mapping when it has one, else derived.
+
+        ``racks_per_su`` comes from the platform's fabric. Explicit wins because a site
+        that has written its mapping down knows something this cannot compute.
+        """
+        if self.scalable_units:
+            return list(self.scalable_units)
+        return derive_scalable_units(racks, racks_per_su, label_prefix=label_prefix)
 
 
 @dataclass

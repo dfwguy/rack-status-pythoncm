@@ -99,7 +99,16 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "CORE_TO_HCA_SCRIPT": "core_to_hca_dgxgb200.sh",
             "CUDA_MAJ": "12",
         },
-        "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 400, "ns_ifname": "bond0"},
+        "fabric": {
+            "scaleout": "ib",
+            "rails_per_gpu": 1,
+            "rail_rate_gbps": 400,
+            "ns_ifname": "bond0",
+            # 8 racks x 72 GPUs = 576 GPUs per SU. Corroborated on Nscale TX 16K, which
+            # is 112 racks in 14 SUs. Leaf/spine counts are left unset rather than
+            # guessed; fill them from the site's fabric design.
+            "racks_per_su": 8,
+        },
         "status": "ga",
         "description": "Grace-Blackwell GB200, 72-GPU NVLink domain (NVL72).",
         "source": "seed",
@@ -130,7 +139,14 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "CORE_TO_HCA_SCRIPT": "core_to_hca_dgxgb300.sh",
             "CUDA_MAJ": "12",
         },
-        "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 800, "ns_ifname": "bond0"},
+        "fabric": {
+            "scaleout": "ib",
+            "rails_per_gpu": 1,
+            "rail_rate_gbps": 800,
+            "ns_ifname": "bond0",
+            # See gb200-nvl72: 8 racks per SU, 576 GPUs.
+            "racks_per_su": 8,
+        },
         "status": "ga",
         "description": "Grace-Blackwell Ultra GB300, 72-GPU NVLink domain (NVL72).",
         "source": "seed",
@@ -276,7 +292,16 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "RACK_CLUSTER_PRODUCT_LINE": "vr200",
             "CUDA_MAJ": "13",
         },
-        "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 800, "ns_ifname": "bond0"},
+        "fabric": {
+            "scaleout": "ib",
+            "rails_per_gpu": 1,
+            "rail_rate_gbps": 800,
+            "ns_ifname": "bond0",
+            # VR200 spans more racks per SU than NVL72, but the number is not settled
+            # here. Left at 0 ("no SU model") deliberately: an invented value would draw
+            # a confidently wrong floor plan, and 0 makes callers degrade to ungrouped
+            # racks instead. Set it from the Vera Rubin reference architecture.
+        },
         "status": "future",
         "description": "Vera Rubin VR200 NVL (forward-looking; geometry provisional).",
         "source": "seed",

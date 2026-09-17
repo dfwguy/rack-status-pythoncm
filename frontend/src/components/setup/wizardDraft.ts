@@ -208,6 +208,10 @@ export function toCluster(draft: WizardDraft): Cluster {
       ssh_key: draft.sshKeyPath.trim(),
       remote_base_path: draft.remoteBasePath.trim(),
     },
+    // The wizard does not ask for an SU map: empty derives it from the platform's
+    // racks_per_su, which is right for every cluster that is not ragged. A site with a
+    // partially populated or row-straddling SU layout edits it afterwards.
+    scalable_units: [],
   };
 }
 

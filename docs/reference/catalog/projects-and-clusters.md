@@ -36,6 +36,7 @@ every login, and what keeps it away from a deployment that upgrades.
 | `site_prefix` | string | The leading token in this site's rack ids. Used to group a multirack launch. |
 | `naming` | object | The three templates — see [Geometry and hostnames](../../explanation/geometry-and-hostnames.md). |
 | `geometry` | object | `pods`, `rows_per_pod`, `racks_per_row`, `trays_per_rack`. |
+| `scalable_units` | list | This cluster's SU-to-rack mapping. Empty derives it from the platform's `fabric.racks_per_su`; see below. |
 | `connection` | object | How the app reaches the cluster, below. |
 
 ### naming
@@ -51,6 +52,26 @@ every login, and what keeps it away from a deployment that upgrades.
 Precedence when resolving a rack to real hostnames is: an explicit comma-list, then the
 template, then the live Slurm inventory. The last is the ground truth and the reason a template
 that is slightly wrong shows up as unresolvable targets rather than as silence.
+
+### scalable_units
+
+A Scalable Unit is the group of racks one set of leaf and spine switches serves. Its **size** is a
+platform field (`fabric.racks_per_su`, with `leaf_switches_per_su` and `spine_switches_per_su`);
+its **membership** is this list.
+
+| Field | Purpose |
+|---|---|
+| `id` | Slug, unique within the cluster, e.g. `su01`. |
+| `label` | Display name, e.g. `SU1`. Falls back to the id. |
+| `racks` | Rack ids in this SU. |
+
+Leave the list **empty** and the mapping is derived: racks chunked in inventory order into groups
+of `racks_per_su`, keeping a partial final group. State it explicitly when the floor does not
+follow that order — Nscale TX 16K numbers SU1–SU14 across two `dh` rows, which no chunking of one
+ordered list reproduces.
+
+An explicit list must be a clean partition. A rack appearing in two SUs, a duplicate id, or an SU
+with no racks is a validation error on the record, not a warning.
 
 ## Connection
 

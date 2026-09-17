@@ -256,6 +256,17 @@ def fabric_defaults(platform: models.Platform) -> dict[str, str]:
         _put(out, "NVIS_FABRIC_EXPECT_RAILS", str(f.rails_per_gpu * gpn))
     if f.rail_rate_gbps > 0:
         _put(out, "NVIS_FABRIC_EXPECT_RATE", str(f.rail_rate_gbps))
+    # Scalable Unit shape. Published only when the platform actually models it, so a
+    # script can tell "no SU model" from "an SU of one rack".
+    if f.racks_per_su > 0:
+        _put(out, "NVIS_SU_RACKS", str(f.racks_per_su))
+        gps = platform.gpus_per_su()
+        if gps > 0:
+            _put(out, "NVIS_SU_GPUS", str(gps))
+    if f.leaf_switches_per_su > 0:
+        _put(out, "NVIS_SU_LEAF_SWITCHES", str(f.leaf_switches_per_su))
+    if f.spine_switches_per_su > 0:
+        _put(out, "NVIS_SU_SPINE_SWITCHES", str(f.spine_switches_per_su))
     return out
 
 
