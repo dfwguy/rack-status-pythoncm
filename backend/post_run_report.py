@@ -388,7 +388,16 @@ def build_report(
 
     rows: list[dict[str, Any]] = []
     for rec in by_node.values():
-        runs = sorted(rec.pop("runs"), key=lambda row: str(row.get("started_at") or ""), reverse=True)
+        all_runs = sorted(
+            rec.pop("runs"), key=lambda row: str(row.get("started_at") or ""), reverse=True
+        )
+        # An evidence feed may present the same check several times -- a current verdict plus
+        # the attempts it superseded. Those older rows are worth keeping for an export, and
+        # counting them would be wrong twice over: it inflates `failure_count` past the
+        # flag threshold and it drags `trend` toward whatever the history happened to be.
+        # A row is current unless it says otherwise, so a producer that knows nothing about
+        # this stays unaffected.
+        runs = [row for row in all_runs if row.get("authoritative") is not False]
         findings_rows = sorted(rec.pop("findings"), key=lambda row: str(row.get("created_at") or ""), reverse=True)
         attributed_runs = [row for row in runs if row.get("attributed_failure")]
         distinct_failure_runs = {
@@ -415,6 +424,9 @@ def build_report(
         rec.update(
             {
                 "participation_count": len(runs),
+                # Reported rather than discarded: if a node shows 2 participations from 7
+                # rows, an operator reading the export needs to know why the numbers differ.
+                "superseded_count": len(all_runs) - len(runs),
                 "failed_job_participations": sum(bool(row.get("failed_job")) for row in runs),
                 "failure_count": failure_count,
                 "distinct_failure_runs": len(distinct_failure_runs),

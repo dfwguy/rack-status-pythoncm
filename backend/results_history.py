@@ -72,8 +72,11 @@ __all__ = [
     "ingest_parser_json",
     "ingest_run",
     "ingest_runs",
+    "ingest_runs_checkpointed",
+    "ingestion_checkpoint",
     "init_db",
     "latest_run_for_log",
+    "latest_runs_by_rack",
     "latest_successful_runs_by_rack",
     "list_runs",
     "make_run_id",
@@ -85,7 +88,7 @@ __all__ = [
     "summary_stats",
 ]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 #: Canonical workload kinds.  Unknown kinds are still stored verbatim (slugified)
 #: rather than being collapsed to ``unknown`` — nothing is silently lost — but
@@ -299,8 +302,27 @@ _SCHEMA_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_runs_started       ON runs(started_at)",
     "CREATE INDEX IF NOT EXISTS idx_runs_log_path      ON runs(source_log_path, log_mtime)",
     "CREATE INDEX IF NOT EXISTS idx_runs_job           ON runs(job_id)",
+    "CREATE INDEX IF NOT EXISTS idx_runs_source        ON runs(source, rack)",
     "CREATE INDEX IF NOT EXISTS idx_metrics_name       ON run_metrics(metric_name)",
     "CREATE INDEX IF NOT EXISTS idx_metrics_run        ON run_metrics(run_id)",
+    # One row per external evidence producer, so re-presenting an unchanged snapshot is
+    # free. This is the only relational addition: it is keyed by producer and *joins
+    # nothing*, but it belongs in this database rather than behind the document `Repo`
+    # because a checkpoint must commit in the same transaction as the runs it vouches for.
+    # Split across two stores and a crash between them leaves a checkpoint claiming rows
+    # that were never written -- which is worse than no checkpoint at all.
+    """
+    CREATE TABLE IF NOT EXISTS ingestion_checkpoints (
+        source_id        TEXT PRIMARY KEY,
+        fingerprint      TEXT NOT NULL,
+        source_path      TEXT,
+        source_mtime_ns  INTEGER,
+        source_size      INTEGER,
+        collected_at     TEXT,
+        run_count        INTEGER NOT NULL DEFAULT 0,
+        updated_at       TEXT NOT NULL
+    )
+    """,
 )
 
 
@@ -570,13 +592,12 @@ def _normalize_metrics(raw: Any) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def ingest_run(record: Mapping[str, Any]) -> str:
-    """UPSERT one run (+ its metrics).  Returns the ``run_id``.
+def _prepare_run(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalise one record into column values. Pure: touches no connection.
 
-    Required: ``source_log_path``.  Everything else is optional and defaulted.
-    Re-ingesting the identical log snapshot is a no-op update: the row keeps its
-    original ``first_seen_at`` and the metric rows are replaced wholesale, so
-    the run count never grows.
+    Split out of :func:`ingest_run` so a batch can be normalised first and then written
+    inside a single transaction alongside its checkpoint -- see
+    :func:`ingest_runs_checkpointed`, where the two must commit together or not at all.
     """
     if not isinstance(record, Mapping):
         raise ResultsHistoryError("record must be a mapping")
@@ -608,10 +629,30 @@ def ingest_run(record: Mapping[str, Any]) -> str:
     source = _clean_str(record.get("source")) or "unknown"
     extra_json = _json_dump(record.get("extra")) if record.get("extra") else None
     metrics = _normalize_metrics(record.get("metrics"))
-    now = _utcnow()
+    return {
+        "run_id": run_id,
+        "source_log_path": src,
+        "log_basename": basename,
+        "workload_kind": kind,
+        "rack": rack,
+        "nodes_json": nodes_json,
+        "job_id": job_id,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "status": status,
+        "log_mtime": mtime,
+        "log_size": size,
+        "source": source,
+        "extra_json": extra_json,
+        "metrics": metrics,
+    }
 
-    with _connect(write=True) as conn:
-        conn.execute(
+
+def _write_run(conn: sqlite3.Connection, prepared: Mapping[str, Any], now: str) -> str:
+    """Write one prepared record on an existing connection. Returns the ``run_id``."""
+    run_id = str(prepared["run_id"])
+    metrics = prepared.get("metrics") or []
+    conn.execute(
             """
             INSERT INTO runs (run_id, source_log_path, log_basename, workload_kind, rack, nodes,
                               job_id, started_at, ended_at, status, log_mtime, log_size, source,
@@ -633,23 +674,51 @@ def ingest_run(record: Mapping[str, Any]) -> str:
                 extra           = COALESCE(excluded.extra, runs.extra),
                 updated_at      = excluded.updated_at
             """,
-            (
-                run_id, src, basename, kind, rack, nodes_json, job_id, started_at, ended_at,
-                status, mtime, size, source, extra_json, now, now,
-            ),
+        (
+            run_id,
+            prepared["source_log_path"],
+            prepared["log_basename"],
+            prepared["workload_kind"],
+            prepared["rack"],
+            prepared["nodes_json"],
+            prepared["job_id"],
+            prepared["started_at"],
+            prepared["ended_at"],
+            prepared["status"],
+            prepared["log_mtime"],
+            prepared["log_size"],
+            prepared["source"],
+            prepared["extra_json"],
+            now,
+            now,
+        ),
+    )
+    if metrics:
+        # Replace wholesale: a re-parse is authoritative for this snapshot.
+        conn.execute("DELETE FROM run_metrics WHERE run_id = ?", (run_id,))
+        conn.executemany(
+            "INSERT INTO run_metrics (run_id, metric_name, seq, value, unit, labels) "
+            "VALUES (?,?,?,?,?,?)",
+            [
+                (run_id, m["metric_name"], m["seq"], m["value"], m["unit"], m["labels"])
+                for m in metrics
+            ],
         )
-        if metrics:
-            # Replace wholesale: a re-parse is authoritative for this snapshot.
-            conn.execute("DELETE FROM run_metrics WHERE run_id = ?", (run_id,))
-            conn.executemany(
-                "INSERT INTO run_metrics (run_id, metric_name, seq, value, unit, labels) "
-                "VALUES (?,?,?,?,?,?)",
-                [
-                    (run_id, m["metric_name"], m["seq"], m["value"], m["unit"], m["labels"])
-                    for m in metrics
-                ],
-            )
     return run_id
+
+
+def ingest_run(record: Mapping[str, Any]) -> str:
+    """UPSERT one run (+ its metrics).  Returns the ``run_id``.
+
+    Required: ``source_log_path``.  Everything else is optional and defaulted.
+    Re-ingesting the identical log snapshot is a no-op update: the row keeps its
+    original ``first_seen_at`` and the metric rows are replaced wholesale, so
+    the run count never grows.
+    """
+    prepared = _prepare_run(record)
+    now = _utcnow()
+    with _connect(write=True) as conn:
+        return _write_run(conn, prepared, now)
 
 
 def ingest_runs(records: Iterable[Mapping[str, Any]]) -> list[str]:
@@ -667,8 +736,8 @@ def _filter_sql(filters: Mapping[str, Any] | None, alias: str = "r") -> tuple[st
 
     Supported keys: ``workload_kind``/``kind`` (str or list), ``rack`` (str or
     list), ``job_id``, ``status`` (str or list), ``run_id``, ``since``/``until``
-    (compared against ``started_at``), ``source_log_path``, ``search``
-    (substring of the basename), ``has_metric`` (metric_name that must exist).
+    (compared against ``started_at``), ``source_log_path``, ``source`` (str or list),
+    ``search`` (substring of the basename), ``has_metric`` (metric_name that must exist).
     """
     where: list[str] = []
     args: list[Any] = []
@@ -695,6 +764,9 @@ def _filter_sql(filters: Mapping[str, Any] | None, alias: str = "r") -> tuple[st
     _in("status", f.get("status"), normalize_status)
     _in("run_id", f.get("run_id"))
     _in("source_log_path", f.get("source_log_path"))
+    # Which producer wrote the row. An external evidence feed and the parser both land in
+    # `runs`, so without this a caller cannot ask for one without the other.
+    _in("source", f.get("source"))
 
     since = _iso(f.get("since"))
     if since:
@@ -1022,6 +1094,138 @@ def latest_successful_runs_by_rack(
                 continue
             grouped[kind][rack] = _row_to_run(row)
     return grouped
+
+
+def latest_runs_by_rack(
+    workload_kinds: Sequence[str] = ("nccl", "nemo"),
+    *,
+    source: str | Sequence[str] | None = None,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Newest run per rack per kind, whatever its status.
+
+    The companion to :func:`latest_successful_runs_by_rack`, and the two answer different
+    questions on purpose. That one is the **acceptance** record -- has this rack ever
+    passed -- and is monotonic, so a later failure cannot erase it. This one is the
+    **current** state, so a rack that passed last week and is failing now reads as failing.
+
+    A dashboard needs both: the first to report what has been accepted, the second to
+    report what is true right now. Collapsing them into one query is how a fleet view comes
+    to show a rack green while it is on fire, or red forever after one bad retry.
+
+    ``source`` narrows to a producer, which is what makes an external evidence feed usable:
+    without it a caller asking for "the current overlay" would also get the local parser's
+    rows and could not tell which won.
+    """
+    kinds: list[str] = []
+    for raw in workload_kinds or ():
+        kind = _norm_kind(raw)
+        if kind and kind not in kinds:
+            kinds.append(kind)
+    if not kinds:
+        return {}
+
+    where, args = _filter_sql({"workload_kind": kinds, "source": source}, alias="runs")
+    sql = (
+        "SELECT * FROM runs "
+        f"{where} AND runs.rack IS NOT NULL AND TRIM(runs.rack) <> '' "
+        if where
+        else "SELECT * FROM runs WHERE runs.rack IS NOT NULL AND TRIM(runs.rack) <> '' "
+    )
+    sql += "ORDER BY started_at DESC, updated_at DESC, run_id DESC"
+    grouped: dict[str, dict[str, dict[str, Any]]] = {kind: {} for kind in kinds}
+    with _connect() as conn:
+        for row in conn.execute(sql, args):
+            kind = str(row["workload_kind"] or "")
+            rack = str(row["rack"] or "").strip()
+            if not rack or kind not in grouped or rack in grouped[kind]:
+                continue
+            grouped[kind][rack] = _row_to_run(row)
+    return grouped
+
+
+def ingestion_checkpoint(source_id: str) -> dict[str, Any] | None:
+    """What was last ingested for ``source_id``, or None if never."""
+    key = _clean_str(source_id)
+    if not key:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM ingestion_checkpoints WHERE source_id = ?", (key,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def ingest_runs_checkpointed(
+    records: Iterable[Mapping[str, Any]],
+    *,
+    source_id: str,
+    fingerprint: str,
+    source_path: Any = None,
+    source_mtime_ns: Any = None,
+    source_size: Any = None,
+    collected_at: Any = None,
+) -> dict[str, Any]:
+    """Ingest a batch once, keyed by a caller-computed ``fingerprint``.
+
+    For an external producer that re-presents its whole index every few minutes. Without a
+    checkpoint each poll rewrites every row, which costs a fleet's worth of writes to learn
+    nothing; with one, an unchanged snapshot is a single SELECT.
+
+    **The fingerprint must describe the content, not the file.** An mtime changes when a
+    collector rewrites an identical index, and a size collides trivially -- so a digest of
+    the records themselves is the only version that makes "unchanged" mean unchanged. The
+    file's mtime and size are recorded alongside for operators, not used for the decision.
+
+    Runs and checkpoint commit **together**. That is the reason this lives here rather than
+    splitting the checkpoint into the document store: a crash between two stores would
+    leave a checkpoint vouching for rows that were never written, and the next poll would
+    skip them forever -- evidence silently absent, which is the failure this whole subsystem
+    exists to prevent.
+
+    Returns ``{"ingested": n, "skipped": bool, "fingerprint": str}``.
+    """
+    key = _clean_str(source_id)
+    if not key:
+        raise ResultsHistoryError("source_id is required")
+    digest = _clean_str(fingerprint)
+    if not digest:
+        raise ResultsHistoryError("fingerprint is required")
+
+    existing = ingestion_checkpoint(key)
+    if existing and str(existing.get("fingerprint") or "") == digest:
+        return {"ingested": 0, "skipped": True, "fingerprint": digest}
+
+    prepared = [_prepare_run(rec) for rec in records]
+    now = _utcnow()
+    # One transaction covering the rows and the claim that they landed -- `_connect(write=True)`
+    # already wraps the block in BEGIN IMMEDIATE ... COMMIT and rolls back on any exception,
+    # so nesting another transaction context here is not just redundant, it fails.
+    with _connect(write=True) as conn:
+        for rec in prepared:
+            _write_run(conn, rec, now)
+        conn.execute(
+            "INSERT INTO ingestion_checkpoints "
+            "(source_id, fingerprint, source_path, source_mtime_ns, source_size, "
+            " collected_at, run_count, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(source_id) DO UPDATE SET "
+            "  fingerprint=excluded.fingerprint, source_path=excluded.source_path, "
+            "  source_mtime_ns=excluded.source_mtime_ns, "
+            "  source_size=excluded.source_size, "
+            "  collected_at=excluded.collected_at, run_count=excluded.run_count, "
+            "  updated_at=excluded.updated_at",
+            (
+                key,
+                digest,
+                _clean_str(source_path) or None,
+                int(source_mtime_ns) if str(source_mtime_ns or "").strip() else None,
+                int(source_size) if str(source_size or "").strip() else None,
+                _iso(collected_at) or now,
+                len(prepared),
+                now,
+            ),
+        )
+    return {"ingested": len(prepared), "skipped": False, "fingerprint": digest}
 
 
 def delete_run(run_id: str) -> bool:
