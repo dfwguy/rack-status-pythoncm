@@ -292,12 +292,12 @@ class TestRackGrantsDoNotCoverNodes:
         e = engine(tmp_path, [rack_only], attach={ALICE: ["rack-a01"]})
 
         assert e.evaluate(ALICE, "rack.power:cycle", "rack.power:a01").allowed
-        # `slurm.node`, not `node`: the latter is not a declared resource type, so asserting a
+        # `scheduler.node`, not `node`: the latter is not a declared resource type, so asserting a
         # refusal against it proved only that a string nothing can produce is unmatched. A resolver
-        # that expanded a rack through the naming templates would emit `slurm.node:…` and sail past
+        # that expanded a rack through the naming templates would emit `scheduler.node:…` and sail past
         # the original form of this line. `test_authz_verification_gaps.py` covers both node types
         # and the resolver side as well.
-        assert not e.evaluate(ALICE, "rack.power:cycle", "slurm.node:a01-h15-15").allowed
+        assert not e.evaluate(ALICE, "rack.power:cycle", "scheduler.node:a01-h15-15").allowed
 
 
 class TestCaseSensitivity:

@@ -51,10 +51,10 @@
     "report",
     "report.node",
     "results",
+    "scheduler.job",
+    "scheduler.node",
+    "scheduler.queue",
     "settings",
-    "slurm.job",
-    "slurm.node",
-    "slurm.queue",
     "support",
     "tools",
     "validation",
@@ -2193,6 +2193,114 @@
       }
     },
     {
+      "service": "scheduler.job",
+      "actions": [
+        {
+          "action": "scheduler.job:cancel",
+          "verb": "cancel",
+          "kind": "mutate",
+          "scope": "instance",
+          "routes": [
+            "POST slurm_ops.api_slurm_scancel"
+          ]
+        },
+        {
+          "action": "scheduler.job:read",
+          "verb": "read",
+          "kind": "read",
+          "scope": "instance",
+          "routes": [
+            "GET slurm_ops.api_slurm_job_log_path",
+            "GET slurm_ops.api_slurm_job_stdout_content",
+            "GET slurm_ops.api_slurm_job_stdout_download",
+            "GET slurm_ops.api_slurm_scontrol_show_job"
+          ]
+        }
+      ],
+      "module": "backend/api/slurm_ops.py",
+      "summary": "Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log.",
+      "scope": "instance",
+      "resource": {
+        "identified_by": [
+          "jid",
+          "job_id"
+        ],
+        "case_folded": false,
+        "collection_fallback_verbs": [
+          "create",
+          "list",
+          "read"
+        ]
+      }
+    },
+    {
+      "service": "scheduler.node",
+      "actions": [
+        {
+          "action": "scheduler.node:drain",
+          "verb": "drain",
+          "kind": "mutate",
+          "scope": "instance",
+          "routes": [
+            "POST slurm_ops.api_slurm_drain"
+          ]
+        },
+        {
+          "action": "scheduler.node:undrain",
+          "verb": "undrain",
+          "kind": "mutate",
+          "scope": "instance",
+          "routes": [
+            "POST slurm_ops.api_slurm_undrain"
+          ]
+        }
+      ],
+      "module": "backend/api/slurm_ops.py",
+      "summary": "Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log.",
+      "scope": "instance",
+      "resource": {
+        "identified_by": [
+          "node",
+          "nodes",
+          "host"
+        ],
+        "case_folded": true,
+        "collection_fallback_verbs": [
+          "create",
+          "list",
+          "read"
+        ]
+      }
+    },
+    {
+      "service": "scheduler.queue",
+      "actions": [
+        {
+          "action": "scheduler.queue:list",
+          "verb": "list",
+          "kind": "read",
+          "scope": "singleton",
+          "routes": [
+            "GET slurm_queries.api_slurm_sacct_recent",
+            "GET slurm_queries.api_slurm_sinfo_r",
+            "GET slurm_queries.api_slurm_squeue"
+          ]
+        }
+      ],
+      "module": "backend/api/slurm_queries.py",
+      "summary": "Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct.",
+      "scope": "singleton",
+      "resource": {
+        "identified_by": [],
+        "case_folded": false,
+        "collection_fallback_verbs": [
+          "create",
+          "list",
+          "read"
+        ]
+      }
+    },
+    {
       "service": "settings",
       "actions": [
         {
@@ -2225,114 +2333,6 @@
       ],
       "module": "backend/api/dashboard.py",
       "summary": "The dashboard core: rack status, cluster overview, app stats, and the settings writer.",
-      "scope": "singleton",
-      "resource": {
-        "identified_by": [],
-        "case_folded": false,
-        "collection_fallback_verbs": [
-          "create",
-          "list",
-          "read"
-        ]
-      }
-    },
-    {
-      "service": "slurm.job",
-      "actions": [
-        {
-          "action": "slurm.job:cancel",
-          "verb": "cancel",
-          "kind": "mutate",
-          "scope": "instance",
-          "routes": [
-            "POST slurm_ops.api_slurm_scancel"
-          ]
-        },
-        {
-          "action": "slurm.job:read",
-          "verb": "read",
-          "kind": "read",
-          "scope": "instance",
-          "routes": [
-            "GET slurm_ops.api_slurm_job_log_path",
-            "GET slurm_ops.api_slurm_job_stdout_content",
-            "GET slurm_ops.api_slurm_job_stdout_download",
-            "GET slurm_ops.api_slurm_scontrol_show_job"
-          ]
-        }
-      ],
-      "module": "backend/api/slurm_ops.py",
-      "summary": "Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log.",
-      "scope": "instance",
-      "resource": {
-        "identified_by": [
-          "jid",
-          "job_id"
-        ],
-        "case_folded": false,
-        "collection_fallback_verbs": [
-          "create",
-          "list",
-          "read"
-        ]
-      }
-    },
-    {
-      "service": "slurm.node",
-      "actions": [
-        {
-          "action": "slurm.node:drain",
-          "verb": "drain",
-          "kind": "mutate",
-          "scope": "instance",
-          "routes": [
-            "POST slurm_ops.api_slurm_drain"
-          ]
-        },
-        {
-          "action": "slurm.node:undrain",
-          "verb": "undrain",
-          "kind": "mutate",
-          "scope": "instance",
-          "routes": [
-            "POST slurm_ops.api_slurm_undrain"
-          ]
-        }
-      ],
-      "module": "backend/api/slurm_ops.py",
-      "summary": "Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log.",
-      "scope": "instance",
-      "resource": {
-        "identified_by": [
-          "node",
-          "nodes",
-          "host"
-        ],
-        "case_folded": true,
-        "collection_fallback_verbs": [
-          "create",
-          "list",
-          "read"
-        ]
-      }
-    },
-    {
-      "service": "slurm.queue",
-      "actions": [
-        {
-          "action": "slurm.queue:list",
-          "verb": "list",
-          "kind": "read",
-          "scope": "singleton",
-          "routes": [
-            "GET slurm_queries.api_slurm_sacct_recent",
-            "GET slurm_queries.api_slurm_sinfo_r",
-            "GET slurm_queries.api_slurm_squeue"
-          ]
-        }
-      ],
-      "module": "backend/api/slurm_queries.py",
-      "summary": "Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct.",
       "scope": "singleton",
       "resource": {
         "identified_by": [],

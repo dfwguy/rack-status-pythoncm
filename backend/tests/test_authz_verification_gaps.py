@@ -20,7 +20,7 @@ missing test: a green tick invites the next reader to trust the property.
 # **The rack-grant test passed for the wrong reason.** It asserted a refusal against
   `node:a01-h15-15` — a resource type that is not declared at all — so the refusal came from nothing
   matching that string, not from rack→node expansion being prevented. The real node types are
-  `slurm.node` and `report.node`, which it never exercised.
+  `scheduler.node` and `report.node`, which it never exercised.
 # **The enforcing→permissive transition was untested** — and, it turns out, already blocked. The
   audit read it as "deleting the policy file silently converts the product to permissive". That is
   true of a bare import and false of a *served* deployment, because `startup_gate` lists an empty
@@ -96,7 +96,7 @@ class TestARackGrantDoesNotCoverItsNodes:
 
     The original test used `node:a01-h15-15`, which is not a declared type — so it asserted that a
     string nothing could ever produce is refused. A resolver that expanded a rack through the naming
-    templates would emit `slurm.node:…` or `report.node:…` and sail past it.
+    templates would emit `scheduler.node:…` or `report.node:…` and sail past it.
     """
 
     RACK_ONLY: ClassVar[dict[str, object]] = {
@@ -115,7 +115,7 @@ class TestARackGrantDoesNotCoverItsNodes:
         """The control: without it every refusal below could be an engine that refuses everything."""
         assert engine.evaluate(ALICE, "rack.power:cycle", "rack.power:a01").allowed
 
-    @pytest.mark.parametrize("node_type", ["slurm.node", "report.node"])
+    @pytest.mark.parametrize("node_type", ["scheduler.node", "report.node"])
     def test_a_declared_node_type_is_not_covered(self, engine, node_type):
         """The real types, so the assertion is about a resource the product can actually produce."""
         assert not engine.evaluate(
@@ -123,10 +123,10 @@ class TestARackGrantDoesNotCoverItsNodes:
         ).allowed
 
     def test_the_node_types_used_here_are_declared(self):
-        """Guards the guard. If `slurm.node` were renamed, the two cases above would silently revert
+        """Guards the guard. If `scheduler.node` were renamed, the two cases above would silently revert
         to asserting against strings nothing produces — which is the defect this file exists for."""
         declared = resources.declared_types()
-        for node_type in ("slurm.node", "report.node"):
+        for node_type in ("scheduler.node", "report.node"):
             assert node_type in declared, f"{node_type} is no longer a declared resource type"
 
     def test_no_resolver_turns_a_rack_request_into_a_node_resource(self):
@@ -139,7 +139,7 @@ class TestARackGrantDoesNotCoverItsNodes:
         # **Both paths, and this is the whole point of the case.** `resolve_all` short-circuits to
         # `resolve()` when one identifier is named, so a single-rack request never reaches the
         # multi-target branch. The first version of this test used only `{"rack": "a01"}` and a
-        # mutation that made the resolver expand racks into `slurm.node:…` passed all 11 tests —
+        # mutation that made the resolver expand racks into `scheduler.node:…` passed all 11 tests —
         # the same "passes for the wrong reason" flaw this file was written to fix, reproduced.
         single = resources.RequestFacts({}, {}, {"rack": "a01"})
         several = resources.RequestFacts({}, {}, {"racks": ["a01", "a02"]})

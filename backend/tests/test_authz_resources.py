@@ -85,7 +85,7 @@ class TestWhereTheIdIsFound:
 
     def test_a_numeric_id_is_accepted(self):
         """Slurm job ids arrive as ints. Rejecting non-strings would refuse every job route."""
-        assert R.resolve("slurm.job:cancel", facts(view_args={"jid": 127391})) == "slurm.job:127391"
+        assert R.resolve("scheduler.job:cancel", facts(view_args={"jid": 127391})) == "scheduler.job:127391"
 
     def test_a_boolean_is_not_an_id(self):
         """`bool` is an `int` in Python, so a careless numeric check turns `{"rack": true}` into

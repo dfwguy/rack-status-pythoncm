@@ -97,6 +97,29 @@ def _glob_any(value: str, patterns: Iterable[str]) -> bool:
     return any(fnmatch.fnmatchcase(value, p) for p in patterns)
 
 
+#: Services renamed when the Slurm-specific HTTP surface became provider-neutral, mapping the
+#: canonical name to the one it replaced.
+#:
+#: A deployment's `policies.json` is a **contract we do not control**: it is edited by operators,
+#: it exists at customer sites, and it is not upgraded when we rename a thing. So a policy written
+#: against `slurm.node:drain` keeps working after the action became `scheduler.node:drain` -- the
+#: request is judged under its canonical name, and the retired spelling is offered to the matcher
+#: alongside it.
+#:
+#: Deliberately applied inside `_matches`, which is the single gate for the deny pass **and** the
+#: allow pass. Aliasing only the allow path would silently stop a `deny slurm.node:drain` from
+#: applying, which is a security regression that no test asking "can I still drain" would catch.
+_RENAMED_SERVICES: dict[str, str] = {"scheduler.": "slurm."}
+
+
+def _action_spellings(action: str) -> tuple[str, ...]:
+    """The canonical action plus any retired spelling a policy may still name."""
+    for canonical, retired in _RENAMED_SERVICES.items():
+        if action.startswith(canonical):
+            return (action, retired + action[len(canonical) :])
+    return (action,)
+
+
 @dataclass(frozen=True)
 class Loaded:
     """The parsed policy set, indexed for lookup by id."""
@@ -232,7 +255,9 @@ class PolicyEngine:
 
     def _matches(self, statement: Statement, action: str, resource: str) -> bool:
         self.statements_examined += 1
-        return _glob_any(action, statement.actions) and _glob_any(resource, statement.resources)
+        return any(
+            _glob_any(spelling, statement.actions) for spelling in _action_spellings(action)
+        ) and _glob_any(resource, statement.resources)
 
     def evaluate(self, principal: str, action: str, resource: str) -> Decision:
         """The verdict. Never raises — a failing evaluator is a denial, not an exception.

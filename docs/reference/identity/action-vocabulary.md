@@ -68,10 +68,10 @@ case does not match.
 | [`report`](#report) | instance | 3 | Generated reports: the archive, per-node reports, and the post-run acceptance report. |
 | [`report.node`](#reportnode) | instance | 4 | Generated reports: the archive, per-node reports, and the post-run acceptance report. |
 | [`results`](#results) | singleton | 4 | Parser results: what a finished run measured, per rack, as the dashboard charts it. |
+| [`scheduler.job`](#schedulerjob) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
+| [`scheduler.node`](#schedulernode) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
+| [`scheduler.queue`](#schedulerqueue) | singleton | 1 | Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct. |
 | [`settings`](#settings) | singleton | 3 | The dashboard core: rack status, cluster overview, app stats, and the settings writer. |
-| [`slurm.job`](#slurmjob) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
-| [`slurm.node`](#slurmnode) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
-| [`slurm.queue`](#slurmqueue) | singleton | 1 | Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct. |
 | [`support`](#support) | singleton | 3 | nvidia-bug-report collection: run it across a rack, then list and serve what landed. |
 | [`tools`](#tools) | instance | 8 | The Tools page: workspace installers, container downloads, Grafana launch. |
 | [`validation`](#validation) | instance | 14 | Launching validation: every run-* endpoint, and the preset path that is replacing them. |
@@ -683,6 +683,44 @@ Owned by `backend/api/parser_results.py`.
 | `results:read` | read | singleton | `GET parser_results.api_capture_job_attempt`<br>`GET parser_results.api_clusterkit_results`<br>`GET parser_results.api_nvloom_heatmaps_log`<br>`GET parser_results.api_parser_results`<br>`GET universal.api_universal_parse` |
 | `results:scan` | mutate | singleton | `POST universal.api_universal_scan` |
 
+## `scheduler.job`
+
+Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log.
+
+Owned by `backend/api/slurm_ops.py`.
+
+Identified by `jid`, `job_id` on the request.
+
+| Action | Kind | Scope | Routes |
+|---|---|---|---|
+| `scheduler.job:cancel` | mutate | instance | `POST slurm_ops.api_slurm_scancel` |
+| `scheduler.job:read` | read | instance | `GET slurm_ops.api_slurm_job_log_path`<br>`GET slurm_ops.api_slurm_job_stdout_content`<br>`GET slurm_ops.api_slurm_job_stdout_download`<br>`GET slurm_ops.api_slurm_scontrol_show_job` |
+
+## `scheduler.node`
+
+Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log.
+
+Owned by `backend/api/slurm_ops.py`.
+
+Identified by `node`, `nodes`, `host` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+
+| Action | Kind | Scope | Routes |
+|---|---|---|---|
+| `scheduler.node:drain` | mutate | instance | `POST slurm_ops.api_slurm_drain` |
+| `scheduler.node:undrain` | mutate | instance | `POST slurm_ops.api_slurm_undrain` |
+
+## `scheduler.queue`
+
+Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct.
+
+Owned by `backend/api/slurm_queries.py`.
+
+**One instance per deployment.** A policy names it as `scheduler.queue:default`; there is no id to narrow a grant to.
+
+| Action | Kind | Scope | Routes |
+|---|---|---|---|
+| `scheduler.queue:list` | read | singleton | `GET slurm_queries.api_slurm_sacct_recent`<br>`GET slurm_queries.api_slurm_sinfo_r`<br>`GET slurm_queries.api_slurm_squeue` |
+
 ## `settings`
 
 The dashboard core: rack status, cluster overview, app stats, and the settings writer.
@@ -696,44 +734,6 @@ Owned by `backend/api/dashboard.py`.
 | `settings:read` | read | singleton | `GET dashboard.api_settings_job_environment` |
 | `settings:update_dashboard` | mutate | singleton | `PUT dashboard.api_cluster_dashboard_metadata` |
 | `settings:update_job_env` | mutate | singleton | `PUT dashboard.api_settings_job_environment` |
-
-## `slurm.job`
-
-Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log.
-
-Owned by `backend/api/slurm_ops.py`.
-
-Identified by `jid`, `job_id` on the request.
-
-| Action | Kind | Scope | Routes |
-|---|---|---|---|
-| `slurm.job:cancel` | mutate | instance | `POST slurm_ops.api_slurm_scancel` |
-| `slurm.job:read` | read | instance | `GET slurm_ops.api_slurm_job_log_path`<br>`GET slurm_ops.api_slurm_job_stdout_content`<br>`GET slurm_ops.api_slurm_job_stdout_download`<br>`GET slurm_ops.api_slurm_scontrol_show_job` |
-
-## `slurm.node`
-
-Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log.
-
-Owned by `backend/api/slurm_ops.py`.
-
-Identified by `node`, `nodes`, `host` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
-
-| Action | Kind | Scope | Routes |
-|---|---|---|---|
-| `slurm.node:drain` | mutate | instance | `POST slurm_ops.api_slurm_drain` |
-| `slurm.node:undrain` | mutate | instance | `POST slurm_ops.api_slurm_undrain` |
-
-## `slurm.queue`
-
-Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct.
-
-Owned by `backend/api/slurm_queries.py`.
-
-**One instance per deployment.** A policy names it as `slurm.queue:default`; there is no id to narrow a grant to.
-
-| Action | Kind | Scope | Routes |
-|---|---|---|---|
-| `slurm.queue:list` | read | singleton | `GET slurm_queries.api_slurm_sacct_recent`<br>`GET slurm_queries.api_slurm_sinfo_r`<br>`GET slurm_queries.api_slurm_squeue` |
 
 ## `support`
 

@@ -275,8 +275,8 @@ _RESOLVERS: dict[str, Extractor] = {
     #    /api/workflow-runs/<run_id>: without it the run reads resolved to the collection.
     "workflow": _by("workflow_id", "run_id", "id"),
     "validation.activity": _by("activity_id", "id"),
-    "slurm.job": _by("jid", "job_id"),
-    "slurm.node": _by("node", "nodes", "host"),
+    "scheduler.job": _by("jid", "job_id"),
+    "scheduler.node": _by("node", "nodes", "host"),
     "report": _by("report_id", "id"),
     "report.node": _by("node", "host"),
     # -- catalog documents, keyed by operator-chosen slug. `doc_id` is the URL parameter the
@@ -345,7 +345,7 @@ _RESOLVERS: dict[str, Extractor] = {
     "export": _singleton,
     "job": _singleton,
     "openapi": _singleton,
-    "slurm.queue": _singleton,
+    "scheduler.queue": _singleton,
 }
 
 
@@ -371,7 +371,7 @@ _FOLDED_TYPES = frozenset({
     "identity.user", "identity.group",
     # Hostnames. DNS is case-insensitive, so two nodes cannot differ only in case and folding
     # cannot collapse two distinct resources into one.
-    "slurm.node", "report.node",
+    "scheduler.node", "report.node",
 })
 
 #: Characters a resource id may never contain, and the reason each one is here.

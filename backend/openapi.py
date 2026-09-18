@@ -226,6 +226,11 @@ _STATUS_TEXT = {
 #: order, so `hw-check-presets` lands in diagnostics. Grouping by raw path segment alone produced
 #: 106 tags for 201 operations — a tag per endpoint, which is no grouping at all.
 _DOMAIN_KEYWORDS: tuple[tuple[str, str], ...] = (
+    # First on purpose. The provider-neutral scheduler surface is one domain, and several of
+    # its paths would otherwise be captured by a later keyword -- `scheduler-drain` by
+    # `drain`, `scheduler-node-reasons` by `node` -- scattering ten related operations across
+    # three tags and leaving `nodes` holding exactly one.
+    ("scheduler", "scheduler"),
     ("bug-report", "diagnostics"),
     ("ds-diag", "diagnostics"),
     ("hw-check", "diagnostics"),
@@ -281,6 +286,11 @@ def _tag_for(path: str, family_counts: dict[str, int]) -> str:
     return "general"
 
 
+def _operation_slug(path: str) -> str:
+    """A path reduced to an identifier fragment, for disambiguating an aliased endpoint."""
+    return re.sub(r"[^A-Za-z0-9]+", "_", path.strip("/")).strip("_").lower()
+
+
 def _flask_path_to_openapi(rule_path: str) -> str:
     """``/api/x/<int:job>`` -> ``/api/x/{job}``."""
     return re.sub(r"<(?:[^:<>]+:)?([^<>]+)>", r"{\1}", rule_path)
@@ -306,11 +316,15 @@ def build_spec(app: Any, *, version: str = "", server_url: str = "") -> dict[str
     # First pass: how many operations share each endpoint family, so a family with siblings gets
     # its own tag and a lone endpoint falls into a domain bucket instead of inventing one.
     family_counts: dict[str, int] = {}
+    # How many included URLs each view serves. One view answering several paths is how the
+    # provider-neutral scheduler aliases work, and those need an operationId each.
+    rules_by_endpoint: dict[str, int] = {}
     for rule in app.url_map.iter_rules():
         path = str(rule.rule)
         if path.startswith(INCLUDED_PREFIXES):
             base = _base_of(_segment_of(path))
             family_counts[base] = family_counts.get(base, 0) + 1
+            rules_by_endpoint[rule.endpoint] = rules_by_endpoint.get(rule.endpoint, 0) + 1
 
     for rule in app.url_map.iter_rules():
         path = str(rule.rule)
@@ -324,6 +338,13 @@ def build_spec(app: Any, *, version: str = "", server_url: str = "") -> dict[str
         if not methods:
             continue
 
+        # An endpoint serving several URLs needs an id per URL. `operationId` must be unique
+        # in an OpenAPI document, and to a consumer two paths ARE two operations even when
+        # one view answers both -- which is how the provider-neutral scheduler aliases are
+        # built. Single-URL endpoints keep the endpoint-derived id, so the spec does not churn.
+        aliased = rules_by_endpoint.get(rule.endpoint, 0) > 1
+        op_base = f"{rule.endpoint}_{_operation_slug(path)}" if aliased else rule.endpoint
+
         summary, description = _summary_and_description(view)
         source = _source_of(view)
         query = _query_parameters(source)
@@ -335,7 +356,7 @@ def build_spec(app: Any, *, version: str = "", server_url: str = "") -> dict[str
         entry = paths.setdefault(openapi_path, {})
         for method in methods:
             operation: dict[str, Any] = {
-                "operationId": f"{rule.endpoint}_{method.lower()}",
+                "operationId": f"{op_base}_{method.lower()}",
                 "tags": [tag],
                 "summary": summary or rule.endpoint.replace("_", " "),
                 "responses": _responses(source, bool(summary), gated=_is_gated(rule.endpoint)),
