@@ -37,6 +37,7 @@ from typing import Any
 
 import nvis_id_templates
 import results_history
+from catalog.store import SqliteDocRepo
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
@@ -232,89 +233,133 @@ def _ensure_dir() -> None:
     ACTIVITIES_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
+#: Document table inside the archive database. Deliberately **not** the legacy
+#: ``validation_activities`` table name: that one is a relational schema with a NOT NULL
+#: ``tool`` column and ``activity_id`` as its key, so writing documents into it is impossible
+#: and dropping it would throw away the only copy of the acceptance record. A new table beside
+#: it means the import is additive and a rollback still finds its data.
+ARCHIVE_TABLE = "activities"
+
+_LEGACY_ARCHIVE_TABLE = "validation_activities"
+#: Written into the archive's own meta table once the legacy import has been considered.
+_LEGACY_IMPORT_MARKER = "legacy_archive_imported"
+_archive_repos: dict[str, SqliteDocRepo] = {}
+#: Per-process memo, so one boot does not re-examine the legacy table on every write. The
+#: durable answer is `_LEGACY_IMPORT_MARKER` in the file; this only avoids re-reading it.
+_archive_imported: set[str] = set()
+
+
+def _archive() -> SqliteDocRepo:
+    """The document repo for the archive named by ``ACTIVITY_ARCHIVE_DB`` *right now*.
+
+    Resolved per call, not bound at import. Two tests repoint that module attribute with
+    ``monkeypatch.setattr``, and a repo captured at import time would keep writing to the
+    real path while the test asserted against its temp file -- the aliasing trap in
+    `backend-api.mdc`, which fails as a confusing assertion rather than an error. Instances
+    are cached per path so repointing is cheap and steady state opens the file once.
+    """
+    key = str(Path(ACTIVITY_ARCHIVE_DB))
+    repo = _archive_repos.get(key)
+    if repo is None:
+        repo = SqliteDocRepo(key)
+        _archive_repos[key] = repo
+        _import_legacy_archive(repo, key)
+    return repo
+
+
+def _import_legacy_archive(repo: SqliteDocRepo, key: str) -> None:
+    """Copy payloads from the pre-document relational table, once per path.
+
+    Deployments carry a populated ``validation_activities`` table from before the archive
+    moved behind the `Repo` interface, and it is the acceptance record -- the thing that
+    answers "did this rack pass". Losing it to a schema change would be the exact failure the
+    archive exists to prevent, so the old table is read and never written or dropped.
+    """
+    if key in _archive_imported:
+        return
+    _archive_imported.add(key)
+    try:
+        # A durable marker, not a row count. "The table is non-empty" is not the same
+        # statement as "the import already ran": an operator who dismisses the last archived
+        # activity would otherwise have it resurrected from the legacy table on the next
+        # restart, which reads as the product refusing to forget.
+        if repo.get_meta(_LEGACY_IMPORT_MARKER):
+            return
+        conn = sqlite3.connect(key, timeout=10.0)
+        try:
+            present = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (_LEGACY_ARCHIVE_TABLE,),
+            ).fetchone()
+            if not present:
+                return
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT activity_id, payload FROM {_LEGACY_ARCHIVE_TABLE}"
+            ).fetchall()
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        _logger.warning("could not read legacy activity archive %s: %s", key, exc)
+        return
+    docs: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            rec = json.loads(str(row["payload"] or "{}"))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        aid = str(row["activity_id"] or "").strip()
+        if isinstance(rec, dict) and aid:
+            docs.append({**rec, "id": aid})
+    if docs:
+        repo.bulk_upsert(ARCHIVE_TABLE, docs)
+        _logger.info("imported %d activity row(s) from the legacy archive schema", len(docs))
+    # Marked even when the legacy table held nothing usable, so a file with an empty or
+    # unreadable legacy table is not rescanned on every boot.
+    repo.set_meta(_LEGACY_IMPORT_MARKER, True)
+
+
 def _archive_upsert_rows(rows: Iterable[dict[str, Any]]) -> bool:
     """Persist activity snapshots outside the capped live-table cache.
 
     The JSON registry is a bounded operational working set.  It cannot also be
     the acceptance record: pruning, dismissal, or cache replacement would
-    otherwise erase completed work.  SQLite lives under ``var/history`` on the
+    otherwise erase completed work.  The archive lives under ``var/history`` on the
     persistent rack-data volume and is append-preserving by ``activity_id``.
+
+    Writes go through ``upsert_if_newer`` because a snapshot may arrive stale -- the
+    background reconcile holds rows it read earlier -- and an unconditional write would let
+    it drag a finished activity back to ``running``.
     """
-    encoded: list[tuple[str, str, str, str, str, str, str, str]] = []
+    docs: list[dict[str, Any]] = []
     for rec in rows:
         if not isinstance(rec, dict):
             continue
         aid = str(rec.get("activity_id") or rec.get("job_id") or "").strip()
         if not aid:
             continue
-        encoded.append(
-            (
-                aid,
-                _normalize_tool(str(rec.get("tool") or rec.get("kind") or "external")),
-                str(rec.get("rack") or "").strip(),
-                str(rec.get("scope") or "").strip().lower(),
-                str(rec.get("log_dir") or ""),
-                str(rec.get("created_at") or ""),
-                str(rec.get("updated_at") or rec.get("created_at") or _now_iso()),
-                json.dumps(rec, ensure_ascii=False, sort_keys=True, default=str),
-            )
+        docs.append(
+            {
+                **rec,
+                "id": aid,
+                "updated_at": str(
+                    rec.get("updated_at") or rec.get("created_at") or _now_iso()
+                ),
+            }
         )
-    if not encoded:
+    if not docs:
         return True
-    path = Path(ACTIVITY_ARCHIVE_DB)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(path), timeout=5.0)
-        try:
-            conn.execute("PRAGMA busy_timeout=5000")
-            try:
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("PRAGMA synchronous=NORMAL")
-            except sqlite3.Error:
-                pass
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS validation_activities (
-                    activity_id TEXT PRIMARY KEY,
-                    tool        TEXT NOT NULL,
-                    rack        TEXT,
-                    scope       TEXT,
-                    log_dir     TEXT,
-                    created_at  TEXT,
-                    updated_at  TEXT,
-                    payload     TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_validation_activities_tool_rack
-                    ON validation_activities(tool, rack);
-                CREATE INDEX IF NOT EXISTS idx_validation_activities_updated
-                    ON validation_activities(updated_at DESC);
-                """
-            )
-            conn.executemany(
-                """
-                INSERT INTO validation_activities
-                    (activity_id, tool, rack, scope, log_dir, created_at, updated_at, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(activity_id) DO UPDATE SET
-                    tool = excluded.tool,
-                    rack = excluded.rack,
-                    scope = excluded.scope,
-                    log_dir = excluded.log_dir,
-                    created_at = excluded.created_at,
-                    updated_at = excluded.updated_at,
-                    payload = excluded.payload
-                WHERE excluded.updated_at >= validation_activities.updated_at
-                """,
-                encoded,
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        repo = _archive()
+        for doc in docs:
+            repo.upsert_if_newer(ARCHIVE_TABLE, doc, clock="updated_at")
         return True
-    except (OSError, sqlite3.Error) as exc:
+    except (OSError, sqlite3.Error, ValueError) as exc:
         # Activity recording must remain available even if the history volume
         # is briefly unhealthy.  The next list/read bootstraps current rows.
-        _logger.warning("could not persist validation activity archive %s: %s", path, exc)
+        _logger.warning(
+            "could not persist validation activity archive %s: %s", ACTIVITY_ARCHIVE_DB, exc
+        )
         return False
 
 
@@ -1600,32 +1645,31 @@ def completion_rollup(
     """
     # Ensures pre-upgrade live rows are imported before the first archive query.
     list_activities(limit=0)
-    path = Path(ACTIVITY_ARCHIVE_DB)
-    raw_rows: list[sqlite3.Row] = []
-    if path.is_file():
-        try:
-            conn = sqlite3.connect(str(path), timeout=5.0)
-            conn.row_factory = sqlite3.Row
-            try:
-                raw_rows = conn.execute(
-                    "SELECT payload FROM validation_activities "
-                    "ORDER BY updated_at DESC, created_at DESC, activity_id DESC"
-                ).fetchall()
-            finally:
-                conn.close()
-        except sqlite3.Error as exc:
-            _logger.warning("could not read validation activity archive %s: %s", path, exc)
+    try:
+        archived = _archive().list(ARCHIVE_TABLE)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        _logger.warning(
+            "could not read validation activity archive %s: %s", ACTIVITY_ARCHIVE_DB, exc
+        )
+        archived = []
+    # Ordering moved from SQL to here, and nothing is lost: the old query was an unindexed
+    # full scan whose ORDER BY only sequenced rows that Python then filtered anyway. Newest
+    # first matters because the first completed attempt per tool+rack wins the rollup.
+    archived.sort(
+        key=lambda rec: (
+            str(rec.get("updated_at") or ""),
+            str(rec.get("created_at") or ""),
+            str(rec.get("activity_id") or ""),
+        ),
+        reverse=True,
+    )
 
     want_tool = _normalize_tool(tool) if tool else None
     want_scope = str(scope or "").strip().lower() or None
     want_rack = str(rack or "").strip() or None
     completed: dict[str, dict[str, dict[str, Any]]] = {}
-    for raw in raw_rows:
-        try:
-            rec = json.loads(str(raw["payload"] or "{}"))
-        except (TypeError, json.JSONDecodeError):
-            continue
-        if not isinstance(rec, dict) or not _activity_completed(rec):
+    for rec in archived:
+        if not _activity_completed(rec):
             continue
         rec_tool = _normalize_tool(str(rec.get("tool") or rec.get("kind") or "external"))
         if want_tool and rec_tool != want_tool:
