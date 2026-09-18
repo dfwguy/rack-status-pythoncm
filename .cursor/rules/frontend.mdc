@@ -156,6 +156,35 @@ and its JSON mode (1.2 MB) — both already on demand and correctly split. The l
 - `noUnusedLocals` enabled. Remove all unused imports.
 - Python lint: `ruff check`. Remove unused imports, no extraneous f-string prefixes.
 
+## Dependencies: `npm audit` audits the install tree, not the bundle
+
+The distinction decides whether a "production" advisory is actually exposed, and it is easy to
+get wrong in both directions.
+
+`npm audit --omit=dev` walks `package.json`, so it reports packages that never reach a browser.
+`undici` is the standing example: it arrives as
+`@nvidia/foundations-react-core → isomorphic-dompurify → jsdom → undici`, is reported **high**,
+and appears **zero times** in `static/spa/assets/` after a build. It is a Node-side path. Check
+before treating a number as shipped risk:
+
+```bash
+npm run build && grep -rl '<package>' ../static/spa/assets/ | wc -l
+```
+
+`dompurify` is the opposite case — three bundled chunks contain it, so an advisory there is real.
+
+**Two `overrides` in `package.json`, and why they exist** (a JSON file cannot hold the comment):
+
+| Override | Reason |
+|---|---|
+| `dompurify: ^3.4.15` | ≤3.4.12 is vulnerable and it **ships**. Reached via KUI, mermaid and monaco, which pinned 3.4.8–3.4.11. A patch-level lift inside 3.4.x. |
+| `undici: ^7.29.0` | 7.0.0–7.28.0 is vulnerable. Does not ship, but jsdom is what **vitest** runs in, so it is worth being current where the tests live. |
+
+Re-check both when KUI is bumped: if the upstream pins move past these, the override is dead
+weight that reads like protection. **Never take `npm audit fix --force` blindly** — for
+`monaco-editor` it proposes *downgrading* 0.56.0 to 0.53.0, and that entry is only flagged `via
+dompurify` in the first place, so fixing dompurify clears it.
+
 ## Styling Rules
 
 - **KUI components**: `style` prop. Example: `style={{ color: "var(--text-color-secondary)" }}`
