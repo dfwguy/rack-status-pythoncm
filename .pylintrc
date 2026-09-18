@@ -40,6 +40,20 @@
 init-hook = 'import sys; sys.path.insert(0, "backend")'
 ignore = tests
 
+# The Python the SHIPPED IMAGE runs, which is not the one pylint runs on.
+#
+# Unset, pylint assumes the interpreter executing it — 3.12 in CI and locally — while
+# `Dockerfile`'s final stage is ubuntu:22.04, whose python3 is 3.10. That silences pylint's
+# version-aware checks (`using-exception-groups-in-unsupported-version` and its siblings) for
+# exactly the gap that has already shipped two broken containers.
+#
+# Worth stating what it does not buy, so nobody mistakes this for the fix: pylint resolves imports
+# against its *own* stdlib, so `from enum import StrEnum` looks fine to it even at 3.10 —
+# measured. Only running the older interpreter catches that, which is the `runtime-python-import`
+# job. This aligns the declaration and turns on the syntax-level checks.
+# `test_ci_job_tooling.py` ties the value to the Dockerfile's base.
+py-version = 3.10
+
 # Single-process ON PURPOSE. duplicate-code is the main reason this file exists, and it is computed
 # from a cross-module index that pylint does not share correctly between workers -- with jobs > 1 it
 # silently under-reports, which is the worst failure mode for a check whose whole job is to notice

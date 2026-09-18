@@ -12,7 +12,22 @@
 # improvement. `extend-select` cannot do that.
 
 line-length = 100
-target-version = "py312"
+
+# The Python the SHIPPED IMAGE runs, not the one CI runs.
+#
+# This said `py312` while `Dockerfile`'s final stage is ubuntu:22.04, whose python3 is 3.10 — so
+# the linter was told to assume an interpreter two versions newer than the one the product
+# executes on. Ruff's defaults include UP (pyupgrade), which means it could *recommend* idioms the
+# container cannot run, and a contributor following the advice would ship a container that will
+# not start. That is not hypothetical here: two 3.11-only imports have already reached
+# deployments.
+#
+# Be clear about what this does NOT do: ruff does not model stdlib symbol availability, so `py310`
+# would not have caught `from enum import StrEnum` — measured, identical findings at both targets.
+# Only running the older interpreter catches that, which is the `runtime-python-import` CI job.
+# This setting is here so the declared target matches reality and the linter stops suggesting
+# code the runtime rejects. `test_ci_job_tooling.py` ties it to the Dockerfile's base.
+target-version = "py310"
 
 # Required for the E1/E2/E3 whitespace and blank-line rules, which are the PEP 8 checks with actual
 # teeth for this codebase. Measured cost of turning it on: 21 findings, 20 of them auto-fixable.

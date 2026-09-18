@@ -191,6 +191,45 @@ class TestNoJobCallsAToolItsImageLacks:
             f"provides Python {expected}."
         )
 
+    def test_the_linters_target_the_python_the_image_runs(self):
+        """Ruff and pylint both declare a target version, and both were declaring the wrong one.
+
+        Ruff said `py312` and pylint said nothing (so it assumed its own 3.12) while the shipped
+        image runs 3.10. A linter told to assume a newer interpreter than the product executes on
+        will happily recommend code the container cannot run — ruff's defaults include the
+        pyupgrade family, which exists to suggest exactly that.
+
+        Neither setting would have caught `from enum import StrEnum`: ruff does not model stdlib
+        symbol availability, and pylint resolves imports against its own stdlib. Both measured. So
+        this is about the declarations agreeing with reality, not about detection — detection is
+        `runtime-python-import`. Checked here because all three must move together when the base
+        image does, and nothing else in the tree knows they are related.
+        """
+        bases = re.findall(r"^FROM\s+(\S+)", (REPO_ROOT / "Dockerfile").read_text(), re.MULTILINE)
+        expected = self.RUNTIME_BASE_PYTHON.get(bases[-1])
+        assert expected, f"unknown Python for runtime base {bases[-1]!r}"
+        short = expected.replace(".", "")  # 3.10 -> 310
+
+        ruff_target = re.search(
+            r'^target-version\s*=\s*"([^"]+)"', (REPO_ROOT / "ruff.toml").read_text(), re.MULTILINE
+        )
+        assert ruff_target, "ruff.toml no longer declares a target-version"
+        assert ruff_target.group(1) == f"py{short}", (
+            f"ruff targets {ruff_target.group(1)} but the image runs Python {expected}; ruff's "
+            f"pyupgrade rules would suggest idioms the container cannot execute"
+        )
+
+        pylint_target = re.search(
+            r"^py-version\s*=\s*(\S+)", (REPO_ROOT / ".pylintrc").read_text(), re.MULTILINE
+        )
+        assert pylint_target, (
+            ".pylintrc does not set py-version, so pylint assumes the interpreter it runs on "
+            "(3.12) and its version-aware checks are silent about the image's 3.10"
+        )
+        assert pylint_target.group(1) == expected, (
+            f"pylint targets {pylint_target.group(1)} but the image runs Python {expected}"
+        )
+
     def test_the_gate_uses_the_generators_own_check_mode(self):
         """The specific repair, pinned. `--check` prints a unified diff, which is the only reason
         `git diff` was reached for; going back to git would reintroduce the failure exactly."""
