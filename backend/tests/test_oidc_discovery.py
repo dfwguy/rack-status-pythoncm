@@ -298,5 +298,3 @@ class TestTheGate:
             "oidc_provider.introspect",
             "oidc_provider.revoke",
         }
-
-

@@ -246,7 +246,6 @@ class TestFR4gTheBeginRouteShedsLoad:
         not entered at all, rather than entered and returning early.
         """
         import throttle
-
         from api import auth_srp
 
         calls: list[tuple] = []

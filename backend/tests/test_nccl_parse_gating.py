@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 #
@@ -91,13 +90,13 @@ def _write(tmp_path: Path, name: str, text: str) -> Path:
 
 def _sh(func: str, path: Path, *args: str) -> str:
     """Call one shell helper from nccl_parse.inc.sh and return its stdout."""
-    quoted = " ".join(['"%s"' % a for a in (str(path), *args)])
+    quoted = " ".join([f'"{a}"' for a in (str(path), *args)])
     proc = subprocess.run(
         ["bash", "-c", f'source "{INC}"; {func} {quoted}'],
         capture_output=True,
         text=True,
         timeout=60,
-    )
+    check=False)
     assert proc.returncode == 0, proc.stderr
     return proc.stdout
 

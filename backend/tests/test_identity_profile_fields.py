@@ -16,10 +16,9 @@ The scope-release half (R3–R5) is exercised in `test_oidc_provider.py` and
 
 from __future__ import annotations
 
-import identity.bootstrap as bootstrap
 import identity.srp as srp_mod
 import pytest
-from identity import models
+from identity import bootstrap, models
 from identity.models import (
     MAX_LOCALE,
     MAX_ZONEINFO,

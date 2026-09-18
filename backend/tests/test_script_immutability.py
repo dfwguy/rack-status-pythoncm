@@ -29,7 +29,6 @@ an in-UI editor, an upload, a generated preset -- should inherit it instead of r
 from __future__ import annotations
 
 import pytest
-
 import script_tree
 
 

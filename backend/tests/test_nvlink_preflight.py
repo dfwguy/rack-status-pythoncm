@@ -35,7 +35,6 @@ from nvlink_preflight import (
     summarize,
 )
 
-
 # --- hostlist expansion --------------------------------------------------------------------
 # The expected-node list cannot be built by splitting on commas: this site's tray range has one
 # inside the brackets, and getting this wrong reported a healthy 18-node rack as "2 did not

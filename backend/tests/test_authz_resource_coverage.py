@@ -212,7 +212,6 @@ class TestEveryDeclaredReadResolves:
     def test_every_allowlisted_action_exists(self):
         """An entry naming an action that no longer exists is a dead exemption, and it reads as an
         intentional one to whoever audits the list next."""
-        import audit.actions as A
 
         rows = json.loads(SNAPSHOT.read_text())
         rows = rows if isinstance(rows, list) else rows.get("actions", [])

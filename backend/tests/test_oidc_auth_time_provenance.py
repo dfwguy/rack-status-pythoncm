@@ -36,7 +36,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from identity import testing as identity_testing  # noqa: E402
+from identity import testing as identity_testing
 
 CLIENT_ID = "cli"
 REDIRECT = "http://localhost:8123/callback"
@@ -205,9 +205,8 @@ class TestTheGateIsWhatCarriesIt:
         later change made the endpoint recover the value some other way, and the next reader would
         have no idea which path was load-bearing.
         """
-        from flask import g
-
         from app import app
+        from flask import g
 
         client, _principal = signed_in
         seen: dict[str, object] = {}
@@ -231,9 +230,8 @@ class TestTheGateIsWhatCarriesIt:
     def test_an_unauthenticated_request_publishes_nothing(self, provider):
         """`g.auth_time` must be absent rather than defaulted, or an anonymous request would carry
         an authentication moment it never had."""
-        from flask import g
-
         from app import app
+        from flask import g
 
         seen: dict[str, object] = {}
 

@@ -60,7 +60,7 @@ class TestExtractAndAssert:
 
     def test_extract_no_match_records_detail(self):
         ev = {"extract": [{"name": "bw", "regex": r"XXX([0-9]+)"}]}
-        ok, outs, detail = workflow_eval.evaluate(ev, returncode=0, stdout="none")
+        _ok, outs, detail = workflow_eval.evaluate(ev, returncode=0, stdout="none")
         assert "bw" not in outs and any("no match" in d for d in detail)
 
     def test_resolve_messages_pass_fail_selection(self):

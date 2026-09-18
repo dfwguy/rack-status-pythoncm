@@ -28,7 +28,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from identity import testing as identity_testing  # noqa: E402
+from identity import testing as identity_testing
 
 
 @pytest.fixture

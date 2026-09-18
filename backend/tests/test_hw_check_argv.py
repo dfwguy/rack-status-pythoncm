@@ -32,7 +32,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from api.diagnostics import (  # noqa: E402
+from api.diagnostics import (
     _HW_CHECK_ARGS_MAX_LEN,
     _HW_CHECK_ARGS_MAX_TOKENS,
     _HW_CHECK_PRESETS,

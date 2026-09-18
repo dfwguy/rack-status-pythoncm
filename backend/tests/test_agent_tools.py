@@ -12,7 +12,8 @@
 import re
 from pathlib import Path
 
-from agent import registrations, tools as agent_tools
+from agent import registrations
+from agent import tools as agent_tools
 
 
 def setup_module(_m):

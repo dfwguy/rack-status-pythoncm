@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 #
@@ -19,11 +18,12 @@ os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
-from api import parser_results
+
 # Log discovery moved out of app.py. Patch and call the module that OWNS these names --
 # patching app's view would reach only the callers inside app.py (see backend-api.mdc).
 import log_discovery
 import naming
+from api import parser_results
 
 
 def test_node_count_from_log_basename():

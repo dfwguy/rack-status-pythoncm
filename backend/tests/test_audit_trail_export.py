@@ -33,8 +33,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import audit  # noqa: E402
-from audit import reader  # noqa: E402
+import audit
+from audit import reader
 
 
 def _event(i: int, **over) -> str:
@@ -159,7 +159,7 @@ class TestItDownloadsWhatTheFilterMatched:
 
         text = client.get("/api/audit-trail/export?format=csv").get_data(as_text=True)
         rows = list(csv.DictReader(io.StringIO(
-            "\n".join(l for l in text.splitlines() if not l.startswith("#"))
+            "\n".join(ln for ln in text.splitlines() if not ln.startswith("#"))
         )))
         assert len(rows) == 5
         assert rows[0]["event_id"] == "id-00004", "newest first, as on screen"
@@ -235,7 +235,7 @@ class TestAPartialExportSaysSoInTheFile:
         text = client.get("/api/audit-trail/export?format=csv").get_data(as_text=True)
         head, *_rest = text.splitlines()
         assert head.startswith("#")
-        body = "\n".join(l for l in text.splitlines() if not l.startswith("#"))
+        body = "\n".join(ln for ln in text.splitlines() if not ln.startswith("#"))
         assert list(csv.DictReader(io.StringIO(body)))
 
 
@@ -253,7 +253,7 @@ class TestExportIsItsOwnGrant:
         assert body["events"][0]["count"] == 47
         text = client.get("/api/audit-trail/export?format=csv").get_data(as_text=True)
         rows = list(csv.DictReader(io.StringIO(
-            "\n".join(l for l in text.splitlines() if not l.startswith("#"))
+            "\n".join(ln for ln in text.splitlines() if not ln.startswith("#"))
         )))
         # Located by id, not by position. `rows[0]` is the *newest* event, which by now is the
         # `audit.trail:export` record written by the JSON request three lines above -- reading the
@@ -287,7 +287,10 @@ class TestExportIsItsOwnGrant:
         registry = audit_actions.registry().actions()
         assert "audit.trail:export" in registry
         assert "audit.trail:list" in registry
-        assert "audit.trail:export" != "audit.trail:list"
+        # Distinct entries, not just both present: the export bound and the page bound
+        # are separate actions, and a registry collapsing them would pass the two
+        # membership checks above.
+        assert len({"audit.trail:export", "audit.trail:list"} & set(registry)) == 2
 
 
 class TestTheExportBoundIsNotThePageBound:

@@ -17,9 +17,9 @@ os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 import app as app_module
-from api import validation_runs
 import naming as naming_mod
 import nvis_id_templates as nid
+from api import validation_runs
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "bin" / "scripts"
 RACKS = [f"ink50-dh01-d{n:02d}" for n in range(19, 23)] + [

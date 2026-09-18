@@ -100,7 +100,7 @@ def _label_file(path: Path, target_steps: str = "2010") -> list[str]:
         text=True,
         timeout=60,
         env={**os.environ, "NEMO_TARGET_STEPS": target_steps},
-    )
+    check=False)
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.rstrip("\n").split("\t")
 
@@ -153,7 +153,7 @@ def _finished_unset_target(tmp_path: Path, text: str) -> bool:
         text=True,
         timeout=60,
         env=env,
-    )
+    check=False)
     return proc.returncode == 0
 
 
@@ -207,7 +207,7 @@ def test_peak_tflops_is_overridable(tmp_path):
         text=True,
         timeout=60,
         env={**os.environ, "NVIS_LLM_PEAK_TFLOPS": "2500"},
-    )
+    check=False)
     assert proc.returncode == 0, proc.stderr
     halved_peak_mfu = float(proc.stdout.rstrip("\n").split("\t")[5])
     # MFU is printed with one decimal, so doubling a rounded value can differ by up to 0.1
@@ -329,7 +329,7 @@ def test_include_owns_the_mfu_denominator():
 _BASH_MAJOR = int(
     subprocess.run(
         ["bash", "-c", "echo ${BASH_VERSINFO[0]}"], capture_output=True, text=True
-    ).stdout.strip()
+    , check=False).stdout.strip()
     or 0
 )
 
@@ -369,7 +369,7 @@ def test_probe_json_llm_ok_matches_the_suite(tmp_path, text, target, want_llm_ok
             "VALIDATION_TEST": "llm",  # isolate the LLM half from NCCL requirements
             "NO_COLOR": "1",
         },
-    )
+    check=False)
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout.strip().splitlines()[-1])
     assert payload["llm_ok"] is want_llm_ok, payload

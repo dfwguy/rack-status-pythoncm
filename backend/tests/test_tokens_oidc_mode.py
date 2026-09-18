@@ -105,6 +105,7 @@ class TestTheTokenShape:
     def test_the_issuer_becomes_a_url_in_oidc_mode(self, oidc_mode):
         assert _unverified(T.mint("user:admin", T.TOKEN_ACCESS))["iss"] == ISSUER
 
+
 class TestRoundTrip:
     def test_a_minted_token_verifies(self, oidc_mode):
         token = T.mint("user:admin", T.TOKEN_ACCESS)

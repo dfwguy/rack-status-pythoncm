@@ -22,13 +22,13 @@ authenticate.
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import time
 from pathlib import Path
 
 import jwt
-import json
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -272,7 +272,6 @@ class TestAlgorithmConfusion:
         algorithm list rather than this attack.
         """
         from cryptography.hazmat.primitives import serialization
-
         from identity import keys as keys_mod
 
         # Serialised from the key pair, because `SigningKey` exposes `private` and `public_jwk`
@@ -531,7 +530,6 @@ class TestRevocationIsFailClosed:
         # signature -- which is precisely the boundary this case is about.
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import ec
-
         from identity import keys as keys_mod
 
         stranger = ec.generate_private_key(ec.SECP256R1()).private_bytes(

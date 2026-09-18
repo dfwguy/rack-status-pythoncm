@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import pytest
-
 from catalog import models, npi_import
 from catalog.store import TABLE_NPI_TOOLS, TinyDBRepo, set_repo
 

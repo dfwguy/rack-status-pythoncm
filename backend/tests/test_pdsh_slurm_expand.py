@@ -155,9 +155,11 @@ def test_grafana_embed_rack_prefix_lower_env():
     from grafana_embed import _grafana_embed_host_regex_and_mode
 
     n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
-    with naming_forced_to(n):
-        with mock.patch.dict(os.environ, {"RACK_WEB_GRAFANA_EMBED_RACK_REGEX_LOWER": "1"}):
-            r, mode = _grafana_embed_host_regex_and_mode("cbr01-dh01-svr-cn0102", [])
+    with (
+        naming_forced_to(n),
+        mock.patch.dict(os.environ, {"RACK_WEB_GRAFANA_EMBED_RACK_REGEX_LOWER": "1"}),
+    ):
+        r, mode = _grafana_embed_host_regex_and_mode("cbr01-dh01-svr-cn0102", [])
     assert mode == "rack_prefix"
     assert r == "cbr01-dh01-svr-cn0102.*"
 
@@ -176,12 +178,14 @@ def test_grafana_embed_host_regex_per_host_env():
     from grafana_embed import _grafana_embed_host_regex_and_mode
 
     n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
-    with naming_forced_to(n):
-        with mock.patch.dict(os.environ, {"RACK_WEB_GRAFANA_HOST_REGEX_PER_HOST": "1"}):
-            r, mode = _grafana_embed_host_regex_and_mode(
-                "cbr01-dh01-svr-cn0102",
-                ["CBR01-DH01-SVR-CN010211"],
-            )
+    with (
+        naming_forced_to(n),
+        mock.patch.dict(os.environ, {"RACK_WEB_GRAFANA_HOST_REGEX_PER_HOST": "1"}),
+    ):
+        r, mode = _grafana_embed_host_regex_and_mode(
+            "cbr01-dh01-svr-cn0102",
+            ["CBR01-DH01-SVR-CN010211"],
+        )
     assert mode == "hosts"
     assert "cn010211" in r.lower()
     assert len(r) > 80

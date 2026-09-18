@@ -29,10 +29,9 @@ import pytest
 os.environ.setdefault("RACK_STATUS_DEMO", "1")
 os.environ.setdefault("RACK_EXEC_MODE", "local")
 
-import app as app_module
-from api import validation_runs
 import naming as naming_mod
 import nvis_id_templates as nid
+from api import validation_runs
 
 BACKEND = Path(__file__).resolve().parent.parent
 SCRIPTS = BACKEND.parent / "bin" / "scripts"
@@ -207,7 +206,7 @@ def test_spec_split_keeps_bracketed_ranges_intact(spec_tag: str, expected: list[
     body = (SCRIPTS / "run-nemo-xrack.sh").read_text(encoding="utf-8")
     # The whole split block, bounded by the `racks=()` that follows it — anchoring on the first
     # `_specs+=` would cut the loop in half and yield an unbalanced snippet.
-    m = re.search(r"^(_specs=\(\)\n.*?)\nracks=\(\)$", body, re.S | re.M)
+    m = re.search(r"^(_specs=\(\)\n.*?)\nracks=\(\)$", body, re.DOTALL | re.MULTILINE)
     assert m, "could not find the bracket-aware split in run-nemo-xrack.sh"
     snippet = m.group(1)
     script = f'spec_tag="$1"\n{snippet}\nprintf "%s\\n" "${{_specs[@]}}"\n'

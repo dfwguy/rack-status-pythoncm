@@ -34,7 +34,7 @@ os.environ.setdefault("RACK_EXEC_MODE", "local")
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "backend"))
 
-import nvis_id_templates as nid
+import nvis_id_templates as nid  # noqa: E402 - needs the sys.path.insert above
 
 COMPACT_32 = "root-NEMO-ink50-dh01-e01+ink50-dh01-h22+32r-a811542455-576N-140457.txt"
 FOUR_RACK = (

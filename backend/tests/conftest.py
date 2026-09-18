@@ -123,7 +123,6 @@ try:
 finally:
     _bootstrap_store.close()
 
-import identity.testing as _identity_testing  # noqa: E402
 
 # NO policy documents are seeded, so the engine stays `AllowAllEngine` for the suite at large.
 #
@@ -136,7 +135,6 @@ import identity.testing as _identity_testing  # noqa: E402
 # Authorization is therefore tested where it belongs: `test_authz_*.py` and `test_policies_api.py`
 # build a real policy file and assert real verdicts. Track the suite-wide enforcement separately
 # from FR-18c.
-
 import pytest  # noqa: E402
 
 
@@ -155,16 +153,15 @@ def _every_test_client_authenticates():
 
     A test that wants the 401 path asks for it: `headers=identity.testing.unauthenticated()`.
     """
-    from flask.testing import FlaskClient
-    from identity import revocation
-    from identity import testing as identity_testing
-
     # `app` FIRST, and the order is load-bearing: importing it runs
     # `_bootstrap_rack_web_secret_key()`, which loads or creates `var/secrets/.rack_web_secret_key`
     # and puts it in the environment. Enrolling before that point tries to derive a signing key from
     # a secret that does not exist yet and raises `TokenError`. This used to be hidden by a faked
     # key set at module scope, which is exactly what INV-17 punishes.
     import app as app_module
+    from flask.testing import FlaskClient
+    from identity import revocation
+    from identity import testing as identity_testing
 
     # `tokens.verify` refuses everything until a checker is registered (FR-6a, INV-18), and without
     # this every request 401s in a way that reads like a gate bug rather than a missing wire.

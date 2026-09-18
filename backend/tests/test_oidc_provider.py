@@ -104,7 +104,6 @@ def client(provider):
 def anonymous_client(provider):
     """A client presenting no credential at all, for the refusal cases."""
     from app import app
-
     from identity import testing as identity_testing
 
     with identity_testing.unauthenticated_client(app) as c:

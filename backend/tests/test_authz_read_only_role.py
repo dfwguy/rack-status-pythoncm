@@ -33,9 +33,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import audit.actions as A  # noqa: E402
-from authz.policy import PolicyEngine  # noqa: E402
-from authz.schema import PolicyFile  # noqa: E402
+import audit.actions as A
+from authz.policy import PolicyEngine
+from authz.schema import PolicyFile
 
 #: The whole role. Two patterns, one statement — the thing that was impossible.
 READ_ONLY = {
@@ -161,14 +161,12 @@ class TestTheEditorAgrees:
         """The Monaco editor validates against the exported schema, so a document the server accepts
         and the editor rejects would make the feature unusable in the UI even though it works."""
         import jsonschema
-
         from authz.schema import document_json_schema
 
         jsonschema.validate(READ_ONLY, document_json_schema())
 
     def test_the_served_schema_refuses_star_colon_star(self):
         import jsonschema
-
         from authz.schema import document_json_schema
 
         with pytest.raises(jsonschema.ValidationError):

@@ -23,15 +23,7 @@ import json
 import cluster_report
 import pytest
 
-FACTS = "\n".join([
-    "bcm.version\tCluster Manager v11.0",
-    "slurm.version\t25.05.8",
-    "nccl.version\t2.29.3+cuda13.1",
-    "nccl.source\trun log (container image)",
-    "container.image\tnvidia+nemo+26.04.01.sqsh",
-    "head.hostname\tnscale-hn1.cm.cluster",
-    "head.os\tUbuntu 24.04.4 LTS",
-])
+FACTS = "bcm.version\tCluster Manager v11.0\nslurm.version\t25.05.8\nnccl.version\t2.29.3+cuda13.1\nnccl.source\trun log (container image)\ncontainer.image\tnvidia+nemo+26.04.01.sqsh\nhead.hostname\tnscale-hn1.cm.cluster\nhead.os\tUbuntu 24.04.4 LTS"
 
 INVENTORY = {
     "captured_at": "2026-08-12T12:00:00Z",
@@ -210,16 +202,16 @@ class TestCsv:
 
     def test_a_blank_line_ends_the_node_table_before_the_rack_blocks(self, dataset):
         text = cluster_report.to_csv(dataset)
-        body = [l for l in text.splitlines() if not l.startswith("#")]
+        body = [ln for ln in text.splitlines() if not ln.startswith("#")]
         blank = body.index("")
         # Header plus one row per node, then the boundary.
         assert blank == 1 + len(dataset["nodes"])
 
     def test_cluster_facts_lead_the_file_as_comments_not_repeated_per_row(self, dataset):
         text = cluster_report.to_csv(dataset)
-        head = [l for l in text.splitlines() if l.startswith("#")]
-        assert any("BCM version,Cluster Manager v11.0" in l for l in head)
-        assert any("NCCL,2.29.3+cuda13.1" in l for l in head)
+        head = [ln for ln in text.splitlines() if ln.startswith("#")]
+        assert any("BCM version,Cluster Manager v11.0" in ln for ln in head)
+        assert any("NCCL,2.29.3+cuda13.1" in ln for ln in head)
         # Repeating 25 constants on every one of 2000 rows would be noise.
         assert "bcm_version" not in (dataset["node_columns"])
 

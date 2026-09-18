@@ -15,11 +15,10 @@ with a hardcoded ``ink50`` regex, and every lake record was tagged ``NscaleTX``.
 cluster that produced silently empty rack/node fields, and provenance filed under the wrong
 customer — which is precisely what the lake exists to prevent.
 """
-import pytest
-
-from api import parser_results as app_mod
 import lake_sink
 import nvis_id_templates as nid
+import pytest
+from api import parser_results as app_mod
 
 NSCALE = (r"ink50-dh01-h[\d+]", r"ink50-dh01-h[\d+]-[\d+]")
 BRIGHT = (nid.DEFAULT_NVIS_RACK_ID, nid.DEFAULT_NVIS_CT_ID)

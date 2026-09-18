@@ -34,13 +34,14 @@ import json
 import socket
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import audit  # noqa: E402
-from authz.policy import PolicyEngine  # noqa: E402
+import audit
+from authz.policy import PolicyEngine
 
 ALICE = "user:alice"
 
@@ -63,7 +64,6 @@ class TestAC15gAttachmentIsAudited:
     def deployment(self, tmp_path, monkeypatch):
         """A real policy set and identity store, with the audit sink pointed at tmp_path."""
         import authz
-        from authz import store as policy_store
         from identity import bootstrap, testing
         from identity.store import IdentityStore
 
@@ -204,7 +204,7 @@ class TestAC16aTheRefusalIsNotAnExistenceOracle:
     the two answers with each other rather than inspect one of them.
     """
 
-    GRANT = {
+    GRANT: ClassVar[dict[str, object]] = {
         "id": "rack-a01",
         "statements": [{
             "sid": "one-rack", "effect": "allow",
@@ -282,7 +282,7 @@ class TestAC18AuthorizationIsPureAndLocal:
     than inferred from the benchmark, because a fast decision can still be an impure one.
     """
 
-    GRANT = {
+    GRANT: ClassVar[dict[str, object]] = {
         "id": "ops",
         "statements": [{
             "sid": "power", "effect": "allow",

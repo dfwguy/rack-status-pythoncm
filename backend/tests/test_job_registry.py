@@ -27,10 +27,9 @@ from __future__ import annotations
 
 import sys
 
-import pytest
-
 import app  # noqa: F401 - imported so the api/ modules are loaded and can be inspected
 import job_registry as J
+import pytest
 
 REGISTRIES = [
     "_validation_jobs",

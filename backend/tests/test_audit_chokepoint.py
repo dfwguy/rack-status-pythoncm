@@ -458,4 +458,3 @@ class TestTheResourceIsWhatWasActedOn:
         )
         (event,) = _events(tmp_path)
         assert "super-secret" not in json.dumps(event)
-

@@ -23,7 +23,6 @@ import os
 os.environ["RACK_STATUS_DEMO"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
-import app as app_module
 from api import validation_runs
 
 

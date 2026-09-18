@@ -19,10 +19,10 @@ os.environ.setdefault("RACK_EXEC_MODE", "local")
 
 # The launch component moved to validation_launch.py; patch/call the owning module.
 import app as app_module
-from api import validation_runs
-import validation_launch
 import naming as naming_mod
 import nvis_id_templates as nid
+import validation_launch
+from api import validation_runs
 
 
 def _naming():

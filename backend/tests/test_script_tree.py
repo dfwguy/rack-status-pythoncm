@@ -33,7 +33,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 import script_tree
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -204,7 +203,7 @@ def _bootstrap(tmp_path, *args):
         capture_output=True,
         text=True,
         env={**os.environ, "RACK_REMOTE_BASE_PATH": ""},
-    )
+    check=False)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
@@ -295,7 +294,7 @@ def test_bootstrap_refuses_a_project_id_that_is_a_path(tmp_path):
             ["bash", str(BOOTSTRAP), "--project", bad, "--tree", str(tree)],
             capture_output=True,
             text=True,
-        )
+        check=False)
         assert proc.returncode == 2, f"{bad!r} was accepted"
         assert "invalid project id" in proc.stderr
 

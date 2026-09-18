@@ -32,9 +32,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import api.bug_report as bug_report
-import api.rack_power as rack_power
 import host_exec
+from api import bug_report, rack_power
 
 # (module, callable, the env var that forces a dry run)
 ENDPOINTS = [

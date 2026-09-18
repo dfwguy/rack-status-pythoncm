@@ -36,7 +36,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from audit import reader  # noqa: E402
+import functools
+import operator
+
+from audit import reader
 
 
 def _event(i: int, *, ts: str | None = None, **over) -> str:
@@ -78,7 +81,7 @@ def trail(tmp_path):
         per = max(1, len(lines) // buckets)
         # Oldest events go in the highest-numbered backup: `.1` is older than the active file.
         chunks = [lines[i:i + per] for i in range(0, len(lines), per)] or [[]]
-        chunks = chunks[:buckets - 1] + [sum(chunks[buckets - 1:], [])] if buckets > 1 else chunks
+        chunks = chunks[:buckets - 1] + [functools.reduce(operator.iadd, chunks[buckets - 1:], [])] if buckets > 1 else chunks
         for position, chunk in enumerate(chunks):
             target = active if position == len(chunks) - 1 else active.with_name(
                 f"audit.jsonl.{len(chunks) - 1 - position}"
@@ -216,8 +219,7 @@ class TestTC9PaginationUnderConcurrentAppend:
         first = reader.read(limit=5, path=active)
 
         with open(active, "a", encoding="utf-8") as handle:
-            for i in range(100, 110):
-                handle.write(_event(i) + "\n")
+            handle.writelines(_event(i) + "\n" for i in range(100, 110))
 
         second = reader.read(limit=5, cursor=first.cursor, path=active)
         assert not ({e["event_id"] for e in first.events} & {e["event_id"] for e in second.events})

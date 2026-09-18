@@ -25,8 +25,6 @@ app module.
 """
 from __future__ import annotations
 
-import os
-
 import app as app_module
 import pytest
 from paths import REPO_ROOT
@@ -143,8 +141,6 @@ def test_spa_assets_stay_public(auth_client):
     for path in ("/assets/does-not-exist.js", "/favicon.svg"):
         code = auth_client.get(path).status_code
         assert code not in (401, 302), f"{path} was blocked by the auth gate ({code})"
-
-
 
 
 def test_the_legacy_login_route_does_not_exist(auth_client):

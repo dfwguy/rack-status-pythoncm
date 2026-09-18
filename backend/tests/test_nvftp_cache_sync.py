@@ -24,7 +24,6 @@ os.environ["RACK_EXEC_MODE"] = "local"
 import nvftp_cache_sync as sync
 import token_vault
 
-
 #: Settings this module's tests run against. Held in an explicit table rather than
 #: read back out of ``os.environ`` — see ``isolated`` below.
 _SETTINGS = {

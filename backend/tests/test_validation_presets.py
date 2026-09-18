@@ -15,8 +15,8 @@ from types import SimpleNamespace
 
 # The launch component moved to validation_launch.py; patch/call the owning module.
 import app as app_module
-import validation_launch
 import pytest
+import validation_launch
 import validation_presets
 
 REPO = Path(__file__).resolve().parents[2]

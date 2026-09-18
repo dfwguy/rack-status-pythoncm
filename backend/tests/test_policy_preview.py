@@ -35,11 +35,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import authz  # noqa: E402
-from authz.policy import PolicyEngine  # noqa: E402
-from identity import testing as identity_testing  # noqa: E402
-from identity.models import Group  # noqa: E402
-from identity.store import IdentityStore  # noqa: E402
+import authz
+from authz.policy import PolicyEngine
+from identity import testing as identity_testing
+from identity.models import Group
+from identity.store import IdentityStore
 
 PREVIEW = "/api/policies/preview"
 
@@ -87,7 +87,6 @@ def viewer(deployment):
 @pytest.fixture
 def client(viewer):
     from app import app
-
     from flask.testing import FlaskClient
 
     class _AsViewer(identity_testing.AuthenticatedClient, FlaskClient):
@@ -296,9 +295,8 @@ class TestItIsNotReconnaissance:
         refuses — which is a different defect wearing the same green tick, and it would make the
         feature useless to the one role that needs it most.
         """
-        from flask.testing import FlaskClient
-
         from app import app
+        from flask.testing import FlaskClient
 
         identity_testing.enrol("previewed-person", authorize=False)
         # An administrator: holds `policy:attach`, which is what widening is gated on.
@@ -329,4 +327,3 @@ class TestItIsNotReconnaissance:
 
         assert resp.status_code == 200, resp.get_data(as_text=True)[:200]
         assert resp.get_json()["subject"] == "user:previewed-person"
-

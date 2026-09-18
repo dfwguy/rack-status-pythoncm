@@ -9,7 +9,6 @@
 # its affiliates is strictly prohibited.
 """Tests for AI and Workflow API endpoints."""
 import os
-import json
 import time
 
 import pytest
@@ -17,8 +16,8 @@ import pytest
 os.environ["RACK_STATUS_DEMO"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
-from app import app
 import workflow_engine
+from app import app
 
 
 @pytest.fixture

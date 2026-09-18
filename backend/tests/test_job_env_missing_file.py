@@ -26,10 +26,9 @@ from __future__ import annotations
 
 import os
 
-import pytest
-
 import app as A
 import config_env as C
+import pytest
 
 
 @pytest.fixture
@@ -109,7 +108,7 @@ def test_a_file_appearing_later_is_picked_up(no_overrides_file):
 
     # sorted(), not next(iter(frozenset)): set order varies per process, so this test used to pick
     # a different Settings key on every run -- unreproducible by construction.
-    key = sorted(C._JOB_ENV_ALLOWED_KEYS)[0]
+    key = min(C._JOB_ENV_ALLOWED_KEYS)
     path = no_overrides_file / "job_env_overrides.json"
     path.write_text(f'{{"{key}": "from-the-file"}}', encoding="utf-8")
 

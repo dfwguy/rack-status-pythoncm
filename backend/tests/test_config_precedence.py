@@ -25,10 +25,9 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 import app as A  # noqa: F401 - imported so the app's own overlay materialisation has run
 import config_env as C
+import pytest
 
 KEY = "RACK_VALIDATION_CT_RANGE"  # a real Settings-managed key, so allow-list filtering applies
 

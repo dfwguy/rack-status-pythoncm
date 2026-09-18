@@ -86,7 +86,7 @@ def _arm(rig, *extra_args: str, tag: str = "run_llmb_test", log_base: str = "llm
             "NVIS_LLMB_AUTOCOLLECT_POLL_SEC": "1",
             **env,
         },
-    )
+    check=False)
 
 
 def _wait_for(path: Path, timeout: float = 30.0) -> bool:
@@ -110,7 +110,7 @@ def test_jobid_is_read_from_llmb_run_output(rig):
         capture_output=True,
         text=True,
         timeout=60,
-    )
+    check=False)
     assert proc.stdout.strip() == "127327"
 
 
@@ -120,7 +120,7 @@ def test_missing_output_file_yields_no_jobid(tmp_path):
         capture_output=True,
         text=True,
         timeout=60,
-    )
+    check=False)
     assert proc.stdout.strip() == ""
 
 
@@ -337,4 +337,4 @@ def test_nemo_collector_expands_slurm_job_token_in_trace_output(tmp_path):
 
 @pytest.mark.parametrize("launcher", LAUNCHERS, ids=lambda p: p.name)
 def test_launcher_still_parses(launcher: Path):
-    assert subprocess.run(["bash", "-n", str(launcher)], timeout=60).returncode == 0
+    assert subprocess.run(["bash", "-n", str(launcher)], timeout=60, check=False).returncode == 0

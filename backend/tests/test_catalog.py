@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import pytest
-
 from catalog import context, models, seed
 from catalog.store import (
     TABLE_PLATFORMS,
@@ -177,7 +176,7 @@ class TestContext:
     def test_active_and_resolve(self, seeded):
         active = context.get_active()
         assert active["project"] == "default"
-        project, cluster, platform = context.resolve()
+        project, _cluster, platform = context.resolve()
         assert project.id == "default"
         assert platform.id == "gb300-nvl72"
 

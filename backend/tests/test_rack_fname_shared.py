@@ -49,7 +49,7 @@ def _sh(func: str, name: str, **env: str) -> str:
         text=True,
         timeout=60,
         env={**os.environ, **env},
-    )
+    check=False)
     assert proc.returncode in (0, 1), proc.stderr
     return proc.stdout.strip()
 

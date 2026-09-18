@@ -16,7 +16,6 @@ real cluster side effects.
 """
 import ai_chat
 import pytest
-
 from agent import loop, registrations
 from agent import tools as agent_tools
 from agent.tools import AgentTool

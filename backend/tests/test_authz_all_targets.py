@@ -36,9 +36,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import authz  # noqa: E402
-import authz.resources as resources  # noqa: E402
-from authz.policy import PolicyEngine  # noqa: E402
+import authz
+from authz import resources
+from authz.policy import PolicyEngine
 
 GRANTED = "p17-r01"
 UNGRANTED = "p17-r02"
@@ -239,4 +239,3 @@ class TestTheKeyListIsAFallbackChain:
             values = facts.all_of(*keys)
             if values:
                 assert facts.first(*keys) == values[0]
-

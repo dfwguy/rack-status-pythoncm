@@ -20,10 +20,9 @@ from __future__ import annotations
 import sys
 import types
 
+import api
 import pytest
 from flask import Blueprint, Flask
-
-import api
 
 
 class TestDiscovery:
@@ -82,7 +81,8 @@ class TestFailsLoudly:
         def make(name: str, body: str):
             full = f"api.{name}"
             module = types.ModuleType(full)
-            exec(compile(body, full, "exec"), module.__dict__)
+            exec(compile(body, full, "exec"), module.__dict__)  # noqa: S102 - building a
+            # synthetic api module IS the subject here: the loader must import it.
             sys.modules[full] = module
             created.append(full)
             return name
@@ -106,7 +106,7 @@ class TestFailsLoudly:
 class TestRegistration:
     def test_install_only_modules_are_supported(self):
         """The terminal is WSGI middleware, below Flask routing — it cannot be a blueprint."""
-        import api.terminal as terminal
+        from api import terminal
 
         assert hasattr(terminal, "install")
         assert not hasattr(terminal, "bp")

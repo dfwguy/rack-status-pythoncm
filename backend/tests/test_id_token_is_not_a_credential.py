@@ -32,7 +32,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from identity import testing as identity_testing  # noqa: E402
+from identity import testing as identity_testing
 
 PROTECTED = "/api/status"
 
@@ -62,7 +62,6 @@ def oidc_mode(monkeypatch, tmp_path):
 def _login(client, login: str) -> dict:
     """Drive the real SRP exchange and return the finish response body."""
     import srp as srp_lib
-
     from identity import srp as srp_mod
 
     principal = identity_testing.enrol(login)
@@ -187,5 +186,3 @@ class TestItAuthorizesNothing:
         with identity_testing.unauthenticated_client(app) as fresh:
             resp = fresh.get(PROTECTED, headers={"Authorization": f"Bearer {access}"})
         assert resp.status_code == 200
-
-

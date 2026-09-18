@@ -127,11 +127,11 @@ class TestCheckReportsWhatServeWouldDo:
         paths["identity"].parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             [sys.executable, "-c",
-             "import sys; sys.path.insert(0, 'backend');"
+             ("import sys; sys.path.insert(0, 'backend');"
              "from identity.store import IdentityStore;"
              "import identity.bootstrap as b;"
              "s = IdentityStore(sys.argv[1]);"
-             "b.ensure_admin(s, emit=False); b.ensure_admin_policy(s); s.close()",
+             "b.ensure_admin(s, emit=False); b.ensure_admin_policy(s); s.close()"),
              str(paths["identity"])],
             cwd=REPO_ROOT, check=True, capture_output=True,
             env={**os.environ, "RACK_WEB_POLICY_FILE": str(paths["policy"]),

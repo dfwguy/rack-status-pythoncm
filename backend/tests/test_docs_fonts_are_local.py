@@ -37,7 +37,7 @@ FONT_CSS = REPO_ROOT / "docs" / "_static" / "local-fonts.css"
 
 def _css_files() -> list[str]:
     """The `html_css_files` list, in order."""
-    match = re.search(r"html_css_files\s*=\s*\[([^\]]*)\]", CONF.read_text(), re.S)
+    match = re.search(r"html_css_files\s*=\s*\[([^\]]*)\]", CONF.read_text(), re.DOTALL)
     assert match, "docs/conf.py no longer declares html_css_files"
     return re.findall(r"[\"']([^\"']+)[\"']", match.group(1))
 

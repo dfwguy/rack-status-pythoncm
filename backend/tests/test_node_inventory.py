@@ -21,53 +21,7 @@ import node_inventory
 import pytest
 
 # Trimmed to two GPUs and two NICs; every value is verbatim from the node.
-REAL_GB300 = "\n".join([
-    "host.hostname\tink50-dh01-d01-18",
-    "host.kernel\t6.17.0-1014-nvidia-64k",
-    "host.os\tUbuntu 24.04.4 LTS",
-    "host.serial\tBKPZPK4",
-    "host.bios_version\t1.0.3",
-    "host.chassis_model\tPowerEdge XE9712",
-    "host.cpu_model\tNeoverse-V2",
-    "host.cpu_sockets\t2",
-    "host.cpu_cores_per_socket\t72",
-    "host.memory_gb\t2064",
-    "gpu.0.index\t0",
-    "gpu.0.uuid\tGPU-4835505f-2414-1719-b9e7-25667c77c4a7",
-    "gpu.0.serial\t1760426805611",
-    "gpu.0.model\tNVIDIA GB300",
-    "gpu.0.pcie_bdf\t00000008:06:00.0",
-    "gpu.0.vbios_version\t97.10.4A.00.1F",
-    "gpu.1.index\t1",
-    "gpu.1.uuid\tGPU-6333c480-1cac-6340-b575-a9b6e346fade",
-    "gpu.1.serial\t1760426805611",
-    "gpu.1.model\tNVIDIA GB300",
-    "gpu.1.pcie_bdf\t00000009:06:00.0",
-    "gpu.1.vbios_version\t97.10.4A.00.1F",
-    "gpu.count\t2",
-    "gpu.driver_version\t580.126.20",
-    "gpu.cuda_runtime\t13.0",
-    "gpu.fabric_manager_version\t580.126.20",
-    "gpu.imex_version\t580.126.20",
-    "nic.0.device\tmlx5_0",
-    "nic.0.port\t1",
-    "nic.0.firmware\t40.48.1126",
-    "nic.0.rate_gbps\t800",
-    "nic.0.state\tACTIVE",
-    "nic.0.port_guid\t0x549b240300a27aa4",
-    "nic.0.pcie_bdf\t0000:03:00.0",
-    "nic.0.netdev\tibo1",
-    "nic.1.device\tmlx5_1",
-    "nic.1.port\t1",
-    "nic.1.firmware\t40.48.1126",
-    "nic.1.rate_gbps\t800",
-    "nic.1.port_guid\t0x549b240300a27ad4",
-    "nic.1.pcie_bdf\t0002:03:00.0",
-    "nic.count\t2",
-    "nic.model\tMellanox Technologies CX8 Family [ConnectX-8]",
-    "nic.ofed_version\tOFED-internal-25.10-1.7.1.413",
-    "software.dcgm_version\t4.6.1",
-])
+REAL_GB300 = "host.hostname\tink50-dh01-d01-18\nhost.kernel\t6.17.0-1014-nvidia-64k\nhost.os\tUbuntu 24.04.4 LTS\nhost.serial\tBKPZPK4\nhost.bios_version\t1.0.3\nhost.chassis_model\tPowerEdge XE9712\nhost.cpu_model\tNeoverse-V2\nhost.cpu_sockets\t2\nhost.cpu_cores_per_socket\t72\nhost.memory_gb\t2064\ngpu.0.index\t0\ngpu.0.uuid\tGPU-4835505f-2414-1719-b9e7-25667c77c4a7\ngpu.0.serial\t1760426805611\ngpu.0.model\tNVIDIA GB300\ngpu.0.pcie_bdf\t00000008:06:00.0\ngpu.0.vbios_version\t97.10.4A.00.1F\ngpu.1.index\t1\ngpu.1.uuid\tGPU-6333c480-1cac-6340-b575-a9b6e346fade\ngpu.1.serial\t1760426805611\ngpu.1.model\tNVIDIA GB300\ngpu.1.pcie_bdf\t00000009:06:00.0\ngpu.1.vbios_version\t97.10.4A.00.1F\ngpu.count\t2\ngpu.driver_version\t580.126.20\ngpu.cuda_runtime\t13.0\ngpu.fabric_manager_version\t580.126.20\ngpu.imex_version\t580.126.20\nnic.0.device\tmlx5_0\nnic.0.port\t1\nnic.0.firmware\t40.48.1126\nnic.0.rate_gbps\t800\nnic.0.state\tACTIVE\nnic.0.port_guid\t0x549b240300a27aa4\nnic.0.pcie_bdf\t0000:03:00.0\nnic.0.netdev\tibo1\nnic.1.device\tmlx5_1\nnic.1.port\t1\nnic.1.firmware\t40.48.1126\nnic.1.rate_gbps\t800\nnic.1.port_guid\t0x549b240300a27ad4\nnic.1.pcie_bdf\t0002:03:00.0\nnic.count\t2\nnic.model\tMellanox Technologies CX8 Family [ConnectX-8]\nnic.ofed_version\tOFED-internal-25.10-1.7.1.413\nsoftware.dcgm_version\t4.6.1"
 
 
 @pytest.fixture
@@ -186,9 +140,7 @@ class TestBuildInventory:
     def test_the_node_s_own_ipmitool_answer_supplies_the_bmc_without_bcm_or_pythoncm(self):
         # Real values from ink50-dh01-d01-18. This is why the report needs neither a per-node
         # cmsh interfaces call nor the root-only cluster CA to fill the bmc block.
-        rec = node_inventory.parse_record(REAL_GB300 + "\n".join([
-            "", "bmc.ip\t10.40.128.9", "bmc.mac\t94:10:5A:EE:87:ED", "bmc.firmware\t1.30",
-        ]))
+        rec = node_inventory.parse_record(REAL_GB300 + "\nbmc.ip\t10.40.128.9\nbmc.mac\t94:10:5A:EE:87:ED\nbmc.firmware\t1.30")
         inv, _ = node_inventory.build_inventory([rec])
         assert inv["nodes"][0]["bmc"] == {
             "ip": "10.40.128.9", "mac": "94:10:5A:EE:87:ED", "firmware": "1.30",
@@ -337,13 +289,7 @@ class TestSrunSweep:
 
     def test_interleaved_task_output_is_reassembled_per_node(self):
         # srun emits lines as tasks produce them, so two nodes' fields arrive shuffled.
-        raw = "\n".join([
-            "0: host.hostname\tn1",
-            "1: host.hostname\tn2",
-            "0: host.serial\tAAA",
-            "1: host.serial\tBBB",
-            "0: gpu.count\t4",
-        ])
+        raw = "0: host.hostname\tn1\n1: host.hostname\tn2\n0: host.serial\tAAA\n1: host.serial\tBBB\n0: gpu.count\t4"
         blobs = node_inventory.parse_srun_labeled(raw)
         recs = [node_inventory.parse_record(b) for b in blobs]
         assert [r["host"]["hostname"] for r in recs] == ["n1", "n2"]

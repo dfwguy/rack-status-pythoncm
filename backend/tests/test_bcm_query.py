@@ -171,7 +171,7 @@ class TestScriptAlwaysAnswersJson:
             [sys.executable, str(SCRIPT), "--query", "nodes",
              "--module-path", str(tmp_path / "nowhere")],
             capture_output=True, text=True, timeout=60,
-        )
+        check=False)
         body = json.loads(proc.stdout)
         assert body["ok"] is False
         assert "pythoncm" in body["error"]
@@ -198,7 +198,7 @@ class TestScriptAlwaysAnswersJson:
             [sys.executable, str(SCRIPT), "--query", "nodes", "--module-path", str(tmp_path),
              "--cert", str(cert), "--key", str(key), "--ca", str(secret)],
             capture_output=True, text=True, timeout=60,
-        )
+        check=False)
         body = json.loads(proc.stdout)
         assert body["ok"] is False
         assert body["error"] == "credentials unavailable"

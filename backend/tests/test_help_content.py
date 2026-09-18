@@ -16,9 +16,9 @@ import pytest
 os.environ["RACK_STATUS_DEMO"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
-from app import app
 import ai_chat
 import help_content
+from app import app
 
 
 @pytest.fixture

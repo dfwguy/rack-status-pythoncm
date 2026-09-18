@@ -39,7 +39,7 @@ HDR = "#       size         count      type   redop    root     time   algbw   b
 def _bash_major() -> int:
     """parser.sh uses declare -A / mapfile, so it needs bash 4+. macOS ships 3.2."""
     try:
-        out = subprocess.run(["bash", "-c", "echo ${BASH_VERSINFO[0]}"], capture_output=True, text=True, timeout=30)
+        out = subprocess.run(["bash", "-c", "echo ${BASH_VERSINFO[0]}"], capture_output=True, text=True, timeout=30, check=False)
         return int((out.stdout or "0").strip() or 0)
     except (OSError, ValueError):
         return 0

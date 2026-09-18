@@ -302,4 +302,3 @@ class TestTheOneDivergenceJsonSchemaCannotExpress:
         signal, so it has to say which sid rather than that something is wrong."""
         with pytest.raises(ValueError, match="same"):
             S.parse_document(self._duplicate_sid())
-

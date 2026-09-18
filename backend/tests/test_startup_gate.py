@@ -195,10 +195,9 @@ class TestTheCliCheckAgreesWithTheGate:
     def test_check_reports_the_same_prerequisites_it_would_refuse_for(self, deployment):
         """Two readers of one state; if they disagreed, `check` would bless a deployment that then
         refused to start."""
+        import os as _os
         import subprocess
         import sys
-
-        import os as _os
 
         got = subprocess.run(
             [sys.executable, "backend/cli.py", "check", "--json",
@@ -255,4 +254,3 @@ class TestAMultiWorkerServeIsRefused:
         message = str(caught.value)
         assert "cannot span" in message
         assert "--workers 1" in message
-

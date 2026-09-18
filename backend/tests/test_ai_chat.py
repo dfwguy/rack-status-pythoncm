@@ -9,8 +9,6 @@
 # its affiliates is strictly prohibited.
 """Tests for ai_chat.py module."""
 import os
-import json
-import tempfile
 
 import pytest
 

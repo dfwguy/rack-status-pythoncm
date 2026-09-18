@@ -35,7 +35,6 @@ from __future__ import annotations
 import re
 
 import pytest
-
 import web_auth
 from identity import testing
 

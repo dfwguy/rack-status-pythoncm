@@ -26,9 +26,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import audit  # noqa: E402
-from audit import actions as audit_actions  # noqa: E402
-from audit import reader  # noqa: E402
+import audit
+from audit import actions as audit_actions
+from audit import reader
 
 
 def _event(i: int, **over) -> str:
@@ -209,7 +209,7 @@ class TestTC14AndTC15TheNamesArePinned:
         """`audit.deep:*` is NVSwitch hardware auditing and shares nothing with the security
         trail. Two unrelated meanings under one prefix is the `/icons.svg` versus `/icons/`
         mistake; a grant on one must never imply the other."""
-        import authz.resources as resources
+        from authz import resources
 
         declared = resources.declared_types()
         assert "audit.trail" in declared
@@ -251,7 +251,7 @@ class TestTC22AndTheHonestyFields:
         200 with an empty list, because a fresh, healthy install is in exactly this state and a 404
         or 500 would make it look broken.
         """
-        app, tmp_path = deployment
+        app, _tmp_path = deployment
         client, _ = _client(app, "granted", grant=True)
         resp = client.get("/api/audit-trail")
         assert resp.status_code == 200
@@ -286,7 +286,7 @@ class TestTC22AndTheHonestyFields:
     def test_the_fields_endpoint_serves_the_filter_list(self, deployment):
         """Served rather than duplicated in the frontend: a hard-coded list is wrong the first
         time somebody adds a field, and the failure is a filter that silently does nothing."""
-        app, tmp_path = deployment
+        app, _tmp_path = deployment
         client, _ = _client(app, "granted", grant=True)
         body = client.get("/api/audit-trail/fields").get_json()
         assert set(body["filters"]) == set(reader.Filter.__dataclass_fields__)

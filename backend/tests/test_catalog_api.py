@@ -18,7 +18,6 @@ os.environ["RACK_STATUS_DEMO"] = "1"
 os.environ["RACK_EXEC_MODE"] = "local"
 
 from app import app
-
 from catalog import seed
 from catalog.store import TinyDBRepo, set_repo
 

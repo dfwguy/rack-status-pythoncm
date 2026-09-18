@@ -540,7 +540,7 @@ class TestLatencyBudget:
     @staticmethod
     def _p95(values: list[float]) -> float:
         ordered = sorted(values)
-        return ordered[min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1))))]
+        return ordered[min(len(ordered) - 1, round(0.95 * (len(ordered) - 1)))]
 
     @pytest.fixture
     def client(self, tmp_path, monkeypatch):

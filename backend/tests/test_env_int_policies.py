@@ -21,10 +21,9 @@ produce documented behaviour, not a different wrong number.
 """
 from __future__ import annotations
 
-import pytest
-
 import config_env
 import native_status
+import pytest
 import rack_locks
 import universal_parser
 

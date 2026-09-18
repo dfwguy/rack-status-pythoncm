@@ -89,7 +89,7 @@ class TestValidity:
     def test_operation_ids_are_unique(self, spec):
         seen: dict[str, str] = {}
         for path, methods in spec["paths"].items():
-            for method, op in methods.items():
+            for op in methods.values():
                 oid = op["operationId"]
                 assert oid not in seen, f"duplicate operationId {oid}: {seen.get(oid)} and {path}"
                 seen[oid] = path

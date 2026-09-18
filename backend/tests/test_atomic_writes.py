@@ -35,9 +35,8 @@ import re
 import stat
 from pathlib import Path
 
-import pytest
-
 import json_db
+import pytest
 
 BACKEND = Path(__file__).resolve().parents[1]
 
@@ -86,9 +85,12 @@ def _code_lines(path: Path) -> list[tuple[int, str]]:
         return []
     doc_lines: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
-            if isinstance(node.value.value, str):
-                doc_lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            doc_lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
     out = []
     for i, line in enumerate(text.splitlines(), 1):
         if i in doc_lines or line.strip().startswith("#"):
@@ -173,9 +175,8 @@ def test_the_lock_is_reentrant_within_a_thread(tmp_path):
     which is why this is a property rather than a note.
     """
     target = tmp_path / "state.json"
-    with json_db.exclusive_lock(target):
-        with json_db.exclusive_lock(target):
-            json_db.atomic_write_json(target, {"n": 1})
+    with json_db.exclusive_lock(target), json_db.exclusive_lock(target):
+        json_db.atomic_write_json(target, {"n": 1})
     assert target.is_file()
 
 

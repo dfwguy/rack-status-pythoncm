@@ -484,7 +484,7 @@ def test_repository_closes_sqlite_connections(tmp_path):
     assert fresh.state == "fresh"
     assert len(closes) == after_init + 4
 
-    leased2, acquired2 = repo.acquire_refresh_lease("cluster-a", "bcm", "owner-2", 30)
+    _leased2, acquired2 = repo.acquire_refresh_lease("cluster-a", "bcm", "owner-2", 30)
     assert acquired2
     failed = repo.commit_failure("cluster-a", "bcm", "owner-2", RuntimeError("boom"))
     assert failed.state == "stale"

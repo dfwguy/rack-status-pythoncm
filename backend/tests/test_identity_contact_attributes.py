@@ -16,9 +16,9 @@ requirement it broke rather than the function it broke.
 
 from __future__ import annotations
 
-import identity.bootstrap as bootstrap
 import identity.srp as srp_mod
 import pytest
+from identity import bootstrap
 from identity.models import (
     MAX_EMAIL,
     IdentityError,

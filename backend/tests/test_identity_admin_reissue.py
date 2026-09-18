@@ -34,9 +34,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from identity import bootstrap, srp  # noqa: E402
-from identity.models import Group, User  # noqa: E402
-from identity.store import IdentityStore  # noqa: E402
+from identity import bootstrap, srp
+from identity.models import Group, User
+from identity.store import IdentityStore
 
 
 @pytest.fixture

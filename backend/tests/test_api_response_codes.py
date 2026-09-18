@@ -87,7 +87,7 @@ class TestTheSpecDeclaresWhatTheGateCanReturn:
         # An import *statement*, not the phrase — the first version of this matched the docstring
         # that explains we do not do it, which is a neat demonstration of why substring checks on
         # source need anchoring.
-        real_import = re.compile(r"^\s*(?:import\s+app\b|from\s+app\s+import\b)", re.M)
+        real_import = re.compile(r"^\s*(?:import\s+app\b|from\s+app\s+import\b)", re.MULTILINE)
         assert not real_import.search(source), (
             "the generator must not import app — that is the deferred-lookup pattern "
             "core-designs.mdc bans and the meta-test rejects"

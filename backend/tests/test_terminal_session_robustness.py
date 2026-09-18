@@ -28,10 +28,8 @@ import queue
 import subprocess
 import time
 
-import pytest
-
-import app as A
 import api.terminal as T
+import pytest
 
 # These exercise a real pty, because the bug is in pty semantics -- a mock would have to encode the
 # EIO behaviour under test and would prove nothing. Some restricted environments cannot allocate
@@ -86,7 +84,7 @@ def _drain(q: queue.Queue) -> tuple[list[bytes], bool]:
 class TestWriteAfterTheShellExits:
     def test_a_keystroke_after_exit_does_not_raise(self):
         sess = _session(["true"])  # exits immediately
-        q = sess.subscribe()
+        sess.subscribe()  # the subscription is the point; the queue itself is not read
         # Let the child exit and the reader thread notice.
         for _ in range(100):
             if not sess.alive:

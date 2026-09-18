@@ -34,6 +34,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import yaml
@@ -152,7 +153,7 @@ class TestNoJobCallsAToolItsImageLacks:
     #: What `python3` each runtime base provides. Needed because the Dockerfile names a distro,
     #: not an interpreter, so "which Python does the image run" is knowledge that lives nowhere
     #: else in the tree — which is precisely why two 3.11-only imports reached customers.
-    RUNTIME_BASE_PYTHON = {
+    RUNTIME_BASE_PYTHON: ClassVar[dict[str, object]] = {
         "ubuntu:22.04": "3.10",
         "ubuntu:24.04": "3.12",
     }

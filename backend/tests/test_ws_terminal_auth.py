@@ -41,7 +41,6 @@ import api.terminal as terminal_module
 import audit
 import logging_config as lc
 import web_auth
-from app import app
 from audit import sink
 
 

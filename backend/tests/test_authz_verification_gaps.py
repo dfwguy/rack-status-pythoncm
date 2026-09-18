@@ -33,14 +33,15 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import audit.actions as audit_actions  # noqa: E402
-import authz.resources as resources  # noqa: E402
-from authz.policy import PolicyEngine  # noqa: E402
+import audit.actions as audit_actions
+from authz import resources
+from authz.policy import PolicyEngine
 
 ALICE = "user:alice"
 
@@ -98,7 +99,7 @@ class TestARackGrantDoesNotCoverItsNodes:
     templates would emit `slurm.node:…` or `report.node:…` and sail past it.
     """
 
-    RACK_ONLY = {
+    RACK_ONLY: ClassVar[dict[str, object]] = {
         "id": "rack-a01",
         "statements": [{
             "sid": "rack", "effect": "allow",

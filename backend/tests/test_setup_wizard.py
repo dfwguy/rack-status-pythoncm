@@ -33,14 +33,12 @@ from __future__ import annotations
 import os
 import stat
 
-import pytest
-
 import naming_propose
+import pytest
 import setup_state
 import ssh_key_store
 from catalog import models
 from catalog.store import TABLE_PROJECTS, get_repo
-
 
 # --- the trigger --------------------------------------------------------------------------------
 
@@ -212,7 +210,7 @@ def test_a_hostname_with_no_numbers_is_refused():
 def test_the_ambiguity_is_stated_rather_than_hidden():
     """A proposal presented as an answer is how a site ends up with the wrong templates."""
     result = naming_propose.propose("ink50-dh01-h15-15")
-    assert "caveat" in result and result["caveat"]
+    assert result.get("caveat")
 
 
 # --- the key file -------------------------------------------------------------------------------

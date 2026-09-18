@@ -201,12 +201,18 @@ python-lint:
     # Same pins as backend/requirements-dev.txt -- installed narrowly here because this job needs
     # no runtime dependencies, so keep the two in step when bumping either.
     - pip install -q ruff==0.16.0 pylint==4.0.7
-    - ruff check backend/ --exclude tests
-    # backend/tests stays excluded FOR NOW, and that is a gap worth naming rather than inheriting:
-    # nothing has ever linted the tests, so they carry 99 findings today (26 unsorted imports, 22
-    # stale `# noqa` that suppress rules which were never on, 14 subprocess calls without `check=`,
-    # 7 unused imports, and ~30 needing a judgement call). 63 are auto-fixable. Closing it is a
-    # separate commit -- gating it here today would just turn the job red.
+    # No `--exclude tests` any more: the whole of `backend/` is linted, tests included.
+    #
+    # That exclusion was the gap this job used to name, and naming it did not hold it: the
+    # comment recorded 99 findings and by the time anyone counted again there were 165. An
+    # ungated number does not stay still, because nothing makes a contributor look at it --
+    # every new test file could add violations for free and did. The 165 are fixed and the
+    # gate is on, which is the only version of this that stays fixed.
+    #
+    # Test code is not held to a lower standard than the code it checks: a test with a stale
+    # `# noqa`, an unsorted import block or a `subprocess.run` whose exit status nobody reads
+    # is a test that is harder to trust when it fails.
+    - ruff check backend/
     # Pylint runs only for what ruff structurally cannot see: cross-module duplicate code. Config
     # and the reasoning for every enabled/disabled check live in .pylintrc.
     - pylint --recursive=y backend
