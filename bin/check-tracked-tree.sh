@@ -156,8 +156,19 @@ if failures:
     for name, exc in failures:
         print(f"  {name}: {type(exc).__name__}: {exc}")
     print()
-    print("Most likely an import was committed without the module it names. Check for an untracked")
-    print("file: git status --short -- 'backend/**/*.py'")
+    # Two causes, and the hint used to name only the first — which sent the reader looking for an
+    # untracked file when the real answer was the interpreter. That matters now that this script
+    # runs on the image's Python (the `runtime-python-import` job) as well as on 3.12, because the
+    # second cause is the *only* one that job exists to catch.
+    print("Two things produce this:")
+    print()
+    print("  1. An import committed without the module it names. Check for an untracked file:")
+    print("       git status --short -- 'backend/**/*.py'")
+    print()
+    print(f"  2. A name this interpreter does not have. Running Python {sys.version.split()[0]};")
+    print("     the shipped container runs the `python3` of the Dockerfile's final stage, which is")
+    print("     older. `StrEnum` and `tomllib` are 3.11+, and both have shipped broken this way.")
+    print("     See backend/toml_compat.py for how the tree handles that split.")
     traceback.print_exception(type(failures[0][1]), failures[0][1], failures[0][1].__traceback__)
     sys.exit(1)
 

@@ -56,6 +56,40 @@ workflow:
 
 # ─── Lint ────────────────────────────────────────────────────────────────────
 
+# Does the code import on the Python the SHIPPED IMAGE runs?
+#
+# Nothing else in this pipeline asks. `Dockerfile`'s final stage is `ubuntu:22.04`, whose `python3`
+# is **3.10**, while every job here and every developer machine is 3.12. `backend/toml_compat.py`
+# names the gap exactly: "`local-vs-ci-tree.mdc` with the image as a third tree nobody tests."
+#
+# Two defects have now shipped through it, both invisible to a green pipeline:
+#
+#   * `import tomllib` (stdlib in 3.11) — the NPI catalog import silently failed on every container
+#     deployment, and `POST /api/catalog/npi-tools/import` answered 500;
+#   * `from enum import StrEnum` (3.11) — `cli.py check` died on an air-gapped install at a
+#     customer site, before the product could report anything at all.
+#
+# Each was fixed where it was found. This asks the question that would have caught both *before*
+# they shipped, and it is cheap: `check-tracked-tree.sh` imports all ~179 backend modules in about
+# three seconds, and a module-scope import of a stdlib name that 3.10 lacks is the whole failure
+# mode. Runtime dependencies only — no dev tooling, because nothing here runs a test.
+#
+# This does not replace `python-test`. The suite still runs on 3.12, which is what the product
+# targets; this job answers the narrower question of whether the container can start.
+runtime-python-import:
+  stage: lint
+  # Pinned to the interpreter `ubuntu:22.04` provides. If the Dockerfile's base moves, this image
+  # must move with it — `test_ci_job_tooling.py` fails the build if the two disagree, because a
+  # job testing the wrong version is worse than no job: it reports safety it never checked.
+  image: python:3.10-slim
+  cache:
+    key: pip-310-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .pip-cache/
+  script:
+    - pip install -q -r backend/requirements.txt
+    - bash bin/check-tracked-tree.sh
+
 # The generated sources of truth, BUILT BEFORE ANYTHING CONSUMES THEM.
 #
 # `docs/action-vocabulary.json` is derived from the live action registry, so it goes stale the moment

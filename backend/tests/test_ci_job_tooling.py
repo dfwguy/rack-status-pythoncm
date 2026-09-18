@@ -149,6 +149,48 @@ class TestNoJobCallsAToolItsImageLacks:
             "bin/bootstrap-project-scripts.sh, which requires it"
         )
 
+    #: What `python3` each runtime base provides. Needed because the Dockerfile names a distro,
+    #: not an interpreter, so "which Python does the image run" is knowledge that lives nowhere
+    #: else in the tree — which is precisely why two 3.11-only imports reached customers.
+    RUNTIME_BASE_PYTHON = {
+        "ubuntu:22.04": "3.10",
+        "ubuntu:24.04": "3.12",
+    }
+
+    def test_a_job_imports_the_tree_on_the_python_the_image_actually_runs(self):
+        """The image is a third tree nobody tested, and it cost two shipped defects.
+
+        `tomllib` (stdlib in 3.11) broke the NPI catalog import on every container deployment, and
+        `from enum import StrEnum` (3.11) killed `cli.py check` on an air-gapped install at a
+        customer site. Both passed CI, because CI is 3.12 and the shipped image is 3.10.
+
+        This asserts the job exists **and** that its interpreter matches the Dockerfile's final
+        base, because those drift apart silently in either direction: move the base to 24.04 and
+        the job keeps testing 3.10, which is merely wasteful; pin the job to 3.12 and it reports a
+        safety it never checked, which is worse than having no job at all.
+        """
+        job = _pipeline().get("runtime-python-import")
+        assert job, (
+            "no job imports the tree on the image's Python. `Dockerfile`'s final stage runs an "
+            "older interpreter than every job in this pipeline, and two 3.11-only imports have "
+            "already reached customers through that gap"
+        )
+
+        bases = re.findall(r"^FROM\s+(\S+)", (REPO_ROOT / "Dockerfile").read_text(), re.MULTILINE)
+        runtime_base = bases[-1]  # the final stage is the one that ships
+        expected = self.RUNTIME_BASE_PYTHON.get(runtime_base)
+        assert expected, (
+            f"Dockerfile's runtime base is {runtime_base!r} and this test does not know which "
+            f"Python it provides. Add it to RUNTIME_BASE_PYTHON so the check below can hold."
+        )
+
+        image = job.get("image")
+        image_ref = image if isinstance(image, str) else (image or {}).get("name", "")
+        assert f"python:{expected}" in image_ref, (
+            f"runtime-python-import runs on {image_ref!r}, but the shipped image ({runtime_base}) "
+            f"provides Python {expected}."
+        )
+
     def test_the_gate_uses_the_generators_own_check_mode(self):
         """The specific repair, pinned. `--check` prints a unified diff, which is the only reason
         `git diff` was reached for; going back to git would reintroduce the failure exactly."""
