@@ -610,7 +610,7 @@ def _cluster_probe_bcm_cmsh_version() -> tuple[str, str]:
 
 
 def _cluster_squeue_overview_block() -> dict[str, object]:
-    """Head-only ``squeue`` (same as ``/api/slurm-squeue``); never targets compute nodes."""
+    """Head-only ``squeue`` (same as ``/api/scheduler-jobs``); never targets compute nodes."""
     if os.environ.get("RACK_SLURM_SQUEUE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return {
             "ok": False,

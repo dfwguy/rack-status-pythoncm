@@ -1248,25 +1248,7 @@
   "variant": "sync"
  },
  {
-  "endpoint": "slurm_ops.api_slurm_drain",
-  "method": "POST",
-  "action": "scheduler.node:drain",
-  "variant": "sync"
- },
- {
   "endpoint": "slurm_ops.api_slurm_job_log_path",
-  "method": "GET",
-  "action": "scheduler.job:read",
-  "variant": "sync"
- },
- {
-  "endpoint": "slurm_ops.api_slurm_job_log_path",
-  "method": "GET",
-  "action": "scheduler.job:read",
-  "variant": "sync"
- },
- {
-  "endpoint": "slurm_ops.api_slurm_job_stdout_content",
   "method": "GET",
   "action": "scheduler.job:read",
   "variant": "sync"
@@ -1284,27 +1266,9 @@
   "variant": "sync"
  },
  {
-  "endpoint": "slurm_ops.api_slurm_job_stdout_download",
-  "method": "GET",
-  "action": "scheduler.job:read",
-  "variant": "sync"
- },
- {
   "endpoint": "slurm_ops.api_slurm_scancel",
   "method": "POST",
   "action": "scheduler.job:cancel",
-  "variant": "sync"
- },
- {
-  "endpoint": "slurm_ops.api_slurm_scancel",
-  "method": "POST",
-  "action": "scheduler.job:cancel",
-  "variant": "sync"
- },
- {
-  "endpoint": "slurm_ops.api_slurm_scontrol_show_job",
-  "method": "GET",
-  "action": "scheduler.job:read",
   "variant": "sync"
  },
  {
@@ -1320,18 +1284,6 @@
   "variant": "sync"
  },
  {
-  "endpoint": "slurm_ops.api_slurm_undrain",
-  "method": "POST",
-  "action": "scheduler.node:undrain",
-  "variant": "sync"
- },
- {
-  "endpoint": "slurm_queries.api_slurm_sacct_recent",
-  "method": "GET",
-  "action": "scheduler.queue:list",
-  "variant": "sync"
- },
- {
   "endpoint": "slurm_queries.api_slurm_sacct_recent",
   "method": "GET",
   "action": "scheduler.queue:list",
@@ -1339,18 +1291,6 @@
  },
  {
   "endpoint": "slurm_queries.api_slurm_sinfo_r",
-  "method": "GET",
-  "action": "scheduler.queue:list",
-  "variant": "sync"
- },
- {
-  "endpoint": "slurm_queries.api_slurm_sinfo_r",
-  "method": "GET",
-  "action": "scheduler.queue:list",
-  "variant": "sync"
- },
- {
-  "endpoint": "slurm_queries.api_slurm_squeue",
   "method": "GET",
   "action": "scheduler.queue:list",
   "variant": "sync"

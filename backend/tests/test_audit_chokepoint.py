@@ -268,7 +268,7 @@ class TestTC27DecisionNotEvaluated:
     def test_decision_is_not_evaluated_for_both_outcomes(self, client, tmp_path):
         """AC-33, asserting the event *count* too so a deferred refusal cannot pass vacuously."""
         client.post(CANONICAL_ENDPOINT, json={"rack": "demo"})
-        client.post("/api/slurm-drain", json={})
+        client.post("/api/scheduler-drain", json={})
         audit.flush()
         events = _events(tmp_path)
         assert len(events) == 2, f"expected two events, got {len(events)}"

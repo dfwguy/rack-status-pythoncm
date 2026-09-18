@@ -283,7 +283,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
               openText("Slurm scancel", "No active job id for this rack (last_job missing or placeholder).", true);
               return;
             }
-            await runSyncJson("Slurm scancel", "/api/slurm-scancel", { rack, job_id: jid });
+            await runSyncJson("Slurm scancel", "/api/scheduler-cancel", { rack, job_id: jid });
           }}
         />
         <ActionCard
@@ -294,7 +294,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
           buttonLabel="Drain"
           disabled={disabled}
           selectedNodes={selectedNodes}
-          onRun={() => runSyncJson("Slurm drain", "/api/slurm-drain", slurmTargetBody(rack, selectedNodes, naming))}
+          onRun={() => runSyncJson("Slurm drain", "/api/scheduler-drain", slurmTargetBody(rack, selectedNodes, naming))}
         />
         <ActionCard
           title="Undrain Nodes"
@@ -304,7 +304,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
           buttonLabel="Undrain"
           disabled={disabled}
           selectedNodes={selectedNodes}
-          onRun={() => runSyncJson("Slurm undrain", "/api/slurm-undrain", slurmTargetBody(rack, selectedNodes, naming))}
+          onRun={() => runSyncJson("Slurm undrain", "/api/scheduler-resume", slurmTargetBody(rack, selectedNodes, naming))}
         />
       </ActionCardGrid>
 

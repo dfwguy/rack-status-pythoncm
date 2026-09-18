@@ -14,7 +14,7 @@
  *
  * Only sources that genuinely exist are wired. Nothing here is generated.
  *
- * 1. **Slurm node state changes** — ``GET /api/slurm-sinfo-r`` runs ``sinfo -R --long`` on
+ * 1. **Slurm node state changes** — ``GET /api/scheduler-node-reasons`` runs ``sinfo -R --long`` on
  *    the head node and returns the reason, the user who set it, the timestamp, the resulting
  *    state and the node list for every drained / down node ("Prolog error", "Not responding",
  *    thermal drains, ...). Parsed with the existing ``parseSinfoRStdout`` and coloured with
@@ -156,7 +156,7 @@ export function EventsView() {
     setSinfoLoading(true);
     setSinfoError("");
     try {
-      const { res, data } = await fetchSlurmJson("/api/slurm-sinfo-r");
+      const { res, data } = await fetchSlurmJson("/api/scheduler-node-reasons");
       setSinfoCmd(String(data.command_display || ""));
       if (!res.ok || data.ok === false) {
         setSinfoStdout("");

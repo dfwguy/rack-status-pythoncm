@@ -45,9 +45,9 @@ export type SlurmCmdJson = {
   command_display?: string;
   returncode?: number;
   job_id?: string;
-  /** /api/slurm-sacct-recent */
+  /** /api/scheduler-history */
   jobs?: SlurmSacctJob[];
-  /** /api/slurm-job-log-path */
+  /** /api/scheduler-job-log-path */
   path?: string;
   source?: string;
 };

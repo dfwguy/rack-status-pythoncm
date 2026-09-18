@@ -71,7 +71,7 @@ export function SinfoPanel({ active, tableMaxHeight = 480, searchSeed = "" }: Si
     setLoading(true);
     resetBody();
     try {
-      const { res, data } = await fetchSlurmJson("/api/slurm-sinfo-r");
+      const { res, data } = await fetchSlurmJson("/api/scheduler-node-reasons");
       setCmd(data.command_display || "");
       if (!res.ok) {
         setBannerErr(data.error || `HTTP ${res.status}`);

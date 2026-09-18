@@ -37,7 +37,6 @@ _logger = logging.getLogger(__name__)
 bp = Blueprint("slurm_queries", __name__, url_prefix="")
 
 
-@bp.route("/api/slurm-squeue", methods=["GET"])
 @bp.route("/api/scheduler-jobs", methods=["GET"])
 @action(get="scheduler.queue:list")
 def api_slurm_squeue():
@@ -51,7 +50,6 @@ def api_slurm_squeue():
     return jsonify(result)
 
 
-@bp.route("/api/slurm-sacct-recent", methods=["GET"])
 @bp.route("/api/scheduler-history", methods=["GET"])
 @action(get="scheduler.queue:list")
 def api_slurm_sacct_recent():
@@ -71,7 +69,6 @@ def api_slurm_sacct_recent():
     return jsonify(result)
 
 
-@bp.route("/api/slurm-sinfo-r", methods=["GET"])
 @bp.route("/api/scheduler-node-reasons", methods=["GET"])
 @action(get="scheduler.queue:list")
 def api_slurm_sinfo_r():

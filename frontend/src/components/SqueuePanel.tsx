@@ -89,7 +89,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
     setLoading(true);
     resetBody();
     try {
-      const { res, data } = await fetchSlurmJson("/api/slurm-squeue");
+      const { res, data } = await fetchSlurmJson("/api/scheduler-jobs");
       setCmd(data.command_display || "");
       if (!res.ok) {
         setBannerErr(data.error || `HTTP ${res.status}`);
@@ -134,7 +134,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
     setScontrolErr(false);
     try {
       const qs = new URLSearchParams({ job_id: jobId });
-      const { res, data } = await fetchSlurmJson(`/api/slurm-scontrol-show-job?${qs}`);
+      const { res, data } = await fetchSlurmJson(`/api/scheduler-job-detail?${qs}`);
       const head =
         (data.error && (!res.ok || data.ok === false) ? `${String(data.error)}\n\n` : "") +
         (data.command_display ? `${String(data.command_display)}\n\n` : "");
@@ -154,7 +154,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
       setTailBusyJob(jobId);
       try {
         const qs = new URLSearchParams({ job_id: jobId });
-        const { res, data } = await fetchSlurmJson(`/api/slurm-scontrol-show-job?${qs}`);
+        const { res, data } = await fetchSlurmJson(`/api/scheduler-job-detail?${qs}`);
         const showBlock = String(data.stdout || "") + (data.stderr ? `\nstderr:\n${data.stderr}` : "");
         if (!res.ok || data.ok === false) {
           window.alert((data.error || "scontrol show job failed") + "\n\n" + formatSlurmCmdDetail(data));
@@ -186,7 +186,7 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
     async (jobId: string) => {
       setScancelBusy(true);
       try {
-        const res = await apiFetch("/api/slurm-scancel", {
+        const res = await apiFetch("/api/scheduler-cancel", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",

@@ -71,7 +71,6 @@ def _slurm_nodename_target_from_body(body: dict) -> tuple[str | None, str | None
     return target, None
 
 
-@bp.route("/api/slurm-drain", methods=["POST"])
 @bp.route("/api/scheduler-drain", methods=["POST"])
 @action("scheduler.node:drain")
 def api_slurm_drain():
@@ -122,7 +121,6 @@ def api_slurm_drain():
     return jsonify(payload), (200 if ok else 502)
 
 
-@bp.route("/api/slurm-undrain", methods=["POST"])
 @bp.route("/api/scheduler-resume", methods=["POST"])
 @action("scheduler.node:undrain")
 def api_slurm_undrain():
@@ -209,7 +207,6 @@ def api_slurm_undrain():
     return jsonify(payload), (200 if ok else 502)
 
 
-@bp.route("/api/slurm-job-log-path", methods=["GET"])
 @bp.route("/api/scheduler-job-log-path", methods=["GET"])
 @action(get="scheduler.job:read")
 def api_slurm_job_log_path():
@@ -232,7 +229,6 @@ def api_slurm_job_log_path():
     return jsonify({"ok": True, "job_id": _slurm_job_base_id(job_id), "path": path, "source": source})
 
 
-@bp.route("/api/slurm-scancel", methods=["POST"])
 @bp.route("/api/scheduler-cancel", methods=["POST"])
 @action("scheduler.job:cancel")
 def api_slurm_scancel():
@@ -279,7 +275,6 @@ def api_slurm_scancel():
     return jsonify(payload), (200 if ok else 502)
 
 
-@bp.route("/api/slurm-scontrol-show-job", methods=["GET"])
 @bp.route("/api/scheduler-job-detail", methods=["GET"])
 @action(get="scheduler.job:read")
 def api_slurm_scontrol_show_job():
@@ -309,7 +304,6 @@ def api_slurm_scontrol_show_job():
     return jsonify(payload), (200 if ok else 502)
 
 
-@bp.route("/api/slurm-job-stdout-content", methods=["GET"])
 @bp.route("/api/scheduler-job-output", methods=["GET"])
 @action(get="scheduler.job:read")
 def api_slurm_job_stdout_content():
@@ -337,7 +331,7 @@ def api_slurm_job_stdout_content():
                 "size_bytes": sz,
                 "filename": lp.name,
                 "max_inline_bytes": max_inline,
-                "download_hint": "Use GET /api/slurm-job-stdout-download with the same query parameters.",
+                "download_hint": "Use GET /api/scheduler-job-output-download with the same query parameters.",
             }
         )
     text, _meta = host_exec.read_text(lp, whole_bytes=max_inline)
@@ -353,11 +347,10 @@ def api_slurm_job_stdout_content():
     )
 
 
-@bp.route("/api/slurm-job-stdout-download", methods=["GET"])
 @bp.route("/api/scheduler-job-output-download", methods=["GET"])
 @action(get="scheduler.job:read")
 def api_slurm_job_stdout_download():
-    """Download job stdout file (same path rules as ``/api/slurm-job-stdout-content``)."""
+    """Download job stdout file (same path rules as ``/api/scheduler-job-output``)."""
     path_raw = (request.args.get("path") or "").strip()
     if not path_raw:
         return jsonify({"ok": False, "error": "path is required"}), 400

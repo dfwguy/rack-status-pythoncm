@@ -209,7 +209,7 @@ def test_a_missing_cluster_is_unavailable_not_a_server_fault(unconfigured, monke
 
     monkeypatch.setitem(app_module.app.config, "PROPAGATE_EXCEPTIONS", False)
     with app_module.app.test_client() as client:
-        resp = client.get("/api/slurm-squeue")
+        resp = client.get("/api/scheduler-jobs")
     assert resp.status_code == 503, resp.get_data(as_text=True)[:200]
     assert "RACK_SSH_HOST" in resp.get_json()["error"]
 

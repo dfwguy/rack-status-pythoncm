@@ -1168,7 +1168,7 @@ _LAKE_CAPTURE_SKIP = frozenset({
     "/api/metrics/health", "/api/lake/health", "/api/observability/health",
 })
 # Read-only by verb but a deliberate operator action, so worth keeping even in "actions" mode.
-_LAKE_CAPTURE_GET_ALLOW = ("/api/hw-check", "/api/slurm-", "/api/history/capture-job",
+_LAKE_CAPTURE_GET_ALLOW = ("/api/hw-check", "/api/scheduler-", "/api/history/capture-job",
                            "/api/rack-log-content", "/api/parser-results", "/api/tools/")
 _LAKE_BODY_MAX = 64 * 1024
 

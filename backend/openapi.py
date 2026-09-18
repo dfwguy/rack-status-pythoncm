@@ -286,6 +286,35 @@ def _tag_for(path: str, family_counts: dict[str, int]) -> str:
     return "general"
 
 
+def _fold_lonely_tags(paths: dict[str, Any], tags_seen: set[str]) -> set[str]:
+    """Move a tag holding exactly one operation into ``general``.
+
+    A tag with one member is not grouping, it is renaming -- which is the thing the tagging
+    is here to avoid, and which `test_tags_group_rather_than_naming_every_endpoint` asserts
+    against. That invariant used to hold by luck: whether a domain bucket had company
+    depended on which unrelated endpoints happened to fall into it, so removing two routes
+    elsewhere could strand a third. It did exactly that when the legacy `slurm-drain` and
+    `slurm-undrain` paths were retired and left `bmc-recovery-async` alone in `remediation`.
+
+    Enforcing it here means the generator cannot emit a document the test would reject, so a
+    future route change fails in review rather than in CI on an unrelated branch.
+    """
+    counts: dict[str, int] = {}
+    for ops in paths.values():
+        for op in ops.values():
+            if isinstance(op, dict):
+                for tag in op.get("tags") or ():
+                    counts[tag] = counts.get(tag, 0) + 1
+    lonely = {tag for tag, n in counts.items() if n == 1 and tag != "general"}
+    if not lonely:
+        return tags_seen
+    for ops in paths.values():
+        for op in ops.values():
+            if isinstance(op, dict) and set(op.get("tags") or ()) & lonely:
+                op["tags"] = ["general"]
+    return (tags_seen - lonely) | {"general"}
+
+
 def _operation_slug(path: str) -> str:
     """A path reduced to an identifier fragment, for disambiguating an aliased endpoint."""
     return re.sub(r"[^A-Za-z0-9]+", "_", path.strip("/")).strip("_").lower()
@@ -377,6 +406,8 @@ def build_spec(app: Any, *, version: str = "", server_url: str = "") -> dict[str
                     ),
                 }
             entry[method.lower()] = operation
+
+    tags_seen = _fold_lonely_tags(paths, tags_seen)
 
     spec: dict[str, Any] = {
         "openapi": OPENAPI_VERSION,

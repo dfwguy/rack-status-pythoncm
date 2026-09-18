@@ -24,6 +24,12 @@
   ]
  },
  {
+  "rule": "/api/about",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
   "rule": "/api/ai/chat",
   "methods": [
    "POST"
@@ -91,6 +97,24 @@
   ]
  },
  {
+  "rule": "/api/audit-trail",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/audit-trail/export",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/audit-trail/fields",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
   "rule": "/api/auth-check",
   "methods": [
    "GET"
@@ -134,6 +158,12 @@
  },
  {
   "rule": "/api/bmc-recovery-async",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/boards/import",
   "methods": [
    "POST"
   ]
@@ -240,6 +270,13 @@
    "DELETE",
    "GET",
    "PUT"
+  ]
+ },
+ {
+  "rule": "/api/catalog/projects/<doc_id>/scripts",
+  "methods": [
+   "GET",
+   "POST"
   ]
  },
  {
@@ -484,6 +521,12 @@
  },
  {
   "rule": "/api/identity/users/<login>/disabled",
+  "methods": [
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/identity/users/<login>/email-verified",
   "methods": [
    "PUT"
   ]
@@ -742,6 +785,58 @@
   ]
  },
  {
+  "rule": "/api/policies",
+  "methods": [
+   "GET",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/policies/<policy_id>",
+  "methods": [
+   "DELETE",
+   "GET",
+   "PUT"
+  ]
+ },
+ {
+  "rule": "/api/policies/<policy_id>/attachments",
+  "methods": [
+   "GET",
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/policies/<policy_id>/attachments/<path:subject>",
+  "methods": [
+   "DELETE"
+  ]
+ },
+ {
+  "rule": "/api/policies/preview",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/policies/schema",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/policies/subjects/<path:subject>",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/policies/vocabulary",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
   "rule": "/api/post-run-node-report",
   "methods": [
    "GET"
@@ -978,6 +1073,66 @@
   ]
  },
  {
+  "rule": "/api/scheduler-cancel",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/scheduler-drain",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/scheduler-history",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/scheduler-job-detail",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/scheduler-job-log-path",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/scheduler-job-output",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/scheduler-job-output-download",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/scheduler-jobs",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/scheduler-node-reasons",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/api/scheduler-resume",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
   "rule": "/api/services-restart",
   "methods": [
    "POST"
@@ -997,63 +1152,33 @@
   ]
  },
  {
-  "rule": "/api/slurm-drain",
+  "rule": "/api/setup/complete",
   "methods": [
    "POST"
   ]
  },
  {
-  "rule": "/api/slurm-job-log-path",
-  "methods": [
-   "GET"
-  ]
- },
- {
-  "rule": "/api/slurm-job-stdout-content",
-  "methods": [
-   "GET"
-  ]
- },
- {
-  "rule": "/api/slurm-job-stdout-download",
-  "methods": [
-   "GET"
-  ]
- },
- {
-  "rule": "/api/slurm-sacct-recent",
-  "methods": [
-   "GET"
-  ]
- },
- {
-  "rule": "/api/slurm-scancel",
+  "rule": "/api/setup/naming/propose",
   "methods": [
    "POST"
   ]
  },
  {
-  "rule": "/api/slurm-scontrol-show-job",
-  "methods": [
-   "GET"
-  ]
- },
- {
-  "rule": "/api/slurm-sinfo-r",
-  "methods": [
-   "GET"
-  ]
- },
- {
-  "rule": "/api/slurm-squeue",
-  "methods": [
-   "GET"
-  ]
- },
- {
-  "rule": "/api/slurm-undrain",
+  "rule": "/api/setup/reopen",
   "methods": [
    "POST"
+  ]
+ },
+ {
+  "rule": "/api/setup/ssh-key",
+  "methods": [
+   "POST"
+  ]
+ },
+ {
+  "rule": "/api/setup/status",
+  "methods": [
+   "GET"
   ]
  },
  {
@@ -1305,6 +1430,18 @@
   "rule": "/api/workflows/generate-mermaid",
   "methods": [
    "POST"
+  ]
+ },
+ {
+  "rule": "/docs/",
+  "methods": [
+   "GET"
+  ]
+ },
+ {
+  "rule": "/docs/<path:filename>",
+  "methods": [
+   "GET"
   ]
  },
  {

@@ -777,12 +777,12 @@ The groups below highlight the release-candidate interfaces; consult the live AP
 | GET | `/api/cluster-overview/live` | Lightweight live Slurm overlay. |
 | GET | `/api/cluster-health` | Connection and cluster reachability. |
 | POST | `/api/cluster-health/reconnect` | Reset connection state and retry. |
-| GET | `/api/slurm-squeue` | Current queue. |
-| GET | `/api/slurm-sacct-recent` | Recent accounting. |
-| GET | `/api/slurm-scontrol-show-job` | Scheduler job detail. |
-| POST | `/api/slurm-scancel` | Guarded cancellation. |
-| POST | `/api/slurm-drain` | Drain selected target. |
-| POST | `/api/slurm-undrain` | Resume selected target. |
+| GET | `/api/scheduler-jobs` | Current queue. |
+| GET | `/api/scheduler-history` | Recent accounting. |
+| GET | `/api/scheduler-job-detail` | Scheduler job detail. |
+| POST | `/api/scheduler-cancel` | Guarded cancellation. |
+| POST | `/api/scheduler-drain` | Drain selected target. |
+| POST | `/api/scheduler-resume` | Resume selected target. |
 | GET | `/api/metrics/catalog` | Native chart catalog. |
 | GET | `/api/metrics/health` | VictoriaMetrics health/series summary. |
 | GET | `/api/metrics/chart/<chart-id>` | Chart.js-ready series with rack/node/SU filters. |
