@@ -99,6 +99,28 @@ export const completeSetup = (project: string) =>
 
 export const reopenSetup = () => apiJson<{ setup: SetupStatus }>("/api/setup/reopen", post({}));
 
+/** Sending the shipped script layers to the head — the step before a project's own copy. */
+export interface ScriptDeployResult {
+  ok: boolean;
+  dry_run: boolean;
+  dest: string;
+  files: number;
+  bytes: number;
+  layers: string[];
+  chunks: number;
+  seconds?: number;
+  detail?: string;
+  error?: string;
+  layout: ScriptLayout;
+}
+
+/** What a deploy would send. Answers without contacting the cluster, so it works before SSH does. */
+export const previewScriptDeploy = () =>
+  apiJson<ScriptDeployResult>("/api/scripts/deploy-preview");
+
+export const deployScripts = () =>
+  apiJson<ScriptDeployResult>("/api/scripts/deploy", post({}));
+
 export interface ScriptBootstrapResult {
   project: string;
   platform: string;

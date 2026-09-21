@@ -53,6 +53,14 @@ export interface WizardDraft {
   remoteBasePath: string;
   logDir: string;
   // Step 5 — scripts
+  /**
+   * Send the shipped script layers to the head node.
+   *
+   * Ordered before `bootstrapScripts` because it is its prerequisite: a project's copy is
+   * *composed from* the shared and platform layers, so on a head that has never had a
+   * deploy there is nothing to compose from and the bootstrap fails looking for defaults.
+   */
+  deployScripts: boolean;
   bootstrapScripts: boolean;
 }
 
@@ -64,6 +72,14 @@ export const STEP_TITLES = [
   "Scripts",
   "Review",
 ] as const;
+
+/**
+ * The two halves of the Scripts step, in the order they must run.
+ *
+ * Deploy puts the shipped layers on the head; bootstrap composes this project's copy out of
+ * them. Reversing them fails on a fresh head, so the UI does not offer the choice.
+ */
+export const SCRIPT_STAGES = ["deploy", "bootstrap"] as const;
 
 export const STEP_DESCRIPTIONS = [
   "Who this deployment is for",
@@ -98,6 +114,7 @@ export function emptyDraft(): WizardDraft {
     sshKeyPath: "",
     remoteBasePath: "/home/cmsupport/nvis-rack-status",
     logDir: "",
+    deployScripts: true,
     bootstrapScripts: true,
   };
 }

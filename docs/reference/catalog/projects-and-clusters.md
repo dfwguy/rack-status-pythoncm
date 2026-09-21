@@ -55,8 +55,9 @@ cluster, never inferred from the cluster manager.
 Every value here must be a kind `schedulers.factory` can build — a cluster naming one it cannot
 would fail at launch, long after the record was saved, so the model refuses it at write time.
 
-`pythoncm` additionally needs `bin/scripts/nvis_pythoncm_exec.py` deployed to the head
-(`bin/deploy-scripts.sh`); `POST /api/scheduler-probe` answers whether it is reachable before a
+`pythoncm` additionally needs `bin/scripts/nvis_pythoncm_exec.py` on the head — the setup
+wizard's Scripts step sends it, as does "Deploy scripts to head" on this screen and
+`bin/deploy-scripts.sh`. `GET /api/scheduler-probe` answers whether it is reachable before a
 launch depends on it.
 
 ### naming

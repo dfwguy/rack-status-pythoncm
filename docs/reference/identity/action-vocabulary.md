@@ -10,7 +10,7 @@ Every action the product declares, which is what a policy's `actions` field may 
 **Generated from the live registry** — a route without a declaration cannot appear here,
 and the build gate in `backend/tests/test_action_coverage.py` fails if one exists.
 
-185 actions across 54 services: 63 reads and 122 mutations.
+187 actions across 55 services: 63 reads and 124 mutations.
 
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
@@ -37,6 +37,7 @@ case does not match.
 | [`catalog.board`](#catalogboard) | singleton | 1 | Importing a shared board bundle — the one gated half of board sharing. |
 | [`catalog.platform`](#catalogplatform) | instance | 5 | — |
 | [`catalog.project`](#catalogproject) | instance | 7 | Giving a project its own copy of the scripts, and telling it apart from the defaults. |
+| [`catalog.scripts`](#catalogscripts) | singleton | 2 | Send the shipped script layers to the cluster head. |
 | [`catalog.tool`](#catalogtool) | instance | 6 | — |
 | [`cluster`](#cluster) | singleton | 2 | Cluster-link reachability for the SPA connection banner. |
 | [`comments`](#comments) | singleton | 3 | Reading and writing operator comments on racks and multirack runs. |
@@ -260,6 +261,19 @@ Identified by `doc_id`, `id`, `project` on the request.
 | `catalog.project:read` | read | instance | `GET catalog.get_project` |
 | `catalog.project:read_scripts` | mutate | instance | `GET project_scripts.api_project_scripts_status` |
 | `catalog.project:update` | mutate | instance | `PUT catalog.update_project` |
+
+## `catalog.scripts`
+
+Send the shipped script layers to the cluster head.
+
+Owned by `backend/api/script_deploy.py`.
+
+**One instance per deployment.** A policy names it as `catalog.scripts:default`; there is no id to narrow a grant to.
+
+| Action | Kind | Scope | Routes |
+|---|---|---|---|
+| `catalog.scripts:deploy` | mutate | singleton | `POST script_deploy.api_script_deploy` |
+| `catalog.scripts:preview_deploy` | mutate | singleton | `GET script_deploy.api_script_deploy_preview` |
 
 ## `catalog.tool`
 

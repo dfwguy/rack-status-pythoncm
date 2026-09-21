@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useState, lazy, Suspense } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import { Plus, Pencil, Trash2, CheckCircle2, Server, FolderKanban, Wand2, FileCode2 } from "lucide-react";
+import { Plus, Pencil, Trash2, CheckCircle2, Server, FolderKanban, Wand2, FileCode2, UploadCloud } from "lucide-react";
 import {
   Banner,
   Button as KuiButton,
@@ -39,7 +39,7 @@ import {
 import { useActiveCluster } from "../context/ActiveClusterContext";
 import type { CatalogVocab, Cluster, Platform, Project } from "../types/catalog";
 import { intOr } from "../lib/catalogForm";
-import { bootstrapProjectScripts } from "../services/setupService";
+import { bootstrapProjectScripts, deployScripts } from "../services/setupService";
 
 // Lazy AND conditionally rendered: the wizard is a whole second form, and this screen is on the
 // initial route. Loading it for everyone to serve the rare "set up another cluster" click is
@@ -74,6 +74,7 @@ export function ProjectsView() {
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [scriptNote, setScriptNote] = useState("");
+  const [deploying, setDeploying] = useState(false);
   const [vocab, setVocab] = useState<CatalogVocab | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -194,6 +195,28 @@ export function ProjectsView() {
     }
   };
 
+  /**
+   * Send this release's shipped scripts to the head node.
+   *
+   * Cluster-wide, not per-project, which is why it sits in the header rather than on a
+   * project row: it writes the shared layers every project on this server composes from.
+   * Separate from "Update scripts" because that pulls a *default* forward into one
+   * project's copy, and on a head that has never had a deploy there is no default to pull.
+   */
+  const onDeployScripts = async () => {
+    setError("");
+    setScriptNote("");
+    setDeploying(true);
+    try {
+      const result = await deployScripts();
+      setScriptNote(`Sent ${result.files} shipped file(s) to ${result.dest}.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeploying(false);
+    }
+  };
+
   if (wizardOpen) {
     return (
       <Suspense fallback={<Box sx={{ p: 4 }} />}>
@@ -218,6 +241,15 @@ export function ProjectsView() {
           <Flex gap="2">
             {/* The same wizard the first login runs. A second cluster is the same job as the
                 first one, and an operator who has done it once already knows this screen. */}
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<UploadCloud size={16} />}
+              disabled={deploying}
+              onClick={() => void onDeployScripts()}
+            >
+              {deploying ? "Deploying…" : "Deploy scripts to head"}
+            </Button>
             <Button variant="outlined" size="small" startIcon={<Wand2 size={16} />} onClick={() => setWizardOpen(true)}>
               Setup wizard
             </Button>

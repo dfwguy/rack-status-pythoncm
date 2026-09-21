@@ -1,0 +1,207 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+# Author: Rafael M. Koike & Cursor Agent ("Ada")
+"""Push the app's own `bin/scripts/` to the cluster head, over the app's connection.
+
+`bin/deploy-scripts.sh` has done this since the beginning and still does, but it runs from a
+developer's workstation with `rsync` and a single `ssh` hop. That is the wrong shape for the
+first-run wizard, for two reasons that are not about convenience:
+
+- **The operator setting up an appliance has no workstation in the path.** They have a
+  browser pointed at the container. Telling them to go and run a shell script is where a
+  first-run flow stops being a first-run flow.
+- **`rsync` cannot reach a head that takes more than one hop.** Nscale TX is Teleport, then
+  a password gate, then the BCM head. Our `Connection` composes that chain already; a
+  second SSH mechanism beside it would have to learn the whole topology over again, which
+  is exactly the parallel-structure mistake `core-designs.mdc` §1 is about.
+
+So this ships the same bytes through the same transport every other remote command uses.
+The shell script keeps its job -- a developer pushing an edit mid-debug -- and the two agree
+on what a deploy *is*, because the exclusion rules and the destination layout below are
+lifted from it deliberately.
+
+**What is never sent.** `custom/` belongs to the deployment (scripts operators added), and
+`project-*/` belongs to a project. A deploy updates what *ships*; it has no opinion on
+either, and since neither is in the archive, extraction cannot touch them. There is no
+delete pass, matching the script's lack of `--delete`: a file only present on the head is
+somebody's, not ours to remove.
+"""
+from __future__ import annotations
+
+import io
+import logging
+import shlex
+import tarfile
+import time
+import uuid
+from pathlib import Path
+
+import host_exec
+import script_tree
+from paths import REPO_ROOT
+
+_logger = logging.getLogger(__name__)
+
+#: Where the shared set lands in the layered tree, and the name of its source directory.
+SHARED_LAYER = "multi-platform"
+
+#: Source-tree directories that are not part of the shared layer.
+#: `platform/` is a *container* of layers, each of which is deployed beside the shared one;
+#: copying it wholesale would bury every platform's scripts inside the default set.
+_NOT_SHARED = ("platform", "custom")
+
+#: Build artifacts and editor leftovers, same list as the shell script's rsync excludes.
+_SKIP_SUFFIXES = (".pyc",)
+_SKIP_DIRS = ("__pycache__",)
+
+#: How much of the archive rides in one command.
+#:
+#: The ceiling is **`MAX_ARG_STRLEN`, not `ARG_MAX`**, and that distinction is the whole
+#: reason this is chunked. Linux caps a *single* argv element at 128 KiB regardless of the
+#: 2 MiB total, and `Connection.write_bytes` puts the base64 payload inline in one `sh -c`
+#: string -- it has to, because stdin is not plumbed through a hop chain. Today's bundle is
+#: ~290 KiB, so an unchunked write would fail with `E2BIG` on the first real cluster while
+#: passing every local test against a one-hop connection.
+#:
+#: 64 KiB of raw bytes is ~88 KiB of base64 plus the script around it: comfortably under the
+#: cap, with room for the quoting each additional hop adds.
+CHUNK_BYTES = 64 * 1024
+
+
+def _is_wanted(path: Path) -> bool:
+    if any(part in _SKIP_DIRS for part in path.parts):
+        return False
+    if path.suffix in _SKIP_SUFFIXES:
+        return False
+    return ".bak" not in path.name
+
+
+def _add_tree(tar: tarfile.TarFile, source: Path, prefix: str, manifest: list[str]) -> None:
+    """Add every wanted file under *source*, placed at *prefix* in the archive."""
+    for path in sorted(source.rglob("*")):
+        if not path.is_file() or not _is_wanted(path.relative_to(source)):
+            continue
+        arcname = f"{prefix}/{path.relative_to(source).as_posix()}"
+        # add() carries the mode, which is what keeps a script executable on the far side.
+        tar.add(path, arcname=arcname)
+        manifest.append(arcname)
+
+
+def build_bundle(source_root: Path | None = None) -> tuple[bytes, list[str]]:
+    """A gzipped tar laid out exactly as the destination tree, plus its file list.
+
+    Laying the archive out as `multi-platform/...` and `<platform-id>/...` means one
+    extraction into the tree root puts everything where `script_tree` looks for it. The
+    alternative -- one transfer per layer -- would be several round trips over a chain where
+    each one costs a second.
+    """
+    root = source_root or (REPO_ROOT / "bin" / "scripts")
+    if not root.is_dir():
+        raise FileNotFoundError(f"no scripts to deploy: {root} is not a directory")
+
+    manifest: list[str] = []
+    buffer = io.BytesIO()
+    # mtime=0 so an unchanged tree produces identical bytes, which makes "did anything
+    # change" answerable by comparing digests later without a second mechanism.
+    with tarfile.open(fileobj=buffer, mode="w:gz", compresslevel=6) as tar:
+        for path in sorted(root.iterdir()):
+            if path.is_file() and _is_wanted(Path(path.name)):
+                tar.add(path, arcname=f"{SHARED_LAYER}/{path.name}")
+                manifest.append(f"{SHARED_LAYER}/{path.name}")
+            elif path.is_dir() and path.name not in _NOT_SHARED:
+                _add_tree(tar, path, f"{SHARED_LAYER}/{path.name}", manifest)
+
+        platform_root = root / "platform"
+        if platform_root.is_dir():
+            for layer in sorted(platform_root.iterdir()):
+                if layer.is_dir():
+                    _add_tree(tar, layer, layer.name, manifest)
+
+    return buffer.getvalue(), manifest
+
+
+def _layers_in(manifest: list[str]) -> list[str]:
+    return sorted({name.split("/", 1)[0] for name in manifest})
+
+
+def deploy(*, dry_run: bool = False, profile: str = "script", timeout: int = 600) -> dict:
+    """Send the shipped script layers to the head node's tree.
+
+    Returns a summary rather than raising on a remote failure: the wizard shows this to an
+    operator who needs to know *which* part did not work, and an exception carrying a
+    truncated stderr is a worse answer than a structured one.
+    """
+    started = time.monotonic()
+    bundle, manifest = build_bundle()
+    tree = script_tree.tree_root()
+    summary: dict[str, object] = {
+        "ok": True,
+        "dry_run": dry_run,
+        "dest": tree,
+        "files": len(manifest),
+        "bytes": len(bundle),
+        "layers": _layers_in(manifest),
+        "chunks": max(1, -(-len(bundle) // CHUNK_BYTES)),
+    }
+    if dry_run:
+        # Deliberately no connection attempt: the point of a preview is to answer "what
+        # would be sent" on a deployment whose SSH is not working yet.
+        summary["detail"] = f"would send {len(manifest)} file(s) to {tree}"
+        return summary
+
+    conn = host_exec.connection(profile)
+    staging = f"{tree.rstrip('/')}/.nvis-deploy-{uuid.uuid4().hex[:8]}"
+    try:
+        error = conn.makedirs(staging)
+        if error:
+            return {**summary, "ok": False, "error": f"cannot create {staging}: {error}"}
+
+        for index in range(0, len(bundle), CHUNK_BYTES):
+            part = f"{staging}/part-{index // CHUNK_BYTES:04d}"
+            error = conn.write_bytes(part, bundle[index:index + CHUNK_BYTES])
+            if error:
+                return {**summary, "ok": False, "error": f"upload failed at {part}: {error}"}
+
+        # Reassemble and extract in one command, so a chain is crossed once more, not twice.
+        # `cat part-*` relies on the zero-padded names sorting in write order.
+        quoted = shlex.quote(staging)
+        script = (
+            f"set -e; cd {quoted}; cat part-* > bundle.tgz; "
+            f"mkdir -p {shlex.quote(tree)}; "
+            f"tar -xzf bundle.tgz -C {shlex.quote(tree)}; "
+            f"cd /; rm -rf {quoted}"
+        )
+        proc = conn.run(["sh", "-c", script], timeout=timeout)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            return {**summary, "ok": False, "error": f"extract failed: {detail[:400]}"}
+    except OSError as exc:
+        return {**summary, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        # The staging directory is removed by the command above on success. This is the
+        # failure path: leaving a few hundred KB of parts on the head every failed attempt
+        # would accumulate silently on the one filesystem nobody watches.
+        _cleanup(conn, staging)
+
+    # The tree now exists, so `script_tree`'s memo of "is this deployment layered" is stale.
+    # Without this the very next resolution still answers with the flat legacy path, and the
+    # bootstrap that follows in the wizard looks for defaults that it cannot see.
+    script_tree.clear_cache()
+    summary["seconds"] = round(time.monotonic() - started, 1)
+    summary["detail"] = f"sent {len(manifest)} file(s) to {tree}"
+    _logger.info("script-deploy: %s", summary["detail"])
+    return summary
+
+
+def _cleanup(conn, staging: str) -> None:
+    try:
+        conn.run(["sh", "-c", f"rm -rf {shlex.quote(staging)}"], timeout=60)
+    except Exception:  # noqa: BLE001 - best effort; the deploy's own result is the answer
+        _logger.debug("script-deploy: could not remove staging dir %s", staging)

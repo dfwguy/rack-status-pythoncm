@@ -85,9 +85,20 @@ tuning `tool_param_defaults` per site is routine.
 
 Two clarifications that follow from "the layer, not the file":
 
-- **`bin/deploy-scripts.sh` writes the shipped layers, and that is correct.** The rule is that
-  *the app* never writes them. Updating the product's scripts is a deploy, run deliberately by
-  someone with the repo in front of them, not a side effect of a click.
+- **The shipped layers are written by a deploy, and only by a deploy.** `bin/deploy-scripts.sh`
+  is one; `POST /api/scripts/deploy`, behind the setup wizard's Scripts step and the Projects
+  screen's "Deploy scripts to head", is the other. The rule this protects was never "the app's
+  process must not write that path" — it is that updating the product's scripts is a deliberate
+  act, never a side effect of something else. A checkbox an operator ticks on a setup screen
+  meets that; a launch quietly refreshing a layer on its way past would not.
+
+  This used to read "*the app* never writes them", which described the implementation of the
+  day rather than the principle, and the gap showed: an operator setting up an appliance has a
+  browser and no repo checkout, so the only route to a usable head node was a shell script they
+  had no way to run. Two properties keep the weaker rule sound — the deploy is **additive**
+  (`custom/` and `project-*/` are not in the archive, so extraction cannot touch them, and there
+  is no delete pass), and it is **explicit** (its own endpoint, its own action, its own audit
+  line, never invoked by a launch).
 - **The legacy flat `{base}/bin/scripts` counts as shipped.** On a deployment that has not been
   migrated it is shared by every project, so a write there has the widest blast radius of all.
   Creating the tree is what makes a writable layer available.

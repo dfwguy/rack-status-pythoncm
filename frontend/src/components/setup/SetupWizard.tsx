@@ -53,9 +53,12 @@ import { listPlatforms, saveProject, setActiveContext } from "../../services/cat
 import {
   bootstrapProjectScripts,
   completeSetup,
+  deployScripts,
+  previewScriptDeploy,
   proposeNaming,
   storeSshKey,
   type NamingCandidate,
+  type ScriptDeployResult,
 } from "../../services/setupService";
 import type { Platform } from "../../types/catalog";
 import {
@@ -97,6 +100,9 @@ export function SetupWizard({ onCancel, onFinished }: SetupWizardProps) {
   const [keyFingerprint, setKeyFingerprint] = useState("");
 
   const [scriptResult, setScriptResult] = useState("");
+  // How much a deploy would send. Fetched once, never blocking: it is a detail on a
+  // checkbox's help line, so a deployment that cannot answer just shows one line less.
+  const [deployPreview, setDeployPreview] = useState<ScriptDeployResult | null>(null);
 
   const set = useCallback(
     (patch: Partial<WizardDraft>) => setDraft((d) => ({ ...d, ...patch })),
@@ -107,6 +113,9 @@ export function SetupWizard({ onCancel, onFinished }: SetupWizardProps) {
     listPlatforms()
       .then(setPlatforms)
       .catch(() => setPlatforms([]));
+    previewScriptDeploy()
+      .then(setDeployPreview)
+      .catch(() => setDeployPreview(null));
   }, []);
 
   const problems = stepProblems(step, draft);
@@ -186,21 +195,36 @@ export function SetupWizard({ onCancel, onFinished }: SetupWizardProps) {
       const project = toProject(draft);
       await saveProject(project);
       await setActiveContext({ project: project.id, cluster: project.clusters[0].id });
-      if (draft.bootstrapScripts) {
-        try {
-          const result = await bootstrapProjectScripts(project.id, false, project.clusters[0].id);
-          setScriptResult(`${result.copied} file(s) into ${result.dest}`);
-        } catch (e) {
-          // The project exists and is active; only the script copy failed, and that is
-          // repeatable from the Projects screen. Failing the whole wizard here would throw
-          // away everything the operator just entered for a step that can be retried.
-          setError(
-            `The project was created, but its scripts could not be copied: ${
-              e instanceof Error ? e.message : String(e)
-            }. Use "Update scripts from defaults" on the Projects screen once the connection works.`,
-          );
+
+      // Deploy before bootstrap, always: the project's copy is composed from the shared
+      // layers this sends. Both are reported together so a partial result names which half
+      // worked -- "scripts failed" with two mechanisms behind it is not a usable answer.
+      const done: string[] = [];
+      try {
+        if (draft.deployScripts) {
+          setBusy("deploy");
+          const sent = await deployScripts();
+          done.push(`sent ${sent.files} shipped file(s) to ${sent.dest}`);
         }
+        if (draft.bootstrapScripts) {
+          setBusy("finish");
+          const result = await bootstrapProjectScripts(project.id, false, project.clusters[0].id);
+          done.push(`copied ${result.copied} file(s) into ${result.dest}`);
+        }
+        setScriptResult(done.join("; "));
+      } catch (e) {
+        // The project exists and is active; only the scripts failed, and both halves are
+        // repeatable from the Projects screen. Failing the whole wizard here would throw
+        // away everything the operator just entered for a step that can be retried.
+        setScriptResult(done.join("; "));
+        setError(
+          `The project was created, but its scripts are not fully in place: ${
+            e instanceof Error ? e.message : String(e)
+          }.${done.length ? ` Completed first: ${done.join("; ")}.` : ""} Use "Deploy scripts to head"` +
+            ` and "Update scripts" on the Projects screen once the connection works.`,
+        );
       }
+
       await completeSetup(project.id);
       onFinished?.(project.id);
     } catch (e) {
@@ -436,24 +460,54 @@ export function SetupWizard({ onCancel, onFinished }: SetupWizardProps) {
         return (
           <Flex direction="col" gap="3">
             <Text kind="body/regular/sm" style={subtle}>
-              Each project runs from its own copy of the scripts, composed from the shared
-              defaults and this platform&apos;s overrides. That is what lets you fix a script for
-              this cluster without changing it for every other project on this server.
+              Greenlight runs its work from scripts on the head node, in two layers. The shared
+              set ships with this release; each project then gets its own copy of it, so you can
+              fix a script for this cluster without changing it for every other project here.
             </Text>
-            {/* A Checkbox, not a two-item Select or a Switch: it is a value submitted when the
-                wizard finishes, not a setting that takes effect the moment it is clicked. */}
+
+            {/* Checkboxes rather than a Switch: these are values submitted when the wizard
+                finishes, not settings that take effect the moment they are clicked. */}
             <Checkbox
-              slotLabel="Copy the scripts into this project's directory when I finish"
+              slotLabel="Send the shipped scripts to the head node"
+              checked={draft.deployScripts}
+              onCheckedChange={(checked) => set({ deployScripts: checked === true })}
+            />
+            <Text kind="mono/sm" style={subtle}>
+              {draft.remoteBasePath || "<base>"}/scripts/multi-platform
+              {deployPreview ? `  ·  ${deployPreview.files} file(s)` : ""}
+            </Text>
+            <Text kind="body/regular/sm" style={subtle}>
+              Needed on a head node that has not had a Greenlight release deployed to it. Your
+              own scripts under <code>custom/</code> are never sent, so nothing you added there
+              can be overwritten.
+            </Text>
+
+            <Divider />
+
+            <Checkbox
+              slotLabel="Copy the scripts into this project's directory"
               checked={draft.bootstrapScripts}
               onCheckedChange={(checked) => set({ bootstrapScripts: checked === true })}
             />
             <Text kind="mono/sm" style={subtle}>
               {draft.remoteBasePath || "<base>"}/scripts/project-{pid || "<project>"}
             </Text>
-            <Banner status="info">
-              Existing files are never overwritten, so running this again after you edit a script
-              leaves your change in place.
-            </Banner>
+
+            {/* The order is not a preference. A project's copy is composed *from* the shared
+                layers, so on a head that has never had a deploy there is nothing to compose
+                from -- which is the failure this step was added to prevent. */}
+            {draft.bootstrapScripts && !draft.deployScripts ? (
+              <Banner status="warning">
+                This project&apos;s copy is built from the shared scripts. If the head node has
+                never had them, copying will fail with nothing to copy — leave the step above
+                on unless you know they are already there.
+              </Banner>
+            ) : (
+              <Banner status="info">
+                Both steps are safe to repeat: existing files are left as they are, so running
+                this again after you edit a script keeps your change.
+              </Banner>
+            )}
           </Flex>
         );
 
@@ -486,8 +540,16 @@ export function SetupWizard({ onCancel, onFinished }: SetupWizardProps) {
             )}
             {row("SSH key", cluster.connection.ssh_key)}
             {row("Remote base", cluster.connection.remote_base_path)}
-            {row("Scripts", draft.bootstrapScripts ? "copy on finish" : "skip")}
-            {scriptResult ? row("Copied", scriptResult) : null}
+            {row(
+              "Scripts",
+              [
+                draft.deployScripts ? "send to head" : "",
+                draft.bootstrapScripts ? "copy into project" : "",
+              ]
+                .filter(Boolean)
+                .join(", ") || "skip",
+            )}
+            {scriptResult ? row("Scripts done", scriptResult) : null}
           </Flex>
         );
       }

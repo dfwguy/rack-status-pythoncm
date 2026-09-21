@@ -314,6 +314,11 @@ _RESOLVERS: dict[str, Extractor] = {
     # (`catalog.tool:<id>`, `workflow:<id>`) inside the handler, so they reuse those types
     # rather than needing one of their own.
     "catalog.board": _singleton,
+    # The head node's shipped script layers: one set per deployment, shared by every project
+    # on it. Unlike `catalog.project`, there is no id to narrow a grant to -- a deploy either
+    # writes that tree or it does not, and "may this principal update the scripts this server
+    # runs from" is the whole question.
+    "catalog.scripts": _singleton,
     "cluster": _singleton,
     "comments": _singleton,
     # One documentation site per deployment; there is no id to narrow a grant to.

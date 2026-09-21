@@ -90,7 +90,7 @@ class TestItIsWiredLikeEveryOtherEndpoint:
         assert "/api/scheduler-probe" in {r.rule for r in app_module.app.url_map.iter_rules()}
 
     def test_it_inherits_the_auth_gate(self):
-        from identity import testing  # noqa: PLC0415
+        from identity import testing
 
         with testing.unauthenticated_client(app_module.app) as anonymous:
             assert anonymous.get("/api/scheduler-probe").status_code == 401

@@ -79,5 +79,6 @@ A basename only resolves inside the script tree, so a binary that lives in a wor
 
 If the script is useful to more than this deployment, open a merge request adding it to
 `bin/scripts/` with a short description of what it does and when to run it. Once merged it
-arrives in `multi-platform/` on every deployment's next `bin/deploy-scripts.sh`, and nobody has
-to copy it by hand again.
+arrives in `multi-platform/` the next time a deployment takes the shipped scripts — either
+"Deploy scripts to head" on the Projects screen, or `bin/deploy-scripts.sh` — and nobody has to
+copy it by hand again.

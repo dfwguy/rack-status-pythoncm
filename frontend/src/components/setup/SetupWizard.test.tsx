@@ -63,6 +63,26 @@ vi.mock("../../services/setupService", () => ({
     layout: {} as never,
   })),
   completeSetup: vi.fn(async () => ({ setup: { required: false, reason: "project-configured", forced: false } })),
+  previewScriptDeploy: vi.fn(async () => ({
+    ok: true,
+    dry_run: true,
+    dest: "/base/scripts",
+    files: 109,
+    bytes: 282879,
+    layers: ["multi-platform"],
+    chunks: 5,
+    layout: {} as never,
+  })),
+  deployScripts: vi.fn(async () => ({
+    ok: true,
+    dry_run: false,
+    dest: "/base/scripts",
+    files: 109,
+    bytes: 282879,
+    layers: ["multi-platform"],
+    chunks: 5,
+    layout: {} as never,
+  })),
 }));
 
 const type = (label: RegExp | string, value: string) => {
@@ -189,5 +209,101 @@ describe("SetupWizard", () => {
     expect(screen.queryByRole("button", { name: /cancel/i })).toBeNull();
     rerender(<SetupWizard onCancel={() => {}} />);
     expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+  });
+
+  describe("the Scripts step", () => {
+    /** Steps 1-4, leaving the wizard on Scripts. */
+    const throughToScripts = async () => {
+      await throughProject();
+      type(/rack id template/i, "ink[01-99]");
+      type(/compute node template/i, "ink[01-99]-[01-99]");
+      type(/trays per rack/i, "18");
+      await waitFor(() => expect(screen.getByRole("button", { name: /next/i })).toBeEnabled());
+      clickNext();
+      await screen.findByPlaceholderText(/BEGIN OPENSSH PRIVATE KEY/i);
+      type(/ssh host/i, "10.0.0.2");
+      await waitFor(() => expect(screen.getByRole("button", { name: /next/i })).toBeEnabled());
+      clickNext();
+      await screen.findByLabelText(/send the shipped scripts/i);
+    };
+
+    it("offers sending the shipped scripts as well as copying them into the project", async () => {
+      render(<SetupWizard />);
+      await throughToScripts();
+      // Both halves are on by default: a fresh head needs the first, and the second is what
+      // the project actually runs from.
+      expect(screen.getByLabelText(/send the shipped scripts/i)).toBeChecked();
+      expect(screen.getByLabelText(/copy the scripts into this project/i)).toBeChecked();
+    });
+
+    it("shows how much a deploy would send, without contacting the cluster", async () => {
+      const { previewScriptDeploy } = await import("../../services/setupService");
+      render(<SetupWizard />);
+      await throughToScripts();
+      expect(previewScriptDeploy).toHaveBeenCalled();
+      expect(await screen.findByText(/109 file\(s\)/)).toBeInTheDocument();
+    });
+
+    it("warns when the project copy is asked for without the deploy that feeds it", async () => {
+      // The bootstrap composes a project's copy FROM the shared layers, so this combination
+      // fails on a head that has never had them -- the failure this step exists to prevent.
+      render(<SetupWizard />);
+      await throughToScripts();
+      fireEvent.click(screen.getByLabelText(/send the shipped scripts/i));
+      expect(await screen.findByText(/never had them/i)).toBeInTheDocument();
+    });
+
+    it("deploys before it bootstraps, because the copy is composed from what was sent",
+      async () => {
+        const { deployScripts, bootstrapProjectScripts, completeSetup } = await import(
+          "../../services/setupService"
+        );
+        const order: string[] = [];
+        vi.mocked(deployScripts).mockImplementation(async () => {
+          order.push("deploy");
+          return { ok: true, dry_run: false, dest: "/base/scripts", files: 109, bytes: 1,
+            layers: ["multi-platform"], chunks: 5, layout: {} as never };
+        });
+        vi.mocked(bootstrapProjectScripts).mockImplementation(async () => {
+          order.push("bootstrap");
+          return { project: "p", platform: "gb300-nvl72", dest: "/base/scripts/project-p",
+            copied: 108, differs_from_defaults: 0, forced: false, layout: {} as never };
+        });
+
+        render(<SetupWizard />);
+        await throughToScripts();
+        clickNext();
+        fireEvent.click(await screen.findByRole("button", { name: /create project/i }));
+
+        await waitFor(() => expect(completeSetup).toHaveBeenCalled());
+        expect(order).toEqual(["deploy", "bootstrap"]);
+      });
+
+    it("still completes setup when the scripts fail, and says which half got through",
+      async () => {
+        // The project exists and is active by then. Discarding everything the operator typed
+        // for a step that is repeatable from the Projects screen would be the worse failure.
+        const { deployScripts, bootstrapProjectScripts, completeSetup } = await import(
+          "../../services/setupService"
+        );
+        vi.mocked(deployScripts).mockResolvedValue({
+          ok: true, dry_run: false, dest: "/base/scripts", files: 109, bytes: 1,
+          layers: ["multi-platform"], chunks: 5, layout: {} as never,
+        });
+        vi.mocked(bootstrapProjectScripts).mockRejectedValue(new Error("no space left on device"));
+
+        render(<SetupWizard />);
+        await throughToScripts();
+        clickNext();
+        fireEvent.click(await screen.findByRole("button", { name: /create project/i }));
+
+        await waitFor(() => expect(completeSetup).toHaveBeenCalled());
+        const banner = await screen.findByText(/no space left on device/);
+        expect(banner).toBeInTheDocument();
+        // Naming the half that worked is the difference between a usable report and "scripts
+        // failed" with two mechanisms behind it. It appears twice by design -- in the error
+        // and in the review summary -- so the operator sees it wherever they are looking.
+        expect(screen.getAllByText(/sent 109 shipped file\(s\)/).length).toBeGreaterThan(0);
+      });
   });
 });

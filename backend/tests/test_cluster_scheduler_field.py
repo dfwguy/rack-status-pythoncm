@@ -17,7 +17,6 @@ native-scheduler site at once, and makes switching clusters switch the backend w
 from __future__ import annotations
 
 import pytest
-
 from catalog import context, models
 from schedulers import factory
 

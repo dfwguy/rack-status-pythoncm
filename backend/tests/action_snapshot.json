@@ -1218,6 +1218,18 @@
   "variant": "sync"
  },
  {
+  "endpoint": "script_deploy.api_script_deploy",
+  "method": "POST",
+  "action": "catalog.scripts:deploy",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "script_deploy.api_script_deploy_preview",
+  "method": "GET",
+  "action": "catalog.scripts:preview_deploy",
+  "variant": "sync"
+ },
+ {
   "endpoint": "setup.api_setup_complete",
   "method": "POST",
   "action": "catalog:complete_setup",
