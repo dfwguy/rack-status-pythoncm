@@ -240,6 +240,41 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
         "source": "seed",
     },
     {
+        "id": "rtx-pro-6000-blackwell",
+        "name": "RTX PRO 6000 Blackwell",
+        "generation": "Blackwell",
+        "gpu_model": "RTX PRO 6000 Blackwell",
+        "superchip": "",
+        "cpu_vendor": "AMD",
+        "cpu_arch": "x86_64",
+        "system_vendor": "",
+        "form_factor": "PCIe",
+        "geometry": {
+            "gpus_per_node": 8,
+            "nodes_per_tray": 1,
+            "trays_per_rack": 1,
+            "gpus_per_rack": 8,
+            "nvlink_domain": 0,
+        },
+        "interconnect": {"scaleup": "PCIe", "scaleout": "Spectrum-X RoCE"},
+        "capabilities": ["roce"],
+        "tool_param_defaults": {
+            "RACK_CLUSTER_PRODUCT_LINE": "rtx6000",
+        },
+        "fabric": {
+            "scaleout": "roce",
+            "rails_per_gpu": 1,
+            "rail_rate_gbps": 400,
+            "ns_ifname": "enp0s5",
+        },
+        "status": "ga",
+        "description": (
+            "Eight NVIDIA RTX PRO 6000 Blackwell PCIe GPUs with eight "
+            "400 Gb/s Spectrum-X RoCE rails."
+        ),
+        "source": "seed",
+    },
+    {
         "id": "dgx-b200",
         "name": "DGX B200",
         "generation": "Blackwell",

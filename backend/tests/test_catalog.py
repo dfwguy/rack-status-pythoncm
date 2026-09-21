@@ -131,6 +131,22 @@ class TestModels:
 
 
 class TestSeed:
+    def test_rtx_pro_6000_blackwell_platform(self):
+        platform = models.Platform.from_dict(
+            next(p for p in seed.SEED_PLATFORMS if p["id"] == "rtx-pro-6000-blackwell")
+        )
+
+        assert platform.validate() == []
+        assert platform.geometry.gpus_per_node == 8
+        assert platform.geometry.nvlink_domain == 0
+        assert not platform.has_capability("nvlink")
+        assert context.fabric_defaults(platform) == {
+            "NVIS_RDMA_LINK_TECH": "roce",
+            "NVIS_FABRIC_EXPECT_RAILS": "8",
+            "NVIS_FABRIC_EXPECT_RATE": "400",
+        }
+        assert seed._guess_platform_id({"RACK_CLUSTER_PRODUCT_LINE": "rtx6000"}) == platform.id
+
     def test_seed_counts_and_idempotent(self, repo):
         s1 = seed.migrate(repo, env={})
         assert s1["platforms_added"] == len(seed.SEED_PLATFORMS)
