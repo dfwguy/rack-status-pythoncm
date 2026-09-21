@@ -186,6 +186,9 @@ export function toCluster(draft: WizardDraft): Cluster {
     name: draft.clusterName.trim() || draft.projectName.trim(),
     platform_id: draft.platformId,
     cluster_manager: draft.clusterManager,
+    // The wizard does not ask: Slurm is right for every cluster we ship to today,
+    // and a site without it changes one field on the cluster record afterwards.
+    scheduler: "slurm",
     site_prefix: draft.sitePrefix.trim(),
     naming: {
       rack_id_template: draft.rackIdTemplate.trim(),

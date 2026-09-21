@@ -1212,6 +1212,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "scheduler_health.api_scheduler_probe",
+  "method": "GET",
+  "action": "scheduler.queue:list",
+  "variant": "sync"
+ },
+ {
   "endpoint": "setup.api_setup_complete",
   "method": "POST",
   "action": "catalog:complete_setup",

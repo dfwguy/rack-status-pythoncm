@@ -2281,14 +2281,15 @@
           "kind": "read",
           "scope": "singleton",
           "routes": [
+            "GET scheduler_health.api_scheduler_probe",
             "GET slurm_queries.api_slurm_sacct_recent",
             "GET slurm_queries.api_slurm_sinfo_r",
             "GET slurm_queries.api_slurm_squeue"
           ]
         }
       ],
-      "module": "backend/api/slurm_queries.py",
-      "summary": "Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct.",
+      "module": "backend/api/scheduler_health.py",
+      "summary": "Can this cluster's scheduler accept work right now?",
       "scope": "singleton",
       "resource": {
         "identified_by": [],

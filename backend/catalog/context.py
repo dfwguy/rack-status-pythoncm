@@ -191,6 +191,10 @@ def high_overlay(
     _put(out, "NVIS_CT_JOINER", n.ct_joiner)
     _put(out, "NVIS_SLURM_HOSTLIST", n.slurm_hostlist)
     _put(out, "RACK_PLATFORM", cluster.cluster_manager)
+    # Which backend runs work, read by `schedulers.factory.build_scheduler`. On the cluster
+    # record rather than in the environment so one instance can serve a Slurm site and a
+    # native-scheduler site at once, and so switching clusters switches the backend with it.
+    _put(out, "RACK_SCHEDULER", cluster.scheduler)
     _put(out, "RACK_MULTIRACK_SITE_PREFIX", cluster.site_prefix)
     c = cluster.connection
     _put(out, "RACK_EXEC_MODE", c.exec_mode)

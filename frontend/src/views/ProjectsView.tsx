@@ -54,6 +54,7 @@ function emptyCluster(): Cluster {
     name: "",
     platform_id: "",
     cluster_manager: "bcm",
+    scheduler: "slurm",
     site_prefix: "",
     naming: { rack_id_template: "", ct_id_template: "", nvsw_id_template: "", ct_joiner: "-ct", slurm_hostlist: "" },
     geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },

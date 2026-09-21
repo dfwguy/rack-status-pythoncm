@@ -38,6 +38,16 @@ SYSTEM_VENDORS = ("NVIDIA", "DGX", "Dell", "SMC", "Supermicro")
 FORM_FACTORS = ("NVL72", "NVL36", "HGX-8", "HGX-4", "MGX")
 CLUSTER_MANAGERS = ("bcm", "maas")
 
+#: Where work runs, as distinct from who manages the machines. Must stay in step with
+#: ``schedulers.factory._BUILDERS`` -- a cluster naming a kind the factory cannot build is a
+#: deployment that comes up and then fails on first launch, so `validate()` refuses it here.
+#:
+#: The default is ``slurm`` and the asymmetry is deliberate: defaulting to a native scheduler
+#: on a Slurm cluster produces a queue view containing only work this product launched, which
+#: looks plausible and is wrong, while defaulting to Slurm where there is none fails loudly on
+#: the first submit. Fail loud wins.
+SCHEDULERS = ("slurm", "pythoncm", "local", "runai", "slinky", "maas")
+
 # How an endpoint is reached. "local" is the app's own host; "ssh" is everything
 # else, including each leg of a multi-hop chain.
 ENDPOINT_TYPES = ("local", "ssh")
@@ -898,7 +908,8 @@ class Cluster:
     id: str
     name: str
     platform_id: str = ""
-    cluster_manager: str = "bcm"
+    cluster_manager: str = "bcm"  # who manages the machines (BCM/MAAS)
+    scheduler: str = "slurm"  # where work runs; see SCHEDULERS
     site_prefix: str = ""  # pod/site prefix for multirack bracket expansion
     naming: ClusterNaming = field(default_factory=ClusterNaming)
     geometry: ClusterGeometry = field(default_factory=ClusterGeometry)
@@ -915,6 +926,7 @@ class Cluster:
             name=_as_str(d.get("name")) or _as_str(d.get("id")),
             platform_id=_as_str(d.get("platform_id")),
             cluster_manager=_as_str(d.get("cluster_manager")) or "bcm",
+            scheduler=_as_str(d.get("scheduler")).lower() or "slurm",
             site_prefix=_as_str(d.get("site_prefix")),
             naming=ClusterNaming.from_dict(d.get("naming")),
             geometry=ClusterGeometry.from_dict(d.get("geometry")),
@@ -939,6 +951,8 @@ class Cluster:
             problems.append(
                 f"unknown cluster_manager {self.cluster_manager!r} (expected {CLUSTER_MANAGERS})"
             )
+        if self.scheduler and self.scheduler not in SCHEDULERS:
+            problems.append(f"unknown scheduler {self.scheduler!r} (expected {SCHEDULERS})")
         problems.extend(self.connection.validate())
         problems.extend(self._validate_scalable_units())
         return problems

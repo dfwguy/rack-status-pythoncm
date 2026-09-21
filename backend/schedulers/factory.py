@@ -14,11 +14,13 @@ import os
 
 from schedulers.base import Scheduler
 from schedulers.local import LocalScheduler
+from schedulers.pythoncm import PythonCMScheduler
 from schedulers.slurm import SlurmScheduler
 from schedulers.stubs import MaaSScheduler, RunAIScheduler, SlinkyScheduler
 
 _BUILDERS = {
     "slurm": SlurmScheduler,
+    "pythoncm": PythonCMScheduler,
     "local": LocalScheduler,
     "runai": RunAIScheduler,
     "slinky": SlinkyScheduler,

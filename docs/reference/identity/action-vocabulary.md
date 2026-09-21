@@ -70,7 +70,7 @@ case does not match.
 | [`results`](#results) | singleton | 4 | Parser results: what a finished run measured, per rack, as the dashboard charts it. |
 | [`scheduler.job`](#schedulerjob) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
 | [`scheduler.node`](#schedulernode) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
-| [`scheduler.queue`](#schedulerqueue) | singleton | 1 | Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct. |
+| [`scheduler.queue`](#schedulerqueue) | singleton | 1 | Can this cluster's scheduler accept work right now? |
 | [`settings`](#settings) | singleton | 3 | The dashboard core: rack status, cluster overview, app stats, and the settings writer. |
 | [`support`](#support) | singleton | 3 | nvidia-bug-report collection: run it across a rack, then list and serve what landed. |
 | [`tools`](#tools) | instance | 8 | The Tools page: workspace installers, container downloads, Grafana launch. |
@@ -711,15 +711,15 @@ Identified by `node`, `nodes`, `host` on the request. The identifier is **case-f
 
 ## `scheduler.queue`
 
-Read-only Slurm queries: squeue, sinfo -R, and recent finished jobs from sacct.
+Can this cluster's scheduler accept work right now?
 
-Owned by `backend/api/slurm_queries.py`.
+Owned by `backend/api/scheduler_health.py`.
 
 **One instance per deployment.** A policy names it as `scheduler.queue:default`; there is no id to narrow a grant to.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
-| `scheduler.queue:list` | read | singleton | `GET slurm_queries.api_slurm_sacct_recent`<br>`GET slurm_queries.api_slurm_sinfo_r`<br>`GET slurm_queries.api_slurm_squeue` |
+| `scheduler.queue:list` | read | singleton | `GET scheduler_health.api_scheduler_probe`<br>`GET slurm_queries.api_slurm_sacct_recent`<br>`GET slurm_queries.api_slurm_sinfo_r`<br>`GET slurm_queries.api_slurm_squeue` |
 
 ## `settings`
 

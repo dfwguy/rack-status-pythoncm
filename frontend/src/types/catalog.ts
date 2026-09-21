@@ -172,7 +172,10 @@ export interface Cluster {
   id: string;
   name: string;
   platform_id: string;
+  /** Who manages the machines (bcm/maas). */
   cluster_manager: string;
+  /** Where work runs (slurm/pythoncm/...). Distinct from cluster_manager. */
+  scheduler: string;
   site_prefix: string;
   naming: ClusterNaming;
   geometry: ClusterGeometry;

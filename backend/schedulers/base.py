@@ -20,8 +20,10 @@ submit and report a normalized :class:`JobResult`.
 """
 from __future__ import annotations
 
+import contextlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Any
 
 # Normalized terminal job states (superset across backends).
 TERMINAL_STATES = {
@@ -46,6 +48,14 @@ class JobSpec:
     env: dict[str, str] = field(default_factory=dict)
     extra_args: list[str] = field(default_factory=list)
     timeout: int = 1800                 # default wait/exec budget (seconds)
+    # Where the command runs across the target. A batch scheduler has one answer and ignores
+    # this; a native parallel runner has to be told. "fanout" runs it on every node,
+    # "leader" on the first only (an MPI launcher that fans out itself), "head" on the
+    # cluster head (an inventory query that must not touch compute).
+    launch_mode: str = "fanout"
+    # Account the work runs as. Slurm takes this from the submitting identity; a native
+    # runner is told explicitly, and getting it wrong writes logs nobody can read.
+    execution_user: str | None = None
 
 
 @dataclass
@@ -62,6 +72,10 @@ class JobResult:
     stdout: str = ""
     stderr: str = ""
     job_id: str | None = None
+    # Per-node outcome, when the backend can report one. A batch job has a single exit
+    # status; a fan-out has one per node, and collapsing 18 of them into a single integer
+    # loses the only thing worth knowing -- which node failed.
+    node_results: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def success(self) -> bool:
@@ -90,5 +104,18 @@ class Scheduler(ABC):
         """Block until the job reaches a terminal state (or *timeout*)."""
 
     def run(self, spec: JobSpec, *, poll_interval: int = 5) -> JobResult:
-        """Convenience: submit + wait using the spec's timeout."""
-        return self.wait(self.submit(spec), timeout=spec.timeout, poll_interval=poll_interval)
+        """Submit, wait, and cancel anything still running when the budget expires.
+
+        The cancel is the part worth stating. Giving up on *waiting* is not the same as the
+        work stopping: a native runner's command outlives this process, and the next job's
+        BCM prolog then finds it and flags a rogue process, draining the rack
+        (`bcm-prolog-rogueprocess.mdc`). So a timeout has to end the work, not just the wait.
+        """
+        handle = self.submit(spec)
+        result = self.wait(handle, timeout=spec.timeout, poll_interval=poll_interval)
+        if result.state == "TIMEOUT":
+            with contextlib.suppress(Exception):
+                # Best effort: the wait already failed, and raising here would replace a
+                # useful TIMEOUT result with an unrelated error from the cancel path.
+                self.cancel(handle)
+        return result

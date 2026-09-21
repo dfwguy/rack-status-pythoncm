@@ -33,11 +33,31 @@ every login, and what keeps it away from a deployment that upgrades.
 | `name` | string | Shown in the switcher beside the project. |
 | `platform_id` | string | Which Platform this is — supplies geometry and per-tool defaults, and selects the platform layer of the script tree. |
 | `cluster_manager` | enum | `bcm` or `maas`. Decides which provider answers node inventory: `cmsh` or `maas-cli`. |
+| `scheduler` | enum | Where work runs: `slurm` (default), `pythoncm`, `local`, `runai`, `slinky`, `maas`. Separate from `cluster_manager` — see below. |
 | `site_prefix` | string | The leading token in this site's rack ids. Used to group a multirack launch. |
 | `naming` | object | The three templates — see [Geometry and hostnames](../../explanation/geometry-and-hostnames.md). |
 | `geometry` | object | `pods`, `rows_per_pod`, `racks_per_row`, `trays_per_rack`. |
 | `scalable_units` | list | This cluster's SU-to-rack mapping. Empty derives it from the platform's `fabric.racks_per_su`; see below. |
 | `connection` | object | How the app reaches the cluster, below. |
+
+### scheduler
+
+`cluster_manager` and `scheduler` answer different questions, and a BCM cluster is where the
+difference becomes visible: BCM tells you what the nodes *are*, Slurm decides what runs on them,
+and plenty of BCM clusters have no Slurm at all. On those, `pythoncm` submits through CMDaemon's
+own ProgramRunner instead.
+
+The default is `slurm`, and the asymmetry with `cluster_manager` is deliberate. Guessing the
+inventory tool wrong produces an immediate, obvious failure; guessing the *scheduler* wrong
+produces a launch that goes somewhere unintended. So a native scheduler is opted into per
+cluster, never inferred from the cluster manager.
+
+Every value here must be a kind `schedulers.factory` can build — a cluster naming one it cannot
+would fail at launch, long after the record was saved, so the model refuses it at write time.
+
+`pythoncm` additionally needs `bin/scripts/nvis_pythoncm_exec.py` deployed to the head
+(`bin/deploy-scripts.sh`); `POST /api/scheduler-probe` answers whether it is reachable before a
+launch depends on it.
 
 ### naming
 
