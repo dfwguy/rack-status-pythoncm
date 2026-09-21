@@ -67,6 +67,8 @@ RACK_PDSH_W_SKIP_SLURM_EXPAND = "Pass a `pdsh -w` target through verbatim instea
 RACK_SSH_REACHABILITY_CONNECT_TIMEOUT = "Seconds a reachability probe waits for a connection. Default 5."
 RACK_SSH_REACHABILITY_TTL_SEC = "How long a reachability result is cached. Default 15, floors at 3."
 NVIS_BCM_PYTHON = "Interpreter used for BCM `pythoncm` queries on the head node."
+RACK_PYTHONCM_JOBS_DIR = "Where the PythonCM helper keeps per-task state on the head. Defaults to `<base>/var/pythoncm-jobs`. Must be durable and shared by the nodes: CMDaemon drops a finished command from its active status, so this directory is the only record of how a job went."
+RACK_PYTHONCM_USER = "Account a PythonCM ProgramRunner job runs as when a launch does not name one. Default `root`."
 RACK_MAAS_CLI = "The `maas` CLI binary. Default `maas`."
 RACK_MAAS_PROFILE = "The `maas` CLI profile to use. Default `admin`."
 

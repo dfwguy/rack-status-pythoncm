@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**243 settings.** 15 are *declared* in
+**245 settings.** 15 are *declared* in
 `backend/config_registry.py`, which is the set `greenlight.toml` can carry, the required-
 setting preflight can demand, and `greenlight.toml.example` lists. 119 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -48,12 +48,12 @@ scan simply cannot point at a call site.
 
 ## Read outside the resolution ladder
 
-162 of them are read only via `os.environ`, so a cluster overlay and the
+161 of them are read only via `os.environ`, so a cluster overlay and the
 Settings screen cannot influence them — the setting is process-wide. New code should
 prefer `_eget` (`core-designs.mdc` §5); these are the ones that predate the rule or
 genuinely belong to the process rather than to a cluster.
 
-They are not listed here — 162 names in a paragraph is not something
+They are not listed here — 161 names in a paragraph is not something
 anyone reads.
 The table below marks each one `environment` in its `Reader` column, which answers the
 same question setting by setting, where you are already looking.
@@ -105,7 +105,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-nemo-sqsh-src"></a>`NEMO_SQSH_SRC` | ladder |  | Squashed NeMo container image used by the NeMo validation launchers. | `backend/api/dashboard.py`, `backend/api/tools.py` |
 | <a id="s-nemo-target-steps"></a>`NEMO_TARGET_STEPS` | environment | `0` | See `docs/ENVIRONMENT.md` | `backend/universal_parser.py` |
 | <a id="s-ngc-api-key"></a>`NGC_API_KEY` | ladder |  | NGC API key used to pull tool containers. The download-containers action refuses without it. | `backend/api/tools.py` |
-| <a id="s-nvis-bcm-python"></a>`NVIS_BCM_PYTHON` | environment |  | Interpreter used for BCM `pythoncm` queries on the head node. | `backend/bcm_query.py` |
+| <a id="s-nvis-bcm-python"></a>`NVIS_BCM_PYTHON` | ladder |  | Interpreter used for BCM `pythoncm` queries on the head node. | `backend/bcm_query.py`, `backend/schedulers/pythoncm.py` |
 | <a id="s-nvis-catalog-file"></a>`NVIS_CATALOG_FILE` | environment |  | Path to the catalog database holding platforms, tools and projects. This is what separates two deployments sharing one checkout. | `backend/catalog/store.py` |
 | <a id="s-nvis-ct-id"></a>`NVIS_CT_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` |
 | <a id="s-nvis-exemplar-workloads"></a>`NVIS_EXEMPLAR_WORKLOADS` | ladder |  | Default Exemplar workloads when a launch names none. | `backend/api/tools.py` |
@@ -256,7 +256,9 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-punchcard-range"></a>`RACK_PUNCHCARD_RANGE` | environment | `Sheet2!A1:Z1000` | Sheet range the punchcard is read from. Default `Sheet2!A1:Z1000`. | `backend/node_issues.py` |
 | <a id="s-rack-punchcard-spreadsheet-id"></a>`RACK_PUNCHCARD_SPREADSHEET_ID` | environment | `1NSs3c7v6r5mf5h-GKNZHNekVU9XsAAgJp3KyeeJK-PA` | Google Sheets id of the node-issue punchcard. | `backend/node_issues.py` |
 | <a id="s-rack-punchcard-token-file"></a>`RACK_PUNCHCARD_TOKEN_FILE` | environment |  | OAuth token file for reading the punchcard sheet. | `backend/node_issues.py` |
-| <a id="s-rack-remote-base-path"></a>`RACK_REMOTE_BASE_PATH` | ladder |  | Where the tooling is deployed on the head node. Script paths and the default log directory derive from it. Optional: unset falls back to the repo root, and a declared topology's scripts role root supersedes it. | `backend/host_exec.py`, `backend/paths.py` +1 |
+| <a id="s-rack-pythoncm-jobs-dir"></a>`RACK_PYTHONCM_JOBS_DIR` | ladder |  | Where the PythonCM helper keeps per-task state on the head. Defaults to `<base>/var/pythoncm-jobs`. Must be durable and shared by the nodes: CMDaemon drops a finished command from its active status, so this directory is the only record of how a job went. | `backend/schedulers/pythoncm.py` |
+| <a id="s-rack-pythoncm-user"></a>`RACK_PYTHONCM_USER` | ladder |  | Account a PythonCM ProgramRunner job runs as when a launch does not name one. Default `root`. | `backend/schedulers/pythoncm.py` |
+| <a id="s-rack-remote-base-path"></a>`RACK_REMOTE_BASE_PATH` | ladder |  | Where the tooling is deployed on the head node. Script paths and the default log directory derive from it. Optional: unset falls back to the repo root, and a declared topology's scripts role root supersedes it. | `backend/host_exec.py`, `backend/paths.py` +2 |
 | <a id="s-rack-results-db"></a>`RACK_RESULTS_DB` | environment |  | SQLite database of parsed results history. | `backend/results_history.py` |
 | <a id="s-rack-results-db-busy-ms"></a>`RACK_RESULTS_DB_BUSY_MS` | environment |  | How long a results-database write waits on a lock before failing. | `backend/results_history.py` |
 | <a id="s-rack-services-restart-disabled"></a>`RACK_SERVICES_RESTART_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |

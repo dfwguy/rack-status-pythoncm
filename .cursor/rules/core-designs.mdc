@@ -338,9 +338,25 @@ a document. Those are **generated and tracked**, by a script under `bin/`, and r
 
 | Document | Generated from | By |
 |---|---|---|
-| `docs/action-vocabulary.json`, `docs/ACTION_VOCABULARY.md` | the live action registry | `bin/gen-action-vocabulary.py` |
+| `docs/action-vocabulary.json`, `docs/ACTION_VOCABULARY.md`, `docs/reference/identity/action-vocabulary.md` | the live action registry | `bin/gen-action-vocabulary.py` |
 | `backend/tests/action_snapshot.json` | the same registry, as endpoint/method pairs | `bin/gen-action-snapshot.py` |
+| `docs/reference/configuration/settings.md` | every setting the code reads, plus `docs/settings-hints.toml` | `bin/gen-settings-reference.py` |
 | `greenlight.toml.example` | `config_registry` | `bin/gen-greenlight-example.py` |
+
+**Run all of them, not the one you think you touched.** The CI job gates three —
+vocabulary, snapshot and settings — and they answer to different changes, so the set you need
+is rarely the set you predict. Adding a scheduler provider looks like pure backend work and
+staled the *settings* reference, because two new knobs read through `_eget` join the inventory
+the moment they exist. This line used to omit `gen-settings-reference.py` entirely, which is
+how that came to be discovered by a red pipeline rather than locally:
+
+```bash
+for g in action-vocabulary action-snapshot settings-reference; do bin/gen-$g.py; done
+```
+
+**A new setting wants a line in `docs/settings-hints.toml`**, not just a regeneration. Without
+one it lands in the page's *Undescribed settings* to-do list — which is the honest state the
+generator is right to publish, and still a to-do somebody has to come back for.
 
 **The rule: if a test needs to know a name the code defines, it reads the generated document.** Not
 a literal, and not by importing the app. A test asserting `rack:read` reached review and failed —

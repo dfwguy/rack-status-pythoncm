@@ -163,8 +163,12 @@ sources-of-truth:
       python bin/gen-settings-reference.py --check || stale=1
       if [ "$stale" -ne 0 ]; then
         echo ""
-        echo "A generated source of truth is stale — an API route was added, removed or renamed."
-        echo "Run these locally, review the diff, and commit it:"
+        echo "A generated source of truth is stale. The diff above says which, and why:"
+        echo "  a route or action was added, removed or renamed  -> vocabulary / snapshot"
+        echo "  a setting was added, renamed, or is read differently -> settings reference"
+        echo ""
+        echo "Run ALL of these locally, review the diff, and commit it. Running the one you"
+        echo "think you broke is how the next push fails on a different document:"
         echo "    bin/gen-action-vocabulary.py"
         echo "    bin/gen-action-snapshot.py"
         echo "    bin/gen-settings-reference.py"
