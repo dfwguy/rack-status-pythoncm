@@ -36,6 +36,8 @@ import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { type NodeInfo } from "../components/rack/NodeSelector";
 import { parseNodesFromRack } from "../lib/parseNodesFromRack";
 import { buildRackRowMap } from "../lib/rackTopology";
+import { powerSpecTokensFromNodeIds } from "../lib/rackCommandBodies";
+import { validationTargetFromNodes } from "../lib/validationTargetFromNodes";
 import { ValidationTab } from "../components/rack/ValidationTab";
 import { HardwareTab } from "../components/rack/HardwareTab";
 import { NetworkingTab } from "../components/rack/NetworkingTab";
@@ -47,10 +49,10 @@ import { RackCommandProvider } from "../context/RackCommandProvider";
 import { useActiveCluster } from "../context/ActiveClusterContext";
 import type { RackStatusResponse, RackRow } from "../types/api";
 
-/** One node row in the flattened table: a tray plus the rack/row it belongs to. */
+/** A discovered compute host with optional rack and datacenter row metadata. */
 interface NodeTableRow {
   id: string;
-  rack: string;
+  rack: string | null;
   /** Datacenter row label (from backend hierarchy) — "" when the site has no row level. */
   row: string;
   status: NodeInfo["status"];
@@ -61,6 +63,10 @@ interface NodeTableRow {
 
 /** Used only when no catalog platform/cluster is active to state the rack's real tray count. */
 const FALLBACK_TRAYS_PER_RACK = 18;
+const ROWS_PER_PAGE_OPTIONS = [25, 50, 100];
+
+// Keep the filter's unassigned option distinct from a real rack named "unassigned".
+const rackFilterValue = (rack: string | null): string => rack === null ? "unassigned" : `rack:${rack}`;
 
 interface NodesViewProps {
   data: RackStatusResponse | null;
@@ -97,10 +103,9 @@ function redfishHref(ip: string): string | null {
 }
 
 /**
- * Compute-node inventory as a flat, filterable table. Reuses the same
- * ``parseNodesFromRack`` helper the Rack Detail and scope tree use, so tray
- * state is parsed once in the SPA. Selecting a node exposes the rack action
- * tabs (Validation / Hardware / Networking / Services) scoped to that node.
+ * Compute-node inventory as a flat, filterable table, independent of rack membership.
+ * Older servers without a nodes inventory retain the legacy rack expansion. Rack-scoped
+ * action tabs remain available only when the selected node has a real rack association.
  */
 export function NodesView({ data, logDir }: NodesViewProps) {
   // Deep link from the Analytics node table: ?node=<id> opens straight to that node. Applied as
@@ -113,25 +118,19 @@ export function NodesView({ data, logDir }: NodesViewProps) {
   const [rackFilters, setRackFilters] = useState<string[]>([]);
   const [nameQuery, setNameQuery] = useState(linkedNode);
   const [page, setPage] = useState(0);
-  const [rowsPerPageChoice, setRowsPerPageChoice] = useState<number | null>(null);
+  const [rowsPerPage, setRowsPerPage] = useState(25);
   const [sortAsc, setSortAsc] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(linkedNode || null);
   const [tabIndex, setTabIndex] = useState(0);
   const [parserOpen, setParserOpen] = useState(false);
   const [terminalNode, setTerminalNode] = useState("");
 
-  // A page holds exactly one rack, so the page size is that rack's tray count. Cluster geometry
-  // overrides the platform's — the same precedence the backend applies in catalog.context.
+  // Geometry is used only for compatibility with servers that lack canonical node inventory.
   const { activeCluster, activePlatform } = useActiveCluster();
   const traysPerRack =
     activeCluster?.geometry?.trays_per_rack ||
     activePlatform?.geometry?.trays_per_rack ||
     FALLBACK_TRAYS_PER_RACK;
-  const rowsPerPage = rowsPerPageChoice ?? traysPerRack;
-  const rowsPerPageOptions = useMemo(() => {
-    const opts = [1, 2, 4, 8].map((multiple) => traysPerRack * multiple);
-    return opts.includes(rowsPerPage) ? opts : [...opts, rowsPerPage].sort((a, b) => a - b);
-  }, [traysPerRack, rowsPerPage]);
 
   const naming = data?.naming;
   const physicalRf0 = useMemo(() => data?.physical_rf0 ?? {}, [data]);
@@ -139,6 +138,14 @@ export function NodesView({ data, logDir }: NodesViewProps) {
 
   const allNodes = useMemo<NodeTableRow[]>(() => {
     const rows: RackRow[] = data?.rows ?? [];
+    if (data?.nodes !== undefined) {
+      const racks = new Map(rows.map((r) => [r.rack, r]));
+      return (data.nodes ?? []).map((node) => ({
+        ...node,
+        row: node.rack === null ? "" : rackRowMap.get(node.rack) ?? "",
+        lastJob: node.rack === null ? undefined : racks.get(node.rack)?.last_job,
+      }));
+    }
     const out: NodeTableRow[] = [];
     for (const r of rows) {
       const nodes = parseNodesFromRack(r.rack, r.ct_down_unk, physicalRf0, traysPerRack, naming);
@@ -165,11 +172,11 @@ export function NodesView({ data, logDir }: NodesViewProps) {
   }, [allNodes]);
 
   const rackOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const n of allNodes) set.add(n.rack);
-    return [...set]
-      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-      .map((v) => ({ value: v, children: v }));
+    const options = new Map<string, string>();
+    for (const n of allNodes) options.set(rackFilterValue(n.rack), n.rack ?? "Unassigned");
+    return [...options]
+      .sort((a, b) => a[1].localeCompare(b[1], undefined, { numeric: true }))
+      .map(([value, children]) => ({ value, children }));
   }, [allNodes]);
 
   const filteredNodes = useMemo(() => {
@@ -178,7 +185,7 @@ export function NodesView({ data, logDir }: NodesViewProps) {
     const rackSet = new Set(rackFilters);
     const out = allNodes.filter((n) => {
       if (rowSet.size > 0 && !rowSet.has(n.row)) return false;
-      if (rackSet.size > 0 && !rackSet.has(n.rack)) return false;
+      if (rackSet.size > 0 && !rackSet.has(rackFilterValue(n.rack))) return false;
       if (q && !n.id.toLowerCase().includes(q)) return false;
       return true;
     });
@@ -216,14 +223,23 @@ export function NodesView({ data, logDir }: NodesViewProps) {
   );
 
   const disabled = selectedNode === null;
+  // Inventory can include hostnames the legacy action APIs cannot represent. Empty specs or
+  // an omitted target can expand to the entire rack, so do not mount those actions in that case.
+  const hasExactActionTarget = selectedNode?.rack != null
+    && powerSpecTokensFromNodeIds(selectedNode.rack, selectedNodeSet, naming).length > 0
+    && validationTargetFromNodes(selectedNode.rack, selectedNodeSet, naming) !== null;
 
   return (
     <Box component="section" sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
       <PageHeader
         contentId="nodes"
         title="Nodes"
-        description="Every compute node across the cluster. Filter by row, rack, or name, then select a node to run Validation, Hardware, Networking, and Services actions against it."
+        description="Every discovered compute node, including nodes without a rack. Filter by row, rack, or name, then select a node to view results and available actions."
       />
+
+      {data?.node_inventory_error && (
+        <Banner status="warning" style={{ marginBottom: 16 }}>{data.node_inventory_error}</Banner>
+      )}
 
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Flex gap="4" wrap="wrap" align="end">
@@ -315,7 +331,9 @@ export function NodesView({ data, logDir }: NodesViewProps) {
               <TableRow>
                 <TableCell colSpan={6}>
                   <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-                    {allNodes.length === 0 ? "No nodes reported yet." : "No nodes match the current filters."}
+                    {data?.nodes === null
+                      ? "Node inventory is unavailable."
+                      : allNodes.length === 0 ? "No nodes reported yet." : "No nodes match the current filters."}
                   </Text>
                 </TableCell>
               </TableRow>
@@ -335,7 +353,7 @@ export function NodesView({ data, logDir }: NodesViewProps) {
                     <Text kind="mono/sm">{n.id}</Text>
                   </TableCell>
                   <TableCell>
-                    <Text kind="body/regular/sm">{n.rack}</Text>
+                    <Text kind="body/regular/sm">{n.rack ?? "Unassigned"}</Text>
                   </TableCell>
                   <TableCell>
                     <Text kind="body/regular/sm" style={{ color: n.row ? undefined : "var(--text-color-secondary)" }}>
@@ -384,10 +402,10 @@ export function NodesView({ data, logDir }: NodesViewProps) {
           onPageChange={(_, p) => setPage(p)}
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => {
-            setRowsPerPageChoice(parseInt(e.target.value, 10));
+            setRowsPerPage(parseInt(e.target.value, 10));
             setPage(0);
           }}
-          rowsPerPageOptions={rowsPerPageOptions}
+          rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS}
         />
       </TableContainer>
 
@@ -397,76 +415,91 @@ export function NodesView({ data, logDir }: NodesViewProps) {
         )}
 
         {selectedNode && (
-          <RackCommandProvider rack={selectedNode.rack} logDir={logDir} jobId={selectedNode.lastJob}>
+          <>
             <Box sx={{ mb: 2 }}>
               <Text kind="title/lg" style={{ display: "block" }}>{selectedNode.id}</Text>
               <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-                Rack {selectedNode.rack}
-                {selectedNode.row ? ` · Row ${selectedNode.row}` : ""} · Actions apply to this node only.
+                {selectedNode.rack === null ? "Unassigned" : `Rack ${selectedNode.rack}`}
+                {selectedNode.row ? ` · Row ${selectedNode.row}` : ""}
+                {hasExactActionTarget ? " · Actions apply to this node only." : ""}
               </Text>
             </Box>
 
             <BringupResultsPanel node={selectedNode.id} logDir={logDir} />
 
-            <Tabs
-              value={tabIndex}
-              onChange={(_, v) => setTabIndex(v)}
-              sx={{ borderBottom: 1, borderColor: "divider", mb: 3 }}
-            >
-              <Tab label="Validation" />
-              <Tab label="Hardware" />
-              <Tab label="Networking" />
-              <Tab label="Services" />
-            </Tabs>
+            {selectedNode.rack === null ? (
+              <Banner status="info">
+                This node has no rack assignment. Terminal access and node results are available;
+                Validation, Hardware, Networking, and Services actions currently require a rack.
+              </Banner>
+            ) : !hasExactActionTarget ? (
+              <Banner status="info">
+                The available actions cannot target this hostname individually. Terminal access and node results remain available.
+              </Banner>
+            ) : (
+              <RackCommandProvider rack={selectedNode.rack} logDir={logDir} jobId={selectedNode.lastJob}>
+                <Tabs
+                  value={tabIndex}
+                  onChange={(_, v) => setTabIndex(v)}
+                  sx={{ borderBottom: 1, borderColor: "divider", mb: 3 }}
+                >
+                  <Tab label="Validation" />
+                  <Tab label="Hardware" />
+                  <Tab label="Networking" />
+                  <Tab label="Services" />
+                </Tabs>
 
-            {tabIndex === 0 && (
-              <ValidationTab
-                rack={selectedNode.rack}
-                logDir={logDir}
-                naming={naming}
-                selectedNodes={selectedNodeSet}
-                disabled={disabled}
-                jobId={selectedNode.lastJob}
-                onViewResults={() => setParserOpen(true)}
-              />
-            )}
-            {tabIndex === 1 && (
-              <HardwareTab
-                rack={selectedNode.rack}
-                logDir={logDir}
-                naming={naming}
-                selectedNodes={selectedNodeSet}
-                disabled={disabled}
-                validationScope="nodes"
-                onSelectPowerResetTargets={() => setSelectedId(selectedNode.id)}
-              />
-            )}
-            {tabIndex === 2 && (
-              <NetworkingTab
-                rack={selectedNode.rack}
-                logDir={logDir}
-                selectedNodes={selectedNodeSet}
-                disabled={disabled}
-              />
-            )}
-            {tabIndex === 3 && (
-              <ServicesTab
-                rack={selectedNode.rack}
-                logDir={logDir}
-                naming={naming}
-                selectedNodes={selectedNodeSet}
-                disabled={disabled}
-              />
-            )}
+                {tabIndex === 0 && (
+                  <ValidationTab
+                    rack={selectedNode.rack}
+                    logDir={logDir}
+                    naming={naming}
+                    selectedNodes={selectedNodeSet}
+                    disabled={disabled}
+                    jobId={selectedNode.lastJob}
+                    onViewResults={() => setParserOpen(true)}
+                  />
+                )}
+                {tabIndex === 1 && (
+                  <HardwareTab
+                    rack={selectedNode.rack}
+                    logDir={logDir}
+                    naming={naming}
+                    selectedNodes={selectedNodeSet}
+                    disabled={disabled}
+                    validationScope="nodes"
+                    onSelectPowerResetTargets={() => setSelectedId(selectedNode.id)}
+                  />
+                )}
+                {tabIndex === 2 && (
+                  <NetworkingTab
+                    rack={selectedNode.rack}
+                    logDir={logDir}
+                    naming={naming}
+                    selectedNodes={selectedNodeSet}
+                    disabled={disabled}
+                  />
+                )}
+                {tabIndex === 3 && (
+                  <ServicesTab
+                    rack={selectedNode.rack}
+                    logDir={logDir}
+                    naming={naming}
+                    selectedNodes={selectedNodeSet}
+                    disabled={disabled}
+                  />
+                )}
 
-            <ParserResultsDialog
-              open={parserOpen}
-              onClose={() => setParserOpen(false)}
-              rack={selectedNode.rack}
-              jobId={selectedNode.lastJob !== "-" ? selectedNode.lastJob : undefined}
-              logDir={logDir}
-            />
-          </RackCommandProvider>
+                <ParserResultsDialog
+                  open={parserOpen}
+                  onClose={() => setParserOpen(false)}
+                  rack={selectedNode.rack}
+                  jobId={selectedNode.lastJob !== "-" ? selectedNode.lastJob : undefined}
+                  logDir={logDir}
+                />
+              </RackCommandProvider>
+            )}
+          </>
         )}
       </Box>
 

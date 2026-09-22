@@ -49,6 +49,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -57,6 +58,7 @@ import host_exec
 import native_status
 from comments_store import read_comments
 from config_env import _eget, _eget_int, _env_int, _job_env_int, _subprocess_env
+from core import is_valid_node_hostname
 from core import rpath as _rpath
 from core import truthy_env as _truthy_env
 from json_db import atomic_write, exclusive_lock
@@ -96,6 +98,7 @@ _physical_rf0_map: dict[str, str] = {}
 
 
 _physical_rf0_loaded = False
+_physical_rf0_context: tuple[str, frozenset[str]] | None = None
 
 
 _rack_status_cache_lock = threading.Lock()
@@ -113,7 +116,7 @@ _cluster_snapshot_repo_cache: tuple[str, cluster_snapshot.SnapshotRepository] | 
 _PHYSICAL_RF0_IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
 
 
-def _parse_physical_rf0_stdout(text: str) -> dict[str, str]:
+def _parse_physical_rf0_stdout(text: str, known_hosts: Iterable[str] = ()) -> dict[str, str]:
     """hostname(lower) -> first IPv4 after that line (skips interfaces / noise until get ip)."""
     out: dict[str, str] = {}
     raw_lines = [ln.rstrip() for ln in (text or "").splitlines()]
@@ -131,8 +134,11 @@ def _parse_physical_rf0_stdout(text: str) -> dict[str, str]:
     )
 
     naming = _nvis_naming()
+    known = {host.casefold() for host in known_hosts}
 
     def host_ok(h: str) -> bool:
+        if h.casefold() in known:
+            return True
         if naming.is_tray_hostname(h):
             return True
         if not loose:
@@ -151,6 +157,10 @@ def _parse_physical_rf0_stdout(text: str) -> dict[str, str]:
             continue
         ip_token = ""
         while i < len(lines):
+            # A known host without an rf0 address must not consume the next host's IP.
+            if (lines[i].lower() != "rf0" and is_valid_node_hostname(lines[i])
+                    and not _PHYSICAL_RF0_IPV4_RE.fullmatch(lines[i])):
+                break
             cand = lines[i].split()[0].split("/")[0].strip()
             i += 1
             if _PHYSICAL_RF0_IPV4_RE.match(cand):
@@ -161,14 +171,17 @@ def _parse_physical_rf0_stdout(text: str) -> dict[str, str]:
     return out
 
 
-def get_physical_rf0_map() -> dict[str, str]:
-    """Run cmsh foreach once per process; merged into /api/status. Disable with RACK_PHYSICAL_RF0_MAP_DISABLED=1."""
-    global _physical_rf0_loaded, _physical_rf0_map
+def get_physical_rf0_map(known_hosts: Iterable[str] = ()) -> dict[str, str]:
+    """Cache management addresses per cluster and real node roster, never discover compute from IPs."""
+    global _physical_rf0_loaded, _physical_rf0_map, _physical_rf0_context
     if os.environ.get("RACK_PHYSICAL_RF0_MAP_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return {}
     with _physical_rf0_lock:
-        if _physical_rf0_loaded:
+        known = frozenset(host.casefold() for host in known_hosts)
+        context = (native_status.native_state_key(Path(".")), known)
+        if _physical_rf0_loaded and _physical_rf0_context == context:
             return dict(_physical_rf0_map)
+        _physical_rf0_context = context
         _physical_rf0_map = {}
         plat = _get_platform()
         cmd = plat.physical_rf0_cmd()
@@ -184,7 +197,7 @@ def get_physical_rf0_map() -> dict[str, str]:
             _physical_rf0_loaded = True
             return {}
         if proc.returncode == 0 and proc.stdout:
-            _physical_rf0_map = _parse_physical_rf0_stdout(proc.stdout)
+            _physical_rf0_map = _parse_physical_rf0_stdout(proc.stdout, known)
         _physical_rf0_loaded = True
         return dict(_physical_rf0_map)
 
@@ -396,7 +409,19 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
         except Exception:
             _logger.debug("run_rack_status: ignoring error", exc_info=True)
             out["comments"] = {}
-        out["physical_rf0"] = get_physical_rf0_map()
+        try:
+            records = None
+            if _eget("RACK_SCHEDULER", "slurm") == "slurm":
+                node_states = native_status.collect_sinfo_nodes()
+            else:
+                records = _get_platform().compute_node_inventory()
+                node_states = {record["id"]: record.get("scheduler_state", "") for record in records}
+            out["nodes"] = native_status.build_node_inventory(
+                node_states, [row["rack"] for row in out["rows"]], records=records)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            out["nodes"] = None
+            out["node_inventory_error"] = f"Node inventory is unavailable. {exc}"
+        _enrich_node_addresses(out)
         out["native_workers"] = {
             "mode": "shell_table",
             "note": "Table from rack_status.sh; native async workers are not used.",
@@ -420,8 +445,19 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
     except Exception:
         _logger.debug("run_rack_status: ignoring error", exc_info=True)
         out["comments"] = {}
-    out["physical_rf0"] = get_physical_rf0_map()
+    _enrich_node_addresses(out)
     return out
+
+
+def _enrich_node_addresses(payload: dict) -> None:
+    nodes = payload.get("nodes") or []
+    if _eget("RACK_SCHEDULER", "slurm") == "slurm":
+        physical = get_physical_rf0_map(node["id"] for node in nodes)
+    else:
+        physical = {node["id"].casefold(): node["ip"] for node in nodes if node.get("ip")}
+    payload["physical_rf0"] = physical
+    for node in nodes:
+        node["ip"] = physical.get(node["id"].casefold(), "") or node.get("ip", "")
 
 
 def _rack_status_background_interval_sec() -> int:

@@ -721,7 +721,13 @@ def build_cluster_overview(
             if k not in summary:
                 summary[k] = 0
     phys = dict(cached.get("physical_rf0") or {}) if cached is not None else {}
-    tray_hosts = len(phys) if cached is not None else None
+    # The node roster is authoritative even without racks or management interfaces.
+    # Only older snapshots lack this field; null is unavailable, [] is truly empty.
+    nodes = cached.get("nodes") if cached is not None else None
+    if cached is not None and "nodes" in cached:
+        tray_hosts = len(nodes) if isinstance(nodes, list) else None
+    else:
+        tray_hosts = len(phys) if cached is not None else None
     gpus_per_tray = max(1, _eget_int("RACK_CLUSTER_GPU_PER_TRAY", 8))
     estimated_gpus = tray_hosts * gpus_per_tray if tray_hosts is not None else None
     validation_total = None
@@ -782,7 +788,10 @@ def build_cluster_overview(
     if nemo_container == "":
         nemo_container = "—"
 
-    cuda_nccl_build_host_candidates = sorted(phys.keys(), key=str.casefold)
+    cuda_nccl_build_host_candidates = sorted(
+        (node["id"] for node in nodes) if isinstance(nodes, list) else phys.keys(),
+        key=str.casefold,
+    )
 
     out: dict[str, object] = {
         "ok": True,

@@ -60,6 +60,18 @@ describe("step gating", () => {
     expect(stepProblems(2, draft).join(" ")).toMatch(/begin with the rack template/i);
   });
 
+  it("allows inventory discovery without naming templates or rack layout", () => {
+    const draft = filled({ rackIdTemplate: " ", ctIdTemplate: "", traysPerRack: "" });
+    expect(stepProblems(2, draft)).toEqual([]);
+  });
+
+  it.each([
+    { rackIdTemplate: "", ctIdTemplate: "node[01-99]" },
+    { rackIdTemplate: "rack[01-99]", ctIdTemplate: "" },
+  ])("refuses partially configured naming: %o", (templates) => {
+    expect(canAdvance(2, filled(templates))).toBe(false);
+  });
+
   it("requires a host only in ssh mode", () => {
     expect(canAdvance(3, filled({ execMode: "local", sshHost: "", sshUser: "" }))).toBe(true);
     expect(canAdvance(3, filled({ execMode: "ssh", sshHost: "" }))).toBe(false);
@@ -80,6 +92,15 @@ describe("the document it produces", () => {
     // Load-bearing, not descriptive: `setup_state` treats any non-seed project as proof that
     // setup happened, which is what stops the wizard reopening on every login.
     expect(toProject(filled()).source).toBe("operator");
+  });
+
+  it("preserves empty naming and inherits geometry without inventing a rack", () => {
+    const cluster = toProject(filled({
+      rackIdTemplate: " ", ctIdTemplate: "", traysPerRack: "",
+    })).clusters[0];
+    expect(cluster.naming.rack_id_template).toBe("");
+    expect(cluster.naming.ct_id_template).toBe("");
+    expect(cluster.geometry.trays_per_rack).toBe(0);
   });
 
   it("derives ids the catalog will accept", () => {

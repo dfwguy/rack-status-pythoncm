@@ -24,6 +24,7 @@ RACK_CLUSTER_ID = "Stable identifier for the cluster, recorded in fleet snapshot
 RACK_CLUSTER_PRODUCT_LINE = "Product-line label such as GB300 NVL72, shown on the overview and in reports."
 RACK_PRODUCT_LINE = "Older alias for RACK_CLUSTER_PRODUCT_LINE; the specific one wins."
 NVIS_PROJECT_ID = "Active project id. Written by the cluster overlay and read to select that project's script layer."
+NVIS_CLUSTER_ID = "Active cluster id supplied by the cluster overlay. Separates cached live node inventory between clusters."
 NVIS_PLATFORM_ID = "Active platform id. Selects the platform layer of the script tree."
 
 # --- geometry and naming -----------------------------------------------------------------------
@@ -59,6 +60,7 @@ RACK_AI_SETTINGS_FILE = "Persisted assistant settings, so a change survives a re
 RACK_AI_TOOL_AUDIT_FILE = "Audit log of the tool calls the assistant made."
 
 # --- execution and Slurm -----------------------------------------------------------------------
+RACK_SCHEDULER = "Scheduler provider selected by the active cluster. Defaults to `slurm`; other schedulers read compute inventory from the cluster manager."
 RACK_SLURM_CONF = "An explicit `SLURM_CONF` to export before running Slurm commands. Needed where the scripts host is not the Slurm controller."
 RACK_MODULES_INIT = "Shell snippet that initialises Environment Modules before a Slurm command, replacing the built-in default."
 RACK_SLURM_SACCT_SINCE = "How far back the recent-jobs query looks. Default `now-7days`."
@@ -67,6 +69,7 @@ RACK_PDSH_W_SKIP_SLURM_EXPAND = "Pass a `pdsh -w` target through verbatim instea
 RACK_SSH_REACHABILITY_CONNECT_TIMEOUT = "Seconds a reachability probe waits for a connection. Default 5."
 RACK_SSH_REACHABILITY_TTL_SEC = "How long a reachability result is cached. Default 15, floors at 3."
 NVIS_BCM_PYTHON = "Interpreter used for BCM `pythoncm` queries on the head node."
+NVIS_BCM_HOST = "BCM API host passed to structured `pythoncm` queries when configured. Also separates cached inventory when the query host changes."
 RACK_PYTHONCM_JOBS_DIR = "Where the PythonCM helper keeps per-task state on the head. Defaults to `<base>/var/pythoncm-jobs`. Must be durable and shared by the nodes: CMDaemon drops a finished command from its active status, so this directory is the only record of how a job went."
 RACK_PYTHONCM_USER = "Account a PythonCM ProgramRunner job runs as when a launch does not name one. Default `root`."
 RACK_MAAS_CLI = "The `maas` CLI binary. Default `maas`."

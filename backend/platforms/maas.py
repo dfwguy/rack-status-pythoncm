@@ -20,9 +20,12 @@ Environment variables
 """
 from __future__ import annotations
 
+import json
 import os
 
-from platforms.base import PlatformProvider
+import host_exec
+
+from platforms.base import PlatformProvider, _compute_node_records
 
 
 class MAASProvider(PlatformProvider):
@@ -34,6 +37,18 @@ class MAASProvider(PlatformProvider):
         return (os.environ.get("RACK_MAAS_PROFILE") or "admin").strip() or "admin"
 
     # -- Cluster manager (maas CLI) -----------------------------------------
+
+    def compute_node_inventory(self) -> list[dict[str, str | None]]:
+        proc = host_exec.run_on_host(self.device_status_cmd(), timeout=120)
+        if proc.returncode != 0:
+            raise RuntimeError(f"MAAS node inventory failed (exit {proc.returncode})")
+        try:
+            records = json.loads(proc.stdout or "")
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("MAAS node inventory returned invalid JSON") from exc
+        # Machine lifecycle status is not scheduler availability. MAAS ip_addresses are
+        # host addresses, not the BMC/rf0 address represented by the inventory's ip field.
+        return _compute_node_records(records, provider="MAAS")
 
     def list_racks_cmd(self) -> list[str]:
         cli = self._maas_cli()

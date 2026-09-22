@@ -326,6 +326,15 @@ export interface MultirackJobsResponse {
   error?: string;
 }
 
+/** Discovered compute host; rack membership is optional inventory metadata. */
+export interface NodeInventoryEntry {
+  id: string;
+  rack: string | null;
+  status: "up" | "down" | "inst" | "unknown";
+  ip: string;
+  scheduler_state?: string;
+}
+
 export interface RackStatusResponse {
   ok: boolean;
   returncode: number;
@@ -335,6 +344,10 @@ export interface RackStatusResponse {
   stderr: string;
   legend: string;
   rows: RackRow[];
+  /** Discovered hosts; null means unavailable, while absence identifies older servers. */
+  nodes?: NodeInventoryEntry[] | null;
+  /** Discovery failure, including whether previously discovered nodes are being retained. */
+  node_inventory_error?: string;
   summary: RackSummary;
   footnotes: string[];
   comments: Record<string, string>;

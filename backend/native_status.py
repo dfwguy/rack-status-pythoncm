@@ -48,6 +48,7 @@ import config_env
 import host_exec
 import nvis_id_templates as _nvis_ids
 import results_history
+from core import is_valid_node_hostname
 from json_db import atomic_write_json
 from platforms import get_platform as _get_platform
 
@@ -791,8 +792,8 @@ def sinfo_state_trim(s: str) -> str:
     return s
 
 
-def collect_sinfo_counts() -> dict[tuple[str, str], int]:
-    """Map (rack_id, trimmed_state) -> count of nodes (after hostname expansion).
+def collect_sinfo_nodes() -> dict[str, str]:
+    """Actual Slurm NodeNames and states, independent of rack naming or placement.
 
     No bare-name ``which("sinfo")`` guard: the Slurm CLI is not on PATH here
     (``plat.sinfo_cmd()`` supplies the absolute path plus ``SLURM_CONF``), so that probe
@@ -811,20 +812,35 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
             plat.sinfo_cmd(extra),
             timeout=max(30, _env_int("RACK_NATIVE_SINFO_TIMEOUT_SEC", 120)),
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
-    counts: dict[tuple[str, str], int] = {}
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("Slurm node inventory unavailable") from exc
+    if proc.returncode != 0:
+        raise RuntimeError(f"Slurm node inventory failed (exit {proc.returncode})")
+    nodes: dict[str, str] = {}
+    spelling: dict[str, str] = {}
     for line in (proc.stdout or "").splitlines():
         line = line.strip()
         if not line:
             continue
-        parts = line.split(None, 1)
-        if len(parts) < 2:
-            continue
+        parts = line.split()
+        if len(parts) != 2:
+            raise RuntimeError("Slurm node inventory returned a malformed row")
         node, st_raw = parts[0], parts[1]
-        st = sinfo_state_trim(st_raw)
-        if not st:
-            continue
+        # %t has a compact state plus optional suffix flags. A login
+        # banner must never become a compute node after dropping rack-name filters.
+        # The manual's summary omits BOOT, INVAL and others: use all return values of
+        # node_state_string_compact in SchedMD/slurm src/common/slurm_protocol_defs.c.
+        st = st_raw.lower().rstrip("*~$#:!%@^-")
+        compact_states = {
+            "?", "alloc", "block", "boot", "canc_r", "cloud", "comp", "down", "drain",
+            "drng", "ext", "fail", "failg", "futr", "idle", "inval", "maint", "mix",
+            "plnd", "pow_dn", "pow_up", "powered_dn", "powering_up", "powring_dn",
+            "resm", "resv", "unk",
+        }
+        if st.endswith("+"):
+            st += "comp"  # ALLOCATED+ includes jobs that are completing.
+        if not set(st.split("+")).issubset(compact_states):
+            raise RuntimeError("Slurm node inventory returned an invalid state")
         hosts: list[str] = []
         if "[" in node and "]" in node:
             try:
@@ -832,21 +848,91 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
                     plat.scontrol_hostnames_cmd(node),
                     timeout=max(5, _env_int("RACK_NATIVE_SCONTROL_TIMEOUT_SEC", 60)),
                 )
+                if hp.returncode != 0:
+                    raise RuntimeError("Slurm node range expansion failed")
                 hosts = [h.strip() for h in (hp.stdout or "").splitlines() if h.strip()]
-            except (OSError, subprocess.TimeoutExpired):
-                hosts = []
+                if not hosts:
+                    raise RuntimeError("Slurm node range expansion returned no hosts")
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise RuntimeError("Slurm node range expansion unavailable") from exc
         else:
             hosts = [node]
-        naming = _nvis_naming()
         for h in hosts:
-            hh = h.lower().split(".")[0]
-            parsed = naming.sinfo_rack_from_host(hh)
-            if not parsed:
-                continue
-            rr, _host = parsed
-            key = (rr, st)
+            if not is_valid_node_hostname(h):
+                raise RuntimeError("Slurm returned an invalid node hostname")
+            # sinfo repeats a node for each partition. Preserve its real spelling,
+            # and keep all reported states rather than letting a later idle hide down.
+            actual = spelling.setdefault(h.casefold(), h)
+            states = set(nodes.get(actual, "").split("+")) - {""}
+            states.update(st.split("+"))
+            nodes[actual] = "+".join(sorted(states))
+    return nodes
+
+
+def sinfo_counts_for_nodes(nodes: dict[str, str]) -> dict[tuple[str, str], int]:
+    """Project real inventory onto the legacy rack table; unmatched nodes remain in inventory."""
+    counts: dict[tuple[str, str], int] = {}
+    naming = _nvis_naming()
+    for host, state in nodes.items():
+        parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
+        if parsed:
+            rack = _normalize_rack_key_for_ds(parsed[0])
+            key = (rack, state)
             counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def collect_sinfo_counts() -> dict[tuple[str, str], int]:
+    """Compatibility projection for the multirack status worker."""
+    return sinfo_counts_for_nodes(collect_sinfo_nodes())
+
+
+def build_node_inventory(
+    nodes: dict[str, str], racks: Iterable[str], ds_text: str = "",
+    records: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Real compute nodes with optional rack membership and BCM status enrichment.
+
+    The scheduler or cluster-manager provider owns the roster. Neither geometry nor
+    a management interface can invent a node. Rack grouping is optional enrichment.
+    """
+    rack_ids = {rack.casefold(): rack for rack in racks}
+    naming = _nvis_naming()
+    details = {record["id"].casefold(): record for record in records or []}
+    device_states: dict[str, str] = {}
+    # Match complete known host tokens, never partial names or arbitrary ds devices.
+    known = {host.casefold() for host in nodes}
+    for line in ds_text.splitlines():
+        match = re.search(r"\[\s*([^\]]+)\]", line)
+        if not match:
+            continue
+        raw = re.sub(r"\s+", "", match.group(1)).lower()
+        state = "up" if raw == "up" else "down" if raw in {"down", "unreachable"} else "inst"
+        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*", line[:match.start()] + line[match.end():]):
+            if token.casefold() in known:
+                device_states[token.casefold()] = state
+    result: list[dict[str, Any]] = []
+    for host, scheduler_state in sorted(nodes.items(), key=lambda item: item[0].casefold()):
+        detail = details.get(host.casefold(), {})
+        parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
+        rack = rack_ids.get(_normalize_rack_key_for_ds(parsed[0]).casefold()) if parsed else None
+        placement = detail.get("rack")
+        if placement:
+            mapped = naming.map_cmsh_rack_list_token(placement) or _normalize_rack_key_for_ds(placement)
+            rack = rack_ids.get(mapped.casefold())
+        if rack is None:
+            # Support real names whose extra components do not fit the tray template.
+            matches = [value for key, value in rack_ids.items()
+                       if host.casefold().startswith(key) and host[len(key):len(key) + 1] in {"-", "_", ".", ":", "/"}]
+            if matches:
+                rack = max(matches, key=len)
+        states = set(scheduler_state.split("+"))
+        state = "down" if states & {"down", "fail", "inval", "unk", "unknown"} else "unknown"
+        if states & {"idle", "alloc", "allocated", "mix", "mixed", "comp", "completing"} and state != "down":
+            state = "up"
+        result.append({"id": host, "rack": rack, "status": device_states.get(host.casefold(), state),
+                       "scheduler_state": scheduler_state, "ip": detail.get("ip", "")})
+    return result
 
 
 def shlex_split_safe(s: str) -> list[str]:
@@ -1367,6 +1453,7 @@ class NativeRackTableState:
         "by_rack_stage_log",
         "ct_by_rack",
         "ds_done",
+        "ds_text",
         "ds_thread",
         "key",
         "last_errors",
@@ -1374,6 +1461,9 @@ class NativeRackTableState:
         "log_dir",
         "log_done",
         "log_thread",
+        "node_inventory_error",
+        "node_records",
+        "node_states",
         "per_path_probe",
         "racks",
         "racks_refresh_lock",
@@ -1391,6 +1481,10 @@ class NativeRackTableState:
         self.racks_refresh_lock = threading.Lock()
         self.racks_refreshed_monotonic = 0.0
         self.ct_by_rack: dict[str, str] = {}
+        self.ds_text = ""
+        self.node_states: dict[str, str] | None = None
+        self.node_records: list[dict[str, Any]] | None = None
+        self.node_inventory_error = ""
         self.sinfo_counts: dict[tuple[str, str], int] = {}
         self.per_path_probe: dict[str, dict[str, Any]] = {}
         self.by_rack_log: dict[str, dict[str, Any]] = {}
@@ -1433,6 +1527,7 @@ class NativeRackTableState:
             col = parse_cmsh_ds_to_ct_column_by_rack(text)
             with self.lock:
                 self.ct_by_rack = col
+                self.ds_text = text
                 self.ds_done = True
         except Exception as e:
             _logger.debug("_worker_ds: ignoring error", exc_info=True)
@@ -1442,15 +1537,38 @@ class NativeRackTableState:
 
     def _worker_sinfo(self) -> None:
         try:
-            c = collect_sinfo_counts()
+            records = None
+            if config_env._eget("RACK_SCHEDULER", "slurm") == "slurm":
+                nodes = collect_sinfo_nodes()
+            else:
+                records = _get_platform().compute_node_inventory()
+                nodes = {record["id"]: record.get("scheduler_state", "") for record in records}
+            c = sinfo_counts_for_nodes(nodes) if records is None else {}
             with self.lock:
+                self.node_states = nodes
+                self.node_records = records
+                self.node_inventory_error = ""
                 self.sinfo_counts = c
                 self.sinfo_done = True
         except Exception as e:
             _logger.debug("_worker_sinfo: ignoring error", exc_info=True)
             with self.lock:
+                self.node_inventory_error = (
+                    "Node inventory is unavailable. " if self.node_states is None
+                    else "Showing the last successful node inventory. "
+                ) + str(e)
                 self.last_errors.append(f"sinfo: {e}")
                 self.sinfo_done = True
+
+    def node_inventory_snapshot(self) -> dict[str, Any]:
+        """An explicit null means unavailable; an empty list means confirmed empty."""
+        with self.lock:
+            return {
+                "nodes": None if self.node_states is None else build_node_inventory(
+                    self.node_states, self.racks, self.ds_text, self.node_records
+                ),
+                "node_inventory_error": self.node_inventory_error,
+            }
 
     def _worker_logs(self, probe_fn: Callable[[Path], dict[str, object] | None]) -> None:
         try:
@@ -1906,7 +2024,7 @@ def _worker_snapshot(st: NativeRackTableState) -> dict[str, Any]:
                 },
                 {
                     "id": "sinfo",
-                    "label": "Slurm sinfo / scontrol hostnames",
+                    "label": "Compute node inventory / scheduler state",
                     "thread_alive": _alive(st.sinfo_thread),
                     "finished_once": st.sinfo_done,
                 },
@@ -1921,9 +2039,23 @@ def _worker_snapshot(st: NativeRackTableState) -> dict[str, Any]:
         }
 
 
+def native_state_key(log_dir: Path) -> str:
+    """Scope retained worker data to the active cluster and naming configuration."""
+    return json.dumps([
+        config_env._eget("NVIS_PROJECT_ID", ""),
+        config_env._eget("NVIS_CLUSTER_ID", ""),
+        config_env._eget("RACK_SSH_HOST", ""),
+        config_env._eget("RACK_EXEC_MODE", "local"),
+        config_env._eget("RACK_PLATFORM", "bcm"),
+        config_env._eget("RACK_SCHEDULER", "slurm"),
+        config_env._eget("NVIS_BCM_HOST", ""),
+        _nvis_rack_id_template(), _nvis_ct_id_template(), str(_host_resolve(log_dir)),
+    ])
+
+
 def worker_snapshot_for_log_dir(log_dir: Path) -> dict[str, Any] | None:
     """Return ``_worker_snapshot`` for *log_dir* if native state exists, else ``None``."""
-    key = str(_host_resolve(log_dir))
+    key = native_state_key(log_dir)
     with _states_lock:
         st = _states.get(key)
     if st is None:
@@ -1937,13 +2069,14 @@ def live_table_snapshot_for_log_dir(log_dir: Path) -> dict[str, Any] | None:
     Cached ``/api/status`` payloads can otherwise keep placeholder ``?`` cells from the first
     snapshot taken before ``ds_done`` / ``sinfo_done`` flipped true.
     """
-    key = str(_host_resolve(log_dir))
+    key = native_state_key(log_dir)
     with _states_lock:
         st = _states.get(key)
     if st is None:
         return None
     rows, summary, footnotes, legend = st.build_table_rows()
     return {
+        **st.node_inventory_snapshot(),
         "rows": rows,
         "summary": summary,
         "footnotes": footnotes,
@@ -1968,7 +2101,7 @@ def build_native_rack_status(
     wait_for_workers: bool = False,
     worker_timeout_sec: float = 300,
 ) -> dict[str, Any]:
-    key = str(_host_resolve(log_dir))
+    key = native_state_key(log_dir)
     st = _get_state(key, log_dir)
     st.refresh_racks_blocking()
     st.schedule_async_workers(probe_fn)
@@ -1982,6 +2115,7 @@ def build_native_rack_status(
             )
     rows, summary, footnotes, legend = st.build_table_rows()
     out: dict[str, Any] = {
+        **st.node_inventory_snapshot(),
         "ok": True,
         "returncode": 0,
         "updated_at": datetime.now(timezone.utc).isoformat(),

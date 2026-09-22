@@ -249,9 +249,27 @@ class SnapshotRepository:
 
     def commit_success(self, key: str, owner: str, payload: dict) -> ClusterSnapshot:
         now = self.clock()
-        payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM cluster_snapshots WHERE snapshot_key = ?", (key,)
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("snapshot disappeared during refresh")
+            if "nodes" in payload and payload["nodes"] is None and row["payload_json"] is not None:
+                previous = json.loads(row["payload_json"])
+                if isinstance(previous.get("nodes"), list):
+                    # The worker's in-memory fallback cannot survive a restart or serve
+                    # another process. Retain only this cluster/log-root/generation's
+                    # known roster; [] is authoritative and legacy payloads stay legacy.
+                    reason = str(payload.get("node_inventory_error") or "Node inventory is unavailable.")
+                    prefix = "Showing the last successful node inventory."
+                    payload = {
+                        **payload,
+                        "nodes": previous["nodes"],
+                        "node_inventory_error": reason if reason.startswith(prefix) else f"{prefix} {reason}",
+                    }
+            payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True)
             connection.execute(
                 """
                 UPDATE cluster_snapshots

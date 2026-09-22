@@ -16,6 +16,7 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
 from cluster_snapshot import ClusterSnapshotService, SnapshotRepository
 
 
@@ -411,3 +412,78 @@ def test_wait_false_failure_preserves_stale_payload(tmp_path):
     assert done.snapshot_id == prior_id
     assert done.payload == prior_payload
     assert "refresh failed" in done.last_error
+
+
+@pytest.mark.parametrize("reason", ["Slurm node inventory failed (exit 1)", "", "Node discovery pending"])
+def test_partial_node_failure_after_restart_retains_persisted_roster_and_reason(tmp_path, reason):
+    nodes = [{"id": "GPU01", "rack": None, "status": "up", "ip": "10.0.0.1"}]
+    previous = {**payload(), "nodes": nodes, "node_inventory_error": ""}
+    service(tmp_path, lambda: previous).get_cluster_snapshot("cluster-a", "/logs")
+    current = {**payload(rack_count=2), "nodes": None, "node_inventory_error": reason}
+
+    # Both objects are new, as after a process restart; the database owns the fallback.
+    restarted = service(tmp_path, lambda: current)
+    merged = restarted.get_cluster_snapshot("cluster-a", "/logs", force_refresh=True)
+
+    assert merged.payload["nodes"] == nodes
+    assert merged.payload["rows"] == current["rows"]
+    assert merged.payload["summary"] == current["summary"]
+    assert merged.payload["node_inventory_error"].startswith("Showing the last successful node inventory.")
+    if reason:
+        assert reason in merged.payload["node_inventory_error"]
+    else:
+        assert "unavailable" in merged.payload["node_inventory_error"]
+    assert current["nodes"] is None  # Do not mutate the collector's payload.
+    stored = restarted.repository.get("cluster-a", "/logs", merged.configuration_generation)
+    assert stored.payload == merged.payload
+
+
+def test_repeated_partial_failure_does_not_duplicate_retention_notice(tmp_path):
+    nodes = [{"id": "GPU01"}]
+    service(tmp_path, lambda: {**payload(), "nodes": nodes}).get_cluster_snapshot("cluster-a", "/logs")
+    reason = "Showing the last successful node inventory. BCM unavailable"
+    failed = service(tmp_path, lambda: {**payload(), "nodes": None, "node_inventory_error": reason})
+    for _ in range(2):
+        result = failed.get_cluster_snapshot("cluster-a", "/logs", force_refresh=True)
+        assert result.payload["nodes"] == nodes
+        assert result.payload["node_inventory_error"] == reason
+
+
+def test_confirmed_empty_replaces_prior_nodes_and_is_itself_retained_on_failure(tmp_path):
+    service(tmp_path, lambda: {**payload(), "nodes": [{"id": "GPU01"}]}).get_cluster_snapshot("cluster-a", "/logs")
+    empty = service(tmp_path, lambda: {**payload(), "nodes": [], "node_inventory_error": ""})
+    cleared = empty.get_cluster_snapshot("cluster-a", "/logs", force_refresh=True)
+    assert cleared.payload["nodes"] == []
+    assert cleared.payload["node_inventory_error"] == ""
+
+    failed = service(tmp_path, lambda: {**payload(), "nodes": None, "node_inventory_error": "BCM unavailable"})
+    retained = failed.get_cluster_snapshot("cluster-a", "/logs", force_refresh=True)
+    assert retained.payload["nodes"] == []
+    assert "last successful" in retained.payload["node_inventory_error"]
+    assert "BCM unavailable" in retained.payload["node_inventory_error"]
+
+
+def test_absent_node_field_in_legacy_payload_never_triggers_fallback(tmp_path):
+    service(tmp_path, lambda: {**payload(), "nodes": [{"id": "GPU01"}]}).get_cluster_snapshot("cluster-a", "/logs")
+    legacy = service(tmp_path, payload).get_cluster_snapshot("cluster-a", "/logs", force_refresh=True)
+    assert "nodes" not in legacy.payload
+    assert "node_inventory_error" not in legacy.payload
+
+
+@pytest.mark.parametrize("boundary", ["cluster", "log_root", "configuration_generation"])
+def test_partial_node_failure_never_borrows_inventory_across_snapshot_boundaries(tmp_path, boundary):
+    service(tmp_path, lambda: {**payload(), "nodes": [{"id": "GPU01"}]}).get_cluster_snapshot("cluster-a", "/logs")
+    current = {**payload(), "nodes": None, "node_inventory_error": "BCM unavailable"}
+    restarted = service(tmp_path, lambda: current)
+    cluster_id, log_root = "cluster-a", "/logs"
+    if boundary == "cluster":
+        cluster_id = "cluster-b"
+    elif boundary == "log_root":
+        log_root = "/other-logs"
+    else:
+        restarted.invalidate()
+
+    result = restarted.get_cluster_snapshot(cluster_id, log_root, force_refresh=True)
+
+    assert result.payload["nodes"] is None
+    assert result.payload["node_inventory_error"] == "BCM unavailable"

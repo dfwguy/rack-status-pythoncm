@@ -311,7 +311,7 @@ export function SetupWizard({ onCancel, onFinished }: SetupWizardProps) {
               "Site prefix",
               "sitePrefix",
               "ink50",
-              "The leading token in this site's rack ids; used to group multirack launches.",
+              "Optional. The leading token in this site's rack ids; used to group multirack launches.",
             )}
           </Flex>
         );
@@ -320,8 +320,10 @@ export function SetupWizard({ onCancel, onFinished }: SetupWizardProps) {
         return (
           <Flex direction="col" gap="3">
             <Text kind="body/regular/sm" style={subtle}>
-              A rack id is not a hostname. Give one compute node hostname you already know and
-              Greenlight will propose templates, showing what each one makes of your example.
+              Nodes are discovered from cluster inventory without requiring rack assignments or
+              naming templates. Leave both templates blank to keep existing naming settings, or
+              provide both to configure rack grouping. To derive templates, enter a known compute
+              node hostname and check the proposed rack and tray below.
             </Text>
             <Flex gap="2" align="end">
               <Box sx={{ flex: 1 }}>
@@ -374,14 +376,14 @@ export function SetupWizard({ onCancel, onFinished }: SetupWizardProps) {
             ))}
 
             <Divider />
-            {text("w-rack-t", "Rack id template", "rackIdTemplate", "ink[01-99]-dh[01-99]-[a-z][01-99]")}
-            {text("w-ct-t", "Compute node template", "ctIdTemplate")}
+            {text("w-rack-t", "Rack id template", "rackIdTemplate", "ink[01-99]-dh[01-99]-[a-z][01-99]", "Optional; provide both rack and compute node templates to configure grouping.")}
+            {text("w-ct-t", "Compute node template", "ctIdTemplate", "", "Optional; required only when a rack template is provided.")}
             {text("w-nvsw-t", "NVSwitch template", "nvswIdTemplate")}
             <Flex gap="2">
               {text("w-pods", "Pods", "pods")}
               {text("w-rows", "Rows per pod", "rowsPerPod")}
               {text("w-racks", "Racks per row", "racksPerRow")}
-              {text("w-trays", "Trays per rack", "traysPerRack")}
+              {text("w-trays", "Trays per rack", "traysPerRack", "", "Required with naming templates; otherwise optional. Leave blank to use the platform default.")}
             </Flex>
           </Flex>
         );
@@ -529,9 +531,9 @@ export function SetupWizard({ onCancel, onFinished }: SetupWizardProps) {
             {row("Cluster", `${cluster.name} (${cluster.id})`)}
             {row("Platform", cluster.platform_id)}
             {row("Cluster manager", cluster.cluster_manager)}
-            {row("Rack template", cluster.naming.rack_id_template)}
-            {row("Node template", cluster.naming.ct_id_template)}
-            {row("Trays per rack", String(cluster.geometry.trays_per_rack))}
+            {row("Rack template", cluster.naming.rack_id_template || "Use existing settings")}
+            {row("Node template", cluster.naming.ct_id_template || "Use existing settings")}
+            {row("Trays per rack", cluster.geometry.trays_per_rack > 0 ? String(cluster.geometry.trays_per_rack) : "Platform default")}
             {row(
               "Connection",
               cluster.connection.exec_mode === "ssh"

@@ -9,9 +9,10 @@
 # its affiliates is strictly prohibited.
 """Abstract base for platform providers.
 
-Each method returns a **shell command string** (or argv list) that
+Command methods return a **shell command string** (or argv list) that
 ``host_exec.run_on_host`` / ``popen_on_host`` will execute either locally
-or over SSH.  Platform-specific subclasses supply the concrete commands.
+or over SSH. Inventory methods execute a read and return normalized records.
+Platform-specific subclasses supply the concrete commands and readers.
 """
 from __future__ import annotations
 
@@ -19,11 +20,43 @@ import os
 import shlex
 from abc import ABC, abstractmethod
 
+from core import is_valid_node_hostname
+
+
+def _compute_node_records(
+    records: object, *, provider: str, rack_field: str = "", ip_field: str = "",
+) -> list[dict[str, str | None]]:
+    """Validate manager inventory without deriving hostnames or requiring rack membership."""
+    if not isinstance(records, list):
+        # This is a failed external query, rather than a caller passing a wrong Python type.
+        raise RuntimeError(f"{provider} node inventory must contain a list of devices")  # noqa: TRY004
+    nodes: dict[str, dict[str, str | None]] = {}
+    for record in records:
+        hostname = record.get("hostname") if isinstance(record, dict) else None
+        if not isinstance(hostname, str) or not is_valid_node_hostname(hostname):
+            raise RuntimeError(f"{provider} node inventory contains an invalid hostname")
+        if hostname in nodes:
+            continue
+        rack = record.get(rack_field) if rack_field else None
+        ip = record.get(ip_field) if ip_field else None
+        nodes[hostname] = {
+            "id": hostname,
+            "rack": rack.strip() or None if isinstance(rack, str) else None,
+            "status": "unknown",
+            "ip": ip.strip() if isinstance(ip, str) else "",
+            "scheduler_state": "",
+        }
+    return list(nodes.values())
+
 
 class PlatformProvider(ABC):
     """Defines the command vocabulary that the rack-status app requires."""
 
     # -- Cluster manager (rack inventory / device status) -------------------
+
+    def compute_node_inventory(self) -> list[dict[str, str | None]]:
+        """Read actual compute nodes independently of rack naming and scheduler presence."""
+        raise RuntimeError(f"Compute node inventory is unsupported by {type(self).__name__}")
 
     @abstractmethod
     def list_racks_cmd(self) -> list[str]:

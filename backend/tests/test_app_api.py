@@ -237,6 +237,26 @@ class TestSharedClusterSnapshotAPI:
         assert overview["rack_count"] == 0
         assert overview["tray_hosts"] == 0
 
+    @pytest.mark.parametrize("nodes, expected", [
+        ([{"id": "GPU01", "rack": None, "status": "up", "ip": ""}], 1),
+        ([], 0),
+        (None, None),
+    ])
+    def test_node_roster_counts_without_racks_or_rf0(self, client, monkeypatch, nodes, expected):
+        payload = self.inventory()
+        # A stale management map must not override an authoritative empty/null roster.
+        payload.update(rows=[], nodes=nodes, node_inventory_error="unavailable" if nodes is None else "")
+        monkeypatch.setattr(rack_status_engine, "run_rack_status", lambda *_a, **_kw: payload)
+        client.get("/api/status?log_dir=/logs")
+        status = self._poll_json(client, "/api/status", want_state="fresh")
+        overview = self._poll_json(client, "/api/cluster-overview", want_state="fresh")
+        assert status["nodes"] == nodes
+        assert overview["rack_count"] == 0
+        assert overview["tray_hosts"] == expected
+        assert overview["snapshot"]["id"] == status["snapshot"]["id"]
+        if nodes:
+            assert overview["cuda_nccl_build_host_candidates"] == ["GPU01"]
+
     def test_cold_overview_returns_metadata_while_initializing(self, client, monkeypatch):
         gate = threading.Event()
         probe_calls = {"slurm": 0, "bcm": 0, "squeue": 0}

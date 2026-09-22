@@ -211,6 +211,37 @@ describe("SetupWizard", () => {
     expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
   });
 
+  it("completes setup without rack naming or layout", async () => {
+    const { saveProject, setActiveContext } = await import("../../services/catalogService");
+    const { completeSetup } = await import("../../services/setupService");
+    const finished = vi.fn();
+    render(<SetupWizard onFinished={finished} />);
+    await throughProject();
+
+    expect(screen.getByText(/without requiring rack assignments/i)).toBeInTheDocument();
+    type(/trays per rack/i, "");
+    expect(screen.getByRole("button", { name: /next/i })).toBeEnabled();
+    clickNext();
+    await screen.findByLabelText(/ssh host/i);
+    type(/ssh host/i, "10.0.0.2");
+    clickNext();
+    fireEvent.click(await screen.findByLabelText(/send the shipped scripts/i));
+    fireEvent.click(screen.getByLabelText(/copy the scripts into this project/i));
+    clickNext();
+    expect(await screen.findByText("Platform default")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /create project/i }));
+
+    await waitFor(() => expect(finished).toHaveBeenCalledWith("nscale-tx"));
+    expect(saveProject).toHaveBeenCalledWith(expect.objectContaining({
+      clusters: [expect.objectContaining({
+        naming: expect.objectContaining({ rack_id_template: "", ct_id_template: "" }),
+        geometry: expect.objectContaining({ trays_per_rack: 0 }),
+      })],
+    }));
+    expect(setActiveContext).toHaveBeenCalledWith({ project: "nscale-tx", cluster: "nscale-tx" });
+    expect(completeSetup).toHaveBeenCalledWith("nscale-tx");
+  });
+
   describe("the Scripts step", () => {
     /** Steps 1-4, leaving the wizard on Scripts. */
     const throughToScripts = async () => {

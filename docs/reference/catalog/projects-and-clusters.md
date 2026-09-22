@@ -62,6 +62,11 @@ launch depends on it.
 
 ### naming
 
+Naming is optional for node discovery. In setup, both rack and compute templates may be
+left blank to inherit existing settings. When supplied, both are required and the compute
+template must begin with the rack template. Rack geometry describes grouping and expected
+capacity; it does not create inventory nodes.
+
 | Field | Purpose |
 |---|---|
 | `rack_id_template` | The rack as the floor view groups it. |
@@ -73,6 +78,29 @@ launch depends on it.
 Precedence when resolving a rack to real hostnames is: an explicit comma-list, then the
 template, then the live Slurm inventory. The last is the ground truth and the reason a template
 that is slightly wrong shows up as unresolvable targets rather than as silence.
+
+### Compute node inventory
+
+The Nodes view and the dashboard node count consume the same `nodes` roster in the
+`/api/status` snapshot. With the Slurm scheduler, the roster contains actual `sinfo` NodeNames,
+deduplicated across partitions. Other schedulers use the cluster-manager provider: BCM's
+structured compute-device query or MAAS's machines inventory. Management addresses are
+optional, so a missing RF0/BMC address does not remove a node.
+
+Each record has `id`, nullable `rack`, `status`, `scheduler_state`, and `ip`. A known rack
+placement or hostname association can attach a node to an existing rack; otherwise the Nodes
+view labels it **Unassigned**. The behavior is shared by RTX PRO 6000, B200, B300, and NVL
+platforms. Platform geometry never supplies synthetic nodes to this roster.
+
+`nodes: []` means discovery succeeded with no compute nodes. `nodes: null` means no successful
+inventory is available. A failed refresh retains the last successful roster and sets
+`node_inventory_error`, which the Nodes view displays. Legacy snapshots without `nodes` retain
+the earlier rack-based rendering until refreshed.
+
+Unassigned nodes support node terminals and bring-up result inspection. The existing rack
+action tabs require a known rack and an exact, representable node target; they are unavailable
+when those conditions are absent. This prevents a node selection from falling back to a
+whole-rack operation.
 
 ### scalable_units
 

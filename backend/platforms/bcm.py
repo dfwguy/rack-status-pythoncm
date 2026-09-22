@@ -17,12 +17,23 @@ from __future__ import annotations
 
 import os
 
-from platforms.base import PlatformProvider
+import bcm_query
+
+from platforms.base import PlatformProvider, _compute_node_records
 
 
 class BCMProvider(PlatformProvider):
 
     # -- Cluster manager (cmsh) ---------------------------------------------
+
+    def compute_node_inventory(self) -> list[dict[str, str | None]]:
+        result = bcm_query.nodes()
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            reason = result.get("error") if isinstance(result, dict) else "invalid response"
+            raise RuntimeError(f"BCM node inventory failed: {reason or 'query unsuccessful'}")
+        return _compute_node_records(
+            result.get("data"), provider="BCM", rack_field="rack_id", ip_field="bmc_ip",
+        )
 
     def list_racks_cmd(self) -> list[str]:
         cmsh = (os.environ.get("RACK_CMSH") or "cmsh").strip() or "cmsh"

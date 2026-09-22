@@ -84,7 +84,7 @@ export const SCRIPT_STAGES = ["deploy", "bootstrap"] as const;
 export const STEP_DESCRIPTIONS = [
   "Who this deployment is for",
   "Hardware and cluster manager",
-  "How nodes are named, and how many there are",
+  "Optional rack grouping and layout",
   "How Greenlight reaches the cluster",
   "Give this project its own copy of the scripts",
   "Confirm and create",
@@ -167,20 +167,22 @@ export function stepProblems(step: number, draft: WizardDraft): string[] {
       if (!draft.platformId) problems.push("Choose the hardware platform.");
       if (!draft.clusterManager) problems.push("Choose the cluster manager.");
       break;
-    case 2:
-      if (!draft.rackIdTemplate.trim()) problems.push("A rack id template is required.");
-      if (!draft.ctIdTemplate.trim()) problems.push("A compute node template is required.");
-      if (
-        draft.rackIdTemplate.trim() &&
-        draft.ctIdTemplate.trim() &&
-        !draft.ctIdTemplate.startsWith(draft.rackIdTemplate)
-      ) {
+    case 2: {
+      const rackTemplate = draft.rackIdTemplate.trim();
+      const nodeTemplate = draft.ctIdTemplate.trim();
+      // Inventory supplies real hostnames without a naming convention. Templates describe
+      // optional rack grouping; a partially configured pair is still an error.
+      if (!rackTemplate && !nodeTemplate) break;
+      if (!rackTemplate) problems.push("A rack id template is required when a node template is set.");
+      if (!nodeTemplate) problems.push("A compute node template is required when a rack template is set.");
+      if (rackTemplate && nodeTemplate && !nodeTemplate.startsWith(rackTemplate)) {
         // The backend enforces this too; saying it here means the operator finds out on the
         // step that owns it rather than at the end of the wizard.
         problems.push("The node template must begin with the rack template.");
       }
       if (int(draft.traysPerRack) <= 0) problems.push("Trays per rack must be at least 1.");
       break;
+    }
     case 3:
       if (draft.execMode === "ssh") {
         if (!draft.sshHost.trim()) problems.push("An SSH host is required in ssh mode.");

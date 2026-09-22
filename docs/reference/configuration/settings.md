@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**245 settings.** 15 are *declared* in
+**248 settings.** 15 are *declared* in
 `backend/config_registry.py`, which is the set `greenlight.toml` can carry, the required-
 setting preflight can demand, and `greenlight.toml.example` lists. 119 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -39,21 +39,21 @@ build until somebody writes one.
 
 ## Declared, read indirectly
 
-5 settings are declared but never appear in a call this scan can see:
+4 settings are declared but never appear in a call this scan can see:
 the connection profile reads its four by name from a list, and `NVIS_LOG_LEVEL` goes
 through `logging_config`'s own registry. They are configuration like any other — the
 scan simply cannot point at a call site.
 
-`NVIS_LOG_LEVEL`, `RACK_EXEC_MODE`, `RACK_SSH_KEY`, `RACK_SSH_PORT`, `RACK_SSH_USER`
+`NVIS_LOG_LEVEL`, `RACK_SSH_KEY`, `RACK_SSH_PORT`, `RACK_SSH_USER`
 
 ## Read outside the resolution ladder
 
-161 of them are read only via `os.environ`, so a cluster overlay and the
+159 of them are read only via `os.environ`, so a cluster overlay and the
 Settings screen cannot influence them — the setting is process-wide. New code should
 prefer `_eget` (`core-designs.mdc` §5); these are the ones that predate the rule or
 genuinely belong to the process rather than to a cluster.
 
-They are not listed here — 161 names in a paragraph is not something
+They are not listed here — 159 names in a paragraph is not something
 anyone reads.
 The table below marks each one `environment` in its `Reader` column, which answers the
 same question setting by setting, where you are already looking.
@@ -105,8 +105,10 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-nemo-sqsh-src"></a>`NEMO_SQSH_SRC` | ladder |  | Squashed NeMo container image used by the NeMo validation launchers. | `backend/api/dashboard.py`, `backend/api/tools.py` |
 | <a id="s-nemo-target-steps"></a>`NEMO_TARGET_STEPS` | environment | `0` | See `docs/ENVIRONMENT.md` | `backend/universal_parser.py` |
 | <a id="s-ngc-api-key"></a>`NGC_API_KEY` | ladder |  | NGC API key used to pull tool containers. The download-containers action refuses without it. | `backend/api/tools.py` |
+| <a id="s-nvis-bcm-host"></a>`NVIS_BCM_HOST` | ladder |  | BCM API host passed to structured `pythoncm` queries when configured. Also separates cached inventory when the query host changes. | `backend/native_status.py` |
 | <a id="s-nvis-bcm-python"></a>`NVIS_BCM_PYTHON` | ladder |  | Interpreter used for BCM `pythoncm` queries on the head node. | `backend/bcm_query.py`, `backend/schedulers/pythoncm.py` |
 | <a id="s-nvis-catalog-file"></a>`NVIS_CATALOG_FILE` | environment |  | Path to the catalog database holding platforms, tools and projects. This is what separates two deployments sharing one checkout. | `backend/catalog/store.py` |
+| <a id="s-nvis-cluster-id"></a>`NVIS_CLUSTER_ID` | ladder |  | Active cluster id supplied by the cluster overlay. Separates cached live node inventory between clusters. | `backend/native_status.py` |
 | <a id="s-nvis-ct-id"></a>`NVIS_CT_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` |
 | <a id="s-nvis-exemplar-workloads"></a>`NVIS_EXEMPLAR_WORKLOADS` | ladder |  | Default Exemplar workloads when a launch names none. | `backend/api/tools.py` |
 | <a id="s-nvis-force-setup-wizard"></a>`NVIS_FORCE_SETUP_WIZARD` | ladder |  | Re-open the first-run setup wizard even though a project is already configured. What `cli.py serve --setup-wizard` sets; normally left unset, since the wizard offers itself when no operator-created project exists. | `backend/setup_state.py` |
@@ -122,7 +124,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-nvis-npi-catalog-dir"></a>`NVIS_NPI_CATALOG_DIR` | environment |  | Directory of NPI tool catalog files to import. | `backend/catalog/npi_import.py` |
 | <a id="s-nvis-nvsw-id"></a>`NVIS_NVSW_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` |
 | <a id="s-nvis-platform-id"></a>`NVIS_PLATFORM_ID` | ladder |  | Active platform id. Selects the platform layer of the script tree. | `backend/script_tree.py` |
-| <a id="s-nvis-project-id"></a>`NVIS_PROJECT_ID` | ladder |  | Active project id. Written by the cluster overlay and read to select that project's script layer. | `backend/script_tree.py` |
+| <a id="s-nvis-project-id"></a>`NVIS_PROJECT_ID` | ladder |  | Active project id. Written by the cluster overlay and read to select that project's script layer. | `backend/native_status.py`, `backend/script_tree.py` |
 | <a id="s-nvis-rack-fname-re"></a>`NVIS_RACK_FNAME_RE` | environment |  | Regex that finds a rack id inside a result-log filename. | `backend/universal_parser.py` |
 | <a id="s-nvis-rack-id"></a>`NVIS_RACK_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` +1 |
 | <a id="s-nvis-reports-dir"></a>`NVIS_REPORTS_DIR` | environment |  | Where generated reports are stored. | `backend/report_store.py` |
@@ -171,7 +173,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-comments-file"></a>`RACK_COMMENTS_FILE` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/comments_store.py` |
 | <a id="s-rack-direct-node-ssh"></a>`RACK_DIRECT_NODE_SSH` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py` |
 | <a id="s-rack-enable-web-terminal"></a>`RACK_ENABLE_WEB_TERMINAL` | environment | `1` | Install the browser terminal. Default on; when off the endpoint does not exist rather than refusing. | `backend/api/terminal.py` |
-| <a id="s-rack-exec-mode"></a>`RACK_EXEC_MODE` | indirect |  | How commands reach the cluster: 'ssh' or 'local'. Deprecated in favour of the topology-based transport config, and 'ssh' is the default; kept because deployed sites still set it. |  |
+| <a id="s-rack-exec-mode"></a>`RACK_EXEC_MODE` | ladder | `local` | How commands reach the cluster: 'ssh' or 'local'. Deprecated in favour of the topology-based transport config, and 'ssh' is the default; kept because deployed sites still set it. | `backend/native_status.py` |
 | <a id="s-rack-exemplar-llama-ct-range"></a>`RACK_EXEMPLAR_LLAMA_CT_RANGE` | ladder | `11-18,28-35` | Tray ranges the Exemplar Llama run targets. Default `11-18,28-35`. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
 | <a id="s-rack-export-nodes-per-rack"></a>`RACK_EXPORT_NODES_PER_RACK` | ladder | `18` | See `docs/ENVIRONMENT.md` | `backend/api/exports.py` |
 | <a id="s-rack-fanout-max-workers"></a>`RACK_FANOUT_MAX_WORKERS` | environment | `8` | See `docs/ENVIRONMENT.md` | `backend/workflow_engine.py` |
@@ -242,7 +244,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-pdsh-w-skip-slurm-expand"></a>`RACK_PDSH_W_SKIP_SLURM_EXPAND` | environment |  | Pass a `pdsh -w` target through verbatim instead of expanding it via Slurm first. | `backend/node_targets.py` |
 | <a id="s-rack-physical-rf0-loose-hostnames"></a>`RACK_PHYSICAL_RF0_LOOSE_HOSTNAMES` | environment |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
 | <a id="s-rack-physical-rf0-map-disabled"></a>`RACK_PHYSICAL_RF0_MAP_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
-| <a id="s-rack-platform"></a>`RACK_PLATFORM` | environment |  | Cluster manager provider: 'bcm' (Base Command Manager) or 'maas'. | `backend/platforms/__init__.py` |
+| <a id="s-rack-platform"></a>`RACK_PLATFORM` | ladder | `bcm` | Cluster manager provider: 'bcm' (Base Command Manager) or 'maas'. | `backend/native_status.py`, `backend/platforms/__init__.py` |
 | <a id="s-rack-post-run-history-file"></a>`RACK_POST_RUN_HISTORY_FILE` | environment |  | Append-only history of post-run report events. | `backend/post_run_report.py` |
 | <a id="s-rack-post-run-max-events"></a>`RACK_POST_RUN_MAX_EVENTS` | environment | `100000` | Ceiling on retained post-run events. Floors at 1000. | `backend/post_run_report.py` |
 | <a id="s-rack-power-disabled"></a>`RACK_POWER_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
@@ -261,6 +263,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-remote-base-path"></a>`RACK_REMOTE_BASE_PATH` | ladder |  | Where the tooling is deployed on the head node. Script paths and the default log directory derive from it. Optional: unset falls back to the repo root, and a declared topology's scripts role root supersedes it. | `backend/host_exec.py`, `backend/paths.py` +2 |
 | <a id="s-rack-results-db"></a>`RACK_RESULTS_DB` | environment |  | SQLite database of parsed results history. | `backend/results_history.py` |
 | <a id="s-rack-results-db-busy-ms"></a>`RACK_RESULTS_DB_BUSY_MS` | environment |  | How long a results-database write waits on a lock before failing. | `backend/results_history.py` |
+| <a id="s-rack-scheduler"></a>`RACK_SCHEDULER` | ladder | `slurm` | Scheduler provider selected by the active cluster. Defaults to `slurm`; other schedulers read compute inventory from the cluster manager. | `backend/native_status.py`, `backend/rack_status_engine.py` |
 | <a id="s-rack-services-restart-disabled"></a>`RACK_SERVICES_RESTART_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-services-restart-dry-run"></a>`RACK_SERVICES_RESTART_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-slurm-conf"></a>`RACK_SLURM_CONF` | environment |  | An explicit `SLURM_CONF` to export before running Slurm commands. Needed where the scripts host is not the Slurm controller. | `backend/bringup.py`, `backend/platforms/base.py` |
@@ -275,7 +278,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-slurm-sinfo-r-disabled"></a>`RACK_SLURM_SINFO_R_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_queries.py` |
 | <a id="s-rack-slurm-skip-module-load"></a>`RACK_SLURM_SKIP_MODULE_LOAD` | environment |  | Skip 'module load slurm' before scheduler commands, for sites where Slurm is already on PATH. | `backend/platforms/base.py` |
 | <a id="s-rack-slurm-squeue-disabled"></a>`RACK_SLURM_SQUEUE_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/slurm_queries.py` |
-| <a id="s-rack-ssh-host"></a>`RACK_SSH_HOST` | environment |  | Head node for the SSH control connection. Required unless the deployment is in demo mode or RACK_EXEC_MODE=local. | `backend/rack_status_engine.py` |
+| <a id="s-rack-ssh-host"></a>`RACK_SSH_HOST` | ladder |  | Head node for the SSH control connection. Required unless the deployment is in demo mode or RACK_EXEC_MODE=local. | `backend/native_status.py`, `backend/rack_status_engine.py` |
 | <a id="s-rack-ssh-key"></a>`RACK_SSH_KEY` | indirect |  | Path to the private key for the control connection. The path, not the key: the key itself must never appear in this file. |  |
 | <a id="s-rack-ssh-port"></a>`RACK_SSH_PORT` | indirect |  | Port for the SSH control connection. |  |
 | <a id="s-rack-ssh-reachability-connect-timeout"></a>`RACK_SSH_REACHABILITY_CONNECT_TIMEOUT` | environment |  | Seconds a reachability probe waits for a connection. Default 5. | `backend/host_exec.py` |
