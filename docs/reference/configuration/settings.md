@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**248 settings.** 15 are *declared* in
+**250 settings.** 15 are *declared* in
 `backend/config_registry.py`, which is the set `greenlight.toml` can carry, the required-
 setting preflight can demand, and `greenlight.toml.example` lists. 119 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -48,12 +48,12 @@ scan simply cannot point at a call site.
 
 ## Read outside the resolution ladder
 
-159 of them are read only via `os.environ`, so a cluster overlay and the
+158 of them are read only via `os.environ`, so a cluster overlay and the
 Settings screen cannot influence them — the setting is process-wide. New code should
 prefer `_eget` (`core-designs.mdc` §5); these are the ones that predate the rule or
 genuinely belong to the process rather than to a cluster.
 
-They are not listed here — 159 names in a paragraph is not something
+They are not listed here — 158 names in a paragraph is not something
 anyone reads.
 The table below marks each one `environment` in its `Reader` column, which answers the
 same question setting by setting, where you are already looking.
@@ -264,6 +264,8 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-results-db"></a>`RACK_RESULTS_DB` | environment |  | SQLite database of parsed results history. | `backend/results_history.py` |
 | <a id="s-rack-results-db-busy-ms"></a>`RACK_RESULTS_DB_BUSY_MS` | environment |  | How long a results-database write waits on a lock before failing. | `backend/results_history.py` |
 | <a id="s-rack-scheduler"></a>`RACK_SCHEDULER` | ladder | `slurm` | Scheduler provider selected by the active cluster. Defaults to `slurm`; other schedulers read compute inventory from the cluster manager. | `backend/native_status.py`, `backend/rack_status_engine.py` |
+| <a id="s-rack-scheduler-watch-disabled"></a>`RACK_SCHEDULER_WATCH_DISABLED` | ladder |  | Stop sampling whether the active cluster's scheduler can accept work. The samples are what answer *when* it stopped answering; on-demand probing still works without them. | `backend/scheduler_watch.py` |
+| <a id="s-rack-scheduler-watch-interval-sec"></a>`RACK_SCHEDULER_WATCH_INTERVAL_SEC` | ladder |  | Seconds between scheduler readiness samples. Default 60, floors at 10 so the check never becomes the load. | `backend/scheduler_watch.py` |
 | <a id="s-rack-services-restart-disabled"></a>`RACK_SERVICES_RESTART_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-services-restart-dry-run"></a>`RACK_SERVICES_RESTART_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-slurm-conf"></a>`RACK_SLURM_CONF` | environment |  | An explicit `SLURM_CONF` to export before running Slurm commands. Needed where the scripts host is not the Slurm controller. | `backend/bringup.py`, `backend/platforms/base.py` |
@@ -285,7 +287,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-ssh-reachability-ttl-sec"></a>`RACK_SSH_REACHABILITY_TTL_SEC` | environment | `15` | How long a reachability result is cached. Default 15, floors at 3. | `backend/host_exec.py` |
 | <a id="s-rack-ssh-user"></a>`RACK_SSH_USER` | indirect |  | Account for the SSH control connection to the head node. |  |
 | <a id="s-rack-status-allowed-prefixes"></a>`RACK_STATUS_ALLOWED_PREFIXES` | environment |  | See `docs/ENVIRONMENT.md` | `backend/paths.py` |
-| <a id="s-rack-status-demo"></a>`RACK_STATUS_DEMO` | environment |  | Synthetic data, no cluster contact. True on a developer laptop, and it also exempts the connection settings from the required-setting preflight. | `backend/app.py`, `backend/cli.py` |
+| <a id="s-rack-status-demo"></a>`RACK_STATUS_DEMO` | ladder |  | Synthetic data, no cluster contact. True on a developer laptop, and it also exempts the connection settings from the required-setting preflight. | `backend/app.py`, `backend/cli.py` +1 |
 | <a id="s-rack-status-extra-args"></a>`RACK_STATUS_EXTRA_ARGS` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
 | <a id="s-rack-status-log-dir"></a>`RACK_STATUS_LOG_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py`, `backend/paths.py` |
 | <a id="s-rack-sysinfo-disabled"></a>`RACK_SYSINFO_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/_common.py` |

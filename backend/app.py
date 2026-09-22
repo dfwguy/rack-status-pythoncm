@@ -178,6 +178,7 @@ import ai_chat
 import core
 import host_exec
 import nvftp_cache_sync
+import scheduler_watch
 import script_tree
 import validation_activities
 from json_db import atomic_write
@@ -789,6 +790,9 @@ def _bootstrap_nvftp_sync_at_startup() -> None:
     except Exception:
         _logger.exception("NVFTP sync startup: job env load failed")
     nvftp_cache_sync.ensure_background_thread()
+    # Started unconditionally and gated inside: which scheduler is watched follows the
+    # active cluster, and that can change after boot, so the decision cannot be made here.
+    scheduler_watch.ensure_background_thread()
 
 
 def _is_public_spa_static_path() -> bool:

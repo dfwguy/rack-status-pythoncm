@@ -67,8 +67,8 @@ class TestExpandingANodeList:
         assert helper.expand_nodelist("n01,n[01-02]") == ["n01", "n02"]
 
 
-class TestDerivingStateFromWhatIsOnDisk:
-    """CMDaemon drops a finished command from its active status, so the files decide."""
+class _Manifests:
+    """Shared task-directory fixtures for the state tests."""
 
     @staticmethod
     def _manifest(tmp_path, nodes):
@@ -83,43 +83,133 @@ class TestDerivingStateFromWhatIsOnDisk:
     def _finish(tmp_path, node, rc):
         (tmp_path / "t1" / f"{node}.status").write_text(str(rc), encoding="utf-8")
 
-    class _Gone:
-        """A cluster that has already forgotten the command, which is the normal case."""
 
-        class parallel:
-            @staticmethod
-            def active_command_status(ids=None):
-                return []
+class _Gone:
+    """A cluster that has already forgotten the command, which is the normal case."""
+
+    class parallel:
+        @staticmethod
+        def active_command_status(ids=None):
+            return []
+
+
+class _Running:
+    """A cluster still reporting the command."""
+
+    class parallel:
+        @staticmethod
+        def active_command_status(ids=None):
+            return [type("S", (), {"unique_key": "p1", "status": "RUNNING"})()]
+
+
+class TestDerivingStateFromWhatIsOnDisk(_Manifests):
+    """CMDaemon drops a finished command from its active status, so the files decide."""
 
     def test_every_node_exiting_zero_is_completed(self, tmp_path):
         m = self._manifest(tmp_path, ["n01", "n02"])
         self._finish(tmp_path, "n01", 0)
         self._finish(tmp_path, "n02", 0)
-        assert helper._derive_state(self._Gone, m) == "COMPLETED"
+        assert helper._derive_state(lambda: _Gone, m) == ("COMPLETED", True)
 
     def test_one_node_failing_fails_the_job(self, tmp_path):
         m = self._manifest(tmp_path, ["n01", "n02"])
         self._finish(tmp_path, "n01", 0)
         self._finish(tmp_path, "n02", 3)
-        assert helper._derive_state(self._Gone, m) == "FAILED"
+        assert helper._derive_state(lambda: _Gone, m) == ("FAILED", True)
 
     def test_a_node_that_never_wrote_a_status_is_a_failure_not_still_running(self, tmp_path):
         # Gone from CMDaemon but missing a status file means the command died. Calling that
         # RUNNING is what would make a caller poll uselessly until its whole budget expired.
         m = self._manifest(tmp_path, ["n01", "n02"])
         self._finish(tmp_path, "n01", 0)
-        assert helper._derive_state(self._Gone, m) == "FAILED"
+        assert helper._derive_state(lambda: _Gone, m) == ("FAILED", True)
 
     def test_a_recorded_cancel_wins_over_the_files(self, tmp_path):
         m = self._manifest(tmp_path, ["n01"])
         m["cancelled_at"] = "2026-09-20T00:00:00+00:00"
-        assert helper._derive_state(self._Gone, m) == "CANCELLED"
+        assert helper._derive_state(lambda: _Gone, m) == ("CANCELLED", True)
 
     def test_the_worst_node_sets_the_aggregate_return_code(self, tmp_path):
         m = self._manifest(tmp_path, ["n01", "n02"])
         self._finish(tmp_path, "n01", 0)
         self._finish(tmp_path, "n02", 7)
-        assert helper._result(self._Gone, m)["returncode"] == 7
+        assert helper._result(lambda: _Gone, m)["returncode"] == 7
+
+
+class TestAnsweringWithoutConnecting(_Manifests):
+    """Why this exists: a fresh `pythoncm` client costs ~10 CPU-seconds on a big controller.
+
+    Paying that on every five-second poll would spend more of the head node's CPU watching
+    an hour-long job than running it. Most polls can be answered from the files the work
+    itself wrote, and these pin which ones can and cannot.
+    """
+
+    def test_a_finished_job_is_answered_from_disk_with_no_connection(self, tmp_path):
+        def explode():
+            raise AssertionError("the files already prove the answer; do not connect")
+
+        m = self._manifest(tmp_path, ["n01"])
+        self._finish(tmp_path, "n01", 0)
+        assert helper._derive_state(explode, m) == ("COMPLETED", True)
+
+    def test_a_terminal_answer_from_disk_is_authoritative_not_a_guess(self, tmp_path):
+        # The status file is written last and by rename, so its existence means that node
+        # finished. That is proof, not an inference, which is why the cheap path may end a
+        # wait on its own.
+        m = self._manifest(tmp_path, ["n01", "n02"])
+        self._finish(tmp_path, "n01", 0)
+        self._finish(tmp_path, "n02", 4)
+        state, authoritative = helper._derive_state(None, m)
+        assert (state, authoritative) == ("FAILED", True)
+
+    def test_an_unfinished_job_offline_is_a_flagged_guess(self, tmp_path):
+        # Offline, a job still running and a job whose ranks died are indistinguishable.
+        # Reporting RUNNING keeps the caller waiting; the flag is what stops it concluding.
+        m = self._manifest(tmp_path, ["n01", "n02"])
+        self._finish(tmp_path, "n01", 0)
+        assert helper._derive_state(None, m) == ("RUNNING", False)
+
+    def test_the_same_state_online_is_resolved_to_the_truth(self, tmp_path):
+        # The verification poll: CMDaemon has forgotten it, so the guess above was wrong and
+        # the job is actually dead.
+        m = self._manifest(tmp_path, ["n01", "n02"])
+        self._finish(tmp_path, "n01", 0)
+        assert helper._derive_state(lambda: _Gone, m) == ("FAILED", True)
+        assert helper._derive_state(lambda: _Running, m) == ("RUNNING", True)
+
+    def test_a_head_mode_run_cannot_be_concluded_offline(self, tmp_path):
+        # No nodes means no status files, so disk has nothing to prove either way.
+        m = self._manifest(tmp_path, [])
+        assert helper._derive_state(None, m) == ("RUNNING", False)
+        assert helper._derive_state(lambda: _Gone, m) == ("COMPLETED", True)
+
+    def test_the_cli_builds_no_client_for_an_offline_status(self, tmp_path, monkeypatch):
+        # The end-to-end guarantee: `--offline` must not reach `_cluster` at all, since
+        # constructing it is the entire cost being avoided.
+        def explode(_args):
+            raise AssertionError("--offline must not construct a pythoncm client")
+
+        monkeypatch.setattr(helper, "_cluster", explode)
+        m = self._manifest(tmp_path, ["n01"])
+        self._finish(tmp_path, "n01", 0)
+        helper._write_manifest(str(tmp_path), "t1", m)
+        args = helper.build_parser().parse_args(
+            ["status", "--jobs-dir", str(tmp_path), "--task-id", "t1", "--offline"]
+        )
+        assert helper.execute(args)["state"] == "COMPLETED"
+
+    def test_a_cancel_is_never_offline(self, tmp_path, monkeypatch):
+        # A cancel that did not reach CMDaemon has not cancelled anything, and the leftover
+        # ranks are what drain the next job's rack.
+        reached = []
+        monkeypatch.setattr(helper, "_cluster", lambda _a: reached.append(1) or _Gone)
+        m = self._manifest(tmp_path, ["n01"])
+        helper._write_manifest(str(tmp_path), "t1", m)
+        args = helper.build_parser().parse_args(
+            ["cancel", "--jobs-dir", str(tmp_path), "--task-id", "t1", "--offline"]
+        )
+        helper.execute(args)
+        assert reached == [1]
 
 
 class TestThePerNodeWrapper:

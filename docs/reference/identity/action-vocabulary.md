@@ -733,7 +733,7 @@ Owned by `backend/api/scheduler_health.py`.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
-| `scheduler.queue:list` | read | singleton | `GET scheduler_health.api_scheduler_probe`<br>`GET slurm_queries.api_slurm_sacct_recent`<br>`GET slurm_queries.api_slurm_sinfo_r`<br>`GET slurm_queries.api_slurm_squeue` |
+| `scheduler.queue:list` | read | singleton | `GET scheduler_health.api_scheduler_probe`<br>`GET scheduler_health.api_scheduler_watch`<br>`GET slurm_queries.api_slurm_sacct_recent`<br>`GET slurm_queries.api_slurm_sinfo_r`<br>`GET slurm_queries.api_slurm_squeue` |
 
 ## `settings`
 

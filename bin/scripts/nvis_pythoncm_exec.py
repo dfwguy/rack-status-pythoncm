@@ -340,23 +340,62 @@ def _node_results(manifest: dict) -> list[dict]:
     return out
 
 
-def _derive_state(cluster, manifest: dict) -> str:
-    """Live status when CMDaemon still has it; otherwise the per-node files decide."""
-    entry = _active_status(cluster, manifest["pythoncm_id"])
-    if entry is not None:
-        raw = str(getattr(entry, "status", "") or getattr(entry, "state", "") or "").upper()
-        return _STATE_MAP.get(raw, "RUNNING")
+def _state_from_disk(manifest: dict) -> str:
+    """The state the durable files prove, or "" when they cannot prove one.
+
+    Cheap, and cheap is the point: constructing a `pythoncm` client costs about ten
+    CPU-seconds on a large controller, and a poll that pays that every five seconds spends
+    more of the head node's CPU watching a job than the job's own launch cost. Most polls
+    can be answered from the files the work itself wrote.
+
+    Only two situations are *provable* from disk. A recorded cancel is terminal. Every node
+    having written a status is terminal, because that file is written last and by rename, so
+    its existence means that node finished. Anything else is genuinely unknown here: a job
+    still running and a job whose ranks died look identical on disk, and only CMDaemon can
+    tell them apart.
+    """
     if manifest.get("cancelled_at"):
         return "CANCELLED"
     results = _node_results(manifest)
     if not results:
-        # A head-mode run has no node files; if CMDaemon has forgotten it, it is done.
-        return "COMPLETED"
+        # A head-mode run writes no node files, so disk can never conclude for it.
+        return ""
     if not all(r["finished"] for r in results):
-        # Gone from CMDaemon but not every node wrote a status: the command died without
-        # completing. Reporting RUNNING here is what makes a caller poll until its deadline.
-        return "FAILED"
+        return ""
     return "COMPLETED" if all((r["returncode"] or 0) == 0 for r in results) else "FAILED"
+
+
+def _derive_state(connect, manifest: dict) -> tuple[str, bool]:
+    """Return ``(state, authoritative)``.
+
+    *connect* is a callable returning a live cluster, or None to stay offline. It is a
+    callable rather than a cluster so the expensive client is built only if the disk cannot
+    answer -- passing a connected cluster would pay the cost before discovering it was
+    unnecessary, which is the whole saving.
+
+    ``authoritative`` is false only for the offline guess below. A caller polling cheaply
+    needs to know the difference between "the files say it finished" and "the files cannot
+    say, so assume it is still going".
+    """
+    proven = _state_from_disk(manifest)
+    if proven:
+        return proven, True
+
+    if connect is None:
+        # Offline and inconclusive. Report RUNNING so a caller keeps waiting rather than
+        # treating an unknown as a failure -- but say it is a guess, so it verifies before
+        # acting on it.
+        return "RUNNING", False
+
+    entry = _active_status(connect(), manifest["pythoncm_id"])
+    if entry is not None:
+        raw = str(getattr(entry, "status", "") or getattr(entry, "state", "") or "").upper()
+        return _STATE_MAP.get(raw, "RUNNING"), True
+    if not (manifest.get("nodes") or []):
+        # A head-mode run CMDaemon has forgotten is finished; there are no files to check.
+        return "COMPLETED", True
+    # Gone from CMDaemon with nodes still unfinished: the command died without completing.
+    return "FAILED", True
 
 
 def _read_logs(manifest: dict) -> tuple[str, str]:
@@ -376,8 +415,8 @@ def _read_logs(manifest: dict) -> tuple[str, str]:
     return "\n".join(stdout), "\n".join(stderr)
 
 
-def _result(cluster, manifest: dict) -> dict:
-    state = _derive_state(cluster, manifest)
+def _result(connect, manifest: dict) -> dict:
+    state, authoritative = _derive_state(connect, manifest)
     nodes = _node_results(manifest)
     stdout, stderr = _read_logs(manifest)
     codes = [r["returncode"] or 0 for r in nodes if r["finished"]]
@@ -386,6 +425,7 @@ def _result(cluster, manifest: dict) -> dict:
         "ok": True,
         "task_id": manifest["task_id"],
         "state": state,
+        "authoritative": authoritative,
         "returncode": returncode,
         "stdout_b64": base64.b64encode(stdout.encode("utf-8")).decode("ascii"),
         "stderr_b64": base64.b64encode(stderr.encode("utf-8")).decode("ascii"),
@@ -422,32 +462,56 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--username", default="")
     p.add_argument("--password-file", default="", help="path; never the password itself")
     p.add_argument("--cookie-file", default="", help="path; never the cookie itself")
+    p.add_argument(
+        "--offline",
+        action="store_true",
+        help=(
+            "answer status/result from the durable task files without connecting to "
+            "CMDaemon. Terminal states are still exact; an unfinished job reports RUNNING "
+            "with authoritative=false"
+        ),
+    )
     return p
 
 
 def execute(args) -> dict:
-    cluster = _cluster(args)
+    # Built at most once, and only when something actually needs CMDaemon. `submit`,
+    # `cancel` and `probe` always do; `status` and `result` usually do not, and that is
+    # where the ten CPU-seconds would otherwise be spent on every poll.
+    cached: list = []
+
+    def connect():
+        if not cached:
+            cached.append(_cluster(args))
+        return cached[0]
+
     if args.action == "probe":
-        cluster.parallel.active_command_status()
+        connect().parallel.active_command_status()
         return {"ok": True, "ready": True}
     if args.action == "submit":
         if not args.payload:
             raise RuntimeError("submit needs --payload")
         payload = json.loads(base64.urlsafe_b64decode(args.payload).decode("utf-8"))
-        return _submit(cluster, payload)
+        return _submit(connect(), payload)
     if not args.task_id:
         raise RuntimeError(f"{args.action} needs --task-id")
     manifest = _load(args.jobs_dir, args.task_id)
     if args.action == "cancel":
-        return _cancel(cluster, manifest)
+        # Never offline: a cancel that did not reach CMDaemon has not cancelled anything,
+        # and leftover ranks are what drain the next job's rack.
+        return _cancel(connect(), manifest)
+
+    reader = None if args.offline else connect
     if args.action == "status":
+        state, authoritative = _derive_state(reader, manifest)
         return {
             "ok": True,
             "task_id": manifest["task_id"],
-            "state": _derive_state(cluster, manifest),
+            "state": state,
+            "authoritative": authoritative,
             "nodes": _node_results(manifest),
         }
-    return _result(cluster, manifest)
+    return _result(reader, manifest)
 
 
 def main(argv: list[str] | None = None) -> int:

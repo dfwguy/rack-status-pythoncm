@@ -2318,6 +2318,7 @@
           "scope": "singleton",
           "routes": [
             "GET scheduler_health.api_scheduler_probe",
+            "GET scheduler_health.api_scheduler_watch",
             "GET slurm_queries.api_slurm_sacct_recent",
             "GET slurm_queries.api_slurm_sinfo_r",
             "GET slurm_queries.api_slurm_squeue"

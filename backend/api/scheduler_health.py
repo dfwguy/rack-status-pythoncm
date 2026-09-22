@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 
+import scheduler_watch
 from audit.actions import action
 from catalog import context as catalog_context
 from flask import Blueprint, jsonify
@@ -33,6 +34,18 @@ from schedulers.factory import build_scheduler
 _logger = logging.getLogger(__name__)
 
 bp = Blueprint("scheduler_health", __name__, url_prefix="")
+
+
+@bp.route("/api/scheduler-watch", methods=["GET"])
+@action(get="scheduler.queue:list")
+def api_scheduler_watch():
+    """Recent readiness samples for the active cluster's scheduler.
+
+    The probe below answers "is it ready now". This answers "since when", which is the
+    question a failed launch actually raises — a single reading cannot distinguish a
+    scheduler that has been unreachable for forty minutes from one that blinked once.
+    """
+    return jsonify({"ok": True, **scheduler_watch.summary(), "history": scheduler_watch.history()})
 
 
 @bp.route("/api/scheduler-probe", methods=["GET"])

@@ -1218,6 +1218,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "scheduler_health.api_scheduler_watch",
+  "method": "GET",
+  "action": "scheduler.queue:list",
+  "variant": "sync"
+ },
+ {
   "endpoint": "script_deploy.api_script_deploy",
   "method": "POST",
   "action": "catalog.scripts:deploy",

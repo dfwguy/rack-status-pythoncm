@@ -198,6 +198,65 @@ class TestTimeoutEndsTheWorkNotJustTheWait:
         assert "cancel" in head.actions()
 
 
+class TestWaitingIsCheap:
+    """A fresh `pythoncm` client costs ~10 CPU-seconds, so polls must not each build one.
+
+    This is the reason we declined to port the fork's broker daemon
+    (`docs/explanation/why-no-pythoncm-broker.md`): the cost only compounds on the polling
+    path, and the polling path is the one that can answer from durable files instead.
+    """
+
+    def test_most_polls_are_offline(self, head):
+        # Driven by state rather than a fake clock: `time.monotonic` is shared, and
+        # `script_tree`'s cache reads it too, so a scripted clock measures the wrong thing.
+        running_for = 25
+        stuck = FakeHead(states=["RUNNING"] * running_for + ["COMPLETED"])
+        sched = _sched(stuck)
+        sched.wait(
+            sched.submit(JobSpec(name="j", nodelist="n01", command="sleep 60")), timeout=3600
+        )
+
+        polls = [c for c in stuck.calls if c[2] == "status"]
+        offline = [c for c in polls if "--offline" in c]
+        assert len(polls) == running_for + 1
+        # One authoritative check per twelve polls, not one per poll.
+        assert len(offline) == len(polls) - len(polls) // 12
+
+    def test_the_helper_path_is_resolved_once_not_per_poll(self, head, monkeypatch):
+        # `script_tree` caches its layer probes for 30s, so re-resolving inside a long wait
+        # would put remote directory probes back in the loop -- and could switch which
+        # project's copy of the helper a running job is polled with.
+        resolutions = []
+        import paths
+
+        real = paths._script
+        monkeypatch.setattr(
+            paths, "_script", lambda *a, **k: resolutions.append(a[0]) or real(*a, **k)
+        )
+        sched = _sched(FakeHead(states=["RUNNING"] * 5 + ["COMPLETED"]))
+        sched.wait(sched.submit(JobSpec(name="j", nodelist="n01", command="x")), timeout=3600)
+        assert resolutions.count("nvis_pythoncm_exec.py") == 1
+
+    def test_a_terminal_state_from_an_offline_poll_still_ends_the_wait(self, head):
+        # The cheap path must be able to finish on its own, or it saves nothing: a job that
+        # completes between verification polls would otherwise wait for the next one.
+        done = FakeHead(states=["COMPLETED"])
+        sched = _sched(done)
+        result = sched.wait(
+            sched.submit(JobSpec(name="j", nodelist="n01", command="true")), timeout=60
+        )
+        assert result.state == "COMPLETED"
+        assert "--offline" in next(c for c in done.calls if c[2] == "status")
+
+    def test_an_explicit_status_call_is_always_authoritative(self, head):
+        # `status()` is the public one-shot question, asked by callers that are about to act
+        # on the answer. It must never return the offline guess.
+        sched = _sched(head)
+        handle = sched.submit(JobSpec(name="j", nodelist="n01", command="true"))
+        sched.status(handle)
+        assert "--offline" not in next(c for c in head.calls if c[2] == "status")
+
+
 class TestItIsAFirstClassProvider:
     def test_the_factory_builds_it_by_name(self, head):
         assert build_scheduler("pythoncm", connection=head).kind == "pythoncm"

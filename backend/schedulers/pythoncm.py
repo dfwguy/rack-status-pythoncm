@@ -47,6 +47,15 @@ LAUNCH_MODES = ("fanout", "leader", "head")
 #: against, which on BCM is the bundled Python rather than whatever `python3` resolves to.
 _DEFAULT_HEAD_PYTHON = "/cm/local/apps/python312/bin/python3"
 
+#: One authoritative status check per this many polls while waiting.
+#:
+#: The cheap offline poll cannot distinguish "still running" from "died without finishing",
+#: because both look the same on disk. This bounds how long that confusion can last: at the
+#: default five-second interval, a dead job is noticed within a minute, for one expensive
+#: call per minute instead of twelve. Lower it and the head node pays; raise it and a dead
+#: job holds its rack longer.
+_VERIFY_EVERY = 12
+
 
 class PythonCMScheduler(Scheduler):
     """Submit through BCM's ProgramRunner, via a helper on the head."""
@@ -57,6 +66,23 @@ class PythonCMScheduler(Scheduler):
         self.conn = connection
         self.platform = platform
         self.profile = profile
+        self._helper: str = ""
+
+    def _helper_path(self) -> str:
+        """Resolve the helper once per scheduler, then reuse it.
+
+        Correctness first, speed second. `script_tree` caches its layer probes for only 30
+        seconds, so a long `wait` would re-resolve mid-job and could start polling a
+        *different* project's copy of the helper if the active project changed underneath
+        it — reading one job's state with another project's script. Pinning at construction
+        ties a job to the helper it was submitted with.
+
+        It also takes the remote directory probes out of the polling loop, which is the
+        point of the offline poll: one round trip, nothing else.
+        """
+        if not self._helper:
+            self._helper = str(paths._script("nvis_pythoncm_exec.py", "RACK_PYTHONCM_EXEC_SCRIPT"))
+        return self._helper
 
     # -- plumbing ---------------------------------------------------------------------------
 
@@ -78,7 +104,7 @@ class PythonCMScheduler(Scheduler):
         """
         argv = [
             _eget("NVIS_BCM_PYTHON", "") or _DEFAULT_HEAD_PYTHON,
-            str(paths._script("nvis_pythoncm_exec.py", "RACK_PYTHONCM_EXEC_SCRIPT")),
+            self._helper_path(),
             action,
         ]
         # Only paths and non-secret identifiers. A password or cookie VALUE never reaches
@@ -202,12 +228,14 @@ class PythonCMScheduler(Scheduler):
             submit_output=json.dumps({"task_id": task_id, "pythoncm_id": native_id}),
         )
 
-    def _status_payload(self, handle: JobHandle) -> dict:
-        return self._call(
-            "status", "--jobs-dir", self._jobs_dir(), "--task-id", handle.job_id, timeout=60
-        )
+    def _status_payload(self, handle: JobHandle, *, offline: bool = False) -> dict:
+        args = ["--jobs-dir", self._jobs_dir(), "--task-id", handle.job_id]
+        if offline:
+            args.append("--offline")
+        return self._call("status", *args, timeout=60)
 
     def status(self, handle: JobHandle) -> str:
+        """The authoritative state. Always asks CMDaemon if the files cannot prove one."""
         return str(self._status_payload(handle).get("state") or "PENDING").upper()
 
     def cancel(self, handle: JobHandle) -> None:
@@ -240,10 +268,29 @@ class PythonCMScheduler(Scheduler):
         )
 
     def wait(self, handle: JobHandle, *, timeout: int = 1800, poll_interval: int = 5) -> JobResult:
+        """Poll to a deadline, cheaply, and cancel rather than abandon on expiry.
+
+        Most polls are `--offline`: they read the durable task files and cost one round
+        trip. That matters because the expensive part of a PythonCM call is constructing
+        the client -- about ten CPU-seconds on a large controller -- so a naive five-second
+        poll would spend more of the head node's CPU watching an hour-long job than running
+        it. A terminal state on disk is exact, so the cheap path still ends the wait
+        correctly; only "not finished yet" is a guess.
+
+        The guess has one blind spot: a job whose ranks died looks exactly like one still
+        running. So every `_VERIFY_EVERY` polls one authoritative check runs, which bounds
+        how long a dead job can masquerade as a live one without putting CMDaemon in the
+        hot path.
+        """
         deadline = time.monotonic() + max(1, timeout)
-        state = "PENDING"
+        polls = 0
         while time.monotonic() < deadline:
-            state = self.status(handle)
+            polls += 1
+            verify = polls % _VERIFY_EVERY == 0
+            payload = self._status_payload(handle, offline=not verify)
+            state = str(payload.get("state") or "PENDING").upper()
+            # A terminal state is trusted from either path; an unauthoritative RUNNING is
+            # only ever a reason to keep waiting, never to conclude.
             if state in TERMINAL_STATES:
                 return self._result(handle, state)
             time.sleep(max(1, poll_interval))

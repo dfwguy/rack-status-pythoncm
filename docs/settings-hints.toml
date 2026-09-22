@@ -72,6 +72,8 @@ NVIS_BCM_PYTHON = "Interpreter used for BCM `pythoncm` queries on the head node.
 NVIS_BCM_HOST = "BCM API host passed to structured `pythoncm` queries when configured. Also separates cached inventory when the query host changes."
 RACK_PYTHONCM_JOBS_DIR = "Where the PythonCM helper keeps per-task state on the head. Defaults to `<base>/var/pythoncm-jobs`. Must be durable and shared by the nodes: CMDaemon drops a finished command from its active status, so this directory is the only record of how a job went."
 RACK_PYTHONCM_USER = "Account a PythonCM ProgramRunner job runs as when a launch does not name one. Default `root`."
+RACK_SCHEDULER_WATCH_DISABLED = "Stop sampling whether the active cluster's scheduler can accept work. The samples are what answer *when* it stopped answering; on-demand probing still works without them."
+RACK_SCHEDULER_WATCH_INTERVAL_SEC = "Seconds between scheduler readiness samples. Default 60, floors at 10 so the check never becomes the load."
 RACK_MAAS_CLI = "The `maas` CLI binary. Default `maas`."
 RACK_MAAS_PROFILE = "The `maas` CLI profile to use. Default `admin`."
 
