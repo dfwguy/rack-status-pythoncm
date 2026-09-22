@@ -152,8 +152,8 @@ class TestItIsBoundedAndSwitchable:
 
 class TestTheEndpoint:
     def test_it_reports_history_and_is_gated(self):
-        import app as app_module  # noqa: PLC0415
-        from identity import testing  # noqa: PLC0415
+        import app as app_module
+        from identity import testing
 
         scheduler_watch.record({"at": "10:00:00", "scheduler": "pythoncm", "ready": False})
         body = app_module.app.test_client().get("/api/scheduler-watch").get_json()

@@ -139,6 +139,85 @@ class TestItIsChunked:
         assert names == sorted(names) == ["part-0000", "part-0001", "part-0002", "part-0003"]
 
 
+class TestItProvesTheTargetWorksBeforeWritingAnything:
+    """Both of these shipped broken and left 1.1 MB of tarball chunks in git.
+
+    The transport is asymmetric: with no SSH host configured `write_bytes` and `makedirs`
+    still succeed -- against the *local* filesystem -- while `run` raises. And under a test
+    harness that stubs `subprocess`, `run` returns a confident zero for a command that never
+    executed. Either way the old order staged the bundle first and only then discovered it
+    could not extract it, leaving the parts behind because cleanup needs the same execution.
+    """
+
+    def test_an_unconfigured_target_is_refused_before_a_byte_is_written(self, monkeypatch):
+        writes = []
+
+        class Unconfigured(_FakeHead):
+            def run(self, cmd, timeout=120, **_kw):
+                raise RuntimeError("No SSH host is configured.")
+
+        conn = Unconfigured(writes)
+        monkeypatch.setattr(script_deploy.host_exec, "connection", lambda _p: conn)
+        monkeypatch.setattr(script_deploy.script_tree, "tree_root", lambda: "/srv/scripts")
+
+        summary = script_deploy.deploy()
+        assert summary["ok"] is False
+        assert "cannot run commands on the target" in summary["error"]
+        # The point of the ordering: nothing was written, so there is nothing to clean up.
+        assert writes == []
+
+    def test_an_exit_code_without_output_is_not_accepted_as_proof(self, monkeypatch):
+        # A stubbed `subprocess` answers 0 with empty stdout for everything. Trusting the
+        # status would stage a real 280 KB bundle for an extraction that cannot happen --
+        # which is exactly how the chunks reached the repository.
+        writes = []
+
+        class Liar(_FakeHead):
+            def run(self, cmd, timeout=120, **_kw):
+                import subprocess
+
+                self.commands.append(cmd[-1])
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        conn = Liar(writes)
+        monkeypatch.setattr(script_deploy.host_exec, "connection", lambda _p: conn)
+        monkeypatch.setattr(script_deploy.script_tree, "tree_root", lambda: "/srv/scripts")
+
+        summary = script_deploy.deploy()
+        assert summary["ok"] is False
+        assert "without running the command" in summary["error"]
+        assert writes == []
+
+    def test_a_real_target_echoes_the_nonce_and_proceeds(self, monkeypatch):
+        writes = []
+        conn = _FakeHead(writes)
+        monkeypatch.setattr(script_deploy.host_exec, "connection", lambda _p: conn)
+        monkeypatch.setattr(script_deploy.script_tree, "tree_root", lambda: "/srv/scripts")
+        monkeypatch.setattr(script_deploy.script_tree, "clear_cache", lambda: None)
+        monkeypatch.setattr(
+            script_deploy, "build_bundle", lambda *_a: (b"x" * 100, ["multi-platform/a.sh"])
+        )
+        assert script_deploy.deploy()["ok"] is True
+        assert writes
+
+
+class TestSuccessIsVerifiedNotAsserted:
+    def test_staging_still_present_after_extract_is_a_failure(self, monkeypatch):
+        # The extract command removes its own staging directory last, so the directory
+        # surviving means nothing landed however the exit code read. Same rule as
+        # `verify-deploy.sh`: "up" is not "working".
+        conn = _FakeHead([], staging_survives=True)
+        monkeypatch.setattr(script_deploy.host_exec, "connection", lambda _p: conn)
+        monkeypatch.setattr(script_deploy.script_tree, "tree_root", lambda: "/srv/scripts")
+        monkeypatch.setattr(script_deploy.script_tree, "clear_cache", lambda: None)
+        monkeypatch.setattr(
+            script_deploy, "build_bundle", lambda *_a: (b"x" * 100, ["multi-platform/a.sh"])
+        )
+        summary = script_deploy.deploy()
+        assert summary["ok"] is False
+        assert "still exists" in summary["error"]
+
+
 class TestItReportsRatherThanRaises:
     def test_a_dry_run_never_touches_the_cluster(self, monkeypatch):
         # The wizard previews this on the step BEFORE SSH has been proven, so a preview that
@@ -192,11 +271,12 @@ class TestItReportsRatherThanRaises:
 class _FakeHead:
     """A head node that records what was written and run."""
 
-    def __init__(self, writes, *, makedirs_error=None, extract_rc=0):
+    def __init__(self, writes, *, makedirs_error=None, extract_rc=0, staging_survives=False):
         self.writes = writes
         self.commands: list[str] = []
         self._makedirs_error = makedirs_error
         self._extract_rc = extract_rc
+        self._staging_survives = staging_survives
 
     def makedirs(self, _path):
         return self._makedirs_error
@@ -204,10 +284,17 @@ class _FakeHead:
     def write_bytes(self, path, data):
         self.writes.append((path, len(data)))
 
+    def is_dir(self, _path):
+        # A working extract removes its own staging directory, so the default is "gone".
+        return self._staging_survives
+
     def run(self, cmd, timeout=120, **_kw):
         import subprocess
 
         script = cmd[-1]
         self.commands.append(script)
+        # Echo the readiness nonce back, the way a host that really ran the command does.
+        if cmd[:2] == ["printf", "%s"]:
+            return subprocess.CompletedProcess(cmd, 0, cmd[2], "")
         rc = self._extract_rc if "tar -xzf" in script else 0
         return subprocess.CompletedProcess(cmd, rc, "", "tar: short read" if rc else "")

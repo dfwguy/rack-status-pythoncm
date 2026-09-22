@@ -198,3 +198,7 @@ plc-evidence.jsonl
 # hostnames and paths are still nobody else's business.
 greenlight.toml
 !greenlight.toml.example
+
+# Runtime script tree. `script_tree.tree_root()` falls back to the repo root when
+# RACK_REMOTE_BASE_PATH is unset, so a local deploy stages here. Build artifact, never source.
+bin/scripts-tree/

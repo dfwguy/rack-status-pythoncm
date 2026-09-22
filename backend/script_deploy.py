@@ -157,6 +157,17 @@ def deploy(*, dry_run: bool = False, profile: str = "script", timeout: int = 600
         return summary
 
     conn = host_exec.connection(profile)
+
+    # Prove the target can run a command BEFORE writing a byte. The transport is asymmetric
+    # in a way that makes this necessary rather than tidy: with no SSH host configured,
+    # `write_bytes` and `makedirs` still succeed -- against the LOCAL filesystem -- while
+    # `run` raises. Writing first therefore staged 280 KB of tarball chunks into the app's
+    # own source tree and only then discovered it could not extract them, leaving the parts
+    # behind because the cleanup needs the same `run` that just failed.
+    unreachable = _cannot_execute(conn)
+    if unreachable:
+        return {**summary, "ok": False, "error": unreachable}
+
     staging = f"{tree.rstrip('/')}/.nvis-deploy-{uuid.uuid4().hex[:8]}"
     try:
         error = conn.makedirs(staging)
@@ -182,8 +193,20 @@ def deploy(*, dry_run: bool = False, profile: str = "script", timeout: int = 600
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout or "").strip()
             return {**summary, "ok": False, "error": f"extract failed: {detail[:400]}"}
-    except OSError as exc:
-        return {**summary, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        # The command removes its own staging directory as its last act, so the directory
+        # still being there means the extraction did not happen however the exit code read.
+        # Same rule as `verify-deploy.sh`: "up" is not "working", and a deploy that reports
+        # success without landing the files is the failure that costs the most to diagnose.
+        if conn.is_dir(staging):
+            return {
+                **summary,
+                "ok": False,
+                "error": f"extract reported success but {staging} still exists; nothing landed",
+            }
+    except Exception as exc:  # noqa: BLE001 - the transport raises several unrelated types
+        # Broad on purpose. This used to catch OSError alone, so `transport.NotConfigured`
+        # escaped as a 500 *and* skipped the structured result the caller shows an operator.
+        return {**summary, "ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}
     finally:
         # The staging directory is removed by the command above on success. This is the
         # failure path: leaving a few hundred KB of parts on the head every failed attempt
@@ -198,6 +221,39 @@ def deploy(*, dry_run: bool = False, profile: str = "script", timeout: int = 600
     summary["detail"] = f"sent {len(manifest)} file(s) to {tree}"
     _logger.info("script-deploy: %s", summary["detail"])
     return summary
+
+
+def _cannot_execute(conn) -> str:
+    """"" if the target really runs commands for us, else why not.
+
+    It echoes a nonce and checks it comes back, rather than trusting a zero exit. That is
+    not paranoia about the shell -- it is that **an exit code is a claim and the echoed
+    nonce is evidence**, and this product has two ways to get the claim without the deed.
+    A transport with no SSH host configured raises here, before anything is written; and a
+    test harness that stubs `subprocess` returns a confident success for a command that
+    never ran. Both used to get past this point and stage 280 KB of tarball into whatever
+    `tree_root()` resolved to -- on an unconfigured host, the app's own source tree -- then
+    fail to extract it and fail to clean up, because cleanup needs the same execution that
+    was never real.
+
+    Checking output rather than status is what makes the deploy refuse both cases with a
+    useful message instead of leaving litter and reporting success.
+    """
+    nonce = uuid.uuid4().hex[:12]
+    try:
+        proc = conn.run(["printf", "%s", nonce], timeout=30)
+    except Exception as exc:  # noqa: BLE001 - NotConfigured, OSError, subprocess errors
+        return f"cannot run commands on the target: {type(exc).__name__}: {exc}"[:400]
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip() or f"exit {proc.returncode}"
+        return f"cannot run commands on the target: {detail[:300]}"
+    if nonce not in (proc.stdout or ""):
+        return (
+            "the target reported success without running the command "
+            "(no output from a probe that only echoes); refusing to stage a deploy it "
+            "cannot extract"
+        )
+    return ""
 
 
 def _cleanup(conn, staging: str) -> None:

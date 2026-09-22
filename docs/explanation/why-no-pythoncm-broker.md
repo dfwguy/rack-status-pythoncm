@@ -1,7 +1,6 @@
 ---
-myst:
-  html_meta:
-    description: "Why Greenlight polls PythonCM from durable files instead of running a broker daemon on the head node."
+diataxis: explanation
+description: Why Greenlight polls PythonCM from durable task files instead of running a broker daemon on the head node, what the cheap path cannot see, and what would reverse the decision.
 ---
 
 # Why there is no PythonCM broker
