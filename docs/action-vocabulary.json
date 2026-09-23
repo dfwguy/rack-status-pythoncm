@@ -953,7 +953,11 @@
         "identified_by": [
           "rack",
           "rack_id",
-          "racks"
+          "racks",
+          "target",
+          "specs",
+          "nodes",
+          "node"
         ],
         "case_folded": true,
         "collection_fallback_verbs": [
@@ -1055,7 +1059,11 @@
         "identified_by": [
           "rack",
           "rack_id",
-          "racks"
+          "racks",
+          "target",
+          "specs",
+          "nodes",
+          "node"
         ],
         "case_folded": true,
         "collection_fallback_verbs": [
@@ -1588,7 +1596,9 @@
         "identified_by": [
           "rack",
           "rack_id",
-          "racks"
+          "racks",
+          "node",
+          "nodes"
         ],
         "case_folded": true,
         "collection_fallback_verbs": [
@@ -1913,7 +1923,10 @@
         "identified_by": [
           "rack",
           "rack_id",
-          "racks"
+          "racks",
+          "specs",
+          "nodes",
+          "node"
         ],
         "case_folded": true,
         "collection_fallback_verbs": [
@@ -1944,7 +1957,10 @@
         "identified_by": [
           "rack",
           "rack_id",
-          "racks"
+          "racks",
+          "specs",
+          "nodes",
+          "node"
         ],
         "case_folded": true,
         "collection_fallback_verbs": [
@@ -2023,7 +2039,10 @@
         "identified_by": [
           "rack",
           "rack_id",
-          "racks"
+          "racks",
+          "specs",
+          "nodes",
+          "node"
         ],
         "case_folded": true,
         "collection_fallback_verbs": [
@@ -2054,7 +2073,10 @@
         "identified_by": [
           "rack",
           "rack_id",
-          "racks"
+          "racks",
+          "specs",
+          "nodes",
+          "node"
         ],
         "case_folded": true,
         "collection_fallback_verbs": [
@@ -2298,7 +2320,8 @@
         "identified_by": [
           "node",
           "nodes",
-          "host"
+          "host",
+          "target"
         ],
         "case_folded": true,
         "collection_fallback_verbs": [
@@ -2667,7 +2690,8 @@
           "rack_id",
           "racks",
           "nodes",
-          "node"
+          "node",
+          "target"
         ],
         "case_folded": true,
         "collection_fallback_verbs": [

@@ -321,7 +321,7 @@ Read-only rack diagnostics: sysinfo, hardware check, and the pre-validation prec
 
 Owned by `backend/api/diagnostics.py`.
 
-Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+Identified by `rack`, `rack_id`, `racks`, `target`, `specs`, `nodes`, `node` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -361,7 +361,7 @@ NVLink fabric operations: NVSwitch audit/reset, IMEX check/reset, NVLink preflig
 
 Owned by `backend/api/fabric_ops.py`.
 
-Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+Identified by `rack`, `rack_id`, `racks`, `target`, `specs`, `nodes`, `node` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -503,7 +503,7 @@ Node issue punchcard rollups and in-SPA issue history.
 
 Owned by `backend/api/node_issues.py`.
 
-Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+Identified by `rack`, `rack_id`, `racks`, `node`, `nodes` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -600,7 +600,7 @@ Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, servi
 
 Owned by `backend/api/rack_power.py`.
 
-Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+Identified by `rack`, `rack_id`, `racks`, `specs`, `nodes`, `node` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -613,7 +613,7 @@ Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, servi
 
 Owned by `backend/api/rack_power.py`.
 
-Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+Identified by `rack`, `rack_id`, `racks`, `specs`, `nodes`, `node` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -635,7 +635,7 @@ Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, servi
 
 Owned by `backend/api/rack_power.py`.
 
-Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+Identified by `rack`, `rack_id`, `racks`, `specs`, `nodes`, `node` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -647,7 +647,7 @@ Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, servi
 
 Owned by `backend/api/rack_power.py`.
 
-Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+Identified by `rack`, `rack_id`, `racks`, `specs`, `nodes`, `node` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -716,7 +716,7 @@ Slurm operations an operator drives from the dashboard: drain, undrain, cancel, 
 
 Owned by `backend/api/slurm_ops.py`.
 
-Identified by `node`, `nodes`, `host` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+Identified by `node`, `nodes`, `host`, `target` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
@@ -788,7 +788,7 @@ Launching validation: every run-* endpoint, and the preset path that is replacin
 
 Owned by `backend/api/validation_runs.py`.
 
-Identified by `rack`, `rack_id`, `racks`, `nodes`, `node` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+Identified by `rack`, `rack_id`, `racks`, `nodes`, `node`, `target` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
