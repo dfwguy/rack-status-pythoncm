@@ -107,7 +107,7 @@ def _wait(client, job_id, timeout=10.0):
     raise AssertionError("job never reached a terminal phase")
 
 
-def test_rack_is_required(client):
+def test_rack_or_exact_target_is_required(client):
     """A request naming no rack is a 400, and the body says why.
 
     Two layers can produce that now and the test accepts either. With authentication on, the
@@ -121,6 +121,24 @@ def test_rack_is_required(client):
     body = r.get_json() or {}
     message = f"{body.get('error') or ''} {body.get('reason') or ''}"
     assert "rack" in message or "target" in message, body
+
+
+def test_exact_node_does_not_require_a_rack(client, stub_pdsh, monkeypatch):
+    stub_pdsh["out"] = READY
+
+    def resolve(rack, override):
+        assert rack == ""
+        assert override == "n01"
+        return override
+
+    monkeypatch.setattr(fabric_ops, "validation_target_for_rack", resolve)
+    start = client.post(
+        "/api/nvlink-preflight-async", json={"target": "n01"}
+    ).get_json()
+    assert start["ok"] is True
+    assert start["rack"] == ""
+    done = _wait(client, start["job_id"])
+    assert done["summary"]["ready"] is True
 
 
 def test_ready_rack_finishes_done(client, stub_pdsh):

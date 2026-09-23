@@ -111,7 +111,24 @@ def test_merge_ct_individuals_preserves_rack_token_casing_for_pdsh():
                 "cbr01-dh01-svr-cn0102[03]",
             ]
         )
+
         assert mixed == ["CBR01-DH01-SVR-CN0102[01,03]"]
+
+
+def test_merge_ct_individuals_preserves_exact_hostname():
+    from validation_launch import merge_ct_individuals_for_power
+
+    assert merge_ct_individuals_for_power(["gpu-rno-012"]) == ["gpu-rno-012"]
+
+
+def test_validation_target_without_rack_uses_exact_hostname():
+    from node_targets import validation_target_for_rack
+
+    with mock.patch(
+        "node_targets._all_slurm_nodenames",
+        return_value=["gpu-rno-012", "gpu-rno-016"],
+    ):
+        assert validation_target_for_rack("", "gpu-rno-012") == "gpu-rno-012"
 
 
 def test_grafana_embed_host_regex_prefers_rack_prefix():

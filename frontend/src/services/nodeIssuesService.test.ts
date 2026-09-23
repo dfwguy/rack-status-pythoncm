@@ -10,7 +10,7 @@
  * its affiliates is strictly prohibited.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchDeepAudit, fetchDeepAuditOutput } from "./nodeIssuesService";
+import { fetchDeepAudit, fetchDeepAuditOutput, fetchDeepAudits, startDeepAudit } from "./nodeIssuesService";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -46,5 +46,36 @@ describe("deep audit result services", () => {
 
     expect((await fetchDeepAudit(runId)).state).toBe("completed");
     expect(await fetchDeepAuditOutput(runId)).toContain("PASS");
+  });
+
+  it("uses the exact node when no rack is assigned", async () => {
+    let launchBody: Record<string, unknown> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/workflows/hardware-deep-audit/run") {
+        launchBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return new Response(JSON.stringify({ ok: true, run_id: "run-1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/deep-audits?kind=hardware&target=gpu-rno-012&limit=20") {
+        return new Response(JSON.stringify({ ok: true, runs: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    await startDeepAudit({
+      workflowId: "hardware-deep-audit",
+      rack: "",
+      target: "gpu-rno-012",
+    });
+    expect(launchBody).toEqual({ params: { target: "gpu-rno-012" } });
+    await expect(
+      fetchDeepAudits({ rack: "", target: "gpu-rno-012", kind: "hardware", limit: 20 }),
+    ).resolves.toEqual([]);
   });
 });

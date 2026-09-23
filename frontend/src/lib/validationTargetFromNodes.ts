@@ -60,7 +60,7 @@ function trayFromNodeId(
  *    through as a comma list, so the backend targets exactly the chosen nodes instead of
  *    falling back to the whole rack.
  *
- * Returns null when nothing belonging to this rack is selected.
+ * Returns null when no node is selected.
  */
 export function validationTargetFromNodes(
   rack: string,
@@ -70,23 +70,26 @@ export function validationTargetFromNodes(
   const rackCanon = rack.trim();
   const rackKey = rackCanon.toLowerCase();
   const joiner = naming?.ct_joiner ?? "-ct";
+  const selectedNodes = Array.from(selected);
   const nums: number[] = [];
   const hostnames: string[] = [];
-  for (const id of selected) {
+  for (const id of selectedNodes) {
     const n = trayFromNodeId(rackKey, id, naming);
     if (n !== null && !Number.isNaN(n)) {
       nums.push(n);
     } else {
       const t = id.trim();
-      if (t && t.toLowerCase().startsWith(rackKey)) hostnames.push(t);
+      if (t) hostnames.push(t);
     }
   }
-  if (nums.length > 0) {
+  if (nums.length > 0 && hostnames.length === 0) {
     nums.sort((a, b) => a - b);
     return `${rackCanon}${joiner}[${compressCtNums(nums)}]`;
   }
   if (hostnames.length > 0) {
-    return Array.from(new Set(hostnames)).join(",");
+    return Array.from(
+      new Set(selectedNodes.map((node) => node.trim()).filter(Boolean)),
+    ).join(",");
   }
   return null;
 }

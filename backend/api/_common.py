@@ -204,13 +204,19 @@ def parse_sysinfo_request(body: dict) -> tuple[dict | None, tuple[object, int] |
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     rack = (body.get("rack") or "").strip()
-    try:
-        rk = _normalize_rack_id(rack)
-    except ValueError as e:
-        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    rk = ""
+    if rack:
+        try:
+            rk = _normalize_rack_id(rack)
+        except ValueError as e:
+            return None, (jsonify({"ok": False, "error": str(e)}), 400)
     tgt_ov = body.get("target")
     if tgt_ov is not None and not isinstance(tgt_ov, str):
         return None, (jsonify({"ok": False, "error": "target must be a string"}), 400)
+    if not rack and not str(tgt_ov or "").strip():
+        return None, (
+            jsonify({"ok": False, "error": "rack or an explicit node target is required"}), 400,
+        )
     try:
         target = validation_target_for_rack(rack, tgt_ov if isinstance(tgt_ov, str) else None)
     except ValueError as e:

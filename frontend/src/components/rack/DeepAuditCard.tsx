@@ -93,6 +93,11 @@ export function DeepAuditCard({
   const [outputOpen, setOutputOpen] = useState(false);
   const [outputText, setOutputText] = useState("");
   const [outputLoading, setOutputLoading] = useState(false);
+  const target = useMemo(
+    () => validationTargetFromNodes(rack, selectedNodes, naming) || "",
+    [rack, selectedNodes, naming],
+  );
+  const scopeLabel = rack || target;
 
   const latest = runs[0];
   const latestSummary = summaryOf(latest);
@@ -100,12 +105,12 @@ export function DeepAuditCard({
 
   const refresh = useCallback(async () => {
     try {
-      setRuns(await fetchDeepAudits({ rack, kind, limit: 20 }));
+      setRuns(await fetchDeepAudits({ rack, target, kind, limit: 20 }));
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [rack, kind]);
+  }, [rack, target, kind]);
 
   useEffect(() => {
     void refresh();
@@ -116,11 +121,6 @@ export function DeepAuditCard({
     const timer = window.setInterval(() => void refresh(), 3000);
     return () => window.clearInterval(timer);
   }, [active, resultsOpen, refresh]);
-
-  const target = useMemo(
-    () => validationTargetFromNodes(rack, selectedNodes, naming) || "",
-    [rack, selectedNodes, naming],
-  );
 
   const launch = async () => {
     setConfirmOpen(false);
@@ -205,7 +205,7 @@ export function DeepAuditCard({
             validation ID and the exact reason. Warnings and unavailable probes remain inconclusive and are not drained.
           </Banner>
           <Text kind="body/regular/md" style={{ display: "block", marginTop: 16 }}>
-            Run on {selectedNodes.size} selected node(s) in {rack}?
+            Run on {selectedNodes.size} selected node(s) for {scopeLabel}?
           </Text>
         </DialogContent>
         <DialogActions>
@@ -218,7 +218,7 @@ export function DeepAuditCard({
         <DialogTitle>
           <Flex align="center" gap="2">
             <Icon size={18} />
-            <span style={{ flex: 1 }}>{title} results — {rack}</span>
+            <span style={{ flex: 1 }}>{title} results — {scopeLabel}</span>
             <Button kind="secondary" size="small" onClick={() => void refresh()}>
               <RefreshCw size={14} /> Refresh
             </Button>
@@ -228,7 +228,7 @@ export function DeepAuditCard({
           {error && <Banner status="error" kind="inline">{error}</Banner>}
           {!latest ? (
             <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
-              No {kind} deep audit has run for this rack yet.
+              No {kind} deep audit has run for this target yet.
             </Text>
           ) : (
             <>

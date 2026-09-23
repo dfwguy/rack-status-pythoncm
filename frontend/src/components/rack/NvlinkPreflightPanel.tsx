@@ -151,6 +151,7 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const cancelled = useRef(false);
+  const target = validationTargetFromNodes(rack, selectedNodes, naming) || "";
 
   const run = useCallback(async () => {
     setRunning(true);
@@ -161,7 +162,6 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
     cancelled.current = false;
     try {
       const body: Record<string, unknown> = { rack, quick };
-      const target = validationTargetFromNodes(rack, selectedNodes, naming);
       if (target) body.target = target;
       const res = await apiFetch("/api/nvlink-preflight-async", {
         method: "POST",
@@ -191,7 +191,7 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
     } finally {
       setRunning(false);
     }
-  }, [rack, quick, selectedNodes, naming]);
+  }, [rack, quick, target]);
 
   const rows = status?.rows ?? [];
   const summary = status?.summary;
@@ -212,7 +212,7 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
         title="NVLink Preflight — run this first"
         category="validation"
         description={
-          `Per-node NVLink / NVLS readiness gate on ${selectedNodes.size} selected node(s) in ${rack}. ` +
+          `Per-node NVLink / NVLS readiness gate on ${selectedNodes.size} selected node(s) for ${rack || target}. ` +
           "Checks GPU enumeration, 18 NVLinks, the P2P matrix, fabric registration, IMEX domain and dmesg, " +
           "and (full mode) forces an NVLink all_reduce under timeout with a RoCE control leg — the only check " +
           "that detects a wedged NVSwitch route, which otherwise makes NCCL and NeMo hang. Run before Stage 1."
@@ -257,7 +257,7 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
         maxWidth="lg"
         fullWidth
       >
-        <DialogTitle>NVLink Preflight — {rack}</DialogTitle>
+        <DialogTitle>NVLink Preflight — {rack || target}</DialogTitle>
         <DialogContent dividers>
           {error && (
             <Box sx={{ mb: 2 }}>
@@ -278,7 +278,7 @@ export function NvlinkPreflightPanel({ rack, naming, selectedNodes, disabled }: 
               <Box sx={{ mt: 1.5 }}>
                 <ProgressBar
                   kind="indeterminate"
-                  aria-label={`NVLink preflight running on ${rack}`}
+                  aria-label={`NVLink preflight running on ${rack || target}`}
                 />
               </Box>
               <Flex align="center" gap="2" style={{ marginTop: 8 }}>

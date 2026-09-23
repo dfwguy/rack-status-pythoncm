@@ -691,15 +691,16 @@ def _macswap_python_module() -> str:
 
 
 def _spec_to_hostname(spec: str) -> str | None:
-    """Parse a single-node spec like ``pNN-rMM-ct[01]`` → ``pNN-rMM-ct01``.
+    """Resolve a single-node tray spec or exact compute hostname.
 
     Returns ``None`` for range forms (e.g. ``pNN-rMM-ct[01-04]``) so the
     caller can fan-out only across explicit single-node selections.
     """
-    m = _SINGLE_NODE_SPEC_RE.match(spec.strip())
-    if not m:
-        return None
-    return f"{m.group(1)}{m.group(2)}".lower()
+    token = spec.strip()
+    m = _SINGLE_NODE_SPEC_RE.match(token)
+    if m:
+        return f"{m.group(1)}{m.group(2)}".lower()
+    return token.lower() if _HOSTNAME_RE.match(token) else None
 
 
 def run_bmc_recovery_one(node: str, iface: str) -> dict:

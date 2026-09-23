@@ -228,9 +228,15 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
           actions={actions}
           clusterId={activeCluster?.id}
           disabled={disabled}
-          blockedReason={(action) =>
-            action.tool ? nodeSelectionProblem(action.tool, nodeCount) : null
-          }
+          blockedReason={(action) => {
+            const selectionProblem = action.tool
+              ? nodeSelectionProblem(action.tool, nodeCount)
+              : null;
+            if (selectionProblem || rack || action.kind === "workflow") return selectionProblem;
+            const plan = action.tool ? planToolLaunch(action.tool) : null;
+            if (plan?.kind === "validation-preset" && plan.scopes.includes("node")) return null;
+            return "This action requires a physical rack target.";
+          }}
           onRun={runTool}
           // Stamped into an exported bundle and compared on import, so a board shared between
           // deployments says where it came from and warns on a platform mismatch.
@@ -244,7 +250,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         />
       )}
 
-      {logDir?.trim() ? (
+      {logDir?.trim() && rack ? (
         <>
           <div style={{ margin: "8px 0" }}>
             <Divider />
@@ -267,6 +273,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
           description="Parse the latest validation log and show NCCL bandwidth summary, step-time charts, and key metrics."
           icon={<FileSearch size={20} />}
           buttonLabel="View"
+          disabled={!onViewResults}
           onRun={onViewResults}
         />
         <ActionCard
@@ -313,7 +320,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         onClose={() => setPendingLaunch(null)}
         onConfirm={confirmLaunch}
         title={pendingLaunch?.title ?? "Launch options"}
-        subtitle={`${nodeCount} selected node(s) in ${rack}`}
+        subtitle={`${nodeCount} selected node(s)${rack ? ` in ${rack}` : ""}`}
         confirmLabel="Launch"
         showNcclVersion={pendingLaunch?.showNcclVersion ?? false}
         showIters={pendingLaunch?.showIters ?? false}
@@ -333,7 +340,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
           fallbackLabel={pendingPreset.label}
           scope={pendingPreset.scope}
           nodes={selectedNodes}
-          racks={[rack]}
+          racks={rack ? [rack] : []}
           logDir={logDir}
           onLaunch={(request) =>
             launchAsyncValidationFamily(

@@ -36,8 +36,6 @@ import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { type NodeInfo } from "../components/rack/NodeSelector";
 import { parseNodesFromRack } from "../lib/parseNodesFromRack";
 import { buildRackRowMap } from "../lib/rackTopology";
-import { powerSpecTokensFromNodeIds } from "../lib/rackCommandBodies";
-import { validationTargetFromNodes } from "../lib/validationTargetFromNodes";
 import { ValidationTab } from "../components/rack/ValidationTab";
 import { HardwareTab } from "../components/rack/HardwareTab";
 import { NetworkingTab } from "../components/rack/NetworkingTab";
@@ -104,8 +102,8 @@ function redfishHref(ip: string): string | null {
 
 /**
  * Compute-node inventory as a flat, filterable table, independent of rack membership.
- * Older servers without a nodes inventory retain the legacy rack expansion. Rack-scoped
- * action tabs remain available only when the selected node has a real rack association.
+ * Older servers without a nodes inventory retain the legacy rack expansion. Node-scoped
+ * actions use the discovered hostname directly when no rack association exists.
  */
 export function NodesView({ data, logDir }: NodesViewProps) {
   // Deep link from the Analytics node table: ?node=<id> opens straight to that node. Applied as
@@ -223,11 +221,6 @@ export function NodesView({ data, logDir }: NodesViewProps) {
   );
 
   const disabled = selectedNode === null;
-  // Inventory can include hostnames the legacy action APIs cannot represent. Empty specs or
-  // an omitted target can expand to the entire rack, so do not mount those actions in that case.
-  const hasExactActionTarget = selectedNode?.rack != null
-    && powerSpecTokensFromNodeIds(selectedNode.rack, selectedNodeSet, naming).length > 0
-    && validationTargetFromNodes(selectedNode.rack, selectedNodeSet, naming) !== null;
 
   return (
     <Box component="section" sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
@@ -421,75 +414,66 @@ export function NodesView({ data, logDir }: NodesViewProps) {
               <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
                 {selectedNode.rack === null ? "Unassigned" : `Rack ${selectedNode.rack}`}
                 {selectedNode.row ? ` · Row ${selectedNode.row}` : ""}
-                {hasExactActionTarget ? " · Actions apply to this node only." : ""}
+                {" · Actions apply to this node only."}
               </Text>
             </Box>
 
             <BringupResultsPanel node={selectedNode.id} logDir={logDir} />
 
-            {selectedNode.rack === null ? (
-              <Banner status="info">
-                This node has no rack assignment. Terminal access and node results are available;
-                Validation, Hardware, Networking, and Services actions currently require a rack.
-              </Banner>
-            ) : !hasExactActionTarget ? (
-              <Banner status="info">
-                The available actions cannot target this hostname individually. Terminal access and node results remain available.
-              </Banner>
-            ) : (
-              <RackCommandProvider rack={selectedNode.rack} logDir={logDir} jobId={selectedNode.lastJob}>
-                <Tabs
-                  value={tabIndex}
-                  onChange={(_, v) => setTabIndex(v)}
-                  sx={{ borderBottom: 1, borderColor: "divider", mb: 3 }}
-                >
-                  <Tab label="Validation" />
-                  <Tab label="Hardware" />
-                  <Tab label="Networking" />
-                  <Tab label="Services" />
-                </Tabs>
+            <RackCommandProvider rack={selectedNode.rack ?? selectedNode.id} logDir={logDir} jobId={selectedNode.lastJob}>
+              <Tabs
+                value={tabIndex}
+                onChange={(_, v) => setTabIndex(v)}
+                sx={{ borderBottom: 1, borderColor: "divider", mb: 3 }}
+              >
+                <Tab label="Validation" />
+                <Tab label="Hardware" />
+                <Tab label="Networking" />
+                <Tab label="Services" />
+              </Tabs>
 
-                {tabIndex === 0 && (
-                  <ValidationTab
-                    rack={selectedNode.rack}
-                    logDir={logDir}
-                    naming={naming}
-                    selectedNodes={selectedNodeSet}
-                    disabled={disabled}
-                    jobId={selectedNode.lastJob}
-                    onViewResults={() => setParserOpen(true)}
-                  />
-                )}
-                {tabIndex === 1 && (
-                  <HardwareTab
-                    rack={selectedNode.rack}
-                    logDir={logDir}
-                    naming={naming}
-                    selectedNodes={selectedNodeSet}
-                    disabled={disabled}
-                    validationScope="nodes"
-                    onSelectPowerResetTargets={() => setSelectedId(selectedNode.id)}
-                  />
-                )}
-                {tabIndex === 2 && (
-                  <NetworkingTab
-                    rack={selectedNode.rack}
-                    logDir={logDir}
-                    naming={naming}
-                    selectedNodes={selectedNodeSet}
-                    disabled={disabled}
-                  />
-                )}
-                {tabIndex === 3 && (
-                  <ServicesTab
-                    rack={selectedNode.rack}
-                    logDir={logDir}
-                    naming={naming}
-                    selectedNodes={selectedNodeSet}
-                    disabled={disabled}
-                  />
-                )}
+              {tabIndex === 0 && (
+                <ValidationTab
+                  rack={selectedNode.rack ?? ""}
+                  logDir={logDir}
+                  naming={naming}
+                  selectedNodes={selectedNodeSet}
+                  disabled={disabled}
+                  jobId={selectedNode.lastJob}
+                  onViewResults={selectedNode.rack ? () => setParserOpen(true) : undefined}
+                />
+              )}
+              {tabIndex === 1 && (
+                <HardwareTab
+                  rack={selectedNode.rack ?? ""}
+                  logDir={logDir}
+                  naming={naming}
+                  selectedNodes={selectedNodeSet}
+                  disabled={disabled}
+                  validationScope="nodes"
+                  onSelectPowerResetTargets={() => setSelectedId(selectedNode.id)}
+                />
+              )}
+              {tabIndex === 2 && (
+                <NetworkingTab
+                  rack={selectedNode.rack ?? ""}
+                  logDir={logDir}
+                  naming={naming}
+                  selectedNodes={selectedNodeSet}
+                  disabled={disabled}
+                />
+              )}
+              {tabIndex === 3 && (
+                <ServicesTab
+                  rack={selectedNode.rack ?? ""}
+                  logDir={logDir}
+                  naming={naming}
+                  selectedNodes={selectedNodeSet}
+                  disabled={disabled}
+                />
+              )}
 
+              {selectedNode.rack && (
                 <ParserResultsDialog
                   open={parserOpen}
                   onClose={() => setParserOpen(false)}
@@ -497,8 +481,8 @@ export function NodesView({ data, logDir }: NodesViewProps) {
                   jobId={selectedNode.lastJob !== "-" ? selectedNode.lastJob : undefined}
                   logDir={logDir}
                 />
-              </RackCommandProvider>
-            )}
+              )}
+            </RackCommandProvider>
           </>
         )}
       </Box>

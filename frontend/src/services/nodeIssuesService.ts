@@ -44,14 +44,16 @@ export async function startDeepAudit(args: {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
-    body: JSON.stringify({ params: { rack: args.rack, target: args.target } }),
+    body: JSON.stringify({ params: { ...(args.rack ? { rack: args.rack } : {}), target: args.target } }),
   });
   const data = await jsonOrError<{ ok: boolean; run_id: string }>(res);
   return data.run_id;
 }
 
-export async function fetchDeepAudits(params: { rack: string; kind: "hardware" | "network"; limit?: number }): Promise<DeepAuditRun[]> {
-  const query = new URLSearchParams({ rack: params.rack, kind: params.kind });
+export async function fetchDeepAudits(params: { rack: string; target?: string; kind: "hardware" | "network"; limit?: number }): Promise<DeepAuditRun[]> {
+  const query = new URLSearchParams({ kind: params.kind });
+  if (params.rack) query.set("rack", params.rack);
+  if (params.target) query.set("target", params.target);
   if (params.limit) query.set("limit", String(params.limit));
   const res = await apiFetch(`/api/deep-audits?${query}`, { credentials: "same-origin", cache: "no-store" });
   const data = await jsonOrError<{ ok: boolean; runs: DeepAuditRun[] }>(res);

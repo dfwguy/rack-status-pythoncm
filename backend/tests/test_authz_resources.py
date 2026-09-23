@@ -76,6 +76,22 @@ class TestWhereTheIdIsFound:
     def test_a_json_body_field(self):
         assert R.resolve("rack.power:on", facts(body={"rack": "b06"})) == "rack.power:b06"
 
+    @pytest.mark.parametrize(
+        ("action", "body", "expected"),
+        [
+            ("rack.power:on", {"rack": "", "specs": ["gpu-rno-012"]}, "rack.power:gpu-rno-012"),
+            ("rack.gpu:reset", {"specs": ["gpu-rno-012"]}, "rack.gpu:gpu-rno-012"),
+            ("rack.bmc:recover", {"node": "gpu-rno-012"}, "rack.bmc:gpu-rno-012"),
+            ("rack.services:restart", {"specs": ["gpu-rno-012"]}, "rack.services:gpu-rno-012"),
+            ("diag:sysinfo", {"target": "gpu-rno-012"}, "diag:gpu-rno-012"),
+            ("fabric:preflight", {"target": "gpu-rno-012"}, "fabric:gpu-rno-012"),
+            ("scheduler.node:drain", {"target": "gpu-rno-012"}, "scheduler.node:gpu-rno-012"),
+            ("validation:launch", {"target": "gpu-rno-012"}, "validation:gpu-rno-012"),
+        ],
+    )
+    def test_exact_node_is_used_when_rack_is_empty(self, action, body, expected):
+        assert R.resolve(action, facts(body=body)) == expected
+
     def test_the_path_wins_over_the_body(self):
         """The URL is what the route matched and what the audit line records, so when a request
         carries both, the path is what actually selected the target. A body that could override it

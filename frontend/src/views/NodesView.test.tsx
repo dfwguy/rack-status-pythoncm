@@ -167,7 +167,7 @@ describe("NodesView", () => {
     expect(visibleRowCount()).toBe(12);
   });
 
-  it("shows discovered nodes when no racks exist, with terminal and results access", () => {
+  it("shows discovered nodes when no racks exist, with node-scoped actions", () => {
     renderNodes({ ...status([]), nodes: [{ ...node("rtx-worker-01"), ip: "10.1.2.3" }] });
     expect(screen.getByText("1 of 1 nodes")).toBeInTheDocument();
     const table = screen.getByRole("table", { name: "Compute nodes" });
@@ -176,9 +176,9 @@ describe("NodesView", () => {
 
     fireEvent.click(within(table).getByText("rtx-worker-01"));
     expect(screen.getByTestId("bringup-results")).toHaveAttribute("data-node", "rtx-worker-01");
-    expect(screen.getByText(/This node has no rack assignment/)).toBeInTheDocument();
-    expect(screen.queryByTestId("rack-command-provider")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("validation-tab")).not.toBeInTheDocument();
+    expect(screen.getByTestId("rack-command-provider")).toHaveAttribute("data-rack", "rtx-worker-01");
+    expect(screen.getByTestId("validation-tab")).toBeInTheDocument();
+    expect(screen.getByText(/Actions apply to this node only/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open terminal to rtx-worker-01" }));
     expect(screen.getByTestId("node-terminal")).toHaveTextContent("rtx-worker-01");
@@ -215,12 +215,12 @@ describe("NodesView", () => {
     expect(screen.getByTestId("validation-tab")).toBeInTheDocument();
   });
 
-  it.each(["custom-worker-7", "p5-r01-custom-07"])("does not expose rack mutations when %s cannot be targeted individually", (hostname) => {
+  it.each(["custom-worker-7", "p5-r01-custom-07"])("uses exact-host actions when %s does not fit the rack template", (hostname) => {
     renderNodes({ ...status(["p5-r01"]), nodes: [node(hostname, "p5-r01")] });
     fireEvent.click(screen.getByText(hostname));
-    expect(screen.getByText("The available actions cannot target this hostname individually. Terminal access and node results remain available.")).toBeInTheDocument();
-    expect(screen.queryByTestId("rack-command-provider")).not.toBeInTheDocument();
-    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.getByTestId("rack-command-provider")).toHaveAttribute("data-rack", "p5-r01");
+    expect(screen.getByTestId("validation-tab")).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
     expect(screen.getByTestId("bringup-results")).toHaveAttribute("data-node", hostname);
     fireEvent.click(screen.getByRole("button", { name: `Open terminal to ${hostname}` }));
     expect(screen.getByTestId("node-terminal")).toHaveTextContent(hostname);

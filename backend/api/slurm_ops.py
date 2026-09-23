@@ -59,11 +59,11 @@ _SLURM_DRAIN_REASON_RE = re.compile(r"^[A-Za-z0-9 _.,:/()\-]{1,256}$")
 def _slurm_nodename_target_from_body(body: dict) -> tuple[str | None, str | None]:
     """Parse rack (+ optional target) into Slurm nodename=… value; (None, err) on error."""
     rack = (body.get("rack") or "").strip()
-    if not rack:
-        return None, "rack is required"
     tgt_ov = body.get("target")
     if tgt_ov is not None and not isinstance(tgt_ov, str):
         return None, "target must be a string"
+    if not rack and not str(tgt_ov or "").strip():
+        return None, "rack or an explicit node target is required"
     try:
         target = validation_target_for_rack(rack, tgt_ov if isinstance(tgt_ov, str) else None)
     except ValueError as e:
@@ -101,7 +101,8 @@ def api_slurm_drain():
     except OSError as e:
         return jsonify({"ok": False, "error": str(e)}), 500
     ok = bool(result.get("ok"))
-    payload: dict = {"ok": ok, "rack": _normalize_rack_id((body.get("rack") or "").strip()), "target": target, **result}
+    rack = (body.get("rack") or "").strip()
+    payload: dict = {"ok": ok, "rack": _normalize_rack_id(rack) if rack else "", "target": target, **result}
     if ok:
         payload["message"] = f"Undrain (state=resume) applied to {len(target.split(','))} node(s)."
     else:
@@ -132,7 +133,7 @@ def api_slurm_undrain():
     if err:
         return jsonify({"ok": False, "error": err}), 400
     rk_for_lock = (body.get("rack") or "").strip()
-    rk_norm = _normalize_rack_id((body.get("rack") or "").strip())
+    rk_norm = _normalize_rack_id(rk_for_lock) if rk_for_lock else ""
 
     # Ask Slurm WHICH of these nodes is actually drained/down before touching anything.
     # Slurm rejects BOTH `state=idle` and `state=resume` with "Invalid node state specified" when

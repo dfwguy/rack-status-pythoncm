@@ -10,7 +10,8 @@
  * its affiliates is strictly prohibited.
  */
 import { describe, it, expect } from "vitest";
-import { parseEnvVars, attachLaunchOptions } from "./rackCommandBodies";
+import { parseEnvVars, attachLaunchOptions, powerSpecTokensFromNodeIds } from "./rackCommandBodies";
+import { validationTargetFromNodes } from "./validationTargetFromNodes";
 
 describe("parseEnvVars", () => {
   it("parses KEY=VALUE lines and ignores blanks/comments", () => {
@@ -40,5 +41,19 @@ describe("attachLaunchOptions", () => {
   it("still handles ncclDebug alongside env", () => {
     const body = attachLaunchOptions({}, { ncclDebug: "INFO", env: { FOO: "1" } });
     expect(body).toEqual({ nccl_debug: "INFO", env: { FOO: "1" } });
+  });
+});
+
+describe("exact node targets", () => {
+  it("uses the hostname when no rack is assigned", () => {
+    const selected = new Set(["gpu-rno-012"]);
+    expect(powerSpecTokensFromNodeIds("", selected)).toEqual(["gpu-rno-012"]);
+    expect(validationTargetFromNodes("", selected)).toBe("gpu-rno-012");
+  });
+
+  it("uses the hostname when it does not fit the rack template", () => {
+    const selected = new Set(["custom-worker-7"]);
+    expect(powerSpecTokensFromNodeIds("p5-r01", selected)).toEqual(["custom-worker-7"]);
+    expect(validationTargetFromNodes("p5-r01", selected)).toBe("custom-worker-7");
   });
 });

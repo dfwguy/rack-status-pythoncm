@@ -977,13 +977,13 @@ def api_nvlink_preflight_async():
     if os.environ.get("RACK_NVLINK_PREFLIGHT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "NVLink preflight disabled (RACK_NVLINK_PREFLIGHT_DISABLED)"}), 403
     body = request.get_json(silent=True) or {}
+    rack = ""
     rack_raw = body.get("rack")
-    if not isinstance(rack_raw, str) or not rack_raw.strip():
-        return jsonify({"ok": False, "error": "rack is required"}), 400
-    try:
-        rack = _normalize_rack_id(rack_raw)
-    except ValueError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
+    if isinstance(rack_raw, str) and rack_raw.strip():
+        try:
+            rack = _normalize_rack_id(rack_raw)
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
 
     # The operator's node selection is an OVERRIDE to the same builder every other launch uses,
     # not a value handed to pdsh unexamined: validation_target_for_rack intersects a plain
@@ -998,6 +998,8 @@ def api_nvlink_preflight_async():
         specs_raw = body.get("specs")
         if isinstance(specs_raw, list) and specs_raw:
             override = ",".join(str(x).strip() for x in specs_raw if str(x).strip())
+    if not rack and not override:
+        return jsonify({"ok": False, "error": "rack or an explicit node target is required"}), 400
     try:
         pdsh_w = validation_target_for_rack(rack, override or None)
     except ValueError as e:

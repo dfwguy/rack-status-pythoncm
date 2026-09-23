@@ -255,17 +255,17 @@ def _by(*names: str) -> Extractor:
 _RESOLVERS: dict[str, Extractor] = {
     # -- racks and the hardware under them. `<rack>` is a URL parameter on 19 routes.
     "rack": _by("rack", "rack_id", "racks"),
-    "rack.power": _by("rack", "rack_id", "racks"),
-    "rack.gpu": _by("rack", "rack_id", "racks"),
-    "rack.bmc": _by("rack", "rack_id", "racks"),
-    "rack.services": _by("rack", "rack_id", "racks"),
+    "rack.power": _by("rack", "rack_id", "racks", "specs", "nodes", "node"),
+    "rack.gpu": _by("rack", "rack_id", "racks", "specs", "nodes", "node"),
+    "rack.bmc": _by("rack", "rack_id", "racks", "specs", "nodes", "node"),
+    "rack.services": _by("rack", "rack_id", "racks", "specs", "nodes", "node"),
     "rack.lock": _by("rack", "rack_id", "racks"),
-    "fabric": _by("rack", "rack_id", "racks"),
+    "fabric": _by("rack", "rack_id", "racks", "target", "specs", "nodes", "node"),
     "fabric.imex": _by("rack", "rack_id", "racks"),
     "fabric.nvswitch": _by("rack", "rack_id", "racks"),
-    "diag": _by("rack", "rack_id", "racks"),
+    "diag": _by("rack", "rack_id", "racks", "target", "specs", "nodes", "node"),
     "bringup": _by("rack", "rack_id", "racks"),
-    "node.issues": _by("rack", "rack_id", "racks"),
+    "node.issues": _by("rack", "rack_id", "racks", "node", "nodes"),
     # -- identity. Note the resource rendering, `identity.user:rkoike`, which is NOT the principal
     #    rendering `user:rkoike`; a policy about who may administer users needs the first while the
     #    actor is the second (RESOURCE_MODEL.md).
@@ -276,7 +276,7 @@ _RESOLVERS: dict[str, Extractor] = {
     "workflow": _by("workflow_id", "run_id", "id"),
     "validation.activity": _by("activity_id", "id"),
     "scheduler.job": _by("jid", "job_id"),
-    "scheduler.node": _by("node", "nodes", "host"),
+    "scheduler.node": _by("node", "nodes", "host", "target"),
     "report": _by("report_id", "id"),
     "report.node": _by("node", "host"),
     # -- catalog documents, keyed by operator-chosen slug. `doc_id` is the URL parameter the
@@ -297,7 +297,7 @@ _RESOLVERS: dict[str, Extractor] = {
     # node-scoped launch was refused as unnameable. `first()` takes the head of a list, so a
     # multi-node launch authorizes against its first node — narrower than the collection, and the
     # dispatcher already refuses a target that is not a clean partition of the reviewed selection.
-    "validation": _by("rack", "rack_id", "racks", "nodes", "node"),
+    "validation": _by("rack", "rack_id", "racks", "nodes", "node", "target"),
     "tools": _by("rack", "rack_id", "racks"),
     # -- one instance per deployment. Scoping these would invent an id nobody could write a policy
     #    against, and `settings:default` reads better in an audit line than a bare type.

@@ -61,9 +61,10 @@ export function ServicesTab({ rack, logDir, naming, selectedNodes, disabled }: S
       <ActionCard
         title="Tail Log"
         category="maintenance"
-        description={`Live tail the latest NEMO validation log for ${rack}. Streams output in real time.`}
+        description={rack ? `Live tail the latest NEMO validation log for ${rack}. Streams output in real time.` : "Requires a physical rack target."}
         icon={<FileText size={20} />}
         buttonLabel="Tail Log"
+        disabled={!rack}
         onRun={() => openTailLogNemo()}
       />
     </ActionCardGrid>

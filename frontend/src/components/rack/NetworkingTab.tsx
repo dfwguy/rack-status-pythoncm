@@ -28,6 +28,7 @@ interface NetworkingTabProps {
 
 export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }: NetworkingTabProps) {
   const { runAsyncReset, openStream, openText } = useRackCommands();
+  const rackOnlyDisabled = disabled || !rack;
 
   const rackLogBody = () => attachLogDir({ rack }, logDir);
 
@@ -66,41 +67,41 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
       <ActionCard
         title="NVSwitch Fix"
         category="networking"
-        description={`Run NVSwitch recovery (NMXC cycle) for ${rack}.`}
+        description={rack ? `Run NVSwitch recovery (NMXC cycle) for ${rack}.` : "Requires a physical rack target."}
         icon={<Network size={20} />}
         buttonLabel="Fix"
-        disabled={disabled}
+        disabled={rackOnlyDisabled}
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("NVSwitch fix", "nmxc", "/api/nvswitch-fix-async", rackLogBody())}
       />
       <ActionCard
         title="NVSwitch SDN Reset"
         category="networking"
-        description={`Reset NVSwitch SDN controller for ${rack}.`}
+        description={rack ? `Reset NVSwitch SDN controller for ${rack}.` : "Requires a physical rack target."}
         icon={<RotateCcw size={20} />}
         buttonLabel="SDN Reset"
-        disabled={disabled}
+        disabled={rackOnlyDisabled}
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("NVSwitch SDN reset", "nmxc", "/api/nvswitch-sdn-reset-async", rackLogBody())}
       />
       <ActionCard
         title="NVSwitch System Reset"
         category="networking"
-        description={`Full NVLink system reset for ${rack} (first NVSwitch host from inventory).`}
+        description={rack ? `Full NVLink system reset for ${rack} (first NVSwitch host from inventory).` : "Requires a physical rack target."}
         icon={<Radio size={20} />}
         buttonLabel="System Reset"
         destructive
-        disabled={disabled}
+        disabled={rackOnlyDisabled}
         selectedNodes={selectedNodes}
         onRun={runSystemReset}
       />
       <ActionCard
         title="NVSwitch Audit"
         category="networking"
-        description={`Stream live NVSwitch audit for ${rack} (check-only).`}
+        description={rack ? `Stream live NVSwitch audit for ${rack} (check-only).` : "Requires a physical rack target."}
         icon={<ShieldCheck size={20} />}
         buttonLabel="Audit"
-        disabled={disabled}
+        disabled={rackOnlyDisabled}
         selectedNodes={selectedNodes}
         onRun={() =>
           openStream("NVSwitch audit (stream)", "/api/run-nvswitch-audit-stream", { ...rackLogBody(), fix: false })
@@ -109,20 +110,20 @@ export function NetworkingTab({ rack, logDir, selectedNodes, disabled, naming }:
       <ActionCard
         title="NVSwitch Check"
         category="networking"
-        description={`Async NVSwitch health check for ${rack}.`}
+        description={rack ? `Async NVSwitch health check for ${rack}.` : "Requires a physical rack target."}
         icon={<ScanSearch size={20} />}
         buttonLabel="Check"
-        disabled={disabled}
+        disabled={rackOnlyDisabled}
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("NVSwitch check", "nmxc", "/api/nvswitch-check-async", rackLogBody())}
       />
       <ActionCard
         title="NVLMapper"
         category="networking"
-        description={`Run NVLMapper topology analysis on ${rack}.`}
+        description={rack ? `Run NVLMapper topology analysis on ${rack}.` : "Requires a physical rack target."}
         icon={<Map size={20} />}
         buttonLabel="Run NVLMapper"
-        disabled={disabled}
+        disabled={rackOnlyDisabled}
         selectedNodes={selectedNodes}
         onRun={() => runAsyncReset("NVLMapper", "nmxc", "/api/nvlmapper-async", { rack })}
       />

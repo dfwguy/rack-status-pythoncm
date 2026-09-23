@@ -59,6 +59,7 @@ from activity_hydration import _update_validation_activity
 from catalog import context as catalog_context
 from catalog import models
 from config_env import _eget, _eget_int, _env_int, _job_env_int, _subprocess_env
+from core import is_valid_node_hostname
 from core import rpath as _rpath
 from flask import jsonify
 from job_registry import (
@@ -425,21 +426,26 @@ def _host_job_cwd(log_dir: Path) -> str:
 
 def merge_ct_individuals_for_power(nodes: list[str]) -> list[str]:
     """
-    Merge per-node tokens (``<rack><ct_joiner>[dd]`` with one tray id) into tray specs for cmsh power.
+    Merge tray tokens into rack ranges while preserving exact compute hostnames.
     """
     naming = _nvis_naming()
     single_re = _ct_power_single_ct_re()
     full_re = _ct_power_tray_full_re()
     by_rack: dict[str, list[int]] = {}
+    exact: list[str] = []
     for raw in nodes:
         if not isinstance(raw, str):
             raise ValueError("each entry in specs must be a string")  # noqa: TRY004 - routes catch ValueError to answer 400; TypeError would 500
         token = raw.strip()
         m = single_re.match(token)
         if not m:
-            raise ValueError(
-                f"invalid node token {raw!r} — expected rack{ naming.ct_joiner }[number] with a single tray id"
-            )
+            if not is_valid_node_hostname(token):
+                raise ValueError(
+                    f"invalid node token {raw!r} — expected a hostname or rack{ naming.ct_joiner }[number]"
+                )
+            if token not in exact:
+                exact.append(token)
+            continue
         rack_tok = m.group(1).strip()
         rr = naming.canonical_rack_id(rack_tok) or rack_tok
         li = m.lastindex or 0
@@ -457,7 +463,7 @@ def merge_ct_individuals_for_power(nodes: list[str]) -> list[str]:
             if not full_re.match(tok):
                 raise ValueError(f"invalid merged tray spec {tok!r}")
             out.append(tok)
-    return out
+    return [*out, *exact]
 
 
 def _campaign_from_catalog() -> dict[str, object] | None:

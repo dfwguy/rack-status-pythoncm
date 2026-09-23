@@ -43,6 +43,7 @@ export function powerSpecTokensFromNodeIds(
   const rackKey = rackCanon.toLowerCase();
   const joiner = naming?.ct_joiner ?? "-ct";
   const nums: number[] = [];
+  const hostnames: string[] = [];
   for (const id of sortedSpecs(selected)) {
     const esc = rackKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const escJoin = joiner.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -52,14 +53,23 @@ export function powerSpecTokensFromNodeIds(
     else if (naming?.node_id_mode === "full_hostname" && id.toLowerCase().startsWith(rackKey)) {
       const tail = id.slice(rackCanon.length);
       const tm = tail.toLowerCase().match(/^(\d{2,})$/);
-      if (tm) nums.push(parseInt(tm[1], 10));
+      if (tm) {
+        nums.push(parseInt(tm[1], 10));
+      } else {
+        hostnames.push(id.trim());
+      }
+    } else {
+      hostnames.push(id.trim());
     }
   }
   const uniq = [...new Set(nums)].sort((a, b) => a - b);
-  if (uniq.length === 0) return [];
+  if (uniq.length === 0) return hostnames;
   const mx = uniq[uniq.length - 1]!;
   const w = mx < 100 ? 2 : String(mx).length;
-  return uniq.map((n) => `${rackCanon}${joiner}[${String(n).padStart(w, "0")}]`);
+  return [
+    ...uniq.map((n) => `${rackCanon}${joiner}[${String(n).padStart(w, "0")}]`),
+    ...hostnames,
+  ];
 }
 
 export function attachLogDir(body: Record<string, unknown>, logDir?: string): Record<string, unknown> {

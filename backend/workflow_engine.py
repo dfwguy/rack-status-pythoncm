@@ -1328,7 +1328,7 @@ def _apply_node_issue_policy(
 
                 node_issues.record_issue(
                     node=node,
-                    rack=rack or (node.rsplit("-", 1)[0] if "-" in node else node),
+                    rack=rack,
                     category=issue_category,
                     code=",".join(codes) or "validation_failure",
                     reason=reason or "confirmed node validation failure",

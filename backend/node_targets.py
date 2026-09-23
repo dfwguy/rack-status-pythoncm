@@ -33,6 +33,7 @@ from core import slurm_job_base_id as _slurm_job_base_id
 from naming import _nvis_naming
 from platforms import get_platform as _get_platform
 from slurm_query import (
+    _all_slurm_nodenames,
     _dedupe_hostnames_preserve_spelling,
     _rack_node_hostnames_from_inventory,
 )
@@ -120,7 +121,8 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
     1. An override that is a **plain comma-list of real node hostnames** (no ``[`` range
        syntax) is honored as an explicit node selection — e.g. the UI sends the selected
        trays directly when the site's hostnames don't fold into ``<rack><joiner>[NN]``
-       (Boston: ``bos01-b07-11-s1-dgx-07-c01``). The list is intersected with live Slurm
+       (Boston: ``bos01-b07-11-s1-dgx-07-c01``). With no rack, this is the node-scoped path.
+       The list is intersected with live Slurm
        inventory for the rack when available (drops typos / foreign hosts); if inventory
        is unavailable the tokens are trusted as-is.
     2. An override in ``<rack><joiner>[ranges]`` template form is validated/normalized by
@@ -138,7 +140,9 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
         # Plain (non-range) override → treat as an explicit hostname selection.
         tokens = [t.strip() for t in ov.split(",") if t.strip()]
         if tokens:
-            inv = _rack_node_hostnames_from_inventory(rack) if inventory_on else []
+            inv = (
+                _rack_node_hostnames_from_inventory(rack) if rack else _all_slurm_nodenames()
+            ) if inventory_on else []
             if inv:
                 inv_cf = {h.casefold(): h for h in inv}
                 chosen = [inv_cf[t.casefold()] for t in tokens if t.casefold() in inv_cf]
@@ -165,6 +169,8 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
         hosts = _rack_node_hostnames_from_inventory(rack)
         if hosts:
             return ",".join(hosts)
+    if not rack:
+        raise ValueError("an explicit node target is required when rack is empty")
     return _nvis_naming().build_validation_target(
         rack, _validation_ct_inner(), override
     )

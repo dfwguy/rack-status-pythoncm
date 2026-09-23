@@ -27,8 +27,9 @@ bp = Blueprint("deep_audits", __name__, url_prefix="")
 @bp.route("/api/deep-audits", methods=["GET"])
 @action(get="audit.deep:list")
 def api_deep_audits_list():
-    """Recent Hardware and NVLink/Network deep-audit runs, optionally for one rack."""
+    """Recent Hardware and NVLink/Network deep-audit runs, optionally for one target."""
     rack = (request.args.get("rack") or "").strip()
+    target = (request.args.get("target") or "").strip()
     kind = (request.args.get("kind") or "").strip().lower()
     workflow_id = {
         "hardware": "hardware-deep-audit",
@@ -48,15 +49,18 @@ def api_deep_audits_list():
         full = workflow_engine.get_run_state(str(row.get("run_id") or "")) or row
         if full.get("invalidated_at"):
             continue
-        if rack and str((full.get("params") or {}).get("rack") or "") != rack:
+        params = full.get("params") or {}
+        if rack and str(params.get("rack") or "") != rack:
+            continue
+        if target and str(params.get("target") or "") != target:
             continue
         out.append({
             "run_id": full.get("run_id"),
             "workflow_id": full.get("workflow_id"),
             "workflow_name": full.get("workflow_name"),
             "state": full.get("state"),
-            "rack": str((full.get("params") or {}).get("rack") or ""),
-            "target": str((full.get("params") or {}).get("target") or ""),
+            "rack": str(params.get("rack") or ""),
+            "target": str(params.get("target") or ""),
             "started_at": full.get("started_at"),
             "updated_at": full.get("updated_at"),
             "audits": full.get("audits") or {},

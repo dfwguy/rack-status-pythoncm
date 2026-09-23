@@ -36,6 +36,7 @@ interface HardwareTabProps {
 export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, validationScope = "rack", onSelectPowerResetTargets }: HardwareTabProps) {
   const { runAsyncReset, launchAsyncValidationFamily } = useRackCommands();
   const nodeCount = selectedNodes.size;
+  const rackOnlyDisabled = disabled || !rack;
   const [macDialogOpen, setMacDialogOpen] = useState(false);
   const [hwCheckDialogOpen, setHwCheckDialogOpen] = useState(false);
   const [sysinfoDialogOpen, setSysinfoDialogOpen] = useState(false);
@@ -72,7 +73,7 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
         <ActionCard
           title="Power On"
           category="hardware"
-          description={`Power on ${nodeCount} selected node(s) in ${rack} via cmsh device power cycle.`}
+          description={`Power on ${nodeCount} selected node(s)${rack ? ` in ${rack}` : ""} via cmsh device power cycle.`}
           icon={<Power size={20} />}
           buttonLabel="Power On"
           disabled={disabled}
@@ -121,20 +122,20 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
         <ActionCard
           title="IMEX Reset"
           category="networking"
-          description={`Reset IMEX daemon on ${rack} (rack-level script).`}
+          description={rack ? `Reset IMEX daemon on ${rack} (rack-level script).` : "Requires a physical rack target."}
           icon={<RotateCcw size={20} />}
           buttonLabel="Reset IMEX"
-          disabled={disabled}
+          disabled={rackOnlyDisabled}
           selectedNodes={selectedNodes}
           onRun={() => runAsyncReset("IMEX reset", "nmxc", "/api/imex-reset-async", imexBody())}
         />
         <ActionCard
           title="IMEX Check"
           category="networking"
-          description={`Verify IMEX daemon health on ${rack}.`}
+          description={rack ? `Verify IMEX daemon health on ${rack}.` : "Requires a physical rack target."}
           icon={<CircleCheck size={20} />}
           buttonLabel="Check IMEX"
-          disabled={disabled}
+          disabled={rackOnlyDisabled}
           selectedNodes={selectedNodes}
           onRun={() => runAsyncReset("IMEX check", "hw", "/api/imex-check-async", imexBody())}
         />
@@ -165,7 +166,7 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
       <HwCheckRunDialog
         open={hwCheckDialogOpen}
         onClose={() => setHwCheckDialogOpen(false)}
-        subtitle={`${nodeCount} selected node(s) in ${rack}`}
+        subtitle={`${nodeCount} selected node(s)${rack ? ` in ${rack}` : ""}`}
         onConfirm={(opts) => {
           setHwCheckDialogOpen(false);
           void runAsyncReset("Hardware check", "hw", "/api/hw-check-async", {
@@ -180,7 +181,7 @@ export function HardwareTab({ rack, logDir, naming, selectedNodes, disabled, val
         presetId="exemplar-system-info"
         scope={validationScope}
         nodes={selectedNodes}
-        racks={[rack]}
+        racks={rack ? [rack] : []}
         logDir={logDir}
         onLaunch={(request: ValidationPresetRequest) =>
           launchAsyncValidationFamily(
