@@ -102,7 +102,13 @@ export function SingleRackView({ data, loading, error, onRetry, onRackSelect, on
           </Flex>
 
           {view === "floor" ? (
-            <RackFloorView rows={data.rows} naming={data.naming} hierarchy={data.hierarchy} onRackSelect={onRackSelect} />
+            <RackFloorView
+              rows={data.rows}
+              naming={data.naming}
+              hierarchy={data.hierarchy}
+              scalableUnits={data.scalable_units}
+              onRackSelect={onRackSelect}
+            />
           ) : (
             <RackTable
               rows={data.rows}

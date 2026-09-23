@@ -304,6 +304,79 @@ export interface FloorSection {
   rackCount: number;
 }
 
+/** One Scalable Unit as the floor view draws it. */
+export interface FloorScalableUnit {
+  id: string;
+  label: string;
+  racks: FloorRack[];
+  rackCount: number;
+}
+
+/**
+ * Group racks by Scalable Unit, using the mapping the backend sent.
+ *
+ * A separate axis from section -> row, not a level inside it, because an SU genuinely does
+ * not follow the floor: Nscale TX numbers SU1-SU14 across two `dh` rows, so nesting rows
+ * under SUs (or the reverse) would misdraw one of them. Both groupings are real — a row is
+ * where the racks physically are, an SU is which fabric they share — so the view offers
+ * each rather than picking.
+ *
+ * Racks the mapping does not mention are collected into a trailing "Unassigned" group. That
+ * is a genuine state during bring-up, when a rack is on the floor before the SU map catches
+ * up, and hiding it would make the floor view quietly disagree with the rack count.
+ */
+export function buildScalableUnitLayout(
+  rows: RackRow[],
+  units: Array<{ id: string; label: string; racks: string[] }>,
+  naming?: NvisNamingSchema,
+): FloorScalableUnit[] {
+  // No map means "this cluster has no SU model", so there is no SU grouping to draw --
+  // not one Unassigned group holding everything. Same rule as `derive_scalable_units`,
+  // which returns [] rather than inventing a single SU.
+  if (units.length === 0) return [];
+
+  const tpl = naming?.rack_id;
+  const byRack = new Map<string, FloorRack>();
+  for (const row of rows) {
+    byRack.set(row.rack.toLowerCase(), {
+      row,
+      parts: parseRackParts(row.rack, tpl),
+      health: rackHealth(row),
+    });
+  }
+
+  const out: FloorScalableUnit[] = [];
+  const claimed = new Set<string>();
+  for (const unit of units) {
+    const racks: FloorRack[] = [];
+    for (const rack of unit.racks) {
+      const key = rack.toLowerCase();
+      const found = byRack.get(key);
+      if (found && !claimed.has(key)) {
+        racks.push(found);
+        claimed.add(key);
+      }
+    }
+    if (racks.length === 0) continue;
+    racks.sort((a, b) => slotCmp(a.parts.slots, b.parts.slots));
+    out.push({ id: unit.id, label: unit.label || unit.id, racks, rackCount: racks.length });
+  }
+
+  const leftover = [...byRack.entries()]
+    .filter(([key]) => !claimed.has(key))
+    .map(([, value]) => value)
+    .sort((a, b) => slotCmp(a.parts.slots, b.parts.slots));
+  if (leftover.length > 0) {
+    out.push({
+      id: "__unassigned",
+      label: "Unassigned",
+      racks: leftover,
+      rackCount: leftover.length,
+    });
+  }
+  return out;
+}
+
 function slotCmp(a: number[], b: number[]): number {
   const len = Math.max(a.length, b.length);
   for (let i = 0; i < len; i += 1) {

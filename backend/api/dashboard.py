@@ -1087,6 +1087,50 @@ def _merge_naming_into_status_payload(payload: dict) -> None:
         payload["hierarchy"] = naming.build_hierarchy(rack_ids)
     except Exception:  # pragma: no cover - hierarchy is additive, never break status
         _logger.exception("failed to build rack hierarchy for status payload")
+    _merge_scalable_units_into_status_payload(payload)
+
+
+def _merge_scalable_units_into_status_payload(payload: dict) -> None:
+    """Attach this cluster's Scalable Unit grouping, for the floor view.
+
+    Sent from the backend rather than derived in the browser because an SU map is a
+    **site fact**, and the implementation this was ported from proves the point: it carried
+    a fourteen-entry row-to-SU table hard-coded in TypeScript, correct for exactly one
+    customer's floor and silently wrong everywhere else. The cluster record owns it, a
+    platform's ``racks_per_su`` supplies a default, and the answer arrives beside the
+    hierarchy the floor view already trusts.
+
+    Only the racks actually in this snapshot are grouped, so a derived map describes the
+    fleet as it is rather than as the geometry predicts. Absent or empty means "this
+    cluster has no SU model" and the floor view keeps drawing rows -- not "one SU holding
+    everything", which would be a confidently wrong diagram.
+    """
+    try:
+        from catalog import context as catalog_context
+
+        _project, cluster, platform = catalog_context.resolve()
+        if cluster is None:
+            return
+        rows = payload.get("rows") or []
+        rack_ids = [r.get("rack", "") for r in rows if isinstance(r, dict) and r.get("rack")]
+        racks_per_su = platform.fabric.racks_per_su if platform is not None else 0
+        units = cluster.scalable_units_for(rack_ids, racks_per_su)
+        if not units:
+            return
+        known = {rack.casefold() for rack in rack_ids}
+        payload["scalable_units"] = [
+            {
+                "id": unit.id,
+                "label": unit.label or unit.id,
+                # An explicit map may name racks this snapshot does not contain -- a rack
+                # can be down, or the record can run ahead of the floor. Filtering here
+                # keeps the view from drawing a tile with nothing behind it.
+                "racks": [rack for rack in unit.racks if rack.casefold() in known],
+            }
+            for unit in units
+        ]
+    except Exception:  # pragma: no cover - additive, never break status
+        _logger.exception("failed to attach scalable units to status payload")
 
 
 def _merge_cluster_reachable_into_status_payload(out: dict, reachable: bool, detail: str = "") -> None:

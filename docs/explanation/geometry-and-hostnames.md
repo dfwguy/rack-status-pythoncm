@@ -107,6 +107,27 @@ enables MNNVL, so a single allocation covering two physical racks joins two sepa
 domains and hangs. The dispatcher groups the selected nodes by rack and fans out independent
 jobs, and refuses if the groups are not a clean partition of the reviewed target.
 
+## Drawing the SU
+
+`/api/status` carries a `scalable_units` list beside the `hierarchy` tree, and the floor view
+offers **By row** and **By SU** as alternatives rather than nesting one inside the other. That
+is not a UI preference — an SU genuinely does not follow the floor. Nscale TX numbers SU1–SU14
+across two `dh` rows, so nesting rows under SUs (or SUs under rows) would misdraw one of them.
+A row is where the racks physically are; an SU is which fabric they share, and both are
+questions operators ask.
+
+The grouping is computed on the **backend**, from the cluster record, because an SU map is a
+site fact. The implementation this was ported from derived it in the browser from a
+fourteen-entry row-to-SU table hard-coded in TypeScript: exactly right for one customer's floor
+and silently wrong on every other, and invisible to the cluster switcher.
+
+Two behaviours worth knowing. An absent or empty list means **this cluster has no SU model**,
+and the floor view keeps drawing rows — it never means "one SU containing every rack", which
+would be a confidently wrong diagram. And racks the map does not mention are collected into a
+trailing **Unassigned** group rather than hidden: a rack reaching the floor before the SU map
+catches up is a real bring-up state, and dropping it would make the floor view quietly disagree
+with the rack count.
+
 ## The Scalable Unit — the level above a row
 
 A rack is not the largest unit that matters. A **Scalable Unit (SU)** is the group of racks that

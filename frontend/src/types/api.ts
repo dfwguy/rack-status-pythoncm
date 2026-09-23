@@ -60,6 +60,20 @@ export interface RackHierarchy {
   unmatched: string[];
 }
 
+/**
+ * One Scalable Unit of the active cluster, and the racks of this snapshot in it.
+ *
+ * Sent by the backend from the cluster record rather than derived here, because an SU map
+ * is a site fact. The implementation this replaced carried a fourteen-entry row-to-SU
+ * table hard-coded in TypeScript — correct for one customer's floor and silently wrong
+ * everywhere else.
+ */
+export interface StatusScalableUnit {
+  id: string;
+  label: string;
+  racks: string[];
+}
+
 /** Child scheduler task on a validation activity (NCCL then NeMo, etc.). */
 export interface ActivityTask {
   task_id: string;
@@ -356,6 +370,11 @@ export interface RackStatusResponse {
   naming?: NvisNamingSchema;
   /** Section -> row -> rack tree derived from the naming module (floor view, etc.). */
   hierarchy?: RackHierarchy;
+  /**
+   * This cluster's SU grouping, when it has one. Absent or empty means "no SU model" and
+   * the floor view keeps drawing rows — it does not mean one SU holding every rack.
+   */
+  scalable_units?: StatusScalableUnit[];
   native_workers: NativeWorkers;
   served_from_cache?: boolean;
   rack_status_background_interval_sec?: number;

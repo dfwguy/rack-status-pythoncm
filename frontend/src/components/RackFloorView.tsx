@@ -9,14 +9,15 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Box from "@mui/material/Box";
 import Tooltip from "@mui/material/Tooltip";
-import { Text } from "@nvidia/foundations-react-core";
-import type { RackRow, RackHierarchy } from "../types/api";
+import { Button, Text } from "@nvidia/foundations-react-core";
+import type { RackRow, RackHierarchy, StatusScalableUnit } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 import {
   buildFloorLayout,
+  buildScalableUnitLayout,
   floorLayoutFromHierarchy,
   HEALTH_COLOR,
   type FloorRack,
@@ -28,6 +29,11 @@ interface RackFloorViewProps {
   naming?: NvisNamingSchema;
   /** Backend-authoritative section/row/rack tree; preferred over client parsing. */
   hierarchy?: RackHierarchy;
+  /**
+   * This cluster's SU grouping, from the cluster record. Absent or empty means the cluster
+   * has no SU model, and the toggle is not offered rather than showing one empty option.
+   */
+  scalableUnits?: StatusScalableUnit[];
   onRackSelect?: (rack: string) => void;
 }
 
@@ -169,7 +175,13 @@ function LegendSwatch({ color, label }: { color: string; label: string }) {
 }
 
 /** Datacenter floor view: racks grouped by section (hall) -> row, each a tile with a tray micro-grid. */
-export function RackFloorView({ rows, naming, hierarchy, onRackSelect }: RackFloorViewProps) {
+export function RackFloorView({
+  rows,
+  naming,
+  hierarchy,
+  scalableUnits,
+  onRackSelect,
+}: RackFloorViewProps) {
   const sections = useMemo(
     () =>
       hierarchy && hierarchy.sections.length > 0
@@ -177,6 +189,17 @@ export function RackFloorView({ rows, naming, hierarchy, onRackSelect }: RackFlo
         : buildFloorLayout(rows, naming),
     [rows, naming, hierarchy],
   );
+  const suGroups = useMemo(
+    () =>
+      scalableUnits && scalableUnits.length > 0
+        ? buildScalableUnitLayout(rows, scalableUnits, naming)
+        : [],
+    [rows, scalableUnits, naming],
+  );
+  // Rows stay the default: it is where the racks physically are, which is what somebody
+  // walking the floor needs. SU is the fabric view, offered only where one is modelled.
+  const [groupBy, setGroupBy] = useState<"row" | "su">("row");
+  const showSu = suGroups.length > 0 && groupBy === "su";
   const multiSection = sections.length > 1 || (sections[0]?.key ?? "") !== "";
 
   return (
@@ -186,9 +209,43 @@ export function RackFloorView({ rows, naming, hierarchy, onRackSelect }: RackFlo
         <LegendSwatch color={HEALTH_COLOR.partial} label="Partial (some trays down)" />
         <LegendSwatch color={HEALTH_COLOR.down} label="Down" />
         <LegendSwatch color={HEALTH_COLOR.unknown} label="No data" />
+        {suGroups.length > 0 && (
+          <Box sx={{ ml: "auto", display: "flex", gap: 0.5 }}>
+            {(["row", "su"] as const).map((mode) => (
+              <Button
+                key={mode}
+                kind={groupBy === mode ? "primary" : "secondary"}
+                size="tiny"
+                onClick={() => setGroupBy(mode)}
+              >
+                {mode === "row" ? "By row" : "By SU"}
+              </Button>
+            ))}
+          </Box>
+        )}
       </Box>
 
-      {sections.map((section) => (
+      {showSu &&
+        suGroups.map((unit) => (
+          <Box key={unit.id} sx={{ display: "flex", alignItems: "flex-start", gap: 1.5 }}>
+            <Box sx={{ minWidth: 96, pt: 1 }}>
+              <Text kind="body/bold/sm" style={{ whiteSpace: "nowrap" }}>{unit.label}</Text>
+              <Text
+                kind="body/regular/sm"
+                style={{ display: "block", fontSize: 11, color: "var(--color-text-secondary, #6b6b6b)" }}
+              >
+                {unit.rackCount} {unit.rackCount === 1 ? "rack" : "racks"}
+              </Text>
+            </Box>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+              {unit.racks.map((r) => (
+                <RackTile key={r.row.rack} rack={r} onRackSelect={onRackSelect} />
+              ))}
+            </Box>
+          </Box>
+        ))}
+
+      {!showSu && sections.map((section) => (
         <Box key={section.key || "all"} sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
           {multiSection && (
             <Text kind="title/sm" style={{ display: "block" }}>
