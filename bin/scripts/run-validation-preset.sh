@@ -34,6 +34,12 @@ EOF
 
 preset=""; nodelist=""; storage="nfs"; rsync_enabled=0
 local_container_dir="/tmp/containers"; log_dir="${RACK_STATUS_LOG_DIR:-$PWD}"; dry_run=0
+# Where this site mounts shared container images. A mount point is a site fact, and it was
+# hard-coded into five image paths here, so a preset could not run anywhere but Nscale. Only
+# the directory is configurable: the basenames below are the reviewed artifacts and the
+# size/SHA256 gates in stage_image still have to pass, so a site may point at its own mirror
+# and cannot substitute a different image.
+container_root="${RACK_VALIDATION_CONTAINER_ROOT:-/cluster/containers}"; container_root="${container_root%/}"
 group_nodelists=()
 while (($#)); do
   case "$1" in
@@ -160,6 +166,10 @@ stage_image() {
   fi
 }
 
+# LLMB's own image store, separate from the container mount above and parameterised for the
+# same reason: its install paths already were, and leaving only the image absolute meant the
+# one hard-coded path left in this preset.
+llmb_image_root="${LLMB_IMAGE_ROOT:-/cluster/llmb/images}"; llmb_image_root="${llmb_image_root%/}"
 llmb_install="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
 llmb_repo="${LLMB_REPO:-${llmb_install}/llmb_repo}"
 llmb_run="${LLMB_RUN:-${NVIS_LLMB_RUN:-/home/cmods/workspace/llmb_venv/bin/llmb-run}}"
@@ -177,7 +187,7 @@ case "$preset" in
 
   llama31-405b-fp8)
     (( node_count == 256 )) || { echo "ERROR: Llama 3.1 405B preset requires exactly 256 nodes/1024 GPUs; got ${node_count}" >&2; exit 2; }
-    source_image="/cluster/containers/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh"
+    source_image="${container_root}/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh"
     local_image="${local_container_dir}/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh"
     if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
     node_sha="$(printf '%s\n' "${nodes[@]}" | sort | sha256sum | awk '{print $1}')"
@@ -190,7 +200,7 @@ case "$preset" in
 
   gpt-oss-cpu)
     (( node_count >= 1 && node_count <= 256 )) || { echo "ERROR: GPT-OSS CPU fan-out requires 1-256 exact nodes; got ${node_count}" >&2; exit 2; }
-    source_image="/cluster/llmb/images/tensorrt-llm+release+1.1.0rc5.sqsh"
+    source_image="${llmb_image_root}/tensorrt-llm+release+1.1.0rc5.sqsh"
     local_image="${local_container_dir}/tensorrt-llm+release+1.1.0rc5.sqsh"
     if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
     stage_image "$source_image" "$local_image" 30284881920 80de1820829418a3789a4ff5ce0c661f669ffb07c013552ac648822b9c1f9e72 0
@@ -243,7 +253,7 @@ case "$preset" in
     (( dry_run )) || git -C "$llmb_repo" diff --quiet v26.06.01 -- microbenchmarks/system_info || {
       echo "ERROR: installed system_info recipe differs from NVIDIA v26.06.01" >&2; exit 2;
     }
-    source_image="/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh"
+    source_image="${container_root}/nvidia+nemo+26.04.01-arm.sqsh"
     local_image="${local_container_dir}/nvidia+nemo+26.04.01-arm.sqsh"
     if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
     stage_image "$source_image" "$local_image" 42245001216 55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc 1
@@ -253,7 +263,7 @@ case "$preset" in
     ;;
 
   nemo-26.04.01)
-    source_image="/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh"
+    source_image="${container_root}/nvidia+nemo+26.04.01-arm.sqsh"
     local_image="${local_container_dir}/nvidia+nemo+26.04.01-arm.sqsh"
     if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
     stage_image "$source_image" "$local_image" 42245001216 55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc 1
@@ -272,7 +282,7 @@ case "$preset" in
     # deterministically turn an otherwise healthy run into TIMEOUT.
     mnubergemm_runtime_seconds=3300
     mnubergemm_slurm_time_limit=01:00:00
-    source_image="/cluster/containers/mnubergemm-26.03-v1.17-arm.sqsh"
+    source_image="${container_root}/mnubergemm-26.03-v1.17-arm.sqsh"
     local_image="${local_container_dir}/mnubergemm-26.03-v1.17-arm.sqsh"
     if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
     stage_image "$source_image" "$local_image" 13949554688 9832dda6e80c8719e74f81ce617cac3abb77399e48d5385a38e86a040cad93e6 0

@@ -234,6 +234,7 @@ export function toCluster(draft: WizardDraft): Cluster {
     // racks_per_su, which is right for every cluster that is not ragged. A site with a
     // partially populated or row-straddling SU layout edits it afterwards.
     scalable_units: [],
+    campaigns: [],
   };
 }
 

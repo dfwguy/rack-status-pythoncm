@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**250 settings.** 15 are *declared* in
+**251 settings.** 15 are *declared* in
 `backend/config_registry.py`, which is the set `greenlight.toml` can carry, the required-
 setting preflight can demand, and `greenlight.toml.example` lists. 119 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -309,6 +309,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-validation-activities-file"></a>`RACK_VALIDATION_ACTIVITIES_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/validation_activities.py` |
 | <a id="s-rack-validation-activities-refresh-disabled"></a>`RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED` | ladder |  | Stop the background reconciliation of stored activities against Slurm. | `backend/api/activities.py`, `backend/app.py` |
 | <a id="s-rack-validation-activities-refresh-lock-file"></a>`RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE` | ladder |  | Lock file that keeps two processes from reconciling activities at once. | `backend/app.py` |
+| <a id="s-rack-validation-container-root"></a>`RACK_VALIDATION_CONTAINER_ROOT` | ladder |  | Where this site mounts shared validation container images. Default `/cluster/containers`. Only the directory is configurable -- the image basename and its SHA256 stay code-owned, so a site can point at its own mirror of a reviewed image but cannot substitute a different one. | `backend/validation_presets.py` |
 | <a id="s-rack-validation-ct-range"></a>`RACK_VALIDATION_CT_RANGE` | ladder | `01-18` | See `docs/ENVIRONMENT.md` | `backend/node_targets.py`, `backend/workflow_engine.py` |
 | <a id="s-rack-validation-disabled"></a>`RACK_VALIDATION_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
 | <a id="s-rack-validation-excluded-nodes"></a>`RACK_VALIDATION_EXCLUDED_NODES` | ladder |  | Comma-list of nodes never eligible for a validation launch, whatever the selection. | `backend/validation_launch.py` |

@@ -19,6 +19,7 @@ Naming note: a :class:`Platform` here is a *hardware/system SKU*. The cluster ma
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
@@ -672,6 +673,83 @@ class ClusterScalableUnit:
         )
 
 
+@dataclass
+class ClusterCampaign:
+    """A pinned roster of exact compute nodes, for a reproducible acceptance run.
+
+    Acceptance is a claim about *specific hardware*. "We validated rack h18" is only
+    meaningful if the eighteen trays are the same eighteen every time, so a campaign names
+    hostnames rather than a rack whose membership a later inventory refresh could change.
+    That is the difference between evidence and an anecdote.
+
+    **This belongs on the cluster record, which is the whole point.** The mechanism it
+    replaces was two environment variables pointing at a newline-separated file on one
+    host: not portable, invisible to the cluster switcher, uneditable from the UI, and
+    impossible for a second deployment to reproduce. A campaign on the Cluster document
+    travels with the project that owns it, so one container genuinely serves Mayo, Firmus,
+    Boston and Nscale.
+
+    **The version is derived, never declared.** See :meth:`fingerprint`.
+    """
+
+    id: str
+    label: str = ""  # display name; falls back to the id
+    nodes: list[str] = field(default_factory=list)  # exact compute hostnames
+    #: Enforced nodes-per-rack, or 0 to not check. A bring-up that reviewed 16 trays per
+    #: rack wants the 17th to be a refusal rather than a silently larger run.
+    nodes_per_rack: int = 0
+    created_at: str = ""
+    notes: str = ""
+
+    @classmethod
+    def from_dict(cls, d: Any) -> ClusterCampaign:
+        d = _as_dict(d)
+        campaign_id = _as_str(d.get("id"))
+        return cls(
+            id=campaign_id,
+            label=_as_str(d.get("label")) or campaign_id,
+            nodes=_as_str_list(d.get("nodes")),
+            nodes_per_rack=_as_int(d.get("nodes_per_rack"), 0),
+            created_at=_as_str(d.get("created_at")),
+            notes=_as_str(d.get("notes")),
+        )
+
+    def fingerprint(self) -> str:
+        """A short digest of the roster itself.
+
+        Derived rather than stored, and that is the design. A `version` field an operator
+        maintains by hand is a value that can disagree with the thing it describes: edit
+        the roster, forget the bump, and every consumer believes it is looking at the
+        previous list. The failure is silent and it lands in an audit trail -- two
+        different node sets recorded under one identifier.
+
+        A digest of the content cannot drift from the content. This is the same repair as
+        `identity-auth-traps.mdc` §1: when a comparison can be wrong, fix the *value* so
+        it cannot be, rather than adding a check around it.
+
+        Case-folded and sorted, because neither the spelling a site uses nor the order it
+        lists nodes in changes which hardware was reviewed.
+        """
+        canonical = "\n".join(sorted(node.strip().casefold() for node in self.nodes if node.strip()))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        if not valid_id(self.id):
+            problems.append(f"invalid campaign id: {self.id!r}")
+        if not self.nodes:
+            # An empty campaign would pin nothing while looking like a control.
+            problems.append(f"campaign {self.id!r} has no nodes")
+        folded = [node.strip().casefold() for node in self.nodes if node.strip()]
+        if len(set(folded)) != len(folded):
+            # A duplicate would run the work twice on one node and inflate the node count
+            # the acceptance record reports.
+            problems.append(f"campaign {self.id!r} lists a node more than once")
+        if self.nodes_per_rack < 0:
+            problems.append(f"campaign {self.id!r}: nodes_per_rack cannot be negative")
+        return problems
+
+
 def derive_scalable_units(
     racks: Iterable[str],
     racks_per_su: int,
@@ -916,11 +994,15 @@ class Cluster:
     connection: ClusterConnection = field(default_factory=ClusterConnection)
     # Empty means "derive from the platform's racks_per_su"; see scalable_units_for().
     scalable_units: list[ClusterScalableUnit] = field(default_factory=list)
+    # Pinned acceptance rosters. A site may keep several -- one per bring-up wave -- and a
+    # launch names which it ran against, so the record says what was actually validated.
+    campaigns: list[ClusterCampaign] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Cluster:
         d = _as_dict(d)
         sus_raw = d.get("scalable_units")
+        campaigns_raw = d.get("campaigns")
         return cls(
             id=_as_str(d.get("id")),
             name=_as_str(d.get("name")) or _as_str(d.get("id")),
@@ -934,6 +1016,11 @@ class Cluster:
             scalable_units=(
                 [ClusterScalableUnit.from_dict(s) for s in sus_raw]
                 if isinstance(sus_raw, list)
+                else []
+            ),
+            campaigns=(
+                [ClusterCampaign.from_dict(c) for c in campaigns_raw]
+                if isinstance(campaigns_raw, list)
                 else []
             ),
         )
@@ -955,7 +1042,27 @@ class Cluster:
             problems.append(f"unknown scheduler {self.scheduler!r} (expected {SCHEDULERS})")
         problems.extend(self.connection.validate())
         problems.extend(self._validate_scalable_units())
+        problems.extend(self._validate_campaigns())
         return problems
+
+    def _validate_campaigns(self) -> list[str]:
+        problems: list[str] = []
+        seen: set[str] = set()
+        for campaign in self.campaigns:
+            problems.extend(campaign.validate())
+            if campaign.id in seen:
+                # Two campaigns sharing an id makes "which roster ran" unanswerable, which
+                # is the one question a campaign exists to answer.
+                problems.append(f"duplicate campaign id {campaign.id!r}")
+            seen.add(campaign.id)
+        return problems
+
+    def campaign(self, campaign_id: str) -> ClusterCampaign | None:
+        wanted = (campaign_id or "").strip()
+        for candidate in self.campaigns:
+            if candidate.id == wanted:
+                return candidate
+        return None
 
     def _validate_scalable_units(self) -> list[str]:
         """An SU map must be a clean partition, for the same reason a multirack launch is.

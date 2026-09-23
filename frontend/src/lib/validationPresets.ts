@@ -56,6 +56,7 @@ export interface ValidationPresetRequest extends Record<string, unknown> {
   rsync_to_local: boolean;
   local_container_dir: "/tmp/containers";
   campaign?: string;
+  campaign_version?: string;
   /** Opaque digest returned by prepare; launch uses it to reject reviewed-target drift. */
   plan_hash?: string;
 }
@@ -110,6 +111,7 @@ export function buildValidationPresetRequest(args: {
   storage: ValidationStorage;
   rsyncToLocal: boolean;
   campaign?: string;
+  campaignVersion?: string;
 }): ValidationPresetRequest {
   const sort = (values?: Iterable<string>) =>
     values
@@ -134,6 +136,12 @@ export function buildValidationPresetRequest(args: {
   if (logDir) request.log_dir = logDir;
   const campaign = args.campaign?.trim();
   if (campaign) request.campaign = campaign;
+  // Sent alongside the id because the id alone cannot detect an edited roster: it is a
+  // label a human chose, and a launch under a stable id used to run whatever the roster
+  // currently held. The version is a digest of the nodes, so a page holding a stale list
+  // is refused instead of silently validating different hardware.
+  const campaignVersion = args.campaignVersion?.trim();
+  if (campaignVersion) request.campaign_version = campaignVersion;
   return request;
 }
 

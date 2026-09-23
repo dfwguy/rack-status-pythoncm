@@ -160,6 +160,23 @@ export interface ClusterScalableUnit {
   racks: string[];
 }
 
+/**
+ * A pinned roster of exact compute nodes, for a reproducible acceptance run.
+ *
+ * There is no `version` field on purpose: the version is a digest the backend derives from
+ * `nodes`, so it cannot drift from the roster it describes. Edit the nodes and the version
+ * changes by itself.
+ */
+export interface ClusterCampaign {
+  id: string;
+  label: string;
+  nodes: string[];
+  /** Exact nodes required per rack, or 0 to not enforce a count. */
+  nodes_per_rack: number;
+  created_at: string;
+  notes: string;
+}
+
 export interface ClusterConnection {
   exec_mode: string;
   ssh_host: string;
@@ -182,6 +199,8 @@ export interface Cluster {
   connection: ClusterConnection;
   /** Empty means "derive from the platform's `fabric.racks_per_su`", not "one SU". */
   scalable_units: ClusterScalableUnit[];
+  /** Pinned acceptance rosters; a site may keep one per bring-up wave. */
+  campaigns: ClusterCampaign[];
 }
 
 export interface Project {

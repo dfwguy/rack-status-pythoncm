@@ -64,6 +64,7 @@ interface ValidationPresetDialogProps {
   target?: string;
   logDir?: string;
   campaignId?: string;
+  campaignVersion?: string;
   onLaunch: (request: ValidationPresetRequest, preset: ValidationPreset) => void | Promise<unknown>;
 }
 
@@ -83,6 +84,7 @@ export function ValidationPresetDialog({
   target,
   logDir,
   campaignId,
+  campaignVersion,
   onLaunch,
 }: ValidationPresetDialogProps) {
   const nodeList = useMemo(() => (nodes ? [...nodes] : []), [nodes]);
@@ -119,8 +121,9 @@ export function ValidationPresetDialog({
         storage,
         rsyncToLocal,
         campaign: campaignId,
+        campaignVersion,
       }),
-    [presetId, scope, nodeList, rackList, target, logDir, storage, rsyncToLocal, campaignId],
+    [presetId, scope, nodeList, rackList, target, logDir, storage, rsyncToLocal, campaignId, campaignVersion],
   );
 
   useEffect(() => {

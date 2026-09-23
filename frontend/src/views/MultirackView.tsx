@@ -123,6 +123,10 @@ interface MultirackCampaignResponse {
   ok: boolean;
   active: boolean;
   id?: string;
+  /** Digest of the pinned roster. Echoed on launch so an edited campaign is refused. */
+  version?: string;
+  /** Which source answered: the cluster record or the legacy environment manifest. */
+  source?: string;
   error?: string;
   racks?: MultirackCampaignRack[];
   eligible_count?: number;
@@ -998,6 +1002,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           racks={selected}
           logDir={logDir}
           campaignId={campaign?.id}
+          campaignVersion={campaign?.version}
           onLaunch={launchPreset}
         />
       ) : null}

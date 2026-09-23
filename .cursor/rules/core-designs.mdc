@@ -165,6 +165,24 @@ presets in Python is precisely the hard-wired `RACK_*_SCRIPT` registry the catal
 operator can edit it, it ships one site's absolute paths to every other site, and adding a test
 needs a code change and a deploy.
 
+**One split this rule does not cover, and `validation_presets.py` is the exception that proves
+it.** A validated *recipe* — the image digest, the size gate, the CUDA and NCCL pins, the fixed
+step count — stays code-owned, and the reason is a security boundary rather than convenience:
+those fields decide **which container runs as root on every node in a rack**, so an
+operator-editable image path is arbitrary remote code execution wearing a config field.
+`normalize_options` refuses client overrides of them for the same reason.
+
+What *is* a catalog document is everything the UI was otherwise hard-coding: that the button
+exists, its label and subtitle, which surface it belongs on, its scopes and node bounds. That is
+the `_preset_tool()` half of `seed.py`, and the drift it fixed is instructive —
+`run-validation-preset.sh` moved to NCCL 2.31.2 while three frontend components still read
+2.30.7 out of their own source.
+
+So the test is **who may change it**: a knob a site should tune is a catalog field, and a pin a
+merge request should review is code. Do not "fix" `validation_presets.py` into the catalog to
+satisfy the paragraph above; the two registries staying in step is asserted by
+`test_catalog_tool_widgets.py`.
+
 ### 2b. The script tree — which *copy* of a script runs
 
 `backend/script_tree.py`. One server runs several customers' projects, so "which script" and

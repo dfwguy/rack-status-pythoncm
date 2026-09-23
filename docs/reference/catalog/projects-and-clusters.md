@@ -102,6 +102,46 @@ action tabs require a known rack and an exact, representable node target; they a
 when those conditions are absent. This prevents a node selection from falling back to a
 whole-rack operation.
 
+### campaigns
+
+An acceptance **campaign** is a pinned roster of exact compute hostnames, so a bring-up can be
+reproduced. Acceptance is a claim about specific hardware: "we validated rack h18" only means
+something if the eighteen trays are the same eighteen every time, which a rack name cannot
+guarantee once inventory refreshes.
+
+| Field | Purpose |
+|---|---|
+| `id` | Slug, unique within the cluster, e.g. `wave1`. |
+| `label` | Display name. Falls back to the id. |
+| `nodes` | Exact compute hostnames. This is the roster. |
+| `nodes_per_rack` | Enforced count per rack, or `0` to not check. A wave that reviewed 16 trays wants the 17th to be a refusal. |
+| `created_at`, `notes` | Provenance for whoever reads the record later. |
+
+**There is no `version` field, and that is deliberate.** The version is a digest of `nodes`
+that the backend derives, so it cannot disagree with the roster it describes — edit the nodes
+and it changes by itself. A version an operator maintains by hand is a value that goes stale
+silently: change the roster, forget the bump, and every consumer believes it is looking at the
+previous list.
+
+A launch sends both `campaign` and `campaign_version`. The id alone was never enough, because
+it is a label a human chose: a roster edited under a stable id used to pass the staleness check
+and run different hardware than was reviewed, recorded in the activity trail under the same
+name. A caller holding a stale roster cannot echo the current digest, so it is refused with a
+409 naming both values. Sending no version is still allowed, so a script or an older bundle
+keeps working — the check constrains what a caller *claims*, and one that claims nothing runs
+the current roster either way.
+
+A cluster may keep several campaigns, one per wave. `RACK_MULTIRACK_CAMPAIGN_ID` selects
+between them; with exactly one, it is used without being named.
+
+**The legacy manifest still resolves, second.** `RACK_MULTIRACK_CAMPAIGN_ID` plus
+`RACK_MULTIRACK_CAMPAIGN_MANIFEST` (a path to a newline-separated host list on the scripts
+host) is what Nscale TX runs on today and keeps working, but the cluster record wins when both
+exist. The record is the better home because it travels with the project: visible to the
+cluster switcher, editable from the Projects screen, and reproducible on a second deployment,
+none of which is true of a path on one host. The resolved snapshot reports which source
+answered in its `source` field.
+
 ### scalable_units
 
 A Scalable Unit is the group of racks one set of leaf and spine switches serves. Its **size** is a

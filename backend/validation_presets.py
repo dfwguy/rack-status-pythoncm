@@ -24,6 +24,44 @@ CUDA_REQUIRED = "13.3+"
 NCCL_REQUIRED = "2.31.2"
 EXEMPLAR_TAG = "v26.06.01"
 
+#: Where shared container images live. Nscale mounts them at ``/cluster/containers``; every
+#: other site mounts them somewhere else, and this was hard-coded into five image paths on
+#: both sides of the launch, so a preset was unrunnable anywhere but Nscale.
+DEFAULT_SHARED_CONTAINER_ROOT = "/cluster/containers"
+
+#: LLMB keeps its images in its own store, which moves per site for the same reason.
+DEFAULT_LLMB_IMAGE_ROOT = "/cluster/llmb/images"
+
+
+def shared_container_root() -> str:
+    """The site's shared image directory.
+
+    Configurable because it is a **mount point**, which is a site fact. The image *filename
+    and digest* stay code-owned in the presets below, and that division is the security
+    boundary: a site may point at its own mirror of a reviewed image, and cannot substitute
+    a different image, because the size and SHA256 gates still have to pass.
+    """
+    from config_env import _eget
+
+    return (_eget("RACK_VALIDATION_CONTAINER_ROOT", "") or "").strip() or (
+        DEFAULT_SHARED_CONTAINER_ROOT
+    )
+
+
+def resolve_shared_image(path: str | None) -> str | None:
+    """Re-root a preset's shared image at this site's container directory.
+
+    Only the directory moves; the basename is the reviewed artifact and is preserved
+    exactly. Resolved per call rather than baked at import, so a cluster overlay switching
+    sites takes effect without a restart.
+    """
+    if not path:
+        return path
+    root = shared_container_root().rstrip("/")
+    if root == DEFAULT_SHARED_CONTAINER_ROOT:
+        return path
+    return f"{root}/{path.rsplit('/', 1)[-1]}"
+
 
 @dataclass(frozen=True)
 class Preset:
@@ -91,7 +129,7 @@ PRESETS: tuple[Preset, ...] = (
         "llama405b",
         ("multirack",),
         container_profile="nemo-26.04.01-nccl2.30.7",
-        shared_image="/cluster/containers/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh",
+        shared_image=f"{DEFAULT_SHARED_CONTAINER_ROOT}/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh",
         local_image=f"{LOCAL_CONTAINER_DIR}/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh",
         image_size=42477232128,
         image_sha256="0829d0c77f38db54848afd095862093a7c62e98778b0b8664b8edff69e273747",
@@ -107,7 +145,7 @@ PRESETS: tuple[Preset, ...] = (
         "gpt_oss",
         ("node", "rack", "multirack"),
         container_profile="tensorrt-llm-1.1.0rc5",
-        shared_image="/cluster/llmb/images/tensorrt-llm+release+1.1.0rc5.sqsh",
+        shared_image=f"{DEFAULT_LLMB_IMAGE_ROOT}/tensorrt-llm+release+1.1.0rc5.sqsh",
         local_image=f"{LOCAL_CONTAINER_DIR}/tensorrt-llm+release+1.1.0rc5.sqsh",
         image_size=30284881920,
         image_sha256="80de1820829418a3789a4ff5ce0c661f669ffb07c013552ac648822b9c1f9e72",
@@ -120,7 +158,7 @@ PRESETS: tuple[Preset, ...] = (
         "exemplar_sysinfo",
         ("node", "rack", "multirack"),
         container_profile="nemo-26.04.01",
-        shared_image="/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh",
+        shared_image=f"{DEFAULT_SHARED_CONTAINER_ROOT}/nvidia+nemo+26.04.01-arm.sqsh",
         local_image=f"{LOCAL_CONTAINER_DIR}/nvidia+nemo+26.04.01-arm.sqsh",
         image_size=42245001216,
         image_sha256="55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc",
@@ -133,7 +171,7 @@ PRESETS: tuple[Preset, ...] = (
         "nemo",
         ("rack", "multirack"),
         container_profile="nemo-26.04.01",
-        shared_image="/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh",
+        shared_image=f"{DEFAULT_SHARED_CONTAINER_ROOT}/nvidia+nemo+26.04.01-arm.sqsh",
         local_image=f"{LOCAL_CONTAINER_DIR}/nvidia+nemo+26.04.01-arm.sqsh",
         image_size=42245001216,
         image_sha256="55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc",
@@ -147,7 +185,7 @@ PRESETS: tuple[Preset, ...] = (
         "mnubergemm",
         ("node", "rack", "multirack"),
         container_profile="mnubergemm-26.03-v1.17-arm",
-        shared_image="/cluster/containers/mnubergemm-26.03-v1.17-arm.sqsh",
+        shared_image=f"{DEFAULT_SHARED_CONTAINER_ROOT}/mnubergemm-26.03-v1.17-arm.sqsh",
         local_image=f"{LOCAL_CONTAINER_DIR}/mnubergemm-26.03-v1.17-arm.sqsh",
         image_size=13949554688,
         image_sha256="9832dda6e80c8719e74f81ce617cac3abb77399e48d5385a38e86a040cad93e6",

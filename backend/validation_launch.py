@@ -56,6 +56,8 @@ import script_tree
 import validation_activities
 import validation_presets
 from activity_hydration import _update_validation_activity
+from catalog import context as catalog_context
+from catalog import models
 from config_env import _eget, _eget_int, _env_int, _job_env_int, _subprocess_env
 from core import rpath as _rpath
 from flask import jsonify
@@ -458,8 +460,86 @@ def merge_ct_individuals_for_power(nodes: list[str]) -> list[str]:
     return out
 
 
+def _campaign_from_catalog() -> dict[str, object] | None:
+    """The active cluster's pinned roster, or None if it keeps none.
+
+    Preferred over the environment manifest below, because this one travels with the
+    project: it is visible to the cluster switcher, editable from the Projects screen, and
+    reproducible on a second deployment. The manifest is a path on one host, and none of
+    those are true of it.
+
+    Which roster a site means is `RACK_MULTIRACK_CAMPAIGN_ID` when set, so switching
+    between waves needs no code change; otherwise the cluster's only campaign, since
+    having to name the single option would be ceremony.
+    """
+    try:
+        _project, cluster, _platform = catalog_context.resolve()
+    except Exception:  # noqa: BLE001 - an unreadable catalog is the caller's 503, not ours
+        return None
+    if cluster is None or not cluster.campaigns:
+        return None
+
+    wanted = (_eget("RACK_MULTIRACK_CAMPAIGN_ID") or "").strip()
+    campaign = cluster.campaign(wanted) if wanted else (
+        cluster.campaigns[0] if len(cluster.campaigns) == 1 else None
+    )
+    if campaign is None:
+        return None
+
+    problems = campaign.validate()
+    if problems:
+        # Refuse rather than run a roster we know is malformed: a duplicate node would
+        # inflate the node count the acceptance record reports.
+        raise RuntimeError(f"campaign {campaign.id!r} is not valid: {'; '.join(problems)}")
+
+    rack_nodes = _group_nodes_by_rack(campaign.nodes)
+    if campaign.nodes_per_rack:
+        _require_nodes_per_rack(rack_nodes, campaign.nodes_per_rack)
+    return {
+        "ok": True,
+        "active": True,
+        "id": campaign.id,
+        "label": campaign.label,
+        # The version a launch must echo back. Derived from the roster, so it cannot
+        # disagree with the nodes it describes.
+        "version": campaign.fingerprint(),
+        "source": "catalog",
+        "nodes_per_rack": campaign.nodes_per_rack,
+        "rack_nodes": rack_nodes,
+    }
+
+
+def _group_nodes_by_rack(nodes: list[str]) -> dict[str, list[str]]:
+    """Map exact hostnames onto their racks, refusing anything that is not a compute node."""
+    rack_nodes: dict[str, list[str]] = {}
+    for node in nodes:
+        parsed = _nvis_naming().sinfo_rack_from_host(node)
+        if parsed is None or parsed[1] is None:
+            raise RuntimeError(f"campaign contains an invalid compute node: {node}")
+        rack_nodes.setdefault(_normalize_rack_id(parsed[0]), []).append(node)
+    return rack_nodes
+
+
+def _require_nodes_per_rack(rack_nodes: dict[str, list[str]], expected: int) -> None:
+    wrong = {rack: len(hosts) for rack, hosts in rack_nodes.items() if len(hosts) != expected}
+    if wrong:
+        details = ", ".join(f"{rack}={count}" for rack, count in sorted(wrong.items()))
+        raise RuntimeError(f"campaign requires exactly {expected} nodes per rack; got {details}")
+
+
 def _multirack_campaign_manifest() -> dict[str, object]:
-    """Load the configured exact-node campaign manifest from the scripts host."""
+    """The exact-node campaign: the cluster record first, the environment manifest second.
+
+    One resolver with an explicit order, rather than two callers each picking a source --
+    that is the mistake `paths` and `workflow_engine` made with script directories, where
+    two resolvers agreed until one learned something and then the API and a workflow step
+    ran different copies of the same script. The winning source is reported so an operator
+    can see which answered.
+    """
+    from_catalog = _campaign_from_catalog()
+    if from_catalog is not None:
+        return from_catalog
+
     campaign_id = (_eget("RACK_MULTIRACK_CAMPAIGN_ID") or "").strip()
     raw_path = (_eget("RACK_MULTIRACK_CAMPAIGN_MANIFEST") or "").strip()
     if not campaign_id or not raw_path:
@@ -479,23 +559,21 @@ def _multirack_campaign_manifest() -> dict[str, object]:
         raise RuntimeError("campaign manifest is empty")
     if len({node.casefold() for node in nodes}) != len(nodes):
         raise RuntimeError("campaign manifest contains duplicate nodes")
-    rack_nodes: dict[str, list[str]] = {}
-    for node in nodes:
-        parsed = _nvis_naming().sinfo_rack_from_host(node)
-        if parsed is None or parsed[1] is None:
-            raise RuntimeError(f"campaign manifest contains an invalid compute node: {node}")
-        rack = _normalize_rack_id(parsed[0])
-        rack_nodes.setdefault(rack, []).append(node)
+    rack_nodes = _group_nodes_by_rack(nodes)
     expected = max(1, _eget_int("RACK_MULTIRACK_CAMPAIGN_NODES_PER_RACK", 16))
-    wrong = {rack: len(hosts) for rack, hosts in rack_nodes.items() if len(hosts) != expected}
-    if wrong:
-        details = ", ".join(f"{rack}={count}" for rack, count in sorted(wrong.items()))
-        raise RuntimeError(f"campaign manifest requires exactly {expected} nodes per rack; got {details}")
+    _require_nodes_per_rack(rack_nodes, expected)
     return {
         "ok": True,
         "active": True,
         "id": campaign_id,
         "manifest": raw_path,
+        # A manifest gets a fingerprint for the same reason the catalog roster does, and
+        # here it is load-bearing: the id is an environment variable and the roster is a
+        # separate file, so editing the file changed the nodes while the id stayed put and
+        # the staleness check passed. Two different node sets, one identifier, in the
+        # audit trail. Deriving the version from the content closes that.
+        "version": models.ClusterCampaign(id=campaign_id, nodes=nodes).fingerprint(),
+        "source": "manifest",
         "nodes_per_rack": expected,
         "rack_nodes": rack_nodes,
     }
@@ -630,9 +708,29 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
             return None, (jsonify({"ok": False, "error": f"exact-node campaign unavailable: {exc}"}), 503)
         campaign_id = str(campaign.get("id") or "")
+        campaign_version = str(campaign.get("version") or "")
         requested_campaign = str(body.get("campaign") or "").strip()
         if requested_campaign and requested_campaign != campaign_id:
             return None, (jsonify({"ok": False, "error": "stale or unknown exact-node campaign id"}), 409)
+        # The id alone was never enough. It is a label a human chose, so a roster edited
+        # under a stable id passed this check and ran different hardware than the operator
+        # reviewed -- recorded under the same name. The version is a digest of the roster,
+        # so a caller holding a stale list cannot echo the current one.
+        requested_version = str(body.get("campaign_version") or "").strip()
+        if requested_version and campaign_version and requested_version != campaign_version:
+            return None, (
+                jsonify({
+                    "ok": False,
+                    "error": (
+                        f"exact-node campaign {campaign_id!r} has changed since this page "
+                        f"loaded (reviewed {requested_version}, current {campaign_version}). "
+                        "Reload and confirm the roster before launching."
+                    ),
+                    "campaign": campaign_id,
+                    "campaign_version": campaign_version,
+                }),
+                409,
+            )
         if campaign.get("active"):
             indexed = {str(row.get("rack") or ""): row for row in campaign.get("racks", []) if isinstance(row, dict)}
             for rack in racks:
@@ -721,7 +819,11 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         for group in rack_node_groups:
             cmd += ["--group-nodelist", ",".join(str(node) for node in group["nodes"])]
     display_cmd = " ".join(shlex.quote(part) for part in cmd)
-    image_path = preset.local_image if options["storage"] == "local" else preset.shared_image
+    # Re-rooted at this site's container mount. Only the directory moves -- the basename is
+    # the reviewed artifact, and the size and SHA256 gates below still have to pass, so a
+    # site can point at its own mirror and cannot substitute a different image.
+    shared_image = validation_presets.resolve_shared_image(preset.shared_image)
+    image_path = preset.local_image if options["storage"] == "local" else shared_image
     checks = ["exact Slurm node identity", "scheduler eligibility at allocation time"]
     if preset.shared_image:
         checks += ["allowlisted image byte size", "allowlisted image SHA256"]
@@ -754,7 +856,9 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         "max_steps": options["max_steps"],
         "max_runtime_minutes": options["max_runtime_minutes"],
         "requires_infiniband": options["requires_infiniband"],
-        "artifact": ({"path": image_path, "source": preset.shared_image, "size": preset.image_size,
+        # `source` is the resolved path so the reviewed plan shows the operator the file that
+        # will actually be staged, not the shipped default they may not be using.
+        "artifact": ({"path": image_path, "source": shared_image, "size": preset.image_size,
                       "sha256": preset.image_sha256} if preset.shared_image else None),
         "checks": checks,
         "node_states": node_states,

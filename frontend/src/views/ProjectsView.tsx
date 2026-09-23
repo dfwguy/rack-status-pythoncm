@@ -62,6 +62,7 @@ function emptyCluster(): Cluster {
     // Empty means "derive SUs from the platform's racks_per_su", which is what a new
     // cluster wants. A site with a ragged SU map states it explicitly instead.
     scalable_units: [],
+    campaigns: [],
   };
 }
 
