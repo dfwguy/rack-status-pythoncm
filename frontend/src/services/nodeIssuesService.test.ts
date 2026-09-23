@@ -59,7 +59,7 @@ describe("deep audit result services", () => {
           headers: { "Content-Type": "application/json" },
         });
       }
-      if (url === "/api/deep-audits?kind=hardware&target=gpu-rno-012&limit=20") {
+      if (url === "/api/deep-audits?kind=hardware&target=compute-001&limit=20") {
         return new Response(JSON.stringify({ ok: true, runs: [] }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -71,11 +71,11 @@ describe("deep audit result services", () => {
     await startDeepAudit({
       workflowId: "hardware-deep-audit",
       rack: "",
-      target: "gpu-rno-012",
+      target: "compute-001",
     });
-    expect(launchBody).toEqual({ params: { target: "gpu-rno-012" } });
+    expect(launchBody).toEqual({ params: { target: "compute-001" } });
     await expect(
-      fetchDeepAudits({ rack: "", target: "gpu-rno-012", kind: "hardware", limit: 20 }),
+      fetchDeepAudits({ rack: "", target: "compute-001", kind: "hardware", limit: 20 }),
     ).resolves.toEqual([]);
   });
 });

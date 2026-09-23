@@ -2457,7 +2457,7 @@
           "action": "tools:download_containers",
           "verb": "download_containers",
           "kind": "mutate",
-          "scope": "instance",
+          "scope": "singleton",
           "routes": [
             "POST tools.api_tools_download_containers",
             "POST tools.api_tools_download_containers_stream"
@@ -2467,7 +2467,7 @@
           "action": "tools:install_cuda_nccl",
           "verb": "install_cuda_nccl",
           "kind": "mutate",
-          "scope": "instance",
+          "scope": "singleton",
           "routes": [
             "POST tools.api_tools_install_cuda_nccl_workspace",
             "POST tools.api_tools_install_cuda_nccl_workspace_stream"
@@ -2477,7 +2477,7 @@
           "action": "tools:install_dcgm",
           "verb": "install_dcgm",
           "kind": "mutate",
-          "scope": "instance",
+          "scope": "singleton",
           "routes": [
             "POST tools.api_tools_install_dcgm_workspace",
             "POST tools.api_tools_install_dcgm_workspace_stream"
@@ -2487,7 +2487,7 @@
           "action": "tools:install_dgxc_benchmarking",
           "verb": "install_dgxc_benchmarking",
           "kind": "mutate",
-          "scope": "instance",
+          "scope": "singleton",
           "routes": [
             "POST tools.api_tools_install_dgxc_benchmarking_workspace",
             "POST tools.api_tools_install_dgxc_benchmarking_workspace_stream"
@@ -2497,7 +2497,7 @@
           "action": "tools:install_hpcx",
           "verb": "install_hpcx",
           "kind": "mutate",
-          "scope": "instance",
+          "scope": "singleton",
           "routes": [
             "POST tools.api_tools_install_hpcx_workspace",
             "POST tools.api_tools_install_hpcx_workspace_stream"
@@ -2507,7 +2507,7 @@
           "action": "tools:install_nvloom",
           "verb": "install_nvloom",
           "kind": "mutate",
-          "scope": "instance",
+          "scope": "singleton",
           "routes": [
             "POST tools.api_tools_install_nvloom_workspace",
             "POST tools.api_tools_install_nvloom_workspace_stream"
@@ -2517,7 +2517,7 @@
           "action": "tools:launch_grafana",
           "verb": "launch_grafana",
           "kind": "mutate",
-          "scope": "instance",
+          "scope": "singleton",
           "routes": [
             "POST tools.api_tools_launch_grafana_bright_prometheus",
             "POST tools.api_tools_launch_grafana_bright_prometheus_stream"
@@ -2527,7 +2527,7 @@
           "action": "tools:list",
           "verb": "list",
           "kind": "read",
-          "scope": "instance",
+          "scope": "singleton",
           "routes": [
             "GET tools.api_tools_available"
           ]
@@ -2535,14 +2535,10 @@
       ],
       "module": "backend/api/tools.py",
       "summary": "The Tools page: workspace installers, container downloads, Grafana launch.",
-      "scope": "instance",
+      "scope": "singleton",
       "resource": {
-        "identified_by": [
-          "rack",
-          "rack_id",
-          "racks"
-        ],
-        "case_folded": true,
+        "identified_by": [],
+        "case_folded": false,
         "collection_fallback_verbs": [
           "create",
           "list",

@@ -79,14 +79,14 @@ class TestWhereTheIdIsFound:
     @pytest.mark.parametrize(
         ("action", "body", "expected"),
         [
-            ("rack.power:on", {"rack": "", "specs": ["gpu-rno-012"]}, "rack.power:gpu-rno-012"),
-            ("rack.gpu:reset", {"specs": ["gpu-rno-012"]}, "rack.gpu:gpu-rno-012"),
-            ("rack.bmc:recover", {"node": "gpu-rno-012"}, "rack.bmc:gpu-rno-012"),
-            ("rack.services:restart", {"specs": ["gpu-rno-012"]}, "rack.services:gpu-rno-012"),
-            ("diag:sysinfo", {"target": "gpu-rno-012"}, "diag:gpu-rno-012"),
-            ("fabric:preflight", {"target": "gpu-rno-012"}, "fabric:gpu-rno-012"),
-            ("scheduler.node:drain", {"target": "gpu-rno-012"}, "scheduler.node:gpu-rno-012"),
-            ("validation:launch", {"target": "gpu-rno-012"}, "validation:gpu-rno-012"),
+            ("rack.power:on", {"rack": "", "specs": ["compute-001"]}, "rack.power:compute-001"),
+            ("rack.gpu:reset", {"specs": ["compute-001"]}, "rack.gpu:compute-001"),
+            ("rack.bmc:recover", {"node": "compute-001"}, "rack.bmc:compute-001"),
+            ("rack.services:restart", {"specs": ["compute-001"]}, "rack.services:compute-001"),
+            ("diag:sysinfo", {"target": "compute-001"}, "diag:compute-001"),
+            ("fabric:preflight", {"target": "compute-001"}, "fabric:compute-001"),
+            ("scheduler.node:drain", {"target": "compute-001"}, "scheduler.node:compute-001"),
+            ("validation:launch", {"target": "compute-001"}, "validation:compute-001"),
         ],
     )
     def test_exact_node_is_used_when_rack_is_empty(self, action, body, expected):
@@ -154,6 +154,14 @@ class TestSingletons:
     @pytest.mark.parametrize("action", ["settings:update", "vault:write", "cluster:read"])
     def test_a_singleton_needs_no_id(self, action):
         assert R.resolve(action, facts()).endswith(":default")
+
+    def test_a_workspace_tool_install_needs_no_rack(self):
+        body = {
+            "workspace": "/cm/shared/workspace",
+            "build_host": "compute-001",
+            "cuda_major": "13",
+        }
+        assert R.resolve("tools:install_cuda_nccl", facts(body=body)) == "tools:default"
 
     def test_a_singleton_ignores_a_supplied_id(self):
         """One instance per deployment, so a caller cannot invent a second one to be authorized

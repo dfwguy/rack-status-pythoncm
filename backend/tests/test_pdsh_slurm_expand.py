@@ -118,7 +118,7 @@ def test_merge_ct_individuals_preserves_rack_token_casing_for_pdsh():
 def test_merge_ct_individuals_preserves_exact_hostname():
     from validation_launch import merge_ct_individuals_for_power
 
-    assert merge_ct_individuals_for_power(["gpu-rno-012"]) == ["gpu-rno-012"]
+    assert merge_ct_individuals_for_power(["compute-001"]) == ["compute-001"]
 
 
 def test_validation_target_without_rack_uses_exact_hostname():
@@ -126,9 +126,9 @@ def test_validation_target_without_rack_uses_exact_hostname():
 
     with mock.patch(
         "node_targets._all_slurm_nodenames",
-        return_value=["gpu-rno-012", "gpu-rno-016"],
+        return_value=["compute-001", "compute-002"],
     ):
-        assert validation_target_for_rack("", "gpu-rno-012") == "gpu-rno-012"
+        assert validation_target_for_rack("", "compute-001") == "compute-001"
 
 
 def test_grafana_embed_host_regex_prefers_rack_prefix():

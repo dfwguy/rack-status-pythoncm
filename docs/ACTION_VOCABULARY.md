@@ -70,7 +70,7 @@ case does not match.
 | [`scheduler.queue`](#schedulerqueue) | singleton | 1 | Can this cluster's scheduler accept work right now? |
 | [`settings`](#settings) | singleton | 3 | The dashboard core: rack status, cluster overview, app stats, and the settings writer. |
 | [`support`](#support) | singleton | 3 | nvidia-bug-report collection: run it across a rack, then list and serve what landed. |
-| [`tools`](#tools) | instance | 8 | The Tools page: workspace installers, container downloads, Grafana launch. |
+| [`tools`](#tools) | singleton | 8 | The Tools page: workspace installers, container downloads, Grafana launch. |
 | [`validation`](#validation) | instance | 14 | Launching validation: every run-* endpoint, and the preset path that is replacing them. |
 | [`validation.activity`](#validationactivity) | instance | 5 | Validation activities: the durable answer to "what ran on this rack, and what came of it". |
 | [`vault`](#vault) | singleton | 3 | NVFTP token vault: read-only access to the stored credential. |
@@ -765,18 +765,18 @@ The Tools page: workspace installers, container downloads, Grafana launch.
 
 Owned by `backend/api/tools.py`.
 
-Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+**One instance per deployment.** A policy names it as `tools:default`; there is no id to narrow a grant to.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
-| `tools:download_containers` | mutate | instance | `POST tools.api_tools_download_containers`<br>`POST tools.api_tools_download_containers_stream` |
-| `tools:install_cuda_nccl` | mutate | instance | `POST tools.api_tools_install_cuda_nccl_workspace`<br>`POST tools.api_tools_install_cuda_nccl_workspace_stream` |
-| `tools:install_dcgm` | mutate | instance | `POST tools.api_tools_install_dcgm_workspace`<br>`POST tools.api_tools_install_dcgm_workspace_stream` |
-| `tools:install_dgxc_benchmarking` | mutate | instance | `POST tools.api_tools_install_dgxc_benchmarking_workspace`<br>`POST tools.api_tools_install_dgxc_benchmarking_workspace_stream` |
-| `tools:install_hpcx` | mutate | instance | `POST tools.api_tools_install_hpcx_workspace`<br>`POST tools.api_tools_install_hpcx_workspace_stream` |
-| `tools:install_nvloom` | mutate | instance | `POST tools.api_tools_install_nvloom_workspace`<br>`POST tools.api_tools_install_nvloom_workspace_stream` |
-| `tools:launch_grafana` | mutate | instance | `POST tools.api_tools_launch_grafana_bright_prometheus`<br>`POST tools.api_tools_launch_grafana_bright_prometheus_stream` |
-| `tools:list` | read | instance | `GET tools.api_tools_available` |
+| `tools:download_containers` | mutate | singleton | `POST tools.api_tools_download_containers`<br>`POST tools.api_tools_download_containers_stream` |
+| `tools:install_cuda_nccl` | mutate | singleton | `POST tools.api_tools_install_cuda_nccl_workspace`<br>`POST tools.api_tools_install_cuda_nccl_workspace_stream` |
+| `tools:install_dcgm` | mutate | singleton | `POST tools.api_tools_install_dcgm_workspace`<br>`POST tools.api_tools_install_dcgm_workspace_stream` |
+| `tools:install_dgxc_benchmarking` | mutate | singleton | `POST tools.api_tools_install_dgxc_benchmarking_workspace`<br>`POST tools.api_tools_install_dgxc_benchmarking_workspace_stream` |
+| `tools:install_hpcx` | mutate | singleton | `POST tools.api_tools_install_hpcx_workspace`<br>`POST tools.api_tools_install_hpcx_workspace_stream` |
+| `tools:install_nvloom` | mutate | singleton | `POST tools.api_tools_install_nvloom_workspace`<br>`POST tools.api_tools_install_nvloom_workspace_stream` |
+| `tools:launch_grafana` | mutate | singleton | `POST tools.api_tools_launch_grafana_bright_prometheus`<br>`POST tools.api_tools_launch_grafana_bright_prometheus_stream` |
+| `tools:list` | read | singleton | `GET tools.api_tools_available` |
 
 ## `validation`
 

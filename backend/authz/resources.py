@@ -298,7 +298,6 @@ _RESOLVERS: dict[str, Extractor] = {
     # multi-node launch authorizes against its first node — narrower than the collection, and the
     # dispatcher already refuses a target that is not a clean partition of the reviewed selection.
     "validation": _by("rack", "rack_id", "racks", "nodes", "node", "target"),
-    "tools": _by("rack", "rack_id", "racks"),
     # -- one instance per deployment. Scoping these would invent an id nobody could write a policy
     #    against, and `settings:default` reads better in an audit line than a bare type.
     "about": _singleton,
@@ -329,6 +328,9 @@ _RESOLVERS: dict[str, Extractor] = {
     "results": _singleton,
     "settings": _singleton,
     "support": _singleton,
+    # Tools install into deployment-wide shared workspaces or manage services on the dashboard
+    # host. No route acts on a rack, and valid mutation requests therefore carry no rack id.
+    "tools": _singleton,
     "vault": _singleton,
     # -- types introduced with the read vocabulary (Phase 3). Instance reads that carry an id are
     #    scoped; the rest are one surface per deployment and their `:list` verb resolves to the
@@ -371,7 +373,7 @@ _FOLDED_TYPES = frozenset({
     # `_normalize_rack_id` -> `canonical_rack_id`, which lower-cases.
     "rack", "rack.power", "rack.gpu", "rack.bmc", "rack.services", "rack.lock",
     "fabric", "fabric.imex", "fabric.nvswitch", "diag", "bringup", "node.issues",
-    "validation", "tools",
+    "validation",
     # `canonical_login` / `canonical_group_name`, which case-fold.
     "identity.user", "identity.group",
     # Hostnames. DNS is case-insensitive, so two nodes cannot differ only in case and folding

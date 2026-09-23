@@ -46,9 +46,9 @@ describe("attachLaunchOptions", () => {
 
 describe("exact node targets", () => {
   it("uses the hostname when no rack is assigned", () => {
-    const selected = new Set(["gpu-rno-012"]);
-    expect(powerSpecTokensFromNodeIds("", selected)).toEqual(["gpu-rno-012"]);
-    expect(validationTargetFromNodes("", selected)).toBe("gpu-rno-012");
+    const selected = new Set(["compute-001"]);
+    expect(powerSpecTokensFromNodeIds("", selected)).toEqual(["compute-001"]);
+    expect(validationTargetFromNodes("", selected)).toBe("compute-001");
   });
 
   it("uses the hostname when it does not fit the rack template", () => {
