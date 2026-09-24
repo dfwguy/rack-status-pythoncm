@@ -18,6 +18,9 @@ into `backend/api/`, and nine files that were uncommitted on the OVA were harves
 
 Read these before doing any work — they apply to every task:
 
+- @.cursor/rules/build-cost-is-not-a-tradeoff.mdc — **how to decide, before deciding anything.**
+  Implementation effort is not a design input: choose for quality, simplicity, robustness,
+  scalability and maintainability, and never trade the right structure for a smaller diff
 - @.cursor/rules/core-designs.mdc — **read this before adding any new mechanism.** The product's
  **first-class citizens** — connection/transport, catalog/Tools, Project/Cluster, the workflow
  state machine, configuration resolution, platform/scheduler providers, the results pipeline, the

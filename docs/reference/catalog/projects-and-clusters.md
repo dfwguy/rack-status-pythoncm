@@ -102,6 +102,44 @@ action tabs require a known rack and an exact, representable node target; they a
 when those conditions are absent. This prevents a node selection from falling back to a
 whole-rack operation.
 
+### evidence
+
+Some sites run their own collector — a pipeline that walks the fleet's logs and writes a
+snapshot of what passed. That snapshot is *better* evidence than anything Greenlight can
+re-derive from the same logs, because the collector has already applied the site's acceptance
+policy. So Greenlight ingests it and does not reopen the artifacts behind it; forming a second
+opinion would give two disagreeing answers to "is this rack accepted".
+
+| Field | Purpose |
+|---|---|
+| `snapshot_path` | The collector's JSON snapshot, read through the `scripts` role. |
+| `healthcheck_root` | Root of per-node health-check markers, one directory per node. |
+
+Both empty is the common case, and means this cluster's evidence is the logs Greenlight reads
+itself. They live on the cluster record because they are paths on *this* cluster's hosts and
+one instance serves several clusters — the implementation this replaced hard-coded
+`/cluster/OVA/logs/nscaletx-16k-validation/validated-racks.json`, which is one customer's
+filesystem compiled into the product.
+
+**A snapshot feeds two streams, and the distinction is the point.** Acceptance is
+**monotonic**: a rack that passed stays passed, because an acceptance record is a historical
+claim that a later unrelated failure does not retract. Current state is **not**: a rack that
+is broken now must read broken, or a pass from last week paints it green forever. They are
+stored under different `source` values and read by different queries —
+`latest_successful_runs_by_rack` for acceptance, `latest_runs_by_rack(source=…)` for now — and
+the fleet floor applies the second over the first.
+
+A partial snapshot is refused whole. The collector sets `complete` last, and a rack missing
+from a half-written file is indistinguishable from a rack with no evidence, so the gap would
+read as "not yet validated" rather than "we did not finish looking".
+
+Rack identity comes from the snapshot's `rack` field, or from `su` plus `rack_number` resolved
+through this cluster's [`scalable_units`](#scalable_units). Nothing computes a rack id from a
+site's floor plan in code.
+
+Ingest with `bin/scripts/nvis_ingest_evidence.py --cluster-default`, on whatever schedule the
+collector runs. It is idempotent: an unchanged snapshot is recognised by content and skipped.
+
 ### campaigns
 
 An acceptance **campaign** is a pinned roster of exact compute hostnames, so a bring-up can be

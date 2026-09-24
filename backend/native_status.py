@@ -45,6 +45,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import config_env
+import external_evidence
 import host_exec
 import nvis_id_templates as _nvis_ids
 import results_history
@@ -1034,6 +1035,7 @@ def _durable_completed_stage_logs_by_rack() -> dict[str, dict[str, dict[str, Any
     except Exception:  # status still renders while history storage is unhealthy
         _logger.warning("could not load durable validation completion evidence", exc_info=True)
         return {}
+    current = _current_stage_evidence_by_rack()
     out: dict[str, dict[str, dict[str, Any]]] = {}
     for kind in ("nccl", "nemo"):
         for rack, run in (completed.get(kind) or {}).items():
@@ -1055,7 +1057,54 @@ def _durable_completed_stage_logs_by_rack() -> dict[str, dict[str, dict[str, Any
                 "_completed_at": str(run.get("ended_at") or run.get("started_at") or ""),
             }
             out.setdefault(str(rack), {})[kind] = probe
+
+    # The table above is monotonic acceptance history, which is correct for "has this rack
+    # ever been accepted" and wrong for "is it working now". A collector's *current* row must
+    # win even when it is a failure, or a pass from last week paints a broken rack green
+    # forever -- and green is the one answer nobody re-checks.
+    for kind, racks in current.items():
+        for rack, run in racks.items():
+            if str(run.get("status") or "").lower() == "pass":
+                continue  # a current pass agrees with acceptance; nothing to override
+            # `.get`, not `setdefault`: a rack with no acceptance has no green to correct,
+            # and creating an empty entry for it would hand callers that iterate this map a
+            # rack with no stages in it.
+            probe = (out.get(str(rack)) or {}).get(kind)
+            if probe is None:
+                continue
+            if not _supersedes(run, probe):
+                continue
+            probe.update({
+                "nemo_state": "fail",
+                "nccl_ok": False,
+                "llm_ok": False,
+                "_durable_completion": False,
+                "_superseded_by_current": True,
+            })
     return out
+
+
+def _current_stage_evidence_by_rack() -> dict[str, dict[str, dict[str, Any]]]:
+    """The collector's current-attempt rows, or nothing if it has no such feed."""
+    try:
+        return results_history.latest_runs_by_rack(
+            ("nccl", "nemo"), source=external_evidence.SOURCE_CURRENT
+        )
+    except Exception:  # the acceptance view still renders without the overlay
+        _logger.warning("could not load current validation evidence overlay", exc_info=True)
+        return {}
+
+
+def _supersedes(current: dict[str, Any], accepted: dict[str, Any]) -> bool:
+    """Is the current row newer than the acceptance it would override?
+
+    Checked rather than assumed. A collector can be re-run against older logs, and letting a
+    stale failure retract a newer pass would be the same defect in the other direction.
+    """
+    try:
+        return float(current.get("log_mtime") or 0) >= float(accepted.get("_mtime") or 0)
+    except (TypeError, ValueError):
+        return False
 
 
 _NCCL_TOKENS = frozenset(

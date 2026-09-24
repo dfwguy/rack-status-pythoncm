@@ -63,6 +63,7 @@ function emptyCluster(): Cluster {
     // cluster wants. A site with a ragged SU map states it explicitly instead.
     scalable_units: [],
     campaigns: [],
+    evidence: { snapshot_path: "", healthcheck_root: "" },
   };
 }
 

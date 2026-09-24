@@ -750,6 +750,38 @@ class ClusterCampaign:
         return problems
 
 
+@dataclass
+class ClusterEvidence:
+    """Where this cluster's external evidence feeds live.
+
+    Some sites run their own collector -- a pipeline that walks the fleet's logs and writes a
+    snapshot of what passed -- and that snapshot is better evidence than anything this product
+    can re-derive, because it has already applied the site's acceptance policy.
+
+    On the cluster record rather than in the environment for the usual reason: these are paths
+    on *this* cluster's hosts, and one instance serves several clusters. The implementation
+    this was ported from hard-coded
+    ``/cluster/OVA/logs/nscaletx-16k-validation/validated-racks.json``, which is one
+    customer's filesystem compiled into the product.
+
+    Empty means the cluster has no external feed, which is the common case: most clusters'
+    evidence is the logs this product reads itself.
+    """
+
+    #: The collector's snapshot, read through the ``scripts`` role.
+    snapshot_path: str = ""
+    #: Root of the per-node health-check markers, one directory per node.
+    healthcheck_root: str = ""
+
+    @classmethod
+    def from_dict(cls, d: Any) -> ClusterEvidence:
+        d = _as_dict(d)
+        return cls(
+            snapshot_path=_as_str(d.get("snapshot_path")),
+            healthcheck_root=_as_str(d.get("healthcheck_root")),
+        )
+
+
 def derive_scalable_units(
     racks: Iterable[str],
     racks_per_su: int,
@@ -997,6 +1029,8 @@ class Cluster:
     # Pinned acceptance rosters. A site may keep several -- one per bring-up wave -- and a
     # launch names which it ran against, so the record says what was actually validated.
     campaigns: list[ClusterCampaign] = field(default_factory=list)
+    # Where an external collector writes this cluster's evidence, if it has one.
+    evidence: ClusterEvidence = field(default_factory=ClusterEvidence)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Cluster:
@@ -1023,6 +1057,7 @@ class Cluster:
                 if isinstance(campaigns_raw, list)
                 else []
             ),
+            evidence=ClusterEvidence.from_dict(d.get("evidence")),
         )
 
     def to_dict(self) -> dict[str, Any]:

@@ -53,6 +53,7 @@ import time
 import uuid
 
 import core
+import healthcheck_evidence
 import host_exec
 import post_run_report
 import validation_activities
@@ -767,8 +768,20 @@ def _build_post_run_report(*, rack: str = "", node: str = "", force: bool = Fals
         findings = [
             row for row in issue_store.get("issues", []) if isinstance(row, dict)
         ]
+        # A site health checker's markers join the same report, so a node's health sits
+        # beside its validation history. Never fatal: most clusters have no such checker,
+        # and a report that refuses to render because an optional feed is unreadable is
+        # worse than one without it.
+        healthcheck_events: list[dict] = []
+        healthcheck_error = ""
+        try:
+            healthcheck_events = healthcheck_evidence.post_run_events(rack=rack, node=node)
+        except Exception as exc:  # noqa: BLE001 - an optional feed, reported not raised
+            healthcheck_error = f"{type(exc).__name__}: {exc}"[:200]
+            _logger.warning("post-run: health-check evidence unavailable: %s", exc)
+
         payload = post_run_report.build_report(
-            events=post_run_report.load_events(),
+            events=[*post_run_report.load_events(), *healthcheck_events],
             inventory=inventory,
             findings=findings,
             audit_results=_post_run_audits(),
@@ -780,6 +793,10 @@ def _build_post_run_report(*, rack: str = "", node: str = "", force: bool = Fals
             "merge": merge,
             "accounting_error": accounting_error,
             "inventory_error": inventory_error,
+            # Surfaced so an operator can tell "this cluster has no health checker" from
+            # "its markers could not be read", which look identical in the table.
+            "healthcheck_error": healthcheck_error,
+            "healthcheck_events": len(healthcheck_events),
         }
         if not rack and not node:
             _post_run_report_cache = (time.monotonic(), payload)

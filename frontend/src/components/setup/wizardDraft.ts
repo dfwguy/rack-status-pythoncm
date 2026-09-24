@@ -235,6 +235,7 @@ export function toCluster(draft: WizardDraft): Cluster {
     // partially populated or row-straddling SU layout edits it afterwards.
     scalable_units: [],
     campaigns: [],
+    evidence: { snapshot_path: "", healthcheck_root: "" },
   };
 }
 

@@ -177,6 +177,16 @@ export interface ClusterCampaign {
   notes: string;
 }
 
+/**
+ * Where an external collector writes this cluster's evidence, if it has one.
+ *
+ * Empty is the common case: most clusters' evidence is the logs this product reads itself.
+ */
+export interface ClusterEvidence {
+  snapshot_path: string;
+  healthcheck_root: string;
+}
+
 export interface ClusterConnection {
   exec_mode: string;
   ssh_host: string;
@@ -201,6 +211,8 @@ export interface Cluster {
   scalable_units: ClusterScalableUnit[];
   /** Pinned acceptance rosters; a site may keep one per bring-up wave. */
   campaigns: ClusterCampaign[];
+  /** External evidence feed paths; empty when the cluster has no collector. */
+  evidence: ClusterEvidence;
 }
 
 export interface Project {
