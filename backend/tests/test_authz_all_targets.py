@@ -239,3 +239,97 @@ class TestTheKeyListIsAFallbackChain:
             values = facts.all_of(*keys)
             if values:
                 assert facts.first(*keys) == values[0]
+
+
+class TestACommaJoinedTargetIsSeveralTargets:
+    """The same bypass, arriving through `target` instead of `racks`.
+
+    `target` is a Slurm nodelist, and node-scoped actions resolve against it since the
+    rack-assignment gates were removed. A comma-joined value therefore names several nodes in
+    one string, and judging it whole reopens exactly what `all_of` closed: `"n04,n05"` would
+    resolve to the single opaque resource `scheduler.node:n04,n05`, which `allow
+    scheduler.node:*` matches and a narrow `deny scheduler.node:n05` does not — and the handler
+    drains both. Measured before the split; the verdict was `allow`.
+
+    Bracket ranges were never exposed this way: the id grammar refuses `[` and `]`, so
+    `n[01-18]` fails closed. Commas are legal characters, which is what made this the reachable
+    half.
+    """
+
+    NODE_ACTION = "scheduler.node:drain"
+    KEPT = "ink50-dh01-h18-04"
+    PROTECTED = "ink50-dh01-h18-05"
+
+    @pytest.fixture
+    def broad_allow_narrow_deny(self, tmp_path):
+        """The commonest policy shape there is, per `identity-auth-traps.mdc` §10."""
+        policy_file = tmp_path / "policies.json"
+        policy_file.write_text(json.dumps({"policies": [{
+            "id": "ops",
+            "statements": [
+                {"sid": "a", "effect": "allow", "actions": [self.NODE_ACTION],
+                 "resources": ["scheduler.node:*"]},
+                {"sid": "d", "effect": "deny", "actions": [self.NODE_ACTION],
+                 "resources": [f"scheduler.node:{self.PROTECTED}"]},
+            ],
+        }]}), encoding="utf-8")
+        return PolicyEngine(
+            policy_file, group_lookup=lambda _p: (), attachment_lookup=lambda _s: ("ops",)
+        )
+
+    def _decide(self, engine, body) -> bool:
+        facts = resources.RequestFacts({}, {}, body)
+        return all(
+            engine.evaluate("user:op", self.NODE_ACTION, resource).allowed
+            for resource in resources.resolve_all(self.NODE_ACTION, facts)
+        )
+
+    def test_a_comma_target_cannot_smuggle_a_denied_node(self, broad_allow_narrow_deny):
+        assert not self._decide(
+            broad_allow_narrow_deny, {"target": f"{self.KEPT},{self.PROTECTED}"}
+        ), "a comma-joined target reached a node the policy denies"
+
+    def test_it_matches_what_the_equivalent_list_does(self, broad_allow_narrow_deny):
+        """The two spellings of one request must get one answer.
+
+        A caller choosing `target` over `nodes` is choosing a wire format, not a privilege
+        level, and a gate that treats them differently is one the caller picks.
+        """
+        as_list = self._decide(
+            broad_allow_narrow_deny, {"nodes": [self.KEPT, self.PROTECTED]}
+        )
+        as_target = self._decide(
+            broad_allow_narrow_deny, {"target": f"{self.KEPT},{self.PROTECTED}"}
+        )
+        assert as_list == as_target is False
+
+    def test_the_permitted_node_alone_still_works(self, broad_allow_narrow_deny):
+        """The control: node-scoped drain is the feature this branch exists to enable."""
+        assert self._decide(broad_allow_narrow_deny, {"target": self.KEPT})
+
+    def test_each_node_is_judged_separately(self):
+        facts = resources.RequestFacts({}, {}, {"target": f"{self.KEPT},{self.PROTECTED}"})
+        assert resources.resolve_all(self.NODE_ACTION, facts) == (
+            f"scheduler.node:{self.KEPT}",
+            f"scheduler.node:{self.PROTECTED}",
+        )
+
+    def test_surrounding_whitespace_does_not_hide_a_node(self):
+        """`scontrol` output and hand-written lists both carry spaces after the comma."""
+        facts = resources.RequestFacts({}, {}, {"target": f" {self.KEPT} , {self.PROTECTED} "})
+        assert resources.resolve_all(self.NODE_ACTION, facts) == (
+            f"scheduler.node:{self.KEPT}",
+            f"scheduler.node:{self.PROTECTED}",
+        )
+
+    def test_a_bracket_range_still_fails_closed(self):
+        """Unchanged, and worth pinning: the id grammar refuses the wildcard characters."""
+        facts = resources.RequestFacts({}, {}, {"target": "ink50-dh01-h18-[01-18]"})
+        with pytest.raises(resources.Unresolvable):
+            resources.resolve_all(self.NODE_ACTION, facts)
+
+    def test_a_single_target_is_not_split(self):
+        facts = resources.RequestFacts({}, {}, {"target": self.KEPT})
+        assert resources.resolve_all(self.NODE_ACTION, facts) == (
+            f"scheduler.node:{self.KEPT}",
+        )

@@ -215,10 +215,26 @@ def _as_identifiers(raw: object) -> tuple[str, ...]:
 
     Shared by `first()` and `all_of()` so the two cannot disagree about what counts as an id — a
     divergence there would mean the gate authorized a different set than it reported.
+
+    **A comma-joined string names several targets and is split into them**, which is the same
+    rule a list already gets. Without it the fan-out bypass `all_of` exists to close comes back
+    through a different key: `target` is a Slurm nodelist, so `"n04,n05"` would be judged as one
+    opaque resource `scheduler.node:n04,n05`, which a narrow `deny scheduler.node:n05` cannot
+    match while `allow scheduler.node:*` can — and the handler then drains both. Measured before
+    the split; the verdict was `allow`. Bracket ranges were never exposed this way because the id
+    grammar refuses `[` and `]`, but commas are legal characters and no resource id in this
+    product contains one.
     """
     candidates = raw if isinstance(raw, list | tuple) else [raw]
-    found: list[str] = []
+    expanded: list[object] = []
     for value in candidates:
+        if isinstance(value, str) and "," in value:
+            expanded.extend(value.split(","))
+        else:
+            expanded.append(value)
+
+    found: list[str] = []
+    for value in expanded:
         if isinstance(value, str) and value.strip():
             cleaned = value.strip()
         elif isinstance(value, int | float) and not isinstance(value, bool):
