@@ -227,10 +227,14 @@ class TestDeployScripts:
         }
         if known is not None:
             env["RACK_SSH_KNOWN_HOSTS"] = known
-        subprocess.run(
+        result = subprocess.run(
             ["bash", str(REPO / "bin" / "deploy-scripts.sh"), "--dry-run"],
             env=env, capture_output=True, text=True, timeout=60, check=False,
         )
+        # Asserted on every run, not only the unset case: macOS's bash 3.2 tolerates what bash 5
+        # rejects under `set -u`, so "it made the right calls" alone passed on a laptop while the
+        # script died on the first line that touched the variable on every Linux host.
+        assert "unbound variable" not in result.stderr, result.stderr
         return log.read_text() if log.exists() else ""
 
     def test_unset_is_unverified(self, tmp_path):

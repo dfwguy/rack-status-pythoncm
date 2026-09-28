@@ -87,12 +87,15 @@ TREE="${NVIS_SCRIPTS_TREE:-${BASE%/}/scripts}"
 # RACK_SSH_KNOWN_HOSTS names a file, in which case the head's key must be in it. Mirrored here
 # rather than shared because this runs on the operator's machine without the backend on its path;
 # test_deploy_scripts_honours_known_hosts keeps the two in step.
-if [[ -n "${RACK_SSH_KNOWN_HOSTS//[[:space:]]/}" ]]; then
-  [[ "${RACK_SSH_KNOWN_HOSTS}" =~ [[:space:]] ]] && {
+# `:-` because this runs under `set -u`: bash 5 treats `${VAR//x/}` on an unset VAR as an error
+# (bash 3.2, macOS's, does not), so the unset case -- the default -- crashed on every Linux host.
+KNOWN_HOSTS="${RACK_SSH_KNOWN_HOSTS:-}"
+if [[ -n "${KNOWN_HOSTS//[[:space:]]/}" ]]; then
+  [[ "${KNOWN_HOSTS}" =~ [[:space:]] ]] && {
     echo "deploy-scripts: RACK_SSH_KNOWN_HOSTS must be a path without spaces" >&2
     exit 2
   }
-  SSH_CMD="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${RACK_SSH_KNOWN_HOSTS} -o IdentitiesOnly=yes"
+  SSH_CMD="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${KNOWN_HOSTS} -o IdentitiesOnly=yes"
 else
   SSH_CMD="ssh -o StrictHostKeyChecking=no"
 fi
