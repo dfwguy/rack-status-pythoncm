@@ -1,0 +1,1 @@
+../rules/kui-components.mdc

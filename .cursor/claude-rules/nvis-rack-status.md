@@ -1,0 +1,1 @@
+../rules/nvis-rack-status.mdc

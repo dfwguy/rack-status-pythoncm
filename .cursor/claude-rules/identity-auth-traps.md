@@ -1,0 +1,1 @@
+../rules/identity-auth-traps.mdc

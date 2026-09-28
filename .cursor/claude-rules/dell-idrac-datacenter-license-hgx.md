@@ -1,0 +1,1 @@
+../rules/dell-idrac-datacenter-license-hgx.mdc

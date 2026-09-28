@@ -221,6 +221,7 @@ python-lint:
     # and the reasoning for every enabled/disabled check live in .pylintrc.
     - pylint --recursive=y backend
     - bash scripts/check_no_vault_in_git.sh
+    - bash scripts/sync_claude_rules.sh --check
 
 typescript-check:
   stage: lint

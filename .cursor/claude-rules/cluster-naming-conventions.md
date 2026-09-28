@@ -1,0 +1,1 @@
+../rules/cluster-naming-conventions.mdc

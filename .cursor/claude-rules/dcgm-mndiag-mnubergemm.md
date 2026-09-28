@@ -1,0 +1,1 @@
+../rules/dcgm-mndiag-mnubergemm.mdc
