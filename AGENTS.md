@@ -37,6 +37,10 @@ Read these before doing any work — they apply to every task:
 - @.cursor/rules/identity-auth-traps.mdc — `backend/identity/` traps: coarse-value comparisons ("add a
   second to be safe" is the wrong fix), read paths that defeat their own cache, unsafe `srp`/PyJWT
   defaults, and why fail-closed controls must not be defaulted permissive
+- @.cursor/rules/storage-engines.mdc — **which storage engine to use**: the join test, the four
+  paradigms already in use, and why "put it in a SQL table" is usually the wrong default
+- @.cursor/rules/local-vs-ci-tree.mdc — why "it passes locally" says nothing about CI: untracked
+  files, missing tools, and the unbuilt frontend (`static/spa/`)
 
 ## Read when relevant (task-scoped)
 
@@ -44,6 +48,7 @@ Read these before doing any work — they apply to every task:
 - @.cursor/rules/kui-components.mdc — Kaizen UI component catalog + MUI→KUI migration table
 - @.cursor/rules/backend-api.mdc — Flask backend / `/api/*` conventions
 - @.cursor/rules/docker-host-exec.mdc — Docker + SSH host-exec details
+- @.cursor/rules/docs-diataxis.mdc — writing anything under `docs/`: the Diátaxis compass as a per-page test
 
 ## Notes
 
