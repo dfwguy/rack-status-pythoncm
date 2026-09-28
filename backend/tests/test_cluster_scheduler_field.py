@@ -93,3 +93,20 @@ class TestSeededProjects:
 def test_the_two_kinds_we_actually_ship_are_selectable(kind):
     assert kind in models.SCHEDULERS
     assert _cluster(scheduler=kind).validate() == []
+
+
+class TestOneListOfSchedulers:
+    """The catalog, the workflow validator and the factory must agree on what a scheduler is.
+
+    The workflow validator used to keep its own copy of the list, which predated PythonCM, so a
+    cluster could be set to `pythoncm` while a workflow step naming it was rejected as invalid.
+    """
+
+    def test_the_factory_builds_every_scheduler_the_catalog_accepts(self):
+        assert set(models.SCHEDULERS) == set(factory._BUILDERS)
+
+    @pytest.mark.parametrize("kind", models.SCHEDULERS)
+    def test_a_workflow_step_may_name_any_catalog_scheduler(self, kind):
+        from workflow_models import validate_scheduler
+
+        assert validate_scheduler({"kind": kind, "script": "x.sh"}) == []

@@ -51,7 +51,7 @@ The three axes reuse the layers we already built:
 - id: nccl
   type: automated
   scheduler:
-    kind: slurm                        # slurm | local | runai | slinky | maas
+    kind: slurm                        # any catalog scheduler: slurm | pythoncm | local | runai | slinky | maas
     script: nccl_allreduce.sbatch      # resolved under bin/scripts (or absolute)
     nodelist: "${target}"              # ${param} substitution from the run
     ntasks_per_node: "${gpus_per_node}"
@@ -74,9 +74,13 @@ The three axes reuse the layers we already built:
 - `NVIS_SCRIPTS_DIR` + `GPUS_PER_NODE` are auto-forwarded via `sbatch --export` so
   batch scripts (e.g. `nccl_allreduce.sbatch`) find `lib/fabric.inc.sh`.
 - `kind: local` runs the command/script directly (no batch system).
+- `kind: pythoncm` submits through BCM's PythonCM on clusters without Slurm
+  (`schedulers/pythoncm.py`).
 - `runai`/`slinky`/`maas` are documented author-ahead stubs (raise a clear
   `NotImplementedError`); implement by subclassing `schedulers.base.Scheduler`.
-- Default backend: `RACK_SCHEDULER` env, else `slurm`.
+- Default backend: the active cluster's `scheduler` (applied as `RACK_SCHEDULER`), else `slurm`.
+- The accepted kinds are `catalog.models.SCHEDULERS`; the workflow validator reads that list
+  rather than keeping its own.
 
 ## `evaluation` — how to judge + extract values
 

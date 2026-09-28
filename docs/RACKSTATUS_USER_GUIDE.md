@@ -38,14 +38,16 @@ Current facts:
 
 - Native Python collectors provide canonical rack status. The canonical snapshot is
   not published until its required log scan has completed at least once.
-- Slurm remains the authority for job state, allocation, drain state, and node
-  reasons.
+- The cluster's scheduler is the authority for job state, allocation, drain state,
+  and node reasons: Slurm by default, or PythonCM on a cluster configured for it.
 - Validation and audit histories are stored under the durable application data
   directory (`/app/var` in the container).
 - Remote execution scripts are sourced from `bin/scripts/` in this repository and
   deployed to the configured remote base path on the head node.
-- PythonCM and Clush conversion are parked. Do not document or operate them as active
-  execution backends.
+- PythonCM is available as a scheduler for BCM clusters without Slurm; a cluster
+  uses it only when its `scheduler` is set to `pythoncm`.
+- Clush conversion is parked. Do not document or operate it as an active execution
+  backend.
 - Telemetry comes from VictoriaMetrics and Loki. Empty telemetry is displayed as
   empty or unavailable; the UI does not invent replacement data.
 
@@ -823,7 +825,8 @@ for the current incident.
 
 ## 16. Current limitations and parked work
 
-- PythonCM execution is parked.
+- PythonCM clusters run without the fork's broker, watchdog actions and ops
+  daemons; see `docs/explanation/porting-the-pythoncm-fork.md`.
 - Clush support is parked.
 - Events is a current-state view, not a retained alert timeline.
 - Deep audits prove only the checks that actually executed; optional unavailable

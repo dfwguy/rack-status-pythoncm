@@ -23,12 +23,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from catalog.models import SCHEDULERS as SCHEDULER_KINDS
+
 CONNECTION_PROFILES = ("control", "script")
 CONNECTION_EXEC_MODES = ("local", "ssh")
-# Schedulers we can build; the rest are accepted in schema but raise at run time
-# (documented interface + stub) so a workflow can be authored ahead of support.
-SCHEDULER_KINDS = ("slurm", "local", "runai", "slinky", "maas")
-SCHEDULER_IMPLEMENTED = ("slurm", "local")
 EVAL_EXTRACT_TYPES = ("str", "int", "float")
 
 

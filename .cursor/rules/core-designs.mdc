@@ -282,8 +282,9 @@ that wire; `test_config_precedence.py` pins the ladder itself.
 
 ### 6. Platform and scheduler providers — which cluster manager, which queue
 
-`backend/platforms/` (`base.py`, `bcm.py`, `maas.py`) and `backend/schedulers/` (slurm/local,
-plus runai/slinky/maas stubs).
+`backend/platforms/` (`base.py`, `bcm.py`, `maas.py`) and `backend/schedulers/` (slurm, pythoncm and
+local, plus runai/slinky/maas stubs). The accepted kinds are `catalog.models.SCHEDULERS`, chosen per
+cluster by its `scheduler` field (default `slurm`).
 
 **A new cluster manager or scheduler is a provider, not an `if` branch.** These exist so that
 BCM-specific `cmsh` behaviour and Slurm-specific command shapes stay behind an interface; adding

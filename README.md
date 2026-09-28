@@ -56,7 +56,7 @@ The table below is an implementation inventory of the current source, shipped wo
 | Durable validation activity registry and rack locks | Implemented | Validation history survives restarts; explicit and implicit advisory locks reduce multi-operator collisions. |
 | Configurable Slurm binary routing | Implemented | `sbatch`, `srun`, `sinfo`, `squeue`, `sacct`, `scontrol`, and `scancel` all resolve through the platform provider and per-binary configuration. |
 | Evidence-attributed failure and drain safety | Implemented | A failed multi-node job does not mark every allocated node failed. Automatic drain requires a structured node failure, a node explicitly implicated by evidence, or an exact-node Slurm prolog/unavailable finding. |
-| PythonCM cluster-manager provider | **Parked** | Not a release-candidate execution path. BCM currently uses `cmsh`; MAAS uses its provider. Do not advertise PythonCM until the provider is implemented and tested. |
+| PythonCM scheduler backend | Implemented, opt-in per cluster | `backend/schedulers/pythoncm.py` plus the head-side helper `bin/scripts/nvis_pythoncm_exec.py`, for BCM clusters that run work without Slurm. Selected by setting a cluster's `scheduler` to `pythoncm`; the default stays `slurm`. `GET /api/scheduler-probe` reports which scheduler answers. The fork's broker, watchdog actions and ops daemons were deliberately not ported — see [Porting the PythonCM fork](docs/explanation/porting-the-pythoncm-fork.md). The cluster-manager provider is unchanged: BCM uses `cmsh`, MAAS its own. |
 | Clush transport | **Parked** | Not a release-candidate transport. Current fan-out is provider/transport based (`pdsh`, SSH composition, or Slurm fan-out). |
 
 ## Architecture
