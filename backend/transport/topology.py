@@ -162,6 +162,7 @@ def _build_one(
             extra_opts=opts,
             connect_timeout=d.connect_timeout,
             sudo=sudo,
+            gateway=True,
         )
 
     leaf: Executor = SSHExecutor(

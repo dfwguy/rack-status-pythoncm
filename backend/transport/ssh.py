@@ -46,8 +46,19 @@ class SSHConfig:
     mux_persist: str = "60"
 
 
-def host_key_opts() -> list[str]:
-    """Host-key verification options, off by default and worth understanding.
+def host_key_opts(*, record: bool = True) -> list[str]:
+    """Host-key verification options for every ssh this process starts, off by default.
+
+    **The single source.** Every argv the app builds for its own ssh -- the control connection,
+    the web terminal, a hop whose leg starts in this process, bug-report collection -- takes its
+    host-key options from here, so ``RACK_SSH_KNOWN_HOSTS`` means the same thing on all of them.
+    A path that hard-codes its own options is the gap this function exists to close: the
+    terminal once did, and so accepted any key even on a deployment that had turned
+    verification on. ``test_every_app_side_path_honours_host_key_opts`` pins it.
+
+    *record* only matters while verification is off: ``False`` also sends the unverified key to
+    ``/dev/null`` rather than ``~/.ssh/known_hosts``, which is what an interactive session wants.
+    With verification on, both paths use the configured file.
 
     We send `StrictHostKeyChecking=no`, which accepts any key the head presents. That is
     weaker than SSH's default and it is a deliberate trade: these deployments are brought up
@@ -68,7 +79,9 @@ def host_key_opts() -> list[str]:
 
     known_hosts = (_eget("RACK_SSH_KNOWN_HOSTS", "") or "").strip()
     if not known_hosts:
-        return ["-o", "StrictHostKeyChecking=no"]
+        if record:
+            return ["-o", "StrictHostKeyChecking=no"]
+        return ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
     return [
         "-o", "StrictHostKeyChecking=yes",
         "-o", f"UserKnownHostsFile={known_hosts}",
@@ -77,6 +90,18 @@ def host_key_opts() -> list[str]:
         # unanswerable from the config alone.
         "-o", "IdentitiesOnly=yes",
     ]
+
+
+def in_cluster_host_key_opts() -> list[str]:
+    """Options for an ssh leg that runs *on a cluster host* (head -> compute), never verified.
+
+    Deliberately not :func:`host_key_opts`. ``RACK_SSH_KNOWN_HOSTS`` names a file on the app's
+    filesystem, so it means nothing on the head where this leg runs; and compute nodes are
+    reimaged as a matter of routine, so a pinned ``known_hosts`` for thousands of them would fail
+    every bring-up. Kept here, beside the app-side options, so this module stays the only place
+    that decides host-key behaviour.
+    """
+    return ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
 
 
 def _mux_control_dir() -> str:
@@ -156,8 +181,7 @@ class SSHExecutor(ShellFilesystem, Executor):
         cfg = self.config
         argv = [
             "ssh", "-tt",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *host_key_opts(record=False),
             "-o", "LogLevel=ERROR",
             "-o", "SetEnv=TERM=xterm-256color",
             *interactive_timeout_opts(cfg.connect_timeout),

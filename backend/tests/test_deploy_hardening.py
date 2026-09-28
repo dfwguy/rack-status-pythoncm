@@ -127,16 +127,25 @@ class TestHostKeyVerification:
         )
         assert ssh.host_key_opts() == ["-o", "StrictHostKeyChecking=no"]
 
-    def test_hops_are_deliberately_not_verified(self):
+    def test_compute_node_hops_are_deliberately_not_verified(self, monkeypatch):
         """The asymmetry is a decision, so it is pinned rather than left to be 'fixed'.
 
-        A hop runs head->node inside the cluster fabric, where nodes are reimaged as a
-        matter of routine; a pinned known_hosts for two thousand of them would fail every
-        bring-up. The link worth verifying is the one crossing a tunnel or jumphost.
+        A node hop runs inside the cluster fabric, where nodes are reimaged as a matter of
+        routine; a pinned known_hosts for two thousand of them would fail every bring-up. The
+        link worth verifying is the one leaving the app across a tunnel or jumphost.
+        test_ssh_host_key_paths.py covers each path's argv; this keeps the reason in place.
         """
+        from transport.hop import HopExecutor
+        from transport.ssh import SSHConfig, SSHExecutor
+
+        monkeypatch.setattr(
+            "config_env._eget",
+            lambda n, d="": "/etc/nvis/known_hosts" if n == "RACK_SSH_KNOWN_HOSTS" else d,
+        )
+        head = SSHExecutor(SSHConfig(host="head"))
+        assert "StrictHostKeyChecking=no" in HopExecutor(head, "tray-01")._ssh_prefix()
         source = (REPO / "backend" / "transport" / "hop.py").read_text(encoding="utf-8")
-        assert "StrictHostKeyChecking=no" in source
-        assert "asymmetry" in source, "the reason must stay written down next to the option"
+        assert "asymmetry" in source, "the reason must stay written down next to the decision"
 
 
 class TestEveryShellScriptCarriesItsLicence:

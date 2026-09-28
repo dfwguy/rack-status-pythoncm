@@ -84,6 +84,7 @@ def apply_hop(base: Connection, spec: HopSpec, *, host_override: str | None = No
         extra_opts=spec.extra_opts,
         connect_timeout=spec.connect_timeout,
         sudo=spec.sudo,
+        gateway=True,
     )
 
 

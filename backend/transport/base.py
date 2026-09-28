@@ -498,6 +498,7 @@ class Connection:
         extra_opts: list[str] | None = None,
         connect_timeout: str = "15",
         sudo: bool = False,
+        gateway: bool = False,
     ) -> Connection:
         """Return a Connection that runs on *host* by tunnelling ssh through ``self``.
 
@@ -505,6 +506,11 @@ class Connection:
         control target (e.g. the head), so the node leg uses the head's credentials.
         Chainable to N levels: ``self.hop(a).hop(b)``. ``sudo=True`` runs the payload
         under passwordless sudo on *host*.
+
+        ``gateway=True`` marks *host* as infrastructure -- a head node, bastion or other declared
+        endpoint -- rather than a compute node, which is what lets its leg verify host keys (see
+        :meth:`transport.hop.HopExecutor._host_key_opts`). Off by default, so every node hop
+        keeps working on a deployment that has turned verification on.
 
         Deliberately unconditional: this always relays through ``self``. Whether a site can
         instead reach a node *directly* is a property of that deployment, so it is resolved
@@ -519,6 +525,6 @@ class Connection:
         return Connection(
             HopExecutor(
                 self.executor, host, user=user, key=key, extra_opts=extra_opts,
-                connect_timeout=connect_timeout, sudo=sudo,
+                connect_timeout=connect_timeout, sudo=sudo, gateway=gateway,
             )
         )

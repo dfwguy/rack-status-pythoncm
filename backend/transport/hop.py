@@ -56,6 +56,7 @@ class HopExecutor(ShellFilesystem, Executor):
         extra_opts: list[str] | None = None,
         connect_timeout: str = "15",
         sudo: bool = False,
+        gateway: bool = False,
     ):
         self.base = base
         self.host = host
@@ -67,19 +68,37 @@ class HopExecutor(ShellFilesystem, Executor):
         # (sudo the `bash` runner, so whole pipelines run privileged — not just the
         # first command). Head→node ssh itself stays unprivileged.
         self.sudo = bool(sudo)
+        # Infrastructure (head, bastion, declared endpoint) rather than a compute node. Only the
+        # builders of declared connections set it: topology `via` endpoints and hop chains.
+        self.gateway = bool(gateway)
+
+    def _host_key_opts(self, *, record: bool = True) -> list[str]:
+        """Host-key options for this leg, which verifies only when both of two things hold.
+
+        1. **The leg starts in this process.** A hop's ``ssh`` runs on ``base``'s host, and
+           ``RACK_SSH_KNOWN_HOSTS`` names a file on *this* process's filesystem -- on the head it
+           would name nothing. So only a hop whose base is local can use it.
+        2. **It reaches infrastructure, not a compute node** (``gateway``). A chain rooted here
+           that reaches a bastion or head node is the app's own link out, exactly like the
+           control connection, so it verifies like one.
+
+        Everything else takes :func:`transport.ssh.in_cluster_host_key_opts`, and that asymmetry
+        with the app-side links is a decision rather than an oversight. Compute nodes are reimaged
+        as a matter of routine, so a pinned ``known_hosts`` for thousands of them would fail every
+        bring-up. The second condition matters where the app runs *on* the head: there the
+        control connection is local, so a fan-out's node hops start in this process too, and
+        without it turning verification on would break every node sweep.
+        """
+        from transport.ssh import host_key_opts, in_cluster_host_key_opts
+
+        if self.gateway and self.base.kind == "local":
+            return host_key_opts(record=record)
+        return in_cluster_host_key_opts()
 
     def _ssh_prefix(self) -> list[str]:
-        # Host keys are deliberately not verified on a hop, and this asymmetry with the
-        # app->head link (`ssh.host_key_opts`, where `RACK_SSH_KNOWN_HOSTS` turns
-        # verification on) is a decision rather than an oversight. A hop runs head->node
-        # inside the cluster fabric; compute nodes are reimaged as a matter of routine, so
-        # their keys change constantly and a pinned `known_hosts` for two thousand of them
-        # would fail every bring-up. The link worth verifying is the one that crosses a
-        # tunnel or a jumphost, and that is the first one.
         argv = [
             "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *self._host_key_opts(),
             "-o", "BatchMode=yes",
             "-o", "LogLevel=ERROR",
             "-o", f"ConnectTimeout={self.connect_timeout}",
@@ -102,8 +121,7 @@ class HopExecutor(ShellFilesystem, Executor):
         """
         argv = [
             "ssh", "-tt",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *self._host_key_opts(record=False),
             "-o", "LogLevel=ERROR",
             *interactive_timeout_opts(self.connect_timeout),
         ]

@@ -30,6 +30,7 @@
 #   RACK_SSH_USER          SSH user (default: root)
 #   RACK_SSH_KEY           SSH private key path (optional; omit when using an ssh-alias)
 #   RACK_SSH_PORT          SSH port (optional; default from ssh config / 22)
+#   RACK_SSH_KNOWN_HOSTS   known_hosts file; when set, the head's host key is verified against it
 #   RACK_REMOTE_BASE_PATH  remote install root (default: /home/cmsupport/nvis-rack-status)
 #
 # Examples:
@@ -82,7 +83,19 @@ BASE="${RACK_REMOTE_BASE_PATH:-/home/cmsupport/nvis-rack-status}"
 TREE="${NVIS_SCRIPTS_TREE:-${BASE%/}/scripts}"
 
 # SSH transport for rsync. Key/port only when explicitly set (an ssh-alias supplies its own).
-SSH_CMD="ssh -o StrictHostKeyChecking=no"
+# Host keys follow the app's rule (backend/transport/ssh.py::host_key_opts): unverified unless
+# RACK_SSH_KNOWN_HOSTS names a file, in which case the head's key must be in it. Mirrored here
+# rather than shared because this runs on the operator's machine without the backend on its path;
+# test_deploy_scripts_honours_known_hosts keeps the two in step.
+if [[ -n "${RACK_SSH_KNOWN_HOSTS//[[:space:]]/}" ]]; then
+  [[ "${RACK_SSH_KNOWN_HOSTS}" =~ [[:space:]] ]] && {
+    echo "deploy-scripts: RACK_SSH_KNOWN_HOSTS must be a path without spaces" >&2
+    exit 2
+  }
+  SSH_CMD="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${RACK_SSH_KNOWN_HOSTS} -o IdentitiesOnly=yes"
+else
+  SSH_CMD="ssh -o StrictHostKeyChecking=no"
+fi
 [[ -n "${RACK_SSH_KEY:-}"  ]] && SSH_CMD+=" -i ${RACK_SSH_KEY}"
 [[ -n "${RACK_SSH_PORT:-}" ]] && SSH_CMD+=" -p ${RACK_SSH_PORT}"
 

@@ -239,7 +239,11 @@ def _bug_report_ssh_argv_prefix() -> list[str]:
     raw = (os.environ.get("RACK_BUG_REPORT_SSH_OPTS") or "").strip()
     if raw:
         return ["ssh", *shlex.split(raw)]
-    return ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"]
+    # This ssh starts in this process, so it is an app-side link and takes the shared host-key
+    # options: with RACK_SSH_KNOWN_HOSTS set it verifies, exactly like the control connection.
+    from transport.ssh import host_key_opts
+
+    return ["ssh", "-o", "BatchMode=yes", *host_key_opts()]
 
 
 def _ssh_cat_remote_bytes(host: str, remote_path: str) -> bytes:
