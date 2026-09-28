@@ -38,6 +38,7 @@ def test_control_plane_launchers_source_the_shared_slurm_initialiser():
         "run_singlerack.sh",
         "run_nvloom_singlerack.sh",
         "run_clusterkit.sh",
+        "run_clusterkit_suite.sh",
         "run-nemo-xrack.sh",
         "run_nccl_mpi.sh",
         "run_mnubergemm_stress.sh",

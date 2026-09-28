@@ -4607,6 +4607,13 @@ def _clusterkit_script_path() -> Path:
     return _rpath(Path(p))
 
 
+def _clusterkit_suite_script_path() -> Path:
+    p = _eget("RACK_CLUSTERKIT_SUITE_SCRIPT", str(SCRIPTS_DIR / "run_clusterkit_suite.sh")) or str(
+        SCRIPTS_DIR / "run_clusterkit_suite.sh"
+    )
+    return _rpath(Path(p))
+
+
 def _run_llmb_nccl_script_path() -> Path:
     p = _eget("RACK_LLMB_NCCL_SCRIPT", str(SCRIPTS_DIR / "run_llmb_nccl.sh")) or str(SCRIPTS_DIR / "run_llmb_nccl.sh")
     return _rpath(Path(p))
@@ -4906,7 +4913,10 @@ def _job_env_effective_values() -> dict[str, str]:
         "RACK_NVLOOM_SINGLERACK_TIMEOUT": str(max(120, _job_env_int("RACK_NVLOOM_SINGLERACK_TIMEOUT", 10800))),
         "RACK_NVLOOM_RACK_SAMPLES": str(max(1, min(256, _job_env_int("RACK_NVLOOM_RACK_SAMPLES", 5)))),
         "RACK_CLUSTERKIT_SCRIPT": str(_clusterkit_script_path()),
+        "RACK_CLUSTERKIT_SUITE_SCRIPT": str(_clusterkit_suite_script_path()),
         "RACK_CLUSTERKIT_TIMEOUT": str(max(120, _job_env_int("RACK_CLUSTERKIT_TIMEOUT", 14400))),
+        "RACK_CLUSTERKIT_SUITE_TIMEOUT": str(max(120, _job_env_int("RACK_CLUSTERKIT_SUITE_TIMEOUT", 172800))),
+        "RACK_CLUSTERKIT_SUITE_RESULTS_ROOT": (_eget("RACK_CLUSTERKIT_SUITE_RESULTS_ROOT") or "").strip(),
         "RACK_CLUSTERKIT_CUDA_MAJOR": (
             _eget("RACK_CLUSTERKIT_CUDA_MAJOR") or _eget("RACK_NVLOOM_CUDA_MAJOR") or "13"
         ).strip(),
@@ -16195,6 +16205,89 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
     )
 
 
+def _prepare_run_clusterkit_suite(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
+    """Shared parse for async ClusterKit SU-suite Slurm job."""
+    if os.environ.get("RACK_CLUSTERKIT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return None, (
+            jsonify({"ok": False, "error": "clusterkit disabled (RACK_CLUSTERKIT_DISABLED)"}),
+            403,
+        )
+    log_raw = body.get("log_dir")
+    try:
+        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+
+    domain = str(body.get("domain") or "").strip().lower()
+    prefix = str(body.get("prefix") or "").strip().lower()
+    su_label = str(body.get("su_label") or body.get("su") or "").strip()
+    if domain not in {"dh01", "dh02"}:
+        return None, (jsonify({"ok": False, "error": "domain must be dh01 or dh02"}), 400)
+    if not re.fullmatch(r"[a-z]", prefix or ""):
+        return None, (jsonify({"ok": False, "error": "prefix must be one rack-letter such as a, b, or j"}), 400)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", su_label or ""):
+        return None, (jsonify({"ok": False, "error": "su_label must contain only letters, numbers, dot, underscore, or dash"}), 400)
+
+    script = _clusterkit_suite_script_path()
+    if not _script_exists(script):
+        return None, (jsonify({"ok": False, "error": f"clusterkit suite script not found: {script}"}), 500)
+    cmd = ["bash", str(script), "run", domain, prefix, su_label]
+    display_cmd = f"./{script.name} run {shlex.quote(domain)} {shlex.quote(prefix)} {shlex.quote(su_label)}"
+    timeout = max(120, _job_env_int("RACK_CLUSTERKIT_SUITE_TIMEOUT", 172800))
+    ws = _nvis_workspace_dir_effective()
+    cuda_m = (_eget("RACK_CLUSTERKIT_CUDA_MAJOR") or _eget("RACK_NVLOOM_CUDA_MAJOR") or _eget("CUDA_MAJ") or "13").strip()
+    if cuda_m not in ("12", "13"):
+        cuda_m = "13"
+    env_updates: dict[str, str] = {
+        "WORKSPACE_DIR": ws,
+        "NVIS_WORKSPACE_DIR": ws,
+        "TOPDIR": ws,
+        "NVIS_BIN_SCRIPTS": str(_rpath(SCRIPTS_DIR)),
+        "CUDA_MAJ": cuda_m,
+        "RACK_JOB_LOG_DIR": str(log_dir),
+        "RACK_STATUS_LOG_DIR": str(log_dir),
+    }
+    pl = _clusterkit_product_line_for_job(body)
+    if pl:
+        env_updates["RACK_CLUSTER_PRODUCT_LINE"] = pl
+    for k in (
+        "NVIS_HPCX_ROOT",
+        "NVIS_CLUSTERKIT_HPCX_INIT",
+        "RACK_CLUSTERKIT_PARTITION",
+        "RACK_CLUSTERKIT_SUITE_PARTITION",
+        "RACK_CLUSTERKIT_EXTRA_OPTS",
+        "NVIS_RDMA_LINK_TECH",
+        "RACK_CLUSTERKIT_LINK_TECH",
+        "RACK_CLUSTERKIT_HCA_PROFILE",
+        "RACK_CLUSTERKIT_UCX_TLS",
+        "RACK_CLUSTERKIT_SUITE_RESULTS_ROOT",
+        "RACK_CLUSTERKIT_SUITE_BW_MIN",
+        "RACK_CLUSTERKIT_SUITE_BW_MAX",
+        "RACK_CLUSTERKIT_SUITE_LAT_MIN",
+        "RACK_CLUSTERKIT_SUITE_LAT_MAX",
+        "RACK_CLUSTERKIT_SUITE_EXPECTED_HCAS",
+        "RACK_CLUSTERKIT_SUITE_NODE_RE",
+        "EXCLUDE_RACKS",
+        "PARALLEL",
+    ):
+        v = (_eget(k) or "").strip()
+        if v:
+            env_updates[k] = v
+    return (
+        {
+            "log_dir": log_dir,
+            "domain": domain,
+            "prefix": prefix,
+            "su_label": su_label,
+            "cmd": cmd,
+            "display_cmd": display_cmd,
+            "timeout": timeout,
+            "env_updates": env_updates,
+        },
+        None,
+    )
+
+
 def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
     """Prepare the audited containerized LLMB 24-test NCCL workflow."""
     try:
@@ -17721,6 +17814,80 @@ def api_run_clusterkit_async():
             "ok": True,
             "job_id": job_id,
             "rack": rk,
+            "target": target,
+            "command_display": display_cmd,
+            "timeout_sec": timeout,
+            "client_poll_deadline_ms": client_poll_deadline_ms,
+            **provider,
+        }
+    )
+
+
+@app.route("/api/run-clusterkit-suite-async", methods=["POST"])
+def api_run_clusterkit_suite_async():
+    """Start the full ClusterKit SU-suite Slurm driver; poll GET /api/run-clusterkit-suite-status?job_id=…"""
+    body = request.get_json(silent=True) or {}
+    prep, err = _prepare_run_clusterkit_suite(body)
+    if err is not None:
+        return err[0], err[1]
+    assert prep is not None
+    log_dir = prep["log_dir"]
+    domain = str(prep["domain"])
+    prefix = str(prep["prefix"])
+    su_label = str(prep["su_label"])
+    cmd = prep["cmd"]
+    display_cmd = str(prep["display_cmd"])
+    timeout = int(prep["timeout"])
+    _eu = prep.get("env_updates")
+    env_merged = {str(k): str(v) for k, v in _eu.items()} if isinstance(_eu, dict) else None
+    job_id = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat()
+    operator = _operator_from_request()
+    provider = _validation_execution_metadata("clusterkit-suite")
+    target = f"{domain}-{prefix} ({su_label})"
+    _record_validation_activity(
+        "clusterkit-suite",
+        stage="other",
+        scope="multirack",
+        rack=su_label,
+        racks=[],
+        log_dir=str(log_dir),
+        command_display=display_cmd,
+        activity_id=job_id,
+        operator=operator,
+        **provider,
+        nodes=[],
+    )
+    with _stress_jobs_lock:
+        _stress_jobs[job_id] = {
+            "job_id": job_id,
+            "kind": "clusterkit-suite",
+            "operator": operator,
+            "rack": su_label,
+            "target": target,
+            "domain": domain,
+            "prefix": prefix,
+            "su_label": su_label,
+            "log_dir": str(log_dir),
+            "phase": "starting",
+            "command_display": display_cmd,
+            "created_at": created,
+            **provider,
+        }
+    threading.Thread(
+        target=_stress_worker,
+        args=(job_id, cmd, str(log_dir), timeout, display_cmd),
+        kwargs={"error_label": "clusterkit suite script", "env_updates": env_merged, "persist": True},
+        daemon=True,
+    ).start()
+    client_poll_deadline_ms = min(int(timeout) * 1000 + 600000, 72 * 3600 * 1000)
+    return jsonify(
+        {
+            "ok": True,
+            "job_id": job_id,
+            "domain": domain,
+            "prefix": prefix,
+            "su_label": su_label,
             "target": target,
             "command_display": display_cmd,
             "timeout_sec": timeout,
@@ -20915,6 +21082,7 @@ _WORKFLOW_TOOL_KEYS = {
     "RACK_MNUBERGEMM_STRESS_SCRIPT": ("MNU Bergemm stress", "Validation"),
     "RACK_NVLOOM_SINGLERACK_SCRIPT": ("NVLoom singlerack", "Validation"),
     "RACK_CLUSTERKIT_SCRIPT": ("ClusterKit singlerack", "Validation"),
+    "RACK_CLUSTERKIT_SUITE_SCRIPT": ("ClusterKit SU suite", "Validation"),
     "RACK_LLMB_NCCL_SCRIPT": ("NCCL Microbenchmark (LLMB)", "Validation"),
     "RACK_SYSINFO_SCRIPT": ("sysinfo / Precheck", "Cluster Tools"),
     "RACK_HW_CHECK_SCRIPT": ("Hardware check (pdsh)", "Cluster Tools"),

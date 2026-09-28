@@ -564,9 +564,27 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_SUITE_SCRIPT",
+        "label": "ClusterKit SU-suite driver script",
+        "description": "Path to run_clusterkit_suite.sh (Slurm; runs per-rack, 2-node, 2-node cross-rack, 2-rack, and full-SU tiers).",
+    },
+    {
+        "section": "jobs_cluster",
         "key": "RACK_CLUSTERKIT_TIMEOUT",
         "label": "ClusterKit singlerack timeout (seconds)",
         "description": "Background job timeout for ClusterKit Slurm wrapper (default 14400).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_SUITE_TIMEOUT",
+        "label": "ClusterKit SU-suite timeout (seconds)",
+        "description": "Background job timeout for the full ClusterKit SU-suite wrapper (default 172800).",
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_SUITE_RESULTS_ROOT",
+        "label": "ClusterKit SU-suite results root",
+        "description": "Optional results root. Defaults to log_dir/clusterkit-suite/.",
     },
     {
         "section": "jobs_cluster",

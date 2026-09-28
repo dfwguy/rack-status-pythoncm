@@ -157,6 +157,19 @@ def api_run_clusterkit_status():
     return jsonify(payload)
 
 
+@bp.route("/api/run-clusterkit-suite-status", methods=["GET"])
+def api_run_clusterkit_suite_status():
+    """Return state for a job started via /api/run-clusterkit-suite-async."""
+    job_id = (request.args.get("job_id") or "").strip()
+    if not job_id:
+        return jsonify({"ok": False, "error": "job_id is required"}), 400
+    payload = _job_payload(job_id, _stress_jobs, _stress_jobs_lock)
+    if payload is None:
+        return jsonify({"ok": False, "error": "unknown or expired job_id"}), 404
+    payload["ok"] = True
+    return jsonify(payload)
+
+
 @bp.route("/api/run-llmb-nccl-status", methods=["GET"])
 def api_run_llmb_nccl_status():
     """Return state for a job started via /api/run-llmb-nccl-async."""

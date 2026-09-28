@@ -26,6 +26,7 @@ _BLOCKED = {
     "nccl-2.31.2": "the NCCL 2.31.2 recipe launches MPI through SSH; a ProgramRunner-only multi-node recipe is not validated",
     "nccl-2.29.3": "the proven containerized NCCL 2.29.3 recipe requires Slurm/Pyxis and PMI2",
     "clusterkit": "the installed ClusterKit multi-host recipe has not been proven free of SSH/workload-manager fan-out",
+    "clusterkit-suite": "the ClusterKit SU-suite submits multiple Slurm batch tiers and performs Slurm-side result checks",
     "nvloom": "the installed NVLoom recipe invokes sysinfo SSH/pdsh fan-out and MPI through SSH",
     "mnubergemm": "the current PythonCM recipe runs dcgmi mndiag and does not implement the pinned-container MNUberGEMM preset semantics",
     "llama": "the installed LLMB Llama recipe calls llmb-run submit, which submits to Slurm",

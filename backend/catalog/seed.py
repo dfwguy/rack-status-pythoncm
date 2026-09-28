@@ -452,6 +452,15 @@ SEED_TOOLS: list[dict[str, Any]] = [
         description="ClusterKit interconnect bandwidth/latency sweep (CPU->HCA affinity aware).",
     ),
     _tool(
+        "clusterkit-suite", "ClusterKit SU Validation Suite", "performance", "run_clusterkit_suite.sh",
+        "RACK_CLUSTERKIT_SUITE_SCRIPT", ["tools", "rackDetail.networking"], "async", "cluster",
+        capabilities=["nvlink"],
+        description=(
+            "Full ClusterKit IB validation suite: per-rack, 2-node, 2-node cross-rack, "
+            "2-rack, and whole-SU tiers with coverage and threshold checks."
+        ),
+    ),
+    _tool(
         "nvloom", "NVLoom Singlerack", "performance", "run_nvloom_singlerack.sh",
         "RACK_NVLOOM_SINGLERACK_SCRIPT", ["rackDetail.networking"], "async", "rack",
         capabilities=["nvlink"],
