@@ -73,17 +73,10 @@ ok()   { printf "  \033[32mPASS\033[0m  %s\n" "$1"; }
 bad()  { printf "  \033[31mFAIL\033[0m  %s\n" "$1"; fail=$((fail+1)); }
 note() { printf "        %s\n" "$1"; }
 
-# 0. Which scheme is this deployment serving? Decided first, because every probe below is an
-#    HTTP request: pointing http:// at a TLS listener fails the handshake, and the gate would
-#    report "the SPA is not built" for a deployment that is entirely healthy -- the cry-wolf
-#    failure this script already avoids for the port.
-TLS_CERT=$(docker exec "$CONTAINER" printenv RACK_WEB_TLS_CERT 2>/dev/null | tr -d '\r')
-if [ -n "$TLS_CERT" ]; then
-  SCHEME="https"; CURL="curl -sk"   # -k: the chain is verified properly in check 7, not here
-else
-  SCHEME="http";  CURL="curl -s"
-fi
-BASE="${SCHEME}://127.0.0.1:${PORT}"
+# 0. The app serves HTTPS only (gunicorn.conf.py settles the certificate before the listener
+#    exists), so every probe is https. -k because the chain is verified properly in check 7.
+CURL="curl -sk"
+BASE="https://127.0.0.1:${PORT}"
 
 # 1. The container is running, and not merely "Up" while looping.
 state=$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo missing)
@@ -154,8 +147,8 @@ required = {
     "/api/post-run-node-report/mark",
 }
 actual = {str(rule) for rule in app.app.url_map.iter_rules()}
-print(",".join(sorted(required - actual)))
-' 2>/dev/null)
+print("MISSING_ROUTES=" + ",".join(sorted(required - actual)))
+' 2>/dev/null | sed -n 's/^MISSING_ROUTES=//p')
   if [ -z "$missing_routes" ]; then
     ok "post-run, node-issue, and deep-audit routes registered"
   else
@@ -220,12 +213,20 @@ errs=$(docker logs --since 5m "$CONTAINER" 2>&1 | grep -icE "ModuleNotFoundError
 #
 #    The fingerprint is printed because a self-signed deployment is only as good as an operator's
 #    ability to compare it out of band. An unpublished fingerprint makes the warning a habit.
-if [ -n "$TLS_CERT" ] && [ "$state" = "running" ]; then
-  tls_out=$(docker exec -e NVIS_VERIFY_PORT="$PORT" "$CONTAINER" python3 -c '
-import os, socket, ssl, datetime
+#
+#    Which file is asked of `startup_gate.ensure_tls()` inside the container -- the function the
+#    server itself used -- rather than read from the container environment, because the certificate
+#    is chosen in the server process and may never appear in `docker exec printenv` at all.
+if [ "$state" = "running" ]; then
+  # Inside the container the app listens on its own PORT (5000), not the host port it is
+  # published on, so the probe connects to that.
+  tls_out=$(docker exec "$CONTAINER" python3 -c '
+import os, socket, ssl, sys, datetime
+sys.path.insert(0, "/app/backend")
+import startup_gate
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
-path = os.environ["RACK_WEB_TLS_CERT"]
+path = startup_gate.ensure_tls()[0]
 cert = x509.load_pem_x509_certificate(open(path, "rb").read())
 fp = ":".join("%02X" % b for b in cert.fingerprint(hashes.SHA256()))
 try:
@@ -236,7 +237,7 @@ days = (expires - datetime.datetime.now(datetime.timezone.utc)).days
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 ctx.load_verify_locations(cafile=path)
 try:
-    with socket.create_connection(("127.0.0.1", int(os.environ["NVIS_VERIFY_PORT"])), timeout=10) as raw:
+    with socket.create_connection(("127.0.0.1", int(os.environ.get("PORT", "5000"))), timeout=10) as raw:
         with ctx.wrap_socket(raw, server_hostname="localhost") as tls:
             print("OK", tls.version(), fp, days)
 except Exception as exc:
@@ -257,8 +258,16 @@ except Exception as exc:
     note "${3:-}"
     [ -n "${4:-}" ] && note "sha256 ${4}"
   fi
-elif [ -z "$TLS_CERT" ]; then
-  note "serving plain HTTP (no RACK_WEB_TLS_CERT) — fine behind an ssh tunnel, see ENVIRONMENT.md §4"
+fi
+
+# 8. Plain HTTP is refused. A listener that still answered http:// would mean a serving path had
+#    bypassed gunicorn.conf.py -- the regression that let a first boot serve cleartext.
+if [ "$state" = "running" ]; then
+  plain=$(curl -s -o /dev/null --max-time 5 -w "%{http_code}" "http://127.0.0.1:${PORT}/api/about" 2>/dev/null || true)
+  case "$plain" in
+    2??|3??) bad "plain HTTP answered ($plain) — the listener is not TLS-only" ;;
+    *)       ok "plain HTTP refused" ;;
+  esac
 fi
 
 echo

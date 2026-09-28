@@ -31,7 +31,7 @@ nvsw_require_admin_password() {
 		${0##*/}: RACK_NVSW_ADMIN_PASSWORD is not set.
 
 		The NVOS admin password is no longer stored in this repository. Export it
-		before running, or set it in the deployment environment (rack-config.env):
+		before running, or set it in the deployment environment:
 
 		    read -rsp 'NVOS admin password: ' RACK_NVSW_ADMIN_PASSWORD
 		    export RACK_NVSW_ADMIN_PASSWORD

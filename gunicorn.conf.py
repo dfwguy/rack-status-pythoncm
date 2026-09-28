@@ -7,14 +7,20 @@
 # disclosure or distribution of this material and related documentation
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
-"""gunicorn configuration — exists only to enforce the TLS floor.
+"""gunicorn configuration — owns TLS, so every serving path is HTTPS.
 
 Author: Rafael M. Koike & Cursor Agent ("Ada")
 
-Every other setting stays on the ENTRYPOINT command line, where it is visible in
-``docker inspect`` and in the process list. This file holds the one thing that *cannot* be
-expressed as a flag: ``ssl_context`` is a hook (``cli=None``), so a minimum TLS version can only
-be set from a config file.
+Every other setting stays on the command line, where it is visible in ``docker inspect`` and in the
+process list. This file holds the TLS decisions, because they cannot be made anywhere else:
+
+* **Which certificate.** ``certfile`` / ``keyfile`` are settled here, when gunicorn reads this file,
+  by ``startup_gate.ensure_tls()``. gunicorn fixes its listener from the config *before*
+  ``on_starting`` runs, so a certificate chosen in that hook — or a shell deciding from an
+  environment variable — arrives too late. That ordering is how a first boot used to generate a
+  certificate and then serve plain HTTP beside it. There is no plain-HTTP path.
+* **Which protocol versions.** ``ssl_context`` is a hook (``cli=None``), so a minimum TLS version
+  can only be set from a config file.
 
 That matters because gunicorn 23 still defaults ``ssl_version`` to ``PROTOCOL_TLS``, the
 permissive selector -- so without this hook the floor would be whatever OpenSSL and the Python
@@ -28,20 +34,24 @@ import sys
 # before that is applied, so resolve it here rather than relying on ordering.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend"))
 
+# After the sys.path insert above, which is what makes the backend importable here.
+import startup_gate
+
+certfile, keyfile = startup_gate.ensure_tls()
+
 
 def on_starting(server):  # noqa: ARG001 - gunicorn passes the arbiter; we need none of it
     """Refuse to serve without an administrator, a policy and TLS.
 
     Here because this hook is the narrowest place that means *starting*. The container's
-    ENTRYPOINT, `start.sh` and `bin/run-local-auth.sh` all reach gunicorn through this config, so
-    one hook covers every real serving path — while the tools that merely *import* `app` to
-    enumerate routes or prove the tree imports keep working, since importing serves nothing.
+    ENTRYPOINT and `cli.py serve` (which `start.sh` and `bin/run-local-auth.sh` use) all reach
+    gunicorn through this config, so one hook covers every real serving path — while the tools
+    that merely *import* `app` to enumerate routes or prove the tree imports keep working, since
+    importing serves nothing.
 
     Runs in the arbiter before any worker is forked, so a refusal is a single clear message rather
     than one per worker.
     """
-    import startup_gate
-
     startup_gate.prepare()
 
 

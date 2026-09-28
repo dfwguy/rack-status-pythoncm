@@ -18,7 +18,7 @@ product ignores it, and the two disagree silently. `build-docker.sh` passed
 announcing "no auth" — so a developer would have met a login screen the script told them would not
 be there, and reasonably concluded the container was broken.
 
-Mentioning one in prose is fine and often necessary: `rack-config.env` says the switch was removed,
+Mentioning one in prose is fine and often necessary: a comment saying the switch was removed,
 which is exactly what an operator upgrading from an older deployment needs to read. So this checks
 for *assignment*, not for the name.
 """
@@ -50,7 +50,7 @@ _ASSIGNMENT = re.compile(
 #: shell — and `${VAR:-...}` reads are matched by the pattern only when followed by `=`.
 _EXEMPT_LINE = re.compile(r"^\s*#|unset\s")
 
-SEARCH = ("*.sh", "*.env", "*.yml", "*.yaml")
+SEARCH = ("*.sh", "*.env", "*.yml", "*.yaml", "*.toml")
 SKIP_DIRS = {".git", "node_modules", ".venv", ".scratch", "out", "release", "dist", "__pycache__"}
 
 
@@ -146,7 +146,7 @@ def test_the_check_actually_looks_at_the_shipped_scripts():
     assignment, so it is the one most worth pinning.
     """
     seen = {str(p.relative_to(REPO)) for p in _candidate_files()}
-    for expected in ("build-docker.sh", "rack-config.env", "start.sh"):
+    for expected in ("build-docker.sh", "docker-compose.yml", "start.sh"):
         assert expected in seen, f"{expected} is not being scanned"
 
 

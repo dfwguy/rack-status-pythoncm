@@ -19,8 +19,8 @@ validator.
 
 So there are three populations, and conflating them is what made the gap invisible:
 
-* **declared** — in the registry. `greenlight.toml` can set it, the preflight can require it, and
-  `greenlight.toml.example` already lists it.
+* **declared** — in the registry. `rackstatus.toml` can set it, the preflight can require it, and
+  `rackstatus.toml.example` already lists it.
 * **described** — has prose in `docs/ENVIRONMENT.md`, whether or not it is declared.
 * **read** — appears in an `_eget(...)` or `os.environ.get(...)` call. This is the honest
   denominator, and it is the one nobody had.
@@ -273,8 +273,8 @@ def render(
         "the source knows the whole set.",
         "",
         f"**{total} settings.** {n_declared} are *declared* in",
-        "`backend/config_registry.py`, which is the set `greenlight.toml` can carry, the required-",
-        f"setting preflight can demand, and `greenlight.toml.example` lists. {n_described} are named in",
+        "`backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-",
+        f"setting preflight can demand, and `rackstatus.toml.example` lists. {n_described} are named in",
         "`docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is",
         "whether that document mentions the setting at all. It is not in this site yet; see",
         "`docs/README.md` for why the migration is page-at-a-time.",
@@ -285,7 +285,7 @@ def render(
         "",
         "1. the active cluster's **high overlay** — identity, naming and connection from the catalog",
         "2. **job env overrides** — `var/cache/job_env_overrides.json`, written by the Settings screen",
-        "3. the **process environment** — `greenlight.toml`, the shell, the container",
+        "3. the **process environment** — `rackstatus.toml`, the shell, the container",
         "4. the platform's **low overlay** — geometry and per-tool defaults",
         "",
         "`Reader` below says which rung a setting starts at. `ladder` means it is read through",
@@ -354,7 +354,7 @@ def render(
     lines += [
         "## Declared settings",
         "",
-        "These have a declaration, so `greenlight.toml` can set them and the preflight can require",
+        "These have a declaration, so `rackstatus.toml` can set them and the preflight can require",
         "them. `UI` marks the ones the dashboard Settings screen may override.",
         "",
         "| Setting | Section | Type | Required | UI | Example | Purpose |",

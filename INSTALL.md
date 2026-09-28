@@ -2,336 +2,248 @@
 
 ## Prerequisites
 
-- Docker Engine 20.10+ (or Docker Desktop)
+- Docker Engine 20.10+ (or Docker Desktop) with Compose v2
+- Python 3.9+ on the Docker host for the one-line config generator (standard library only), or
+  run it inside the image instead — see below
 - An SSH key pair that can reach your head node (BCM or MAAS)
-- The head node must be running `sshd` and have Slurm, cmsh/maas-cli, and pdsh available
-- The nvis-rack-status scripts must be deployed on the head node (see [Deploying Scripts](#deploying-scripts-to-the-head-node))
+- On the head node: `sshd`, Slurm (unless the cluster uses PythonCM), `cmsh` or `maas`, and `pdsh`
+- The validation scripts deployed on the head node — see [Deploying scripts](#deploying-scripts-to-the-head-node)
 
-## Quick Start (Demo Mode)
+The dashboard is **HTTPS only**. There is no plain-HTTP mode and no way to run without signing in.
 
-Run the dashboard with synthetic data — no cluster access required:
+## Quick start (demo mode, no cluster)
 
 ```bash
-docker run -d --name rack-status -p 5050:5000 \
+docker run -d --name rack-status -p 127.0.0.1:5050:5000 \
   -e RACK_STATUS_DEMO=1 \
-  nvcr.io/your-org/nvis-rack-status:latest
+  -v rack-data:/app/var \
+  nvis-rack-status:<version>
 ```
 
-Open **https://localhost:5050/spa/** in your browser.
+Open **https://localhost:5050/**. The first start generates a self-signed certificate, so the
+browser warns once; accept it. Sign in as `admin` with the one-time password from the log:
 
-## Production Deployment
+```bash
+docker logs rack-status 2>&1 | grep -A6 "ONE-TIME ADMINISTRATOR"
+```
 
-### Which file configures what — three files, three jobs
+(Host port 5050 rather than 5000 because macOS answers `:5000` with the AirPlay Receiver.)
 
-Worth reading once before editing anything, because each is read by a different thing and a
-setting in the wrong one fails silently:
+## Production deployment
+
+### Where configuration lives
 
 | File | Read by | Holds |
 |---|---|---|
-| `greenlight.toml` | the application, at launch | everything the app itself reads. Copy `greenlight.toml.example`. **Start here.** |
-| `rack-config.env` | Docker, as `env_file` | settings passed into the container |
-| `.env` | Docker Compose, for `${...}` | only the six it interpolates for ports and bind mounts. Copy `.env.example`. |
+| `config/rackstatus.toml` | the application, at launch | every setting the app reads. Start from the minimal file below. |
+| `config/tls/server.crt`, `server.key` | the application, at launch | *optional* — your own certificate. Without it, a self-signed one is generated. |
+| `.env` | Docker Compose, for `${...}` | only the bind address, host port and SSH key path. Copy `.env.example`. |
 
-The application reads `greenlight.toml` and treats it as the **baseline**: a real environment
-variable, or a `docker run -e` flag, overrides anything in it. So the file can hold a site's
-settled configuration while an operator still overrides one value for a single run.
+`config/` is mounted read-only at `/app/config`. Only `config/rackstatus.toml.example` is tracked
+in git; your `rackstatus.toml` and certificate stay out of shared history.
 
-A few settings cannot be guessed, and for those **Greenlight refuses to start** rather than boot
-into a state where it cannot work — reporting every missing one at once, with an example value, so
-one restart fixes all of them. Today that is the OIDC issuer (when the provider is enabled), the
-SSH host (unless in demo mode or a local execution target), and the TLS key (whenever a
-certificate is set). A setting that has a working default is deliberately *not* on that list.
+**Create the minimal configuration.** Every setting except the head node has a working default:
 
 ```bash
-cp greenlight.toml.example greenlight.toml
-# then uncomment and edit what your site needs
+python3 backend/cli.py init-config --ssh-host <head-node>
 ```
 
-### Option A: Config file (recommended)
-
-1. Edit `rack-config.env` with your site settings:
+No Python on the host? Run the same command inside the image:
 
 ```bash
-# Key settings to change:
-RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status  # path on head node
-RACK_EXEC_MODE=ssh
-RACK_PLATFORM=bcm
-RACK_SSH_USER=root
-RACK_SLURM_SKIP_MODULE_LOAD=1      # if sinfo/squeue are on PATH
-NEMO_SQSH_SRC=/path/to/nemo.sqsh   # NeMo container image on head node
+docker run --rm -v "$PWD/config:/app/config" --entrypoint python3 nvis-rack-status:<version> \
+  backend/cli.py init-config --ssh-host <head-node>
 ```
 
-2. Launch:
+Either way it writes `config/rackstatus.toml` with one live line. To change anything else, copy its line
+from `config/rackstatus.toml.example` (every setting, with its description) and uncomment it. The
+full list of what the app reads, including the defaults, is the generated
+[settings reference](docs/reference/configuration/settings.md). A real environment variable
+overrides the file.
+
+If a setting cannot be guessed, the app **refuses to start** and names every missing one at once —
+today that is the SSH host (unless in demo mode).
+
+> **After the first start, the connection belongs to the catalog.** The first boot creates a
+> project and cluster from this file; from then on the cluster's host, user, key and base path come
+> from **Projects & Clusters** in the UI and outrank the file. Change the target there, not here.
+
+### Upgrading from `rack-config.env`
+
+Deployments configured before this layout kept their settings in `rack-config.env`, which the
+container no longer reads. Convert it once, before upgrading:
 
 ```bash
-docker run -d --name rack-status -p 5050:5000 \
-  --env-file rack-config.env \
-  -e RACK_SSH_HOST=<head-node-ip> \
-  -v ~/.ssh/id_rsa:/run/secrets/ssh_key:ro \
-  --restart unless-stopped \
-  nvis-rack-status:local
+python3 backend/cli.py init-config --from-env-file rack-config.env
 ```
 
-The `RACK_REMOTE_BASE_PATH` variable is the key — it tells the container where
-the scripts and log directory live on the head node. All script paths resolve as
-`{RACK_REMOTE_BASE_PATH}/bin/scripts/<script>.sh` and the default log directory
-resolves as `{RACK_REMOTE_BASE_PATH}/var/logs/`.
+Each setting is carried into `config/rackstatus.toml` under its section. The command lists every
+key it does not carry and why — secrets (set those in the environment), and the few that cannot
+take effect from the file (`PORT`, the deprecated `RACK_EXEC_MODE`, and the TLS and Compose
+values). Nothing is dropped silently.
 
-### Option B: Docker Compose
+### TLS
+
+Put your certificate and key at `config/tls/server.crt` and `config/tls/server.key` and restart.
+Without them, the first start generates a self-signed pair under `/app/var/secrets/tls/` on the
+data volume, so it — and the browser exception you accept for it — survives restarts and
+recreates. The SAN must include `localhost`, because operators reach the dashboard through an
+SSH tunnel; `bin/gen-tls-cert.py` issues such a certificate.
+
+### Option A: Docker Compose (recommended)
 
 ```bash
-# Edit rack-config.env, then:
+cp .env.example .env                 # bind address, host port, SSH key path
+python3 backend/cli.py init-config --ssh-host <head-node>
+bin/write-build-info.sh              # stamps the build identity the dashboard shows
+docker compose build
 docker compose up -d
+NVIS_CONTAINER=$(docker compose ps -q rack-status) bash bin/verify-deploy.sh
 ```
 
-### Option C: build-docker.sh helper
+The port is published on `127.0.0.1` by default; reach it through an SSH tunnel. Set
+`RACK_WEB_BIND_ADDR` in `.env` only to expose it deliberately.
+
+### Option B: `build-docker.sh`
 
 ```bash
-# Edit rack-config.env first
-RACK_SSH_HOST=10.0.0.1 ./build-docker.sh prod
+RACK_SSH_HOST=<head-node> ./build-docker.sh prod
 ```
 
-## Deploying Scripts to the Head Node
+Creates `config/rackstatus.toml` from `RACK_SSH_HOST` if it does not exist yet (it never overwrites
+one), builds the image and runs it with `config/`, the SSH key and the `rack-data` volume mounted.
 
-The container executes scripts on the head node via SSH. Copy the project to
-a shared filesystem path accessible by compute nodes:
+### Option C: plain `docker run`
 
 ```bash
-# On your workstation
-tar czf nvis-deploy.tar.gz backend/ bin/ static/ help_content.json var/
-
-# Copy to head node
-scp nvis-deploy.tar.gz root@<head-node>:/home/cmsupport/nvis-rack-status/
-ssh root@<head-node> "cd /home/cmsupport/nvis-rack-status && tar xzf nvis-deploy.tar.gz"
+docker run -d --name rack-status -p 127.0.0.1:5050:5000 \
+  -v "$PWD/config:/app/config:ro" \
+  -v ~/.ssh/rack_status_key:/run/secrets/ssh_key:ro \
+  -v rack-data:/app/var \
+  --restart unless-stopped \
+  nvis-rack-status:<version>
 ```
 
-Then set `RACK_REMOTE_BASE_PATH=/home/cmsupport/nvis-rack-status` in `rack-config.env`.
+**Always mount `/app/var` on a volume.** It holds the identity store (your administrator), the
+signing keys, the generated certificate, the catalog and the run history; without it, recreating
+the container loses all of them.
 
-## Accessing the Dashboard
+## Deploying scripts to the head node
 
-| URL | Description |
-|---|---|
-| `https://<host>:5050/spa/` | React SPA (primary UI) |
-| `https://<host>:5050/` | The same SPA — `/` serves it too, so either URL works |
-| `https://<host>:5050/api/status` | JSON API |
+The container runs validation scripts on the head node over SSH, from
+`RACK_REMOTE_BASE_PATH`. Two ways to put them there — both copy only the scripts, never `var/`:
 
-After the container starts, read the one-time administrator password from its log:
+- **From the UI:** the first-run setup wizard offers to deploy the shipped scripts over the
+  connection you just configured.
+- **From a workstation:** `bin/deploy-scripts.sh [--dry-run] [user@host]` — a checksum-based
+  `rsync` of `bin/scripts/`. It never deletes head-only files unless you pass `--delete`.
 
-```bash
-docker logs <container> 2>&1 | grep -A6 "ONE-TIME ADMINISTRATOR"
-```
+On the head node the scripts live under `{RACK_REMOTE_BASE_PATH}/scripts/` in layers (a project
+layer, `custom/`, the platform, then `multi-platform/`), or under the legacy
+`{RACK_REMOTE_BASE_PATH}/bin/scripts/` on a deployment that has not been migrated — both tools
+detect which. Logs default to `{RACK_REMOTE_BASE_PATH}/var/logs/`.
 
-Sign in as `admin` with that password; the UI will require you to choose your own. It is shown once
-and only its verifier is stored, so capture it before anyone needs to sign in.
+## SSH
 
-There is no way to run without authentication: the switch that used to do that was removed on
-2026-09-08, and a first boot creates the administrator and the policy granting them rather than
-leaving the gate open.
-
-## Configuration Reference
-
-### Remote Path
-
-| Variable | Default | Description |
-|---|---|---|
-| `RACK_REMOTE_BASE_PATH` | — | Base directory on the head node where nvis-rack-status is deployed. All script paths and the default log directory derive from this single variable. |
-
-### Connection
-
-| Variable | Default | Description |
-|---|---|---|
-| `RACK_EXEC_MODE` | `local` | `local` = run commands directly, `ssh` = SSH to head node |
-| `RACK_PLATFORM` | `bcm` | `bcm` (Base Command Manager) or `maas` (Canonical MAAS) |
-| `RACK_SSH_HOST` | — | Head-node hostname or IP **(required in ssh mode)** |
-| `RACK_SSH_USER` | `root` | SSH user on the head node |
-| `RACK_SSH_PORT` | `22` | SSH port |
-
-### Authentication
-
-| Variable | Default | Description |
-|---|---|---|
-| `RACK_WEB_SECRET_KEY` | random | Set a fixed value for stable sessions across container restarts |
-
-### Cluster-Specific
-
-| Variable | Default | Description |
-|---|---|---|
-| `NEMO_SQSH_SRC` | — | Path to NeMo container image (`.sqsh`) on the head node |
-| `RACK_SLURM_SKIP_MODULE_LOAD` | `0` | Set to `1` if Slurm binaries are already on PATH |
-| `RACK_VALIDATION_CT_RANGE` | `01-18` | Tray range per rack (e.g. `01-08` for 8-node racks) |
-| `VALIDATION_TEST` | — | Tests that must pass (e.g. `nccl_allreduce,llm`) |
-
-### Volumes
-
-| Container Path | Purpose |
-|---|---|
-| `/run/secrets/ssh_key` | SSH private key (mount read-only) |
-| `/app/var/logs` | Local rack validation log directory (only needed in local mode) |
-| `/app/var/cache` | Internal caches (use a named volume for persistence) |
-
-### Other
-
-| Variable | Default | Description |
-|---|---|---|
-| `RACK_STATUS_DEMO` | `0` | `1` = synthetic demo data, no cluster access needed |
-| `PORT` | `5000` | Listen port **inside** the container (`EXPOSE 5000`). Publish it on a different host port — `-p 5050:5000` — because host `:5000` is the AirPlay Receiver on macOS and answers 403. Note `./start.sh` defaults to 5050 instead, since it binds the host directly. |
-
-## SSH Key Setup
-
-The container connects to the head node over SSH. You need a key pair where:
-
-1. The **private key** is mounted into the container at `/run/secrets/ssh_key`
-2. The **public key** is in `~/.ssh/authorized_keys` on the head node
-
-To generate a dedicated key pair:
+The private key is mounted at `/run/secrets/ssh_key`, where the app looks by default; the public
+key goes in the head node's `~/.ssh/authorized_keys`:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/rack_status_key -N "" -C "nvis-rack-status"
 ssh-copy-id -i ~/.ssh/rack_status_key.pub root@<head-node>
 ```
 
-Then mount it: `-v ~/.ssh/rack_status_key:/run/secrets/ssh_key:ro`
-
-### SSH via Jump Host
-
-If the head node requires a jump host, set up an SSH tunnel first:
+**Host keys are not verified by default.** To verify them on every connection the app makes —
+the control connection, the web terminal, hops to a head or bastion, bug-report collection and
+`bin/deploy-scripts.sh` — seed a known-hosts file from a machine you trust and point
+`RACK_SSH_KNOWN_HOSTS` at it:
 
 ```bash
-# Start tunnel (local port 2222 -> head node port 22 via jump host)
-ssh -f -N -L 2222:<head-node-internal-ip>:22 user@jump-host
-
-# Run container pointing to the tunnel
-docker run -d --name rack-status -p 5050:5000 \
-  --env-file rack-config.env \
-  -e RACK_SSH_HOST=host.docker.internal \
-  -e RACK_SSH_PORT=2222 \
-  -v ~/.ssh/key:/run/secrets/ssh_key:ro \
-  --add-host=host.docker.internal:host-gateway \
-  nvis-rack-status:local
+ssh-keyscan -H <head-node> >> config/known_hosts
+# config/rackstatus.toml
+# RACK_SSH_KNOWN_HOSTS = "/app/config/known_hosts"
 ```
 
-## Building the Image Locally
+**Jump hosts:** declare them in the cluster's connection topology (Projects & Clusters), or set
+`RACK_SSH_OPTS` (for example `-J user@bastion`) in `config/rackstatus.toml`.
+
+## Building the image
 
 ```bash
-git clone <repo-url>
-cd nvis-rack-status
+bin/write-build-info.sh
 docker build -t nvis-rack-status:local .
 ```
 
-Or use the helper: `./build-docker.sh build`
+Or `./build-docker.sh build`.
 
-## Air-Gapped Deployment (offline image bundle)
-
-For hosts with **no internet/registry access**, package the fully-built image into a
-single tarball, copy it over, then `docker load` + `docker run` it — no build or pull
-needed on the target.
-
-### 1. Produce the image bundle
-
-**Locally** (uses `docker build` + `docker save`):
+## Air-gapped deployment
 
 ```bash
-./build-docker.sh save
-# → dist/nvis-rack-status-<version>.tar.gz
-#   dist/nvis-rack-status-<version>.tar.gz.sha256
+./build-docker.sh save            # → dist/nvis-rack-status-<version>.tar.gz and .sha256
 ```
 
-Useful overrides: `RACK_IMAGE_TAG=1.2.3`, `RACK_IMAGE_OUT_DIR=/tmp/out`,
-`RACK_IMAGE_COMPRESS=0` (skip gzip).
-
-**From CI/CD (published with each release)**: on the release commit, the `docker-save`
-job builds the bundle tagged with the release **VERSION** (from `version.py`), and the
-`release:publish-bundle` job uploads it to the project's **Package Registry** and links
-it on the **GitLab Release** page. Download it by version from either:
-
-- the Release page → **Assets** (`nvis-rack-status-<version>.tar.gz` + `.sha256`), or
-- the Package Registry: `…/packages/generic/nvis-rack-status-image/<version>/nvis-rack-status-<version>.tar.gz`
-
-Both CI jobs use Kaniko's `--tarPath` (the daemonless equivalent of `docker save`, since
-the CI runners have no Docker daemon). `docker-save` can also be triggered **manually** on
-any other pipeline to produce an ad-hoc bundle as a downloadable job artifact.
-
-### 2. Transfer and run on the air-gapped host
+Each release also publishes this bundle to the project's Package Registry and the GitLab Release
+page (`nvis-rack-status-<version>.tar.gz` + `.sha256`). On the offline host:
 
 ```bash
-# Copy the tarball (and checksum) to the offline host by your approved method
-sha256sum -c nvis-rack-status-<version>.tar.gz.sha256   # verify integrity
-
-docker load -i nvis-rack-status-<version>.tar.gz        # import (gz auto-detected)
-
-# Demo (no cluster). Authentication is always on: read the one-time `admin`
-# password from `docker logs rack-status` on first start.
-docker run -d --name rack-status -p 5050:5000 \
-  -e RACK_STATUS_DEMO=1 \
-  -v rack-data:/app/var nvis-rack-status:<version>
-
-# Or load with the helper (verifies the checksum if present):
-./build-docker.sh load nvis-rack-status-<version>.tar.gz
+sha256sum -c nvis-rack-status-<version>.tar.gz.sha256
+docker load -i nvis-rack-status-<version>.tar.gz     # or: ./build-docker.sh load <tarball>
 ```
 
-For a real cluster, swap the demo flags for the SSH/auth env described in
-[Configuration Reference](#configuration-reference) (e.g. `--env-file rack-config.env`,
-`RACK_SSH_HOST` and the SSH key mount).
-
-## Running Tests
-
-```bash
-# Backend (run from repo root)
-pip install pytest
-python -m pytest backend/tests/ -v
-
-# Frontend
-cd frontend && npm test
-```
+Then run it as in [Option C](#option-c-plain-docker-run).
 
 ## Updating
 
-```bash
-docker compose pull && docker compose up -d
-```
-
-Or with `docker run`:
+A Compose deployment builds its image from the tree, so update the tree and rebuild:
 
 ```bash
-docker pull nvcr.io/your-org/nvis-rack-status:latest
-docker stop rack-status && docker rm rack-status
-# re-run the docker run command
+git pull                              # or merge the release branch
+bin/write-build-info.sh
+docker compose build
+docker compose up -d                  # not `docker restart` — that keeps the old image
+NVIS_CONTAINER=$(docker compose ps -q rack-status) bash bin/verify-deploy.sh
 ```
+
+With `docker run`, load or pull the new image, then `docker rm -f rack-status` and run the same
+command again — the `rack-data` volume carries everything over.
+
+## Running tests
+
+```bash
+pip install -r backend/requirements-dev.txt
+python -m pytest backend/tests/ -q
+cd frontend && npm test
+```
+
+`bin/check-ci-lint.sh` runs the same lint gates CI does.
 
 ## Troubleshooting
 
-**Container starts but dashboard shows no racks:**
-- Verify `RACK_SSH_HOST` is reachable: `docker exec rack-status ssh -i /run/secrets/ssh_key root@<host> hostname`
-- Check `RACK_REMOTE_BASE_PATH` points to where scripts are deployed on the head node
-- Check that `cmsh` (BCM) or `maas` (MAAS) is available on the head node
-- Check container logs: `docker logs rack-status`
+**The browser shows a certificate warning:** expected with the generated self-signed certificate.
+`bin/verify-deploy.sh` prints its SHA-256 fingerprint — compare it before accepting. To remove the
+warning, install a certificate your browsers trust in `config/tls/`.
 
-**Scripts fail with "No such file or directory":**
-- Verify `RACK_REMOTE_BASE_PATH` is set correctly in `rack-config.env`
-- Verify scripts exist on the head node: `ssh root@<host> ls <RACK_REMOTE_BASE_PATH>/bin/scripts/`
+**The container refuses to start:** read `docker logs rack-status`. The app lists every missing
+setting at once with the fix; `python backend/cli.py check` reports the same without starting.
 
-**SSH connection refused:**
-- Confirm `sshd` is running on the head node
-- Confirm the mounted SSH key matches an authorized key on the head node
-- For jump hosts, verify the SSH tunnel is active: `lsof -i :<tunnel-port>`
+**The dashboard shows no racks:**
+- Check the head node is reachable: `docker exec rack-status ssh -i /run/secrets/ssh_key root@<host> hostname`
+- Check the cluster's connection and base path under **Projects & Clusters** — after the first
+  start they outrank `config/rackstatus.toml`
+- Check `cmsh` (BCM) or `maas` (MAAS) is available on the head node
 
-**Login page appears but password is rejected:**
-- Read the one-time `admin` password from the container log (see above); if the identity
-  store already has users, no password is printed and you must use an existing account
-- If every administrator credential is lost, the store must be redeployed — there is
-  deliberately no reset endpoint, no recovery code and no bypass flag
+**Scripts fail with "No such file or directory":** check the scripts are deployed (see above) and
+that the cluster's base path points at them: `ssh root@<host> ls <base>/scripts <base>/bin/scripts`.
 
-**NEMO container fails to start (pyxis/enroot errors):**
-- Ensure `enroot` and `pyxis` are installed on compute nodes
-- Ensure `libnvidia-container` (`nvidia-container-cli`) is installed
-- Check disk space on compute nodes: container extraction needs ~20GB
-- Verify `NEMO_SQSH_SRC` points to a valid `.sqsh` file accessible from compute nodes
+**The password is rejected:** the one-time `admin` password is printed only when the identity store
+is empty. If every administrator credential is lost, the store must be redeployed — there is
+deliberately no reset endpoint, recovery code or bypass flag.
 
-**Log directory returns 400 error:**
-- In SSH mode, `RACK_REMOTE_BASE_PATH` sets the default log dir automatically
-- You can also change the log directory in the Settings page (persisted in browser)
-- The path must exist on the head node, not inside the container
+**NeMo containers fail to start (pyxis/enroot errors):** check `enroot`, `pyxis` and
+`nvidia-container-cli` on the compute nodes, ~20 GB of free space for extraction, and that
+`NEMO_SQSH_SRC` points at a `.sqsh` readable from the compute nodes.
 
-**Environment variables not reaching scripts:**
-- Variables prefixed with `RACK_*`, `NEMO_*`, `VALIDATION_*`, and `SQUEUE_*` are automatically forwarded to the remote SSH session
-- Add custom prefixes by modifying `_FORWARD_ENV_PREFIXES` in `backend/host_exec.py`
+**Environment variables do not reach scripts:** variables with the prefixes in
+`transport/factory.py` `FORWARD_ENV_PREFIXES` (`RACK_`, `NEMO_`, `VALIDATION_`, `SQUEUE_`,
+`NVIS_`, `PDSH_`, `NGC_`, `LLMB_`) and the names in `FORWARD_ENV_NAMES` are forwarded to the
+remote session.

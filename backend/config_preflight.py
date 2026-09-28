@@ -136,11 +136,11 @@ def run(*, exit_on_fault: bool = True) -> tuple[list[Fault], list[Fault]]:
     # Every fault at once, to stderr as well as the log: this can run before a deployment's log
     # sink is somewhere the operator will look, and the whole point is that they see all of it.
     lines = [
-        "greenlight: refusing to start — required configuration is missing.",
+        "rackstatus: refusing to start — required configuration is missing.",
         "",
         *[f.render() for f in faults],
         "",
-        "Set these in greenlight.toml, or in the environment (the environment wins).",
+        "Set these in config/rackstatus.toml, or in the environment (the environment wins).",
     ]
     report = "\n".join(lines)
     _logger.critical("config: refusing to start; %d required setting(s) missing", len(faults))

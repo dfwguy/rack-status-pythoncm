@@ -36,6 +36,8 @@ def deployment(tmp_path, monkeypatch):
     monkeypatch.setenv("RACK_WEB_POLICY_FILE", str(tmp_path / "store" / "policies.json"))
     monkeypatch.setenv("NVIS_CATALOG_FILE", str(tmp_path / "catalog.json"))
     monkeypatch.setenv("RACK_WEB_TLS_DIR", str(tmp_path / "tls"))
+    # Isolates the operator-supplied rung (`config/tls/`) from the developer's real tree.
+    monkeypatch.setenv("NVIS_RACKSTATUS_CONFIG", str(tmp_path / "config" / "rackstatus.toml"))
     monkeypatch.delenv("RACK_WEB_TLS_CERT", raising=False)
     monkeypatch.delenv("RACK_WEB_TLS_KEY", raising=False)
     return tmp_path

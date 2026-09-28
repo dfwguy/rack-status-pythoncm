@@ -45,7 +45,7 @@ import host_exec
 def truthy_env(name: str, default: bool = False) -> bool:
     """Read an environment variable as a boolean.
 
-    Accepts the spellings operators actually use in ``rack-config.env`` and compose files.
+    Accepts the spellings operators actually use in ``rackstatus.toml``, env files and compose files.
     """
     raw = os.environ.get(name)
     if raw is None:

@@ -443,7 +443,7 @@ flowchart TB
 
 ### 9.5 Configuration
 
-Reuse existing env (documented in `[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)`): `RACK_WEB_GRAFANA_URI`, `RACK_WEB_GRAFANA_PORT`, `RACK_WEB_GRAFANA_DASH_UID`, `RACK_WEB_GRAFANA_DASH_SLUG`, `RACK_WEB_GRAFANA_EMBED_DISABLED`, `RACK_WEB_GRAFANA_TIMEZONE`, and the host-regex variables. No new config required for v1; optionally add Grafana defaults to `rack-config.env` for deployment convenience.
+Reuse existing env (documented in `[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)`): `RACK_WEB_GRAFANA_URI`, `RACK_WEB_GRAFANA_PORT`, `RACK_WEB_GRAFANA_DASH_UID`, `RACK_WEB_GRAFANA_DASH_SLUG`, `RACK_WEB_GRAFANA_EMBED_DISABLED`, `RACK_WEB_GRAFANA_TIMEZONE`, and the host-regex variables. No new config required for v1; optionally add Grafana defaults to `config/rackstatus.toml` for deployment convenience.
 
 ### 9.6 Signal boundary (where each pillar lives)
 

@@ -269,10 +269,10 @@ python-test:
     # shared cause was one missing file. This says so in one line, and it needs the deps installed
     # above, which is why it lives here and not in the lint job.
     - bash bin/check-tracked-tree.sh
-    # greenlight.toml.example is generated from backend/config_registry.py. A generated file
-    # nobody regenerates is worse than a hand-written one, because it claims to be derived from
-    # the code -- so this fails the build when a setting was declared without regenerating.
-    - python bin/gen-greenlight-example.py --check
+    # config/rackstatus.toml.example is generated from backend/config_registry.py. A generated
+    # file nobody regenerates is worse than a hand-written one, because it claims to be derived
+    # from the code -- so this fails the build when a setting was declared without regenerating.
+    - python bin/gen-config-example.py --check
     # The action vocabulary is NOT re-checked here: `sources-of-truth` in the lint stage builds and
     # gates it, and a failed stage stops the pipeline before this job starts. Two places to check
     # one thing is two places to forget when a third generator arrives.

@@ -192,12 +192,12 @@ plc-evidence.jsonl
 # commits the lot — so it is named here explicitly.
 .scratch/
 
-# Launch configuration. The .example is tracked; the real file is per-deployment and
-# must not enter shared git history -- five clusters use this repo
-# (cluster-deployments.mdc). Secrets are refused from it at startup, but a site's
-# hostnames and paths are still nobody else's business.
-greenlight.toml
-!greenlight.toml.example
+# Operator configuration. Only the generated example is tracked; the real file and any
+# certificate are per-deployment and must not enter shared git history -- five clusters use
+# this repo (cluster-deployments.mdc). Secrets are refused from the file at startup, but a
+# site's hostnames and paths are still nobody else's business, and a TLS key is a secret.
+config/*
+!config/rackstatus.toml.example
 
 # Runtime script tree. `script_tree.tree_root()` falls back to the repo root when
 # RACK_REMOTE_BASE_PATH is unset, so a local deploy stages here. Build artifact, never source.

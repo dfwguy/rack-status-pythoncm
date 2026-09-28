@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
-"""`greenlight.toml.example` is generated and must stay current (DC-5, FR-1b, FR-1e).
+"""`config/rackstatus.toml.example` is generated and must stay current (DC-5, FR-1b, FR-1e).
 
 The load-bearing test is `test_the_tracked_example_is_current`: a generated file that nobody
 regenerates is worse than a hand-written one, because it *claims* to be derived from the code. It
@@ -16,7 +16,7 @@ is the same failure as a stale test citation — right on the day it was written
 the first setting anyone adds.
 
 `TestTheExampleIsInert` exists because the file's whole purpose is to be copied. If
-`cp greenlight.toml.example greenlight.toml` reconfigured a live deployment, the example would be
+`cp rackstatus.toml.example rackstatus.toml` reconfigured a live deployment, the example would be
 a trap rather than documentation.
 """
 
@@ -32,8 +32,8 @@ import pytest
 import toml_compat
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-GENERATOR = REPO_ROOT / "bin" / "gen-greenlight-example.py"
-EXAMPLE = REPO_ROOT / "greenlight.toml.example"
+GENERATOR = REPO_ROOT / "bin" / "gen-config-example.py"
+EXAMPLE = REPO_ROOT / "config" / "rackstatus.toml.example"
 
 
 def _uncomment(raw: str) -> str:
@@ -59,8 +59,8 @@ class TestTheTrackedExampleIsCurrent:
             check=False,
         )
         assert result.returncode == 0, (
-            f"greenlight.toml.example is stale:\n{result.stderr}\n"
-            "Run bin/gen-greenlight-example.py"
+            f"config/rackstatus.toml.example is stale:\n{result.stderr}\n"
+            "Run bin/gen-config-example.py"
         )
 
     def test_check_mode_actually_detects_staleness(self):
@@ -111,7 +111,7 @@ class TestTheExampleIsInert:
         """The behavioural half: hand the real loader a copy and assert it applies no value."""
         import config_launch
 
-        target = tmp_path / "greenlight.toml"
+        target = tmp_path / "rackstatus.toml"
         target.write_text(EXAMPLE.read_text())
         monkeypatch.delenv("RACK_STATUS_DEMO", raising=False)
 

@@ -86,7 +86,7 @@ _app_dir_s = str(APP_DIR)
 if _app_dir_s not in sys.path:
     sys.path.insert(0, _app_dir_s)
 
-# ---- greenlight.toml, before ANY other first-party import (DC-3, FR-3a) ----------------------
+# ---- rackstatus.toml, before ANY other first-party import (DC-3, FR-3a) ---------------------
 #
 # This placement is the feature, not a detail. ``config_env.py:737`` snapshots ``os.environ`` at
 # *import* time for the 95 Settings-managed keys and ``:773`` **pops** any of them absent from that
@@ -110,7 +110,7 @@ except _config_launch.ConfigError as _config_exc:
 #
 # Moved to *after* the loader deliberately. It used to sit above it, which made this the one key
 # whose file value could never take effect -- ``setdefault`` would always find the value this line
-# had just written. Below the loader, ``greenlight.toml`` can point the overrides store somewhere
+# had just written. Below the loader, ``rackstatus.toml`` can point the overrides store somewhere
 # else and this stays the default for everyone who does not. Nothing between here and the loader
 # depends on the order; the loader's only real constraint is that ``sys.path`` is set up first.
 os.environ.setdefault(
@@ -496,12 +496,13 @@ def _bootstrap_rack_web_secret_key() -> None:
 
 
 def _tls_cert_configured() -> str:
-    """The configured TLS certificate path, or "" when this process serves plain HTTP.
+    """The configured TLS certificate path, or "" when this process is not serving.
 
-    Read straight from the environment rather than through the config ladder: it is consumed
-    before the app finishes booting (and by the entrypoint, outside Python entirely), and like
-    the origin allowlist it is a deploy-time property that no operator should be able to change
-    from the Settings page.
+    Every serving path settles the certificate (`startup_gate.ensure_tls`) before `app` is
+    imported, so "" only happens when a tool or the test suite imports the module without serving.
+    Read straight from the environment rather than through the config ladder: like the origin
+    allowlist it is a deploy-time property that no operator should be able to change from the
+    Settings page.
     """
     return (os.environ.get("RACK_WEB_TLS_CERT") or "").strip()
 
@@ -1358,23 +1359,16 @@ if __name__ == "__main__":
     startup_gate.prepare()
 
     port = int(os.environ.get("PORT", "5000"))
-    # TLS when a certificate is configured. The same two variables drive gunicorn's
-    # --certfile/--keyfile in the container entrypoint, so a deployment configures TLS in one
-    # place regardless of which server runs. Binding stays 0.0.0.0 here (a dev server the
-    # operator reaches from their own browser); the *container's* published port is what gets
-    # restricted to loopback, in compose.
-    _cert, _key = _tls_cert_configured(), (os.environ.get("RACK_WEB_TLS_KEY") or "").strip()
-    _ssl = None
-    if _cert and not _key:
-        _logger.error("RACK_WEB_TLS_CERT is set but RACK_WEB_TLS_KEY is not; serving plain HTTP")
-    elif _cert:
-        # An explicit hardened context, not the (cert, key) tuple: Werkzeug would build its own
-        # with whatever floor the Python build defaults to. tls_server is the same policy
-        # gunicorn.conf.py applies, so local and container runs cannot diverge.
-        _ssl = tls_server.build_ssl_context(_cert, _key)
-        _logger.info(
-            "serving HTTPS on :%s (cert %s, %s)", port, _cert, tls_server.describe(_ssl)
-        )
+    # Always TLS: `prepare()` above has settled the certificate (or refused to start), and the
+    # development server serves the same one gunicorn would. An explicit hardened context, not the
+    # (cert, key) tuple: Werkzeug would build its own with whatever floor the Python build defaults
+    # to, and tls_server is the policy gunicorn.conf.py applies. Binding stays 0.0.0.0 here (a dev
+    # server the operator reaches from their own browser); the container's published port is what
+    # gets restricted to loopback, in compose.
+    _ssl = tls_server.build_ssl_context(
+        os.environ["RACK_WEB_TLS_CERT"], os.environ["RACK_WEB_TLS_KEY"]
+    )
+    _logger.info("serving HTTPS on :%s (%s)", port, tls_server.describe(_ssl))
     app.run(
         host="0.0.0.0",
         port=port,

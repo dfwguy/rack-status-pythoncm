@@ -12,8 +12,8 @@ importing it — a variable read inside a function body is never reached by an i
 the source knows the whole set.
 
 **252 settings.** 15 are *declared* in
-`backend/config_registry.py`, which is the set `greenlight.toml` can carry, the required-
-setting preflight can demand, and `greenlight.toml.example` lists. 119 are named in
+`backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
+setting preflight can demand, and `rackstatus.toml.example` lists. 120 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
 whether that document mentions the setting at all. It is not in this site yet; see
 `docs/README.md` for why the migration is page-at-a-time.
@@ -24,7 +24,7 @@ Highest wins (`core-designs.mdc` §5):
 
 1. the active cluster's **high overlay** — identity, naming and connection from the catalog
 2. **job env overrides** — `var/cache/job_env_overrides.json`, written by the Settings screen
-3. the **process environment** — `greenlight.toml`, the shell, the container
+3. the **process environment** — `rackstatus.toml`, the shell, the container
 4. the platform's **low overlay** — geometry and per-tool defaults
 
 `Reader` below says which rung a setting starts at. `ladder` means it is read through
@@ -60,7 +60,7 @@ same question setting by setting, where you are already looking.
 
 ## Declared settings
 
-These have a declaration, so `greenlight.toml` can set them and the preflight can require
+These have a declaration, so `rackstatus.toml` can set them and the preflight can require
 them. `UI` marks the ones the dashboard Settings screen may override.
 
 | Setting | Section | Type | Required | UI | Example | Purpose |
@@ -78,8 +78,8 @@ them. `UI` marks the ones the dashboard Settings screen may override.
 | `RACK_SSH_PORT` | connection | integer | no |  | `22` | Port for the SSH control connection. |
 | `RACK_SSH_USER` | connection | string | no |  | `root` | Account for the SSH control connection to the head node. |
 | `RACK_STATUS_DEMO` | general | boolean | no |  | `false` | Synthetic data, no cluster contact. True on a developer laptop, and it also exempts the connection settings from the required-setting preflight. |
-| `RACK_WEB_OIDC_ISSUER` | auth | string | no |  | `https://greenlight.example.com` | This deployment's own base URL, used as the OIDC `iss` claim. Required when the OIDC provider is enabled. Cannot be derived from the request: OIDC Discovery 1.0 §4.3 requires it to be the URL discovery is served from, and a Host header is attacker-controlled. http is accepted only for localhost, which is how an operator reaches a tunnelled deployment. |
-| `RACK_WEB_TLS_KEY` | tls | string | no |  | `/etc/greenlight/tls/server.key` | Private key for the TLS certificate. Required whenever RACK_WEB_TLS_CERT is set: a cert with no key downgrades one path silently and crashes the other. |
+| `RACK_WEB_OIDC_ISSUER` | auth | string | no |  | `https://rackstatus.example.com` | This deployment's own base URL, used as the OIDC `iss` claim. Required when the OIDC provider is enabled. Cannot be derived from the request: OIDC Discovery 1.0 §4.3 requires it to be the URL discovery is served from, and a Host header is attacker-controlled. http is accepted only for localhost, which is how an operator reaches a tunnelled deployment. |
+| `RACK_WEB_TLS_KEY` | tls | string | no |  | `/app/config/tls/server.key` | Private key for the TLS certificate. Required whenever RACK_WEB_TLS_CERT is set: a cert with no key downgrades one path silently and crashes the other. |
 
 ## Every setting
 
@@ -112,7 +112,6 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-nvis-ct-id"></a>`NVIS_CT_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` |
 | <a id="s-nvis-exemplar-workloads"></a>`NVIS_EXEMPLAR_WORKLOADS` | ladder |  | Default Exemplar workloads when a launch names none. | `backend/api/tools.py` |
 | <a id="s-nvis-force-setup-wizard"></a>`NVIS_FORCE_SETUP_WIZARD` | ladder |  | Re-open the first-run setup wizard even though a project is already configured. What `cli.py serve --setup-wizard` sets; normally left unset, since the wizard offers itself when no operator-created project exists. | `backend/setup_state.py` |
-| <a id="s-nvis-greenlight-config"></a>`NVIS_GREENLIGHT_CONFIG` | environment |  | See `docs/ENVIRONMENT.md` | `backend/config_launch.py` |
 | <a id="s-nvis-identity-file"></a>`NVIS_IDENTITY_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/identity/store.py` |
 | <a id="s-nvis-inventory-cache"></a>`NVIS_INVENTORY_CACHE` | environment |  | Path to the collected node-inventory cache. | `backend/node_inventory.py` |
 | <a id="s-nvis-inventory-srun-chunk"></a>`NVIS_INVENTORY_SRUN_CHUNK` | environment |  | Nodes per `srun` batch when collecting inventory that way. | `backend/node_inventory.py` |
@@ -125,6 +124,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-nvis-nvsw-id"></a>`NVIS_NVSW_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` |
 | <a id="s-nvis-platform-id"></a>`NVIS_PLATFORM_ID` | ladder |  | Active platform id. Selects the platform layer of the script tree. | `backend/script_tree.py` |
 | <a id="s-nvis-project-id"></a>`NVIS_PROJECT_ID` | ladder |  | Active project id. Written by the cluster overlay and read to select that project's script layer. | `backend/native_status.py`, `backend/script_tree.py` |
+| <a id="s-nvis-rackstatus-config"></a>`NVIS_RACKSTATUS_CONFIG` | environment |  | Path of the operator config file, default config/rackstatus.toml. Its directory also holds tls/ for a supplied certificate. | `backend/config_launch.py` |
 | <a id="s-nvis-rack-fname-re"></a>`NVIS_RACK_FNAME_RE` | environment |  | Regex that finds a rack id inside a result-log filename. | `backend/universal_parser.py` |
 | <a id="s-nvis-rack-id"></a>`NVIS_RACK_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` +1 |
 | <a id="s-nvis-reports-dir"></a>`NVIS_REPORTS_DIR` | environment |  | Where generated reports are stored. | `backend/report_store.py` |
@@ -336,8 +336,8 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-web-signing-key-dir"></a>`RACK_WEB_SIGNING_KEY_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/identity/keys.py` |
 | <a id="s-rack-web-signing-key-validity-seconds"></a>`RACK_WEB_SIGNING_KEY_VALIDITY_SECONDS` | environment |  | See `docs/ENVIRONMENT.md` | `backend/identity/keys.py` |
 | <a id="s-rack-web-tls-cert"></a>`RACK_WEB_TLS_CERT` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/app.py`, `backend/cli.py` +2 |
-| <a id="s-rack-web-tls-dir"></a>`RACK_WEB_TLS_DIR` | environment |  | Where the TLS certificate and key live. The startup gate generates a self-signed pair here on a first boot. | `backend/startup_gate.py` |
-| <a id="s-rack-web-tls-key"></a>`RACK_WEB_TLS_KEY` | environment |  | Private key for the TLS certificate. Required whenever RACK_WEB_TLS_CERT is set: a cert with no key downgrades one path silently and crashes the other. | `backend/app.py`, `backend/cli.py` +1 |
+| <a id="s-rack-web-tls-dir"></a>`RACK_WEB_TLS_DIR` | environment |  | Where the self-signed TLS pair is generated on a first boot when neither the environment nor config/tls/ supplies one. | `backend/startup_gate.py` |
+| <a id="s-rack-web-tls-key"></a>`RACK_WEB_TLS_KEY` | environment |  | Private key for the TLS certificate. Required whenever RACK_WEB_TLS_CERT is set: a cert with no key downgrades one path silently and crashes the other. | `backend/cli.py`, `backend/startup_gate.py` |
 | <a id="s-rack-web-tls-min-version"></a>`RACK_WEB_TLS_MIN_VERSION` | environment |  | See `docs/ENVIRONMENT.md` | `backend/tls_server.py` |
 | <a id="s-rack-web-token-issuer"></a>`RACK_WEB_TOKEN_ISSUER` | environment |  | The `iss` claim on tokens this deployment mints. Defaults to `nvis-rack-status`. | `backend/identity/tokens.py` |
 | <a id="s-rack-workflows-dir"></a>`RACK_WORKFLOWS_DIR` | environment |  | Where workflow definitions are stored. Defaults under `var/workflows`. | `backend/workflow_engine.py` |

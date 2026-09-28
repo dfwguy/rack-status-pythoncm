@@ -18,13 +18,17 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      // The backend serves HTTPS only, usually with a self-signed certificate, hence `secure: false`
+      // for this dev-only proxy (it verifies nothing a browser would not also warn about).
       "/api": {
-        target: "http://127.0.0.1:5050",
+        target: "https://127.0.0.1:5050",
         changeOrigin: true,
+        secure: false,
       },
       "/ws": {
-        target: "http://127.0.0.1:5050",
+        target: "wss://127.0.0.1:5050",
         changeOrigin: true,
+        secure: false,
         ws: true,
       },
     },

@@ -6,7 +6,7 @@
 
 **Application:** `nvis-rack-status-v3`
 
-**Default site URL:** `http://localhost:5056`
+**Default site URL:** `https://localhost:5056`
 **Source of truth:** the deployed application and this repository
 
 This guide describes the current Rack Status product: live rack state, validation,
@@ -65,8 +65,9 @@ fresh series must arrive at the observability VM.
 
 ## 2. Access, authentication, and navigation
 
-Open `http://localhost:5056`. Authenticate through the configured token or PAM
-flow. The signed-in operator name is attached to locks and actions where supported.
+Open `https://localhost:5056` (HTTPS only; accept the certificate warning once if the site uses
+the generated self-signed certificate). Sign in with your Rack Status account; on a new
+deployment, the first sign-in is `admin` with the one-time password from the container log. The signed-in operator name is attached to locks and actions where supported.
 
 All application routes below are hash routes; paste the complete URL into the same
 browser session after login.

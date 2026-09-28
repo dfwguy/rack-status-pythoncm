@@ -24,17 +24,19 @@ usage() {
 NVIS Rack Status — build, run, and package the Docker container
 
 Usage:
-  ./build-docker.sh                # dev mode (demo data, no auth, port 5050)
-  ./build-docker.sh prod           # prod mode (SSH to head node, token auth)
+  ./build-docker.sh                # dev mode (demo data, HTTPS, login required, port 5050)
+  ./build-docker.sh prod           # prod mode (SSH to head node; settings in config/rackstatus.toml)
   ./build-docker.sh build          # build the image only, don't run
   ./build-docker.sh save           # build + `docker save` → dist/*.tar.gz (air-gapped artifact)
   ./build-docker.sh load <tar>     # `docker load` an image tarball on an air-gapped host
   ./build-docker.sh stop           # stop and remove the container
   ./build-docker.sh logs           # tail container logs
 
-Override any setting with env vars:
-  RACK_WEB_PORT=8080 ./build-docker.sh
-  RACK_SSH_HOST=10.0.0.5 RACK_PLATFORM=maas ./build-docker.sh prod
+Settings live in config/rackstatus.toml (mounted read-only). On a first prod run with no file,
+RACK_SSH_HOST creates the minimal one; after that, edit the file:
+  RACK_SSH_HOST=10.0.0.5 ./build-docker.sh prod
+The host port and bind address are the only run-time overrides:
+  RACK_WEB_PORT=8080 RACK_WEB_BIND_ADDR=127.0.0.1 ./build-docker.sh
 
 Image-bundle (save) env vars:
   RACK_IMAGE_OUT_DIR=dist          # output directory for the .tar(.gz) + .sha256
@@ -165,7 +167,8 @@ load_image() {
   echo "==> Loading image from ${tar_path} (docker load) …"
   docker load -i "$tar_path"
   echo "==> Done. Run it with e.g.:"
-  echo "    docker run -d --name ${CONTAINER} -p 5000:5000 -e RACK_STATUS_DEMO=1 -v rack-data:/app/var nvis-rack-status:latest"
+  echo "    docker run -d --name ${CONTAINER} -p 127.0.0.1:5000:5000 -e RACK_STATUS_DEMO=1 -v rack-data:/app/var nvis-rack-status:latest"
+  echo "    (HTTPS only: https://localhost:5000/ — a self-signed certificate is generated on first start)"
 }
 
 stop_container() {
@@ -175,10 +178,12 @@ stop_container() {
 
 wait_ready() {
   local port="$1"
-  echo "==> Waiting for Flask …"
-  for _ in $(seq 1 15); do
-    if curl -sf "http://localhost:${port}/api/status" >/dev/null 2>&1; then
-      echo "==> Responding: http://localhost:${port}/spa/"
+  echo "==> Waiting for the server …"
+  # HTTPS only, and the certificate may be the self-signed one generated on first boot, hence -k:
+  # bin/verify-deploy.sh verifies the chain properly. /api/about is public; /api/status is not.
+  for _ in $(seq 1 30); do
+    if curl -skf "https://localhost:${port}/api/about" >/dev/null 2>&1; then
+      echo "==> Responding: https://localhost:${port}/"
       verify_deploy "$port"
       return $?
     fi
@@ -213,10 +218,9 @@ run_dev() {
   stop_container
   # Not "no auth" any more: the gate cannot be switched off, so this container bootstraps an
   # administrator and prints a one-time password to its log.
-  echo "==> Starting in DEV mode (demo data, authenticated, port ${port}) …"
-  docker run -d --name "$CONTAINER" -p "${port}:5000" \
+  echo "==> Starting in DEV mode (demo data, authenticated, HTTPS, port ${port}) …"
+  docker run -d --name "$CONTAINER" -p "${RACK_WEB_BIND_ADDR:-127.0.0.1}:${port}:5000" \
     -e RACK_STATUS_DEMO=1 \
-    -e RACK_EXEC_MODE=local \
     -v rack-data:/app/var \
     "$IMAGE"
   wait_ready "$port"
@@ -224,14 +228,20 @@ run_dev() {
 
 run_prod() {
   local port="${RACK_WEB_PORT:-5000}"
-  local ssh_host="${RACK_SSH_HOST:-}"
   local ssh_key="${RACK_SSH_KEY_PATH:-$HOME/.ssh/id_rsa}"
-  local config="${RACK_CONFIG_FILE:-rack-config.env}"
+  local config_dir
+  config_dir="$(cd "$(dirname "$0")" && pwd)/config"
 
-  if [[ -z "$ssh_host" ]]; then
-    echo "Error: RACK_SSH_HOST is required for prod mode."
-    echo "  RACK_SSH_HOST=10.0.0.1 ./build-docker.sh prod"
-    exit 1
+  # All settings live in config/rackstatus.toml, mounted read-only. Create the minimal one from
+  # RACK_SSH_HOST on a first run; never overwrite an operator's file.
+  if [[ ! -f "${config_dir}/rackstatus.toml" ]]; then
+    if [[ -z "${RACK_SSH_HOST:-}" ]]; then
+      echo "Error: ${config_dir}/rackstatus.toml does not exist. Create it with:"
+      echo "  python3 backend/cli.py init-config --ssh-host <head-node>"
+      echo "or run: RACK_SSH_HOST=<head-node> ./build-docker.sh prod"
+      exit 1
+    fi
+    python3 "$(dirname "$0")/backend/cli.py" init-config --ssh-host "$RACK_SSH_HOST"
   fi
   # No credential to pass in. Shared-token and PAM login were removed (FR-18): the container
   # authenticates against its own identity store, and the FIRST start with an empty store prints a
@@ -244,16 +254,16 @@ run_prod() {
   if [[ ! -f "$ssh_key" ]]; then
     echo "Warning: SSH key not found at ${ssh_key}"
   fi
-  if [[ ! -f "$config" ]]; then
-    echo "Warning: Config file not found at ${config}, using image defaults"
-  fi
 
   stop_container
-  echo "==> Starting in PROD mode (port ${port}, config: ${config}) …"
-  docker run -d --name "$CONTAINER" -p "${port}:5000" \
-    --env-file "$config" \
-    -e RACK_SSH_HOST="$ssh_host" \
+  echo "==> Starting in PROD mode (HTTPS, port ${port}, config: ${config_dir}) …"
+  # Loopback unless told otherwise, like docker-compose.yml: every access path is an ssh tunnel.
+  # rack-data holds the identity store, certificate and history — without it a recreate loses all
+  # three.
+  docker run -d --name "$CONTAINER" -p "${RACK_WEB_BIND_ADDR:-127.0.0.1}:${port}:5000" \
+    -v "${config_dir}:/app/config:ro" \
     -v "${ssh_key}:/run/secrets/ssh_key:ro" \
+    -v rack-data:/app/var \
     --restart unless-stopped \
     "$IMAGE"
   wait_ready "$port"

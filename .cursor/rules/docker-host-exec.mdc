@@ -1,6 +1,6 @@
 ---
 description: Docker deployment, remote path config, and host command execution patterns
-globs: host_exec.py,platforms/**/*.py,Dockerfile,docker-compose.yml,build-docker.sh,rack-config.env
+globs: host_exec.py,platforms/**/*.py,Dockerfile,docker-compose.yml,build-docker.sh,gunicorn.conf.py,config/**
 alwaysApply: false
 ---
 
@@ -82,19 +82,25 @@ When adding new cluster commands: add method to `PlatformProvider` (base.py), im
 
 ## Docker Config
 
-- `rack-config.env` — centralized config file, loaded via `--env-file` or `docker compose env_file`
-- `build-docker.sh` — dev (demo), prod (env-file), build, stop, logs
-- Multi-stage Dockerfile: Node 22 SPA build + Ubuntu 22.04 runtime
-- SPA base path is `/spa/` (set in `vite.config.ts`)
-- `api_login` must be in the auth bypass list in `_require_dashboard_auth()`
+- `config/` on the host is mounted read-only at `/app/config`: `rackstatus.toml` (every setting;
+  create the minimal one with `python3 backend/cli.py init-config`) and optional `tls/`. Only
+  `config/rackstatus.toml.example` is tracked. There is no env file; `.env` holds only what Compose
+  interpolates (bind address, host port, SSH key path).
+- `build-docker.sh` — dev (demo), prod (config/ mount + rack-data volume), build, save, load, stop, logs
+- Multi-stage Dockerfile: `node:24-slim` SPA build, `python:3.12-slim` docs build, `ubuntu:22.04` runtime
+- The SPA is built with Vite `base: "/"`; `/spa/` is a Flask route serving the same app
+- **HTTPS only.** `gunicorn.conf.py` sets `certfile`/`keyfile` from `startup_gate.ensure_tls()` when
+  gunicorn loads it: `RACK_WEB_TLS_CERT`/`KEY`, else `config/tls/`, else a self-signed pair
+  generated under `var/secrets/tls/`. Never decide TLS in the ENTRYPOINT — gunicorn fixes its
+  listener before `on_starting`, which is how a first boot once served plain HTTP.
+- The image's `HEALTHCHECK` is `bin/healthcheck.py` (HTTPS on loopback, any answer below 500).
 
 ## Auth in Docker
 
-PAM does not work in containers. Token auth auto-selects whenever the execution target is **not**
-local — `_auth_mode()` returns `token` unless `host_exec.exec_kind() == "local"`, because PAM
-authenticates against *this* machine's accounts and a remote target has no such mapping. It keys off
-the **resolved executor**, so pointing the app at a remote endpoint is what switches it; there is no
-mode flag to set. Override explicitly with `RACK_WEB_AUTH_MODE=pam|token`.
+Nothing to configure, and nothing to switch off. The app authenticates against its own identity
+store over SRP (`backend/identity/`); shared-token and PAM login were removed. The first start
+with an empty store prints a one-time `admin` password to the container log. The public endpoints
+are `web_auth.AUTH_BYPASS_ENDPOINTS`.
 
 ## Path Resolution
 

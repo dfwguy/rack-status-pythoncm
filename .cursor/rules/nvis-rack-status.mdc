@@ -94,7 +94,7 @@ prescriptive detail — and the cost of each wrong choice — in **`core-designs
 - **_script_exists()**: All script `is_file()` checks skip in SSH mode (scripts live on remote host).
 - **Auth**: Token mode for Docker (`RACK_WEB_AUTH_MODE=token`), PAM for local. `api_login` endpoint must be in the auth bypass list.
 - **Demo mode**: `RACK_STATUS_DEMO=1` returns synthetic data. `/api/parser-results` also returns mock chart data.
-- **Docker**: Multi-stage Dockerfile. `rack-config.env` centralizes deployment settings. `build-docker.sh` for dev/prod/build/stop/logs.
+- **Docker**: Multi-stage Dockerfile. `config/rackstatus.toml` (mounted read-only from the host's `config/`) holds deployment settings; HTTPS only. `build-docker.sh` for dev/prod/build/stop/logs.
 - **Command contexts**: `RackCommandContext` and `RackCommandsStoreContext` track async job state across views.
 - **Workflow editor**: Mermaid source text is the single source of truth. React Flow canvas reads from and writes back to mermaid via `mermaidToReactFlow.ts` parser and `handleCodeAction` in `WorkflowDesigner.tsx`. Node types: automated (green rect), manual/event (blue stadium), decision (yellow diamond). The parser infers `stepType` from mermaid shape — this must be preserved during save (`handleSave`) so nodes retain their visual style on reload. Edge deletion must preserve inline node definitions (e.g., `step1 --> done(["Done"])` — removing the edge must re-insert `done(["Done"])` as a standalone line). Connections use React Flow handles: Top=target, Bottom=source, Left=target, Right=source. Edge delete buttons appear on node hover (not on the edge line).
 - **Script resolution**: a Tool's `script` is a **basename**, resolved most-specific-first through
@@ -111,7 +111,7 @@ prescriptive detail — and the cost of each wrong choice — in **`core-designs
 - **CI/CD**: `.gitlab-ci.yml` — lint (**sources-of-truth**, ruff + tsc), test (pytest + vitest),
   build (Docker). `sources-of-truth` runs FIRST and rebuilds the generated documents
   (`docs/action-vocabulary.json`, `backend/tests/action_snapshot.json`,
-  `greenlight.toml.example`), then fails if the tracked copies differ — so adding or renaming
+  `docs/reference/configuration/settings.md`), then fails if the tracked copies differ — so adding or renaming
   an API route surfaces as a reviewed diff instead of drifting. See `core-designs.mdc` §14.
 - **Lint**: the `python-lint` job runs **two** commands, and this line used to name only the
  first — `ruff check backend/ --exclude tests` **and** `pylint --recursive=y backend`. A green
@@ -218,7 +218,7 @@ concern rather than adding a helper beside a route:
 - `backend/rack_locks.py` — Advisory rack lock claims, persistence, TTL, heartbeat-based release
 - `backend/platforms/` — BCM and MAAS platform providers
 - `backend/requirements.txt` — Python dependencies
-- `rack-config.env` — Docker deployment configuration
+- `config/rackstatus.toml` — operator configuration (gitignored; `cli.py init-config` writes the minimal one, `config/rackstatus.toml.example` lists every setting)
 - `frontend/src/components/RackTable.tsx` — Main dashboard table with filters, menus, charts
 - `frontend/src/components/rack/ValidationActivitiesTable.tsx` — Per-rack / multirack validation activity table (polls `/api/validation-activities`)
 - `frontend/src/components/ParserResultsDialog.tsx` — NCCL/NEMO chart dialog + Grafana embeds

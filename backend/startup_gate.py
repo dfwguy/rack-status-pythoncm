@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
-"""The three things Greenlight refuses to serve without: an administrator, a policy, and TLS.
+"""The three things Rack Status refuses to serve without: an administrator, a policy, and TLS.
 
 **Checked when the server starts, not when `app` is imported**, and the distinction is deliberate
 rather than a loophole. `bin/check-tracked-tree.sh` imports all 164 modules to prove the committed
@@ -74,8 +74,9 @@ def _tls_faults() -> list[Fault]:
             "operators reach this dashboard over a forwarded port and authenticate with SRP; the "
             "browser needs a secure context for crypto.subtle, and a session cookie without "
             "Secure is a cookie that travels in clear.",
-            "bin/gen-tls-cert.py --out-dir var/secrets/tls, then set RACK_WEB_TLS_CERT and "
-            "RACK_WEB_TLS_KEY (bin/run-local-auth.sh does both).",
+            "put the certificate and key at config/tls/server.crt and config/tls/server.key, or "
+            "set RACK_WEB_TLS_CERT and RACK_WEB_TLS_KEY, or start without --no-bootstrap so a "
+            "self-signed one is generated.",
         )]
 
     # Both or neither. One alone silently downgrades one server and crashes the other, which is why
@@ -189,7 +190,7 @@ def prepare(*, bootstrap: bool = True, exit_on_fault: bool = True) -> list[Fault
     if not bootstrap:
         return require(exit_on_fault=exit_on_fault)
 
-    _ensure_tls()
+    ensure_tls()
     _ensure_oidc_issuer()
     _ensure_identity()
     return require(exit_on_fault=exit_on_fault)
@@ -263,30 +264,55 @@ def _assert_worker_count() -> None:
         raise SystemExit(EXIT_CONFIG) from exc
 
 
-def _ensure_tls() -> None:
-    """Generate a self-signed certificate when none is configured, and point the process at it."""
-    if (os.environ.get("RACK_WEB_TLS_CERT") or "").strip():
-        return
+def ensure_tls() -> tuple[str, str]:
+    """Settle which certificate this process serves, creating a self-signed one only as a last resort.
 
-    from paths import REPO_ROOT
+    Three rungs, first match wins:
 
-    out_dir = Path(os.environ.get("RACK_WEB_TLS_DIR") or (REPO_ROOT / "var" / "secrets" / "tls"))
-    cert, key = out_dir / "server.crt", out_dir / "server.key"
+    1. `RACK_WEB_TLS_CERT` / `RACK_WEB_TLS_KEY` in the environment — an explicit choice;
+    2. `tls/server.crt` and `tls/server.key` beside the config file — a certificate the operator
+       supplies on the host (`config/tls/`, mounted read-only into the container);
+    3. a self-signed pair under `var/secrets/tls/`, generated on first boot and kept on the data
+       volume so its fingerprint stays stable across restarts.
 
-    if not (cert.is_file() and key.is_file()):
-        # Out of process, so this borrows `bin/gen-tls-cert.py` rather than growing a second
-        # certificate generator beside it — the SAN rules there (localhost, 127.0.0.1, ::1 added
-        # unconditionally) are load-bearing and must not be reimplemented from memory.
-        logging.getLogger("startup").warning(
-            "startup: no TLS certificate configured; generating a self-signed one in %s", out_dir
-        )
-        subprocess.run(
-            [sys.executable, str(REPO_ROOT / "bin" / "gen-tls-cert.py"), "--out-dir", str(out_dir)],
-            check=True, capture_output=True,
-        )
+    Returns the pair and exports it, so every serving path reads one answer. **`gunicorn.conf.py`
+    calls this when it loads**, because gunicorn fixes its listener's certificate from the config
+    before `on_starting` runs: deciding later — which is what the container's entrypoint used to do
+    — let a first boot generate a certificate and then serve plain HTTP beside it.
 
-    os.environ["RACK_WEB_TLS_CERT"] = str(cert)
-    os.environ.setdefault("RACK_WEB_TLS_KEY", str(key))
+    Must not import `paths` or `config_env`: this can run before `rackstatus.toml` is applied, and
+    those modules read the environment at import time.
+    """
+    cert = (os.environ.get("RACK_WEB_TLS_CERT") or "").strip()
+    key = (os.environ.get("RACK_WEB_TLS_KEY") or "").strip()
+    if cert or key:
+        # Half a pair is left as found, so `require()` reports it as half-configured instead of
+        # this quietly pairing the operator's key with some other certificate.
+        return cert, key
+
+    import config_launch
+
+    supplied = config_launch.config_dir() / "tls"
+    cert_path, key_path = supplied / "server.crt", supplied / "server.key"
+    if not (cert_path.is_file() and key_path.is_file()):
+        repo_root = Path(__file__).resolve().parent.parent
+        out_dir = Path(os.environ.get("RACK_WEB_TLS_DIR") or (repo_root / "var" / "secrets" / "tls"))
+        cert_path, key_path = out_dir / "server.crt", out_dir / "server.key"
+        if not (cert_path.is_file() and key_path.is_file()):
+            # Out of process, so this borrows `bin/gen-tls-cert.py` rather than growing a second
+            # certificate generator beside it — the SAN rules there (localhost, 127.0.0.1, ::1
+            # added unconditionally) are load-bearing and must not be reimplemented from memory.
+            logging.getLogger("startup").warning(
+                "startup: no TLS certificate supplied; generating a self-signed one in %s", out_dir
+            )
+            subprocess.run(
+                [sys.executable, str(repo_root / "bin" / "gen-tls-cert.py"), "--out-dir", str(out_dir)],
+                check=True, capture_output=True,
+            )
+
+    os.environ["RACK_WEB_TLS_CERT"] = str(cert_path)
+    os.environ["RACK_WEB_TLS_KEY"] = str(key_path)
+    return str(cert_path), str(key_path)
 
 
 def _ensure_identity() -> None:
@@ -315,7 +341,7 @@ def require(*, exit_on_fault: bool = True) -> list[Fault]:
 
     lines = [
         "",
-        "  greenlight: refusing to start.",
+        "  rackstatus: refusing to start.",
         "",
         f"  {len(faults)} prerequisite(s) are missing. Every one is listed so this takes one",
         "  attempt rather than one restart each:",

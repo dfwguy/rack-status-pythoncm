@@ -8,7 +8,8 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
-"""The Greenlight launcher — `serve` to run, `check` to find out what a run would do.
+"""The Rack Status launcher — `serve` to run, `check` to find out what a run would do,
+`init-config` to write the minimal `config/rackstatus.toml` a deployment starts from.
 
 **Why this exists.** Runtime decisions were spread across `start.sh` and `bin/run-local-auth.sh`:
 which paths to read, whether to serve TLS, which mode to run in, and — until this file — whether an
@@ -44,7 +45,7 @@ from pathlib import Path
 #: Flag → environment variable. The single table, so a flag cannot drift from the setting it feeds
 #: and `check` can print provenance without a second list to maintain.
 PATH_SETTINGS: dict[str, str] = {
-    "config": "NVIS_GREENLIGHT_CONFIG",
+    "config": "NVIS_RACKSTATUS_CONFIG",
     "identity_file": "NVIS_IDENTITY_FILE",
     "policy_file": "RACK_WEB_POLICY_FILE",
     "catalog_file": "NVIS_CATALOG_FILE",
@@ -63,8 +64,8 @@ EXIT_CONFIG = 78
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="greenlight",
-        description="Run NVIS Greenlight, or report what running it would do.",
+        prog="rackstatus",
+        description="Run NVIS Rack Status, or report what running it would do.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -106,6 +107,35 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    init = sub.add_parser(
+        "init-config",
+        help="Write the minimal config/rackstatus.toml a deployment starts from.",
+        description=(
+            "Write the smallest configuration a deployment can start with. Every other setting "
+            "has a working default; add them later from config/rackstatus.toml.example."
+        ),
+    )
+    init.add_argument(
+        "--config", metavar="PATH", help="Where to write it. Sets NVIS_RACKSTATUS_CONFIG."
+    )
+    init.add_argument(
+        "--ssh-host",
+        metavar="HOST",
+        help=(
+            "The head node. Omitted, the line is written commented out and startup refuses until "
+            "it is set (demo mode excepted)."
+        ),
+    )
+    init.add_argument(
+        "--from-env-file",
+        metavar="PATH",
+        help=(
+            "Carry a site's settings over from an old env file (rack-config.env). Keys that cannot "
+            "live in the config file, and secrets, are listed and left out."
+        ),
+    )
+    init.add_argument("--force", action="store_true", help="Replace an existing file.")
+
     reconcile = sub.choices["reconcile-admin-policy"]
     reconcile.add_argument(
         "--dry-run",
@@ -136,23 +166,17 @@ def _add_path_options(cmd: argparse.ArgumentParser) -> None:
         "Where to read configuration and state. A flag wins over the matching environment "
         "variable; both win over the built-in default.",
     )
-    for flag, env in (
-        ("--config", "NVIS_GREENLIGHT_CONFIG"),
-        ("--identity-file", "NVIS_IDENTITY_FILE"),
-        ("--policy-file", "RACK_WEB_POLICY_FILE"),
-        ("--catalog-file", "NVIS_CATALOG_FILE"),
-        ("--signing-key-dir", "RACK_WEB_SIGNING_KEY_DIR"),
-        ("--tls-cert", "RACK_WEB_TLS_CERT"),
-        ("--tls-key", "RACK_WEB_TLS_KEY"),
-    ):
-        group.add_argument(flag, metavar="PATH", help=f"Sets {env}.")
+    for attr, env in PATH_SETTINGS.items():
+        group.add_argument(
+            "--" + attr.replace("_", "-"), dest=attr, metavar="PATH", help=f"Sets {env}."
+        )
 
 
 #: Defaults `start.sh` used to export, moved here so the app owns its own runtime decisions.
 #:
 #: They were invisible to the app that depends on them, untestable by the suite that verifies it,
 #: and re-derived by every other launcher. `setdefault` semantics throughout: a real environment
-#: variable, a `greenlight.toml` entry or a flag still wins, exactly as before.
+#: variable, a `rackstatus.toml` entry or a flag still wins, exactly as before.
 CLUSTER_DEFAULTS: dict[str, str] = {
     "VALIDATION_TEST": "nccl_allreduce,llm",
     "NEMO_SQSH_SRC": "/home/cmsupport/nemo-25.11.01.sqsh",
@@ -206,7 +230,7 @@ def _apply(args: argparse.Namespace) -> dict[str, str]:
         os.environ["RACK_WEB_PORT"] = str(args.port)
         applied["RACK_WEB_PORT"] = str(args.port)
     # Only set when asked. Writing "false" for an absent flag would make the CLI override a
-    # `greenlight.toml` that turned it on -- the flags write the environment and let the
+    # `rackstatus.toml` that turned it on -- the flags write the environment and let the
     # `config_registry` ladder decide precedence, rather than resolving anything themselves.
     if getattr(args, "setup_wizard", False):
         os.environ["NVIS_FORCE_SETUP_WIZARD"] = "1"
@@ -314,7 +338,7 @@ def _report(plan: dict, applied: dict[str, str], as_json: bool) -> int:
     def line(label: str, value: object) -> None:
         print(f"  {label:22} {value}")
 
-    print("greenlight check — no administrator, policy or credential has been created")
+    print("rackstatus check — no administrator, policy or credential has been created")
     print()
     line(
         "config file",
@@ -384,9 +408,8 @@ def _serve(args: argparse.Namespace) -> int:
         "--access-logfile", "-", "--pythonpath", "backend",
         "--bind", bind,
     ]
-    cert, key = os.environ.get("RACK_WEB_TLS_CERT"), os.environ.get("RACK_WEB_TLS_KEY")
-    if cert and key:
-        argv += ["--certfile", cert, "--keyfile", key]
+    # No --certfile/--keyfile: gunicorn.conf.py sets them from `startup_gate.ensure_tls()`, which
+    # `prepare()` above has already settled. Passing them here too would be a second source.
     argv.append("app:app")
 
     os.execv(sys.executable, argv)
@@ -452,6 +475,147 @@ def _reconcile_admin_policy(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+#: Keys an old env file (`rack-config.env`) may carry that must not move into `rackstatus.toml`,
+#: each with the reason `init-config --from-env-file` prints.
+NOT_FOR_THE_CONFIG_FILE: dict[str, str] = {
+    "PORT": "the container's internal port, set by the image",
+    "RACK_EXEC_MODE": "deprecated: ssh is the default and the connection topology decides",
+    "RACK_WEB_BIND_ADDR": "Compose interpolates it before the app starts; keep it in .env",
+    "RACK_WEB_PORT": "Compose interpolates it before the app starts; keep it in .env",
+    "RACK_SSH_KEY_PATH": "Compose interpolates it before the app starts; keep it in .env",
+    "RACK_WEB_TLS_CERT": "settled before the file is read; put the certificate in config/tls/",
+    "RACK_WEB_TLS_KEY": "settled before the file is read; put the key in config/tls/",
+    "NVIS_RACKSTATUS_CONFIG": "a file cannot name the path to itself",
+}
+
+#: Table for keys the registry does not declare. Tables group, they do not namespace, so the name
+#: only has to be readable; the loader applies an undeclared key and logs that it did.
+UNDECLARED_SECTION = "site"
+
+
+def parse_env_file(text: str) -> dict[str, str]:
+    """`KEY=VALUE` lines, as `docker --env-file` reads them: comments and blanks skipped, an optional
+    `export ` prefix and one layer of matching quotes removed. Later lines win."""
+    values: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.removeprefix("export ").partition("=")
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key:
+            values[key] = value
+    return values
+
+
+def sort_env_values(values: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """Split an env file's values into what `rackstatus.toml` should carry and why the rest won't.
+
+    Secrets are refused, not copied: the loader refuses to start with one in the file, because the
+    file is what ends up in bug reports.
+    """
+    import config_registry
+
+    kept: dict[str, str] = {}
+    notes: list[str] = []
+    for key, value in values.items():
+        if key in NOT_FOR_THE_CONFIG_FILE:
+            notes.append(f"{key}: not carried — {NOT_FOR_THE_CONFIG_FILE[key]}")
+        elif config_registry.is_secret(key):
+            notes.append(f"{key}: not carried — a secret; set it in the environment instead")
+        else:
+            kept[key] = value
+    return kept, notes
+
+
+def _toml_value(key: str, value: str) -> str:
+    """Render one env string in the type its declaration names, so the file reads like the example.
+    Undeclared, or not cleanly that type, stays a string — exactly what the environment held."""
+    import config_registry
+
+    setting = config_registry.get(key)
+    kind = setting.toml_type if setting else config_registry.TOML_STR
+    if kind == config_registry.TOML_INT and value.isdigit():
+        return value
+    if kind == config_registry.TOML_BOOL and value.lower() in ("1", "0", "true", "false"):
+        return "true" if value.lower() in ("1", "true") else "false"
+    return json.dumps(value)
+
+
+def minimal_config(ssh_host: str | None = None, carried: dict[str, str] | None = None) -> str:
+    """The text `init-config` writes: the required settings, plus anything carried from an old file.
+
+    Built from the registry declarations, so the description an operator reads here is the one the
+    settings reference shows. `test_cli.py` proves the result satisfies the required-setting
+    preflight, which is what keeps this in step when a new setting becomes required.
+    """
+    import config_registry
+
+    carried = dict(carried or {})
+    host_setting = config_registry.RACK_SSH_HOST
+    host = ssh_host or carried.pop(host_setting.name, "") or None
+    carried.pop(host_setting.name, None)
+
+    line = f"{host_setting.name} = {json.dumps(host if host else host_setting.example)}"
+    if not host:
+        line = f"# {line}    <- set this: startup refuses without it (demo mode excepted)"
+    sections: dict[str, list[str]] = {host_setting.section: [f"# {host_setting.description}", line]}
+    for key in sorted(carried):
+        setting = config_registry.get(key)
+        section = setting.section if setting else UNDECLARED_SECTION
+        sections.setdefault(section, []).append(f"{key} = {_toml_value(key, carried[key])}")
+
+    out = [
+        "# NVIS Rack Status configuration: the minimum a deployment needs.",
+        "#",
+        "# Written by `python backend/cli.py init-config`. Everything not listed here has a working",
+        "# default. To change one, copy its line from rackstatus.toml.example (beside this file,",
+        "# every setting with its description) and uncomment it. The environment overrides this file.",
+        "# No secrets here: this is the file that ends up in bug reports.",
+        "#",
+        "# TLS: put your certificate at tls/server.crt and tls/server.key beside this file. Without",
+        "# one, a self-signed certificate is generated on first start and kept on the data volume.",
+    ]
+    for section, lines in sections.items():
+        out += ["", f"[{section}]", *lines]
+    return "\n".join(out) + "\n"
+
+
+def _init_config(args: argparse.Namespace) -> int:
+    """Write `minimal_config()` to the config path, refusing to replace a file unless told to."""
+    import config_launch
+
+    if args.ssh_host is not None and (not args.ssh_host.strip() or "\n" in args.ssh_host):
+        print("init-config: --ssh-host must be a single non-empty host", file=sys.stderr)
+        return EXIT_CONFIG
+
+    carried: dict[str, str] = {}
+    if args.from_env_file:
+        source = Path(args.from_env_file).expanduser()
+        if not source.is_file():
+            print(f"init-config: {source} does not exist", file=sys.stderr)
+            return EXIT_CONFIG
+        carried, notes = sort_env_values(parse_env_file(source.read_text(encoding="utf-8")))
+        for note in notes:
+            print(f"init-config: {note}")
+
+    target = config_launch.resolve_path()
+    if target.exists() and not args.force:
+        print(
+            f"init-config: {target} already exists; it was left unchanged. "
+            "Use --force to replace it.",
+            file=sys.stderr,
+        )
+        return EXIT_FAULT
+    target.parent.mkdir(parents=True, exist_ok=True)
+    text = minimal_config((args.ssh_host or "").strip() or None, carried)
+    target.write_text(text, encoding="utf-8")
+    print(f"init-config: wrote {target}")
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     applied = _apply(args)
@@ -460,6 +624,8 @@ def main(argv: list[str] | None = None) -> int:
         return _report(_plan(), applied, args.as_json)
     if args.command == "reconcile-admin-policy":
         return _reconcile_admin_policy(args)
+    if args.command == "init-config":
+        return _init_config(args)
     return _serve(args)
 
 

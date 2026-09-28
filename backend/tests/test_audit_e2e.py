@@ -46,6 +46,7 @@ import http.client
 import json
 import os
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -133,18 +134,21 @@ def _free_port() -> int:
 class _LiveServer:
     """A gunicorn child under default audit configuration, plus the audit file it writes."""
 
-    def __init__(self, port: int, audit_file: Path, proc: subprocess.Popen):
+    def __init__(self, port: int, audit_file: Path, proc: subprocess.Popen, tls_cert: Path):
         self.port = port
         self.audit_file = audit_file
         self.proc = proc
         self.session_cookie: str | None = None
+        # The server is HTTPS-only; verify against the certificate it generated, as a browser
+        # through the tunnel would (its SAN carries 127.0.0.1).
+        self.tls = ssl.create_default_context(cafile=str(tls_cert))
 
     # -- transport ------------------------------------------------------------------------------
     def _request(
         self, method: str, path: str, body: dict | None = None, *, with_session: bool = False,
         extra_headers: dict[str, str] | None = None,
     ) -> tuple[int, list[tuple[str, str]], bytes]:
-        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=20)
+        conn = http.client.HTTPSConnection("127.0.0.1", self.port, timeout=20, context=self.tls)
         headers = {"Content-Type": "application/json"}
         if with_session and self.session_cookie:
             headers["Cookie"] = self.session_cookie
@@ -279,6 +283,10 @@ def live_server(tmp_path):
             "NVIS_AUDIT_FILE": str(audit_file),
             "RACK_UPTIME_DRY_RUN": "1",
             "NVIS_CATALOG_FILE": str(tmp_path / "catalog.json"),
+            # Where the server generates its self-signed pair, and a config dir with no tls/ in
+            # it -- so the developer's own config/ cannot change which certificate is served.
+            "RACK_WEB_TLS_DIR": str(tmp_path / "tls"),
+            "NVIS_RACKSTATUS_CONFIG": str(tmp_path / "config" / "rackstatus.toml"),
             "PYTHONUNBUFFERED": "1",
         }
     )
@@ -319,7 +327,7 @@ def live_server(tmp_path):
             time.sleep(0.2)
         if not ready:
             pytest.fail(f"server never listened on {port} within {STARTUP_TIMEOUT_SEC}s")
-        yield _LiveServer(port, audit_file, proc)
+        yield _LiveServer(port, audit_file, proc, tmp_path / "tls" / "server.crt")
     finally:
         proc.terminate()
         try:

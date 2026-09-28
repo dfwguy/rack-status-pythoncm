@@ -1,12 +1,12 @@
 ---
 diataxis: how-to
-description: Set up greenlight.toml, know which rung a value comes from, and see what a first boot creates for you.
+description: Set up config/rackstatus.toml, know which rung a value comes from, and see what a first boot creates for you.
 ---
 
 # How to configure a deployment
 
-Greenlight needs very little to start and refuses to start without three things it can create
-itself. This is the order to do it in.
+Rack Status needs very little to start and refuses to start without three things it can create
+itself: an administrator, a policy and a TLS certificate. This is the order to do it in.
 
 The complete list of settings is [Configuration settings](../reference/configuration/settings.md),
 generated from the source. Per-setting prose for the older half of them is in
@@ -27,15 +27,21 @@ cluster. That is a documented exception rather than an oversight — `test_cli.p
 
 ## 2. Write the settings that cannot be guessed
 
-Copy the generated example and edit it:
+Write the minimal file — only the head node, because everything else has a working default:
 
 ```bash
-cp greenlight.toml.example greenlight.toml
+python3 backend/cli.py init-config --ssh-host <head-node>
+# upgrading a deployment that used rack-config.env:
+python3 backend/cli.py init-config --from-env-file rack-config.env
 ```
 
-`greenlight.toml.example` is generated from the settings registry, so it lists exactly the
-settings a file may carry, in sections, with an example value each. Point somewhere else with
-`NVIS_GREENLIGHT_CONFIG`.
+That writes `config/rackstatus.toml`. To set anything else, copy its line from
+`config/rackstatus.toml.example`, which is generated from the settings registry and lists exactly
+the settings a file may carry, in sections, with an example value each. Point somewhere else with
+`NVIS_RACKSTATUS_CONFIG`.
+
+A certificate of your own goes in `config/tls/server.crt` and `config/tls/server.key`; without
+one, the first start generates a self-signed pair. There is no plain-HTTP mode.
 
 For a real cluster the connection settings are the ones with no sensible default:
 
@@ -72,10 +78,10 @@ A setting can arrive from four places. Highest wins:
 |---|---|---|
 | 1 | the active cluster's **high overlay** — from the catalog | per cluster |
 | 2 | **job env overrides** — `var/cache/job_env_overrides.json`, written by the Settings screen | per deployment |
-| 3 | the **process environment** — `greenlight.toml`, the shell, the container | per process |
+| 3 | the **process environment** — `config/rackstatus.toml`, the shell, the container | per process |
 | 4 | the platform's **low overlay** — geometry and per-tool defaults | per platform |
 
-This is why a setting can be correct in `greenlight.toml` and still not take effect: a cluster
+This is why a setting can be correct in `config/rackstatus.toml` and still not take effect: a cluster
 record naming its own `RACK_SSH_HOST` outranks the file. The Settings screen shows the resolved
 value, and [Configuration settings](../reference/configuration/settings.md) marks which settings
 go through the ladder at all — a handful are read straight from the process environment and

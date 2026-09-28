@@ -144,7 +144,7 @@ Cluster identity is catalog-driven. Nscale TX is one deployment of this product,
 
 ## Operator surfaces
 
-The SPA uses hash routes, so deep links are refresh-safe. Examples below omit the origin, such as `http://localhost:5056`.
+The SPA uses hash routes, so deep links are refresh-safe. Examples below omit the origin, such as `https://localhost:5056`.
 
 | Navigation | Hash route | Purpose |
 |---|---|---|
@@ -371,7 +371,7 @@ RACK_STATUS_DEMO=1 ./start.sh
 BUILD_FRONTEND=0 ./start.sh
 ```
 
-The default development URL is `http://localhost:5050/`. Unknown paths and `/` resolve to the SPA.
+The default development URL is `https://localhost:5050/` — the app serves HTTPS only, with a self-signed certificate generated on the first run unless `config/tls/` holds yours. Unknown paths and `/` resolve to the SPA.
 
 ### Local test environment
 
@@ -419,9 +419,10 @@ Do not deploy individual scripts with ad hoc `scp`. The repository `bin/scripts/
 
 ### Base Docker deployment
 
-The portable Compose file builds the image, loads `rack-config.env`, mounts the SSH key, and stores `/app/var` in the named `rack-data` volume:
+The portable Compose file builds the image, mounts `config/` read-only (settings in `config/rackstatus.toml`, an optional certificate in `config/tls/`), mounts the SSH key, and stores `/app/var` in the `rack-data` volume:
 
 ```bash
+python3 backend/cli.py init-config --ssh-host <head-node>   # first time only
 docker compose up -d --build
 ```
 
@@ -511,18 +512,21 @@ Release pipelines also build a Kaniko image tarball, publish it to the GitLab Pa
 
 ## Configuration
 
-Greenlight reads two things at launch: a **configuration file**, and the **environment**.
+Rack Status reads two things at launch: **`config/rackstatus.toml`**, and the **environment**.
 
-### `greenlight.toml`
+### `config/rackstatus.toml`
 
-Copy `greenlight.toml.example` to `greenlight.toml` in the repo root and edit it. Point the app
-somewhere else with `NVIS_GREENLIGHT_CONFIG=/path/to/file`.
+Create the minimal file with `python3 backend/cli.py init-config --ssh-host <head-node>` — it holds
+only the head node, because every other setting has a working default. Copy further lines from
+`config/rackstatus.toml.example` (generated from `backend/config_registry.py`: every setting the
+file can carry, commented out) as you need them. Point the app elsewhere with
+`NVIS_RACKSTATUS_CONFIG=/path/to/file`; an existing `rack-config.env` converts with
+`init-config --from-env-file rack-config.env`. The complete list of settings the code reads, with
+defaults, is the generated [settings reference](docs/reference/configuration/settings.md).
 
 **The file is the baseline; the launch wins.** A real environment variable or a `docker run -e`
-flag overrides any value in the file, so a per-site file can be checked against a deployment while
-an operator still overrides one setting for a single run. An absent file is completely normal —
-the real file is gitignored, so a fresh clone has none and behaves exactly as it did before this
-existed.
+flag overrides any value in the file. An absent file is completely normal — the real file is
+gitignored, so a fresh clone has none.
 
 Two things about the shape. **Tables group, they do not namespace**: a leaf key is the exact
 environment variable name, so `[auth] RACK_WEB_OIDC_ISSUER = "…"` sets `RACK_WEB_OIDC_ISSUER` and
@@ -530,23 +534,26 @@ not `AUTH_RACK_WEB_OIDC_ISSUER`. And **secrets are refused** — a setting the a
 secret makes startup fail if it appears in the file, because this file gets copied into bug
 reports and support bundles. Put secrets in the environment or a mounted secret.
 
-Six settings deliberately cannot live here: `RACK_WEB_BIND_ADDR`, `RACK_WEB_PORT`, `RACK_SSH_HOST`,
-`RACK_WEB_TLS_CERT`, `RACK_WEB_TLS_KEY` and `RACK_SSH_KEY_PATH` are interpolated by
-`docker-compose.yml` to publish ports and build bind mounts, which Docker resolves before Python
-starts. Those stay in `rack-config.env`. (`RACK_SSH_HOST` does work in the file for a non-Compose
-launch; Compose needs its own copy.)
+A few settings cannot live here. `RACK_WEB_BIND_ADDR`, `RACK_WEB_PORT` and `RACK_SSH_KEY_PATH` are
+interpolated by `docker-compose.yml` before Python starts, so they go in `.env`. The TLS
+certificate is settled before the file is read: put it in `config/tls/server.crt` and
+`server.key` (or set `RACK_WEB_TLS_CERT` / `RACK_WEB_TLS_KEY` in the environment).
+
+**After the first start, the connection belongs to the catalog.** The first boot seeds a project
+and cluster from this file; from then on the cluster's host, user, key, base path and scheduler
+come from **Projects & Clusters** and outrank both the file and the environment. Change the target
+there.
 
 ### Required settings, and why startup can refuse
 
 Most settings have a sensible default and are optional. A few cannot be guessed, and for those
-**Greenlight refuses to start rather than boot into a state where it cannot work** — reporting
+**Rack Status refuses to start rather than boot into a state where it cannot work** — reporting
 *every* missing setting at once, with an example value, so one restart fixes all of them.
 
 | Setting | Required when |
 |---|---|
-| `RACK_WEB_OIDC_ISSUER` | the OIDC provider is enabled |
-| `RACK_SSH_HOST` | the cluster is reached over SSH — i.e. not demo mode and not `RACK_EXEC_MODE=local` |
-| `RACK_WEB_TLS_KEY` | `RACK_WEB_TLS_CERT` is set (a cert with no key downgrades one path silently and crashes the other) |
+| `RACK_SSH_HOST` | the cluster is reached over SSH — i.e. not demo mode |
+| `RACK_WEB_TLS_KEY` | `RACK_WEB_TLS_CERT` is set in the environment (a cert with no key cannot serve) |
 
 A setting that *has* a working default is deliberately **not** on this list, even where it is
 "required in practice" — `RACK_REMOTE_BASE_PATH` falls back to the repo root, and
@@ -665,10 +672,13 @@ For a multi-rack audit, launch the same workflow from **Workflows** with a comma
 
 ### Launch a deep audit through the API
 
-The example below is intentionally explicit. Substitute real inventory names and use an authenticated session:
+The examples below are intentionally explicit. Substitute real inventory names. Every request needs HTTPS and a credential — get an access token as described in [Authenticate to the API](docs/how-to/authenticate-to-the-api.md), then:
 
 ```bash
-curl -fsS -X POST http://localhost:5050/api/workflows/hardware-deep-audit/run \
+BASE=https://localhost:5050
+AUTH=(-H "Authorization: Bearer $TOKEN" --cacert var/secrets/tls/server.crt)   # or -k to skip verification
+
+curl -fsS "${AUTH[@]}" -X POST $BASE/api/workflows/hardware-deep-audit/run \
   -H 'Content-Type: application/json' \
   -d '{
     "params": {
@@ -681,12 +691,14 @@ curl -fsS -X POST http://localhost:5050/api/workflows/hardware-deep-audit/run \
 Poll the returned `run_id`:
 
 ```bash
-curl -fsS http://localhost:5050/api/workflow-runs/<run-id>
-curl -fsS http://localhost:5050/api/workflow-runs/<run-id>/output/audit
-curl -fsS http://localhost:5050/api/deep-audits/<run-id>
+curl -fsS "${AUTH[@]}" $BASE/api/workflow-runs/<run-id>
+curl -fsS "${AUTH[@]}" $BASE/api/workflow-runs/<run-id>/output/audit
+curl -fsS "${AUTH[@]}" $BASE/api/deep-audits/<run-id>
 ```
 
 ### Prepare and launch a validation preset
+
+Uses `BASE` and `AUTH` as set in [Launch a deep audit through the API](#launch-a-deep-audit-through-the-api).
 
 Prepare is read-only with respect to workload submission, but it queries live inventory and Slurm eligibility:
 
@@ -700,7 +712,7 @@ request='{
   "local_container_dir": "/tmp/containers"
 }'
 
-plan=$(curl -fsS -X POST http://localhost:5050/api/validation-presets/prepare \
+plan=$(curl -fsS "${AUTH[@]}" -X POST $BASE/api/validation-presets/prepare \
   -H 'Content-Type: application/json' -d "$request")
 printf '%s\n' "$plan" | jq '.plan | {summary,nodes,checks,artifact,command_display,plan_hash}'
 ```
@@ -710,7 +722,7 @@ After operator review, launch with the returned hash. The server recomputes the 
 ```bash
 hash=$(printf '%s\n' "$plan" | jq -r '.plan.plan_hash')
 printf '%s\n' "$request" | jq --arg hash "$hash" '. + {plan_hash:$hash}' \
-  | curl -fsS -X POST http://localhost:5050/api/run-validation-preset-async \
+  | curl -fsS "${AUTH[@]}" -X POST $BASE/api/run-validation-preset-async \
       -H 'Content-Type: application/json' --data-binary @-
 ```
 
@@ -718,11 +730,13 @@ Track the returned application `job_id` with `/api/run-validation-preset-status?
 
 ### Refresh and investigate post-run history
 
+Uses `BASE` and `AUTH` as set in [Launch a deep audit through the API](#launch-a-deep-audit-through-the-api).
+
 ```bash
-curl -fsS 'http://localhost:5050/api/post-run-node-report?refresh=1' \
+curl -fsS "${AUTH[@]}" "$BASE/api/post-run-node-report?refresh=1" \
   | jq '{summary,errors,updated_at}'
 
-curl -fsS 'http://localhost:5050/api/post-run-node-report?node=node-a-01' \
+curl -fsS "${AUTH[@]}" "$BASE/api/post-run-node-report?node=node-a-01" \
   | jq '.nodes[0]'
 ```
 
@@ -730,10 +744,12 @@ A forced refresh joins new activity/accounting evidence into durable history. Ac
 
 ### Mark and optionally drain a node
 
+Uses `BASE` and `AUTH` as set in [Launch a deep audit through the API](#launch-a-deep-audit-through-the-api).
+
 Use the GUI for normal operations because it presents a confirmation. The corresponding API requires an exact current-inventory node:
 
 ```bash
-curl -fsS -X POST http://localhost:5050/api/post-run-node-report/mark \
+curl -fsS "${AUTH[@]}" -X POST $BASE/api/post-run-node-report/mark \
   -H 'Content-Type: application/json' \
   -d '{
     "node": "node-a-01",
@@ -848,24 +864,38 @@ The groups below highlight the release-candidate interfaces; consult the live AP
 | `var/reports/` | Generated report payloads and metadata. | Operator deliverables. |
 | `var/workflows/*.yaml` | Workflow templates. | Repeatable procedure definitions. |
 | `var/workflows/runs/` | Run state and full step logs. | Execution evidence, deep-audit results, invalidation record. |
+| `var/identity/identity.json` | Users, groups and SRP verifiers. | **Without it nobody can sign in**; there is no reset path. |
+| `var/store/policies.json` | Authorization policies. | Who may do what; without it the gate is default-deny. |
+| `var/store/catalog.json` | Projects, clusters, platforms, tools, campaigns. | The cluster connection and naming — outranks `config/rackstatus.toml`. |
+| `var/history/validation_activities.sqlite3` | Archived validation activities. | Activity history past the live window. |
+| `var/cache/job_env_overrides.json` | Values saved on the Settings screen. | Operator overrides above the config file. |
+| `var/secrets/` | Session secret, token-signing and OIDC keys, the generated TLS pair, UI-stored SSH keys, the token vault. | **Secrets.** A backup containing this directory is itself a secret. |
 | configured validation log directory | NCCL, NeMo, Llama, MNUberGEMM, system-info, and other raw outputs. | Primary workload evidence; may be remote/NFS rather than in `/app/var`. |
 
 ### Backup
 
-Stop or quiesce mutations before a filesystem-level copy. For the portable named volume:
+Stop or quiesce mutations before a filesystem-level copy. Compose names the volume
+`<project>_rack-data`, so find it by label rather than assuming the name — `-v rack-data:` on a
+Compose deployment mounts a **new, empty** volume and produces an empty backup:
 
 ```bash
+volume=$(docker volume ls -q --filter label=com.docker.compose.volume=rack-data)
+[ "$(echo "$volume" | wc -l)" -eq 1 ] || { echo "expected one rack-data volume, got: $volume"; exit 1; }
 backup_dir=$(mktemp -d)
 docker run --rm \
-  -v rack-data:/source:ro \
+  -v "$volume":/source:ro \
   -v "$backup_dir":/backup \
   alpine sh -c 'cd /source && tar czf /backup/rack-data.tar.gz .'
 sha256sum "$backup_dir/rack-data.tar.gz"
+chmod 600 "$backup_dir/rack-data.tar.gz"
 ```
+
+The archive contains `var/secrets/` — private keys and the token vault — so store it like one.
+(A `docker run` deployment named the volume itself; use that name.)
 
 Also back up:
 
-- the Git commit/tag and deployment configuration without printing secrets;
+- the Git commit/tag, `config/rackstatus.toml` and `config/tls/` (the key is a secret);
 - the external validation log directory;
 - external reports/artifacts if they are outside `var/`;
 - campaign manifests and secret mounts through the site's secret-management process.
@@ -875,7 +905,7 @@ Also back up:
 1. Restore code from a reviewed commit or release image.
 2. Restore `var/` into the persistent volume with the application stopped.
 3. Restore external logs/reports at their configured paths.
-4. Apply the correct environment and secret mounts.
+4. Restore `config/` and apply the correct environment and secret mounts.
 5. Recreate the container.
 6. Run `bin/verify-deploy.sh`.
 7. Perform read-only checks of `/api/status`, `/api/validation-activities`, `/api/post-run-node-report`, `/api/reports/generated`, and `/api/metrics/health`.
@@ -1153,7 +1183,7 @@ nvis-rack-status/
 ├── Dockerfile                     multi-stage frontend/runtime image
 ├── start.sh                       supported local launcher
 ├── build-docker.sh                image/run/air-gap helper
-├── rack-config.env                deployment configuration template/current site file
+├── config/                        operator configuration (rackstatus.toml, tls/); only the example is tracked
 ├── version.py                     release version
 └── .gitlab-ci.yml                 lint, test, image, and release pipeline
 ```

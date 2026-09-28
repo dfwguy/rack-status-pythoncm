@@ -262,13 +262,14 @@ class TestServeBuildsTheGunicornCommand:
         assert argv[4] == "gunicorn.conf.py"
         assert argv[-1] == "app:app"
 
-    def test_tls_flags_are_passed_when_both_are_configured(self, execv, monkeypatch):
+    def test_the_certificate_is_left_to_gunicorn_conf(self, execv, monkeypatch):
+        """gunicorn.conf.py sets certfile/keyfile from `startup_gate.ensure_tls()`. A CLI flag too
+        would be a second source for the same decision."""
         monkeypatch.setenv("RACK_WEB_TLS_CERT", "/tmp/cert.pem")
         monkeypatch.setenv("RACK_WEB_TLS_KEY", "/tmp/key.pem")
         cli._serve(_args(command="serve"))
         argv = execv["argv"]
-        assert argv[argv.index("--certfile") + 1] == "/tmp/cert.pem"
-        assert argv[argv.index("--keyfile") + 1] == "/tmp/key.pem"
+        assert "--certfile" not in argv and "--keyfile" not in argv
 
     def test_half_configured_tls_is_not_passed(self, execv, monkeypatch):
         """A cert with no key would make gunicorn fail to bind at all. Passing neither leaves the
@@ -328,7 +329,7 @@ class TestMainDispatch:
         assert cli.main(["serve"]) == cli.EXIT_OK
 
     def test_a_missing_subcommand_is_refused(self):
-        """`required=True` on the subparser. Without it, a bare `greenlight` would fall through to
+        """`required=True` on the subparser. Without it, a bare `rackstatus` would fall through to
         an argv with no `command` attribute."""
         with pytest.raises(SystemExit):
             cli.main([])

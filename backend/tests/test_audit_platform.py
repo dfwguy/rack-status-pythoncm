@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -70,21 +71,25 @@ def _free_port() -> int:
 class _Server:
     """A gunicorn child, its captured stdout, and the audit file it was told to write."""
 
-    def __init__(self, port: int, lines: list[str], audit_file: Path, proc):
+    def __init__(self, port: int, lines: list[str], audit_file: Path, proc, tls_cert: Path):
         self.port = port
         self.lines = lines
         self.audit_file = audit_file
         self.proc = proc
+        # HTTPS-only server; verify against the certificate it generates (SAN has 127.0.0.1).
+        # Read on first use: this object exists before gunicorn has loaded its config.
+        self.tls_cert = tls_cert
 
     def post(self, path: str, body: dict) -> int:
         req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}{path}",
+            f"https://127.0.0.1:{self.port}{path}",
             data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            tls = ssl.create_default_context(cafile=str(self.tls_cert))
+            with urllib.request.urlopen(req, timeout=20, context=tls) as resp:
                 return int(resp.status)
         except urllib.error.HTTPError as exc:
             # A 4xx/5xx is still an answer, and the audit event is emitted either way.
@@ -176,10 +181,13 @@ def gunicorn_server(tmp_path):
             "NVIS_IDENTITY_FILE": str(tmp_path / "identity" / "identity.json"),
             "RACK_WEB_POLICY_FILE": str(tmp_path / "store" / "policies.json"),
             "RACK_WEB_TLS_DIR": str(tmp_path / "tls"),
+            "NVIS_RACKSTATUS_CONFIG": str(tmp_path / "config" / "rackstatus.toml"),
             "PYTHONUNBUFFERED": "1",
         }
     )
-    env.pop("RACK_WEB_TLS_CERT", None)  # plain HTTP: TLS is TC-31's subject, not this one
+    # A developer's own certificate variables must not decide what this server serves; with them
+    # cleared it generates a pair under RACK_WEB_TLS_DIR, the first-boot shape.
+    env.pop("RACK_WEB_TLS_CERT", None)
     env.pop("RACK_WEB_TLS_KEY", None)
 
     cmd = [
@@ -209,7 +217,7 @@ def gunicorn_server(tmp_path):
     reader = threading.Thread(target=_drain, daemon=True)
     reader.start()
 
-    server = _Server(port, lines, audit_file, proc)
+    server = _Server(port, lines, audit_file, proc, tmp_path / "tls" / "server.crt")
     try:
         deadline = time.monotonic() + STARTUP_TIMEOUT_SEC
         ready = False
@@ -326,6 +334,7 @@ def test_the_audit_file_holds_the_event_with_stdout_off(tmp_path):
             "NVIS_IDENTITY_FILE": str(tmp_path / "identity" / "identity.json"),
             "RACK_WEB_POLICY_FILE": str(tmp_path / "store" / "policies.json"),
             "RACK_WEB_TLS_DIR": str(tmp_path / "tls"),
+            "NVIS_RACKSTATUS_CONFIG": str(tmp_path / "config" / "rackstatus.toml"),
             "PYTHONUNBUFFERED": "1",
         }
     )
@@ -342,7 +351,7 @@ def test_the_audit_file_holds_the_event_with_stdout_off(tmp_path):
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
-        server = _Server(port, [], audit_file, proc)
+        server = _Server(port, [], audit_file, proc, tmp_path / "tls" / "server.crt")
         deadline = time.monotonic() + STARTUP_TIMEOUT_SEC
         while time.monotonic() < deadline:
             if proc.poll() is not None:

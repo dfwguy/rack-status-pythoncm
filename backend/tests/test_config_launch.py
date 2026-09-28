@@ -35,7 +35,7 @@ import pytest
 BACKEND = Path(__file__).resolve().parent.parent
 
 
-def write(tmp_path: Path, body: str, name: str = "greenlight.toml") -> Path:
+def write(tmp_path: Path, body: str, name: str = "rackstatus.toml") -> Path:
     path = tmp_path / name
     path.write_text(body)
     return path
@@ -48,8 +48,11 @@ def _clean(monkeypatch):
 
 
 class TestTC1PathResolution:
-    def test_the_repo_root_default(self):
-        assert L.resolve_path() == L.REPO_ROOT / L.CONFIG_FILENAME
+    def test_the_default_is_the_config_directory(self, monkeypatch):
+        """One directory holds operator configuration: the file, and `tls/` beside it."""
+        monkeypatch.delenv(L.CONFIG_PATH_ENV, raising=False)
+        assert L.resolve_path() == L.REPO_ROOT / "config" / "rackstatus.toml"
+        assert L.config_dir() == L.REPO_ROOT / "config"
 
     def test_an_explicit_path_wins(self, monkeypatch, tmp_path):
         monkeypatch.setenv(L.CONFIG_PATH_ENV, str(tmp_path / "other.toml"))
@@ -62,7 +65,7 @@ class TestTC1PathResolution:
     def test_an_example_file_is_never_read_as_config(self, tmp_path):
         """FR-1d. Loading one would hand a deployment the placeholder values it was told to
         replace."""
-        path = write(tmp_path, 'X = "placeholder"\n', name="greenlight.toml.example")
+        path = write(tmp_path, 'X = "placeholder"\n', name="rackstatus.toml.example")
         with pytest.raises(L.ConfigError, match="example"):
             L.load(path)
 
@@ -182,7 +185,7 @@ class TestABrokenFileIsFatalNotPartial:
         """A third case, distinct from "cannot open" and "is not TOML". TOML v1.0.0 requires UTF-8,
         and without this branch the operator gets an unhandled traceback out of a module that runs
         before any log handler exists."""
-        path = tmp_path / "greenlight.toml"
+        path = tmp_path / "rackstatus.toml"
         path.write_bytes(b'X = "\xff\xfe not utf 8"\n')
 
         with pytest.raises(L.ConfigError, match="UTF-8"):

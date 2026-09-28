@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
-"""The `greenlight` launcher.
+"""The `rackstatus` launcher.
 
 The property worth most here is that **`check` changes nothing**. It is the command an operator
 points at a live deployment's paths to find out what a restart would do, so a `check` that wrote
@@ -63,7 +63,7 @@ def _run(paths, *extra, demo: str = "1", exec_mode: str = "local") -> subprocess
     # Cleared, not inherited. A full-suite run has RACK_SSH_HOST in `os.environ` from an earlier
     # module, which satisfies the requirement these tests assert is unmet — so they passed in
     # isolation and failed in the suite.
-    for leaked in ("RACK_SSH_HOST", "NVIS_GREENLIGHT_CONFIG"):
+    for leaked in ("RACK_SSH_HOST", "NVIS_RACKSTATUS_CONFIG"):
         env.pop(leaked, None)
     return subprocess.run(
         [sys.executable, "backend/cli.py", "check",

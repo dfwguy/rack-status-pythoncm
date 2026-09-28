@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
-"""Reads `greenlight.toml` at launch and materializes it into the process environment.
+"""Reads `config/rackstatus.toml` at launch and materializes it into the process environment.
 
 DC-3 of `.plc/briefs/launch-configuration-brief.md`. The file is the **baseline**; a real
 environment variable or a `docker run -e` flag still wins.
@@ -42,7 +42,7 @@ this module's imports are stdlib plus `config_registry` and `toml_compat`, both 
 nothing at import.
 
 Diagnostics are **deferred**, not logged. This runs before `logging_config.configure()` (`app.py:102`)
-so that `greenlight.toml` can set `NVIS_LOG_LEVEL` — which means there is no configured handler yet.
+so that `rackstatus.toml` can set `NVIS_LOG_LEVEL` — which means there is no configured handler yet.
 Records are buffered and replayed by DC-6 once logging exists; fatal paths write to `sys.stderr`,
 which is the only sink guaranteed to exist this early.
 """
@@ -55,19 +55,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import config_registry
-import toml_compat
 
 #: Computed, never imported. See the module docstring: `paths.REPO_ROOT` would drag `config_env`
 #: onto this module's import graph and defeat the whole ordering invariant.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 #: Overridable so a test can point at a fixture without monkeypatching `Path`.
-CONFIG_FILENAME = "greenlight.toml"
+CONFIG_FILENAME = "rackstatus.toml"
+
+#: Operator configuration lives in one directory: this file, and `tls/` beside it for a certificate
+#: the operator supplies. The container mounts the host's `config/` here read-only, so the default
+#: path is the same inside and outside Docker.
+CONFIG_DIRNAME = "config"
 
 #: Where an operator may point the loader. Its own value can only ever come from the real
 #: environment — a file cannot usefully name the path to itself, which is why FR-28 lists it among
 #: the keys whose file value can never take effect.
-CONFIG_PATH_ENV = "NVIS_GREENLIGHT_CONFIG"
+CONFIG_PATH_ENV = "NVIS_RACKSTATUS_CONFIG"
 
 #: A `.example` file is documentation, never configuration (FR-1d). Loading one would give a
 #: deployment the placeholder values it was meant to be told to replace.
@@ -107,9 +111,14 @@ class Result:
 
 
 def resolve_path() -> Path:
-    """Where to look. An explicit `NVIS_GREENLIGHT_CONFIG` wins over the repo-root default."""
+    """Where to look. `NVIS_RACKSTATUS_CONFIG` wins over `<repo>/config/rackstatus.toml`."""
     raw = (os.environ.get(CONFIG_PATH_ENV) or "").strip()
-    return Path(raw).expanduser() if raw else REPO_ROOT / CONFIG_FILENAME
+    return Path(raw).expanduser() if raw else REPO_ROOT / CONFIG_DIRNAME / CONFIG_FILENAME
+
+
+def config_dir() -> Path:
+    """The directory holding the config file, and therefore the operator's `tls/`."""
+    return resolve_path().parent
 
 
 def render(value: object, key: str) -> str:
@@ -194,6 +203,11 @@ def load(path: Path | None = None) -> Result:
     except OSError as exc:
         raise ConfigError(f"{target} cannot be read: {exc}") from exc
 
+    # Imported here, not at module scope, so `cli.py init-config` -- which only needs the path --
+    # runs on a host Python older than 3.11, where `tomllib` does not exist and `tomli` is not
+    # installed. Reading a file needs a parser; writing one does not.
+    import toml_compat
+
     try:
         document = toml_compat.loads(raw.decode("utf-8"))
     except UnicodeDecodeError as exc:
@@ -240,5 +254,5 @@ def fatal(exc: ConfigError) -> None:
     which uses it for a refused credential — though note gunicorn masks the value, so the message
     is what an operator will actually have.
     """
-    print(f"greenlight: refusing to start: {exc}", file=sys.stderr, flush=True)
+    print(f"rackstatus: refusing to start: {exc}", file=sys.stderr, flush=True)
     raise SystemExit(78)

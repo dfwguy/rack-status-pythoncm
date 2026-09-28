@@ -18,13 +18,11 @@
 #
 #   bin/run-local-auth.sh              # HTTPS, demo data, fresh store each run
 #   KEEP_STORE=1 bin/run-local-auth.sh # reuse the previous run's store and password
-#   TLS=0 bin/run-local-auth.sh        # plain HTTP, if you need to watch the wire
 #
 # Then open the URL it prints and sign in with the credentials it shows.
 #
-# HTTPS IS THE DEFAULT HERE, unlike start.sh, and the reason is specific to what this script is
-# for. Testing authentication over http://localhost hides two things that break the moment a real
-# deployment serves TLS:
+# HTTPS ONLY, like every way this app serves. Testing authentication over http://localhost would
+# hide two things that break on a real deployment:
 #
 #   * `Secure` cookies are not sent over plain HTTP at all, so the access and refresh cookies
 #     silently do not come back and a session appears to end immediately;
@@ -32,8 +30,8 @@
 #     context. http://localhost happens to count as one, so it works locally and fails the first
 #     time anyone reaches the dashboard by IP or hostname over plain HTTP.
 #
-# Both are the kind of defect that reproduces only on the deployment, so this script serves TLS by
-# default and generates the certificate if it is missing.
+# Both are the kind of defect that reproduces only on the deployment, which is one reason there is
+# no plain-HTTP mode anywhere.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -82,53 +80,12 @@ unset RACK_WEB_AUTH_TOKEN RACK_WEB_AUTH_MODE RACK_WEB_PAM_SERVICE RACK_WEB_AUTH_
 
 # ---- TLS -------------------------------------------------------------------------------------
 #
-# `start.sh` serves TLS under gunicorn whenever both variables are set, so this only has to make
-# sure a certificate exists and point at it. Deliberately NOT the Werkzeug dev server: it emits
-# chunked, brotli-compressed bodies, and over TLS that is a shutdown race (see start.sh).
-TLS_DIR="${TLS_DIR:-var/secrets/tls}"
-TLS_CERT="$PWD/$TLS_DIR/server.crt"
-TLS_KEY="$PWD/$TLS_DIR/server.key"
-
-if [[ "${TLS:-1}" == "1" ]]; then
-  if [[ ! -f "$TLS_CERT" || ! -f "$TLS_KEY" ]]; then
-    echo "[run-local-auth] no certificate at $TLS_DIR — generating a self-signed one"
-
-    # The repo venv, not the system python3. `cryptography` is a backend dependency and is not
-    # generally installed system-wide, so `python3 bin/gen-tls-cert.py` fails with the generator's
-    # own "cryptography is not importable" message — which tells you to use the venv. Doing that
-    # here means the script does not hand you an error it already knows how to avoid.
-    #
-    # start.sh creates the venv, so on a first-ever run it may not exist yet; fall back to
-    # python3 and let the generator's message stand.
-    TLS_PY="${PYTHON:-}"
-    if [[ -z "$TLS_PY" ]]; then
-      if [[ -x .venv/bin/python ]]; then TLS_PY=.venv/bin/python; else TLS_PY=python3; fi
-    fi
-
-    # Not --force: an existing cert is reused across runs on purpose. Re-issuing every time would
-    # change the fingerprint, so the browser exception you accepted last run stops applying and
-    # you get the interstitial again on every restart.
-    if ! "$TLS_PY" bin/gen-tls-cert.py --out-dir "$TLS_DIR" >/dev/null; then
-      echo "[run-local-auth] STOP: could not generate a certificate." >&2
-      echo "[run-local-auth] Run ./start.sh once to create the venv, or use TLS=0 for plain HTTP." >&2
-      exit 1
-    fi
-  fi
-
-  # Both, or neither. A cert without its key downgrades one path silently and crashes the other,
-  # which is why the launch preflight requires the key whenever the cert is set.
-  export RACK_WEB_TLS_CERT="$TLS_CERT"
-  export RACK_WEB_TLS_KEY="$TLS_KEY"
-  SCHEME="https"
-  SCHEME_LABEL="HTTPS"
-else
-  # Explicit opt-out, for watching the wire in a proxy. Unset rather than empty: start.sh tests
-  # for a non-empty value, and an inherited variable from a previous shell would otherwise turn
-  # TLS back on while this script claims it is off.
-  unset RACK_WEB_TLS_CERT RACK_WEB_TLS_KEY
-  SCHEME="http"
-  SCHEME_LABEL="plain HTTP"
-fi
+# Nothing to do here. `start.sh` hands off to `cli.py serve`, whose gunicorn config settles the
+# certificate through `startup_gate.ensure_tls()`: `config/tls/` if you put one there, otherwise a
+# self-signed pair generated once under var/secrets/tls and reused, so the browser exception you
+# accepted last run keeps applying.
+SCHEME="https"
+SCHEME_LABEL="HTTPS"
 
 # ---- OIDC issuer ------------------------------------------------------------------------------
 #
@@ -160,7 +117,7 @@ fi
 cat <<BANNER
 
   ─────────────────────────────────────────────────────────────────────
-   NVIS Greenlight — local run, SRP authentication ENABLED, ${SCHEME_LABEL}
+   NVIS Rack Status — local run, SRP authentication ENABLED, ${SCHEME_LABEL}
   ─────────────────────────────────────────────────────────────────────
    Watch for the ONE-TIME ADMINISTRATOR CREDENTIAL banner below and copy
    the password. It is not stored and cannot be shown again; only its
@@ -169,24 +126,10 @@ cat <<BANNER
    Log in as: admin
    URL:       ${SCHEME}://localhost:${PORT:-5050}
    Issuer:    ${RACK_WEB_OIDC_ISSUER} (${ISSUER_NOTE})
-$(
-  if [[ "$SCHEME" == "https" ]]; then
-    cat <<'TLSNOTE'
 
-   The certificate is self-signed, so the browser will warn once. Accept
-   it and the exception persists — the cert is reused between runs, so
-   the fingerprint does not change on restart.
-TLSNOTE
-  else
-    cat <<'HTTPNOTE'
-
-   Plain HTTP (TLS=0). Two things behave differently from a deployment:
-   Secure cookies are not sent, and crypto.subtle is only available in a
-   secure context — http://localhost counts as one, an IP or hostname
-   does not.
-HTTPNOTE
-  fi
-)
+   Unless config/tls/ holds your own certificate, it is self-signed, so the
+   browser will warn once. Accept it and the exception persists — the cert
+   is reused between runs, so the fingerprint does not change on restart.
   ─────────────────────────────────────────────────────────────────────
 
 BANNER

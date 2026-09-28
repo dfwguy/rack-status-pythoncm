@@ -48,7 +48,7 @@ export interface Deployment {
    * Scheme for a tunnelled deployment. Defaults to `https`.
    *
    * **Greenlight refuses to serve without TLS**, so `https` is the correct default:
-   * `backend/startup_gate.py` lists a missing certificate as a fault and `_ensure_tls()`
+   * `backend/startup_gate.py` lists a missing certificate as a fault and `ensure_tls()`
    * generates a self-signed one on first boot rather than letting the operator opt out. The
    * browser needs a secure context for `crypto.subtle` (SRP login) anyway.
    *

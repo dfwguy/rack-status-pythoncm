@@ -8,12 +8,12 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
-"""What `greenlight.toml` is allowed to declare, and which settings a launch cannot do without.
+"""What `rackstatus.toml` is allowed to declare, and which settings a launch cannot do without.
 
 DC-2 of `.plc/briefs/launch-configuration-brief.md`. Three consumers: the loader (DC-3) asks what a
 key's TOML type is and whether it may be materialized, the preflight (DC-4) asks which settings are
 required *right now*, and the example generator (DC-5) renders this file into
-`greenlight.toml.example` so the documentation cannot drift from the code that reads it.
+`config/rackstatus.toml.example` so the documentation cannot drift from the code that reads it.
 
 DELIBERATELY THE SAME SHAPE AS `logging_config.Setting`
 -------------------------------------------------------
@@ -304,7 +304,7 @@ RACK_WEB_OIDC_ISSUER = register(
         # something the product can make. The predicate this replaced asked whether the OIDC
         # provider was enabled — a question with only one answer since 2026-09-08.
         required_when=None,
-        example="https://greenlight.example.com",
+        example="https://rackstatus.example.com",
         section="auth",
         description=(
             "This deployment's own base URL, used as the OIDC `iss` claim. Required when the OIDC "
@@ -379,8 +379,8 @@ RACK_REMOTE_BASE_PATH = register(
 
 # -- The settings a real deployment actually sets ------------------------------------------------
 #
-# Mirrors `rack-config.env`, which is what every deployed site edits today. None of these is
-# *required* — each has a working default — but they are declared so that `greenlight.toml.example`
+# The settings deployed sites carried in `rack-config.env`, now in `rackstatus.toml`. None of these is
+# *required* — each has a working default — but they are declared so that `rackstatus.toml.example`
 # documents them, so the loader stops warning "not a declared setting" about the ordinary case, and
 # so their secrecy is resolved explicitly rather than by pattern.
 
@@ -529,7 +529,7 @@ RACK_WEB_TLS_KEY = register(
         name="RACK_WEB_TLS_KEY",
         secret=False,  # a path, not the key material; see SENSITIVE_NAME_PATTERN's omission of KEY
         required_when=_tls_cert_configured,
-        example="/etc/greenlight/tls/server.key",
+        example="/app/config/tls/server.key",
         section="tls",
         description=(
             "Private key for the TLS certificate. Required whenever RACK_WEB_TLS_CERT is set: a "

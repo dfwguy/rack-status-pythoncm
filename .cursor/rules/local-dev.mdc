@@ -103,7 +103,6 @@ superset of ours, not a stale lineage that was patched locally.
 
 2. Start the app with SSH env vars:
 ```bash
-RACK_EXEC_MODE=ssh \
 RACK_SSH_HOST=<head-node-ip> \
 RACK_SSH_USER=root \
 RACK_SSH_KEY=~/.ssh/<key> \

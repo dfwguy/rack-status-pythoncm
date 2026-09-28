@@ -192,7 +192,7 @@ class TestTC24Declarations:
         assert R.get("INJECTED") is None
 
     def test_every_declaration_carries_what_the_example_generator_needs(self):
-        """DC-5 renders `greenlight.toml.example` from this registry, so a declaration with no
+        """DC-5 renders `rackstatus.toml.example` from this registry, so a declaration with no
         description or example produces a file that documents nothing (FR-1b)."""
         thin = [
             s.name for s in R.declared().values() if not s.description.strip()

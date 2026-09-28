@@ -234,7 +234,7 @@ the spelling; a typo there is a gate that silently is not there.
 
 **A certificate is generated, not demanded.** Phase 0.5 already decided "self-signed by default", so
 refusing to start for want of a certificate the product can make is a gate that teaches operators to
-route around it. `_ensure_tls` shells out to `bin/gen-tls-cert.py` rather than growing a second
+route around it. `startup_gate.ensure_tls()` shells out to `bin/gen-tls-cert.py` rather than growing a second
 generator, because the SAN rules there (`localhost`, `127.0.0.1`, `::1` added unconditionally) are
 load-bearing and would be reimplemented from memory.
 

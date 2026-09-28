@@ -71,7 +71,7 @@ class TestItOffersExactlyWhatComposeUses:
         inert = sorted(offered_by_example() - interpolated_by_compose())
         assert not inert, (
             "these keys do nothing in .env because docker-compose.yml never interpolates them — "
-            "they belong in rack-config.env or greenlight.toml:\n  " + "\n  ".join(inert)
+            "they belong in config/rackstatus.toml:\n  " + "\n  ".join(inert)
         )
 
     def test_every_interpolated_key_is_offered(self):
@@ -113,20 +113,26 @@ class TestItDoesNotAdvertiseRemovedVariables:
 
 
 class TestItNamesTheProductCorrectly:
-    def test_it_says_greenlight(self):
+    def test_it_says_rack_status(self):
+        """The Greenlight name was dropped; a copied `.env` should not reintroduce it."""
         raw = ENV_EXAMPLE.read_text()
-        assert "NVIS Greenlight" in raw
-        assert "NVIS Rack Status" not in raw
+        assert "NVIS Rack Status" in raw
+        assert "Greenlight" not in raw
 
 
-class TestItPointsAtTheOtherTwoFiles:
-    """Three files with three jobs and nothing documented them together, which is how six inert
-    keys survived in the one an operator copies first."""
+class TestItPointsAtTheConfigFile:
+    """Two files with two jobs. Undocumented, the split is how six inert keys once survived in the
+    file an operator copies first."""
 
     def test_it_explains_where_other_settings_go(self):
         raw = ENV_EXAMPLE.read_text()
-        assert "rack-config.env" in raw
-        assert "greenlight.toml" in raw
+        assert "config/rackstatus.toml" in raw
+        assert "init-config" in raw
+
+    def test_it_does_not_point_at_the_removed_env_file(self):
+        """`rack-config.env` was folded into `config/rackstatus.toml`; naming it sends an operator
+        to a file that no longer exists."""
+        assert "rack-config.env" not in ENV_EXAMPLE.read_text()
 
     def test_it_holds_no_key_material(self):
         """It offers a key *path*; the key itself must never be here."""

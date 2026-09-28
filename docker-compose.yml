@@ -34,20 +34,23 @@ services:
     # so during the window /ws/terminal was unauthenticated, the reachable population was everyone
     # on the management network rather than everyone holding SSH access. Every documented access
     # path here is an ssh tunnel, which terminates on the host and reaches loopback fine, so this
-    # costs nothing. Set RACK_WEB_BIND_ADDR=0.0.0.0 to expose it deliberately (and read
-    # docs/ENVIRONMENT.md §4 about TLS first).
+    # costs nothing. Set RACK_WEB_BIND_ADDR=0.0.0.0 in .env to expose it deliberately. The listener
+    # is HTTPS-only either way.
     ports:
       - "${RACK_WEB_BIND_ADDR:-127.0.0.1}:${RACK_WEB_PORT:-5000}:5000"
-    env_file: rack-config.env
-    environment:
-      - RACK_SSH_HOST=${RACK_SSH_HOST}
-      # TLS: point these at bin/gen-tls-cert.py output to serve HTTPS. Unset = plain HTTP.
-      - RACK_WEB_TLS_CERT=${RACK_WEB_TLS_CERT:-}
-      - RACK_WEB_TLS_KEY=${RACK_WEB_TLS_KEY:-}
     volumes:
+      # Operator configuration, one directory, read-only: rackstatus.toml (create it with
+      # `python3 backend/cli.py init-config --ssh-host <head>`) and, optionally, tls/server.crt +
+      # tls/server.key. Without a supplied certificate a self-signed one is generated on first
+      # start and kept on rack-data, so it survives a recreate.
+      - ./config:/app/config:ro
       - ${RACK_SSH_KEY_PATH:-~/.ssh/id_rsa}:/run/secrets/ssh_key:ro
       - rack-data:/app/var
     restart: unless-stopped
 
 volumes:
+  # Compose names this `<project>_rack-data` (the project defaults to the directory name). Do NOT
+  # add `name:` to shorten it: every existing deployment would come up on a new, empty volume and
+  # lose its identity store, certificate and history. Address it by label instead, e.g.
+  #   docker volume ls -q --filter label=com.docker.compose.volume=rack-data
   rack-data:

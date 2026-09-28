@@ -62,7 +62,7 @@ services:
       # It does NOT create a false pass: a 2010-step run that dies at iteration 64 still
       # has cur(64) < tot(2010) and still fails.
       - NEMO_TARGET_STEPS=50
-      # Nscale TX validated image. Override the portable rack-config.env example so
+      # Nscale TX validated image. Pinned here, rather than left to the image default, so
       # both the existing NeMo paths and validation presets use the current NFS asset.
       - NEMO_SQSH_SRC=/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh
       # NCCL side of the same acceptance: judge stage 1 on the all_reduce busbw line.
@@ -256,8 +256,8 @@ services:
       # Served by the SPA catch-all (`@app.route("/<path:path>")` -> _serve_spa_asset),
       # which returns any REAL file under /app/static/spa/ and only falls back to
       # index.html when the path does not exist. So these land at:
-      #   http://<host>:5056/docs/OVA-VALIDATION-MOP.md
-      #   http://<host>:5056/docs/RACKSTATUS_USER_GUIDE.md
+      #   https://<host>:5056/docs/OVA-VALIDATION-MOP.md
+      #   https://<host>:5056/docs/RACKSTATUS_USER_GUIDE.md
       # Both sit behind the normal dashboard auth gate (_require_dashboard_auth
       # redirects an unauthenticated non-/api path to /login) — same login as the UI.
       # Mounted as FILES, not a directory, and pointed at the canonical copies in
@@ -268,7 +268,7 @@ services:
       # Exemplar/NVIDIA Llama 3.1 405B review package: combined system report,
       # bounded Nsight Systems trace, CPU-overhead evidence, and checksums.
       # Directory index and direct downloads are available under
-      #   http://<host>:5056/static/spa/docs/exemplar/
+      #   https://<host>:5056/static/spa/docs/exemplar/
       - /opt/observability/exemplar-share:/app/static/spa/docs/exemplar:ro
       # Both of the above in one gzip, for operators who want a single download.
       # NB: unlike the two .md mounts, this one is a BUILT artefact — regenerating
@@ -277,14 +277,14 @@ services:
       #     OVA-VALIDATION-MOP.md RACKSTATUS_USER_GUIDE.md
       - /opt/observability/nvis-ova-docs.tar.gz:/app/static/spa/docs/nvis-ova-docs.tar.gz:ro
       # Progress tracker workbook, downloadable at
-      #   http://<host>:5056/docs/NVIS-Progress-Tracker.xlsx
+      #   https://<host>:5056/docs/NVIS-Progress-Tracker.xlsx
       # Mounted under a URL-safe name: the canonical file name contains spaces and a
       # double dash, which survive neither a plain URL nor a copy-pasted curl command.
       # Same live-mount rule as the .md files above -- rewriting the workbook in
       # /opt/observability updates what the dashboard serves, no copy step.
       - "/opt/observability/Nscale -- WC TX NVIS progress Tracker.xlsx:/app/static/spa/docs/NVIS-Progress-Tracker.xlsx:ro"
       # Dell/Nscale/Microsoft daily deployment tracker, downloadable at
-      #   http://<host>:5056/docs/NScale-TX-Deployment-Tracker.xlsx
+      #   https://<host>:5056/docs/NScale-TX-Deployment-Tracker.xlsx
       # Same URL-safe-name and live-mount rules as the workbook above: rewriting
       # the .xlsx in /opt/observability updates what the dashboard serves.
       - "/opt/observability/NScale TX Deployment Tracker.xlsx:/app/static/spa/docs/NScale-TX-Deployment-Tracker.xlsx:ro"

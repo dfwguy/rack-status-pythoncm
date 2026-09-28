@@ -1,9 +1,10 @@
 # NVIS Rack Status configuration reference
 
-## `greenlight.toml` and the required-setting preflight
+## `config/rackstatus.toml` and the required-setting preflight
 
-Every variable in this document can also be set in **`greenlight.toml`** at the repo root (copy
-`greenlight.toml.example`, or point elsewhere with `NVIS_GREENLIGHT_CONFIG`). The file is the
+Every variable in this document can also be set in **`config/rackstatus.toml`** (create the minimal
+one with `python3 backend/cli.py init-config`, copy more from `config/rackstatus.toml.example`, or
+point elsewhere with `NVIS_RACKSTATUS_CONFIG`). The file is the
 **baseline**: anything already present in the environment at launch wins, so this document remains
 the authority on what each variable *means* and the file only changes where a value can come from.
 
@@ -34,7 +35,7 @@ pattern but is an NVFTP folder name, so it is declared non-secret.
 |---|---|---|
 | `RACK_WEB_OIDC_ISSUER` | *(always read; derived from the bind address when unset)* | OIDC Discovery §4.3 requires it to be the URL discovery is served from; deriving it from `Host` would let a caller choose our token issuer |
 | `RACK_SSH_HOST` | the resolved control connection is SSH and `RACK_STATUS_DEMO` is falsy | no default can reach a customer's head node |
-| `RACK_WEB_TLS_KEY` | `RACK_WEB_TLS_CERT` is set | a cert with no key downgrades one path silently and crashes the other |
+| `RACK_WEB_TLS_KEY` | `RACK_WEB_TLS_CERT` is set in the environment | a certificate with no key cannot serve |
 
 All missing settings are reported **together**, then startup exits `78`. A setting with a working
 default is deliberately absent from this table even when it is "required in practice": missing and
@@ -276,10 +277,10 @@ Requires `RACK_WEB_SECRET_KEY`, **Settings → `RACK_PROJECT_TOKEN`**, vault NVF
 | **`RACK_NVFTP_SYNC_DISABLED`** | `0` | `1` to disable background sync |
 | **`RACK_NVFTP_SYNC_FORCE`** | `0` | `1` to upload every cache file on each sync (not only changed files) |
 | **`RACK_WEB_SESSION_HOURS`** | `8` | Session lifetime. |
-| **`RACK_WEB_TLS_CERT`** | *(unset)* | PEM certificate (chain, if CA-issued). Set → the app serves **HTTPS**, via gunicorn `--certfile` in the container and `ssl_context` for the dev server. Issue one with `bin/gen-tls-cert.py`. **Its SAN must include `localhost`** — that is the name a browser validates through an SSH tunnel. |
-| **`RACK_WEB_TLS_KEY`** | *(unset)* | Matching private key (0600). Required whenever the cert is set; cert-without-key logs an error and stays on HTTP. |
+| **`RACK_WEB_TLS_CERT`** | *(unset)* | PEM certificate (chain, if CA-issued). The app serves **HTTPS only**; the certificate is the first of: this variable, `config/tls/server.crt`, or a self-signed pair generated under `RACK_WEB_TLS_DIR` on first boot (`startup_gate.ensure_tls`, called by `gunicorn.conf.py`). Issue one with `bin/gen-tls-cert.py`. **Its SAN must include `localhost`** — that is the name a browser validates through an SSH tunnel. |
+| **`RACK_WEB_TLS_KEY`** | *(unset)* | Matching private key (0600). Required whenever the cert variable is set; half a pair is refused at startup. `config/tls/server.key` when the certificate comes from `config/tls/`. |
 | **`RACK_WEB_TLS_MIN_VERSION`** | `1.2` | Minimum negotiable TLS version (`1.2` or `1.3`). Enforced explicitly on **both** servers by `backend/tls_server.py` — gunicorn 23 still defaults `ssl_version` to the permissive `PROTOCOL_TLS`, so the floor is not left to the server's or the Python build's default. An unrecognised value warns and keeps 1.2 rather than widening. Also disables TLS compression (CRIME) and client-initiated renegotiation. |
-| **`RACK_WEB_COOKIE_SECURE`** | *(auto)* | `Secure` cookies. **Automatic when `RACK_WEB_TLS_CERT` is set**; set it explicitly only when TLS terminates in a proxy this process cannot see. |
+| **`RACK_WEB_COOKIE_SECURE`** | *(auto)* | `Secure` cookies. **Automatic whenever the app serves** (every serving path settles a certificate first); set it explicitly only when TLS terminates in a proxy this process cannot see. |
 | **`RACK_WEB_CSP_MODE`** | `enforce` | `enforce`, `report` (send `Content-Security-Policy-Report-Only` — logs violations, blocks nothing) or `off`. `report` lets a new deployment confirm the policy fits its Grafana setup first; `off` is the rollback. |
 | **`RACK_WEB_BIND_ADDR`** | `127.0.0.1` | *(compose)* Address the container's port is published on. Loopback by default so the dashboard is reachable only through an SSH tunnel; `0.0.0.0` exposes it on the host's network, which previously was the unintended default. |
 | **`RACK_WEB_ALLOWED_ORIGINS`** | *(unset)* | Comma-separated extra browser origins allowed to open `/ws/terminal`. Same-origin is always allowed, so this is only needed when the page and the WebSocket differ (a reverse proxy under another name, a separate dev host). Deploy-time env only — deliberately **not** settable from Settings, since widening it is a privilege change. |

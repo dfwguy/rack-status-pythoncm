@@ -228,5 +228,5 @@ PY
 fi
 
 echo
-echo "[run] dashboard -> http://localhost:${PORT}  (Ctrl-C to stop)"
+echo "[run] dashboard -> https://localhost:${PORT}  (Ctrl-C to stop)"
 exec ./start.sh

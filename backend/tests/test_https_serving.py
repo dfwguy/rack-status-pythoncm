@@ -257,8 +257,11 @@ class TestThePolicyIsSharedWithGunicorn:
     """A floor that differs between the container and a local run is a floor nobody can verify."""
 
     @pytest.mark.filterwarnings("ignore::DeprecationWarning")
-    def test_the_gunicorn_hook_applies_the_same_harden(self, ca_certs):
+    def test_the_gunicorn_hook_applies_the_same_harden(self, ca_certs, monkeypatch):
         """Exercises ``gunicorn.conf.py``'s hook with gunicorn's own factory contract."""
+        # Loading the file settles the certificate; hand it one so nothing is generated.
+        monkeypatch.setenv("RACK_WEB_TLS_CERT", str(ca_certs / "server.crt"))
+        monkeypatch.setenv("RACK_WEB_TLS_KEY", str(ca_certs / "server.key"))
         spec_path = REPO_ROOT / "gunicorn.conf.py"
         assert spec_path.is_file(), "the ssl_context hook is the only way to set a minimum version"
         import importlib.util
@@ -304,8 +307,9 @@ class TestThePolicyIsSharedWithGunicorn:
 
         cli = (REPO_ROOT / "backend" / "cli.py").read_text(encoding="utf-8")
         assert "gunicorn" in cli
-        assert '"-c", "gunicorn.conf.py"' in cli, "the TLS floor comes from the hook"
-        assert "--certfile" in cli and "--keyfile" in cli
+        assert '"-c", "gunicorn.conf.py"' in cli, "TLS, certificate included, comes from the config"
+        # The certificate itself is chosen by gunicorn.conf.py; test_https_only.py proves the CLI
+        # passes no --certfile of its own, which would be a second source.
 
 
 def test_openssl_is_not_required_to_run_these(monkeypatch):
