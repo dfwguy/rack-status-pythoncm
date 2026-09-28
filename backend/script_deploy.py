@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import shlex
 import tarfile
 import time
@@ -83,12 +84,47 @@ def _is_wanted(path: Path) -> bool:
     return ".bak" not in path.name
 
 
+class UnsafeScript(ValueError):
+    """A file in the script tree must not be shipped, so nothing is."""
+
+
+def _check_shippable(path: Path, source: Path) -> None:
+    """Refuse anything that is not a plain file, before it can be archived.
+
+    `tar` faithfully reproduces what it is given, and the far side extracts as the deploy
+    user into a tree shared by every project on the head. A symlink in `bin/scripts/` would
+    therefore be recreated *there*, still pointing wherever it pointed here -- so a link
+    named `sysinfo.sh` aimed at `/etc/passwd` becomes a file in the scripts tree that reads
+    or writes outside it. Device nodes and hard links are refused for the same reason.
+
+    Checked at **build** time rather than trusting the extraction, because this is the side
+    that can name the offending file and the side where the error is actionable. It is the
+    discipline of the touchless harness's `safe_extract`, applied one step earlier: the
+    archive never contains the thing, so no extractor has to be careful.
+
+    Nothing in `bin/scripts/` is a symlink today. That is exactly when to add the check --
+    afterwards it is an incident.
+    """
+    if path.is_symlink():
+        raise UnsafeScript(
+            f"{path.relative_to(source)} is a symlink ({os.readlink(path)}); "
+            "the script tree is deployed to a shared head node and must contain only "
+            "regular files"
+        )
+    if not path.is_file():
+        raise UnsafeScript(f"{path.relative_to(source)} is not a regular file")
+
+
 def _add_tree(tar: tarfile.TarFile, source: Path, prefix: str, manifest: list[str]) -> None:
     """Add every wanted file under *source*, placed at *prefix* in the archive."""
     for path in sorted(source.rglob("*")):
-        if not path.is_file() or not _is_wanted(path.relative_to(source)):
+        relative = path.relative_to(source)
+        if not _is_wanted(relative):
             continue
-        arcname = f"{prefix}/{path.relative_to(source).as_posix()}"
+        if path.is_dir() and not path.is_symlink():
+            continue
+        _check_shippable(path, source)
+        arcname = f"{prefix}/{relative.as_posix()}"
         # add() carries the mode, which is what keeps a script executable on the far side.
         tar.add(path, arcname=arcname)
         manifest.append(arcname)
@@ -112,11 +148,15 @@ def build_bundle(source_root: Path | None = None) -> tuple[bytes, list[str]]:
     # change" answerable by comparing digests later without a second mechanism.
     with tarfile.open(fileobj=buffer, mode="w:gz", compresslevel=6) as tar:
         for path in sorted(root.iterdir()):
-            if path.is_file() and _is_wanted(Path(path.name)):
-                tar.add(path, arcname=f"{SHARED_LAYER}/{path.name}")
-                manifest.append(f"{SHARED_LAYER}/{path.name}")
-            elif path.is_dir() and path.name not in _NOT_SHARED:
-                _add_tree(tar, path, f"{SHARED_LAYER}/{path.name}", manifest)
+            if not _is_wanted(Path(path.name)):
+                continue
+            if path.is_dir() and not path.is_symlink():
+                if path.name not in _NOT_SHARED:
+                    _add_tree(tar, path, f"{SHARED_LAYER}/{path.name}", manifest)
+                continue
+            _check_shippable(path, root)
+            tar.add(path, arcname=f"{SHARED_LAYER}/{path.name}")
+            manifest.append(f"{SHARED_LAYER}/{path.name}")
 
         platform_root = root / "platform"
         if platform_root.is_dir():

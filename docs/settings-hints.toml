@@ -66,6 +66,7 @@ RACK_MODULES_INIT = "Shell snippet that initialises Environment Modules before a
 RACK_SLURM_SACCT_SINCE = "How far back the recent-jobs query looks. Default `now-7days`."
 RACK_SLURM_SACCT_DISABLED = "Stop querying `sacct`, for a cluster with no accounting database."
 RACK_PDSH_W_SKIP_SLURM_EXPAND = "Pass a `pdsh -w` target through verbatim instead of expanding it via Slurm first."
+RACK_SSH_KNOWN_HOSTS = "Path to a known_hosts file. Setting it turns on real host-key verification for the app-to-head link (StrictHostKeyChecking=yes plus IdentitiesOnly), which closes the machine-in-the-middle gap on a tunnelled or multi-hop path. Unset -- the default -- accepts any key, because an appliance's key changes when it is reimaged. Seed with `ssh-keyscan -H <head>`. Hops to compute nodes are never verified; see backend/transport/hop.py."
 RACK_SSH_REACHABILITY_CONNECT_TIMEOUT = "Seconds a reachability probe waits for a connection. Default 5."
 RACK_SSH_REACHABILITY_TTL_SEC = "How long a reachability result is cached. Default 15, floors at 3."
 NVIS_BCM_PYTHON = "Interpreter used for BCM `pythoncm` queries on the head node."

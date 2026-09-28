@@ -43,6 +43,10 @@ def api_script_deploy_preview():
     """
     try:
         summary = script_deploy.deploy(dry_run=True)
+    except script_deploy.UnsafeScript as exc:
+        # Surfaced in the preview so the wizard shows it before an operator commits to a
+        # deploy, which is the whole reason the preview builds the bundle for real.
+        return jsonify({"ok": False, "error": str(exc)}), 500
     except FileNotFoundError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
     return jsonify({**summary, "layout": script_tree.describe()})
@@ -63,6 +67,11 @@ def api_script_deploy():
     body = request.get_json(silent=True) or {}
     try:
         summary = script_deploy.deploy(dry_run=bool(body.get("dry_run")))
+    except script_deploy.UnsafeScript as exc:
+        # The app's own tree contains something that must not be shipped to a shared head
+        # node. Nothing was sent, and the fix is in this install, not on the cluster.
+        _logger.error("script deploy refused: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
     except FileNotFoundError as exc:
         # The app's own scripts are missing from the image. Not the cluster's fault, and a
         # 500 rather than a 502 says so.

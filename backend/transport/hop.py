@@ -69,6 +69,13 @@ class HopExecutor(ShellFilesystem, Executor):
         self.sudo = bool(sudo)
 
     def _ssh_prefix(self) -> list[str]:
+        # Host keys are deliberately not verified on a hop, and this asymmetry with the
+        # app->head link (`ssh.host_key_opts`, where `RACK_SSH_KNOWN_HOSTS` turns
+        # verification on) is a decision rather than an oversight. A hop runs head->node
+        # inside the cluster fabric; compute nodes are reimaged as a matter of routine, so
+        # their keys change constantly and a pinned `known_hosts` for two thousand of them
+        # would fail every bring-up. The link worth verifying is the one that crosses a
+        # tunnel or a jumphost, and that is the first one.
         argv = [
             "ssh",
             "-o", "StrictHostKeyChecking=no",

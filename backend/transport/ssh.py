@@ -46,6 +46,39 @@ class SSHConfig:
     mux_persist: str = "60"
 
 
+def host_key_opts() -> list[str]:
+    """Host-key verification options, off by default and worth understanding.
+
+    We send `StrictHostKeyChecking=no`, which accepts any key the head presents. That is
+    weaker than SSH's default and it is a deliberate trade: these deployments are brought up
+    against appliances whose keys change when they are reimaged, and an install that refuses
+    to run until somebody seeds a `known_hosts` file is an install operators route around by
+    turning verification off permanently — a worse end state than starting off.
+
+    Setting `RACK_SSH_KNOWN_HOSTS` to a file turns real verification **on**: the connection
+    then refuses a head whose key is not in it, which is what closes the
+    machine-in-the-middle gap on a network where the app and the head are several hops
+    apart. Opt-in rather than a default, because flipping it on silently would break every
+    existing deployment at once and the failure looks like the cluster being down.
+
+    Seed the file with `ssh-keyscan -H <head> >> <path>` from somewhere you trust, then set
+    the variable. Nothing else changes.
+    """
+    from config_env import _eget
+
+    known_hosts = (_eget("RACK_SSH_KNOWN_HOSTS", "") or "").strip()
+    if not known_hosts:
+        return ["-o", "StrictHostKeyChecking=no"]
+    return [
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", f"UserKnownHostsFile={known_hosts}",
+        # Present only the configured key. Without it a loaded agent can offer identities
+        # this deployment was never given, which makes "which credential reached the head"
+        # unanswerable from the config alone.
+        "-o", "IdentitiesOnly=yes",
+    ]
+
+
 def _mux_control_dir() -> str:
     """A writable dir for ControlMaster sockets (~/.ssh preferred, else temp)."""
 
@@ -87,7 +120,7 @@ class SSHExecutor(ShellFilesystem, Executor):
             )
         argv = [
             "ssh",
-            "-o", "StrictHostKeyChecking=no",
+            *host_key_opts(),
             "-o", "BatchMode=yes",
             "-o", f"ConnectTimeout={connect_timeout or cfg.connect_timeout or '10'}",
             "-o", f"ServerAliveInterval={cfg.alive_interval or '5'}",
