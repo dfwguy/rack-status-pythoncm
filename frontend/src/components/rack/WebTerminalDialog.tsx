@@ -21,6 +21,7 @@ import Box from "@mui/material/Box";
 import { Text, Tag } from "@nvidia/foundations-react-core";
 import { Terminal as TerminalIcon, ExternalLink } from "lucide-react";
 import { TERMINAL_BACKGROUND, useTerminal } from "../../hooks/useTerminal";
+import { openApiUrl } from "../../lib/apiFetch";
 
 export interface WebTerminalDialogProps {
   open: boolean;
@@ -61,7 +62,7 @@ export default function WebTerminalDialog({
       params.set("mode", mode);
     }
     params.set("label", displayName);
-    window.open(`/terminal?${params}`, "_blank");
+    void openApiUrl(`/terminal?${params}`);
     onClose();
   }, [sessionId, target, mode, displayName, onClose]);
 

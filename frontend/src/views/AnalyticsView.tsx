@@ -312,7 +312,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
         body: JSON.stringify({ log_dir: logDir || undefined, rows: bodyRows }),
       });
       if (start.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const started = (await start.json()) as { ok?: boolean; job_id?: string; error?: string };
@@ -327,7 +327,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
           { credentials: "same-origin", cache: "no-store" },
         );
         if (res.status === 401) {
-          window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+          // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
           return;
         }
         const st = (await res.json()) as AnalyticsJobStatus;
@@ -360,7 +360,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
         cache: "no-store",
       });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       if (res.status === 404) {

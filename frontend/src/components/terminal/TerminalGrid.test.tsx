@@ -15,7 +15,7 @@
 // v1's flat props (cols, rowHeight, draggableHandle, isDraggable) with grouped config objects, so
 // code written against the older API type-checks in places and still silently loses dragging or
 // lays out at the wrong size. Only mounting it proves the props are wired to the version installed.
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { TerminalGrid } from "./TerminalGrid";
 import { PANE_DRAG_HANDLE } from "./TerminalPane";
@@ -123,29 +123,44 @@ describe("closing a pane", () => {
 });
 
 describe("detaching a single pane", () => {
-  it("carries the live session so the new tab adopts the shell", () => {
+  // The detached tab is opened blank inside the click and navigated once the session is known to
+  // be fresh (openApiUrl), so the URL is read from where the tab ends up, not from window.open.
+  function openDetachedTab() {
+    const tab = { opener: {} as unknown, location: { href: "about:blank" }, close: vi.fn() };
+    const open = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ authenticated: true }), { status: 200 })));
+    return {
+      open,
+      tab,
+      restore: () => {
+        open.mockRestore();
+        vi.unstubAllGlobals();
+      },
+    };
+  }
+
+  it("carries the live session so the new tab adopts the shell", async () => {
     useTerminalMock.mockReturnValue({ sessionId: "sess-9", connected: true, cleanup: vi.fn() });
-    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const { open, tab, restore } = openDetachedTab();
     renderGrid([pane("a", "head-01")]);
 
     fireEvent.click(screen.getByLabelText("Detach head-01"));
 
-    const url = String(open.mock.calls[0][0]);
-    expect(url).toContain("/terminal?");
-    expect(url).toContain("session=sess-9");
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+    await waitFor(() => expect(tab.location.href).toContain("/terminal?"));
+    expect(tab.location.href).toContain("session=sess-9");
     // A target alongside the session would let the new tab dial a second shell.
-    expect(url).not.toContain("target=");
-    open.mockRestore();
+    expect(tab.location.href).not.toContain("target=");
+    restore();
   });
 
-  it("falls back to the target when no session has been assigned yet", () => {
-    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  it("falls back to the target when no session has been assigned yet", async () => {
+    const { tab, restore } = openDetachedTab();
     renderGrid([pane("a", "ct07-01")]);
     fireEvent.click(screen.getByLabelText("Detach ct07-01"));
-    const url = String(open.mock.calls[0][0]);
-    expect(url).toContain("target=ct07-01");
-    expect(url).toContain("mode=node");
-    open.mockRestore();
+    await waitFor(() => expect(tab.location.href).toContain("target=ct07-01"));
+    expect(tab.location.href).toContain("mode=node");
+    restore();
   });
 });
 

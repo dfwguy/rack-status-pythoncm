@@ -1,6 +1,6 @@
 {
   "generated_by": "frontend/scripts/gen-help-content.mjs",
-  "count": 83,
+  "count": 82,
   "entries": [
     {
       "id": "dashboard",
@@ -272,8 +272,7 @@
         "squeuePanel",
         "sinfoPanel",
         "squeueDialog",
-        "sinfoDialog",
-        "jobStatusPanel"
+        "sinfoDialog"
       ],
       "keywords": [
         "slurm",
@@ -397,8 +396,7 @@
         }
       ],
       "related": [
-        "rackTable",
-        "jobStatusPanel"
+        "rackTable"
       ],
       "keywords": [
         "indicator",
@@ -681,44 +679,6 @@
         "description": "Modal showing Slurm node states, opened from the toolbar."
       },
       "aiContext": "SinfoDialog is a toolbar modal wrapping SinfoPanel so users can check node states from anywhere."
-    },
-    {
-      "id": "jobStatusPanel",
-      "kind": "component",
-      "title": "Job status panel",
-      "domain": "Compute",
-      "summary": "Floating panel tracking a single async job by id.",
-      "description": "JobStatusPanel is a floating panel that tracks a single asynchronous job by its id and kind, showing live progress for a launched command/validation.",
-      "features": [
-        "Tracks one async job.",
-        "Shows live progress and result."
-      ],
-      "howTo": [
-        {
-          "task": "Track a launched job",
-          "steps": [
-            "Launch a command that returns a job id.",
-            "Watch the job status panel for progress."
-          ]
-        }
-      ],
-      "related": [
-        "rackTableCommandIndicator",
-        "commandStreamDialog"
-      ],
-      "keywords": [
-        "job",
-        "status",
-        "panel",
-        "async",
-        "progress",
-        "tracking"
-      ],
-      "aria": {
-        "label": "Job status panel",
-        "description": "Floating panel that tracks a single asynchronous job's progress by id."
-      },
-      "aiContext": "JobStatusPanel is a floating panel that tracks one async job (by id/kind) and shows its live progress and result."
     },
     {
       "id": "rackDetail",

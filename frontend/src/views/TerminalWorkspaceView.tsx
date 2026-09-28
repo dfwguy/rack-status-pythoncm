@@ -30,6 +30,7 @@ import { TerminalGrid } from "../components/terminal/TerminalGrid";
 import { EMPTY_GRID, addPane, withSession, type TerminalGridState } from "../components/terminal/gridState";
 import { AddTerminalDialog, type TerminalTarget } from "../components/terminal/AddTerminalDialog";
 import { detachUrl } from "../components/terminal/detachState";
+import { openApiUrl } from "../lib/apiFetch";
 import { useContainerWidth } from "react-grid-layout";
 import { useActiveCluster } from "../context/ActiveClusterContext";
 
@@ -102,7 +103,7 @@ export default function TerminalWorkspaceView({ logDir }: TerminalWorkspaceViewP
 
   const detachAll = useCallback(() => {
     if (state.panes.length === 0) return;
-    window.open(detachUrl(state), "_blank", "noopener,noreferrer");
+    void openApiUrl(detachUrl(state));
   }, [state]);
 
   const closeAll = useCallback(() => setState(EMPTY_GRID), []);

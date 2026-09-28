@@ -98,7 +98,7 @@ import {
   hwCheckOptionsBody,
   validationFamilyBody,
 } from "../lib/rackCommandBodies";
-import { apiFetch } from "../lib/apiFetch";
+import { apiFetch, openApiUrl } from "../lib/apiFetch";
 
 const ICON_SIZE = 14;
 
@@ -774,7 +774,7 @@ export function RackTable({
 
   const handleCheckSinfo = useCallback(() => {
     closeMenu();
-    window.open("/api/scheduler-node-reasons", "_blank");
+    void openApiUrl("/api/scheduler-node-reasons");
   }, [closeMenu]);
 
   const handleOpenLog = useCallback(async () => {
@@ -861,7 +861,7 @@ export function RackTable({
           break;
       }
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1242,7 +1242,7 @@ export function RackTable({
                       ) : (
                         <span style={{ color: "var(--text-color-subtle)", fontSize: 14 }}>—</span>
                       )}
-                      <IconButton size="small" disabled={selectMode} onClick={(e) => openMenu(e, "comment", row)} sx={{ flexShrink: 0 }}>
+                      <IconButton size="small" disabled={selectMode} onClick={(e) => openMenu(e, "comment", row)} sx={{ flexShrink: 0 }} aria-label={`Comment actions for ${row.rack}`}>
                         <Ellipsis size={16} />
                       </IconButton>
                     </Box>
@@ -1256,7 +1256,7 @@ export function RackTable({
                         {row.last_job}
                       </Text>
                       {row.last_job !== "-" && row.last_job !== "" && (
-                        <IconButton size="small" disabled={selectMode} onClick={(e) => openMenu(e, "job", row)} sx={{ flexShrink: 0 }}>
+                        <IconButton size="small" disabled={selectMode} onClick={(e) => openMenu(e, "job", row)} sx={{ flexShrink: 0 }} aria-label={`Job actions for ${row.rack}`}>
                           <Ellipsis size={16} />
                         </IconButton>
                       )}
@@ -1265,7 +1265,7 @@ export function RackTable({
                   <TableCell>
                     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
                       <SinfoTags sinfo={row.sinfo} />
-                      <IconButton size="small" disabled={selectMode} onClick={(e) => openMenu(e, "sinfo", row)} sx={{ ml: "auto", flexShrink: 0 }}>
+                      <IconButton size="small" disabled={selectMode} onClick={(e) => openMenu(e, "sinfo", row)} sx={{ ml: "auto", flexShrink: 0 }} aria-label={`Node state actions for ${row.rack}`}>
                         <Ellipsis size={16} />
                       </IconButton>
                     </Box>

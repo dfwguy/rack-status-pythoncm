@@ -78,6 +78,71 @@ export default defineConfig([
       // work in GitLab and link the issue instead. A warning, not an error, so an in-progress
       // branch is not blocked from building.
       'no-warning-comments': ['warn', { terms: ['todo', 'fixme', 'xxx', 'hack'], location: 'anywhere' }],
+
+      // ---- Every request to the backend goes through lib/apiFetch.ts (added 2026-09-28) -------
+      //
+      // A request that bypasses apiFetch still carries the session cookie, so it works — until the
+      // access token expires, and then it fails for good, because only apiFetch knows how to renew
+      // it. That shipped: rack actions, both exports, the log tails and every Slurm panel broke an
+      // hour into a session. An earlier codemod rewrote only `fetch("/api/...")` with a literal
+      // URL, which is how every call with a built-up URL was missed — so this is a lint rule on
+      // the call itself, not a pattern on its argument.
+      //
+      //   JSON / streamed body  -> apiFetch
+      //   file download         -> apiDownload
+      //   new tab (/api, /terminal) -> openApiUrl
+      //   WebSocket             -> await ensureFreshSession() first
+      //   session lost          -> nothing: apiFetch signs the UI out and AuthProvider keeps the route
+      'no-restricted-globals': ['error',
+        { name: 'fetch', message: 'Use apiFetch / apiDownload from lib/apiFetch — a raw fetch cannot renew an expired session.' },
+        { name: 'EventSource', message: 'EventSource cannot renew an expired session; stream with apiFetch and read res.body instead.' },
+      ],
+      'no-restricted-properties': ['error',
+        { object: 'window', property: 'fetch', message: 'Use apiFetch from lib/apiFetch.' },
+        { object: 'globalThis', property: 'fetch', message: 'Use apiFetch from lib/apiFetch.' },
+      ],
+      'no-restricted-syntax': ['error',
+        {
+          selector: "NewExpression[callee.name='WebSocket']",
+          message: 'Await ensureFreshSession() from lib/apiFetch before opening a WebSocket; the handshake cannot renew the session.',
+        },
+        {
+          selector: "CallExpression[callee.object.name='window'][callee.property.name='open'][arguments.0.value=/^\\/(api|terminal)\\b/]",
+          message: 'Use openApiUrl (or apiDownload) from lib/apiFetch; a plain window.open cannot renew the session.',
+        },
+        {
+          selector: "CallExpression[callee.object.name='window'][callee.property.name='open'][arguments.0.quasis.0.value.raw=/^\\/(api|terminal)\\b/]",
+          message: 'Use openApiUrl (or apiDownload) from lib/apiFetch; a plain window.open cannot renew the session.',
+        },
+        {
+          // A link straight to /api is a browser-initiated request too. Keep the href (copyable,
+          // accessible) but route the click through openApiUrl, as JobLogContentDialog does.
+          selector: "JSXOpeningElement[name.name='a']:not(:has(JSXAttribute[name.name='onClick'])) > JSXAttribute[name.name='href'] > Literal[value=/^\\/api\\//]",
+          message: 'A plain <a href="/api/..."> cannot renew an expired session; add an onClick that calls openApiUrl or apiDownload.',
+        },
+        {
+          selector: "JSXOpeningElement[name.name='a']:not(:has(JSXAttribute[name.name='onClick'])) > JSXAttribute[name.name='href'] > JSXExpressionContainer > TemplateLiteral[quasis.0.value.raw=/^\\/api\\//]",
+          message: 'A plain <a href="/api/..."> cannot renew an expired session; add an onClick that calls openApiUrl or apiDownload.',
+        },
+        {
+          selector: "AssignmentExpression[left.property.name='href'][right.value=/^\\/login\\b/]",
+          message: 'Do not redirect to /login: apiFetch signs the UI out on a lost session and AuthProvider keeps the route.',
+        },
+        {
+          selector: "AssignmentExpression[left.property.name='href'][right.quasis.0.value.raw=/^\\/login\\b/]",
+          message: 'Do not redirect to /login: apiFetch signs the UI out on a lost session and AuthProvider keeps the route.',
+        },
+      ],
+    },
+  },
+  {
+    // The two modules allowed to touch the network directly: apiFetch is the wrapper itself, and
+    // srpClient runs the sign-in exchange that obtains a session in the first place. Tests stub
+    // the global fetch, which is what these rules forbid everywhere else.
+    files: ['src/lib/apiFetch.ts', 'src/lib/srpClient.ts', '**/*.test.{ts,tsx}', 'src/test/**'],
+    rules: {
+      'no-restricted-globals': 'off',
+      'no-restricted-properties': 'off',
     },
   },
 ])

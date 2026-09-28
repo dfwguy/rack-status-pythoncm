@@ -80,10 +80,21 @@ replays the original request, and returns the untouched `401` if the *refresh* a
 is the only 401 that means "log in again". It also de-duplicates, because a dashboard firing a
 dozen requests at an expired token produces a dozen simultaneous 401s and one shared renewal.
 
-A bare `fetch("/api/...")` therefore works for an hour and then that panel starts failing, and
-recovers only if some *other* call happens to renew first. It presents as one flaky pane, which is
-why it survived: **58 call sites across 28 files** had drifted onto raw `fetch` before
-`bin/codemod-apifetch.py` moved them (re-runnable; `--dry-run` shows a diff).
+A request that bypasses `apiFetch` still carries the cookie, so it works for an hour and then that
+panel fails for good, recovering only if some *other* call happens to renew first. It presents as
+one flaky pane, which is why it kept surviving. An earlier codemod moved raw `fetch("/api/...")`
+calls with a *literal* URL and missed every call whose URL was built up or passed in — rack
+actions, both exports, the log tails and every Slurm panel — so the guard is now a lint rule on the
+call itself.
+
+**Every browser request to the backend goes through `lib/apiFetch.ts`**, by what it is:
+
+| Request | Use | Why |
+|---|---|---|
+| JSON, or a streamed body (`res.body.getReader()`) | `apiFetch` | Renews on 401 and replays; the retry happens before the body is read, so streams work |
+| File download | `apiDownload(url, fallbackName)` | `apiFetch` → blob → named download; throws with the server's `error` text |
+| New tab to `/api/...` or `/terminal` | `openApiUrl(url)` | Opens the tab synchronously (keeps the click's user gesture), navigates it only once `ensureFreshSession()` succeeds |
+| WebSocket (`/ws/terminal`) | `await ensureFreshSession()` first | The handshake sends the cookie but cannot renew it |
 
 ```tsx
 import { apiFetch } from "../lib/apiFetch";        // depth varies: ./lib, ../lib, ../../lib
@@ -92,14 +103,26 @@ const res = await apiFetch(`/api/status?${params}`, { cache: "no-store" });
 ```
 
 `credentials` and the `X-Rack-Operator` / `X-Rack-Client-Id` headers are set for you, so a call
-site does not need to restate them.
+site does not need to restate them — and must not bypass them: rack-lock tracking attributes an
+action to the operator from those headers.
 
-**Two deliberate exceptions, and only these two.** `apiFetch.ts` itself, whose own
-`fetch("/api/auth/refresh")` must stay raw or renewal recurses; and `srpClient.ts`, which *obtains*
-the session and so has nothing to renew. Anything else using raw `fetch` on an `/api` path is a
-bug. `/api/auth/refresh`, `/api/auth/srp/` and `/api/auth/logout` are on `NO_REFRESH` inside the
+**A 401 needs no handling at the call site.** When the renewal fails, `apiFetch` calls the
+`onSessionLost` handler and `AuthProvider` shows sign-in in place, keeping the hash route. Never
+redirect to `/login` by hand: that loses the route (this is a `HashRouter`) and skips the handler.
+Just stop — return, or show "session expired" in a streaming pane.
+
+**Enforced by ESLint** (`frontend/eslint.config.js`, a hard CI gate): `fetch` and `EventSource` as
+globals, `window.fetch`/`globalThis.fetch`, `new WebSocket`, `window.open` of an `/api` or
+`/terminal` URL, and assigning a `/login` URL to `href` are all errors. **Two deliberate
+exceptions, and only these two:** `apiFetch.ts` itself, whose own `fetch("/api/auth/refresh")` must
+stay raw or renewal recurses; and `srpClient.ts`, which *obtains* the session and so has nothing to
+renew. Tests are exempt so they can stub `fetch`. The one `new WebSocket` (`hooks/useTerminal.ts`)
+carries an inline disable naming the `ensureFreshSession()` call before it.
+
+`/api/auth/refresh`, `/api/auth/srp/` and `/api/auth/logout` are on `NO_REFRESH` inside the
 wrapper — **`/api/auth-check` is deliberately not**, and putting it back reintroduces a defect
 where a page reload signed the operator out of a live session (see that constant's comment).
+`ensureFreshSession()` depends on that: it is a renewing call to `/api/auth-check`.
 
 ## Code splitting: a lazy route is not enough, and a lazy dialog is not enough either
 

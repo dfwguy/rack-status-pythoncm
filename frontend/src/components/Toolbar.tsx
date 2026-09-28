@@ -45,6 +45,7 @@ import { SinfoDialog } from "./SinfoDialog";
 // xterm + its WebGL addon (~461 kB), for the head-node console.
 const WebTerminalDialog = lazy(() => import("./rack/WebTerminalDialog"));
 import { useAuth } from "../context/AuthContext";
+import { apiDownload } from "../lib/apiFetch";
 import { useRackLocksContext } from "../context/RackLocksContext";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
@@ -111,42 +112,22 @@ export function Toolbar({
     return Array.from(byOp.values()).sort((a, b) => a.operator.localeCompare(b.operator));
   }, [locks]);
 
-  const handleExportLogs = () => {
+  const handleExportLogs = async () => {
     const params = new URLSearchParams();
     if (logDir) params.set("log_dir", logDir);
-    window.open(`/api/export-logs-zip?${params}`, "_blank");
+    try {
+      await apiDownload(`/api/export-logs-zip?${params}`, "rack-logs.zip");
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Log export failed");
+    }
   };
 
   const handleExportExcel = async () => {
     const params = new URLSearchParams();
     if (logDir) params.set("log_dir", logDir);
-    const url = `/api/parser-export-excel?${params}`;
     setExcelExporting(true);
     try {
-      const res = await fetch(url, { credentials: "same-origin" });
-      if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
-        return;
-      }
-      if (!res.ok) {
-        const ct = res.headers.get("content-type") || "";
-        if (ct.includes("application/json")) {
-          const j = (await res.json()) as { error?: string };
-          throw new Error(typeof j.error === "string" ? j.error : `HTTP ${res.status}`);
-        }
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const blob = await res.blob();
-      const cd = res.headers.get("content-disposition");
-      let name = "rack-parser-export.xlsx";
-      const m = cd && /filename="([^"]+)"/.exec(cd);
-      if (m) name = m[1];
-      const a = document.createElement("a");
-      const href = URL.createObjectURL(blob);
-      a.href = href;
-      a.download = name;
-      a.click();
-      URL.revokeObjectURL(href);
+      await apiDownload(`/api/parser-export-excel?${params}`, "rack-parser-export.xlsx");
     } catch (e) {
       window.alert(e instanceof Error ? e.message : "Excel export failed");
     } finally {

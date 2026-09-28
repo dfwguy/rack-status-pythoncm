@@ -34,7 +34,7 @@ import Paper from "@mui/material/Paper";
 import { ChevronDown, ChevronRight, Download, RefreshCw } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
-import { apiFetch } from "../lib/apiFetch";
+import { apiFetch, openApiUrl } from "../lib/apiFetch";
 
 interface OpenApiParameter {
   name: string;
@@ -183,7 +183,7 @@ export function ApiReferenceView() {
             <Button
               kind="secondary"
               size="small"
-              onClick={() => window.open("/api/openapi.json", "_blank")}
+              onClick={() => void openApiUrl("/api/openapi.json")}
             >
               <Download size={14} style={{ marginRight: 6 }} />
               openapi.json

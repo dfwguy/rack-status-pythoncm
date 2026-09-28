@@ -108,11 +108,16 @@ function refreshSession(): Promise<boolean> {
 /**
  * ``fetch`` replacement: adds the operator/client headers, and renews an expired session once.
  *
- * **The renewal is why this wrapper is worth having.** Access tokens last 15 minutes by design —
- * short, because FR-6 lets a *withdrawn* grant lag by at most that long. Without a renewal path the
- * UI simply broke after fifteen minutes: every call returned "authentication required" while the
- * page still looked signed in, because the mount-time check had passed long before. That is what a
- * refresh token is for, and the route existed; nothing called it.
+ * **The renewal is why this wrapper is worth having.** Access tokens last an hour by default
+ * (`ACCESS_TTL_SECONDS` in `backend/identity/tokens.py`) — short, because FR-6 lets a *withdrawn*
+ * grant lag by at most that long. Without a renewal path the UI simply broke when the token expired:
+ * every call returned "authentication required" while the page still looked signed in, because the
+ * mount-time check had passed long before. That is what a refresh token is for.
+ *
+ * **Every browser request to `/api` goes through here** — JSON, streamed bodies, downloads
+ * ({@link apiDownload}), and anything the browser opens itself ({@link ensureFreshSession} first).
+ * A request that bypasses it still carries the cookie, so it works until the token expires and
+ * then fails for good. ESLint enforces this (`frontend/eslint.config.js`).
  *
  * On a 401 it refreshes once and retries. If the refresh fails the original 401 is returned
  * untouched, so the caller — and ultimately `AuthProvider` — still sees a genuine sign-out rather
@@ -139,6 +144,97 @@ export async function apiFetch(
   // The body of `init` may be a stream that the first attempt consumed. Callers in this codebase
   // pass strings, which are replayable; a stream body would need cloning before the first send.
   return rawFetch(input, init);
+}
+
+/**
+ * Renew the session if it has expired, and say whether it is still valid.
+ *
+ * For requests the browser makes itself — `window.open` of an `/api` URL, the `/terminal` page,
+ * the terminal WebSocket. They carry the cookie but cannot run {@link apiFetch}'s refresh, so an
+ * expired access token fails them outright. Call this first; it goes through `apiFetch`, so a
+ * failed renewal also triggers the app-wide sign-out.
+ */
+export async function ensureFreshSession(): Promise<boolean> {
+  try {
+    return (await apiFetch("/api/auth-check")).ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Open a same-origin URL that needs a session (an `/api` URL, `/terminal`) in a new tab.
+ *
+ * The tab is opened **synchronously**, inside the click that called this, and only navigated once
+ * the session is known to be fresh: a `window.open` issued after an `await` has lost the user
+ * gesture, and popup blockers refuse it. If the session is gone the blank tab is closed and
+ * `apiFetch` has already signed the UI out.
+ *
+ * `noopener` cannot be passed to `window.open` here — it makes the call return `null`, leaving
+ * nothing to navigate — so the opener link is cut by hand instead, to the same effect.
+ *
+ * Call it directly from the event handler, before any other `await`.
+ */
+export async function openApiUrl(url: string): Promise<void> {
+  const win = window.open("about:blank", "_blank");
+  if (win) win.opener = null;
+  if (!(await ensureFreshSession())) {
+    win?.close();
+    return;
+  }
+  if (win) win.location.href = url;
+}
+
+/** The filename from a `Content-Disposition` header, preferring the RFC 5987 `filename*` form. */
+export function filenameFromDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const extended = /filename\*\s*=\s*[^']*''([^;]+)/i.exec(header);
+  if (extended) {
+    try {
+      return decodeURIComponent(extended[1].trim().replace(/^"|"$/g, ""));
+    } catch {
+      // Malformed percent-encoding: fall through to the plain form.
+    }
+  }
+  const plain = /filename\s*=\s*("([^"]*)"|[^;]+)/i.exec(header);
+  if (!plain) return null;
+  return (plain[2] ?? plain[1]).trim() || null;
+}
+
+/**
+ * Download an `/api` response as a file, with the session renewal `apiFetch` provides.
+ *
+ * Replaces `window.open` and a bare `fetch` → blob, both of which fail permanently once the access
+ * token expires. Throws with the server's `error` text on a non-OK response. A 401 that survives
+ * the refresh returns quietly: `apiFetch` has already signed the UI out.
+ */
+export async function apiDownload(
+  input: string,
+  fallbackName: string,
+  init?: RequestInit,
+): Promise<void> {
+  const res = await apiFetch(input, init);
+  if (res.status === 401) return;
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) message = body.error;
+    } catch {
+      // Not JSON: keep the status line.
+    }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filenameFromDisposition(res.headers.get("Content-Disposition")) ?? fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoked on the next tick: revoking synchronously can cancel the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(href), 0);
 }
 
 function rawFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {

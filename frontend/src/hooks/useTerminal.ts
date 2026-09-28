@@ -16,6 +16,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
+import { ensureFreshSession } from "../lib/apiFetch";
 
 /**
  * Terminal background, shared by the xterm theme and every surface that hosts one.
@@ -100,7 +101,10 @@ export function useTerminal({
     if (!active) return;
     if (!reconnectSessionId && !target) return;
 
-    const timerId = setTimeout(() => {
+    // Set by the effect's cleanup. The body below awaits the session check, and a pane closed or
+    // re-targeted during that await must not go on to open a socket nobody will close.
+    let cancelled = false;
+    const timerId = setTimeout(() => void (async () => {
       const el = containerRef.current;
       if (!el) return;
 
@@ -159,6 +163,16 @@ export function useTerminal({
         params.set("mode", mode);
       }
       const wsUrl = `${protocol}//${window.location.host}/ws/terminal?${params}`;
+
+      // The WebSocket handshake carries the access cookie but cannot renew it, so an expired token
+      // fails the upgrade outright. Renew first (a failed renewal signs the UI out via apiFetch).
+      const fresh = await ensureFreshSession();
+      if (cancelled) return;
+      if (!fresh) {
+        term.writeln("\x1b[1;31mYour session has expired. Sign in again to open a terminal.\x1b[0m");
+        return;
+      }
+      // eslint-disable-next-line no-restricted-syntax -- the app's one WebSocket, opened only after ensureFreshSession() above
       const ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -275,9 +289,10 @@ export function useTerminal({
       doFit();
       setTimeout(doFit, 300);
       setTimeout(() => { doFit(); term.focus(); }, 800);
-    }, 150);
+    })(), 150);
 
     return () => {
+      cancelled = true;
       clearTimeout(timerId);
       cleanup();
     };

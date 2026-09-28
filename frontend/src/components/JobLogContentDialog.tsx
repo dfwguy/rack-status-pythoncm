@@ -17,7 +17,7 @@ import DialogActions from "@mui/material/DialogActions";
 import MuiButton from "@mui/material/Button";
 import Box from "@mui/material/Box";
 import LinearProgress from "@mui/material/LinearProgress";
-import { apiFetch } from "../lib/apiFetch";
+import { apiFetch, openApiUrl } from "../lib/apiFetch";
 
 interface StdoutContentResponse {
   ok: boolean;
@@ -79,7 +79,7 @@ export function JobLogContentDialog({ open, onClose, title, path, logDir }: JobL
           signal: ac.signal,
         });
         if (res.status === 401) {
-          window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+          // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
           return;
         }
         const json = (await res.json()) as StdoutContentResponse;
@@ -118,7 +118,17 @@ export function JobLogContentDialog({ open, onClose, title, path, logDir }: JobL
         {tooLarge && path && (
           <Box sx={{ mb: 1, fontSize: 13, color: "text.secondary" }}>
             File is {Math.round(tooLarge.size / 1024)} KB, too large to display inline.{" "}
-            <a href={downloadHref(path, logDir)} target="_blank" rel="noopener noreferrer">
+            <a
+              href={downloadHref(path, logDir)}
+              target="_blank"
+              rel="noopener noreferrer"
+              // A plain link cannot renew an expired session. Renew first, then let the browser
+              // stream the download itself: these are the files too large to buffer in a blob.
+              onClick={(e) => {
+                e.preventDefault();
+                void openApiUrl(downloadHref(path, logDir));
+              }}
+            >
               Download the full log
             </a>
             .

@@ -27,6 +27,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Box from "@mui/material/Box";
 import { ExternalLink, GripVertical, X } from "lucide-react";
 import { TERMINAL_BACKGROUND, useTerminal } from "../../hooks/useTerminal";
+import { openApiUrl } from "../../lib/apiFetch";
 
 /** Class the grid uses as its drag handle; only elements carrying it start a drag. */
 export const PANE_DRAG_HANDLE = "nvis-pane-drag";
@@ -91,7 +92,7 @@ export function TerminalPane({ spec, onClose, onSession }: TerminalPaneProps) {
       params.set("mode", spec.mode);
     }
     params.set("label", spec.label);
-    window.open(`/terminal?${params}`, "_blank", "noopener,noreferrer");
+    void openApiUrl(`/terminal?${params}`);
   };
 
   return (

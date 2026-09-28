@@ -13,9 +13,9 @@
 /**
  * Session renewal on 401 — the fix for a real, reported failure.
  *
- * Access tokens last 15 minutes by design: FR-6 permits a *withdrawn* grant to lag by at most that
- * long, so the TTL is the bound. `/api/auth/refresh` existed from the start and **nothing called
- * it**, so after fifteen minutes every request returned "authentication required" while the page
+ * Access tokens are short-lived by design (an hour by default): FR-6 permits a *withdrawn* grant to
+ * lag by at most that long, so the TTL is the bound. `/api/auth/refresh` existed from the start and
+ * **nothing called it**, so once the token expired every request returned "authentication required" while the page
  * still looked signed in — the mount-time check had passed long before. That is what was reported:
  * a Users page that listed users and then refused to create one.
  *
@@ -29,7 +29,14 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { apiFetch, onSessionLost } from "./apiFetch";
+import {
+  apiDownload,
+  apiFetch,
+  ensureFreshSession,
+  filenameFromDisposition,
+  onSessionLost,
+  openApiUrl,
+} from "./apiFetch";
 
 const originalFetch = globalThis.fetch;
 
@@ -253,5 +260,172 @@ describe("/api/auth-check", () => {
     expect(resp.status).toBe(401);
     // One renewal attempt, not a loop: the refresh route is itself on the no-refresh list.
     expect(calls).toEqual(["/api/auth-check", "/api/auth/refresh"]);
+  });
+});
+
+/**
+ * The helpers for requests that are not a plain JSON `apiFetch`: downloads, new tabs and the
+ * terminal WebSocket. Each existed as a raw `fetch` or `window.open` that worked until the access
+ * token expired and then failed for good, because only `apiFetch` can renew it.
+ */
+describe("apiDownload", () => {
+  let clicked: { href: string; download: string }[];
+  let createObjectURL: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    clicked = [];
+    createObjectURL = vi.fn(() => "blob:mock");
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push({ href: this.getAttribute("href") ?? "", download: this.download });
+    });
+  });
+
+  afterEach(() => {
+    onSessionLost(null);
+    vi.restoreAllMocks();
+  });
+
+  it("renews an expired session and downloads under the server's filename", async () => {
+    const calls: string[] = [];
+    let served = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/api/auth/refresh")) return json({ ok: true });
+      served += 1;
+      if (served === 1) return json({ error: "authentication required" }, 401);
+      return new Response("xlsx-bytes", {
+        status: 200,
+        headers: { "Content-Disposition": 'attachment; filename="rack-export-2026.xlsx"' },
+      });
+    }) as typeof fetch;
+
+    await apiDownload("/api/parser-export-excel?log_dir=x", "fallback.xlsx");
+
+    expect(calls).toEqual([
+      "/api/parser-export-excel?log_dir=x",
+      "/api/auth/refresh",
+      "/api/parser-export-excel?log_dir=x",
+    ]);
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(clicked).toEqual([{ href: "blob:mock", download: "rack-export-2026.xlsx" }]);
+  });
+
+  it("falls back to the given name when the server sends none", async () => {
+    globalThis.fetch = (async () => new Response("zip-bytes", { status: 200 })) as typeof fetch;
+
+    await apiDownload("/api/export-logs-zip", "rack-logs.zip");
+
+    expect(clicked).toEqual([{ href: "blob:mock", download: "rack-logs.zip" }]);
+  });
+
+  it("throws the server's error text and downloads nothing", async () => {
+    globalThis.fetch = (async () => json({ ok: false, error: "no exportable .txt logs" }, 404)) as typeof fetch;
+
+    await expect(apiDownload("/api/export-logs-zip", "rack-logs.zip")).rejects.toThrow(
+      "no exportable .txt logs",
+    );
+    expect(clicked).toEqual([]);
+  });
+
+  it("signs out and downloads nothing when the refresh also fails", async () => {
+    const lost = vi.fn();
+    onSessionLost(lost);
+    globalThis.fetch = (async () => json({ error: "authentication required" }, 401)) as typeof fetch;
+
+    await apiDownload("/api/parser-export-excel", "x.xlsx");
+
+    expect(lost).toHaveBeenCalledTimes(1);
+    expect(clicked).toEqual([]);
+    expect(createObjectURL).not.toHaveBeenCalled();
+  });
+});
+
+describe("filenameFromDisposition", () => {
+  it.each([
+    ['attachment; filename="report.pdf"', "report.pdf"],
+    ["attachment; filename=report.csv", "report.csv"],
+    ["attachment; filename*=UTF-8''rack%20g01.zip", "rack g01.zip"],
+    [`attachment; filename="plain.txt"; filename*=UTF-8''pr%C3%A9f%C3%A9r%C3%A9.txt`, "préféré.txt"],
+  ])("%s -> %s", (header, expected) => {
+    expect(filenameFromDisposition(header)).toBe(expected);
+  });
+
+  it("returns null when there is no filename", () => {
+    expect(filenameFromDisposition(null)).toBeNull();
+    expect(filenameFromDisposition("inline")).toBeNull();
+  });
+});
+
+describe("ensureFreshSession", () => {
+  afterEach(() => onSessionLost(null));
+
+  it("is true after renewing an expired access token", async () => {
+    let checked = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("/api/auth/refresh")) return json({ ok: true });
+      checked += 1;
+      return checked === 1 ? json({ authenticated: false }, 401) : json({ authenticated: true });
+    }) as typeof fetch;
+
+    expect(await ensureFreshSession()).toBe(true);
+  });
+
+  it("is false, and signs out, when the session is gone", async () => {
+    const lost = vi.fn();
+    onSessionLost(lost);
+    globalThis.fetch = (async () => json({ authenticated: false }, 401)) as typeof fetch;
+
+    expect(await ensureFreshSession()).toBe(false);
+    expect(lost).toHaveBeenCalledTimes(1);
+  });
+
+  it("is false on a network failure rather than throwing", async () => {
+    globalThis.fetch = (async () => {
+      throw new TypeError("Failed to fetch");
+    }) as typeof fetch;
+
+    expect(await ensureFreshSession()).toBe(false);
+  });
+});
+
+describe("openApiUrl", () => {
+  afterEach(() => {
+    onSessionLost(null);
+    vi.restoreAllMocks();
+  });
+
+  function fakeTab() {
+    return { opener: {} as unknown, location: { href: "about:blank" }, close: vi.fn() };
+  }
+
+  it("opens the tab inside the click, then navigates it once the session is fresh", async () => {
+    const tab = fakeTab();
+    const open = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+    let resolveCheck: (r: Response) => void = () => {};
+    globalThis.fetch = (() => new Promise<Response>((r) => { resolveCheck = r; })) as typeof fetch;
+
+    const pending = openApiUrl("/terminal?target=head");
+    // Synchronously — before the session check resolves — so the popup keeps the user gesture.
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(tab.opener).toBeNull();
+    expect(tab.location.href).toBe("about:blank");
+
+    resolveCheck(json({ authenticated: true }));
+    await pending;
+    expect(tab.location.href).toBe("/terminal?target=head");
+    expect(tab.close).not.toHaveBeenCalled();
+  });
+
+  it("closes the blank tab when the session is gone", async () => {
+    const tab = fakeTab();
+    vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+    globalThis.fetch = (async () => json({ authenticated: false }, 401)) as typeof fetch;
+
+    await openApiUrl("/api/openapi.json");
+
+    expect(tab.close).toHaveBeenCalledTimes(1);
+    expect(tab.location.href).toBe("about:blank");
   });
 });

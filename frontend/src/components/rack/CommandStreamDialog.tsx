@@ -17,6 +17,7 @@ import DialogActions from "@mui/material/DialogActions";
 import MuiButton from "@mui/material/Button";
 import Box from "@mui/material/Box";
 import LinearProgress from "@mui/material/LinearProgress";
+import { apiFetch } from "../../lib/apiFetch";
 
 export interface CommandStreamDialogProps {
   open: boolean;
@@ -67,15 +68,15 @@ export function CommandStreamDialog({ open, onClose, title, endpoint, body }: Co
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
       try {
-        const res = await fetch(endpoint, {
+        const res = await apiFetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
-          credentials: "same-origin",
           signal: ac.signal,
         });
         if (res.status === 401) {
-          window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+          // apiFetch already tried a renewal and, on failure, signed the UI out.
+          setPreText("Your session has expired. Sign in again to continue.\n");
           return;
         }
         if (!res.ok) {

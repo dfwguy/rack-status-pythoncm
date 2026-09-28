@@ -95,7 +95,7 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
         cache: "no-store",
       });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const json = (await res.json()) as {
@@ -189,7 +189,7 @@ export function SettingsView({ logDir, onLogDirChange, onDashboardEnvSaved }: Se
         body: JSON.stringify({ overrides }),
       });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const json = (await res.json()) as {

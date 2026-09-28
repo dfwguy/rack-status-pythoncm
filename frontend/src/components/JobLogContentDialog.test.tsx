@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { JobLogContentDialog } from "./JobLogContentDialog";
 
@@ -45,6 +45,20 @@ describe("JobLogContentDialog", () => {
     render(<JobLogContentDialog open onClose={() => {}} title="node / big" path="/x/results/n/big.txt" />);
     const link = await screen.findByRole("link", { name: /Download the full log/ });
     expect(link).toHaveAttribute("href", expect.stringContaining("/api/scheduler-job-output-download?path="));
+  });
+
+  it("renews the session before the browser downloads the full log", async () => {
+    vi.stubGlobal("fetch", mockFetch({ ok: true, too_large: true, size_bytes: 20 * 1024 * 1024, filename: "big.txt" }));
+    const tab = { opener: {} as unknown, location: { href: "about:blank" }, close: vi.fn() };
+    const open = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+    render(<JobLogContentDialog open onClose={() => {}} title="node / big" path="/x/results/n/big.txt" />);
+
+    fireEvent.click(await screen.findByRole("link", { name: /Download the full log/ }));
+
+    // A plain link cannot renew; the click opens a blank tab, checks the session, then navigates.
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+    await waitFor(() => expect(tab.location.href).toContain("/api/scheduler-job-output-download?path="));
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toContain("/api/auth-check");
   });
 
   it("surfaces an error from the endpoint", async () => {

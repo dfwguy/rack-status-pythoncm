@@ -9,6 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
+import { apiFetch } from "./apiFetch";
 /** Slurm job id suitable for scancel (digits, optional _task for job arrays). Legacy-aligned. */
 export function slurmJobIdForScancel(raw: unknown): string {
   const t = String(raw ?? "").trim();
@@ -62,7 +63,7 @@ export function formatSlurmCmdDetail(data: SlurmCmdJson): string {
 }
 
 export async function fetchSlurmJson(url: string, init?: RequestInit): Promise<{ res: Response; data: SlurmCmdJson }> {
-  const res = await fetch(url, { credentials: "same-origin", ...init });
+  const res = await apiFetch(url, init);
   const raw = await res.text();
   // No initialiser: the catch throws, so `data` is either parsed or we never reach the use.
   let data: SlurmCmdJson;

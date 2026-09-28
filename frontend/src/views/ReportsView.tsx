@@ -126,7 +126,7 @@ export function ReportsView() {
     try {
       const res = await apiFetch("/api/bug-report-inventory", { credentials: "same-origin" });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const raw = await res.text();
@@ -194,7 +194,7 @@ export function ReportsView() {
       const params = new URLSearchParams({ host, name });
       const res = await apiFetch(`/api/bug-report-file?${params}`, { credentials: "same-origin" });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const ctype = (res.headers.get("Content-Type") || "").toLowerCase();

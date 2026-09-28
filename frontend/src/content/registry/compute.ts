@@ -223,7 +223,7 @@ export const computeContent: HelpContent[] = [
         steps: ["Find the job in the squeue panel.", "Use the log/tail action on its row to stream output."],
       },
     ],
-    related: ["squeuePanel", "sinfoPanel", "squeueDialog", "sinfoDialog", "jobStatusPanel"],
+    related: ["squeuePanel", "sinfoPanel", "squeueDialog", "sinfoDialog"],
     keywords: ["slurm", "scheduler", "squeue", "sinfo", "jobs", "queue", "nodes", "drain", "idle", "alloc"],
     aria: {
       label: "Slurm scheduler page",
@@ -300,7 +300,7 @@ export const computeContent: HelpContent[] = [
         steps: ["Look for the activity dot on the rack's row.", "An active dot means a command/job is in flight."],
       },
     ],
-    related: ["rackTable", "jobStatusPanel"],
+    related: ["rackTable"],
     keywords: ["indicator", "activity", "command", "running", "job", "dot"],
     aria: {
       label: "Rack command activity indicator",
@@ -456,26 +456,5 @@ export const computeContent: HelpContent[] = [
       description: "Modal showing Slurm node states, opened from the toolbar.",
     },
     aiContext: "SinfoDialog is a toolbar modal wrapping SinfoPanel so users can check node states from anywhere.",
-  },
-  {
-    id: "jobStatusPanel",
-    kind: "component",
-    title: "Job status panel",
-    domain: "Compute",
-    summary: "Floating panel tracking a single async job by id.",
-    description:
-      "JobStatusPanel is a floating panel that tracks a single asynchronous job by its id and kind, showing live progress for a launched command/validation.",
-    features: ["Tracks one async job.", "Shows live progress and result."],
-    howTo: [
-      { task: "Track a launched job", steps: ["Launch a command that returns a job id.", "Watch the job status panel for progress."] },
-    ],
-    related: ["rackTableCommandIndicator", "commandStreamDialog"],
-    keywords: ["job", "status", "panel", "async", "progress", "tracking"],
-    aria: {
-      label: "Job status panel",
-      description: "Floating panel that tracks a single asynchronous job's progress by id.",
-    },
-    aiContext:
-      "JobStatusPanel is a floating panel that tracks one async job (by id/kind) and shows its live progress and result.",
   },
 ];

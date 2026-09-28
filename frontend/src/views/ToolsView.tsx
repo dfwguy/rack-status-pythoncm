@@ -447,7 +447,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             { credentials: "same-origin", signal: ac.signal },
           );
           if (res.status === 401) {
-            window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+            // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
             return;
           }
           const json = (await res.json()) as {
@@ -512,7 +512,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
             signal: ac.signal,
           });
           if (res.status === 401) {
-            window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+            // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
             return null;
           }
           const json = (await res.json()) as {
@@ -625,7 +625,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         }),
       });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, nemo: t })));
@@ -707,7 +707,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         }),
       });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, hpcx: t })));
@@ -785,7 +785,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         }),
       });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, cudaNccl: t })));
@@ -853,7 +853,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         }),
       });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, dcgm: t })));
@@ -917,7 +917,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         log_dir: logDir,
       });
       if (startRes.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const startJson = (await startRes.json()) as { ok?: boolean; job_id?: string; error?: string };
@@ -995,7 +995,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         }),
       });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, nvloom: t })));
@@ -1065,7 +1065,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         }),
       });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, dgxc: t })));
@@ -1121,7 +1121,7 @@ export function ToolsView({ logDir }: ToolsViewProps) {
         body: JSON.stringify({}),
       });
       if (res.status === 401) {
-        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+        // apiFetch already tried a renewal and, on failure, signed the UI out (the route is kept).
         return;
       }
       const sink = createThrottledLogSink((t) => setLiveLogs((p) => ({ ...p, grafana: t })));
