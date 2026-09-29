@@ -7,6 +7,7 @@
 //! land in later phases; the passthrough means every endpoint is usable in the meantime.
 
 mod api;
+mod auth;
 mod config;
 mod output;
 
@@ -45,6 +46,18 @@ enum Command {
     /// Call any `/api/*` endpoint directly. The full surface, before typed verbs exist for it.
     Api(api::ApiArgs),
 
+    /// Log in to the active profile over SRP and store the session.
+    Login {
+        /// Login name. Prompted for if omitted.
+        login: Option<String>,
+        /// Read the password from stdin instead of prompting (for scripts/CI).
+        #[arg(long)]
+        password_stdin: bool,
+    },
+
+    /// Log out of the active profile: revoke the session and forget it locally.
+    Logout,
+
     /// Report whether the active profile has a valid session (probes `/api/auth-check`).
     Whoami,
 }
@@ -73,13 +86,29 @@ fn main() {
         Ok(()) => 0,
         Err(err) => {
             eprintln!("error: {err:#}");
-            // Preserve a transport error's specific exit code so scripts can branch on *why*.
-            err.downcast_ref::<nvrs_client::Error>()
-                .map(|e| e.exit_code())
-                .unwrap_or(1)
+            exit_code_for(&err)
         }
     };
     std::process::exit(code);
+}
+
+/// Map an error to a process exit code so a script can branch on *why* a command failed. A transport
+/// error keeps its specific code whether it surfaces bare or wrapped inside an [`nvrs_auth::AuthError`];
+/// an auth-specific failure (bad credentials, expired session, impostor server) is "not authorized".
+fn exit_code_for(err: &anyhow::Error) -> i32 {
+    if let Some(e) = err.downcast_ref::<nvrs_client::Error>() {
+        return e.exit_code();
+    }
+    if let Some(e) = err.downcast_ref::<nvrs_auth::AuthError>() {
+        return match e {
+            nvrs_auth::AuthError::Client(c) => c.exit_code(),
+            nvrs_auth::AuthError::InvalidCredentials
+            | nvrs_auth::AuthError::SessionExpired
+            | nvrs_auth::AuthError::ServerAuthFailed => 77,
+            _ => 1,
+        };
+    }
+    1
 }
 
 fn run(cli: Cli) -> Result<()> {
@@ -89,6 +118,19 @@ fn run(cli: Cli) -> Result<()> {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
             block_on(api::run(args, &cfg, &name, profile, cli.json))
+        }
+        Command::Login {
+            login,
+            password_stdin,
+        } => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            block_on(auth::login(&cfg, &name, profile, login, password_stdin))
+        }
+        Command::Logout => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            block_on(auth::logout(&cfg, &name, profile))
         }
         Command::Whoami => {
             let cfg = Config::load()?;

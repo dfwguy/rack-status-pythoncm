@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::Args;
+use nvrs_auth::TokenStore;
 use nvrs_client::Method;
 use serde_json::Value;
 
@@ -81,33 +82,93 @@ pub async fn run(
     let query = parse_kv(&args.query).context("parsing --query")?;
     let body = build_body(&args.field, args.body.as_deref())?;
 
-    let client = client_for(cfg, profile, args.token.clone())?;
+    let store = TokenStore::open_default()?;
+    let (token, stored) = crate::auth::resolve_access(&store, profile_name, args.token.as_deref())?;
+    // Only a *stored* session can be refreshed; an explicit --token/$NVRS_TOKEN is opaque to us.
+    let refresh = if args.token.is_none() {
+        stored.map(|t| t.refresh)
+    } else {
+        None
+    };
+    let client = client_for(cfg, profile, token)?;
 
     if args.stream {
-        let resp = client
-            .send_raw(method, &args.path, &query, body.as_ref())
-            .await?;
+        let resp = match client
+            .send_raw(method.clone(), &args.path, &query, body.as_ref())
+            .await
+        {
+            Err(nvrs_client::Error::Unauthorized) if refresh.is_some() => {
+                let new = crate::auth::refresh_and_store(
+                    cfg,
+                    profile,
+                    profile_name,
+                    &store,
+                    refresh.as_deref().unwrap(),
+                )
+                .await?;
+                client_for(cfg, profile, Some(new))?
+                    .send_raw(method, &args.path, &query, body.as_ref())
+                    .await?
+            }
+            other => other?,
+        };
         stream_to_stdout(resp).await?;
         return Ok(());
     }
 
-    let value = client
-        .send_json(method, &args.path, &query, body.as_ref())
-        .await?;
+    let value = match client
+        .send_json(method.clone(), &args.path, &query, body.as_ref())
+        .await
+    {
+        Err(nvrs_client::Error::Unauthorized) if refresh.is_some() => {
+            let new = crate::auth::refresh_and_store(
+                cfg,
+                profile,
+                profile_name,
+                &store,
+                refresh.as_deref().unwrap(),
+            )
+            .await?;
+            client_for(cfg, profile, Some(new))?
+                .send_json(method, &args.path, &query, body.as_ref())
+                .await?
+        }
+        other => other?,
+    };
     output::print_json(&value, json);
-    let _ = profile_name;
     Ok(())
 }
 
-/// `whoami` — is there a live session for this profile? Probes `/api/auth-check`, which answers 401
-/// when unauthenticated and otherwise reports the principal and flags.
+/// `whoami` — is there a live session for this profile? Probes `/api/auth-check` with the stored
+/// token, refreshing once if the access token has expired.
 pub async fn whoami(cfg: &Config, profile_name: &str, profile: &Profile, json: bool) -> Result<()> {
-    let token = std::env::var("NVRS_TOKEN").ok().filter(|s| !s.is_empty());
+    let store = TokenStore::open_default()?;
+    let env_token = std::env::var("NVRS_TOKEN").ok().filter(|s| !s.is_empty());
+    let (token, stored) = crate::auth::resolve_access(&store, profile_name, env_token.as_deref())?;
+    let refresh = if env_token.is_none() {
+        stored.map(|t| t.refresh)
+    } else {
+        None
+    };
     let client = client_for(cfg, profile, token)?;
-    match client
+
+    let mut result = client
         .send_json(Method::GET, "/api/auth-check", &[], None)
-        .await
-    {
+        .await;
+    if matches!(result, Err(nvrs_client::Error::Unauthorized)) {
+        if let Some(refresh_token) = &refresh {
+            if let Ok(new) =
+                crate::auth::refresh_and_store(cfg, profile, profile_name, &store, refresh_token)
+                    .await
+            {
+                result = client_for(cfg, profile, Some(new))?
+                    .send_json(Method::GET, "/api/auth-check", &[], None)
+                    .await;
+            }
+        }
+    }
+
+    match result {
         Ok(value) => {
             if json {
                 output::print_json(&value, true);
@@ -122,8 +183,11 @@ pub async fn whoami(cfg: &Config, profile_name: &str, profile: &Profile, json: b
             Ok(())
         }
         Err(nvrs_client::Error::Unauthorized) => {
-            // Not an error the user needs a backtrace for — it is the normal "logged out" answer.
-            println!("profile {profile_name:?} at {}: not authenticated (run `nvrs login` once implemented, or set $NVRS_TOKEN)", client.base_url());
+            // The normal "logged out" answer, not an error worth a backtrace.
+            println!(
+                "profile {profile_name:?} at {}: not authenticated — run `nvrs login`",
+                client.base_url()
+            );
             Ok(())
         }
         Err(e) => Err(e.into()),

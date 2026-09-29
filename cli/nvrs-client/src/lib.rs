@@ -79,6 +79,14 @@ impl ClientConfig {
     }
 }
 
+/// A decoded JSON body together with the `Set-Cookie` header values the response carried. Returned
+/// by [`Client::send_json_with_cookies`] so the auth layer can lift session tokens out of the
+/// cookies the login exchange sets.
+pub struct CapturedJson {
+    pub value: Value,
+    pub set_cookies: Vec<String>,
+}
+
 /// A configured HTTP client bound to one deployment. Cheap to clone (reqwest client is an `Arc`).
 #[derive(Clone)]
 pub struct Client {
@@ -199,6 +207,64 @@ impl Client {
             // Fold a failed stream start into the same error shape as send_json.
             Err(self.status_error(status, resp.text().await.unwrap_or_default()))
         }
+    }
+
+    /// Send a JSON request and return both the decoded body and the response's `Set-Cookie` values.
+    ///
+    /// The auth flows need this because the session tokens are delivered *only* as `Set-Cookie`
+    /// (`nvis_access` / `nvis_refresh`), never in the JSON body — so the ordinary [`send_json`], which
+    /// discards headers, cannot see them. `request_cookies` sets an outgoing `Cookie` header, which
+    /// is how `/api/auth/refresh` receives the refresh token (it reads a cookie, not a bearer).
+    ///
+    /// No 429 retry here: login is a deliberate, interactive act; a rate-limit answer should surface
+    /// to the operator rather than being silently slept through.
+    pub async fn send_json_with_cookies(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+        request_cookies: &[(&str, &str)],
+    ) -> Result<CapturedJson> {
+        let url = self.base.join(path).map_err(Error::Url)?;
+        let mut req = self.apply_headers(self.http.request(method, url));
+        if !request_cookies.is_empty() {
+            let jar = request_cookies
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            req = req.header(reqwest::header::COOKIE, jar);
+        }
+        if let Some(b) = body {
+            req = req.json(b);
+        }
+
+        let resp = req.send().await.map_err(Error::Transport)?;
+        let status = resp.status();
+        let set_cookies: Vec<String> = resp
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok().map(str::to_owned))
+            .collect();
+
+        let text = resp.text().await.map_err(Error::Transport)?;
+        if !status.is_success() {
+            return Err(self.status_error(status, text));
+        }
+        let value: Value = if text.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&text).map_err(|e| Error::Decode(e.to_string()))?
+        };
+        if !envelope::is_ok(&value) {
+            return Err(Error::Api {
+                status: status.as_u16(),
+                message: envelope::extract_error(&value)
+                    .unwrap_or_else(|| "request reported failure".into()),
+            });
+        }
+        Ok(CapturedJson { value, set_cookies })
     }
 
     fn apply_headers(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {

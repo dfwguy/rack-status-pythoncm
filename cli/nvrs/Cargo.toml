@@ -25,6 +25,8 @@ clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 anyhow = "1"
 toml = "0.8"
 comfy-table = "7"
+# Hidden password prompt for `nvrs login`.
+rpassword = "7"
 
 [dev-dependencies]
 tempfile = "3"

@@ -8,9 +8,9 @@ A single-binary client for a Rack Status deployment: run tests, validations and 
 a cluster, from the terminal. It is a **client of the existing API** — it speaks the same
 `/api/*` contract, SRP login and token auth as the web UI, and adds no backend surface of its own.
 
-> Status: **Phase 0** (foundation). Profiles, a generic `nvrs api` passthrough that reaches the whole
-> API, and a `whoami` probe. SRP `login` and typed domain verbs land in later phases — see the build
-> plan. Until `login` exists, pass an access token via `$NVRS_TOKEN`.
+> Status: **Phase 1**. Profiles, SRP-6a `login`/`logout`, a token store with automatic refresh, a
+> generic `nvrs api` passthrough that reaches the whole API, and `whoami`. Typed domain verbs and the
+> interactive terminal land in later phases — see the build plan.
 
 ## Workspace layout
 
@@ -18,7 +18,7 @@ a cluster, from the terminal. It is a **client of the existing API** — it spea
 | --- | --- |
 | `nvrs` | the binary: clap command tree, output rendering, exit codes |
 | `nvrs-client` | transport — HTTP + streaming, the JSON envelope, 429 backoff, TLS trust |
-| `nvrs-auth` | SRP-6a login and the token store *(Phase 1)* |
+| `nvrs-auth` | SRP-6a login, the token store, and refresh |
 | `nvrs-openapi` | fetch/cache and query the live OpenAPI contract *(Phase 2)* |
 
 ## Build & test
@@ -51,13 +51,29 @@ nvrs config list
 The OVA serves HTTPS only, usually reached over an ssh tunnel (`ssh -L 5000:localhost:5000 …`), so
 the base URL is typically `https://localhost:<local-port>`. Config lives at
 `$XDG_CONFIG_HOME/nvrs/config.toml` (or `~/.config/nvrs/config.toml`); `$NVRS_CONFIG` overrides it.
-It holds **no secrets** — tokens go in the OS keyring (Phase 1).
+It holds **no secrets** — session tokens live in a separate `0600` state file (see below).
+
+## Log in
+
+SRP-6a: the password never leaves the machine — the server receives a proof, not the password. The
+session (an access token + a refresh token) is stored under the profile name in a `0600` file at
+`$XDG_STATE_HOME/nvrs/tokens.json` (or `~/.local/state/nvrs/tokens.json`; `$NVRS_STATE` overrides).
+Calls refresh the access token automatically when it expires; a dead refresh token prompts re-login.
+
+```bash
+nvrs login                      # prompts for login + password (hidden)
+nvrs login operator             # login given, password prompted
+echo "$PW" | nvrs login operator --password-stdin   # scripted / CI
+nvrs whoami                     # who am I on the active profile?
+nvrs logout                     # revoke the session and forget it
+```
+
+An access token can still be supplied out-of-band with `$NVRS_TOKEN` (or `nvrs api --token`) — handy
+for a short-lived CI credential — which bypasses the stored session.
 
 ## Call the API
 
 ```bash
-export NVRS_TOKEN=<access-token>            # bridge until `nvrs login` exists
-
 nvrs api GET /api/status
 nvrs api GET /api/rack-locks
 nvrs api POST /api/rack-locks/p17-r01 --field note="burn-in" --field ttl_sec=3600

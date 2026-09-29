@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 [package]
 name = "nvrs-auth"
-description = "SRP-6a login and the token store for the Rack Status CLI. (Phase 1.)"
+description = "SRP-6a login and the token store for the Rack Status CLI."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,3 +14,17 @@ nvrs-client = { path = "../nvrs-client" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# SRP-6a is implemented by hand to match backend/identity/srp.py (pysrp) byte-for-byte: the
+# RustCrypto `srp` crate computes a different M1, so it cannot interoperate. The only primitives are
+# modular exponentiation and SHA-256.
+num-bigint = "0.4"
+num-traits = "0.2"
+sha2 = "0.10"
+hex = "0.4"
+# CSPRNG for the ephemeral private exponent `a`.
+rand = "0.8"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
+tempfile = "3"
+url = "2"
