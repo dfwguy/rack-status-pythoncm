@@ -231,8 +231,14 @@ def geometry_defaults(platform: models.Platform, cluster: models.Cluster | None 
     if trays > 0:
         out["RACK_VALIDATION_CT_RANGE"] = f"01-{trays:02d}"
         out["RACK_EXPORT_NODES_PER_RACK"] = str(trays)
-        if g.gpus_per_rack > 0:
-            per_tray = max(1, round(g.gpus_per_rack / trays))
+        if g.gpus_per_rack > 0 and g.trays_per_rack > 0:
+            # A cluster may override how many trays it places in a rack, but that cannot
+            # change the hardware inside one tray. Use the platform's own rack geometry
+            # rather than dividing its GPU total by the cluster's overridden tray count.
+            per_tray = max(1, round(g.gpus_per_rack / g.trays_per_rack))
+            out["RACK_CLUSTER_GPU_PER_TRAY"] = str(per_tray)
+        elif g.gpus_per_node > 0 and g.nodes_per_tray > 0:
+            per_tray = g.gpus_per_node * g.nodes_per_tray
             out["RACK_CLUSTER_GPU_PER_TRAY"] = str(per_tray)
     # GPUs per compute node (NVL=4, HGX=8, …) so launchers don't assume a generation.
     # Lowest precedence: an explicit env or on-node nvidia-smi still wins.

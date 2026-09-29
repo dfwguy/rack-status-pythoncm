@@ -318,10 +318,13 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
     except ValueError as e:
         return None, (jsonify({"ok": False, "error": str(e)}), 400)
     rack = (body.get("rack") or "").strip()
-    try:
-        rk = _normalize_rack_id(rack)
-    except ValueError as e:
-        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    if rack:
+        try:
+            rk = _normalize_rack_id(rack)
+        except ValueError as e:
+            return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    else:
+        rk = ""
     tgt_ov = body.get("target")
     if tgt_ov is not None and not isinstance(tgt_ov, str):
         return None, (jsonify({"ok": False, "error": "target must be a string"}), 400)
@@ -332,8 +335,9 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
     script = _validation_script_path()
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"validation script not found: {script}"}), 500)
-    # Pass the resolved rack id as $2 so the script names the log …-1Rack-<rack>-… correctly for any
-    # naming convention (Bright p<N>-r<N> or Boston bos01-b05); the script's own regex is Bright-only.
+    # Pass the resolved rack id as $2 when available so the script names rack logs correctly for
+    # any naming convention. Rackless exact-node launches leave $2 empty; the wrapper uses the
+    # explicit target only as its legacy log label.
     cmd = ["bash", str(script), target, rk]
     display_cmd = "./" + script.name + " " + shlex.quote(target) + " " + shlex.quote(rk)
     timeout = max(30, _job_env_int("RACK_VALIDATION_TIMEOUT", 600))
@@ -432,9 +436,9 @@ def api_run_validation_async():
     _record_validation_activity(
         val_tool,
         stage=val_stage,
-        scope="rack",
+        scope="rack" if rk else "node",
         rack=rk,
-        racks=[rk],
+        racks=[rk] if rk else [],
         log_dir=str(log_dir),
         command_display=display_cmd,
         activity_id=job_id,

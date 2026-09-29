@@ -25,6 +25,7 @@
 # container here. Falls back to the stock image for direct/manual runs.
 CONT="${NVIS_NEMO_CONT:-/raid/data/nemo-25.11.01.sqsh}"
 SYSINFO_SH=${SLURM_SUBMIT_DIR}/sysinfo.sh
+GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
 
 single_rack=1
 [ $SLURM_NNODES -gt 18 ] && single_rack=0
@@ -38,7 +39,7 @@ if [ -n "${NVIS_NEMO_XRACK:-}" ]; then
   if [ "${NVIS_NEMO_XRACK}" = 1 ]; then single_rack=0; else single_rack=1; fi
 fi
 echo "INFO: nnodes=${SLURM_NNODES} single_rack=${single_rack} (NVIS_NEMO_XRACK=${NVIS_NEMO_XRACK:-<unset>})"
-if [ $(( ${SLURM_NNODES} % 2 )) != 0 ]
+if [ "${SLURM_NNODES}" -ne 1 ] && [ $(( ${SLURM_NNODES} % 2 )) != 0 ]
 then
   echo "ERROR: SLURM_NNODES=$SLURM_NNODES is not multiple of 2!!!"
   exit 1
@@ -119,12 +120,16 @@ else
   echo "WARN: lib/fabric.inc.sh not found (set NVIS_SCRIPTS_DIR); falling back to mlx5_0..3 (may mix IB/RoCE)"
 fi
 if declare -F nvis_fabric_scan >/dev/null 2>&1; then eval "$(nvis_fabric_scan 2>/dev/null)"; fi
+ns_nic="${NVIS_FAB_NS_IFNAME:-$ns_nic}"
+echo "INFO: fabric ns_nic=${ns_nic}"
 if [[ -n "${NVIS_FAB_IB_HCA:-}" ]]; then
   IFS=',' read -r -a ew_nics <<< "${NVIS_FAB_IB_HCA}"
 else
   ew_nics=($(echo mlx5_{0..3}))
 fi
-export MELLANOX_VISIBLE_DEVICES=all
+# An IB-disabled preflight can skip enroot's Mellanox hook on nodes without
+# /sys/class/infiniband_mad. Keep the existing default for fabric-backed runs.
+export MELLANOX_VISIBLE_DEVICES="${NVIS_NEMO_MLX:-all}"
 export PMIX_MCA_gds=hash
 #
 if [ $single_rack -eq 1 ]; then
@@ -256,7 +261,7 @@ srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/n
 # NCCL pre-flight verbosity — default WARN (quiet). Override from the UI/launch (NVIS_NCCL_DEBUG=
 # INFO|TRACE) to diagnose a silent cross-rack hang: INFO names the stuck rank/peer connection.
 export NCCL_DEBUG="${NVIS_NCCL_DEBUG:-WARN}"
-export NCCL_NVLS_ENABLE=1
+export NCCL_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-1}
 
 # NCCL pre-flight selector: which collectives to run before NeMo training (space/comma
 # list of: allreduce alltoall allgather). Default = all three (original behavior). The
@@ -355,6 +360,14 @@ if [ $exitcode -ne 0 ]; then
   if [ "${NVIS_NCCL_PREFLIGHT_STRICT}" = 1 ]; then exit 1; fi
   echo "WARN: All-Gather not required for this workload (ep=1) — continuing (NVIS_NCCL_PREFLIGHT_STRICT=1 to gate)."
 fi
+fi
+
+if [ "${NVIS_NEMO_PREFLIGHT_ONLY:-0}" = 1 ]; then
+  srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/null
+  e_time=$(date +%s)
+  echo "INFO: NCCL preflight-only validation completed in $[e_time-s_time](s)"
+  echo "NCCL_PREFLIGHT_PASS nodes=${SLURM_NNODES} gpus_per_node=${GPUS_PER_NODE}"
+  exit 0
 fi
 
 
@@ -508,8 +521,8 @@ python /opt/Megatron-Bridge/scripts/performance/run_script.py \
   --container_image ${NEMORUN_HOME}/nemo-25.11.01.sqsh \
   --nemo_home ${NEMORUN_HOME}/experiments \
   --gpu ${NVIS_NEMO_GPU_TYPE} \
-  --num_gpus $[4*${SLURM_NNODES}] \
-  --gpus_per_node 4 \
+  --num_gpus $[${GPUS_PER_NODE}*${SLURM_NNODES}] \
+  --gpus_per_node ${GPUS_PER_NODE} \
   --compute_dtype ${NVIS_NEMO_DTYPE} \
   ${NVIS_NEMO_MODEL_ARGS} \
   ${NVIS_NEMO_EXTRA_ARGS} \

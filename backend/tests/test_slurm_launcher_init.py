@@ -35,3 +35,26 @@ def test_control_plane_launchers_source_the_shared_slurm_initialiser():
     ):
         source = (SCRIPTS / name).read_text(encoding="utf-8")
         assert "slurm-init.inc.sh" in source, f"{name} bypasses the shared Slurm PATH setup"
+
+
+def test_single_node_validation_uses_platform_gpu_geometry():
+    launcher = (SCRIPTS / "run_singlerack.sh").read_text(encoding="utf-8")
+    batch = (SCRIPTS / "nemo-nemotron5h_56b-mbridge-fp8.sh").read_text(encoding="utf-8")
+
+    assert 'n=${#hosts[@]}' in launcher
+    assert '(( n > 1 )) && n=$((n / 2 * 2))' in launcher
+    assert '--ntasks-per-node="${gpus_per_node}"' in launcher
+    assert '--gpus-per-node="${gpus_per_node}"' in launcher
+    assert 'GPUS_PER_NODE="${GPUS_PER_NODE:-4}"' in batch
+    assert '"${SLURM_NNODES}" -ne 1' in batch
+    assert '--num_gpus $[${GPUS_PER_NODE}*${SLURM_NNODES}]' in batch
+    assert '--gpus_per_node ${GPUS_PER_NODE}' in batch
+    assert 'ns_nic="${NVIS_FAB_NS_IFNAME:-$ns_nic}"' in batch
+    assert 'MELLANOX_VISIBLE_DEVICES="${NVIS_NEMO_MLX:-all}"' in batch
+
+
+def test_nemo_validation_can_stop_after_container_nccl_preflight():
+    batch = (SCRIPTS / "nemo-nemotron5h_56b-mbridge-fp8.sh").read_text(encoding="utf-8")
+
+    assert '"${NVIS_NEMO_PREFLIGHT_ONLY:-0}" = 1' in batch
+    assert 'NCCL_PREFLIGHT_PASS nodes=${SLURM_NNODES}' in batch

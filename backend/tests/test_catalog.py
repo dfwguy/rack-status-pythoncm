@@ -211,6 +211,22 @@ class TestContext:
         assert low["RACK_EXPORT_NODES_PER_RACK"] == "18"
         assert low["GPU_MODEL_FLAG"] == "gb300"
 
+    def test_cluster_layout_does_not_change_rtx_node_geometry(self):
+        platform = models.Platform.from_dict(
+            next(p for p in seed.SEED_PLATFORMS if p["id"] == "rtx-pro-6000-blackwell")
+        )
+        cluster = models.Cluster(
+            id="rtx",
+            name="RTX",
+            geometry=models.ClusterGeometry(trays_per_rack=4),
+        )
+
+        low = context.geometry_defaults(platform, cluster)
+
+        assert low["RACK_VALIDATION_CT_RANGE"] == "01-04"
+        assert low["RACK_CLUSTER_GPU_PER_TRAY"] == "8"
+        assert low["GPUS_PER_NODE"] == "8"
+
     def test_switch_changes_geometry_and_compat(self, seeded):
         repo = seeded
         repo.upsert(

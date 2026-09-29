@@ -109,7 +109,13 @@ do
  fi
  pdsh -R ssh -w "$_wl" "${_sudo}mkdir -p /raid/data && ${_sudo}rsync -ah $NEMO_SQSH_SRC /raid/data/$_sqsh_b"
 
- n=$[${#hosts[*]}/2*2]
+ n=${#hosts[@]}
+ (( n > 0 )) || { echo "run_singlerack: target resolved to no hosts: $r" >&2; exit 2; }
+ # The NeMo training recipe requires paired nodes, but a single node is a valid NCCL
+ # preflight target. Preserve the historical even-node truncation for larger selections.
+ (( n > 1 )) && n=$((n / 2 * 2))
+ gpus_per_node="${GPUS_PER_NODE:-4}"
+ cpus_per_task="${NVIS_NEMO_CPUS_PER_TASK:-36}"
 
 # NVIS_NEMO_CONT MUST be exported: the batch script defaults to
 # CONT="${NVIS_NEMO_CONT:-/raid/data/nemo-25.11.01.sqsh}", but staging above copies
@@ -125,6 +131,9 @@ do
 sbatch \
  -N ${n} \
  -w $(echo "${hosts[*]}"|tr ' ' ',') \
+ --ntasks-per-node="${gpus_per_node}" \
+ --cpus-per-task="${cpus_per_task}" \
+ --gpus-per-node="${gpus_per_node}" \
  -t 03:00:00 \
  --job-name=NEMO-1R \
  --output="${JOB_LOG_DIR%/}/${USER}-NEMO-1Rack-${rack}-${n}N-%j.txt" \

@@ -24,7 +24,7 @@ import app as app_module
 import rack_locks
 import rack_status_engine
 import validation_activities
-from api import dashboard
+from api import dashboard, validation_runs
 from app import app
 
 
@@ -256,6 +256,30 @@ class TestSharedClusterSnapshotAPI:
         assert overview["snapshot"]["id"] == status["snapshot"]["id"]
         if nodes:
             assert overview["cuda_nccl_build_host_candidates"] == ["GPU01"]
+
+    def test_overview_counts_platform_gpus_per_node(self, client, monkeypatch):
+        payload = self.inventory()
+        payload.update(
+            rows=[],
+            nodes=[
+                {"id": "GPU01", "rack": None, "status": "up", "ip": ""},
+                {"id": "GPU02", "rack": None, "status": "up", "ip": ""},
+            ],
+        )
+        monkeypatch.setattr(rack_status_engine, "run_rack_status", lambda *_a, **_kw: payload)
+        monkeypatch.setattr(
+            dashboard,
+            "_eget_int",
+            lambda name, default: {"GPUS_PER_NODE": 8, "RACK_CLUSTER_GPU_PER_TRAY": 2}.get(
+                name, default
+            ),
+        )
+
+        client.get("/api/cluster-overview?log_dir=/logs")
+        overview = self._poll_json(client, "/api/cluster-overview", want_state="fresh")
+
+        assert overview["tray_hosts"] == 2
+        assert overview["estimated_gpu_count"] == 16
 
     def test_cold_overview_returns_metadata_while_initializing(self, client, monkeypatch):
         gate = threading.Event()
@@ -947,6 +971,51 @@ class TestReviewedLaunchBinding:
             "/api/validation-activities", query_string={"log_dir": log_dir}
         ).get_json()
         assert listed["activities"] == []
+
+    def test_explicit_node_validation_does_not_require_a_rack(
+        self, client, log_dir, monkeypatch
+    ):
+        """A real Slurm hostname is sufficient when BCM has no rack assignments."""
+        node = "compute-001"
+
+        def resolve(rack, override):
+            assert rack == ""
+            assert override == node
+            return node
+
+        monkeypatch.setattr(validation_runs, "validation_target_for_rack", resolve)
+        monkeypatch.setattr(validation_runs, "_script_exists", lambda _path: True)
+        response = client.post(
+            "/api/launch/prepare",
+            json={"kind": "validation", "target": node, "log_dir": log_dir},
+        )
+
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body["ok"] is True
+        assert body["plan"]["rack"] == ""
+        assert body["plan"]["target"] == node
+
+        recorded = {}
+        monkeypatch.setattr(
+            validation_runs, "_record_validation_activity",
+            lambda _tool, **fields: recorded.update(fields),
+        )
+        monkeypatch.setattr(validation_runs.threading.Thread, "start", lambda _thread: None)
+        monkeypatch.setattr(validation_runs, "_validation_jobs", {})
+        launch = client.post(
+            "/api/run-validation-async",
+            json={
+                "target": node,
+                "log_dir": log_dir,
+                "plan_hash": body["plan_hash"],
+            },
+        )
+
+        assert launch.status_code == 200
+        assert recorded["scope"] == "node"
+        assert recorded["rack"] == ""
+        assert recorded["racks"] == []
 
     def test_off_mode_restores_the_legacy_contract(self, client, log_dir, monkeypatch):
         """The compatibility escape hatch, for a site with its own automation posting here."""

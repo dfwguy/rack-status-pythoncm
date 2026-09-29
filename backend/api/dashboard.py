@@ -728,8 +728,12 @@ def build_cluster_overview(
         tray_hosts = len(nodes) if isinstance(nodes, list) else None
     else:
         tray_hosts = len(phys) if cached is not None else None
-    gpus_per_tray = max(1, _eget_int("RACK_CLUSTER_GPU_PER_TRAY", 8))
-    estimated_gpus = tray_hosts * gpus_per_tray if tray_hosts is not None else None
+    # ``nodes`` is the scheduler's compute-node roster, not a rack/tray inventory. Prefer
+    # the platform's per-node geometry; the per-tray setting remains a compatibility fallback.
+    gpus_per_node = _eget_int("GPUS_PER_NODE", 0)
+    if gpus_per_node <= 0:
+        gpus_per_node = _eget_int("RACK_CLUSTER_GPU_PER_TRAY", 8)
+    estimated_gpus = tray_hosts * max(1, gpus_per_node) if tray_hosts is not None else None
     validation_total = None
     if summary is not None:
         validation_total = int(summary.get("done", 0) or 0) + int(summary.get("fail", 0) or 0)

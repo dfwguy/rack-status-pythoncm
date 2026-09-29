@@ -98,7 +98,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-cuda-maj"></a>`CUDA_MAJ` | ladder |  | CUDA major version for selecting a tool's container or module. The last fallback, behind each tool's own RACK_*_CUDA_MAJOR. Default 13. | `backend/api/validation_runs.py` |
 | <a id="s-default-log-dir"></a>`DEFAULT_LOG_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/workflow_engine.py` |
 | <a id="s-flask-debug"></a>`FLASK_DEBUG` | environment |  | See `docs/ENVIRONMENT.md` | `backend/app.py` |
-| <a id="s-gpus-per-node"></a>`GPUS_PER_NODE` | ladder | `0` | GPUs in one node. Also supplies sbatch --ntasks-per-node for a step that does not set one. | `backend/rack_status_engine.py`, `backend/workflow_engine.py` |
+| <a id="s-gpus-per-node"></a>`GPUS_PER_NODE` | ladder | `0` | GPUs in one node. Also supplies sbatch --ntasks-per-node for a step that does not set one. | `backend/api/dashboard.py`, `backend/rack_status_engine.py` +1 |
 | <a id="s-gunicorn-threads"></a>`GUNICORN_THREADS` | environment |  | Threads per worker. Default 24. | `backend/cli.py` |
 | <a id="s-gunicorn-timeout"></a>`GUNICORN_TIMEOUT` | environment |  | Seconds before a worker is considered hung. Default 600, because a fleet scan legitimately takes minutes. | `backend/cli.py` |
 | <a id="s-gunicorn-workers"></a>`GUNICORN_WORKERS` | environment |  | Worker count. Must be 1 — SRP login state is in-process, so a second worker splits it and login succeeds about half the time. The startup gate refuses more. | `backend/startup_gate.py` |
