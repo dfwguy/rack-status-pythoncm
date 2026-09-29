@@ -341,6 +341,12 @@ _RESOLVERS: dict[str, Extractor] = {
     "logs": _singleton,
     "nvftp": _singleton,
     "oidc.token": _singleton,
+    # NVIS-P2P is single-tenant -- one Dragonfly instance per cluster -- and every /api/p2p request
+    # acts on the *active* cluster, resolved server-side from the catalog, never named in the
+    # request. There is no id a resolver (which sees only RequestFacts, not the store) could read to
+    # narrow a grant against, so the capability is governed as one resource: "may this principal
+    # manage P2P here".
+    "p2p": _singleton,
     "results": _singleton,
     "settings": _singleton,
     "support": _singleton,

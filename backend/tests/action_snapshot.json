@@ -960,6 +960,24 @@
   "variant": "sync"
  },
  {
+  "endpoint": "p2p_fleet.p2p_operations",
+  "method": "POST",
+  "action": "p2p:operate",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "p2p_fleet.p2p_provision",
+  "method": "POST",
+  "action": "p2p:provision",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "p2p_fleet.p2p_status",
+  "method": "GET",
+  "action": "p2p:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "parser_results.api_capture_job_attempt",
   "method": "GET",
   "action": "results:read",

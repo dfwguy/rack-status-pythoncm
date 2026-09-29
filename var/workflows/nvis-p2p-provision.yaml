@@ -1,0 +1,105 @@
+id: nvis-p2p-provision
+name: NVIS-P2P provision (reconcile)
+description: >-
+  Stand up, or reconcile, the single-tenant Dragonfly control plane for a cluster's NVIS-P2P
+  instance (one instance per cluster). The steps run on the cluster's app server over the cluster
+  connection. This is a reconcile: a healthy instance is left in place and only what is missing is
+  created. Blast radius is real -- it brings up containers and installs peer units on a live host --
+  so the first step is a READ-ONLY preflight and every mutating step is gated behind it. The
+  control-plane bring-up, bootstrap and peer install are added to this recipe as they are built and
+  verified; until then this workflow proves the app server is ready.
+version: 1
+target:
+  mode: host
+steps:
+- id: start
+  name: Start
+  type: automated
+- id: preflight
+  name: Preflight the app server
+  type: automated
+  description: >-
+    Read-only readiness checks on the app server -- container runtime, compose, non-interactive
+    sudo, the canonical image origin, and disk headroom on the deploy filesystem. No side effects;
+    a blocking fault fails the step so nothing downstream runs against an unready host.
+  timeout: 180
+  parameters:
+    DOCKER_BIN: docker
+    CANONICAL_DIR: /cluster/containers
+    DEPLOY_BASE: /cluster/nvis-p2p
+    MIN_FREE_GB: "200"
+  run: |
+    set -uo pipefail
+    docker_hint="${DOCKER_BIN}"
+    canonical="${CANONICAL_DIR}"
+    deploy_base="${DEPLOY_BASE}"
+    min_free_gb="${MIN_FREE_GB}"
+
+    faults=0
+    warns=0
+    pass() { printf '  [PASS] %s\n' "$1"; }
+    warn() { printf '  [WARN] %s\n' "$1"; warns=$((warns+1)); }
+    fail() { printf '  [FAIL] %s\n' "$1"; faults=$((faults+1)); }
+
+    echo "== NVIS-P2P control-plane preflight =="
+    echo "host: $(hostname 2>/dev/null || echo '?')  user: $(whoami 2>/dev/null || echo '?')"
+    echo ""
+
+    # --- container runtime: PATH first, then the BCM-packaged location seen on Nscale hosts ---
+    docker=""
+    if command -v "$docker_hint" >/dev/null 2>&1; then
+      docker="$docker_hint"
+    elif [ -x /cm/local/apps/docker/current/bin/docker ]; then
+      docker=/cm/local/apps/docker/current/bin/docker
+    fi
+    echo "Container runtime:"
+    if [ -n "$docker" ]; then
+      ver=$(sudo -n "$docker" version --format '{{.Server.Version}}' 2>/dev/null \
+            || "$docker" version --format '{{.Server.Version}}' 2>/dev/null || echo '?')
+      pass "docker present ($docker), server $ver"
+      # compose plugin (control plane is Docker Compose)
+      if sudo -n "$docker" compose version >/dev/null 2>&1 || "$docker" compose version >/dev/null 2>&1; then
+        pass "docker compose plugin available"
+      else
+        fail "docker compose plugin not available (control plane is compose-based)"
+      fi
+      # non-interactive sudo docker: compose bring-up needs it
+      if sudo -n "$docker" ps >/dev/null 2>&1; then
+        pass "sudo -n docker works (non-interactive)"
+      else
+        warn "sudo -n docker failed; the daemon may be rootless or sudo needs a password"
+      fi
+    else
+      fail "no docker runtime found in PATH or /cm/local/apps/docker/current/bin"
+    fi
+
+    # --- canonical image origin (read-only source of the catalog) ---
+    echo "Canonical image origin ($canonical):"
+    if [ -d "$canonical" ]; then
+      n=$(ls -1 "$canonical" 2>/dev/null | wc -l | tr -d ' ')
+      pass "present ($n entr$([ "$n" = 1 ] && echo y || echo ies))"
+    else
+      warn "not present yet -- images must be staged here before distribution"
+    fi
+
+    # --- deploy filesystem headroom ---
+    echo "Deploy filesystem ($deploy_base):"
+    probe="$deploy_base"; while [ ! -d "$probe" ] && [ "$probe" != "/" ]; do probe=$(dirname "$probe"); done
+    free_gb=$(df -BG --output=avail "$probe" 2>/dev/null | tail -1 | tr -dc '0-9')
+    if [ -n "$free_gb" ]; then
+      if [ "$free_gb" -ge "$min_free_gb" ]; then
+        pass "${free_gb}G free on $probe (need ${min_free_gb}G)"
+      else
+        fail "only ${free_gb}G free on $probe (need ${min_free_gb}G)"
+      fi
+    else
+      warn "could not read free space on $probe"
+    fi
+
+    echo ""
+    echo "== preflight summary: $faults fault(s), $warns warning(s) =="
+    [ "$faults" -eq 0 ] || echo "Resolve the FAIL items above before provisioning."
+    exit "$faults"
+- id: done
+  name: Provisioned
+  type: manual
