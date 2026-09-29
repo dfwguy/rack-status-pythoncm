@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+[package]
+name = "nvrs-client"
+description = "Transport for the Rack Status API: the JSON envelope, error mapping, 429 backoff, and TLS trust policy."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+reqwest.workspace = true
+url.workspace = true
+futures-util.workspace = true
+# Only `time`, for the 429 backoff sleep. The client stays otherwise runtime-agnostic; the binary
+# owns the multi-thread runtime.
+tokio = { workspace = true }
+bytes = "1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

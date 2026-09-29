@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+[package]
+name = "nvrs"
+description = "NVIDIA Rack Status CLI — run tests, validations and reports against a Rack Status deployment from the terminal."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "nvrs"
+path = "src/main.rs"
+
+[dependencies]
+nvrs-client = { path = "../nvrs-client" }
+nvrs-auth = { path = "../nvrs-auth" }
+nvrs-openapi = { path = "../nvrs-openapi" }
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+tokio = { workspace = true }
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+anyhow = "1"
+toml = "0.8"
+comfy-table = "7"
+
+[dev-dependencies]
+tempfile = "3"

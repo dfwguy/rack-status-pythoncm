@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# nvrs — the NVIDIA Rack Status command-line client.
+#
+# A Cargo workspace, not a single crate, so the transport/contract layer is reusable and
+# testable without the CLI veneer: `nvrs-client` (HTTP + streaming + envelope), `nvrs-auth`
+# (SRP-6a + token store), and `nvrs-openapi` (contract discovery) each stand alone, and the
+# `nvrs` binary is a thin clap tree over them. See docs — this mirrors the SPA's split between
+# `lib/apiFetch.ts`, `lib/srpClient.ts` and the generated OpenAPI contract.
+[workspace]
+resolver = "2"
+members = [
+    "nvrs",
+    "nvrs-client",
+    "nvrs-auth",
+    "nvrs-openapi",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.82"
+license = "LicenseRef-NvidiaProprietary"
+authors = ["NVIDIA Rack Status team"]
+
+# One place for shared dependency versions so the four crates cannot drift apart.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "time"] }
+# rustls, not the platform's OpenSSL: the OVA ships a self-signed cert reached over an ssh tunnel,
+# so we need full programmatic control over trust (add-root / pin / accept-invalid) and a
+# dependency that cross-compiles to a static musl binary without a system TLS library.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots", "rustls-tls-native-roots", "json", "stream", "http2"] }
+url = "2"
+futures-util = "0.3"

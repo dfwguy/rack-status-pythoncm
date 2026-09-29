@@ -240,6 +240,44 @@ typescript-check:
     # the job -- set-state-in-effect is deliberately a warning and eslint.config.js says why.
     - npm run lint
 
+# The Rust CLI (`cli/`) is a separate workspace with its own toolchain. These two jobs gate it the
+# same way the Python and TypeScript jobs gate their trees: format + clippy at zero warnings in
+# `lint`, the full test suite in `test`. Both are scoped with `rules: changes` so an unrelated
+# backend/frontend commit does not pay for a Rust build; a change under `cli/` runs them.
+.cli-rust-base:
+  # Pinned to the workspace MSRV (see cli/Cargo.toml `rust-version`), so CI and a contributor's
+  # `rustup` agree on which compiler judged the code. Bump both together.
+  image: rust:1.82-slim-bookworm
+  cache:
+    key: cargo-${CI_COMMIT_REF_SLUG}
+    paths:
+      - cli/target/
+      - .cargo-registry/
+  variables:
+    CARGO_HOME: ${CI_PROJECT_DIR}/.cargo-registry
+  rules:
+    - changes:
+        - cli/**/*
+
+cli-rust-lint:
+  extends: .cli-rust-base
+  stage: lint
+  script:
+    - rustup component add rustfmt clippy
+    - cd cli
+    # `--check`: the job fails on unformatted code rather than reformatting it, so formatting is a
+    # gate, not a side effect. `-D warnings`: clippy findings fail the build, matching the "zero
+    # warnings" bar the TypeScript job holds.
+    - cargo fmt --all -- --check
+    - cargo clippy --all-targets -- -D warnings
+
+cli-rust-test:
+  extends: .cli-rust-base
+  stage: test
+  script:
+    - cd cli
+    - cargo test --all
+
 # ─── Test ────────────────────────────────────────────────────────────────────
 
 python-test:
