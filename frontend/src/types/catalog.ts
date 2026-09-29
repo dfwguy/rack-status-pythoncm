@@ -213,6 +213,12 @@ export interface Cluster {
   campaigns: ClusterCampaign[];
   /** External evidence feed paths; empty when the cluster has no collector. */
   evidence: ClusterEvidence;
+  /**
+   * Whether NVIS-P2P (artifact distribution) is enabled for this cluster. P2P is single-tenant —
+   * one Dragonfly instance per cluster — so this is a per-cluster capability flag. When on, the
+   * P2P nav group and gateway are active for this cluster; when off (default), they are hidden.
+   */
+  p2p_enabled?: boolean;
 }
 
 export interface Project {
@@ -256,6 +262,7 @@ export interface CatalogVocab {
   system_vendors: string[];
   form_factors: string[];
   cluster_managers: string[];
+  schedulers: string[];
   tool_categories: string[];
   exec_modes: string[];
   exec_targets: string[];

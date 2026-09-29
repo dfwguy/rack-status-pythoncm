@@ -48,6 +48,7 @@ export const ROUTES: RouteDef[] = [
   { viewId: "singleRack", path: RACKS_PATH, domain: "Compute", label: "Racks" },
   { viewId: "multirack", path: "/compute/multirack", domain: "Compute", label: "Multirack operations" },
   { viewId: "slurm", path: "/compute/scheduler", domain: "Compute", label: "Scheduler" },
+  { viewId: "p2pArtifacts", path: "/p2p/artifacts", domain: "Artifact Distribution", label: "Artifact Fleet" },
   { viewId: "infraEthernet", path: "/infrastructure/ethernet", domain: "Infrastructure", label: "Ethernet" },
   { viewId: "infraIbNvlink", path: "/infrastructure/ib-nvlink", domain: "Infrastructure", label: "IB / NVLink" },
   { viewId: "infraStorage", path: "/infrastructure/storage", domain: "Infrastructure", label: "Storage" },

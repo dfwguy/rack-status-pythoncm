@@ -23,6 +23,7 @@ import {
   ModalCloseButton,
   Select,
   StatusMessage,
+  Switch,
   Tag,
   Text,
   TextArea,
@@ -64,6 +65,7 @@ function emptyCluster(): Cluster {
     scalable_units: [],
     campaigns: [],
     evidence: { snapshot_path: "", healthcheck_root: "" },
+    p2p_enabled: false,
   };
 }
 
@@ -423,10 +425,26 @@ export function ProjectsView() {
             <FormField name="cl-manager" slotLabel="Cluster manager">
               <Select items={vocab?.cluster_managers || ["bcm", "maas"]} value={clusterDraft?.cluster.cluster_manager || "bcm"} onValueChange={(v) => setCl({ cluster_manager: v })} placeholder="Select" />
             </FormField>
+            <FormField name="cl-scheduler" slotLabel="Scheduler" slotHelp="Where work runs; distinct from the cluster manager">
+              <Select items={vocab?.schedulers || ["slurm", "pythoncm", "local", "runai", "slinky", "maas"]} value={clusterDraft?.cluster.scheduler || "slurm"} onValueChange={(v) => setCl({ scheduler: v })} placeholder="Select" />
+            </FormField>
             <FormField name="cl-siteprefix" slotLabel="Site prefix" slotHelp="Used for multirack hostname inference">
               <TextInput value={clusterDraft?.cluster.site_prefix || ""} onValueChange={(v) => setCl({ site_prefix: v })} placeholder="optional" />
             </FormField>
           </Box>
+
+          <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Artifact Distribution</Text>
+          <FormField
+            name="cl-p2p"
+            slotLabel="NVIS-P2P"
+            slotHelp="Peer-to-peer container-image distribution (Dragonfly). Single-tenant: one P2P instance per cluster. When enabled, the Artifact Fleet appears for this cluster."
+          >
+            <Switch
+              slotLabel="Enable P2P for this cluster"
+              checked={Boolean(clusterDraft?.cluster.p2p_enabled)}
+              onCheckedChange={(on: boolean) => setCl({ p2p_enabled: on })}
+            />
+          </FormField>
 
           <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Naming convention</Text>
           <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>

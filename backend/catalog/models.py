@@ -1031,6 +1031,11 @@ class Cluster:
     campaigns: list[ClusterCampaign] = field(default_factory=list)
     # Where an external collector writes this cluster's evidence, if it has one.
     evidence: ClusterEvidence = field(default_factory=ClusterEvidence)
+    # NVIS-P2P (artifact distribution) is single-tenant: one Dragonfly instance per cluster. This
+    # flag says whether this cluster has that capability. Off means the P2P nav group and gateway
+    # are inert for it. The enabled instance's endpoints/credentials live on the connection overlay
+    # and the token vault, not here -- this is only the on/off an operator sets per cluster.
+    p2p_enabled: bool = False
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Cluster:
@@ -1058,6 +1063,7 @@ class Cluster:
                 else []
             ),
             evidence=ClusterEvidence.from_dict(d.get("evidence")),
+            p2p_enabled=_as_bool(d.get("p2p_enabled")),
         )
 
     def to_dict(self) -> dict[str, Any]:
