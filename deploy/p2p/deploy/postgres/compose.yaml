@@ -1,0 +1,30 @@
+name: nvis-p2p-postgres
+
+services:
+  postgres:
+    image: postgres@sha256:2992a3f8fd266125e19507a5ab9efa95ba0ec0a88688341354015b897147234d
+    container_name: nvis-p2p-postgres
+    environment:
+      POSTGRES_USER: nvis_p2p
+      POSTGRES_DB: nvis_p2p
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - nvis-p2p-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+
+volumes:
+  nvis-p2p-postgres-data:
+    external: true

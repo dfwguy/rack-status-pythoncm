@@ -1,0 +1,7 @@
+order	name	filename	bytes	sha256
+1	NVBandwidth	nvbandwidth-v0.9-arm.sqsh	853815296	e1d1a9837d5d212ddf72ab8a7d7316a7bd9e5dc1d5df9632623f5cac760eb4ce
+2	HPC Benchmarks	nvidia+hpc-benchmarks+26.02-arm.sqsh	9818501120	cf1281e8fe1253ce3cdb22c08361e0a614ecc2a5747b8abe1d99bb76d5014a37
+3	MNUberGEMM	mnubergemm-26.03-v1.17-arm.sqsh	13949554688	9832dda6e80c8719e74f81ce617cac3abb77399e48d5385a38e86a040cad93e6
+4	Canonical NeMo/NCCL	nvidia+nemo+26.04.01.sqsh	42245001216	e9a68d31832f5575eabaae94d9360e45145a0047110740d80412ec491a247aca
+5	Llama 3.1 405B with NCCL 2.30.7	nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh	42477232128	0829d0c77f38db54848afd095862093a7c62e98778b0b8664b8edff69e273747
+6	Stock NeMo ARM (single-node and recipe validation)	nvidia+nemo+26.04.01-arm.sqsh	42245001216	8b79bc8e337db2aacd4fb296f917ad93faf0415da9bb7cefeec40b520f98bead

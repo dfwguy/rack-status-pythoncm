@@ -1,0 +1,21 @@
+name: nvis-p2p-redis
+
+services:
+  redis:
+    image: redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    container_name: nvis-p2p-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:15379:6379"
+    volumes:
+      - nvis-p2p-redis-data:/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+volumes:
+  nvis-p2p-redis-data:
+    external: true

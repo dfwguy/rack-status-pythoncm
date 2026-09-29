@@ -1,0 +1,35 @@
+name: nvis-p2p-control-plane
+
+services:
+  scheduler:
+    image: ubuntu@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+    container_name: nvis-p2p-scheduler
+    network_mode: host
+    user: "1024:1003"
+    working_dir: /home/hlakshminara/NVIS-P2P
+    command:
+      - /home/hlakshminara/NVIS-P2P/dist/core/scheduler
+      - --config
+      - /home/hlakshminara/NVIS-P2P/configs/scheduler.yaml
+      - --console
+    volumes:
+      - /home/hlakshminara/NVIS-P2P:/home/hlakshminara/NVIS-P2P:rw
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    pids_limit: 2048
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "exec 3<>/dev/tcp/10.41.112.3/12002"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"

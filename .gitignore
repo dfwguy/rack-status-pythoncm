@@ -183,7 +183,13 @@ plc-evidence.jsonl
 # installer), not a work product. Our tracked agent guidance stays where it
 # already lives: AGENTS.md, the CLAUDE.md symlink, and .cursor/rules.
 .agents/
-.claude/
+# Ignore .claude/ contents (not the dir itself, so the one shared file below can be re-included):
+# settings.local.json, agents/, skills/, worktrees/ are all per-developer local state.
+.claude/*
+# ...except the shared, checked-in team settings: the SessionStart hook that loads the
+# always-apply .cursor/rules into every Claude Code session (see AGENTS.md "How Claude Code
+# loads these").
+!.claude/settings.json
 .codex/
 
 # Agent scratch space: intermediate command output, captured cluster inventories,
@@ -202,3 +208,8 @@ config/*
 # Runtime script tree. `script_tree.tree_root()` falls back to the repo root when
 # RACK_REMOTE_BASE_PATH is unset, so a local deploy stages here. Build artifact, never source.
 bin/scripts-tree/
+
+# NVIS-P2P Dragonfly binaries (~300 MB). Never committed: they are staged and checksum-verified
+# from a validated set by deploy/p2p/bin/stage-artifacts.sh before an image build. The pinned
+# sha256s in deploy/p2p/artifacts.lock are the reproducibility anchor, not the bytes themselves.
+deploy/p2p/dist/

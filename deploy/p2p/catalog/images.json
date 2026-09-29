@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "catalog_name": "NVIS validated container catalog",
+  "canonical_directory": "/cluster/containers",
+  "generated_at_utc": "2026-09-17T20:55:00Z",
+  "images": [
+    {
+      "order": 1,
+      "name": "NVBandwidth",
+      "filename": "nvbandwidth-v0.9-arm.sqsh",
+      "bytes": 853815296,
+      "sha256": "e1d1a9837d5d212ddf72ab8a7d7316a7bd9e5dc1d5df9632623f5cac760eb4ce",
+      "required_by": ["Single-node NVBandwidth"]
+    },
+    {
+      "order": 2,
+      "name": "HPC Benchmarks",
+      "filename": "nvidia+hpc-benchmarks+26.02-arm.sqsh",
+      "bytes": 9818501120,
+      "sha256": "cf1281e8fe1253ce3cdb22c08361e0a614ecc2a5747b8abe1d99bb76d5014a37",
+      "required_by": ["NCCL-only", "Single-node NCCL collectives", "HPL", "STREAM", "cuBLAS"]
+    },
+    {
+      "order": 3,
+      "name": "MNUberGEMM",
+      "filename": "mnubergemm-26.03-v1.17-arm.sqsh",
+      "bytes": 13949554688,
+      "sha256": "9832dda6e80c8719e74f81ce617cac3abb77399e48d5385a38e86a040cad93e6",
+      "required_by": ["MNUberGEMM", "Single-node MNU burn-in"]
+    },
+    {
+      "order": 4,
+      "name": "Canonical NeMo/NCCL",
+      "filename": "nvidia+nemo+26.04.01.sqsh",
+      "bytes": 42245001216,
+      "sha256": "e9a68d31832f5575eabaae94d9360e45145a0047110740d80412ec491a247aca",
+      "required_by": ["NCCL + NeMo"]
+    },
+    {
+      "order": 5,
+      "name": "Llama 3.1 405B with NCCL 2.30.7",
+      "filename": "nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh",
+      "bytes": 42477232128,
+      "sha256": "0829d0c77f38db54848afd095862093a7c62e98778b0b8664b8edff69e273747",
+      "required_by": ["Llama 3.1 405B", "NCCL 2.30.7"]
+    },
+    {
+      "order": 6,
+      "name": "Stock NeMo ARM (single-node and recipe validation)",
+      "filename": "nvidia+nemo+26.04.01-arm.sqsh",
+      "bytes": 42245001216,
+      "sha256": "8b79bc8e337db2aacd4fb296f917ad93faf0415da9bb7cefeec40b520f98bead",
+      "required_by": ["NeMo-only", "Single-node Llama 3.1 recipe validation"]
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+name: nvis-p2p-seed-origin
+
+services:
+  origin:
+    image: nginx@sha256:72ba65eb42c10344912a84ff42408db7d34f2feb642204570ab8fc5ffd29f1d3
+    container_name: nvis-p2p-seed-origin
+    network_mode: host
+    user: "101:101"
+    entrypoint: ["nginx"]
+    command: ["-g", "daemon off;", "-c", "/etc/nginx/nginx.conf"]
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - /cluster/containers:/srv/images:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://10.41.112.3:12130/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
