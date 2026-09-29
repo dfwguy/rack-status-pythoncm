@@ -50,6 +50,7 @@ import { buildRackRowMap } from "../lib/rackTopology";
 import { launchWithReview } from "../lib/launchReview";
 import type { MultirackJob, RackRow, RackStatusResponse } from "../types/api";
 import { usePagedRows } from "../hooks/usePagedRows";
+import { useCatalogTools } from "../hooks/useCatalogTools";
 import { TablePager } from "../components/TablePager";
 import {
   VALIDATION_PRESET_LABELS,
@@ -159,6 +160,27 @@ const LAUNCH_TITLE: Record<MultirackLaunchKind, string> = {
 const EMPTY_RACK_ROWS: RackRow[] = [];
 
 export function MultirackView({ data, logDir }: MultirackViewProps) {
+  const {
+    tools: catalogTools,
+    loading: catalogToolsLoading,
+    error: catalogToolsError,
+  } = useCatalogTools();
+  const multirackTools = useMemo(
+    () => catalogTools.filter((tool) => tool.surfaces.includes("multirack")),
+    [catalogTools],
+  );
+  const compatibleToolIds = useMemo(
+    () => new Set(multirackTools.map((tool) => tool.id)),
+    [multirackTools],
+  );
+  const compatiblePresetIds = useMemo(
+    () => new Set(
+      multirackTools
+        .filter((tool) => tool.launch.kind === "validation-preset")
+        .map((tool) => tool.launch.preset_id),
+    ),
+    [multirackTools],
+  );
   const [dryRun, setDryRun] = useState(false);
   const [pendingKind, setPendingKind] = useState<MultirackLaunchKind | null>(null);
   // Plain string, not the frozen union: recipe ids now come from the catalog at runtime.
@@ -685,6 +707,14 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           </div>
         )}
 
+        {catalogToolsError ? (
+          <div style={{ marginBottom: 12 }}>
+            <Banner status="warning">
+              Could not load compatible tools ({catalogToolsError}). Catalog-controlled launch actions are unavailable.
+            </Banner>
+          </div>
+        ) : null}
+
         <Flex gap="2" align="center" wrap="wrap" style={{ marginBottom: 12 }}>
           <MuiButton
             size="small"
@@ -701,15 +731,17 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
             label="Dry run (NCCL/Llama — print plan, don't submit)"
           />
           <Flex gap="2" align="center" wrap="wrap" style={{ marginLeft: "auto" }}>
-            <Button
-              kind="primary"
-              size="small"
-              onClick={() => setPendingKind("nemo")}
-              disabled={noRacks || selected.size === 0 || launchingKind !== null}
-            >
-              <Layers size={16} style={{ marginRight: 6 }} />
-              {launchingKind === "nemo" ? "Launching…" : `Launch Multirack Validation (${selected.size})`}
-            </Button>
+            {!catalogToolsLoading && compatibleToolIds.has("nemo-xrack") ? (
+              <Button
+                kind="primary"
+                size="small"
+                onClick={() => setPendingKind("nemo")}
+                disabled={noRacks || selected.size === 0 || launchingKind !== null}
+              >
+                <Layers size={16} style={{ marginRight: 6 }} />
+                {launchingKind === "nemo" ? "Launching…" : `Launch Multirack Validation (${selected.size})`}
+              </Button>
+            ) : null}
             <Button
               kind="secondary"
               size="small"
@@ -736,15 +768,33 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginBottom: 12 }}>
             Server-validated versions and image inventory. Container-backed recipes support NFS or node-local storage and optional rsync to /tmp/containers; direct-host NCCL does not stage a container. NVIDIA DGXC system_info fans out to every node in every selected rack.
           </Text>
-          <Flex gap="2" wrap="wrap">
-            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nccl-2.31.2")}>NCCL 2.31.2 / CUDA 13.3+</Button>
-            <Button kind="secondary" size="small" disabled={!llama1024Ready || launchingPreset !== null} onClick={() => setPendingPreset("llama31-405b-fp8")}>Llama 405B FP8 — 1024 GPUs / 50 steps</Button>
-            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("gpt-oss-cpu")}>GPT-OSS CPU — per-node fan-out</Button>
-            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("exemplar-system-info")}>DGXC system_info</Button>
-            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nemo-26.04.01")}>NeMo 26.04.01</Button>
-            <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("mnubergemm-26.03-v1.17")}>MNUberGEMM 26.03-v1.17</Button>
-          </Flex>
-          {selected.size > 0 && !llama1024Ready ? (
+          {catalogToolsLoading ? (
+            <Text kind="body/regular/sm" style={{ color: "var(--text-color-subtle)" }}>
+              Loading compatible recipes…
+            </Text>
+          ) : (
+            <Flex gap="2" wrap="wrap">
+              {compatiblePresetIds.has("nccl-2.31.2") ? (
+                <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nccl-2.31.2")}>NCCL 2.31.2 / CUDA 13.3+</Button>
+              ) : null}
+              {compatiblePresetIds.has("llama31-405b-fp8") ? (
+                <Button kind="secondary" size="small" disabled={!llama1024Ready || launchingPreset !== null} onClick={() => setPendingPreset("llama31-405b-fp8")}>Llama 405B FP8 — 1024 GPUs / 50 steps</Button>
+              ) : null}
+              {compatiblePresetIds.has("gpt-oss-cpu") ? (
+                <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("gpt-oss-cpu")}>GPT-OSS CPU — per-node fan-out</Button>
+              ) : null}
+              {compatiblePresetIds.has("exemplar-system-info") ? (
+                <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("exemplar-system-info")}>DGXC system_info</Button>
+              ) : null}
+              {compatiblePresetIds.has("nemo-26.04.01") ? (
+                <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nemo-26.04.01")}>NeMo 26.04.01</Button>
+              ) : null}
+              {compatiblePresetIds.has("mnubergemm-26.03-v1.17") ? (
+                <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("mnubergemm-26.03-v1.17")}>MNUberGEMM 26.03-v1.17</Button>
+              ) : null}
+            </Flex>
+          )}
+          {!catalogToolsLoading && compatiblePresetIds.has("llama31-405b-fp8") && selected.size > 0 && !llama1024Ready ? (
             <div style={{ marginTop: 12 }}>
               <Banner status="info">
                 The fixed Llama preset requires exactly 256 manifest nodes / 1024 GB300 GPUs. {campaign?.active && campaign.ok

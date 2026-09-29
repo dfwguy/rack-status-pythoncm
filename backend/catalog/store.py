@@ -52,7 +52,7 @@ TABLE_PROJECTS = "projects"
 TABLE_NPI_TOOLS = "npi_tools"
 TABLE_META = "meta"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _lock = threading.RLock()
 

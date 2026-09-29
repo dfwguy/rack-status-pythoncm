@@ -267,6 +267,38 @@ def test_the_backfill_is_idempotent(repo):
     assert seed.migrate(repo, env={})["tools_backfilled"] == 0
 
 
+def test_pre_v2_catalog_restricts_match_all_nemo_tools_once(repo):
+    """The safety correction reaches existing catalogs without owning later operator edits."""
+    from catalog.store import TABLE_TOOLS
+
+    nemo_ids = {
+        "llama",
+        "nemo-xrack",
+        "preset-llama405b",
+        "preset-nemo",
+        "validation-singlerack",
+    }
+    for old in (t for t in seed.SEED_TOOLS if t["id"] in nemo_ids):
+        repo.upsert(
+            TABLE_TOOLS,
+            models.Tool.from_dict({**old, "compatible": {"match": "all"}}).to_dict(),
+        )
+    repo.set_meta("schema_version", 1)
+
+    summary = seed.migrate(repo, env={})
+
+    for tool_id in nemo_ids:
+        upgraded = models.Tool.from_dict(repo.get(TABLE_TOOLS, tool_id))
+        assert upgraded.compatible.capabilities == ["nvlink"]
+    assert summary["nemo_compatibility_migrated"] == len(nemo_ids)
+
+    edited = repo.get(TABLE_TOOLS, "preset-nemo")
+    edited["compatible"] = {"match": "all"}
+    repo.upsert(TABLE_TOOLS, edited)
+    seed.migrate(repo, env={})
+    assert models.Tool.from_dict(repo.get(TABLE_TOOLS, "preset-nemo")).compatible.match == "all"
+
+
 def test_the_backfill_ignores_a_tool_the_operator_invented(repo):
     from catalog.store import TABLE_TOOLS
 

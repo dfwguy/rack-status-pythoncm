@@ -18,6 +18,7 @@ import app as app_module
 import pytest
 import validation_launch
 import validation_presets
+from catalog import models
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -157,6 +158,39 @@ def test_backend_routes_publish_prepare_contract(monkeypatch, tmp_path):
     })
     assert launch.status_code == 409
     assert "plan_hash" in launch.get_json()["error"]
+
+
+def test_rtx_catalog_refuses_nemo_before_launch_preparation(monkeypatch):
+    platform = models.Platform(id="rtx-pro-6000-blackwell", name="RTX PRO 6000 Blackwell")
+    monkeypatch.setattr(validation_launch.catalog_context, "tool_for_cluster", lambda _tool_id: None)
+    monkeypatch.setattr(validation_launch.catalog_context, "tools_for_cluster", list)
+    monkeypatch.setattr(
+        validation_launch.catalog_context,
+        "resolve",
+        lambda: (None, None, platform),
+    )
+    client = app_module.app.test_client()
+
+    preset = client.post(
+        "/api/validation-presets/prepare",
+        json={"preset_id": "nemo-26.04.01", "scope": "rack", "rack": "rack-01"},
+    )
+    legacy = client.post(
+        "/api/launch/prepare",
+        json={"kind": "validation", "rack": "rack-01"},
+    )
+
+    assert preset.status_code == 409
+    assert preset.get_json() == {
+        "ok": False,
+        "error": "NeMo 26.04.01 is not compatible with RTX PRO 6000 Blackwell",
+        "reason": "incompatible_platform",
+        "platform_id": "rtx-pro-6000-blackwell",
+        "preset_id": "nemo-26.04.01",
+    }
+    assert legacy.status_code == 409
+    assert legacy.get_json()["reason"] == "incompatible_platform"
+    assert legacy.get_json()["tool_id"] == "validation-singlerack"
 
 
 def test_mnubergemm_multirack_plan_is_exact_and_time_capped(monkeypatch, tmp_path):

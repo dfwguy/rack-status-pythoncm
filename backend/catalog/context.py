@@ -313,6 +313,26 @@ def tool_param_defaults(
 # ---------------------------------------------------------------------------
 
 
+def tool_for_cluster(
+    tool_id: str,
+    cluster_id: str | None = None,
+    project_id: str | None = None,
+    repo: Repo | None = None,
+) -> dict[str, Any] | None:
+    """Return one tool when it is compatible with the cluster's platform."""
+    repo = repo or get_repo()
+    raw = repo.get(TABLE_TOOLS, tool_id)
+    if raw is None:
+        return None
+    _project, _cluster, platform = resolve(project_id, cluster_id, repo=repo)
+    tool = models.Tool.from_dict(raw)
+    if not tool.compatible.matches(platform):
+        return None
+    out = tool.to_dict()
+    out["compatible_with_platform"] = True
+    return out
+
+
 def tools_for_cluster(
     cluster_id: str | None = None,
     project_id: str | None = None,

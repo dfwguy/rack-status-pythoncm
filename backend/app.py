@@ -649,8 +649,11 @@ def _bootstrap_catalog_at_startup() -> None:
     try:
         repo = catalog_store.get_repo()
         summary = catalog_seed.migrate(repo)
-        if summary.get("platforms_added") or summary.get("tools_added") or summary.get(
-            "default_project_created"
+        if (
+            summary.get("platforms_added")
+            or summary.get("tools_added")
+            or summary.get("nemo_compatibility_migrated")
+            or summary.get("default_project_created")
         ):
             _logger.info("catalog seeded: %s", summary)
         # Re-materialize on any later catalog change (active switch or doc edits).

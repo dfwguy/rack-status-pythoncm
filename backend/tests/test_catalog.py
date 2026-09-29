@@ -254,6 +254,35 @@ class TestContext:
         assert "sysinfo" in ids
         assert "validation-singlerack" not in ids
 
+    def test_rtx_platform_filters_nemo_tools(self, seeded):
+        seeded.upsert(
+            TABLE_PROJECTS,
+            models.Project(
+                id="rtx-project",
+                name="RTX Project",
+                clusters=[
+                    models.Cluster(
+                        id="rtx-cluster",
+                        name="RTX Cluster",
+                        platform_id="rtx-pro-6000-blackwell",
+                    )
+                ],
+            ).to_dict(),
+        )
+        context.set_active("rtx-project", "rtx-cluster")
+
+        ids = {tool["id"] for tool in context.tools_for_cluster()}
+
+        assert {
+            "llama",
+            "nemo-xrack",
+            "preset-llama405b",
+            "preset-nemo",
+            "validation-singlerack",
+        }.isdisjoint(ids)
+        assert context.tool_for_cluster("preset-nemo") is None
+        assert "sysinfo" in ids
+
     def test_ai_context_block_is_authoritative(self, seeded):
         block = context.build_ai_context_block()
         assert "Customer: NSCALE" in block

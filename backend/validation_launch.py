@@ -664,6 +664,50 @@ def _validation_node_eligibility(nodes: list[str]) -> tuple[dict[str, str], list
     return ({node: states.get(node.casefold(), "missing") for node in nodes}, reasons)
 
 
+def _catalog_tool_compatibility_error(tool_id: str) -> tuple[object, int] | None:
+    """Return a launch refusal when the active platform cannot run a catalog tool."""
+    if catalog_context.tool_for_cluster(tool_id) is not None:
+        return None
+    _project, _cluster, platform = catalog_context.resolve()
+    platform_id = platform.id if platform is not None else ""
+    platform_name = platform.name if platform is not None else "the active platform"
+    return (
+        jsonify({
+            "ok": False,
+            "error": f"{tool_id} is not compatible with {platform_name}",
+            "reason": "incompatible_platform",
+            "platform_id": platform_id,
+            "tool_id": tool_id,
+        }),
+        409,
+    )
+
+
+def _validation_preset_compatibility_error(body: dict) -> tuple[object, int] | None:
+    """Apply catalog compatibility to a code-owned validation recipe."""
+    try:
+        preset = validation_presets.resolve_preset(body.get("preset_id", body.get("validation")))
+    except ValueError:
+        return None
+    for raw in catalog_context.tools_for_cluster():
+        tool = models.Tool.from_dict(raw)
+        if tool.launch.kind == "validation-preset" and tool.launch.preset_id == preset.id:
+            return None
+    _project, _cluster, platform = catalog_context.resolve()
+    platform_id = platform.id if platform is not None else ""
+    platform_name = platform.name if platform is not None else "the active platform"
+    return (
+        jsonify({
+            "ok": False,
+            "error": f"{preset.label} is not compatible with {platform_name}",
+            "reason": "incompatible_platform",
+            "platform_id": platform_id,
+            "preset_id": preset.id,
+        }),
+        409,
+    )
+
+
 def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
     """Resolve an allowlisted preset into an exact-node, shell-free launch plan."""
     try:

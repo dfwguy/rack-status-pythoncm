@@ -541,6 +541,7 @@ SEED_TOOLS: list[dict[str, Any]] = [
     _tool(
         "validation-singlerack", "Stage 2 — NEMO Training", "validation",
         "run_singlerack.sh", "RACK_VALIDATION_SCRIPT", ["rackDetail.validation"], "async", "rack",
+        capabilities=["nvlink"],
         description="NCCL collectives + Nemotron training validation for one rack.",
         ai_context="run_singlerack runs NCCL all-reduce and a Nemotron training step per rack.",
         subtitle="NCCL + LLMB, all trays",
@@ -581,6 +582,7 @@ SEED_TOOLS: list[dict[str, Any]] = [
     _tool(
         "nemo-xrack", "Multirack NEMO", "validation", "run-nemo-xrack.sh", "RACK_NEMO_XRACK_SCRIPT",
         ["multirack"], "async", "multirack",
+        capabilities=["nvlink"],
         description="Cross-rack Nemotron training validation.",
     ),
     # Catalogued, deliberately not bound: the rack Validation tab has only ever shown a
@@ -591,6 +593,7 @@ SEED_TOOLS: list[dict[str, Any]] = [
     _tool(
         "llama", "Llama Training", "performance", "run-llama.sh", "RACK_LLAMA_SCRIPT",
         ["rackDetail.validation"], "async", "rack",
+        capabilities=["nvlink"],
         description="Llama training workload.",
         order=60,
     ),
@@ -743,7 +746,7 @@ SEED_TOOLS: list[dict[str, Any]] = [
         "preset-llama405b", "Llama 3.1 405B FP8", "1024 GPUs · 50 steps · NCCL 2.30.7",
         "The fixed 256-node profile: TP4/PP8/CP1/VP4, MBS1, GBS6144, FP8, NVLS disabled.",
         "llama31-405b-fp8", ["multirack"], "multirack", 40,
-        category="performance", scopes=["multirack"],
+        category="performance", capabilities=["nvlink"], scopes=["multirack"],
     ),
     # Two documents for one recipe, because the two surfaces offer it on different terms. The
     # rack tab has always gated it to exactly one node ("no GPU training workload or rack
@@ -775,7 +778,7 @@ SEED_TOOLS: list[dict[str, Any]] = [
         "preset-nemo", "NeMo Validation", "NeMo 26.04.01 · 50 steps",
         "NeMo-only rack or multi-rack validation with the staged 26.04.01 ARM image.",
         "nemo-26.04.01", ["rackDetail.validation", "multirack"], "rack", 35,
-        scopes=["rack", "multirack"],
+        capabilities=["nvlink"], scopes=["rack", "multirack"],
     ),
     _preset_tool(
         "preset-mnubergemm", "MNUberGEMM", "26.03-v1.17 · 60-minute ceiling",
@@ -877,6 +880,37 @@ _SURFACE_BACKFILL = {
     "llmb-nccl": ["rackDetail.validation"],
 }
 
+# These launchers all enter a NeMo/Megatron recipe validated for NVLink platforms. The RTX
+# PRO 6000 platform is PCIe-only, and the recipe's own GPU-profile parser rejects ``rtx6000``.
+# Requiring the hardware capability makes the catalog refuse the launch before Slurm submission.
+_NEMO_TOOL_IDS = (
+    "llama",
+    "nemo-xrack",
+    "preset-llama405b",
+    "preset-nemo",
+    "validation-singlerack",
+)
+
+
+def _migrate_nemo_compatibility(repo: Repo) -> int:
+    """Replace the former match-all NeMo compatibility on pre-v2 catalogs."""
+    changed = 0
+    match_all = models.ToolCompatibility()
+    for tool_id in _NEMO_TOOL_IDS:
+        raw = repo.get(TABLE_TOOLS, tool_id)
+        if raw is None:
+            continue
+        if models.ToolCompatibility.from_dict(raw.get("compatible")) != match_all:
+            continue
+        repo.upsert(
+            TABLE_TOOLS,
+            models.Tool.from_dict(
+                {**raw, "compatible": {"capabilities": ["nvlink"]}}
+            ).to_dict(),
+        )
+        changed += 1
+    return changed
+
 
 def _backfill_tool_widgets(repo: Repo) -> int:
     """Teach pre-widget Tool documents about launch bindings, without clobbering edits.
@@ -914,10 +948,15 @@ def _backfill_tool_widgets(repo: Repo) -> int:
 
 def migrate(repo: Repo, *, env: dict[str, str] | None = None) -> dict[str, Any]:
     """Idempotently seed/migrate the catalog. Returns a small summary for logging."""
+    try:
+        previous_schema_version = int(repo.get_meta("schema_version", 0) or 0)
+    except (TypeError, ValueError):
+        previous_schema_version = 0
     summary: dict[str, Any] = {
         "platforms_added": 0,
         "tools_added": 0,
         "tools_backfilled": 0,
+        "nemo_compatibility_migrated": 0,
         "default_project_created": False,
     }
 
@@ -930,6 +969,8 @@ def migrate(repo: Repo, *, env: dict[str, str] | None = None) -> dict[str, Any]:
         if repo.get(TABLE_TOOLS, t["id"]) is None:
             repo.upsert(TABLE_TOOLS, models.Tool.from_dict(t).to_dict())
             summary["tools_added"] += 1
+    if previous_schema_version < 2:
+        summary["nemo_compatibility_migrated"] = _migrate_nemo_compatibility(repo)
     summary["tools_backfilled"] = _backfill_tool_widgets(repo)
 
     # On first run, create a default project from the environment and make it active.

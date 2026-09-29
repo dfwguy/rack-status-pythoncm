@@ -22,6 +22,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MultirackView } from "./MultirackView";
 import type { RackRow, RackStatusResponse } from "../types/api";
 
+const catalogState = vi.hoisted(() => ({
+  tools: [] as Array<{
+    id: string;
+    surfaces: string[];
+    launch: { kind: string; preset_id: string };
+  }>,
+}));
+
+vi.mock("../hooks/useCatalogTools", () => ({
+  useCatalogTools: () => ({
+    tools: catalogState.tools,
+    loading: false,
+    error: null,
+    reload: vi.fn(),
+  }),
+}));
+
+function compatibleTools() {
+  return [
+    { id: "nemo-xrack", surfaces: ["multirack"], launch: { kind: "async-job", preset_id: "" } },
+    { id: "preset-nccl", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "nccl-2.31.2" } },
+    { id: "preset-llama405b", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "llama31-405b-fp8" } },
+    { id: "preset-gpt-oss", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "gpt-oss-cpu" } },
+    { id: "preset-exemplar-sysinfo", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "exemplar-system-info" } },
+    { id: "preset-nemo", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "nemo-26.04.01" } },
+    { id: "preset-mnubergemm", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "mnubergemm-26.03-v1.17" } },
+  ];
+}
+
 function rack(id: string, nemo: string, opts: Partial<RackRow> = {}): RackRow {
   return {
     rack: id,
@@ -86,6 +115,7 @@ function makeData(): RackStatusResponse {
 }
 
 beforeEach(() => {
+  catalogState.tools = compatibleTools();
   // The view polls multirack jobs and on-disk results on mount; keep both empty and quiet.
   const emptyBody = JSON.stringify({ ok: true, rows: [], jobs: [] });
   vi.spyOn(globalThis, "fetch").mockResolvedValue({
@@ -133,6 +163,19 @@ function chooseOption(comboboxLabel: string, optionText: string) {
 }
 
 describe("MultirackView rack filters", () => {
+  it("hides NeMo launch actions when the catalog marks them incompatible", async () => {
+    catalogState.tools = compatibleTools().filter(
+      (tool) => tool.id !== "nemo-xrack" && tool.id !== "preset-nemo",
+    );
+
+    renderView();
+    await waitFor(() => expect(visibleRacks().length).toBe(8));
+
+    expect(screen.queryByRole("button", { name: /Launch Multirack Validation/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "NeMo 26.04.01" })).toBeNull();
+    expect(screen.getByRole("button", { name: "GPT-OSS CPU — per-node fan-out" })).toBeInTheDocument();
+  });
+
   it("shows every rack before any filter is applied", async () => {
     renderView();
     await waitFor(() => expect(visibleRacks().length).toBe(8));

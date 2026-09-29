@@ -106,12 +106,14 @@ from slurm_query import (
     _rack_node_hostnames_from_inventory,
 )
 from validation_launch import (
+    _catalog_tool_compatibility_error,
     _host_job_cwd,
     _llama_worker,
     _multirack_campaign_snapshot,
     _prepare_validation_preset,
     _stress_worker,
     _validation_node_eligibility,
+    _validation_preset_compatibility_error,
     _validation_preset_status_payload,
     _validation_worker,
     _xrack_worker,
@@ -127,7 +129,12 @@ _logger = logging.getLogger(__name__)
 bp = Blueprint("validation_runs", __name__, url_prefix="")
 
 
-def _prepared(prepare, body: dict) -> tuple[dict | None, tuple[object, int] | None]:
+def _prepared(
+    prepare,
+    body: dict,
+    *,
+    catalog_tool_id: str = "",
+) -> tuple[dict | None, tuple[object, int] | None]:
     """Run a legacy prepare, then apply the reviewed-target gate (REQ-6).
 
     Wrapping the prepare rather than editing ten launch bodies is deliberate. The ten call sites
@@ -141,6 +148,10 @@ def _prepared(prepare, body: dict) -> tuple[dict | None, tuple[object, int] | No
     reviewed target no longer holds. Both are the `(response, status)` shape the call sites already
     unpack, so no call site changes shape.
     """
+    if catalog_tool_id:
+        compatibility_error = _catalog_tool_compatibility_error(catalog_tool_id)
+        if compatibility_error is not None:
+            return None, compatibility_error
     prep, err = prepare(body)
     if err is not None:
         return None, err
@@ -372,7 +383,11 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
 def api_run_validation():
     """Run singlerack validation script with one target, e.g. p26-r05-ct[01-18] (cwd = log_dir)."""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepared(_prepare_run_validation, body)
+    prep, err = _prepared(
+        _prepare_run_validation,
+        body,
+        catalog_tool_id="validation-singlerack",
+    )
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -417,7 +432,11 @@ def api_run_validation():
 def api_run_validation_async():
     """Start validation in a background thread; poll GET /api/run-validation-status?job_id=…"""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepared(_prepare_run_validation, body)
+    prep, err = _prepared(
+        _prepare_run_validation,
+        body,
+        catalog_tool_id="validation-singlerack",
+    )
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -537,7 +556,11 @@ def api_run_nemo_xrack_async():
     Process cwd is *log_dir* (same as ``/api/run-validation``) so Slurm batch stdout files land there.
     """
     body = request.get_json(silent=True) or {}
-    prep, err = _prepared(_prepare_run_nemo_xrack, body)
+    prep, err = _prepared(
+        _prepare_run_nemo_xrack,
+        body,
+        catalog_tool_id="nemo-xrack",
+    )
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -733,7 +756,11 @@ def _prepare_run_exemplar_llama(body: dict) -> tuple[dict | None, tuple[object, 
 def api_run_exemplar_llama_async():
     """Submit Llama 3.1 405B Exemplar pretraining across eight selected racks."""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepared(_prepare_run_exemplar_llama, body)
+    prep, err = _prepared(
+        _prepare_run_exemplar_llama,
+        body,
+        catalog_tool_id="preset-llama405b",
+    )
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -807,7 +834,11 @@ def api_run_exemplar_llama_async():
 def api_run_llama_async():
     """Start ``run-llama.sh`` in the background; poll ``/api/run-llama-status``."""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepared(_prepare_run_llama, body)
+    prep, err = _prepared(
+        _prepare_run_llama,
+        body,
+        catalog_tool_id="llama",
+    )
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -1460,6 +1491,9 @@ def api_validation_presets():
 @action("validation:prepare_preset")
 def api_prepare_validation_preset():
     body = request.get_json(silent=True) or {}
+    compatibility_error = _validation_preset_compatibility_error(body)
+    if compatibility_error is not None:
+        return compatibility_error
     plan, err = _prepare_validation_preset(body)
     if err is not None:
         return err
@@ -1482,6 +1516,13 @@ _PREPARE_BY_KIND.update({
     "clusterkit": _prepare_run_clusterkit_singlerack,
     "llmb-nccl": _prepare_run_llmb_nccl,
 })
+
+_CATALOG_TOOL_BY_KIND = {
+    "exemplar-llama": "preset-llama405b",
+    "llama": "llama",
+    "nemo-xrack": "nemo-xrack",
+    "validation": "validation-singlerack",
+}
 
 
 @bp.route("/api/launch/prepare", methods=["POST"])
@@ -1513,6 +1554,11 @@ def api_prepare_launch():
         }), 400
 
     launch_body = {k: v for k, v in body.items() if k != "kind"}
+    tool_id = _CATALOG_TOOL_BY_KIND.get(kind)
+    if tool_id:
+        compatibility_error = _catalog_tool_compatibility_error(tool_id)
+        if compatibility_error is not None:
+            return compatibility_error
     prep, err = prepare(launch_body)
     if err is not None:
         return err[0], err[1]
@@ -1532,6 +1578,9 @@ def api_prepare_launch():
 
 
 def _run_validation_preset_async(body: dict):
+    compatibility_error = _validation_preset_compatibility_error(body)
+    if compatibility_error is not None:
+        return compatibility_error
     plan, err = _prepare_validation_preset(body)
     if err is not None:
         return err
