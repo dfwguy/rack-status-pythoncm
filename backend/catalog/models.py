@@ -1152,6 +1152,123 @@ class Cluster:
 
 
 @dataclass
+class P2pSettings:
+    """Per-cluster NVIS-P2P instance configuration.
+
+    Exactly what ``deploy/p2p/scripts/render-site-config.py`` needs to stand up one Dragonfly
+    instance for a cluster. Read and written whole by its ``cluster_id``; nothing joins it, so it is
+    a document behind the ``Repo`` (citizen 15), not a relation. Secrets are **not** stored here --
+    render generates them into files under ``install_root`` and the paths are derived, so the
+    document holds only topology and identity, nothing reversible.
+
+    The defaults are a working baseline for a single-app-server cluster; ``manager_ip`` and
+    ``appserver_ip`` have no safe default (they are the cluster's own addresses) and provisioning
+    refuses until they are set.
+    """
+
+    cluster_id: str
+    install_root: str = "/cluster/nvis-p2p"
+    service_user: str = "nvis-p2p"
+    service_group: str = "nvis-p2p"
+    service_uid: int = 3100
+    service_gid: int = 3100
+    #: The app server's addresses. No default -- they are the cluster's own and must be supplied.
+    manager_ip: str = ""
+    appserver_ip: str = ""
+    console_bind: str = "127.0.0.1:4300"
+    #: How compute nodes are enumerated for the peer fan-out (e.g. a Slurm hostlist) and the
+    #: hostname pattern within it. Empty until the operator names the fleet.
+    inventory_source: str = ""
+    inventory_pattern: str = ""
+    container_path: str = "/cluster/containers"
+    catalog_path: str = "/cluster/containers"
+    peer_root: str = "/opt/containers/.nvis-p2p"
+    object_store_data_path: str = "/cluster/nvis-p2p/object-store"
+    seed_cache_path: str = "/cluster/nvis-p2p/seed-cache"
+    systemd_dir: str = "/etc/systemd/system"
+
+    @classmethod
+    def from_dict(cls, d: Any) -> P2pSettings:
+        d = _as_dict(d)
+        base = cls(cluster_id=_as_str(d.get("cluster_id")))
+        return cls(
+            cluster_id=base.cluster_id,
+            install_root=_as_str(d.get("install_root")) or base.install_root,
+            service_user=_as_str(d.get("service_user")) or base.service_user,
+            service_group=_as_str(d.get("service_group")) or base.service_group,
+            service_uid=_as_int(d.get("service_uid"), base.service_uid),
+            service_gid=_as_int(d.get("service_gid"), base.service_gid),
+            manager_ip=_as_str(d.get("manager_ip")),
+            appserver_ip=_as_str(d.get("appserver_ip")),
+            console_bind=_as_str(d.get("console_bind")) or base.console_bind,
+            inventory_source=_as_str(d.get("inventory_source")),
+            inventory_pattern=_as_str(d.get("inventory_pattern")),
+            container_path=_as_str(d.get("container_path")) or base.container_path,
+            catalog_path=_as_str(d.get("catalog_path")) or base.catalog_path,
+            peer_root=_as_str(d.get("peer_root")) or base.peer_root,
+            object_store_data_path=_as_str(d.get("object_store_data_path")) or base.object_store_data_path,
+            seed_cache_path=_as_str(d.get("seed_cache_path")) or base.seed_cache_path,
+            systemd_dir=_as_str(d.get("systemd_dir")) or base.systemd_dir,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        # The store keys documents by "id"; carry both so a get-by-id and a read of cluster_id agree.
+        out = asdict(self)
+        out["id"] = self.cluster_id
+        return out
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        if not valid_id(self.cluster_id):
+            problems.append(f"invalid cluster id: {self.cluster_id!r}")
+        return problems
+
+    def provisioning_blockers(self) -> list[str]:
+        """What is missing before this instance can be provisioned. Empty means ready to try.
+
+        Separate from :meth:`validate`: a settings document is *valid* to store with the addresses
+        still blank (an operator saves it, then fills them in), but provisioning cannot start
+        without them. Keeping the two apart means the editor accepts a draft while the reconcile
+        still refuses to run against an underspecified instance.
+        """
+        blockers: list[str] = []
+        for label, value in (("manager_ip", self.manager_ip), ("appserver_ip", self.appserver_ip)):
+            if not value.strip():
+                blockers.append(f"{label} is not set")
+        return blockers
+
+    def to_render_env(self) -> dict[str, str]:
+        """The ``NVIS_*`` environment ``render-site-config.py`` consumes.
+
+        Secret *file paths* are derived under ``install_root/secrets`` rather than stored: render
+        writes the secrets there, so the document never carries one.
+        """
+        secrets = f"{self.install_root}/secrets"
+        return {
+            "NVIS_INSTALL_ROOT": self.install_root,
+            "NVIS_SERVICE_USER": self.service_user,
+            "NVIS_SERVICE_GROUP": self.service_group,
+            "NVIS_SERVICE_UID": str(self.service_uid),
+            "NVIS_SERVICE_GID": str(self.service_gid),
+            "NVIS_MANAGER_IP": self.manager_ip,
+            "NVIS_APPSERVER_IP": self.appserver_ip,
+            "NVIS_CONSOLE_BIND": self.console_bind,
+            "NVIS_INVENTORY_SOURCE": self.inventory_source,
+            "NVIS_INVENTORY_PATTERN": self.inventory_pattern,
+            "NVIS_CONTAINER_PATH": self.container_path,
+            "NVIS_CATALOG_PATH": self.catalog_path,
+            "NVIS_PEER_ROOT": self.peer_root,
+            "NVIS_OBJECT_STORE_DATA_PATH": self.object_store_data_path,
+            "NVIS_SEED_CACHE_PATH": self.seed_cache_path,
+            "NVIS_POSTGRES_PASSWORD_FILE": f"{secrets}/postgres-password",
+            "NVIS_MANAGER_JWT_KEY_FILE": f"{secrets}/manager-jwt-key",
+            "NVIS_MINIO_ROOT_PASSWORD_FILE": f"{secrets}/minio-root-password",
+            "NVIS_DFSTORE_READONLY_ENV_FILE": f"{secrets}/dfstore-readonly.env",
+            "NVIS_SYSTEMD_DIR": self.systemd_dir,
+        }
+
+
+@dataclass
 class Project:
     id: str
     name: str

@@ -50,6 +50,9 @@ TABLE_PLATFORMS = "platforms"
 TABLE_TOOLS = "tools"
 TABLE_PROJECTS = "projects"
 TABLE_NPI_TOOLS = "npi_tools"
+#: Per-cluster NVIS-P2P instance configuration, keyed by cluster id. A document (read/written whole,
+#: no joins) -- see models.P2pSettings and citizen 15.
+TABLE_P2P_SETTINGS = "p2p_settings"
 TABLE_META = "meta"
 
 SCHEMA_VERSION = 1

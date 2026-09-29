@@ -32,12 +32,14 @@ from __future__ import annotations
 import json
 import logging
 
+import p2p_config
 import paths
 import throttle
 import workflow_engine
 from audit.actions import action
 from catalog import context as catalog_context
-from flask import Blueprint, jsonify
+from catalog import models
+from flask import Blueprint, jsonify, request
 
 _logger = logging.getLogger("rack_web.api.p2p_fleet")
 
@@ -193,6 +195,22 @@ def p2p_provision():
     if cluster is None or not getattr(cluster, "p2p_enabled", False):
         return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
 
+    settings = p2p_config.get_settings(cluster.id)
+    blockers = settings.provisioning_blockers()
+    if blockers:
+        # Refuse before spawning a run: a workflow that can only fail its own render step is worse
+        # than a clear 400 that names what the operator must fill in first (Dragonfly Settings).
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "message": "P2P settings are incomplete: " + "; ".join(blockers),
+                    "provisioning_blockers": blockers,
+                }
+            ),
+            400,
+        )
+
     params = {"cluster_id": cluster.id, "cluster_name": cluster.name}
     try:
         result = workflow_engine.start_workflow_run(_PROVISION_WORKFLOW, params)
@@ -214,3 +232,49 @@ def p2p_provision():
         ),
         202,
     )
+
+
+@bp.route("/settings", methods=["GET"])
+@throttle.throttle(
+    30,
+    rationale="reads one small per-cluster document; the Dragonfly Settings view loads it on open.",
+)
+@action(get="p2p:read")
+def p2p_get_settings():
+    """This cluster's P2P instance settings, defaulted when never configured."""
+    _project, cluster, _platform = catalog_context.resolve()
+    if cluster is None or not getattr(cluster, "p2p_enabled", False):
+        return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
+    settings = p2p_config.get_settings(cluster.id)
+    body = settings.to_dict()
+    body["ok"] = True
+    body["provisioning_blockers"] = settings.provisioning_blockers()
+    return jsonify(body)
+
+
+@bp.route("/settings", methods=["PUT"])
+@throttle.throttle(
+    20,
+    rationale="writes one small per-cluster document; not a poll target.",
+)
+@action(put="p2p:configure")
+def p2p_put_settings():
+    """Save this cluster's P2P instance settings.
+
+    A valid document may still be *incomplete* for provisioning (the addresses blank), so this
+    accepts the draft and reports the remaining blockers rather than refusing it -- the reconcile is
+    where an underspecified instance is turned away.
+    """
+    _project, cluster, _platform = catalog_context.resolve()
+    if cluster is None or not getattr(cluster, "p2p_enabled", False):
+        return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
+    payload = request.get_json(silent=True) or {}
+    settings = models.P2pSettings.from_dict({**payload, "cluster_id": cluster.id})
+    try:
+        saved = p2p_config.save_settings(settings)
+    except ValueError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+    body = saved.to_dict()
+    body["ok"] = True
+    body["provisioning_blockers"] = saved.provisioning_blockers()
+    return jsonify(body)

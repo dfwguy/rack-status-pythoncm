@@ -960,6 +960,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "p2p_fleet.p2p_get_settings",
+  "method": "GET",
+  "action": "p2p:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "p2p_fleet.p2p_operations",
   "method": "POST",
   "action": "p2p:operate",
@@ -969,6 +975,12 @@
   "endpoint": "p2p_fleet.p2p_provision",
   "method": "POST",
   "action": "p2p:provision",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "p2p_fleet.p2p_put_settings",
+  "method": "PUT",
+  "action": "p2p:configure",
   "variant": "sync"
  },
  {
