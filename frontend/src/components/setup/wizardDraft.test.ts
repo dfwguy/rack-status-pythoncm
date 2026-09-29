@@ -122,6 +122,13 @@ describe("the document it produces", () => {
     expect(serialised).not.toMatch(/BEGIN [A-Z ]*PRIVATE KEY/);
   });
 
+  it("defaults the scheduler to slurm and carries an explicit choice through", () => {
+    // The wizard now asks. Slurm stays the default; a BCM site scheduling through CMDaemon can
+    // pick pythoncm here instead of hand-editing the cluster record afterwards.
+    expect(toProject(filled()).clusters[0].scheduler).toBe("slurm");
+    expect(toProject(filled({ scheduler: "pythoncm" })).clusters[0].scheduler).toBe("pythoncm");
+  });
+
   it("converts the numeric fields once, at the end", () => {
     const geometry = toProject(filled({ pods: "2", rowsPerPod: "4", racksPerRow: "9" }))
       .clusters[0].geometry;

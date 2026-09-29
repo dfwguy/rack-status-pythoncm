@@ -411,6 +411,7 @@ def vocab():
             "system_vendors": list(models.SYSTEM_VENDORS),
             "form_factors": list(models.FORM_FACTORS),
             "cluster_managers": list(models.CLUSTER_MANAGERS),
+            "schedulers": list(models.SCHEDULERS),
             "tool_categories": list(models.TOOL_CATEGORIES),
             "exec_modes": list(models.EXEC_MODES),
             "exec_targets": list(models.EXEC_TARGETS),

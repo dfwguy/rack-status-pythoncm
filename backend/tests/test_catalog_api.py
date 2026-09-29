@@ -45,6 +45,10 @@ class TestCatalogApi:
         data = client.get("/api/catalog/vocab").get_json()
         assert "GB200" in data["gpu_models"]
         assert "bcm" in data["cluster_managers"]
+        # The scheduler dropdowns (cluster editor + setup wizard) read this list; without it
+        # the UI cannot offer pythoncm and the field stays hand-edited in the store.
+        assert "slurm" in data["schedulers"]
+        assert "pythoncm" in data["schedulers"]
 
     def test_list_and_get_platform(self, client):
         data = client.get("/api/catalog/platforms").get_json()

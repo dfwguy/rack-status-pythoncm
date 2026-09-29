@@ -256,6 +256,7 @@ export interface CatalogVocab {
   system_vendors: string[];
   form_factors: string[];
   cluster_managers: string[];
+  schedulers: string[];
   tool_categories: string[];
   exec_modes: string[];
   exec_targets: string[];

@@ -305,6 +305,27 @@ export function SetupWizard({ onCancel, onFinished }: SetupWizardProps) {
                 ]}
               />
             </FormField>
+            {/* Where work runs, as distinct from who manages the machines. A Select rather than a
+                RadioGroup: six backends is past KUI's below-five guidance for radios. */}
+            <FormField
+              name="w-scheduler"
+              slotLabel="Scheduler"
+              slotHelp="What submits jobs. Slurm for a Slurm cluster; PythonCM for a BCM site scheduling through CMDaemon."
+            >
+              <Select
+                items={[
+                  { value: "slurm", children: "Slurm" },
+                  { value: "pythoncm", children: "PythonCM (BCM native)" },
+                  { value: "local", children: "Local (this host)" },
+                  { value: "runai", children: "Run:ai" },
+                  { value: "slinky", children: "Slinky" },
+                  { value: "maas", children: "MAAS" },
+                ]}
+                value={draft.scheduler}
+                placeholder="Select a scheduler"
+                onValueChange={(v: string) => set({ scheduler: v })}
+              />
+            </FormField>
             {text("w-cluster", "Cluster name", "clusterName", draft.projectName || "Primary")}
             {text(
               "w-prefix",
@@ -531,6 +552,7 @@ export function SetupWizard({ onCancel, onFinished }: SetupWizardProps) {
             {row("Cluster", `${cluster.name} (${cluster.id})`)}
             {row("Platform", cluster.platform_id)}
             {row("Cluster manager", cluster.cluster_manager)}
+            {row("Scheduler", cluster.scheduler)}
             {row("Rack template", cluster.naming.rack_id_template || "Use existing settings")}
             {row("Node template", cluster.naming.ct_id_template || "Use existing settings")}
             {row("Trays per rack", cluster.geometry.trays_per_rack > 0 ? String(cluster.geometry.trays_per_rack) : "Platform default")}

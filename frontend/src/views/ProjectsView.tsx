@@ -423,6 +423,9 @@ export function ProjectsView() {
             <FormField name="cl-manager" slotLabel="Cluster manager">
               <Select items={vocab?.cluster_managers || ["bcm", "maas"]} value={clusterDraft?.cluster.cluster_manager || "bcm"} onValueChange={(v) => setCl({ cluster_manager: v })} placeholder="Select" />
             </FormField>
+            <FormField name="cl-scheduler" slotLabel="Scheduler" slotHelp="Where work runs; distinct from the cluster manager">
+              <Select items={vocab?.schedulers || ["slurm", "pythoncm", "local", "runai", "slinky", "maas"]} value={clusterDraft?.cluster.scheduler || "slurm"} onValueChange={(v) => setCl({ scheduler: v })} placeholder="Select" />
+            </FormField>
             <FormField name="cl-siteprefix" slotLabel="Site prefix" slotHelp="Used for multirack hostname inference">
               <TextInput value={clusterDraft?.cluster.site_prefix || ""} onValueChange={(v) => setCl({ site_prefix: v })} placeholder="optional" />
             </FormField>
