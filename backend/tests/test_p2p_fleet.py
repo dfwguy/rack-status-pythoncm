@@ -228,3 +228,41 @@ class TestP2pProvisionWorkflow:
         assert step_ids.index("preflight") < step_ids.index("stage-assets") < step_ids.index("bring-up")
         stage = next(s for s in wf["steps"] if s["id"] == "stage-assets")
         assert stage.get("native") == "p2p_stage_assets"
+
+
+class TestP2pSettingsContract:
+    """The model must match render-site-config.py's real contract (learned from the NC dry-run)."""
+
+    def test_catalog_path_defaults_to_a_json_file(self):
+        env = models.P2pSettings(cluster_id="c1").to_render_env()
+        assert env["NVIS_CATALOG_PATH"].endswith(".json"), env["NVIS_CATALOG_PATH"]
+
+    def test_inventory_source_is_an_absolute_path(self):
+        # Blank -> a default under install_root the reconcile writes; the renderer needs a path.
+        s = models.P2pSettings(cluster_id="c1", install_root="/cluster/nvis-p2p")
+        src = s.to_render_env()["NVIS_INVENTORY_SOURCE"]
+        assert src.startswith("/cluster/nvis-p2p/") and " " not in src
+        # An explicit path is honoured.
+        s2 = models.P2pSettings(cluster_id="c1", inventory_source="/data/nodes.txt")
+        assert s2.to_render_env()["NVIS_INVENTORY_SOURCE"] == "/data/nodes.txt"
+
+    def test_inventory_source_is_not_a_provisioning_blocker_but_pattern_is(self):
+        s = models.P2pSettings(cluster_id="c1", manager_ip="1.1.1.1", appserver_ip="1.1.1.2")
+        # pattern missing -> blocked; source missing -> not (it defaults)
+        assert any("inventory_pattern" in b for b in s.provisioning_blockers())
+        assert not any("inventory_source" in b for b in s.provisioning_blockers())
+
+    def test_appserver_connection_falls_back_to_appserver_ip(self):
+        s = models.P2pSettings(cluster_id="c1", appserver_ip="10.10.20.22")
+        conn = s.appserver_connection()
+        assert conn == {"host": "10.10.20.22", "user": "root", "key": ""}
+        s2 = models.P2pSettings(
+            cluster_id="c1", appserver_ip="10.10.20.22",
+            appserver_ssh_host="mgmt.example", appserver_ssh_user="svc", appserver_ssh_key="/k",
+        )
+        assert s2.appserver_connection() == {"host": "mgmt.example", "user": "svc", "key": "/k"}
+
+    def test_ssh_fields_round_trip(self):
+        d = models.P2pSettings(cluster_id="c1", appserver_ssh_user="svc", appserver_ssh_key="/k").to_dict()
+        back = models.P2pSettings.from_dict(d)
+        assert back.appserver_ssh_user == "svc" and back.appserver_ssh_key == "/k"

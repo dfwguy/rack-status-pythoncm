@@ -1175,13 +1175,24 @@ class P2pSettings:
     #: The app server's addresses. No default -- they are the cluster's own and must be supplied.
     manager_ip: str = ""
     appserver_ip: str = ""
+    #: How the reconcile REACHES the P2P app server. This is not the cluster's control connection --
+    #: on NC that is the BCM head (a different host) -- so P2P carries its own: an SSH host (defaults
+    #: to appserver_ip when blank), a user, and a key path readable inside the container. This is the
+    #: server the reconcile stages assets to and brings the control plane up on.
+    appserver_ssh_host: str = ""
+    appserver_ssh_user: str = "root"
+    appserver_ssh_key: str = ""
     console_bind: str = "127.0.0.1:4300"
-    #: How compute nodes are enumerated for the peer fan-out (e.g. a Slurm hostlist) and the
-    #: hostname pattern within it. Empty until the operator names the fleet.
+    #: The compute-peer inventory. INVENTORY_SOURCE is an absolute PATH to a file listing eligible
+    #: nodes -- the renderer validates it as a path, not a scheduler name -- and INVENTORY_PATTERN is
+    #: the hostname bracket pattern (e.g. ``sys1-gso1-p-phy-[001-224]``). Left blank, the source path
+    #: defaults under install_root and the reconcile writes it from the cluster roster.
     inventory_source: str = ""
     inventory_pattern: str = ""
     container_path: str = "/cluster/containers"
-    catalog_path: str = "/cluster/containers"
+    #: NVIS_CATALOG_PATH must name a ``.json`` file (the renderer enforces the suffix); the images
+    #: directory is ``container_path``, a different thing.
+    catalog_path: str = "/cluster/containers/catalog.json"
     peer_root: str = "/opt/containers/.nvis-p2p"
     object_store_data_path: str = "/cluster/nvis-p2p/object-store"
     seed_cache_path: str = "/cluster/nvis-p2p/seed-cache"
@@ -1200,6 +1211,9 @@ class P2pSettings:
             service_gid=_as_int(d.get("service_gid"), base.service_gid),
             manager_ip=_as_str(d.get("manager_ip")),
             appserver_ip=_as_str(d.get("appserver_ip")),
+            appserver_ssh_host=_as_str(d.get("appserver_ssh_host")),
+            appserver_ssh_user=_as_str(d.get("appserver_ssh_user")) or base.appserver_ssh_user,
+            appserver_ssh_key=_as_str(d.get("appserver_ssh_key")),
             console_bind=_as_str(d.get("console_bind")) or base.console_bind,
             inventory_source=_as_str(d.get("inventory_source")),
             inventory_pattern=_as_str(d.get("inventory_pattern")),
@@ -1232,18 +1246,35 @@ class P2pSettings:
         still refuses to run against an underspecified instance.
         """
         blockers: list[str] = []
-        # The renderer requires these and they have no safe default: the cluster's own addresses and
-        # how its compute nodes are enumerated for the peer fan-out. Everything else defaults.
+        # These have no safe default: the cluster's own addresses and the hostname pattern its
+        # compute peers follow. The inventory *source path* defaults under install_root (the reconcile
+        # writes it), so it is not a blocker; everything else defaults.
         required = (
             ("manager_ip", self.manager_ip),
             ("appserver_ip", self.appserver_ip),
-            ("inventory_source", self.inventory_source),
             ("inventory_pattern", self.inventory_pattern),
         )
         for label, value in required:
             if not value.strip():
                 blockers.append(f"{label} is not set")
         return blockers
+
+    def resolved_inventory_source(self) -> str:
+        """The inventory file path: explicit, or a default under install_root the reconcile writes."""
+        return self.inventory_source.strip() or f"{self.install_root.rstrip('/')}/inventory/eligible.nodes"
+
+    def appserver_connection(self) -> dict[str, str]:
+        """SSH parameters the reconcile uses to reach the P2P app server.
+
+        The host falls back to ``appserver_ip`` because on a single-app-server cluster they are the
+        same address; a site whose app server answers on a different management address overrides it.
+        The key is a path readable inside the container (e.g. the mounted deployment key).
+        """
+        return {
+            "host": self.appserver_ssh_host.strip() or self.appserver_ip.strip(),
+            "user": self.appserver_ssh_user.strip() or "root",
+            "key": self.appserver_ssh_key.strip(),
+        }
 
     def to_render_env(self) -> dict[str, str]:
         """The ``NVIS_*`` environment ``render-site-config.py`` consumes.
@@ -1261,7 +1292,7 @@ class P2pSettings:
             "NVIS_MANAGER_IP": self.manager_ip,
             "NVIS_APPSERVER_IP": self.appserver_ip,
             "NVIS_CONSOLE_BIND": self.console_bind,
-            "NVIS_INVENTORY_SOURCE": self.inventory_source,
+            "NVIS_INVENTORY_SOURCE": self.resolved_inventory_source(),
             "NVIS_INVENTORY_PATTERN": self.inventory_pattern,
             "NVIS_CONTAINER_PATH": self.container_path,
             "NVIS_CATALOG_PATH": self.catalog_path,
