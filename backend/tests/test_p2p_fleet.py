@@ -100,7 +100,8 @@ class TestP2pProvision:
 
     def test_provision_starts_the_reconcile_run(self, client, monkeypatch):
         _set_active_p2p(True)
-        _configure_active_p2p(manager_ip="10.41.112.3", appserver_ip="192.168.10.4")
+        _configure_active_p2p(manager_ip="10.41.112.3", appserver_ip="192.168.10.4",
+                              inventory_source="slurm", inventory_pattern="nc-[01-24]")
         calls = {}
 
         def _fake_start(workflow_id, params=None):
@@ -147,7 +148,8 @@ class TestP2pSettings:
         _set_active_p2p(True)
         put = client.put(
             "/api/p2p/settings",
-            json={"manager_ip": "10.41.112.3", "appserver_ip": "192.168.10.4", "console_bind": "127.0.0.1:4300"},
+            json={"manager_ip": "10.41.112.3", "appserver_ip": "192.168.10.4",
+                  "inventory_source": "slurm", "inventory_pattern": "nc-[01-24]"},
         )
         assert put.status_code == 200
         assert put.get_json()["provisioning_blockers"] == []
@@ -178,5 +180,51 @@ class TestP2pSettingsModel:
 
     def test_blockers_and_defaults(self):
         assert models.P2pSettings(cluster_id="c1").provisioning_blockers()  # addresses blank
-        ready = models.P2pSettings(cluster_id="c1", manager_ip="1.1.1.1", appserver_ip="1.1.1.2")
+        ready = models.P2pSettings(cluster_id="c1", manager_ip="1.1.1.1", appserver_ip="1.1.1.2",
+                                   inventory_source="slurm", inventory_pattern="n[01-09]")
         assert ready.provisioning_blockers() == []
+
+
+class TestP2pProvisionWorkflow:
+    def test_native_stage_step_is_registered_and_targets_install_root_src(self, monkeypatch):
+        import host_exec
+        import workflow_engine
+
+        # Registered at import of p2p_provision (via api.p2p_fleet).
+        assert "p2p_stage_assets" in workflow_engine._NATIVE_STEPS
+
+        seen = {}
+
+        def _fake_copy(local, remote, **kw):
+            seen["local"] = str(local)
+            seen["remote"] = remote
+            return None
+
+        monkeypatch.setattr(host_exec, "copy_tree_to_host", _fake_copy)
+        fn = workflow_engine._NATIVE_STEPS["p2p_stage_assets"]
+        run = {"run_id": "r1", "params": {"NVIS_INSTALL_ROOT": "/cluster/nvis-p2p"}}
+        ok, output = fn(run, {"id": "stage-assets"})
+        assert ok, output
+        assert seen["remote"] == "/cluster/nvis-p2p/src"
+        assert seen["local"].endswith("deploy/p2p")
+
+    def test_native_dispatch_reports_an_unknown_step(self):
+        import workflow_engine
+
+        ok, output = workflow_engine._execute_native_step(
+            {"run_id": "r1", "params": {}}, {"id": "x", "native": "no_such_native"}
+        )
+        assert ok is False
+        assert "no native step registered" in output
+
+    def test_reconcile_workflow_has_the_full_step_sequence(self):
+        import workflow_engine
+
+        wf = workflow_engine.get_workflow("nvis-p2p-provision")
+        step_ids = [s.get("id") for s in wf.get("steps", [])]
+        # Read-only first, staging before any render, mutating bring-up last before done.
+        for expected in ("start", "preflight", "stage-assets", "prepare", "bring-up", "done"):
+            assert expected in step_ids, f"missing step {expected}"
+        assert step_ids.index("preflight") < step_ids.index("stage-assets") < step_ids.index("bring-up")
+        stage = next(s for s in wf["steps"] if s["id"] == "stage-assets")
+        assert stage.get("native") == "p2p_stage_assets"

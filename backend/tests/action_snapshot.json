@@ -972,15 +972,15 @@
   "variant": "sync"
  },
  {
-  "endpoint": "p2p_fleet.p2p_provision",
-  "method": "POST",
-  "action": "p2p:provision",
-  "variant": "sync"
- },
- {
   "endpoint": "p2p_fleet.p2p_put_settings",
   "method": "PUT",
   "action": "p2p:configure",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "p2p_fleet.p2p_start_provision",
+  "method": "POST",
+  "action": "p2p:provision",
   "variant": "sync"
  },
  {

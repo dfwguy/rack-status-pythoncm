@@ -1794,7 +1794,7 @@
           "kind": "mutate",
           "scope": "singleton",
           "routes": [
-            "POST p2p_fleet.p2p_provision"
+            "POST p2p_fleet.p2p_start_provision"
           ]
         },
         {

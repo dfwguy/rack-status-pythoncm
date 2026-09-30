@@ -100,6 +100,77 @@ steps:
     echo "== preflight summary: $faults fault(s), $warns warning(s) =="
     [ "$faults" -eq 0 ] || echo "Resolve the FAIL items above before provisioning."
     exit "$faults"
+- id: stage-assets
+  name: Stage the P2P assets to the app server
+  type: automated
+  description: >-
+    Copy the deploy/p2p asset tree -- scripts, compose, config templates, catalog manifest and, when
+    the image was built with them, the pinned Dragonfly binaries -- to {install_root}/src on the app
+    server. A native step (host_exec.copy_tree_to_host) because the assets live in the Rack Status
+    image and must cross the connection; it runs inside this same durable run like every other step.
+  native: p2p_stage_assets
+- id: prepare
+  name: Render and validate (no changes)
+  type: automated
+  description: >-
+    Write the per-cluster cluster.env, then run the installer's --check and --dry-run. Both are
+    read-only: --check validates the release and settings, --dry-run renders the site overlay to a
+    temporary directory and prints the plan without touching a service. A failure here stops the run
+    before anything is created.
+  timeout: 300
+  run: |
+    set -euo pipefail
+    SRC="${NVIS_INSTALL_ROOT}/src"
+    ENVF="${NVIS_INSTALL_ROOT}/cluster.env"
+    sudo mkdir -p "${NVIS_INSTALL_ROOT}"
+    {
+      echo "NVIS_INSTALL_ROOT=${NVIS_INSTALL_ROOT}"
+      echo "NVIS_SERVICE_USER=${NVIS_SERVICE_USER}"
+      echo "NVIS_SERVICE_GROUP=${NVIS_SERVICE_GROUP}"
+      echo "NVIS_SERVICE_UID=${NVIS_SERVICE_UID}"
+      echo "NVIS_SERVICE_GID=${NVIS_SERVICE_GID}"
+      echo "NVIS_MANAGER_IP=${NVIS_MANAGER_IP}"
+      echo "NVIS_APPSERVER_IP=${NVIS_APPSERVER_IP}"
+      echo "NVIS_CONSOLE_BIND=${NVIS_CONSOLE_BIND}"
+      echo "NVIS_INVENTORY_SOURCE=${NVIS_INVENTORY_SOURCE}"
+      echo "NVIS_INVENTORY_PATTERN=${NVIS_INVENTORY_PATTERN}"
+      echo "NVIS_CONTAINER_PATH=${NVIS_CONTAINER_PATH}"
+      echo "NVIS_CATALOG_PATH=${NVIS_CATALOG_PATH}"
+      echo "NVIS_PEER_ROOT=${NVIS_PEER_ROOT}"
+      echo "NVIS_OBJECT_STORE_DATA_PATH=${NVIS_OBJECT_STORE_DATA_PATH}"
+      echo "NVIS_SEED_CACHE_PATH=${NVIS_SEED_CACHE_PATH}"
+      echo "NVIS_POSTGRES_PASSWORD_FILE=${NVIS_POSTGRES_PASSWORD_FILE}"
+      echo "NVIS_MANAGER_JWT_KEY_FILE=${NVIS_MANAGER_JWT_KEY_FILE}"
+      echo "NVIS_MINIO_ROOT_PASSWORD_FILE=${NVIS_MINIO_ROOT_PASSWORD_FILE}"
+      echo "NVIS_DFSTORE_READONLY_ENV_FILE=${NVIS_DFSTORE_READONLY_ENV_FILE}"
+      echo "NVIS_SYSTEMD_DIR=${NVIS_SYSTEMD_DIR}"
+    } | sudo tee "${ENVF}" >/dev/null
+    echo "wrote ${ENVF}"
+    python3 "${SRC}/scripts/install-nvis-p2p.py" --env "${ENVF}" --check
+    python3 "${SRC}/scripts/install-nvis-p2p.py" --env "${ENVF}" --dry-run
+- id: bring-up
+  name: Bring up the control plane
+  type: automated
+  description: >-
+    The first mutating step. Ensures the service account exists, then runs the installer for real
+    (render the overlay, generate secrets, install units and the catalog) and starts the
+    control-plane services. Gated behind a healthy preflight, a successful stage, and a passing
+    check/dry-run above.
+  timeout: 1800
+  run: |
+    set -euo pipefail
+    SRC="${NVIS_INSTALL_ROOT}/src"
+    ENVF="${NVIS_INSTALL_ROOT}/cluster.env"
+    getent group "${NVIS_SERVICE_GROUP}" >/dev/null 2>&1 \
+      || sudo groupadd -g "${NVIS_SERVICE_GID}" "${NVIS_SERVICE_GROUP}"
+    id "${NVIS_SERVICE_USER}" >/dev/null 2>&1 \
+      || sudo useradd -r -u "${NVIS_SERVICE_UID}" -g "${NVIS_SERVICE_GID}" -s /usr/sbin/nologin "${NVIS_SERVICE_USER}"
+    sudo python3 "${SRC}/scripts/install-nvis-p2p.py" --env "${ENVF}"
+    sudo systemctl daemon-reload
+    for unit in nvis-p2p-manager nvis-p2p-seed nvis-p2p-seed2; do
+      sudo systemctl enable --now "${unit}.service" || echo "warning: ${unit} did not start"
+    done
+    echo "control-plane bring-up requested; verify: systemctl status nvis-p2p-manager"
 - id: done
   name: Provisioned
   type: manual

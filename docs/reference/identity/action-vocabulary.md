@@ -576,7 +576,7 @@ Owned by `backend/api/p2p_fleet.py`.
 |---|---|---|---|
 | `p2p:configure` | mutate | singleton | `PUT p2p_fleet.p2p_put_settings` |
 | `p2p:operate` | mutate | singleton | `POST p2p_fleet.p2p_operations` |
-| `p2p:provision` | mutate | singleton | `POST p2p_fleet.p2p_provision` |
+| `p2p:provision` | mutate | singleton | `POST p2p_fleet.p2p_start_provision` |
 | `p2p:read` | read | singleton | `GET p2p_fleet.p2p_get_settings`<br>`GET p2p_fleet.p2p_status` |
 
 ## `policy`

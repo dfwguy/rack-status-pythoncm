@@ -24,6 +24,7 @@ import shlex
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -1419,8 +1420,49 @@ def _execute_inline_run(run: dict, step: dict, params: dict, script_text: str) -
                 pass
 
 
+#: Native steps: a registered Python callable a workflow step invokes instead of shelling out.
+#:
+#: Most steps are bash on a host, which is right for a check or a fan-out. A few are genuinely
+#: in-process work the engine should own rather than reinvent -- the P2P reconcile stages an asset
+#: tree to the app server via ``host_exec.copy_tree_to_host``, which is a Python primitive, not a
+#: remote command. Adding the capability *to the engine* (citizen 4) keeps that step inside the same
+#: durable run, progress and idempotency as every other, instead of a second job path beside it.
+#:
+#: A provider registers with :func:`register_native_step`; the callable takes ``(run, step)`` and
+#: returns ``(success, output)`` exactly like the other step executors. The registry is deliberately
+#: not imported here -- workflow_engine must not depend on a feature module -- so a provider module
+#: registers at import and is imported at startup by whatever surface owns it.
+_NATIVE_STEPS: dict[str, Callable[[dict, dict], tuple[bool, str]]] = {}
+
+
+def register_native_step(name: str, fn: Callable[[dict, dict], tuple[bool, str]]) -> None:
+    """Register a native step callable under *name* (idempotent; a re-register replaces)."""
+    _NATIVE_STEPS[name] = fn
+
+
+def _execute_native_step(run: dict, step: dict) -> tuple[bool, str]:
+    name = str(step.get("native") or "")
+    run_id, step_id = run["run_id"], step.get("id", "unknown")
+    fn = _NATIVE_STEPS.get(name)
+    if fn is None:
+        out = f"[Native step error] no native step registered as {name!r}"
+        _save_step_output(run_id, step_id, out)
+        return False, out
+    try:
+        success, output = fn(run, step)
+    except Exception as exc:
+        output = f"[Native step {name}] {type(exc).__name__}: {exc}"
+        _logger.exception("Workflow %s native step %s (%s) failed", run_id, step_id, name)
+        _save_step_output(run_id, step_id, output)
+        return False, output
+    _save_step_output(run_id, step_id, output)
+    return success, output
+
+
 def _execute_automated_step(run: dict, step: dict) -> tuple[bool, str]:
     """Execute an automated step. Returns (success, output)."""
+    if step.get("native"):
+        return _execute_native_step(run, step)
     if step.get("resolve"):
         return _execute_resolve_step(run, step)
     if step.get("scheduler"):

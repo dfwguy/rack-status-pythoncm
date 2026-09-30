@@ -33,6 +33,7 @@ import json
 import logging
 
 import p2p_config
+import p2p_provision  # noqa: F401 -- imported for its side effect: registers the p2p_stage_assets native step
 import paths
 import throttle
 import workflow_engine
@@ -182,7 +183,7 @@ def p2p_operations():
     rationale="starts a durable reconcile run (a background thread); cheap to call but not a poll target.",
 )
 @action(post="p2p:provision")
-def p2p_provision():
+def p2p_start_provision():
     """Start (or reconcile) this cluster's Dragonfly control plane.
 
     Runs the shipped reconcile workflow on the active cluster's app server. Returns immediately with
@@ -211,7 +212,10 @@ def p2p_provision():
             400,
         )
 
-    params = {"cluster_id": cluster.id, "cluster_name": cluster.name}
+    # The render env carries the per-cluster facts the reconcile's steps need (install root,
+    # addresses, paths). Passed as run params so a step can write the cluster.env and the native
+    # stage step knows where to put the assets. Secrets are file *paths* here, never values.
+    params = {"cluster_id": cluster.id, "cluster_name": cluster.name, **settings.to_render_env()}
     try:
         result = workflow_engine.start_workflow_run(_PROVISION_WORKFLOW, params)
     except ValueError as exc:

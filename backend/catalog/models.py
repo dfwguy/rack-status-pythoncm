@@ -1232,7 +1232,15 @@ class P2pSettings:
         still refuses to run against an underspecified instance.
         """
         blockers: list[str] = []
-        for label, value in (("manager_ip", self.manager_ip), ("appserver_ip", self.appserver_ip)):
+        # The renderer requires these and they have no safe default: the cluster's own addresses and
+        # how its compute nodes are enumerated for the peer fan-out. Everything else defaults.
+        required = (
+            ("manager_ip", self.manager_ip),
+            ("appserver_ip", self.appserver_ip),
+            ("inventory_source", self.inventory_source),
+            ("inventory_pattern", self.inventory_pattern),
+        )
+        for label, value in required:
             if not value.strip():
                 blockers.append(f"{label} is not set")
         return blockers
