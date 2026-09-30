@@ -25,8 +25,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-import cli
 import pytest
+
+import cli
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

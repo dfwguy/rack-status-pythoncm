@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import os
 
-import cli
 import config_launch
 import config_registry
 import pytest
+
+import cli
 
 #: Settings with a `required_when` that a fresh, non-demo deployment does NOT need in its minimal
 #: file, each with why. Adding a required setting means either writing it in `minimal_config()` or
