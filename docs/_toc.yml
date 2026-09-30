@@ -70,3 +70,5 @@ subtrees:
         title: Porting the PythonCM fork
       - file: explanation/p2p-module-integration
         title: NVIS-P2P as a per-cluster capability
+      - file: explanation/active-passive-and-blue-green
+        title: Active/passive and blue/green (roadmap)
