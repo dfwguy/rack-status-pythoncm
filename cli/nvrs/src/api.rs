@@ -49,6 +49,10 @@ pub struct ApiArgs {
     /// Bearer access token. Prefer $NVRS_TOKEN. Phase 1's `nvrs login` removes the need for this.
     #[arg(long, env = "NVRS_TOKEN", hide_env_values = true)]
     pub token: Option<String>,
+
+    /// Skip the best-effort check of the path/method against the cached API contract.
+    #[arg(long)]
+    pub no_validate: bool,
 }
 
 /// Build a transport client for a resolved profile, with an optional bearer token.
@@ -71,6 +75,30 @@ pub fn client_for(
     Ok(nvrs_client::Client::new(client_cfg)?)
 }
 
+/// Warn (to stderr) if a call does not match the *cached* API contract. Best-effort by design:
+/// cache-only so it never fetches (no latency, no auth needed), never blocks the call (the cache can
+/// be stale and the contract is a map, not a straitjacket), and silent when nothing is cached.
+/// Populate or refresh the cache with `nvrs spec`.
+fn warn_if_off_contract(profile: &Profile, method: &str, path: &str) {
+    let Ok(base_url) = url::Url::parse(&profile.base_url) else {
+        return;
+    };
+    let Some(loaded) = nvrs_openapi::load_cached(&base_url, nvrs_openapi::DEFAULT_MAX_AGE) else {
+        return;
+    };
+    match loaded.spec.check_call(method, path) {
+        nvrs_openapi::CallCheck::Ok => {}
+        nvrs_openapi::CallCheck::UnknownPath => eprintln!(
+            "warning: {path} is not in the cached API contract \
+             (a typo, or the cache is stale — try `nvrs spec --refresh`); sending anyway"
+        ),
+        nvrs_openapi::CallCheck::MethodNotAllowed(methods) => eprintln!(
+            "warning: {method} is not defined for {path}; the contract allows {}; sending anyway",
+            methods.join(", ")
+        ),
+    }
+}
+
 pub async fn run(
     args: ApiArgs,
     cfg: &Config,
@@ -81,6 +109,10 @@ pub async fn run(
     let method = parse_method(&args.method)?;
     let query = parse_kv(&args.query).context("parsing --query")?;
     let body = build_body(&args.field, args.body.as_deref())?;
+
+    if !args.no_validate {
+        warn_if_off_contract(profile, method.as_str(), &args.path);
+    }
 
     let store = TokenStore::open_default()?;
     let (token, stored) = crate::auth::resolve_access(&store, profile_name, args.token.as_deref())?;

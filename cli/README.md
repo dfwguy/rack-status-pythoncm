@@ -8,9 +8,10 @@ A single-binary client for a Rack Status deployment: run tests, validations and 
 a cluster, from the terminal. It is a **client of the existing API** — it speaks the same
 `/api/*` contract, SRP login and token auth as the web UI, and adds no backend surface of its own.
 
-> Status: **Phase 1**. Profiles, SRP-6a `login`/`logout`, a token store with automatic refresh, a
-> generic `nvrs api` passthrough that reaches the whole API, and `whoami`. Typed domain verbs and the
-> interactive terminal land in later phases — see the build plan.
+> Status: **Phase 2**. Profiles, SRP-6a `login`/`logout` with automatic refresh, a generic `nvrs api`
+> passthrough that reaches the whole API, `whoami`, and `nvrs spec` — OpenAPI contract discovery that
+> also validates `api` calls against the served contract. Typed domain verbs and the interactive
+> terminal land in later phases — see the build plan.
 
 ## Workspace layout
 
@@ -19,7 +20,7 @@ a cluster, from the terminal. It is a **client of the existing API** — it spea
 | `nvrs` | the binary: clap command tree, output rendering, exit codes |
 | `nvrs-client` | transport — HTTP + streaming, the JSON envelope, 429 backoff, TLS trust |
 | `nvrs-auth` | SRP-6a login, the token store, and refresh |
-| `nvrs-openapi` | fetch/cache and query the live OpenAPI contract *(Phase 2)* |
+| `nvrs-openapi` | fetch/cache and query the live OpenAPI contract |
 
 ## Build & test
 
@@ -81,6 +82,21 @@ nvrs api POST /api/run-validation-async --body @params.json
 nvrs api POST /api/tools/download-containers-stream --field arch=x86_64 --stream
 
 nvrs --json api GET /api/status | jq .        # machine-readable envelope for scripting
+```
+
+## Discover the API
+
+`nvrs spec` reads the deployment's own OpenAPI 3.1 document (generated from its route table, so it
+never drifts) and caches it under `$XDG_CACHE_HOME/nvrs/` (`$NVRS_CACHE` overrides). `nvrs api` then
+uses that cache to warn — never block — when a call names an unknown path or a method the endpoint
+does not define (`--no-validate` skips the check).
+
+```bash
+nvrs spec                       # every endpoint: METHOD PATH — summary
+nvrs spec rack                  # filter by method/path/summary substring
+nvrs spec rack-locks --details  # parameters and tags for matching endpoints
+nvrs spec --refresh             # re-fetch instead of using the cache
+nvrs --json spec | jq '.paths | keys'   # the raw OpenAPI document
 ```
 
 Exit codes distinguish *why* a call failed: `77` not authenticated / forbidden, `75` rate-limited

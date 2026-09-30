@@ -10,6 +10,7 @@ mod api;
 mod auth;
 mod config;
 mod output;
+mod spec;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -45,6 +46,18 @@ enum Command {
 
     /// Call any `/api/*` endpoint directly. The full surface, before typed verbs exist for it.
     Api(api::ApiArgs),
+
+    /// Browse the deployment's OpenAPI contract: every endpoint, method and summary.
+    Spec {
+        /// Show only endpoints whose method, path or summary contains this text.
+        filter: Option<String>,
+        /// Show full details (parameters, tags) for each matching endpoint.
+        #[arg(long)]
+        details: bool,
+        /// Re-fetch from the deployment instead of using the cached copy.
+        #[arg(long)]
+        refresh: bool,
+    },
 
     /// Log in to the active profile over SRP and store the session.
     Login {
@@ -118,6 +131,17 @@ fn run(cli: Cli) -> Result<()> {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
             block_on(api::run(args, &cfg, &name, profile, cli.json))
+        }
+        Command::Spec {
+            filter,
+            details,
+            refresh,
+        } => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            block_on(spec::run(
+                &cfg, &name, profile, filter, details, refresh, cli.json,
+            ))
         }
         Command::Login {
             login,

@@ -13,3 +13,8 @@ authors.workspace = true
 nvrs-client = { path = "../nvrs-client" }
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
