@@ -6,6 +6,7 @@
 //! `/api/*` endpoint, and a `whoami` that probes the auth gate. Login (SRP) and typed domain verbs
 //! land in later phases; the passthrough means every endpoint is usable in the meantime.
 
+mod admin;
 mod api;
 mod auth;
 mod config;
@@ -99,6 +100,22 @@ enum Command {
     #[command(subcommand)]
     Reports(ReportsCmd),
 
+    /// Catalog CRUD: platforms, tools and projects — what the product can run.
+    Catalog {
+        /// Collection: platforms, tools or projects.
+        kind: String,
+        #[command(subcommand)]
+        op: CrudCmd,
+    },
+
+    /// Identity administration: users and groups.
+    #[command(subcommand)]
+    Identity(IdentityCmd),
+
+    /// Authorization policies and what a principal may do.
+    #[command(subcommand)]
+    Policy(PolicyCmd),
+
     /// Browse the deployment's OpenAPI contract: every endpoint, method and summary.
     Spec {
         /// Show only endpoints whose method, path or summary contains this text.
@@ -124,7 +141,11 @@ enum Command {
     Logout,
 
     /// Report whether the active profile has a valid session (probes `/api/auth-check`).
-    Whoami,
+    Whoami {
+        /// Also list every action allowed for the current principal.
+        #[arg(long)]
+        grants: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -176,6 +197,98 @@ enum RackCmd {
 enum ReportsCmd {
     /// List generated reports.
     List,
+}
+
+#[derive(Subcommand, Debug)]
+enum CrudCmd {
+    /// List entries.
+    List,
+    /// Show one entry by id.
+    Get { id: String },
+    /// Create an entry from --field/--body.
+    Create {
+        #[arg(long = "field", short = 'f', value_name = "KEY=VALUE")]
+        field: Vec<String>,
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Update an entry by id from --field/--body.
+    Update {
+        id: String,
+        #[arg(long = "field", short = 'f', value_name = "KEY=VALUE")]
+        field: Vec<String>,
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Delete an entry by id.
+    Delete { id: String },
+}
+
+#[derive(Subcommand, Debug)]
+enum IdentityCmd {
+    /// User administration.
+    #[command(subcommand)]
+    Users(UserCmd),
+    /// Group administration.
+    #[command(subcommand)]
+    Groups(GroupCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum UserCmd {
+    List,
+    Get {
+        login: String,
+    },
+    Create {
+        #[arg(long = "field", short = 'f', value_name = "KEY=VALUE")]
+        field: Vec<String>,
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Disable a user (or re-enable with --enable).
+    Disable {
+        login: String,
+        #[arg(long)]
+        enable: bool,
+    },
+    Delete {
+        login: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum GroupCmd {
+    List,
+    Create {
+        name: String,
+        #[arg(long)]
+        description: Option<String>,
+    },
+    Delete {
+        name: String,
+    },
+    /// Add a user to a group.
+    AddMember {
+        group: String,
+        login: String,
+    },
+    /// Remove a user from a group.
+    RemoveMember {
+        group: String,
+        login: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PolicyCmd {
+    /// List attached policies.
+    List,
+    /// Every action with allow/deny for a principal (yours by default).
+    Preview {
+        #[arg(long)]
+        principal: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -293,6 +406,87 @@ fn run(cli: Cli) -> Result<()> {
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
             block_on(verbs::reports_list(&cfg, &name, profile, cli.json))
         }
+        Command::Catalog { kind, op } => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            let ctx = admin::Ctx {
+                cfg: &cfg,
+                name: &name,
+                profile,
+                json: cli.json,
+            };
+            block_on(async {
+                match op {
+                    CrudCmd::List => admin::catalog_list(&ctx, &kind).await,
+                    CrudCmd::Get { id } => admin::catalog_get(&ctx, &kind, &id).await,
+                    CrudCmd::Create { field, body } => {
+                        admin::catalog_create(&ctx, &kind, &field, body.as_deref()).await
+                    }
+                    CrudCmd::Update { id, field, body } => {
+                        admin::catalog_update(&ctx, &kind, &id, &field, body.as_deref()).await
+                    }
+                    CrudCmd::Delete { id } => admin::catalog_delete(&ctx, &kind, &id).await,
+                }
+            })
+        }
+        Command::Identity(cmd) => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            let ctx = admin::Ctx {
+                cfg: &cfg,
+                name: &name,
+                profile,
+                json: cli.json,
+            };
+            block_on(async {
+                match cmd {
+                    IdentityCmd::Users(UserCmd::List) => admin::users_list(&ctx).await,
+                    IdentityCmd::Users(UserCmd::Get { login }) => {
+                        admin::users_get(&ctx, &login).await
+                    }
+                    IdentityCmd::Users(UserCmd::Create { field, body }) => {
+                        admin::users_create(&ctx, &field, body.as_deref()).await
+                    }
+                    IdentityCmd::Users(UserCmd::Disable { login, enable }) => {
+                        admin::users_set_disabled(&ctx, &login, !enable).await
+                    }
+                    IdentityCmd::Users(UserCmd::Delete { login }) => {
+                        admin::users_delete(&ctx, &login).await
+                    }
+                    IdentityCmd::Groups(GroupCmd::List) => admin::groups_list(&ctx).await,
+                    IdentityCmd::Groups(GroupCmd::Create { name, description }) => {
+                        admin::groups_create(&ctx, &name, description).await
+                    }
+                    IdentityCmd::Groups(GroupCmd::Delete { name }) => {
+                        admin::groups_delete(&ctx, &name).await
+                    }
+                    IdentityCmd::Groups(GroupCmd::AddMember { group, login }) => {
+                        admin::group_add_member(&ctx, &group, &login).await
+                    }
+                    IdentityCmd::Groups(GroupCmd::RemoveMember { group, login }) => {
+                        admin::group_remove_member(&ctx, &group, &login).await
+                    }
+                }
+            })
+        }
+        Command::Policy(cmd) => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            let ctx = admin::Ctx {
+                cfg: &cfg,
+                name: &name,
+                profile,
+                json: cli.json,
+            };
+            block_on(async {
+                match cmd {
+                    PolicyCmd::List => admin::policy_list(&ctx).await,
+                    PolicyCmd::Preview { principal } => {
+                        admin::policy_preview(&ctx, principal.as_deref()).await
+                    }
+                }
+            })
+        }
         Command::Spec {
             filter,
             details,
@@ -317,10 +511,22 @@ fn run(cli: Cli) -> Result<()> {
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
             block_on(auth::logout(&cfg, &name, profile))
         }
-        Command::Whoami => {
+        Command::Whoami { grants } => {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
-            block_on(api::whoami(&cfg, &name, profile, cli.json))
+            block_on(async {
+                api::whoami(&cfg, &name, profile, cli.json).await?;
+                if grants {
+                    let ctx = admin::Ctx {
+                        cfg: &cfg,
+                        name: &name,
+                        profile,
+                        json: cli.json,
+                    };
+                    admin::policy_preview(&ctx, None).await?;
+                }
+                Ok(())
+            })
         }
     }
 }

@@ -53,6 +53,16 @@ fn handle(mut stream: TcpStream, polls: Arc<AtomicUsize>) {
                 r#"{"ok":true,"job_id":"j1","phase":"done","returncode":0,"log_dir":"/logs/j1"}"#.to_string()
             }
         }
+        ("GET", "/api/catalog/platforms") => {
+            r#"{"ok":true,"items":[{"id":"gb200","name":"GB200 NVL72"},{"id":"h100","name":"H100"}]}"#.to_string()
+        }
+        ("DELETE", "/api/catalog/tools/old") => r#"{"ok":true,"deleted":"old"}"#.to_string(),
+        ("GET", "/api/identity/users") => {
+            r#"{"ok":true,"users":[{"login":"rafael","display_name":"Rafael","disabled":false}]}"#.to_string()
+        }
+        ("GET", "/api/policies/preview") => {
+            r#"{"ok":true,"subject":"user:rafael","actions":[{"action":"rack.power:on","effect":"allow"},{"action":"identity.user:create","effect":"deny"}]}"#.to_string()
+        }
         _ => r#"{"ok":false,"error":"not found"}"#.to_string(),
     };
 
@@ -131,4 +141,46 @@ fn unknown_suite_exits_nonzero() {
 
     let (_out, code) = run(dir, &["run", "bogus-suite"]);
     assert_ne!(code, 0, "an unknown suite should be an error");
+}
+
+#[test]
+fn admin_verbs_render_their_collections() {
+    let base = start_server();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    run(dir, &["config", "set-url", "fake", &base]);
+
+    // catalog list renders the items array as a table.
+    let (out, code) = run(dir, &["catalog", "platforms", "list"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("gb200") && out.contains("H100"), "{out}");
+
+    // identity users list.
+    let (out, code) = run(dir, &["identity", "users", "list"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("rafael"), "{out}");
+
+    // policy preview flattens the actions array.
+    let (out, code) = run(dir, &["policy", "preview"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("rack.power:on") && out.contains("allow"),
+        "{out}"
+    );
+
+    // a delete confirmation.
+    let (out, code) = run(dir, &["catalog", "tools", "delete", "old"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("deleted old"), "{out}");
+}
+
+#[test]
+fn unknown_catalog_kind_exits_nonzero() {
+    let base = start_server();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    run(dir, &["config", "set-url", "fake", &base]);
+
+    let (_out, code) = run(dir, &["catalog", "platform", "list"]); // singular typo
+    assert_ne!(code, 0, "an unknown catalog kind should be an error");
 }

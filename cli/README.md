@@ -8,10 +8,10 @@ A single-binary client for a Rack Status deployment: run tests, validations and 
 a cluster, from the terminal. It is a **client of the existing API** — it speaks the same
 `/api/*` contract, SRP login and token auth as the web UI, and adds no backend surface of its own.
 
-> Status: **Phase 4**. Profiles, SRP-6a `login`/`logout` with automatic refresh, `whoami`, OpenAPI
-> discovery (`nvrs spec`), the generic `nvrs api` passthrough, typed verbs (`compute status`, `rack
-> list/lock/unlock`, `run <suite> --follow`, `reports list`), live log tailing (`logs tail`), and an
-> interactive shell over the web terminal (`nvrs terminal`). Admin CRUD lands in Phase 5.
+> Status: **feature-complete (Phases 0–5)**. Profiles, SRP-6a `login`/`logout` with automatic
+> refresh, `whoami [--grants]`, OpenAPI discovery (`nvrs spec`), the generic `nvrs api` passthrough,
+> typed verbs (`compute`, `rack`, `run --follow`, `reports`), live log tailing (`logs tail`), the
+> interactive web terminal (`nvrs terminal`), and admin CRUD (`catalog`, `identity`, `policy`).
 
 ## Workspace layout
 
@@ -117,6 +117,26 @@ nvrs terminal --headnode                           # …or the cluster head node
 `nvrs terminal` opens the deployment's web terminal — the backend spawns `ssh` to the target and
 bridges its PTY over a WebSocket. The local terminal goes into raw mode and is restored on exit;
 window resizes are forwarded, and exiting the remote shell disconnects. Needs a real TTY.
+
+## Administration
+
+Catalog, identity and policy, all rendered as tables (`--json` for the envelope):
+
+```bash
+nvrs catalog platforms list                 # or tools / projects
+nvrs catalog tools get <id>
+nvrs catalog projects create --field name="Mayo cluster" --field id=mayo
+nvrs catalog platforms update gb200 --field name="GB200 NVL72"
+nvrs catalog tools delete <id>
+
+nvrs identity users list
+nvrs identity users disable <login>         # --enable to re-enable
+nvrs identity groups add-member operators <login>
+
+nvrs policy list
+nvrs policy preview [--principal user:alice] # every action, allow/deny
+nvrs whoami --grants                         # …for yourself
+```
 
 ## Discover the API
 
