@@ -529,14 +529,35 @@ def canonical_rack_id(rid: str) -> str | None:
     return _nvis_naming().canonical_rack_id(rid)
 
 
+def _rack_template_scan_safe(naming: _nvis_ids.NvisNaming) -> bool:
+    """Whether a whole-text rack-id scan of ``cmsh rack; list`` won't invent phantom racks.
+
+    The scan matches the rack pattern anywhere in the output, including inside the member
+    hostnames each row lists. That is fine for an anchored template (``bos01-a05``, ``p5-r03``):
+    the literal prefix keeps it from matching hostname substrings. But an anchorless template --
+    a bare ``[A-Z][\\d+]``, all slots and no literals -- matches ``gso1``->``o1``, ``su19``->``u19``,
+    ``gpu1``->``u1`` inside the members and invents racks that do not exist (Nscale NC produced
+    ~150 phantom rows this way). With no literal to anchor on, the first-column parse is the only
+    trustworthy source, so the scan is skipped.
+    """
+    return any(
+        seg[0] == "lit" and seg[1].strip(" -_/:.")
+        for seg in naming.rack_template.segments
+    )
+
+
 def extract_rack_ids_from_cmsh_text(text: str) -> list[str]:
     """Parse rack ids from ``cmsh -c 'rack; list'`` using ``NVIS_RACK_ID`` (legacy regex when configured)."""
     text = text or ""
     naming = _nvis_naming()
     canon: set[str] = set()
     if not _legacy_ds_configured():
-        for rid in naming.extract_rack_ids_from_text(text):
-            canon.add(rid)
+        # Only scan the whole output when the template is anchored; otherwise the first-column
+        # parse below is authoritative and the scan would fabricate racks from hostname
+        # substrings. See _rack_template_scan_safe.
+        if _rack_template_scan_safe(naming):
+            for rid in naming.extract_rack_ids_from_text(text):
+                canon.add(rid)
     else:
         legacy = re.compile(r"\bp\d+-r\d+\b", re.IGNORECASE)
         for m in legacy.finditer(text):

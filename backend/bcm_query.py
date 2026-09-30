@@ -36,7 +36,6 @@ import json
 import logging
 import os
 import shlex
-from pathlib import Path
 from typing import Any
 
 import host_exec
@@ -53,11 +52,13 @@ DEFAULT_TIMEOUT = 120
 
 
 def _script_path() -> str:
-    # role_root("scripts") already points at the scripts directory on the target host; joining
-    # "bin/scripts" onto it again yields .../bin/scripts/bin/scripts and a confusing ENOENT.
-    base = host_exec.role_root("scripts") or ""
-    if base:
-        return str(Path(base) / "nvis_bcm_query.py")
+    # Resolve through the script tree (project / custom / platform / multi-platform layers, or
+    # the legacy flat dir when there is no tree), exactly like schedulers/pythoncm.py._helper_path.
+    # Preferring role_root("scripts") here was the bug that made two resolvers disagree about which
+    # copy of the script runs: script_deploy writes the layered tree at {base}/scripts, while the
+    # legacy role root points at {base}/bin/scripts -- so on a tree deployment the helper resolved
+    # to an empty legacy dir and every query failed with "can't open file". resolve() searches the
+    # tree first and still falls back to the legacy dir, so both layouts work.
     return script_tree.resolve("nvis_bcm_query.py")
 
 
