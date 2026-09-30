@@ -186,26 +186,45 @@ class TestP2pSettingsModel:
 
 
 class TestP2pProvisionWorkflow:
-    def test_native_stage_step_is_registered_and_targets_install_root_src(self, monkeypatch):
+    def test_native_stage_step_targets_the_app_server_current_dir(self, monkeypatch):
         import host_exec
         import workflow_engine
 
         # Registered at import of p2p_provision (via api.p2p_fleet).
         assert "p2p_stage_assets" in workflow_engine._NATIVE_STEPS
+        assert "p2p_run_on_appserver" in workflow_engine._NATIVE_STEPS
 
         seen = {}
 
-        def _fake_copy(local, remote, **kw):
+        def _fake_copy(local, remote, *, conn=None, **kw):
             seen["local"] = str(local)
             seen["remote"] = remote
+            seen["has_conn"] = conn is not None
 
         monkeypatch.setattr(host_exec, "copy_tree_to_host", _fake_copy)
         fn = workflow_engine._NATIVE_STEPS["p2p_stage_assets"]
-        run = {"run_id": "r1", "params": {"NVIS_INSTALL_ROOT": "/cluster/nvis-p2p"}}
+        run = {"run_id": "r1", "params": {"NVIS_INSTALL_ROOT": "/cluster/nvis-p2p", "P2P_APPSERVER_HOST": "10.10.20.22"}}
         ok, output = fn(run, {"id": "stage-assets"})
         assert ok, output
-        assert seen["remote"] == "/cluster/nvis-p2p/src"
+        # Staged under {install_root}/current (what the rendered compose references), over an
+        # explicit connection to the app server -- not the default control connection.
+        assert seen["remote"] == "/cluster/nvis-p2p/current"
+        assert seen["has_conn"] is True
         assert seen["local"].endswith("deploy/p2p")
+
+    def test_stage_refuses_without_an_app_server_host(self):
+        import workflow_engine
+
+        fn = workflow_engine._NATIVE_STEPS["p2p_stage_assets"]
+        ok, output = fn({"run_id": "r1", "params": {"NVIS_INSTALL_ROOT": "/x"}}, {"id": "s"})
+        assert ok is False and "P2P_APPSERVER_HOST" in output
+
+    def test_run_on_appserver_refuses_without_a_host(self):
+        import workflow_engine
+
+        fn = workflow_engine._NATIVE_STEPS["p2p_run_on_appserver"]
+        ok, output = fn({"run_id": "r1", "params": {}}, {"id": "x", "run": "echo hi"})
+        assert ok is False and "P2P_APPSERVER_HOST" in output
 
     def test_native_dispatch_reports_an_unknown_step(self):
         import workflow_engine
@@ -216,17 +235,20 @@ class TestP2pProvisionWorkflow:
         assert ok is False
         assert "no native step registered" in output
 
-    def test_reconcile_workflow_has_the_full_step_sequence(self):
+    def test_reconcile_workflow_runs_every_step_on_the_app_server(self):
         import workflow_engine
 
         wf = workflow_engine.get_workflow("nvis-p2p-provision")
-        step_ids = [s.get("id") for s in wf.get("steps", [])]
-        # Read-only first, staging before any render, mutating bring-up last before done.
-        for expected in ("start", "preflight", "stage-assets", "prepare", "bring-up", "done"):
+        steps = {s["id"]: s for s in wf.get("steps", [])}
+        step_ids = list(steps)
+        # Read-only preflight first, staging before render, secrets before render, bring-up last.
+        for expected in ("start", "preflight", "stage-assets", "secrets", "render", "bring-up", "done"):
             assert expected in step_ids, f"missing step {expected}"
-        assert step_ids.index("preflight") < step_ids.index("stage-assets") < step_ids.index("bring-up")
-        stage = next(s for s in wf["steps"] if s["id"] == "stage-assets")
-        assert stage.get("native") == "p2p_stage_assets"
+        assert step_ids.index("secrets") < step_ids.index("render") < step_ids.index("bring-up")
+        assert steps["stage-assets"]["native"] == "p2p_stage_assets"
+        # Every executing step runs on the app server, not the default control connection.
+        for sid in ("preflight", "secrets", "render", "bring-up"):
+            assert steps[sid].get("native") == "p2p_run_on_appserver", sid
 
 
 class TestP2pSettingsContract:

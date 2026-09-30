@@ -412,6 +412,7 @@ def copy_tree_to_host(
     remote_dir: str,
     *,
     role: str = DEFAULT_ROLE,
+    conn: Connection | None = None,
     timeout: int = 1800,
     skip_suffixes: tuple[str, ...] = (".pyc",),
 ) -> str | None:
@@ -442,7 +443,9 @@ def copy_tree_to_host(
             sent += 1
     bundle = buf.getvalue()
 
-    conn = connection(role)
+    # An explicit connection targets a host the roles do not name (the P2P app server); otherwise
+    # the role's configured connection.
+    conn = conn if conn is not None else connection(role)
     # Prove the target runs a command before writing a byte: with no SSH host configured write_bytes
     # and makedirs still succeed against the LOCAL filesystem while run fails, so writing first would
     # scatter parts into the app's own tree and only then discover it cannot extract them.
@@ -968,3 +971,31 @@ def ssh_to_node_argv(node: str) -> list[str]:
     behind a bastion gives ``ssh -J bastion head 'ssh <node>'``. Nothing here counts legs.
     """
     return node_connection(node).interactive_argv()
+
+
+def connection_to(
+    host: str,
+    *,
+    user: str = "",
+    key: str = "",
+    port: str = "",
+    connect_timeout: str = "",
+) -> Connection:
+    """An ad-hoc **direct** connection to an arbitrary *host*, independent of the configured roles.
+
+    For work that targets a host the topology does not name -- the NVIS-P2P app server, which is a
+    host in its own right and, on a cluster like NC, not the control connection (that is the BCM
+    head). The caller supplies the address and credentials from the P2P settings; blanks fall back
+    to the control profile's key/port so a deployment that reaches its app server the same way it
+    reaches its head need only name the host. It does **not** relay through the control host -- the
+    app server is reached directly, which is the whole reason it is separate from `node_connection`.
+    """
+    _ensure_init()
+    ctrl = _CONFIG.control if _CONFIG else None
+    return Connection(SSHExecutor(SSHConfig(
+        host=host,
+        user=(user or "").strip() or (ctrl.user if ctrl else "") or "root",
+        key=(key or "").strip() or (ctrl.key if ctrl else ""),
+        port=(port or "").strip() or (ctrl.port if ctrl else "22") or "22",
+        connect_timeout=(connect_timeout or "").strip() or (ctrl.connect_timeout if ctrl else "") or "15",
+    )))

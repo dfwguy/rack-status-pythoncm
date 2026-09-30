@@ -213,9 +213,17 @@ def p2p_start_provision():
         )
 
     # The render env carries the per-cluster facts the reconcile's steps need (install root,
-    # addresses, paths). Passed as run params so a step can write the cluster.env and the native
-    # stage step knows where to put the assets. Secrets are file *paths* here, never values.
-    params = {"cluster_id": cluster.id, "cluster_name": cluster.name, **settings.to_render_env()}
+    # addresses, paths). The P2P_APPSERVER_* params carry the connection every step runs over -- the
+    # app server, not the cluster's control host. Secrets are file *paths* here, never values.
+    conn = settings.appserver_connection()
+    params = {
+        "cluster_id": cluster.id,
+        "cluster_name": cluster.name,
+        "P2P_APPSERVER_HOST": conn["host"],
+        "P2P_APPSERVER_USER": conn["user"],
+        "P2P_APPSERVER_KEY": conn["key"],
+        **settings.to_render_env(),
+    }
     try:
         result = workflow_engine.start_workflow_run(_PROVISION_WORKFLOW, params)
     except ValueError as exc:

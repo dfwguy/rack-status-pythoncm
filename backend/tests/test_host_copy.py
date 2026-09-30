@@ -62,3 +62,12 @@ def test_binary_content_survives_the_bundle(tmp_path):
     dest = tmp_path / "dest"
     assert host_exec.copy_tree_to_host(src, str(dest)) is None
     assert (dest / "bin.dat").read_bytes() == blob
+
+
+def test_connection_to_builds_a_direct_ssh_connection():
+    # Ad-hoc connection to an arbitrary host (the P2P app server), independent of the roles.
+    conn = host_exec.connection_to("10.10.20.22", user="svc", key="/k")
+    argv = conn.interactive_argv()
+    assert any("10.10.20.22" in a for a in argv), argv
+    # Direct, not relayed through a control host: the target appears once, no nested ssh.
+    assert sum(a == "ssh" or a.endswith("/ssh") for a in argv) <= 1
