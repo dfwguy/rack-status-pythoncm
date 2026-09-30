@@ -41,15 +41,105 @@ pub fn structured(value: &Value, format: Format) -> Option<String> {
     }
 }
 
-/// Print a single value. `Text` pretty-prints the JSON (indented, for reading); `Json`/`Yaml` emit
-/// the structured form. Used by verbs that show one object rather than a table.
+/// Print a single value. `Json`/`Yaml` emit the structured form; `Text` renders it structurally —
+/// scalar fields as an aligned `key: value` list, nested objects as indented sections, and arrays of
+/// objects as tables — so a single-object response reads cleanly instead of as raw JSON.
 pub fn print_value(value: &Value, format: Format) {
     match structured(value, format) {
         Some(s) => println!("{s}"),
-        None => println!(
-            "{}",
-            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
-        ),
+        None => {
+            let text = human(value);
+            if text.is_empty() {
+                println!("(empty)");
+            } else {
+                println!("{text}");
+            }
+        }
+    }
+}
+
+/// Render any JSON value as clean human text (no schema required): it dispatches on shape, not on a
+/// known set of fields, so it adapts to every endpoint. Returns the text without a trailing newline.
+pub fn human(value: &Value) -> String {
+    let mut out = String::new();
+    render(value, &mut out, 0);
+    out.trim_end().to_string()
+}
+
+fn is_scalar(v: &Value) -> bool {
+    !matches!(v, Value::Object(_) | Value::Array(_))
+}
+
+/// Whether an array is a clean, non-empty list of objects (so it renders as a table).
+fn is_object_array(items: &[Value]) -> bool {
+    !items.is_empty() && items.iter().all(Value::is_object)
+}
+
+/// The recursive structural renderer. `indent` applies to key/value lines and bullets; tables render
+/// at column zero under their heading, since indenting box-drawing looks worse than it reads.
+fn render(value: &Value, out: &mut String, indent: usize) {
+    use std::fmt::Write;
+    let pad = " ".repeat(indent);
+    match value {
+        Value::Object(map) if !map.is_empty() => {
+            let scalars: Vec<(&str, &Value)> = map
+                .iter()
+                .filter(|(_, v)| is_scalar(v))
+                .map(|(k, v)| (k.as_str(), v))
+                .collect();
+            let complex: Vec<(&str, &Value)> = map
+                .iter()
+                .filter(|(_, v)| !is_scalar(v))
+                .map(|(k, v)| (k.as_str(), v))
+                .collect();
+
+            let width = scalars
+                .iter()
+                .map(|(k, _)| k.chars().count())
+                .max()
+                .unwrap_or(0);
+            for (k, v) in &scalars {
+                let _ = writeln!(out, "{pad}{k:<width$}  {}", cell(Some(v)));
+            }
+            for (k, v) in &complex {
+                let _ = writeln!(out);
+                let _ = writeln!(out, "{pad}{k}:");
+                match v {
+                    Value::Array(items) if is_object_array(items) => {
+                        let maps: Vec<&serde_json::Map<String, Value>> =
+                            items.iter().filter_map(Value::as_object).collect();
+                        let cols = infer_columns(&maps);
+                        let col_refs: Vec<&str> = cols.iter().map(String::as_str).collect();
+                        out.push_str(&table_string(&col_refs, &maps));
+                        out.push('\n');
+                    }
+                    Value::Array(items) => {
+                        for it in items {
+                            let _ = writeln!(out, "{pad}  - {}", cell(Some(it)));
+                        }
+                    }
+                    Value::Object(_) => render(v, out, indent + 2),
+                    _ => {}
+                }
+            }
+        }
+        Value::Array(items) if is_object_array(items) => {
+            let maps: Vec<&serde_json::Map<String, Value>> =
+                items.iter().filter_map(Value::as_object).collect();
+            let cols = infer_columns(&maps);
+            let col_refs: Vec<&str> = cols.iter().map(String::as_str).collect();
+            out.push_str(&table_string(&col_refs, &maps));
+        }
+        Value::Array(items) => {
+            for it in items {
+                let _ = writeln!(out, "{pad}- {}", cell(Some(it)));
+            }
+        }
+        // Empty object, or a bare scalar.
+        Value::Object(_) => {}
+        other => {
+            let _ = writeln!(out, "{pad}{}", cell(Some(other)));
+        }
     }
 }
 
@@ -61,6 +151,12 @@ pub fn print_table(columns: &[&str], rows: &[&serde_json::Map<String, Value>], e
         println!("{empty}");
         return;
     }
+    println!("{}", table_string(columns, rows));
+}
+
+/// Build the same table as [`print_table`] but return it as a string, so it can be embedded under a
+/// section heading by the structural renderer.
+fn table_string(columns: &[&str], rows: &[&serde_json::Map<String, Value>]) -> String {
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
     table.set_header(columns.iter().map(|c| c.to_string()).collect::<Vec<_>>());
@@ -72,7 +168,7 @@ pub fn print_table(columns: &[&str], rows: &[&serde_json::Map<String, Value>], e
                 .collect::<Vec<_>>(),
         );
     }
-    println!("{table}");
+    table.to_string()
 }
 
 /// Render a JSON array of objects as a table, inferring columns from the scalar-valued keys that
@@ -210,6 +306,54 @@ mod tests {
         assert!(yaml.contains("id: gb200"), "{yaml}");
         assert!(yaml.contains("ok: true"), "{yaml}");
         assert!(!yaml.ends_with('\n'), "trailing newline should be trimmed");
+    }
+
+    #[test]
+    fn human_renders_scalars_as_aligned_key_values() {
+        let v = json!({"id": "gb200", "name": "GB200 NVL72", "scheduler": "slurm"});
+        let text = human(&v);
+        // Not JSON: no braces, and each field on its own line.
+        assert!(!text.contains('{'), "{text}");
+        assert!(text.contains("id"), "{text}");
+        assert!(text.contains("gb200"), "{text}");
+        assert!(text.contains("scheduler"), "{text}");
+        assert_eq!(text.lines().count(), 3);
+    }
+
+    #[test]
+    fn human_renders_scalar_arrays_as_bullets() {
+        let v = json!({"racks": ["p17-r01", "p17-r02"]});
+        let text = human(&v);
+        assert!(text.contains("racks:"), "{text}");
+        assert!(text.contains("- p17-r01"), "{text}");
+        assert!(text.contains("- p17-r02"), "{text}");
+    }
+
+    #[test]
+    fn human_renders_object_arrays_as_tables() {
+        // A nested list of objects becomes a table under its key — the shape drives the rendering.
+        let v = json!({"count": 2, "nodes": [{"host": "n04", "state": "idle"}, {"host": "n05", "state": "busy"}]});
+        let text = human(&v);
+        assert!(text.contains("count"), "{text}");
+        assert!(text.contains("nodes:"), "{text}");
+        assert!(
+            text.contains("host") && text.contains("state"),
+            "table header: {text}"
+        );
+        assert!(
+            text.contains("n04") && text.contains("busy"),
+            "table rows: {text}"
+        );
+        assert!(
+            text.contains('┌'),
+            "should contain a box-drawn table: {text}"
+        );
+    }
+
+    #[test]
+    fn human_top_level_object_array_is_a_table() {
+        let v = json!([{"id": 1}, {"id": 2}]);
+        assert!(human(&v).contains("id"));
     }
 
     #[test]
