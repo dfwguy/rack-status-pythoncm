@@ -11,6 +11,7 @@ use nvrs_openapi::{Loaded, Operation, DEFAULT_MAX_AGE};
 
 use crate::api::client_for;
 use crate::config::{Config, Profile};
+use crate::output;
 
 /// Fetch (or load from cache) the contract and print it: a filtered endpoint list, or full details.
 pub async fn run(
@@ -20,14 +21,14 @@ pub async fn run(
     filter: Option<String>,
     details: bool,
     refresh: bool,
-    json: bool,
+    format: output::Format,
 ) -> Result<()> {
     let base_url = url::Url::parse(&profile.base_url)?;
     let loaded = load_with_auth(cfg, profile_name, profile, &base_url, refresh).await?;
 
-    if json {
-        // The server's exact document, for tooling. Compact — pipe it to `jq`.
-        println!("{}", serde_json::to_string(&loaded.raw)?);
+    if let Some(s) = output::structured(&loaded.raw, format) {
+        // The server's exact document, for tooling (compact JSON to pipe into `jq`, or YAML).
+        println!("{s}");
         return Ok(());
     }
 

@@ -184,7 +184,7 @@ pub async fn run(
     cfg: &Config,
     profile_name: &str,
     profile: &Profile,
-    json: bool,
+    format: output::Format,
 ) -> Result<()> {
     let method = parse_method(&args.method)?;
     let query = parse_kv(&args.query).context("parsing --query")?;
@@ -247,13 +247,18 @@ pub async fn run(
         }
         other => other?,
     };
-    output::print_json(&value, json);
+    output::print_value(&value, format);
     Ok(())
 }
 
 /// `whoami` — is there a live session for this profile? Probes `/api/auth-check` with the stored
 /// token, refreshing once if the access token has expired.
-pub async fn whoami(cfg: &Config, profile_name: &str, profile: &Profile, json: bool) -> Result<()> {
+pub async fn whoami(
+    cfg: &Config,
+    profile_name: &str,
+    profile: &Profile,
+    format: output::Format,
+) -> Result<()> {
     let store = TokenStore::open_default()?;
     let env_token = std::env::var("NVRS_TOKEN").ok().filter(|s| !s.is_empty());
     let (token, stored) = crate::auth::resolve_access(&store, profile_name, env_token.as_deref())?;
@@ -282,8 +287,8 @@ pub async fn whoami(cfg: &Config, profile_name: &str, profile: &Profile, json: b
 
     match result {
         Ok(value) => {
-            if json {
-                output::print_json(&value, true);
+            if let Some(s) = output::structured(&value, format) {
+                println!("{s}");
             } else {
                 let user = value.get("user").and_then(Value::as_str).unwrap_or("?");
                 println!("profile {profile_name:?} at {}", client.base_url());

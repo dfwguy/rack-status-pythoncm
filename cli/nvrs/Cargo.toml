@@ -25,6 +25,7 @@ clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 anyhow = "1"
 toml = "0.8"
 comfy-table = "7"
+serde_yaml = "0.9"
 # Hidden password prompt for `nvrs login`.
 rpassword = "7"
 # Interactive terminal: raw TTY mode + size, and the sink/stream combinators for the WebSocket.

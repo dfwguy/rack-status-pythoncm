@@ -25,7 +25,12 @@ use crate::output;
 // ─── rack ────────────────────────────────────────────────────────────────────
 
 /// `nvrs rack list` — the advisory lock snapshot: who is operating on which rack.
-pub async fn rack_list(cfg: &Config, name: &str, profile: &Profile, json: bool) -> Result<()> {
+pub async fn rack_list(
+    cfg: &Config,
+    name: &str,
+    profile: &Profile,
+    format: output::Format,
+) -> Result<()> {
     let value = call_json(
         cfg,
         name,
@@ -37,8 +42,8 @@ pub async fn rack_list(cfg: &Config, name: &str, profile: &Profile, json: bool) 
         None,
     )
     .await?;
-    if json {
-        output::print_json(&value, true);
+    if let Some(s) = output::structured(&value, format) {
+        println!("{s}");
         return Ok(());
     }
     // `locks` is a map of rack -> entry; flatten it into rows with the rack as a column.
@@ -72,7 +77,7 @@ pub async fn rack_lock(
     note: Option<String>,
     ttl_sec: Option<u64>,
     force: bool,
-    json: bool,
+    format: output::Format,
 ) -> Result<()> {
     // The endpoint requires an operator label (X-Rack-Operator) and 400s without one; catch it here
     // with an actionable message rather than letting the server's terse error surface.
@@ -101,8 +106,8 @@ pub async fn rack_lock(
         None,
     )
     .await?;
-    if json {
-        output::print_json(&value, true);
+    if let Some(s) = output::structured(&value, format) {
+        println!("{s}");
     } else {
         println!("locked {rack}");
     }
@@ -115,12 +120,12 @@ pub async fn rack_unlock(
     name: &str,
     profile: &Profile,
     rack: &str,
-    json: bool,
+    format: output::Format,
 ) -> Result<()> {
     let path = format!("/api/rack-locks/{rack}");
     let value = call_json(cfg, name, profile, Method::DELETE, &path, &[], None, None).await?;
-    if json {
-        output::print_json(&value, true);
+    if let Some(s) = output::structured(&value, format) {
+        println!("{s}");
     } else {
         println!("unlocked {rack}");
     }
@@ -130,7 +135,12 @@ pub async fn rack_unlock(
 // ─── reports ───────────────────────────────────────────────────────────────
 
 /// `nvrs reports list` — reports this deployment has generated and kept on disk.
-pub async fn reports_list(cfg: &Config, name: &str, profile: &Profile, json: bool) -> Result<()> {
+pub async fn reports_list(
+    cfg: &Config,
+    name: &str,
+    profile: &Profile,
+    format: output::Format,
+) -> Result<()> {
     let value = call_json(
         cfg,
         name,
@@ -146,7 +156,7 @@ pub async fn reports_list(cfg: &Config, name: &str, profile: &Profile, json: boo
         .get("reports")
         .cloned()
         .unwrap_or(Value::Array(vec![]));
-    output::print_array_table(&reports, "no reports have been generated", json);
+    output::print_array_table(&reports, "no reports have been generated", format);
     Ok(())
 }
 
@@ -192,7 +202,12 @@ pub async fn logs_tail(
 /// `nvrs compute status` — the main rack status payload. The shape is produced by `rack_status.sh`
 /// and is not something the CLI models, so the human view is the pretty-printed document; `--json`
 /// gives the compact form for scripting.
-pub async fn compute_status(cfg: &Config, name: &str, profile: &Profile, json: bool) -> Result<()> {
+pub async fn compute_status(
+    cfg: &Config,
+    name: &str,
+    profile: &Profile,
+    format: output::Format,
+) -> Result<()> {
     let value = call_json(
         cfg,
         name,
@@ -204,7 +219,7 @@ pub async fn compute_status(cfg: &Config, name: &str, profile: &Profile, json: b
         None,
     )
     .await?;
-    output::print_json(&value, json);
+    output::print_value(&value, format);
     Ok(())
 }
 
@@ -283,7 +298,7 @@ pub async fn run_suite(
     body: Option<String>,
     follow: bool,
     interval_secs: u64,
-    json: bool,
+    format: output::Format,
 ) -> Result<()> {
     let suite = match suite {
         Some(s) if SUITES.contains(&s.as_str()) => s,
@@ -310,7 +325,7 @@ pub async fn run_suite(
                 other,
                 follow,
                 interval_secs,
-                json,
+                format,
             )
             .await;
         }
@@ -331,7 +346,7 @@ pub async fn run_suite(
         Value::Object(obj),
         follow,
         interval_secs,
-        json,
+        format,
     )
     .await
 }
@@ -345,7 +360,7 @@ async fn submit_and_maybe_follow(
     body: Value,
     follow: bool,
     interval_secs: u64,
-    json: bool,
+    format: output::Format,
 ) -> Result<()> {
     let async_path = format!("/api/run-{suite}-async");
     let submitted = call_json(
@@ -366,8 +381,8 @@ async fn submit_and_maybe_follow(
         .context("the server accepted the run but returned no job_id")?
         .to_string();
 
-    if json && !follow {
-        output::print_json(&submitted, true);
+    if format != output::Format::Text && !follow {
+        output::print_value(&submitted, format);
         return Ok(());
     }
     println!("submitted {suite} — job {job_id}");
@@ -376,7 +391,7 @@ async fn submit_and_maybe_follow(
         return Ok(());
     }
 
-    follow_job(cfg, name, profile, suite, &job_id, interval_secs, json).await
+    follow_job(cfg, name, profile, suite, &job_id, interval_secs, format).await
 }
 
 /// Poll a job's status endpoint until it reaches a terminal phase, printing each phase transition.
@@ -388,7 +403,7 @@ async fn follow_job(
     suite: &str,
     job_id: &str,
     interval_secs: u64,
-    json: bool,
+    format: output::Format,
 ) -> Result<()> {
     let status_path = format!("/api/run-{suite}-status");
     let query = [("job_id".to_string(), job_id.to_string())];
@@ -423,8 +438,8 @@ async fn follow_job(
         match classify(&phase, rc) {
             Outcome::Pending => {}
             terminal => {
-                if json {
-                    output::print_json(&status, true);
+                if format != output::Format::Text {
+                    output::print_value(&status, format);
                 }
                 if let Some(dir) = status.get("log_dir").and_then(Value::as_str) {
                     println!("logs: {dir}");

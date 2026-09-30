@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::api::call_json;
 use crate::config::{Config, Profile};
-use crate::output;
+use crate::output::{self, Format};
 
 /// A resolved profile plus its name, threaded through every call. Cuts the repetition of passing
 /// three arguments to every helper.
@@ -21,7 +21,7 @@ pub struct Ctx<'a> {
     pub cfg: &'a Config,
     pub name: &'a str,
     pub profile: &'a Profile,
-    pub json: bool,
+    pub format: Format,
 }
 
 impl Ctx<'_> {
@@ -57,7 +57,7 @@ impl Ctx<'_> {
     async fn list(&self, path: &str, key: &str, empty: &str) -> Result<()> {
         let value = self.get(path).await?;
         let arr = value.get(key).cloned().unwrap_or(Value::Array(vec![]));
-        output::print_array_table(&arr, empty, self.json);
+        output::print_array_table(&arr, empty, self.format);
         Ok(())
     }
 
@@ -65,7 +65,7 @@ impl Ctx<'_> {
     async fn item(&self, path: &str, key: &str) -> Result<()> {
         let value = self.get(path).await?;
         let item = value.get(key).cloned().unwrap_or(value);
-        output::print_json(&item, self.json);
+        output::print_value(&item, self.format);
         Ok(())
     }
 
@@ -78,10 +78,10 @@ impl Ctx<'_> {
         confirmation: &str,
     ) -> Result<()> {
         let value = self.send(method, path, body.as_ref()).await?;
-        if self.json {
-            output::print_json(&value, true);
-        } else {
+        if self.format == Format::Text {
             println!("{confirmation}");
+        } else {
+            output::print_value(&value, self.format);
         }
         Ok(())
     }
@@ -274,7 +274,7 @@ pub async fn policy_preview(ctx: &Ctx<'_>, principal: Option<&str>) -> Result<()
         .get("actions")
         .cloned()
         .unwrap_or(Value::Array(vec![]));
-    output::print_array_table(&actions, "no actions", ctx.json);
+    output::print_array_table(&actions, "no actions", ctx.format);
     Ok(())
 }
 

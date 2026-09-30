@@ -1,25 +1,55 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-//! Rendering: human tables by default, raw JSON under `--json`.
+//! Rendering: human tables by default, or structured `--output json|yaml` for scripts.
 //!
 //! Two audiences, one dataset. An operator reading a terminal wants aligned columns; a script piping
-//! into `jq` wants the exact envelope. `--json` is compact (one line, pipe-friendly); the default
-//! JSON view is pretty-printed for reading.
+//! into `jq` or `yq` wants the exact envelope. [`Format::Text`] renders tables and human views;
+//! [`Format::Json`] is compact (one line, pipe-friendly); [`Format::Yaml`] is block YAML. The table
+//! renderers fall back to structured output automatically when the format is not text, so every verb
+//! honours `--output` without each one re-implementing the choice.
 
 use comfy_table::{presets::UTF8_FULL, Table};
 use serde_json::Value;
 
 use crate::config::{Config, Profile};
 
-/// Print an API JSON value. `--json` → compact single line; otherwise pretty, indented.
-pub fn print_json(value: &Value, json: bool) {
-    if json {
-        println!("{}", serde_json::to_string(value).unwrap_or_default());
-    } else {
-        println!(
+/// How to render output. The global `-o/--output` selects it; `Text` is the default.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum Format {
+    /// Human-oriented: tables and formatted views.
+    #[default]
+    Text,
+    /// Compact single-line JSON — the exact envelope, for piping into `jq`.
+    Json,
+    /// Block YAML.
+    Yaml,
+}
+
+/// Serialise `value` for a structured format, or `None` for [`Format::Text`] (where the caller
+/// renders a table or human view instead). The single place json/yaml encoding lives, so every verb
+/// agrees on it.
+pub fn structured(value: &Value, format: Format) -> Option<String> {
+    match format {
+        Format::Text => None,
+        Format::Json => Some(serde_json::to_string(value).unwrap_or_default()),
+        Format::Yaml => Some(
+            serde_yaml::to_string(value)
+                .unwrap_or_default()
+                .trim_end()
+                .to_string(),
+        ),
+    }
+}
+
+/// Print a single value. `Text` pretty-prints the JSON (indented, for reading); `Json`/`Yaml` emit
+/// the structured form. Used by verbs that show one object rather than a table.
+pub fn print_value(value: &Value, format: Format) {
+    match structured(value, format) {
+        Some(s) => println!("{s}"),
+        None => println!(
             "{}",
             serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
-        );
+        ),
     }
 }
 
@@ -49,13 +79,13 @@ pub fn print_table(columns: &[&str], rows: &[&serde_json::Map<String, Value>], e
 /// appear across the rows (sorted, so output is stable). For a list whose shape the CLI does not
 /// model explicitly — generated reports, say — this shows the data honestly without a hand-picked
 /// schema. Falls back to pretty JSON when the value is not an array of objects.
-pub fn print_array_table(value: &Value, empty: &str, json: bool) {
-    if json {
-        print_json(value, true);
+pub fn print_array_table(value: &Value, empty: &str, format: Format) {
+    if let Some(s) = structured(value, format) {
+        println!("{s}");
         return;
     }
     let Some(items) = value.as_array() else {
-        print_json(value, false);
+        print_value(value, format);
         return;
     };
     let maps: Vec<&serde_json::Map<String, Value>> =
@@ -65,7 +95,7 @@ pub fn print_array_table(value: &Value, empty: &str, json: bool) {
         if items.is_empty() {
             println!("{empty}");
         } else {
-            print_json(value, false);
+            print_value(value, format);
         }
         return;
     }
@@ -99,9 +129,10 @@ pub fn cell(value: Option<&Value>) -> String {
 }
 
 /// The `nvrs config list` view.
-pub fn print_profiles(cfg: &Config, json: bool) {
-    if json {
-        println!("{}", serde_json::to_string(cfg).unwrap_or_default());
+pub fn print_profiles(cfg: &Config, format: Format) {
+    if format != Format::Text {
+        let value = serde_json::to_value(cfg).unwrap_or(Value::Null);
+        println!("{}", structured(&value, format).unwrap_or_default());
         return;
     }
     if cfg.profiles.is_empty() {
@@ -129,12 +160,10 @@ pub fn print_profiles(cfg: &Config, json: bool) {
 }
 
 /// The `nvrs config show` view for a single profile.
-pub fn print_profile(name: &str, profile: &Profile, json: bool) {
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({ "name": name, "profile": profile })
-        );
+pub fn print_profile(name: &str, profile: &Profile, format: Format) {
+    if format != Format::Text {
+        let value = serde_json::json!({ "name": name, "profile": profile });
+        println!("{}", structured(&value, format).unwrap_or_default());
         return;
     }
     println!("profile:  {name}");
@@ -159,6 +188,28 @@ mod tests {
         assert_eq!(cell(Some(&json!(true))), "true");
         assert_eq!(cell(Some(&json!(42))), "42");
         assert_eq!(cell(Some(&json!(["a", "b"]))), r#"["a","b"]"#);
+    }
+
+    #[test]
+    fn format_default_is_text() {
+        assert_eq!(Format::default(), Format::Text);
+    }
+
+    #[test]
+    fn structured_encodes_json_and_yaml_and_skips_text() {
+        let v = json!({"id": "gb200", "ok": true});
+        // Text has no structured form — the caller renders a table/human view.
+        assert_eq!(structured(&v, Format::Text), None);
+        // JSON is compact, one line.
+        assert_eq!(
+            structured(&v, Format::Json).unwrap(),
+            r#"{"id":"gb200","ok":true}"#
+        );
+        // YAML is block form with the same data, no trailing newline.
+        let yaml = structured(&v, Format::Yaml).unwrap();
+        assert!(yaml.contains("id: gb200"), "{yaml}");
+        assert!(yaml.contains("ok: true"), "{yaml}");
+        assert!(!yaml.ends_with('\n'), "trailing newline should be trimmed");
     }
 
     #[test]

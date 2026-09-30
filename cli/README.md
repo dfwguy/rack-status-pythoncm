@@ -13,6 +13,12 @@ a cluster, from the terminal. It is a **client of the existing API** — it spea
 > typed verbs (`compute`, `rack`, `run --follow`, `reports`), live log tailing (`logs tail`), the
 > interactive web terminal (`nvrs terminal`), and admin CRUD (`catalog`, `identity`, `policy`).
 
+## Global flags
+
+`-p/--profile <name>` targets a deployment; `-o/--output <text|json|yaml>` picks the rendering
+(`text` tables by default; `json`/`yaml` for scripting). `--json` is a shorthand for `-o json`. All
+are global — they work on any subcommand.
+
 ## Workspace layout
 
 | Crate | Role |
@@ -81,12 +87,12 @@ nvrs api POST /api/rack-locks/p17-r01 --field note="burn-in" --field ttl_sec=360
 nvrs api POST /api/run-validation-async --body @params.json
 nvrs api POST /api/tools/download-containers-stream --field arch=x86_64 --stream
 
-nvrs --json api GET /api/status | jq .        # machine-readable envelope for scripting
+nvrs -o json api GET /api/status | jq .       # machine-readable envelope for scripting
 ```
 
 ## Typed verbs
 
-Curated commands over the flat API, rendered as tables (`--json` for the raw envelope):
+Curated commands over the flat API, rendered as tables (`-o json` or `-o yaml` for structured output):
 
 ```bash
 nvrs compute status                 # the main rack status payload
@@ -120,7 +126,7 @@ window resizes are forwarded, and exiting the remote shell disconnects. Needs a 
 
 ## Administration
 
-Catalog, identity and policy, all rendered as tables (`--json` for the envelope):
+Catalog, identity and policy, all rendered as tables (`-o json`/`-o yaml` for structured output):
 
 ```bash
 nvrs catalog platforms list                 # or tools / projects
@@ -150,7 +156,7 @@ nvrs spec                       # every endpoint: METHOD PATH — summary
 nvrs spec rack                  # filter by method/path/summary substring
 nvrs spec rack-locks --details  # parameters and tags for matching endpoints
 nvrs spec --refresh             # re-fetch instead of using the cache
-nvrs --json spec | jq '.paths | keys'   # the raw OpenAPI document
+nvrs -o json spec | jq '.paths | keys'  # the raw OpenAPI document
 ```
 
 Exit codes distinguish *why* a call failed: `77` not authenticated / forbidden, `75` rate-limited

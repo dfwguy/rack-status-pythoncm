@@ -33,12 +33,33 @@ struct Cli {
     #[arg(long, short = 'p', global = true)]
     profile: Option<String>,
 
-    /// Emit machine-readable JSON instead of formatted tables.
+    /// Output format: text (tables), json, or yaml.
+    #[arg(
+        long,
+        short = 'o',
+        global = true,
+        default_value = "text",
+        value_name = "FORMAT"
+    )]
+    output: output::Format,
+
+    /// Shorthand for `--output json`. Overrides --output when set.
     #[arg(long, global = true)]
     json: bool,
 
     #[command(subcommand)]
     command: Command,
+}
+
+impl Cli {
+    /// The effective output format: `--json` wins as a convenience shorthand, else `--output`.
+    fn format(&self) -> output::Format {
+        if self.json {
+            output::Format::Json
+        } else {
+            self.output
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -339,35 +360,36 @@ fn exit_code_for(err: &anyhow::Error) -> i32 {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let format = cli.format();
     match cli.command {
-        Command::Config(cmd) => run_config(cmd, cli.profile.as_deref(), cli.json),
+        Command::Config(cmd) => run_config(cmd, cli.profile.as_deref(), format),
         Command::Api(args) => {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
-            block_on(api::run(args, &cfg, &name, profile, cli.json))
+            block_on(api::run(args, &cfg, &name, profile, format))
         }
         Command::Compute(ComputeCmd::Status) => {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
-            block_on(verbs::compute_status(&cfg, &name, profile, cli.json))
+            block_on(verbs::compute_status(&cfg, &name, profile, format))
         }
         Command::Rack(cmd) => {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
             block_on(async {
                 match cmd {
-                    RackCmd::List => verbs::rack_list(&cfg, &name, profile, cli.json).await,
+                    RackCmd::List => verbs::rack_list(&cfg, &name, profile, format).await,
                     RackCmd::Lock {
                         rack,
                         note,
                         ttl,
                         force,
                     } => {
-                        verbs::rack_lock(&cfg, &name, profile, &rack, note, ttl, force, cli.json)
+                        verbs::rack_lock(&cfg, &name, profile, &rack, note, ttl, force, format)
                             .await
                     }
                     RackCmd::Unlock { rack } => {
-                        verbs::rack_unlock(&cfg, &name, profile, &rack, cli.json).await
+                        verbs::rack_unlock(&cfg, &name, profile, &rack, format).await
                     }
                 }
             })
@@ -384,7 +406,7 @@ fn run(cli: Cli) -> Result<()> {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
             block_on(verbs::run_suite(
-                &cfg, &name, profile, suite, rack, target, field, body, follow, interval, cli.json,
+                &cfg, &name, profile, suite, rack, target, field, body, follow, interval, format,
             ))
         }
         Command::Terminal { node, headnode } => {
@@ -404,7 +426,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Reports(ReportsCmd::List) => {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
-            block_on(verbs::reports_list(&cfg, &name, profile, cli.json))
+            block_on(verbs::reports_list(&cfg, &name, profile, format))
         }
         Command::Catalog { kind, op } => {
             let cfg = Config::load()?;
@@ -413,7 +435,7 @@ fn run(cli: Cli) -> Result<()> {
                 cfg: &cfg,
                 name: &name,
                 profile,
-                json: cli.json,
+                format,
             };
             block_on(async {
                 match op {
@@ -436,7 +458,7 @@ fn run(cli: Cli) -> Result<()> {
                 cfg: &cfg,
                 name: &name,
                 profile,
-                json: cli.json,
+                format,
             };
             block_on(async {
                 match cmd {
@@ -476,7 +498,7 @@ fn run(cli: Cli) -> Result<()> {
                 cfg: &cfg,
                 name: &name,
                 profile,
-                json: cli.json,
+                format,
             };
             block_on(async {
                 match cmd {
@@ -495,7 +517,7 @@ fn run(cli: Cli) -> Result<()> {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
             block_on(spec::run(
-                &cfg, &name, profile, filter, details, refresh, cli.json,
+                &cfg, &name, profile, filter, details, refresh, format,
             ))
         }
         Command::Login {
@@ -515,13 +537,13 @@ fn run(cli: Cli) -> Result<()> {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
             block_on(async {
-                api::whoami(&cfg, &name, profile, cli.json).await?;
+                api::whoami(&cfg, &name, profile, format).await?;
                 if grants {
                     let ctx = admin::Ctx {
                         cfg: &cfg,
                         name: &name,
                         profile,
-                        json: cli.json,
+                        format,
                     };
                     admin::policy_preview(&ctx, None).await?;
                 }
@@ -540,7 +562,11 @@ fn block_on<F: std::future::Future<Output = Result<()>>>(fut: F) -> Result<()> {
         .block_on(fut)
 }
 
-fn run_config(cmd: ConfigCmd, profile_override: Option<&str>, json: bool) -> Result<()> {
+fn run_config(
+    cmd: ConfigCmd,
+    profile_override: Option<&str>,
+    format: output::Format,
+) -> Result<()> {
     match cmd {
         ConfigCmd::Path => {
             println!("{}", Config::path()?.display());
@@ -548,7 +574,7 @@ fn run_config(cmd: ConfigCmd, profile_override: Option<&str>, json: bool) -> Res
         }
         ConfigCmd::List => {
             let cfg = Config::load()?;
-            output::print_profiles(&cfg, json);
+            output::print_profiles(&cfg, format);
             Ok(())
         }
         ConfigCmd::Show { name } => {
@@ -556,7 +582,7 @@ fn run_config(cmd: ConfigCmd, profile_override: Option<&str>, json: bool) -> Res
             // Precedence: the positional name, then the global --profile, then the active profile.
             let requested = name.as_deref().or(profile_override);
             let (name, profile) = cfg.resolve(requested)?;
-            output::print_profile(&name, profile, json);
+            output::print_profile(&name, profile, format);
             Ok(())
         }
         ConfigCmd::SetUrl { name, url } => {
