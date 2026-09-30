@@ -68,3 +68,5 @@ subtrees:
         title: Why there is no PythonCM broker
       - file: explanation/porting-the-pythoncm-fork
         title: Porting the PythonCM fork
+      - file: explanation/p2p-module-integration
+        title: NVIS-P2P as a per-cluster capability
