@@ -198,7 +198,6 @@ class TestP2pProvisionWorkflow:
         def _fake_copy(local, remote, **kw):
             seen["local"] = str(local)
             seen["remote"] = remote
-            return None
 
         monkeypatch.setattr(host_exec, "copy_tree_to_host", _fake_copy)
         fn = workflow_engine._NATIVE_STEPS["p2p_stage_assets"]
