@@ -32,6 +32,8 @@ export interface WizardDraft {
   // Step 2 — platform and manager
   platformId: string;
   clusterManager: string;
+  /** Where work runs (slurm/pythoncm/...); distinct from clusterManager. */
+  scheduler: string;
   sitePrefix: string;
   clusterName: string;
   // Step 3 — naming and geometry
@@ -97,6 +99,7 @@ export function emptyDraft(): WizardDraft {
     description: "",
     platformId: "",
     clusterManager: "bcm",
+    scheduler: "slurm",
     sitePrefix: "",
     clusterName: "",
     exampleHostname: "",
@@ -205,9 +208,12 @@ export function toCluster(draft: WizardDraft): Cluster {
     name: draft.clusterName.trim() || draft.projectName.trim(),
     platform_id: draft.platformId,
     cluster_manager: draft.clusterManager,
-    // The wizard does not ask: Slurm is right for every cluster we ship to today,
-    // and a site without it changes one field on the cluster record afterwards.
-    scheduler: "slurm",
+    // Where work runs. Defaults to Slurm; a BCM site without it (native CMDaemon
+    // scheduling) picks pythoncm here rather than editing the record afterwards.
+    scheduler: draft.scheduler || "slurm",
+    // The wizard only builds hostname-embedded-rack clusters; a translate cluster
+    // (provider rack + SU list) is configured afterwards in Projects & Clusters.
+    rack_mapping_mode: "direct",
     site_prefix: draft.sitePrefix.trim(),
     naming: {
       rack_id_template: draft.rackIdTemplate.trim(),

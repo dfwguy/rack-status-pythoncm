@@ -203,6 +203,12 @@ export interface Cluster {
   cluster_manager: string;
   /** Where work runs (slurm/pythoncm/...). Distinct from cluster_manager. */
   scheduler: string;
+  /**
+   * How nodes map to the floor. "direct": the rack id is embedded in the hostname and parsed
+   * via the naming templates. "translate": the hostname does not encode the rack — rack/slot
+   * come from the cluster-manager provider and the SU grouping from `scalable_units`.
+   */
+  rack_mapping_mode: "direct" | "translate";
   site_prefix: string;
   naming: ClusterNaming;
   geometry: ClusterGeometry;

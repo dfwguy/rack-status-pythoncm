@@ -39,6 +39,21 @@ SYSTEM_VENDORS = ("NVIDIA", "DGX", "Dell", "SMC", "Supermicro")
 FORM_FACTORS = ("NVL72", "NVL36", "HGX-8", "HGX-4", "MGX")
 CLUSTER_MANAGERS = ("bcm", "maas")
 
+#: How a compute node is placed on the floor (row/rack/slot).
+#:
+#: ``direct`` -- the rack id is embedded in the hostname, so the naming templates
+#: (``NVIS_RACK_ID`` prefixing ``NVIS_CT_ID``) parse it out. This is every cluster whose
+#: hostnames look like ``bos01-a05-11-s1-dgx-01-c01``.
+#:
+#: ``translate`` -- the hostname does NOT encode the rack (Nscale NC's
+#: ``sys1-gso1-p-phy-gpu1-su19``). Per-node rack/slot comes live from the cluster-manager
+#: provider (BCM's ``rack`` attribute, ``U19:11``), rows come from the rack-id template applied
+#: to that provider rack id, and the SU grouping -- which neither the hostname nor the provider
+#: rack attribute gives -- is supplied by the cluster's ``scalable_units`` list. In this mode
+#: the rack-prefixes-CT constraint does not apply, because ``NVIS_CT_ID`` is not a placement
+#: source.
+RACK_MAPPING_MODES = ("direct", "translate")
+
 #: Where work runs, as distinct from who manages the machines. Must stay in step with
 #: ``schedulers.factory._BUILDERS`` -- a cluster naming a kind the factory cannot build is a
 #: deployment that comes up and then fails on first launch, so `validate()` refuses it here.
@@ -1020,6 +1035,9 @@ class Cluster:
     platform_id: str = ""
     cluster_manager: str = "bcm"  # who manages the machines (BCM/MAAS)
     scheduler: str = "slurm"  # where work runs; see SCHEDULERS
+    # How nodes map to the floor: hostname-embedded rack (direct) vs provider rack + SU list
+    # (translate). See RACK_MAPPING_MODES.
+    rack_mapping_mode: str = "direct"
     site_prefix: str = ""  # pod/site prefix for multirack bracket expansion
     naming: ClusterNaming = field(default_factory=ClusterNaming)
     geometry: ClusterGeometry = field(default_factory=ClusterGeometry)
@@ -1048,6 +1066,7 @@ class Cluster:
             platform_id=_as_str(d.get("platform_id")),
             cluster_manager=_as_str(d.get("cluster_manager")) or "bcm",
             scheduler=_as_str(d.get("scheduler")).lower() or "slurm",
+            rack_mapping_mode=_as_str(d.get("rack_mapping_mode")).lower() or "direct",
             site_prefix=_as_str(d.get("site_prefix")),
             naming=ClusterNaming.from_dict(d.get("naming")),
             geometry=ClusterGeometry.from_dict(d.get("geometry")),
@@ -1081,6 +1100,17 @@ class Cluster:
             )
         if self.scheduler and self.scheduler not in SCHEDULERS:
             problems.append(f"unknown scheduler {self.scheduler!r} (expected {SCHEDULERS})")
+        if self.rack_mapping_mode and self.rack_mapping_mode not in RACK_MAPPING_MODES:
+            problems.append(
+                f"unknown rack_mapping_mode {self.rack_mapping_mode!r} (expected {RACK_MAPPING_MODES})"
+            )
+        if self.rack_mapping_mode == "translate" and not self.scalable_units:
+            # translate mode places rows/racks from the provider, but the SU grouping has no
+            # other source -- the hostname's suffix isn't read as an SU and the provider rack
+            # attribute doesn't carry one. Without the list the floor has no SUs at all.
+            problems.append(
+                "rack_mapping_mode 'translate' requires a scalable_units (SU) translation list"
+            )
         problems.extend(self.connection.validate())
         problems.extend(self._validate_scalable_units())
         problems.extend(self._validate_campaigns())

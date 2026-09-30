@@ -180,6 +180,16 @@ def _ds_node_line_re() -> re.Pattern[str]:
     return _ds_line_re_compiled
 
 
+def _rack_mapping_mode() -> str:
+    """'direct' (rack parsed from the hostname template) or 'translate' (rack from the provider).
+
+    See ``catalog.models.RACK_MAPPING_MODES``. Anything unrecognised is treated as 'direct',
+    the historical behaviour, so a stale or empty value never hides a cluster's racks.
+    """
+    mode = _native_env_ds("NVIS_RACK_MAPPING_MODE", "direct").strip().lower()
+    return "translate" if mode == "translate" else "direct"
+
+
 def _nvis_rack_id_template() -> str:
     return _native_env_ds("NVIS_RACK_ID", _nvis_ids.DEFAULT_NVIS_RACK_ID)
 
@@ -203,10 +213,33 @@ def _legacy_ds_configured() -> bool:
     return False
 
 
+def rack_mapping_mode() -> str:
+    """Public accessor for the active cluster's rack mapping mode ('direct' | 'translate')."""
+    return _rack_mapping_mode()
+
+
 def validate_nvis_naming_settings(
     rack_t: str, ct_t: str, nvsw_t: str = ""
 ) -> str | None:
-    """Syntax validation for NVIS_* templates (no hardcoded sample hostnames)."""
+    """Syntax validation for NVIS_* templates (no hardcoded sample hostnames).
+
+    The rack-prefixes-CT rule the triplet enforces only makes sense in 'direct' mode, where the
+    rack id is parsed out of the hostname. In 'translate' mode NVIS_CT_ID is not a placement
+    source (rack/slot come from the provider), so that cross-template constraint is not applied;
+    each template is still validated for syntax individually.
+    """
+    if rack_mapping_mode() == "translate":
+        for label, tpl in (
+            ("NVIS_RACK_ID", rack_t),
+            ("NVIS_CT_ID", ct_t),
+            ("NVIS_NVSW_ID", nvsw_t),
+        ):
+            if not (tpl or "").strip():
+                continue
+            err = _nvis_ids.validate_nvis_template(tpl, label=label)
+            if err:
+                return err
+        return None
     return _nvis_ids.validate_nvis_naming_triplet(rack_t, ct_t, nvsw_t)
 
 
@@ -912,16 +945,23 @@ def build_node_inventory(
         for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*", line[:match.start()] + line[match.end():]):
             if token.casefold() in known:
                 device_states[token.casefold()] = state
+    # In translate mode the hostname does not encode the rack (Nscale NC's
+    # sys1-gso1-p-phy-gpu1-su19), so parsing it would invent a wrong rack from a mis-set CT
+    # template. Placement then comes only from the provider's rack attribute; an unplaced node
+    # stays ungrouped rather than mis-grouped.
+    translate = _rack_mapping_mode() == "translate"
     result: list[dict[str, Any]] = []
     for host, scheduler_state in sorted(nodes.items(), key=lambda item: item[0].casefold()):
         detail = details.get(host.casefold(), {})
-        parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
-        rack = rack_ids.get(_normalize_rack_key_for_ds(parsed[0]).casefold()) if parsed else None
+        rack = None
+        if not translate:
+            parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
+            rack = rack_ids.get(_normalize_rack_key_for_ds(parsed[0]).casefold()) if parsed else None
         placement = detail.get("rack")
         if placement:
             mapped = naming.map_cmsh_rack_list_token(placement) or _normalize_rack_key_for_ds(placement)
             rack = rack_ids.get(mapped.casefold())
-        if rack is None:
+        if rack is None and not translate:
             # Support real names whose extra components do not fit the tray template.
             matches = [value for key, value in rack_ids.items()
                        if host.casefold().startswith(key) and host[len(key):len(key) + 1] in {"-", "_", ".", ":", "/"}]

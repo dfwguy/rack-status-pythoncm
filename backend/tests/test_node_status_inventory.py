@@ -80,6 +80,36 @@ def test_duplicate_partition_rows_preserve_spelling_and_all_states(monkeypatch):
     assert [node["status"] for node in ns.build_node_inventory(nodes, [])] == ["down", "up"]
 
 
+# A hostname the CT template CAN parse into a rack, so the two modes diverge observably.
+_MAP_NODES = {"p1-r5-ct3": "idle"}
+_MAP_RACKS = ["p1-r5"]
+
+
+class TestRackMappingMode:
+    """Direct parses the rack from the hostname; translate refuses to, taking placement only
+    from the provider record. The divergence is the whole point of the flag: on Nscale NC the
+    hostname carries no rack, so parsing it would invent a wrong one from a mis-set CT template.
+    """
+
+    def test_direct_parses_the_rack_out_of_the_hostname(self, monkeypatch):
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "direct")
+        inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[])
+        assert inv[0]["rack"] == "p1-r5"
+
+    def test_translate_ignores_the_hostname_when_provider_is_silent(self, monkeypatch):
+        """No provider placement -> ungrouped, rather than a hostname-guessed rack."""
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[])
+        assert inv[0]["rack"] is None
+
+    def test_translate_places_from_the_provider_rack_attribute(self, monkeypatch):
+        """The NC path: rack/slot come from the cluster manager's device record, not the name."""
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        records = [{"id": "p1-r5-ct3", "rack": "p1-r5", "ip": ""}]
+        inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=records)
+        assert inv[0]["rack"] == "p1-r5"
+
+
 def test_expanded_hostnames_are_actual_roster_and_expanded_only_once(monkeypatch):
     run = Mock(side_effect=[
         slurm_response("GPU[01-02] idle\nGPU01 idle\n"),
