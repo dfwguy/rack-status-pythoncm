@@ -67,6 +67,7 @@ const VOCAB = {
   system_vendors: [],
   form_factors: [],
   cluster_managers: [],
+  schedulers: [],
   tool_categories: ["validation"],
   exec_modes: ["async"],
   exec_targets: ["rack"],
