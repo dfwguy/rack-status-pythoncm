@@ -801,6 +801,149 @@ release:publish-desktop:
       cd desktop
       RELEASE_TAG="${DESKTOP_VERSION}" bash scripts/publish-release.sh
 
+# ─── nvrs CLI release binaries ─────────────────────────────────────────────────
+#
+# Prebuilt `nvrs` binaries, published the same way the desktop installers are: build job -> job
+# artifacts -> generic Package Registry -> Release asset links, so a binary is downloadable straight
+# from the release page and never enters git.
+#
+# Scope, deliberately: **Linux x86_64 and macOS universal only** — the two targets that build
+# *natively* on the runners this project has. The CLI's TLS provider (aws-lc-rs) builds AWS-LC from C
+# and is painful to cross-compile, so Linux/aarch64 and Windows are intentionally out until either a
+# runner of that arch exists or the provider moves to `ring` (which cross-compiles cleanly). Building
+# each target on its own architecture avoids that whole problem.
+#
+# Linux is a glibc binary built on the same bookworm base the OVA container runs, so it runs there and
+# on any comparably-recent Linux; a fully-static musl build is the natural next step once the `ring`
+# switch lands. macOS is a fat binary (arm64 + x86_64 via lipo), gated behind a mac runner exactly
+# like `macos-sign`, so it is defined and lint-checked now but never blocks a pipeline until a runner
+# is wired up.
+.cli-release-base:
+  stage: build
+  # Independent of lint/test, like the desktop installers: a release binary's correctness does not
+  # depend on an unrelated frontend/backend gate, and coupling them means an unrelated failure blocks
+  # the build. `release:publish-cli` gates on the test jobs instead, where publishing a red commit
+  # actually matters.
+  needs: []
+  variables:
+    GIT_DEPTH: "1"
+  rules:
+    # Automatic on the release (finalize) commit; manual elsewhere for ad-hoc builds (including on an
+    # MR, so the build can be verified before merge).
+    - !reference [.rules:on_main_finalize_commit, rules]
+    - when: manual
+      allow_failure: true
+
+cli-release-linux:
+  extends: .cli-release-base
+  image: rust:1.88-slim-bookworm
+  variables:
+    GIT_DEPTH: "1"
+    CARGO_HOME: ${CI_PROJECT_DIR}/.cargo-registry
+  before_script:
+    # Same toolchain the cli-rust jobs need: aws-lc-rs builds AWS-LC with cmake + a C compiler.
+    - apt-get update && apt-get install -y --no-install-recommends cmake build-essential perl
+  script:
+    # The release tag is the product version on a release commit, else the short SHA so an ad-hoc
+    # build is still uniquely addressable — the same rule the bundle and desktop jobs use.
+    - export VERSION=$(grep -Eo '"[0-9]+\.[0-9]+\.[0-9]+[^"]*"' version.py 2>/dev/null | head -1 | tr -d '"')
+    - export CLI_TAG="${VERSION:-$CI_COMMIT_SHORT_SHA}"
+    - (cd cli && cargo build --release -p nvrs)
+    - install -m 0755 cli/target/release/nvrs nvrs-linux-x86_64
+    - sha256sum nvrs-linux-x86_64 > nvrs-linux-x86_64.sha256
+    - ./nvrs-linux-x86_64 --version
+    # Hand the resolved tag to the publish job (which runs with GIT_STRATEGY none).
+    - printf 'CLI_TAG=%s\n' "${CLI_TAG}" > cli.env
+    - ls -lh nvrs-linux-x86_64
+  artifacts:
+    name: "nvrs-linux-x86_64-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - nvrs-linux-x86_64
+      - nvrs-linux-x86_64.sha256
+    reports:
+      dotenv: cli.env
+    expire_in: 2 weeks
+
+cli-release-macos:
+  extends: .cli-release-base
+  tags:
+    - $MACOS_RUNNER_TAG
+  script:
+    - export VERSION=$(grep -Eo '"[0-9]+\.[0-9]+\.[0-9]+[^"]*"' version.py 2>/dev/null | head -1 | tr -d '"')
+    - export CLI_TAG="${VERSION:-$CI_COMMIT_SHORT_SHA}"
+    - rustup target add x86_64-apple-darwin aarch64-apple-darwin
+    - cd cli
+    - cargo build --release -p nvrs --target x86_64-apple-darwin
+    - cargo build --release -p nvrs --target aarch64-apple-darwin
+    # One fat binary that runs on both Apple Silicon and Intel Macs.
+    - lipo -create -output ../nvrs-macos-universal target/x86_64-apple-darwin/release/nvrs target/aarch64-apple-darwin/release/nvrs
+    - cd ..
+    - shasum -a 256 nvrs-macos-universal > nvrs-macos-universal.sha256
+    - lipo -info nvrs-macos-universal
+  artifacts:
+    name: "nvrs-macos-universal-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - nvrs-macos-universal
+      - nvrs-macos-universal.sha256
+    expire_in: 2 weeks
+  rules:
+    # Gated like macos-sign: absent from the pipeline entirely unless a mac runner tag is set, manual
+    # even then. Defined and lint-checked now so it is ready when a runner exists.
+    - if: $MACOS_RUNNER_TAG
+      when: manual
+      allow_failure: true
+    - when: never
+
+# ─── Publish the CLI binaries to the Package Registry + attach to the GitLab Release ───────────────
+release:publish-cli:
+  stage: ci_toolkit_release
+  image:
+    name: dockerhub.nvidia.com/python:3.12
+    pull_policy: ["if-not-present", "always"]
+  tags:
+    - $GITLAB_RUNNER_DOCKER_TAG
+  variables:
+    GIT_STRATEGY: none
+  needs:
+    - job: cli-release-linux
+      artifacts: true
+    # Optional: only present when a mac runner built it.
+    - job: cli-release-macos
+      artifacts: true
+      optional: true
+    # Publishing a red commit is what the test gate guards against (the builds themselves are decoupled).
+    - job: python-test
+      artifacts: false
+    - job: cli-rust-test
+      artifacts: false
+      optional: true
+    - job: "release:finalize"
+      artifacts: false
+      optional: true
+  rules:
+    - !reference [.rules:on_main_finalize_commit, rules]
+  script:
+    - |
+      set -e
+      test -n "${CLI_TAG:-}"
+      PKG_BASE="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/nvrs-cli/${CLI_TAG}"
+      for f in nvrs-linux-x86_64 nvrs-macos-universal; do
+        [ -f "$f" ] || { echo "skip $f (not built this pipeline)"; continue; }
+        echo "Uploading $f -> ${PKG_BASE}/"
+        curl --fail-with-body --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "$f" "${PKG_BASE}/$f"
+        curl --fail-with-body --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file "$f.sha256" "${PKG_BASE}/$f.sha256"
+        echo "Attaching release asset link to release ${CLI_TAG} (best-effort)"
+        curl --fail-with-body --silent --show-error --request POST \
+          --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --data-urlencode "name=$f (nvrs CLI)" \
+          --data-urlencode "url=${PKG_BASE}/$f" \
+          --data "link_type=package" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases/${CLI_TAG}/assets/links" \
+          || echo "WARN: could not attach release link (release ${CLI_TAG} may not exist yet or token scope); binary is in the Package Registry regardless."
+      done
+  after_script:
+    - !reference [.pipeline_post_job_hooks, after_script]
+
 # Push to NVCR (uncomment when registry is configured)
 # docker-push:
 #   stage: build

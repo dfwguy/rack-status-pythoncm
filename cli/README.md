@@ -28,11 +28,18 @@ are global — they work on any subcommand.
 | `nvrs-auth` | SRP-6a login, the token store, and refresh |
 | `nvrs-openapi` | fetch/cache and query the live OpenAPI contract |
 
+## Install
+
+Prebuilt binaries are published on each release to the project's generic Package Registry (and linked
+from the GitLab Release page): `nvrs-linux-x86_64` and `nvrs-macos-universal`. Download, `chmod +x`,
+and drop on your `PATH`. Linux-aarch64 and Windows are not built yet (see `.gitlab-ci.yml` — they need
+a runner of that arch or the `ring` TLS provider); build them from source in the meantime.
+
 ## Build & test
 
 ```bash
 cd cli
-cargo build
+cargo build --release   # target/release/nvrs
 cargo test --all
 ```
 
