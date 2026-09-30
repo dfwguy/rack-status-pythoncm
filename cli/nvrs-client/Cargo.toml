@@ -18,8 +18,15 @@ url.workspace = true
 futures-util.workspace = true
 # Only `time`, for the 429 backoff sleep. The client stays otherwise runtime-agnostic; the binary
 # owns the multi-thread runtime.
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
 bytes = "1"
+# WebSocket transport for the interactive terminal (/ws/terminal). rustls (aws-lc-rs, the same
+# provider reqwest uses) keeps the whole binary on one TLS stack with no system OpenSSL dependency.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs", "logging"] }
+rustls-native-certs = "0.8"
+rustls-pemfile = "2"
+http = "1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }

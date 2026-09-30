@@ -20,13 +20,16 @@ nvrs-openapi = { path = "../nvrs-openapi" }
 serde.workspace = true
 serde_json.workspace = true
 url.workspace = true
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 anyhow = "1"
 toml = "0.8"
 comfy-table = "7"
 # Hidden password prompt for `nvrs login`.
 rpassword = "7"
+# Interactive terminal: raw TTY mode + size, and the sink/stream combinators for the WebSocket.
+crossterm = "0.28"
+futures-util.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

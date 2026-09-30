@@ -22,8 +22,10 @@
 
 mod envelope;
 mod error;
+mod ws;
 
 pub use error::{Error, Result};
+pub use ws::{connect_terminal, terminal_url, Message, WsStream};
 // Re-exported so the binary can name HTTP verbs and consume a streaming body without taking its own
 // direct dependency on reqwest (and risking a version skew with this crate's).
 pub use reqwest::{Method, Response};

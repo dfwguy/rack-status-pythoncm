@@ -11,6 +11,7 @@ mod auth;
 mod config;
 mod output;
 mod spec;
+mod terminal;
 mod verbs;
 
 use anyhow::Result;
@@ -79,6 +80,20 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         interval: u64,
     },
+
+    /// Open an interactive shell on a node (or the head node) over the web terminal.
+    Terminal {
+        /// Target node hostname.
+        #[arg(long)]
+        node: Option<String>,
+        /// Connect to the cluster head node instead of a compute node.
+        #[arg(long)]
+        headnode: bool,
+    },
+
+    /// Tail live logs.
+    #[command(subcommand)]
+    Logs(LogsCmd),
 
     /// Reports this deployment has generated.
     #[command(subcommand)]
@@ -163,6 +178,22 @@ enum ReportsCmd {
     List,
 }
 
+#[derive(Subcommand, Debug)]
+enum LogsCmd {
+    /// Stream a live `tail -f` of a run log (or a Slurm job's stdout with --job-path).
+    Tail {
+        /// The log directory the run wrote to.
+        #[arg(long)]
+        dir: String,
+        /// A specific log basename within the directory (NEMO rack log otherwise).
+        #[arg(long)]
+        file: Option<String>,
+        /// A Slurm job stdout path to resolve and tail instead of the rack log.
+        #[arg(long)]
+        job_path: Option<String>,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
     let code = match run(cli) {
@@ -242,6 +273,20 @@ fn run(cli: Cli) -> Result<()> {
             block_on(verbs::run_suite(
                 &cfg, &name, profile, suite, rack, target, field, body, follow, interval, cli.json,
             ))
+        }
+        Command::Terminal { node, headnode } => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            block_on(terminal::run(&cfg, &name, profile, node, headnode))
+        }
+        Command::Logs(LogsCmd::Tail {
+            dir,
+            file,
+            job_path,
+        }) => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            block_on(verbs::logs_tail(&cfg, &name, profile, dir, file, job_path))
         }
         Command::Reports(ReportsCmd::List) => {
             let cfg = Config::load()?;

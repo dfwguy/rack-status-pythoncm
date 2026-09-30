@@ -150,6 +150,43 @@ pub async fn reports_list(cfg: &Config, name: &str, profile: &Profile, json: boo
     Ok(())
 }
 
+// ─── logs ────────────────────────────────────────────────────────────────────
+
+/// `nvrs logs tail` — live `tail -f` of a run's log (or a Slurm job's stdout) streamed to the
+/// terminal. Wraps the two streaming tail endpoints; the body they read is `log_dir` plus either a
+/// log basename or a Slurm stdout `path`.
+pub async fn logs_tail(
+    cfg: &Config,
+    name: &str,
+    profile: &Profile,
+    dir: String,
+    file: Option<String>,
+    job_path: Option<String>,
+) -> Result<()> {
+    let mut body = Map::new();
+    body.insert("log_dir".into(), Value::String(dir));
+    let path = if let Some(jp) = job_path {
+        body.insert("path".into(), Value::String(jp));
+        "/api/tail-job-stdout-stream"
+    } else {
+        if let Some(f) = file {
+            body.insert("log_basename".into(), Value::String(f));
+        }
+        "/api/tail-log-stream"
+    };
+    crate::api::stream_call(
+        cfg,
+        name,
+        profile,
+        Method::POST,
+        path,
+        &[],
+        Some(&Value::Object(body)),
+        None,
+    )
+    .await
+}
+
 // ─── compute ─────────────────────────────────────────────────────────────────
 
 /// `nvrs compute status` — the main rack status payload. The shape is produced by `rack_status.sh`

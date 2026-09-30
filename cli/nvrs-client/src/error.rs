@@ -51,6 +51,14 @@ pub enum Error {
     /// The configured base URL, or a joined path, was not a valid URL.
     #[error("invalid URL: {0}")]
     Url(#[source] url::ParseError),
+
+    /// A WebSocket connection (the interactive terminal) failed to open or was lost.
+    #[error("websocket: {0}")]
+    WebSocket(String),
+
+    /// TLS setup for a WebSocket connection failed (a bad pinned cert, say).
+    #[error("tls: {0}")]
+    Tls(String),
 }
 
 impl Error {

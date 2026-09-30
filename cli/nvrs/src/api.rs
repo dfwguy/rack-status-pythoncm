@@ -139,6 +139,46 @@ pub async fn call_json(
     }
 }
 
+/// Like [`call_json`] but for a streaming endpoint: pump the chunked body straight to stdout,
+/// refreshing the token once on a 401. Shared by `nvrs api --stream` and the typed `logs tail`.
+#[allow(clippy::too_many_arguments)]
+pub async fn stream_call(
+    cfg: &Config,
+    profile_name: &str,
+    profile: &Profile,
+    method: Method,
+    path: &str,
+    query: &[(String, String)],
+    body: Option<&Value>,
+    explicit_token: Option<&str>,
+) -> Result<()> {
+    let store = TokenStore::open_default()?;
+    let (token, stored) = crate::auth::resolve_access(&store, profile_name, explicit_token)?;
+    let refresh = if explicit_token.is_none() {
+        stored.map(|t| t.refresh)
+    } else {
+        None
+    };
+    let client = client_for(cfg, profile, token)?;
+    let resp = match client.send_raw(method.clone(), path, query, body).await {
+        Err(nvrs_client::Error::Unauthorized) if refresh.is_some() => {
+            let new = crate::auth::refresh_and_store(
+                cfg,
+                profile,
+                profile_name,
+                &store,
+                refresh.as_deref().unwrap(),
+            )
+            .await?;
+            client_for(cfg, profile, Some(new))?
+                .send_raw(method, path, query, body)
+                .await?
+        }
+        other => other?,
+    };
+    stream_to_stdout(resp).await
+}
+
 pub async fn run(
     args: ApiArgs,
     cfg: &Config,

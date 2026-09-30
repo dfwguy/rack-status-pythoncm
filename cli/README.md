@@ -8,10 +8,10 @@ A single-binary client for a Rack Status deployment: run tests, validations and 
 a cluster, from the terminal. It is a **client of the existing API** — it speaks the same
 `/api/*` contract, SRP login and token auth as the web UI, and adds no backend surface of its own.
 
-> Status: **Phase 3**. Profiles, SRP-6a `login`/`logout` with automatic refresh, `whoami`, OpenAPI
-> discovery (`nvrs spec`), the generic `nvrs api` passthrough, and the first typed verbs — `compute
-> status`, `rack list/lock/unlock`, `run <suite> --follow`, `reports list`. The interactive terminal
-> and admin CRUD land in later phases — see the build plan.
+> Status: **Phase 4**. Profiles, SRP-6a `login`/`logout` with automatic refresh, `whoami`, OpenAPI
+> discovery (`nvrs spec`), the generic `nvrs api` passthrough, typed verbs (`compute status`, `rack
+> list/lock/unlock`, `run <suite> --follow`, `reports list`), live log tailing (`logs tail`), and an
+> interactive shell over the web terminal (`nvrs terminal`). Admin CRUD lands in Phase 5.
 
 ## Workspace layout
 
@@ -104,6 +104,19 @@ nvrs run validation --rack p17-r01 --follow     # submit and poll to completion
 — non-zero if the job failed or its script returned non-zero — so it can gate a shell script.
 Suite-specific parameters go through `--field key=value` or `--body @params.json`, the same as
 `nvrs api`.
+
+## Live output
+
+```bash
+nvrs logs tail --dir /path/to/run/logs             # tail -f the run log
+nvrs logs tail --dir /path/to/logs --job-path "$STDOUT"   # a Slurm job's stdout
+nvrs terminal --node p17-r01-n04                   # interactive shell on a node
+nvrs terminal --headnode                           # …or the cluster head node
+```
+
+`nvrs terminal` opens the deployment's web terminal — the backend spawns `ssh` to the target and
+bridges its PTY over a WebSocket. The local terminal goes into raw mode and is restored on exit;
+window resizes are forwarded, and exiting the remote shell disconnects. Needs a real TTY.
 
 ## Discover the API
 
