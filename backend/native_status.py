@@ -1026,6 +1026,29 @@ def format_sinfo_cell(rack: str, counts: dict[tuple[str, str], int]) -> str:
     return ",".join(f"{st}={cnt}" for cnt, st in pairs)
 
 
+def counts_from_node_inventory(
+    inventory: list[dict[str, Any]],
+) -> dict[tuple[str, str], int]:
+    """Per-(rack, status) node counts from a built node inventory.
+
+    The provider path (a BCM/pythoncm cluster) has no ``sinfo``, so ``sinfo_counts`` is empty and
+    the rack tiles read 0/0 even when the cluster manager has fully enumerated the fleet -- every
+    Nscale NC rack showed 0/0 despite holding 18 nodes, all installing. The per-node status
+    ``build_node_inventory`` already derives from ``ds`` (``up``/``down``/``inst``/``unknown``) is
+    exactly what the tile needs, so project it back to the ``(rack, state)`` shape the rack table
+    consumes. The frontend counts everything but ``up`` as not-up, so an all-installing rack reads
+    0/18 rather than a misleading 18/18.
+    """
+    counts: dict[tuple[str, str], int] = {}
+    for node in inventory:
+        rack = node.get("rack")
+        if not rack:
+            continue
+        state = str(node.get("status") or "unknown")
+        counts[(rack, state)] = counts.get((rack, state), 0) + 1
+    return counts
+
+
 def _slurm_base_job_id(jid_raw: str) -> str | None:
     """Strip Slurm step suffix (``12345.batch`` → ``12345``) for lookup keys."""
     s = (jid_raw or "").strip()
@@ -1802,11 +1825,21 @@ class NativeRackTableState:
             racks = list(self.racks)
             ct = dict(self.ct_by_rack)
             sct = dict(self.sinfo_counts)
+            node_states = None if self.node_states is None else dict(self.node_states)
+            node_records = None if self.node_records is None else list(self.node_records)
+            ds_text = self.ds_text
             by_rack = {k: dict(v) for k, v in self.by_rack_log.items()}
             by_rack_stage = {k: {kk: dict(vv) for kk, vv in v.items()} for k, v in self.by_rack_stage_log.items()}
             errs = list(self.last_errors)
             ds_done = self.ds_done
             sinfo_done = self.sinfo_done
+        # A provider cluster (BCM/pythoncm) has no sinfo, so the per-rack node totals come from the
+        # roster the cluster manager returned instead. Without this every provider rack reads 0/0
+        # even when the fleet is fully enumerated. Slurm clusters keep their real sinfo_counts.
+        if not sct and node_states is not None:
+            sct = counts_from_node_inventory(
+                build_node_inventory(node_states, racks, ds_text, node_records)
+            )
         rows: list[dict[str, str]] = []
         n_done = n_fail = n_on = n_pending = 0
         stage1_summary = empty_stage_summary()

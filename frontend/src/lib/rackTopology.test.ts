@@ -10,7 +10,7 @@
  * its affiliates is strictly prohibited.
  */
 import { describe, expect, it } from "vitest";
-import { buildFloorLayout, buildScalableUnitLayout, floorLayoutFromHierarchy } from "./rackTopology";
+import { buildFloorLayout, buildScalableUnitLayout, floorLayoutFromHierarchy, rackHealth } from "./rackTopology";
 import type { RackRow, RackHierarchy } from "../types/api";
 
 function rackRow(rack: string): RackRow {
@@ -154,5 +154,32 @@ describe("buildScalableUnitLayout (SU as its own grouping axis)", () => {
 
   it("returns nothing when the cluster has no SU map", () => {
     expect(buildScalableUnitLayout([nscale("dh01", 18)], [])).toEqual([]);
+  });
+});
+
+describe("rackHealth — provider (BCM/pythoncm) node states", () => {
+  const row = (sinfo: string): RackRow =>
+    ({ rack: "U19", nemo: "-", last_job: "-", sinfo, ct_down_unk: "-" });
+
+  it("counts installing nodes toward the total but not as up", () => {
+    // An all-installing rack must read 0/18, not 0/0 (no data) and not 18/18 (misleading up).
+    const h = rackHealth(row("inst=18"));
+    expect(h.total).toBe(18);
+    expect(h.upCount).toBe(0);
+    expect(h.health).toBe("down");
+  });
+
+  it("mixes installing, down and up into a partial verdict", () => {
+    const h = rackHealth(row("inst=16,down=1,up=1"));
+    expect(h.total).toBe(18);
+    expect(h.upCount).toBe(1);
+    expect(h.health).toBe("partial");
+  });
+
+  it("still reads an all-up rack as healthy (Slurm path unchanged)", () => {
+    const h = rackHealth(row("idle=18"));
+    expect(h.total).toBe(18);
+    expect(h.upCount).toBe(18);
+    expect(h.health).toBe("healthy");
   });
 });

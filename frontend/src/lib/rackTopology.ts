@@ -177,6 +177,8 @@ const BAD_STATES = new Set([
   "boot",
   "pow_down",
   "powering_down",
+  // Provider (BCM/pythoncm) node states from ds: a node still installing is not "up".
+  "inst",
 ]);
 
 /** Parse ``"idle=17,down=1"`` into ``{idle:17, down:1}``. */

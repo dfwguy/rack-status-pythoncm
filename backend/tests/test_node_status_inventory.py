@@ -110,6 +110,26 @@ class TestRackMappingMode:
         assert inv[0]["rack"] == "p1-r5"
 
 
+class TestProviderRackCounts:
+    """A BCM/pythoncm cluster has no sinfo, so the rack tiles' node totals must come from the
+    placed roster. Without this every provider rack showed 0/0 even with 18 nodes enumerated.
+    """
+
+    def test_counts_are_grouped_by_rack_and_state(self):
+        inv = (
+            [{"id": f"n{i}", "rack": "U19", "status": "inst"} for i in range(16)]
+            + [{"id": "nd", "rack": "U19", "status": "down"}]
+            + [{"id": "nu", "rack": "U19", "status": "up"}]
+        )
+        counts = ns.counts_from_node_inventory(inv)
+        assert counts == {("U19", "inst"): 16, ("U19", "down"): 1, ("U19", "up"): 1}
+        assert ns.rack_total_sinfo_nodes("U19", counts) == 18  # the total the tile was missing
+
+    def test_unplaced_nodes_do_not_count(self):
+        inv = [{"id": "app", "rack": None, "status": "up"}, {"id": "n", "rack": "R2", "status": "down"}]
+        assert ns.counts_from_node_inventory(inv) == {("R2", "down"): 1}
+
+
 def test_expanded_hostnames_are_actual_roster_and_expanded_only_once(monkeypatch):
     run = Mock(side_effect=[
         slurm_response("GPU[01-02] idle\nGPU01 idle\n"),
