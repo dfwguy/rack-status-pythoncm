@@ -20,7 +20,10 @@ members = [
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-rust-version = "1.82"
+# 1.88: the `icu_*`/`idna` crates the `url` dependency pulls transitively require rustc 1.88, so this
+# is the real floor of the dependency tree, not a preference. Keep it in step with the CI image in
+# `.gitlab-ci.yml`; a lower value there fails to parse `edition2024` manifests before a line compiles.
+rust-version = "1.88"
 license = "LicenseRef-NvidiaProprietary"
 authors = ["NVIDIA Rack Status team"]
 

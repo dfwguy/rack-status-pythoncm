@@ -246,8 +246,10 @@ typescript-check:
 # backend/frontend commit does not pay for a Rust build; a change under `cli/` runs them.
 .cli-rust-base:
   # Pinned to the workspace MSRV (see cli/Cargo.toml `rust-version`), so CI and a contributor's
-  # `rustup` agree on which compiler judged the code. Bump both together.
-  image: rust:1.82-slim-bookworm
+  # `rustup` agree on which compiler judged the code. Bump both together. 1.88 is the floor the
+  # dependency tree requires: `url` pulls `icu_*`/`idna_adapter`, whose manifests use edition2024 and
+  # need rustc 1.88 — an older image fails to *parse* them before any of our code compiles.
+  image: rust:1.88-slim-bookworm
   cache:
     key: cargo-${CI_COMMIT_REF_SLUG}
     paths:
@@ -255,6 +257,11 @@ typescript-check:
       - .cargo-registry/
   variables:
     CARGO_HOME: ${CI_PROJECT_DIR}/.cargo-registry
+  before_script:
+    # aws-lc-rs (the rustls crypto provider, shared with reqwest) builds AWS-LC from source with
+    # CMake and a C toolchain; the slim image ships neither. Install them before cargo runs, or the
+    # first build of `aws-lc-sys` fails with "cmake: not found" long after the manifests parse.
+    - apt-get update && apt-get install -y --no-install-recommends cmake build-essential perl
   rules:
     - changes:
         - cli/**/*
