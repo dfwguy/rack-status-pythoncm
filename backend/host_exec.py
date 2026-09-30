@@ -35,13 +35,17 @@ Environment variables
 """
 from __future__ import annotations
 
+import io
 import logging
 import os
 import shlex
 import subprocess
+import tarfile
 import threading
 import time
+import uuid
 from collections.abc import Callable
+from pathlib import Path
 
 from transport import (
     DEFAULT_HEAD_BYTES,
@@ -394,6 +398,90 @@ def read_text(
         path, head_bytes=head_bytes, tail_bytes=tail_bytes,
         whole_bytes=whole_bytes, timeout=timeout,
     )
+
+
+#: How much of a copy bundle rides in one `write_bytes`. The cap is `MAX_ARG_STRLEN` (a single argv
+#: element, ~128 KiB), not `ARG_MAX`, because `write_bytes` puts the base64 payload inline in one
+#: `sh -c` -- stdin is not plumbed through a hop chain. 64 KiB raw is ~88 KiB of base64, under the
+#: cap with room for the quoting each extra hop adds. The same reasoning script_deploy chose.
+_COPY_CHUNK_BYTES = 64 * 1024
+
+
+def copy_tree_to_host(
+    local_dir: object,
+    remote_dir: str,
+    *,
+    role: str = DEFAULT_ROLE,
+    timeout: int = 1800,
+    skip_suffixes: tuple[str, ...] = (".pyc",),
+) -> str | None:
+    """Copy a local directory tree to *remote_dir* on the role's host. ``None`` on success, else error.
+
+    Streams as a chunked gzipped-tar bundle -- the one shape that crosses a *multi-hop* chain,
+    because stdin is not plumbed through the hops (rsync needs a single hop, and a Teleport-fronted
+    head is two). The mechanism is the script-deploy bundle push generalised: numbered parts under a
+    staging dir, reassembled and extracted in one remote command so the chain is crossed once more
+    rather than per file, and the staging dir still existing afterwards is treated as failure however
+    the exit code read -- "up is not working" applied to a copy.
+
+    On size: each part rides inline in one ``sh -c``, so the cost is one round trip per 64 KiB. That
+    is nothing for config and scripts and slow for a multi-hundred-MB payload over a slow chain; when
+    that matters the right fix is plumbing stdin through the chain, not a bigger inline chunk.
+    """
+    local = Path(str(local_dir))
+    if not local.is_dir():
+        return f"not a directory: {local}"
+
+    buf = io.BytesIO()
+    sent = 0
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for path in sorted(local.rglob("*")):
+            if path.is_dir() or path.suffix in skip_suffixes or "__pycache__" in path.parts:
+                continue
+            tar.add(str(path), arcname=str(path.relative_to(local)))
+            sent += 1
+    bundle = buf.getvalue()
+
+    conn = connection(role)
+    # Prove the target runs a command before writing a byte: with no SSH host configured write_bytes
+    # and makedirs still succeed against the LOCAL filesystem while run fails, so writing first would
+    # scatter parts into the app's own tree and only then discover it cannot extract them.
+    probe = conn.run(["sh", "-c", "true"], timeout=30)
+    if probe.returncode != 0:
+        detail = (probe.stderr or probe.stdout or "").strip()
+        return f"target not reachable: {detail[:200]}"
+
+    staging = f"{remote_dir.rstrip('/')}/.nvis-p2p-stage-{uuid.uuid4().hex[:8]}"
+    try:
+        err = conn.makedirs(staging)
+        if err:
+            return f"cannot create {staging}: {err}"
+        for index in range(0, len(bundle), _COPY_CHUNK_BYTES):
+            part = f"{staging}/part-{index // _COPY_CHUNK_BYTES:04d}"
+            err = conn.write_bytes(part, bundle[index:index + _COPY_CHUNK_BYTES])
+            if err:
+                return f"upload failed at {part}: {err}"
+        q, t = shlex.quote(staging), shlex.quote(remote_dir)
+        script = (
+            f"set -e; cd {q}; cat part-* > bundle.tgz; mkdir -p {t}; "
+            f"tar -xzf bundle.tgz -C {t}; cd /; rm -rf {q}"
+        )
+        proc = conn.run(["sh", "-c", script], timeout=timeout)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            return f"extract failed: {detail[:400]}"
+        if conn.is_dir(staging):
+            return f"extract reported success but {staging} still exists; nothing landed"
+    except Exception as exc:  # noqa: BLE001 - the transport raises several unrelated types
+        return f"{type(exc).__name__}: {exc}"[:400]
+    finally:
+        try:
+            if conn.is_dir(staging):
+                conn.run(["sh", "-c", f"rm -rf {shlex.quote(staging)}"], timeout=60)
+        except Exception:
+            _logger.debug("copy_tree_to_host: staging cleanup ignored", exc_info=True)
+    _logger.info("copy_tree_to_host: sent %d file(s) to %s", sent, remote_dir)
+    return None
 
 
 def execution_host_configured(role: str = DEFAULT_ROLE) -> bool:
