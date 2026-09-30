@@ -133,14 +133,17 @@ export default function P2pSettingsView() {
         title="Dragonfly Settings"
         description={`Per-cluster NVIS-P2P instance configuration${activeCluster ? ` for ${activeCluster.name}` : ""}. Secrets are generated on the app server and never stored here.`}
         actions={
-          <Flex gap="2">
-            <Button kind="secondary" onClick={() => void load()}>Reload</Button>
-            <Button kind="primary" color="brand" disabled={saving || !draft} onClick={() => void onSave()}>
+          <Flex gap="2" align="center">
+            <Button kind="secondary" color="neutral" size="small" onClick={() => void load()}>
+              Reload
+            </Button>
+            <Button kind="secondary" color="brand" size="small" disabled={saving || !draft} onClick={() => void onSave()}>
               {saving ? "Saving…" : "Save"}
             </Button>
             <Button
               kind="primary"
               color="brand"
+              size="small"
               disabled={provisioning || !ready}
               onClick={() => void onProvision()}
             >
@@ -150,18 +153,18 @@ export default function P2pSettingsView() {
         }
       />
 
-      {error ? <Banner status="error" style={{ marginBottom: 12 }}>{error}</Banner> : null}
-      {status ? <Banner status="success" style={{ marginBottom: 12 }}>{status}</Banner> : null}
+      {error ? <Banner status="error" kind="inline" style={{ marginBottom: 16 }}>{error}</Banner> : null}
+      {status ? <Banner status="success" kind="inline" style={{ marginBottom: 16 }}>{status}</Banner> : null}
       {loading ? <Text kind="body/regular/md">Loading…</Text> : null}
 
       {!loading && draft ? (
         <Flex direction="col" gap="3">
           {!ready ? (
-            <Banner status="warning">
+            <Banner status="warning" kind="inline">
               Not ready to provision — set: {blockers.join("; ")}.
             </Banner>
           ) : (
-            <Banner status="info">Settings complete. Provision to stand up (or reconcile) the control plane.</Banner>
+            <Banner status="info" kind="inline">Settings complete. Provision to stand up (or reconcile) the control plane.</Banner>
           )}
 
           {section("Addresses & app-server connection", (
