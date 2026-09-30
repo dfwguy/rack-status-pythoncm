@@ -78,4 +78,42 @@ export const p2pContent: HelpContent[] = [
     aiContext:
       "Artifact Fleet is the NVIS-P2P operator surface for the active cluster. It distributes a validated container-image catalog across the compute fleet using Dragonfly peer-assisted transfer with durable object storage and per-node SHA-256 receipts. Operators run preflight/persist/sync/distribute/verify/repair operations and read a per-SU readiness table and node coverage heatmap. P2P is single-tenant — one instance per cluster — and enabled per project.",
   },
+  {
+    id: "p2pSettings",
+    kind: "view",
+    title: "Dragonfly Settings",
+    domain: "Artifact Distribution",
+    routePath: "/p2p/settings",
+    summary:
+      "Per-cluster NVIS-P2P instance configuration — addresses, the app-server connection, inventory, paths — and the button that provisions or reconciles the control plane.",
+    description:
+      "Dragonfly Settings holds everything the reconcile needs to stand up this cluster's P2P instance: the Manager and app-server addresses, how the reconcile reaches the app server over SSH (a host in its own right, not the cluster's control node), the compute-peer inventory pattern, and the install/storage paths. Secrets are generated on the app server and never stored here. Missing pieces are named, and Provision stays disabled until they are filled in; provisioning starts a reconcile run tracked under Workflows.",
+    features: [
+      "Manager / app-server addresses and the app-server SSH connection",
+      "Compute-peer inventory pattern and source path",
+      "Install root, catalog (.json) and storage paths, service account",
+      "Named provisioning blockers, and a gated Provision (reconcile) action",
+    ],
+    howTo: [
+      {
+        task: "Configure and provision a cluster's P2P instance",
+        steps: [
+          "Enable P2P for the cluster in Projects & Clusters.",
+          "Fill in the Manager IP, app-server IP, the app-server SSH user/key, and the inventory pattern.",
+          "Save, then click Provision once no blockers remain, and track the run under Workflows.",
+        ],
+      },
+    ],
+    tips: [
+      "The app server is often a different host from the cluster's control node — set its SSH connection explicitly.",
+      "The catalog path must name a .json file; the inventory source is a file path, not a scheduler name.",
+    ],
+    keywords: ["p2p", "dragonfly", "settings", "provision", "reconcile", "app server", "inventory", "manager"],
+    aria: {
+      label: "Dragonfly Settings",
+      description: "Per-cluster NVIS-P2P instance configuration and provisioning.",
+    },
+    aiContext:
+      "Dragonfly Settings is the per-cluster NVIS-P2P instance configuration for the active cluster (backend P2pSettings). It edits the Manager/app-server addresses, the app-server SSH connection the reconcile runs over (the app server is its own host, not the cluster control node), the compute-peer inventory pattern and source path, and install/storage paths. Secrets are generated on the app server, never stored. It names provisioning blockers and exposes a gated Provision action that starts a reconcile workflow run.",
+  },
 ];

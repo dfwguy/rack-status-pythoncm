@@ -62,6 +62,7 @@ const MultirackView = lazy(() => import("./views/MultirackView").then((m) => ({ 
 // NVIS-P2P (artifact distribution). Lazy like the rest: the feature carries its own view tree
 // and only mounts when an operator opens it on a cluster that has P2P enabled.
 const ArtifactFleetView = lazy(() => import("./features/p2p/views/ArtifactFleetView"));
+const P2pSettingsView = lazy(() => import("./features/p2p/views/P2pSettingsView"));
 const SlurmView = lazy(() => import("./views/SlurmView").then((m) => ({ default: m.SlurmView })));
 const ReportsView = lazy(() => import("./views/ReportsView").then((m) => ({ default: m.ReportsView })));
 const AnalyticsView = lazy(() => import("./views/AnalyticsView").then((m) => ({ default: m.AnalyticsView })));
@@ -117,6 +118,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   obsAuditTrail: "Audit Trail",
   multirack: "Multirack operations",
   p2pArtifacts: "Artifact Fleet",
+  p2pSettings: "Dragonfly Settings",
   reports: "Reports",
   analytics: "Analytics",
   postRunNodeReport: "Post Run Node Report",
@@ -414,6 +416,7 @@ function AppContent() {
           <Route path="/compute/multirack" element={<MultirackView data={data} logDir={logDir} />} />
           <Route path="/compute/scheduler" element={<SlurmView logDir={logDir} />} />
           <Route path="/p2p/artifacts" element={<ArtifactFleetView />} />
+          <Route path="/p2p/settings" element={<P2pSettingsView />} />
           <Route path="/infrastructure/ethernet" element={<InfrastructureView segment="ethernet" />} />
           <Route path="/infrastructure/ib-nvlink" element={<InfrastructureView segment="ib-nvlink" />} />
           <Route path="/infrastructure/storage" element={<InfrastructureView segment="storage" />} />
