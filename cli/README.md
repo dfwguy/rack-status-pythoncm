@@ -8,10 +8,10 @@ A single-binary client for a Rack Status deployment: run tests, validations and 
 a cluster, from the terminal. It is a **client of the existing API** — it speaks the same
 `/api/*` contract, SRP login and token auth as the web UI, and adds no backend surface of its own.
 
-> Status: **Phase 2**. Profiles, SRP-6a `login`/`logout` with automatic refresh, a generic `nvrs api`
-> passthrough that reaches the whole API, `whoami`, and `nvrs spec` — OpenAPI contract discovery that
-> also validates `api` calls against the served contract. Typed domain verbs and the interactive
-> terminal land in later phases — see the build plan.
+> Status: **Phase 3**. Profiles, SRP-6a `login`/`logout` with automatic refresh, `whoami`, OpenAPI
+> discovery (`nvrs spec`), the generic `nvrs api` passthrough, and the first typed verbs — `compute
+> status`, `rack list/lock/unlock`, `run <suite> --follow`, `reports list`. The interactive terminal
+> and admin CRUD land in later phases — see the build plan.
 
 ## Workspace layout
 
@@ -83,6 +83,27 @@ nvrs api POST /api/tools/download-containers-stream --field arch=x86_64 --stream
 
 nvrs --json api GET /api/status | jq .        # machine-readable envelope for scripting
 ```
+
+## Typed verbs
+
+Curated commands over the flat API, rendered as tables (`--json` for the raw envelope):
+
+```bash
+nvrs compute status                 # the main rack status payload
+nvrs rack list                      # who holds which rack
+nvrs rack lock p17-r01 --note "burn-in" --ttl 3600   # needs an operator on the profile
+nvrs rack unlock p17-r01
+nvrs reports list                   # generated reports kept on disk
+
+nvrs run                            # list the runnable suites
+nvrs run validation --rack p17-r01              # submit, print the job id
+nvrs run validation --rack p17-r01 --follow     # submit and poll to completion
+```
+
+`run --follow` prints each phase change (`[running]` → `[done]`) and **exits with the job's result**
+— non-zero if the job failed or its script returned non-zero — so it can gate a shell script.
+Suite-specific parameters go through `--field key=value` or `--body @params.json`, the same as
+`nvrs api`.
 
 ## Discover the API
 

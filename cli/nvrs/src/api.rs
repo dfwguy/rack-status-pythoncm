@@ -99,6 +99,46 @@ fn warn_if_off_contract(profile: &Profile, method: &str, path: &str) {
     }
 }
 
+/// Make one authenticated JSON call for a profile, refreshing the access token once on a 401. This
+/// is the shared spine every typed verb sits on, so the auth/refresh dance lives in exactly one
+/// place. `explicit_token` is an out-of-band `$NVRS_TOKEN`/`--token`; `None` uses the stored session.
+#[allow(clippy::too_many_arguments)]
+pub async fn call_json(
+    cfg: &Config,
+    profile_name: &str,
+    profile: &Profile,
+    method: Method,
+    path: &str,
+    query: &[(String, String)],
+    body: Option<&Value>,
+    explicit_token: Option<&str>,
+) -> Result<Value> {
+    let store = TokenStore::open_default()?;
+    let (token, stored) = crate::auth::resolve_access(&store, profile_name, explicit_token)?;
+    let refresh = if explicit_token.is_none() {
+        stored.map(|t| t.refresh)
+    } else {
+        None
+    };
+    let client = client_for(cfg, profile, token)?;
+    match client.send_json(method.clone(), path, query, body).await {
+        Err(nvrs_client::Error::Unauthorized) if refresh.is_some() => {
+            let new = crate::auth::refresh_and_store(
+                cfg,
+                profile,
+                profile_name,
+                &store,
+                refresh.as_deref().unwrap(),
+            )
+            .await?;
+            Ok(client_for(cfg, profile, Some(new))?
+                .send_json(method, path, query, body)
+                .await?)
+        }
+        other => Ok(other?),
+    }
+}
+
 pub async fn run(
     args: ApiArgs,
     cfg: &Config,
@@ -245,7 +285,7 @@ fn parse_kv(items: &[String]) -> Result<Vec<(String, String)>> {
 }
 
 /// Build the JSON body from either `--field` pairs or a raw `--body`, refusing both at once.
-fn build_body(fields: &[String], body: Option<&str>) -> Result<Option<Value>> {
+pub(crate) fn build_body(fields: &[String], body: Option<&str>) -> Result<Option<Value>> {
     match (fields.is_empty(), body) {
         (true, None) => Ok(None),
         (false, Some(_)) => bail!("use either --field or --body, not both"),

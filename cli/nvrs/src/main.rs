@@ -11,6 +11,7 @@ mod auth;
 mod config;
 mod output;
 mod spec;
+mod verbs;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -46,6 +47,42 @@ enum Command {
 
     /// Call any `/api/*` endpoint directly. The full surface, before typed verbs exist for it.
     Api(api::ApiArgs),
+
+    /// Compute-plane status.
+    #[command(subcommand)]
+    Compute(ComputeCmd),
+
+    /// Advisory rack locks: see, claim and release racks.
+    #[command(subcommand)]
+    Rack(RackCmd),
+
+    /// Run a validation suite (submit, and with --follow poll it to completion).
+    Run {
+        /// Suite to run. Omit to list the available suites.
+        suite: Option<String>,
+        /// Target rack (added to the request body as `rack`).
+        #[arg(long)]
+        rack: Option<String>,
+        /// Target node/spec (added to the request body as `target`).
+        #[arg(long)]
+        target: Option<String>,
+        /// Extra string body field, repeatable: --field key=value.
+        #[arg(long = "field", short = 'f', value_name = "KEY=VALUE")]
+        field: Vec<String>,
+        /// Raw JSON body: inline or @file. Mutually exclusive with --field.
+        #[arg(long)]
+        body: Option<String>,
+        /// Poll the job to completion, printing phase changes, and exit with its result.
+        #[arg(long)]
+        follow: bool,
+        /// Seconds between polls when following.
+        #[arg(long, default_value_t = 3)]
+        interval: u64,
+    },
+
+    /// Reports this deployment has generated.
+    #[command(subcommand)]
+    Reports(ReportsCmd),
 
     /// Browse the deployment's OpenAPI contract: every endpoint, method and summary.
     Spec {
@@ -93,6 +130,39 @@ enum ConfigCmd {
     Use { name: String },
 }
 
+#[derive(Subcommand, Debug)]
+enum ComputeCmd {
+    /// The main rack status payload.
+    Status,
+}
+
+#[derive(Subcommand, Debug)]
+enum RackCmd {
+    /// Show which racks are locked and by whom.
+    List,
+    /// Claim a rack (requires an operator set on the profile).
+    Lock {
+        rack: String,
+        /// A note recorded with the claim.
+        #[arg(long)]
+        note: Option<String>,
+        /// Seconds until the claim expires.
+        #[arg(long)]
+        ttl: Option<u64>,
+        /// Take the rack even if someone else holds it.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Release a rack you hold.
+    Unlock { rack: String },
+}
+
+#[derive(Subcommand, Debug)]
+enum ReportsCmd {
+    /// List generated reports.
+    List,
+}
+
 fn main() {
     let cli = Cli::parse();
     let code = match run(cli) {
@@ -131,6 +201,52 @@ fn run(cli: Cli) -> Result<()> {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
             block_on(api::run(args, &cfg, &name, profile, cli.json))
+        }
+        Command::Compute(ComputeCmd::Status) => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            block_on(verbs::compute_status(&cfg, &name, profile, cli.json))
+        }
+        Command::Rack(cmd) => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            block_on(async {
+                match cmd {
+                    RackCmd::List => verbs::rack_list(&cfg, &name, profile, cli.json).await,
+                    RackCmd::Lock {
+                        rack,
+                        note,
+                        ttl,
+                        force,
+                    } => {
+                        verbs::rack_lock(&cfg, &name, profile, &rack, note, ttl, force, cli.json)
+                            .await
+                    }
+                    RackCmd::Unlock { rack } => {
+                        verbs::rack_unlock(&cfg, &name, profile, &rack, cli.json).await
+                    }
+                }
+            })
+        }
+        Command::Run {
+            suite,
+            rack,
+            target,
+            field,
+            body,
+            follow,
+            interval,
+        } => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            block_on(verbs::run_suite(
+                &cfg, &name, profile, suite, rack, target, field, body, follow, interval, cli.json,
+            ))
+        }
+        Command::Reports(ReportsCmd::List) => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            block_on(verbs::reports_list(&cfg, &name, profile, cli.json))
         }
         Command::Spec {
             filter,
