@@ -15,6 +15,7 @@
 // against. Everything render-site-config.py needs, editable per cluster, with the missing pieces
 // named and provisioning gated until they are filled in.
 import { useCallback, useEffect, useState } from "react";
+import Box from "@mui/material/Box";
 import { Banner, Button, Card, Flex, FormField, Text, TextInput } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../../../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../../../components/layout/contentWidth";
@@ -127,7 +128,7 @@ export default function P2pSettingsView() {
   );
 
   return (
-    <div style={{ maxWidth: CONTENT_MAX_WIDTH.comfortable, margin: "0 auto" }}>
+    <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.comfortable, mx: "auto", p: 4 }}>
       <PageHeader
         title="Dragonfly Settings"
         description={`Per-cluster NVIS-P2P instance configuration${activeCluster ? ` for ${activeCluster.name}` : ""}. Secrets are generated on the app server and never stored here.`}
@@ -209,6 +210,6 @@ export default function P2pSettingsView() {
           ) : null}
         </Flex>
       ) : null}
-    </div>
+    </Box>
   );
 }
