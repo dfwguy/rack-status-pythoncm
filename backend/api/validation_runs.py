@@ -133,7 +133,7 @@ def _prepared(
     prepare,
     body: dict,
     *,
-    catalog_tool_id: str = "",
+    kind: str,
 ) -> tuple[dict | None, tuple[object, int] | None]:
     """Run a legacy prepare, then apply the reviewed-target gate (REQ-6).
 
@@ -148,8 +148,9 @@ def _prepared(
     reviewed target no longer holds. Both are the `(response, status)` shape the call sites already
     unpack, so no call site changes shape.
     """
-    if catalog_tool_id:
-        compatibility_error = _catalog_tool_compatibility_error(catalog_tool_id)
+    tool_id = _CATALOG_TOOL_BY_KIND.get(kind)
+    if tool_id:
+        compatibility_error = _catalog_tool_compatibility_error(tool_id)
         if compatibility_error is not None:
             return None, compatibility_error
     prep, err = prepare(body)
@@ -386,7 +387,7 @@ def api_run_validation():
     prep, err = _prepared(
         _prepare_run_validation,
         body,
-        catalog_tool_id="validation-singlerack",
+        kind="validation",
     )
     if err is not None:
         return err[0], err[1]
@@ -435,7 +436,7 @@ def api_run_validation_async():
     prep, err = _prepared(
         _prepare_run_validation,
         body,
-        catalog_tool_id="validation-singlerack",
+        kind="validation",
     )
     if err is not None:
         return err[0], err[1]
@@ -559,7 +560,7 @@ def api_run_nemo_xrack_async():
     prep, err = _prepared(
         _prepare_run_nemo_xrack,
         body,
-        catalog_tool_id="nemo-xrack",
+        kind="nemo-xrack",
     )
     if err is not None:
         return err[0], err[1]
@@ -759,7 +760,7 @@ def api_run_exemplar_llama_async():
     prep, err = _prepared(
         _prepare_run_exemplar_llama,
         body,
-        catalog_tool_id="preset-llama405b",
+        kind="exemplar-llama",
     )
     if err is not None:
         return err[0], err[1]
@@ -837,7 +838,7 @@ def api_run_llama_async():
     prep, err = _prepared(
         _prepare_run_llama,
         body,
-        catalog_tool_id="llama",
+        kind="llama",
     )
     if err is not None:
         return err[0], err[1]
@@ -1648,7 +1649,7 @@ def api_run_exemplar_sysinfo_status():
 def api_run_mnubergemm_stress_async():
     """Start mnubergemm stress driver; poll GET /api/run-mnubergemm-stress-status?job_id=…"""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepared(_prepare_run_mnubergemm_stress, body)
+    prep, err = _prepared(_prepare_run_mnubergemm_stress, body, kind="mnubergemm-stress")
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -1711,7 +1712,7 @@ def api_run_mnubergemm_stress_async():
 def api_run_nccl_fullrack_async():
     """Start the standalone Stage-1 NCCL benchmark; poll GET /api/run-nccl-fullrack-status?job_id=…"""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepared(_prepare_run_nccl_fullrack, body)
+    prep, err = _prepared(_prepare_run_nccl_fullrack, body, kind="nccl-fullrack")
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -1782,7 +1783,7 @@ def api_run_nccl_fullrack_async():
 def api_run_nvloom_async():
     """Start nvloom singlerack Slurm driver (sbatch --wait); poll GET /api/run-nvloom-status?job_id=…"""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepared(_prepare_run_nvloom_singlerack, body)
+    prep, err = _prepared(_prepare_run_nvloom_singlerack, body, kind="nvloom")
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -1845,7 +1846,7 @@ def api_run_nvloom_async():
 def api_run_clusterkit_async():
     """Start ClusterKit singlerack Slurm driver; poll GET /api/run-clusterkit-status?job_id=…"""
     body = request.get_json(silent=True) or {}
-    prep, err = _prepared(_prepare_run_clusterkit_singlerack, body)
+    prep, err = _prepared(_prepare_run_clusterkit_singlerack, body, kind="clusterkit")
     if err is not None:
         return err[0], err[1]
     assert prep is not None
@@ -1914,7 +1915,7 @@ def api_run_llmb_nccl_async():
     the head node).
     """
     body = request.get_json(silent=True) or {}
-    prep, err = _prepared(_prepare_run_llmb_nccl, body)
+    prep, err = _prepared(_prepare_run_llmb_nccl, body, kind="llmb-nccl")
     if err is not None:
         return err[0], err[1]
     assert prep is not None

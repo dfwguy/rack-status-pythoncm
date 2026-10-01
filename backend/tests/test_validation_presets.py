@@ -191,6 +191,49 @@ def test_rtx_catalog_refuses_nemo_before_launch_preparation(monkeypatch):
     assert legacy.status_code == 409
     assert legacy.get_json()["reason"] == "incompatible_platform"
     assert legacy.get_json()["tool_id"] == "validation-singlerack"
+    from catalog.store import TABLE_TOOLS, get_repo
+
+    tool_name = get_repo().get(TABLE_TOOLS, "validation-singlerack")["name"]
+    assert legacy.get_json()["error"] == f"{tool_name} is not compatible with {platform.name}"
+
+
+@pytest.mark.parametrize("endpoint", [
+    "/api/validation-presets/prepare", "/api/run-validation-preset-async",
+])
+def test_missing_preset_binding_reports_catalog_configuration_error(monkeypatch, tmp_path, endpoint):
+    from catalog.store import TinyDBRepo
+
+    repo = TinyDBRepo(tmp_path / "empty-catalog.json")
+    monkeypatch.setattr(validation_launch, "get_repo", lambda: repo)
+    monkeypatch.setattr(validation_launch.catalog_context, "tools_for_cluster", list)
+    response = app_module.app.test_client().post(endpoint, json={
+        "preset_id": "nemo-26.04.01", "scope": "rack", "rack": "rack-01",
+    })
+    assert response.status_code == 409
+    assert response.get_json()["reason"] == "missing_preset_tool"
+    assert response.get_json()["preset_id"] == "nemo-26.04.01"
+    assert "platform_id" not in response.get_json()
+
+
+@pytest.mark.parametrize("kind,endpoint", [
+    ("validation", "/api/run-validation"),
+    ("validation", "/api/run-validation-async"),
+    ("nemo-xrack", "/api/run-nemo-xrack-async"),
+    ("exemplar-llama", "/api/run-exemplar-llama-async"),
+    ("llama", "/api/run-llama-async"),
+])
+def test_legacy_prepare_and_launch_share_catalog_mapping(monkeypatch, kind, endpoint):
+    from api import validation_runs
+
+    # Alter the single mapping to prove both routes consult it before preparing or launching.
+    monkeypatch.setitem(validation_runs._CATALOG_TOOL_BY_KIND, kind, "missing-review-tool")
+    client = app_module.app.test_client()
+    target = {"rack": "rack-01", "racks": ["rack-01", "rack-02"]}
+    for route, body in [("/api/launch/prepare", {"kind": kind, **target}), (endpoint, target)]:
+        response = client.post(route, json=body)
+        assert response.status_code == 404
+        assert response.get_json()["reason"] == "unknown_tool"
+        assert response.get_json()["tool_id"] == "missing-review-tool"
 
 
 def test_mnubergemm_multirack_plan_is_exact_and_time_capped(monkeypatch, tmp_path):

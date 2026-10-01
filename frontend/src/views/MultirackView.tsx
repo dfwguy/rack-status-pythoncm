@@ -165,13 +165,12 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     loading: catalogToolsLoading,
     error: catalogToolsError,
   } = useCatalogTools();
+  // Launch surfaces fail closed, including stale tools retained after a reload fails.
   const multirackTools = useMemo(
-    () => catalogTools.filter((tool) => tool.surfaces.includes("multirack")),
-    [catalogTools],
-  );
-  const compatibleToolIds = useMemo(
-    () => new Set(multirackTools.map((tool) => tool.id)),
-    [multirackTools],
+    () => catalogToolsLoading || catalogToolsError ? [] : catalogTools
+      .filter((tool) => tool.surfaces.includes("multirack"))
+      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name)),
+    [catalogTools, catalogToolsLoading, catalogToolsError],
   );
   const compatiblePresetIds = useMemo(
     () => new Set(
@@ -526,7 +525,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
       }
       setSnackbar({
         open: true,
-        message: `${VALIDATION_PRESET_LABELS[presetId]} launched on ${request.racks?.length ?? 0} racks`,
+        message: `${multirackTools.find((tool) => tool.launch.preset_id === presetId)?.name ?? VALIDATION_PRESET_LABELS[presetId] ?? presetId} launched on ${request.racks?.length ?? 0} racks`,
         severity: "success",
       });
       setSelected(new Set());
@@ -581,6 +580,9 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
       )
     : 0;
   const llama1024Ready = selectedCampaignIsExact && selectedCampaignNodeCount === 256;
+  const presetSelectionReady: Record<string, boolean> = {
+    "llama31-405b-fp8": llama1024Ready,
+  };
 
   return (
     <Box sx={{ maxWidth: CONTENT_MAX_WIDTH.wide, mx: "auto", p: 4 }}>
@@ -731,17 +733,18 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
             label="Dry run (NCCL/Llama — print plan, don't submit)"
           />
           <Flex gap="2" align="center" wrap="wrap" style={{ marginLeft: "auto" }}>
-            {!catalogToolsLoading && compatibleToolIds.has("nemo-xrack") ? (
+            {multirackTools.filter((tool) => tool.id === "nemo-xrack").map((tool) => (
               <Button
+                key={tool.id}
                 kind="primary"
                 size="small"
                 onClick={() => setPendingKind("nemo")}
                 disabled={noRacks || selected.size === 0 || launchingKind !== null}
               >
                 <Layers size={16} style={{ marginRight: 6 }} />
-                {launchingKind === "nemo" ? "Launching…" : `Launch Multirack Validation (${selected.size})`}
+                {launchingKind === "nemo" ? "Launching…" : `${tool.name} (${selected.size})`}
               </Button>
-            ) : null}
+            ))}
             <Button
               kind="secondary"
               size="small"
@@ -774,24 +777,18 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
             </Text>
           ) : (
             <Flex gap="2" wrap="wrap">
-              {compatiblePresetIds.has("nccl-2.31.2") ? (
-                <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nccl-2.31.2")}>NCCL 2.31.2 / CUDA 13.3+</Button>
-              ) : null}
-              {compatiblePresetIds.has("llama31-405b-fp8") ? (
-                <Button kind="secondary" size="small" disabled={!llama1024Ready || launchingPreset !== null} onClick={() => setPendingPreset("llama31-405b-fp8")}>Llama 405B FP8 — 1024 GPUs / 50 steps</Button>
-              ) : null}
-              {compatiblePresetIds.has("gpt-oss-cpu") ? (
-                <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("gpt-oss-cpu")}>GPT-OSS CPU — per-node fan-out</Button>
-              ) : null}
-              {compatiblePresetIds.has("exemplar-system-info") ? (
-                <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("exemplar-system-info")}>DGXC system_info</Button>
-              ) : null}
-              {compatiblePresetIds.has("nemo-26.04.01") ? (
-                <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("nemo-26.04.01")}>NeMo 26.04.01</Button>
-              ) : null}
-              {compatiblePresetIds.has("mnubergemm-26.03-v1.17") ? (
-                <Button kind="secondary" size="small" disabled={selected.size === 0 || launchingPreset !== null} onClick={() => setPendingPreset("mnubergemm-26.03-v1.17")}>MNUberGEMM 26.03-v1.17</Button>
-              ) : null}
+              {multirackTools.filter((tool) => tool.launch.kind === "validation-preset").map((tool) => (
+                <Button
+                  key={tool.id}
+                  kind="secondary"
+                  size="small"
+                  title={tool.subtitle || tool.description}
+                  disabled={selected.size === 0 || launchingPreset !== null || presetSelectionReady[tool.launch.preset_id] === false}
+                  onClick={() => setPendingPreset(tool.launch.preset_id)}
+                >
+                  {tool.name}
+                </Button>
+              ))}
             </Flex>
           )}
           {!catalogToolsLoading && compatiblePresetIds.has("llama31-405b-fp8") && selected.size > 0 && !llama1024Ready ? (

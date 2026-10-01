@@ -111,11 +111,11 @@ def test_every_preset_binding_names_a_real_recipe():
     assert bound <= known, f"catalog references presets the engine does not define: {bound - known}"
 
 
-def test_every_audited_preset_is_reachable_from_some_surface():
+@pytest.mark.parametrize("preset_id", [preset.id for preset in validation_presets.PRESETS])
+def test_every_audited_preset_is_reachable_from_some_surface(preset_id):
     """A recipe nobody can press is a recipe that silently stops being run."""
-    known = {preset.id for preset in validation_presets.PRESETS}
-    bound = {t.launch.preset_id for t in _bound() if t.launch.kind == "validation-preset"}
-    assert known - bound == set(), f"presets with no widget: {sorted(known - bound)}"
+    bound = {t.launch.preset_id for t in _bound() if t.launch.kind == "validation-preset" and t.surfaces}
+    assert preset_id in bound, f"preset with no seeded catalog widget: {preset_id}"
 
 
 def test_the_validation_board_reproduces_the_hand_built_tab():

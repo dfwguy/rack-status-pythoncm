@@ -25,21 +25,34 @@ import type { RackRow, RackStatusResponse } from "../types/api";
 const catalogState = vi.hoisted(() => ({
   tools: [] as Array<{
     id: string;
+    name: string;
+    order: number;
     surfaces: string[];
     launch: { kind: string; preset_id: string };
   }>,
+  loading: false,
+  error: null as string | null,
 }));
 
 vi.mock("../hooks/useCatalogTools", () => ({
   useCatalogTools: () => ({
     tools: catalogState.tools,
-    loading: false,
-    error: null,
+    loading: catalogState.loading,
+    error: catalogState.error,
     reload: vi.fn(),
   }),
 }));
 
 function compatibleTools() {
+  const names: Record<string, string> = {
+    "nemo-xrack": "Launch Multirack Validation",
+    "preset-nccl": "NCCL 2.31.2 / CUDA 13.3+",
+    "preset-llama405b": "Llama 405B FP8 — 1024 GPUs / 50 steps",
+    "preset-gpt-oss": "GPT-OSS CPU — per-node fan-out",
+    "preset-exemplar-sysinfo": "DGXC system_info",
+    "preset-nemo": "NeMo 26.04.01",
+    "preset-mnubergemm": "MNUberGEMM 26.03-v1.17",
+  };
   return [
     { id: "nemo-xrack", surfaces: ["multirack"], launch: { kind: "async-job", preset_id: "" } },
     { id: "preset-nccl", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "nccl-2.31.2" } },
@@ -48,7 +61,7 @@ function compatibleTools() {
     { id: "preset-exemplar-sysinfo", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "exemplar-system-info" } },
     { id: "preset-nemo", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "nemo-26.04.01" } },
     { id: "preset-mnubergemm", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "mnubergemm-26.03-v1.17" } },
-  ];
+  ].map((tool, order) => ({ ...tool, name: names[tool.id], order }));
 }
 
 function rack(id: string, nemo: string, opts: Partial<RackRow> = {}): RackRow {
@@ -116,6 +129,8 @@ function makeData(): RackStatusResponse {
 
 beforeEach(() => {
   catalogState.tools = compatibleTools();
+  catalogState.loading = false;
+  catalogState.error = null;
   // The view polls multirack jobs and on-disk results on mount; keep both empty and quiet.
   const emptyBody = JSON.stringify({ ok: true, rows: [], jobs: [] });
   vi.spyOn(globalThis, "fetch").mockResolvedValue({
@@ -163,6 +178,36 @@ function chooseOption(comboboxLabel: string, optionText: string) {
 }
 
 describe("MultirackView rack filters", () => {
+  it("renders a newly catalogued preset and its edited name without frontend registration", () => {
+    catalogState.tools.push({
+      id: "site-preset", name: "Site acceptance recipe", order: 99,
+      surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "site-recipe" },
+    });
+    catalogState.tools[1].name = "Our NCCL recipe";
+    renderView();
+    expect(screen.getByRole("button", { name: "Site acceptance recipe" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Our NCCL recipe" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Select all eligible/ }));
+    expect(screen.getByRole("button", { name: "Site acceptance recipe" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Llama 405B FP8/ })).toBeDisabled();
+  });
+
+  it.each(["loading", "error"])("hides stale catalog actions on catalog %s", (state) => {
+    if (state === "loading") catalogState.loading = true;
+    else catalogState.error = "catalog unavailable";
+    renderView();
+    for (const tool of compatibleTools()) {
+      expect(screen.queryByRole("button", { name: new RegExp(tool.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) })).toBeNull();
+    }
+    if (state === "error") expect(screen.getByText(/Could not load compatible tools/)).toBeInTheDocument();
+  });
+
+  it("does not render a recipe assigned only to another surface", () => {
+    catalogState.tools[1].surfaces = ["rackDetail.validation"];
+    renderView();
+    expect(screen.queryByRole("button", { name: "NCCL 2.31.2 / CUDA 13.3+" })).toBeNull();
+  });
+
   it("hides NeMo launch actions when the catalog marks them incompatible", async () => {
     catalogState.tools = compatibleTools().filter(
       (tool) => tool.id !== "nemo-xrack" && tool.id !== "preset-nemo",

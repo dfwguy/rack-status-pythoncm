@@ -58,6 +58,7 @@ import validation_presets
 from activity_hydration import _update_validation_activity
 from catalog import context as catalog_context
 from catalog import models
+from catalog.store import TABLE_TOOLS, get_repo
 from config_env import _eget, _eget_int, _env_int, _job_env_int, _subprocess_env
 from core import is_valid_node_hostname
 from core import rpath as _rpath
@@ -664,23 +665,34 @@ def _validation_node_eligibility(nodes: list[str]) -> tuple[dict[str, str], list
     return ({node: states.get(node.casefold(), "missing") for node in nodes}, reasons)
 
 
-def _catalog_tool_compatibility_error(tool_id: str) -> tuple[object, int] | None:
-    """Return a launch refusal when the active platform cannot run a catalog tool."""
-    if catalog_context.tool_for_cluster(tool_id) is not None:
-        return None
+def _incompatible_platform_error(label: str, **extra: Any) -> tuple[object, int]:
+    """Describe an actual platform mismatch consistently across launch paths."""
     _project, _cluster, platform = catalog_context.resolve()
     platform_id = platform.id if platform is not None else ""
     platform_name = platform.name if platform is not None else "the active platform"
     return (
         jsonify({
             "ok": False,
-            "error": f"{tool_id} is not compatible with {platform_name}",
+            "error": f"{label} is not compatible with {platform_name}",
             "reason": "incompatible_platform",
             "platform_id": platform_id,
-            "tool_id": tool_id,
+            **extra,
         }),
         409,
     )
+
+
+def _catalog_tool_compatibility_error(tool_id: str) -> tuple[object, int] | None:
+    """Distinguish an absent catalog tool from a platform mismatch."""
+    raw = get_repo().get(TABLE_TOOLS, tool_id)
+    if raw is None:
+        return jsonify({
+            "ok": False, "error": f"Unknown catalog tool {tool_id!r}",
+            "reason": "unknown_tool", "tool_id": tool_id,
+        }), 404
+    if catalog_context.tool_for_cluster(tool_id) is not None:
+        return None
+    return _incompatible_platform_error(models.Tool.from_dict(raw).name, tool_id=tool_id)
 
 
 def _validation_preset_compatibility_error(body: dict) -> tuple[object, int] | None:
@@ -693,19 +705,14 @@ def _validation_preset_compatibility_error(body: dict) -> tuple[object, int] | N
         tool = models.Tool.from_dict(raw)
         if tool.launch.kind == "validation-preset" and tool.launch.preset_id == preset.id:
             return None
-    _project, _cluster, platform = catalog_context.resolve()
-    platform_id = platform.id if platform is not None else ""
-    platform_name = platform.name if platform is not None else "the active platform"
-    return (
-        jsonify({
-            "ok": False,
-            "error": f"{preset.label} is not compatible with {platform_name}",
-            "reason": "incompatible_platform",
-            "platform_id": platform_id,
-            "preset_id": preset.id,
-        }),
-        409,
-    )
+    bound_tools = (models.Tool.from_dict(raw) for raw in get_repo().list(TABLE_TOOLS))
+    if not any(tool.launch.kind == "validation-preset" and tool.launch.preset_id == preset.id
+               for tool in bound_tools):
+        return jsonify({
+            "ok": False, "error": f"No catalog tool is bound to {preset.label}",
+            "reason": "missing_preset_tool", "preset_id": preset.id,
+        }), 409
+    return _incompatible_platform_error(preset.label, preset_id=preset.id)
 
 
 def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
