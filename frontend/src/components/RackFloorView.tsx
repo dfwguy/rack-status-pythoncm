@@ -16,6 +16,7 @@ import { Button, Text } from "@nvidia/foundations-react-core";
 import type { RackRow, RackHierarchy, StatusScalableUnit } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 import {
+  barColumns,
   buildFloorLayout,
   buildScalableUnitLayout,
   floorLayoutFromHierarchy,
@@ -61,17 +62,20 @@ function TrayGrid({ rack }: { rack: FloorRack }) {
   const { trays, downCount, total } = rack.health;
 
   if (trays.length === 0) {
-    // No per-tray detail — proportional bar from sinfo counts.
+    // No per-tray detail — proportional count from sinfo (up vs down), wrapped into rows instead
+    // of one long thin strip. Rows of 8 when the node count is a multiple of 8 (the common GPU
+    // rack, e.g. 16 -> 2x8); otherwise ~2 balanced rows capped at 9 wide (NC's 18 -> 2x9). The
+    // cells are a count, not per-tray state, so they fill up-then-down rather than by position.
     const cells = total > 0 ? total : 1;
     const downN = Math.min(downCount, cells);
+    const cols = barColumns(cells);
     return (
-      <Box sx={{ display: "flex", gap: "1px", mt: 0.5 }}>
+      <Box sx={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: "2px", mt: 0.5 }}>
         {Array.from({ length: cells }).map((_, i) => (
           <Box
             key={i}
             sx={{
-              flex: 1,
-              height: 6,
+              height: 8,
               borderRadius: "1px",
               backgroundColor: i < cells - downN ? TRAY_UP : TRAY_DOWN,
             }}

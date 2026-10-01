@@ -10,7 +10,7 @@
  * its affiliates is strictly prohibited.
  */
 import { describe, expect, it } from "vitest";
-import { buildFloorLayout, buildScalableUnitLayout, floorLayoutFromHierarchy, rackHealth } from "./rackTopology";
+import { barColumns, buildFloorLayout, buildScalableUnitLayout, floorLayoutFromHierarchy, rackHealth } from "./rackTopology";
 import type { RackRow, RackHierarchy } from "../types/api";
 
 function rackRow(rack: string): RackRow {
@@ -181,5 +181,24 @@ describe("rackHealth — provider (BCM/pythoncm) node states", () => {
     expect(h.total).toBe(18);
     expect(h.upCount).toBe(18);
     expect(h.health).toBe("healthy");
+  });
+});
+
+describe("barColumns — node-count bar wraps into pleasant rows", () => {
+  it("uses rows of 8 for multiples of 8", () => {
+    expect(barColumns(8)).toBe(8);   // 1x8
+    expect(barColumns(16)).toBe(8);  // 2x8 — the familiar look
+    expect(barColumns(24)).toBe(8);  // 3x8
+    expect(barColumns(72)).toBe(8);  // 9x8
+  });
+
+  it("wraps an off-multiple count into ~2 rows capped at 9 wide", () => {
+    expect(barColumns(18)).toBe(9);  // NC's GB300 rack -> 2x9, not a thin 18-strip
+    expect(barColumns(14)).toBe(7);  // 2x7
+  });
+
+  it("never returns less than 1 column", () => {
+    expect(barColumns(1)).toBe(1);
+    expect(barColumns(0)).toBe(1);
   });
 });

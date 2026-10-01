@@ -283,6 +283,18 @@ export function rackHealth(row: RackRow): RackHealthInfo {
   return { health, total, upCount: total - bad, downCount: bad, trays: [] };
 }
 
+/**
+ * Columns for the proportional node bar (the no-per-tray-detail case). Rows of 8 when the count is
+ * a multiple of 8 (the common GPU rack — 16 -> 2x8, 24 -> 3x8); otherwise ~2 balanced rows capped
+ * at 9 wide, so an off-multiple count wraps tidily instead of becoming one long thin strip
+ * (NC's 18 -> 2x9).
+ */
+export function barColumns(cells: number): number {
+  if (cells <= 0) return 1;
+  if (cells % 8 === 0) return 8;
+  return Math.min(9, Math.max(1, Math.ceil(cells / 2)));
+}
+
 // ---------------------------------------------------------------------------
 // Grouping
 // ---------------------------------------------------------------------------
