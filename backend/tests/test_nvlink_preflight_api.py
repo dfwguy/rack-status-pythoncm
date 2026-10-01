@@ -28,7 +28,7 @@ import app as app_module
 import job_registry
 from api import fabric_ops
 from catalog import seed
-from catalog.store import TinyDBRepo, TABLE_PLATFORMS
+from catalog.store import TABLE_PLATFORMS, TinyDBRepo
 
 READY = """\
 n01: ### nvlink_preflight n01 (quick=0) ###
