@@ -28,7 +28,9 @@ vi.mock("../../context/RackCommandContext", () => ({
     openText: vi.fn(),
   }),
 }));
-vi.mock("./NvlinkPreflightPanel", () => ({ NvlinkPreflightPanel: () => null }));
+vi.mock("./NvlinkPreflightPanel", () => ({
+  NvlinkPreflightPanel: () => <div>NVLink readiness panel</div>,
+}));
 vi.mock("./ValidationActivitiesTable", () => ({ ValidationActivitiesTable: () => null }));
 vi.mock("../../context/ActiveClusterContext", () => ({
   useActiveCluster: () => ({ activeCluster: { id: "test-cluster" }, version: 0 }),
@@ -123,6 +125,33 @@ function renderTab(nodes: string[]) {
 }
 
 describe("ValidationTab pinned recipes", () => {
+  it("hides NVLink preflight when the cluster catalog excludes it", () => {
+    renderTab(["d01-01"]);
+    expect(screen.queryByText("NVLink readiness panel")).not.toBeInTheDocument();
+    expect(screen.queryByText("Preflight")).not.toBeInTheDocument();
+  });
+
+  it("shows NVLink preflight only after a compatible catalog loads", () => {
+    const compatibleActions = [fromTool(preset("nvlink-preflight", { surfaces: [] }))];
+    const state = {
+      actions: compatibleActions, loading: false, error: null, reload: vi.fn(),
+    };
+    boardActionsMock.mockReturnValue(state);
+    const view = renderTab(["d01-01"]);
+    expect(screen.getByText("NVLink readiness panel")).toBeInTheDocument();
+
+    for (const next of [
+      { ...state, loading: true },
+      { ...state, error: "Catalog unavailable" },
+      { ...state, actions: [] },
+    ]) {
+      boardActionsMock.mockReturnValue(next);
+      view.rerender(<ValidationTab rack="d01" selectedNodes={new Set(["d01-01"])} disabled={false} />);
+      expect(screen.queryByText("NVLink readiness panel")).not.toBeInTheDocument();
+      expect(screen.queryByText("Preflight")).not.toBeInTheDocument();
+    }
+  });
+
   it("shows the pinned versions from the catalog, not from component source", () => {
     renderTab(["d01-01"]);
     expect(screen.getByText("NeMo 26.04.01 · 50 steps")).toBeInTheDocument();

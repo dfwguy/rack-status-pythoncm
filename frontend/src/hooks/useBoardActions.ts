@@ -45,6 +45,10 @@ export function useBoardActions(): BoardActionsState {
   const [error, setError] = useState<string | null>(null);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  const [loadedContext, setLoadedContext] = useState<{
+    clusterId: string | undefined;
+    version: number;
+  } | null>(null);
 
   useEffect(() => {
     // The cluster can change while a fetch is in flight; a late response for the previous
@@ -54,6 +58,7 @@ export function useBoardActions(): BoardActionsState {
     Promise.allSettled([listTools(clusterId), listWorkflows()])
       .then(([toolsResult, workflowsResult]) => {
         if (!live) return;
+        setLoadedContext({ clusterId, version });
         const tools = toolsResult.status === "fulfilled" ? toolsResult.value : [];
         const workflows = workflowsResult.status === "fulfilled" ? workflowsResult.value : [];
         setActions(buildActions(tools, workflows));
@@ -73,7 +78,15 @@ export function useBoardActions(): BoardActionsState {
   }, [clusterId, version, nonce]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
-  return { actions, loading, error, workflowError, reload };
+  // Effects run after render: never expose the previous cluster's actions during a switch.
+  const current = loadedContext?.clusterId === clusterId && loadedContext?.version === version;
+  return {
+    actions: current ? actions : [],
+    loading: !current || loading,
+    error: current ? error : null,
+    workflowError: current ? workflowError : null,
+    reload,
+  };
 }
 
 function describe(reason: unknown): string {

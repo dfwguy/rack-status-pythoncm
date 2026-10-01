@@ -27,6 +27,8 @@ os.environ.setdefault("RACK_EXEC_MODE", "local")
 import app as app_module
 import job_registry
 from api import fabric_ops
+from catalog import seed
+from catalog.store import TinyDBRepo, TABLE_PLATFORMS
 
 READY = """\
 n01: ### nvlink_preflight n01 (quick=0) ###
@@ -232,6 +234,38 @@ def test_disabled_by_env(client, stub_pdsh, monkeypatch):
     monkeypatch.setenv("RACK_NVLINK_PREFLIGHT_DISABLED", "1")
     r = client.post("/api/nvlink-preflight-async", json={"rack": "p5-r01", "target": "n01"})
     assert r.status_code == 403
+
+
+@pytest.mark.parametrize("product_line,compatible", [("rtx6000", False), ("gb300", True)])
+def test_platform_compatibility_before_execution(client, stub_pdsh, monkeypatch, tmp_path, product_line, compatible):
+    repo = TinyDBRepo(tmp_path / "catalog.json")
+    seed.migrate(repo, env={"RACK_CLUSTER_PRODUCT_LINE": product_line})
+    tools_for_cluster = fabric_ops.catalog_context.tools_for_cluster
+    monkeypatch.setattr(fabric_ops.catalog_context, "tools_for_cluster", lambda: tools_for_cluster(repo=repo))
+    stub_pdsh["out"] = READY
+    monkeypatch.setattr(fabric_ops, "validation_target_for_rack", lambda *_args: "n01")
+    response = client.post("/api/nvlink-preflight-async", json={"target": "n01", "quick": True})
+    if compatible:
+        assert response.status_code == 200
+        assert response.get_json()["job_id"]
+        assert "cmd" in stub_pdsh
+    else:
+        assert response.status_code == 400
+        assert response.get_json()["reason"] == "incompatible_platform"
+        assert "cmd" not in stub_pdsh
+        assert not job_registry._reset_jobs
+
+
+def test_unknown_platform_refuses_preflight(client, stub_pdsh, monkeypatch, tmp_path):
+    repo = TinyDBRepo(tmp_path / "catalog.json")
+    seed.migrate(repo, env={"RACK_CLUSTER_PRODUCT_LINE": "gb300"})
+    repo.delete(TABLE_PLATFORMS, "gb300-nvl72")
+    tools_for_cluster = fabric_ops.catalog_context.tools_for_cluster
+    monkeypatch.setattr(fabric_ops.catalog_context, "tools_for_cluster", lambda: tools_for_cluster(repo=repo))
+    response = client.post("/api/nvlink-preflight-async", json={"target": "n01"})
+    assert response.status_code == 400
+    assert response.get_json()["reason"] == "incompatible_platform"
+    assert "cmd" not in stub_pdsh
 
 
 def test_a_target_with_shell_metacharacters_is_refused(client, stub_pdsh):

@@ -87,6 +87,8 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
   const { actions, loading: toolsLoading, error: toolsError, reload: reloadActions } =
     useBoardActions();
   const nodeCount = selectedNodes.size;
+  const showNvlinkPreflight = !toolsLoading && !toolsError &&
+    actions.some((action) => action.kind === "tool" && action.id === "nvlink-preflight");
   const [pendingLaunch, setPendingLaunch] = useState<PendingLaunch | null>(null);
   const [pendingPreset, setPendingPreset] = useState<PendingPreset | null>(null);
   const [workflowRunId, setWorkflowRunId] = useState<string | null>(null);
@@ -189,18 +191,20 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
       {/* First, above the stages: the cheap gate that decides whether the expensive ones are
           worth starting. A wedged NVSwitch route makes NCCL/NeMo hang rather than fail. */}
-      <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)", marginTop: 8 }}>
-        Preflight
-      </Text>
-
-      <NvlinkPreflightPanel
-        rack={rack}
-        naming={naming}
-        selectedNodes={selectedNodes}
-        disabled={disabled}
-      />
-
-      <Divider />
+      {showNvlinkPreflight ? (
+        <>
+          <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)", marginTop: 8 }}>
+            Preflight
+          </Text>
+          <NvlinkPreflightPanel
+            rack={rack}
+            naming={naming}
+            selectedNodes={selectedNodes}
+            disabled={disabled}
+          />
+          <Divider />
+        </>
+      ) : null}
 
       <Text kind="body/bold/sm" style={{ color: "var(--text-color-secondary)" }}>
         Validation Actions

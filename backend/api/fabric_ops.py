@@ -43,6 +43,7 @@ import host_exec
 import nvlink_preflight
 import script_tree
 from audit.actions import action
+from catalog import context as catalog_context
 from config_env import _eget, _env_int, _job_env_int, _subprocess_env
 from core import rpath as _rpath
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
@@ -976,6 +977,12 @@ def api_nvlink_preflight_async():
     """
     if os.environ.get("RACK_NVLINK_PREFLIGHT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return jsonify({"ok": False, "error": "NVLink preflight disabled (RACK_NVLINK_PREFLIGHT_DISABLED)"}), 403
+    if not any(tool["id"] == "nvlink-preflight" for tool in catalog_context.tools_for_cluster()):
+        return jsonify({
+            "ok": False,
+            "reason": "incompatible_platform",
+            "error": "NVLink preflight is unavailable for the active cluster's platform.",
+        }), 400
     body = request.get_json(silent=True) or {}
     rack = ""
     rack_raw = body.get("rack")
