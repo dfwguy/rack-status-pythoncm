@@ -15,7 +15,7 @@ duplicate rule content here** — edit the `.mdc` files instead.
 
 ## Start here if you are resuming work on the Nscale TX OVA
 
-**[docs/HANDOVER_2026-08-14.md](docs/HANDOVER_2026-08-14.md)** — endpoints moved out of `app.py`
+**[docs/handovers/HANDOVER_2026-08-14.md](docs/handovers/HANDOVER_2026-08-14.md)** — endpoints moved out of `app.py`
 into `backend/api/`, and nine files that were uncommitted on the OVA were harvested into
 `694ff28`. Read it before editing `backend/app.py` or discarding anything in that working tree.
 

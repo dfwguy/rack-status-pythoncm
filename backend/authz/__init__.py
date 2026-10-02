@@ -11,7 +11,7 @@
 """Authorization: the seam now, the policy engine later.
 
 **This package exists to be replaced from the inside.** Phase 3 wires a real evaluator — the
-pydantic-schema engine in `docs/PHASE3_POLICY_ENGINE_SPIKE.md`, or Cedar — and the point of landing
+pydantic-schema engine in `docs/auth/PHASE3_POLICY_ENGINE_SPIKE.md`, or Cedar — and the point of landing
 the interface first is that doing so changes no call site. Every route asks the same question
 through the same function today as it will then; only the answer gets smarter.
 
@@ -75,7 +75,7 @@ class Decision:
 
     Frozen because a decision that can be edited after the fact is not evidence. `reason` is written
     for a human reading a refusal, so it must never name a resource the caller was not already
-    allowed to know exists — see the existence-oracle note in `AUTH_PROGRAMME_SCOPE.md`.
+    allowed to know exists — see the existence-oracle note in `docs/auth/AUTH_PROGRAMME_SCOPE.md`.
     """
 
     allowed: bool

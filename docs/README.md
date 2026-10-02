@@ -31,13 +31,16 @@ accumulating pages reachable only by search.
 
 ## The migration boundary
 
-This repo has ~44 hand-written `SCREAMING_CASE.md` files at `docs/` root that predate the site.
-They are **excluded** by the `[A-Z]*.md` pattern in `conf.py`, not listed in `_toc.yml`, and not
-built.
+This repo has ~44 hand-written `SCREAMING_CASE.md` files that predate the site. They began at
+`docs/` root and are now filed into topic subfolders — `clusters/` (customer/site runbooks and
+RCAs), `networking/` (NCCL/fabric), `auth/`, `releases/`, `handovers/`, `integrations/`, `dsx/`,
+and per-feature folders — to keep the root readable. They are **excluded** by the `[A-Z]*.md` and
+`**/[A-Z]*.md` patterns in `conf.py` (the second keeps them excluded at any depth after the move),
+not listed in `_toc.yml`, and not built.
 
 That is a deliberate staging boundary, not neglect: converting all of them at once would be a
 large unreviewable change, and several are incident write-ups and cluster runbooks that may
-belong in `explanation/` or nowhere. To migrate one:
+belong in `explanation/` or nowhere. To migrate one (from wherever it now lives):
 
 1. Decide its Diátaxis mode — apply the compass in `.cursor/rules/docs-diataxis.mdc`, not the
    filename. Most of the existing files are `explanation` or `reference`; a few are genuinely

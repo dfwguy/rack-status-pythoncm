@@ -65,7 +65,7 @@ password-only, an agent can never open a fresh session — the human runs
 container on the OVA at `:5056`, reached via a local **5156** forward (`~/Documents/code/ns-tun.sh`).
 Reached via device2 — see the jumphost map above; the devices are **not** interchangeable.
 `Connection closed by UNKNOWN port 65535` means the jumphost is offline, not a cert problem.
-Full detail: **[docs/NSCALE_TX_DEPLOYMENT.md](../../docs/NSCALE_TX_DEPLOYMENT.md)**.
+Full detail: **[docs/clusters/NSCALE_TX_DEPLOYMENT.md](../../docs/clusters/NSCALE_TX_DEPLOYMENT.md)**.
 
 **Nscale NC** — new as of 2026-08-25, and **not the TX kit**. Two hops, key auth throughout:
 Teleport cert to `mobilekit-p-phy-device3.nscale.teleport.sh`, then key `id_nscale_nc` to

@@ -24,10 +24,12 @@ Two things are specific to this repo:
 * **The legacy flat docs are excluded.** ``external_toc_exclude_missing = False`` makes a page
   that exists but appears in no toc a *build failure*, which is the check that stops a site
   accumulating pages reachable only by search. This repo still has ~44 hand-written
-  ``SCREAMING_CASE.md`` files at ``docs/`` root that predate the site, so they are excluded by
-  pattern until they are migrated. The boundary is deliberate and documented in ``README.md``:
-  anything in ``index.md`` or one of the four mode directories is part of the site; a root-level
-  uppercase file is not yet.
+  ``SCREAMING_CASE.md`` files that predate the site. They were originally all at ``docs/`` root;
+  they have since been filed into topic subfolders (``clusters/``, ``networking/``, ``auth/``,
+  ``releases/``, ``handovers/``, ``integrations/``, ``dsx/``, …), so both ``[A-Z]*.md`` and
+  ``**/[A-Z]*.md`` exclude them until they are migrated. The boundary is deliberate and documented
+  in ``README.md``: anything in ``index.md`` or one of the four mode directories is part of the
+  site; a ``SCREAMING_CASE.md`` file — at root or in a topic subfolder — is not yet.
 """
 
 from __future__ import annotations
@@ -106,7 +108,10 @@ exclude_patterns = [
     "README.md",
     # The pre-site flat docs. See the module docstring: these are excluded rather than listed,
     # so adding a page to the site means putting it in a mode directory and in `_toc.yml`.
+    # `*` does not cross `/`, so the second pattern keeps the same SCREAMING_CASE.md files
+    # excluded after they were filed into topic subfolders (clusters/, networking/, auth/, …).
     "[A-Z]*.md",
+    "**/[A-Z]*.md",
     "screenshots",
     # Agent-authored plan/spec artifacts. Internal working notes, not reader-facing pages.
     "superpowers",

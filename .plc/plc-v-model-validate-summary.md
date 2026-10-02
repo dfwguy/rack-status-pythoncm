@@ -99,7 +99,7 @@ beside REQ-30's TLS mandate for the inbound surface.
 The 121 changed files on this branch are traceable to requirements. The three added today map
 directly: `bin/check-coverage-floor.py` and `backend/tests/test_coverage_floor_gate.py` to REQ-45,
 `backend/requirements-dev.txt` to REQ-42's spirit (reproducing CI's tree), and the
-`docs/AUDIT_PHASE1_VERIFICATION.md` sign-off table to REQ-47. No untraced behaviour found. One
+`docs/auth/AUDIT_PHASE1_VERIFICATION.md` sign-off table to REQ-47. No untraced behaviour found. One
 advisory note: REQ-45 and REQ-47 were added to the SRD today and are not yet in the SADD — recorded
 as findings B-4 and B-5 in the requirements report rather than duplicated here.
 

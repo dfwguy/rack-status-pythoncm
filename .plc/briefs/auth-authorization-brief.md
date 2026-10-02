@@ -1,7 +1,7 @@
 # PLC Feature Brief — auth-authorization (Phase 3)
 
 **Status:** requirements draft, 2026-09-02. Not yet reviewed.
-**Programme:** `docs/AUTH_PROGRAMME_SCOPE.md` — Phase 3, the last phase.
+**Programme:** `docs/auth/AUTH_PROGRAMME_SCOPE.md` — Phase 3, the last phase.
 **Jira:** [NVRACKSTAT-58](https://jirasw.nvidia.com/browse/NVRACKSTAT-58).
 **Directed by:** feature lead, 2026-09-02 — resource resolver first, full V-model, node grants explicit.
 

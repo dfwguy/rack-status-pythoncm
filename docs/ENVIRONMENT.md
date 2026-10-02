@@ -389,7 +389,7 @@ observe a connection. The only mechanism that genuinely binds an identity to a c
 **mutual TLS**, where both ends present a certificate from a trusted CA. Phase 0.5 already ships the
 CA, the certificate tooling and a TLS 1.2 floor, so client certificates are an increment rather than
 a new capability — and short-lived client certs compose with the revocation design in
-`PHASE3_POLICY_ENGINE_SPIKE.md` §5b. Until then, read `src_ip` as "where the connection appeared to
+`auth/PHASE3_POLICY_ENGINE_SPIKE.md` §5b. Until then, read `src_ip` as "where the connection appeared to
 come from", never as "who this was".
 
 **On source addresses in the audit trail.** An audit event records the TCP peer address it

@@ -1,7 +1,7 @@
 # PLC Feature Brief — auth-oidc-provider (Phase 2.5)
 
 **Status:** requirements draft, 2026-09-01. Not yet reviewed.
-**Programme:** `docs/AUTH_PROGRAMME_SCOPE.md` — Phase 2.5, between identity (Phase 2) and
+**Programme:** `docs/auth/AUTH_PROGRAMME_SCOPE.md` — Phase 2.5, between identity (Phase 2) and
 authorization (Phase 3).
 **Directed by:** feature lead, 2026-09-01 — "full OP", sequenced after Phase 2.
 **Jira:** [NVRACKSTAT-57](https://jirasw.nvidia.com/browse/NVRACKSTAT-57), under epic [NVRACKSTAT-53](https://jirasw.nvidia.com/browse/NVRACKSTAT-53).

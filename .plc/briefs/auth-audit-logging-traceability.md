@@ -172,8 +172,8 @@ pytest run, so their evidence is a committed checklist rather than a node id:
 
 | TC | Method | Evidence |
 |---|---|---|
-| TC-39 | inspection — the feature diff carries no hunk touching a pre-existing `logging.getLogger` call site (NFR-6) | `docs/AUDIT_PHASE1_VERIFICATION.md` |
-| TC-40 | demonstration — audit history survived a container recreate on the `rack-data` named volume (FR-11a / AC-10f) | `docs/AUDIT_PHASE1_VERIFICATION.md` |
+| TC-39 | inspection — the feature diff carries no hunk touching a pre-existing `logging.getLogger` call site (NFR-6) | `docs/auth/AUDIT_PHASE1_VERIFICATION.md` |
+| TC-40 | demonstration — audit history survived a container recreate on the `rack-data` named volume (FR-11a / AC-10f) | `docs/auth/AUDIT_PHASE1_VERIFICATION.md` |
 
 NFR-6 therefore shows **no executed test** above and that is correct, not a gap: an
 inspection has no test to execute.

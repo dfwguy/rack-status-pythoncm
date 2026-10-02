@@ -14,7 +14,7 @@
 | Feature brief path | `.plc/briefs/auth-identity-brief.md` |
 | Test plan path | *(not yet authored)* |
 | Predecessor | `.plc/briefs/auth-audit-logging-brief.md` (Phase 1 — merged to `main` 2026-08-25) |
-| Programme scope | `docs/AUTH_PROGRAMME_SCOPE.md` |
+| Programme scope | `docs/auth/AUTH_PROGRAMME_SCOPE.md` |
 | SRD source | `.plc/requirements/SWE-PLC-L1-002-BasicPLC-SRD-NVIS-RACK-STATUS.md` (REQ-27 authenticated access) |
 | Jira Ticket | *(to be created)* |
 
@@ -86,7 +86,7 @@ release-gate evidence.
 | FR-5c | Every token shall carry its **type** (`id`, `access`, `refresh`), and verification shall require the caller to state the type it expects, refusing any other. | **gap found during implementation 2026-08-25** — FR-5 named the id/access split without requiring it be *enforced* | JWT libraries have no notion of token type, so nothing distinguishes our three tokens by default. The refresh token lives 48x longer than the access token, so presenting one as the other would authorise requests for half a day; the reverse would let an access token mint fresh ones forever. The expected type therefore has **no default parameter** — type confusion should need a wrong argument, not an omitted one |
 | FR-6a | If no revocation check is registered, the product shall refuse **every** token rather than treat the absence as "nothing is revoked". | **design decision during implementation 2026-08-25** | fail-closed, because FR-6's invariant is *grants may be stale, denials may not*. Phase 1 supplies the precedent directly: the config materialise hook, when unregistered, produced wrong values on some clusters and an error on none, and needed `test_config_materialize_hook.py` purely to assert the wire existed. Here the same absence is a loud total refusal, caught by the first request rather than by an incident. Minting deliberately stays available so first-boot bootstrap (FR-10) can run before the revocation store is wired |
 | FR-5b | Access tokens shall be short-lived and renewable without re-entering a password, and the renewal path shall itself be revocable. | FR-6 depends on it | short TTL is what bounds the staleness FR-6 permits |
-| FR-6 | Before honouring any token-derived grant, the product shall consult a revocation record for the subject. A revocation shall take effect within **10 seconds**; a withdrawn *grant* may lag by up to the access-token lifetime. | scope doc; `docs/PHASE3_POLICY_ENGINE_SPIKE.md` §5b | "within seconds" was unquantified and therefore untestable. 10 s is the stated bound; it also caps any cache TTL on the revocation record. The invariant is *grants may be stale, denials may not* — a stateless JWT cannot be withdrawn before expiry, so this check is what makes JWT acceptable |
+| FR-6 | Before honouring any token-derived grant, the product shall consult a revocation record for the subject. A revocation shall take effect within **10 seconds**; a withdrawn *grant* may lag by up to the access-token lifetime. | scope doc; `docs/auth/PHASE3_POLICY_ENGINE_SPIKE.md` §5b | "within seconds" was unquantified and therefore untestable. 10 s is the stated bound; it also caps any cache TTL on the revocation record. The invariant is *grants may be stale, denials may not* — a stateless JWT cannot be withdrawn before expiry, so this check is what makes JWT acceptable |
 | FR-7 | The product shall support **OIDC federation** as an alternative authentication method, configurable per deployment and disabled by default, validating the provider's ID token before establishing a session. | user request; feature-lead decision 2026-08-25 (in Phase 2, not deferred) | absence of an IdP must not affect local login (assumption 6) **DEFERRED to Phase 2.6, 2026-09-08.** `identity/oidc.py` is the OIDC *Provider* — it mints for local accounts. Consuming another issuer's tokens shares almost no code with it, and on a filename scan the two are indistinguishable, which is how this sat inside a delivered phase with nothing implementing it. `AUTH_FEDERATED` exists as a constant nothing resolves |
 | FR-7a | A federated subject shall be resolved to a local user record, so that groups, policy attachment and the audit trail work identically for local and federated principals. | design necessity | otherwise Phase 3 has two principal models **DEFERRED to Phase 2.6** |
 | FR-8 | Groups shall be **flat**: a group shall contain users and shall not contain another group. | feature-lead decision 2026-08-25 | removes transitive resolution and the cycle guard it would need; revisit only with a stated need |
@@ -656,7 +656,7 @@ broken login form.
   and `PoliciesView` belongs there because a UI editing documents nothing evaluates invites false
   confidence.
 - **Per-user cluster credentials.** Per-user SSH certificates and the removal of the `os.environ`
-  materialisation are `docs/MULTI_USER_MULTI_CLUSTER_PLAN.md`, whose step 1 is blocked on this phase.
+  materialisation are `docs/multi-cluster/MULTI_USER_MULTI_CLUSTER_PLAN.md`, whose step 1 is blocked on this phase.
 - **An audit trail viewer.** Recorded as a Phase 1 non-goal for a reason that still holds:
   authentication alone is insufficient, because without authorization every operator could read
   every other operator's actions.

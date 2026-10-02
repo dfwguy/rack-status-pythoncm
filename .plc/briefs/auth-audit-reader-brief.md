@@ -1,7 +1,7 @@
 # PLC Feature Brief — audit trail reader
 
 **Status:** requirements draft, 2026-09-10. Not yet reviewed.
-**Programme:** `docs/AUTH_PROGRAMME_SCOPE.md` — the deferred work item from Phase 1, unblocked by Phase 3.
+**Programme:** `docs/auth/AUTH_PROGRAMME_SCOPE.md` — the deferred work item from Phase 1, unblocked by Phase 3.
 **Jira:** *(ticket to be raised)*.
 **Directed by:** feature lead, 2026-09-10 — chosen as the next foundation after the Phase 3 close.
 

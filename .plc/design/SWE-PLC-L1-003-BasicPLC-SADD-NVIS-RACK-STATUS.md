@@ -83,8 +83,8 @@ As per the SRD. Design-specific additions:
 
 `.cursor/rules/core-designs.mdc`; `docs/EXECUTION_ARCHITECTURE.md`;
 `docs/PARSING_RESULTS_ARCHITECTURE.md`; `docs/RACKSTATUS_USER_GUIDE.md`;
-`.plc/briefs/auth-audit-logging-brief.md`; `docs/AUTH_PROGRAMME_SCOPE.md`;
-`docs/MULTI_USER_MULTI_CLUSTER_PLAN.md`.
+`.plc/briefs/auth-audit-logging-brief.md`; `docs/auth/AUTH_PROGRAMME_SCOPE.md`;
+`docs/multi-cluster/MULTI_USER_MULTI_CLUSTER_PLAN.md`.
 
 ---
 
@@ -309,7 +309,7 @@ above is the contract as this side understands it; the writer owns its own valid
 ### Identity design (`backend/identity/`) — FR-1..FR-6, FR-15
 
 Six modules, each owning one concern, built in dependency order. This is the Phase 2 half of the
-auth programme (`docs/AUTH_PROGRAMME_SCOPE.md`); Phase 3 adds policy evaluation on top and is not
+auth programme (`docs/auth/AUTH_PROGRAMME_SCOPE.md`); Phase 3 adds policy evaluation on top and is not
 described here.
 
 | Module | Owns |
@@ -745,7 +745,7 @@ Reconstructed from the shipped tree; every component named above exists in the s
 1. **The one remaining `import app` cycle.** Recorded as debt in `core-designs.mdc`
    (`agent/registrations.py`). Is unwinding it a committed design intent to state here, or accepted
    permanently?
-2. **`pythoncm` migration.** `docs/MULTI_USER_MULTI_CLUSTER_PLAN.md` names moving read traffic from
+2. **`pythoncm` migration.** `docs/multi-cluster/MULTI_USER_MULTI_CLUSTER_PLAN.md` names moving read traffic from
    `cmsh` to `pythoncm` to reduce head-node load, while the README lists PythonCM as parked. Which
    is current — is the migration intended, and if so is it a design commitment?
 3. **Frontend performance and accessibility design.** With the frontend now in scope, the absence of

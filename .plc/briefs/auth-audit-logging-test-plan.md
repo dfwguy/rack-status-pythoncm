@@ -300,7 +300,7 @@ deleted would have been worse than no test.
 
 **38 of 40 test cases now resolve to executing tests.** The two that do not are TC-39 (inspection)
 and TC-40 (demonstration), which verify by method rather than by pytest and whose evidence is the
-committed checklist at `docs/AUDIT_PHASE1_VERIFICATION.md`.
+committed checklist at `docs/auth/AUDIT_PHASE1_VERIFICATION.md`.
 
 ## Out-of-Scope Verification
 

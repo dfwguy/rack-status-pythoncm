@@ -740,7 +740,7 @@ permissions, parser version, and timestamps. Never translate empty into zero/pas
 ## 14. Release and deployment verification
 
 This section is for maintainers. Follow the site deployment MOP and
-`docs/NSCALE_TX_DEPLOYMENT.md`; do not improvise on production.
+`docs/clusters/NSCALE_TX_DEPLOYMENT.md`; do not improvise on production.
 
 ### Source and persistent state
 
@@ -875,5 +875,5 @@ history before sharing screenshots.
 | Validation activity | Durable record of a launched validation and its results/log identity |
 
 For environment-variable details use `docs/ENVIRONMENT.md`. For production deployment
-landmines and recovery use `docs/NSCALE_TX_DEPLOYMENT.md`. For parser internals use
+landmines and recovery use `docs/clusters/NSCALE_TX_DEPLOYMENT.md`. For parser internals use
 `docs/PARSING_RESULTS_ARCHITECTURE.md`.

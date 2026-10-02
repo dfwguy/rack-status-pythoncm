@@ -10,7 +10,7 @@
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
 """Local identity: users, groups, membership, and the principals they render as.
 
-Phase 2 of the auth programme (``docs/AUTH_PROGRAMME_SCOPE.md``). Requirements and design live in
+Phase 2 of the auth programme (``docs/auth/AUTH_PROGRAMME_SCOPE.md``). Requirements and design live in
 ``.plc/briefs/auth-identity-brief.md``; the resource taxonomy authorization will be written against
 is ``docs/RESOURCE_MODEL.md``.
 

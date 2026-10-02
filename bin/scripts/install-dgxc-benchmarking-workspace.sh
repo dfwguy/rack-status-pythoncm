@@ -26,7 +26,7 @@
 #                        downloads the NeMo container via SLURM, and installs the
 #                        selected workloads to LLMB_INSTALL. Long-running (can be hours).
 #
-# Reference: docs/VR200_GBx00_FastTrack_Validation_MOP.md §7.4.1;
+# Reference: docs/clusters/VR200_GBx00_FastTrack_Validation_MOP.md §7.4.1;
 #            NVIDIA/dgxc-benchmarking cli/llmb-install (--record / --play schema).
 #
 # Usage: install-dgxc-benchmarking-workspace.sh [TOPDIR]
@@ -47,7 +47,7 @@
 #   NVIS_EXEMPLAR_GPU_TYPE       gb200 | gb300 | vr200 | h100   (default gb200). Also drives the
 #                                NVL NCCL scale patch: gb*/NVL72 adds 72xN scales, vr*/NVL144
 #                                adds 144xN (1..8 racks) to nccl/metadata.yaml so full-rack
-#                                microbenchmark_nccl passes. See docs/DGXC_LLMB_NCCL_SCALE_PATCH.md
+#                                microbenchmark_nccl passes. See docs/networking/DGXC_LLMB_NCCL_SCALE_PATCH.md
 #   NVIS_EXEMPLAR_ARCH           aarch64 | x86_64               (default aarch64)
 #   NVIS_EXEMPLAR_INSTALL_METHOD slurm | local                  (default slurm)
 #   NVIS_EXEMPLAR_WORKLOADS      comma list of workloads        (default microbenchmark_nccl,pretrain_nemotron-h)
@@ -163,7 +163,7 @@ ensure_repo_trust
 # `llmb-run single --scale`. We add the rack multiples (1..8 racks) to the recipe's
 # nccl/metadata.yaml for the ACTIVE gpu_type profile, preserving the originals. Idempotent
 # and re-applied on every install (metadata.yaml lives in llmb_repo, which llmb-install
-# regenerates). See docs/DGXC_LLMB_NCCL_SCALE_PATCH.md.
+# regenerates). See docs/networking/DGXC_LLMB_NCCL_SCALE_PATCH.md.
 _rack_gpus_for_gpu_type() {
   case "${1,,}" in
     gb200|gb300|gbx00|gb*) echo 72 ;;

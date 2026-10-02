@@ -3,7 +3,7 @@ name: FastTrack Validation (VR200/GB300/GB200)
 description: >-
   NVIS FastTrack systems-level validation for VR200/GB300/GB200 NVL72/NVL144 clusters,
   modeled on Giovanni Mascari's MOP (nvis-npi/validation-mops ::
-  VR200_GBx00_FastTrack_Validation_MOP.md). Phase 1 = health, stress & workload
+  docs/clusters/VR200_GBx00_FastTrack_Validation_MOP.md). Phase 1 = health, stress & workload
   validation (NHC/nvbandwidth/dcgmi -> single-rack NCCL, MNUBERGEMM, Nemotron-H ->
   cross-rack NCCL + Nemotron); Phase 2 = diagnostics & remediation (troubleshooting
   cycle / single-node Nemotron -> remediate -> re-test); Phase 3 = optional customer /

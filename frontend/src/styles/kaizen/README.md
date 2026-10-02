@@ -20,7 +20,7 @@ Everything is vendored rather than loaded from
 - **The build is reproducible and self-contained.** No network fetch at page load,
   and no deploy-time rewriting of `index.html` to point at locally-mounted copies
   (which is what the Nscale TX deployment used to do — see
-  `docs/NSCALE_TX_DEPLOYMENT.md`).
+  `docs/clusters/NSCALE_TX_DEPLOYMENT.md`).
 - **Version is pinned with the code**, so a CDN publish cannot restyle a released
   build underneath us.
 

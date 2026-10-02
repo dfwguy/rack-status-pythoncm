@@ -2,7 +2,7 @@
 
 The vocabulary a policy engine needs: every resource type Rack Status governs, how each one is
 identified, and where its identifier comes from. Written for **Phase 3** of the auth programme
-(`AUTH_PROGRAMME_SCOPE.md`), because a policy that says *who may do what to which thing* cannot be
+(`auth/AUTH_PROGRAMME_SCOPE.md`), because a policy that says *who may do what to which thing* cannot be
 written until the third of those is named.
 
 **This is a survey, not an invention.** The 35 types outside the Identity section already exist in
@@ -276,8 +276,8 @@ the whole matrix rather than expecting an operator to check actions one at a tim
 
 ## Related
 
-- `AUTH_PROGRAMME_SCOPE.md` — phases, and why groups are Phase 2
+- `auth/AUTH_PROGRAMME_SCOPE.md` — phases, and why groups are Phase 2
 - `.plc/briefs/auth-identity-brief.md` — Phase 2 requirements, including the identity identifiers
-- `PHASE3_POLICY_ENGINE_SPIKE.md` — engine comparison and the revocation-freshness design
+- `auth/PHASE3_POLICY_ENGINE_SPIKE.md` — engine comparison and the revocation-freshness design
 - `.cursor/rules/cluster-naming-conventions.mdc` — why rack id and hostname are different namespaces
 - `backend/audit/actions.py`, `backend/tests/action_snapshot.json` — the committed action vocabulary

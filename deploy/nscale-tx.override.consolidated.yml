@@ -121,7 +121,7 @@ services:
       - RACK_WORKSPACE_DIR=/home/cmods/workspace
       - NVIS_WORKSPACE_DIR=/home/cmods/workspace
       # Big overview label (build_cluster_overview -> cluster_name).
-      # ── NVIS Grafana deep-links (docs/GRAFANA_PROMETHEUS_INTEGRATION.md §3).
+      # ── NVIS Grafana deep-links (docs/integrations/GRAFANA_PROMETHEUS_INTEGRATION.md §3).
       # Replaces the built-in stock NMC dashboard catalog with OUR 61-dashboard NVIS folder.
       # Deep-links open a full dashboard in a new tab -> no iframe, no ALLOW_EMBEDDING,
       # no CSP/X-Frame change. Grafana is fed by VictoriaMetrics (:8429), Prometheus-compatible.

@@ -234,7 +234,7 @@ tree.
 
 Not designed anywhere. Also added today.
 
-**Remediation:** state where such evidence lives (`docs/AUDIT_PHASE1_VERIFICATION.md` is the
+**Remediation:** state where such evidence lives (`docs/auth/AUDIT_PHASE1_VERIFICATION.md` is the
 existing instance) and what a sign-off record contains. Small, but leaving it undesigned is how the
 sign-off table stays perpetually pending.
 

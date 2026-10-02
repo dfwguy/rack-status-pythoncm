@@ -1207,19 +1207,19 @@ nvis-rack-status/
 | Document | Content |
 |---|---|
 | [docs/RACKSTATUS_USER_GUIDE.md](docs/RACKSTATUS_USER_GUIDE.md) | Detailed operator/admin guide for every current route, validation, audit, report, safety rule, and troubleshooting flow. |
-| [docs/RELEASE_NOTES_2026-08-13.md](docs/RELEASE_NOTES_2026-08-13.md) | Release-candidate scope, operator-visible changes, deployment notes, and GitLab handoff. |
-| [docs/RELEASE_QA_2026-08-13.md](docs/RELEASE_QA_2026-08-13.md) | Feature-by-feature qualification matrix and exact test/live evidence. |
+| [docs/releases/RELEASE_NOTES_2026-08-13.md](docs/releases/RELEASE_NOTES_2026-08-13.md) | Release-candidate scope, operator-visible changes, deployment notes, and GitLab handoff. |
+| [docs/releases/RELEASE_QA_2026-08-13.md](docs/releases/RELEASE_QA_2026-08-13.md) | Feature-by-feature qualification matrix and exact test/live evidence. |
 | [INSTALL.md](INSTALL.md) | Docker, SSH keys, air-gapped bundle, and installation troubleshooting. |
 | [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) | Exhaustive environment-variable reference. |
 | [docs/EXECUTION_ARCHITECTURE.md](docs/EXECUTION_ARCHITECTURE.md) | Local/SSH execution, endpoint roles, transports, and path resolution. |
 | [docs/API_RESPONSE_CODES.md](docs/API_RESPONSE_CODES.md) | What every endpoint may return, and the authentication/authorization codes: 401 vs 403 vs 429, and why "cannot evaluate authentication" is a 503 rather than a 401. |
 | [docs/WORKFLOW_COMPOSITION.md](docs/WORKFLOW_COMPOSITION.md) | Workflow connection, scheduler, evaluation, and capability axes. |
 | [docs/PARSING_RESULTS_ARCHITECTURE.md](docs/PARSING_RESULTS_ARCHITECTURE.md) | Validation log generation through durable presentation. |
-| [docs/GRAFANA_PROMETHEUS_INTEGRATION.md](docs/GRAFANA_PROMETHEUS_INTEGRATION.md) | Metrics/Grafana topology, labels, and troubleshooting. |
-| [docs/MULTIRACK_VALIDATION_LEDGER.md](docs/MULTIRACK_VALIDATION_LEDGER.md) | Durable multi-rack launch ledger and lifecycle. |
-| [docs/NCCL_architecture.md](docs/NCCL_architecture.md) | Single-rack versus multi-rack NCCL on GB300 NVL72. |
+| [docs/integrations/GRAFANA_PROMETHEUS_INTEGRATION.md](docs/integrations/GRAFANA_PROMETHEUS_INTEGRATION.md) | Metrics/Grafana topology, labels, and troubleshooting. |
+| [docs/clusters/MULTIRACK_VALIDATION_LEDGER.md](docs/clusters/MULTIRACK_VALIDATION_LEDGER.md) | Durable multi-rack launch ledger and lifecycle. |
+| [docs/networking/NCCL_architecture.md](docs/networking/NCCL_architecture.md) | Single-rack versus multi-rack NCCL on GB300 NVL72. |
 | [docs/UX_FRAMEWORK.md](docs/UX_FRAMEWORK.md) | Navigation, interaction, and KUI-first UI conventions. |
-| [docs/NSCALE_TX_DEPLOYMENT.md](docs/NSCALE_TX_DEPLOYMENT.md) | Nscale TX deployment-specific operations and history; do not apply to another cluster without review. |
+| [docs/clusters/NSCALE_TX_DEPLOYMENT.md](docs/clusters/NSCALE_TX_DEPLOYMENT.md) | Nscale TX deployment-specific operations and history; do not apply to another cluster without review. |
 | [AGENTS.md](AGENTS.md) | Pointer to the repository's authoritative engineering rules. |
 
 ## Screenshots

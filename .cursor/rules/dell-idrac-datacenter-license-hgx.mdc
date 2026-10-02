@@ -5,9 +5,9 @@ alwaysApply: true
 
 # Dell HGX + iDRAC Datacenter — don't relearn the 699 W dead-end
 
-Full runbook: `docs/DELL_IDRAC_DATACENTER_LICENSE_HGX.md`. Validated on Nscale TX
+Full runbook: `docs/clusters/DELL_IDRAC_DATACENTER_LICENSE_HGX.md`. Validated on Nscale TX
 (GB300 / PowerEdge XE9712) 2026-08-05: 115 nodes fixed only after Datacenter install.
-Incident detail: `docs/NSCALE_TX_GB300_SLOT0_POWER_CAP.md`.
+Incident detail: `docs/clusters/NSCALE_TX_GB300_SLOT0_POWER_CAP.md`.
 
 - **Design gate, not a mystery bug.** On Dell HGX, Redfish
   `ClearOOBSetPoint` / `PATCH PowerLimitWatts` require **iDRAC Datacenter** (Enterprise is

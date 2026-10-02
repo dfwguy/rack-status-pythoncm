@@ -185,11 +185,11 @@ this time. Release cadence is periodic but not contractually fixed.
 | — | Execution architecture | Aug. 2026 | `docs/EXECUTION_ARCHITECTURE.md` |
 | — | Parsing results architecture | Aug. 2026 | `docs/PARSING_RESULTS_ARCHITECTURE.md` |
 | — | Auth, audit and logging feature brief | Aug. 2026 | `.plc/briefs/auth-audit-logging-brief.md` |
-| — | Security assessment | Aug. 2026 | `docs/SECURITY_ASSESSMENT_2026-08.md` |
+| — | Security assessment | Aug. 2026 | `docs/releases/SECURITY_ASSESSMENT_2026-08.md` |
 | — | Threat model (SecNemo TAVA) | Aug. 2026 | `.plc/security/threat-model-NVIS-RACK-STATUS.md` |
 | — | Environment variable reference | Aug. 2026 | `docs/ENVIRONMENT.md` |
-| — | Multi-user / multi-cluster plan | Aug. 2026 | `docs/MULTI_USER_MULTI_CLUSTER_PLAN.md` |
-| — | Auth programme scope (Phases 0–3) | Aug. 2026 | `docs/AUTH_PROGRAMME_SCOPE.md` |
+| — | Multi-user / multi-cluster plan | Aug. 2026 | `docs/multi-cluster/MULTI_USER_MULTI_CLUSTER_PLAN.md` |
+| — | Auth programme scope (Phases 0–3) | Aug. 2026 | `docs/auth/AUTH_PROGRAMME_SCOPE.md` |
 
 ---
 
@@ -335,7 +335,7 @@ explicitly not release-candidate execution paths.
 
 **Remaining open questions — lower priority, still unanswered:**
 
-1. **User scale as a requirement.** `docs/MULTI_USER_MULTI_CLUSTER_PLAN.md` sizes for 20
+1. **User scale as a requirement.** `docs/multi-cluster/MULTI_USER_MULTI_CLUSTER_PLAN.md` sizes for 20
    simultaneous operators. Should that become a stated requirement, and does the 16K-node Nscale
    deployment raise it?
 2. **External accessibility standard.** Kaizen UI is mandated internally; is there a WCAG level or
