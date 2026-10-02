@@ -1,3 +1,8 @@
+---
+diataxis: explanation
+description: Why Rack Status is a single-writer, stateful service, what that means for a highly-available active/passive deployment on shared storage, and the concrete gaps between here and there.
+---
+
 # Active/passive and blue/green for Rack Status
 
 *Explanation — why Rack Status is a single-writer, stateful service, what that means for a

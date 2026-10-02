@@ -1,3 +1,8 @@
+---
+diataxis: explanation
+description: Why the Dragonfly peer-to-peer artifact console becomes a capability of a Project/Cluster rather than a separate app, and how it lands on the first-class citizens instead of beside them.
+---
+
 # Bringing NVIS-P2P into Rack Status as a per-project capability
 
 *Explanation — why the Dragonfly peer-to-peer artifact console becomes a capability of a
