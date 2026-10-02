@@ -347,6 +347,11 @@ export interface NodeInventoryEntry {
   status: "up" | "down" | "inst" | "unknown";
   ip: string;
   scheduler_state?: string;
+  /** GPUs on this node, from the scheduler (Slurm GRES) or an nvidia-smi sample. Shape is
+   * orthogonal to placement: a pool-mode node with no rack still carries a count. Absent = unknown. */
+  gpu_count?: number;
+  /** GPU model label when known (e.g. "nvidia", "NVIDIA RTX 6000 Ada Generation"). */
+  gpu_type?: string;
 }
 
 export interface RackStatusResponse {
@@ -386,6 +391,9 @@ export interface RackStatusResponse {
   /** True when the backend returned a fast placeholder because the link is down. */
   degraded?: boolean;
   exec_mode?: "ssh" | "local";
+  /** How nodes map to the floor: "direct" / "translate" place on racks; "pool" has no placement
+   * (flat node list). Absent on older servers — treat as "direct". See catalog Cluster. */
+  rack_mapping_mode?: "direct" | "translate" | "pool";
   snapshot: ClusterSnapshotMeta;
 }
 

@@ -207,8 +207,10 @@ export interface Cluster {
    * How nodes map to the floor. "direct": the rack id is embedded in the hostname and parsed
    * via the naming templates. "translate": the hostname does not encode the rack — rack/slot
    * come from the cluster-manager provider and the SU grouping from `scalable_units`.
+   * "pool": there is no placement data anywhere — the fleet renders as a flat list of nodes
+   * (the Akamai/Reno RTX 6000 case). Node shape (GPUs per node) still comes from the scheduler.
    */
-  rack_mapping_mode: "direct" | "translate";
+  rack_mapping_mode: "direct" | "translate" | "pool";
   site_prefix: string;
   naming: ClusterNaming;
   geometry: ClusterGeometry;

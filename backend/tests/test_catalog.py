@@ -124,6 +124,24 @@ class TestModels:
         )
         assert any("cluster_manager" in e for e in proj.validate())
 
+    def test_rack_mapping_mode_pool_is_accepted(self):
+        # The Reno case: no placement anywhere, rendered as a flat pool. No SU list required.
+        c = models.Cluster.from_dict({"id": "c", "name": "C", "rack_mapping_mode": "pool"})
+        assert "pool" not in " ".join(c.validate())
+        assert c.rack_mapping_mode == "pool"
+
+    def test_rack_mapping_mode_pool_rejects_scalable_units(self):
+        # pool asserts there is no placement, so an SU grouping is a contradiction.
+        c = models.Cluster.from_dict({
+            "id": "c", "name": "C", "rack_mapping_mode": "pool",
+            "scalable_units": [{"id": "su01", "racks": ["r1"]}],
+        })
+        assert any("pool" in e and "scalable_units" in e for e in c.validate())
+
+    def test_rack_mapping_mode_unknown_is_rejected(self):
+        c = models.Cluster.from_dict({"id": "c", "name": "C", "rack_mapping_mode": "bananas"})
+        assert any("rack_mapping_mode" in e for e in c.validate())
+
 
 # ---------------------------------------------------------------------------
 # Seed / migrate

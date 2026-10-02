@@ -52,7 +52,16 @@ CLUSTER_MANAGERS = ("bcm", "maas")
 #: rack attribute gives -- is supplied by the cluster's ``scalable_units`` list. In this mode
 #: the rack-prefixes-CT constraint does not apply, because ``NVIS_CT_ID`` is not a placement
 #: source.
-RACK_MAPPING_MODES = ("direct", "translate")
+#:
+#: ``pool`` -- there is NO placement data anywhere: no rack objects in the cluster manager,
+#: no rack attribute on the devices, no rack token in the hostname, no SU list. The Akamai/Reno
+#: RTX 6000 cluster is the archetype -- ``cmsh rack; list`` returns nothing and every device's
+#: ``rack`` attribute is empty. The node is the atom: the fleet renders as a flat pool of node
+#: tiles ordered by hostname, with no rack rows and no fabricated rack. Node *shape* (GPUs per
+#: node) still comes from the scheduler/provider (see node-shape enrichment); only *placement*
+#: is absent. A cluster flips from ``pool`` to ``translate`` with no rework the day someone
+#: populates rack/rackindex in the cluster manager.
+RACK_MAPPING_MODES = ("direct", "translate", "pool")
 
 #: Where work runs, as distinct from who manages the machines. Must stay in step with
 #: ``schedulers.factory._BUILDERS`` -- a cluster naming a kind the factory cannot build is a
@@ -1035,8 +1044,8 @@ class Cluster:
     platform_id: str = ""
     cluster_manager: str = "bcm"  # who manages the machines (BCM/MAAS)
     scheduler: str = "slurm"  # where work runs; see SCHEDULERS
-    # How nodes map to the floor: hostname-embedded rack (direct) vs provider rack + SU list
-    # (translate). See RACK_MAPPING_MODES.
+    # How nodes map to the floor: hostname-embedded rack (direct), provider rack + SU list
+    # (translate), or no placement at all -- a flat pool of nodes (pool). See RACK_MAPPING_MODES.
     rack_mapping_mode: str = "direct"
     site_prefix: str = ""  # pod/site prefix for multirack bracket expansion
     naming: ClusterNaming = field(default_factory=ClusterNaming)
@@ -1110,6 +1119,13 @@ class Cluster:
             # attribute doesn't carry one. Without the list the floor has no SUs at all.
             problems.append(
                 "rack_mapping_mode 'translate' requires a scalable_units (SU) translation list"
+            )
+        if self.rack_mapping_mode == "pool" and self.scalable_units:
+            # pool mode asserts there is no placement at all, so an SU grouping is a
+            # contradiction -- it would claim a geometry the mode exists to say does not exist.
+            # Fail closed at the record rather than silently rendering phantom SUs.
+            problems.append(
+                "rack_mapping_mode 'pool' has no placement, so scalable_units must be empty"
             )
         problems.extend(self.connection.validate())
         problems.extend(self._validate_scalable_units())

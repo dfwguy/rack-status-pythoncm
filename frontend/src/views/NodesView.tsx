@@ -55,6 +55,9 @@ interface NodeTableRow {
   row: string;
   status: NodeInfo["status"];
   ip: string;
+  /** GPUs on this node (scheduler GRES / nvidia-smi sample); undefined when unknown. */
+  gpu_count?: number;
+  gpu_type?: string;
   /** The last_job of the parent rack, forwarded to the command provider. */
   lastJob?: string;
 }
@@ -314,6 +317,7 @@ export function NodesView({ data, logDir }: NodesViewProps) {
               </TableCell>
               <TableCell>Rack</TableCell>
               <TableCell>Row</TableCell>
+              <TableCell>GPUs</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>BMC / RedFish</TableCell>
               <TableCell align="right">Terminal</TableCell>
@@ -322,7 +326,7 @@ export function NodesView({ data, logDir }: NodesViewProps) {
           <TableBody>
             {pagedNodes.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6}>
+                <TableCell colSpan={7}>
                   <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
                     {data?.nodes === null
                       ? "Node inventory is unavailable."
@@ -351,6 +355,15 @@ export function NodesView({ data, logDir }: NodesViewProps) {
                   <TableCell>
                     <Text kind="body/regular/sm" style={{ color: n.row ? undefined : "var(--text-color-secondary)" }}>
                       {n.row || "—"}
+                    </Text>
+                  </TableCell>
+                  <TableCell>
+                    <Text
+                      kind="body/regular/sm"
+                      style={{ color: n.gpu_count ? undefined : "var(--text-color-secondary)" }}
+                      title={n.gpu_type || undefined}
+                    >
+                      {n.gpu_count ?? "—"}
                     </Text>
                   </TableCell>
                   <TableCell>

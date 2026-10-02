@@ -17,6 +17,7 @@ import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { StatusSummary, type ValidationSummaryCategory } from "../components/StatusSummary";
 import { RackTable } from "../components/RackTable";
 import { RackFloorView } from "../components/RackFloorView";
+import { NodePoolView } from "../components/NodePoolView";
 import { WorkerStatusPanel } from "../components/WorkerStatus";
 import { FooterNotes } from "../components/FooterNotes";
 import { LoadingSkeleton } from "../components/LoadingSkeleton";
@@ -77,7 +78,14 @@ export function SingleRackView({ data, loading, error, onRetry, onRackSelect, on
         </Box>
       )}
 
-      {data && (data.snapshot.state === "fresh" || data.snapshot.state === "stale") ? (
+      {data && data.rack_mapping_mode === "pool" ? (
+        // No placement data: render the flat node pool rather than empty rack rows. The rack
+        // table/floor assume racks exist; pool clusters have none, so the node is the atom.
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <NodePoolView nodes={data.nodes} inventoryError={data.node_inventory_error} />
+          <FooterNotes footnotes={data.footnotes} />
+        </Box>
+      ) : data && (data.snapshot.state === "fresh" || data.snapshot.state === "stale") ? (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <StatusSummary
             summary={data.summary}

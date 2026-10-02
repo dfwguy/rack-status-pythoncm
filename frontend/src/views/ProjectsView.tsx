@@ -458,36 +458,45 @@ export function ProjectsView() {
           <FormField
             name="cl-rackmapping"
             slotLabel="Rack mapping"
-            slotHelp="Direct: the rack id is in the hostname (parsed by the templates below). Translate: the hostname has no rack; rack/slot come from the cluster manager and the SU grouping from the list below."
+            slotHelp="Direct: the rack id is in the hostname (parsed by the templates below). Translate: the hostname has no rack; rack/slot come from the cluster manager and the SU grouping from the list below. Pool: there is no placement at all — nodes render as a flat list (GPU counts still come from the scheduler)."
           >
             <Select
               items={[
                 { value: "direct", children: "Direct (rack id in hostname)" },
                 { value: "translate", children: "Translate (provider rack + SU list)" },
+                { value: "pool", children: "Pool (no placement — flat node list)" },
               ]}
               value={clMode}
               onValueChange={(v) => setCl({ rack_mapping_mode: v as Cluster["rack_mapping_mode"] })}
               placeholder="Direct"
             />
           </FormField>
-          <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
-            <FormField name="cl-rack-tpl" slotLabel="Rack id template" slotHelp={clMode === "translate" ? "NVIS_RACK_ID — decomposes the provider's rack id into a row (e.g. [A-Z][\\d+])" : "NVIS_RACK_ID"}>
-              <TextInput value={clusterDraft?.cluster.naming.rack_id_template || ""} onValueChange={(v) => setNaming({ rack_id_template: v })} />
-            </FormField>
-            {clMode !== "translate" && (
-              <>
-                <FormField name="cl-ct-tpl" slotLabel="Node/CT id template" slotHelp="NVIS_CT_ID">
-                  <TextInput value={clusterDraft?.cluster.naming.ct_id_template || ""} onValueChange={(v) => setNaming({ ct_id_template: v })} />
-                </FormField>
-                <FormField name="cl-nvsw-tpl" slotLabel="NVSwitch id template" slotHelp="NVIS_NVSW_ID">
-                  <TextInput value={clusterDraft?.cluster.naming.nvsw_id_template || ""} onValueChange={(v) => setNaming({ nvsw_id_template: v })} />
-                </FormField>
-                <FormField name="cl-joiner" slotLabel="Tray joiner">
-                  <TextInput value={clusterDraft?.cluster.naming.ct_joiner || "-ct"} onValueChange={(v) => setNaming({ ct_joiner: v })} />
-                </FormField>
-              </>
-            )}
-          </Box>
+          {clMode === "pool" ? (
+            <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block" }}>
+              Pool mode uses no naming templates: with no placement, there is nothing to parse out of
+              the hostname. Nodes render as a flat list ordered by hostname, and GPU counts come from
+              the scheduler (Slurm GRES) or an nvidia-smi sample.
+            </Text>
+          ) : (
+            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
+              <FormField name="cl-rack-tpl" slotLabel="Rack id template" slotHelp={clMode === "translate" ? "NVIS_RACK_ID — decomposes the provider's rack id into a row (e.g. [A-Z][\\d+])" : "NVIS_RACK_ID"}>
+                <TextInput value={clusterDraft?.cluster.naming.rack_id_template || ""} onValueChange={(v) => setNaming({ rack_id_template: v })} />
+              </FormField>
+              {clMode === "direct" && (
+                <>
+                  <FormField name="cl-ct-tpl" slotLabel="Node/CT id template" slotHelp="NVIS_CT_ID">
+                    <TextInput value={clusterDraft?.cluster.naming.ct_id_template || ""} onValueChange={(v) => setNaming({ ct_id_template: v })} />
+                  </FormField>
+                  <FormField name="cl-nvsw-tpl" slotLabel="NVSwitch id template" slotHelp="NVIS_NVSW_ID">
+                    <TextInput value={clusterDraft?.cluster.naming.nvsw_id_template || ""} onValueChange={(v) => setNaming({ nvsw_id_template: v })} />
+                  </FormField>
+                  <FormField name="cl-joiner" slotLabel="Tray joiner">
+                    <TextInput value={clusterDraft?.cluster.naming.ct_joiner || "-ct"} onValueChange={(v) => setNaming({ ct_joiner: v })} />
+                  </FormField>
+                </>
+              )}
+            </Box>
+          )}
 
           {clMode === "translate" && (
             <>
