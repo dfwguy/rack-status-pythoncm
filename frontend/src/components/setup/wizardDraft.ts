@@ -235,6 +235,9 @@ export function toCluster(draft: WizardDraft): Cluster {
       // A path, never key material — `storeSshKey` wrote the file and returned this.
       ssh_key: draft.sshKeyPath.trim(),
       remote_base_path: draft.remoteBasePath.trim(),
+      // The wizard does not ask for a log directory: blank falls back to remote_base_path/var/logs,
+      // and a site whose logs live elsewhere sets it per cluster in the editor afterward.
+      log_dir: "",
     },
     // The wizard does not ask for an SU map: empty derives it from the platform's
     // racks_per_su, which is right for every cluster that is not ragged. A site with a

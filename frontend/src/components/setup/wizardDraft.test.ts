@@ -122,6 +122,14 @@ describe("the document it produces", () => {
     expect(serialised).not.toMatch(/BEGIN [A-Z ]*PRIVATE KEY/);
   });
 
+  it("leaves the per-cluster log directory blank for the editor to set", () => {
+    // The wizard does not ask for it; blank means the cluster falls back to remote_base_path/var/logs,
+    // and the deprecated global RACK_STATUS_LOG_DIR plays no part. A site whose logs live elsewhere
+    // sets connection.log_dir per cluster in the editor afterward.
+    const project = toProject(filled({}));
+    expect(project.clusters[0].connection.log_dir).toBe("");
+  });
+
   it("converts the numeric fields once, at the end", () => {
     const geometry = toProject(filled({ pods: "2", rowsPerPod: "4", racksPerRow: "9" }))
       .clusters[0].geometry;

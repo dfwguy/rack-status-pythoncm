@@ -193,6 +193,9 @@ export interface ClusterConnection {
   ssh_user: string;
   ssh_key: string;
   remote_base_path: string;
+  // Where this cluster's nodes write the logs Rack Status ingests. Per-cluster so each project
+  // reads its own cluster's logs; supersedes the deprecated global RACK_STATUS_LOG_DIR env var.
+  log_dir: string;
 }
 
 export interface Cluster {

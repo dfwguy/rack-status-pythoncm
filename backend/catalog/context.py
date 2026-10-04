@@ -206,6 +206,10 @@ def high_overlay(
     _put(out, "RACK_SSH_USER", c.ssh_user)
     _put(out, "RACK_SSH_KEY", c.ssh_key)
     _put(out, "RACK_REMOTE_BASE_PATH", c.remote_base_path)
+    # Where this cluster's logs are ingested from. A clean, per-cluster key (not the deprecated
+    # global RACK_STATUS_LOG_DIR) so the active cluster's own directory is authoritative and
+    # switching clusters switches the log location with it. Read by paths._default_log_dir().
+    _put(out, "NVIS_LOG_DIR", c.log_dir)
     _put(out, "RACK_CLUSTER_NAME", cluster.name)
     # The active ids, so `script_tree` can pick a project's own copy of a script without
     # importing the catalog. Every other per-cluster value already reaches its consumer this

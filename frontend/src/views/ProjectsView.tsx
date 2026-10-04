@@ -60,7 +60,7 @@ function emptyCluster(): Cluster {
     site_prefix: "",
     naming: { rack_id_template: "", ct_id_template: "", nvsw_id_template: "", ct_joiner: "-ct", slurm_hostlist: "" },
     geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },
-    connection: { exec_mode: "", ssh_host: "", ssh_user: "", ssh_key: "", remote_base_path: "" },
+    connection: { exec_mode: "", ssh_host: "", ssh_user: "", ssh_key: "", remote_base_path: "", log_dir: "" },
     // Empty means "derive SUs from the platform's racks_per_su", which is what a new
     // cluster wants. A site with a ragged SU map states it explicitly instead.
     scalable_units: [],
@@ -569,6 +569,15 @@ export function ProjectsView() {
             <Box sx={{ gridColumn: "span 2" }}>
               <FormField name="cl-remotebase" slotLabel="Remote base path">
                 <TextInput value={clusterDraft?.cluster.connection.remote_base_path || ""} onValueChange={(v) => setConn({ remote_base_path: v })} />
+              </FormField>
+            </Box>
+            <Box sx={{ gridColumn: "span 2" }}>
+              <FormField name="cl-logdir" slotLabel="Log directory">
+                <TextInput
+                  value={clusterDraft?.cluster.connection.log_dir || ""}
+                  onValueChange={(v) => setConn({ log_dir: v })}
+                  placeholder="Where this cluster's nodes write logs (blank = remote base path /var/logs)"
+                />
               </FormField>
             </Box>
           </Box>

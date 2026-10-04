@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**254 settings.** 16 are *declared* in
+**255 settings.** 17 are *declared* in
 `backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
 setting preflight can demand, and `rackstatus.toml.example` lists. 120 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -33,7 +33,7 @@ process environment and cannot be set per cluster or from the Settings screen.
 
 ## Undescribed settings
 
-2 settings have no declaration, no prose in `docs/ENVIRONMENT.md`
+3 settings have no declaration, no prose in `docs/ENVIRONMENT.md`
 and no hint in `docs/settings-hints.toml`. Each name links to its row in the table
 below, which still gives you its reader, its default and the module that reads it.
 
@@ -41,7 +41,7 @@ They are listed because an inventory that hid them would be the reason nobody kn
 generator must not invent a description, so each of these is a real to-do — write one
 into `docs/settings-hints.toml` and it moves out of this list on the next build.
 
-<a href="#s-rack-bringup-report-benchmarks"><code>RACK_BRINGUP_REPORT_BENCHMARKS</code></a>, <a href="#s-rack-bringup-report-job-status"><code>RACK_BRINGUP_REPORT_JOB_STATUS</code></a>
+<a href="#s-nvis-log-dir"><code>NVIS_LOG_DIR</code></a>, <a href="#s-rack-bringup-report-benchmarks"><code>RACK_BRINGUP_REPORT_BENCHMARKS</code></a>, <a href="#s-rack-bringup-report-job-status"><code>RACK_BRINGUP_REPORT_JOB_STATUS</code></a>
 
 ## Declared, read indirectly
 
@@ -54,12 +54,12 @@ scan simply cannot point at a call site.
 
 ## Read outside the resolution ladder
 
-159 of them are read only via `os.environ`, so a cluster overlay and the
+160 of them are read only via `os.environ`, so a cluster overlay and the
 Settings screen cannot influence them — the setting is process-wide. New code should
 prefer `_eget` (`core-designs.mdc` §5); these are the ones that predate the rule or
 genuinely belong to the process rather than to a cluster.
 
-They are not listed here — 159 names in a paragraph is not something
+They are not listed here — 160 names in a paragraph is not something
 anyone reads.
 The table below marks each one `environment` in its `Reader` column, which answers the
 same question setting by setting, where you are already looking.
@@ -85,6 +85,7 @@ them. `UI` marks the ones the dashboard Settings screen may override.
 | `RACK_SSH_PORT` | connection | integer | no |  | `22` | Port for the SSH control connection. |
 | `RACK_SSH_USER` | connection | string | no |  | `root` | Account for the SSH control connection to the head node. |
 | `RACK_STATUS_DEMO` | general | boolean | no |  | `false` | Synthetic data, no cluster contact. True on a developer laptop, and it also exempts the connection settings from the required-setting preflight. |
+| `RACK_STATUS_LOG_DIR` | connection | string | no |  | `/home/cmsupport/aihpc_val-main/validation/nemo` | Deprecated. The directory Rack Status ingests node logs from. This is one global value for every cluster at once, so a multi-tenant deployment would read a project's logs from a cluster it may not operate; set the log directory per cluster instead (the cluster's connection.log_dir). Kept only as a fallback for deployments still migrating, and it warns when used. |
 | `RACK_WEB_OIDC_ISSUER` | auth | string | no |  | `https://rackstatus.example.com` | This deployment's own base URL, used as the OIDC `iss` claim. Required when the OIDC provider is enabled. Cannot be derived from the request: OIDC Discovery 1.0 §4.3 requires it to be the URL discovery is served from, and a Host header is attacker-controlled. http is accepted only for localhost, which is how an operator reaches a tunnelled deployment. |
 | `RACK_WEB_TLS_KEY` | tls | string | no |  | `/app/config/tls/server.key` | Private key for the TLS certificate. Required whenever RACK_WEB_TLS_CERT is set: a cert with no key downgrades one path silently and crashes the other. |
 
@@ -126,6 +127,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-nvis-inventory-workers"></a>`NVIS_INVENTORY_WORKERS` | environment |  | Concurrency for a fleet inventory sweep. Bounded by the head node's SSH session limit, not by this alone. | `backend/node_inventory.py` |
 | <a id="s-nvis-job-env-overrides-file"></a>`NVIS_JOB_ENV_OVERRIDES_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/catalog/seed.py`, `backend/native_status.py` |
 | <a id="s-nvis-log-basename-mode"></a>`NVIS_LOG_BASENAME_MODE` | environment |  | `open` (default) accepts any plausible result-log name; `strict` accepts only the legacy marker allowlist. | `backend/nvis_id_templates.py` |
+| <a id="s-nvis-log-dir"></a>`NVIS_LOG_DIR` | environment |  | — | `backend/paths.py` |
 | <a id="s-nvis-log-level"></a>`NVIS_LOG_LEVEL` | indirect |  | Log level. Settable here because the config file is read before logging is configured, which is the reason the loader's own records appear slightly late. |  |
 | <a id="s-nvis-npi-catalog-dir"></a>`NVIS_NPI_CATALOG_DIR` | environment |  | Directory of NPI tool catalog files to import. | `backend/catalog/npi_import.py` |
 | <a id="s-nvis-nvsw-id"></a>`NVIS_NVSW_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` |
@@ -299,7 +301,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-status-allowed-prefixes"></a>`RACK_STATUS_ALLOWED_PREFIXES` | environment |  | See `docs/ENVIRONMENT.md` | `backend/paths.py` |
 | <a id="s-rack-status-demo"></a>`RACK_STATUS_DEMO` | ladder |  | Synthetic data, no cluster contact. True on a developer laptop, and it also exempts the connection settings from the required-setting preflight. | `backend/app.py`, `backend/cli.py` +1 |
 | <a id="s-rack-status-extra-args"></a>`RACK_STATUS_EXTRA_ARGS` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
-| <a id="s-rack-status-log-dir"></a>`RACK_STATUS_LOG_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py`, `backend/paths.py` |
+| <a id="s-rack-status-log-dir"></a>`RACK_STATUS_LOG_DIR` | environment |  | Deprecated. The directory Rack Status ingests node logs from. This is one global value for every cluster at once, so a multi-tenant deployment would read a project's logs from a cluster it may not operate; set the log directory per cluster instead (the cluster's connection.log_dir). Kept only as a fallback for deployments still migrating, and it warns when used. | `backend/host_exec.py`, `backend/paths.py` |
 | <a id="s-rack-sysinfo-disabled"></a>`RACK_SYSINFO_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/_common.py` |
 | <a id="s-rack-tail-linebuffer"></a>`RACK_TAIL_LINEBUFFER` | ladder | `1` | See `docs/ENVIRONMENT.md` | `backend/api/logs.py` |
 | <a id="s-rack-tail-log-disabled"></a>`RACK_TAIL_LOG_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/logs.py` |

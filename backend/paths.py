@@ -23,6 +23,7 @@ different host from the logs; ``RACK_REMOTE_BASE_PATH`` is the single-host fallb
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path, PurePosixPath
 
@@ -30,6 +31,40 @@ import host_exec
 import script_tree
 from config_env import _eget
 from core import rpath as _rpath
+
+_logger = logging.getLogger(__name__)
+
+#: Projected by ``catalog.context.high_overlay`` from the active cluster's ``connection.log_dir``.
+#: The per-cluster, multi-tenant-safe source of the log directory — it wins over the deprecated
+#: global ``RACK_STATUS_LOG_DIR`` so each project reads logs from its own cluster.
+CLUSTER_LOG_DIR_ENV = "NVIS_LOG_DIR"
+
+#: The single-tenant relic. One global value for every cluster at once, which is wrong the moment a
+#: deployment serves more than one — a project would read logs from a directory belonging to a
+#: cluster it does not operate. Kept as a deprecated fallback so existing deployments keep working
+#: while they migrate to the per-cluster field; a direct value warns once.
+LEGACY_LOG_DIR_ENV = "RACK_STATUS_LOG_DIR"
+
+_warned_legacy_log_dir = False
+
+
+def _warn_legacy_log_dir() -> None:
+    """Warn once that the global ``RACK_STATUS_LOG_DIR`` is deprecated in favour of the per-cluster
+    field. Fires only on a *directly set* global value, never on the per-cluster projection, so a
+    cluster that configures its log directory the right way is silent."""
+    global _warned_legacy_log_dir
+    if _warned_legacy_log_dir:
+        return
+    _warned_legacy_log_dir = True
+    _logger.warning(
+        "%s is DEPRECATED and will be removed in a future release. It sets one log directory for "
+        "every cluster at once, so a multi-tenant deployment reads a project's logs from a cluster "
+        "it may not operate. Set the log directory per cluster instead (the cluster's "
+        "connection.log_dir, 'Log directory' in the cluster editor); this global value is now only "
+        "a fallback.",
+        LEGACY_LOG_DIR_ENV,
+    )
+
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
@@ -98,7 +133,24 @@ def _script_exists(path: Path) -> bool:
 
 
 def _default_log_dir() -> PurePosixPath:
-    return _rpath(os.environ.get("RACK_STATUS_LOG_DIR", str(DEFAULT_LOG_DIR)))
+    """The log directory when a request did not name one.
+
+    Resolution order, most specific first:
+
+    1. the **active cluster's** ``connection.log_dir`` (projected to ``NVIS_LOG_DIR`` by the
+       overlay) — the per-cluster, multi-tenant-safe source;
+    2. the deprecated global ``RACK_STATUS_LOG_DIR`` — kept as a fallback for deployments still
+       migrating, and it warns once when it is the thing actually used;
+    3. ``remote_base_path/var/logs`` (or the repo's ``var/logs`` off a cluster).
+    """
+    cluster_log_dir = (os.environ.get(CLUSTER_LOG_DIR_ENV) or "").strip()
+    if cluster_log_dir:
+        return _rpath(cluster_log_dir)
+    legacy = (os.environ.get(LEGACY_LOG_DIR_ENV) or "").strip()
+    if legacy:
+        _warn_legacy_log_dir()
+        return _rpath(legacy)
+    return _rpath(str(DEFAULT_LOG_DIR))
 
 
 def _allowed_roots() -> list[PurePosixPath]:

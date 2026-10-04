@@ -81,6 +81,13 @@
 # Account for the SSH control connection to the head node.
 # RACK_SSH_USER = "root"
 
+# Deprecated. The directory Rack Status ingests node logs from. This is one global value for
+# every cluster at once, so a multi-tenant deployment would read a project's logs from a cluster
+# it may not operate; set the log directory per cluster instead (the cluster's
+# connection.log_dir). Kept only as a fallback for deployments still migrating, and it warns
+# when used.
+# RACK_STATUS_LOG_DIR = "/home/cmsupport/aihpc_val-main/validation/nemo"
+
 
 [cluster]
 # Cluster manager provider: 'bcm' (Base Command Manager) or 'maas'.

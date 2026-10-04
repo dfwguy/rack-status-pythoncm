@@ -400,6 +400,22 @@ register(
 
 register(
     Setting(
+        name="RACK_STATUS_LOG_DIR",
+        secret=False,
+        example="/home/cmsupport/aihpc_val-main/validation/nemo",
+        section="connection",
+        description=(
+            "Deprecated. The directory Rack Status ingests node logs from. This is one global "
+            "value for every cluster at once, so a multi-tenant deployment would read a project's "
+            "logs from a cluster it may not operate; set the log directory per cluster instead "
+            "(the cluster's connection.log_dir). Kept only as a fallback for deployments still "
+            "migrating, and it warns when used."
+        ),
+    )
+)
+
+register(
+    Setting(
         name="RACK_BUG_REPORT_REMOTE_DIR",
         secret=False,
         example="/home/cmods/bringup-data/reports",
