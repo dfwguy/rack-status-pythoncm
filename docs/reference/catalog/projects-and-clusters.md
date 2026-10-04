@@ -206,7 +206,7 @@ The simple form is four fields, and it is all a single-host deployment needs:
 
 | Field | Purpose |
 |---|---|
-| `exec_mode` | `ssh` for a real cluster, `local` when the app runs on the target host itself. |
+| `exec_mode` | **Optional, deprecated — leave unset.** SSH is the default; a stored value is projected to the deprecated `RACK_EXEC_MODE` and logs a warning. Set `local` only when the app runs on the target host itself. |
 | `ssh_host` | The head node. |
 | `ssh_user` | The account. |
 | `ssh_key` | **A path to a private key, never key material.** |

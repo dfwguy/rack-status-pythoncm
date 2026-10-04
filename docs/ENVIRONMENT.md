@@ -675,7 +675,7 @@ them when present. See [`docs/EXECUTION_ARCHITECTURE.md`](EXECUTION_ARCHITECTURE
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| **`RACK_EXEC_MODE`** | `ssh` | **Deprecated.** `local` or `ssh`; logs a warning whenever it is set. Connections default to `ssh`. |
+| **`RACK_EXEC_MODE`** | `ssh` | **Deprecated — do not set in new configs; remove it from existing ones.** Logs a warning whenever present. Connections default to `ssh`; set it (`local`) only when the app runs directly on the target host. |
 | **`RACK_SSH_HOST`** | *(unset)* | Head-node hostname / IP for the control route. |
 | **`RACK_SSH_USER`** | `root` | SSH user. |
 | **`RACK_SSH_KEY`** | `/run/secrets/ssh_key` | Private key path. Passed as `-i` only when the file exists. |

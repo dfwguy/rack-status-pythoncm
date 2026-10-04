@@ -5,10 +5,10 @@ This document explains **how NVIS runs cluster commands and shell scripts**, and
 three very different places:
 
 1. **On the cluster head node** (the classic deployment: NVIS installed under
-   `…/nvis-rack-status`, `RACK_EXEC_MODE=local`).
-2. **Inside a Docker container on a cluster node** (still `local`-ish — same host, no SSH).
-3. **On a developer laptop pointed at a remote cluster** (`RACK_EXEC_MODE=ssh`, possibly
-   from **macOS**).
+   `…/nvis-rack-status`; the app sits on the target, so commands run locally).
+2. **Inside a Docker container on a cluster node** (still local-ish — same host, no SSH).
+3. **On a developer laptop pointed at a remote cluster** (commands reach the cluster over
+   SSH, possibly from **macOS**).
 
 Most bugs we hit during the Firmus/MEL01 and Boston Markley deployments come from a single
 root cause: **a path, a hostname, or a transport that is correct in one of those contexts
@@ -32,7 +32,7 @@ for anything that touches the cluster. The layer has two responsibilities:
 
 | Responsibility | Why it matters |
 |----------------|----------------|
-| **Mechanism** | The layer holds a composed connection and applies the right mechanism — direct subprocess, SSH, or a chain of hops. The caller writes the command **once** and never branches on where it runs. (`RACK_EXEC_MODE` is deprecated and defaults to `ssh`; there is no `is_remote()` predicate to test.) |
+| **Mechanism** | The layer holds a composed connection and applies the right mechanism — direct subprocess, SSH, or a chain of hops. The caller writes the command **once** and never branches on where it runs. (The composed connection decides the mechanism — SSH by default; there is no `is_remote()` predicate to test.) |
 | **Environment forwarding** | A local subprocess inherits the daemon's env for free. An **SSH** session does **not** — so `host_exec` re-exports a whitelist of variables on the remote side. |
 | **Filesystem** | The same connection answers `stat_dir` / `read_text` / `write_bytes` / `is_dir`, so a path is always evaluated against the host that owns it rather than the one the process happens to run on. |
 

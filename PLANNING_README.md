@@ -345,8 +345,8 @@ sibling deploy. `docker-compose.yml` defines one service `rack-status` with `bui
    `RACK_SSH_KEY_PATH=/opt/observability/nvis-rack-status-v3/deploy-secrets/placeholder_ssh_key`
    (compose does NOT expand `~`), `RACK_SSH_HOST=127.0.0.1`, `RACK_WEB_AUTH_TOKEN=`.
 4. Created `docker-compose.override.yml` forcing `RACK_STATUS_DEMO=1`, `RACK_WEB_AUTH_DISABLED=1`,
-   `RACK_EXEC_MODE=local`, `RACK_STATUS_LOG_DIR=/app/var/logs`, `container_name: nvis-rack-status-v3`,
-   `restart: unless-stopped`.
+   `RACK_STATUS_LOG_DIR=/app/var/logs`, `container_name: nvis-rack-status-v3`,
+   `restart: unless-stopped`. (Demo serves synthetic data, so no cluster transport is involved.)
 5. `docker compose -p nvis-rack-status-v3 up -d --build`
 6. Verify: `docker compose -p nvis-rack-status-v3 ps` and `curl -sf http://localhost:5056/api/status`;
    open `http://<host>:5056/spa/`.
@@ -375,7 +375,6 @@ Outbound (only when switched to ssh mode later): 22 (SSH to head node + SFTP to 
 | `RACK_SSH_HOST` | `127.0.0.1` | Placeholder to silence compose interpolation warning. |
 | `RACK_WEB_AUTH_TOKEN` | empty | Auth disabled for demo. |
 | `RACK_STATUS_DEMO` | `1` | Synthetic data, no cluster access. |
-| `RACK_EXEC_MODE` | `local` | Overrides rack-config.env's shipped `ssh`. |
 | `RACK_WEB_AUTH_DISABLED` | `1` | Simplest minimal start. |
 | `RACK_STATUS_LOG_DIR` | `/app/var/logs` | Avoids a 400 on `/api/status` from the non-existent head-node log path. |
 
@@ -386,8 +385,9 @@ Outbound (only when switched to ssh mode later): 22 (SSH to head node + SFTP to 
 Everything below is deliberately left as safe placeholders so the tool starts with synthetic data.
 Configure when moving to real cluster data:
 
-- [ ] **Switch to real cluster:** empty/delete `docker-compose.override.yml`; set `RACK_EXEC_MODE=ssh`,
-      `RACK_PLATFORM=bcm` in `rack-config.env`.
+- [ ] **Switch to real cluster:** empty/delete `docker-compose.override.yml`; set `RACK_PLATFORM=bcm`
+      in `rack-config.env` (SSH is the default transport — no exec-mode flag needed; point
+      `RACK_SSH_HOST`/`RACK_SSH_USER`/`RACK_SSH_KEY` at the head).
 - [ ] **Head node:** `RACK_SSH_HOST=192.168.10.2` (nscale-hn1), `RACK_SSH_USER`, `RACK_SSH_PORT`,
       `RACK_REMOTE_BASE_PATH` (where nvis-rack-status scripts + logs live on the head node).
 - [ ] **Real SSH key:** replace `deploy-secrets/placeholder_ssh_key` with a private key whose public
@@ -426,9 +426,9 @@ Configure when moving to real cluster data:
 - **Build needs network:** `build: .` runs apt-get + pip + npm ci + npm run build (may pull Node 22).
   Needs registry/proxy access on the ObsVM. If air-gapped, use `build-docker.sh save/load`. (The
   sibling image built OK at 258MB, so the build works here.)
-- **Default config is SSH, not demo:** `rack-config.env` ships `RACK_EXEC_MODE=ssh` with the host
-  commented out; without forcing demo/local you get an empty "no racks" state. The override forces
-  demo/local.
+- **Default config is SSH, not demo:** the shipped config reaches the cluster over SSH (the default
+  transport) with the host commented out, so without forcing demo you get an empty "no racks"
+  state. The override forces demo mode.
 - **Binds all interfaces + no auth in demo:** with `RACK_WEB_AUTH_DISABLED=1` there is no login and
   the UI is reachable on both the mgmt IP and the 10.40 fabric. Restrict access / enable auth before
   a routable exposure.

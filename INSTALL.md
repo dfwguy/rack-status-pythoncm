@@ -79,8 +79,7 @@ python3 backend/cli.py init-config --from-env-file rack-config.env
 
 Each setting is carried into `config/rackstatus.toml` under its section. The command lists every
 key it does not carry and why — secrets (set those in the environment), and the few that cannot
-take effect from the file (`PORT`, the deprecated `RACK_EXEC_MODE`, and the TLS and Compose
-values). Nothing is dropped silently.
+take effect from the file (`PORT`, and the TLS and Compose values). Nothing is dropped silently.
 
 ### TLS
 
