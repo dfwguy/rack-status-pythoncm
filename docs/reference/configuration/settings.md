@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**253 settings.** 16 are *declared* in
+**255 settings.** 16 are *declared* in
 `backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
 setting preflight can demand, and `rackstatus.toml.example` lists. 120 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -33,7 +33,7 @@ process environment and cannot be set per cluster or from the Settings screen.
 
 ## Undescribed settings
 
-1 settings have no declaration, no prose in `docs/ENVIRONMENT.md`
+3 settings have no declaration, no prose in `docs/ENVIRONMENT.md`
 and no hint in `docs/settings-hints.toml`. Each name links to its row in the table
 below, which still gives you its reader, its default and the module that reads it.
 
@@ -41,7 +41,7 @@ They are listed because an inventory that hid them would be the reason nobody kn
 generator must not invent a description, so each of these is a real to-do — write one
 into `docs/settings-hints.toml` and it moves out of this list on the next build.
 
-<a href="#s-nvis-log-dir"><code>NVIS_LOG_DIR</code></a>
+<a href="#s-nvis-log-dir"><code>NVIS_LOG_DIR</code></a>, <a href="#s-rack-bringup-report-benchmarks"><code>RACK_BRINGUP_REPORT_BENCHMARKS</code></a>, <a href="#s-rack-bringup-report-job-status"><code>RACK_BRINGUP_REPORT_JOB_STATUS</code></a>
 
 ## Declared, read indirectly
 
@@ -54,12 +54,12 @@ scan simply cannot point at a call site.
 
 ## Read outside the resolution ladder
 
-159 of them are read only via `os.environ`, so a cluster overlay and the
+161 of them are read only via `os.environ`, so a cluster overlay and the
 Settings screen cannot influence them — the setting is process-wide. New code should
 prefer `_eget` (`core-designs.mdc` §5); these are the ones that predate the rule or
 genuinely belong to the process rather than to a cluster.
 
-They are not listed here — 159 names in a paragraph is not something
+They are not listed here — 161 names in a paragraph is not something
 anyone reads.
 The table below marks each one `environment` in its `Reader` column, which answers the
 same question setting by setting, where you are already looking.
@@ -162,6 +162,8 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-bringup-cache-ttl-sec"></a>`RACK_BRINGUP_CACHE_TTL_SEC` | environment | `30` | See `docs/ENVIRONMENT.md` | `backend/bringup.py` |
 | <a id="s-rack-bringup-disabled"></a>`RACK_BRINGUP_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/bringup.py` |
 | <a id="s-rack-bringup-home"></a>`RACK_BRINGUP_HOME` | environment |  | See `docs/ENVIRONMENT.md` | `backend/bringup.py` |
+| <a id="s-rack-bringup-report-benchmarks"></a>`RACK_BRINGUP_REPORT_BENCHMARKS` | environment |  | — | `backend/bringup.py` |
+| <a id="s-rack-bringup-report-job-status"></a>`RACK_BRINGUP_REPORT_JOB_STATUS` | environment |  | — | `backend/bringup.py` |
 | <a id="s-rack-bug-report-disabled"></a>`RACK_BUG_REPORT_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
 | <a id="s-rack-bug-report-dry-run"></a>`RACK_BUG_REPORT_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
 | <a id="s-rack-bug-report-remote-dir"></a>`RACK_BUG_REPORT_REMOTE_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/paths.py` |
