@@ -56,6 +56,14 @@ class TestReadingMarkers:
         assert events[0]["node"] == "ink50-dh01-h18-01"
         assert events[0]["source"] == healthcheck_evidence.SOURCE
 
+    def test_auto_action_trigger_clean_and_failed_vocabulary(self, root):
+        # node_health.sh writes exactly ``clean`` (no reason) or ``failed``; both must map,
+        # or every healthy node reads UNKNOWN in the health view.
+        _node(root, "gpu1-su19", "clean")
+        _node(root, "gpu2-su19", "failed")
+        by_node = {e["node"]: e["status"] for e in healthcheck_evidence.post_run_events()}
+        assert by_node == {"gpu1-su19": "PASS", "gpu2-su19": "FAIL"}
+
     def test_a_failure_carries_the_log_tail_as_its_reason(self, root):
         # A red row with no reason sends the operator to the filesystem anyway.
         _node(root, "n01", "failed", log="GPU4 ECC uncorrectable\nfan 3 stalled\n")

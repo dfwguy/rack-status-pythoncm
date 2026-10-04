@@ -180,12 +180,20 @@ compute is a verdict that silently disagrees with his after the next tuning.
 
 | We call | We get | Note |
 |---|---|---|
-| `daily-report.sh -c` | Cluster CSV, `node,slurm,<job columns…>`. Each cell is the extracted **metric** when the run produced one, otherwise a **status word** (`NOT_RUN`/`INCOMPLETE`/`RUNNING`) | Does **not** encode pass/fail — *a FAIL keeps its number.* Never colour a cell from the metric alone |
-| `status-check.sh <node>` | Authoritative per-job **status + reason** (`DONE`/`FAIL`/`RETRY`/`INCOMPLETE`/`RUNNING`/`NOT_RUN`) | Scoped to one node, so it is cheap |
+| `report_benchmarks.sh -c` | Cluster CSV, `node,slurm,<job columns…>`. Each cell is the extracted **metric** when the run produced one, otherwise a **status word** (`NOT_RUN`/`INCOMPLETE`/`RUNNING`) | Does **not** encode pass/fail — *a FAIL keeps its number.* Never colour a cell from the metric alone |
+| `report_job-status.sh <node>` | Authoritative per-job **status + reason** (`DONE`/`FAIL`/`RETRY`/`INCOMPLETE`/`RUNNING`/`NOT_RUN`) | Scoped to one node, so it is cheap |
 
-`node_summary()` merges them: status and reason from `status-check`, metric from `daily-report`. The
-cluster-wide call is cached (`RACK_BRINGUP_CACHE_TTL_SEC`, default 30 s) because it scans every result
-directory and re-judges each one on every invocation.
+> **Script rename (Oct 2026).** Travis renamed the top-level scripts to a
+> `build_/check_/report_/admin_` scheme: `daily-report.sh → report_benchmarks.sh`,
+> `status-check.sh → report_job-status.sh` (plus `health-check.sh → report_health.sh`,
+> `overall_report.sh → report_overall.sh`), and added an `abup <group> <name>` dispatcher.
+> The basenames we call live in `bringup.REPORT_BENCHMARKS` / `REPORT_JOB_STATUS`, overridable
+> with `RACK_BRINGUP_REPORT_BENCHMARKS` / `RACK_BRINGUP_REPORT_JOB_STATUS` for a site still on
+> the pre-rename tree.
+
+`node_summary()` merges them: status and reason from `report_job-status`, metric from
+`report_benchmarks`. The cluster-wide call is cached (`RACK_BRINGUP_CACHE_TTL_SEC`, default 30 s)
+because it scans every result directory and re-judges each one on every invocation.
 
 Our env surface:
 
@@ -200,6 +208,20 @@ Artifacts we read or link to, per node under `results/<node>/`: `<job>.txt` (job
 directly by `sbatch --output`, so a `RUNNING` cell is a file being appended to **right now**),
 `.fail<N>.txt` archives of prior attempts, `quick-view.txt`, and `trigger.log`. Fleet CSVs land in
 `reports/`.
+
+### The health-check marker feed (separate from the benchmark report above)
+
+`healthcheck_evidence.py` is a **second, independent** feed. It does *not* shell out — it reads the
+per-node health markers **directly off the filesystem**: `<root>/<node>/.last-check` (`<epoch>␉<status>`)
+plus a `health.log` tail for failures. `node_health.sh` writes exactly two status words — **`clean`**
+(a run with no reason) or **`failed`** — both of which we map (`_STATUS`), so a healthy node is `PASS`,
+not `UNKNOWN`. The root is the per-cluster catalog field `cluster.evidence.healthcheck_root`
+(e.g. `HEALTH_LOG_DIR`, `…/bringup-data/logs`), **not** an env var.
+
+Because this feed reads locally, the health-log tree must be **visible inside the Rack Status
+container at that exact path** — on a deployment that does not mount the framework's `/home`, add a
+read-only bind mount for `HEALTH_LOG_DIR` (and include it in `RACK_STATUS_ALLOWED_PREFIXES` so the UI
+can open a check log). The benchmark report feed above does not need this — it runs over SSH on the head.
 
 ## 8. His documentation — where to look
 
@@ -227,7 +249,7 @@ At `/home/cmods/bringup/docs/`, [Diátaxis](https://diataxis.fr/)-organised. Sta
 1. **Integrate, don't duplicate.** The site already had authoritative validation; the win was
    surfacing it. This applies to its *documentation* as much as its verdicts.
 2. **Shell out for verdicts.** Re-implementing pass/fail guarantees eventual disagreement.
-3. **A metric is not a verdict.** `daily-report.sh` keeps the number on a FAIL.
+3. **A metric is not a verdict.** `report_benchmarks.sh` keeps the number on a FAIL.
 4. **Absence of results is not health.** Registration and pause state are independent of each other
    and invisible in `sinfo`; treat "no data" as unknown, never as passing.
 
