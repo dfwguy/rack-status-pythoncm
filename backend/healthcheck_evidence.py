@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,74 @@ _STATUS = {
 
 _MARKER = ".last-check"
 _TAIL_BYTES = 4096
+
+#: The fields a post-run "run" row carries, mirrored from the frontend ``PostRunEvent``
+#: contract (``frontend/src/types/api.ts``). A health marker is rendered through the same
+#: post-run table as a Slurm validation run, so it must present every field that table reads
+#: -- otherwise a cell reaches the client as ``undefined`` and crashes the view. Declared
+#: once, applied by ``_marker_event``, so the contract lives in a single place as it grows.
+_RUN_FIELD_DEFAULTS: dict[str, Any] = {
+    "rack": "",
+    "job_id": "",
+    "scope": "node",
+    "ended_at": "",
+    "exit_code": "",
+    "failed_job": False,
+    "attributed_failure": False,
+    "category": "",
+    "output_run_id": "",
+    "output_step_id": "",
+}
+
+
+def _epoch_to_iso(epoch: str) -> str:
+    """ISO-8601 UTC from a Unix-seconds marker, or ``""`` when it is not a plain number.
+
+    The timestamp comes from a shell ``date +%s`` and is normally clean; this validates
+    rather than trusts it, so a half-written or hand-edited marker never reaches
+    ``new Date(...)`` on the client as a bare integer string that renders as a non-date.
+    """
+    s = (epoch or "").strip()
+    if not s.isdigit():
+        return ""
+    try:
+        return datetime.fromtimestamp(int(s), tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def _marker_event(*, host: str, verdict: str, raw_status: str, detail: str, epoch: str, marker: Path) -> dict[str, Any]:
+    """One health marker as a conformant, fully-populated post-run run event.
+
+    Validated and sanitised at the boundary: every field is a definite type, so a partial
+    marker renders as a row rather than crashing the table. ``state`` carries the verdict so
+    the shared state-colour maps PASS/FAIL to green/red; the health-specific fields
+    (``status``, ``raw_verdict``, ``workload``) ride alongside for any marker-aware consumer.
+    Reused for every marker and every caller, so the shape cannot drift between them.
+    """
+    started = _epoch_to_iso(epoch)
+    return {
+        **_RUN_FIELD_DEFAULTS,
+        "node": str(host),
+        "activity_id": f"healthcheck:{host}",
+        "tool": "node-healthcheck",
+        "state": verdict,
+        "started_at": started,
+        "reason": str(detail or ""),
+        "source": SOURCE,
+        # Always current: the checker overwrites one marker per node, so there is no
+        # superseded row to keep out of a failure count.
+        "authoritative": True,
+        "history_only": False,
+        # Health-specific fields, kept for marker-aware consumers:
+        "workload": "healthcheck",
+        "test": "node-healthcheck",
+        "status": verdict,
+        "raw_verdict": str(raw_status),
+        "detail": str(detail or ""),
+        "artifact_path": str(marker),
+        "observed_at": str(epoch),
+    }
 
 _cache: dict[str, Any] = {}
 _cache_lock = threading.Lock()
@@ -147,21 +216,14 @@ def post_run_events(*, rack: str = "", node: str = "") -> list[dict[str, Any]]:
             continue
         raw_status, epoch = parsed
         verdict = _STATUS.get(raw_status.strip().lower(), "UNKNOWN")
-        event = {
-            "node": host,
-            "workload": "healthcheck",
-            "test": "node-healthcheck",
-            "status": verdict,
-            "raw_verdict": raw_status,
-            "detail": _failure_detail(directory) if verdict == "FAIL" else "",
-            "artifact_path": str(marker),
-            "observed_at": epoch,
-            "source": SOURCE,
-            # Always current: the checker overwrites one marker per node, so there is no
-            # superseded row to keep out of a failure count.
-            "authoritative": True,
-            "history_only": False,
-        }
+        event = _marker_event(
+            host=host,
+            verdict=verdict,
+            raw_status=raw_status,
+            detail=_failure_detail(directory) if verdict == "FAIL" else "",
+            epoch=epoch,
+            marker=marker,
+        )
         with _cache_lock:
             _cache[key] = event
         out.append(event)
