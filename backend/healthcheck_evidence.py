@@ -37,11 +37,14 @@ SOURCE = "external-evidence:healthcheck"
 #: Marker statuses the checker writes, mapped onto our verdicts. Anything else becomes
 #: UNKNOWN rather than being guessed into a pass or a fail -- a health view that invents a
 #: verdict is worse than one that admits it cannot read the file.
+#: ``clean``/``failed`` is the ``auto-action-trigger`` node_health vocabulary (it writes
+#: ``clean`` for a run with no reason, ``failed`` otherwise); the rest cover other checkers.
 _STATUS = {
     "ok": "PASS",
     "pass": "PASS",
     "passed": "PASS",
     "healthy": "PASS",
+    "clean": "PASS",
     "fail": "FAIL",
     "failed": "FAIL",
     "error": "FAIL",

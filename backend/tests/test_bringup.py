@@ -17,7 +17,8 @@ import subprocess
 
 import bringup
 
-# Captured from the live head node (daily-report.sh -c / status-check.sh <node>).
+# Captured from the live head node (report_benchmarks.sh -c / report_job-status.sh <node>;
+# formerly daily-report.sh / status-check.sh).
 DAILY_CSV = (
     "node,slurm,dcgm,nvbandwidth,allreduce,allreduce-nonvlink\n"
     "ink50-dh01-h01-11,down*,DONE,357.23,688.68,2.28\n"
@@ -38,7 +39,9 @@ STATUS_CHECK = (
 def _fake_run(daily=DAILY_CSV, status=STATUS_CHECK):
     def run(cmd, **_kw):
         joined = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
-        out = daily if "daily-report.sh" in joined else status if "status-check.sh" in joined else ""
+        is_daily = "report_benchmarks.sh" in joined or "daily-report.sh" in joined
+        is_status = "report_job-status.sh" in joined or "status-check.sh" in joined
+        out = daily if is_daily else status if is_status else ""
         return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
     return run
 

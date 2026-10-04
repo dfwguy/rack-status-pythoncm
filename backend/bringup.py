@@ -16,16 +16,21 @@ pass/fail logic (which lives in his ``parsers/<set>/verdict.sh`` and drifts as f
 are tuned), this module shells out to his own read-only reporting scripts on the head
 node so verdicts stay authoritative:
 
-* ``daily-report.sh -c`` -- cluster-wide CSV, ``node,slurm,<job columns...>``. Each
-  job cell is the extracted **metric** (busbw GB/s, min GB/s, triad MB/s, gflops) when
-  the run produced one, otherwise a **status word** (NOT_RUN/INCOMPLETE/RUNNING). It
-  does NOT encode pass/fail for a numeric cell -- a FAIL keeps its number.
-* ``status-check.sh <node>`` -- scoped, authoritative per-job **status + reason**
-  (DONE/FAIL/RETRY/INCOMPLETE/RUNNING/NOT_RUN).
+* ``report_benchmarks.sh -c`` (was ``daily-report.sh``) -- cluster-wide CSV,
+  ``node,slurm,<job columns...>``. Each job cell is the extracted **metric** (busbw GB/s,
+  min GB/s, triad MB/s, gflops) when the run produced one, otherwise a **status word**
+  (NOT_RUN/INCOMPLETE/RUNNING). It does NOT encode pass/fail for a numeric cell -- a FAIL
+  keeps its number.
+* ``report_job-status.sh <node>`` (was ``status-check.sh``) -- scoped, authoritative
+  per-job **status + reason** (DONE/FAIL/RETRY/INCOMPLETE/RUNNING/NOT_RUN).
 
-``node_summary()`` merges the two: status/reason from status-check, metric from
-daily-report. The cluster-wide daily-report is cached briefly because it scans every
-result directory and re-judges each on every call.
+The script names moved with Travis's Oct-2026 ``build_/check_/report_/admin_`` rename;
+the basenames live in ``REPORT_BENCHMARKS``/``REPORT_JOB_STATUS`` (env-overridable for a
+site still on the pre-rename tree).
+
+``node_summary()`` merges the two: status/reason from report_job-status, metric from
+report_benchmarks. The cluster-wide benchmarks report is cached briefly because it scans
+every result directory and re-judges each on every call.
 """
 from __future__ import annotations
 
@@ -38,7 +43,15 @@ import host_exec
 
 DEFAULT_HOME = "/home/cmods/bringup"
 
-#: Metric label per job, mirroring ``daily-report.sh``'s ``metric_label()``. Jobs not
+#: The two reporting CLIs we shell out to on the head. Travis renamed the whole top-level
+#: script set to a ``build_/check_/report_/admin_`` scheme in Oct 2026
+#: (``daily-report.sh`` -> ``report_benchmarks.sh``, ``status-check.sh`` ->
+#: ``report_job-status.sh``); we call the current names. A site still on the pre-rename
+#: tree can point back with these env vars rather than pin an old checkout.
+REPORT_BENCHMARKS = (os.environ.get("RACK_BRINGUP_REPORT_BENCHMARKS") or "report_benchmarks.sh").strip()
+REPORT_JOB_STATUS = (os.environ.get("RACK_BRINGUP_REPORT_JOB_STATUS") or "report_job-status.sh").strip()
+
+#: Metric label per job, mirroring ``report_benchmarks.sh``'s ``metric_label()``. Jobs not
 #: listed here (dcgm, memtester, stressapptest, mnubergemm) report a status only.
 METRIC_LABELS: dict[str, str] = {
     "hpl": "gflops",
@@ -102,7 +115,7 @@ def _base_job(col: str) -> str:
 
 
 def parse_daily_report_csv(text: str) -> tuple[list[str], dict[str, dict[str, object]]]:
-    """Parse ``daily-report.sh -c`` stdout.
+    """Parse ``report_benchmarks.sh -c`` stdout.
 
     Returns ``(columns, rows)`` where ``columns`` is the ordered job columns (``node``
     and ``slurm`` removed) and ``rows`` maps a node name to
@@ -133,7 +146,7 @@ def parse_daily_report_csv(text: str) -> tuple[list[str], dict[str, dict[str, ob
 
 
 def parse_status_check(text: str) -> dict[str, dict[str, str]]:
-    """Parse ``status-check.sh <node>`` stdout into ``{col: {status, reason}}``.
+    """Parse ``report_job-status.sh <node>`` stdout into ``{col: {status, reason}}``.
 
     Handles both the dshbak-grouped form (``col: STATUS -- reason``) and the ungrouped
     fallback (``node: col: STATUS -- reason``); only the trailing ``col: STATUS`` is
@@ -152,7 +165,7 @@ def parse_status_check(text: str) -> dict[str, dict[str, str]]:
 
 
 def run_daily_report(*, timeout: int = 150) -> str:
-    """Run (and briefly cache) ``daily-report.sh -c`` on the head node."""
+    """Run (and briefly cache) ``report_benchmarks.sh -c`` on the head node."""
     home = bringup_home()
     ttl = _cache_ttl()
     now = time.time()
@@ -161,24 +174,24 @@ def run_daily_report(*, timeout: int = 150) -> str:
         if hit and ttl and (now - hit[0]) < ttl:
             return hit[1]
     proc = host_exec.run_on_host(
-        ["bash", f"{home}/daily-report.sh", "-c"],
+        ["bash", f"{home}/{REPORT_BENCHMARKS}", "-c"],
         cwd=home,
         timeout=timeout,
         env_extra=_slurm_env_extra(),
     )
     out = proc.stdout or ""
     if proc.returncode != 0 and not out.strip():
-        raise RuntimeError((proc.stderr or "").strip() or f"daily-report.sh exited {proc.returncode}")
+        raise RuntimeError((proc.stderr or "").strip() or f"{REPORT_BENCHMARKS} exited {proc.returncode}")
     with _cache_lock:
         _daily_cache[home] = (time.time(), out)
     return out
 
 
 def run_status_check(node: str, *, timeout: int = 90) -> str:
-    """Run ``status-check.sh <node>`` (scoped to one node) on the head node."""
+    """Run ``report_job-status.sh <node>`` (scoped to one node) on the head node."""
     home = bringup_home()
     proc = host_exec.run_on_host(
-        ["bash", f"{home}/status-check.sh", node],
+        ["bash", f"{home}/{REPORT_JOB_STATUS}", node],
         cwd=home,
         timeout=timeout,
         env_extra=_slurm_env_extra(),
@@ -187,21 +200,21 @@ def run_status_check(node: str, *, timeout: int = 90) -> str:
 
 
 def run_status_check_all(*, timeout: int = 180) -> str:
-    """Run ``status-check.sh`` with no pattern: every node under ``results/``.
+    """Run ``report_job-status.sh`` with no pattern: every node under ``results/``.
 
     Its own scan cache makes this cheap (~0.5 s for 564 nodes), so a fleet view costs one
     round trip instead of one per node.
     """
     home = bringup_home()
     proc = host_exec.run_on_host(
-        ["bash", f"{home}/status-check.sh"],
+        ["bash", f"{home}/{REPORT_JOB_STATUS}"],
         cwd=home,
         timeout=timeout,
         env_extra=_slurm_env_extra(),
     )
     out = proc.stdout or ""
     if proc.returncode != 0 and not out.strip():
-        raise RuntimeError((proc.stderr or "").strip() or f"status-check.sh exited {proc.returncode}")
+        raise RuntimeError((proc.stderr or "").strip() or f"{REPORT_JOB_STATUS} exited {proc.returncode}")
     return out
 
 
@@ -220,7 +233,7 @@ def _expand_nodeset(spec: str) -> list[str]:
 
 
 def parse_status_check_fleet(text: str) -> dict[str, dict[str, dict[str, str]]]:
-    """Parse the fleet form of ``status-check.sh`` into ``{node: {col: {status, reason}}}``.
+    """Parse the fleet form of ``report_job-status.sh`` into ``{node: {col: {status, reason}}}``.
 
     With no pattern the script groups nodes that share an identical verdict set, ``dshbak -c``
     style::
@@ -257,8 +270,8 @@ def parse_status_check_fleet(text: str) -> dict[str, dict[str, dict[str, str]]]:
 def fleet_summary() -> dict[str, object]:
     """Bring-up state for every node, in two calls rather than one per node.
 
-    Statuses and reasons come from the fleet ``status-check.sh`` (authoritative verdicts);
-    metrics come from the ``daily-report.sh -c`` CSV. This is the split ``node_summary()``
+    Statuses and reasons come from the fleet ``report_job-status.sh`` (authoritative verdicts);
+    metrics come from the ``report_benchmarks.sh -c`` CSV. This is the split ``node_summary()``
     makes for a single node — the CSV alone is not enough because a FAIL keeps its number
     there, so a numeric cell says nothing about pass/fail.
     """
