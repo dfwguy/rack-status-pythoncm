@@ -28,6 +28,8 @@ subtrees:
         title: How to add your own script and register it as a tool
       - file: how-to/use-the-terminal
         title: How to use the terminal
+      - file: how-to/stage-observability-agents
+        title: How to stage the observability node-agents to a cluster
 
   - caption: Reference — the machinery, described
     entries:
