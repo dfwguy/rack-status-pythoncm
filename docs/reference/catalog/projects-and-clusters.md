@@ -211,6 +211,7 @@ The simple form is four fields, and it is all a single-host deployment needs:
 | `ssh_user` | The account. |
 | `ssh_key` | **A path to a private key, never key material.** |
 | `remote_base_path` | Where scripts and logs live on that host. Everything else derives from it. |
+| `log_dir` | Where this cluster's nodes write the logs Rack Status ingests. Per-cluster on purpose: a multi-tenant deployment reads each project's logs from its own cluster, not from one global directory. Blank falls back to `remote_base_path/var/logs`. Supersedes the deprecated global `RACK_STATUS_LOG_DIR`. |
 
 ### Keys are paths
 

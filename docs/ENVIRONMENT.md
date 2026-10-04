@@ -292,7 +292,7 @@ Requires `RACK_WEB_SECRET_KEY`, **Settings → `RACK_PROJECT_TOKEN`**, vault NVF
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| **`RACK_STATUS_LOG_DIR`** | `APP_DIR/var/logs` | Default log root. |
+| **`RACK_STATUS_LOG_DIR`** | `APP_DIR/var/logs` | **Deprecated — do not set.** One global log root for every cluster at once, so a multi-tenant deployment reads a project's logs from a cluster it may not operate. Set the log directory **per cluster** instead (the cluster's `connection.log_dir`, "Log directory" in the cluster editor). Kept as a fallback for deployments still migrating; warns once when used. |
 | **`RACK_STATUS_SCRIPT`** | `bin/scripts/rack_status.sh` | Shell table script path. |
 | **`RACK_STATUS_EXTRA_ARGS`** | *(unset)* | Extra args for `rack_status.sh`. |
 | **`RACK_STATUS_ALLOWED_PREFIXES`** | *(unset)* | Allowed `log_dir` path prefixes (comma-separated). Must include the bring-up `results` root when the Nodes view reads Travis's per-node artifacts. |

@@ -939,6 +939,12 @@ class ClusterConnection:
     ssh_user: str = ""
     ssh_key: str = ""
     remote_base_path: str = ""
+    #: Where this cluster's nodes write the validation/job logs that Rack Status ingests. A
+    #: per-cluster setting on purpose: a multi-tenant deployment must read each project's logs from
+    #: its own cluster, not from one global directory shared by all of them (the single-tenant
+    #: ``RACK_STATUS_LOG_DIR`` env var this supersedes). Blank falls back to that deprecated env var,
+    #: then to ``remote_base_path/var/logs``.
+    log_dir: str = ""
     endpoints: list[Endpoint] = field(default_factory=list)
     roles: list[ConnectionRole] = field(default_factory=list)
 
@@ -951,6 +957,7 @@ class ClusterConnection:
             ssh_user=_as_str(d.get("ssh_user")),
             ssh_key=_as_str(d.get("ssh_key")),
             remote_base_path=_as_str(d.get("remote_base_path")),
+            log_dir=_as_str(d.get("log_dir")),
             endpoints=[Endpoint.from_dict(x) for x in _as_dict_list(d.get("endpoints"))],
             roles=[ConnectionRole.from_dict(x) for x in _as_dict_list(d.get("roles"))],
         )

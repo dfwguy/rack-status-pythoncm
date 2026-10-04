@@ -181,10 +181,14 @@ def _add_path_options(cmd: argparse.ArgumentParser) -> None:
 #: They were invisible to the app that depends on them, untestable by the suite that verifies it,
 #: and re-derived by every other launcher. `setdefault` semantics throughout: a real environment
 #: variable, a `rackstatus.toml` entry or a flag still wins, exactly as before.
+#: `RACK_STATUS_LOG_DIR` deliberately NOT here any more. It was a single global log directory for
+#: every cluster at once — the single-tenant assumption this launcher outgrew. The log directory is
+#: now a per-cluster setting (the cluster's `connection.log_dir`, projected by the overlay), so a
+#: multi-tenant deployment reads each project's logs from its own cluster. Deployments still on the
+#: global env var keep working through the deprecated fallback in `paths._default_log_dir`.
 CLUSTER_DEFAULTS: dict[str, str] = {
     "VALIDATION_TEST": "nccl_allreduce,llm",
     "NEMO_SQSH_SRC": "/home/cmsupport/nemo-25.11.01.sqsh",
-    "RACK_STATUS_LOG_DIR": "/home/cmsupport/aihpc_val-main/validation/nemo",
 }
 
 
