@@ -225,8 +225,10 @@ def _hw_check_pdsh_script_path() -> Path:
 def _nvlmapper_reports_base() -> Path:
     # An execution-host directory: expanduser/resolve would answer with this
     # process's home and filesystem, which is not where the reports are written.
-    raw = (_eget("RACK_NVLMAPPER_REPORTS_BASE") or "/home/cmsupport/reports").strip()
-    return _rpath(raw or "/home/cmsupport/reports")
+    # Defaults to the bug-report dir so one setting moves both -- the Reports page
+    # lists NVLMapper outputs and bug reports under the same tree.
+    raw = (_eget("RACK_NVLMAPPER_REPORTS_BASE") or "").strip() or _bug_report_remote_dir()
+    return _rpath(raw)
 
 
 def _parser_path() -> Path:
@@ -245,20 +247,26 @@ def _rack_status_script_path() -> Path:
 # Shared by the four bug-report routes and by the log-zip export, which is why it is here rather than
 # beside either of them.
 #
-# NOTE a live inconsistency with _nvlmapper_reports_base above, preserved rather than "fixed": that one
-# deliberately does NOT expanduser, because the path names a directory on the EXECUTION host and `~`
-# would resolve to this container's home. This one does expanduser. Harmless while the default stays
-# absolute (/home/cmsupport/reports), wrong the day somebody sets RACK_BUG_REPORT_REMOTE_DIR=~/reports.
-# It also reads os.environ directly instead of going through _eget, so it cannot be set from dashboard
-# settings. Both are behaviour changes, not refactors, so they are flagged here rather than made quietly.
+# Still expanduser'd (unlike _nvlmapper_reports_base, which must not be, because `~` would resolve to
+# this container's home rather than the execution host's). That is safe here because the value is an
+# absolute path at every real deployment; a site that sets RACK_BUG_REPORT_REMOTE_DIR=~/reports gets
+# the container's home, which is the one `~` the reports are never under -- so keep it absolute.
 
 
 _DEFAULT_BUG_REPORT_REMOTE_DIR = "/home/cmsupport/reports"
 
 
 def _bug_report_remote_dir() -> str:
-    """Base dir on each node (pdsh) and on this host (inventory). Override with ``RACK_BUG_REPORT_REMOTE_DIR``."""
-    d = (os.environ.get("RACK_BUG_REPORT_REMOTE_DIR") or "").strip()
+    """Base dir on each node (pdsh) and on this host (inventory).
+
+    Resolved through the config ladder (``_eget``: cluster overlay > dashboard Settings >
+    process env > platform overlay > default), so a deployment points it at the project's own
+    prefix -- e.g. ``/home/cmods/bringup-data/reports`` -- rather than inheriting the historical
+    ``/home/cmsupport/reports``, which exists on exactly one appliance. It used to read
+    ``os.environ`` directly, which meant neither a cluster overlay nor the Settings screen could
+    move it off that dead default.
+    """
+    d = (_eget("RACK_BUG_REPORT_REMOTE_DIR") or "").strip()
     if not d:
         d = _DEFAULT_BUG_REPORT_REMOTE_DIR
     out = os.path.expanduser(d).strip()

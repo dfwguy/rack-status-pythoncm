@@ -416,6 +416,23 @@ register(
 
 register(
     Setting(
+        name="RACK_BUG_REPORT_REMOTE_DIR",
+        secret=False,
+        example="/home/cmods/bringup-data/reports",
+        section="connection",
+        description=(
+            "Base directory the bug-report and NVLMapper outputs are written to on each node "
+            "(pdsh) and read from on the dashboard host (the Reports page). Point it at the "
+            "project's own prefix -- a directory the service account can create and the "
+            "dashboard host can see over the shared mount. Default /home/cmsupport/reports "
+            "exists on only one appliance, so most deployments set this. NVLMapper's base "
+            "(RACK_NVLMAPPER_REPORTS_BASE) defaults to it, so one value moves both."
+        ),
+    )
+)
+
+register(
+    Setting(
         name="RACK_SSH_USER",
         secret=False,
         example="root",

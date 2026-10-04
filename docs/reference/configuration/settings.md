@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**255 settings.** 16 are *declared* in
+**255 settings.** 17 are *declared* in
 `backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
 setting preflight can demand, and `rackstatus.toml.example` lists. 120 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -54,12 +54,12 @@ scan simply cannot point at a call site.
 
 ## Read outside the resolution ladder
 
-161 of them are read only via `os.environ`, so a cluster overlay and the
+160 of them are read only via `os.environ`, so a cluster overlay and the
 Settings screen cannot influence them — the setting is process-wide. New code should
 prefer `_eget` (`core-designs.mdc` §5); these are the ones that predate the rule or
 genuinely belong to the process rather than to a cluster.
 
-They are not listed here — 161 names in a paragraph is not something
+They are not listed here — 160 names in a paragraph is not something
 anyone reads.
 The table below marks each one `environment` in its `Reader` column, which answers the
 same question setting by setting, where you are already looking.
@@ -74,6 +74,7 @@ them. `UI` marks the ones the dashboard Settings screen may override.
 | `NEMO_SQSH_SRC` | validation | string | no |  | `/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh` | Squashed NeMo container image used by the NeMo validation launchers. |
 | `NVIS_FORCE_SETUP_WIZARD` | general | boolean | no |  | `false` | Re-open the first-run setup wizard even though a project is already configured. What `cli.py serve --setup-wizard` sets; normally left unset, since the wizard offers itself when no operator-created project exists. |
 | `NVIS_LOG_LEVEL` | general | string | no |  | `INFO` | Log level. Settable here because the config file is read before logging is configured, which is the reason the loader's own records appear slightly late. |
+| `RACK_BUG_REPORT_REMOTE_DIR` | connection | string | no |  | `/home/cmods/bringup-data/reports` | Base directory the bug-report and NVLMapper outputs are written to on each node (pdsh) and read from on the dashboard host (the Reports page). Point it at the project's own prefix -- a directory the service account can create and the dashboard host can see over the shared mount. Default /home/cmsupport/reports exists on only one appliance, so most deployments set this. NVLMapper's base (RACK_NVLMAPPER_REPORTS_BASE) defaults to it, so one value moves both. |
 | `RACK_EXEC_MODE` | connection | string | no |  | `ssh` | How commands reach the cluster: 'ssh' or 'local'. Deprecated in favour of the topology-based transport config, and 'ssh' is the default; kept because deployed sites still set it. |
 | `RACK_PLATFORM` | cluster | string | no |  | `bcm` | Cluster manager provider: 'bcm' (Base Command Manager) or 'maas'. |
 | `RACK_PROJECT_TOKEN` | nvftp | string | no |  | `my-project` | NVFTP project folder name. Not a credential, despite matching the sensitive-name pattern on 'TOKEN'. |
@@ -166,7 +167,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-bringup-report-job-status"></a>`RACK_BRINGUP_REPORT_JOB_STATUS` | environment |  | — | `backend/bringup.py` |
 | <a id="s-rack-bug-report-disabled"></a>`RACK_BUG_REPORT_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
 | <a id="s-rack-bug-report-dry-run"></a>`RACK_BUG_REPORT_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
-| <a id="s-rack-bug-report-remote-dir"></a>`RACK_BUG_REPORT_REMOTE_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/paths.py` |
+| <a id="s-rack-bug-report-remote-dir"></a>`RACK_BUG_REPORT_REMOTE_DIR` | ladder |  | Base directory the bug-report and NVLMapper outputs are written to on each node (pdsh) and read from on the dashboard host (the Reports page). Point it at the project's own prefix -- a directory the service account can create and the dashboard host can see over the shared mount. Default /home/cmsupport/reports exists on only one appliance, so most deployments set this. NVLMapper's base (RACK_NVLMAPPER_REPORTS_BASE) defaults to it, so one value moves both. | `backend/paths.py` |
 | <a id="s-rack-bug-report-ssh-opts"></a>`RACK_BUG_REPORT_SSH_OPTS` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
 | <a id="s-rack-bug-report-ssh-user"></a>`RACK_BUG_REPORT_SSH_USER` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
 | <a id="s-rack-clusterkit-cuda-major"></a>`RACK_CLUSTERKIT_CUDA_MAJOR` | ladder |  | CUDA major for ClusterKit. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
