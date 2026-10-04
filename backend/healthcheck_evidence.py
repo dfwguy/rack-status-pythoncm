@@ -123,6 +123,7 @@ def _marker_event(*, host: str, verdict: str, raw_status: str, detail: str, epoc
         "observed_at": str(epoch),
     }
 
+
 _cache: dict[str, Any] = {}
 _cache_lock = threading.Lock()
 
